@@ -47,7 +47,7 @@ export function quoteAgreesWithSnapshot(
  * `createFromQuote` (refuse a financed quote with no snapshot) and `assertQuoteEconomicsMatchFrozen`.
  * A manual application (no company, MANUAL_FINANCE_COMPANY) is covered by the mode test.
  */
-export function isFinancedDeal(mode: string | undefined, companyId: unknown): boolean {
+export function isFinancedDeal(mode: string | undefined, companyId: AnchorApp["companyId"]): boolean {
   return mode === "CONFIGURED_FINANCE_COMPANY" || mode === "MANUAL_FINANCE_COMPANY" || !!companyId;
 }
 

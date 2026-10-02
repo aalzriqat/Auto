@@ -9,7 +9,7 @@ import { useGenericError, type AppLocale } from "./modules/moduleShared";
  * pricing details with the structured code below. The text must stay equal to the web dictionary entry
  * `ServerError_QUOTE_PRICING_SNAPSHOT_MISMATCH` (lib/i18n/domains/sales.ts).
  */
-export const QUOTE_PRICING_SNAPSHOT_MISMATCH_CODE = "QUOTE_PRICING_SNAPSHOT_MISMATCH";
+const QUOTE_PRICING_SNAPSHOT_MISMATCH_CODE = "QUOTE_PRICING_SNAPSHOT_MISMATCH";
 
 const MESSAGES: Record<AppLocale, { title: string; message: string }> = {
   en: {

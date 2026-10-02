@@ -1,8 +1,9 @@
 /**
- * SCRUM-533. `createFromQuote` admits a finance application only from a quote that satisfies exactly
- * the predicate `finalizeDeal` later applies (SCRUM-528, convex/utils/quoteEconomicsAnchor.ts): the
- * quote's vehiclePrice, downPayment, totalFinancedAmount and termMonths strictly equal the snapshot,
- * and a financed quote with no snapshot is refused. Every refusal is coded and writes nothing.
+ * SCRUM-533. `createFromQuote` admits a finance application only from a quote that passes `finalizeDeal`'s
+ * top-level anchor (SCRUM-528, `quoteAgreesWithSnapshot` in convex/utils/quoteEconomicsAnchor.ts): the
+ * quote's vehiclePrice, downPayment, totalFinancedAmount and termMonths strictly equal the snapshot.
+ * It adds a create-only monthlyInstallment check (intentional, c21628), and refuses a financed quote
+ * with no snapshot. Every refusal is coded and writes nothing.
  */
 import { describe, expect, test } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
@@ -105,9 +106,6 @@ async function expectRefusedWithZeroWrites(env: Awaited<ReturnType<typeof financ
   const before = await databaseState(env.t);
   await expectAppError(create(env, env.quoteId), "QUOTE_PRICING_SNAPSHOT_MISMATCH", QUOTE_PRICING_SNAPSHOT_MISMATCH_MESSAGE);
   expect(await databaseState(env.t)).toEqual(before);
-  expect(await env.t.run((ctx) => ctx.db.query("financeApplications").collect())).toHaveLength(0);
-  const vehicle = await env.t.run((ctx) => ctx.db.get("vehicles", env.vehicleId));
-  expect(vehicle?.status).toBe("AVAILABLE");
 }
 
 describe("SCRUM-533 createFromQuote anchors the quote to its saved pricing snapshot", () => {

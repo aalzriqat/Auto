@@ -2633,14 +2633,15 @@ export const createFromQuote = mutation({
     let totalFinancedAmount: number | undefined;
 
     if (quote.customerQuotePricingSnapshot) {
-      if (quote.customerQuotePricingSnapshot.currency !== economicsCurrency) {
+      const snap = quote.customerQuotePricingSnapshot;
+      if (snap.currency !== economicsCurrency) {
         throw new ConvexError(
-          `Quote currency (${quote.customerQuotePricingSnapshot.currency}) does not match organization currency (${economicsCurrency}).`
+          `Quote currency (${snap.currency}) does not match organization currency (${economicsCurrency}).`
         );
       }
-      // SCRUM-533. Admit only a quote that satisfies the predicate `finalizeDeal` later applies
-      // (SCRUM-528), so every admitted application is finalizable unless the quote changes afterwards.
-      const snap = quote.customerQuotePricingSnapshot;
+      // SCRUM-533. Admit only a quote that passes `finalizeDeal`'s top-level anchor (SCRUM-528,
+      // `quoteAgreesWithSnapshot`), plus a create-only monthlyInstallment check (intentional, c21628), so
+      // an admitted application is finalizable unless the quote changes afterwards.
       if (
         !quoteAgreesWithSnapshot(quote, snap) ||
         (quote.monthlyInstallment !== undefined && quote.monthlyInstallment !== snap.monthlyInstallment)
