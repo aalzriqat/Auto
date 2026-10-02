@@ -171,6 +171,11 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
         updatedAt: Date.now(),
       })
     );
+    // SCRUM-567: the leg only trusts a sale that names this application back (as `completeSale` writes it).
+    if (finalizedSaleId && saleKind !== "deleted") {
+      const saleId = finalizedSaleId;
+      await s.t.run((ctx) => ctx.db.patch(saleId, { applicationId }));
+    }
     if (opts.reconciledFee) {
       await recordReconciledZeroCost(s.asOwner, api, s.orgId, applicationId);
       await s.t.run((ctx) => ctx.db.patch(applicationId, closedFields));
@@ -204,8 +209,6 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
   describe.each<{ name: string; mode: Mode }>([
     { name: "a manual finance company", mode: "MANUAL_FINANCE_COMPANY" },
     { name: "a lease", mode: "LEASE" },
-    { name: "a CASH-mode deal", mode: "CASH" },
-    { name: "a mode-less application", mode: "NONE" },
   ])("$name, closed through the dealership with a completed sale, no company", ({ mode }) => {
     test("DISBURSEMENT is NOT NOT_APPLICABLE: it keeps waiting (UNKNOWN evidence is never NONE)", async () => {
       const s = await seed(`waits_${mode}`);
@@ -221,6 +224,22 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       const attempt = confirm(s, applicationId);
       await expect(attempt).rejects.toThrow(/no finance company — no disbursement expected/i);
       await expect(attempt).rejects.not.toThrow(/no finance company pays the dealership/i);
+    });
+  });
+
+  // SCRUM-567: a CASH sale (any quote mode, including none) that names this application back, with no
+  // company and no manual payer, is PROVABLY financier-less: the leg is NONE. (Before SCRUM-567 these two
+  // rows kept waiting; the finalize-path coverage lives in cashApplicationFinancierLeg.test.ts.)
+  describe.each<{ name: string; mode: Mode }>([
+    { name: "a CASH-mode deal", mode: "CASH" },
+    { name: "a mode-less application", mode: "NONE" },
+  ])("$name, closed with a COMPLETED CASH sale that names it back, no company", ({ mode }) => {
+    test("DISBURSEMENT is NOT_APPLICABLE and confirmDisbursement refuses with the NONE refusal", async () => {
+      const s = await seed(`cashna_${mode}`);
+      const { applicationId } = await insertDeal(s, { mode });
+      const { disbursement } = await stagesOf(s, applicationId);
+      expect(disbursement.state).toBe("NOT_APPLICABLE");
+      await expect(confirm(s, applicationId)).rejects.toThrow(/no finance company pays the dealership/i);
     });
   });
 

@@ -1751,6 +1751,14 @@ const serverErrorMessages = defineBilingualMessages({
     "The cheque's recorded face does not equal the disbursement being confirmed. Correct the expected payment or the cheque before confirming. Nothing has been changed.",
     "المبلغ المسجَّل على الشيك لا يساوي مبلغ الصرف الذي يتم تأكيده. صحّح الدفعة المتوقعة أو الشيك قبل التأكيد. لم يتم تغيير أي شيء.",
   ],
+  ServerError_FINANCE_CONFIRM_NO_FINANCIER_PAYS: [
+    "No finance company pays the dealership on this deal, so there is no disbursement to confirm.",
+    "لا تدفع أي شركة تمويل للمعرض في هذه الصفقة، لذلك لا يوجد صرف لتأكيده.",
+  ],
+  ServerError_FINANCE_CONFIRM_NO_FINANCE_COMPANY: [
+    "This application has no finance company — no disbursement expected.",
+    "لا توجد شركة تمويل لهذا الطلب، ولا يُتوقَّع أي صرف.",
+  ],
   ServerError_CHEQUE_BANK_FEE_INVALID: [
     "The bank fee must be a whole, non-negative amount in minor currency units. Nothing has been changed.",
     "يجب أن تكون رسوم البنك عددًا صحيحًا غير سالب بالوحدات الصغرى للعملة. لم يتم تغيير أي شيء.",
