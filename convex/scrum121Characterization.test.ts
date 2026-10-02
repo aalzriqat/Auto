@@ -687,10 +687,32 @@ describe("SCRUM-121 characterization of current main", () => {
       expect(intents).toHaveLength(0); // nothing was stored to fail later
     });
 
-    // CONTROL — same intent shape without the unvalidated document settles.
+    // CONTROL — same intent shape aimed at a real document of THIS org and
+    // payer settles. (SCRUM-571 S1: an untargeted intent is itself refused now,
+    // so the control must carry a valid target to isolate the foreign one.)
+    const ownDocId = await t.run((ctx) =>
+      ctx.db.insert("receivableDocuments", {
+        orgId,
+        documentType: "INVOICE",
+        documentNumber: "OWN-0001",
+        payerType: "CUSTOMER",
+        customerId,
+        sourceType: "legacy_receivable",
+        sourceId: "own-source",
+        originalAmountMinor: 500_000,
+        currency: "JOD",
+        scale: 3,
+        issueDate: Date.now(),
+        dueDate: DUE(),
+        status: "OPEN",
+        createdAt: Date.now(),
+        createdBy: userId,
+      })
+    );
     const cleanIntentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
+      receivableDocumentId: ownDocId,
       amountMinor: 100_000,
       currency: "JOD",
       provider: "stripe",

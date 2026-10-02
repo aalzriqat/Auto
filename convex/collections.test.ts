@@ -2688,7 +2688,9 @@ describe("SCRUM-263 recordPayment refuses a deposit application", () => {
   test("genuine inbound methods still record (controls)", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
-    for (const method of ["CASH", "BANK_TRANSFER", "CARD", "PAYMENT_LINK"] as const) {
+    // PAYMENT_LINK is deliberately absent: recordPayment refuses it (SCRUM-571 S1);
+    // that refusal is asserted in scrum571ReceiptContainment.test.ts.
+    for (const method of ["CASH", "BANK_TRANSFER", "CARD"] as const) {
       const paymentId = await asFinance.mutation(api.collections.recordPayment, {
         idempotencyKey: crypto.randomUUID(),
         orgId,
