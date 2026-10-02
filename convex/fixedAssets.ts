@@ -26,28 +26,53 @@ import { paymentMethodValidator, PaymentMethod } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertMonthClaim } from "./utils/expenseAmortization";
 import { AppErrorCode, throwAppError } from "./utils/errors";
-import { isFutureUtcDay, isRepresentableTimestamp, utcDay } from "./utils/ledgerCalendar";
+import { interpolate } from "../lib/i18n/interpolate";
+import { isFutureUtcDay, isRepresentableTimestamp, utcDateLabel, utcDay } from "./utils/ledgerCalendar";
 
 const methodValidator = v.literal("STRAIGHT_LINE");
 
 /**
  * SCRUM-542. The English text of every accounting-date refusal `impair` and
  * `dispose` can raise. Must equal `ServerError_<code>` (en) in
- * lib/i18n/domains/common.ts; no amounts or ids, so one string serves every asset.
+ * lib/i18n/domains/common.ts. A `{placeholder}` entry is a template: the server fills the
+ * English message and sends the field beside the code, so the client's
+ * `ServerError_<code>` template is filled in the user's language.
  */
 export const FIXED_ASSET_DATE_REFUSALS = {
   ASSET_EVENT_DATE_INVALID: "The accounting date is not a valid date.",
-  ASSET_EVENT_DATE_IN_FUTURE: "The accounting date cannot be later than today.",
-  ASSET_EVENT_BEFORE_CAPITALIZATION: "The accounting date cannot be earlier than the day the asset was capitalized.",
-  ASSET_EVENT_BEFORE_DEPRECIATION: "The accounting date cannot be earlier than the asset's latest posted depreciation.",
-  ASSET_EVENT_BEFORE_IMPAIRMENT: "The accounting date cannot be earlier than the day the asset was impaired.",
-  ASSET_PURCHASE_DATE_IN_FUTURE: "The purchase date cannot be after today.",
+  ASSET_EVENT_DATE_IN_FUTURE: "The accounting date cannot be later than today ({today}, UTC).",
+  ASSET_EVENT_BEFORE_CAPITALIZATION:
+    "The accounting date cannot be earlier than the day the asset was capitalized. The earliest allowed date is {earliestDate} (UTC).",
+  ASSET_EVENT_BEFORE_DEPRECIATION:
+    "The accounting date cannot be earlier than the asset's latest posted depreciation. The earliest allowed date is {earliestDate} (UTC).",
+  ASSET_EVENT_BEFORE_IMPAIRMENT:
+    "The accounting date cannot be earlier than the day the asset was impaired. The earliest allowed date is {earliestDate} (UTC).",
+  ASSET_PURCHASE_DATE_IN_FUTURE: "The purchase date cannot be after today ({today}, UTC).",
   ASSET_PURCHASE_DATE_INVALID: "The purchase date is not a valid date.",
   ASSET_DEPRECIATION_START_DATE_INVALID: "The depreciation start date is not a valid date.",
 } as const satisfies Record<string, string>;
 
-function refuseAssetDate(code: keyof typeof FIXED_ASSET_DATE_REFUSALS): never {
+/** The payload field each templated refusal fills: the earliest allowed day, or today. */
+const DATED_REFUSAL_FIELD = {
+  ASSET_EVENT_BEFORE_CAPITALIZATION: "earliestDate",
+  ASSET_EVENT_BEFORE_DEPRECIATION: "earliestDate",
+  ASSET_EVENT_BEFORE_IMPAIRMENT: "earliestDate",
+  ASSET_EVENT_DATE_IN_FUTURE: "today",
+  ASSET_PURCHASE_DATE_IN_FUTURE: "today",
+} as const satisfies Record<string, "earliestDate" | "today">;
+
+type DatedRefusalCode = keyof typeof DATED_REFUSAL_FIELD;
+
+/** A refusal with no placeholder: the message is the same for every asset. */
+function refuseAssetDate(code: Exclude<keyof typeof FIXED_ASSET_DATE_REFUSALS, DatedRefusalCode>): never {
   return throwAppError(AppErrorCode[code], FIXED_ASSET_DATE_REFUSALS[code]);
+}
+
+/** A refusal that names a boundary day: `date` fills the template here and, beside the code, the client's. */
+function refuseAssetDateOn(code: DatedRefusalCode, date: string): never {
+  const field = DATED_REFUSAL_FIELD[code];
+  const message = interpolate(FIXED_ASSET_DATE_REFUSALS[code], { [field]: date });
+  throw new ConvexError({ code: AppErrorCode[code], message, [field]: date });
 }
 
 /**
@@ -67,29 +92,40 @@ async function assertAssetEventDate(
   const { orgId, asset, occurredAt, kind } = input;
   if (!isRepresentableTimestamp(occurredAt)) refuseAssetDate("ASSET_EVENT_DATE_INVALID");
   const day = utcDay(occurredAt);
-  if (isFutureUtcDay(occurredAt, Date.now())) refuseAssetDate("ASSET_EVENT_DATE_IN_FUTURE");
+  const now = Date.now(); // read once: the comparison and the label name the same day
+  if (isFutureUtcDay(occurredAt, now)) refuseAssetDateOn("ASSET_EVENT_DATE_IN_FUTURE", utcDateLabel(now));
 
-  const events = await ctx.db
-    .query("fixedAssetEvents")
-    .withIndex("by_org_asset_time", (q) => q.eq("orgId", orgId).eq("assetId", asset._id))
-    .collect();
-  // One pass: the latest occurredAt of each event type that bounds the date.
-  const latest: Partial<Record<Doc<"fixedAssetEvents">["type"], number>> = {};
-  for (const event of events) {
-    if (event.type !== "CAPITALIZE" && event.type !== "DEPRECIATE" && event.type !== "IMPAIR") continue;
-    const seen = latest[event.type];
-    if (seen === undefined || event.occurredAt > seen) latest[event.type] = event.occurredAt;
-  }
+  // The latest event of one type, a single indexed read (never the whole history).
+  const latestOf = async (type: "CAPITALIZE" | "DEPRECIATE" | "IMPAIR") =>
+    (
+      await ctx.db
+        .query("fixedAssetEvents")
+        .withIndex("by_org_asset_type_time", (q) => q.eq("orgId", orgId).eq("assetId", asset._id).eq("type", type))
+        .order("desc")
+        .first()
+    )?.occurredAt;
+  const [capitalizedAt, depreciatedAt, impairedAt] = await Promise.all([
+    latestOf("CAPITALIZE"),
+    latestOf("DEPRECIATE"),
+    kind === "DISPOSE" ? latestOf("IMPAIR") : Promise.resolve(undefined),
+  ]);
 
   // Precedence is the order of this table. A legacy row without a CAPITALIZE
   // event falls back to its purchase date; IMPAIR bounds only a disposal.
-  const bounds: ReadonlyArray<[number | undefined, keyof typeof FIXED_ASSET_DATE_REFUSALS]> = [
-    [latest.CAPITALIZE ?? asset.purchaseDate, "ASSET_EVENT_BEFORE_CAPITALIZATION"],
-    [latest.DEPRECIATE, "ASSET_EVENT_BEFORE_DEPRECIATION"],
-    [kind === "DISPOSE" ? latest.IMPAIR : undefined, "ASSET_EVENT_BEFORE_IMPAIRMENT"],
+  const bounds: ReadonlyArray<[number | undefined, Extract<DatedRefusalCode, `ASSET_EVENT_BEFORE_${string}`>]> = [
+    [capitalizedAt ?? asset.purchaseDate, "ASSET_EVENT_BEFORE_CAPITALIZATION"],
+    [depreciatedAt, "ASSET_EVENT_BEFORE_DEPRECIATION"],
+    [impairedAt, "ASSET_EVENT_BEFORE_IMPAIRMENT"],
   ];
+  // Whole UTC days, so the SAME day is allowed on purpose. The dispose UI sends 00:00 UTC,
+  // depreciation is dated around 03:00 UTC and an impairment at Date.now(), so a view
+  // sorted by occurredAt can show a same-day disposal before that day's depreciation.
+  // An unrepresentable stored bound (NaN, fractional, outside the Date range) is ignored, as a
+  // non-finite one always was. No current writer can store one, and legacy production rows are
+  // wiped at go-live, so nothing depends on it. Day and period totals are unaffected.
+  // The refusal names the same UTC day it compared against.
   for (const [boundAt, code] of bounds) {
-    if (boundAt !== undefined && Number.isFinite(boundAt) && day < utcDay(boundAt)) refuseAssetDate(code);
+    if (boundAt !== undefined && isRepresentableTimestamp(boundAt) && day < utcDay(boundAt)) refuseAssetDateOn(code, utcDateLabel(boundAt));
   }
 }
 
@@ -186,10 +222,10 @@ export const capitalize = mutation({
     if (args.depreciationStartDate !== undefined && !isRepresentableTimestamp(args.depreciationStartDate)) {
       refuseAssetDate("ASSET_DEPRECIATION_START_DATE_INVALID");
     }
-    if (isFutureUtcDay(args.purchaseDate, Date.now())) refuseAssetDate("ASSET_PURCHASE_DATE_IN_FUTURE");
+    const now = Date.now(); // read once: the check, the label and createdAt agree
+    if (isFutureUtcDay(args.purchaseDate, now)) refuseAssetDateOn("ASSET_PURCHASE_DATE_IN_FUTURE", utcDateLabel(now));
 
     const currency = args.currency ?? (await getOrgCurrency(ctx, args.orgId));
-    const now = Date.now();
 
     return await runWithIdempotency(
       ctx,
@@ -547,6 +583,12 @@ export const depreciateAssetForMonth = internalMutation({
     // replay still reaches that skip. Thrown, not a counted skip: a caller/data
     // bug whose throw rolls back before any patch or ledger write.
     assertMonthClaim({ yearMonth: args.yearMonth, occurredAt: args.occurredAt });
+    // Every fixedAssetEvents.occurredAt must be a representable whole-ms instant: the date
+    // guard reads the latest event per type by index order and relies on it. Internal and
+    // cron-only, so a plain Error in the month-claim style, thrown before any write.
+    if (!isRepresentableTimestamp(args.occurredAt)) {
+      throw new Error("Month claim refused: occurredAt is not a whole-millisecond timestamp");
+    }
     // Lexicographic comparison is safe for "YYYY-MM" strings. Equality alone
     // (the old check) only blocked re-running the *same* month — it let a
     // stale/earlier month slip through as a genuine second posting (its

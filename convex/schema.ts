@@ -4898,7 +4898,9 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_asset", ["assetId"])
-    .index("by_org_asset_time", ["orgId", "assetId", "occurredAt"]),
+    .index("by_org_asset_time", ["orgId", "assetId", "occurredAt"])
+    // One bounding event per type for the date guard: the latest of a type is a single read.
+    .index("by_org_asset_type_time", ["orgId", "assetId", "type", "occurredAt"]),
 
   partnerEquity: defineTable({
     orgId: v.id("organizations"),
