@@ -460,6 +460,14 @@ export async function postAccountingEvent(
     .unique();
 
   if (existingByKey) {
+    // SCRUM-515: a forward post is never satisfied by a reversal row. General
+    // key tuple-identity checking is out of scope (SCRUM-544).
+    if (existingByKey.eventType === "JOURNAL_REVERSAL") {
+      throw new Error(
+        `Idempotency key "${cmd.idempotencyKey}" is held by reversal event ${existingByKey._id}; ` +
+          `a forward ${cmd.eventType} post cannot be satisfied by a JOURNAL_REVERSAL (SCRUM-515).`
+      );
+    }
     if (existingByKey.status === "POSTED" && existingByKey.journalEntryId) {
       // The key found something. For the reserved occurrence, prove it is the
       // SAME occurrence with the SAME economics before reporting equivalence.
