@@ -78,9 +78,10 @@ async function checkRefs(t: T, orgId: Id<"organizations">, pairs: ReadonlyArray<
   });
 }
 
-/** Every survivor, across `pairs`, whose reference no longer resolves. */
+/** Every survivor, across `pairs`, whose reference no longer resolves; a wrong-table id counts as dangling too. */
 async function dangling(t: T, orgId: Id<"organizations">, pairs: ReadonlyArray<Pair>): Promise<string[]> {
-  return (await checkRefs(t, orgId, pairs)).dangling;
+  const check = await checkRefs(t, orgId, pairs);
+  return [...check.dangling, ...check.wrongTable.map((k) => `${k} (wrong table)`)];
 }
 
 /** The pairs that resolved no id at all: a vacuous or misspelled path, not a passing one. */
@@ -403,6 +404,13 @@ describe("resetOrgFinancialData keeps a promoted reference resolving after a one
     const bad = await checkRefs(t, orgId, [misspelled]);
     expect(bad.dangling).toEqual([]); // the old check was silent here: it would have passed
     expect(vacuousPairs(bad)).toEqual(["financeDealFees.custodyPosted.custodyID"]);
+  });
+
+  test("CONTROL (N2): dangling() reports a wrong-table pair instead of dropping it", async () => {
+    const { t, orgId } = await seedOrg(seedE4, "E4N2");
+    await onePass(t, orgId);
+    const wrong: Pair = ["financeDealFees", "applicationId", "financeDealCustody"];
+    expect(await dangling(t, orgId, [wrong])).toEqual(["financeDealFees.applicationId -> financeDealCustody (wrong table)"]);
   });
 
   test("CONTROL (F4): an id from a different table is not counted as resolved against the pair's target", async () => {

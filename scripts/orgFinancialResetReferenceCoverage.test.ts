@@ -442,10 +442,12 @@ const snippet = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 100);
  * cannot be read statically; (2) any value-position occurrence of a watched name
  * (`insert`, the helpers, `createReceivable`) outside the recognised direct
  * positions listed on `indirectUse`: element access, `.call`/`.apply`,
- * destructuring, a stored reference, a parenthesised callee; (3) a helper
- * re-exported under another name. NOT covered: a table or function reached by a
- * computed (non-literal) element-access key, or any write that never names one of
- * the watched names. Identifier resolution is deliberately NOT
+ * destructuring, a stored reference, a parenthesised callee; (3) a watched
+ * function rebound under another name by an import alias or an export specifier
+ * (one hop: the alias's value uses, and `export { x as y }` / `export { alias }`).
+ * NOT covered: a computed non-literal element-access key, `export *`, writes that
+ * never name a watched name (including `patch` / `replace`), and cross-file symbol
+ * resolution beyond that one-hop alias-and-export rule. Identifier resolution is deliberately NOT
  * heuristic (the SCRUM-208 lesson, "a number cannot be shadowed"): a name resolves
  * only when the file declares it exactly once, anywhere, as a top-level
  * `const NAME = "literal"`.
@@ -558,22 +560,30 @@ function sourceTypeOf(arg: ts.Expression | undefined, decls: Map<string, ts.Node
  * call of `createReceivableDocument` / `ensureReceivableDocument` under any
  * import alias, or as a namespace member; or a call passing a function reference
  * named after a helper or `createReceivable` (the `runMutation` form). A helper
- * that escapes as a bare value, or is re-exported under another name, is reported
- * as unparsed. Definitions, imports, type positions and comments are not sites.
+ * that escapes as a bare value, or is rebound by an import alias or an export
+ * specifier under another name (one hop only), is reported as unparsed. Not
+ * covered: see the boundary list above (`export *`, computed keys, patch/replace,
+ * cross-file resolution). Definitions, imports, type positions and comments are not sites.
  * Each site's `sourceType` must resolve to a literal or it is reported.
  */
 function scanReceivableDocumentWriters(rawText: string, file = "scanned.ts"): ReceivableWriterScan {
   const sf = parseModule(rawText, file);
   const decls = declarationsByName(sf);
+  // Import aliases of EVERY watched function name. A helper alias is also a recognised
+  // callee; a `createReceivable` alias is only watched, so any use of it is unparsed.
   const aliases = new Set<string>(RECEIVABLE_HELPERS);
+  const refAliases = new Set<string>();
   sf.forEachChild(function findImports(node) {
     if (!ts.isImportDeclaration(node)) return;
     const bindings = node.importClause?.namedBindings;
     if (!bindings || !ts.isNamedImports(bindings)) return;
     for (const el of bindings.elements) {
-      if (RECEIVABLE_HELPERS.has((el.propertyName ?? el.name).text)) aliases.add(el.name.text);
+      const imported = (el.propertyName ?? el.name).text;
+      if (RECEIVABLE_HELPERS.has(imported)) aliases.add(el.name.text);
+      else if (RECEIVABLE_MUTATION_REFS.has(imported)) refAliases.add(el.name.text);
     }
   });
+  const tracked = (name: string) => RECEIVABLE_MUTATION_REFS.has(name) || aliases.has(name) || refAliases.has(name);
 
   const literals = new Set<string>();
   const unparsed: string[] = [];
@@ -608,14 +618,20 @@ function scanReceivableDocumentWriters(rawText: string, file = "scanned.ts"): Re
       } else if (refAt >= 0) {
         record(sourceTypeOf(args[refAt + 1], decls));
       }
-    } else if (ts.isExportSpecifier(node) && node.propertyName && RECEIVABLE_HELPERS.has(node.propertyName.text)) {
-      sites++;
-      unparsed.push(`re-export under a new name: ${snippet(node.getText())}`);
+    } else if (ts.isExportSpecifier(node)) {
+      // One site per specifier: rebinding a watched name under another name, by export
+      // rename or by exporting an import alias. Same-name export of an ORIGINAL name is fine.
+      const local = (node.propertyName ?? node.name).text;
+      const aliasOnly = tracked(local) && !RECEIVABLE_MUTATION_REFS.has(local);
+      if (tracked(local) && (node.name.text !== local || aliasOnly)) {
+        sites++;
+        unparsed.push(`re-export under a new name: ${snippet(node.getText())}`);
+      }
     }
     // Name-keyed escape check, independent of the call shape above: EVERY value-position
     // occurrence of a watched name must sit in a recognised direct position or it is a site.
     let escape: string | null = null;
-    if (ts.isIdentifier(node)) escape = indirectUse(node, aliases);
+    if (ts.isIdentifier(node)) escape = indirectUse(node, aliases, refAliases);
     else if (ts.isElementAccessExpression(node) && !inTypePosition(node)) {
       const key = staticStringOf(node.argumentExpression);
       if (key !== null && WATCHED_NAMES.has(key)) escape = `indirect use of ${key}: ${snippet(node.getText())}`;
@@ -653,10 +669,14 @@ const isKeyPosition = (p: ts.Node, id: ts.Identifier): boolean =>
  * exports (renames are reported separately), object keys and type positions.
  * Destructuring, shorthand properties, element access and every other shape fail closed.
  */
-function indirectUse(id: ts.Identifier, aliases: ReadonlySet<string>): string | null {
+function indirectUse(
+  id: ts.Identifier,
+  aliases: ReadonlySet<string>,
+  refAliases: ReadonlySet<string>
+): string | null {
   const name = id.text;
   const base = WATCHED_NAMES.has(name);
-  if (!base && !aliases.has(name)) return null;
+  if (!base && !aliases.has(name) && !refAliases.has(name)) return null;
   if (inTypePosition(id)) return null;
   const p = id.parent;
   const bad = (n: ts.Node) => `indirect use of ${name}: ${snippet(n.getText())}`;
@@ -927,6 +947,42 @@ describe("receivableDocuments.sourceId opaque references stay pinned", () => {
     const scan = scanReceivableDocumentWriters(source);
     expect(scan.unparsed.length).toBeGreaterThan(0);
     expect(scan.unparsed.some((u) => /^indirect use of /.test(u))).toBe(true);
+  });
+
+  // ── SCRUM-559 round 3: rebinding a watched function under ANY other name is visible ──
+  test.each([
+    ["(1) a re-export of createReceivable under a new name", 'export { createReceivable as renamed } from "./subledger";'],
+    [
+      "(2) an import alias of createReceivable, exported",
+      'import { createReceivable as r } from "./subledger"; export { r };',
+    ],
+    [
+      "(3a) an import alias of a helper, exported",
+      'import { ensureReceivableDocument as e } from "./subledger"; export { e };',
+    ],
+    [
+      "(3b) an import alias of a helper, exported under yet another name",
+      'import { ensureReceivableDocument as e } from "./subledger"; export { e as other };',
+    ],
+    [
+      "(4) an import alias of createReceivable used as a value",
+      'import { createReceivable as r } from "./subledger"; const f = r;',
+    ],
+  ])("MUTATION CONTROL: %s is exactly one unparsed site", (_name, source) => {
+    const scan = scanReceivableDocumentWriters(source);
+    expect(scan.sites).toBe(1);
+    expect(scan.unparsed).toHaveLength(1);
+  });
+
+  test("MUTATION CONTROL: a same-name re-export of an original watched name is not a site", () => {
+    expect(scanReceivableDocumentWriters('export { ensureReceivableDocument } from "./subledger";')).toEqual({
+      sites: 0,
+      literals: [],
+      unparsed: [],
+    });
+    expect(
+      scanReceivableDocumentWriters("export const createReceivable = internalMutation({}); export { createReceivable };")
+    ).toEqual({ sites: 0, literals: [], unparsed: [] });
   });
 
   test("MUTATION CONTROL: benign look-alikes are NOT sites (no false red)", () => {
