@@ -4869,6 +4869,9 @@ export default defineSchema({
     disposalProceedsMinor: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
+    // Live rows never set isDeleted (the only writer sets true), so `eq("isDeleted", undefined)`
+    // is exactly "not deleted" — lets `list` page live rows only, with no post-index filter.
+    .index("by_org_deleted", ["orgId", "isDeleted"])
     .index("by_status", ["status"]),
 
   // Immutable, append-only log of every capitalization/depreciation/impairment/

@@ -355,7 +355,8 @@ describe("SCRUM-302 F3 — fixed asset depreciation cron vs org lifecycle", () =
       orgId: dealer.orgId,
       assetId,
       yearMonth: `${new Date().getUTCFullYear()}-01`,
-      occurredAt: Date.now(),
+      // SCRUM-542: the posting must be dated inside the month it claims.
+      occurredAt: Date.UTC(new Date().getUTCFullYear(), 0, 15, 12),
       systemActorId: dealer.userId,
     });
 

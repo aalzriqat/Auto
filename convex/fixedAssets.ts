@@ -24,8 +24,79 @@ import {
 } from "./accounting/workflowHooks";
 import { paymentMethodValidator, PaymentMethod } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
+import { assertMonthClaim } from "./utils/expenseAmortization";
+import { AppErrorCode, throwAppError } from "./utils/errors";
 
 const methodValidator = v.literal("STRAIGHT_LINE");
+
+const DAY_MS = 86_400_000;
+
+/** UTC calendar day number of an instant — the ledger's calendar, compared by day, never by time of day. */
+function utcDay(ms: number): number {
+  return Math.floor(ms / DAY_MS);
+}
+
+/**
+ * SCRUM-542. The English text of every accounting-date refusal `impair` and
+ * `dispose` can raise. Must equal `ServerError_<code>` (en) in
+ * lib/i18n/domains/common.ts; no amounts or ids, so one string serves every asset.
+ */
+export const FIXED_ASSET_DATE_REFUSALS = {
+  ASSET_EVENT_DATE_INVALID: "The accounting date is not a valid date.",
+  ASSET_EVENT_DATE_IN_FUTURE: "The accounting date cannot be later than today.",
+  ASSET_EVENT_BEFORE_CAPITALIZATION: "The accounting date cannot be earlier than the day the asset was capitalized.",
+  ASSET_EVENT_BEFORE_DEPRECIATION: "The accounting date cannot be earlier than the asset's latest posted depreciation.",
+  ASSET_EVENT_BEFORE_IMPAIRMENT: "The accounting date cannot be earlier than the day the asset was impaired.",
+} as const satisfies Record<string, string>;
+
+function refuseAssetDate(code: keyof typeof FIXED_ASSET_DATE_REFUSALS): never {
+  return throwAppError(AppErrorCode[code], FIXED_ASSET_DATE_REFUSALS[code]);
+}
+
+/**
+ * SCRUM-542 invariant: an impairment or disposal is dated on a UTC day that has
+ * begun, and never before the asset's own earlier events — capitalization, the
+ * latest posted depreciation, and (for a disposal of an impaired asset) the
+ * impairment. Days compare as whole UTC days, so the same day is always allowed.
+ * Raised before the caller's first write.
+ *
+ * Out of scope here (SCRUM-560): catch-up depreciation, GL-posted prerequisites
+ * and period-lock gates.
+ */
+async function assertAssetEventDate(
+  ctx: MutationCtx,
+  input: { orgId: Id<"organizations">; asset: Doc<"fixedAssets">; occurredAt: number; kind: "IMPAIR" | "DISPOSE" }
+): Promise<void> {
+  const { orgId, asset, occurredAt, kind } = input;
+  if (!Number.isFinite(occurredAt)) refuseAssetDate("ASSET_EVENT_DATE_INVALID");
+  const day = utcDay(occurredAt);
+  if (day > utcDay(Date.now())) refuseAssetDate("ASSET_EVENT_DATE_IN_FUTURE");
+
+  const events = await ctx.db
+    .query("fixedAssetEvents")
+    .withIndex("by_org_asset_time", (q) => q.eq("orgId", orgId).eq("assetId", asset._id))
+    .collect();
+  const latestOf = (type: Doc<"fixedAssetEvents">["type"]): number | undefined => {
+    const times = events.filter((event) => event.type === type).map((event) => event.occurredAt);
+    return times.length > 0 ? Math.max(...times) : undefined;
+  };
+
+  // A legacy row without a CAPITALIZE event falls back to its purchase date.
+  const capitalizedAt = latestOf("CAPITALIZE") ?? asset.purchaseDate;
+  if (Number.isFinite(capitalizedAt) && day < utcDay(capitalizedAt)) {
+    refuseAssetDate("ASSET_EVENT_BEFORE_CAPITALIZATION");
+  }
+  const depreciatedAt = latestOf("DEPRECIATE");
+  if (depreciatedAt !== undefined && day < utcDay(depreciatedAt)) {
+    refuseAssetDate("ASSET_EVENT_BEFORE_DEPRECIATION");
+  }
+  if (kind === "DISPOSE") {
+    const impairedAt = latestOf("IMPAIR");
+    if (impairedAt !== undefined && day < utcDay(impairedAt)) {
+      refuseAssetDate("ASSET_EVENT_BEFORE_IMPAIRMENT");
+    }
+  }
+}
 
 export const list = query({
   args: {
@@ -34,11 +105,14 @@ export const list = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    // Pages LIVE rows only, through the index: a post-index `.filter` made a page
+    // of deleted rows look empty. `isDeleted` is unset on live rows and true once
+    // soft-deleted; `lt(true)` also keeps a row an admin restore set to `false`.
     return await ctx.db
       .query("fixedAssets")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .withIndex("by_org_deleted", (q) => q.eq("orgId", args.orgId).lt("isDeleted", true))
       .order("desc")
-      .filter((q) => q.neq(q.field("isDeleted"), true)).paginate(args.paginationOpts);
+      .paginate(args.paginationOpts);
   },
 });
 
@@ -303,6 +377,7 @@ export const impair = mutation({
     }
 
     const occurredAt = args.occurredAt ?? Date.now();
+    await assertAssetEventDate(ctx, { orgId: args.orgId, asset, occurredAt, kind: "IMPAIR" });
     const currency = asset.currency ?? (await getOrgCurrency(ctx, args.orgId));
 
     await ctx.db.patch(args.assetId, {
@@ -363,6 +438,7 @@ export const dispose = mutation({
     }
 
     const occurredAt = args.occurredAt ?? Date.now();
+    await assertAssetEventDate(ctx, { orgId: args.orgId, asset, occurredAt, kind: "DISPOSE" });
     const currency = asset.currency ?? (await getOrgCurrency(ctx, args.orgId));
     const accumulatedDepreciationMinor = asset.accumulatedDepreciationMinor ?? 0;
 
@@ -456,6 +532,13 @@ export const depreciateAssetForMonth = internalMutation({
     const asset = await ctx.db.get(args.assetId);
     if (!asset || asset.orgId !== args.orgId || asset.isDeleted) return { posted: false, reason: "not_found" };
     if (asset.status !== "ACTIVE") return { posted: false, reason: "not_active" };
+    // SCRUM-542 — the posting must be dated inside the month it claims. Enforced
+    // HERE, at the mutation boundary (this is an internal mutation any caller can
+    // invoke), after the lifecycle classification above and BEFORE the replay skip
+    // below, so a malformed claim is never laundered into a benign skip. A valid
+    // replay still reaches that skip. Thrown, not a counted skip: a caller/data
+    // bug whose throw rolls back before any patch or ledger write.
+    assertMonthClaim({ yearMonth: args.yearMonth, occurredAt: args.occurredAt });
     // Lexicographic comparison is safe for "YYYY-MM" strings. Equality alone
     // (the old check) only blocked re-running the *same* month — it let a
     // stale/earlier month slip through as a genuine second posting (its
@@ -526,9 +609,13 @@ export const depreciateAssetForMonth = internalMutation({
 /**
  * Not org-scoped: the monthly depreciation cron runs across every tenant, so
  * it needs a global (by_status, not by_org) index scan. Paginated — the cron
- * action loops pages until exhausted, so no fleet size silently truncates
- * the run (a flat .take(N) here would skip every asset past N with a
- * success-looking summary).
+ * action loops pages until exhausted (crons.ts runMonthlyCron drains cursors
+ * until isDone), so no fleet size silently truncates the run (a flat .take(N)
+ * here would skip every asset past N with a success-looking summary).
+ *
+ * Soft-deleted rows are dropped from each page in JS rather than by a
+ * `.filter`; a page may therefore be shorter than numItems (even empty) while
+ * `isDone` is still false, which the draining caller already handles.
  */
 export const listActiveAssetsForDepreciation = internalQuery({
   args: {
@@ -536,10 +623,10 @@ export const listActiveAssetsForDepreciation = internalQuery({
     numItems: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const result = await ctx.db
       .query("fixedAssets")
       .withIndex("by_status", (q) => q.eq("status", "ACTIVE"))
-      .filter((q) => q.neq(q.field("isDeleted"), true))
       .paginate({ cursor: args.cursor ?? null, numItems: args.numItems ?? 200 });
+    return { ...result, page: result.page.filter((asset) => asset.isDeleted !== true) };
   },
 });

@@ -18,6 +18,13 @@ const MODULE_GLOB = import.meta.glob("./**/*.ts");
 // before those months, or the schedule-start guard (correctly) skips them.
 const PAST_PURCHASE_DATE = Date.UTC(2025, 11, 1);
 
+// SCRUM-542: a depreciation claim for "YYYY-MM" must be dated INSIDE that UTC
+// month (the mutation refuses otherwise), so tests pass the month's 15th.
+function monthMid(yearMonth: string): number {
+  const [year, month] = yearMonth.split("-").map(Number);
+  return Date.UTC(year, month - 1, 15, 12);
+}
+
 async function seedAssetDealer() {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
@@ -84,8 +91,7 @@ async function eventsOfType(t: Awaited<ReturnType<typeof seedAssetDealer>>["t"],
   return await t.run((ctx) =>
     ctx.db
       .query("accountingEvents")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId))
-      .filter((q) => q.eq(q.field("eventType"), eventType))
+      .withIndex("by_org_eventType", (q) => q.eq("orgId", orgId).eq("eventType", eventType))
       .collect()
   );
 }
@@ -260,7 +266,7 @@ describe("Phase 11 — monthly depreciation", () => {
     });
 
     const first = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
-      orgId, assetId, yearMonth: "2026-01", occurredAt: Date.now(), systemActorId: userId,
+      orgId, assetId, yearMonth: "2026-01", occurredAt: monthMid("2026-01"), systemActorId: userId,
     });
     expect(first.posted).toBe(true);
     expect(first.amountMinor).toBe(100_000);
@@ -284,7 +290,7 @@ describe("Phase 11 — monthly depreciation", () => {
     // Re-running for the same month must be a no-op — this is the acceptance
     // gate that a cron redrive/redeploy can't double-post.
     const second = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
-      orgId, assetId, yearMonth: "2026-01", occurredAt: Date.now(), systemActorId: userId,
+      orgId, assetId, yearMonth: "2026-01", occurredAt: monthMid("2026-01"), systemActorId: userId,
     });
     expect(second.posted).toBe(false);
     expect(second.reason).toBe("not_after_last_depreciated_month");
@@ -308,7 +314,7 @@ describe("Phase 11 — monthly depreciation", () => {
     for (let month = 1; month <= 12; month++) {
       const yearMonth = `2026-${String(month).padStart(2, "0")}`;
       const result = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
-        orgId, assetId, yearMonth, occurredAt: Date.now(), systemActorId: userId,
+        orgId, assetId, yearMonth, occurredAt: monthMid(yearMonth), systemActorId: userId,
       });
       expect(result.posted).toBe(true);
     }
@@ -317,7 +323,7 @@ describe("Phase 11 — monthly depreciation", () => {
     expect(asset?.accumulatedDepreciationMinor).toBe(1_200_000);
 
     const thirteenth = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
-      orgId, assetId, yearMonth: "2027-01", occurredAt: Date.now(), systemActorId: userId,
+      orgId, assetId, yearMonth: "2027-01", occurredAt: monthMid("2027-01"), systemActorId: userId,
     });
     expect(thirteenth.posted).toBe(false);
     expect(thirteenth.reason).toBe("fully_depreciated");
@@ -349,7 +355,7 @@ describe("Phase 11 — monthly depreciation", () => {
     await asOwner.mutation(api.fixedAssets.dispose, { orgId, assetId, proceedsMinor: 200_000 });
 
     const result = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
-      orgId, assetId, yearMonth: "2026-01", occurredAt: Date.now(), systemActorId: userId,
+      orgId, assetId, yearMonth: "2026-01", occurredAt: monthMid("2026-01"), systemActorId: userId,
     });
     expect(result.posted).toBe(false);
     expect(result.reason).toBe("not_active");
@@ -369,14 +375,14 @@ describe("Phase 11 — monthly depreciation", () => {
     });
 
     const early = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
-      orgId, assetId, yearMonth: "2026-03", occurredAt: Date.now(), systemActorId: userId,
+      orgId, assetId, yearMonth: "2026-03", occurredAt: monthMid("2026-03"), systemActorId: userId,
     });
     expect(early.posted).toBe(false);
     expect(early.reason).toBe("before_depreciation_start");
     expect(await eventsOfType(t, orgId, "DEPRECIATION_POSTED")).toHaveLength(0);
 
     const onTime = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
-      orgId, assetId, yearMonth: "2026-06", occurredAt: Date.now(), systemActorId: userId,
+      orgId, assetId, yearMonth: "2026-06", occurredAt: monthMid("2026-06"), systemActorId: userId,
     });
     expect(onTime.posted).toBe(true);
   });
@@ -395,7 +401,7 @@ describe("Phase 11 — monthly depreciation", () => {
     });
 
     const first = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
-      orgId, assetId, yearMonth: "2026-01", occurredAt: Date.now(), systemActorId: userId,
+      orgId, assetId, yearMonth: "2026-01", occurredAt: monthMid("2026-01"), systemActorId: userId,
     });
     expect(first.posted).toBe(true);
     expect(first.amountMinor).toBe(1);
@@ -419,13 +425,13 @@ describe("Phase 11 — monthly depreciation", () => {
     });
 
     const m1 = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
-      orgId, assetId, yearMonth: "2026-01", occurredAt: Date.now(), systemActorId: userId,
+      orgId, assetId, yearMonth: "2026-01", occurredAt: monthMid("2026-01"), systemActorId: userId,
     });
     const m2 = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
-      orgId, assetId, yearMonth: "2026-02", occurredAt: Date.now(), systemActorId: userId,
+      orgId, assetId, yearMonth: "2026-02", occurredAt: monthMid("2026-02"), systemActorId: userId,
     });
     const m3 = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
-      orgId, assetId, yearMonth: "2026-03", occurredAt: Date.now(), systemActorId: userId,
+      orgId, assetId, yearMonth: "2026-03", occurredAt: monthMid("2026-03"), systemActorId: userId,
     });
     expect(m1.posted && m2.posted && m3.posted).toBe(true);
     expect((m1.amountMinor ?? 0) + (m2.amountMinor ?? 0) + (m3.amountMinor ?? 0)).toBe(100);
@@ -436,7 +442,7 @@ describe("Phase 11 — monthly depreciation", () => {
     // A 4th month must find nothing left — the schedule finished in exactly
     // usefulLifeMonths (3), never needing a 4th.
     const m4 = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
-      orgId, assetId, yearMonth: "2026-04", occurredAt: Date.now(), systemActorId: userId,
+      orgId, assetId, yearMonth: "2026-04", occurredAt: monthMid("2026-04"), systemActorId: userId,
     });
     expect(m4.posted).toBe(false);
     expect(m4.reason).toBe("fully_depreciated");
@@ -454,10 +460,10 @@ describe("Phase 11 — monthly depreciation", () => {
     });
 
     await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
-      orgId, assetId, yearMonth: "2026-08", occurredAt: Date.now(), systemActorId: userId,
+      orgId, assetId, yearMonth: "2026-08", occurredAt: monthMid("2026-08"), systemActorId: userId,
     });
     const earlier = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
-      orgId, assetId, yearMonth: "2026-07", occurredAt: Date.now(), systemActorId: userId,
+      orgId, assetId, yearMonth: "2026-07", occurredAt: monthMid("2026-07"), systemActorId: userId,
     });
     expect(earlier.posted).toBe(false);
     expect(earlier.reason).toBe("not_after_last_depreciated_month");
@@ -527,7 +533,7 @@ describe("Phase 11 — impairment", () => {
       usefulLifeMonths: 50,
     });
     await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
-      orgId, assetId, yearMonth: "2026-01", occurredAt: Date.now(), systemActorId: userId,
+      orgId, assetId, yearMonth: "2026-01", occurredAt: monthMid("2026-01"), systemActorId: userId,
     });
 
     await asOwner.mutation(api.fixedAssets.impair, { orgId, assetId, amountMinor: 200_000 });
@@ -623,7 +629,7 @@ describe("Phase 11 — disposal", () => {
       usefulLifeMonths: 50,
     });
     await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
-      orgId, assetId, yearMonth: "2026-01", occurredAt: Date.now(), systemActorId: userId,
+      orgId, assetId, yearMonth: "2026-01", occurredAt: monthMid("2026-01"), systemActorId: userId,
     });
 
     await asOwner.mutation(api.fixedAssets.dispose, { orgId, assetId, proceedsMinor: 550_000 });
@@ -651,7 +657,7 @@ describe("Phase 11 — disposal", () => {
       usefulLifeMonths: 50,
     });
     await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
-      orgId, assetId, yearMonth: "2026-01", occurredAt: Date.now(), systemActorId: userId,
+      orgId, assetId, yearMonth: "2026-01", occurredAt: monthMid("2026-01"), systemActorId: userId,
     });
 
     await asOwner.mutation(api.fixedAssets.dispose, { orgId, assetId, proceedsMinor: 490_000 });
@@ -747,5 +753,317 @@ describe("Phase 11 — soft delete guard", () => {
     const legacy = await t.run((ctx) => ctx.db.get(legacyId));
     expect(disposed?.isDeleted).toBe(true);
     expect(legacy?.isDeleted).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCRUM-542 slice A1 — month-claim guard, UTC-day temporal guards, list visibility
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DAY_MS = 86_400_000;
+const utcDayStart = (ms: number) => Math.floor(ms / DAY_MS) * DAY_MS;
+
+type Seed = Awaited<ReturnType<typeof seedAssetDealer>>;
+
+async function footprint(seed: Seed, assetId: Id<"fixedAssets">) {
+  const { t, orgId } = seed;
+  return {
+    asset: await t.run((ctx) => ctx.db.get(assetId)),
+    fixedAssetEvents: (
+      await t.run((ctx) => ctx.db.query("fixedAssetEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect())
+    ).length,
+    accountingEvents: (
+      await t.run((ctx) => ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect())
+    ).length,
+  };
+}
+
+/** The structured code of a refusal, "RESOLVED" when the call did not refuse, or the raw message when uncoded. */
+async function refusalCode(attempt: Promise<unknown>): Promise<string> {
+  try {
+    await attempt;
+  } catch (caught) {
+    const error = caught as { data?: { code?: string }; message?: string };
+    return error.data?.code ?? `UNCODED: ${error.message}`;
+  }
+  return "RESOLVED";
+}
+
+describe("SCRUM-542 — depreciation month-claim guard", () => {
+  async function seedVan() {
+    const seed = await seedAssetDealer();
+    const assetId = await seed.asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId: seed.orgId,
+      name: "Claim Guard Van",
+      purchaseDate: PAST_PURCHASE_DATE,
+      costMinor: 1_200_000,
+      usefulLifeMonths: 12,
+    });
+    return { ...seed, assetId };
+  }
+
+  test("a posting dated outside its claimed yearMonth throws and writes nothing", async () => {
+    const seed = await seedVan();
+    const before = await footprint(seed, seed.assetId);
+    await expect(
+      seed.t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
+        orgId: seed.orgId, assetId: seed.assetId, yearMonth: "2026-01",
+        occurredAt: monthMid("2026-02"), systemActorId: seed.userId,
+      })
+    ).rejects.toThrow(/occurredAt is not within 2026-01/);
+    expect(await footprint(seed, seed.assetId)).toEqual(before);
+  });
+
+  test("a non-finite occurredAt throws", async () => {
+    const seed = await seedVan();
+    await expect(
+      seed.t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
+        orgId: seed.orgId, assetId: seed.assetId, yearMonth: "2026-01",
+        occurredAt: Number.NaN, systemActorId: seed.userId,
+      })
+    ).rejects.toThrow(/occurredAt is not within 2026-01/);
+  });
+
+  test.each(["2026-13", "2026-00", "garbage", "2026-1", "26-01"])("a malformed yearMonth %s throws", async (yearMonth) => {
+    const seed = await seedVan();
+    const before = await footprint(seed, seed.assetId);
+    await expect(
+      seed.t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
+        orgId: seed.orgId, assetId: seed.assetId, yearMonth,
+        occurredAt: monthMid("2026-01"), systemActorId: seed.userId,
+      })
+    ).rejects.toThrow(/yearMonth is not YYYY-MM/);
+    expect(await footprint(seed, seed.assetId)).toEqual(before);
+  });
+
+  test("CONTROL: a valid replay of an already-posted month still returns its benign skip", async () => {
+    const seed = await seedVan();
+    const args = {
+      orgId: seed.orgId, assetId: seed.assetId, yearMonth: "2026-01",
+      occurredAt: monthMid("2026-01"), systemActorId: seed.userId,
+    };
+    expect((await seed.t.mutation(internal.fixedAssets.depreciateAssetForMonth, args)).posted).toBe(true);
+    const replay = await seed.t.mutation(internal.fixedAssets.depreciateAssetForMonth, args);
+    expect(replay).toEqual({ posted: false, reason: "not_after_last_depreciated_month" });
+  });
+
+  test("a MALFORMED replay of an already-posted month throws instead of skipping", async () => {
+    const seed = await seedVan();
+    await seed.t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
+      orgId: seed.orgId, assetId: seed.assetId, yearMonth: "2026-01",
+      occurredAt: monthMid("2026-01"), systemActorId: seed.userId,
+    });
+    await expect(
+      seed.t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
+        orgId: seed.orgId, assetId: seed.assetId, yearMonth: "2026-01",
+        occurredAt: monthMid("2026-03"), systemActorId: seed.userId,
+      })
+    ).rejects.toThrow(/occurredAt is not within 2026-01/);
+  });
+});
+
+describe.each(["impair", "dispose"] as const)("SCRUM-542 — %s UTC-day guards", (operation) => {
+  const capitalizedDay = utcDayStart(Date.now()) - 20 * DAY_MS;
+
+  async function seedAsset() {
+    const seed = await seedAssetDealer();
+    const assetId = await seed.asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId: seed.orgId,
+      name: "Guarded Asset",
+      purchaseDate: capitalizedDay + 5 * 3_600_000,
+      costMinor: 600_000,
+      usefulLifeMonths: 60,
+    });
+    return { ...seed, assetId };
+  }
+
+  function act(seed: Seed & { assetId: Id<"fixedAssets"> }, occurredAt: number | undefined) {
+    return operation === "impair"
+      ? seed.asOwner.mutation(api.fixedAssets.impair, {
+          orgId: seed.orgId, assetId: seed.assetId, amountMinor: 10_000, occurredAt,
+        })
+      : seed.asOwner.mutation(api.fixedAssets.dispose, {
+          orgId: seed.orgId, assetId: seed.assetId, proceedsMinor: 0, occurredAt,
+        });
+  }
+
+  async function expectRefusedWithoutWrites(
+    seed: Seed & { assetId: Id<"fixedAssets"> },
+    occurredAt: number,
+    code: string
+  ) {
+    const before = await footprint(seed, seed.assetId);
+    expect(await refusalCode(act(seed, occurredAt))).toBe(code);
+    expect(await footprint(seed, seed.assetId)).toEqual(before);
+  }
+
+  test("a date on a future UTC day is refused with zero writes; today is admitted", async () => {
+    const seed = await seedAsset();
+    await expectRefusedWithoutWrites(seed, Date.now() + DAY_MS, "ASSET_EVENT_DATE_IN_FUTURE");
+    await act(seed, Date.now());
+    expect((await footprint(seed, seed.assetId)).asset?.status).toBe(operation === "impair" ? "IMPAIRED" : "DISPOSED");
+  });
+
+  test("the UTC midnight that starts today is admitted (same day, earlier time)", async () => {
+    const seed = await seedAsset();
+    await act(seed, utcDayStart(Date.now()));
+    expect((await footprint(seed, seed.assetId)).asset?.status).toBe(operation === "impair" ? "IMPAIRED" : "DISPOSED");
+  });
+
+  test("a non-finite date is refused with zero writes", async () => {
+    const seed = await seedAsset();
+    await expectRefusedWithoutWrites(seed, Number.NaN, "ASSET_EVENT_DATE_INVALID");
+  });
+
+  test("a date before the capitalization day is refused with zero writes; the same day is admitted", async () => {
+    const seed = await seedAsset();
+    await expectRefusedWithoutWrites(seed, capitalizedDay - 1, "ASSET_EVENT_BEFORE_CAPITALIZATION");
+    await act(seed, capitalizedDay); // capitalized at 05:00 that day; midnight is the SAME UTC day
+    expect((await footprint(seed, seed.assetId)).asset?.status).toBe(operation === "impair" ? "IMPAIRED" : "DISPOSED");
+  });
+
+  test("a date before the latest cron DEPRECIATE event day is refused; the same day is admitted", async () => {
+    const seed = await seedAsset();
+    const summary: string = await seed.t.action(internal.crons.triggerFixedAssetDepreciation, {});
+    expect(summary).toMatch(/posted 1\/1/i);
+    const depreciated = await seed.t.run((ctx) =>
+      ctx.db.query("fixedAssetEvents").withIndex("by_asset", (q) => q.eq("assetId", seed.assetId)).collect()
+    );
+    const depreciateDay = utcDayStart(Math.max(...depreciated.filter((e) => e.type === "DEPRECIATE").map((e) => e.occurredAt)));
+
+    await expectRefusedWithoutWrites(seed, depreciateDay - DAY_MS, "ASSET_EVENT_BEFORE_DEPRECIATION");
+    await act(seed, depreciateDay);
+    expect((await footprint(seed, seed.assetId)).asset?.status).toBe(operation === "impair" ? "IMPAIRED" : "DISPOSED");
+  });
+});
+
+describe("SCRUM-542 — dispose of an IMPAIRED asset", () => {
+  test("a disposal dated before the impairment day is refused with zero writes; the same day is admitted", async () => {
+    const seed = await seedAssetDealer();
+    const capitalizedDay = utcDayStart(Date.now()) - 20 * DAY_MS;
+    const impairedDay = utcDayStart(Date.now()) - 5 * DAY_MS;
+    const assetId = await seed.asOwner.mutation(api.fixedAssets.capitalize, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId: seed.orgId,
+      name: "Impaired Then Disposed",
+      purchaseDate: capitalizedDay + 3_600_000,
+      costMinor: 600_000,
+      usefulLifeMonths: 60,
+    });
+    await seed.asOwner.mutation(api.fixedAssets.impair, {
+      orgId: seed.orgId, assetId, amountMinor: 10_000, occurredAt: impairedDay + 12 * 3_600_000,
+    });
+
+    const before = await footprint(seed, assetId);
+    expect(
+      await refusalCode(
+        seed.asOwner.mutation(api.fixedAssets.dispose, {
+          orgId: seed.orgId, assetId, proceedsMinor: 0, occurredAt: impairedDay - 1,
+        })
+      )
+    ).toBe("ASSET_EVENT_BEFORE_IMPAIRMENT");
+    expect(await footprint(seed, assetId)).toEqual(before);
+
+    await seed.asOwner.mutation(api.fixedAssets.dispose, {
+      orgId: seed.orgId, assetId, proceedsMinor: 0, occurredAt: impairedDay,
+    });
+    expect((await footprint(seed, assetId)).asset?.status).toBe("DISPOSED");
+  });
+});
+
+describe("SCRUM-542 — fixed asset list visibility", () => {
+  test("a live asset is on the FIRST page even when 100+ deleted rows sort ahead of it", async () => {
+    const { t, orgId, asOwner } = await seedAssetDealer();
+    const liveId = await t.run((ctx) =>
+      ctx.db.insert("fixedAssets", { orgId, name: "Live", purchaseDate: Date.now(), costMinor: 1000 })
+    );
+    // Inserted AFTER the live row, so the desc-ordered scan meets all 105 first.
+    for (let i = 0; i < 105; i++) {
+      await t.run((ctx) =>
+        ctx.db.insert("fixedAssets", { orgId, name: `Deleted ${i}`, purchaseDate: Date.now(), isDeleted: true })
+      );
+    }
+    const page = await asOwner.query(api.fixedAssets.list, {
+      orgId, paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(page.page.map((row) => row._id)).toEqual([liveId]);
+    expect(page.isDone).toBe(true);
+  });
+
+  test("CONTROL: a live asset created AFTER the deleted rows is listed too", async () => {
+    const { t, orgId, asOwner } = await seedAssetDealer();
+    for (let i = 0; i < 105; i++) {
+      await t.run((ctx) =>
+        ctx.db.insert("fixedAssets", { orgId, name: `Deleted ${i}`, purchaseDate: Date.now(), isDeleted: true })
+      );
+    }
+    const liveId = await t.run((ctx) =>
+      ctx.db.insert("fixedAssets", { orgId, name: "Live", purchaseDate: Date.now(), costMinor: 1000 })
+    );
+    const page = await asOwner.query(api.fixedAssets.list, {
+      orgId, paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(page.page.map((row) => row._id)).toEqual([liveId]);
+  });
+
+  test("CONTROL: an asset an admin restore left with isDeleted=false stays listed", async () => {
+    const { t, orgId, asOwner } = await seedAssetDealer();
+    const restoredId = await t.run((ctx) =>
+      ctx.db.insert("fixedAssets", { orgId, name: "Restored", purchaseDate: Date.now(), costMinor: 1000, isDeleted: false })
+    );
+    const page = await asOwner.query(api.fixedAssets.list, {
+      orgId, paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(page.page.map((row) => row._id)).toEqual([restoredId]);
+  });
+
+  test("the cron's active-asset listing never returns a deleted asset, across pages", async () => {
+    const { t, orgId } = await seedAssetDealer();
+    const liveIds: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      liveIds.push(
+        await t.run((ctx) =>
+          ctx.db.insert("fixedAssets", { orgId, name: `Live ${i}`, purchaseDate: Date.now(), costMinor: 1000, status: "ACTIVE" })
+        )
+      );
+      await t.run((ctx) =>
+        ctx.db.insert("fixedAssets", { orgId, name: `Gone ${i}`, purchaseDate: Date.now(), costMinor: 1000, status: "ACTIVE", isDeleted: true })
+      );
+    }
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let guard = 0; guard < 20; guard++) {
+      const page = await t.query(internal.fixedAssets.listActiveAssetsForDepreciation, { cursor, numItems: 2 });
+      seen.push(...page.page.map((row) => row._id));
+      if (page.isDone) break;
+      cursor = page.continueCursor;
+    }
+    expect(seen.sort()).toEqual([...liveIds].sort());
+  });
+});
+
+describe("SCRUM-542 — refusal translations", () => {
+  test("every new asset-date code has en and ar ServerError_ entries; en equals the server message", async () => {
+    const { FIXED_ASSET_DATE_REFUSALS } = await import("./fixedAssets");
+    const { dictionaries } = await import("../lib/i18n/dictionaries");
+    const codes = Object.keys(FIXED_ASSET_DATE_REFUSALS);
+    expect(codes.sort()).toEqual([
+      "ASSET_EVENT_BEFORE_CAPITALIZATION",
+      "ASSET_EVENT_BEFORE_DEPRECIATION",
+      "ASSET_EVENT_BEFORE_IMPAIRMENT",
+      "ASSET_EVENT_DATE_INVALID",
+      "ASSET_EVENT_DATE_IN_FUTURE",
+    ]);
+    for (const code of codes) {
+      const key = `ServerError_${code}`;
+      const en = (dictionaries.en as Record<string, string>)[key];
+      const ar = (dictionaries.ar as Record<string, string>)[key];
+      expect(en, `${key} en`).toBe((FIXED_ASSET_DATE_REFUSALS as Record<string, string>)[code]);
+      expect(ar, `${key} ar`).toMatch(/[؀-ۿ]/);
+    }
+    expect((dictionaries.en as Record<string, string>).DisposalAccountingDateLabel).toBeTruthy();
+    expect((dictionaries.ar as Record<string, string>).DisposalAccountingDateLabel).toMatch(/[؀-ۿ]/);
   });
 });

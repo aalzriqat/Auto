@@ -89,6 +89,13 @@ export const AppErrorCode = {
   // SCRUM-239 round 4: `collections.returnClearedCheque` key reuse with a different
   // cheque, reason or bank fee (its fingerprint includes the fee).
   CHEQUE_RETURN_KEY_CONFLICT: "CHEQUE_RETURN_KEY_CONFLICT",
+  // SCRUM-542. `fixedAssets.impair` / `fixedAssets.dispose` accounting-date guards, each raised
+  // before the first write and translated under ServerError_<code>.
+  ASSET_EVENT_DATE_INVALID: "ASSET_EVENT_DATE_INVALID",
+  ASSET_EVENT_DATE_IN_FUTURE: "ASSET_EVENT_DATE_IN_FUTURE",
+  ASSET_EVENT_BEFORE_CAPITALIZATION: "ASSET_EVENT_BEFORE_CAPITALIZATION",
+  ASSET_EVENT_BEFORE_DEPRECIATION: "ASSET_EVENT_BEFORE_DEPRECIATION",
+  ASSET_EVENT_BEFORE_IMPAIRMENT: "ASSET_EVENT_BEFORE_IMPAIRMENT",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];
