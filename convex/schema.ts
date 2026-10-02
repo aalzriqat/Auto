@@ -2611,7 +2611,8 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_vehicle", ["vehicleId"])
-    .index("by_company", ["companyId"]),
+    .index("by_company", ["companyId"])
+    .index("by_org_vehicle_company", ["orgId", "vehicleId", "companyId"]),
 
   guarantors: defineTable({
     orgId: v.id("organizations"),

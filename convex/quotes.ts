@@ -47,11 +47,11 @@ export const listQuotesByCustomer = query({
   },
   handler: async (ctx, { orgId, customerId }) => {
     await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_CUSTOMERS]);
-    return await ctx.db
+    const customerQuotes = await ctx.db
       .query("quotes")
       .withIndex("by_customer", (q) => q.eq("customerId", customerId))
-      .filter((q) => q.eq(q.field("orgId"), orgId))
       .collect();
+    return customerQuotes.filter((quote) => quote.orgId === orgId);
   },
 });
 
@@ -307,12 +307,8 @@ export const saveQuote = mutation({
       if (maxFinancingLTV !== undefined && maxFinancingLTV > 0) {
         const valuation = await ctx.db
           .query("vehicleValuations")
-          .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId))
-          .filter((q) =>
-            q.and(
-              q.eq(q.field("orgId"), args.orgId),
-              q.eq(q.field("companyId"), company._id),
-            ),
+          .withIndex("by_org_vehicle_company", (q) =>
+            q.eq("orgId", args.orgId).eq("vehicleId", vehicleId).eq("companyId", company._id)
           )
           .first();
 
