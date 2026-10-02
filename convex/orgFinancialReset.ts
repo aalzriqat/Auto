@@ -435,6 +435,12 @@ export const resetOrgFinancialData = internalMutation({
     orgSuspended: boolean;
     /** SCRUM-559. True when a PENDING online payment intent exists, which makes a destructive reset refuse. */
     pendingPaymentIntentsPresent: boolean;
+    /**
+     * SCRUM-563. True when the org has cash drawer sessions or movements, which this
+     * reset does not remove and which therefore make a destructive reset refuse.
+     * Reported on a dry run so an operator learns it before the destructive form.
+     */
+    cashDrawerStatePresent: boolean;
   }> => {
     const dryRun = args.dryRun ?? true;
     const limit = Math.min(Math.max(args.batchSize ?? RESET_DELETE_BATCH, 1), RESET_DELETE_BATCH);
@@ -517,6 +523,27 @@ export const resetOrgFinancialData = internalMutation({
       throw new ConvexError(
         "This organization has pending online payment intents. Settle, fail or expire them " +
           "with the provider before resetting. Refusing before any deletion."
+      );
+    }
+
+    // Cash movements carry their own idempotency replay
+    // (`cashMovements.by_org_idempotency`) outside `commandIdempotency`, and neither
+    // cash table is reset. Leaving them would let a pre-reset key replay after
+    // reactivation, breaking the SCRUM-563 invariant. Whether to delete, close or
+    // carry them is the SCRUM-565 owner decision, so until then the reset refuses.
+    const cashDrawerStatePresent =
+      (await ctx.db
+        .query("cashDrawerSessions")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .first()) !== null ||
+      (await ctx.db
+        .query("cashMovements")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .first()) !== null;
+    if (!dryRun && cashDrawerStatePresent) {
+      throw new ConvexError(
+        "This organization has cash drawer sessions or movements, which this reset does not " +
+          "remove (SCRUM-565). Refusing before any deletion."
       );
     }
 
@@ -621,6 +648,7 @@ export const resetOrgFinancialData = internalMutation({
       authorityLifecyclePresent,
       orgSuspended,
       pendingPaymentIntentsPresent,
+      cashDrawerStatePresent,
     };
   },
 });

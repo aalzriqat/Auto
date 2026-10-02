@@ -44,7 +44,9 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const PERMISSIONS = ["create:expenses", "edit:expenses", "delete:expenses", "view:expenses", "view:users"];
+const PERMISSIONS = [
+  "create:expenses", "edit:expenses", "delete:expenses", "view:expenses", "view:users", "manage:finance",
+];
 
 const REPLAY_CODE = "COMMAND_RECORDED_BEFORE_RESET";
 const IN_PROGRESS_CODE = "ORG_FINANCIAL_RESET_IN_PROGRESS";
@@ -236,6 +238,7 @@ describe("SCRUM-563 R1 — generation lifecycle", () => {
 
     const first = await resetBatch(s.t, s.orgId, 1);
     expect(first.remaining).toBeGreaterThan(0);
+    expect(first.cashDrawerStatePresent).toBe(false);
     expect(await orgState(s.t, s.orgId)).toMatchObject({ generation: 1 });
     expect((await orgState(s.t, s.orgId)).completed ?? 0).toBe(0);
 
@@ -267,6 +270,79 @@ describe("SCRUM-563 R1 — generation lifecycle", () => {
     const s = await setup();
     await expect(resetBatch(s.t, s.orgId)).rejects.toThrow();
     expect((await orgState(s.t, s.orgId)).generation).toBeUndefined();
+  });
+});
+
+describe("SCRUM-563 F1 — cash drawer state refuses the reset (its own replay survives a reset)", () => {
+  /** An OPEN session plus one movement recorded through the real public mutations. */
+  async function seedCash(s: Setup, idempotencyKey = "CASH-K") {
+    const sessionId = await s.asUser.mutation(api.cashDrawer.open, { orgId: s.orgId, openingFloatMinor: 10_000 });
+    const record = () =>
+      s.asUser.mutation(api.cashDrawer.recordMovement, {
+        orgId: s.orgId,
+        sessionId,
+        type: "SALE" as const,
+        amountMinor: 2_500,
+        idempotencyKey,
+      });
+    return { sessionId, movementId: await record(), record };
+  }
+
+  async function cashRows(s: Setup) {
+    return await s.t.run(async (ctx) => ({
+      sessions: (await ctx.db.query("cashDrawerSessions").collect()).length,
+      movements: (await ctx.db.query("cashMovements").collect()).length,
+    }));
+  }
+
+  test("(a) a destructive reset throws and changes nothing", async () => {
+    const s = await setup();
+    await createExpense(s, "E1");
+    await seedCash(s);
+    await suspend(s.t, s.orgId);
+
+    await expect(resetBatch(s.t, s.orgId)).rejects.toThrow(/cash drawer/i);
+
+    expect((await orgState(s.t, s.orgId)).generation).toBeUndefined();
+    expect(await cashRows(s)).toEqual({ sessions: 1, movements: 1 });
+    expect((await footprint(s.t, s.orgId)).expenses).toBe(1);
+  });
+
+  test("(b) a dry run reports cashDrawerStatePresent: true and writes nothing", async () => {
+    const s = await setup();
+    await seedCash(s);
+    await suspend(s.t, s.orgId);
+
+    const dry = await s.t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId: s.orgId, dryRun: true });
+    expect(dry.cashDrawerStatePresent).toBe(true);
+    expect(await orgState(s.t, s.orgId)).toEqual({ generation: undefined, completed: undefined, suspended: true });
+    expect(await cashRows(s)).toEqual({ sessions: 1, movements: 1 });
+  });
+
+  test("(c) control: an org with no cash state resets to completion", async () => {
+    const s = await setup();
+    await createExpense(s, "E1");
+    await suspend(s.t, s.orgId);
+    const dry = await s.t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId: s.orgId, dryRun: true });
+    expect(dry.cashDrawerStatePresent).toBe(false);
+    const done = await resetOrgToCompletion(s.t, s.orgId);
+    expect(done.cashDrawerStatePresent).toBe(false);
+    expect(await orgState(s.t, s.orgId)).toMatchObject({ generation: 1, completed: 1 });
+  });
+
+  test("(d) a cash key recorded before the reset replays in its generation, and the reset that would orphan it refuses", async () => {
+    const s = await setup();
+    const { movementId, record } = await seedCash(s, "K");
+    expect(await record()).toEqual(movementId);
+    expect((await cashRows(s)).movements).toBe(1);
+
+    await suspend(s.t, s.orgId);
+    await expect(resetBatch(s.t, s.orgId)).rejects.toThrow(/cash drawer/i);
+
+    // No reset ever completed, so K can never be replayed across one.
+    expect((await orgState(s.t, s.orgId)).generation).toBeUndefined();
+    await unsuspend(s);
+    expect(await record()).toEqual(movementId);
   });
 });
 
