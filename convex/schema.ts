@@ -132,17 +132,7 @@ export default defineSchema({
      * one batch — that is normal, and never a reason to fail the batch.
      */
     commitmentAuthorityVersion: v.optional(v.number()),
-    /**
-     * SCRUM-563 — FINANCIAL RESET GENERATION. Absent means 0.
-     *
-     * `resetOrgFinancialData` bumps `financialResetGeneration` exactly once per
-     * reset, before its first delete, and stamps `financialResetCompletedGeneration`
-     * when a run ends with nothing remaining. `generation !== completed` means a
-     * reset is in progress. A command identity (`commandIdempotency`) records the
-     * generation it was written under, and a replay from an older generation is
-     * refused instead of returning ids of rows the reset deleted. A counter, not
-     * a timestamp: a timestamp compare is defeated by an equal clock.
-     */
+    /** SCRUM-563 — financial reset counters; absent means 0. Protocol: `convex/utils/orgResetGeneration.ts`. */
     financialResetGeneration: v.optional(v.number()),
     financialResetCompletedGeneration: v.optional(v.number()),
   }),
@@ -179,11 +169,7 @@ export default defineSchema({
     // key with materially different inputs is rejected instead of silently
     // returning the prior result.
     fingerprint: v.optional(v.string()),
-    /**
-     * SCRUM-563. The org's `financialResetGeneration` when this row was written
-     * (absent = 0). A replay under a different generation is refused: the stored
-     * `result` may name rows an org financial reset has since deleted.
-     */
+    /** SCRUM-563. The org's `financialResetGeneration` at write time (absent = 0); see `utils/orgResetGeneration.ts`. */
     resetGeneration: v.optional(v.number()),
     createdBy: v.optional(v.id("users")),
     createdAt: v.number(),

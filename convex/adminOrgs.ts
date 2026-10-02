@@ -286,16 +286,10 @@ async function assertNoIrreversiblePurgeHistory(
 /**
  * ⚠️ SCRUM-563 — A PARTIALLY RESET ORGANIZATION IS NOT RETURNED TO SERVICE.
  *
- * `resetOrgFinancialData` runs in batches. Between batches the org holds some
- * financial rows and not others, and its command log still names rows that are
- * gone. `financialResetGeneration !== financialResetCompletedGeneration` is the
- * in-progress marker (see `utils/orgResetGeneration.ts`); the reset itself stamps
- * the completed side when a destructive run leaves nothing behind. The only way
- * forward is to finish the reset.
- *
- * Called from `reactivateOrganization`, so both callers (`unsuspendOrg` and
- * `rejectDeletionRequest`) inherit it. Thrown, so an uncaught refusal rolls the
- * whole calling mutation back.
+ * Refuses while a financial reset is in progress (see
+ * `utils/orgResetGeneration.ts`); the only way forward is to finish the reset.
+ * Called from `reactivateOrganization`, so `unsuspendOrg` and
+ * `rejectDeletionRequest` both inherit it.
  */
 export const FINANCIAL_RESET_IN_PROGRESS_MESSAGE =
   "This organization's financial reset has not finished. It cannot be returned to service until the reset completes.";

@@ -46,8 +46,10 @@ import { orgResetState } from "./utils/orgResetGeneration";
  * hold for a suspended org, so the PENDING-intent refusal (and edges E2/E3) is
  * defence in depth in case the org is unsuspended mid-reset (SCRUM-563). A
  * missing `organizations` row skips the suspension check.
- * Command-idempotency results and terminal payment intents are out of scope here
- * and tracked in SCRUM-563.
+ * Command-idempotency replay is closed by the reset generation (SCRUM-563, see
+ * `utils/orgResetGeneration.ts`). Surviving active state such as terminal
+ * payment intents is an owner decision tracked in SCRUM-565; SCRUM-563 only
+ * pins today's behaviour.
  */
 const RESET_TABLES = [
   // ⚠️ SCRUM-208 c15825 — AUTHORITY LIFECYCLE FIRST, IN DEPENDENCY ORDER:
@@ -433,10 +435,6 @@ export const resetOrgFinancialData = internalMutation({
     orgSuspended: boolean;
     /** SCRUM-559. True when a PENDING online payment intent exists, which makes a destructive reset refuse. */
     pendingPaymentIntentsPresent: boolean;
-    /** SCRUM-563. The org's reset generation after this run (0 when it never had one). */
-    resetGeneration: number;
-    /** SCRUM-563. True when this destructive run finished the reset (nothing remaining). */
-    resetComplete: boolean;
   }> => {
     const dryRun = args.dryRun ?? true;
     const limit = Math.min(Math.max(args.batchSize ?? RESET_DELETE_BATCH, 1), RESET_DELETE_BATCH);
@@ -522,17 +520,10 @@ export const resetOrgFinancialData = internalMutation({
       );
     }
 
-    // ⚠️ SCRUM-563 R1 — THE RESET GENERATION IS BUMPED BEFORE THE FIRST DELETE,
-    // in this same mutation, and only when no reset is already in progress.
-    //
-    // `commandIdempotency` is not in RESET_TABLES, so command rows survive the
-    // reset while the rows their stored results name do not. Every command row
-    // carries the generation it was written under, and `runWithIdempotency`
-    // refuses a replay from an older one. A counter rather than a timestamp: an
-    // equal clock cannot defeat it. A continuation batch finds
-    // `generation !== completed` and leaves the generation alone, so it moves
-    // exactly once per reset. Dry runs and refused runs (all thrown above) write
-    // nothing. A missing org row has nowhere to record it and skips this.
+    // ⚠️ SCRUM-563 — protocol in `utils/orgResetGeneration.ts`. The bump happens
+    // BEFORE the first delete, in this same mutation. A continuation batch finds
+    // a reset in progress and does not bump again. Dry runs and refused runs
+    // (thrown above) write nothing; a missing org row has nowhere to record it.
     const resetState = orgResetState(org);
     let resetGeneration = resetState.generation;
     if (!dryRun && org !== null && !resetState.inProgress) {
@@ -614,10 +605,8 @@ export const resetOrgFinancialData = internalMutation({
       }
     }
 
-    // SCRUM-563 R1. A destructive run that leaves nothing behind completes the
-    // reset: only now may the organization be reactivated.
-    const resetComplete = !dryRun && org !== null && remaining === 0;
-    if (resetComplete) {
+    // SCRUM-563: a destructive run that leaves nothing behind completes the reset.
+    if (!dryRun && org !== null && remaining === 0) {
       await ctx.db.patch(args.orgId, { financialResetCompletedGeneration: resetGeneration });
     }
 
@@ -632,8 +621,6 @@ export const resetOrgFinancialData = internalMutation({
       authorityLifecyclePresent,
       orgSuspended,
       pendingPaymentIntentsPresent,
-      resetGeneration,
-      resetComplete,
     };
   },
 });

@@ -28,7 +28,9 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { ORGANIZATION_DELETION_STEPS } from "./adminOrgs";
 import { enqueuePendingPost } from "./accountingOutbox";
-import { settleOutbox,makeDue, heldRows, outboxRows } from "../test-utils/outboxWork";
+import { settleOutbox, makeDue, heldRows, outboxRows } from "../test-utils/outboxWork";
+import { resetOrgToCompletion } from "../test-utils/orgResetFixtures";
+import { seedOrgWithMember } from "../test-utils/seedOrg";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -106,27 +108,17 @@ const FINANCE_PERMS = [
 
 async function seedDealer(tag: string) {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
-  const orgId = await t.run((ctx) =>
-    ctx.db.insert("organizations", { name: `SCRUM563 ${tag}`, createdAt: Date.now() })
-  );
-  await t.run((ctx) =>
-    ctx.db.insert("subscriptions", {
-      orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now(),
-    })
-  );
-  const userId = await t.run((ctx) =>
-    ctx.db.insert("users", { clerkId: `${tag}_user`, email: `${tag}@example.com`, name: `${tag} User` })
-  );
-  const roleId = await t.run((ctx) =>
-    ctx.db.insert("roles", { orgId, name: "Owner", permissions: FINANCE_PERMS, isSystemOwnerRole: true })
-  );
-  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  const { orgId, userId, identity: asUser } = await seedOrgWithMember(t, {
+    clerkId: `${tag}_user`,
+    permissions: FINANCE_PERMS,
+    orgName: `SCRUM563 ${tag}`,
+    roleName: "Owner",
+  });
   await t.run((ctx) =>
     ctx.db.insert("orgSettings", {
       orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
     })
   );
-  const asUser = t.withIdentity({ subject: `${tag}_user`, clerkId: `${tag}_user` });
   await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
   const fiscalYear = new Date().getUTCFullYear();
   await asUser.mutation(api.accountingPeriods.create, {
@@ -274,13 +266,7 @@ describe("SCRUM-563 R6.11 — a SETTLED payment intent after reset and reactivat
     // Real reset: suspend, run to completion, reactivate (state flip only; the
     // admin reactivation guard is covered in orgResetGeneration.scrum563.test.ts).
     await d.t.run((ctx) => ctx.db.patch(d.orgId, { suspended: true, suspendedAt: Date.now() }));
-    for (let i = 0; i < 40; i += 1) {
-      const result = await d.t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-        orgId: d.orgId,
-        dryRun: false,
-      });
-      if (result.remaining === 0) break;
-    }
+    await resetOrgToCompletion(d.t, d.orgId);
     await d.t.run((ctx) => ctx.db.patch(d.orgId, { suspended: false }));
 
     // The intent survived the reset; the ledger rows it produced did not.

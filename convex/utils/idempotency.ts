@@ -11,22 +11,21 @@ export const COMMAND_RECORDED_BEFORE_RESET_MESSAGE =
   "This request was recorded before the organization's financial data was reset and can no longer be replayed. Start a new operation.";
 
 /**
- * SCRUM-563. The org's current financial-reset generation, read once per call.
- * A missing org row reads as generation 0.
+ * SCRUM-563 (protocol: `orgResetGeneration.ts`). Reads the org row on every
+ * call, so callers invoke it only when they actually need the generation. A
+ * missing org row reads as generation 0.
  */
 async function currentResetGeneration(ctx: MutationCtx, orgId: Id<"organizations">): Promise<number> {
   return orgResetState(await ctx.db.get(orgId)).generation;
 }
 
-/**
- * SCRUM-563. A stored command from an older generation names rows the reset
- * deleted, so it is refused rather than replayed. Absent means generation 0.
- */
-function assertRecordedInCurrentGeneration(
-  existing: { resetGeneration?: number },
-  currentGeneration: number
-): void {
-  if ((existing.resetGeneration ?? 0) !== currentGeneration) {
+/** Refuses a stored command written under an older generation; absent means 0. */
+async function assertReplayable(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  existing: { resetGeneration?: number }
+): Promise<void> {
+  if ((existing.resetGeneration ?? 0) !== (await currentResetGeneration(ctx, orgId))) {
     throwAppError(AppErrorCode.COMMAND_RECORDED_BEFORE_RESET, COMMAND_RECORDED_BEFORE_RESET_MESSAGE);
   }
 }
@@ -133,7 +132,6 @@ export async function runWithIdempotency<T>(
     throw new ConvexError("Idempotent operation name is required.");
   }
 
-  const resetGeneration = await currentResetGeneration(ctx, args.orgId);
   const existing = await ctx.db
     .query("commandIdempotency")
     .withIndex("by_org_operation_key", (q) =>
@@ -172,7 +170,7 @@ export async function runWithIdempotency<T>(
     if (existing.status !== "COMPLETED") {
       throw new ConvexError("This command is already being processed. Please retry shortly.");
     }
-    assertRecordedInCurrentGeneration(existing, resetGeneration);
+    await assertReplayable(ctx, args.orgId, existing);
     return existing.result as T;
   }
 
@@ -182,7 +180,7 @@ export async function runWithIdempotency<T>(
     operation: args.operation,
     idempotencyKey,
     status: "STARTED",
-    resetGeneration,
+    resetGeneration: await currentResetGeneration(ctx, args.orgId),
     fingerprint: args.fingerprint,
     createdBy: args.actorId,
     createdAt: now,
@@ -265,7 +263,7 @@ export async function findCommandUnit(
       `${args.label ?? idempotencyKey} is recorded as still in progress. Nothing was imported. Retry shortly.`
     );
   }
-  assertRecordedInCurrentGeneration(existing, await currentResetGeneration(ctx, args.orgId));
+  await assertReplayable(ctx, args.orgId, existing);
   return { result: existing.result };
 }
 

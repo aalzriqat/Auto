@@ -1,6 +1,30 @@
 import type { Id } from "../convex/_generated/dataModel";
 import type { MutationCtx } from "../convex/_generated/server";
 import { RESET_ORG_INDEX_FOR_TEST } from "../convex/orgFinancialReset";
+import { internal } from "../convex/_generated/api";
+import type { convexTestWithComponents } from "./convexTest";
+
+/**
+ * Runs destructive reset batches until one reports `remaining === 0`. THROWS if
+ * that never happens within `maxBatches`, so a reset that stalls fails loudly
+ * instead of letting the test assert against a half-reset org.
+ */
+export async function resetOrgToCompletion(
+  t: ReturnType<typeof convexTestWithComponents>,
+  orgId: Id<"organizations">,
+  batchSize?: number,
+  maxBatches = 40
+) {
+  for (let i = 0; i < maxBatches; i += 1) {
+    const result = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
+      orgId,
+      dryRun: false,
+      ...(batchSize === undefined ? {} : { batchSize }),
+    });
+    if (result.remaining === 0) return result;
+  }
+  throw new Error(`org financial reset did not reach remaining === 0 within ${maxBatches} batches`);
+}
 
 /** Table names here are dynamic (driven by the reset's own table list), so the typed db is bypassed. */
 export interface LooseDb {

@@ -99,7 +99,7 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "تاريخ بدء الاستهلاك غير صالح.",
   ],
   // SCRUM-563. The English text must equal the server message in convex/utils/idempotency.ts,
-  // convex/adminOrgs.ts and convex/subledger.ts respectively.
+  // and convex/adminOrgs.ts respectively.
   ServerError_COMMAND_RECORDED_BEFORE_RESET: [
     "This request was recorded before the organization's financial data was reset and can no longer be replayed. Start a new operation.",
     "سُجّل هذا الطلب قبل إعادة ضبط البيانات المالية للمنشأة ولم يعد بالإمكان إعادة إرساله. يرجى بدء عملية جديدة.",
@@ -107,10 +107,6 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ServerError_ORG_FINANCIAL_RESET_IN_PROGRESS: [
     "This organization's financial reset has not finished. It cannot be returned to service until the reset completes.",
     "لم تكتمل إعادة ضبط البيانات المالية لهذه المنشأة. لا يمكن إعادتها إلى الخدمة قبل اكتمال إعادة الضبط.",
-  ],
-  ServerError_RECEIVABLE_SOURCE_TYPE_NOT_ALLOWED: [
-    "This receivable cannot be created from the given source type.",
-    "لا يمكن إنشاء هذه الذمة المدينة من نوع المصدر المحدد.",
   ],
   FinanceCompanyReceivables: ["Finance-company receivables", "ذمم شركات التمويل"],
   FinanceCompanyReceivablesDesc: ["Amounts due from finance companies. Open the originating deal to review or settle them.", "المبالغ المستحقة من شركات التمويل. افتح الصفقة الأصلية للمراجعة أو التسوية."],
