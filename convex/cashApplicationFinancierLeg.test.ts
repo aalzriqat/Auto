@@ -2,7 +2,7 @@ import { TestConvex as ConvexTestInstance } from "convex-test";
 import { describe, expect, test } from "vitest";
 import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 import { FC_RETURN_MESSAGES } from "./utils/fcCheque";
@@ -274,13 +274,14 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
       expect(view.expectedPaymentReRegistrable).toBe(false);
       expect(view.chequeNeedsCorrection).toBe(false);
       expect(view.unattestedChequeId).toBeNull();
-      // Stock vehicle: nothing else is owed, so the money is finished.
-      expect(settlement.state).toBe("COMPLETE");
+      // Stock vehicle: no financier and no supplier is owed, but the CUSTOMER still owes the
+      // dealership the whole price on the sale's canonical invoice (AF-567-1). NONE on the
+      // financier leg is not "settled"; the SETTLEMENT stage stays open until that invoice is paid.
+      expect(settlement.state).not.toBe("COMPLETE");
 
-      // The overview reads the same cockpit stage for "money settled". Its profit stays an
-      // estimate here only because this deal records no cost lines (`expensesFullyReconciled`,
-      // dealOverview.ts) - a separate, unchanged half of "fully settled" - so the overview
-      // is asserted to load, not to flip classification.
+      // The overview reads the same cockpit stage for "money settled", so it cannot call this
+      // deal fully settled either. It is asserted to load; its profit classification also
+      // depends on `expensesFullyReconciled` (dealOverview.ts), a separate half.
       const overview = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
       expect(overview).not.toBeNull();
     });
@@ -488,6 +489,102 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
   });
 
   // ── the shared predicate (reader and writer) ───────────────────────────────
+  // ── AF-567-1: the customer's own invoice holds SETTLEMENT open ──────────────
+  // Invariant: a finalized application whose financier leg is NONE must not report money settled
+  // while the sale's canonical customer receivable has a positive outstanding balance, or while
+  // that balance cannot be read.
+  describe("AF-567-1: an unpaid financier-less deal is not settled", () => {
+    async function canonicalReceivable(s: Seed, applicationId: Id<"financeApplications">) {
+      return s.t.run(async (ctx) => {
+        const app = (await ctx.db.get(applicationId))!;
+        const sale = (await ctx.db.get(app.finalizedSaleId!))!;
+        return { saleId: sale._id, receivableId: sale.canonicalReceivableDocumentId! };
+      });
+    }
+    const outstandingOf = async (s: Seed, receivableId: Id<"receivableDocuments">) =>
+      (await s.asOwner.query(api.subledger.getReceivableBalance, { orgId: s.orgId, receivableDocumentId: receivableId }))!
+        .outstandingMinor;
+
+    /** A real customer payment (canonicalPayments row) allocated through the real subledger.allocate. */
+    async function payInvoice(s: Seed, receivableId: Id<"receivableDocuments">, amountMinor: number) {
+      const paymentId = await s.t.run((ctx) =>
+        ctx.db.insert("canonicalPayments", {
+          orgId: s.orgId, direction: "IN", payerType: "CUSTOMER", customerId: s.customerId,
+          method: "CASH", amountMinor, currency: "JOD", scale: 3, status: "SETTLED",
+          idempotencyKey: `af5671-${crypto.randomUUID()}`, createdBy: s.userId, createdAt: Date.now(),
+        })
+      );
+      await s.asOwner.mutation(internal.subledger.allocate, {
+        orgId: s.orgId, paymentId, receivableDocumentId: receivableId, amountMinor,
+      });
+    }
+
+    test("(1) an unpaid stock CASH deal is not SETTLEMENT COMPLETE, and the overview reads the same stage", async () => {
+      const { s, applicationId } = await finalizedCash("af1_unpaid");
+      const { receivableId } = await canonicalReceivable(s, applicationId);
+      expect(await outstandingOf(s, receivableId)).toBeGreaterThan(0);
+      const { disbursement, settlement } = await cockpitOf(s, applicationId);
+      expect(settlement.state).not.toBe("COMPLETE");
+      expect(disbursement.state).toBe("NOT_APPLICABLE");
+      expect(await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId })).not.toBeNull();
+    });
+
+    test("(2) a partial customer payment still leaves SETTLEMENT open; (3) the full payment completes it", async () => {
+      const { s, applicationId } = await finalizedCash("af23_paid");
+      const { receivableId } = await canonicalReceivable(s, applicationId);
+      const owed = await outstandingOf(s, receivableId);
+      expect(owed).toBeGreaterThan(1_000);
+
+      await payInvoice(s, receivableId, 1_000);
+      expect(await outstandingOf(s, receivableId)).toBe(owed - 1_000);
+      expect((await cockpitOf(s, applicationId)).settlement.state).not.toBe("COMPLETE");
+
+      await payInvoice(s, receivableId, owed - 1_000);
+      expect(await outstandingOf(s, receivableId)).toBe(0);
+      expect((await cockpitOf(s, applicationId)).settlement.state).toBe("COMPLETE");
+    });
+
+    test("(5) the consigned CASH deal stays open even once the customer has paid in full", async () => {
+      const { s, applicationId } = await finalizedCash("af5_consigned", { sourced: true });
+      const { receivableId } = await canonicalReceivable(s, applicationId);
+      await payInvoice(s, receivableId, await outstandingOf(s, receivableId));
+      expect((await cockpitOf(s, applicationId)).settlement.state).not.toBe("COMPLETE");
+    });
+
+    test("(6) a finalize replay keeps the same, still-open result", async () => {
+      const { s, applicationId } = await finalizedCash("af6_replay");
+      const before = (await cockpitOf(s, applicationId)).settlement.state;
+      await finalize(s, applicationId);
+      const after = (await cockpitOf(s, applicationId)).settlement.state;
+      expect(after).toBe(before);
+      expect(after).not.toBe("COMPLETE");
+    });
+
+    test("(7) an unreadable canonical receivable (pointer absent, row gone, other org, other currency) is never COMPLETE", async () => {
+      const mutations: Array<[string, (s: Seed, saleId: Id<"sales">, receivableId: Id<"receivableDocuments">) => Promise<void>]> = [
+        ["pointer absent", (s, saleId) => s.t.run((ctx) => ctx.db.patch(saleId, { canonicalReceivableDocumentId: undefined }))],
+        ["row deleted", (s, _saleId, receivableId) => s.t.run((ctx) => ctx.db.delete(receivableId))],
+        [
+          "other org",
+          async (s, _saleId, receivableId) => {
+            const other = await s.t.run((ctx) => ctx.db.insert("organizations", { name: "Other", createdAt: Date.now() }));
+            await s.t.run((ctx) => ctx.db.patch(receivableId, { orgId: other }));
+          },
+        ],
+        ["other currency", (s, _saleId, receivableId) => s.t.run((ctx) => ctx.db.patch(receivableId, { currency: "USD" }))],
+      ];
+      for (const [label, breakIt] of mutations) {
+        const { s, applicationId } = await finalizedCash(`af7_${label.replace(/\W/g, "")}`);
+        const { saleId, receivableId } = await canonicalReceivable(s, applicationId);
+        // Pay it in full first, so only the unreadability can hold the stage open.
+        await payInvoice(s, receivableId, await outstandingOf(s, receivableId));
+        expect((await cockpitOf(s, applicationId)).settlement.state, `${label}: paid control`).toBe("COMPLETE");
+        await breakIt(s, saleId, receivableId);
+        expect((await cockpitOf(s, applicationId)).settlement.state, label).not.toBe("COMPLETE");
+      }
+    });
+  });
+
   test("a retired INTERNAL_INSTALLMENT deal cannot be finalized, so the writer's INTERNAL_INSTALLMENT arm is not reachable through finalizeDeal", async () => {
     // SCRUM-495: finalizeDeal refuses the retired mode before any write. The arm still exists in the
     // shared predicate because the READER must keep reading legacy INTERNAL_INSTALLMENT rows

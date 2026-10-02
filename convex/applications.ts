@@ -960,6 +960,16 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
     ? { financier: financierObligation, supplier: supplierObligation }
     : { financier: "UNKNOWN", supplier: "UNKNOWN" };
 
+  // A financier-less deal (leg NONE) is paid by the CUSTOMER alone, so the sale's
+  // canonical customer invoice IS the money still owed. NONE on the financier leg
+  // must never read as "settled" while that invoice has a balance, or while the
+  // balance cannot be read (AF-567-1). Not evaluated when a financier is in play;
+  // financed-deal customer balances are a separate lane (SCRUM-570).
+  const customerObligation =
+    financierLeg === "NONE"
+      ? await resolveCustomerInvoiceObligation(ctx, app, sale, currency)
+      : undefined;
+
   return {
     vehicle,
     consigned,
@@ -976,8 +986,32 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
     // A cancelled sale's books were reversed: whatever the obligations say, the
     // money on it is not "settled" (SCRUM-446). Without this a CLOSED application
     // over a cancelled sale read SETTLEMENT as COMPLETE.
-    moneySettled: !saleCancelled && settlementIsComplete(obligations),
+    moneySettled:
+      !saleCancelled &&
+      settlementIsComplete(obligations) &&
+      (customerObligation === undefined || customerObligation === "CLOSED"),
   };
+}
+
+/**
+ * The customer's side of a financier-less deal: is the sale's canonical invoice
+ * paid? Fails closed — a missing pointer, a missing row, another org's row or a
+ * row in another currency is UNKNOWN, never CLOSED.
+ */
+async function resolveCustomerInvoiceObligation(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+  sale: Doc<"sales"> | null | undefined,
+  currency: string
+): Promise<ObligationState> {
+  const receivableId = sale?.canonicalReceivableDocumentId;
+  if (!receivableId) return "UNKNOWN";
+  const receivable = await ctx.db.get(receivableId);
+  if (!receivable || receivable.orgId !== app.orgId || receivable.currency !== currency) {
+    return "UNKNOWN";
+  }
+  const outstandingMinor = await getReceivableOutstandingMinor(ctx, receivableId);
+  return outstandingMinor > 0 ? "OPEN" : "CLOSED";
 }
 
 /**
