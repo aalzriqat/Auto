@@ -220,3 +220,21 @@ auditConfig:
   ignoreGhsas:
     - GHSA-w3rx-r6r6-pgpr
     - GHSA-5p2g-fcmc-qvqq
+    # SCRUM-556: node-forge RSA PKCS#1 v1.5 signature verification accepts extra
+    # nested DigestAlgorithm elements (HIGH). Affected <=1.4.0 with
+    # first_patched_version null, and npm's latest is 1.4.0 itself — so no
+    # override or bump can clear it. Reached only through Expo CLI
+    # developer/EAS signing tooling, every path rooted at
+    #   apps/mobile > expo > @expo/cli
+    # (verified with `pnpm why node-forge -r`): @expo/cli 57.0.6 depends on
+    # node-forge 1.4.0 directly and also via @expo/code-signing-certificates
+    # 0.0.6. Not in the Next.js web runtime, the Convex backend, dealer-worker,
+    # or the shipped mobile JS bundle; on-device update signature verification
+    # is native expo-updates.
+    #
+    # Ignored individually rather than by lowering --audit-level, so every other
+    # high advisory still fails the required dependency-audit check. Remove once
+    # node-forge > 1.4.0 ships and pnpm audit no longer reports
+    # GHSA-86w9-cpqp-85rv (both @expo/cli and @expo/code-signing-certificates
+    # must resolve to the patched version).
+    - GHSA-86w9-cpqp-85rv
