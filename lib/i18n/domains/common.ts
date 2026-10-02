@@ -111,8 +111,8 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "يجب إنشاء رابط الدفع مقابل ذمة أو عملية بيع أو مستند ذمة محدد. لم يتم تغيير أي شيء.",
   ],
   ServerError_PAYMENT_LINK_EXCEEDS_OUTSTANDING: [
-    "The payment link amount cannot exceed what is still outstanding on this debt. Nothing has been changed.",
-    "لا يمكن أن يتجاوز مبلغ رابط الدفع الرصيد المتبقي المستحق على هذه الذمة. لم يتم تغيير أي شيء.",
+    "The payment link amount cannot exceed what is still owed on this debt, less payment links already sent and not yet paid. Expiring an unpaid link frees its amount. Nothing has been changed.",
+    "لا يمكن أن يتجاوز مبلغ رابط الدفع ما تبقى مستحقاً على هذه الذمة بعد خصم روابط الدفع التي أُرسلت ولم تُسدَّد بعد. ويؤدي إنهاء صلاحية رابط غير مدفوع إلى تحرير مبلغه. لم يتم تغيير أي شيء.",
   ],
   ServerError_PAYMENT_LINK_RECEIPT_MANUAL_REFUSED: [
     "A payment-link receipt cannot be recorded manually. It is recorded automatically when the payment link is settled. Nothing has been changed.",

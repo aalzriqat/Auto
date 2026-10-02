@@ -25,7 +25,7 @@ import { fromMinorUnits, toMinorUnits, scaleForCurrency, assertValidMinorAmount 
 const PAYMENT_LINK_TARGET_REQUIRED_MESSAGE =
   "A payment link must be created against a specific receivable, sale or receivable document. Nothing has been changed.";
 const PAYMENT_LINK_EXCEEDS_OUTSTANDING_MESSAGE =
-  "The payment link amount cannot exceed what is still outstanding on this debt. Nothing has been changed.";
+  "The payment link amount cannot exceed what is still owed on this debt, less payment links already sent and not yet paid. Expiring an unpaid link frees its amount. Nothing has been changed.";
 
 const statusValidator = v.union(
   v.literal("PENDING"),
@@ -457,7 +457,21 @@ export const create = mutation({
         // so an over-cap intent would credit AR for money no document absorbs.
         if (receivableDocumentId) {
           const documentOutstandingMinor = await getReceivableOutstandingMinor(ctx, receivableDocumentId);
-          if (args.amountMinor > documentOutstandingMinor) {
+          // Links already sent and not yet paid reserve their amount: two links
+          // each within outstanding could otherwise settle for more than the
+          // debt in total. Every PENDING intent counts regardless of expiresAt
+          // (only an explicit expiry frees it); concurrent creates are
+          // serialized by OCC on this read set. The document's payer was proved
+          // to be args.customerId above, so every intent for it is under
+          // (orgId, customerId).
+          const customerIntents = await ctx.db
+            .query("paymentIntents")
+            .withIndex("by_org_customer", (q) => q.eq("orgId", args.orgId).eq("customerId", args.customerId))
+            .collect();
+          const reservedMinor = customerIntents
+            .filter((i) => i.status === "PENDING" && i.receivableDocumentId === receivableDocumentId)
+            .reduce((sum, i) => sum + i.amountMinor, 0);
+          if (args.amountMinor > documentOutstandingMinor - reservedMinor) {
             throwAppError(AppErrorCode.PAYMENT_LINK_EXCEEDS_OUTSTANDING, PAYMENT_LINK_EXCEEDS_OUTSTANDING_MESSAGE);
           }
         }

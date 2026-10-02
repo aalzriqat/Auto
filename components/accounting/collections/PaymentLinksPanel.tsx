@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "@/components/ui/sonner";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { scaleForCurrency } from "../AccountingTabShared";
@@ -187,8 +188,8 @@ function CreatePaymentLinkDialog({ open, onOpenChange }: Readonly<{ open: boolea
       });
       toast.success(t("PaymentLinkCreated" as any));
       handleOpenChange(false);
-    } catch {
-      toast.error(t("UnexpectedError" as any));
+    } catch (error) {
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setSubmitting(false);
     }

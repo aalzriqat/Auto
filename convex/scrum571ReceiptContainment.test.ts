@@ -19,6 +19,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { commonAr, commonEn } from "../lib/i18n/domains/common";
 import { AppErrorCode } from "./utils/errors";
 
@@ -372,6 +373,101 @@ describe("SCRUM-571 S1 — collections.recordPayment refuses PAYMENT_LINK", () =
       const payment = await t.run((ctx) => ctx.db.get(paymentId));
       expect(payment?.method, method).toBe(method);
     }
+  });
+});
+
+describe("SCRUM-571 S1 — pending payment links reserve the document's outstanding", () => {
+  const link = (
+    orgId: Id<"organizations">,
+    customerId: Id<"customers">,
+    receivableDocumentId: Id<"receivableDocuments">,
+    amountMinor: number
+  ) => ({
+    idempotencyKey: crypto.randomUUID(),
+    orgId,
+    customerId,
+    receivableDocumentId,
+    amountMinor,
+    currency: "JOD",
+    provider: "tap",
+  });
+
+  test("two links each within outstanding but together over it: the second is refused", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance, receivableDocumentId } = await seed(t);
+    await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 600_000));
+    const before = await counts(t);
+
+    expect(
+      await codeOf(asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 600_000)))
+    ).toBe("PAYMENT_LINK_EXCEEDS_OUTSTANDING");
+    expect(await counts(t)).toEqual(before);
+
+    // Exactly the remainder is still accepted.
+    const ok = await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 400_000));
+    expect(ok).toBeTruthy();
+  });
+
+  test("expiring the first link frees its amount for the second", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance, receivableDocumentId } = await seed(t);
+    const first = await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 600_000));
+    expect(
+      await codeOf(asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 600_000)))
+    ).toBe("PAYMENT_LINK_EXCEEDS_OUTSTANDING");
+
+    await asFinance.mutation(api.paymentIntents.expire, { orgId, intentId: first });
+    const second = await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 600_000));
+    expect(second).toBeTruthy();
+  });
+
+  test("a SETTLED or EXPIRED intent does not reserve", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance, receivableDocumentId } = await seed(t);
+    const settled = await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 300_000));
+    const expired = await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 300_000));
+    await asFinance.mutation(api.paymentIntents.markSettled, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId,
+      intentId: settled,
+    });
+    await asFinance.mutation(api.paymentIntents.expire, { orgId, intentId: expired });
+
+    // Outstanding is now 700_000 (300_000 allocated); the expired 300_000 and
+    // the settled 300_000 must not be reserved a second time.
+    expect(
+      await codeOf(asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 700_001)))
+    ).toBe("PAYMENT_LINK_EXCEEDS_OUTSTANDING");
+    const ok = await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 700_000));
+    expect(ok).toBeTruthy();
+  });
+
+  test("a pending intent for a different document of the same customer does not reserve", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId, customerId, asFinance, receivableDocumentId } = await seed(t);
+    const otherDocumentId = await t.run((ctx) =>
+      ctx.db.insert("receivableDocuments", {
+        orgId,
+        documentType: "INVOICE",
+        documentNumber: "OTHER-0001",
+        payerType: "CUSTOMER",
+        customerId,
+        sourceType: "legacy_receivable",
+        sourceId: "other-source",
+        originalAmountMinor: 900_000,
+        currency: "JOD",
+        scale: 3,
+        issueDate: Date.now(),
+        dueDate: DUE(),
+        status: "OPEN",
+        createdAt: Date.now(),
+        createdBy: userId,
+      })
+    );
+    await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, otherDocumentId, 900_000));
+
+    const ok = await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 1_000_000));
+    expect(ok).toBeTruthy();
   });
 });
 

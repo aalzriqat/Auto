@@ -1007,7 +1007,7 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
       setReference("");
       setNotes("");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setSubmitting(false);
     }
