@@ -11,7 +11,43 @@ import {
   parseMoneyCell,
   purchaseBlockers,
   validateVehicleRow,
+  importChunkFailureMessage,
 } from "./VehicleImportDialog";
+import { ConvexError } from "convex/values";
+
+describe("SCRUM-563 F2 - importChunkFailureMessage localizes the post-reset refusal", () => {
+  const dict = (d: Record<string, string>) => (key: string) => d[key] ?? key;
+  const english = dict(commonEn as Record<string, string>);
+  const arabic = dict(commonAr as Record<string, string>);
+  const refusal = () =>
+    new ConvexError({ code: "COMMAND_RECORDED_BEFORE_RESET", message: "server english text" });
+
+  test.each([
+    ["en", english, commonEn as Record<string, string>],
+    ["ar", arabic, commonAr as Record<string, string>],
+  ] as const)("%s: shows the translated refusal and no retry advice", (_lang, t, dictionary) => {
+    const expected = dictionary.ServerError_COMMAND_RECORDED_BEFORE_RESET;
+    expect(expected).toBeTruthy();
+    for (const posting of ["PURCHASE", "OPENING_STOCK"]) {
+      const message = importChunkFailureMessage(refusal(), posting, 3, t);
+      expect(message).toBe(expected);
+      expect(message).not.toContain(dictionary.ImportRetryAdvicePurchase);
+      expect(message).not.toContain(dictionary.ImportRetryAdviceOpeningStock);
+    }
+  });
+
+  test("every other failure keeps its retry advice", () => {
+    const plain = new Error("Boom");
+    expect(importChunkFailureMessage(plain, "PURCHASE", 0, english)).toBe(
+      `Boom ${commonEn.ImportRetryAdvicePurchase}`
+    );
+    const coded = new ConvexError({ code: "SOME_OTHER_CODE", message: "Other refusal" });
+    expect(importChunkFailureMessage(coded, "OPENING_STOCK", 0, english)).toBe("Other refusal");
+    expect(importChunkFailureMessage(coded, "OPENING_STOCK", 2, english)).toContain(
+      commonEn.ImportRetryAdviceOpeningStock
+    );
+  });
+});
 
 /**
  * The import dialog's two pure gating functions.

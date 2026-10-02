@@ -19,6 +19,7 @@ import {
   type AcquisitionPaymentMethod,
 } from "@/components/payments/PaymentMethodSelect";
 import { PURCHASE_IMPORT_MAX_ROWS } from "@/convex/utils/importLimits";
+import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { assertDirectVehicleCreateStatus } from "@/convex/utils/vehicleStatusGuards";
 import { hasNonCanonicalVinCharacters, isPlaceholderVin } from "@/convex/utils/vin";
@@ -691,6 +692,42 @@ const IMPORT_CHUNK_SIZE = 200;
  */
 export const IMPORT_PURCHASE_MAX_ROWS = PURCHASE_IMPORT_MAX_ROWS;
 
+/** The coded refusal of a command identity recorded before an org financial reset (SCRUM-563). */
+const COMMAND_RECORDED_BEFORE_RESET = "COMMAND_RECORDED_BEFORE_RESET";
+
+function isRecordedBeforeResetRefusal(err: unknown): boolean {
+  if (!isConvexError(err)) return false;
+  const data: unknown = err.data;
+  return typeof data === "object" && data !== null && (data as { code?: unknown }).code === COMMAND_RECORDED_BEFORE_RESET;
+}
+
+/**
+ * What the operator sees when an import chunk fails. A coded server refusal is
+ * shown in the user's language. Retry advice is appended for every failure EXCEPT
+ * the post-reset refusal, whose own message already says to start a new operation
+ * (telling the operator to re-import the same file would be wrong).
+ *
+ * What a re-import does depends on the mode. A PURCHASE file has a real VIN on
+ * every row, so every car already added is skipped as a duplicate. An OPENING_STOCK
+ * file may contain VIN-less rows, which get a fresh placeholder each time and would
+ * be added again, so blanket retry safety is not promised there. PURCHASE is one
+ * atomic call, so `inserted` is always 0 for it and the advice is always shown;
+ * OPENING_STOCK keeps the partial-progress form because it still chunks.
+ */
+export function importChunkFailureMessage(
+  err: unknown,
+  posting: string,
+  inserted: number,
+  t: (key: string) => string
+): string {
+  const detail = getLocalizedErrorMessage(err, t);
+  if (isRecordedBeforeResetRefusal(err)) return detail;
+  const retryAdvice = t(posting === "PURCHASE" ? "ImportRetryAdvicePurchase" : "ImportRetryAdviceOpeningStock");
+  const stopped = t("ImportStoppedAfter").replace("{count}", String(inserted));
+  if (posting === "PURCHASE") return `${detail} ${retryAdvice}`;
+  return inserted > 0 ? `${stopped} ${detail} ${retryAdvice}` : detail;
+}
+
 export function VehicleImportDialog({ open, onOpenChange }: Props) {
   const { t } = useLanguage();
   const { activeOrgId } = useOrg();
@@ -886,34 +923,8 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
               // through Excel can still alter a cell, which is why the message
               // says "as long as their VINs are unchanged" rather than
               // promising outright.
-              const detail = err instanceof Error ? err.message : String(err);
-              // What a re-import actually does depends on the mode. A PURCHASE
-              // file has a real VIN on every row, so every car already added is
-              // skipped as a duplicate. An OPENING_STOCK file may contain
-              // VIN-less rows, which get a fresh placeholder each time and would
-              // be added again — promising blanket retry safety there would be
-              // false.
-              const retryAdvice = t(
-                (posting === "PURCHASE"
-                  ? "ImportRetryAdvicePurchase"
-                  : "ImportRetryAdviceOpeningStock") as any
-              );
-              const stopped = t("ImportStoppedAfter" as any).replace(
-                "{count}",
-                String(totals.inserted)
-              );
-              // PURCHASE is one atomic call, so `totals.inserted` is ALWAYS 0 here
-              // and the "imported N, then stopped" framing never applies — gating
-              // the guidance on it made the guidance unreachable. For PURCHASE the
-              // advice is always true and always relevant, so it is always shown.
-              // OPENING_STOCK keeps the partial-progress form, which is accurate
-              // for it because it still chunks.
               throw new Error(
-                posting === "PURCHASE"
-                  ? `${detail} ${retryAdvice}`
-                  : totals.inserted > 0
-                    ? `${stopped} ${detail} ${retryAdvice}`
-                    : detail
+                importChunkFailureMessage(err, posting, totals.inserted, t as (key: string) => string)
               );
             }
           }
