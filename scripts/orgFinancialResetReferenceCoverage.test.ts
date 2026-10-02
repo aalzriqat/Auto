@@ -446,8 +446,10 @@ const snippet = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 100);
  * function rebound under another name by an import alias or an export specifier
  * (one hop: the alias's value uses, and `export { x as y }` / `export { alias }`).
  * NOT covered: a computed non-literal element-access key, `export *`, writes that
- * never name a watched name (including `patch` / `replace`), and cross-file symbol
- * resolution beyond that one-hop alias-and-export rule. Identifier resolution is deliberately NOT
+ * never name a watched name (including `patch` / `replace`), string-addressed
+ * function references (e.g. makeFunctionReference("subledger:createReceivable")),
+ * and cross-file symbol resolution beyond that one-hop alias-and-export rule.
+ * Identity is the import binding, not the spelling. Identifier resolution is deliberately NOT
  * heuristic (the SCRUM-208 lesson, "a number cannot be shadowed"): a name resolves
  * only when the file declares it exactly once, anywhere, as a top-level
  * `const NAME = "literal"`.
@@ -557,30 +559,45 @@ function sourceTypeOf(arg: ts.Expression | undefined, decls: Map<string, ts.Node
  * Inspects EVERY receivableDocuments write in one file. A call is a SITE when it
  * is: a `.insert(` (any receiver, so a `db = ctx.db` alias counts) whose table is
  * "receivableDocuments" OR is not a string literal (unresolved, so unparsed); a
- * call of `createReceivableDocument` / `ensureReceivableDocument` under any
- * import alias, or as a namespace member; or a call passing a function reference
- * named after a helper or `createReceivable` (the `runMutation` form). A helper
- * that escapes as a bare value, or is rebound by an import alias or an export
- * specifier under another name (one hop only), is reported as unparsed. Not
- * covered: see the boundary list above (`export *`, computed keys, patch/replace,
- * cross-file resolution). Definitions, imports, type positions and comments are not sites.
+ * call of a helper import-bound to `createReceivableDocument` /
+ * `ensureReceivableDocument` under any local name, or as a namespace member; or a
+ * call passing a function reference named after a helper or `createReceivable`
+ * (the `runMutation` form). A helper alias is a recognised callee; a
+ * `createReceivable` alias (whatever its spelling), any value use of it, a helper
+ * that escapes as a bare value, or a re-export under another name is reported as
+ * unparsed (one hop only). Not covered: see the boundary list above (`export *`,
+ * computed keys, patch/replace, string-addressed references, cross-file
+ * resolution). Definitions, imports, type positions and comments are not sites.
  * Each site's `sourceType` must resolve to a literal or it is reported.
  */
 function scanReceivableDocumentWriters(rawText: string, file = "scanned.ts"): ReceivableWriterScan {
   const sf = parseModule(rawText, file);
   const decls = declarationsByName(sf);
-  // Import aliases of EVERY watched function name. A helper alias is also a recognised
-  // callee; a `createReceivable` alias is only watched, so any use of it is unparsed.
+  // Identity is the IMPORT BINDING, not the spelling. `importedFrom` maps each local name
+  // bound by a named import of a watched function to the original name it imports. A
+  // helper binding is a recognised callee; a `createReceivable` binding is only watched
+  // (`refAliases`), even when it is spelled like a helper, so any use of it is unparsed.
+  // The reverse (a helper imported as `createReceivable`) is a helper binding and is
+  // recorded as such; its same-name export is caught by the export rule below.
   const aliases = new Set<string>(RECEIVABLE_HELPERS);
   const refAliases = new Set<string>();
+  const importedFrom = new Map<string, string>();
   sf.forEachChild(function findImports(node) {
     if (!ts.isImportDeclaration(node)) return;
     const bindings = node.importClause?.namedBindings;
     if (!bindings || !ts.isNamedImports(bindings)) return;
     for (const el of bindings.elements) {
       const imported = (el.propertyName ?? el.name).text;
-      if (RECEIVABLE_HELPERS.has(imported)) aliases.add(el.name.text);
-      else if (RECEIVABLE_MUTATION_REFS.has(imported)) refAliases.add(el.name.text);
+      const local = el.name.text;
+      if (!RECEIVABLE_MUTATION_REFS.has(imported)) continue;
+      importedFrom.set(local, imported);
+      if (RECEIVABLE_HELPERS.has(imported)) {
+        aliases.add(local);
+        refAliases.delete(local);
+      } else {
+        refAliases.add(local);
+        aliases.delete(local);
+      }
     }
   });
   const tracked = (name: string) => RECEIVABLE_MUTATION_REFS.has(name) || aliases.has(name) || refAliases.has(name);
@@ -619,11 +636,11 @@ function scanReceivableDocumentWriters(rawText: string, file = "scanned.ts"): Re
         record(sourceTypeOf(args[refAt + 1], decls));
       }
     } else if (ts.isExportSpecifier(node)) {
-      // One site per specifier: rebinding a watched name under another name, by export
-      // rename or by exporting an import alias. Same-name export of an ORIGINAL name is fine.
+      // One site per specifier: it fires when a tracked name is exported under any name other
+      // than the ORIGINAL it is bound to (the import's original name, else its own spelling).
       const local = (node.propertyName ?? node.name).text;
-      const aliasOnly = tracked(local) && !RECEIVABLE_MUTATION_REFS.has(local);
-      if (tracked(local) && (node.name.text !== local || aliasOnly)) {
+      const original = importedFrom.get(local) ?? local;
+      if (tracked(local) && node.name.text !== original) {
         sites++;
         unparsed.push(`re-export under a new name: ${snippet(node.getText())}`);
       }
@@ -972,6 +989,39 @@ describe("receivableDocuments.sourceId opaque references stay pinned", () => {
     const scan = scanReceivableDocumentWriters(source);
     expect(scan.sites).toBe(1);
     expect(scan.unparsed).toHaveLength(1);
+  });
+
+  // ── SCRUM-559 round 4: identity is the IMPORT BINDING, never the spelling ──
+  test.each([
+    [
+      "(5) createReceivable imported under a helper's spelling, then exported",
+      'import { createReceivable as ensureReceivableDocument } from "./subledger"; export { ensureReceivableDocument };',
+    ],
+    [
+      "(7) a helper imported under createReceivable's spelling, then exported",
+      'import { ensureReceivableDocument as createReceivable } from "./subledger"; export { createReceivable };',
+    ],
+  ])("MUTATION CONTROL: %s is exactly one unparsed site", (_name, source) => {
+    const scan = scanReceivableDocumentWriters(source);
+    expect(scan.sites).toBe(1);
+    expect(scan.unparsed).toHaveLength(1);
+  });
+
+  test("MUTATION CONTROL (6): createReceivable under a helper's spelling is not parsed as a helper call", () => {
+    const scan = scanReceivableDocumentWriters(
+      'import { createReceivable as ensureReceivableDocument } from "./subledger"; await ensureReceivableDocument(ctx, { sourceType: "sales" });'
+    );
+    expect(scan.sites).toBe(1);
+    expect(scan.unparsed).toHaveLength(1);
+    expect(scan.literals).toEqual([]);
+  });
+
+  test("MUTATION CONTROL: importing and exporting a helper under its own name is not a site", () => {
+    expect(
+      scanReceivableDocumentWriters(
+        'import { ensureReceivableDocument } from "./subledger"; export { ensureReceivableDocument };'
+      )
+    ).toEqual({ sites: 0, literals: [], unparsed: [] });
   });
 
   test("MUTATION CONTROL: a same-name re-export of an original watched name is not a site", () => {
