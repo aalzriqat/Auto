@@ -1,6 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { internalMutation } from "./functions";
-import type { Id } from "./_generated/dataModel";
+import type { DatabaseReader } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
 
 /**
  * One-off operational tool: clears an organization's accounting, sales and
@@ -143,6 +144,8 @@ const RESET_TABLES = [
   "quotes",
 ] as const;
 
+type ResetTable = (typeof RESET_TABLES)[number];
+
 /**
  * Tables whose rows reference a parent, keyed by that parent.
  *
@@ -160,7 +163,7 @@ const RESET_TABLES = [
  * including ones added later — the claim was wrong in this comment twice before
  * anything checked it.
  */
-const CHILD_TABLES: Partial<Record<(typeof RESET_TABLES)[number], readonly string[]>> = {
+const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   financeApplications: [
     "financeAppraisals",
     "financeApplicationOverrides",
@@ -224,6 +227,96 @@ const CHILD_TABLES: Partial<Record<(typeof RESET_TABLES)[number], readonly strin
 const RESET_DELETE_BATCH = 500;
 
 /**
+ * The index each reset table is read through, so every read is an index range
+ * on `orgId` rather than a filtered table scan (SCRUM-555).
+ *
+ * Every index named here has `orgId` as its FIRST field, so
+ * `q.eq("orgId", orgId)` is a prefix range that returns exactly this org's rows
+ * and no one else's. Convex indexes contain every document, including ones
+ * whose later index fields are unset, so no row is skipped.
+ *
+ * `by_org` where the table has one. Four tables carry no single-field
+ * `by_org`, so they reuse an existing orgId-leading index instead of adding one
+ * (a new index is a schema change and a production backfill for no behavioural
+ * gain): `accountBalanceSnapshots` -> `by_org_period`,
+ * `commitmentAuthorityAttempt` / `commitmentAuthorityWork` / `pendingAccountingEvents`
+ * -> `by_org_status`. `Record<ResetTable, ...>` makes a table added to
+ * `RESET_TABLES` without an entry here a compile error.
+ *
+ * Which order the rows come back in does not matter to this tool: the batch is
+ * only ever "some `limit` rows of this org", every row is deleted across the
+ * repeated runs regardless of which came first, and the `limit + 1` read exists
+ * solely to learn whether more remain.
+ */
+const RESET_ORG_INDEX: Record<ResetTable, string> = {
+  commitmentAuthorityAttempt: "by_org_status",
+  commitmentAuthorityWork: "by_org_status",
+  accountingEvents: "by_org",
+  pendingAccountingEvents: "by_org_status",
+  journalEntries: "by_org",
+  journalLines: "by_org",
+  financialAuditLog: "by_org",
+  accountBalanceSnapshots: "by_org_period",
+  chartOfAccounts: "by_org",
+  receiptApplications: "by_org",
+  receiptRetainedPositions: "by_org",
+  receiptMovements: "by_org",
+  transactions: "by_org",
+  deposits: "by_org",
+  collectionPayments: "by_org",
+  receivableDocuments: "by_org",
+  canonicalPayments: "by_org",
+  receivables: "by_org",
+  paymentAllocations: "by_org",
+  postDatedCheques: "by_org",
+  cashierReconciliations: "by_org",
+  collectionApprovalRequests: "by_org",
+  paymentVouchers: "by_org",
+  supplierCostRecoveryReceipts: "by_org",
+  supplierCostRecoveries: "by_org",
+  expenses: "by_org",
+  payrollItems: "by_org",
+  payrollRuns: "by_org",
+  employeeCompensation: "by_org",
+  financeAppraisals: "by_org",
+  financeApplicationOverrides: "by_org",
+  financeDealCustodyEntries: "by_org",
+  financeDealFees: "by_org",
+  financeDealCustody: "by_org",
+  applicationStatusLog: "by_org",
+  financeApplications: "by_org",
+  sales: "by_org",
+  quotes: "by_org",
+};
+
+/**
+ * Up to `max` of this org's rows in `table`, read through its orgId-leading
+ * index (see `RESET_ORG_INDEX`).
+ *
+ * ⚠️ THE ONE CAST IN THIS FILE. `table` is a union of 38 table names and the
+ * index name is chosen per table at runtime, so TypeScript cannot relate the
+ * two: `withIndex` is only typed against a single table's literal index names.
+ * The cast widens the query to one arbitrary table's shape purely to make the
+ * call compile; the real table and index are `table` and `RESET_ORG_INDEX`,
+ * which `Record<ResetTable, string>` keeps exhaustive and
+ * `orgFinancialReset.test.ts` proves against the schema. The result is
+ * re-asserted to the union of the reset tables' documents, which is exactly
+ * what it contains.
+ */
+async function orgRows(
+  db: DatabaseReader,
+  table: ResetTable,
+  orgId: Id<"organizations">,
+  max: number
+): Promise<Doc<ResetTable>[]> {
+  const rows = await db
+    .query(table as "chartOfAccounts")
+    .withIndex(RESET_ORG_INDEX[table] as "by_org", (q) => q.eq("orgId", orgId))
+    .take(max);
+  return rows as Doc<ResetTable>[];
+}
+
+/**
  * Deletes — or with `dryRun`, merely counts — this org's rows in every table
  * above.
  *
@@ -231,11 +324,11 @@ const RESET_DELETE_BATCH = 500;
  * explicitly, so the natural first invocation is the safe one and the
  * destructive form has to be typed on purpose.
  *
- * Rows are matched with a filter rather than a `by_org` index because the
- * tables here differ in which indexes they carry, and a wrong index name would
- * fail loudly mid-run after earlier tables had already been deleted. Every one
- * of these tables is small on this deployment, so a scan costs little and
- * behaves identically everywhere.
+ * Rows are matched through each table's orgId-leading index (`RESET_ORG_INDEX`)
+ * rather than a filtered scan. The tables differ in which indexes they carry,
+ * so the index is named per table, and the test suite proves every named index
+ * exists with `orgId` first — a wrong name fails in CI, not mid-run after
+ * earlier tables had already been deleted.
  */
 export const resetOrgFinancialData = internalMutation({
   args: {
@@ -291,11 +384,11 @@ export const resetOrgFinancialData = internalMutation({
     // costs an operator an error message.
     const authorityAttempts = await ctx.db
       .query("commitmentAuthorityAttempt")
-      .filter((q) => q.eq(q.field("orgId"), args.orgId))
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId))
       .take(1);
     const authorityWork = await ctx.db
       .query("commitmentAuthorityWork")
-      .filter((q) => q.eq(q.field("orgId"), args.orgId))
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId))
       .take(1);
     const authorityLifecyclePresent =
       authorityAttempts.length > 0 || authorityWork.length > 0;
@@ -320,10 +413,7 @@ export const resetOrgFinancialData = internalMutation({
     for (const table of RESET_TABLES) {
       // One past the limit, so `remaining` reports honestly whether another
       // run is needed instead of silently stopping at a full batch.
-      const rows = await ctx.db
-        .query(table)
-        .filter((q) => q.eq(q.field("orgId"), args.orgId))
-        .take(limit + 1);
+      const rows = await orgRows(ctx.db, table, args.orgId, limit + 1);
 
       // Deleting a parent while a child still has rows leaves those rows
       // pointing at nothing. Defer the parent entirely — it is reported in
@@ -403,6 +493,12 @@ export const RESET_TABLES_FOR_TEST: readonly string[] = RESET_TABLES;
  * never blocked by it. See `orgDeletionCoverage.test.ts`.
  */
 export const CHILD_TABLES_FOR_TEST: Readonly<Record<string, readonly string[]>> = CHILD_TABLES;
+
+/**
+ * Exported so the test suite can prove every index named is a real index with
+ * `orgId` as its first field (SCRUM-555).
+ */
+export const RESET_ORG_INDEX_FOR_TEST: Readonly<Record<string, string>> = RESET_ORG_INDEX;
 
 /** Exported so a caller can type the org argument without importing generated ids. */
 export type ResetOrgId = Id<"organizations">;
