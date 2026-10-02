@@ -14,6 +14,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { toast } from "@/components/ui/sonner";
 import { format } from "date-fns";
+import { economicTodayDateInput } from "@/lib/dateInput";
 import { Plus, History, TrendingDown, XCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -582,7 +583,9 @@ function DisposeAssetDialog({
 
   const form = useForm<DisposeAssetFormValues>({
     resolver: zodResolver(disposeAssetSchema),
-    defaultValues: { proceeds: 0, occurredAt: todayInput },
+    // The ledger's calendar is UTC: the server refuses a UTC day that has not begun, so the
+    // default is the UTC day (a user ahead of UTC would otherwise default to a refused date).
+    defaultValues: { proceeds: 0, occurredAt: economicTodayDateInput() },
   });
 
   async function onSubmit(values: DisposeAssetFormValues) {
@@ -631,7 +634,7 @@ function DisposeAssetDialog({
                 name="occurredAt"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t("DisposalDateLabel" as any)}</FormLabel>
+                    <FormLabel>{t("DisposalAccountingDateLabel" as any)}</FormLabel>
                     <FormControl>
                       <Input type="date" {...field} />
                     </FormControl>

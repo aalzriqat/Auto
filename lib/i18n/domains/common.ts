@@ -64,6 +64,28 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   AccountingNoAttentionItemsReportedDesc: ["This list covers the chart, the current open period and retryable pending events only. Failed postings and close review are under Reconcile & Close.", "تغطي هذه القائمة دليل الحسابات والفترة المفتوحة الحالية وأحداث الترحيل المعلقة القابلة لإعادة المحاولة فقط. الترحيلات الفاشلة ومراجعة الإقفال ضمن التسوية والإقفال."],
   AccountingRecentPeriods: ["Recent periods", "الفترات الأخيرة"],
   AccountingAdminSections: ["Admin", "الإدارة"],
+  // SCRUM-542. The English text must equal FIXED_ASSET_DATE_REFUSALS in convex/fixedAssets.ts.
+  DisposalAccountingDateLabel: ["Accounting date", "التاريخ المحاسبي"],
+  ServerError_ASSET_EVENT_DATE_INVALID: [
+    "The accounting date is not a valid date.",
+    "التاريخ المحاسبي غير صالح.",
+  ],
+  ServerError_ASSET_EVENT_DATE_IN_FUTURE: [
+    "The accounting date cannot be later than today.",
+    "لا يجوز أن يكون التاريخ المحاسبي لاحقاً لتاريخ اليوم.",
+  ],
+  ServerError_ASSET_EVENT_BEFORE_CAPITALIZATION: [
+    "The accounting date cannot be earlier than the day the asset was capitalized.",
+    "لا يجوز أن يكون التاريخ المحاسبي سابقاً ليوم رسملة الأصل.",
+  ],
+  ServerError_ASSET_EVENT_BEFORE_DEPRECIATION: [
+    "The accounting date cannot be earlier than the asset's latest posted depreciation.",
+    "لا يجوز أن يكون التاريخ المحاسبي سابقاً لآخر إهلاك تم ترحيله للأصل.",
+  ],
+  ServerError_ASSET_EVENT_BEFORE_IMPAIRMENT: [
+    "The accounting date cannot be earlier than the day the asset was impaired.",
+    "لا يجوز أن يكون التاريخ المحاسبي سابقاً ليوم تسجيل انخفاض قيمة الأصل.",
+  ],
   FinanceCompanyReceivables: ["Finance-company receivables", "ذمم شركات التمويل"],
   FinanceCompanyReceivablesDesc: ["Amounts due from finance companies. Open the originating deal to review or settle them.", "المبالغ المستحقة من شركات التمويل. افتح الصفقة الأصلية للمراجعة أو التسوية."],
   DocumentNumber: ["Document number", "رقم المستند"],

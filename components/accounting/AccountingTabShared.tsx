@@ -10,6 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { toast } from "@/components/ui/sonner";
 import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
+import { getLocalizedErrorMessage } from "@/lib/errors";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 export { PaymentMethodSelect, type PaymentMethod, type Translate } from "@/components/payments/PaymentMethodSelect";
 
 const CURRENCY_SCALES: Record<string, number> = {
@@ -62,6 +64,7 @@ export function errorMessage(error: unknown): string {
 }
 
 export function useAccountingSubmit() {
+  const { t } = useLanguage();
   const [submitting, setSubmitting] = useState(false);
 
   async function submitWithFeedback(action: () => Promise<void>): Promise<void> {
@@ -69,7 +72,9 @@ export function useAccountingSubmit() {
     try {
       await action();
     } catch (error) {
-      toast.error(errorMessage(error));
+      // A coded server refusal is shown in the user's language; anything uncoded
+      // falls back to the cleaned message (lib/errors.ts getErrorMessage).
+      toast.error(getLocalizedErrorMessage(error, t));
     } finally {
       setSubmitting(false);
     }
