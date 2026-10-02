@@ -203,6 +203,7 @@ import type * as utils_instagramApi from "../utils/instagramApi.js";
 import type * as utils_leadActivity from "../utils/leadActivity.js";
 import type * as utils_leadAssignment from "../utils/leadAssignment.js";
 import type * as utils_leadStageHelpers from "../utils/leadStageHelpers.js";
+import type * as utils_ledgerCalendar from "../utils/ledgerCalendar.js";
 import type * as utils_manualFinancePayer from "../utils/manualFinancePayer.js";
 import type * as utils_marketplaceMatching from "../utils/marketplaceMatching.js";
 import type * as utils_materialization from "../utils/materialization.js";
@@ -459,6 +460,7 @@ declare const fullApi: ApiFromModules<{
   "utils/leadActivity": typeof utils_leadActivity;
   "utils/leadAssignment": typeof utils_leadAssignment;
   "utils/leadStageHelpers": typeof utils_leadStageHelpers;
+  "utils/ledgerCalendar": typeof utils_ledgerCalendar;
   "utils/manualFinancePayer": typeof utils_manualFinancePayer;
   "utils/marketplaceMatching": typeof utils_marketplaceMatching;
   "utils/materialization": typeof utils_materialization;
