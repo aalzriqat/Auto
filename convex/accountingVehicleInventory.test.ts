@@ -961,14 +961,19 @@ describe("Monthly F&I commission recognition cron", () => {
     );
     expect(deferral?.totalMarginMinor).toBe(100); // 100 minor units, not divisible by 3
 
+    // S230-R2: a deferral is created with its sale (2025-04), recognition starts in
+    // the sale month, and each posting is dated inside the month it claims.
+    await t.run((ctx) => ctx.db.patch(deferral!._id, { createdAt: Date.UTC(2025, 3, 1) }));
     const recognize = (yearMonth: string) =>
       t.mutation(internal.dealerProductDeferrals.recognizeDeferredCommissionForMonth, {
-        orgId, deferralId: deferral!._id, yearMonth, occurredAt: Date.now(), systemActorId: userId,
+        orgId, deferralId: deferral!._id, yearMonth,
+        occurredAt: Date.UTC(Number(yearMonth.slice(0, 4)), Number(yearMonth.slice(5)) - 1, 15),
+        systemActorId: userId,
       });
 
-    const m1 = await recognize("2025-01");
-    const m2 = await recognize("2025-02");
-    const m3 = await recognize("2025-03");
+    const m1 = await recognize("2025-04");
+    const m2 = await recognize("2025-05");
+    const m3 = await recognize("2025-06");
     expect(m1.posted && m2.posted && m3.posted).toBe(true);
     expect((m1.amountMinor ?? 0) + (m2.amountMinor ?? 0) + (m3.amountMinor ?? 0)).toBe(100);
 
@@ -978,7 +983,7 @@ describe("Monthly F&I commission recognition cron", () => {
 
     // A 4th month must find nothing left to recognize — the deferral finished
     // in exactly 3 months, never needing a 4th.
-    const m4 = await recognize("2025-04");
+    const m4 = await recognize("2025-07");
     expect(m4.posted).toBe(false);
     expect(m4.reason).toBe("not_active"); // already FULLY_RECOGNIZED after month 3
   });
@@ -998,9 +1003,13 @@ describe("Monthly F&I commission recognition cron", () => {
       ctx.db.query("dealerProductDeferrals").withIndex("by_org", (q) => q.eq("orgId", orgId)).first()
     );
 
+    // S230-R2: created with its sale (2025-04); each posting is dated inside its month.
+    await t.run((ctx) => ctx.db.patch(deferral!._id, { createdAt: Date.UTC(2025, 3, 1) }));
     const recognize = (yearMonth: string) =>
       t.mutation(internal.dealerProductDeferrals.recognizeDeferredCommissionForMonth, {
-        orgId, deferralId: deferral!._id, yearMonth, occurredAt: Date.now(), systemActorId: userId,
+        orgId, deferralId: deferral!._id, yearMonth,
+        occurredAt: Date.UTC(Number(yearMonth.slice(0, 4)), Number(yearMonth.slice(5)) - 1, 15),
+        systemActorId: userId,
       });
 
     await recognize("2025-08");
@@ -1035,6 +1044,8 @@ async function seedFiDeferral(suffix: string, saleDate: number) {
     ctx.db.query("dealerProductDeferrals").withIndex("by_sale", (q) => q.eq("saleId", saleId)).first()
   );
   expect(deferral?.totalMarginMinor).toBe(100);
+  // S230-R2: a deferral is created with its sale, so its recognition floor is the sale month.
+  await t.run((ctx) => ctx.db.patch(deferral!._id, { createdAt: saleDate }));
   const recognize = (yearMonth: string, occurredAt: number) =>
     t.mutation(internal.dealerProductDeferrals.recognizeDeferredCommissionForMonth, {
       orgId, deferralId: deferral!._id, yearMonth, occurredAt, systemActorId: userId,
@@ -1108,8 +1119,11 @@ describe("SCRUM-537 — F&I recognition posts one GL occurrence per month", () =
 
   test("T2: a queued month 1 and a posted month 2 both reach the ledger once drained", async () => {
     const s = await seedFiDeferral("fi537_t2", Date.UTC(2025, 3, 1));
-    // Month 1 is dated before any period exists -> queued in the outbox.
-    await s.recognize("2025-05", Date.UTC(2019, 4, 15));
+    // Month 1 (2025-05) is dated before the first period starts -> queued in the outbox.
+    // Move the seeded period's start to 2025-06 so 2025-05 genuinely precedes any period.
+    const [seedPeriod] = await s.asOwner.query(api.accountingPeriods.list, { orgId: s.orgId });
+    await s.t.run((ctx) => ctx.db.patch(seedPeriod._id, { startDate: Date.UTC(2025, 5, 1) }));
+    await s.recognize("2025-05", Date.UTC(2025, 4, 15));
     const queued = await s.t.run((ctx) =>
       ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", s.orgId).eq("status", "PENDING"))
         .filter((q) => q.eq(q.field("eventType"), "FI_COMMISSION_RECOGNIZED")).collect()
@@ -1121,13 +1135,13 @@ describe("SCRUM-537 — F&I recognition posts one GL occurrence per month", () =
     await s.recognize("2025-06", Date.UTC(2025, 5, 15));
     expect((await s.fiEvents()).map((e) => [e.eventVersion, e.status])).toEqual([[2, "POSTED"]]);
 
-    // Open a period covering month 1's date, then drain.
+    // Open a period covering month 1's date (2025-05-15), then drain.
     await s.asOwner.mutation(api.accountingPeriods.create, {
-      orgId: s.orgId, startDate: Date.UTC(2018, 0, 1), endDate: Date.UTC(2019, 11, 31, 23, 59, 59, 999),
-      fiscalYear: 2018, periodNumber: 1,
+      orgId: s.orgId, startDate: Date.UTC(2020, 0, 1), endDate: Date.UTC(2025, 4, 31, 23, 59, 59, 999),
+      fiscalYear: 2024, periodNumber: 1,
     });
     const early = (await s.asOwner.query(api.accountingPeriods.list, { orgId: s.orgId }))
-      .find((p) => p.startDate === Date.UTC(2018, 0, 1))!;
+      .find((p) => p.startDate === Date.UTC(2020, 0, 1))!;
     await s.asOwner.mutation(api.accountingPeriods.open, { orgId: s.orgId, periodId: early._id });
     await drainQueuedAccountingEventsForOrg(s.t, s.orgId);
 
@@ -1137,8 +1151,13 @@ describe("SCRUM-537 — F&I recognition posts one GL occurrence per month", () =
 
   test("T3: cancelling after two recognized months leaves every FI event reversed and the accounts at zero", async () => {
     const s = await seedFiDeferral("fi537_t3", Date.now() - 120 * 86_400_000);
-    await s.recognize("2025-05", Date.now() - 60 * 86_400_000);
-    await s.recognize("2025-06", Date.now() - 30 * 86_400_000);
+    // yearMonth is derived from occurredAt (mid-month, two consecutive past months after the sale).
+    const now = new Date();
+    const at1 = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 2, 15);
+    const at2 = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 15);
+    const monthOf = (ts: number) => new Date(ts).toISOString().slice(0, 7);
+    await s.recognize(monthOf(at1), at1);
+    await s.recognize(monthOf(at2), at2);
     expect((await s.fiEvents()).map((e) => e.eventVersion).sort((a, b) => a - b)).toEqual([1, 2]);
 
     const asApprover = await addCancellationApprover(s.t, s.orgId, "fi537_t3");

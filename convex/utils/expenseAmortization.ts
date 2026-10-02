@@ -57,6 +57,11 @@ export function yearMonthFromIndex(idx: number): string {
   return `${year}-${String(month + 1).padStart(2, "0")}`;
 }
 
+/** UTC "YYYY-MM" for a timestamp. */
+export function toYearMonth(timestamp: number): string {
+  return yearMonthFromIndex(yearMonthIndex(timestamp));
+}
+
 /**
  * A timestamp that falls inside calendar month `idx` (its last millisecond),
  * clamped to `now` so the in-progress current month posts as-of-now rather
@@ -65,6 +70,33 @@ export function yearMonthFromIndex(idx: number): string {
  */
 export function occurredAtForMonthIndex(idx: number, now: number): number {
   return Math.min(endOfMonthMs(idx), now);
+}
+
+/**
+ * First calendar month (absolute index) a monthly GL cron may offer an item —
+ * the lower bound of its catch-up range: never earlier than the month after the
+ * last one posted, the month the item was created (INCLUSIVE — months before
+ * the row existed are never back-filled), or its schedule start month (fixed
+ * assets' depreciation start / purchase date; omit for F&I deferrals).
+ */
+export function firstOfferableMonthIndex(input: {
+  lastPostedYearMonth?: string;
+  startAt?: number;
+  createdAt: number;
+}): number {
+  let first = yearMonthIndex(input.createdAt);
+  if (input.startAt !== undefined) first = Math.max(first, yearMonthIndex(input.startAt));
+  if (input.lastPostedYearMonth) first = Math.max(first, yearMonthStringIndex(input.lastPostedYearMonth) + 1);
+  // Math.max(x, NaN) is NaN, and NaN poisons both callers: the cron's
+  // `idx <= currentIdx` loop never runs (the item is silently counted done) and the
+  // recognition mutation's `< floor` guard silently passes. An unrepresentable input
+  // is refused loudly - never "nothing to do", never "no floor".
+  if (!Number.isFinite(first)) {
+    throw new Error(
+      "first offerable month is not representable: createdAt, startAt or lastPostedYearMonth is malformed or out of range"
+    );
+  }
+  return first;
 }
 
 /** Last millisecond of calendar month `idx` (year*12 + 0-based month). */

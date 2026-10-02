@@ -23,6 +23,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { toYearMonth } from "./utils/expenseAmortization";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -466,7 +467,9 @@ describe("SCRUM-302 F4 — F&I deferral recognition cron vs org lifecycle", () =
       {
         orgId: dealer.orgId,
         deferralId,
-        yearMonth: `${new Date().getUTCFullYear()}-01`,
+        // S230-R2: the month must be the sale's own (sale + deferral are created now)
+        // and occurredAt must fall inside it.
+        yearMonth: toYearMonth(Date.now()),
         occurredAt: Date.now(),
         systemActorId: dealer.userId,
       }
