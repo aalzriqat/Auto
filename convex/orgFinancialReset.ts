@@ -487,35 +487,12 @@ export const resetOrgFinancialData = internalMutation({
     // ⚠️ SUSPENSION AND PENDING-INTENT PREFLIGHT (SCRUM-559 I1), ALSO BEFORE ANY
     // DELETE OR STORAGE WRITE.
     //
-    // A reset runs across SEVERAL passes and nothing locks the organization
-    // between them, so a user (or a webhook) writing between two passes meets a
-    // half-reset ledger. Several rows below are dereferenced by user-facing
-    // mutations and left unordered on purpose (the accepted optional references
-    // in scripts/orgFinancialResetReferenceCoverage.test.ts, e.g.
-    // `financeApplications.approvedPurchaseAppraisalId` and `sales.applicationId`,
-    // where a reverse edge would cycle). Those are safe mid-reset ONLY because a
-    // suspended organization cannot pass tenant auth, so no user writer runs.
-    // The flag is read from the organization row here, never taken from the
-    // caller. A missing organization row keeps the earlier behaviour (no check):
-    // there is no tenant left for a writer to authenticate against.
-    //
-    // A PENDING `paymentIntents` row is a payment the provider may still settle:
-    // its webhook would then post a payment against rows this reset deleted.
-    // The operator settles, fails or expires it with the provider first. Intents
-    // are read through `by_org_status` and are NOT reset (they stay with the
-    // org). Command-idempotency results and terminal intents are out of scope
-    // here (SCRUM-563).
-    //
-    // Both refusals are thrown (an uncaught throw aborts the transaction) and
-    // come from an internal operator tool that no UI shows, so they stay English
-    // like the authority refusal above.
+    // Suspension: unordered references are safe mid-reset only because a
+    // suspended org passes no tenant auth, so no user writer runs between passes.
+    // A PENDING payment intent blocks: its webhook would post against deleted
+    // rows. Rationale and limits: see the header docblock. Both refusals stay
+    // English (internal operator tool).
     const orgSuspended = org?.suspended === true;
-    const pendingIntent = await ctx.db
-      .query("paymentIntents")
-      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
-      .first();
-    const pendingPaymentIntentsPresent = pendingIntent !== null;
-
     if (!dryRun && org !== null && !orgSuspended) {
       throw new ConvexError(
         "Suspend this organization before running the financial reset. A reset runs across " +
@@ -523,6 +500,11 @@ export const resetOrgFinancialData = internalMutation({
           "Refusing before any deletion."
       );
     }
+    const pendingPaymentIntentsPresent =
+      (await ctx.db
+        .query("paymentIntents")
+        .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
+        .first()) !== null;
     if (!dryRun && pendingPaymentIntentsPresent) {
       throw new ConvexError(
         "This organization has pending online payment intents. Settle, fail or expire them " +

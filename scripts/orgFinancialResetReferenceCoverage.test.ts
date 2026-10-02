@@ -22,6 +22,7 @@ import * as path from "node:path";
 import { describe, expect, test } from "vitest";
 import { v } from "convex/values";
 import schema from "../convex/schema";
+import { convexSourceFiles } from "./commitmentWriteGuard";
 import { CHILD_TABLES_FOR_TEST, RESET_TABLES_FOR_TEST } from "../convex/orgFinancialReset";
 
 interface ValidatorLike {
@@ -420,17 +421,6 @@ const RECEIVABLE_DOCUMENT_SOURCE_KINDS: Record<string, string> = {
 
 const CONVEX_DIR = path.join(__dirname, "..", "convex");
 
-function convexSourceFiles(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "_generated" || entry.name === "node_modules") continue;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...convexSourceFiles(full));
-    else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) out.push(full);
-  }
-  return out;
-}
-
 /** sourceType literals written by files that create receivable documents. */
 function receivableDocumentSourceLiterals(): { writers: string[]; literals: Set<string> } {
   const writers: string[] = [];
@@ -438,6 +428,7 @@ function receivableDocumentSourceLiterals(): { writers: string[]; literals: Set<
   for (const file of convexSourceFiles(CONVEX_DIR)) {
     if (path.basename(file) === "subledger.ts") continue; // the generic writer, no literal
     const text = fs.readFileSync(file, "utf8");
+    if (!text.includes("ReceivableDocument") && !text.includes('"receivableDocuments"')) continue;
     if (!/createReceivableDocument|ensureReceivableDocument|insert\(\s*"receivableDocuments"/.test(text)) continue;
     writers.push(path.relative(CONVEX_DIR, file).replace(/\\/g, "/"));
     // Only the argument object of the create call: other `sourceType` keys in these files are accounting-event sources.

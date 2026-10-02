@@ -506,13 +506,13 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     expect(new Set(applications.map((a) => a.eventIdempotencyKey)).size).toBe(3);
 
     // Three separate journals, not one.
-    const events = await t.run((ctx) =>
-      ctx.db
+    const events = await t.run(async (ctx) => {
+      const rows = await ctx.db
         .query("accountingEvents")
         .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .collect()
-        .then((rows) => rows.filter((row) => row.eventType === "RECEIPT_CREDIT_APPLIED"))
-    );
+        .collect();
+      return rows.filter((row) => row.eventType === "RECEIPT_CREDIT_APPLIED");
+    });
     expect(events).toHaveLength(3);
     expect((await positionFor(t, orgId, movement._id))!.remainingUnappliedMinor).toBe(4000);
   });
@@ -657,13 +657,13 @@ describe("SCRUM-218-C §5 — exact replay of one application", () => {
     );
     expect(allocations).toHaveLength(1);
 
-    const events = await t.run((ctx) =>
-      ctx.db
+    const events = await t.run(async (ctx) => {
+      const rows = await ctx.db
         .query("accountingEvents")
         .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .collect()
-        .then((rows) => rows.filter((row) => row.eventType === "RECEIPT_CREDIT_APPLIED"))
-    );
+        .collect();
+      return rows.filter((row) => row.eventType === "RECEIPT_CREDIT_APPLIED");
+    });
     expect(events).toHaveLength(1);
   });
 
