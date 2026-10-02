@@ -12,6 +12,7 @@
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
+import { seedOrgWithMember } from "../test-utils/seedOrg";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { reverseAccountingEvent } from "./accounting/reversals";
@@ -23,30 +24,13 @@ const KEY_CONFLICT = /idempotency key/i;
 
 async function seed() {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
-  const orgId = await t.run((ctx) =>
-    ctx.db.insert("organizations", { name: "Reversal Key Dealer", createdAt: Date.now() })
-  );
-  await t.run((ctx) =>
-    ctx.db.insert("subscriptions", {
-      orgId,
-      plan: "professional",
-      status: "active",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    })
-  );
-  const userId = await t.run((ctx) =>
-    ctx.db.insert("users", { clerkId: "rk_user", email: "rk@example.com", name: "RK User" })
-  );
-  const roleId = await t.run((ctx) =>
-    ctx.db.insert("roles", {
-      orgId,
-      name: "Finance",
-      permissions: ["view:sales", "manage:finance", "view:finance"],
-    })
-  );
-  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
-  const asUser = t.withIdentity({ subject: "rk_user", clerkId: "rk_user" });
+  const { orgId, userId, identity: asUser } = await seedOrgWithMember(t, {
+    clerkId: "rk_user",
+    permissions: ["view:sales", "manage:finance", "view:finance"],
+    orgName: "Reversal Key Dealer",
+    roleName: "Finance",
+    memberName: "RK User",
+  });
   await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
 
   const now = Date.now();
@@ -93,12 +77,11 @@ async function footprint(s: Seed) {
   return await s.t.run(async (ctx) => {
     const events = await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect();
     const journals = await ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect();
-    const pending = await ctx.db.query("pendingAccountingEvents").collect();
-    return {
-      events: events.length,
-      journals: journals.length,
-      pending: pending.filter((p) => String(p.orgId) === String(s.orgId)).length,
-    };
+    const pending = await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_status", (q) => q.eq("orgId", s.orgId))
+      .collect();
+    return { events: events.length, journals: journals.length, pending: pending.length };
   });
 }
 
@@ -140,13 +123,25 @@ async function pendingRow(s: Seed, key: string) {
   );
 }
 
+function pendingDoc(s: Seed, row: Record<string, unknown>) {
+  return {
+    orgId: s.orgId, attempts: 0, createdAt: Date.now(), actorId: s.userId,
+    accountingDate: s.now, ...row,
+  } as any;
+}
+
 function insertPending(s: Seed, row: Record<string, unknown>) {
-  return s.t.run((ctx) =>
-    ctx.db.insert("pendingAccountingEvents", {
-      orgId: s.orgId, attempts: 0, createdAt: Date.now(), actorId: s.userId,
-      accountingDate: s.now, ...row,
-    } as any)
-  );
+  return s.t.run((ctx) => ctx.db.insert("pendingAccountingEvents", pendingDoc(s, row)));
+}
+
+/** A queued PENDING forward EXPENSE_POSTED row holding `key`. */
+function queuedPost(s: Seed, key: string, expenseId: string) {
+  return {
+    kind: "POST", status: "PENDING", idempotencyKey: key,
+    eventType: "EXPENSE_POSTED", sourceType: "expenses", sourceId: expenseId,
+    eventVersion: 1, occurredAt: s.now, currency: "JOD",
+    payload: { expenseId, amountMinor: 5000, currency: "JOD", category: "OTHER" },
+  };
 }
 
 describe("SCRUM-515 — reverseAccountingEvent proves the TARGET, not just the key", () => {
@@ -204,12 +199,7 @@ describe("SCRUM-515 — reverseAccountingEvent proves the TARGET, not just the k
   test("5a. reverse under a key held by a queued PENDING POST row: throws, no reversal written", async () => {
     const s = await seed();
     const b = await postDeposit(s, "5b");
-    await insertPending(s, {
-      kind: "POST", status: "PENDING", idempotencyKey: "queued_post_key",
-      eventType: "EXPENSE_POSTED", sourceType: "expenses", sourceId: "exp_5",
-      eventVersion: 1, occurredAt: s.now, currency: "JOD",
-      payload: { expenseId: "exp_5", amountMinor: 5000, currency: "JOD", category: "OTHER" },
-    });
+    await insertPending(s, queuedPost(s, "queued_post_key", "exp_5"));
     const before = await footprint(s);
 
     await expect(reverse(s, b, "queued_post_key")).rejects.toThrow(KEY_CONFLICT);
@@ -240,13 +230,7 @@ describe("SCRUM-515 — reverseAccountingEvent proves the TARGET, not just the k
     // the fixed code throws before any write (so the catch commits nothing);
     // on the unfixed code it succeeds and writes the poisoned reversal row.
     await s.t.run(async (ctx) => {
-      await ctx.db.insert("pendingAccountingEvents", {
-        orgId: s.orgId, kind: "POST", status: "PENDING", idempotencyKey: key,
-        accountingDate: s.now, actorId: s.userId, attempts: 0, createdAt: Date.now(),
-        eventType: "EXPENSE_POSTED", sourceType: "expenses", sourceId: "exp_5e",
-        eventVersion: 1, occurredAt: s.now, currency: "JOD",
-        payload: { expenseId: "exp_5e", amountMinor: 5000, currency: "JOD", category: "OTHER" },
-      });
+      await ctx.db.insert("pendingAccountingEvents", pendingDoc(s, queuedPost(s, key, "exp_5e")));
       try {
         await reverseAccountingEvent(ctx, {
           orgId: s.orgId, originalEventId: b, reversalDate: s.now,
@@ -447,8 +431,13 @@ async function drainOnce(t: any, orgId: any) {
     });
     await pump(t);
     const claimed: any[] = await t.run(async (ctx: any) =>
-      (await ctx.db.query("pendingAccountingEvents").collect())
-        .filter((r: any) => String(r.orgId) === String(orgId) && r.dispatchState === "DISPATCHED")
+      (
+        await ctx.db
+          .query("pendingAccountingEvents")
+          .withIndex("by_org_status", (q: any) => q.eq("orgId", orgId))
+          .collect()
+      )
+        .filter((r: any) => r.dispatchState === "DISPATCHED")
         .map((r: any) => r._id)
     );
     for (const rowId of claimed) {

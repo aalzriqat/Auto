@@ -38,7 +38,11 @@ import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
 import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
 import { custodyPostingBlockedReason, custodyPostingRefusal } from "./utils/custodySourceLedger";
 import { commissionPostingBlockedReason } from "./utils/commissionSourceLedger";
-import { reverseAccountingEvent } from "./accounting/reversals";
+import {
+  isPostedReversalOf,
+  reversalKeyConflict,
+  reverseAccountingEvent,
+} from "./accounting/reversals";
 import { scheduleAuthorityDispatch } from "./utils/authorityDispatchScheduler";
 import {
   commitDeferredReversal,
@@ -124,12 +128,8 @@ export async function enqueuePendingReversal(
 ): Promise<void> {
   await assertOrgEconomicallyActive(ctx, args.orgId);
 
-  // ⚠️ SCRUM-515 — a held key proves nothing about WHICH obligation holds it.
-  // Returning silently on any hit let a caller (and the workflow hook's
-  // "DEFERRED") believe a reversal of `originalEventId` was queued when the key
-  // belonged to another row. The only no-op is a live, dispatchable reversal of
-  // THIS original; every other holder fails closed (plain Error: internal
-  // invariant, server-side text only), before any write.
+  // SCRUM-515 (see isPostedReversalOf): the only no-op is a pending/posted reversal
+  // of THIS original; any other key holder fails closed before any write.
   const existing = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_idempotency", (q) =>
@@ -144,10 +144,10 @@ export async function enqueuePendingReversal(
     ) {
       return;
     }
-    throw new Error(
-      `Reversal idempotency key "${args.idempotencyKey}" is already held by queued outbox row ` +
-        `${existing._id} (${existing.kind}, ${existing.status}), not by a pending reversal of ` +
-        `${args.originalEventId} (SCRUM-515).`
+    throw reversalKeyConflict(
+      args.idempotencyKey,
+      `queued outbox row ${existing._id} (${existing.kind}, ${existing.status})`,
+      args.originalEventId
     );
   }
   const ledgerHolder = await ctx.db
@@ -157,18 +157,11 @@ export async function enqueuePendingReversal(
     )
     .unique();
   if (ledgerHolder) {
-    if (
-      ledgerHolder.eventType === "JOURNAL_REVERSAL" &&
-      ledgerHolder.reversalOfEventId === args.originalEventId &&
-      ledgerHolder.status === "POSTED" &&
-      ledgerHolder.journalEntryId
-    ) {
-      return;
-    }
-    throw new Error(
-      `Reversal idempotency key "${args.idempotencyKey}" is already held by accounting event ` +
-        `${ledgerHolder._id} (${ledgerHolder.eventType}, ${ledgerHolder.status}), not by a posted ` +
-        `reversal of ${args.originalEventId} (SCRUM-515).`
+    if (isPostedReversalOf(ledgerHolder, args.originalEventId)) return;
+    throw reversalKeyConflict(
+      args.idempotencyKey,
+      `accounting event ${ledgerHolder._id} (${ledgerHolder.eventType}, ${ledgerHolder.status})`,
+      args.originalEventId
     );
   }
 

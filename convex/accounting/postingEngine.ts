@@ -460,12 +460,8 @@ export async function postAccountingEvent(
     .unique();
 
   if (existingByKey) {
-    // ⚠️ SCRUM-515 — a forward post is never satisfied by a reversal. A
-    // JOURNAL_REVERSAL holding this key is a different obligation's footprint
-    // (it unwinds an event; it posts nothing forward), so `alreadyPosted` here
-    // would hand the caller — and the outbox drain — a reversal's id as the
-    // proof that THEIR event posted. Plain Error: internal invariant. A general
-    // tuple-identity check on the key is deliberately out of scope (SCRUM-544).
+    // SCRUM-515: a forward post is never satisfied by a reversal row. General
+    // key tuple-identity checking is out of scope (SCRUM-544).
     if (existingByKey.eventType === "JOURNAL_REVERSAL") {
       throw new Error(
         `Idempotency key "${cmd.idempotencyKey}" is held by reversal event ${existingByKey._id}; ` +
