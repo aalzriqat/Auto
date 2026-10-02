@@ -4869,6 +4869,11 @@ export default defineSchema({
     disposalProceedsMinor: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
+    // `list` pages live rows only through this index, with no post-index filter, using
+    // `.lt("isDeleted", true)`, which matches unset or false. That is defensive: no current
+    // fixed-asset writer sets false, because admin restore refuses financial tables. Should a
+    // false row ever exist, the index orders it as its own group, apart from the unset rows.
+    .index("by_org_deleted", ["orgId", "isDeleted"])
     .index("by_status", ["status"]),
 
   // Immutable, append-only log of every capitalization/depreciation/impairment/

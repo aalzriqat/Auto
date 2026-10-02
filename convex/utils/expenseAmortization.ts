@@ -73,6 +73,23 @@ export function occurredAtForMonthIndex(idx: number, now: number): number {
 }
 
 /**
+ * SCRUM-542 — a monthly posting names the month it belongs to (`yearMonth`) AND
+ * carries the instant it is dated (`occurredAt`); the two must agree, or the
+ * journal lands in a different accounting month than the schedule it advances.
+ * Throws on a malformed "YYYY-MM", a non-finite instant, or an instant outside
+ * that UTC month. A caller/data bug, not a counted skip: the throw rolls the whole
+ * mutation back before any patch or ledger write.
+ */
+export function assertMonthClaim(claim: { yearMonth: string; occurredAt: number }): void {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(claim.yearMonth)) {
+    throw new Error("Month claim refused: yearMonth is not YYYY-MM");
+  }
+  if (!Number.isFinite(claim.occurredAt) || yearMonthIndex(claim.occurredAt) !== yearMonthStringIndex(claim.yearMonth)) {
+    throw new Error(`Month claim refused: occurredAt is not within ${claim.yearMonth}`);
+  }
+}
+
+/**
  * First calendar month (absolute index) a monthly GL cron may offer an item —
  * the lower bound of its catch-up range: never earlier than the month after the
  * last one posted, the month the item was created (INCLUSIVE — months before
