@@ -3,6 +3,7 @@ import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
 import { RESET_ORG_INDEX_FOR_TEST, RESET_TABLES_FOR_TEST } from "./orgFinancialReset";
 
 /**
@@ -37,8 +38,10 @@ function setup() {
   return convexTestWithComponents(schema, MODULES);
 }
 
+type Pair = readonly [string, string, string];
+
 /** [child table, field (an id or an array of ids), target table]. */
-const PAIRS: ReadonlyArray<readonly [string, string, string]> = [
+const PAIRS: ReadonlyArray<Pair> = [
   ["journalLines", "journalEntryId", "journalEntries"],
   ["journalLines", "accountId", "chartOfAccounts"],
   ["accountBalanceSnapshots", "accountId", "chartOfAccounts"],
@@ -52,7 +55,11 @@ const PAIRS: ReadonlyArray<readonly [string, string, string]> = [
   ["collectionPayments", "paymentAllocationId", "paymentAllocations"],
 ];
 
-const key = (p: readonly [string, string, string]) => `${p[0]}.${p[1]}->${p[2]}`;
+/** D1 / D2 have dedicated ISOLATED tests (see below), so they are not in the table. */
+const D1: Pair = ["deposits", "canonicalPaymentId", "canonicalPayments"];
+const D2: Pair = ["receivables", "canonicalReceivableDocumentId", "receivableDocuments"];
+
+const key = (p: Pair) => `${p[0]}.${p[1]}->${p[2]}`;
 
 interface LooseDb {
   query(table: string): {
@@ -80,7 +87,7 @@ async function danglingNow(t: T, orgId: Id<"organizations">): Promise<string[]> 
     for (const pair of PAIRS) {
       for (const row of await rowsOf(db, pair[0], orgId)) {
         const raw = row[pair[1]];
-        const ids = Array.isArray(raw) ? raw : raw === undefined || raw === null ? [] : [raw];
+        const ids = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
         for (const id of ids) {
           if ((await db.get(id)) === null) out.push(key(pair));
         }
@@ -101,29 +108,80 @@ async function populatedTables(t: T, orgId: Id<"organizations">): Promise<string
   });
 }
 
+// ── Shared seed helpers ─────────────────────────────────────────────────────
+
+interface Base {
+  orgId: Id<"organizations">;
+  userId: Id<"users">;
+  vehicleId: Id<"vehicles">;
+  customerId: Id<"customers">;
+  now: number;
+}
+
+/** An org with the user, vehicle and customer every protected row needs. */
+async function seedBase(ctx: MutationCtx, tag: string): Promise<Base> {
+  const now = Date.now();
+  const orgId = await ctx.db.insert("organizations", { name: tag, createdAt: now });
+  const userId = await ctx.db.insert("users", {
+    clerkId: `req_refs_${tag}`,
+    email: `${tag.replace(/\s/g, "")}@x.com`,
+  });
+  const vehicleId = await ctx.db.insert("vehicles", {
+    orgId, vin: `VIN${tag}`, make: "Kia", model: "Rio", year: 2024, mileage: 10,
+    color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: 15000,
+    status: "AVAILABLE",
+  });
+  const customerId = await ctx.db.insert("customers", {
+    orgId, firstName: "Refs", lastName: "Customer",
+  });
+  return { orgId, userId, vehicleId, customerId, now };
+}
+
+async function insertCanonicalPayment(ctx: MutationCtx, b: Base, k: string) {
+  return await ctx.db.insert("canonicalPayments", {
+    orgId: b.orgId, direction: "IN", method: "CASH", amountMinor: 1000, currency: "JOD",
+    scale: 3, status: "SETTLED", idempotencyKey: k, createdBy: b.userId, createdAt: b.now,
+  });
+}
+
+async function insertReceivableDocument(ctx: MutationCtx, b: Base, k: string) {
+  return await ctx.db.insert("receivableDocuments", {
+    orgId: b.orgId, documentType: "INVOICE", documentNumber: k, payerType: "CUSTOMER",
+    customerId: b.customerId, sourceType: "TEST", sourceId: k, originalAmountMinor: 1000,
+    currency: "JOD", scale: 3, issueDate: b.now, dueDate: b.now, status: "OPEN",
+    createdAt: b.now, createdBy: b.userId,
+  });
+}
+
+async function insertDeposit(ctx: MutationCtx, b: Base, canonicalPaymentId: Id<"canonicalPayments">) {
+  return await ctx.db.insert("deposits", {
+    orgId: b.orgId, vehicleId: b.vehicleId, customerId: b.customerId, amount: 1000,
+    status: "HELD", holdActive: false, canonicalPaymentId, createdBy: b.userId,
+    createdAt: b.now,
+  });
+}
+
+async function insertReceivable(
+  ctx: MutationCtx,
+  b: Base,
+  i: number,
+  canonicalReceivableDocumentId: Id<"receivableDocuments">
+) {
+  return await ctx.db.insert("receivables", {
+    orgId: b.orgId, customerId: b.customerId, sourceType: "OTHER", title: `R${i}`,
+    originalAmount: 1, outstandingAmount: 1, dueDate: b.now, status: "OPEN",
+    canonicalReceivableDocumentId, createdBy: b.userId, createdAt: b.now, updatedAt: b.now,
+  });
+}
+
 /**
  * Seeds an org with TWO of everything on each protected edge, so that a
  * one-row-per-table pass always leaves a second row behind.
  */
 async function seedGraph(t: T, name: string) {
-  const orgId = await t.run((ctx) =>
-    ctx.db.insert("organizations", { name, createdAt: Date.now() })
-  );
-  const now = Date.now();
-
-  await t.run(async (ctx) => {
-    const userId = await ctx.db.insert("users", {
-      clerkId: `req_refs_${name}`,
-      email: `${name.replace(/\s/g, "")}@x.com`,
-    });
-    const vehicleId = await ctx.db.insert("vehicles", {
-      orgId, vin: `VIN${name}`, make: "Kia", model: "Rio", year: 2024, mileage: 10,
-      color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: 15000,
-      status: "AVAILABLE",
-    });
-    const customerId = await ctx.db.insert("customers", {
-      orgId, firstName: "Refs", lastName: "Customer",
-    });
+  return await t.run(async (ctx) => {
+    const b = await seedBase(ctx, name);
+    const { orgId, userId, vehicleId, customerId, now } = b;
     const quoteId = await ctx.db.insert("quotes", {
       orgId, customerId, vehicleId, vehiclePrice: 15000, downPayment: 1000,
       termMonths: 48, status: "ACCEPTED", createdBy: userId, createdAt: now,
@@ -172,40 +230,18 @@ async function seedGraph(t: T, name: string) {
     // cannot hide a violation, because a one-row pass deletes parent #1 while
     // child #2 (the survivor) still references it.
     const parents = async (i: number) => ({
-      canonicalPaymentId: await ctx.db.insert("canonicalPayments", {
-        orgId, direction: "IN", method: "CASH", amountMinor: 1000, currency: "JOD",
-        scale: 3, status: "SETTLED", idempotencyKey: `cp-${i}`, createdBy: userId,
-        createdAt: now,
-      }),
-      receivableDocumentId: await ctx.db.insert("receivableDocuments", {
-        orgId, documentType: "INVOICE", documentNumber: `INV-${i}`, payerType: "CUSTOMER",
-        customerId, sourceType: "TEST", sourceId: `rd${i}`, originalAmountMinor: 1000,
-        currency: "JOD", scale: 3, issueDate: now, dueDate: now, status: "OPEN",
-        createdAt: now, createdBy: userId,
-      }),
+      canonicalPaymentId: await insertCanonicalPayment(ctx, b, `cp-${i}`),
+      receivableDocumentId: await insertReceivableDocument(ctx, b, `INV-${i}`),
     });
     const base = [await parents(0), await parents(1)];
     const deposits = [
-      await ctx.db.insert("deposits", {
-        orgId, vehicleId, customerId, amount: 1000, status: "HELD", holdActive: false,
-        canonicalPaymentId: base[1].canonicalPaymentId, createdBy: userId, createdAt: now,
-      }),
-      await ctx.db.insert("deposits", {
-        orgId, vehicleId, customerId, amount: 1000, status: "HELD", holdActive: false,
-        canonicalPaymentId: base[0].canonicalPaymentId, createdBy: userId, createdAt: now,
-      }),
+      await insertDeposit(ctx, b, base[1].canonicalPaymentId),
+      await insertDeposit(ctx, b, base[0].canonicalPaymentId),
     ];
-    const receivables = [];
-    for (const i of [0, 1]) {
-      receivables.push(
-        await ctx.db.insert("receivables", {
-          orgId, customerId, sourceType: "OTHER", title: `R${i}`, originalAmount: 1,
-          outstandingAmount: 1, dueDate: now, status: "OPEN",
-          canonicalReceivableDocumentId: base[1 - i].receivableDocumentId,
-          createdBy: userId, createdAt: now, updatedAt: now,
-        })
-      );
-    }
+    const receivables = [
+      await insertReceivable(ctx, b, 0, base[1].receivableDocumentId),
+      await insertReceivable(ctx, b, 1, base[0].receivableDocumentId),
+    ];
     const allocations = [];
     for (const i of [0, 1]) {
       allocations.push(
@@ -248,8 +284,8 @@ async function seedGraph(t: T, name: string) {
         });
       }
     }
+    return orgId;
   });
-  return orgId;
 }
 
 const MAX_PASSES = 200;
@@ -276,29 +312,35 @@ async function drive(t: T, orgId: Id<"organizations">) {
   return { dangling, trace, passes, remaining };
 }
 
+/** Seeds an ISOLATED fixture (just the pair under test) and drives it to completion. */
+async function driveIsolated(
+  tag: string,
+  seed: (ctx: MutationCtx, b: Base) => Promise<void>
+) {
+  const t = setup();
+  const orgId = await t.run(async (ctx) => {
+    const b = await seedBase(ctx, tag);
+    await seed(ctx, b);
+    return b.orgId;
+  });
+  return await drive(t, orgId);
+}
+
 let shared: ReturnType<typeof runShared> | undefined;
 async function runShared() {
   const t = setup();
   const orgId = await seedGraph(t, "Refs Motors");
   // A bystander org with the same shape, which must be untouched throughout.
   const other = await seedGraph(t, "Bystander Refs");
-  const otherBefore = await populatedTables(t, other);
-  const otherDanglingBefore = await danglingNow(t, other);
   const result = await drive(t, orgId);
   return {
-    t, orgId, other, otherBefore, otherDanglingBefore, result,
-    otherAfter: await populatedTables(t, other),
+    result,
+    otherPopulatedAfter: await populatedTables(t, other),
     otherDanglingAfter: await danglingNow(t, other),
     orgPopulatedAfter: await populatedTables(t, orgId),
   };
 }
 const getShared = () => (shared ??= runShared());
-
-async function expectNoDangling(pairs: ReadonlyArray<readonly [string, string, string]>) {
-  const { result } = await getShared();
-  const hit = pairs.map(key).filter((k) => result.dangling.has(k));
-  expect(hit, `dangled after a pass:\n${result.trace.join("\n")}`).toEqual([]);
-}
 
 describe("resetOrgFinancialData never leaves a required reference dangling (SCRUM-549)", () => {
   test("fixture sanity: the seed really populates every protected pair", async () => {
@@ -312,112 +354,44 @@ describe("resetOrgFinancialData never leaves a required reference dangling (SCRU
     expect(await danglingNow(t, orgId)).toEqual([]);
   });
 
-  test("(i) journalLines never outlive their journalEntries", async () => {
-    await expectNoDangling([["journalLines", "journalEntryId", "journalEntries"]]);
-  });
-
-  test("(ii) paymentVouchers never outlive their deposits", async () => {
-    await expectNoDangling([["paymentVouchers", "depositId", "deposits"]]);
-  });
-
-  test("(iii) journalLines and accountBalanceSnapshots never outlive their chartOfAccounts", async () => {
-    await expectNoDangling([
-      ["journalLines", "accountId", "chartOfAccounts"],
-      ["accountBalanceSnapshots", "accountId", "chartOfAccounts"],
-    ]);
-  });
-
-  test("(iv) financeDealCustodyEntries never outlive their financeDealCustody", async () => {
-    await expectNoDangling([["financeDealCustodyEntries", "custodyId", "financeDealCustody"]]);
-  });
-
-  // (v) and (vi) run on ISOLATED fixtures. In the full graph a neighbouring edge
+  // D1 and D2 run on ISOLATED fixtures. In the full graph a neighbouring edge
   // (paymentAllocations / paymentVouchers still populated) defers the same
   // target and would mask a missing `deposits` / `receivables` edge.
   test("(v) D1: a surviving deposit's canonicalPayment always resolves", async () => {
-    const t = setup();
-    const orgId = await t.run((ctx) =>
-      ctx.db.insert("organizations", { name: "D1 Motors", createdAt: Date.now() })
-    );
-    await t.run(async (ctx) => {
-      const now = Date.now();
-      const userId = await ctx.db.insert("users", { clerkId: "d1_u", email: "d1@x.com" });
-      const vehicleId = await ctx.db.insert("vehicles", {
-        orgId, vin: "VIND1", make: "Kia", model: "Rio", year: 2024, mileage: 10,
-        color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: 15000,
-        status: "AVAILABLE",
-      });
-      const customerId = await ctx.db.insert("customers", { orgId, firstName: "D", lastName: "1" });
-      const payments = [];
-      for (const i of [0, 1]) {
-        payments.push(
-          await ctx.db.insert("canonicalPayments", {
-            orgId, direction: "IN", method: "CASH", amountMinor: 1000, currency: "JOD",
-            scale: 3, status: "SETTLED", idempotencyKey: `d1-${i}`, createdBy: userId,
-            createdAt: now,
-          })
-        );
-      }
+    const result = await driveIsolated("D1 Motors", async (ctx, b) => {
+      const payments = [
+        await insertCanonicalPayment(ctx, b, "d1-0"),
+        await insertCanonicalPayment(ctx, b, "d1-1"),
+      ];
       // Cross-linked: deposit #2 (the pass-1 survivor) names payment #1.
-      for (const i of [0, 1]) {
-        await ctx.db.insert("deposits", {
-          orgId, vehicleId, customerId, amount: 1000, status: "HELD", holdActive: false,
-          canonicalPaymentId: payments[1 - i], createdBy: userId, createdAt: now,
-        });
-      }
+      await insertDeposit(ctx, b, payments[1]);
+      await insertDeposit(ctx, b, payments[0]);
     });
-    const result = await drive(t, orgId);
-    expect(result.trace.filter((l) => l.includes("deposits.canonicalPaymentId"))).toEqual([]);
+    expect(result.dangling.has(key(D1)), result.trace.join("\n")).toBe(false);
     expect(result.remaining).toBe(0);
   });
 
   test("(vi) D2: a surviving receivable's receivableDocument always resolves", async () => {
-    const t = setup();
-    const orgId = await t.run((ctx) =>
-      ctx.db.insert("organizations", { name: "D2 Motors", createdAt: Date.now() })
-    );
-    await t.run(async (ctx) => {
-      const now = Date.now();
-      const userId = await ctx.db.insert("users", { clerkId: "d2_u", email: "d2@x.com" });
-      const customerId = await ctx.db.insert("customers", { orgId, firstName: "D", lastName: "2" });
-      const docs = [];
-      for (const i of [0, 1]) {
-        docs.push(
-          await ctx.db.insert("receivableDocuments", {
-            orgId, documentType: "INVOICE", documentNumber: `D2-${i}`, payerType: "CUSTOMER",
-            customerId, sourceType: "TEST", sourceId: `d2${i}`, originalAmountMinor: 1000,
-            currency: "JOD", scale: 3, issueDate: now, dueDate: now, status: "OPEN",
-            createdAt: now, createdBy: userId,
-          })
-        );
-      }
-      for (const i of [0, 1]) {
-        await ctx.db.insert("receivables", {
-          orgId, customerId, sourceType: "OTHER", title: `R${i}`, originalAmount: 1,
-          outstandingAmount: 1, dueDate: now, status: "OPEN",
-          canonicalReceivableDocumentId: docs[1 - i], createdBy: userId, createdAt: now,
-          updatedAt: now,
-        });
-      }
+    const result = await driveIsolated("D2 Motors", async (ctx, b) => {
+      const docs = [
+        await insertReceivableDocument(ctx, b, "D2-0"),
+        await insertReceivableDocument(ctx, b, "D2-1"),
+      ];
+      await insertReceivable(ctx, b, 0, docs[1]);
+      await insertReceivable(ctx, b, 1, docs[0]);
     });
-    const result = await drive(t, orgId);
-    expect(
-      result.trace.filter((l) => l.includes("receivables.canonicalReceivableDocumentId"))
-    ).toEqual([]);
+    expect(result.dangling.has(key(D2)), result.trace.join("\n")).toBe(false);
     expect(result.remaining).toBe(0);
   });
 
-  test("(Class A) paymentAllocations and collectionApprovalRequests never dangle", async () => {
-    await expectNoDangling([
-      ["paymentAllocations", "paymentId", "canonicalPayments"],
-      ["paymentAllocations", "receivableDocumentId", "receivableDocuments"],
-      ["collectionApprovalRequests", "receivableId", "receivables"],
-    ]);
-  });
-
-  test("(addition 3) collectionPayments never point at a deleted paymentAllocation", async () => {
-    await expectNoDangling([["collectionPayments", "paymentAllocationId", "paymentAllocations"]]);
-  });
+  // Every other pair, in the full graph. D1/D2 are covered by (v)/(vi) above.
+  test.each(PAIRS.filter((p) => key(p) !== key(D1) && key(p) !== key(D2)).map((p) => [key(p), p] as const))(
+    "%s never dangles after a pass",
+    async (_name, pair) => {
+      const { result } = await getShared();
+      expect(result.dangling.has(key(pair)), result.trace.join("\n")).toBe(false);
+    }
+  );
 
   test("(vii) repeated passes terminate with remaining 0 and every table empty", async () => {
     const { result, orgPopulatedAfter } = await getShared();
@@ -426,28 +400,24 @@ describe("resetOrgFinancialData never leaves a required reference dangling (SCRU
     expect(orgPopulatedAfter).toEqual([]);
   });
 
-  test("(viii) another organization's rows are untouched", async () => {
-    const { otherBefore, otherAfter, otherDanglingBefore, otherDanglingAfter } = await getShared();
-    expect(otherBefore.length).toBeGreaterThan(0);
-    expect(otherAfter).toEqual(otherBefore);
-    expect(otherDanglingBefore).toEqual([]);
+  // Bystander isolation itself is covered in orgFinancialReset.test.ts; this only
+  // asserts the new invariant: the other org's references still resolve.
+  test("(viii) another organization's references still resolve", async () => {
+    const { otherPopulatedAfter, otherDanglingAfter } = await getShared();
+    expect(otherPopulatedAfter.length).toBeGreaterThan(0);
     expect(otherDanglingAfter).toEqual([]);
   });
 
-  test("(ix) a dry run reports remaining > 0 and deletes nothing", async () => {
+  // The dry-run contract itself is covered in orgFinancialReset.test.ts; this only
+  // asserts that a dry run leaves every protected reference resolving.
+  test("(ix) a dry run leaves no reference dangling", async () => {
     const t = setup();
     const orgId = await seedGraph(t, "Dry Refs");
-    const before = await populatedTables(t, orgId);
-
-    const res = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
+    await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
       orgId,
       dryRun: true,
       batchSize: 1,
     });
-
-    expect(res.dryRun).toBe(true);
-    expect(res.remaining).toBeGreaterThan(0);
-    expect(await populatedTables(t, orgId)).toEqual(before);
     expect(await danglingNow(t, orgId)).toEqual([]);
   });
 });

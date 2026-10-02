@@ -94,9 +94,10 @@ const RESET_TABLES = [
   "receiptRetainedPositions",
   "receiptMovements",
   "transactions",
-  // ⚠️ SCRUM-549. Every table here is a child of a later one. Vouchers go before
-  // the deposits they name (`depositId` REQUIRED). `paymentAllocations` follows
-  // `collectionPayments` (whose `paymentAllocationId` it would otherwise orphan)
+  // ⚠️ SCRUM-549. paymentVouchers .. receivables are each a child of a later
+  // table here (`cashierReconciliations` is a parent only: it references no reset
+  // table). Vouchers go before the deposits they name (`depositId` REQUIRED).
+  // `paymentAllocations` follows `collectionPayments` (whose `paymentAllocationId` it would otherwise orphan)
   // and precedes the payment and document it REQUIRES. Approval requests precede
   // the receivables they name.
   "paymentVouchers",
@@ -391,10 +392,10 @@ export const resetOrgFinancialData = internalMutation({
     // would throw on every dispatch, burn its retry budget and record a false
     // RETRY_EXHAUSTED against a deal nobody could explain.
     //
-    // `CHILD_TABLES` already defers a parent whose children remain, but the
-    // authority lifecycle is not expressible that way: work rows reference
-    // pending events, deposits, sales, holds and vehicles at once, and the
-    // ordering of this array is not a dependency proof.
+    // SCRUM-549 made every authority reference between reset tables a
+    // `CHILD_TABLES` edge; holds and vehicles sit outside the reset. This stays
+    // as defence in depth: work rows also reference those non-reset rows and
+    // lifecycle state, which no edge or ordering can prove safe.
     //
     // ⚠️ SO THIS REFUSES RATHER THAN ORDERING. Safety beats partial progress on
     // a destructive internal tool: an organization carrying canonical authority
