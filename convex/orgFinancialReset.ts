@@ -392,8 +392,13 @@ export const resetOrgFinancialData = internalMutation({
     // would throw on every dispatch, burn its retry budget and record a false
     // RETRY_EXHAUSTED against a deal nobody could explain.
     //
-    // SCRUM-549 made every authority reference between reset tables a
-    // `CHILD_TABLES` edge; holds and vehicles sit outside the reset. This stays
+    // SCRUM-549 made every REQUIRED authority reference between reset tables a
+    // `CHILD_TABLES` edge; holds and vehicles sit outside the reset. The one
+    // accepted exception is the optional `commitmentAuthorityWork.activeAttemptId`
+    // back-link to `commitmentAuthorityAttempt`: it has no edge because the
+    // reverse required edge `attempt.workId -> work` exists and adding it would
+    // cycle (ACCEPTED_OPTIONAL_DANGLING in
+    // scripts/orgFinancialResetReferenceCoverage.test.ts). This stays
     // as defence in depth: work rows also reference those non-reset rows and
     // lifecycle state, which no edge or ordering can prove safe.
     //

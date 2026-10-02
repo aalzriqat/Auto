@@ -384,6 +384,78 @@ describe("resetOrgFinancialData never leaves a required reference dangling (SCRU
     expect(result.remaining).toBe(0);
   });
 
+  // Three more pairs run ISOLATED because in the shared graph another child
+  // defers the same target at least as long, so removing their own CHILD_TABLES
+  // edge would leave the full-graph test green:
+  //   paymentAllocations.paymentId            (deposits also defer canonicalPayments)
+  //   paymentAllocations.receivableDocumentId (receivables also defer it)
+  //   accountBalanceSnapshots.accountId       (journalLines defer chartOfAccounts longer)
+  // Here ONLY the child under test is seeded, so no neighbour can hold the parent.
+  const A1: Pair = ["paymentAllocations", "paymentId", "canonicalPayments"];
+  const A2: Pair = ["paymentAllocations", "receivableDocumentId", "receivableDocuments"];
+  const S1: Pair = ["accountBalanceSnapshots", "accountId", "chartOfAccounts"];
+
+  /** Two payments, two documents, two cross-linked allocations and nothing else. */
+  const seedAllocationsOnly = async (ctx: MutationCtx, b: Base) => {
+    const payments = [
+      await insertCanonicalPayment(ctx, b, "al-p0"),
+      await insertCanonicalPayment(ctx, b, "al-p1"),
+    ];
+    const docs = [
+      await insertReceivableDocument(ctx, b, "AL-0"),
+      await insertReceivableDocument(ctx, b, "AL-1"),
+    ];
+    // Allocation #2 (the pass-1 survivor) names payment #1 / document #1, which
+    // pass 1 deletes first.
+    for (const i of [0, 1]) {
+      await ctx.db.insert("paymentAllocations", {
+        orgId: b.orgId, paymentId: payments[1 - i], receivableDocumentId: docs[1 - i],
+        amountMinor: 1000, currency: "JOD", scale: 3, allocationDate: b.now,
+        status: "ACTIVE", createdBy: b.userId, createdAt: b.now,
+      });
+    }
+  };
+
+  test("(x) A1: a surviving allocation's canonicalPayment always resolves", async () => {
+    const result = await driveIsolated("A1 Motors", seedAllocationsOnly);
+    expect(result.dangling.has(key(A1)), result.trace.join("\n")).toBe(false);
+    expect(result.remaining).toBe(0);
+  });
+
+  test("(xi) A2: a surviving allocation's receivableDocument always resolves", async () => {
+    const result = await driveIsolated("A2 Motors", seedAllocationsOnly);
+    expect(result.dangling.has(key(A2)), result.trace.join("\n")).toBe(false);
+    expect(result.remaining).toBe(0);
+  });
+
+  test("(xii) S1: a surviving balance snapshot's account always resolves", async () => {
+    const result = await driveIsolated("S1 Motors", async (ctx, b) => {
+      const periodId = await ctx.db.insert("accountingPeriods", {
+        orgId: b.orgId, startDate: b.now, endDate: b.now + 1, fiscalYear: 2026,
+        periodNumber: 1, status: "OPEN", createdAt: b.now,
+      });
+      const accounts = [];
+      for (const code of ["1000", "1100"]) {
+        accounts.push(
+          await ctx.db.insert("chartOfAccounts", {
+            orgId: b.orgId, code, name: `Acct ${code}`, type: "ASSET",
+            normalBalance: "DEBIT", isControlAccount: false, allowManualPosting: true,
+            active: true, createdAt: b.now, updatedAt: b.now,
+          })
+        );
+      }
+      // Cross-linked: snapshot #2 (the pass-1 survivor) names account #1.
+      for (const i of [0, 1]) {
+        await ctx.db.insert("accountBalanceSnapshots", {
+          orgId: b.orgId, accountId: accounts[1 - i], currency: "JOD", periodId,
+          runningDebitMinor: 0, runningCreditMinor: 0, updatedAt: b.now,
+        });
+      }
+    });
+    expect(result.dangling.has(key(S1)), result.trace.join("\n")).toBe(false);
+    expect(result.remaining).toBe(0);
+  });
+
   // Every other pair, in the full graph. D1/D2 are covered by (v)/(vi) above.
   test.each(PAIRS.filter((p) => key(p) !== key(D1) && key(p) !== key(D2)).map((p) => [key(p), p] as const))(
     "%s never dangles after a pass",
