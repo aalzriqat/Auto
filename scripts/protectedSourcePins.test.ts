@@ -750,8 +750,9 @@ describe("protected source content pins", () => {
       // SCRUM-528 RENEWAL 2026-10-01: inalizeDeal refuses (coded QUOTE_ECONOMICS_DRIFTED) before the documents check and before any write when the quote's economics no longer agree with the pricing frozen on the application, or when a financed deal has no frozen snapshot (an import and 1 call site; logic in convex/utils/quoteEconomicsAnchor.ts); no permission, schema, index, posting or idempotency change. NOT yet reviewed by an independent seat; read the hunks. Previous postimage bytes 290260, sha256 aad5d6ac5aeb134e1ceeb74ebf19d898e885b979a94a5296d3b44158883c43bf. Recomputed from the file with this test's own normalization.
       // SCRUM-528 /simplify 2026-10-01: behaviour-preserving - quoteMode declaration hoisted above the anchor call and passed to it (single computation); previous postimage bytes 290608, sha256 5a48dab206df99a5ef8e92bcc3a186addb8aa012e22d4bfedc7b0524380d7a7f. Recomputed from the file with this test's own normalization.
       // SCRUM-69 RENEWAL 2026-10-01: finalizeDeal passes the FINANCE_FINALIZATION door to completeSale (1 call-site change); previous postimage bytes 290578, sha256 0f849708e6b8e17b758ef951aa00bb52607e64e42d2718b635486929edb53911. Recomputed from the file with this test's own normalization.
-      bytes: 290715,
-      sha256: "2e3bf3d24262c8bafc7d0b78d660d902b7b0e1437094012d208e8c191f32cb50",
+      // SCRUM-555 RENEWAL 2026-10-02: convex-lint cleanup lane (owner ruling (B), Jira c21603-c21605) - five legacy .filter(q.field) reads become index reads + in-memory filters (getActiveReceivableAllocations ACTIVE filter; createFromQuote duplicate check via by_org_quote, in-flight check via by_org_vehicle scoped to the org, guarantors isDeleted !== true, valuation by_vehicle + find(companyId)). Behaviour-preserving read rewrite; no permission, posting, idempotency or write-path change. Reviewed at 48cd9e17d by Opus 5.5 (APPROVE WITH DOCUMENTED LOW RISK) and Codex gpt-6-sol xhigh (555B-01 dispositioned LOW -> SCRUM-557), Jira c21616. Previous postimage bytes 290715, sha256 2e3bf3d24262c8bafc7d0b78d660d902b7b0e1437094012d208e8c191f32cb50. Recomputed from the file with this test's own normalization.
+      bytes: 290899,
+      sha256: "2dfd9254f526ec411f35ddc1db0963ae2630223522325e916e90ee6f2cf5fe1a",
     },
     {
       /**

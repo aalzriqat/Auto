@@ -311,11 +311,11 @@ async function getActiveReceivableAllocations(
   ctx: MutationCtx,
   receivableDocumentId: Id<"receivableDocuments">
 ) {
-  return await ctx.db
+  const allocations = await ctx.db
     .query("paymentAllocations")
     .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivableDocumentId))
-    .filter((q) => q.eq(q.field("status"), "ACTIVE"))
     .collect();
+  return allocations.filter((allocation) => allocation.status === "ACTIVE");
 }
 
 /**
@@ -2590,8 +2590,7 @@ export const createFromQuote = mutation({
     // Check if application already exists for this quote
     const existing = await ctx.db
       .query("financeApplications")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("quoteId"), args.quoteId))
+      .withIndex("by_org_quote", (q) => q.eq("orgId", args.orgId).eq("quoteId", args.quoteId))
       .first();
 
     if (existing) {
@@ -2610,12 +2609,11 @@ export const createFromQuote = mutation({
     // in one place, and the release side (`hasLiveCommitmentBasis`) reads the
     // same array, so acquisition and release cannot drift apart.
     for (const item of quoteVehicleItems) {
-      const activeForVehicle = await ctx.db
+      const vehicleApplications = await ctx.db
         .query("financeApplications")
-        .withIndex("by_vehicle", (q) => q.eq("vehicleId", item.vehicleId))
-        .filter((q) => q.eq(q.field("orgId"), args.orgId))
-        .collect()
-        .then((rows) => rows.find((r) => IN_FLIGHT_FINANCE_STATUSES.includes(r.status)));
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", item.vehicleId))
+        .collect();
+      const activeForVehicle = vehicleApplications.find((r) => IN_FLIGHT_FINANCE_STATUSES.includes(r.status));
       if (activeForVehicle) {
         throw new ConvexError(
           "This vehicle already has an active finance application. Cancel it before starting a new one."
@@ -2658,11 +2656,12 @@ export const createFromQuote = mutation({
       totalFinancedAmount = quote.totalFinancedAmount;
     }
 
-    const guarantors = await ctx.db
+    const customerGuarantors = await ctx.db
       .query("guarantors")
       .withIndex("by_customer", (q) => q.eq("customerId", quote.customerId))
-      .filter((q) => q.neq(q.field("isDeleted"), true))
       .collect();
+    // Rows with `isDeleted` absent are kept — only an explicit `true` excludes.
+    const guarantors = customerGuarantors.filter((g) => g.isDeleted !== true);
 
     const salary = customer.employment?.salary;
     const existingMonthlyDebt = customer.financials?.totalMonthlyDebt;
@@ -2675,13 +2674,13 @@ export const createFromQuote = mutation({
     let ltv: number | undefined;
     if (quote.companyId) {
       const valuations = await Promise.all(
-        quoteVehicleItems.map((item) =>
-          ctx.db
+        quoteVehicleItems.map(async (item) => {
+          const vehicleValuationRows = await ctx.db
             .query("vehicleValuations")
             .withIndex("by_vehicle", (q) => q.eq("vehicleId", item.vehicleId))
-            .filter((q) => q.eq(q.field("companyId"), quote.companyId))
-            .first()
-        )
+            .collect();
+          return vehicleValuationRows.find((v) => v.companyId === quote.companyId) ?? null;
+        })
       );
       // Only treat the combined valuation as meaningful if every vehicle on the
       // quote has one — a partial sum would understate true collateral value.
