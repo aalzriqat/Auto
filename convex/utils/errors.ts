@@ -99,6 +99,11 @@ export const AppErrorCode = {
   ASSET_PURCHASE_DATE_IN_FUTURE: "ASSET_PURCHASE_DATE_IN_FUTURE",
   ASSET_PURCHASE_DATE_INVALID: "ASSET_PURCHASE_DATE_INVALID",
   ASSET_DEPRECIATION_START_DATE_INVALID: "ASSET_DEPRECIATION_START_DATE_INVALID",
+  // SCRUM-563. Post-reset safety. A command identity recorded before an org financial reset
+  // cannot replay after it; the org cannot be reactivated mid-reset. Translated under
+  // ServerError_<code>.
+  COMMAND_RECORDED_BEFORE_RESET: "COMMAND_RECORDED_BEFORE_RESET",
+  ORG_FINANCIAL_RESET_IN_PROGRESS: "ORG_FINANCIAL_RESET_IN_PROGRESS",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];

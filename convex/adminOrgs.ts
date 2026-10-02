@@ -6,6 +6,7 @@ import { internalMutation, mutation } from "./functions";
 import { Doc, Id, TableNames } from "./_generated/dataModel";
 import { requireSuperAdmin } from "./utils/tenancy";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { orgResetState } from "./utils/orgResetGeneration";
 import { logAdminAction } from "./adminAudit";
 import { notifyManagers } from "./utils/notifications";
 
@@ -283,6 +284,23 @@ async function assertNoIrreversiblePurgeHistory(
 }
 
 /**
+ * ⚠️ SCRUM-563 — A PARTIALLY RESET ORGANIZATION IS NOT RETURNED TO SERVICE.
+ *
+ * Refuses while a financial reset is in progress (see
+ * `utils/orgResetGeneration.ts`); the only way forward is to finish the reset.
+ * Called from `reactivateOrganization`, so `unsuspendOrg` and
+ * `rejectDeletionRequest` both inherit it.
+ */
+export const FINANCIAL_RESET_IN_PROGRESS_MESSAGE =
+  "This organization's financial reset has not finished. It cannot be returned to service until the reset completes.";
+
+function assertNoFinancialResetInProgress(org: Doc<"organizations">) {
+  if (orgResetState(org).inProgress) {
+    throwAppError(AppErrorCode.ORG_FINANCIAL_RESET_IN_PROGRESS, FINANCIAL_RESET_IN_PROGRESS_MESSAGE);
+  }
+}
+
+/**
  * THE ONLY PLACE AN ORGANIZATION IS RETURNED TO SERVICE.
  *
  * The guard and the write live in one function on purpose. Two earlier
@@ -314,6 +332,7 @@ async function reactivateOrganization(
   options: { clearDeletionRequestPointer?: boolean } = {}
 ) {
   await assertNoIrreversiblePurgeHistory(ctx, org);
+  assertNoFinancialResetInProgress(org);
 
   await ctx.db.patch(org._id, {
     suspended: false,

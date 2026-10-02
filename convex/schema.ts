@@ -132,6 +132,9 @@ export default defineSchema({
      * one batch — that is normal, and never a reason to fail the batch.
      */
     commitmentAuthorityVersion: v.optional(v.number()),
+    /** SCRUM-563 — financial reset counters; absent means 0. Protocol: `convex/utils/orgResetGeneration.ts`. */
+    financialResetGeneration: v.optional(v.number()),
+    financialResetCompletedGeneration: v.optional(v.number()),
   }),
 
   organizationDeletionRequests: defineTable({
@@ -166,6 +169,8 @@ export default defineSchema({
     // key with materially different inputs is rejected instead of silently
     // returning the prior result.
     fingerprint: v.optional(v.string()),
+    /** SCRUM-563. The org's `financialResetGeneration` at write time (absent = 0); see `utils/orgResetGeneration.ts`. */
+    resetGeneration: v.optional(v.number()),
     createdBy: v.optional(v.id("users")),
     createdAt: v.number(),
     completedAt: v.optional(v.number()),

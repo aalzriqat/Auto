@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { internalMutation } from "./functions";
 import type { DatabaseReader } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { orgResetState } from "./utils/orgResetGeneration";
 
 /**
  * One-off operational tool: clears an organization's accounting, sales and
@@ -45,8 +46,10 @@ import type { Doc, Id } from "./_generated/dataModel";
  * hold for a suspended org, so the PENDING-intent refusal (and edges E2/E3) is
  * defence in depth in case the org is unsuspended mid-reset (SCRUM-563). A
  * missing `organizations` row skips the suspension check.
- * Command-idempotency results and terminal payment intents are out of scope here
- * and tracked in SCRUM-563.
+ * Command-idempotency replay is closed by the reset generation (SCRUM-563, see
+ * `utils/orgResetGeneration.ts`). Surviving active state such as terminal
+ * payment intents is an owner decision tracked in SCRUM-565; SCRUM-563 only
+ * pins today's behaviour.
  */
 const RESET_TABLES = [
   // ⚠️ SCRUM-208 c15825 — AUTHORITY LIFECYCLE FIRST, IN DEPENDENCY ORDER:
@@ -432,6 +435,12 @@ export const resetOrgFinancialData = internalMutation({
     orgSuspended: boolean;
     /** SCRUM-559. True when a PENDING online payment intent exists, which makes a destructive reset refuse. */
     pendingPaymentIntentsPresent: boolean;
+    /**
+     * SCRUM-563. True when the org has cash drawer sessions or movements, which this
+     * reset does not remove and which therefore make a destructive reset refuse.
+     * Reported on a dry run so an operator learns it before the destructive form.
+     */
+    cashDrawerStatePresent: boolean;
   }> => {
     const dryRun = args.dryRun ?? true;
     const limit = Math.min(Math.max(args.batchSize ?? RESET_DELETE_BATCH, 1), RESET_DELETE_BATCH);
@@ -517,6 +526,38 @@ export const resetOrgFinancialData = internalMutation({
       );
     }
 
+    // Cash movements carry their own idempotency replay
+    // (`cashMovements.by_org_idempotency`) outside `commandIdempotency`, and neither
+    // cash table is reset. Leaving them would let a pre-reset key replay after
+    // reactivation, breaking the SCRUM-563 invariant. Whether to delete, close or
+    // carry them is the SCRUM-565 owner decision, so until then the reset refuses.
+    const cashDrawerStatePresent =
+      (await ctx.db
+        .query("cashDrawerSessions")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .first()) !== null ||
+      (await ctx.db
+        .query("cashMovements")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .first()) !== null;
+    if (!dryRun && cashDrawerStatePresent) {
+      throw new ConvexError(
+        "This organization has cash drawer sessions or movements, which this reset does not " +
+          "remove (SCRUM-565). Refusing before any deletion."
+      );
+    }
+
+    // ⚠️ SCRUM-563 — protocol in `utils/orgResetGeneration.ts`. The bump happens
+    // BEFORE the first delete, in this same mutation. A continuation batch finds
+    // a reset in progress and does not bump again. Dry runs and refused runs
+    // (thrown above) write nothing; a missing org row has nowhere to record it.
+    const resetState = orgResetState(org);
+    let resetGeneration = resetState.generation;
+    if (!dryRun && org !== null && !resetState.inProgress) {
+      resetGeneration = resetState.generation + 1;
+      await ctx.db.patch(args.orgId, { financialResetGeneration: resetGeneration });
+    }
+
     const perTable: Record<string, number> = {};
     let total = 0;
     let remaining = 0;
@@ -591,6 +632,11 @@ export const resetOrgFinancialData = internalMutation({
       }
     }
 
+    // SCRUM-563: a destructive run that leaves nothing behind completes the reset.
+    if (!dryRun && org !== null && remaining === 0) {
+      await ctx.db.patch(args.orgId, { financialResetCompletedGeneration: resetGeneration });
+    }
+
     // Reported truthfully on a dry run so an operator sees the precondition
     // BEFORE typing the destructive form, rather than discovering it as an error.
     return {
@@ -602,6 +648,7 @@ export const resetOrgFinancialData = internalMutation({
       authorityLifecyclePresent,
       orgSuspended,
       pendingPaymentIntentsPresent,
+      cashDrawerStatePresent,
     };
   },
 });

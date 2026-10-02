@@ -211,6 +211,7 @@ import type * as utils_metaText from "../utils/metaText.js";
 import type * as utils_money from "../utils/money.js";
 import type * as utils_notifications from "../utils/notifications.js";
 import type * as utils_orgLifecycle from "../utils/orgLifecycle.js";
+import type * as utils_orgResetGeneration from "../utils/orgResetGeneration.js";
 import type * as utils_paymentMethods from "../utils/paymentMethods.js";
 import type * as utils_paymentWebhook from "../utils/paymentWebhook.js";
 import type * as utils_payrollSourceLedger from "../utils/payrollSourceLedger.js";
@@ -468,6 +469,7 @@ declare const fullApi: ApiFromModules<{
   "utils/money": typeof utils_money;
   "utils/notifications": typeof utils_notifications;
   "utils/orgLifecycle": typeof utils_orgLifecycle;
+  "utils/orgResetGeneration": typeof utils_orgResetGeneration;
   "utils/paymentMethods": typeof utils_paymentMethods;
   "utils/paymentWebhook": typeof utils_paymentWebhook;
   "utils/payrollSourceLedger": typeof utils_payrollSourceLedger;

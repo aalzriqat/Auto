@@ -11,7 +11,56 @@ import {
   parseMoneyCell,
   purchaseBlockers,
   validateVehicleRow,
+  importChunkFailureMessage,
 } from "./VehicleImportDialog";
+import { ConvexError } from "convex/values";
+
+describe("SCRUM-563 F2 - importChunkFailureMessage localizes the post-reset refusal", () => {
+  const dict = (d: Record<string, string>) => (key: string) => d[key] ?? key;
+  const english = dict(commonEn as Record<string, string>);
+  const arabic = dict(commonAr as Record<string, string>);
+  const refusal = () =>
+    new ConvexError({ code: "COMMAND_RECORDED_BEFORE_RESET", message: "server english text" });
+
+  test.each([
+    ["en", english, commonEn as Record<string, string>],
+    ["ar", arabic, commonAr as Record<string, string>],
+  ] as const)("%s: translated refusal, partial progress kept for OPENING_STOCK, never retry advice", (_lang, t, dictionary) => {
+    const expected = dictionary.ServerError_COMMAND_RECORDED_BEFORE_RESET;
+    expect(expected).toBeTruthy();
+    const stopped = dictionary.ImportStoppedAfter.replace("{count}", "3");
+    const noAdvice = (message: string) => {
+      expect(message).not.toContain(dictionary.ImportRetryAdvicePurchase);
+      expect(message).not.toContain(dictionary.ImportRetryAdviceOpeningStock);
+    };
+
+    const purchase = importChunkFailureMessage(refusal(), "PURCHASE", 3, t);
+    expect(purchase).toBe(expected);
+    noAdvice(purchase);
+
+    const openingNone = importChunkFailureMessage(refusal(), "OPENING_STOCK", 0, t);
+    expect(openingNone).toBe(expected);
+    noAdvice(openingNone);
+
+    // Earlier chunks committed: the operator must be told how many, or a "new
+    // operation" would add the VIN-less rows again.
+    const openingPartial = importChunkFailureMessage(refusal(), "OPENING_STOCK", 3, t);
+    expect(openingPartial).toBe(`${stopped} ${expected}`);
+    noAdvice(openingPartial);
+  });
+
+  test("every other failure keeps its retry advice", () => {
+    const plain = new Error("Boom");
+    expect(importChunkFailureMessage(plain, "PURCHASE", 0, english)).toBe(
+      `Boom ${commonEn.ImportRetryAdvicePurchase}`
+    );
+    const coded = new ConvexError({ code: "SOME_OTHER_CODE", message: "Other refusal" });
+    expect(importChunkFailureMessage(coded, "OPENING_STOCK", 0, english)).toBe("Other refusal");
+    expect(importChunkFailureMessage(coded, "OPENING_STOCK", 2, english)).toContain(
+      commonEn.ImportRetryAdviceOpeningStock
+    );
+  });
+});
 
 /**
  * The import dialog's two pure gating functions.
