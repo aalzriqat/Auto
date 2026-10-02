@@ -144,6 +144,8 @@ describe("SCRUM-447/446: cheque and disbursement flags agree with the resolved f
         updatedAt: Date.now(),
       })
     );
+    // SCRUM-567: the leg only trusts a sale that names this application back (as `completeSale` writes it).
+    if (finalizedSaleId) await s.t.run((ctx) => ctx.db.patch(finalizedSaleId, { applicationId }));
     return { applicationId, companyId };
   }
 

@@ -100,6 +100,8 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
     legacy?: boolean;
     /** Record and reconcile a zero dealer cost line BEFORE the deal closes (closing refuses new costs). */
     reconciledFee?: boolean;
+    /** Seed the sale's canonical customer invoice, paid in full (AF-567-1). */
+    paidInvoice?: boolean;
   }
 
   async function insertDeal(s: Seed, opts: DealOpts = {}) {
@@ -171,6 +173,35 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
         updatedAt: Date.now(),
       })
     );
+    // SCRUM-567: the leg only trusts a sale that names this application back (as `completeSale` writes it).
+    if (finalizedSaleId && saleKind !== "deleted") {
+      const saleId = finalizedSaleId;
+      await s.t.run((ctx) => ctx.db.patch(saleId, { applicationId }));
+    }
+    // AF-567-1: a financier-less deal is only "settled" once the customer has paid the sale's canonical
+    // invoice, so a fixture whose intent is "genuinely finished" seeds that invoice and pays it in full.
+    if (opts.paidInvoice && finalizedSaleId && saleKind !== "deleted") {
+      const saleId = finalizedSaleId;
+      await s.t.run(async (ctx) => {
+        const amountMinor = 10_500_000;
+        const receivableId = await ctx.db.insert("receivableDocuments", {
+          orgId: s.orgId, documentType: "INVOICE", documentNumber: `INV-${saleId}`, payerType: "CUSTOMER",
+          customerId: s.customerId, sourceType: "sales", sourceId: saleId, originalAmountMinor: amountMinor,
+          currency: "JOD", scale: 3, issueDate: Date.now(), dueDate: Date.now(), status: "PAID",
+          createdAt: Date.now(), createdBy: s.userId,
+        });
+        const paymentId = await ctx.db.insert("canonicalPayments", {
+          orgId: s.orgId, direction: "IN", payerType: "CUSTOMER", customerId: s.customerId, method: "CASH",
+          amountMinor, currency: "JOD", scale: 3, status: "SETTLED",
+          idempotencyKey: `fl-paid-${saleId}`, createdBy: s.userId, createdAt: Date.now(),
+        });
+        await ctx.db.insert("paymentAllocations", {
+          orgId: s.orgId, paymentId, receivableDocumentId: receivableId, amountMinor, currency: "JOD", scale: 3,
+          allocationDate: Date.now(), status: "ACTIVE", createdBy: s.userId, createdAt: Date.now(),
+        });
+        await ctx.db.patch(saleId, { canonicalReceivableDocumentId: receivableId });
+      });
+    }
     if (opts.reconciledFee) {
       await recordReconciledZeroCost(s.asOwner, api, s.orgId, applicationId);
       await s.t.run((ctx) => ctx.db.patch(applicationId, closedFields));
@@ -204,8 +235,6 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
   describe.each<{ name: string; mode: Mode }>([
     { name: "a manual finance company", mode: "MANUAL_FINANCE_COMPANY" },
     { name: "a lease", mode: "LEASE" },
-    { name: "a CASH-mode deal", mode: "CASH" },
-    { name: "a mode-less application", mode: "NONE" },
   ])("$name, closed through the dealership with a completed sale, no company", ({ mode }) => {
     test("DISBURSEMENT is NOT NOT_APPLICABLE: it keeps waiting (UNKNOWN evidence is never NONE)", async () => {
       const s = await seed(`waits_${mode}`);
@@ -221,6 +250,22 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       const attempt = confirm(s, applicationId);
       await expect(attempt).rejects.toThrow(/no finance company — no disbursement expected/i);
       await expect(attempt).rejects.not.toThrow(/no finance company pays the dealership/i);
+    });
+  });
+
+  // SCRUM-567: a CASH sale (any quote mode, including none) that names this application back, with no
+  // company and no manual payer, is PROVABLY financier-less: the leg is NONE. (Before SCRUM-567 these two
+  // rows kept waiting; the finalize-path coverage lives in cashApplicationFinancierLeg.test.ts.)
+  describe.each<{ name: string; mode: Mode }>([
+    { name: "a CASH-mode deal", mode: "CASH" },
+    { name: "a mode-less application", mode: "NONE" },
+  ])("$name, closed with a COMPLETED CASH sale that names it back, no company", ({ mode }) => {
+    test("DISBURSEMENT is NOT_APPLICABLE and confirmDisbursement refuses with the NONE refusal", async () => {
+      const s = await seed(`cashna_${mode}`);
+      const { applicationId } = await insertDeal(s, { mode });
+      const { disbursement } = await stagesOf(s, applicationId);
+      expect(disbursement.state).toBe("NOT_APPLICABLE");
+      await expect(confirm(s, applicationId)).rejects.toThrow(/no finance company pays the dealership/i);
     });
   });
 
@@ -244,13 +289,13 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
       const s = await seed(`settle_${mode}`);
       // Money settles on the supplier obligation alone; profit is ACTUAL only
       // once the dealer-borne cost lines are reconciled too.
-      const unreconciled = await insertDeal(s, { mode });
+      const unreconciled = await insertDeal(s, { mode, paidInvoice: true });
       expect((await stagesOf(s, unreconciled.applicationId)).settlement.state).toBe("COMPLETE");
       const before = await profitOf(s, unreconciled.applicationId);
       if (!before.available || before.basis !== "MANAGEMENT_ESTIMATE") throw new Error("expected an estimate");
       expect(before.classification).toBe("ESTIMATED_AWAITING_SETTLEMENT");
 
-      const { applicationId } = await insertDeal(s, { mode, reconciledFee: true });
+      const { applicationId } = await insertDeal(s, { mode, reconciledFee: true, paidInvoice: true });
       expect((await stagesOf(s, applicationId)).settlement.state).toBe("COMPLETE");
       const after = await profitOf(s, applicationId);
       if (!after.available || after.basis !== "MANAGEMENT_ESTIMATE") throw new Error("expected an estimate");
@@ -270,7 +315,7 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
 
   test("a legacy row with no lifecycle dimensions recorded reads the same", async () => {
     const s = await seed("legacy");
-    const { applicationId } = await insertDeal(s, { legacy: true });
+    const { applicationId } = await insertDeal(s, { legacy: true, paidInvoice: true });
     const { disbursement, settlement } = await stagesOf(s, applicationId);
     expect(disbursement.state).toBe("NOT_APPLICABLE");
     expect(settlement.state).toBe("COMPLETE");
@@ -349,7 +394,7 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
   describe("a legacy application with no quoteModeAtSubmission reads the mode from its quote", () => {
     /** Closed internal-instalment deal whose frozen mode is cleared; the quote, in INTERNAL_INSTALLMENT, is the only mode evidence. */
     async function legacyDeal(s: Seed) {
-      const { applicationId } = await insertDeal(s, { mode: "INTERNAL_INSTALLMENT" });
+      const { applicationId } = await insertDeal(s, { mode: "INTERNAL_INSTALLMENT", paidInvoice: true });
       await s.t.run(async (ctx) => {
         await ctx.db.patch(applicationId, { quoteModeAtSubmission: undefined });
         await ctx.db.patch(s.quoteId, { mode: "INTERNAL_INSTALLMENT" });
@@ -743,7 +788,7 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
   describe("allComplete is true only on a live COMPLETED-sale deal that is genuinely finished", () => {
     test("live COMPLETED sale, reconciled: every stage is COMPLETE or NOT_APPLICABLE", async () => {
       const s = await seed("ac_true");
-      const { applicationId } = await insertDeal(s, { reconciledFee: true });
+      const { applicationId } = await insertDeal(s, { reconciledFee: true, paidInvoice: true });
       const { all, disbursement } = await stagesOf(s, applicationId);
       expect(disbursement.state).toBe("NOT_APPLICABLE");
       expect(all.filter((st) => st.state !== "NOT_APPLICABLE").every((st) => st.state === "COMPLETE")).toBe(true);
@@ -774,7 +819,7 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
 
     test("an application CANCELLED after a completed sale is never all complete", async () => {
       const s = await seed("ac_appcancel");
-      const { applicationId } = await insertDeal(s, { reconciledFee: true });
+      const { applicationId } = await insertDeal(s, { reconciledFee: true, paidInvoice: true });
       expect(allComplete((await stagesOf(s, applicationId)).all)).toBe(true);
       await s.t.run((ctx) => ctx.db.patch(applicationId, { status: "CANCELLED" }));
       expect(allComplete((await stagesOf(s, applicationId)).all)).toBe(false);

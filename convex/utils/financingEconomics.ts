@@ -100,6 +100,11 @@ export const gapResolutionValidator = v.union(
 export const settlementStatusValidator = v.union(
   v.literal("NOT_READY"),
   v.literal("EXPECTED"),
+  // SCRUM-567: written by finalizeDeal ONLY for a deal that is provably
+  // financier-less (CASH, no company, no manual payer, not settled direct).
+  // It means "no finance company pays the dealership"; it is NOT "settled" and
+  // no settled/complete derivation may read it as such (fail closed).
+  v.literal("NOT_APPLICABLE"),
   v.literal("PARTIALLY_SETTLED"),
   v.literal("FULLY_SETTLED"),
   v.literal("RECONCILED")

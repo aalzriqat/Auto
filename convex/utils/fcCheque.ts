@@ -169,6 +169,10 @@ export const FC_RETURN_MESSAGES = {
     "This cheque's face amount was never recorded in minor units. Have a finance manager attest the face from the deal before confirming disbursement. Nothing has been changed.",
   FINANCE_CONFIRM_CHEQUE_FACE_MISMATCH:
     "The cheque's recorded face does not equal the disbursement being confirmed. Correct the expected payment or the cheque before confirming. Nothing has been changed.",
+  FINANCE_CONFIRM_NO_FINANCIER_PAYS:
+    "No finance company pays the dealership on this deal, so there is no disbursement to confirm.",
+  FINANCE_CONFIRM_NO_FINANCE_COMPANY:
+    "This application has no finance company — no disbursement expected.",
   CHEQUE_BANK_FEE_INVALID:
     "The bank fee must be a whole, non-negative amount in minor currency units. Nothing has been changed.",
   CHEQUE_RETURN_NO_RECEIPT_LINEAGE:
