@@ -21,7 +21,7 @@ describe("resetOrgFinancialData never strands a payroll item's commissionSaleIds
   test("a partial pass keeps the sale while a payroll item still lists it", async () => {
     const t = convexTestWithComponents(schema, MODULES);
     const orgId = await t.run((ctx) =>
-      ctx.db.insert("organizations", { name: "Payroll Order Motors", createdAt: Date.now() })
+      ctx.db.insert("organizations", { name: "Payroll Order Motors", createdAt: Date.now(), suspended: true })
     );
 
     const ids = await t.run(async (ctx) => {

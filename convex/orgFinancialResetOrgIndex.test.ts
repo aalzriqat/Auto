@@ -43,7 +43,7 @@ describe("reset org-index map (static, against the real schema)", () => {
 });
 
 async function makeOrg(t: T, name: string) {
-  return await t.run((ctx) => ctx.db.insert("organizations", { name, createdAt: Date.now() }));
+  return await t.run((ctx) => ctx.db.insert("organizations", { name, createdAt: Date.now(), suspended: true }));
 }
 
 /** One pending event for the org, plus an authority work row and an attempt. */

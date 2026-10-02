@@ -4,7 +4,8 @@ import schema from "./schema";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
-import { RESET_ORG_INDEX_FOR_TEST, RESET_TABLES_FOR_TEST } from "./orgFinancialReset";
+import { RESET_TABLES_FOR_TEST } from "./orgFinancialReset";
+import { rowsOf, seedBase as seedBaseFor, type Base, type LooseDb } from "../test-utils/orgResetFixtures";
 
 /**
  * SCRUM-549 — REQUIRED (and operationally dereferenced optional) references
@@ -61,24 +62,6 @@ const D2: Pair = ["receivables", "canonicalReceivableDocumentId", "receivableDoc
 
 const key = (p: Pair) => `${p[0]}.${p[1]}->${p[2]}`;
 
-interface LooseDb {
-  query(table: string): {
-    withIndex(
-      index: string,
-      range: (q: { eq(field: string, value: unknown): unknown }) => unknown
-    ): { collect(): Promise<Array<Record<string, unknown>>> };
-  };
-  get(id: unknown): Promise<unknown>;
-}
-
-/** Surviving rows of `table` for the org, read through the reset's own index. */
-async function rowsOf(db: LooseDb, table: string, orgId: Id<"organizations">) {
-  return await db
-    .query(table)
-    .withIndex(RESET_ORG_INDEX_FOR_TEST[table], (q) => q.eq("orgId", orgId))
-    .collect();
-}
-
 /** Every PAIRS reference held by a surviving row that no longer resolves. */
 async function danglingNow(t: T, orgId: Id<"organizations">): Promise<string[]> {
   return await t.run(async (ctx) => {
@@ -110,32 +93,7 @@ async function populatedTables(t: T, orgId: Id<"organizations">): Promise<string
 
 // ── Shared seed helpers ─────────────────────────────────────────────────────
 
-interface Base {
-  orgId: Id<"organizations">;
-  userId: Id<"users">;
-  vehicleId: Id<"vehicles">;
-  customerId: Id<"customers">;
-  now: number;
-}
-
-/** An org with the user, vehicle and customer every protected row needs. */
-async function seedBase(ctx: MutationCtx, tag: string): Promise<Base> {
-  const now = Date.now();
-  const orgId = await ctx.db.insert("organizations", { name: tag, createdAt: now });
-  const userId = await ctx.db.insert("users", {
-    clerkId: `req_refs_${tag}`,
-    email: `${tag.replace(/\s/g, "")}@x.com`,
-  });
-  const vehicleId = await ctx.db.insert("vehicles", {
-    orgId, vin: `VIN${tag}`, make: "Kia", model: "Rio", year: 2024, mileage: 10,
-    color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: 15000,
-    status: "AVAILABLE",
-  });
-  const customerId = await ctx.db.insert("customers", {
-    orgId, firstName: "Refs", lastName: "Customer",
-  });
-  return { orgId, userId, vehicleId, customerId, now };
-}
+const seedBase = (ctx: MutationCtx, tag: string) => seedBaseFor(ctx, tag, "req_refs_");
 
 async function insertCanonicalPayment(ctx: MutationCtx, b: Base, k: string) {
   return await ctx.db.insert("canonicalPayments", {
