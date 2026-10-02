@@ -18,7 +18,14 @@ import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { hookPaymentLinkReceived } from "./accounting/workflowHooks";
 import { allocatePaymentToReceivable, createCanonicalPayment, getReceivableOutstandingMinor } from "./subledger";
+import { AppErrorCode, throwAppError } from "./utils/errors";
 import { fromMinorUnits, toMinorUnits, scaleForCurrency, assertValidMinorAmount } from "./utils/money";
+
+// SCRUM-571 S1. English text equals `ServerError_<code>` in lib/i18n/domains/common.ts.
+const PAYMENT_LINK_TARGET_REQUIRED_MESSAGE =
+  "A payment link must be created against a specific receivable, sale or receivable document. Nothing has been changed.";
+const PAYMENT_LINK_EXCEEDS_OUTSTANDING_MESSAGE =
+  "The payment link amount cannot exceed what is still outstanding on this debt. Nothing has been changed.";
 
 const statusValidator = v.union(
   v.literal("PENDING"),
@@ -299,6 +306,17 @@ export const create = mutation({
       throw new ConvexError("Provider external ID is required when a checkout URL is stored.");
     }
 
+    // SCRUM-571 S1 (c21732) — an intent with no target has no document to
+    // allocate to, so settlement would post its GROSS amount to customer AR
+    // while allocating nothing. Refused BEFORE the idempotency wrapper, like
+    // the manual-receipt guards, so a refusal never consumes the key.
+    //
+    // Creation only: an intent already issued without a target must still
+    // settle (the provider may hold the money), so no settle path changes.
+    if (!args.receivableId && !args.saleId && !args.receivableDocumentId) {
+      throwAppError(AppErrorCode.PAYMENT_LINK_TARGET_REQUIRED, PAYMENT_LINK_TARGET_REQUIRED_MESSAGE);
+    }
+
     return await runWithIdempotency(
       ctx,
       {
@@ -427,6 +445,21 @@ export const create = mutation({
 
         if (legacyOutstandingMinor !== null && args.amountMinor > legacyOutstandingMinor) {
           throw new ConvexError("Payment link amount cannot exceed the receivable outstanding amount.");
+        }
+
+        // SCRUM-571 S1 (c21732) — cap at the CANONICAL document's outstanding
+        // however the document was resolved (document id, sale, or legacy
+        // receivable). The legacy cap above reads the mirror row, which can
+        // drift from the document, and applied only on the receivableId path;
+        // the stricter of the two now holds. Integer minor units on both sides
+        // (originalAmountMinor less ACTIVE allocations), so there is no float
+        // drift. Settlement clamps the allocation but posts the gross amount,
+        // so an over-cap intent would credit AR for money no document absorbs.
+        if (receivableDocumentId) {
+          const documentOutstandingMinor = await getReceivableOutstandingMinor(ctx, receivableDocumentId);
+          if (args.amountMinor > documentOutstandingMinor) {
+            throwAppError(AppErrorCode.PAYMENT_LINK_EXCEEDS_OUTSTANDING, PAYMENT_LINK_EXCEEDS_OUTSTANDING_MESSAGE);
+          }
         }
 
         if (externalId) {

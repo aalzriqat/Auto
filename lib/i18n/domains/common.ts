@@ -104,6 +104,20 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This request was recorded before the organization's financial data was reset and can no longer be replayed. Start a new operation.",
     "سُجّل هذا الطلب قبل إعادة ضبط البيانات المالية للمنشأة ولم يعد بالإمكان إعادة إرساله. يرجى بدء عملية جديدة.",
   ],
+  // SCRUM-571 S1. The English text must equal the server message in convex/paymentIntents.ts
+  // and convex/collections.ts respectively.
+  ServerError_PAYMENT_LINK_TARGET_REQUIRED: [
+    "A payment link must be created against a specific receivable, sale or receivable document. Nothing has been changed.",
+    "يجب إنشاء رابط الدفع مقابل ذمة أو عملية بيع أو مستند ذمة محدد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_EXCEEDS_OUTSTANDING: [
+    "The payment link amount cannot exceed what is still outstanding on this debt. Nothing has been changed.",
+    "لا يمكن أن يتجاوز مبلغ رابط الدفع الرصيد المتبقي المستحق على هذه الذمة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_RECEIPT_MANUAL_REFUSED: [
+    "A payment-link receipt cannot be recorded manually. It is recorded automatically when the payment link is settled. Nothing has been changed.",
+    "لا يمكن تسجيل قبض رابط الدفع يدويًا، إذ يُسجَّل تلقائيًا عند تسوية رابط الدفع. لم يتم تغيير أي شيء.",
+  ],
   ServerError_ORG_FINANCIAL_RESET_IN_PROGRESS: [
     "This organization's financial reset has not finished. It cannot be returned to service until the reset completes.",
     "لم تكتمل إعادة ضبط البيانات المالية لهذه المنشأة. لا يمكن إعادتها إلى الخدمة قبل اكتمال إعادة الضبط.",

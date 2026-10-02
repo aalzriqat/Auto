@@ -154,6 +154,26 @@ async function seedDealer(t: Harness, tag: string) {
   return { orgId, userId, asUser, customerId };
 }
 
+/**
+ * SCRUM-571 S1: `paymentIntents.create` refuses an untargeted intent, so every
+ * intent here points at its own canonical document (sized above 1_000_000).
+ * The document is created BEFORE any footprint baseline is taken.
+ */
+async function seedTargetDocument(dealer: Awaited<ReturnType<typeof seedDealer>>) {
+  return await dealer.asUser.mutation(internal.subledger.createReceivable, {
+    orgId: dealer.orgId,
+    documentType: "INVOICE",
+    payerType: "CUSTOMER",
+    customerId: dealer.customerId,
+    sourceType: "test_intent",
+    sourceId: `scrum302_${crypto.randomUUID()}`,
+    originalAmountMinor: 2_000_000,
+    currency: "JOD",
+    issueDate: Date.now(),
+    dueDate: Date.now(),
+  });
+}
+
 async function suspend(t: Harness, orgId: Id<"organizations">) {
   await t.run((ctx) =>
     ctx.db.patch(orgId, {
@@ -180,6 +200,7 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
       idempotencyKey: crypto.randomUUID(),
       orgId: dealer.orgId,
       customerId: dealer.customerId,
+      receivableDocumentId: await seedTargetDocument(dealer),
       amountMinor: 1_000_000,
       currency: "JOD",
       provider: "tap",
@@ -210,6 +231,7 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
       idempotencyKey: crypto.randomUUID(),
       orgId: dealer.orgId,
       customerId: dealer.customerId,
+      receivableDocumentId: await seedTargetDocument(dealer),
       amountMinor: 1_000_000,
       currency: "JOD",
       provider: "tap",
@@ -236,6 +258,7 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
       idempotencyKey: crypto.randomUUID(),
       orgId: dealer.orgId,
       customerId: dealer.customerId,
+      receivableDocumentId: await seedTargetDocument(dealer),
       amountMinor: 1_000_000,
       currency: "JOD",
       provider: "tap",
@@ -264,6 +287,7 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
       idempotencyKey: crypto.randomUUID(),
       orgId: blocked.orgId,
       customerId: blocked.customerId,
+      receivableDocumentId: await seedTargetDocument(blocked),
       amountMinor: 1_000_000,
       currency: "JOD",
       provider: "tap",
@@ -273,6 +297,7 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
       idempotencyKey: crypto.randomUUID(),
       orgId: healthy.orgId,
       customerId: healthy.customerId,
+      receivableDocumentId: await seedTargetDocument(healthy),
       amountMinor: 1_000_000,
       currency: "JOD",
       provider: "tap",

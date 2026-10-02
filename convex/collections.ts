@@ -1193,6 +1193,18 @@ export const recordPayment = mutation({
     if (args.method === "DEPOSIT_APPLIED") {
       throw new ConvexError("A deposit is applied from the deal, not recorded as a new payment.");
     }
+    // SCRUM-571 S1 (c21732): payment-link money arrives only through
+    // `paymentIntents` settlement. A manually recorded PAYMENT_LINK receipt
+    // posts through the wrong door and credits customer AR with no intent to
+    // tie it to. Refused BEFORE the idempotency wrapper for the same reason as
+    // the guard above: a replay of a call completed before this guard existed
+    // returns its stored result without reaching the body.
+    if (args.method === "PAYMENT_LINK") {
+      throwAppError(
+        AppErrorCode.PAYMENT_LINK_RECEIPT_MANUAL_REFUSED,
+        "A payment-link receipt cannot be recorded manually. It is recorded automatically when the payment link is settled. Nothing has been changed."
+      );
+    }
     return await runWithIdempotency(
       ctx,
       {

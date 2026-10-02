@@ -1025,7 +1025,7 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
           <Select value={method} onValueChange={setMethod}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
-              {["CASH", "BANK_TRANSFER", "PAYMENT_LINK", "CARD", "OTHER"].map((value) => (
+              {["CASH", "BANK_TRANSFER", "CARD", "OTHER"].map((value) => (
                 <SelectItem key={value} value={value}>{collectionLabel(t, value)}</SelectItem>
               ))}
             </SelectContent>

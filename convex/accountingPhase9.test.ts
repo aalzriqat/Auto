@@ -436,15 +436,22 @@ describe("Phase 9 — accounting outbox", () => {
 describe("Phase 9 — idempotency fingerprint", () => {
   test("reusing an idempotency key with a different payload is rejected", async () => {
     const { orgId, asUser, customerId } = await seedDealer("idem");
+    // SCRUM-571 S1: an intent needs a target document, sized above 999_999.
+    const receivableDocumentId = await asUser.mutation(internal.subledger.createReceivable, {
+      orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
+      sourceType: "test_intent", sourceId: "idem_receivable",
+      originalAmountMinor: 2_000_000, currency: "JOD",
+      issueDate: Date.now(), dueDate: Date.now(),
+    });
 
     await asUser.mutation(api.paymentIntents.create, {
-      orgId, customerId, amountMinor: 1000, currency: "JOD", provider: "tap",
+      orgId, customerId, receivableDocumentId, amountMinor: 1000, currency: "JOD", provider: "tap",
       idempotencyKey: "reused_key_1",
     });
 
     await expect(
       asUser.mutation(api.paymentIntents.create, {
-        orgId, customerId, amountMinor: 999999, currency: "JOD", provider: "tap",
+        orgId, customerId, receivableDocumentId, amountMinor: 999999, currency: "JOD", provider: "tap",
         idempotencyKey: "reused_key_1",
       })
     ).rejects.toThrow(/different request content/i);
@@ -452,8 +459,14 @@ describe("Phase 9 — idempotency fingerprint", () => {
 
   test("same key with identical payload still returns the prior result", async () => {
     const { orgId, asUser, customerId } = await seedDealer("idem2");
+    const receivableDocumentId = await asUser.mutation(internal.subledger.createReceivable, {
+      orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
+      sourceType: "test_intent", sourceId: "idem2_receivable",
+      originalAmountMinor: 2_000_000, currency: "JOD",
+      issueDate: Date.now(), dueDate: Date.now(),
+    });
     const args = {
-      orgId, customerId, amountMinor: 5000, currency: "JOD", provider: "tap",
+      orgId, customerId, receivableDocumentId, amountMinor: 5000, currency: "JOD", provider: "tap",
       idempotencyKey: "stable_key_1",
     } as const;
     const a = await asUser.mutation(api.paymentIntents.create, args);

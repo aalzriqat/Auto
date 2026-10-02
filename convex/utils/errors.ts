@@ -106,6 +106,12 @@ export const AppErrorCode = {
   // ServerError_<code>.
   COMMAND_RECORDED_BEFORE_RESET: "COMMAND_RECORDED_BEFORE_RESET",
   ORG_FINANCIAL_RESET_IN_PROGRESS: "ORG_FINANCIAL_RESET_IN_PROGRESS",
+  // SCRUM-571 S1 (c21732). Receipt containment: a payment link is created only against a debt
+  // and never for more than that debt still owes, and its money arrives only through intent
+  // settlement, never as a manually recorded receipt. Translated under ServerError_<code>.
+  PAYMENT_LINK_TARGET_REQUIRED: "PAYMENT_LINK_TARGET_REQUIRED",
+  PAYMENT_LINK_EXCEEDS_OUTSTANDING: "PAYMENT_LINK_EXCEEDS_OUTSTANDING",
+  PAYMENT_LINK_RECEIPT_MANUAL_REFUSED: "PAYMENT_LINK_RECEIPT_MANUAL_REFUSED",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];
