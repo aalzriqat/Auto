@@ -87,6 +87,15 @@ export function firstOfferableMonthIndex(input: {
   let first = yearMonthIndex(input.createdAt);
   if (input.startAt !== undefined) first = Math.max(first, yearMonthIndex(input.startAt));
   if (input.lastPostedYearMonth) first = Math.max(first, yearMonthStringIndex(input.lastPostedYearMonth) + 1);
+  // Math.max(x, NaN) is NaN, and NaN poisons both callers: the cron's
+  // `idx <= currentIdx` loop never runs (the item is silently counted done) and the
+  // recognition mutation's `< floor` guard silently passes. An unrepresentable input
+  // is refused loudly - never "nothing to do", never "no floor".
+  if (!Number.isFinite(first)) {
+    throw new Error(
+      "first offerable month is not representable: createdAt, startAt or lastPostedYearMonth is malformed or out of range"
+    );
+  }
   return first;
 }
 

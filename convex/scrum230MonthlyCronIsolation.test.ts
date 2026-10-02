@@ -821,3 +821,52 @@ describe("posted-item accounting is independent of how the item ended", () => {
     expect(summary).toMatch(/1 failed/);
   });
 });
+
+
+// ─── 10. a non-finite first offerable month is refused, never "nothing to do" ─
+
+describe("firstOfferableMonthIndex refuses an unrepresentable input (SCRUM-230 CodeRabbit #404)", () => {
+  test("a) throws for a malformed lastPostedYearMonth, an unrepresentable startAt, and a NaN createdAt", () => {
+    expect(() => firstOfferableMonthIndex({ lastPostedYearMonth: "garbage", createdAt: FEB_10 })).toThrow(/first offerable month/);
+    expect(() => firstOfferableMonthIndex({ lastPostedYearMonth: "2026", createdAt: FEB_10 })).toThrow(/first offerable month/);
+    expect(() => firstOfferableMonthIndex({ startAt: 1e20, createdAt: FEB_10 })).toThrow(/first offerable month/);
+    expect(() => firstOfferableMonthIndex({ createdAt: Number.NaN })).toThrow(/first offerable month/);
+  });
+
+  test("a) CONTROL: finite inputs (including a lenient 'YYYY-M') still return a finite index", () => {
+    expect(firstOfferableMonthIndex({ lastPostedYearMonth: "2026-03", createdAt: FEB_10, startAt: FEB_10 }))
+      .toBe(yearMonthIndex(Date.UTC(2026, 3, 1)));
+    expect(Number.isFinite(firstOfferableMonthIndex({ lastPostedYearMonth: "2026-1", createdAt: FEB_10 }))).toBe(true);
+  });
+
+  test("b) depreciation: an asset with a malformed lastDepreciatedYearMonth is a counted FAILURE with a failure row, not done; another org still posts", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const a = await seedOrg(t, "nan_a");
+    const b = await seedOrg(t, "nan_b");
+    const assetA = await capitalizeAsset(a, "Malformed");
+    await capitalizeAsset(b, "Healthy");
+    await t.run((ctx) => ctx.db.patch(assetA, { lastDepreciatedYearMonth: "garbage" }));
+
+    const summary = await runDepreciation(t);
+
+    expect(summary).toMatch(/1 failed/);
+    expect(summary).toMatch(/posted 1\/2/);
+    expect(await depreciationEvents(t, a.orgId)).toHaveLength(0);
+    expect(await depreciationEvents(t, b.orgId)).toHaveLength(1);
+    const failures = (await cronReports(t, "fixed-asset-depreciation")).filter((r) => r.status === "error");
+    expect(failures.some((r) => r.error?.includes("first offerable month"))).toBe(true);
+  });
+
+  test("c) recognition mutation boundary: an unrepresentable deferral createdAt throws and leaves no trace", async () => {
+    const t = convexTestWithComponents(schema, MODULE_GLOB);
+    const org = await seedOrg(t, "nan_c");
+    const deferralId = await createDeferral(t, org, "000041");
+    await t.run((ctx) => ctx.db.patch(deferralId, { createdAt: 1e20 }));
+    const before = await recognitionFootprint(t, org.orgId, deferralId);
+
+    await expect(recognizeDirect(t, org, deferralId, "2026-02", FEB_10)).rejects.toThrow(/first offerable month/);
+
+    expect(await recognitionFootprint(t, org.orgId, deferralId)).toEqual(before);
+    expect(await fiEvents(t, org.orgId)).toEqual([]);
+  });
+});
