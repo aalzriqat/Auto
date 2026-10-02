@@ -421,36 +421,227 @@ const RECEIVABLE_DOCUMENT_SOURCE_KINDS: Record<string, string> = {
 
 const CONVEX_DIR = path.join(__dirname, "..", "convex");
 
-/** sourceType literals written by files that create receivable documents. */
-function receivableDocumentSourceLiterals(): { writers: string[]; literals: Set<string> } {
+interface ReceivableWriterScan {
+  /** Call sites seen (helper calls and direct inserts; definitions excluded). */
+  sites: number;
+  /** sourceType kinds resolved to a string literal. */
+  literals: string[];
+  /** Call sites whose sourceType could not be resolved, as `reason: snippet`. */
+  unparsed: string[];
+}
+
+/** Blank out comments so a call mentioned in prose is not a site. Strings are left alone. */
+function stripComments(text: string): string {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+/** Index just past the matching close of the bracket at `open`; quote-aware. -1 when unbalanced. */
+function matchingClose(text: string, open: number): number {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = open; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) quote = null;
+    } else if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+    } else if (c === "(" || c === "[" || c === "{") {
+      depth++;
+    } else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** Split on commas that sit outside any bracket or string. */
+function splitTopLevel(text: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let quote: string | null = null;
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) quote = null;
+    } else if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+    } else if (c === "(" || c === "[" || c === "{") {
+      depth++;
+    } else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+    } else if (c === "," && depth === 0) {
+      parts.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(text.slice(start));
+  return parts.map((p) => p.trim()).filter((p) => p !== "");
+}
+
+const snippet = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 100);
+const STRING_LITERAL = /^(["'`])([^"'`\\$]*)\1$/;
+
+/**
+ * Inspects EVERY receivableDocuments write in one file's text: calls to
+ * `createReceivableDocument(` / `ensureReceivableDocument(` and direct
+ * `.insert("receivableDocuments"`. Function definitions, imports, type
+ * positions and comments are not sites. Each site's `sourceType` must resolve
+ * to a string literal (inline, or through a same-file `const X = "..."`);
+ * anything else is reported as unparsed rather than silently skipped.
+ */
+function scanReceivableDocumentWriters(rawText: string): ReceivableWriterScan {
+  const text = stripComments(rawText);
+  const literals = new Set<string>();
+  const unparsed: string[] = [];
+  let sites = 0;
+  const siteRe = /\b(?:createReceivableDocument|ensureReceivableDocument)\s*\(|\.insert\(\s*["'`]receivableDocuments["'`]/g;
+  for (const m of text.matchAll(siteRe)) {
+    const index = m.index ?? 0;
+    if (/function\s*\*?\s*$/.test(text.slice(0, index))) continue; // a definition, not a call
+    sites++;
+    const open = index + m[0].indexOf("("); // the helper's or insert's own opening paren
+    const close = matchingClose(text, open);
+    if (close < 0) {
+      unparsed.push(`unbalanced call: ${snippet(text.slice(index, index + 80))}`);
+      continue;
+    }
+    const args = splitTopLevel(text.slice(open + 1, close));
+    const objectArg = args[1] ?? "";
+    if (!objectArg.startsWith("{")) {
+      unparsed.push(`no inline object argument: ${snippet(objectArg || args.join(", "))}`);
+      continue;
+    }
+    const props = splitTopLevel(objectArg.slice(1, objectArg.lastIndexOf("}")));
+    if (props.some((p) => p.startsWith("..."))) {
+      unparsed.push(`spread args: ${snippet(objectArg)}`);
+      continue;
+    }
+    const prop = props.map((p) => /^sourceType\s*(?::\s*([\s\S]*))?$/.exec(p)).find((r) => r !== null);
+    if (!prop) {
+      unparsed.push(`no sourceType key: ${snippet(objectArg)}`);
+      continue;
+    }
+    const expr = (prop[1] ?? "sourceType").trim();
+    const literal = STRING_LITERAL.exec(expr);
+    if (literal) {
+      literals.add(literal[2]);
+      continue;
+    }
+    if (/^[A-Za-z_$][\w$]*$/.test(expr)) {
+      const constant = new RegExp(`\\bconst\\s+${expr.replace(/\$/g, "\\$")}\\s*=\\s*(["'])([^"'\\\\]*)\\1`).exec(text);
+      if (constant) {
+        literals.add(constant[2]);
+        continue;
+      }
+    }
+    unparsed.push(`unresolved sourceType: ${snippet(expr)}`);
+  }
+  return { sites, literals: [...literals], unparsed };
+}
+
+/**
+ * subledger.ts is the generic writer: its sourceType comes from its caller's
+ * args, so these (and only these) pass-through sites are tolerated there. Any
+ * other unparsed site in that file still fails the pin.
+ */
+const SUBLEDGER_PASSTHROUGH = new Set<string>([
+  "unresolved sourceType: args.sourceType",
+  "no inline object argument: args",
+  "spread args: { ...args, actorId: user._id }",
+]);
+
+function receivableDocumentWriterScan(): { writers: string[]; literals: Set<string>; unparsed: string[] } {
   const writers: string[] = [];
   const literals = new Set<string>();
+  const unparsed: string[] = [];
   for (const file of convexSourceFiles(CONVEX_DIR)) {
-    if (path.basename(file) === "subledger.ts") continue; // the generic writer, no literal
-    const text = fs.readFileSync(file, "utf8");
-    if (!text.includes("ReceivableDocument") && !text.includes('"receivableDocuments"')) continue;
-    if (!/createReceivableDocument|ensureReceivableDocument|insert\(\s*"receivableDocuments"/.test(text)) continue;
-    writers.push(path.relative(CONVEX_DIR, file).replace(/\\/g, "/"));
-    // Only the argument object of the create call: other `sourceType` keys in these files are accounting-event sources.
-    for (const call of text.matchAll(/(?:createReceivableDocument|ensureReceivableDocument)\(\s*ctx\s*,\s*\{([\s\S]{0,600}?)\}\s*\)/g)) {
-      for (const m of call[1].matchAll(/sourceType\s*:\s*"([^"]+)"/g)) literals.add(m[1]);
+    const rel = path.relative(CONVEX_DIR, file).replace(/\\/g, "/");
+    const scan = scanReceivableDocumentWriters(fs.readFileSync(file, "utf8"));
+    if (scan.sites === 0) continue;
+    writers.push(rel);
+    for (const kind of scan.literals) literals.add(kind);
+    for (const u of scan.unparsed) {
+      if (rel === "subledger.ts" && SUBLEDGER_PASSTHROUGH.has(u)) continue;
+      unparsed.push(`${rel} -> ${u}`);
     }
-    for (const m of text.matchAll(/_SOURCE\s*=\s*"([^"]+)"/g)) literals.add(m[1]);
   }
-  return { writers, literals };
+  return { writers, literals, unparsed };
 }
 
 describe("receivableDocuments.sourceId opaque references stay pinned", () => {
   test("every in-repo writer uses a pinned sourceType kind", () => {
-    const { writers, literals } = receivableDocumentSourceLiterals();
+    const { writers, literals, unparsed } = receivableDocumentWriterScan();
     // Sanity: the scan must actually see the known writers, or it proves nothing.
     expect(writers).toEqual(expect.arrayContaining(["applications.ts", "collections.ts", "utils/saleCompletion.ts"]));
     for (const kind of Object.keys(RECEIVABLE_DOCUMENT_SOURCE_KINDS)) expect(literals).toContain(kind);
+    expect(
+      unparsed,
+      render("receivableDocuments writers whose sourceType cannot be resolved to a literal (pin them or decide their reset handling):", unparsed)
+    ).toEqual([]);
     const unknown = [...literals].filter((k) => !(k in RECEIVABLE_DOCUMENT_SOURCE_KINDS)).sort();
     expect(
       unknown,
       render("receivableDocuments.sourceType kinds with no pinned target table (decide its reset handling):", unknown)
     ).toEqual([]);
+  });
+
+  test("MUTATION CONTROL: a direct insert with a new literal kind is detected", () => {
+    const scan = scanReceivableDocumentWriters(
+      'await ctx.db.insert("receivableDocuments", { orgId, sourceType: "new_kind", sourceId: x });'
+    );
+    expect(scan.literals).toEqual(["new_kind"]);
+    expect(scan.unparsed).toEqual([]);
+  });
+
+  test("MUTATION CONTROL: a direct insert with an unresolved identifier is unparsed", () => {
+    const scan = scanReceivableDocumentWriters(
+      'await ctx.db.insert("receivableDocuments", { orgId, sourceType: someVar, sourceId: x });'
+    );
+    expect(scan.literals).toEqual([]);
+    expect(scan.unparsed).toEqual(["unresolved sourceType: someVar"]);
+  });
+
+  test("MUTATION CONTROL: a helper call without an inline object argument is unparsed", () => {
+    const scan = scanReceivableDocumentWriters("await createReceivableDocument(ctx, args);");
+    expect(scan.literals).toEqual([]);
+    expect(scan.unparsed).toEqual(["no inline object argument: args"]);
+  });
+
+  test("MUTATION CONTROL: spread args, a missing key, and a computed value are unparsed", () => {
+    expect(scanReceivableDocumentWriters("await ensureReceivableDocument(ctx, { ...base, sourceType: 'x' });").unparsed).toHaveLength(1);
+    expect(scanReceivableDocumentWriters("await ensureReceivableDocument(ctx, { orgId, sourceId: x });").unparsed).toEqual([
+      "no sourceType key: { orgId, sourceId: x }",
+    ]);
+    expect(
+      scanReceivableDocumentWriters('await ensureReceivableDocument(ctx, { sourceType: a ? "x" : "y" });').unparsed
+    ).toEqual(['unresolved sourceType: a ? "x" : "y"']);
+  });
+
+  test("MUTATION CONTROL: a helper call resolving through a _SOURCE const yields the kind", () => {
+    const scan = scanReceivableDocumentWriters(
+      'const FOO_SOURCE = "foo_kind";\nawait ensureReceivableDocument(ctx, { sourceType: FOO_SOURCE, sourceId: x });'
+    );
+    expect(scan.literals).toEqual(["foo_kind"]);
+    expect(scan.unparsed).toEqual([]);
+  });
+
+  test("MUTATION CONTROL: a known literal resolves, and definitions, imports and type positions are not sites", () => {
+    const scan = scanReceivableDocumentWriters(
+      [
+        "import { ensureReceivableDocument } from './subledger';",
+        "export async function createReceivableDocument(ctx, args) { return 1; }",
+        "type T = Parameters<typeof ensureReceivableDocument>[1];",
+        "// createReceivableDocument(ctx, args) in a comment",
+        'await ensureReceivableDocument(ctx, { sourceType: "sales", sourceId: x });',
+      ].join("\n")
+    );
+    expect(scan).toEqual({ sites: 1, literals: ["sales"], unparsed: [] });
   });
 
   test("every pinned kind targets a reset-scoped table", () => {

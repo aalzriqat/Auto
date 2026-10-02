@@ -50,7 +50,8 @@ async function dangling(t: T, orgId: Id<"organizations">, pairs: ReadonlyArray<P
     const out: string[] = [];
     for (const [table, field, target] of pairs) {
       for (const row of await rowsOf(db, table, orgId)) {
-        const id = row[field];
+        // A dotted field ("custodyPosted.custodyId") names a nested reference.
+        const id = field.split(".").reduce<unknown>((v, key) => (v as Record<string, unknown> | null | undefined)?.[key], row);
         if (id != null && (await db.get(id)) === null) out.push(`${table}.${field} -> ${target}`);
       }
     }
@@ -195,7 +196,8 @@ const seedE4: Seed = async (ctx, b) => {
         orgId: b.orgId, applicationId, feeType: "APPRAISAL_FEE", currency: "JOD",
         paidBy: "DEALER", paidTo: "APPRAISER", accountingTreatment: "APPRAISAL_EXPENSE",
         includedInQuotation: false, deductedFromSettlement: false, refundable: false,
-        custodyId, source: "MANUAL", createdBy: b.userId, createdAt: b.now, updatedAt: b.now,
+        custodyId, custodyPosted: { version: 1, amountMinor: 0, custodyId },
+        source: "MANUAL", createdBy: b.userId, createdAt: b.now, updatedAt: b.now,
       })
   );
 };
@@ -217,7 +219,8 @@ const seedE6 = (ctx: MutationCtx, b: Base, outstanding = 500) =>
 const E1: Pair = ["collectionPayments", "canonicalPaymentId", "canonicalPayments"];
 const E2: Pair = ["accountingEvents", "journalEntryId", "journalEntries"];
 const E3: Pair = ["pendingAccountingEvents", "originalEventId", "accountingEvents"];
-const E4: Pair = ["financeDealFees", "custodyId", "financeDealCustody"];
+const E4A: Pair = ["financeDealFees", "custodyId", "financeDealCustody"];
+const E4B: Pair = ["financeDealFees", "custodyPosted.custodyId", "financeDealCustody"];
 const E5A: Pair = ["postDatedCheques", "applicationId", "financeApplications"];
 const E5B: Pair = ["postDatedCheques", "originApplicationId", "financeApplications"];
 const E6: Pair = ["postDatedCheques", "receivableId", "receivables"];
@@ -227,7 +230,12 @@ const EDGES: ReadonlyArray<{ id: string; label: string; seed: Seed; pairs: Reado
   { id: "E1", label: "collectionPayments.canonicalPaymentId -> canonicalPayments", seed: seedE1, pairs: [E1] },
   { id: "E2", label: "accountingEvents.journalEntryId -> journalEntries", seed: seedE2, pairs: [E2] },
   { id: "E3", label: "pendingAccountingEvents.originalEventId -> accountingEvents", seed: seedE3, pairs: [E3] },
-  { id: "E4", label: "financeDealFees.custodyId -> financeDealCustody", seed: seedE4, pairs: [E4] },
+  {
+    id: "E4",
+    label: "financeDealFees.custodyId / custodyPosted.custodyId -> financeDealCustody",
+    seed: seedE4,
+    pairs: [E4A, E4B],
+  },
   {
     id: "E5",
     label: "postDatedCheques.applicationId / originApplicationId -> financeApplications",
@@ -259,7 +267,7 @@ async function insertIntent(ctx: MutationCtx, b: Base, status: IntentStatus, k: 
     orgId: b.orgId, customerId: b.customerId, amountMinor: 1000, currency: "JOD",
     provider: "TEST", status, idempotencyKey: `intent-${k}`, createdBy: b.userId,
     createdAt: b.now, updatedAt: b.now,
-  } as never);
+  });
 }
 
 /** An org that owns financial rows in several reset tables, plus one payment intent per `intents` entry. */

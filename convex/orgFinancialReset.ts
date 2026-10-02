@@ -40,8 +40,11 @@ import type { Doc, Id } from "./_generated/dataModel";
  * spans several passes with no lock, and user-facing writers dereference some
  * rows this reset deletes (see the accepted optional references in
  * `scripts/orgFinancialResetReferenceCoverage.test.ts`); a suspended org cannot
- * pass tenant auth, which is what makes the unordered ones safe mid-reset. A
- * PENDING intent is a payment the provider can still settle against deleted rows.
+ * pass tenant auth, which is what makes the unordered ones safe mid-reset. The
+ * outbox, `reverseAccountingEvent` and `settleByExternalId` already refuse or
+ * hold for a suspended org, so the PENDING-intent refusal (and edges E2/E3) is
+ * defence in depth in case the org is unsuspended mid-reset (SCRUM-563). A
+ * missing `organizations` row skips the suspension check.
  * Command-idempotency results and terminal payment intents are out of scope here
  * and tracked in SCRUM-563.
  */
@@ -489,8 +492,10 @@ export const resetOrgFinancialData = internalMutation({
     //
     // Suspension: unordered references are safe mid-reset only because a
     // suspended org passes no tenant auth, so no user writer runs between passes.
-    // A PENDING payment intent blocks: its webhook would post against deleted
-    // rows. Rationale and limits: see the header docblock. Both refusals stay
+    // A PENDING payment intent blocks as defence in depth: settlement already
+    // holds for a suspended org, but the org could be unsuspended mid-reset
+    // (SCRUM-563). A missing organizations row skips the suspension check.
+    // Rationale and limits: see the header docblock. Both refusals stay
     // English (internal operator tool).
     const orgSuspended = org?.suspended === true;
     if (!dryRun && org !== null && !orgSuspended) {
