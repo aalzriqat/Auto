@@ -130,36 +130,42 @@ export async function enqueuePendingReversal(
 
   // SCRUM-515 (see isPostedReversalOf): the only no-op is a pending/posted reversal
   // of THIS original; any other key holder fails closed before any write.
-  // S515-R2: the ledger holder is checked FIRST, so a matching queued row can
-  // never mask a key that a forward/foreign event has since taken.
+  // S515-R2/R3: read BOTH holders, refuse a foreign holder in EITHER table, and
+  // only then decide a no-op — a matching holder in one table must never mask a
+  // foreign holder in the other.
   const ledgerHolder = await ctx.db
     .query("accountingEvents")
     .withIndex("by_org_idempotency", (q) =>
       q.eq("orgId", args.orgId).eq("idempotencyKey", args.idempotencyKey)
     )
     .unique();
-  if (ledgerHolder) {
-    if (isPostedReversalOf(ledgerHolder, args.originalEventId)) return;
-    throw reversalKeyConflict(
-      args.idempotencyKey,
-      `accounting event ${ledgerHolder._id} (${ledgerHolder.eventType}, ${ledgerHolder.status})`,
-      args.originalEventId
-    );
-  }
   const existing = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_idempotency", (q) =>
       q.eq("orgId", args.orgId).eq("idempotencyKey", args.idempotencyKey)
     )
     .unique();
+  if (ledgerHolder && !isPostedReversalOf(ledgerHolder, args.originalEventId)) {
+    throw reversalKeyConflict(
+      args.idempotencyKey,
+      `accounting event ${ledgerHolder._id} (${ledgerHolder.eventType}, ${ledgerHolder.status})`,
+      args.originalEventId
+    );
+  }
+  if (
+    existing &&
+    !(existing.kind === "REVERSE" && existing.originalEventId === args.originalEventId)
+  ) {
+    throw reversalKeyConflict(
+      args.idempotencyKey,
+      `queued outbox row ${existing._id} (${existing.kind}, ${existing.status})`,
+      args.originalEventId
+    );
+  }
+  if (ledgerHolder) return;
   if (existing) {
-    if (
-      existing.status === "PENDING" &&
-      existing.kind === "REVERSE" &&
-      existing.originalEventId === args.originalEventId
-    ) {
-      return;
-    }
+    // Own REVERSE row: only a PENDING one is queued; FAILED/POSTED is not.
+    if (existing.status === "PENDING") return;
     throw reversalKeyConflict(
       args.idempotencyKey,
       `queued outbox row ${existing._id} (${existing.kind}, ${existing.status})`,

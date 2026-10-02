@@ -475,6 +475,60 @@ describe("SCRUM-515 round 1 — a foreign key holder is refused on EVERY success
     await enqueueFor(s, a, "r2b_k");
     expect(await pendingRow(s, "r2b_k")).toHaveLength(1);
   });
+
+  test("R3a. live posted reversal of A holds K AND a pending POST holds K: enqueue(A, K) throws, nothing written", async () => {
+    const s = await seed();
+    const a = await postDeposit(s, "r3a_a");
+    await reverse(s, a, "r3a_k");
+    await insertPending(s, queuedPost(s, "r3a_k", "exp_r3a"));
+    const before = await footprint(s);
+
+    await expect(enqueueFor(s, a, "r3a_k")).rejects.toThrow(KEY_CONFLICT);
+
+    expect(await footprint(s)).toEqual(before);
+    expect(await pendingRow(s, "r3a_k")).toHaveLength(1);
+  });
+
+  test("R3b. live posted reversal of A holds K AND a pending REVERSE of another original B holds K: throws", async () => {
+    const s = await seed();
+    const a = await postDeposit(s, "r3b_a");
+    const b = await postDeposit(s, "r3b_b");
+    await reverse(s, a, "r3b_k");
+    await insertPending(s, {
+      kind: "REVERSE", status: "PENDING", idempotencyKey: "r3b_k",
+      sourceType: "deposits", sourceId: "dep_r", originalEventId: b,
+    });
+    const before = await footprint(s);
+
+    await expect(enqueueFor(s, a, "r3b_k")).rejects.toThrow(KEY_CONFLICT);
+
+    expect(await footprint(s)).toEqual(before);
+  });
+
+  test("R3c. control: live posted reversal of A under K, no pending holder: no-op, no row", async () => {
+    const s = await seed();
+    const a = await postDeposit(s, "r3c_a");
+    await reverse(s, a, "r3c_k");
+    const before = await footprint(s);
+
+    await enqueueFor(s, a, "r3c_k");
+
+    expect(await footprint(s)).toEqual(before);
+    expect(await pendingRow(s, "r3c_k")).toHaveLength(0);
+  });
+
+  test("R3d. control: own PENDING REVERSE row for A under K, no ledger holder: no-op", async () => {
+    const s = await seed();
+    const a = await postDeposit(s, "r3d_a");
+    await insertPending(s, {
+      kind: "REVERSE", status: "PENDING", idempotencyKey: "r3d_k",
+      sourceType: "deposits", sourceId: "dep_r", originalEventId: a,
+    });
+
+    await enqueueFor(s, a, "r3d_k");
+
+    expect(await pendingRow(s, "r3d_k")).toHaveLength(1);
+  });
 });
 
 // ── outbox drive helpers (same shape as accountingOutboxAtomicity.test.ts) ──
