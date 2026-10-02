@@ -56,7 +56,18 @@ export async function reverseAccountingEvent(
   if (original.status === "REVERSED") {
     if (original.reversedByEventId) {
       const reversalEvent = await ctx.db.get(original.reversedByEventId);
-      if (reversalEvent?.journalEntryId) {
+      // ⚠️ SCRUM-515 — "already reversed" is a CLAIM about the ledger, so the
+      // ledger has to prove it: the linked row must be a live, journaled
+      // reversal of THIS event. A link to a reversal that has itself since been
+      // reversed (status REVERSED), or to a row that is not a reversal of
+      // `original`, is a contradictory chain — not a success.
+      if (
+        reversalEvent &&
+        reversalEvent.eventType === "JOURNAL_REVERSAL" &&
+        reversalEvent.reversalOfEventId === original._id &&
+        reversalEvent.status === "POSTED" &&
+        reversalEvent.journalEntryId
+      ) {
         return {
           reversalEventId: original.reversedByEventId,
           reversalJournalEntryId: reversalEvent.journalEntryId,
@@ -136,12 +147,50 @@ export async function reverseAccountingEvent(
     )
     .unique();
 
-  if (existingReversal && existingReversal.status === "POSTED" && existingReversal.journalEntryId) {
-    return {
-      reversalEventId: existingReversal._id,
-      reversalJournalEntryId: existingReversal.journalEntryId,
-      alreadyReversed: true,
-    };
+  // ⚠️ SCRUM-515 — a held key is evidence only when the row holding it is a
+  // live reversal of THIS original. Any other holder (a forward event, a
+  // reversal of a different event, a PENDING/FAILED row) means the key belongs
+  // to a different obligation; reporting `alreadyReversed` would tell the caller
+  // an event it never reversed is reversed. Internal invariant, so a plain
+  // Error (server-side text only), thrown before any write.
+  if (existingReversal) {
+    if (
+      existingReversal.eventType === "JOURNAL_REVERSAL" &&
+      existingReversal.reversalOfEventId === cmd.originalEventId &&
+      existingReversal.status === "POSTED" &&
+      existingReversal.journalEntryId
+    ) {
+      return {
+        reversalEventId: existingReversal._id,
+        reversalJournalEntryId: existingReversal.journalEntryId,
+        alreadyReversed: true,
+      };
+    }
+    throw new Error(
+      `Reversal idempotency key "${cmd.idempotencyKey}" is already held by accounting event ` +
+        `${existingReversal._id} (${existingReversal.eventType}, ${existingReversal.status}), ` +
+        `not by a posted reversal of ${cmd.originalEventId} (SCRUM-515).`
+    );
+  }
+
+  // The same key may also be reserved by a queued outbox row. The outbox drain
+  // reverses using its own row's key, so a REVERSE row targeting THIS original
+  // is the one legitimate holder; any other holder owns a different obligation.
+  const queuedHolder = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", cmd.orgId).eq("idempotencyKey", cmd.idempotencyKey)
+    )
+    .unique();
+  if (
+    queuedHolder &&
+    !(queuedHolder.kind === "REVERSE" && queuedHolder.originalEventId === cmd.originalEventId)
+  ) {
+    throw new Error(
+      `Reversal idempotency key "${cmd.idempotencyKey}" is already held by queued outbox row ` +
+        `${queuedHolder._id} (${queuedHolder.kind}, ${queuedHolder.status}) for a different obligation ` +
+        `than the reversal of ${cmd.originalEventId} (SCRUM-515).`
+    );
   }
 
   // Validate the reversal date falls in an open period
