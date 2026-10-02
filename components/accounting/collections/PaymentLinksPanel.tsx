@@ -14,6 +14,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "@/components/ui/sonner";
 import { getLocalizedErrorMessage } from "@/lib/errors";
+import { interpolate } from "@/lib/i18n/interpolate";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { scaleForCurrency } from "../AccountingTabShared";
@@ -39,6 +40,7 @@ export function PaymentLinksPanel() {
   const formatCurrency = useCurrencyFormatter();
   const [createOpen, setCreateOpen] = useState(false);
   const [settleIntent, setSettleIntent] = useState<PaymentIntentRow | null>(null);
+  const [expireIntent, setExpireIntent] = useState<PaymentIntentRow | null>(null);
 
   const { results: paymentLinks, status: paymentLinkLoadStatus, loadMore: loadMorePaymentLinks } = usePaginatedQuery(
     api.paymentIntents.list,
@@ -95,6 +97,9 @@ export function PaymentLinksPanel() {
                       <Button size="sm" variant="outline" disabled={intent.status !== "PENDING"} onClick={() => setSettleIntent(intent)}>
                         {t("MarkSettled" as any)}
                       </Button>
+                      <Button size="sm" variant="outline" disabled={intent.status !== "PENDING"} onClick={() => setExpireIntent(intent)}>
+                        {t("ExpirePaymentLink" as any)}
+                      </Button>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -108,6 +113,7 @@ export function PaymentLinksPanel() {
       )}
       <CreatePaymentLinkDialog open={createOpen} onOpenChange={setCreateOpen} />
       <SettlePaymentLinkDialog intent={settleIntent} onOpenChange={(open) => !open && setSettleIntent(null)} />
+      <ExpirePaymentLinkDialog intent={expireIntent} onOpenChange={(open) => !open && setExpireIntent(null)} />
     </div>
   );
 }
@@ -268,8 +274,8 @@ function SettlePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
       idempotencyKeyRef.current = null;
       toast.success(t("PaymentLinkSettled" as any));
       handleOpenChange(false);
-    } catch {
-      toast.error(t("UnexpectedError" as any));
+    } catch (error) {
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setSubmitting(false);
     }
@@ -286,6 +292,47 @@ function SettlePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
         <DialogFooter>
           <Button variant="outline" onClick={() => handleOpenChange(false)}>{t("Cancel" as any)}</Button>
           <Button onClick={submit} disabled={submitting}>{submitting ? t("Saving" as any) : t("MarkSettled" as any)}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ExpirePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: PaymentIntentRow | null; onOpenChange: (open: boolean) => void }>) {
+  const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
+  const formatCurrency = useCurrencyFormatter();
+  const expirePaymentLink = useMutation(api.paymentIntents.expire);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function submit() {
+    if (!activeOrgId || !intent) return;
+    setSubmitting(true);
+    try {
+      await expirePaymentLink({ orgId: activeOrgId, intentId: intent._id });
+      toast.success(t("PaymentLinkExpired" as any));
+      onOpenChange(false);
+    } catch (error) {
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const amount = intent ? formatCurrency(intent.amountMinor / Math.pow(10, scaleForCurrency(intent.currency))) : "";
+
+  return (
+    <Dialog open={intent !== null} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("ExpirePaymentLinkTitle" as any)}</DialogTitle>
+          <DialogDescription>
+            {interpolate(t("ExpirePaymentLinkDescription" as any), { customer: intent?.customerName ?? "-", amount })}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>{t("Cancel" as any)}</Button>
+          <Button onClick={submit} disabled={submitting}>{t("ExpirePaymentLink" as any)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

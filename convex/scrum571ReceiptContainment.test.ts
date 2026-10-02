@@ -471,11 +471,93 @@ describe("SCRUM-571 S1 — pending payment links reserve the document's outstand
   });
 });
 
+// The PENDING happy path (expire frees the reservation) is covered above by
+// "expiring the first link frees its amount for the second".
+describe("SCRUM-571 S1 — paymentIntents.expire refusals are coded", () => {
+  test("a non-PENDING intent is refused with PAYMENT_LINK_NOT_PENDING and is not changed", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance, receivableDocumentId } = await seed(t);
+    const intentId = await asFinance.mutation(api.paymentIntents.create, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId,
+      customerId,
+      receivableDocumentId,
+      amountMinor: 100_000,
+      currency: "JOD",
+      provider: "tap",
+    });
+    await asFinance.mutation(api.paymentIntents.expire, { orgId, intentId });
+
+    expect(await codeOf(asFinance.mutation(api.paymentIntents.expire, { orgId, intentId }))).toBe(
+      "PAYMENT_LINK_NOT_PENDING"
+    );
+    const row = await t.run((ctx) => ctx.db.get(intentId));
+    expect(row?.status).toBe("EXPIRED");
+  });
+
+  test("a foreign-org or missing intent gets the same PAYMENT_LINK_NOT_FOUND refusal", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId, asFinance } = await seed(t);
+    const foreignIntentId = await t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() });
+      const otherCustomerId = await ctx.db.insert("customers", {
+        orgId: otherOrgId,
+        firstName: "Omar",
+        lastName: "Other",
+        phone: "+962790000001",
+      });
+      return await ctx.db.insert("paymentIntents", {
+        orgId: otherOrgId,
+        customerId: otherCustomerId,
+        amountMinor: 1,
+        currency: "JOD",
+        provider: "tap",
+        status: "PENDING",
+        idempotencyKey: "foreign-key",
+        createdBy: userId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    });
+    const missingIntentId = await t.run(async (ctx) => {
+      const id = await ctx.db.insert("paymentIntents", {
+        orgId,
+        customerId: (await ctx.db.query("customers").first())!._id,
+        amountMinor: 1,
+        currency: "JOD",
+        provider: "tap",
+        status: "PENDING",
+        idempotencyKey: "gone-key",
+        createdBy: userId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      await ctx.db.delete(id);
+      return id;
+    });
+
+    const foreign = await asFinance
+      .mutation(api.paymentIntents.expire, { orgId, intentId: foreignIntentId })
+      .catch((e: { data?: { code?: string; message?: string } }) => e.data);
+    const missing = await asFinance
+      .mutation(api.paymentIntents.expire, { orgId, intentId: missingIntentId })
+      .catch((e: { data?: { code?: string; message?: string } }) => e.data);
+
+    expect(foreign?.code).toBe("PAYMENT_LINK_NOT_FOUND");
+    // One message for both, so a foreign row is indistinguishable from a missing one.
+    expect(foreign).toEqual(missing);
+    const untouched = await t.run((ctx) => ctx.db.get(foreignIntentId));
+    expect(untouched?.status).toBe("PENDING");
+  });
+});
+
 describe("SCRUM-571 S1 — every new refusal is translated in both locales", () => {
   const codes = [
     "PAYMENT_LINK_TARGET_REQUIRED",
     "PAYMENT_LINK_EXCEEDS_OUTSTANDING",
     "PAYMENT_LINK_RECEIPT_MANUAL_REFUSED",
+    "PAYMENT_LINK_NOT_FOUND",
+    "PAYMENT_LINK_NOT_PENDING",
   ] as const;
 
   test.each(codes)("ServerError_%s exists in en and ar", (code) => {

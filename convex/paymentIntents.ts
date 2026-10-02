@@ -26,6 +26,9 @@ const PAYMENT_LINK_TARGET_REQUIRED_MESSAGE =
   "A payment link must be created against a specific receivable, sale or receivable document. Nothing has been changed.";
 const PAYMENT_LINK_EXCEEDS_OUTSTANDING_MESSAGE =
   "The payment link amount cannot exceed what is still owed on this debt, less payment links already sent and not yet paid. Expiring an unpaid link frees its amount. Nothing has been changed.";
+const PAYMENT_LINK_NOT_FOUND_MESSAGE = "This payment link could not be found. Nothing has been changed.";
+const PAYMENT_LINK_NOT_PENDING_MESSAGE =
+  "Only a payment link that is still waiting for payment can be expired. Nothing has been changed.";
 
 const statusValidator = v.union(
   v.literal("PENDING"),
@@ -587,9 +590,13 @@ export const expire = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
     const intent = await ctx.db.get(args.intentId);
-    if (!intent || intent.orgId !== args.orgId) throw new ConvexError("Payment intent not found.");
+    // One message for a missing row and another org's row: never disclose that a
+    // foreign tenant's payment link exists.
+    if (!intent || intent.orgId !== args.orgId) {
+      throwAppError(AppErrorCode.PAYMENT_LINK_NOT_FOUND, PAYMENT_LINK_NOT_FOUND_MESSAGE);
+    }
     if (intent.status !== "PENDING") {
-      throw new ConvexError(`Cannot expire a ${intent.status} payment intent.`);
+      throwAppError(AppErrorCode.PAYMENT_LINK_NOT_PENDING, PAYMENT_LINK_NOT_PENDING_MESSAGE);
     }
 
     await ctx.db.patch(args.intentId, {

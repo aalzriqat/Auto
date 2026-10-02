@@ -114,6 +114,14 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "The payment link amount cannot exceed what is still owed on this debt, less payment links already sent and not yet paid. Expiring an unpaid link frees its amount. Nothing has been changed.",
     "لا يمكن أن يتجاوز مبلغ رابط الدفع ما تبقى مستحقاً على هذه الذمة بعد خصم روابط الدفع التي أُرسلت ولم تُسدَّد بعد. ويؤدي إنهاء صلاحية رابط غير مدفوع إلى تحرير مبلغه. لم يتم تغيير أي شيء.",
   ],
+  ServerError_PAYMENT_LINK_NOT_FOUND: [
+    "This payment link could not be found. Nothing has been changed.",
+    "تعذّر العثور على رابط الدفع هذا. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_NOT_PENDING: [
+    "Only a payment link that is still waiting for payment can be expired. Nothing has been changed.",
+    "لا يمكن إنهاء صلاحية إلا رابط دفع ما زال بانتظار السداد. لم يتم تغيير أي شيء.",
+  ],
   ServerError_PAYMENT_LINK_RECEIPT_MANUAL_REFUSED: [
     "A payment-link receipt cannot be recorded manually. It is recorded automatically when the payment link is settled. Nothing has been changed.",
     "لا يمكن تسجيل قبض رابط الدفع يدويًا، إذ يُسجَّل تلقائيًا عند تسوية رابط الدفع. لم يتم تغيير أي شيء.",
@@ -889,6 +897,11 @@ export const commonEn = {
   ExternalSettlementId: "External settlement ID",
   PaymentLinkCreated: "Payment link recorded.",
   PaymentLinkSettled: "Payment link settled.",
+  ExpirePaymentLink: "Expire link",
+  ExpirePaymentLinkTitle: "Expire this payment link?",
+  ExpirePaymentLinkDescription:
+    "The payment link for {customer} ({amount}) will stop accepting payment. Its amount is freed so a new link can be issued.",
+  PaymentLinkExpired: "Payment link expired.",
   LoadingPaymentLinks: "Loading payment links...",
   NoPaymentLinksFound: "No payment links found.",
   OpenCashDrawer: "Open Cash Drawer",
@@ -1846,6 +1859,11 @@ export const commonAr = {
   ExternalSettlementId: "معرف التسوية الخارجي",
   PaymentLinkCreated: "تم تسجيل رابط الدفع.",
   PaymentLinkSettled: "تمت تسوية رابط الدفع.",
+  ExpirePaymentLink: "إنهاء صلاحية الرابط",
+  ExpirePaymentLinkTitle: "هل تريد إنهاء صلاحية رابط الدفع هذا؟",
+  ExpirePaymentLinkDescription:
+    "سيتوقف رابط الدفع الخاص بـ {customer} ({amount}) عن قبول الدفعات، ويُحرَّر مبلغه لإصدار رابط جديد.",
+  PaymentLinkExpired: "تم إنهاء صلاحية رابط الدفع.",
   LoadingPaymentLinks: "جاري تحميل روابط الدفع...",
   NoPaymentLinksFound: "لا توجد روابط دفع.",
   OpenCashDrawer: "فتح صندوق النقد",
