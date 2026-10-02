@@ -120,9 +120,12 @@ async function assertAssetEventDate(
   // Whole UTC days, so the SAME day is allowed on purpose. The dispose UI sends 00:00 UTC,
   // depreciation is dated around 03:00 UTC and an impairment at Date.now(), so a view
   // sorted by occurredAt can show a same-day disposal before that day's depreciation.
-  // Day and period totals are unaffected. The refusal names the same UTC day it compared against.
+  // An unrepresentable stored bound (NaN, fractional, outside the Date range) is ignored, as a
+  // non-finite one always was. No current writer can store one, and legacy production rows are
+  // wiped at go-live, so nothing depends on it. Day and period totals are unaffected.
+  // The refusal names the same UTC day it compared against.
   for (const [boundAt, code] of bounds) {
-    if (boundAt !== undefined && Number.isFinite(boundAt) && day < utcDay(boundAt)) refuseAssetDateOn(code, utcDateLabel(boundAt));
+    if (boundAt !== undefined && isRepresentableTimestamp(boundAt) && day < utcDay(boundAt)) refuseAssetDateOn(code, utcDateLabel(boundAt));
   }
 }
 
@@ -580,6 +583,12 @@ export const depreciateAssetForMonth = internalMutation({
     // replay still reaches that skip. Thrown, not a counted skip: a caller/data
     // bug whose throw rolls back before any patch or ledger write.
     assertMonthClaim({ yearMonth: args.yearMonth, occurredAt: args.occurredAt });
+    // Every fixedAssetEvents.occurredAt must be a representable whole-ms instant: the date
+    // guard reads the latest event per type by index order and relies on it. Internal and
+    // cron-only, so a plain Error in the month-claim style, thrown before any write.
+    if (!isRepresentableTimestamp(args.occurredAt)) {
+      throw new Error("Month claim refused: occurredAt is not a whole-millisecond timestamp");
+    }
     // Lexicographic comparison is safe for "YYYY-MM" strings. Equality alone
     // (the old check) only blocked re-running the *same* month — it let a
     // stale/earlier month slip through as a genuine second posting (its

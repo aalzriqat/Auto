@@ -23,9 +23,11 @@ export function isFutureUtcDay(ms: number, nowMs: number): boolean {
 /**
  * The UTC calendar date of an instant as "YYYY-MM-DD", for refusals that name a boundary day.
  * Built from the UTC parts, not `toISOString().slice(0, 10)`, which is wrong for years outside 0000-9999.
+ * The date comes from `utcDay(ms)`, the day the guards compare, so a fractional instant before 1970
+ * (where the Date constructor truncates toward zero) is labelled with the day `utcDay` floors to.
  */
 export function utcDateLabel(ms: number): string {
-  const date = new Date(ms);
+  const date = new Date(utcDay(ms) * DAY_MS);
   const year = date.getUTCFullYear();
   const yyyy = `${year < 0 ? "-" : ""}${String(Math.abs(year)).padStart(4, "0")}`;
   const mm = String(date.getUTCMonth() + 1).padStart(2, "0");

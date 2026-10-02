@@ -7,7 +7,7 @@
  * depreciation cron for the same month never double-posts.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
@@ -1142,6 +1142,9 @@ describe("SCRUM-561 - utcDateLabel", () => {
     [Date.UTC(2026, 9, 2, 23, 59, 59, 999), "2026-10-02"],
     [Date.UTC(2026, 9, 3, 0, 0, 0, 0), "2026-10-03"],
     [-1, "1969-12-31"],
+    [-0.1, "1969-12-31"], // a fractional instant before 1970 is labelled with the day utcDay floors to
+    [-8_640_000_000_000_000, "-271821-04-20"],
+    [8_640_000_000_000_000, "275760-09-13"],
   ])("%s renders as %s", async (ms, label) => {
     const { utcDateLabel } = await import("./utils/ledgerCalendar");
     expect(utcDateLabel(ms)).toBe(label);
@@ -1153,6 +1156,13 @@ const isoDay = (ms: number) => new Date(utcDayStart(ms)).toISOString().slice(0, 
 describe("SCRUM-561 - date refusals name the UTC day they enforced", () => {
   const D = utcDayStart(Date.now()) - 30 * DAY_MS;
   const H = 3_600_000;
+  afterEach(() => vi.useRealTimers());
+  // The clock is pinned to the last millisecond of a UTC day so the "today" label cannot flake at midnight.
+  const PINNED_NOW = Date.UTC(2026, 9, 2, 23, 59, 59, 999);
+  const pinClock = () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(PINNED_NOW);
+  };
   type Refusal = { code: string; message: string; earliestDate?: string; today?: string };
 
   /** A capitalized asset (cost 600_000, 60 months) bought at `purchaseDate`. */
@@ -1250,21 +1260,37 @@ describe("SCRUM-561 - date refusals name the UTC day they enforced", () => {
     expect((await footprint(legacy, assetId)).asset?.status).toBe("DISPOSED");
   });
 
+  test("an unrepresentable stored bound is ignored, never a NaN refusal", async () => {
+    const seed = await seedAssetDealer();
+    const assetId = await seed.t.run((ctx) =>
+      ctx.db.insert("fixedAssets", { orgId: seed.orgId, name: "Legacy bad date", purchaseDate: 8_640_000_000_000_001, costMinor: 600_000, status: "ACTIVE" })
+    );
+    const legacy = { ...seed, assetId };
+    await dispose(legacy, D);
+    expect((await footprint(legacy, assetId)).asset?.status).toBe("DISPOSED");
+    const events = await seed.t.run((ctx) => ctx.db.query("fixedAssetEvents").withIndex("by_asset", (q) => q.eq("assetId", assetId)).collect());
+    expect(events.map((e) => e.type)).toEqual(["DISPOSE"]);
+  });
+
   test.each(["impair", "dispose"] as const)("IN_FUTURE (%s) names today's UTC day", async (operation) => {
     const seed = await seedAsset(D + H);
-    const future = Date.now() + 2 * DAY_MS;
+    pinClock();
+    const future = PINNED_NOW + 2 * DAY_MS;
     const data = await refusal(operation === "impair" ? impair(seed, future) : dispose(seed, future));
-    expectDated(data, "ASSET_EVENT_DATE_IN_FUTURE", "today", Date.now());
+    expectDated(data, "ASSET_EVENT_DATE_IN_FUTURE", "today", PINNED_NOW);
+    expect(data.today).toBe("2026-10-02");
   });
 
   test("capitalize IN_FUTURE names today's UTC day", async () => {
     const seed = await seedAssetDealer();
+    pinClock();
     const data = await refusal(
       seed.asOwner.mutation(api.fixedAssets.capitalize, {
-        idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, name: "Future", purchaseDate: Date.now() + 2 * DAY_MS, costMinor: 600_000, usefulLifeMonths: 60,
+        idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, name: "Future", purchaseDate: PINNED_NOW + 2 * DAY_MS, costMinor: 600_000, usefulLifeMonths: 60,
       })
     );
-    expectDated(data, "ASSET_PURCHASE_DATE_IN_FUTURE", "today", Date.now());
+    expectDated(data, "ASSET_PURCHASE_DATE_IN_FUTURE", "today", PINNED_NOW);
+    expect(data.today).toBe("2026-10-02");
   });
 });
 
@@ -1320,5 +1346,30 @@ describe("SCRUM-561 - the placeholder is filled in the user's language", () => {
       expect(text).not.toContain("{");
     }
     expect(ar).toMatch(/[؀-ۿ]/);
+  });
+});
+
+describe("SCRUM-561 - depreciateAssetForMonth stores only whole-millisecond instants", () => {
+  async function counts(seed: Seed) {
+    return seed.t.run(async (ctx) => ({
+      events: (await ctx.db.query("fixedAssetEvents").collect()).length,
+      journals: (await ctx.db.query("journalEntries").collect()).length,
+    }));
+  }
+  const post = (seed: Seed & { assetId: Id<"fixedAssets"> }, occurredAt: number) =>
+    seed.t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
+      orgId: seed.orgId, assetId: seed.assetId, yearMonth: "2026-01", occurredAt, systemActorId: seed.userId,
+    });
+
+  test("a fractional occurredAt inside the month is refused and writes nothing", async () => {
+    const seed = await seedCapitalizedAsset();
+    const before = await counts(seed);
+    await expect(post(seed, monthMid("2026-01") + 0.5)).rejects.toThrow(/whole-millisecond/);
+    expect(await counts(seed)).toEqual(before);
+  });
+
+  test("CONTROL: the whole-millisecond instant still posts", async () => {
+    const seed = await seedCapitalizedAsset();
+    expect(await post(seed, monthMid("2026-01"))).toMatchObject({ posted: true });
   });
 });
