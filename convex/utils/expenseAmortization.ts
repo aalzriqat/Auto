@@ -101,17 +101,28 @@ export function firstOfferableMonthIndex(input: {
   startAt?: number;
   createdAt: number;
 }): number {
-  let first = yearMonthIndex(input.createdAt);
-  if (input.startAt !== undefined) first = Math.max(first, yearMonthIndex(input.startAt));
-  if (input.lastPostedYearMonth) first = Math.max(first, yearMonthStringIndex(input.lastPostedYearMonth) + 1);
   // Math.max(x, NaN) is NaN, and NaN poisons both callers: the cron's
   // `idx <= currentIdx` loop never runs (the item is silently counted done) and the
   // recognition mutation's `< floor` guard silently passes. An unrepresentable input
-  // is refused loudly - never "nothing to do", never "no floor".
-  if (!Number.isFinite(first)) {
-    throw new Error(
-      "first offerable month is not representable: createdAt, startAt or lastPostedYearMonth is malformed or out of range"
-    );
+  // is refused loudly - never "nothing to do", never "no floor" - and the error names
+  // the FIRST offending input so the failure row is actionable.
+  const refuse = (inputName: string): never => {
+    throw new Error(`first offerable month is not representable: ${inputName} is malformed or out of range`);
+  };
+  let first = yearMonthIndex(input.createdAt);
+  if (!Number.isFinite(first)) refuse("createdAt");
+  if (input.startAt !== undefined) {
+    const startIdx = yearMonthIndex(input.startAt);
+    if (!Number.isFinite(startIdx)) refuse("startAt");
+    first = Math.max(first, startIdx);
+  }
+  if (input.lastPostedYearMonth) {
+    // "YYYY-M" stays accepted (legacy leniency); the month itself must be 1..12, so an
+    // impossible "2026-13" cannot silently floor the schedule into a later year.
+    const match = /^(\d{4})-(\d{1,2})$/.exec(input.lastPostedYearMonth);
+    const month = match ? Number(match[2]) : Number.NaN;
+    if (!match || month < 1 || month > 12) refuse("lastPostedYearMonth");
+    first = Math.max(first, yearMonthStringIndex(input.lastPostedYearMonth) + 1);
   }
   return first;
 }
