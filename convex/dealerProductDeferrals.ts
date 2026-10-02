@@ -18,6 +18,7 @@
 // a cycle, so it goes above every local import.
 import { orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { internalQuery } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { fiCommissionRecognizedKey, hookFiCommissionRecognized } from "./accounting/workflowHooks";
@@ -52,6 +53,10 @@ export const listActiveDeferralsForRecognition = internalQuery({
     return { ...result, page };
   },
 });
+
+function refuseRecognition(deferralId: Id<"dealerProductDeferrals">, why: string): never {
+  throw new Error(`F&I recognition refused for deferral ${deferralId}: ${why}`);
+}
 
 /**
  * Every reason recognizeDeferredCommissionForMonth can decline to post. crons.ts
@@ -102,23 +107,27 @@ export const recognizeDeferredCommissionForMonth = internalMutation({
     // `lastPostedYearMonth` — replay of an already-recognized month keeps its
     // benign `not_after_last_recognized_month` return below.
     const sale = await ctx.db.get(deferral.saleId);
-    const refuse = (why: string): never => {
-      throw new Error(`F&I recognition refused for deferral ${args.deferralId}: ${why}`);
-    };
-    if (!sale) refuse("owning sale is missing");
-    else if (sale.orgId !== deferral.orgId) refuse("owning sale belongs to another organization");
-    else if (!Number.isFinite(yearMonthIndex(sale.saleDate))) refuse("owning sale has no valid sale date");
-    else if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(args.yearMonth)) refuse("yearMonth is not YYYY-MM");
-    else if (
+    if (!sale) refuseRecognition(args.deferralId, "owning sale is missing");
+    if (sale.orgId !== deferral.orgId) {
+      refuseRecognition(args.deferralId, "owning sale belongs to another organization");
+    }
+    if (!Number.isFinite(yearMonthIndex(sale.saleDate))) {
+      refuseRecognition(args.deferralId, "owning sale has no valid sale date");
+    }
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(args.yearMonth)) {
+      refuseRecognition(args.deferralId, "yearMonth is not YYYY-MM");
+    }
+    if (
       yearMonthStringIndex(args.yearMonth) <
       firstOfferableMonthIndex({ startAt: sale.saleDate, createdAt: deferral.createdAt })
     ) {
-      refuse(`${args.yearMonth} precedes the sale's accounting month`);
-    } else if (
+      refuseRecognition(args.deferralId, `${args.yearMonth} precedes the sale's accounting month`);
+    }
+    if (
       !Number.isFinite(args.occurredAt) ||
       yearMonthIndex(args.occurredAt) !== yearMonthStringIndex(args.yearMonth)
     ) {
-      refuse(`occurredAt is not within ${args.yearMonth}`);
+      refuseRecognition(args.deferralId, `occurredAt is not within ${args.yearMonth}`);
     }
 
     // Lexicographic comparison is safe for "YYYY-MM" strings. Equality alone
