@@ -71,24 +71,24 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "التاريخ المحاسبي غير صالح.",
   ],
   ServerError_ASSET_EVENT_DATE_IN_FUTURE: [
-    "The accounting date cannot be later than today.",
-    "لا يجوز أن يكون التاريخ المحاسبي لاحقاً لتاريخ اليوم.",
+    "The accounting date cannot be later than today ({today}, UTC).",
+    "لا يجوز أن يكون التاريخ المحاسبي لاحقاً لتاريخ اليوم ({today} بالتوقيت العالمي UTC).",
   ],
   ServerError_ASSET_EVENT_BEFORE_CAPITALIZATION: [
-    "The accounting date cannot be earlier than the day the asset was capitalized.",
-    "لا يجوز أن يكون التاريخ المحاسبي سابقاً ليوم رسملة الأصل.",
+    "The accounting date cannot be earlier than the day the asset was capitalized. The earliest allowed date is {earliestDate} (UTC).",
+    "لا يجوز أن يكون التاريخ المحاسبي سابقاً ليوم رسملة الأصل. أول تاريخ مسموح به هو {earliestDate} (بالتوقيت العالمي UTC).",
   ],
   ServerError_ASSET_EVENT_BEFORE_DEPRECIATION: [
-    "The accounting date cannot be earlier than the asset's latest posted depreciation.",
-    "لا يجوز أن يكون التاريخ المحاسبي سابقاً لآخر إهلاك تم ترحيله للأصل.",
+    "The accounting date cannot be earlier than the asset's latest posted depreciation. The earliest allowed date is {earliestDate} (UTC).",
+    "لا يجوز أن يكون التاريخ المحاسبي سابقاً لآخر إهلاك تم ترحيله للأصل. أول تاريخ مسموح به هو {earliestDate} (بالتوقيت العالمي UTC).",
   ],
   ServerError_ASSET_EVENT_BEFORE_IMPAIRMENT: [
-    "The accounting date cannot be earlier than the day the asset was impaired.",
-    "لا يجوز أن يكون التاريخ المحاسبي سابقاً ليوم تسجيل انخفاض قيمة الأصل.",
+    "The accounting date cannot be earlier than the day the asset was impaired. The earliest allowed date is {earliestDate} (UTC).",
+    "لا يجوز أن يكون التاريخ المحاسبي سابقاً ليوم تسجيل انخفاض قيمة الأصل. أول تاريخ مسموح به هو {earliestDate} (بالتوقيت العالمي UTC).",
   ],
   ServerError_ASSET_PURCHASE_DATE_IN_FUTURE: [
-    "The purchase date cannot be after today.",
-    "لا يجوز أن يكون تاريخ الشراء لاحقاً لتاريخ اليوم.",
+    "The purchase date cannot be after today ({today}, UTC).",
+    "لا يجوز أن يكون تاريخ الشراء لاحقاً لتاريخ اليوم ({today} بالتوقيت العالمي UTC).",
   ],
   ServerError_ASSET_PURCHASE_DATE_INVALID: [
     "The purchase date is not a valid date.",
