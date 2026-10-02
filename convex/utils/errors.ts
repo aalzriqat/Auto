@@ -52,6 +52,10 @@ export const AppErrorCode = {
   // SCRUM-528. `finalizeDeal` builds the sale only from quote economics that still agree with
   // the pricing frozen on the finance application; a disagreement refuses before any write.
   QUOTE_ECONOMICS_DRIFTED: "QUOTE_ECONOMICS_DRIFTED",
+  // SCRUM-533. `createFromQuote` admits a finance application only from a quote whose figures equal
+  // its own saved pricing snapshot (finalize's top-level anchor, SCRUM-528, plus a create-only
+  // monthlyInstallment check); refused before any write.
+  QUOTE_PRICING_SNAPSHOT_MISMATCH: "QUOTE_PRICING_SNAPSHOT_MISMATCH",
   // SCRUM-239. Returning a cleared finance-company cheque from the deal; each
   // refusal is raised before the first write and is translated under
   // ServerError_<code>.

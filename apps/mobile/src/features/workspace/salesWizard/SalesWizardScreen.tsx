@@ -27,6 +27,7 @@ import { useLocale } from "../../../providers/LocaleProvider";
 import { type AppTheme } from "../../../theme";
 import { useAppTheme, useThemedStyles } from "../../../providers/ThemeProvider";
 import { compactInitials } from "../nativeModules";
+import { useApplicationCreateError } from "../applicationCreateError";
 import { useCommandIdentity, money, parseOptionalNumber, useGenericError, SearchInput, SelectField } from "../modules/moduleShared";
 import {
   calculateUnifiedMurabaha,
@@ -150,6 +151,7 @@ export function SalesWizardScreen({
   const styles = useThemedStyles(makeStyles);
   const { locale, textDirection } = useLocale();
   const reportError = useGenericError();
+  const reportApplicationError = useApplicationCreateError();
   const isCash = paymentType === "CASH";
   const accent = accentColor(paymentType, theme.colors);
 
@@ -694,7 +696,7 @@ export function SalesWizardScreen({
       await createApplication({ orgId, quoteId });
       setApplicationStarted(true);
     } catch (error) {
-      reportError("Mobile wizard application failed", error);
+      reportApplicationError("Mobile wizard application failed", error);
     } finally {
       setSaving(false);
     }

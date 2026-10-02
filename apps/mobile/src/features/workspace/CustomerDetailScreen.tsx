@@ -1,4 +1,5 @@
 import { useAuth } from "@clerk/expo";
+import { useApplicationCreateError } from "./applicationCreateError";
 import { useMutation, useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
@@ -44,6 +45,7 @@ export function CustomerDetailScreen({
   const router = useRouter();
   const { locale, t } = useLocale();
   const reportError = useGenericError();
+  const reportApplicationError = useApplicationCreateError();
   const styles = useStyles();
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const canQuery = isLoaded && isSignedIn && Boolean(orgId) && Boolean(customerId);
@@ -334,7 +336,7 @@ export function CustomerDetailScreen({
       await createApplication({ orgId, quoteId });
       Alert.alert(locale === "ar" ? "تم إنشاء طلب التمويل." : "Finance application created.");
     } catch (error) {
-      reportError("Mobile application create failed", error);
+      reportApplicationError("Mobile application create failed", error);
     }
   }
 

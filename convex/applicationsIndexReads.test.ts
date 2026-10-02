@@ -91,6 +91,29 @@ async function seedQuote(
       monthlyInstallment: 500,
       ...(args.companyId ? { companyId: args.companyId, mode: "CONFIGURED_FINANCE_COMPANY" as const } : {}),
       ...(args.totalFinancedAmount !== undefined ? { totalFinancedAmount: args.totalFinancedAmount } : {}),
+      // SCRUM-533: a financed quote carries the pricing snapshot `saveQuote` would have frozen; its
+      // figures equal the quote's own (createFromQuote refuses any disagreement).
+      ...(args.companyId && args.totalFinancedAmount !== undefined
+        ? {
+            customerQuotePricingSnapshot: {
+              currency: "JOD",
+              vehiclePrice: 22000,
+              downPayment: 2000,
+              termMonths: 48,
+              executionFees: 0,
+              commission: 0,
+              profitRate: 5,
+              insuranceRate: 0,
+              gracePeriodMonths: 0,
+              includesCommissionInDebt: false,
+              totalFinancedAmount: args.totalFinancedAmount,
+              totalContractValue: args.totalFinancedAmount,
+              monthlyInstallment: 500,
+              totalProfit: 0,
+              takafulAmount: 0,
+            },
+          }
+        : {}),
     })
   );
 }

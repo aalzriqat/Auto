@@ -32,7 +32,7 @@ import { downloadElementAsPdf } from "@/lib/htmlToPdf";
 import { QuoteDepositManager } from "@/components/deposits/QuoteDepositManager";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
-import { getErrorMessage } from "@/lib/errors";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 import { buildWhatsAppDeepLink } from "@/lib/whatsappDeepLink";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { translateLeadSourceLabel } from "@/lib/i18n/defaultLabels";
@@ -476,7 +476,7 @@ export function CustomerDetailsDialog({
                                 });
                                 toast.success(t("ApplicationCreatedSuccess" as any));
                               } catch (error) {
-                                toast.error(getErrorMessage(error));
+                                toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
                               }
                             }}
                           >
