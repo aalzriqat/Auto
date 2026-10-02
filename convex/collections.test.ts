@@ -576,15 +576,17 @@ describe("Collections", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
-    const postedBefore = await t.run((ctx) =>
-      ctx.db
-        .query("accountingEvents")
-        .withIndex("by_org_source", (q) =>
-          q.eq("orgId", orgId).eq("sourceType", "receivables").eq("sourceId", receivableId.toString())
+    const postedBefore =
+      (
+        await t.run((ctx) =>
+          ctx.db
+            .query("accountingEvents")
+            .withIndex("by_org_source", (q) =>
+              q.eq("orgId", orgId).eq("sourceType", "receivables").eq("sourceId", receivableId.toString())
+            )
+            .collect()
         )
-        .filter((q) => q.eq(q.field("eventType"), "RECEIVABLE_CREATED"))
-        .first()
-    );
+      ).find((e) => e.eventType === "RECEIVABLE_CREATED") ?? null;
     expect(postedBefore?.status).toBe("POSTED");
 
     const requestId = await asFinance.mutation(api.collections.requestApproval, {

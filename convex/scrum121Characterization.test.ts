@@ -1142,11 +1142,12 @@ describe("SCRUM-121A — Codex F2, validated independently", () => {
       // Not cancelled, and the money is untouched: the refusal is a zero-delta,
       // not a partial cancellation that stopped halfway.
       expect(doc?.status).not.toBe("CANCELLED");
-      const allocs = await ctx.db
-        .query("paymentAllocations")
-        .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
-        .filter((q) => q.eq(q.field("status"), "ACTIVE"))
-        .collect();
+      const allocs = (
+        await ctx.db
+          .query("paymentAllocations")
+          .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
+          .collect()
+      ).filter((a) => a.status === "ACTIVE");
       expect(allocs).toHaveLength(1);
       expect(allocs[0]!.amountMinor).toBe(400_000);
       // The approval request itself rolled back with everything else — the
@@ -1445,11 +1446,12 @@ describe("SCRUM-121A — c16581 evidence fixtures", () => {
     const allocationId = await t.run(async (ctx) => {
       const doc = await ctx.db.get(docId);
       expect(doc?.status).toBe("CANCELLED");
-      const allocs = await ctx.db
-        .query("paymentAllocations")
-        .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
-        .filter((q) => q.eq(q.field("status"), "ACTIVE"))
-        .collect();
+      const allocs = (
+        await ctx.db
+          .query("paymentAllocations")
+          .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
+          .collect()
+      ).filter((a) => a.status === "ACTIVE");
       expect(allocs).toHaveLength(1);
       return allocs[0]!._id as Id<"paymentAllocations">;
     });
@@ -1690,12 +1692,13 @@ describe("SCRUM-121A — c16581 evidence fixtures", () => {
 
     const statusAfter = async () => (await t.run((ctx) => ctx.db.get(docId)))?.status;
     const activeCount = async () =>
-      (await t.run((ctx) =>
-        ctx.db
-          .query("paymentAllocations")
-          .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
-          .filter((q) => q.eq(q.field("status"), "ACTIVE"))
-          .collect()
+      (await t.run(async (ctx) =>
+        (
+          await ctx.db
+            .query("paymentAllocations")
+            .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
+            .collect()
+        ).filter((a) => a.status === "ACTIVE")
       )).length;
 
     expect(await statusAfter()).toBe("PAID");
@@ -1909,7 +1912,7 @@ describe("SCRUM-121A — EV6, the withdrawn payer", () => {
     await t.run(async (ctx) => {
       const role = await ctx.db
         .query("roles")
-        .filter((q) => q.eq(q.field("orgId"), orgId))
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
         .first();
       await ctx.db.patch(role!._id, {
         permissions: [...role!.permissions, "delete:customers"],
@@ -2123,11 +2126,12 @@ describe("SCRUM-121A — Codex R3 findings, validated independently", () => {
     await t.run(async (ctx) => {
       const doc = await ctx.db.get(docId);
       expect(doc?.status).toBe("PAID");
-      const allocs = await ctx.db
-        .query("paymentAllocations")
-        .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
-        .filter((q) => q.eq(q.field("status"), "ACTIVE"))
-        .collect();
+      const allocs = (
+        await ctx.db
+          .query("paymentAllocations")
+          .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
+          .collect()
+      ).filter((a) => a.status === "ACTIVE");
       expect(allocs).toHaveLength(1);
     });
 
@@ -2139,11 +2143,12 @@ describe("SCRUM-121A — Codex R3 findings, validated independently", () => {
     await t.run(async (ctx) => {
       const doc = await ctx.db.get(docId);
       expect(doc?.status).toBe("CANCELLED");
-      const allocs = await ctx.db
-        .query("paymentAllocations")
-        .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
-        .filter((q) => q.eq(q.field("status"), "ACTIVE"))
-        .collect();
+      const allocs = (
+        await ctx.db
+          .query("paymentAllocations")
+          .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
+          .collect()
+      ).filter((a) => a.status === "ACTIVE");
       // CANCELLED + ACTIVE on the finance side. The planned reversal guard
       // would make this permanently uncorrectable.
       expect(allocs).toHaveLength(1);
@@ -2199,11 +2204,12 @@ describe("SCRUM-121A — Codex R3 findings, validated independently", () => {
       const row = await ctx.db.get(receivableId);
       expect(row?.outstandingAmount).toBe(600);
       const docId = row!.canonicalReceivableDocumentId!;
-      const allocs = await ctx.db
-        .query("paymentAllocations")
-        .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
-        .filter((q) => q.eq(q.field("status"), "ACTIVE"))
-        .collect();
+      const allocs = (
+        await ctx.db
+          .query("paymentAllocations")
+          .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
+          .collect()
+      ).filter((a) => a.status === "ACTIVE");
       expect(allocs).toHaveLength(1);
       expect(allocs[0]!.amountMinor).toBe(400_000);
     });
@@ -2498,7 +2504,7 @@ describe("SCRUM-121A-PRE — Codex R4 findings, validated independently", () => 
     const { orgId, userId, customerId, asFinance } = await seedFinanceMember(t);
 
     await t.run(async (ctx) => {
-      const role = await ctx.db.query("roles").filter((q) => q.eq(q.field("orgId"), orgId)).first();
+      const role = await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
       await ctx.db.patch(role!._id, {
         permissions: [...role!.permissions, "create:finance_application", "finalize:financed_deal"],
       });
@@ -2581,11 +2587,12 @@ describe("SCRUM-121A-PRE — Codex R4 findings, validated independently", () => 
     await t.run(async (ctx) => {
       const doc = await ctx.db.get(docId);
       expect(doc?.status).not.toBe("CANCELLED");
-      const allocs = await ctx.db
-        .query("paymentAllocations")
-        .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
-        .filter((q) => q.eq(q.field("status"), "ACTIVE"))
-        .collect();
+      const allocs = (
+        await ctx.db
+          .query("paymentAllocations")
+          .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
+          .collect()
+      ).filter((a) => a.status === "ACTIVE");
       expect(allocs).toHaveLength(1);
       expect(allocs[0]!.amountMinor).toBe(10_000_000);
       // The application is untouched too. The gate is hoisted above every write
@@ -2722,7 +2729,7 @@ describe("SCRUM-121A-PRE — Codex R5 findings, validated independently", () => 
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     await t.run(async (ctx) => {
-      const role = await ctx.db.query("roles").filter((q) => q.eq(q.field("orgId"), orgId)).first();
+      const role = await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
       await ctx.db.patch(role!._id, {
         permissions: [...role!.permissions, "delete:customers"],
       });
@@ -2994,7 +3001,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     // is reached on its merits rather than by falling out at the permission
     // check — which would make this test pass without exercising the gate.
     await t.run(async (ctx) => {
-      const role = await ctx.db.query("roles").filter((q) => q.eq(q.field("orgId"), orgId)).first();
+      const role = await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
       await ctx.db.patch(role!._id, {
         permissions: [...role!.permissions, "create:finance_application", "finalize:financed_deal"],
       });
@@ -3029,10 +3036,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     const docId = await t.run(async (ctx) => {
       const { createReceivableDocument, createCanonicalPayment, allocatePaymentToReceivable } =
         await import("./subledger");
-      const company = await ctx.db
-        .query("financeCompanies")
-        .filter((q) => q.eq(q.field("orgId"), orgId))
-        .first();
+      const company = (await ctx.db.query("financeCompanies").collect()).find((c) => c.orgId === orgId) ?? null;
       const id = await createReceivableDocument(ctx as never, {
         orgId, documentType: "INVOICE", payerType: "FINANCE_COMPANY",
         financeCompanyId: company!._id, customerId,
@@ -3072,10 +3076,9 @@ describe("SCRUM-121A-PRE — verification floor", () => {
       // reversed is still COMPLETED.
       expect((await ctx.db.get(app!.finalizedSaleId!))?.status).toBe("COMPLETED");
       // …and the idempotency STARTED row rolled back with everything else.
-      const started = await ctx.db
-        .query("commandIdempotency")
-        .filter((q) => q.eq(q.field("orgId"), orgId))
-        .collect();
+      const started = (await ctx.db.query("commandIdempotency").collect()).filter(
+        (r) => r.orgId === orgId
+      );
       expect(started).toHaveLength(0);
     });
   });
@@ -3093,7 +3096,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     const { orgId, userId, customerId, asFinance } = await seedFinanceMember(t);
 
     await t.run(async (ctx) => {
-      const role = await ctx.db.query("roles").filter((q) => q.eq(q.field("orgId"), orgId)).first();
+      const role = await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
       await ctx.db.patch(role!._id, {
         permissions: [...role!.permissions, "create:finance_application", "finalize:financed_deal"],
       });
@@ -3321,7 +3324,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     const { orgId, userId, customerId, asFinance } = await seedFinanceMember(t);
 
     await t.run(async (ctx) => {
-      const role = await ctx.db.query("roles").filter((q) => q.eq(q.field("orgId"), orgId)).first();
+      const role = await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
       await ctx.db.patch(role!._id, {
         permissions: [...role!.permissions, "create:finance_application", "finalize:financed_deal"],
       });

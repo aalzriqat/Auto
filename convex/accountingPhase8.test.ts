@@ -121,11 +121,12 @@ describe("Phase 8 — sale cancellation reversal", () => {
       idempotencyKey: "cancel_sale_001",
     });
 
-    const beforeEvents = await t.run((ctx) =>
-      ctx.db.query("accountingEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "SALE_COMPLETED"))
-        .collect()
+    const beforeEvents = await t.run(async (ctx) =>
+      (
+        await ctx.db.query("accountingEvents")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
+      ).filter((e) => e.eventType === "SALE_COMPLETED")
     );
     expect(beforeEvents).toHaveLength(1);
     expect(beforeEvents[0].status).toBe("POSTED");
@@ -135,11 +136,12 @@ describe("Phase 8 — sale cancellation reversal", () => {
 
     await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
 
-    const reversalEvents = await t.run((ctx) =>
-      ctx.db.query("accountingEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "JOURNAL_REVERSAL"))
-        .collect()
+    const reversalEvents = await t.run(async (ctx) =>
+      (
+        await ctx.db.query("accountingEvents")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
+      ).filter((e) => e.eventType === "JOURNAL_REVERSAL")
     );
     expect(reversalEvents).toHaveLength(1);
 
@@ -337,11 +339,12 @@ describe("Phase 8 — payment intent settlement", () => {
     expect(canonicalPayment?.provider).toBe("tap");
     expect(canonicalPayment?.providerTransactionId).toBe("tap_charge_abc123");
 
-    const glEvents = await t.run((ctx) =>
-      ctx.db.query("accountingEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "PAYMENT_LINK_RECEIVED"))
-        .collect()
+    const glEvents = await t.run(async (ctx) =>
+      (
+        await ctx.db.query("accountingEvents")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
+      ).filter((e) => e.eventType === "PAYMENT_LINK_RECEIVED")
     );
     expect(glEvents).toHaveLength(1);
     expect(glEvents[0].status).toBe("POSTED");
@@ -383,11 +386,12 @@ describe("Phase 8 — payment intent settlement", () => {
     expect(settled?.providerAmountMinor).toBe(1000_000);
     expect(settled?.providerCurrency).toBe("JOD");
 
-    const glEvents = await t.run((ctx) =>
-      ctx.db.query("accountingEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "PAYMENT_LINK_RECEIVED"))
-        .collect()
+    const glEvents = await t.run(async (ctx) =>
+      (
+        await ctx.db.query("accountingEvents")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
+      ).filter((e) => e.eventType === "PAYMENT_LINK_RECEIVED")
     );
     expect(glEvents).toHaveLength(1);
   });
@@ -424,11 +428,12 @@ describe("Phase 8 — payment intent settlement", () => {
     expect(failed?.providerAmountMinor).toBe(999_000);
     expect(failed?.canonicalPaymentId).toBeUndefined();
 
-    const glEvents = await t.run((ctx) =>
-      ctx.db.query("accountingEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "PAYMENT_LINK_RECEIVED"))
-        .collect()
+    const glEvents = await t.run(async (ctx) =>
+      (
+        await ctx.db.query("accountingEvents")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
+      ).filter((e) => e.eventType === "PAYMENT_LINK_RECEIVED")
     );
     expect(glEvents).toHaveLength(0);
   });
