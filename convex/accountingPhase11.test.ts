@@ -765,6 +765,31 @@ const utcDayStart = (ms: number) => Math.floor(ms / DAY_MS) * DAY_MS;
 
 type Seed = Awaited<ReturnType<typeof seedAssetDealer>>;
 
+/** A capitalized asset in a fresh dealer; defaults are the claim-guard van, any field can be overridden. */
+async function seedCapitalizedAsset(
+  overrides: Partial<{ name: string; purchaseDate: number; costMinor: number; usefulLifeMonths: number }> = {}
+) {
+  const seed = await seedAssetDealer();
+  const assetId = await seed.asOwner.mutation(api.fixedAssets.capitalize, {
+    idempotencyKey: crypto.randomUUID(),
+    orgId: seed.orgId,
+    name: "Claim Guard Van",
+    purchaseDate: PAST_PURCHASE_DATE,
+    costMinor: 1_200_000,
+    usefulLifeMonths: 12,
+    ...overrides,
+  });
+  return { ...seed, assetId };
+}
+
+/** Inserts `count` soft-deleted fixed assets for the org. */
+async function seedDeleted(seed: Pick<Seed, "t" | "orgId">, count: number) {
+  for (let i = 0; i < count; i++) {
+    await seed.t.run((ctx) =>
+      ctx.db.insert("fixedAssets", { orgId: seed.orgId, name: `Deleted ${i}`, purchaseDate: Date.now(), isDeleted: true })
+    );
+  }
+}
 async function footprint(seed: Seed, assetId: Id<"fixedAssets">) {
   const { t, orgId } = seed;
   return {
@@ -790,21 +815,9 @@ async function refusalCode(attempt: Promise<unknown>): Promise<string> {
 }
 
 describe("SCRUM-542 — depreciation month-claim guard", () => {
-  async function seedVan() {
-    const seed = await seedAssetDealer();
-    const assetId = await seed.asOwner.mutation(api.fixedAssets.capitalize, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId: seed.orgId,
-      name: "Claim Guard Van",
-      purchaseDate: PAST_PURCHASE_DATE,
-      costMinor: 1_200_000,
-      usefulLifeMonths: 12,
-    });
-    return { ...seed, assetId };
-  }
 
   test("a posting dated outside its claimed yearMonth throws and writes nothing", async () => {
-    const seed = await seedVan();
+    const seed = await seedCapitalizedAsset();
     const before = await footprint(seed, seed.assetId);
     await expect(
       seed.t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
@@ -816,7 +829,7 @@ describe("SCRUM-542 — depreciation month-claim guard", () => {
   });
 
   test("a non-finite occurredAt throws", async () => {
-    const seed = await seedVan();
+    const seed = await seedCapitalizedAsset();
     await expect(
       seed.t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
         orgId: seed.orgId, assetId: seed.assetId, yearMonth: "2026-01",
@@ -826,7 +839,7 @@ describe("SCRUM-542 — depreciation month-claim guard", () => {
   });
 
   test.each(["2026-13", "2026-00", "garbage", "2026-1", "26-01"])("a malformed yearMonth %s throws", async (yearMonth) => {
-    const seed = await seedVan();
+    const seed = await seedCapitalizedAsset();
     const before = await footprint(seed, seed.assetId);
     await expect(
       seed.t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
@@ -838,7 +851,7 @@ describe("SCRUM-542 — depreciation month-claim guard", () => {
   });
 
   test("CONTROL: a valid replay of an already-posted month still returns its benign skip", async () => {
-    const seed = await seedVan();
+    const seed = await seedCapitalizedAsset();
     const args = {
       orgId: seed.orgId, assetId: seed.assetId, yearMonth: "2026-01",
       occurredAt: monthMid("2026-01"), systemActorId: seed.userId,
@@ -849,7 +862,7 @@ describe("SCRUM-542 — depreciation month-claim guard", () => {
   });
 
   test("a MALFORMED replay of an already-posted month throws instead of skipping", async () => {
-    const seed = await seedVan();
+    const seed = await seedCapitalizedAsset();
     await seed.t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
       orgId: seed.orgId, assetId: seed.assetId, yearMonth: "2026-01",
       occurredAt: monthMid("2026-01"), systemActorId: seed.userId,
@@ -866,18 +879,6 @@ describe("SCRUM-542 — depreciation month-claim guard", () => {
 describe.each(["impair", "dispose"] as const)("SCRUM-542 — %s UTC-day guards", (operation) => {
   const capitalizedDay = utcDayStart(Date.now()) - 20 * DAY_MS;
 
-  async function seedAsset() {
-    const seed = await seedAssetDealer();
-    const assetId = await seed.asOwner.mutation(api.fixedAssets.capitalize, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId: seed.orgId,
-      name: "Guarded Asset",
-      purchaseDate: capitalizedDay + 5 * 3_600_000,
-      costMinor: 600_000,
-      usefulLifeMonths: 60,
-    });
-    return { ...seed, assetId };
-  }
 
   function act(seed: Seed & { assetId: Id<"fixedAssets"> }, occurredAt: number | undefined) {
     return operation === "impair"
@@ -900,32 +901,32 @@ describe.each(["impair", "dispose"] as const)("SCRUM-542 — %s UTC-day guards",
   }
 
   test("a date on a future UTC day is refused with zero writes; today is admitted", async () => {
-    const seed = await seedAsset();
+    const seed = await seedCapitalizedAsset({ name: "Guarded Asset", purchaseDate: capitalizedDay + 5 * 3_600_000, costMinor: 600_000, usefulLifeMonths: 60 });
     await expectRefusedWithoutWrites(seed, Date.now() + DAY_MS, "ASSET_EVENT_DATE_IN_FUTURE");
     await act(seed, Date.now());
     expect((await footprint(seed, seed.assetId)).asset?.status).toBe(operation === "impair" ? "IMPAIRED" : "DISPOSED");
   });
 
   test("the UTC midnight that starts today is admitted (same day, earlier time)", async () => {
-    const seed = await seedAsset();
+    const seed = await seedCapitalizedAsset({ name: "Guarded Asset", purchaseDate: capitalizedDay + 5 * 3_600_000, costMinor: 600_000, usefulLifeMonths: 60 });
     await act(seed, utcDayStart(Date.now()));
     expect((await footprint(seed, seed.assetId)).asset?.status).toBe(operation === "impair" ? "IMPAIRED" : "DISPOSED");
   });
 
   test("a non-finite date is refused with zero writes", async () => {
-    const seed = await seedAsset();
+    const seed = await seedCapitalizedAsset({ name: "Guarded Asset", purchaseDate: capitalizedDay + 5 * 3_600_000, costMinor: 600_000, usefulLifeMonths: 60 });
     await expectRefusedWithoutWrites(seed, Number.NaN, "ASSET_EVENT_DATE_INVALID");
   });
 
   test("a date before the capitalization day is refused with zero writes; the same day is admitted", async () => {
-    const seed = await seedAsset();
+    const seed = await seedCapitalizedAsset({ name: "Guarded Asset", purchaseDate: capitalizedDay + 5 * 3_600_000, costMinor: 600_000, usefulLifeMonths: 60 });
     await expectRefusedWithoutWrites(seed, capitalizedDay - 1, "ASSET_EVENT_BEFORE_CAPITALIZATION");
     await act(seed, capitalizedDay); // capitalized at 05:00 that day; midnight is the SAME UTC day
     expect((await footprint(seed, seed.assetId)).asset?.status).toBe(operation === "impair" ? "IMPAIRED" : "DISPOSED");
   });
 
   test("a date before the latest cron DEPRECIATE event day is refused; the same day is admitted", async () => {
-    const seed = await seedAsset();
+    const seed = await seedCapitalizedAsset({ name: "Guarded Asset", purchaseDate: capitalizedDay + 5 * 3_600_000, costMinor: 600_000, usefulLifeMonths: 60 });
     const summary: string = await seed.t.action(internal.crons.triggerFixedAssetDepreciation, {});
     expect(summary).toMatch(/posted 1\/1/i);
     const depreciated = await seed.t.run((ctx) =>
@@ -974,40 +975,24 @@ describe("SCRUM-542 — dispose of an IMPAIRED asset", () => {
 });
 
 describe("SCRUM-542 — fixed asset list visibility", () => {
-  test("a live asset is on the FIRST page even when 100+ deleted rows sort ahead of it", async () => {
-    const { t, orgId, asOwner } = await seedAssetDealer();
-    const liveId = await t.run((ctx) =>
-      ctx.db.insert("fixedAssets", { orgId, name: "Live", purchaseDate: Date.now(), costMinor: 1000 })
-    );
-    // Inserted AFTER the live row, so the desc-ordered scan meets all 105 first.
-    for (let i = 0; i < 105; i++) {
-      await t.run((ctx) =>
-        ctx.db.insert("fixedAssets", { orgId, name: `Deleted ${i}`, purchaseDate: Date.now(), isDeleted: true })
-      );
+  test.each(["before", "after"] as const)(
+    "a live asset created %s 105 deleted rows is on the FIRST page of list",
+    async (when) => {
+      const seed = await seedAssetDealer();
+      const { t, orgId, asOwner } = seed;
+      const insertLive = () =>
+        t.run((ctx) => ctx.db.insert("fixedAssets", { orgId, name: "Live", purchaseDate: Date.now(), costMinor: 1000 }));
+      // "before": the live row is older, so the desc-ordered scan meets all 105 deleted rows first.
+      const liveBefore = when === "before" ? await insertLive() : undefined;
+      await seedDeleted(seed, 105);
+      const liveId = liveBefore ?? (await insertLive());
+      const page = await asOwner.query(api.fixedAssets.list, {
+        orgId, paginationOpts: { numItems: 10, cursor: null },
+      });
+      expect(page.page.map((row) => row._id)).toEqual([liveId]);
+      expect(page.isDone).toBe(true);
     }
-    const page = await asOwner.query(api.fixedAssets.list, {
-      orgId, paginationOpts: { numItems: 10, cursor: null },
-    });
-    expect(page.page.map((row) => row._id)).toEqual([liveId]);
-    expect(page.isDone).toBe(true);
-  });
-
-  test("CONTROL: a live asset created AFTER the deleted rows is listed too", async () => {
-    const { t, orgId, asOwner } = await seedAssetDealer();
-    for (let i = 0; i < 105; i++) {
-      await t.run((ctx) =>
-        ctx.db.insert("fixedAssets", { orgId, name: `Deleted ${i}`, purchaseDate: Date.now(), isDeleted: true })
-      );
-    }
-    const liveId = await t.run((ctx) =>
-      ctx.db.insert("fixedAssets", { orgId, name: "Live", purchaseDate: Date.now(), costMinor: 1000 })
-    );
-    const page = await asOwner.query(api.fixedAssets.list, {
-      orgId, paginationOpts: { numItems: 10, cursor: null },
-    });
-    expect(page.page.map((row) => row._id)).toEqual([liveId]);
-  });
-
+  );
   test("CONTROL: an asset an admin restore left with isDeleted=false stays listed", async () => {
     const { t, orgId, asOwner } = await seedAssetDealer();
     const restoredId = await t.run((ctx) =>

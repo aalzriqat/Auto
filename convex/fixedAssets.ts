@@ -26,15 +26,9 @@ import { paymentMethodValidator, PaymentMethod } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertMonthClaim } from "./utils/expenseAmortization";
 import { AppErrorCode, throwAppError } from "./utils/errors";
+import { isFutureUtcDay, utcDay } from "./utils/ledgerCalendar";
 
 const methodValidator = v.literal("STRAIGHT_LINE");
-
-const DAY_MS = 86_400_000;
-
-/** UTC calendar day number of an instant — the ledger's calendar, compared by day, never by time of day. */
-function utcDay(ms: number): number {
-  return Math.floor(ms / DAY_MS);
-}
 
 /**
  * SCRUM-542. The English text of every accounting-date refusal `impair` and
@@ -70,31 +64,29 @@ async function assertAssetEventDate(
   const { orgId, asset, occurredAt, kind } = input;
   if (!Number.isFinite(occurredAt)) refuseAssetDate("ASSET_EVENT_DATE_INVALID");
   const day = utcDay(occurredAt);
-  if (day > utcDay(Date.now())) refuseAssetDate("ASSET_EVENT_DATE_IN_FUTURE");
+  if (isFutureUtcDay(occurredAt, Date.now())) refuseAssetDate("ASSET_EVENT_DATE_IN_FUTURE");
 
   const events = await ctx.db
     .query("fixedAssetEvents")
     .withIndex("by_org_asset_time", (q) => q.eq("orgId", orgId).eq("assetId", asset._id))
     .collect();
-  const latestOf = (type: Doc<"fixedAssetEvents">["type"]): number | undefined => {
-    const times = events.filter((event) => event.type === type).map((event) => event.occurredAt);
-    return times.length > 0 ? Math.max(...times) : undefined;
-  };
+  // One pass: the latest occurredAt of each event type that bounds the date.
+  const latest: Partial<Record<Doc<"fixedAssetEvents">["type"], number>> = {};
+  for (const event of events) {
+    if (event.type !== "CAPITALIZE" && event.type !== "DEPRECIATE" && event.type !== "IMPAIR") continue;
+    const seen = latest[event.type];
+    if (seen === undefined || event.occurredAt > seen) latest[event.type] = event.occurredAt;
+  }
 
-  // A legacy row without a CAPITALIZE event falls back to its purchase date.
-  const capitalizedAt = latestOf("CAPITALIZE") ?? asset.purchaseDate;
-  if (Number.isFinite(capitalizedAt) && day < utcDay(capitalizedAt)) {
-    refuseAssetDate("ASSET_EVENT_BEFORE_CAPITALIZATION");
-  }
-  const depreciatedAt = latestOf("DEPRECIATE");
-  if (depreciatedAt !== undefined && day < utcDay(depreciatedAt)) {
-    refuseAssetDate("ASSET_EVENT_BEFORE_DEPRECIATION");
-  }
-  if (kind === "DISPOSE") {
-    const impairedAt = latestOf("IMPAIR");
-    if (impairedAt !== undefined && day < utcDay(impairedAt)) {
-      refuseAssetDate("ASSET_EVENT_BEFORE_IMPAIRMENT");
-    }
+  // Precedence is the order of this table. A legacy row without a CAPITALIZE
+  // event falls back to its purchase date; IMPAIR bounds only a disposal.
+  const bounds: ReadonlyArray<[number | undefined, keyof typeof FIXED_ASSET_DATE_REFUSALS]> = [
+    [latest.CAPITALIZE ?? asset.purchaseDate, "ASSET_EVENT_BEFORE_CAPITALIZATION"],
+    [latest.DEPRECIATE, "ASSET_EVENT_BEFORE_DEPRECIATION"],
+    [kind === "DISPOSE" ? latest.IMPAIR : undefined, "ASSET_EVENT_BEFORE_IMPAIRMENT"],
+  ];
+  for (const [boundAt, code] of bounds) {
+    if (boundAt !== undefined && Number.isFinite(boundAt) && day < utcDay(boundAt)) refuseAssetDate(code);
   }
 }
 
@@ -108,6 +100,8 @@ export const list = query({
     // Pages LIVE rows only, through the index: a post-index `.filter` made a page
     // of deleted rows look empty. `isDeleted` is unset on live rows and true once
     // soft-deleted; `lt(true)` also keeps a row an admin restore set to `false`.
+    // The index orders by isDeleted before _creationTime, so restored (false) rows
+    // form their own group, not interleaved by creation time with the unset ones.
     return await ctx.db
       .query("fixedAssets")
       .withIndex("by_org_deleted", (q) => q.eq("orgId", args.orgId).lt("isDeleted", true))

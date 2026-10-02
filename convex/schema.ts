@@ -4869,8 +4869,11 @@ export default defineSchema({
     disposalProceedsMinor: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
-    // Live rows never set isDeleted (the only writer sets true), so `eq("isDeleted", undefined)`
-    // is exactly "not deleted" — lets `list` page live rows only, with no post-index filter.
+    // `list` pages live rows only through this index, with no post-index filter, using
+    // `.lt("isDeleted", true)`: convex/adminData.ts restore writes `isDeleted: false`, so live
+    // rows are undefined OR false (an `eq(undefined)` would drop restored rows). The index
+    // orders by isDeleted before _creationTime, so restored (false) rows sort as their own
+    // group in `list`, apart from the unset ones.
     .index("by_org_deleted", ["orgId", "isDeleted"])
     .index("by_status", ["status"]),
 
