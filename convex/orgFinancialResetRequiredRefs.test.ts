@@ -331,14 +331,80 @@ describe("resetOrgFinancialData never leaves a required reference dangling (SCRU
     await expectNoDangling([["financeDealCustodyEntries", "custodyId", "financeDealCustody"]]);
   });
 
+  // (v) and (vi) run on ISOLATED fixtures. In the full graph a neighbouring edge
+  // (paymentAllocations / paymentVouchers still populated) defers the same
+  // target and would mask a missing `deposits` / `receivables` edge.
   test("(v) D1: a surviving deposit's canonicalPayment always resolves", async () => {
-    await expectNoDangling([["deposits", "canonicalPaymentId", "canonicalPayments"]]);
+    const t = setup();
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "D1 Motors", createdAt: Date.now() })
+    );
+    await t.run(async (ctx) => {
+      const now = Date.now();
+      const userId = await ctx.db.insert("users", { clerkId: "d1_u", email: "d1@x.com" });
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "VIND1", make: "Kia", model: "Rio", year: 2024, mileage: 10,
+        color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: 15000,
+        status: "AVAILABLE",
+      });
+      const customerId = await ctx.db.insert("customers", { orgId, firstName: "D", lastName: "1" });
+      const payments = [];
+      for (const i of [0, 1]) {
+        payments.push(
+          await ctx.db.insert("canonicalPayments", {
+            orgId, direction: "IN", method: "CASH", amountMinor: 1000, currency: "JOD",
+            scale: 3, status: "SETTLED", idempotencyKey: `d1-${i}`, createdBy: userId,
+            createdAt: now,
+          })
+        );
+      }
+      // Cross-linked: deposit #2 (the pass-1 survivor) names payment #1.
+      for (const i of [0, 1]) {
+        await ctx.db.insert("deposits", {
+          orgId, vehicleId, customerId, amount: 1000, status: "HELD", holdActive: false,
+          canonicalPaymentId: payments[1 - i], createdBy: userId, createdAt: now,
+        });
+      }
+    });
+    const result = await drive(t, orgId);
+    expect(result.trace.filter((l) => l.includes("deposits.canonicalPaymentId"))).toEqual([]);
+    expect(result.remaining).toBe(0);
   });
 
   test("(vi) D2: a surviving receivable's receivableDocument always resolves", async () => {
-    await expectNoDangling([
-      ["receivables", "canonicalReceivableDocumentId", "receivableDocuments"],
-    ]);
+    const t = setup();
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "D2 Motors", createdAt: Date.now() })
+    );
+    await t.run(async (ctx) => {
+      const now = Date.now();
+      const userId = await ctx.db.insert("users", { clerkId: "d2_u", email: "d2@x.com" });
+      const customerId = await ctx.db.insert("customers", { orgId, firstName: "D", lastName: "2" });
+      const docs = [];
+      for (const i of [0, 1]) {
+        docs.push(
+          await ctx.db.insert("receivableDocuments", {
+            orgId, documentType: "INVOICE", documentNumber: `D2-${i}`, payerType: "CUSTOMER",
+            customerId, sourceType: "TEST", sourceId: `d2${i}`, originalAmountMinor: 1000,
+            currency: "JOD", scale: 3, issueDate: now, dueDate: now, status: "OPEN",
+            createdAt: now, createdBy: userId,
+          })
+        );
+      }
+      for (const i of [0, 1]) {
+        await ctx.db.insert("receivables", {
+          orgId, customerId, sourceType: "OTHER", title: `R${i}`, originalAmount: 1,
+          outstandingAmount: 1, dueDate: now, status: "OPEN",
+          canonicalReceivableDocumentId: docs[1 - i], createdBy: userId, createdAt: now,
+          updatedAt: now,
+        });
+      }
+    });
+    const result = await drive(t, orgId);
+    expect(
+      result.trace.filter((l) => l.includes("receivables.canonicalReceivableDocumentId"))
+    ).toEqual([]);
+    expect(result.remaining).toBe(0);
   });
 
   test("(Class A) paymentAllocations and collectionApprovalRequests never dangle", async () => {
