@@ -43,21 +43,47 @@ const seedBase = (ctx: MutationCtx, tag: string, suspended = true) =>
 type Pair = readonly [table: string, field: string, target: string];
 type Seed = (ctx: MutationCtx, b: Base) => Promise<void>;
 
-/** Every survivor, across `pairs`, whose reference no longer resolves (one `t.run`). */
-async function dangling(t: T, orgId: Id<"organizations">, pairs: ReadonlyArray<Pair>): Promise<string[]> {
+interface RefCheck {
+  /** Every survivor whose reference no longer resolves. */
+  dangling: string[];
+  /** Per `table.field`: how many survivors held an id that RESOLVED to a live row. */
+  resolved: Record<string, number>;
+}
+
+/**
+ * One `t.run` over `pairs`. `dangling` alone can pass by emptiness: a misspelled
+ * field path reads `undefined` on every row and is skipped, so it reports nothing.
+ * `resolved` is the other half: a pair that never resolved a single id was not checked.
+ */
+async function checkRefs(t: T, orgId: Id<"organizations">, pairs: ReadonlyArray<Pair>): Promise<RefCheck> {
   return await t.run(async (ctx) => {
     const db = ctx.db as unknown as LooseDb;
-    const out: string[] = [];
+    const out: RefCheck = { dangling: [], resolved: {} };
     for (const [table, field, target] of pairs) {
+      const key = `${table}.${field}`;
+      out.resolved[key] = 0;
       for (const row of await rowsOf(db, table, orgId)) {
         // A dotted field ("custodyPosted.custodyId") names a nested reference.
-        const id = field.split(".").reduce<unknown>((v, key) => (v as Record<string, unknown> | null | undefined)?.[key], row);
-        if (id != null && (await db.get(id)) === null) out.push(`${table}.${field} -> ${target}`);
+        const id = field.split(".").reduce<unknown>((v, k) => (v as Record<string, unknown> | null | undefined)?.[k], row);
+        if (id == null) continue;
+        if ((await db.get(id)) === null) out.dangling.push(`${key} -> ${target}`);
+        else out.resolved[key] += 1;
       }
     }
     return out;
   });
 }
+
+/** Every survivor, across `pairs`, whose reference no longer resolves. */
+async function dangling(t: T, orgId: Id<"organizations">, pairs: ReadonlyArray<Pair>): Promise<string[]> {
+  return (await checkRefs(t, orgId, pairs)).dangling;
+}
+
+/** The pairs that resolved no id at all: a vacuous or misspelled path, not a passing one. */
+const vacuousPairs = (check: RefCheck): string[] =>
+  Object.entries(check.resolved)
+    .filter(([, n]) => n === 0)
+    .map(([key]) => key);
 
 async function survivors(t: T, orgId: Id<"organizations">, table: string): Promise<number> {
   return await t.run(async (ctx) => (await rowsOf(ctx.db as unknown as LooseDb, table, orgId)).length);
@@ -358,7 +384,21 @@ describe("resetOrgFinancialData keeps a promoted reference resolving after a one
     const { t, orgId } = await seedOrg(seed, id);
     await onePass(t, orgId);
     expect(await survivors(t, orgId, pairs[0][0])).toBeGreaterThan(0);
-    expect(await dangling(t, orgId, pairs)).toEqual([]);
+    const check = await checkRefs(t, orgId, pairs);
+    expect(check.dangling).toEqual([]);
+    // Every promoted pair must have RESOLVED at least one id, or the check above proved nothing.
+    expect(vacuousPairs(check), `pairs that resolved no id: ${JSON.stringify(check.resolved)}`).toEqual([]);
+  });
+
+  test("CONTROL: a misspelled field path is reported as vacuous, not as passing", async () => {
+    const { t, orgId } = await seedOrg(seedE4, "E4Control");
+    await onePass(t, orgId);
+    const good = await checkRefs(t, orgId, [E4B]);
+    expect(vacuousPairs(good)).toEqual([]);
+    const misspelled: Pair = ["financeDealFees", "custodyPosted.custodyID", "financeDealCustody"];
+    const bad = await checkRefs(t, orgId, [misspelled]);
+    expect(bad.dangling).toEqual([]); // the old check was silent here: it would have passed
+    expect(vacuousPairs(bad)).toEqual(["financeDealFees.custodyPosted.custodyID"]);
   });
 });
 

@@ -19,10 +19,11 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import ts from "typescript";
 import { describe, expect, test } from "vitest";
 import { v } from "convex/values";
 import schema from "../convex/schema";
-import { convexSourceFiles } from "./commitmentWriteGuard";
+import { convexSourceFiles, parseModule, staticStringOf } from "./commitmentWriteGuard";
 import { CHILD_TABLES_FOR_TEST, RESET_TABLES_FOR_TEST } from "../convex/orgFinancialReset";
 
 interface ValidatorLike {
@@ -422,7 +423,7 @@ const RECEIVABLE_DOCUMENT_SOURCE_KINDS: Record<string, string> = {
 const CONVEX_DIR = path.join(__dirname, "..", "convex");
 
 interface ReceivableWriterScan {
-  /** Call sites seen (helper calls and direct inserts; definitions excluded). */
+  /** Writer sites seen, including unparsed ones (definitions and type positions excluded). */
   sites: number;
   /** sourceType kinds resolved to a string literal. */
   literals: string[];
@@ -430,165 +431,279 @@ interface ReceivableWriterScan {
   unparsed: string[];
 }
 
-/** Blank out comments so a call mentioned in prose is not a site. Strings are left alone. */
-function stripComments(text: string): string {
-  return text
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
-}
-
-/** Index just past the matching close of the bracket at `open`; quote-aware. -1 when unbalanced. */
-function matchingClose(text: string, open: number): number {
-  let depth = 0;
-  let quote: string | null = null;
-  for (let i = open; i < text.length; i++) {
-    const c = text[i];
-    if (quote) {
-      if (c === "\\") i++;
-      else if (c === quote) quote = null;
-    } else if (c === '"' || c === "'" || c === "`") {
-      quote = c;
-    } else if (c === "(" || c === "[" || c === "{") {
-      depth++;
-    } else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth === 0) return i;
-    }
-  }
-  return -1;
-}
-
-/** Split on commas that sit outside any bracket or string. */
-function splitTopLevel(text: string): string[] {
-  const parts: string[] = [];
-  let depth = 0;
-  let quote: string | null = null;
-  let start = 0;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (quote) {
-      if (c === "\\") i++;
-      else if (c === quote) quote = null;
-    } else if (c === '"' || c === "'" || c === "`") {
-      quote = c;
-    } else if (c === "(" || c === "[" || c === "{") {
-      depth++;
-    } else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-    } else if (c === "," && depth === 0) {
-      parts.push(text.slice(start, i));
-      start = i + 1;
-    }
-  }
-  parts.push(text.slice(start));
-  return parts.map((p) => p.trim()).filter((p) => p !== "");
-}
-
 const snippet = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 100);
-const STRING_LITERAL = /^(["'`])([^"'`\\$]*)\1$/;
 
 /**
- * Inspects EVERY receivableDocuments write in one file's text: calls to
- * `createReceivableDocument(` / `ensureReceivableDocument(` and direct
- * `.insert("receivableDocuments"`. Function definitions, imports, type
- * positions and comments are not sites. Each site's `sourceType` must resolve
- * to a string literal (inline, or through a same-file `const X = "..."`);
- * anything else is reported as unparsed rather than silently skipped.
+ * Parsed with the TypeScript compiler API, like commitmentWriteGuard (SCRUM-208).
+ * The previous text scanner was forged five ways (a table held in a const, a
+ * space before the paren, an import alias, a `//` inside a string, an inner-scope
+ * shadow of a const). Everything below fails CLOSED: what cannot be read is
+ * reported as unparsed, never skipped. Identifier resolution is deliberately NOT
+ * heuristic (the SCRUM-208 lesson, "a number cannot be shadowed"): a name resolves
+ * only when the file declares it exactly once, anywhere, as a top-level
+ * `const NAME = "literal"`.
  */
-function scanReceivableDocumentWriters(rawText: string): ReceivableWriterScan {
-  const text = stripComments(rawText);
+const RECEIVABLE_HELPERS: ReadonlySet<string> = new Set(["createReceivableDocument", "ensureReceivableDocument"]);
+/** Names that, passed as a function reference, enqueue a receivableDocuments write. */
+const RECEIVABLE_MUTATION_REFS: ReadonlySet<string> = new Set([...RECEIVABLE_HELPERS, "createReceivable"]);
+
+/** Peel `( )`, `as T`, `<T>x`, `x satisfies T` and `x!`: none changes the value. */
+function unwrap(node: ts.Expression): ts.Expression {
+  let n = node;
+  while (
+    ts.isParenthesizedExpression(n) ||
+    ts.isAsExpression(n) ||
+    ts.isTypeAssertionExpression(n) ||
+    ts.isSatisfiesExpression(n) ||
+    ts.isNonNullExpression(n)
+  ) {
+    n = n.expression;
+  }
+  return n;
+}
+
+/** Every binding of each name in the file, at any scope, including imports, parameters and patterns. */
+function declarationsByName(sf: ts.SourceFile): Map<string, ts.Node[]> {
+  const out = new Map<string, ts.Node[]>();
+  const add = (name: ts.Node | undefined, decl: ts.Node) => {
+    if (name && ts.isIdentifier(name)) out.set(name.text, [...(out.get(name.text) ?? []), decl]);
+  };
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(node) ||
+      ts.isParameter(node) ||
+      ts.isBindingElement(node) ||
+      ts.isFunctionDeclaration(node) ||
+      ts.isFunctionExpression(node) ||
+      ts.isClassDeclaration(node) ||
+      ts.isClassExpression(node) ||
+      ts.isEnumDeclaration(node) ||
+      ts.isModuleDeclaration(node) ||
+      ts.isTypeAliasDeclaration(node) ||
+      ts.isInterfaceDeclaration(node) ||
+      ts.isImportSpecifier(node) ||
+      ts.isImportClause(node) ||
+      ts.isNamespaceImport(node) ||
+      ts.isImportEqualsDeclaration(node)
+    ) {
+      add(node.name, node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+/** The literal a name is bound to, or null. Resolves ONLY a sole, top-level `const NAME = "..."`. */
+function resolveConstString(name: string, decls: Map<string, ts.Node[]>): string | null {
+  const all = decls.get(name) ?? [];
+  if (all.length !== 1) return null;
+  const decl = all[0];
+  if (!ts.isVariableDeclaration(decl) || !decl.initializer) return null;
+  const list = decl.parent;
+  if (!ts.isVariableDeclarationList(list) || !(list.flags & ts.NodeFlags.Const)) return null;
+  if (!ts.isVariableStatement(list.parent) || !ts.isSourceFile(list.parent.parent)) return null;
+  return staticStringOf(unwrap(decl.initializer));
+}
+
+/** True when `node` sits inside a type annotation, where `typeof helper` is not a call. */
+const inTypePosition = (node: ts.Node): boolean => {
+  for (let p: ts.Node | undefined = node.parent; p; p = p.parent) if (ts.isTypeNode(p)) return true;
+  return false;
+};
+
+type SourceTypeVerdict = { kind: string } | { reason: string };
+
+function sourceTypeOf(arg: ts.Expression | undefined, decls: Map<string, ts.Node[]>): SourceTypeVerdict {
+  if (!arg) return { reason: "no inline object argument: (missing)" };
+  const obj = unwrap(arg);
+  if (!ts.isObjectLiteralExpression(obj)) {
+    return { reason: `no inline object argument: ${snippet(arg.getText())}` };
+  }
+  if (obj.properties.some((p) => ts.isSpreadAssignment(p))) {
+    return { reason: `spread args: ${snippet(obj.getText())}` };
+  }
+  // A computed key could spell sourceType at runtime; refuse rather than guess.
+  if (obj.properties.some((p) => p.name && ts.isComputedPropertyName(p.name))) {
+    return { reason: `computed key: ${snippet(obj.getText())}` };
+  }
+  const named = obj.properties.filter(
+    (p) => p.name && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) && p.name.text === "sourceType"
+  );
+  if (named.length === 0) return { reason: `no sourceType key: ${snippet(obj.getText())}` };
+  if (named.length > 1) return { reason: `duplicate sourceType: ${snippet(obj.getText())}` };
+  const prop = named[0];
+  if (!ts.isPropertyAssignment(prop)) return { reason: `shorthand or method sourceType: ${snippet(prop.getText())}` };
+  const value = unwrap(prop.initializer);
+  const literal = staticStringOf(value);
+  if (literal !== null) return { kind: literal };
+  if (ts.isIdentifier(value)) {
+    const resolved = resolveConstString(value.text, decls);
+    if (resolved !== null) return { kind: resolved };
+  }
+  return { reason: `unresolved sourceType: ${snippet(value.getText())}` };
+}
+
+/**
+ * Inspects EVERY receivableDocuments write in one file. A call is a SITE when it
+ * is: a `.insert(` (any receiver, so a `db = ctx.db` alias counts) whose table is
+ * "receivableDocuments" OR is not a string literal (unresolved, so unparsed); a
+ * call of `createReceivableDocument` / `ensureReceivableDocument` under any
+ * import alias, or as a namespace member; or a call passing a function reference
+ * named after a helper or `createReceivable` (the `runMutation` form). A helper
+ * that escapes as a bare value, or is re-exported under another name, is reported
+ * as unparsed. Definitions, imports, type positions and comments are not sites.
+ * Each site's `sourceType` must resolve to a literal or it is reported.
+ */
+function scanReceivableDocumentWriters(rawText: string, file = "scanned.ts"): ReceivableWriterScan {
+  const sf = parseModule(rawText, file);
+  const decls = declarationsByName(sf);
+  const aliases = new Set<string>(RECEIVABLE_HELPERS);
+  sf.forEachChild(function findImports(node) {
+    if (!ts.isImportDeclaration(node)) return;
+    const bindings = node.importClause?.namedBindings;
+    if (!bindings || !ts.isNamedImports(bindings)) return;
+    for (const el of bindings.elements) {
+      if (RECEIVABLE_HELPERS.has((el.propertyName ?? el.name).text)) aliases.add(el.name.text);
+    }
+  });
+
   const literals = new Set<string>();
   const unparsed: string[] = [];
   let sites = 0;
-  const siteRe = /\b(?:createReceivableDocument|ensureReceivableDocument)\s*\(|\.insert\(\s*["'`]receivableDocuments["'`]/g;
-  for (const m of text.matchAll(siteRe)) {
-    const index = m.index ?? 0;
-    if (/function\s*\*?\s*$/.test(text.slice(0, index))) continue; // a definition, not a call
+  const record = (verdict: SourceTypeVerdict) => {
     sites++;
-    const open = index + m[0].indexOf("("); // the helper's or insert's own opening paren
-    const close = matchingClose(text, open);
-    if (close < 0) {
-      unparsed.push(`unbalanced call: ${snippet(text.slice(index, index + 80))}`);
-      continue;
-    }
-    const args = splitTopLevel(text.slice(open + 1, close));
-    const objectArg = args[1] ?? "";
-    if (!objectArg.startsWith("{")) {
-      unparsed.push(`no inline object argument: ${snippet(objectArg || args.join(", "))}`);
-      continue;
-    }
-    const props = splitTopLevel(objectArg.slice(1, objectArg.lastIndexOf("}")));
-    if (props.some((p) => p.startsWith("..."))) {
-      unparsed.push(`spread args: ${snippet(objectArg)}`);
-      continue;
-    }
-    const prop = props.map((p) => /^sourceType\s*(?::\s*([\s\S]*))?$/.exec(p)).find((r) => r !== null);
-    if (!prop) {
-      unparsed.push(`no sourceType key: ${snippet(objectArg)}`);
-      continue;
-    }
-    const expr = (prop[1] ?? "sourceType").trim();
-    const literal = STRING_LITERAL.exec(expr);
-    if (literal) {
-      literals.add(literal[2]);
-      continue;
-    }
-    if (/^[A-Za-z_$][\w$]*$/.test(expr)) {
-      const constant = new RegExp(`\\bconst\\s+${expr.replace(/\$/g, "\\$")}\\s*=\\s*(["'])([^"'\\\\]*)\\1`).exec(text);
-      if (constant) {
-        literals.add(constant[2]);
-        continue;
+    if ("kind" in verdict) literals.add(verdict.kind);
+    else unparsed.push(verdict.reason);
+  };
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && !inTypePosition(node)) {
+      const callee = node.expression;
+      const args = node.arguments;
+      const refAt = args.findIndex((a) => {
+        const e = unwrap(a);
+        return ts.isPropertyAccessExpression(e) && RECEIVABLE_MUTATION_REFS.has(e.name.text);
+      });
+      if (ts.isPropertyAccessExpression(callee) && callee.name.text === "insert") {
+        const table = staticStringOf(args[0]);
+        if (table === "receivableDocuments") record(sourceTypeOf(args[1], decls));
+        else if (table === null) {
+          sites++;
+          unparsed.push(`unresolved table: ${snippet(args[0] ? args[0].getText() : "(missing)")}`);
+        }
+      } else if (ts.isIdentifier(callee) && aliases.has(callee.text)) {
+        record(sourceTypeOf(args[1], decls));
+      } else if (ts.isPropertyAccessExpression(callee) && RECEIVABLE_HELPERS.has(callee.name.text)) {
+        record(sourceTypeOf(args[1], decls));
+      } else if (refAt >= 0) {
+        record(sourceTypeOf(args[refAt + 1], decls));
       }
+    } else if (ts.isExportSpecifier(node) && node.propertyName && RECEIVABLE_HELPERS.has(node.propertyName.text)) {
+      sites++;
+      unparsed.push(`re-export under a new name: ${snippet(node.getText())}`);
+    } else if (ts.isIdentifier(node) && aliases.has(node.text) && isEscapingReference(node)) {
+      sites++;
+      unparsed.push(`helper used as a value: ${snippet(node.parent.getText())}`);
     }
-    unparsed.push(`unresolved sourceType: ${snippet(expr)}`);
-  }
-  return { sites, literals: [...literals], unparsed };
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return { sites, literals: [...literals].sort(), unparsed: unparsed.sort() };
+}
+
+/** A helper name used other than as a callee, a declaration, a specifier, a member name or in a type. */
+function isEscapingReference(id: ts.Identifier): boolean {
+  const p = id.parent;
+  if (inTypePosition(id)) return false;
+  if (ts.isCallExpression(p) && p.expression === id) return false;
+  if (ts.isImportSpecifier(p) || ts.isImportClause(p) || ts.isExportSpecifier(p)) return false;
+  if (ts.isPropertyAccessExpression(p) && p.name === id) return false;
+  if (ts.isShorthandPropertyAssignment(p)) return true;
+  if ("name" in p && (p as { name?: ts.Node }).name === id) return false; // a declaration or a key
+  if (ts.isBindingElement(p) && p.propertyName === id) return false;
+  return true;
+}
+
+interface CensusPin {
+  /** Exact writer-site count per file. A new file, or a changed count, fails. */
+  sites: Record<string, number>;
+  /** Exact multiset of unparsed reasons per file (reason -> count). */
+  unparsed: Record<string, Record<string, number>>;
 }
 
 /**
- * subledger.ts is the generic writer: its sourceType comes from its caller's
- * args, so these (and only these) pass-through sites are tolerated there. Any
- * other unparsed site in that file still fails the pin.
+ * The receivableDocuments writer census, as an exact pin. Verified against
+ * convex/ with the AST scanner (SCRUM-559 R1). subledger.ts is the generic
+ * writer: its three unparsed sites forward a caller's args and are pinned by
+ * reason AND count, so a second identical pass-through fails instead of being
+ * swallowed by a Set.
  */
-const SUBLEDGER_PASSTHROUGH = new Set<string>([
-  "unresolved sourceType: args.sourceType",
-  "no inline object argument: args",
-  "spread args: { ...args, actorId: user._id }",
-]);
+const WRITER_CENSUS: CensusPin = {
+  sites: { "applications.ts": 1, "collections.ts": 1, "subledger.ts": 3, "utils/saleCompletion.ts": 1 },
+  unparsed: {
+    "subledger.ts": {
+      "unresolved sourceType: args.sourceType": 1, // the insert inside createReceivableDocument
+      "no inline object argument: args": 1, // ensureReceivableDocument -> createReceivableDocument(ctx, args)
+      "spread args: { ...args, actorId: user._id }": 1, // the internal createReceivable mutation
+    },
+  },
+};
 
-function receivableDocumentWriterScan(): { writers: string[]; literals: Set<string>; unparsed: string[] } {
-  const writers: string[] = [];
-  const literals = new Set<string>();
-  const unparsed: string[] = [];
-  for (const file of convexSourceFiles(CONVEX_DIR)) {
-    const rel = path.relative(CONVEX_DIR, file).replace(/\\/g, "/");
-    const scan = scanReceivableDocumentWriters(fs.readFileSync(file, "utf8"));
-    if (scan.sites === 0) continue;
-    writers.push(rel);
-    for (const kind of scan.literals) literals.add(kind);
-    for (const u of scan.unparsed) {
-      if (rel === "subledger.ts" && SUBLEDGER_PASSTHROUGH.has(u)) continue;
-      unparsed.push(`${rel} -> ${u}`);
+const countBy = (xs: readonly string[]): Record<string, number> => {
+  const out: Record<string, number> = {};
+  for (const x of xs) out[x] = (out[x] ?? 0) + 1;
+  return out;
+};
+
+/** Every way the scan differs from the pin; empty when it equals it exactly. */
+function censusProblems(scans: Record<string, ReceivableWriterScan>, pin: CensusPin): string[] {
+  const problems: string[] = [];
+  const files = new Set([
+    ...Object.entries(scans).filter(([, s]) => s.sites > 0).map(([f]) => f),
+    ...Object.keys(pin.sites),
+  ]);
+  for (const file of [...files].sort()) {
+    const actual = scans[file]?.sites ?? 0;
+    const expected = pin.sites[file] ?? 0;
+    if (actual !== expected) {
+      problems.push(
+        `${file}: ${actual} receivableDocuments writer site(s), pinned ${expected}. Decide the new site's reset handling, then update WRITER_CENSUS.`
+      );
+    }
+    const actualReasons = countBy(scans[file]?.unparsed ?? []);
+    const expectedReasons = pin.unparsed[file] ?? {};
+    if (JSON.stringify(Object.entries(actualReasons).sort()) !== JSON.stringify(Object.entries(expectedReasons).sort())) {
+      problems.push(
+        `${file}: unparsed sites ${JSON.stringify(actualReasons)} differ from the pin ${JSON.stringify(expectedReasons)}`
+      );
+    }
+    for (const kind of scans[file]?.literals ?? []) {
+      if (!(kind in RECEIVABLE_DOCUMENT_SOURCE_KINDS)) {
+        problems.push(`${file}: sourceType kind "${kind}" has no pinned target table (decide its reset handling)`);
+      }
     }
   }
-  return { writers, literals, unparsed };
+  return problems;
+}
+
+function scanConvex(): Record<string, ReceivableWriterScan> {
+  const out: Record<string, ReceivableWriterScan> = {};
+  for (const file of convexSourceFiles(CONVEX_DIR)) {
+    const rel = path.relative(CONVEX_DIR, file).replace(/\\/g, "/");
+    out[rel] = scanReceivableDocumentWriters(fs.readFileSync(file, "utf8"), rel);
+  }
+  return out;
 }
 
 describe("receivableDocuments.sourceId opaque references stay pinned", () => {
-  test("every in-repo writer uses a pinned sourceType kind", () => {
-    const { writers, literals, unparsed } = receivableDocumentWriterScan();
+  test("the writer census equals its pin and every kind is a pinned kind", () => {
+    const scans = scanConvex();
+    const literals = new Set(Object.values(scans).flatMap((s) => s.literals));
     // Sanity: the scan must actually see the known writers, or it proves nothing.
-    expect(writers).toEqual(expect.arrayContaining(["applications.ts", "collections.ts", "utils/saleCompletion.ts"]));
     for (const kind of Object.keys(RECEIVABLE_DOCUMENT_SOURCE_KINDS)) expect(literals).toContain(kind);
-    expect(
-      unparsed,
-      render("receivableDocuments writers whose sourceType cannot be resolved to a literal (pin them or decide their reset handling):", unparsed)
-    ).toEqual([]);
-    const unknown = [...literals].filter((k) => !(k in RECEIVABLE_DOCUMENT_SOURCE_KINDS)).sort();
-    expect(
-      unknown,
-      render("receivableDocuments.sourceType kinds with no pinned target table (decide its reset handling):", unknown)
-    ).toEqual([]);
+    const problems = censusProblems(scans, WRITER_CENSUS);
+    expect(problems, render("receivableDocuments writer census differs from its pin:", problems)).toEqual([]);
   });
 
   test("MUTATION CONTROL: a direct insert with a new literal kind is detected", () => {
@@ -642,6 +757,108 @@ describe("receivableDocuments.sourceId opaque references stay pinned", () => {
       ].join("\n")
     );
     expect(scan).toEqual({ sites: 1, literals: ["sales"], unparsed: [] });
+  });
+
+  // ── SCRUM-559 R1: forgeries Codex proved against the regex scanner ──────────
+  const NEW = 'await ctx.db.insert("receivableDocuments", { sourceType: "new_kind" });';
+
+  test("MUTATION CONTROL (a): a table name held in a const is unparsed, not skipped", () => {
+    const scan = scanReceivableDocumentWriters(
+      'const TABLE = "receivableDocuments"; await ctx.db.insert(TABLE, { sourceType: "new_kind" });'
+    );
+    expect(scan.sites).toBe(1);
+    expect(scan.unparsed).toHaveLength(1);
+  });
+
+  test("MUTATION CONTROL (b): whitespace before the call paren does not hide the site", () => {
+    const scan = scanReceivableDocumentWriters(
+      'await ctx.db.insert ("receivableDocuments", { sourceType: "new_kind" });'
+    );
+    expect(scan.literals).toEqual(["new_kind"]);
+  });
+
+  test("MUTATION CONTROL (c): an import alias of a helper is still a site", () => {
+    const scan = scanReceivableDocumentWriters(
+      'import { ensureReceivableDocument as ensure } from "./subledger"; await ensure(ctx, { sourceType: "new_kind" });'
+    );
+    expect(scan.literals).toEqual(["new_kind"]);
+  });
+
+  test("MUTATION CONTROL (d): a string containing // does not swallow the next call", () => {
+    const scan = scanReceivableDocumentWriters(`const u = "a//b"; ${NEW}`);
+    expect(scan.literals).toEqual(["new_kind"]);
+  });
+
+  test("MUTATION CONTROL (e): an inner-scope shadow of a const is unparsed, not resolved", () => {
+    const scan = scanReceivableDocumentWriters(
+      'const KIND = "sales"; { const KIND = args.sourceType; await ensureReceivableDocument(ctx, { sourceType: KIND }); }'
+    );
+    expect(scan.literals).toEqual([]);
+    expect(scan.unparsed).toHaveLength(1);
+  });
+
+  test("MUTATION CONTROL: a namespace-import call is a site", () => {
+    const scan = scanReceivableDocumentWriters(
+      'import * as sl from "./subledger"; await sl.createReceivableDocument(ctx, { sourceType: "new_kind" });'
+    );
+    expect(scan.literals).toEqual(["new_kind"]);
+  });
+
+  test("MUTATION CONTROL: the runMutation function-reference form is a site", () => {
+    const scan = scanReceivableDocumentWriters(
+      'await ctx.runMutation(internal.subledger.createReceivable, { sourceType: "new_kind" });'
+    );
+    expect(scan.literals).toEqual(["new_kind"]);
+  });
+
+  test("MUTATION CONTROL: a re-export of a helper under a new name is unparsed", () => {
+    const scan = scanReceivableDocumentWriters('export { ensureReceivableDocument as renamed } from "./subledger";');
+    expect(scan.unparsed).toHaveLength(1);
+  });
+
+  test("MUTATION CONTROL: a db alias insert is a site", () => {
+    const scan = scanReceivableDocumentWriters(
+      'const db = ctx.db; await db.insert("receivableDocuments", { sourceType: "new_kind" });'
+    );
+    expect(scan.literals).toEqual(["new_kind"]);
+  });
+
+  test("MUTATION CONTROL: a shorthand { sourceType } is unparsed", () => {
+    const scan = scanReceivableDocumentWriters(
+      'const sourceType = "sales"; await ensureReceivableDocument(ctx, { sourceType });'
+    );
+    expect(scan.literals).toEqual([]);
+    expect(scan.unparsed).toHaveLength(1);
+  });
+
+  test("MUTATION CONTROL: an identifier with two declarations is unparsed; a single top-level const resolves", () => {
+    const twice = scanReceivableDocumentWriters(
+      'const K = "a"; function f(K: string) {} await ensureReceivableDocument(ctx, { sourceType: K });'
+    );
+    expect(twice.literals).toEqual([]);
+    expect(twice.unparsed).toHaveLength(1);
+    const once = scanReceivableDocumentWriters(
+      'const K = "kind_a"; await ensureReceivableDocument(ctx, { sourceType: K });'
+    );
+    expect(once.literals).toEqual(["kind_a"]);
+    expect(once.unparsed).toEqual([]);
+  });
+
+  test("MUTATION CONTROL (D2): a second identical pass-through site is not swallowed by the census", () => {
+    const pass = { sites: 2, literals: [], unparsed: ["unresolved sourceType: args.sourceType", "unresolved sourceType: args.sourceType"] };
+    const pin = { sites: { "subledger.ts": 2 }, unparsed: { "subledger.ts": { "unresolved sourceType: args.sourceType": 1 } } };
+    expect(censusProblems({ "subledger.ts": pass }, pin)).not.toEqual([]);
+    const one = { sites: 1, literals: [], unparsed: ["unresolved sourceType: args.sourceType"] };
+    expect(censusProblems({ "subledger.ts": one }, { sites: { "subledger.ts": 1 }, unparsed: pin.unparsed })).toEqual([]);
+  });
+
+  test("MUTATION CONTROL: a new writer file and an unpinned kind each fail the census", () => {
+    const pin = { sites: { "a.ts": 1 }, unparsed: {} };
+    const ok = { sites: 1, literals: ["sales"], unparsed: [] };
+    expect(censusProblems({ "a.ts": ok }, pin)).toEqual([]);
+    expect(censusProblems({ "a.ts": ok, "b.ts": ok }, pin)).not.toEqual([]);
+    expect(censusProblems({ "a.ts": { ...ok, literals: ["new_kind"] } }, pin)).not.toEqual([]);
+    expect(censusProblems({ "a.ts": { ...ok, sites: 2 } }, pin)).not.toEqual([]);
   });
 
   test("every pinned kind targets a reset-scoped table", () => {
