@@ -38,6 +38,7 @@ import { deriveForwardState, forwardCancelRefusal, forwardGateRefusal } from "./
 import {
   resolveFinancedSalePlan,
   financedSaleRecognitionDate,
+  financedSaleRecognitionApplies,
   evaluateClosingReadiness,
   closingRefusalError,
   type ClosingReadiness,
@@ -723,25 +724,45 @@ async function resolveSupplierObligation(
 }
 
 /**
+ * SCRUM-567: the deal facts that prove no finance company pays the dealership.
+ * Shared by `finalizeDeal` (write) and `resolveFinancierLeg` (read) so they
+ * cannot drift. `manualPayerOf(app) === null` means "payer not known yet", never
+ * "no payer", so a manual-mode application is excluded by mode, not by letter.
+ */
+function isProvablyFinancierless(
+  app: Doc<"financeApplications">,
+  facts: {
+    settlesDirect: boolean;
+    financingType: Doc<"sales">["financingType"] | undefined;
+    mode: DealMode | undefined;
+  }
+): boolean {
+  return (
+    !facts.settlesDirect &&
+    !financedSaleRecognitionApplies(app, { settlesDirect: false }) &&
+    (facts.mode === "INTERNAL_INSTALLMENT" || facts.financingType === "CASH")
+  );
+}
+
+/**
  * Whether a finance company pays the dealership on this deal (SCRUM-446).
  *
  * Invariant: `NONE` is returned only when the server can PROVE, from records
  * that cannot drift under the deal, that no finance company ever pays the
- * dealership on it — the application is CLOSED, its linked sale exists in this
- * org and is COMPLETED, that sale settled through the dealership, the
- * application names no finance company and no manual payer, the sale names THIS
- * application back (`sale.applicationId`), AND either the deal's mode is exactly
- * `INTERNAL_INSTALLMENT` (the dealership itself finances; the customer is the
- * debtor) or the sale's own `financingType` is `CASH` (SCRUM-567: the sale row
- * is what finalize wrote, so a CASH sale on the application's own closed sale is
- * proof no financier exists, whatever the quote mode was - including a
- * mode-less application). Owner rulings OR-1 / OR-2 (SCRUM-486 c21360): a MANUAL
- * finance company and a LEASE company that purchases the vehicle owe the
- * dealership the full amount exactly like a configured one, so
- * MANUAL_FINANCE_COMPANY and LEASE with no `companyId` are money EXPECTED from a
- * financier, never `NONE`. An unreadable `financingType` (undefined) and every
- * other shape of missing evidence are `UNKNOWN`; unknown evidence is never read
- * as `NONE`.
+ * dealership on it:
+ * - the application is CLOSED and its linked sale exists in this org, is
+ *   COMPLETED and names THIS application back (`sale.applicationId`);
+ * - the route is known, not cancelled and settles through the dealership;
+ * - `isProvablyFinancierless` holds: no configured company, no manual finance
+ *   mode, and either the mode is `INTERNAL_INSTALLMENT` or the sale's own
+ *   `financingType` is `CASH` (SCRUM-567, including a mode-less application).
+ *
+ * Owner rulings OR-1 / OR-2 (SCRUM-486 c21360): a MANUAL finance company and a
+ * LEASE company that purchases the vehicle owe the dealership the full amount
+ * exactly like a configured one, so MANUAL_FINANCE_COMPANY and LEASE with no
+ * `companyId` are money EXPECTED from a financier, never `NONE`. An unreadable
+ * `financingType` and every other shape of missing evidence are `UNKNOWN`;
+ * unknown evidence is never read as `NONE`.
  *
  * Deliberately NOT `NONE`: a configured company with a zero net (SCRUM-315), a
  * direct-to-supplier deal (the financier pays the supplier and its own stage
@@ -758,16 +779,17 @@ function resolveFinancierLeg(
 ): FinancierLeg {
   if (
     app.status === "CLOSED" &&
-    !app.companyId &&
-    !manualPayerOf(app) &&
-    (mode === "INTERNAL_INSTALLMENT" || sale?.financingType === "CASH") &&
     app.finalizedSaleId !== undefined &&
     sale !== null &&
     sale.applicationId === app._id &&
     sale.status === "COMPLETED" &&
     route.routeKnown &&
     !route.saleCancelled &&
-    !route.settlesDirect
+    isProvablyFinancierless(app, {
+      settlesDirect: route.settlesDirect,
+      financingType: sale.financingType,
+      mode,
+    })
   ) {
     return "NONE";
   }
@@ -923,8 +945,12 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
     { routeKnown, settlesDirect, saleCancelled },
     sale,
     // Only a CLOSED, company-less deal with a finalized sale can resolve NONE,
-    // and only then does the mode matter (see `resolveFinancierLeg`).
-    app.status === "CLOSED" && !app.companyId && app.finalizedSaleId !== undefined
+    // and only then does the mode matter (see `resolveFinancierLeg`); a CASH
+    // sale proves it without the mode, so the quote read is skipped.
+    app.status === "CLOSED" &&
+    !app.companyId &&
+    app.finalizedSaleId !== undefined &&
+    sale?.financingType !== "CASH"
       ? await dealModeOf(ctx, app)
       : undefined
   );
@@ -4730,8 +4756,7 @@ export const finalizeDeal = mutation({
           mayReadMoney,
         });
 
-        // The financingType the sale row is written with; also what the
-        // SCRUM-567 settlementStatus below keys on, so the two cannot disagree.
+        // The sale row's financingType; the settlementStatus below keys on it too.
         const saleFinancingType =
           quoteMode === undefined && app.companyId ? "FINANCED" : financingType;
 
@@ -4875,24 +4900,16 @@ export const finalizeDeal = mutation({
           // change of decision. What moves is settlement: from here the
           // finance company owes the dealership money.
           creditDecision: "APPROVED",
-          // SCRUM-567: NOT_APPLICABLE only when the deal is provably
-          // financier-less: a CASH sale, no configured company, no manual
-          // payer, and not settled direct-to-supplier. Anything else is
-          // EXPECTED (fail closed). This is the WRITE-time subset of the
-          // read-time `resolveFinancierLeg` NONE predicate: that one also needs
-          // the CLOSED app, a COMPLETED sale naming this application back and a
-          // known, non-cancelled route, which only exist once this mutation has
-          // committed - so the reader re-proves them on every read, and a stored
-          // NOT_APPLICABLE is a hint that never overrides it. Nothing reads
-          // NOT_APPLICABLE as settled (`resolveSupplierObligation` /
-          // `settlementStatusForFacts` treat it as not FULLY_SETTLED/RECONCILED).
-          settlementStatus:
-            saleFinancingType === "CASH" &&
-            !app.companyId &&
-            !manualPayerOf(app) &&
-            !directToSupplier
-              ? "NOT_APPLICABLE"
-              : "EXPECTED",
+          // SCRUM-567: NOT_APPLICABLE comes from the same predicate the reader
+          // uses; the reader re-proves the lifecycle on every read, and it is
+          // never read as settled. Anything unproven stays EXPECTED.
+          settlementStatus: isProvablyFinancierless(app, {
+            settlesDirect: directToSupplier,
+            financingType: saleFinancingType,
+            mode: quoteMode,
+          })
+            ? "NOT_APPLICABLE"
+            : "EXPECTED",
           // …except on the direct route, where it owes the dealership nothing.
           // The expected remittance is what the COMPANY will send HERE, and on
           // this route it sends it to the supplier instead. Left at a positive

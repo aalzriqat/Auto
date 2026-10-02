@@ -6,7 +6,7 @@ import { api } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 import { FC_RETURN_MESSAGES } from "./utils/fcCheque";
-import { salesAr, salesEn } from "../lib/i18n/domains/sales";
+import { salesAr } from "../lib/i18n/domains/sales";
 
 type TestConvex = ConvexTestInstance<typeof schema>;
 const MODULES = import.meta.glob("./**/*.*s");
@@ -105,7 +105,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
   }
 
   /** `NONE`: a mode-less application (no `quoteModeAtSubmission`; the seed quote carries no mode either). */
-  type Mode = "CASH" | "NONE" | "MANUAL_FINANCE_COMPANY";
+  type Mode = "CASH" | "NONE" | "MANUAL_FINANCE_COMPANY" | "INTERNAL_INSTALLMENT";
 
   /**
    * An APPROVED application that has passed every `finalizeDeal` precondition,
@@ -190,6 +190,14 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
 
   const appOf = (s: Seed, applicationId: Id<"financeApplications">) =>
     s.t.run((ctx) => ctx.db.get(applicationId)) as Promise<Doc<"financeApplications">>;
+
+  /** seed -> readyToFinalize -> real finalizeDeal -> read the application back. */
+  async function finalizedCash(tag: string, opts: { mode?: Mode; sourced?: boolean } = {}) {
+    const s = await seed(tag, { sourced: opts.sourced });
+    const applicationId = await readyToFinalize(s, { mode: opts.mode ?? "CASH" });
+    await finalize(s, applicationId);
+    return { s, applicationId, app: await appOf(s, applicationId) };
+  }
 
   async function cockpitOf(s: Seed, applicationId: Id<"financeApplications">) {
     const view = (await s.asOwner.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId }))!;
@@ -278,10 +286,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     });
 
     test("confirmDisbursement refuses with the coded NONE refusal and changes nothing", async () => {
-      const s = await seed(`ai_${mode}`);
-      const applicationId = await readyToFinalize(s, { mode });
-      await finalize(s, applicationId);
-      const before = await appOf(s, applicationId);
+      const { s, applicationId, app: before } = await finalizedCash(`ai_${mode}`, { mode });
       expect(await refusalCode(confirm(s, applicationId))).toBe("FINANCE_CONFIRM_NO_FINANCIER_PAYS");
       expect(await appOf(s, applicationId)).toEqual(before);
     });
@@ -290,9 +295,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
   // Parity pin, NOT a failing-first test: it passes before and after. The counts were taken from the
   // unmodified code, so any journal / receivable this change adds (or removes) fails here.
   test("ledger parity: finalizing a CASH deal writes exactly the documents it wrote before this change", async () => {
-    const s = await seed("parity");
-    const applicationId = await readyToFinalize(s, { mode: "CASH" });
-    await finalize(s, applicationId);
+    const { s } = await finalizedCash("parity");
     expect(await ledgerCounts(s)).toEqual({
       journalEntries: 1,
       journalLines: 4,
@@ -388,10 +391,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
   // `finalizeDeal` always writes a financingType, so (e) cannot be produced through it: the narrowest
   // fixture is a real finalize followed by clearing that one field (a legacy / hand-edited sale row).
   test("(e) a sale whose financingType is unreadable is UNKNOWN, not NONE", async () => {
-    const s = await seed("e_untyped");
-    const applicationId = await readyToFinalize(s, { mode: "CASH" });
-    await finalize(s, applicationId);
-    const app = await appOf(s, applicationId);
+    const { s, applicationId, app } = await finalizedCash("e_untyped");
     expect((await cockpitOf(s, applicationId)).disbursement.state).toBe("NOT_APPLICABLE"); // control
     await s.t.run((ctx) => ctx.db.patch(app.finalizedSaleId!, { financingType: undefined }));
     const { disbursement, settlement } = await cockpitOf(s, applicationId);
@@ -401,10 +401,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
   });
 
   test("(f) a sale that does not name this application back is not evidence", async () => {
-    const s = await seed("f_mismatch");
-    const applicationId = await readyToFinalize(s, { mode: "CASH" });
-    await finalize(s, applicationId);
-    const app = await appOf(s, applicationId);
+    const { s, applicationId, app } = await finalizedCash("f_mismatch");
     expect((await cockpitOf(s, applicationId)).disbursement.state).toBe("NOT_APPLICABLE"); // control
     const otherAppId = await s.t.run((ctx) =>
       ctx.db.insert("financeApplications", {
@@ -420,24 +417,17 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     }
   });
 
-  test("(g) a sale cancelled while the application stays CLOSED is not NONE and not settled", async () => {
-    const s = await seed("g_cancelled");
-    const applicationId = await readyToFinalize(s, { mode: "CASH" });
-    await finalize(s, applicationId);
-    const app = await appOf(s, applicationId);
+  test("(g) a cancelled deal is never NONE, never NOT_APPLICABLE and never settled (sale cancelled behind the app, and a real cancelApplication)", async () => {
     // Legacy shape (a sale cancelled behind the application's back): `sales.update` now refuses to cancel a
     // finance-linked sale, so the cancellation is patched onto the row the way the SCRUM-446 suite does.
-    await s.t.run((ctx) => ctx.db.patch(app.finalizedSaleId!, { status: "CANCELLED" }));
-    const { disbursement, settlement, all } = await cockpitOf(s, applicationId);
-    expect(disbursement.state).toBe("STOPPED");
-    expect(settlement.state).not.toBe("COMPLETE");
-    expect(all.some((st) => st.state === "NOT_APPLICABLE")).toBe(false);
-  });
+    const legacy = await finalizedCash("g_cancelled");
+    await legacy.s.t.run((ctx) => ctx.db.patch(legacy.app.finalizedSaleId!, { status: "CANCELLED" }));
+    const stopped = await cockpitOf(legacy.s, legacy.applicationId);
+    expect(stopped.disbursement.state).toBe("STOPPED");
+    expect(stopped.settlement.state).not.toBe("COMPLETE");
+    expect(stopped.all.some((st) => st.state === "NOT_APPLICABLE")).toBe(false);
 
-  test("(g2) a deal cancelled from the deal screen is NOT_READY and never NOT_APPLICABLE", async () => {
-    const s = await seed("g_cancelapp");
-    const applicationId = await readyToFinalize(s, { mode: "CASH" });
-    await finalize(s, applicationId);
+    const { s, applicationId } = await finalizedCash("g_cancelapp");
     await s.asOwner.mutation(api.applications.cancelApplication, {
       idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
@@ -454,7 +444,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
   // ── (h) replay ─────────────────────────────────────────────────────────────
   test("(h) finalizing twice is idempotent (same key or new key); the status never flips and no second sale is made", async () => {
     const s = await seed("h_replay");
-    const applicationId = await readyToFinalize(s, { mode: "CASH" });
+    const applicationId = await readyToFinalize(s);
     const key = crypto.randomUUID();
     const first = await finalize(s, applicationId, key);
     const afterFirst = await appOf(s, applicationId);
@@ -470,11 +460,11 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
   });
 
   // ── (i) the coded refusals and their translations ──────────────────────────
-  test("(i) the confirmDisbursement no-financier refusals are coded, with EN and AR text in the dictionary", () => {
+  // EN text equality with the server message is covered by financeDisbursementChequeReturn.test.ts.
+  test("(i) the confirmDisbursement no-financier refusals are coded, with Arabic text in the dictionary", () => {
     for (const code of ["FINANCE_CONFIRM_NO_FINANCIER_PAYS", "FINANCE_CONFIRM_NO_FINANCE_COMPANY"] as const) {
       expect(Object.keys(FC_RETURN_MESSAGES), code).toContain(code);
-      const key = `ServerError_${code}` as keyof typeof salesEn;
-      expect(typeof salesEn[key], `${code} en`).toBe("string");
+      const key = `ServerError_${code}`;
       const ar = (salesAr as Record<string, unknown>)[key];
       expect(typeof ar, `${code} ar`).toBe("string");
       expect(/[؀-ۿ]/.test(ar as string), `${code} ar is Arabic`).toBe(true);
@@ -483,23 +473,48 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
 
   // ── (j) controls: open money stays open ────────────────────────────────────
   test("(j) a consigned CASH deal: the financier leg is NONE but the supplier's money is still owed, so settlement stays open", async () => {
-    const s = await seed("j_consigned", { sourced: true });
-    const applicationId = await readyToFinalize(s, { mode: "CASH" });
-    await finalize(s, applicationId);
-    const app = await appOf(s, applicationId);
+    const { s, applicationId, app } = await finalizedCash("j_consigned", { sourced: true });
     expect(app.settlementStatus).toBe("NOT_APPLICABLE");
     const { disbursement, settlement } = await cockpitOf(s, applicationId);
     expect(disbursement.state).toBe("NOT_APPLICABLE");
     // NOT_APPLICABLE on the financier leg must never read as the whole deal being settled.
     expect(settlement.state).not.toBe("COMPLETE");
+
+    // Same family: a handover-less STOCK CASH deal never reads all-complete off NOT_APPLICABLE alone.
+    const stock = await finalizedCash("j_handover");
+    await stock.s.t.run((ctx) => ctx.db.patch(stock.applicationId, { handoverStatus: "READY" }));
+    const { all } = await cockpitOf(stock.s, stock.applicationId);
+    expect(all.every((st) => st.state === "COMPLETE" || st.state === "NOT_APPLICABLE")).toBe(false);
   });
 
-  test("control: a handover-less CASH deal never reads all-complete off NOT_APPLICABLE alone", async () => {
-    const s = await seed("j_handover");
-    const applicationId = await readyToFinalize(s, { mode: "CASH" });
+  // ── the shared predicate (reader and writer) ───────────────────────────────
+  test("a retired INTERNAL_INSTALLMENT deal cannot be finalized, so the writer's INTERNAL_INSTALLMENT arm is not reachable through finalizeDeal", async () => {
+    // SCRUM-495: finalizeDeal refuses the retired mode before any write. The arm still exists in the
+    // shared predicate because the READER must keep reading legacy INTERNAL_INSTALLMENT rows
+    // (financierLegNotApplicable.test.ts); this pins that the write side cannot produce one.
+    const s = await seed("ii_retired");
+    const applicationId = await readyToFinalize(s, { mode: "INTERNAL_INSTALLMENT" });
+    await expect(finalize(s, applicationId)).rejects.toThrow();
+    const app = await appOf(s, applicationId);
+    expect(app.status).toBe("APPROVED");
+    expect(app.settlementStatus).toBeUndefined();
+  });
+
+  test("control: a manual application whose letter is not yet entered is never NONE and never NOT_APPLICABLE", async () => {
+    // manualPayerOf(app) === null means "payer not known yet", not "no payer". Finalize with the
+    // letter, then drop it and hand-edit the sale to CASH: the manual MODE alone must keep the leg closed.
+    const s = await seed("manual_noletter");
+    const applicationId = await readyManualDeal(s);
     await finalize(s, applicationId);
-    await s.t.run((ctx) => ctx.db.patch(applicationId, { handoverStatus: "READY" }));
-    const { all } = await cockpitOf(s, applicationId);
-    expect(all.every((st) => st.state === "COMPLETE" || st.state === "NOT_APPLICABLE")).toBe(false);
+    const app = await appOf(s, applicationId);
+    expect(app.settlementStatus).toBe("EXPECTED");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, { manualApproval: undefined });
+      await ctx.db.patch(app.finalizedSaleId!, { financingType: "CASH" });
+    });
+    const { disbursement, settlement } = await cockpitOf(s, applicationId);
+    expect(disbursement.state).not.toBe("NOT_APPLICABLE");
+    expect(settlement.state).not.toBe("COMPLETE");
+    expect((await appOf(s, applicationId)).settlementStatus).not.toBe("NOT_APPLICABLE");
   });
 });
