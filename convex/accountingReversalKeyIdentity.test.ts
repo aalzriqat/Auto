@@ -244,12 +244,12 @@ describe("SCRUM-515 — reverseAccountingEvent proves the TARGET, not just the k
     await drainOnce(s.t, s.orgId);
 
     const row = (await pendingRow(s, key))[0] as any;
-    if (row.status === "POSTED" && row.resultEventId) {
-      const ev = (await s.t.run((ctx) => ctx.db.get(row.resultEventId))) as any;
-      // The queued POST may only ever be satisfied by ITS OWN forward event.
-      expect(ev.eventType).toBe("EXPENSE_POSTED");
-      expect(ev.sourceId).toBe("exp_5e");
-    }
+    expect(row.status).toBe("POSTED");
+    expect(row.resultEventId).toBeDefined();
+    const ev = (await s.t.run((ctx) => ctx.db.get(row.resultEventId))) as any;
+    // The queued POST may only ever be satisfied by ITS OWN forward event.
+    expect(ev.eventType).toBe("EXPENSE_POSTED");
+    expect(ev.sourceId).toBe("exp_5e");
     const forward = await s.t.run((ctx) =>
       ctx.db.query("accountingEvents")
         .withIndex("by_org_event_source_version", (q) =>
