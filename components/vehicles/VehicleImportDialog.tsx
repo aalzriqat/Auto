@@ -705,7 +705,11 @@ function isRecordedBeforeResetRefusal(err: unknown): boolean {
  * What the operator sees when an import chunk fails. A coded server refusal is
  * shown in the user's language. Retry advice is appended for every failure EXCEPT
  * the post-reset refusal, whose own message already says to start a new operation
- * (telling the operator to re-import the same file would be wrong).
+ * (telling the operator to re-import the same file would be wrong). That refusal
+ * still reports partial progress for OPENING_STOCK: earlier chunks committed, and
+ * a new import would add their VIN-less rows again, so the operator must be told
+ * how many vehicles were imported. For PURCHASE, or when nothing was imported, it
+ * is the bare message.
  *
  * What a re-import does depends on the mode. A PURCHASE file has a real VIN on
  * every row, so every car already added is skipped as a duplicate. An OPENING_STOCK
@@ -721,9 +725,11 @@ export function importChunkFailureMessage(
   t: (key: string) => string
 ): string {
   const detail = getLocalizedErrorMessage(err, t);
-  if (isRecordedBeforeResetRefusal(err)) return detail;
-  const retryAdvice = t(posting === "PURCHASE" ? "ImportRetryAdvicePurchase" : "ImportRetryAdviceOpeningStock");
   const stopped = t("ImportStoppedAfter").replace("{count}", String(inserted));
+  if (isRecordedBeforeResetRefusal(err)) {
+    return posting !== "PURCHASE" && inserted > 0 ? `${stopped} ${detail}` : detail;
+  }
+  const retryAdvice = t(posting === "PURCHASE" ? "ImportRetryAdvicePurchase" : "ImportRetryAdviceOpeningStock");
   if (posting === "PURCHASE") return `${detail} ${retryAdvice}`;
   return inserted > 0 ? `${stopped} ${detail} ${retryAdvice}` : detail;
 }

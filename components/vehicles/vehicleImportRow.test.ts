@@ -25,15 +25,28 @@ describe("SCRUM-563 F2 - importChunkFailureMessage localizes the post-reset refu
   test.each([
     ["en", english, commonEn as Record<string, string>],
     ["ar", arabic, commonAr as Record<string, string>],
-  ] as const)("%s: shows the translated refusal and no retry advice", (_lang, t, dictionary) => {
+  ] as const)("%s: translated refusal, partial progress kept for OPENING_STOCK, never retry advice", (_lang, t, dictionary) => {
     const expected = dictionary.ServerError_COMMAND_RECORDED_BEFORE_RESET;
     expect(expected).toBeTruthy();
-    for (const posting of ["PURCHASE", "OPENING_STOCK"]) {
-      const message = importChunkFailureMessage(refusal(), posting, 3, t);
-      expect(message).toBe(expected);
+    const stopped = dictionary.ImportStoppedAfter.replace("{count}", "3");
+    const noAdvice = (message: string) => {
       expect(message).not.toContain(dictionary.ImportRetryAdvicePurchase);
       expect(message).not.toContain(dictionary.ImportRetryAdviceOpeningStock);
-    }
+    };
+
+    const purchase = importChunkFailureMessage(refusal(), "PURCHASE", 3, t);
+    expect(purchase).toBe(expected);
+    noAdvice(purchase);
+
+    const openingNone = importChunkFailureMessage(refusal(), "OPENING_STOCK", 0, t);
+    expect(openingNone).toBe(expected);
+    noAdvice(openingNone);
+
+    // Earlier chunks committed: the operator must be told how many, or a "new
+    // operation" would add the VIN-less rows again.
+    const openingPartial = importChunkFailureMessage(refusal(), "OPENING_STOCK", 3, t);
+    expect(openingPartial).toBe(`${stopped} ${expected}`);
+    noAdvice(openingPartial);
   });
 
   test("every other failure keeps its retry advice", () => {
