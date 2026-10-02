@@ -2673,14 +2673,18 @@ export const createFromQuote = mutation({
     let vehicleValuation: number | undefined;
     let ltv: number | undefined;
     if (quote.companyId) {
+      const valuationCompanyId = quote.companyId;
       const valuations = await Promise.all(
-        quoteVehicleItems.map(async (item) => {
-          const vehicleValuationRows = await ctx.db
+        quoteVehicleItems.map(async (item) =>
+          // SCRUM-557: one tenant-led (org, vehicle, company) point read; a row
+          // stamped with another org is never selected.
+          (await ctx.db
             .query("vehicleValuations")
-            .withIndex("by_vehicle", (q) => q.eq("vehicleId", item.vehicleId))
-            .collect();
-          return vehicleValuationRows.find((v) => v.companyId === quote.companyId) ?? null;
-        })
+            .withIndex("by_org_vehicle_company", (q) =>
+              q.eq("orgId", args.orgId).eq("vehicleId", item.vehicleId).eq("companyId", valuationCompanyId)
+            )
+            .first()) ?? null
+        )
       );
       // Only treat the combined valuation as meaningful if every vehicle on the
       // quote has one — a partial sum would understate true collateral value.
