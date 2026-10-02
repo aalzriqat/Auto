@@ -12,6 +12,7 @@
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { seedOrgWithMember } from "../test-utils/seedOrg";
+import { seedCompany, seedVehicle } from "../test-utils/seedFinanceFixtures";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -40,39 +41,6 @@ async function seedDealer(tag: string) {
     ctx.db.insert("customers", { orgId, firstName: "Val", lastName: "Customer" })
   );
   return { t, orgId, otherOrgId, userId, asUser, customerId };
-}
-
-async function seedVehicle(t: TestConvex, orgId: Id<"organizations">, vin: string) {
-  return await t.run((ctx) =>
-    ctx.db.insert("vehicles", {
-      orgId,
-      vin,
-      make: "Toyota",
-      model: "RAV4",
-      year: 2025,
-      mileage: 100,
-      color: "Silver",
-      fuelType: "Gasoline",
-      transmission: "Automatic",
-      purchasePrice: 18000,
-      sellingPrice: 22000,
-      status: "AVAILABLE",
-    })
-  );
-}
-
-async function seedCompany(t: TestConvex, orgId: Id<"organizations">, name: string) {
-  return await t.run((ctx) =>
-    ctx.db.insert("financeCompanies", {
-      orgId,
-      name,
-      profitRate: 5,
-      maxTermMonths: 60,
-      gracePeriodMonths: 0,
-      isActive: true,
-      adminFees: 0,
-    })
-  );
 }
 
 function insertValuation(
