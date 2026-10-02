@@ -49,8 +49,10 @@ const RESET_TABLES = [
   // General ledger
   "accountingEvents",
   "pendingAccountingEvents",
-  "journalEntries",
+  // ⚠️ SCRUM-549: `journalLines.journalEntryId` and `.accountId` are REQUIRED, so
+  // lines go BEFORE their entry and their account (CHILD_TABLES defers both).
   "journalLines",
+  "journalEntries",
   "financialAuditLog",
   "accountBalanceSnapshots",
   "chartOfAccounts",
@@ -92,16 +94,21 @@ const RESET_TABLES = [
   "receiptRetainedPositions",
   "receiptMovements",
   "transactions",
+  // ⚠️ SCRUM-549. paymentVouchers .. receivables are each a child of a later
+  // table here (`cashierReconciliations` is a parent only: it references no reset
+  // table). Vouchers go before the deposits they name (`depositId` REQUIRED).
+  // `paymentAllocations` follows `collectionPayments` (whose `paymentAllocationId` it would otherwise orphan)
+  // and precedes the payment and document it REQUIRES. Approval requests precede
+  // the receivables they name.
+  "paymentVouchers",
   "deposits",
   "collectionPayments",
-  "receivableDocuments",
-  "canonicalPayments",
-  "receivables",
   "paymentAllocations",
+  "canonicalPayments",
+  "collectionApprovalRequests",
+  "receivables",
   "postDatedCheques",
   "cashierReconciliations",
-  "collectionApprovalRequests",
-  "paymentVouchers",
   // Expenses. SCRUM-389 supplier-cost recoveries first: a receipt names its
   // recovery and a recovery names its expense, so neither may outlive what it
   // points at (children before parents, plus the CHILD_TABLES edges).
@@ -127,7 +134,8 @@ const RESET_TABLES = [
   "financeDealCustody",
   "applicationStatusLog",
   "financeApplications",
-  // Sales, then quotes — LAST, because both are referenced by rows above.
+  // Sales, then receivable documents, then quotes — LAST, because they are
+  // referenced by rows above.
   //
   // ⚠️ SCRUM-534. `quotes` and `sales` used to sit BEFORE the finance group with
   // no `CHILD_TABLES` edge. `financeApplications.quoteId` is REQUIRED, so one
@@ -141,6 +149,10 @@ const RESET_TABLES = [
   // may be REQUIRED-dangling, and the required edge — application -> quote — is
   // the one this order protects). `quotes` follows `sales`.
   "sales",
+  // SCRUM-549: `receivables` and `sales` hold an optional document link that
+  // `paymentIntents.create` refuses to proceed without, so documents outlive
+  // both (hence after `sales`). A document references no table listed later.
+  "receivableDocuments",
   "quotes",
 ] as const;
 
@@ -188,21 +200,38 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   // first would leave live receipt authority referring to payments,
   // allocations and receivables that no longer exist.
   collectionPayments: ["receiptMovements"],
-  canonicalPayments: ["receiptMovements"],
-  paymentAllocations: ["receiptApplications"],
-  receivableDocuments: ["receiptApplications"],
-  receivables: ["receiptApplications"],
+  // SCRUM-549. `deposits.canonicalPaymentId` is optional but voidDeposit and
+  // voidCanonicalPayment dereference it. `paymentAllocations.paymentId` and
+  // `.receivableDocumentId` are REQUIRED.
+  canonicalPayments: ["receiptMovements", "paymentAllocations", "deposits"],
+  // `receiptMovements.initialAllocationIds[]` is REQUIRED; `collectionPayments.
+  // paymentAllocationId` is optional but listed so no payment points at a
+  // deleted allocation.
+  paymentAllocations: ["receiptApplications", "receiptMovements", "collectionPayments"],
+  // `receivables` and `sales` carry `canonicalReceivableDocumentId` (optional,
+  // but `paymentIntents.create` refuses a missing document).
+  receivableDocuments: ["receiptApplications", "paymentAllocations", "receivables", "sales"],
+  receivables: ["receiptApplications", "collectionApprovalRequests"],
+  // SCRUM-549 — the ledger. `journalLines.journalEntryId` / `.accountId` and
+  // `accountBalanceSnapshots.accountId` are REQUIRED.
+  journalEntries: ["journalLines"],
+  chartOfAccounts: ["journalLines", "accountBalanceSnapshots"],
+  // `paymentVouchers.depositId` is REQUIRED; `commitmentAuthorityWork.depositId`
+  // is too (not behaviour-tested: the authority preflight refuses a destructive
+  // reset while those rows exist).
+  deposits: ["paymentVouchers", "commitmentAuthorityWork"],
+  commitmentAuthorityWork: ["commitmentAuthorityAttempt"],
+  pendingAccountingEvents: ["commitmentAuthorityWork"],
+  financeDealCustody: ["financeDealCustodyEntries"],
   // SCRUM-389 — the partial-drain half for the supplier-cost recovery chain.
   supplierCostRecoveries: ["supplierCostRecoveryReceipts"],
   expenses: ["supplierCostRecoveries"],
   // SCRUM-534 — every in-scope table that references a sale or a quote. The
   // required references are financeApplications.quoteId and
   // payrollItems.commissionSaleIds; the rest are optional but are deferred the
-  // same way so no pass leaves any of them dangling. One exception:
-  // commitmentAuthorityWork.saleId is a required sale reference that is NOT
-  // listed here. It is pinned as an open decision in the reference coverage test
-  // and is unreachable today because the preflight refuses a destructive reset
-  // while authority rows exist.
+  // same way so no pass leaves any of them dangling. SCRUM-549 adds
+  // commitmentAuthorityWork.saleId (REQUIRED); it is not behaviour-tested because
+  // the preflight refuses a destructive reset while authority rows exist.
   sales: [
     "financeApplications",
     "deposits",
@@ -212,6 +241,7 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
     "transactions",
     // payrollItems.commissionSaleIds is a REQUIRED v.array(v.id("sales")).
     "payrollItems",
+    "commitmentAuthorityWork",
   ],
   quotes: ["sales", "financeApplications", "deposits", "receivables"],
   payrollRuns: ["payrollItems"],
@@ -362,10 +392,15 @@ export const resetOrgFinancialData = internalMutation({
     // would throw on every dispatch, burn its retry budget and record a false
     // RETRY_EXHAUSTED against a deal nobody could explain.
     //
-    // `CHILD_TABLES` already defers a parent whose children remain, but the
-    // authority lifecycle is not expressible that way: work rows reference
-    // pending events, deposits, sales, holds and vehicles at once, and the
-    // ordering of this array is not a dependency proof.
+    // SCRUM-549 made every REQUIRED authority reference between reset tables a
+    // `CHILD_TABLES` edge; holds and vehicles sit outside the reset. The one
+    // accepted exception is the optional `commitmentAuthorityWork.activeAttemptId`
+    // back-link to `commitmentAuthorityAttempt`: it has no edge because the
+    // reverse required edge `attempt.workId -> work` exists and adding it would
+    // cycle (ACCEPTED_OPTIONAL_DANGLING in
+    // scripts/orgFinancialResetReferenceCoverage.test.ts). This stays
+    // as defence in depth: work rows also reference those non-reset rows and
+    // lifecycle state, which no edge or ordering can prove safe.
     //
     // ⚠️ SO THIS REFUSES RATHER THAN ORDERING. Safety beats partial progress on
     // a destructive internal tool: an organization carrying canonical authority

@@ -126,15 +126,11 @@ const ACCEPTED_OPTIONAL_DANGLING: Record<string, string> = {
     "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
   "collectionPayments.chequeId->postDatedCheques":
     "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
-  "collectionPayments.paymentAllocationId->paymentAllocations":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
   "collectionPayments.receivableId->receivables":
     "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
   "collectionPayments.reconciliationId->cashierReconciliations":
     "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
   "commitmentAuthorityWork.activeAttemptId->commitmentAuthorityAttempt":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
-  "deposits.canonicalPaymentId->canonicalPayments":
     "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
   "financeApplications.approvedPurchaseAppraisalId->financeAppraisals":
     "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
@@ -174,11 +170,7 @@ const ACCEPTED_OPTIONAL_DANGLING: Record<string, string> = {
     "optional self-reference between rows of one reset table; pre-existing, not individually reviewed; dangling tolerated.",
   "receivables.applicationId->financeApplications":
     "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
-  "receivables.canonicalReceivableDocumentId->receivableDocuments":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
   "sales.applicationId->financeApplications":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
-  "sales.canonicalReceivableDocumentId->receivableDocuments":
     "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
   "transactions.depositId->deposits":
     "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
@@ -193,8 +185,6 @@ const ACCEPTED_OPTIONAL_DANGLING: Record<string, string> = {
  * these is endorsed; listing them stops the set growing silently.
  */
 const KNOWN_SURVIVING_REFERENCES: Record<string, string> = {
-  "accountBalanceSnapshots.accountId->chartOfAccounts":
-    "OPEN DECISION: REQUIRED reference; child is ordered first but has no CHILD_TABLES edge, so a partial (small batchSize) pass can delete the target while the child survives.",
   "applicationDocuments.applicationId->financeApplications":
     "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
   "bankStatementLines.matchedJournalLineId->journalLines":
@@ -205,20 +195,10 @@ const KNOWN_SURVIVING_REFERENCES: Record<string, string> = {
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "claims.saleId->sales":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "collectionApprovalRequests.receivableId->receivables":
-    "OPEN DECISION: REQUIRED reference; the child is listed AFTER its target in RESET_TABLES and has no edge, so a pass can delete the target while the child survives.",
   "collectionReminders.chequeId->postDatedCheques":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "collectionReminders.receivableId->receivables":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "commitmentAuthorityAttempt.workId->commitmentAuthorityWork":
-    "OPEN DECISION: REQUIRED reference; child is ordered first but has no CHILD_TABLES edge, so a partial (small batchSize) pass can delete the target while the child survives.",
-  "commitmentAuthorityWork.depositId->deposits":
-    "OPEN DECISION: REQUIRED reference; child is ordered first but has no CHILD_TABLES edge, so a partial (small batchSize) pass can delete the target while the child survives.",
-  "commitmentAuthorityWork.pendingEventId->pendingAccountingEvents":
-    "OPEN DECISION: REQUIRED reference; child is ordered first but has no CHILD_TABLES edge, so a partial (small batchSize) pass can delete the target while the child survives.",
-  "commitmentAuthorityWork.saleId->sales":
-    "OPEN DECISION: REQUIRED reference; child is ordered first but has no CHILD_TABLES edge, so a partial (small batchSize) pass can delete the target while the child survives.",
   "commitmentRoots.consumedBySaleId->sales":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "commitmentRoots.headQuoteId->quotes":
@@ -251,14 +231,8 @@ const KNOWN_SURVIVING_REFERENCES: Record<string, string> = {
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "financeCompanyForwards.applicationId->financeApplications":
     "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  "financeDealCustodyEntries.custodyId->financeDealCustody":
-    "OPEN DECISION: REQUIRED reference; child is ordered first but has no CHILD_TABLES edge, so a partial (small batchSize) pass can delete the target while the child survives.",
   "fixedAssetEvents.accountingEventId->accountingEvents":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "journalLines.accountId->chartOfAccounts":
-    "OPEN DECISION: REQUIRED reference; child is ordered first but has no CHILD_TABLES edge, so a partial (small batchSize) pass can delete the target while the child survives.",
-  "journalLines.journalEntryId->journalEntries":
-    "OPEN DECISION: REQUIRED reference; the child is listed AFTER its target in RESET_TABLES and has no edge, so a pass can delete the target while the child survives.",
   "manualJournalDrafts.journalEntryId->journalEntries":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "manualJournalDrafts.lines[].accountId->chartOfAccounts":
@@ -269,10 +243,6 @@ const KNOWN_SURVIVING_REFERENCES: Record<string, string> = {
     "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
   "partnerEquityTransactions.accountingEventId->accountingEvents":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "paymentAllocations.paymentId->canonicalPayments":
-    "OPEN DECISION: REQUIRED reference; the child is listed AFTER its target in RESET_TABLES and has no edge, so a pass can delete the target while the child survives.",
-  "paymentAllocations.receivableDocumentId->receivableDocuments":
-    "OPEN DECISION: REQUIRED reference; the child is listed AFTER its target in RESET_TABLES and has no edge, so a pass can delete the target while the child survives.",
   "paymentIntents.canonicalPaymentId->canonicalPayments":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "paymentIntents.collectionPaymentId->collectionPayments":
@@ -285,12 +255,8 @@ const KNOWN_SURVIVING_REFERENCES: Record<string, string> = {
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "paymentIntents.saleId->sales":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "paymentVouchers.depositId->deposits":
-    "OPEN DECISION: REQUIRED reference; the child is listed AFTER its target in RESET_TABLES and has no edge, so a pass can delete the target while the child survives.",
   "prepaidExpenseSchedules.expenseId->expenses":
     "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  "receiptMovements.initialAllocationIds[]->paymentAllocations":
-    "OPEN DECISION: REQUIRED reference; child is ordered first but has no CHILD_TABLES edge, so a partial (small batchSize) pass can delete the target while the child survives.",
   "vehicleCommitmentClaims.applicationId->financeApplications":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "vehicleCommitmentClaims.consumedBySaleId->sales":
