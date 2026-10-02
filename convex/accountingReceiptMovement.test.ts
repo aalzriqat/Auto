@@ -510,8 +510,8 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
       ctx.db
         .query("accountingEvents")
         .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "RECEIPT_CREDIT_APPLIED"))
         .collect()
+        .then((rows) => rows.filter((row) => row.eventType === "RECEIPT_CREDIT_APPLIED"))
     );
     expect(events).toHaveLength(3);
     expect((await positionFor(t, orgId, movement._id))!.remainingUnappliedMinor).toBe(4000);
@@ -661,8 +661,8 @@ describe("SCRUM-218-C §5 — exact replay of one application", () => {
       ctx.db
         .query("accountingEvents")
         .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "RECEIPT_CREDIT_APPLIED"))
         .collect()
+        .then((rows) => rows.filter((row) => row.eventType === "RECEIPT_CREDIT_APPLIED"))
     );
     expect(events).toHaveLength(1);
   });
@@ -1026,6 +1026,9 @@ describe("SCRUM-218-C §10 R02 — a batched financial reset never orphans recei
           .collect()
       )
     ).toHaveLength(2);
+
+    // A reset runs only on a suspended organization (SCRUM-559).
+    await t.run((ctx) => ctx.db.patch(orgId, { suspended: true }));
 
     // One row per table per pass — the adversarial batch size.
     //

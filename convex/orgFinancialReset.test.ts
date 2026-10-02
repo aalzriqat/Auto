@@ -27,7 +27,7 @@ function setup() {
 /** Seeds one org with a row in each of three reset tables plus protected rows. */
 async function seedOrg(t: ReturnType<typeof setup>, name: string) {
   const orgId = await t.run((ctx) =>
-    ctx.db.insert("organizations", { name, createdAt: Date.now() })
+    ctx.db.insert("organizations", { name, createdAt: Date.now(), suspended: true })
   );
 
   await t.run(async (ctx) => {
@@ -87,8 +87,8 @@ async function countFor(
   const rows = await t.run((ctx) =>
     ctx.db
       .query(table)
-      .filter((q) => q.eq(q.field("orgId"), orgId))
       .collect()
+      .then((all) => all.filter((row) => row.orgId === orgId))
   );
   return rows.length;
 }
@@ -167,8 +167,8 @@ describe("resetOrgFinancialData", () => {
     const vehicles = await t.run((ctx) =>
       ctx.db
         .query("vehicles")
-        .filter((q) => q.eq(q.field("orgId"), orgId))
         .collect()
+        .then((all) => all.filter((row) => row.orgId === orgId))
     );
     expect(vehicles).toHaveLength(1);
     expect(vehicles[0].status).toBe("SOLD");
@@ -177,7 +177,7 @@ describe("resetOrgFinancialData", () => {
   test("deletes an appraisal's stored report rather than orphaning it", async () => {
     const t = setup();
     const orgId = await t.run((ctx) =>
-      ctx.db.insert("organizations", { name: "Blob Motors", createdAt: Date.now() })
+      ctx.db.insert("organizations", { name: "Blob Motors", createdAt: Date.now(), suspended: true })
     );
     const blobId = await t.run((ctx) => ctx.storage.store(new Blob(["appraisal.pdf"])));
 
@@ -222,7 +222,7 @@ describe("resetOrgFinancialData", () => {
   test("a partial batch never deletes an application out from under its own fee rows", async () => {
     const t = setup();
     const orgId = await t.run((ctx) =>
-      ctx.db.insert("organizations", { name: "Batch Motors", createdAt: Date.now() })
+      ctx.db.insert("organizations", { name: "Batch Motors", createdAt: Date.now(), suspended: true })
     );
 
     const ids = await t.run(async (ctx) => {
@@ -517,7 +517,7 @@ describe("resetOrgFinancialData never strands a surviving row's quote or sale re
   test("a partial pass keeps the quote and sale while applications or their children survive", async () => {
     const t = setup();
     const orgId = await t.run((ctx) =>
-      ctx.db.insert("organizations", { name: "Quote Order Motors", createdAt: Date.now() })
+      ctx.db.insert("organizations", { name: "Quote Order Motors", createdAt: Date.now(), suspended: true })
     );
 
     const ids = await t.run(async (ctx) => {
@@ -600,7 +600,7 @@ describe("resetOrgFinancialData never strands a payrollItem's run reference", ()
   test("a partial pass keeps the payroll run while any of its items survive", async () => {
     const t = setup();
     const orgId = await t.run((ctx) =>
-      ctx.db.insert("organizations", { name: "Payroll Order Motors", createdAt: Date.now() })
+      ctx.db.insert("organizations", { name: "Payroll Order Motors", createdAt: Date.now(), suspended: true })
     );
 
     const runId = await t.run(async (ctx) => {

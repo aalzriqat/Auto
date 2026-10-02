@@ -121,7 +121,7 @@ interface Base {
 /** An org with the user, vehicle and customer every protected row needs. */
 async function seedBase(ctx: MutationCtx, tag: string): Promise<Base> {
   const now = Date.now();
-  const orgId = await ctx.db.insert("organizations", { name: tag, createdAt: now });
+  const orgId = await ctx.db.insert("organizations", { name: tag, createdAt: now, suspended: true });
   const userId = await ctx.db.insert("users", {
     clerkId: `req_refs_${tag}`,
     email: `${tag.replace(/\s/g, "")}@x.com`,

@@ -17,6 +17,8 @@
  *   3. KNOWN SURVIVING — listed in KNOWN_SURVIVING_REFERENCES (OPEN DECISION).
  * Anything else, and any stale entry in the lists, fails.
  */
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { describe, expect, test } from "vitest";
 import { v } from "convex/values";
 import schema from "../convex/schema";
@@ -103,79 +105,64 @@ function allReferences(): Ref[] {
 
 /**
  * Optional reference fields between two reset-scoped tables that are
- * deliberately NOT ordered/deferred. Optional only; each needs a reason.
+ * deliberately NOT ordered/deferred. Optional only. Each reason was verified by
+ * grepping the readers and writers of the field (SCRUM-559); a field that IS
+ * hard-dereferenced must be an edge, or be safe only because the suspension
+ * preflight blocks every non-internal caller, and the reason must say so.
  */
 const ACCEPTED_OPTIONAL_DANGLING: Record<string, string> = {
-  "accountingEvents.journalEntryId->journalEntries":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
   "accountingEvents.reversalOfEventId->accountingEvents":
-    "optional self-reference between rows of one reset table; pre-existing, not individually reviewed; dangling tolerated.",
+    "Self-reference; read only as an id compare (utils/financeCompanyForward.ts:154) and passed to a null-guarded get (utils/prepaidRecognitionEvents.ts:179-182); never a hard dereference.",
   "accountingEvents.reversedByEventId->accountingEvents":
-    "optional self-reference between rows of one reset table; pre-existing, not individually reviewed; dangling tolerated.",
+    "Self-reference; every read null-guards the get (accounting/reversals.ts:58-59, accountingReports.ts:1110-1111, utils/financeCompanyForward.ts:149-153 fails to NEEDS_REPAIR).",
   "canonicalPayments.accountingEventId->accountingEvents":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
+    "Written only (subledger.ts:123,201); no reader dereferences it.",
   "canonicalPayments.cashierSessionId->cashierReconciliations":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
+    "Written only (subledger.ts:200); no reader dereferences it.",
   "canonicalPayments.originalPaymentId->canonicalPayments":
-    "optional self-reference between rows of one reset table; pre-existing, not individually reviewed; dangling tolerated.",
+    "Self-reference; no reader or writer exists in convex/ outside the schema.",
   "canonicalPayments.reversalPaymentId->canonicalPayments":
-    "optional self-reference between rows of one reset table; pre-existing, not individually reviewed; dangling tolerated.",
+    "Self-reference; no reader or writer exists in convex/ outside the schema.",
   "chartOfAccounts.parentAccountId->chartOfAccounts":
-    "optional self-reference between rows of one reset table; pre-existing, not individually reviewed; dangling tolerated.",
-  "collectionPayments.canonicalPaymentId->canonicalPayments":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
+    "Self-reference; read only to validate the parent when an account is created (chartOfAccounts.ts:817-818), a tenant mutation the suspension blocks.",
   "collectionPayments.chequeId->postDatedCheques":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
+    "Only compared through the by_cheque index (collections.ts:2263); never dereferenced from the payment row.",
   "collectionPayments.receivableId->receivables":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
+    "Read only through a null-guarded get (collections.ts:292, hydratePayment); no other reader dereferences it.",
   "collectionPayments.reconciliationId->cashierReconciliations":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
+    "Written (collections.ts:3026) and index-filtered (collections.ts:2928) only; no reader dereferences it.",
   "commitmentAuthorityWork.activeAttemptId->commitmentAuthorityAttempt":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
+    "Reverse edge would cycle (attempt.workId requires work); the reset refuses any org holding authority rows (orgFinancialReset.ts authority preflight), and the one reader null-guards (accountingOutbox.ts:895-904).",
   "financeApplications.approvedPurchaseAppraisalId->financeAppraisals":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
+    "Dereferenced by financingEconomics.recomputeEconomicsForApplication (financingEconomics.ts:188-190, null-tolerated but silently drops the LTV basis) via financeDealCosts.recordDealFee (financeDealCosts.ts:1828); a reverse edge would cycle because appraisals require their application. Safe mid-reset ONLY because the suspension preflight blocks that tenant-auth writer (financeDealCosts.ts has no internal or scheduled entry point).",
   "financeAppraisals.supersededByAppraisalId->financeAppraisals":
-    "optional self-reference between rows of one reset table; pre-existing, not individually reviewed; dangling tolerated.",
+    "Self-reference; written only (financingEconomics.ts:2096); no reader dereferences it.",
   "financeDealCustodyEntries.reversesEntryId->financeDealCustodyEntries":
-    "optional self-reference between rows of one reset table; pre-existing, not individually reviewed; dangling tolerated.",
-  "financeDealFees.custodyId->financeDealCustody":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
-  "financeDealFees.custodyPosted.custodyId->financeDealCustody":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
+    "Self-reference; hard-dereferenced by financeDealCosts.ts:1326,1419,3235 and utils/custodySourceLedger.ts:1258,1750, all tenant-auth functions or pure ledger folds over a live custody, blocked by the suspension preflight.",
   "journalEntries.accountingEventId->accountingEvents":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
+    "Reverse of the E2 edge (accountingEvents.journalEntryId), which would cycle; the only reader null-guards (accountingLedger.ts:198).",
   "journalEntries.reversalOfJournalEntryId->journalEntries":
-    "optional self-reference between rows of one reset table; pre-existing, not individually reviewed; dangling tolerated.",
+    "Self-reference; written only (accounting/reversals.ts:219); no reader dereferences it.",
   "journalEntries.reversedByJournalEntryId->journalEntries":
-    "optional self-reference between rows of one reset table; pre-existing, not individually reviewed; dangling tolerated.",
+    "Self-reference; written only (accounting/reversals.ts:272); no reader dereferences it.",
   "paymentAllocations.reversalOfAllocationId->paymentAllocations":
-    "optional self-reference between rows of one reset table; pre-existing, not individually reviewed; dangling tolerated.",
+    "Self-reference; used only as a Map key in accountingReports.ts:443-450, never dereferenced.",
   "paymentAllocations.reversedByAllocationId->paymentAllocations":
-    "optional self-reference between rows of one reset table; pre-existing, not individually reviewed; dangling tolerated.",
-  "pendingAccountingEvents.originalEventId->accountingEvents":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
-  "pendingAccountingEvents.resultEventId->accountingEvents":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
-  "postDatedCheques.applicationId->financeApplications":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
-  "postDatedCheques.originApplicationId->financeApplications":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
-  "postDatedCheques.receivableId->receivables":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
+    "Self-reference; written only (subledger.ts:367); no reader dereferences it.",
   "postDatedCheques.replacementChequeId->postDatedCheques":
-    "optional self-reference between rows of one reset table; pre-existing, not individually reviewed; dangling tolerated.",
+    "Self-reference; the only reader (chequeLineageAudit.ts:77-78) null-guards the get and answers UNRESOLVED; collections.ts:2171 writes it.",
   "receivableDocuments.accountingEventId->accountingEvents":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
+    "Written only (subledger.ts:123); no reader dereferences it.",
   "receivableDocuments.reversedDocumentId->receivableDocuments":
-    "optional self-reference between rows of one reset table; pre-existing, not individually reviewed; dangling tolerated.",
+    "Self-reference; no reader or writer exists in convex/ outside the schema.",
   "receivables.applicationId->financeApplications":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
+    "Only ownership-checked when a receivable is created (collections.ts:239-241), a tenant mutation the suspension blocks; never dereferenced from a stored row.",
   "sales.applicationId->financeApplications":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
+    "Dereferenced by sales.cancel (sales.ts:1024-1025, fails closed), getBillOfSaleEconomics (sales.ts:353) and utils/financingProvenance.ts:86,98 (reports and dashboard). A reverse edge would cycle. Safe mid-reset ONLY because the suspension preflight blocks those tenant-auth callers.",
   "transactions.depositId->deposits":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
+    "Read through null-guarded gets (transactions.ts:40-45, depositRevenueImpact.ts:107) and an id compare (reports.ts:1050).",
   "transactions.expenseId->expenses":
-    "optional reference between reset tables with no CHILD_TABLES edge; pre-existing, not individually reviewed; dangling tolerated.",
+    "Written at creation only (transactions.ts:273,297); no reader dereferences it.",
 };
 
 /**
@@ -412,5 +399,73 @@ describe("organization financial reset covers every reset-to-reset reference", (
 
   test("MUTATION CONTROL: an unknown validator kind throws instead of being skipped", () => {
     expect(() => collect("t", { kind: "futureKind" }, "f", false, [])).toThrow(/futureKind.*t\.f|t\.f.*futureKind/);
+  });
+});
+
+/**
+ * `receivableDocuments.sourceId` is an opaque string, so the v.id walk above
+ * cannot see it, yet each known `sourceType` makes it a reference to a row in a
+ * reset-scoped table. Pinned here so a new kind cannot appear unnoticed.
+ *
+ * `sourceId` is only compared through the by_org source index and written; no
+ * reader turns it back into a row id today (SCRUM-559 recon). `subledger
+ * .createReceivable` (internal) accepts arbitrary strings, so the scan below
+ * covers the in-repo writers only; the open-ended input is tracked in SCRUM-563.
+ */
+const RECEIVABLE_DOCUMENT_SOURCE_KINDS: Record<string, string> = {
+  finance_application: "financeApplications",
+  legacy_receivable: "receivables",
+  sales: "sales",
+};
+
+const CONVEX_DIR = path.join(__dirname, "..", "convex");
+
+function convexSourceFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "_generated" || entry.name === "node_modules") continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...convexSourceFiles(full));
+    else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) out.push(full);
+  }
+  return out;
+}
+
+/** sourceType literals written by files that create receivable documents. */
+function receivableDocumentSourceLiterals(): { writers: string[]; literals: Set<string> } {
+  const writers: string[] = [];
+  const literals = new Set<string>();
+  for (const file of convexSourceFiles(CONVEX_DIR)) {
+    if (path.basename(file) === "subledger.ts") continue; // the generic writer, no literal
+    const text = fs.readFileSync(file, "utf8");
+    if (!/createReceivableDocument|ensureReceivableDocument|insert\(\s*"receivableDocuments"/.test(text)) continue;
+    writers.push(path.relative(CONVEX_DIR, file).replace(/\\/g, "/"));
+    // Only the argument object of the create call: other `sourceType` keys in these files are accounting-event sources.
+    for (const call of text.matchAll(/(?:createReceivableDocument|ensureReceivableDocument)\(\s*ctx\s*,\s*\{([\s\S]{0,600}?)\}\s*\)/g)) {
+      for (const m of call[1].matchAll(/sourceType\s*:\s*"([^"]+)"/g)) literals.add(m[1]);
+    }
+    for (const m of text.matchAll(/_SOURCE\s*=\s*"([^"]+)"/g)) literals.add(m[1]);
+  }
+  return { writers, literals };
+}
+
+describe("receivableDocuments.sourceId opaque references stay pinned", () => {
+  test("every in-repo writer uses a pinned sourceType kind", () => {
+    const { writers, literals } = receivableDocumentSourceLiterals();
+    // Sanity: the scan must actually see the known writers, or it proves nothing.
+    expect(writers).toEqual(expect.arrayContaining(["applications.ts", "collections.ts", "utils/saleCompletion.ts"]));
+    for (const kind of Object.keys(RECEIVABLE_DOCUMENT_SOURCE_KINDS)) expect(literals).toContain(kind);
+    const unknown = [...literals].filter((k) => !(k in RECEIVABLE_DOCUMENT_SOURCE_KINDS)).sort();
+    expect(
+      unknown,
+      render("receivableDocuments.sourceType kinds with no pinned target table (decide its reset handling):", unknown)
+    ).toEqual([]);
+  });
+
+  test("every pinned kind targets a reset-scoped table", () => {
+    const resetSet = new Set<string>(RESET_TABLES_FOR_TEST);
+    for (const [kind, table] of Object.entries(RECEIVABLE_DOCUMENT_SOURCE_KINDS)) {
+      expect(resetSet.has(table), `${kind} -> ${table}`).toBe(true);
+    }
   });
 });
