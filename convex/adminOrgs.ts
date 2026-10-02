@@ -6,6 +6,7 @@ import { internalMutation, mutation } from "./functions";
 import { Doc, Id, TableNames } from "./_generated/dataModel";
 import { requireSuperAdmin } from "./utils/tenancy";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { orgResetState } from "./utils/orgResetGeneration";
 import { logAdminAction } from "./adminAudit";
 import { notifyManagers } from "./utils/notifications";
 
@@ -283,6 +284,29 @@ async function assertNoIrreversiblePurgeHistory(
 }
 
 /**
+ * ⚠️ SCRUM-563 — A PARTIALLY RESET ORGANIZATION IS NOT RETURNED TO SERVICE.
+ *
+ * `resetOrgFinancialData` runs in batches. Between batches the org holds some
+ * financial rows and not others, and its command log still names rows that are
+ * gone. `financialResetGeneration !== financialResetCompletedGeneration` is the
+ * in-progress marker (see `utils/orgResetGeneration.ts`); the reset itself stamps
+ * the completed side when a destructive run leaves nothing behind. The only way
+ * forward is to finish the reset.
+ *
+ * Called from `reactivateOrganization`, so both callers (`unsuspendOrg` and
+ * `rejectDeletionRequest`) inherit it. Thrown, so an uncaught refusal rolls the
+ * whole calling mutation back.
+ */
+export const FINANCIAL_RESET_IN_PROGRESS_MESSAGE =
+  "This organization's financial reset has not finished. It cannot be returned to service until the reset completes.";
+
+function assertNoFinancialResetInProgress(org: Doc<"organizations">) {
+  if (orgResetState(org).inProgress) {
+    throwAppError(AppErrorCode.ORG_FINANCIAL_RESET_IN_PROGRESS, FINANCIAL_RESET_IN_PROGRESS_MESSAGE);
+  }
+}
+
+/**
  * THE ONLY PLACE AN ORGANIZATION IS RETURNED TO SERVICE.
  *
  * The guard and the write live in one function on purpose. Two earlier
@@ -314,6 +338,7 @@ async function reactivateOrganization(
   options: { clearDeletionRequestPointer?: boolean } = {}
 ) {
   await assertNoIrreversiblePurgeHistory(ctx, org);
+  assertNoFinancialResetInProgress(org);
 
   await ctx.db.patch(org._id, {
     suspended: false,

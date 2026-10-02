@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { internalMutation } from "./functions";
 import type { DatabaseReader } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { orgResetState } from "./utils/orgResetGeneration";
 
 /**
  * One-off operational tool: clears an organization's accounting, sales and
@@ -432,6 +433,10 @@ export const resetOrgFinancialData = internalMutation({
     orgSuspended: boolean;
     /** SCRUM-559. True when a PENDING online payment intent exists, which makes a destructive reset refuse. */
     pendingPaymentIntentsPresent: boolean;
+    /** SCRUM-563. The org's reset generation after this run (0 when it never had one). */
+    resetGeneration: number;
+    /** SCRUM-563. True when this destructive run finished the reset (nothing remaining). */
+    resetComplete: boolean;
   }> => {
     const dryRun = args.dryRun ?? true;
     const limit = Math.min(Math.max(args.batchSize ?? RESET_DELETE_BATCH, 1), RESET_DELETE_BATCH);
@@ -517,6 +522,24 @@ export const resetOrgFinancialData = internalMutation({
       );
     }
 
+    // ⚠️ SCRUM-563 R1 — THE RESET GENERATION IS BUMPED BEFORE THE FIRST DELETE,
+    // in this same mutation, and only when no reset is already in progress.
+    //
+    // `commandIdempotency` is not in RESET_TABLES, so command rows survive the
+    // reset while the rows their stored results name do not. Every command row
+    // carries the generation it was written under, and `runWithIdempotency`
+    // refuses a replay from an older one. A counter rather than a timestamp: an
+    // equal clock cannot defeat it. A continuation batch finds
+    // `generation !== completed` and leaves the generation alone, so it moves
+    // exactly once per reset. Dry runs and refused runs (all thrown above) write
+    // nothing. A missing org row has nowhere to record it and skips this.
+    const resetState = orgResetState(org);
+    let resetGeneration = resetState.generation;
+    if (!dryRun && org !== null && !resetState.inProgress) {
+      resetGeneration = resetState.generation + 1;
+      await ctx.db.patch(args.orgId, { financialResetGeneration: resetGeneration });
+    }
+
     const perTable: Record<string, number> = {};
     let total = 0;
     let remaining = 0;
@@ -591,6 +614,13 @@ export const resetOrgFinancialData = internalMutation({
       }
     }
 
+    // SCRUM-563 R1. A destructive run that leaves nothing behind completes the
+    // reset: only now may the organization be reactivated.
+    const resetComplete = !dryRun && org !== null && remaining === 0;
+    if (resetComplete) {
+      await ctx.db.patch(args.orgId, { financialResetCompletedGeneration: resetGeneration });
+    }
+
     // Reported truthfully on a dry run so an operator sees the precondition
     // BEFORE typing the destructive form, rather than discovering it as an error.
     return {
@@ -602,6 +632,8 @@ export const resetOrgFinancialData = internalMutation({
       authorityLifecyclePresent,
       orgSuspended,
       pendingPaymentIntentsPresent,
+      resetGeneration,
+      resetComplete,
     };
   },
 });
