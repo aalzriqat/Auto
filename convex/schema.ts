@@ -1060,7 +1060,8 @@ export default defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_org", ["orgId"])
-    .index("by_org_user", ["orgId", "userId"]),
+    .index("by_org_user", ["orgId", "userId"])
+    .index("by_org_role", ["orgId", "roleId"]),
 
   membershipOffboardingJobs: defineTable({
     membershipId: v.id("memberships"),

@@ -538,24 +538,27 @@ function newMonthlyCronStats(): MonthlyCronStats {
   return { total: 0, posted: 0, monthsPosted: 0, skippedNoOwner: 0, done: 0, abnormalByReason: {}, failed: 0 };
 }
 
-/** The failure row must never be able to break isolation: it has its own try/catch. */
+/**
+ * The failure row must never be able to break isolation: it has its own try/catch.
+ * `phase` names where the item actually failed: "owner lookup", "month floor", or the YYYY-MM being posted.
+ */
 async function recordMonthlyItemFailure<T extends MonthlyCronItem, R extends string>(
   ctx: ActionCtx,
   spec: MonthlyCronSpec<T, R>,
   stats: MonthlyCronStats,
   item: T,
-  yearMonth: string | null,
+  phase: string,
   err: unknown
 ): Promise<void> {
   const message = err instanceof Error ? err.message : String(err);
-  console.error(`${spec.source}: ${spec.noun} ${item._id} (org ${item.orgId}) failed at ${yearMonth ?? "owner lookup"}:`, err);
+  console.error(`${spec.source}: ${spec.noun} ${item._id} (org ${item.orgId}) failed at ${phase}:`, err);
   // stats.failed already counts this item: only the first MAX rows are written.
   if (stats.failed > MAX_ITEM_FAILURE_ROWS) return;
   try {
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
       source: spec.source,
       status: "error",
-      summary: `${spec.source} item failed: org ${item.orgId} ${spec.noun} ${item._id} month ${yearMonth ?? "n/a"}`,
+      summary: `${spec.source} item failed: org ${item.orgId} ${spec.noun} ${item._id} at ${phase}`,
       error: message.slice(0, 1000),
     });
   } catch (recorderErr) {
@@ -577,7 +580,7 @@ async function runMonthlyCatchUpForItem<T extends MonthlyCronItem, R extends str
     stats.done++;
     return;
   }
-  let yearMonth: string | null = null;
+  let phase = "owner lookup";
   try {
     const systemActorId = await getCachedOrgOwnerUserId(ctx, run.ownerByOrg, item.orgId);
     if (!systemActorId) {
@@ -587,8 +590,11 @@ async function runMonthlyCatchUpForItem<T extends MonthlyCronItem, R extends str
     const currentIdx = yearMonthIndex(run.now);
     let postedAny = false;
     let abnormalReason: R | undefined;
-    for (let idx = spec.firstOfferableMonthIndex(item); idx <= currentIdx; idx++) {
-      yearMonth = yearMonthFromIndex(idx);
+    phase = "month floor";
+    const firstIdx = spec.firstOfferableMonthIndex(item);
+    for (let idx = firstIdx; idx <= currentIdx; idx++) {
+      const yearMonth = yearMonthFromIndex(idx);
+      phase = yearMonth;
       const result = await spec.postMonth(ctx, item, {
         systemActorId,
         yearMonth,
@@ -612,7 +618,7 @@ async function runMonthlyCatchUpForItem<T extends MonthlyCronItem, R extends str
     }
   } catch (err) {
     stats.failed++;
-    await recordMonthlyItemFailure(ctx, spec, stats, item, yearMonth, err);
+    await recordMonthlyItemFailure(ctx, spec, stats, item, phase, err);
   }
 }
 
@@ -935,13 +941,10 @@ async function findOrgOwnerUser(ctx: QueryCtx, orgId: Id<"organizations">): Prom
   const ownerRole = roles.find((r) => isSystemOwnerRole(r));
   if (!ownerRole) return null;
 
-  // Filter by roleId inside the query rather than slicing N memberships
-  // client-side — an org with more members than any cap would otherwise
-  // "lose" its owner and silently skip automated postings.
+  // by_org_role fixes orgId and roleId, so first() is the earliest owner membership (index order = _creationTime).
   const ownerMembership = await ctx.db
     .query("memberships")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .filter((q) => q.eq(q.field("roleId"), ownerRole._id))
+    .withIndex("by_org_role", (q) => q.eq("orgId", orgId).eq("roleId", ownerRole._id))
     .first();
   if (!ownerMembership) return null;
 

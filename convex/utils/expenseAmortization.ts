@@ -89,6 +89,10 @@ export function assertMonthClaim(claim: { yearMonth: string; occurredAt: number 
   }
 }
 
+function refuseFirstOfferable(inputName: string): never {
+  throw new Error(`first offerable month is not representable: ${inputName} is malformed or out of range`);
+}
+
 /**
  * First calendar month (absolute index) a monthly GL cron may offer an item —
  * the lower bound of its catch-up range: never earlier than the month after the
@@ -101,17 +105,20 @@ export function firstOfferableMonthIndex(input: {
   startAt?: number;
   createdAt: number;
 }): number {
+  // Math.max(x, NaN) is NaN, and NaN poisons both callers: the cron's `idx <= currentIdx`
+  // loop never runs (silently counted done) and the recognition `< floor` guard silently
+  // passes. Refuse loudly, naming the FIRST offending input.
   let first = yearMonthIndex(input.createdAt);
-  if (input.startAt !== undefined) first = Math.max(first, yearMonthIndex(input.startAt));
-  if (input.lastPostedYearMonth) first = Math.max(first, yearMonthStringIndex(input.lastPostedYearMonth) + 1);
-  // Math.max(x, NaN) is NaN, and NaN poisons both callers: the cron's
-  // `idx <= currentIdx` loop never runs (the item is silently counted done) and the
-  // recognition mutation's `< floor` guard silently passes. An unrepresentable input
-  // is refused loudly - never "nothing to do", never "no floor".
-  if (!Number.isFinite(first)) {
-    throw new Error(
-      "first offerable month is not representable: createdAt, startAt or lastPostedYearMonth is malformed or out of range"
-    );
+  if (!Number.isFinite(first)) refuseFirstOfferable("createdAt");
+  if (input.startAt !== undefined) {
+    const startIdx = yearMonthIndex(input.startAt);
+    if (!Number.isFinite(startIdx)) refuseFirstOfferable("startAt");
+    first = Math.max(first, startIdx);
+  }
+  if (input.lastPostedYearMonth) {
+    // "YYYY-M" stays accepted (legacy leniency); the month must be 1..12.
+    if (!/^\d{4}-(0?[1-9]|1[0-2])$/.test(input.lastPostedYearMonth)) refuseFirstOfferable("lastPostedYearMonth");
+    first = Math.max(first, yearMonthStringIndex(input.lastPostedYearMonth) + 1);
   }
   return first;
 }
