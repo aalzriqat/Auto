@@ -4870,10 +4870,9 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     // `list` pages live rows only through this index, with no post-index filter, using
-    // `.lt("isDeleted", true)`: convex/adminData.ts restore writes `isDeleted: false`, so live
-    // rows are undefined OR false (an `eq(undefined)` would drop restored rows). The index
-    // orders by isDeleted before _creationTime, so restored (false) rows sort as their own
-    // group in `list`, apart from the unset ones.
+    // `.lt("isDeleted", true)`, which matches unset or false. That is defensive: no current
+    // fixed-asset writer sets false, because admin restore refuses financial tables. Should a
+    // false row ever exist, the index orders it as its own group, apart from the unset rows.
     .index("by_org_deleted", ["orgId", "isDeleted"])
     .index("by_status", ["status"]),
 

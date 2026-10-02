@@ -41,6 +41,7 @@ export const FIXED_ASSET_DATE_REFUSALS = {
   ASSET_EVENT_BEFORE_CAPITALIZATION: "The accounting date cannot be earlier than the day the asset was capitalized.",
   ASSET_EVENT_BEFORE_DEPRECIATION: "The accounting date cannot be earlier than the asset's latest posted depreciation.",
   ASSET_EVENT_BEFORE_IMPAIRMENT: "The accounting date cannot be earlier than the day the asset was impaired.",
+  ASSET_PURCHASE_DATE_IN_FUTURE: "The purchase date cannot be after today.",
 } as const satisfies Record<string, string>;
 
 function refuseAssetDate(code: keyof typeof FIXED_ASSET_DATE_REFUSALS): never {
@@ -99,9 +100,10 @@ export const list = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     // Pages LIVE rows only, through the index: a post-index `.filter` made a page
     // of deleted rows look empty. `isDeleted` is unset on live rows and true once
-    // soft-deleted; `lt(true)` also keeps a row an admin restore set to `false`.
-    // The index orders by isDeleted before _creationTime, so restored (false) rows
-    // form their own group, not interleaved by creation time with the unset ones.
+    // soft-deleted; `lt(true)` matches unset or false. The false case is defensive:
+    // no current fixed-asset writer sets it, since admin restore refuses financial
+    // tables. Should such a row exist, the index orders it as its own group, apart
+    // from the unset rows.
     return await ctx.db
       .query("fixedAssets")
       .withIndex("by_org_deleted", (q) => q.eq("orgId", args.orgId).lt("isDeleted", true))
@@ -173,6 +175,10 @@ export const capitalize = mutation({
     if (!Number.isSafeInteger(args.usefulLifeMonths) || args.usefulLifeMonths <= 0) {
       throw new ConvexError("Useful life must be a positive integer number of months.");
     }
+    // The CAPITALIZE event is dated purchaseDate, and impair/dispose refuse any date
+    // before it, so a future purchase day would strand the asset (SCRUM-542). A future
+    // depreciationStartDate stays legitimate: the cron simply postpones it.
+    if (isFutureUtcDay(args.purchaseDate, Date.now())) refuseAssetDate("ASSET_PURCHASE_DATE_IN_FUTURE");
 
     const currency = args.currency ?? (await getOrgCurrency(ctx, args.orgId));
     const now = Date.now();

@@ -40,7 +40,6 @@ import {
   PaymentMethodSelect,
   dateInputToMs,
   scaleForCurrency,
-  todayInput,
   useAccountingSubmit,
   type CurrencyFormatter,
 } from "./AccountingTabShared";
@@ -257,7 +256,7 @@ function CapitalizeAssetDialog({
     resolver: zodResolver(capitalizeAssetSchema),
     defaultValues: {
       name: "",
-      purchaseDate: todayInput,
+      purchaseDate: economicTodayDateInput(),
       cost: 0,
       salvageValue: 0,
       usefulLifeMonths: 60,
@@ -325,7 +324,7 @@ function CapitalizeAssetDialog({
                   <FormItem>
                     <FormLabel>{t("PurchaseDateLabel" as any)}</FormLabel>
                     <FormControl>
-                      <Input type="date" {...field} />
+                      <Input type="date" max={economicTodayDateInput()} {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -636,7 +635,7 @@ function DisposeAssetDialog({
                   <FormItem>
                     <FormLabel>{t("DisposalAccountingDateLabel" as any)}</FormLabel>
                     <FormControl>
-                      <Input type="date" {...field} />
+                      <Input type="date" max={economicTodayDateInput()} {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

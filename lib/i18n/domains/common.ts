@@ -86,6 +86,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "The accounting date cannot be earlier than the day the asset was impaired.",
     "لا يجوز أن يكون التاريخ المحاسبي سابقاً ليوم تسجيل انخفاض قيمة الأصل.",
   ],
+  ServerError_ASSET_PURCHASE_DATE_IN_FUTURE: [
+    "The purchase date cannot be after today.",
+    "لا يجوز أن يكون تاريخ الشراء لاحقاً لتاريخ اليوم.",
+  ],
   FinanceCompanyReceivables: ["Finance-company receivables", "ذمم شركات التمويل"],
   FinanceCompanyReceivablesDesc: ["Amounts due from finance companies. Open the originating deal to review or settle them.", "المبالغ المستحقة من شركات التمويل. افتح الصفقة الأصلية للمراجعة أو التسوية."],
   DocumentNumber: ["Document number", "رقم المستند"],

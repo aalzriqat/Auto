@@ -1029,6 +1029,51 @@ describe("SCRUM-542 — fixed asset list visibility", () => {
   });
 });
 
+describe("SCRUM-542 — capitalize refuses a purchase date on a future UTC day", () => {
+  const capitalizeArgs = (seed: Seed, purchaseDate: number) => ({
+    idempotencyKey: crypto.randomUUID(),
+    orgId: seed.orgId,
+    name: "Date Guard Asset",
+    purchaseDate,
+    costMinor: 600_000,
+    usefulLifeMonths: 60,
+  });
+
+  test("the next UTC day is refused with ASSET_PURCHASE_DATE_IN_FUTURE and zero writes", async () => {
+    const seed = await seedAssetDealer();
+    const count = (table: "fixedAssets" | "fixedAssetEvents" | "accountingEvents" | "commandIdempotency") =>
+      seed.t.run(async (ctx) => (await ctx.db.query(table).collect()).length);
+    const before = {
+      assets: await count("fixedAssets"),
+      events: await count("fixedAssetEvents"),
+      accounting: await count("accountingEvents"),
+      idempotency: await count("commandIdempotency"),
+    };
+    const code = await refusalCode(
+      seed.asOwner.mutation(api.fixedAssets.capitalize, capitalizeArgs(seed, utcDayStart(Date.now()) + DAY_MS))
+    );
+    expect(code).toBe("ASSET_PURCHASE_DATE_IN_FUTURE");
+    expect({
+      assets: await count("fixedAssets"),
+      events: await count("fixedAssetEvents"),
+      accounting: await count("accountingEvents"),
+      idempotency: await count("commandIdempotency"),
+    }).toEqual(before);
+  });
+
+  test("CONTROL: a purchase date earlier today (UTC) is admitted, and a same-day disposal is admitted", async () => {
+    const seed = await seedAssetDealer();
+    const assetId = await seed.asOwner.mutation(
+      api.fixedAssets.capitalize,
+      capitalizeArgs(seed, utcDayStart(Date.now()))
+    );
+    await seed.asOwner.mutation(api.fixedAssets.dispose, {
+      orgId: seed.orgId, assetId, proceedsMinor: 0, occurredAt: Date.now(),
+    });
+    expect((await footprint(seed, assetId)).asset?.status).toBe("DISPOSED");
+  });
+});
+
 describe("SCRUM-542 — refusal translations", () => {
   test("every new asset-date code has en and ar ServerError_ entries; en equals the server message", async () => {
     const { FIXED_ASSET_DATE_REFUSALS } = await import("./fixedAssets");
@@ -1040,6 +1085,7 @@ describe("SCRUM-542 — refusal translations", () => {
       "ASSET_EVENT_BEFORE_IMPAIRMENT",
       "ASSET_EVENT_DATE_INVALID",
       "ASSET_EVENT_DATE_IN_FUTURE",
+      "ASSET_PURCHASE_DATE_IN_FUTURE",
     ]);
     for (const code of codes) {
       const key = `ServerError_${code}`;
