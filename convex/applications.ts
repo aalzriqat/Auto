@@ -2609,13 +2609,11 @@ export const createFromQuote = mutation({
     // in one place, and the release side (`hasLiveCommitmentBasis`) reads the
     // same array, so acquisition and release cannot drift apart.
     for (const item of quoteVehicleItems) {
-      const activeForVehicle = await ctx.db
+      const vehicleApplications = await ctx.db
         .query("financeApplications")
-        .withIndex("by_vehicle", (q) => q.eq("vehicleId", item.vehicleId))
-        .collect()
-        .then((rows) =>
-          rows.find((r) => r.orgId === args.orgId && IN_FLIGHT_FINANCE_STATUSES.includes(r.status))
-        );
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", item.vehicleId))
+        .collect();
+      const activeForVehicle = vehicleApplications.find((r) => IN_FLIGHT_FINANCE_STATUSES.includes(r.status));
       if (activeForVehicle) {
         throw new ConvexError(
           "This vehicle already has an active finance application. Cancel it before starting a new one."

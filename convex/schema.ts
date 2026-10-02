@@ -3137,6 +3137,7 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_quote", ["orgId", "quoteId"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_org_reconciliation", ["orgId", "needsFinancingReconciliation"]),
 
   /**

@@ -1,11 +1,10 @@
 /**
- * SCRUM-555 part 2 — `applications.ts` stopped scanning with a query-level
- * field predicate and reads through an index (or narrows in JS) instead. Only
- * the READ MECHANISM changed: every refusal and every computed snapshot value
- * must be exactly what it was. These tests pin the five decisions that sit on
- * those reads.
+ * SCRUM-555 part 2 — `applications.ts` reads through indexes instead of query
+ * field predicates. Only the READ MECHANISM changed: every refusal and every
+ * computed snapshot value must be exactly what it was.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { seedOrgWithMember } from "../test-utils/seedOrg";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -18,17 +17,16 @@ type TestConvex = ReturnType<typeof convexTestWithComponents>;
 
 async function seedDealer(tag: string) {
   const t = convexTestWithComponents(schema, MODULES);
-  const orgId = await t.run((ctx) =>
-    ctx.db.insert("organizations", { name: `IdxReads Dealer ${tag}`, createdAt: Date.now() })
-  );
-  const userId = await t.run((ctx) =>
-    ctx.db.insert("users", { clerkId: `${tag}_user`, email: `${tag}@example.com`, name: `${tag} User` })
-  );
-  const roleId = await t.run((ctx) =>
-    ctx.db.insert("roles", { orgId, name: "Sales", permissions: ["create:sales", "view:sales"] })
-  );
-  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
-  const asUser = t.withIdentity({ subject: `${tag}_user`, clerkId: `${tag}_user` });
+  const {
+    orgId,
+    userId,
+    identity: asUser,
+  } = await seedOrgWithMember(t, {
+    clerkId: `${tag}_user`,
+    permissions: ["create:sales", "view:sales"],
+    orgName: `IdxReads Dealer ${tag}`,
+    roleName: "Sales",
+  });
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Idx", lastName: "Customer" })
   );
@@ -112,13 +110,12 @@ describe("createFromQuote duplicate-application read (by quote)", () => {
       asUser.mutation(api.applications.createFromQuote, { orgId, quoteId: quoteA })
     ).rejects.toThrow("An application already exists for this quote.");
 
-    // An application on quote A must not read as "already exists" for quote B.
     const second = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId: quoteB });
     expect(second).not.toBe(first);
   });
 });
 
-describe("createFromQuote in-flight application read (by vehicle)", () => {
+describe("createFromQuote in-flight application read (by org + vehicle)", () => {
   async function seedApplicationRow(
     t: TestConvex,
     args: {
@@ -149,26 +146,18 @@ describe("createFromQuote in-flight application read (by vehicle)", () => {
     const vehicleId = await seedVehicle(t, orgId, "IDXT2VEH00001");
     const quoteId = await seedQuote(t, { orgId, customerId, vehicleId, userId });
 
-    // The OTHER org's row, in an in-flight status, pointing at the same vehicle id.
-    const { otherOrgId, otherCustomerId, otherQuoteId } = await t.run(async (ctx) => {
-      const otherOrgId = await ctx.db.insert("organizations", { name: "Other Org t2", createdAt: Date.now() });
-      const otherCustomerId = await ctx.db.insert("customers", {
-        orgId: otherOrgId,
-        firstName: "Other",
-        lastName: "Customer",
-      });
-      const otherQuoteId = await ctx.db.insert("quotes", {
-        orgId: otherOrgId,
-        customerId: otherCustomerId,
-        vehicleId,
-        vehiclePrice: 22000,
-        downPayment: 2000,
-        termMonths: 48,
-        status: "ACCEPTED",
-        createdBy: userId,
-        createdAt: Date.now(),
-      });
-      return { otherOrgId, otherCustomerId, otherQuoteId };
+    // The OTHER org's in-flight row points at the same vehicle id.
+    const otherOrgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Other Org t2", createdAt: Date.now() })
+    );
+    const otherCustomerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId: otherOrgId, firstName: "Other", lastName: "Customer" })
+    );
+    const otherQuoteId = await seedQuote(t, {
+      orgId: otherOrgId,
+      customerId: otherCustomerId,
+      vehicleId,
+      userId,
     });
     await seedApplicationRow(t, {
       orgId: otherOrgId,
@@ -182,7 +171,6 @@ describe("createFromQuote in-flight application read (by vehicle)", () => {
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
     expect(applicationId).toBeTruthy();
 
-    // A second quote in org A on the same vehicle IS blocked by org A's own in-flight row.
     const secondQuote = await seedQuote(t, { orgId, customerId, vehicleId, userId });
     await expect(
       asUser.mutation(api.applications.createFromQuote, { orgId, quoteId: secondQuote })
@@ -207,15 +195,17 @@ describe("createFromQuote guarantor read", () => {
     const { t, orgId, userId, asUser, customerId } = await seedDealer("t3");
     const vehicleId = await seedVehicle(t, orgId, "IDXT3VEH00001");
     const base = { orgId, customerId, lastName: "G", phone: "555-0100" };
-    const absentId = await t.run((ctx) =>
-      ctx.db.insert("guarantors", { ...base, firstName: "Absent", nationalId: "N-1111" })
-    );
-    const falseId = await t.run((ctx) =>
-      ctx.db.insert("guarantors", { ...base, firstName: "False", nationalId: "N-2222", isDeleted: false })
-    );
-    await t.run((ctx) =>
-      ctx.db.insert("guarantors", { ...base, firstName: "Deleted", nationalId: "N-3333", isDeleted: true })
-    );
+    const { absentId, falseId } = await t.run(async (ctx) => {
+      const absentId = await ctx.db.insert("guarantors", { ...base, firstName: "Absent", nationalId: "N-1111" });
+      const falseId = await ctx.db.insert("guarantors", {
+        ...base,
+        firstName: "False",
+        nationalId: "N-2222",
+        isDeleted: false,
+      });
+      await ctx.db.insert("guarantors", { ...base, firstName: "Deleted", nationalId: "N-3333", isDeleted: true });
+      return { absentId, falseId };
+    });
     const quoteId = await seedQuote(t, { orgId, customerId, vehicleId, userId });
 
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
@@ -228,53 +218,46 @@ describe("createFromQuote guarantor read", () => {
 });
 
 describe("createFromQuote vehicle valuation read", () => {
-  test("only the quote company's valuation feeds vehicleValuation and ltv", async () => {
-    const { t, orgId, userId, asUser, customerId } = await seedDealer("t4");
-    const vehicleId = await seedVehicle(t, orgId, "IDXT4VEH00001");
-    const otherCompany = await seedCompany(t, orgId, "Other Finance");
-    const quoteCompany = await seedCompany(t, orgId, "Quote Finance");
-    // The other company's valuation is inserted FIRST, so it is first in index order.
-    await t.run((ctx) =>
-      ctx.db.insert("vehicleValuations", { orgId, vehicleId, companyId: otherCompany, valuationAmount: 10000 })
-    );
-    await t.run((ctx) =>
-      ctx.db.insert("vehicleValuations", { orgId, vehicleId, companyId: quoteCompany, valuationAmount: 20000 })
-    );
+  /** A quote with `quoteCompany`, financed 15000, plus the given valuations on its vehicle. */
+  async function createWithValuations(tag: string, vin: string, valuedCompanies: ("other" | "quote")[]) {
+    const { t, orgId, userId, asUser, customerId } = await seedDealer(tag);
+    const vehicleId = await seedVehicle(t, orgId, vin);
+    const companies = {
+      other: await seedCompany(t, orgId, "Other Finance"),
+      quote: await seedCompany(t, orgId, "Quote Finance"),
+    };
+    for (const which of valuedCompanies) {
+      await t.run((ctx) =>
+        ctx.db.insert("vehicleValuations", {
+          orgId,
+          vehicleId,
+          companyId: companies[which],
+          valuationAmount: which === "other" ? 10000 : 20000,
+        })
+      );
+    }
     const quoteId = await seedQuote(t, {
       orgId,
       customerId,
       vehicleId,
       userId,
-      companyId: quoteCompany,
+      companyId: companies.quote,
       totalFinancedAmount: 15000,
     });
-
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
-    const snapshot = (await t.run((ctx) => ctx.db.get(applicationId)))?.underwritingSnapshot;
+    return (await t.run((ctx) => ctx.db.get(applicationId)))?.underwritingSnapshot;
+  }
+
+  test("only the quote company's valuation feeds vehicleValuation and ltv", async () => {
+    // The other company's valuation is inserted FIRST, so it is first in index order.
+    const snapshot = await createWithValuations("t4", "IDXT4VEH00001", ["other", "quote"]);
 
     expect(snapshot?.vehicleValuationAtSubmission).toBe(20000);
     expect(snapshot?.ltvAtSubmission).toBe(75);
   });
 
   test("with only another company's valuation, vehicleValuation and ltv are undefined", async () => {
-    const { t, orgId, userId, asUser, customerId } = await seedDealer("t4b");
-    const vehicleId = await seedVehicle(t, orgId, "IDXT4BVEH0001");
-    const otherCompany = await seedCompany(t, orgId, "Other Finance");
-    const quoteCompany = await seedCompany(t, orgId, "Quote Finance");
-    await t.run((ctx) =>
-      ctx.db.insert("vehicleValuations", { orgId, vehicleId, companyId: otherCompany, valuationAmount: 10000 })
-    );
-    const quoteId = await seedQuote(t, {
-      orgId,
-      customerId,
-      vehicleId,
-      userId,
-      companyId: quoteCompany,
-      totalFinancedAmount: 15000,
-    });
-
-    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
-    const snapshot = (await t.run((ctx) => ctx.db.get(applicationId)))?.underwritingSnapshot;
+    const snapshot = await createWithValuations("t4b", "IDXT4BVEH0001", ["other"]);
 
     expect(snapshot?.vehicleValuationAtSubmission).toBeUndefined();
     expect(snapshot?.ltvAtSubmission).toBeUndefined();
@@ -282,12 +265,8 @@ describe("createFromQuote vehicle valuation read", () => {
 });
 
 describe("getActiveReceivableAllocations (via transferFinancedAmountFromCustomerReceivable)", () => {
-  // `getActiveReceivableAllocations` is module-private. It is reached by two
-  // callers: `transferFinancedAmountFromCustomerReceivable` (exported, driven
-  // directly here — the same way applications.test.ts drives it) and the
-  // finance-company receipt guard, which needs a full finalized deal to reach.
-  // The exported one observes the allocation set exactly: it sums it and
-  // derives the receivable status from it.
+  // `getActiveReceivableAllocations` is module-private; the exported transfer
+  // observes the allocation set exactly (it sums it and derives the status).
   async function seedReceivable(t: TestConvex, seed: Awaited<ReturnType<typeof seedDealer>>, vin: string) {
     const { orgId, userId, customerId } = seed;
     const vehicleId = await seedVehicle(t, orgId, vin);
@@ -360,14 +339,14 @@ describe("getActiveReceivableAllocations (via transferFinancedAmountFromCustomer
     );
   }
 
-  test("a REVERSED allocation is ignored; the ACTIVE ones alone set the status", async () => {
-    const seed = await seedDealer("t5");
+  /** Seeds a receivable with the given allocations, transfers 17_000_000 of it to financing, returns the result row. */
+  async function transferWith(tag: string, vin: string, allocations: { amountMinor: number; status: "ACTIVE" | "REVERSED" }[]) {
+    const seed = await seedDealer(tag);
     const { t, orgId } = seed;
-    const ids = await seedReceivable(t, seed, "IDXT5VEH00001");
-    await addAllocation(t, seed, ids, 1_000_000, "ACTIVE");
-    // Larger than the non-financed balance: counted, it would throw "exceed".
-    await addAllocation(t, seed, ids, 5_000_000, "REVERSED");
-
+    const ids = await seedReceivable(t, seed, vin);
+    for (const a of allocations) {
+      await addAllocation(t, seed, ids, a.amountMinor, a.status);
+    }
     await t.run((ctx) =>
       transferFinancedAmountFromCustomerReceivable(ctx, {
         orgId,
@@ -376,28 +355,23 @@ describe("getActiveReceivableAllocations (via transferFinancedAmountFromCustomer
         financedAmountMinor: 17_000_000,
       })
     );
+    return await t.run((ctx) => ctx.db.get(ids.receivableDocumentId));
+  }
 
-    const receivable = await t.run((ctx) => ctx.db.get(ids.receivableDocumentId));
+  test("a REVERSED allocation is ignored; the ACTIVE ones alone set the status", async () => {
+    // The REVERSED amount exceeds the non-financed balance: counted, it would throw "exceed".
+    const receivable = await transferWith("t5", "IDXT5VEH00001", [
+      { amountMinor: 1_000_000, status: "ACTIVE" },
+      { amountMinor: 5_000_000, status: "REVERSED" },
+    ]);
+
     expect(receivable?.originalAmountMinor).toBe(3_000_000);
     expect(receivable?.status).toBe("PARTIALLY_PAID");
   });
 
   test("with only a REVERSED allocation the receivable is OPEN, not partially paid", async () => {
-    const seed = await seedDealer("t5b");
-    const { t, orgId } = seed;
-    const ids = await seedReceivable(t, seed, "IDXT5BVEH0001");
-    await addAllocation(t, seed, ids, 2_000_000, "REVERSED");
+    const receivable = await transferWith("t5b", "IDXT5BVEH0001", [{ amountMinor: 2_000_000, status: "REVERSED" }]);
 
-    await t.run((ctx) =>
-      transferFinancedAmountFromCustomerReceivable(ctx, {
-        orgId,
-        saleId: ids.saleId,
-        saleAmountMinor: 20_000_000,
-        financedAmountMinor: 17_000_000,
-      })
-    );
-
-    const receivable = await t.run((ctx) => ctx.db.get(ids.receivableDocumentId));
     expect(receivable?.status).toBe("OPEN");
   });
 });
