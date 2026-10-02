@@ -130,6 +130,22 @@ export async function enqueuePendingReversal(
 
   // SCRUM-515 (see isPostedReversalOf): the only no-op is a pending/posted reversal
   // of THIS original; any other key holder fails closed before any write.
+  // S515-R2: the ledger holder is checked FIRST, so a matching queued row can
+  // never mask a key that a forward/foreign event has since taken.
+  const ledgerHolder = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", args.orgId).eq("idempotencyKey", args.idempotencyKey)
+    )
+    .unique();
+  if (ledgerHolder) {
+    if (isPostedReversalOf(ledgerHolder, args.originalEventId)) return;
+    throw reversalKeyConflict(
+      args.idempotencyKey,
+      `accounting event ${ledgerHolder._id} (${ledgerHolder.eventType}, ${ledgerHolder.status})`,
+      args.originalEventId
+    );
+  }
   const existing = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_idempotency", (q) =>
@@ -147,20 +163,6 @@ export async function enqueuePendingReversal(
     throw reversalKeyConflict(
       args.idempotencyKey,
       `queued outbox row ${existing._id} (${existing.kind}, ${existing.status})`,
-      args.originalEventId
-    );
-  }
-  const ledgerHolder = await ctx.db
-    .query("accountingEvents")
-    .withIndex("by_org_idempotency", (q) =>
-      q.eq("orgId", args.orgId).eq("idempotencyKey", args.idempotencyKey)
-    )
-    .unique();
-  if (ledgerHolder) {
-    if (isPostedReversalOf(ledgerHolder, args.originalEventId)) return;
-    throw reversalKeyConflict(
-      args.idempotencyKey,
-      `accounting event ${ledgerHolder._id} (${ledgerHolder.eventType}, ${ledgerHolder.status})`,
       args.originalEventId
     );
   }

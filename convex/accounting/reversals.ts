@@ -99,6 +99,47 @@ export async function reverseAccountingEvent(
   if (!original || original.orgId !== cmd.orgId) {
     throw new ConvexError("Accounting event not found in this organization.");
   }
+
+  // ⚠️ SCRUM-515 (S515-R1) — the key-holder lookups run BEFORE every success
+  // path, including the REVERSED early return below: an idempotency key held by
+  // a row of a different obligation must fail closed even when the requested
+  // original is already reversed under some other key.
+  const existingReversal = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", cmd.orgId).eq("idempotencyKey", cmd.idempotencyKey)
+    )
+    .unique();
+  const queuedHolder = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", cmd.orgId).eq("idempotencyKey", cmd.idempotencyKey)
+    )
+    .unique();
+  // A same-target reversal in ANY status stays here so the D1/D1c logic below
+  // decides it; only a holder of a different obligation is refused outright.
+  if (
+    existingReversal &&
+    !(existingReversal.eventType === "JOURNAL_REVERSAL" && existingReversal.reversalOfEventId === original._id)
+  ) {
+    throw reversalKeyConflict(
+      cmd.idempotencyKey,
+      `accounting event ${existingReversal._id} (${existingReversal.eventType}, ${existingReversal.status})`,
+      cmd.originalEventId
+    );
+  }
+  // The outbox's own REVERSE row for THIS original is the only legitimate queued holder.
+  if (
+    queuedHolder &&
+    !(queuedHolder.kind === "REVERSE" && queuedHolder.originalEventId === original._id)
+  ) {
+    throw reversalKeyConflict(
+      cmd.idempotencyKey,
+      `queued outbox row ${queuedHolder._id} (${queuedHolder.kind}, ${queuedHolder.status})`,
+      cmd.originalEventId
+    );
+  }
+
   if (original.status === "REVERSED") {
     if (original.reversedByEventId) {
       const reversalEvent = await ctx.db.get(original.reversedByEventId);
@@ -171,15 +212,8 @@ export async function reverseAccountingEvent(
     }
   }
 
-  // Check idempotency
-  const existingReversal = await ctx.db
-    .query("accountingEvents")
-    .withIndex("by_org_idempotency", (q) =>
-      q.eq("orgId", cmd.orgId).eq("idempotencyKey", cmd.idempotencyKey)
-    )
-    .unique();
-
-  // SCRUM-515: a held key counts only if its holder is a live reversal of THIS original.
+  // SCRUM-515: a held key counts only if its holder is a live reversal of THIS
+  // original (holders of other obligations were already refused above).
   if (existingReversal) {
     if (isPostedReversalOf(existingReversal, cmd.originalEventId)) {
       return alreadyReversedResult(existingReversal);
@@ -187,24 +221,6 @@ export async function reverseAccountingEvent(
     throw reversalKeyConflict(
       cmd.idempotencyKey,
       `accounting event ${existingReversal._id} (${existingReversal.eventType}, ${existingReversal.status})`,
-      cmd.originalEventId
-    );
-  }
-
-  // SCRUM-515: the outbox's own REVERSE row for THIS original is the only legitimate queued holder.
-  const queuedHolder = await ctx.db
-    .query("pendingAccountingEvents")
-    .withIndex("by_org_idempotency", (q) =>
-      q.eq("orgId", cmd.orgId).eq("idempotencyKey", cmd.idempotencyKey)
-    )
-    .unique();
-  if (
-    queuedHolder &&
-    !(queuedHolder.kind === "REVERSE" && queuedHolder.originalEventId === cmd.originalEventId)
-  ) {
-    throw reversalKeyConflict(
-      cmd.idempotencyKey,
-      `queued outbox row ${queuedHolder._id} (${queuedHolder.kind}, ${queuedHolder.status})`,
       cmd.originalEventId
     );
   }

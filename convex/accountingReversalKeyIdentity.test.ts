@@ -407,6 +407,76 @@ describe("SCRUM-515 — the workflow hook cannot report REVERSED / DEFERRED on a
   });
 });
 
+describe("SCRUM-515 round 1 — a foreign key holder is refused on EVERY success path", () => {
+  const enqueueFor = (s: Seed, target: any, key: string) =>
+    s.t.run((ctx) =>
+      enqueuePendingReversal(ctx, {
+        orgId: s.orgId, originalEventId: target, reversalDate: s.now, reason: "SCRUM-515",
+        actorId: s.userId, idempotencyKey: key, sourceType: "deposits", sourceId: "dep_r",
+      })
+    );
+
+  test("R1a. A already REVERSED; reverse(A, key held by forward B) throws, never alreadyReversed", async () => {
+    const s = await seed();
+    const a = await postDeposit(s, "r1a_a", "r1a_ka");
+    const bKey = "r1a_kb";
+    await postDeposit(s, "r1a_b", bKey);
+    await reverse(s, a, "r1a_kr");
+    const before = await footprint(s);
+
+    await expect(reverse(s, a, bKey)).rejects.toThrow(KEY_CONFLICT);
+
+    expect(await footprint(s)).toEqual(before);
+  });
+
+  test("R1b. A already REVERSED; reverse(A, key held by a queued POST row) throws, no writes", async () => {
+    const s = await seed();
+    const a = await postDeposit(s, "r1b_a");
+    await reverse(s, a, "r1b_kr");
+    await insertPending(s, queuedPost(s, "r1b_kq", "exp_r1b"));
+    const before = await footprint(s);
+
+    await expect(reverse(s, a, "r1b_kq")).rejects.toThrow(KEY_CONFLICT);
+
+    expect(await footprint(s)).toEqual(before);
+  });
+
+  test("R1c. control: A already REVERSED; reverse(A, UNHELD key) is alreadyReversed via the link", async () => {
+    const s = await seed();
+    const a = await postDeposit(s, "r1c_a");
+    const first = await reverse(s, a, "r1c_kr");
+    const before = await footprint(s);
+
+    const again = await reverse(s, a, "r1c_unheld");
+
+    expect(again.alreadyReversed).toBe(true);
+    expect(again.reversalEventId).toBe(first.reversalEventId);
+    expect(await footprint(s)).toEqual(before);
+  });
+
+  test("R2a. a PENDING reversal of A under K, then forward B takes K: enqueue(A, K) throws, still one row", async () => {
+    const s = await seed();
+    const a = await postDeposit(s, "r2a_a");
+    await enqueueFor(s, a, "r2a_k");
+    expect(await pendingRow(s, "r2a_k")).toHaveLength(1);
+    await rawPosted(s, {
+      eventType: "DEPOSIT_RECEIVED", sourceType: "deposits", sourceId: "r2a_b", key: "r2a_k",
+    });
+
+    await expect(enqueueFor(s, a, "r2a_k")).rejects.toThrow(KEY_CONFLICT);
+
+    expect(await pendingRow(s, "r2a_k")).toHaveLength(1);
+  });
+
+  test("R2b. control: enqueue(A, K) twice with no ledger holder is a no-op, one pending row", async () => {
+    const s = await seed();
+    const a = await postDeposit(s, "r2b_a");
+    await enqueueFor(s, a, "r2b_k");
+    await enqueueFor(s, a, "r2b_k");
+    expect(await pendingRow(s, "r2b_k")).toHaveLength(1);
+  });
+});
+
 // ── outbox drive helpers (same shape as accountingOutboxAtomicity.test.ts) ──
 
 async function pump(t: any) {
