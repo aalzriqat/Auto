@@ -26,6 +26,7 @@ import { paymentMethodValidator, PaymentMethod } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertMonthClaim } from "./utils/expenseAmortization";
 import { AppErrorCode, throwAppError } from "./utils/errors";
+import { interpolate } from "../lib/i18n/interpolate";
 import { isFutureUtcDay, isRepresentableTimestamp, utcDateLabel, utcDay } from "./utils/ledgerCalendar";
 
 const methodValidator = v.literal("STRAIGHT_LINE");
@@ -51,13 +52,6 @@ export const FIXED_ASSET_DATE_REFUSALS = {
   ASSET_DEPRECIATION_START_DATE_INVALID: "The depreciation start date is not a valid date.",
 } as const satisfies Record<string, string>;
 
-type DatedRefusalCode =
-  | "ASSET_EVENT_BEFORE_CAPITALIZATION"
-  | "ASSET_EVENT_BEFORE_DEPRECIATION"
-  | "ASSET_EVENT_BEFORE_IMPAIRMENT"
-  | "ASSET_EVENT_DATE_IN_FUTURE"
-  | "ASSET_PURCHASE_DATE_IN_FUTURE";
-
 /** The payload field each templated refusal fills: the earliest allowed day, or today. */
 const DATED_REFUSAL_FIELD = {
   ASSET_EVENT_BEFORE_CAPITALIZATION: "earliestDate",
@@ -65,7 +59,9 @@ const DATED_REFUSAL_FIELD = {
   ASSET_EVENT_BEFORE_IMPAIRMENT: "earliestDate",
   ASSET_EVENT_DATE_IN_FUTURE: "today",
   ASSET_PURCHASE_DATE_IN_FUTURE: "today",
-} as const satisfies Record<DatedRefusalCode, "earliestDate" | "today">;
+} as const satisfies Record<string, "earliestDate" | "today">;
+
+type DatedRefusalCode = keyof typeof DATED_REFUSAL_FIELD;
 
 /** A refusal with no placeholder: the message is the same for every asset. */
 function refuseAssetDate(code: Exclude<keyof typeof FIXED_ASSET_DATE_REFUSALS, DatedRefusalCode>): never {
@@ -75,7 +71,7 @@ function refuseAssetDate(code: Exclude<keyof typeof FIXED_ASSET_DATE_REFUSALS, D
 /** A refusal that names a boundary day: `date` fills the template here and, beside the code, the client's. */
 function refuseAssetDateOn(code: DatedRefusalCode, date: string): never {
   const field = DATED_REFUSAL_FIELD[code];
-  const message = FIXED_ASSET_DATE_REFUSALS[code].replace(`{${field}}`, date);
+  const message = interpolate(FIXED_ASSET_DATE_REFUSALS[code], { [field]: date });
   throw new ConvexError({ code: AppErrorCode[code], message, [field]: date });
 }
 
@@ -116,9 +112,7 @@ async function assertAssetEventDate(
 
   // Precedence is the order of this table. A legacy row without a CAPITALIZE
   // event falls back to its purchase date; IMPAIR bounds only a disposal.
-  const bounds: ReadonlyArray<
-    [number | undefined, "ASSET_EVENT_BEFORE_CAPITALIZATION" | "ASSET_EVENT_BEFORE_DEPRECIATION" | "ASSET_EVENT_BEFORE_IMPAIRMENT"]
-  > = [
+  const bounds: ReadonlyArray<[number | undefined, Extract<DatedRefusalCode, `ASSET_EVENT_BEFORE_${string}`>]> = [
     [capitalizedAt ?? asset.purchaseDate, "ASSET_EVENT_BEFORE_CAPITALIZATION"],
     [depreciatedAt, "ASSET_EVENT_BEFORE_DEPRECIATION"],
     [impairedAt, "ASSET_EVENT_BEFORE_IMPAIRMENT"],
@@ -126,14 +120,12 @@ async function assertAssetEventDate(
   // Whole UTC days, so the SAME day is allowed on purpose. The dispose UI sends 00:00 UTC,
   // depreciation is dated around 03:00 UTC and an impairment at Date.now(), so a view
   // sorted by occurredAt can show a same-day disposal before that day's depreciation.
-  // Day and period totals are unaffected.
+  // Day and period totals are unaffected. The refusal names the same UTC day it compared against.
   for (const [boundAt, code] of bounds) {
-    if (boundAt !== undefined && Number.isFinite(boundAt) && day < utcDay(boundAt)) {
-      // The label is the day compared against: utcDateLabel(boundAt) prints only the UTC date.
-      refuseAssetDateOn(code, utcDateLabel(boundAt));
-    }
+    if (boundAt !== undefined && Number.isFinite(boundAt) && day < utcDay(boundAt)) refuseAssetDateOn(code, utcDateLabel(boundAt));
   }
 }
+
 export const list = query({
   args: {
     orgId: v.id("organizations"),
@@ -227,13 +219,10 @@ export const capitalize = mutation({
     if (args.depreciationStartDate !== undefined && !isRepresentableTimestamp(args.depreciationStartDate)) {
       refuseAssetDate("ASSET_DEPRECIATION_START_DATE_INVALID");
     }
-    const purchaseCheckedAt = Date.now(); // read once: the comparison and the label name the same day
-    if (isFutureUtcDay(args.purchaseDate, purchaseCheckedAt)) {
-      refuseAssetDateOn("ASSET_PURCHASE_DATE_IN_FUTURE", utcDateLabel(purchaseCheckedAt));
-    }
+    const now = Date.now(); // read once: the check, the label and createdAt agree
+    if (isFutureUtcDay(args.purchaseDate, now)) refuseAssetDateOn("ASSET_PURCHASE_DATE_IN_FUTURE", utcDateLabel(now));
 
     const currency = args.currency ?? (await getOrgCurrency(ctx, args.orgId));
-    const now = Date.now();
 
     return await runWithIdempotency(
       ctx,

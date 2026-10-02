@@ -1153,17 +1153,31 @@ const isoDay = (ms: number) => new Date(utcDayStart(ms)).toISOString().slice(0, 
 describe("SCRUM-561 - date refusals name the UTC day they enforced", () => {
   const D = utcDayStart(Date.now()) - 30 * DAY_MS;
   const H = 3_600_000;
+  type Refusal = { code: string; message: string; earliestDate?: string; today?: string };
 
-  async function dispose(seed: Seed & { assetId: Id<"fixedAssets"> }, occurredAt: number) {
+  /** A capitalized asset (cost 600_000, 60 months) bought at `purchaseDate`. */
+  const seedAsset = (purchaseDate: number) => seedCapitalizedAsset({ purchaseDate, costMinor: 600_000, usefulLifeMonths: 60 });
+
+  function dispose(seed: Seed & { assetId: Id<"fixedAssets"> }, occurredAt: number) {
     return seed.asOwner.mutation(api.fixedAssets.dispose, { orgId: seed.orgId, assetId: seed.assetId, proceedsMinor: 0, occurredAt });
   }
-  async function refusal(attempt: Promise<unknown>) {
+  function impair(seed: Seed & { assetId: Id<"fixedAssets"> }, occurredAt: number) {
+    return seed.asOwner.mutation(api.fixedAssets.impair, { orgId: seed.orgId, assetId: seed.assetId, amountMinor: 10_000, occurredAt });
+  }
+  async function refusal(attempt: Promise<unknown>): Promise<Refusal> {
     try {
       await attempt;
     } catch (caught) {
-      return (caught as { data: { code: string; message: string; earliestDate?: string; today?: string } }).data;
+      return (caught as { data: Refusal }).data;
     }
     throw new Error("expected a refusal");
+  }
+  /** The refusal has `code`, names `day` (an instant on the expected UTC day) in `field` and in its message. */
+  function expectDated(data: Refusal, code: string, field: "earliestDate" | "today", day: number) {
+    expect(data.code).toBe(code);
+    expect(data[field]).toBe(isoDay(day));
+    expect(data.message).toContain(isoDay(day));
+    expect(data.message).not.toContain("{");
   }
   function insertEvent(seed: Seed & { assetId: Id<"fixedAssets"> }, type: "DEPRECIATE" | "IMPAIR", occurredAt: number) {
     return seed.t.run((ctx) =>
@@ -1178,65 +1192,51 @@ describe("SCRUM-561 - date refusals name the UTC day they enforced", () => {
     ["23:30 UTC", 23.5 * H],
     ["00:00 UTC", 0],
   ])("BEFORE_CAPITALIZATION names the capitalization day (bound at %s) and writes nothing", async (_label, offset) => {
-    const seed = await seedCapitalizedAsset({ purchaseDate: D + offset, costMinor: 600_000, usefulLifeMonths: 60 });
+    const seed = await seedAsset(D + offset);
     const before = await footprint(seed, seed.assetId);
-    const data = await refusal(dispose(seed, D - 1));
-    expect(data.code).toBe("ASSET_EVENT_BEFORE_CAPITALIZATION");
-    expect(data.earliestDate).toBe(isoDay(D));
-    expect(data.message).toContain(isoDay(D));
-    expect(data.message).not.toContain("{");
+    expectDated(await refusal(dispose(seed, D - 1)), "ASSET_EVENT_BEFORE_CAPITALIZATION", "earliestDate", D);
     expect(await footprint(seed, seed.assetId)).toEqual(before);
   });
 
   test("BEFORE_DEPRECIATION names the LATEST depreciation day, whatever the insertion order", async () => {
-    const seed = await seedCapitalizedAsset({ purchaseDate: D + 5 * H, costMinor: 600_000, usefulLifeMonths: 60 });
+    const seed = await seedAsset(D + 5 * H);
     await insertEvent(seed, "DEPRECIATE", D + 12 * DAY_MS + 15.5 * H);
     await insertEvent(seed, "DEPRECIATE", D + 2 * DAY_MS + 15.5 * H);
     await insertEvent(seed, "DEPRECIATE", D + 7 * DAY_MS + 15.5 * H);
     const before = await footprint(seed, seed.assetId);
-    const data = await refusal(dispose(seed, D + 11 * DAY_MS));
-    expect(data.code).toBe("ASSET_EVENT_BEFORE_DEPRECIATION");
-    expect(data.earliestDate).toBe(isoDay(D + 12 * DAY_MS));
-    expect(data.message).toContain(isoDay(D + 12 * DAY_MS));
+    expectDated(await refusal(dispose(seed, D + 11 * DAY_MS)), "ASSET_EVENT_BEFORE_DEPRECIATION", "earliestDate", D + 12 * DAY_MS);
     expect(await footprint(seed, seed.assetId)).toEqual(before);
     await dispose(seed, D + 12 * DAY_MS); // the same UTC day is still admitted
     expect((await footprint(seed, seed.assetId)).asset?.status).toBe("DISPOSED");
   });
 
   test("BEFORE_IMPAIRMENT names the impairment day for a disposal", async () => {
-    const seed = await seedCapitalizedAsset({ purchaseDate: D + H, costMinor: 600_000, usefulLifeMonths: 60 });
+    const seed = await seedAsset(D + H);
     const impairedAt = D + 9 * DAY_MS + 15.5 * H;
-    await seed.asOwner.mutation(api.fixedAssets.impair, { orgId: seed.orgId, assetId: seed.assetId, amountMinor: 10_000, occurredAt: impairedAt });
+    await impair(seed, impairedAt);
     const before = await footprint(seed, seed.assetId);
-    const data = await refusal(dispose(seed, D + 8 * DAY_MS + 23.5 * H));
-    expect(data.code).toBe("ASSET_EVENT_BEFORE_IMPAIRMENT");
-    expect(data.earliestDate).toBe(isoDay(impairedAt));
-    expect(data.message).toContain(isoDay(impairedAt));
+    expectDated(await refusal(dispose(seed, D + 8 * DAY_MS + 23.5 * H)), "ASSET_EVENT_BEFORE_IMPAIRMENT", "earliestDate", impairedAt);
     expect(await footprint(seed, seed.assetId)).toEqual(before);
   });
 
   test("CONTROL: an impairment is not bounded by an earlier IMPAIR event", async () => {
-    const seed = await seedCapitalizedAsset({ purchaseDate: D + H, costMinor: 600_000, usefulLifeMonths: 60 });
+    const seed = await seedAsset(D + H);
     await insertEvent(seed, "IMPAIR", D + 9 * DAY_MS + 15.5 * H);
-    await seed.asOwner.mutation(api.fixedAssets.impair, { orgId: seed.orgId, assetId: seed.assetId, amountMinor: 10_000, occurredAt: D + 3 * DAY_MS });
+    await impair(seed, D + 3 * DAY_MS);
     expect((await footprint(seed, seed.assetId)).asset?.status).toBe("IMPAIRED");
   });
 
   test("precedence: capitalization wins over depreciation and names ITS date", async () => {
-    const seed = await seedCapitalizedAsset({ purchaseDate: D + 15.5 * H, costMinor: 600_000, usefulLifeMonths: 60 });
+    const seed = await seedAsset(D + 15.5 * H);
     await insertEvent(seed, "DEPRECIATE", D + 10 * DAY_MS + 15.5 * H);
-    const data = await refusal(dispose(seed, D - 1));
-    expect(data.code).toBe("ASSET_EVENT_BEFORE_CAPITALIZATION");
-    expect(data.earliestDate).toBe(isoDay(D));
+    expectDated(await refusal(dispose(seed, D - 1)), "ASSET_EVENT_BEFORE_CAPITALIZATION", "earliestDate", D);
   });
 
   test("precedence: depreciation wins over impairment for a disposal and names ITS date", async () => {
-    const seed = await seedCapitalizedAsset({ purchaseDate: D + H, costMinor: 600_000, usefulLifeMonths: 60 });
+    const seed = await seedAsset(D + H);
     await insertEvent(seed, "DEPRECIATE", D + 10 * DAY_MS + 15.5 * H);
     await insertEvent(seed, "IMPAIR", D + 5 * DAY_MS + 15.5 * H);
-    const data = await refusal(dispose(seed, D + 3 * DAY_MS));
-    expect(data.code).toBe("ASSET_EVENT_BEFORE_DEPRECIATION");
-    expect(data.earliestDate).toBe(isoDay(D + 10 * DAY_MS));
+    expectDated(await refusal(dispose(seed, D + 3 * DAY_MS)), "ASSET_EVENT_BEFORE_DEPRECIATION", "earliestDate", D + 10 * DAY_MS);
   });
 
   test("a legacy asset with no CAPITALIZE event falls back to its purchase date, and names it", async () => {
@@ -1245,23 +1245,16 @@ describe("SCRUM-561 - date refusals name the UTC day they enforced", () => {
       ctx.db.insert("fixedAssets", { orgId: seed.orgId, name: "Legacy", purchaseDate: D + 15.5 * H, costMinor: 600_000, status: "ACTIVE" })
     );
     const legacy = { ...seed, assetId };
-    const data = await refusal(dispose(legacy, D - 1));
-    expect(data.code).toBe("ASSET_EVENT_BEFORE_CAPITALIZATION");
-    expect(data.earliestDate).toBe(isoDay(D));
+    expectDated(await refusal(dispose(legacy, D - 1)), "ASSET_EVENT_BEFORE_CAPITALIZATION", "earliestDate", D);
     await dispose(legacy, D);
     expect((await footprint(legacy, assetId)).asset?.status).toBe("DISPOSED");
   });
 
   test.each(["impair", "dispose"] as const)("IN_FUTURE (%s) names today's UTC day", async (operation) => {
-    const seed = await seedCapitalizedAsset({ purchaseDate: D + H, costMinor: 600_000, usefulLifeMonths: 60 });
-    const call =
-      operation === "impair"
-        ? seed.asOwner.mutation(api.fixedAssets.impair, { orgId: seed.orgId, assetId: seed.assetId, amountMinor: 10_000, occurredAt: Date.now() + 2 * DAY_MS })
-        : dispose(seed, Date.now() + 2 * DAY_MS);
-    const data = await refusal(call);
-    expect(data.code).toBe("ASSET_EVENT_DATE_IN_FUTURE");
-    expect(data.today).toBe(isoDay(Date.now()));
-    expect(data.message).toContain(data.today as string);
+    const seed = await seedAsset(D + H);
+    const future = Date.now() + 2 * DAY_MS;
+    const data = await refusal(operation === "impair" ? impair(seed, future) : dispose(seed, future));
+    expectDated(data, "ASSET_EVENT_DATE_IN_FUTURE", "today", Date.now());
   });
 
   test("capitalize IN_FUTURE names today's UTC day", async () => {
@@ -1271,11 +1264,10 @@ describe("SCRUM-561 - date refusals name the UTC day they enforced", () => {
         idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, name: "Future", purchaseDate: Date.now() + 2 * DAY_MS, costMinor: 600_000, usefulLifeMonths: 60,
       })
     );
-    expect(data.code).toBe("ASSET_PURCHASE_DATE_IN_FUTURE");
-    expect(data.today).toBe(isoDay(Date.now()));
-    expect(data.message).toContain(data.today as string);
+    expectDated(data, "ASSET_PURCHASE_DATE_IN_FUTURE", "today", Date.now());
   });
 });
+
 describe("SCRUM-542 — refusal translations", () => {
   test("every new asset-date code has en and ar ServerError_ entries; en equals the server message", async () => {
     const { FIXED_ASSET_DATE_REFUSALS } = await import("./fixedAssets");
