@@ -264,8 +264,11 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
 
   for (const sourceFile of program.getSourceFiles()) {
     if (sourceFile.isDeclarationFile) continue;
-    if (sourceFile.fileName.includes("node_modules")) continue;
-    if (inScope.size && !inScope.has(normalizeSurfacePath(sourceFile.fileName))) continue;
+    // An explicitly listed file is scanned even if its path contains
+    // `node_modules` (the exit-code scaffolds live there); an unlisted one never is.
+    if (inScope.size) {
+      if (!inScope.has(normalizeSurfacePath(sourceFile.fileName))) continue;
+    } else if (sourceFile.fileName.includes("node_modules")) continue;
 
     // ⚠️ KEYED BY SYMBOL, NOT BY NAME.
     //
