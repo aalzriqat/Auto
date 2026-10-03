@@ -721,7 +721,7 @@ describe("T1/T2 — a sale with ANY legacy receivable cannot complete or cancel"
     expect(code).not.toBe("SALE_HAS_LEGACY_RECEIVABLE");
   });
 
-  test("T1 a sale with no legacy receivable gets past the guard (control)", async () => {
+  test("T1 a sale with no legacy receivable gets past the guard and actually COMPLETES (control)", async () => {
     const w = await seedWorld();
     const { saleId } = await insertSale(w, "PENDING");
     const code = await codeOf(
@@ -731,7 +731,8 @@ describe("T1/T2 — a sale with ANY legacy receivable cannot complete or cancel"
         idempotencyKey: crypto.randomUUID(),
       })
     );
-    expect(code).not.toBe("SALE_HAS_LEGACY_RECEIVABLE");
+    expect(code).toBeUndefined();
+    expect((await w.t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("COMPLETED");
   });
 
   for (const status of STATUSES) {
@@ -788,6 +789,151 @@ describe("T1/T2 — a sale with ANY legacy receivable cannot complete or cancel"
     const present = await w.t.run((ctx) => saleHasLegacyReceivable(ctx, w.orgId, saleId));
     expect(present).toBe(false);
   });
+});
+
+/** A user who may edit, approve and delete sales and cancel a finalized deal. Never the sale's salesperson. */
+async function seedDealActor(w: World) {
+  const clerkId = `s571s1_deal_${crypto.randomUUID().slice(0, 8)}`;
+  const userId = await w.t.run((ctx) =>
+    ctx.db.insert("users", { clerkId, email: `${clerkId}@example.com`, name: "Deal Manager" })
+  );
+  const roleId = await w.t.run((ctx) =>
+    ctx.db.insert("roles", {
+      orgId: w.orgId,
+      name: `Deal Manager ${clerkId}`,
+      permissions: [
+        "view:sales",
+        "edit:sales",
+        "delete:sales",
+        "approve:requests",
+        "create:finance_application",
+        "approve:finance_application",
+        "finalize:financed_deal",
+      ],
+    })
+  );
+  await w.t.run((ctx) => ctx.db.insert("memberships", { orgId: w.orgId, userId, roleId }));
+  return w.t.withIdentity({ subject: clerkId, clerkId });
+}
+
+type DraftDoor = "sales.update" | "sales.softDelete" | "applications.cancelApplication";
+const DRAFT_DOORS: DraftDoor[] = ["sales.update", "sales.softDelete", "applications.cancelApplication"];
+
+/** A PENDING draft sale (plus a CLOSED application pointing at it for the application door) and the door that exits it. */
+async function openDraftDeal(w: World, door: DraftDoor) {
+  const { saleId, vehicleId } = await insertSale(w, "PENDING");
+  let applicationId: Id<"financeApplications"> | undefined;
+  if (door === "applications.cancelApplication") {
+    applicationId = await insertApplication(w, vehicleId);
+    await w.t.run((ctx) => ctx.db.patch(applicationId!, { status: "CLOSED", finalizedSaleId: saleId }));
+  }
+  const actor = await seedDealActor(w);
+  const run = () =>
+    door === "sales.update"
+      ? actor.mutation(api.sales.update, { orgId: w.orgId, saleId, status: "CANCELLED" })
+      : door === "sales.softDelete"
+        ? actor.mutation(api.sales.softDelete, { orgId: w.orgId, saleId })
+        : actor.mutation(api.applications.cancelApplication, {
+            orgId: w.orgId,
+            applicationId: applicationId!,
+            idempotencyKey: crypto.randomUUID(),
+          });
+  const state = () =>
+    w.t.run(async (ctx) => {
+      const sale = await ctx.db.get(saleId);
+      const app = applicationId ? await ctx.db.get(applicationId) : null;
+      return { saleStatus: sale?.status, saleDeleted: sale?.isDeleted ?? false, appStatus: app?.status ?? null };
+    });
+  return { saleId, applicationId, run, state };
+}
+
+describe("SCRUM-571 S1 T2 — every exit of a DRAFT sale refuses while any sale-linked legacy receivable exists", () => {
+  for (const door of DRAFT_DOORS) {
+    for (const status of ["OPEN", "CANCELLED"] as const) {
+      test(`${door}: a ${status} same-org legacy receivable refuses the draft exit; sale, application and counts are unchanged`, async () => {
+        const w = await seedWorld();
+        const deal = await openDraftDeal(w, door);
+        await insertLegacyReceivable(w, { saleId: deal.saleId, status });
+        const before = await counts(w.t);
+        const stateBefore = await deal.state();
+
+        expect(await codeOf(deal.run())).toBe("SALE_HAS_LEGACY_RECEIVABLE");
+
+        expect(await deal.state()).toEqual(stateBefore);
+        expect(stateBefore.saleStatus).toBe("PENDING");
+        expect(await counts(w.t)).toEqual(before);
+      });
+    }
+
+    test(`${door}: control, a draft with no linked row exits normally`, async () => {
+      const w = await seedWorld();
+      const deal = await openDraftDeal(w, door);
+      expect(await codeOf(deal.run())).toBeUndefined();
+      const after = await deal.state();
+      if (door === "sales.softDelete") expect(after.saleDeleted).toBe(true);
+      else expect(after.saleStatus).toBe("CANCELLED");
+      if (door === "applications.cancelApplication") expect(after.appStatus).toBe("CANCELLED");
+    });
+
+    test(`${door}: control, a row linked to ANOTHER sale does not block`, async () => {
+      const w = await seedWorld();
+      const deal = await openDraftDeal(w, door);
+      const other = await insertSale(w, "PENDING");
+      await insertLegacyReceivable(w, { saleId: other.saleId });
+      expect(await codeOf(deal.run())).toBeUndefined();
+    });
+
+    test(`${door}: control, a same-id row in ANOTHER org does not block`, async () => {
+      const w = await seedWorld();
+      const deal = await openDraftDeal(w, door);
+      const otherOrg = await w.t.run((ctx) => ctx.db.insert("organizations", { name: "Other", createdAt: Date.now() }));
+      await insertLegacyReceivable(w, { saleId: deal.saleId, orgId: otherOrg });
+      expect(await codeOf(deal.run())).toBeUndefined();
+    });
+  }
+});
+
+describe("SCRUM-571 S1 T2 — a COMPLETED sale cannot be cancelled through a public door while a legacy receivable exists", () => {
+  for (const status of ["OPEN", "CANCELLED"] as const) {
+    test(`sales.update (status CANCELLED) with a ${status} legacy receivable is refused and rolled back`, async () => {
+      const w = await seedWorld();
+      const { saleId, vehicleId } = await insertSale(w, "COMPLETED");
+      await insertLegacyReceivable(w, { saleId, status });
+      const actor = await seedDealActor(w);
+      const before = await counts(w.t);
+
+      const code = await codeOf(actor.mutation(api.sales.update, { orgId: w.orgId, saleId, status: "CANCELLED" }));
+
+      expect(code).toBe("SALE_HAS_LEGACY_RECEIVABLE");
+      expect((await w.t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("COMPLETED");
+      expect((await w.t.run((ctx) => ctx.db.get(vehicleId)))?.status).toBe("SOLD");
+      expect(await counts(w.t)).toEqual(before);
+    });
+
+    test(`applications.cancelApplication on a CLOSED deal with a ${status} legacy receivable is refused and rolled back`, async () => {
+      const w = await seedWorld();
+      const { saleId, vehicleId } = await insertSale(w, "COMPLETED");
+      const applicationId = await insertApplication(w, vehicleId);
+      await w.t.run((ctx) => ctx.db.patch(applicationId, { status: "CLOSED", finalizedSaleId: saleId }));
+      await insertLegacyReceivable(w, { saleId, status });
+      const actor = await seedDealActor(w);
+      const before = await counts(w.t);
+
+      const code = await codeOf(
+        actor.mutation(api.applications.cancelApplication, {
+          orgId: w.orgId,
+          applicationId,
+          idempotencyKey: crypto.randomUUID(),
+        })
+      );
+
+      expect(code).toBe("SALE_HAS_LEGACY_RECEIVABLE");
+      expect((await w.t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("COMPLETED");
+      expect((await w.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
+      expect((await w.t.run((ctx) => ctx.db.get(vehicleId)))?.status).toBe("SOLD");
+      expect(await counts(w.t)).toEqual(before);
+    });
+  }
 });
 
 describe("R5 — a refund that would re-allocate a remainder to a sale-linked legacy doc is refused up front", () => {
@@ -848,6 +994,48 @@ describe("R5 — a refund that would re-allocate a remainder to a sale-linked le
     expect(code).toBe("SALE_DEBT_RECEIPT_REFUSED");
     expect(await counts(w.t)).toEqual(before);
     expect(await w.t.run((ctx) => ctx.db.query("paymentAllocations").take(1000))).toEqual(allocationsBefore);
+    expect((await w.t.run((ctx) => ctx.db.get(receivableId)))?.outstandingAmount).toBe(0);
+  });
+
+  test("a split across the OLDER of two allocations on a sale-linked doc is still refused before any write", async () => {
+    const w = await seedWorld();
+    const receivableId = await w.asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId: w.orgId,
+      customerId: w.customerId,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "R5 two payments",
+      amount: 500,
+      dueDate: DUE(),
+      creditSystemKey: "MISCELLANEOUS_INCOME",
+    });
+    for (const amount of [300, 200]) {
+      await w.asFinance.mutation(api.collections.recordPayment, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: w.orgId,
+        receivableId,
+        amount,
+        method: "CASH",
+        paymentDate: Date.now(),
+      });
+    }
+    const { saleId } = await insertSale(w, "PENDING");
+    await w.t.run((ctx) => ctx.db.patch(receivableId, { saleId }));
+    // 250 covers the newer 200 allocation, then splits the older 300 one.
+    const requestId = await request(w, receivableId, 250);
+    const before = await counts(w.t);
+
+    const code = await codeOf(
+      w.asApprover.mutation(api.collections.respondToApproval, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: w.orgId,
+        requestId,
+        status: "APPROVED",
+      })
+    );
+
+    expect(code).toBe("SALE_DEBT_RECEIPT_REFUSED");
+    expect(await counts(w.t)).toEqual(before);
     expect((await w.t.run((ctx) => ctx.db.get(receivableId)))?.outstandingAmount).toBe(0);
   });
 
@@ -1172,15 +1360,47 @@ describe("P4 — expire still works and never touches a captured link's held fun
     expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("EXPIRED");
   });
 
-  test("expiring a link whose capture is held leaves the held row untouched", async () => {
+  test("expire REFUSES a link whose capture is held: the link stays PENDING and the held row is unchanged", async () => {
     const w = await seedWorld();
     const intentId = await seedLink(w);
     await settleCapture(w);
     const [heldBefore] = await w.t.run((ctx) => ctx.db.query("unmatchedProviderFunds").take(10));
-    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId });
+    const before = await counts(w.t);
+
+    expect(
+      await codeOf(w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId }))
+    ).toBe("PAYMENT_LINK_CAPTURE_HELD");
+
+    const intent = await w.t.run((ctx) => ctx.db.get(intentId));
+    expect(intent?.status).toBe("PENDING");
     const rows = await w.t.run((ctx) => ctx.db.query("unmatchedProviderFunds").take(10));
     expect(rows).toHaveLength(1);
     expect(rows[0]).toEqual(heldBefore);
+    expect(await counts(w.t)).toEqual(before);
+  });
+
+  test("control: a PENDING link whose provider reference has NO held row still expires", async () => {
+    const w = await seedWorld();
+    const intentId = await seedLink(w);
+    // A held row for a DIFFERENT provider reference must not block this link.
+    await w.t.run((ctx) =>
+      ctx.db.insert("unmatchedProviderFunds", {
+        orgId: w.orgId,
+        provider: "tap",
+        externalId: "tap_some_other_ref",
+        reason: "PAYMENT_LINKS_DISABLED",
+        amountMinor: 1,
+        currency: "JOD",
+        providerEventIds: [],
+        deliveryCount: 1,
+        amountConflict: false,
+        reviewStatus: "OPEN",
+        firstReceivedAt: Date.now(),
+        lastReceivedAt: Date.now(),
+      } as never)
+    );
+    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId });
+    expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("EXPIRED");
   });
 
   test("expire refuses a SETTLED link (a captured link is never expired)", async () => {
