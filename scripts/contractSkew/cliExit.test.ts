@@ -472,6 +472,52 @@ describe("CS2-1: an SDK call through an element access is both counted and compa
   }, 300_000);
 });
 
+describe("entry points clientPaths does not extract fail CLOSED (exit 9), never silently pass", () => {
+  // Names absent from compare's EXPECTED_FUNCTION_TYPE (see functionTypeCoverage.test.ts).
+  // clientPaths extracts none of them, so the census holds a site the extractor has
+  // no record for and records it UNACCOUNTED -> COVERAGE_INCOMPLETE.
+  // createMutation and useQueriesHelper are not exported from any public `convex`
+  // subpath, so they are imported by relative path to the package's declarations
+  // (a public import does not resolve, the census sees no symbol, and exit is 0).
+  const HEAD = 'declare const api: { vehicles: { update: unknown } };\n';
+  const CASES: Array<[string, string]> = [
+    [
+      "useQuery_experimental",
+      'import { useQuery_experimental } from "convex/react";\n' + HEAD +
+        "export const go = () => useQuery_experimental(api.vehicles.update, {});\n",
+    ],
+    [
+      "usePaginatedQuery_experimental",
+      'import { usePaginatedQuery_experimental } from "convex/react";\n' + HEAD +
+        "export const go = () => usePaginatedQuery_experimental(api.vehicles.update, {}, { initialNumItems: 1 });\n",
+    ],
+    [
+      "createMutation",
+      'import { createMutation, type ConvexReactClient } from "../../../../convex/dist/esm-types/react/client.js";\n' + HEAD +
+        "declare const client: ConvexReactClient;\n" +
+        "export const go = () => createMutation(api.vehicles.update, client);\n",
+    ],
+    [
+      "useQueriesHelper",
+      'import { useQueriesHelper } from "../../../../convex/dist/esm-types/react/use_queries.js";\n' + HEAD +
+        "export const go = () => useQueriesHelper({ a: { query: api.vehicles.update, args: {} } }, undefined as never);\n",
+    ],
+    [
+      "onPaginatedUpdate_experimental",
+      'import type { ConvexClient } from "convex/browser";\n' + HEAD +
+        "declare const client: ConvexClient;\n" +
+        "export const go = () => client.onPaginatedUpdate_experimental(api.vehicles.update, {}, { initialNumItems: 1 }, () => {});\n",
+    ],
+  ];
+
+  test.each(CASES)("%s exits 9 and names the site", (name, source) => {
+    const dir = scaffold({ client: PROVEN, extra: { [`app/unextracted-${name}.tsx`]: source } });
+    const r = production(dir);
+    expect(r.code).toBe(9);
+    expect(r.stderr).toContain(`unextracted-${name}.tsx`);
+  }, 300_000);
+});
+
 describe("CS2-2: the spec is validated before it is trusted", () => {
   const route = { functionType: "HttpAction", method: "GET", path: "/health" };
   const base = () => mutation("vehicles.js:update", { orgId: required(str) });
