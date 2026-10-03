@@ -18,7 +18,7 @@ import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation, internalMutation } from "./functions";
 import { internal } from "./_generated/api";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { QueryCtx, MutationCtx } from "./_generated/server";
 import { requireTenantAuth, requireOwnedRow } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -502,11 +502,13 @@ export const backfillVehicleInventoryOpeningBalances = mutation({
     // once here rather than per vehicle so a large backfill run doesn't
     // re-scan the same event list once per vehicle.
     const postedLandedCostDeltaByVehicle = new Map<string, number>();
-    const postedLandedCostEvents = await ctx.db
-      .query("accountingEvents")
-      .withIndex("by_org_eventType", (q) => q.eq("orgId", args.orgId).eq("eventType", "VEHICLE_LANDED_COST_CAPITALIZED"))
-      .filter((q) => q.eq(q.field("status"), "POSTED"))
-      .collect();
+    // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+    const postedLandedCostEvents = (
+      await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_eventType", (q) => q.eq("orgId", args.orgId).eq("eventType", "VEHICLE_LANDED_COST_CAPITALIZED"))
+        .collect()
+    ).filter((e) => e.status === "POSTED");
     for (const event of postedLandedCostEvents) {
       const payload = event.payload as { vehicleId?: string; deltaMinor?: number } | undefined;
       if (!payload?.vehicleId || typeof payload.deltaMinor !== "number") continue;
@@ -526,15 +528,18 @@ export const backfillVehicleInventoryOpeningBalances = mutation({
     }> = [];
 
     for (const vehicle of vehicles) {
-      const alreadyPosted = await ctx.db
+      // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+      let alreadyPosted: Doc<"accountingEvents"> | null = null;
+      for await (const event of ctx.db
         .query("accountingEvents")
         .withIndex("by_org_source", (q) =>
           q.eq("orgId", args.orgId).eq("sourceType", "vehicles").eq("sourceId", vehicle._id.toString())
-        )
-        .filter((q) =>
-          q.or(q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"), q.eq(q.field("eventType"), "VEHICLE_INVENTORY_OPENING_BALANCE"))
-        )
-        .first();
+        )) {
+        if (event.eventType === "VEHICLE_ACQUIRED" || event.eventType === "VEHICLE_INVENTORY_OPENING_BALANCE") {
+          alreadyPosted = event;
+          break;
+        }
+      }
       if (alreadyPosted) {
         results.push({ vehicleId: vehicle._id.toString(), action: "SKIP", reason: "already_posted" });
         continue;
@@ -581,14 +586,18 @@ export const backfillVehicleInventoryOpeningBalances = mutation({
 
         const netAmount = expense.amount - (expense.taxAmount ?? 0);
 
-        const postedEvent = await ctx.db
+        // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+        let postedEvent: Doc<"accountingEvents"> | null = null;
+        for await (const event of ctx.db
           .query("accountingEvents")
           .withIndex("by_org_source", (q) =>
             q.eq("orgId", args.orgId).eq("sourceType", "expenses").eq("sourceId", expense._id.toString())
-          )
-          .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
-          .filter((q) => q.eq(q.field("status"), "POSTED"))
-          .first();
+          )) {
+          if (event.eventType === "EXPENSE_POSTED" && event.status === "POSTED") {
+            postedEvent = event;
+            break;
+          }
+        }
         const pendingPost = postedEvent
           ? null
           : await ctx.db
