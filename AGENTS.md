@@ -12,6 +12,42 @@ Convex agent skills for common tasks can be installed by running
 
 <!-- convex-ai-end -->
 
+## When a finding turns out to be real
+
+Fixing the instance is not the deliverable. The defect class is.
+
+For every **validated, important** finding — high severity, a recurring class, a
+production or process incident, or a correctness / security / tenancy /
+data-integrity invariant:
+
+1. **Fix the root cause, then search for siblings.** Structurally equivalent
+   instances across the whole codebase, not only the file you were in. A fix that
+   lands on one writer of a record and not on its siblings has closed nothing.
+2. **Choose the protection that enforces the defect class at the right
+   boundary.** Combine constraints, deterministic guards and regression tests
+   when they prove different things. Make a regression test fail on pre-fix
+   code whenever technically possible. Give structural guards negative or
+   mutation controls, and record any proof that is deferred or inapplicable.
+3. **A second occurrence of a class shows its protection was absent,
+   incomplete or ineffective — determine which.** Do not simply fix it again;
+   establish whether a guard existed, and if it did, why it did not fire, and
+   improve that layer. Classes that move money, auth, tenancy or production
+   data are mechanized on the first occurrence.
+4. **Close it honestly, in the catalog's terms.** Map an important finding to
+   an existing invariant ID in `scripts/autoflowInvariantCatalog.ts`, or create
+   one, and state its proof state as the catalog defines it — **DOCUMENTED**,
+   **PARTIAL** or **ENFORCED**. A fixed instance is not an ENFORCED class: an
+   invariant is ENFORCED only when siblings are addressed and every applicable
+   proof obligation is satisfied. When executable evidence is not yet possible,
+   record the obligation as **DEFERRED** with a Jira owner, and the invariant
+   stays PARTIAL with the gap visible.
+
+Prefer executable protection wherever it can measure the property. Record what
+the evidence proves and what remains unverified. Keep instructions and runbooks
+needed for operator action or evidence boundaries; update them when checks
+change. Retire catalog invariants only through the documented retirement
+process in `docs/architecture/invariant-governance.md`.
+
 ## Deploying the Convex backend to production
 
 Production is deployed by running the **Deploy production** workflow from the
