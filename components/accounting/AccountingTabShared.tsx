@@ -151,6 +151,7 @@ export function DialogFooterActions({
   disabled,
   confirmVariant,
   confirmClassName,
+  cancelDisabled,
 }: Readonly<{
   cancelLabel: string;
   confirmLabel: string;
@@ -160,10 +161,14 @@ export function DialogFooterActions({
   disabled?: boolean;
   confirmVariant?: ButtonVariant;
   confirmClassName?: string;
+  // Opt-in (default: Cancel stays enabled, as every other caller expects). A
+  // dialog whose submit cannot be recalled passes `submitting` here so Cancel
+  // cannot dismiss it mid-flight and hide the outcome (SCRUM-571 S1).
+  cancelDisabled?: boolean;
 }>) {
   return (
     <>
-      <Button variant="outline" onClick={onCancel}>
+      <Button variant="outline" onClick={onCancel} disabled={cancelDisabled}>
         {cancelLabel}
       </Button>
       <Button
