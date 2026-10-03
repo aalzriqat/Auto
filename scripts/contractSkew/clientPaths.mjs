@@ -120,7 +120,18 @@ const DIRECT_CALLERS = new Set([
   "runMutation", "runQuery", "runAction",
   "fetchQuery", "fetchMutation", "fetchAction",
   "preloadQuery",
+  // Client-class methods that transmit at call time (ConvexReactClient /
+  // ConvexClient / ConvexHttpClient). The census inventories these from the
+  // pinned `convex` package; listing them here is what lets the extractor
+  // answer for them rather than leave each as an unaccounted site.
+  "watchQuery", "prewarmQuery", "onUpdate", "consistentQuery",
 ]);
+/**
+ * The same entry points called as BARE functions (`fetchQuery(api.x.y, {...})`
+ * from `convex/nextjs`). Form B only matched `something.fetchQuery(...)`, so the
+ * bare form — the one that package actually exports — was never extracted.
+ */
+const BARE_DIRECT_CALLERS = new Set(["fetchQuery", "fetchMutation", "fetchAction", "preloadQuery"]);
 
 const MAX_DEPTH = 12;
 
@@ -132,19 +143,34 @@ const MAX_DEPTH = 12;
  * checking was switched on. A comment that drifts is a comment; an annotation
  * that drifts is a lie the toolchain repeats.
  *
- * @param {string[]} rootFiles  entry files to type-check
- * @param {string} tsconfigPath
- * @returns {{
+ * @typedef {{
  *   calls: Array<{
  *     identifier: string, file: string, line: number,
  *     payload: import("./contractTree.mjs").ClientNode | null,
- *     skipped?: boolean, unknowns: string[], casts: string[], via?: string
+ *     skipped?: boolean, unknowns: string[], casts: string[], via?: string,
+ *     siteId: string, mapSiteId?: string
  *   }>,
- *   unresolvedBinders: Array<{identifier: string, file: string, line: number, cause: string, reason: string}>,
+ *   unresolvedBinders: Array<{
+ *     identifier: string, file: string, line: number, cause: string, reason: string,
+ *     siteId: string, mapSiteId?: string
+ *   }>,
+ *   provedSkips: Array<{file: string, line: number, reason: string, siteId: string, mapSiteId?: string}>,
  *   diagnosticsCount: number
- * }}
+ * }} Extraction
  */
-export function extractClientCalls(rootFiles, tsconfigPath) {
+
+/**
+ * Build the TypeScript program for one client surface.
+ *
+ * Separate from extraction so the SAME program can feed the independent census
+ * (`census.mjs`) — the census must not trust the extractor's call list, but it
+ * has no reason to pay for a second type-check of the same files.
+ *
+ * @param {string[]} rootFiles  entry files to type-check
+ * @param {string} tsconfigPath
+ * @returns {import("typescript").Program}
+ */
+export function createClientProgram(rootFiles, tsconfigPath) {
   const configFile = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
   const parsed = ts.parseJsonConfigFileContent(
     configFile.config,
@@ -177,15 +203,36 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
     );
   }
 
-  const program = ts.createProgram({
+  return ts.createProgram({
     rootNames: rootFiles.length ? rootFiles : parsed.fileNames,
     options: { ...parsed.options, noEmit: true },
   });
+}
+
+/**
+ * @param {string[]} rootFiles  entry files to type-check
+ * @param {string} tsconfigPath
+ * @param {{ program?: import("typescript").Program }} [options]
+ * @returns {Extraction}
+ */
+export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
+  const program = options.program ?? createClientProgram(rootFiles, tsconfigPath);
   const checker = program.getTypeChecker();
   const evidence = createEvidenceAnalysis(program, checker);
 
   const calls = [];
   const unresolvedBinders = [];
+  const provedSkips = [];
+
+  // ⚠️ SITE IDENTITY. Every record carries the position of the expression that
+  // NAMES the Convex function (or the request map, or the invoked binding) so
+  // the independent census can reconcile its own candidates to these records by
+  // identity. Counts would let one gap swap for another; this cannot.
+  const relFile = (sourceFile) => path.relative(process.cwd(), sourceFile.fileName).replace(/\\/g, "/");
+  const siteOf = (sourceFile, node) => {
+    const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.getStart());
+    return `${relFile(sourceFile)}:${line + 1}:${character + 1}`;
+  };
 
   // ⚠️ SCOPE IS THE DECLARED CLIENT, NOT THE WHOLE PROGRAM.
   //
@@ -248,7 +295,7 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
         node.initializer.arguments.length > 0 &&
         ts.isIdentifier(node.name)
       ) {
-        const id = apiReferenceToIdentifier(node.initializer.arguments[0]);
+        const id = resolveFunctionReference(node.initializer.arguments[0], checker);
         const symbol = checker.getSymbolAtLocation(node.name);
         if (id && symbol) bound.set(symbol, id);
       }
@@ -265,7 +312,7 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
         INLINE_PAYLOAD_BINDERS.has(node.expression.text) &&
         node.arguments.length > 0
       ) {
-        const id = apiReferenceToIdentifier(node.arguments[0]);
+        const id = resolveFunctionReference(node.arguments[0], checker);
         if (id) {
           const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart());
           const acc = { unknowns: [], casts: [] };
@@ -308,6 +355,7 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
             // `usePaginatedQuery` supplies `paginationOpts` itself, so demanding
             // it from the caller is a fabricated finding.
             via: node.expression.text,
+            siteId: siteOf(sourceFile, node.arguments[0]),
           });
           inlineResolved.add(node);
         }
@@ -331,20 +379,29 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
         CLIENT_BINDERS.has(node.expression.text) &&
         node.arguments.length > 0
       ) {
-        const identifier = apiReferenceToIdentifier(node.arguments[0]);
+        const identifier = resolveFunctionReference(node.arguments[0], checker);
         const parent = node.parent;
         const boundToSimpleName =
           parent && ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name);
-        if (!boundToSimpleName && !inlineResolved.has(node)) {
+        // ⚠️ BINDING TO A SIMPLE NAME ONLY HELPS A REFERENCE WE RESOLVED.
+        //
+        // `boundToSimpleName` used to suppress the record on its own, so
+        // `const rows = useQuery(someRef, ...)` with a reference nobody could
+        // resolve produced NOTHING: no call, no unresolved site, and a
+        // clean-looking run. The simple name says where the hook's RESULT goes;
+        // it says nothing about whether the FUNCTION was identified.
+        const followable = identifier && (boundToSimpleName || inlineResolved.has(node));
+        if (!followable) {
           const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart());
           unresolvedBinders.push({
             identifier: identifier ?? "<unresolved>",
-            file: path.relative(process.cwd(), sourceFile.fileName).replace(/\\/g, "/"),
+            file: relFile(sourceFile),
             line: line + 1,
             cause: classifyBinder(node, identifier),
             reason: identifier
               ? "hook result is not bound to a simple name; its payload cannot be followed"
-              : "the Convex function reference is not a literal api.* path",
+              : "the Convex function reference is not a literal api.* path or a const alias of one",
+            siteId: siteOf(sourceFile, node.arguments[0]),
           });
         }
       }
@@ -357,6 +414,11 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
       if (ts.isCallExpression(node)) {
         let identifier = null;
         let argExpr = null;
+        /**
+         * The expression whose position identifies this transmission site.
+         * @type {import("typescript").Node}
+         */
+        let siteNode = node;
 
         // Form A: boundVariable({...}) — resolved through the symbol so a
         // same-named local (a useState setter, a prop) cannot be mistaken for
@@ -366,20 +428,24 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
           if (symbol && bound.has(symbol)) {
             identifier = bound.get(symbol);
             argExpr = node.arguments[0] ?? null;
+            siteNode = node.expression;
           }
         }
 
-        // Form B: something.mutation(api.x.y, {...})
+        // Form B: something.mutation(api.x.y, {...}), and the bare
+        // fetchQuery(api.x.y, {...}) that `convex/nextjs` actually exports.
         if (
           !identifier &&
-          ts.isPropertyAccessExpression(node.expression) &&
-          DIRECT_CALLERS.has(node.expression.name.text) &&
-          node.arguments.length > 0
+          node.arguments.length > 0 &&
+          ((ts.isPropertyAccessExpression(node.expression) &&
+            DIRECT_CALLERS.has(node.expression.name.text)) ||
+            (ts.isIdentifier(node.expression) && BARE_DIRECT_CALLERS.has(node.expression.text)))
         ) {
-          const maybe = apiReferenceToIdentifier(node.arguments[0]);
+          const maybe = resolveFunctionReference(node.arguments[0], checker);
           if (maybe) {
             identifier = maybe;
             argExpr = node.arguments[1] ?? null;
+            siteNode = node.arguments[0];
           }
         }
 
@@ -408,17 +474,216 @@ export function extractClientCalls(rootFiles, tsconfigPath) {
             payload,
             unknowns: acc.unknowns,
             casts: acc.casts,
+            siteId: siteOf(sourceFile, siteNode),
           });
         }
       }
       ts.forEachChild(node, visit);
     };
     visit(sourceFile);
+
+    // Pass 3: `useQueries` request maps. Each `{ query, args }` entry is a call.
+    const visitUseQueries = (node) => {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === "useQueries"
+      ) {
+        extractRequestMap(node, sourceFile);
+      }
+      ts.forEachChild(node, visitUseQueries);
+    };
+    visitUseQueries(sourceFile);
+  }
+
+  /**
+   * ⚠️ A `useQueries` ARGUMENT IS A MAP OF CALLS, NOT A FUNCTION REFERENCE.
+   *
+   * `useQueries({ key: { query: api.x.y, args } })` sends one query per entry.
+   * Treating it as a hook with a reference at argument 0 (as every other hook
+   * here does) finds nothing. The map is usually built in a `useMemo`, so this
+   * follows const identifiers, conditionals and `useMemo` return statements:
+   *
+   *   - an EMPTY object literal is a PROVED skip (nothing is sent);
+   *   - an entry with a resolvable `query` is a call;
+   *   - anything else (a parameter, a spread, a computed reference, a call we
+   *     cannot read) is UNRESOLVED at its file:line — never dropped.
+   */
+  function extractRequestMap(callNode, sourceFile) {
+    const mapSiteId = callNode.arguments[0]
+      ? siteOf(sourceFile, callNode.arguments[0])
+      : siteOf(sourceFile, callNode);
+    const lineOfNode = (node) => sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1;
+    const unresolved = (node, cause, reason) =>
+      unresolvedBinders.push({
+        identifier: "<unresolved>",
+        file: relFile(sourceFile),
+        line: lineOfNode(node),
+        cause,
+        reason,
+        siteId: siteOf(sourceFile, node),
+        mapSiteId,
+      });
+
+    /** Return expressions of a function body, not descending into nested functions. */
+    const returnedExpressions = (fn) => {
+      if (!ts.isBlock(fn.body)) return [fn.body];
+      const found = [];
+      const scan = (n) => {
+        if (ts.isFunctionLike(n) && n !== fn) return;
+        if (ts.isReturnStatement(n)) {
+          if (n.expression) found.push(n.expression);
+          return;
+        }
+        ts.forEachChild(n, scan);
+      };
+      scan(fn.body);
+      return found;
+    };
+
+    const propertyKey = (prop) =>
+      (ts.isPropertyAssignment(prop) || ts.isShorthandPropertyAssignment(prop)) &&
+      (ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name))
+        ? prop.name.text
+        : null;
+
+    const entry = (entryNode) => {
+      const literal = unwrapReferenceExpression(entryNode);
+      if (!ts.isObjectLiteralExpression(literal)) {
+        unresolved(entryNode, "DYNAMIC_REQUEST_ENTRY", "a useQueries entry is not an object literal");
+        return;
+      }
+      let queryNode = null;
+      let argsNode = null;
+      for (const prop of literal.properties) {
+        const key = propertyKey(prop);
+        const valueNode = ts.isShorthandPropertyAssignment(prop)
+          ? prop.name
+          : ts.isPropertyAssignment(prop)
+            ? prop.initializer
+            : null;
+        if (key === "query" && valueNode) queryNode = valueNode;
+        else if (key === "args" && valueNode) argsNode = valueNode;
+        else if (ts.isSpreadAssignment(prop) || key === null) {
+          unresolved(prop, "DYNAMIC_REQUEST_ENTRY", "a useQueries entry has a spread or computed key");
+          return;
+        }
+      }
+      if (!queryNode) {
+        unresolved(literal, "DYNAMIC_REQUEST_ENTRY", "a useQueries entry has no literal `query` property");
+        return;
+      }
+      const identifier = resolveFunctionReference(queryNode, checker);
+      if (!identifier) {
+        unresolved(queryNode, "DYNAMIC_IDENTITY", "the Convex function reference is not a literal api.* path or a const alias of one");
+        return;
+      }
+      const acc = { unknowns: [], casts: [] };
+      const payload = argsNode
+        ? collectFromExpression(argsNode, {
+            checker,
+            prefix: "",
+            acc,
+            depth: 0,
+            seen: new Set(),
+            evidence,
+            expressionSeen: new Set(),
+            refinements: createFlowRefinements(),
+          })
+        : EMPTY_PAYLOAD;
+      calls.push({
+        identifier,
+        file: relFile(sourceFile),
+        line: lineOfNode(queryNode),
+        payload,
+        unknowns: acc.unknowns,
+        casts: acc.casts,
+        via: "useQueries",
+        siteId: siteOf(sourceFile, queryNode),
+        mapSiteId,
+      });
+    };
+
+    const walk = (expression, depth, seen) => {
+      const node = unwrapReferenceExpression(expression);
+      if (depth > MAX_DEPTH) {
+        unresolved(node, "DYNAMIC_REQUEST_MAP", "the useQueries request map is nested too deeply to follow");
+        return;
+      }
+      if (ts.isObjectLiteralExpression(node)) {
+        if (node.properties.length === 0) {
+          provedSkips.push({
+            file: relFile(sourceFile),
+            line: lineOfNode(node),
+            reason: "empty useQueries request map: nothing is sent",
+            siteId: siteOf(sourceFile, node),
+            mapSiteId,
+          });
+          return;
+        }
+        for (const prop of node.properties) {
+          if (ts.isPropertyAssignment(prop)) entry(prop.initializer);
+          else if (ts.isSpreadAssignment(prop)) walk(prop.expression, depth + 1, seen);
+          else unresolved(prop, "DYNAMIC_REQUEST_ENTRY", "a useQueries entry is not an inline object literal");
+        }
+        return;
+      }
+      if (ts.isConditionalExpression(node)) {
+        walk(node.whenTrue, depth + 1, seen);
+        walk(node.whenFalse, depth + 1, seen);
+        return;
+      }
+      if (ts.isIdentifier(node)) {
+        const symbol = resolveSymbol(checker, node);
+        const decl = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+        const list = decl && ts.isVariableDeclaration(decl) ? decl.parent : undefined;
+        if (
+          symbol &&
+          decl &&
+          ts.isVariableDeclaration(decl) &&
+          decl.initializer &&
+          list &&
+          ts.isVariableDeclarationList(list) &&
+          list.flags & ts.NodeFlags.Const &&
+          !seen.has(symbol)
+        ) {
+          seen.add(symbol);
+          walk(decl.initializer, depth + 1, seen);
+          return;
+        }
+        unresolved(node, "DYNAMIC_REQUEST_MAP", "the useQueries request map is not a const object we can read");
+        return;
+      }
+      if (ts.isCallExpression(node)) {
+        const callee = node.expression;
+        const isUseMemo =
+          (ts.isIdentifier(callee) && callee.text === "useMemo") ||
+          (ts.isPropertyAccessExpression(callee) && callee.name.text === "useMemo");
+        const factory = node.arguments[0] ? unwrapReferenceExpression(node.arguments[0]) : null;
+        if (isUseMemo && factory && (ts.isArrowFunction(factory) || ts.isFunctionExpression(factory))) {
+          const returned = returnedExpressions(factory);
+          if (returned.length === 0) {
+            unresolved(node, "DYNAMIC_REQUEST_MAP", "the useMemo factory returns no request map");
+            return;
+          }
+          for (const expr of returned) walk(expr, depth + 1, seen);
+          return;
+        }
+      }
+      unresolved(node, "DYNAMIC_REQUEST_MAP", "the useQueries request map is built dynamically");
+    };
+
+    if (callNode.arguments.length === 0) {
+      unresolved(callNode, "DYNAMIC_REQUEST_MAP", "useQueries called without a request map");
+      return;
+    }
+    walk(callNode.arguments[0], 0, new Set());
   }
 
   return {
     calls,
     unresolvedBinders,
+    provedSkips,
     diagnosticsCount: program.getSemanticDiagnostics().length,
   };
 }
@@ -1339,21 +1604,59 @@ function evidenceSourceOfDeclaration(declaration) {
   return { mutable: false, node: undefined };
 }
 
-/** `api.vehicles.importBulk` (or `internal.x.y`) -> `vehicles:importBulk` */
-function apiReferenceToIdentifier(node) {
+/** Strip parentheses, `as`, `as unknown as`, `!` and `satisfies`. */
+function unwrapReferenceExpression(node) {
+  return unwrapAliasExpression(node);
+}
+
+/**
+ * The path segments of a function reference rooted in `api` / `internal`,
+ * following const aliases: `const ref = (api as unknown as T).search.globalSearch`
+ * is `["search", "globalSearch"]`. Returns null for anything not provably a
+ * literal path (a computed key, a mutable binding, a parameter, a call).
+ */
+function referenceChain(node, checker, depth = 0, seen = new Set()) {
+  if (depth > 8) return null;
   const segments = [];
-  let current = node;
-  while (current && ts.isPropertyAccessExpression(current)) {
-    segments.unshift(current.name.text);
-    current = current.expression;
+  let current = unwrapReferenceExpression(node);
+  for (;;) {
+    if (ts.isPropertyAccessExpression(current)) {
+      segments.unshift(current.name.text);
+    } else if (
+      ts.isElementAccessExpression(current) &&
+      (ts.isStringLiteral(current.argumentExpression) ||
+        ts.isNoSubstitutionTemplateLiteral(current.argumentExpression))
+    ) {
+      segments.unshift(current.argumentExpression.text);
+    } else {
+      break;
+    }
+    current = unwrapReferenceExpression(current.expression);
   }
-  if (!current || !ts.isIdentifier(current)) return null;
-  const root = current.text;
-  if (root !== "api" && root !== "internal") return null;
-  if (segments.length < 2) return null;
-  const fn = segments[segments.length - 1];
-  const modulePath = segments.slice(0, -1).join("/");
-  return `${modulePath}:${fn}`;
+  if (!ts.isIdentifier(current)) return null;
+  if (current.text === "api" || current.text === "internal") {
+    // A local `const api = ...` that is itself an alias of something else is
+    // not followed: the generated object (and the mobile hand-built one) are
+    // the only roots, and they are recognised by name exactly as before.
+    return segments;
+  }
+  const symbol = resolveSymbol(checker, current);
+  const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+  if (!symbol || seen.has(symbol) || !declaration || !ts.isVariableDeclaration(declaration)) return null;
+  const list = declaration.parent;
+  if (!ts.isVariableDeclarationList(list) || !(list.flags & ts.NodeFlags.Const)) return null;
+  if (!declaration.initializer || !ts.isIdentifier(declaration.name)) return null;
+  seen.add(symbol);
+  const base = referenceChain(declaration.initializer, checker, depth + 1, seen);
+  return base ? [...base, ...segments] : null;
+}
+
+/** `api.vehicles.importBulk` (or an alias of it) -> `vehicles:importBulk` */
+function resolveFunctionReference(node, checker) {
+  if (!node) return null;
+  const segments = referenceChain(node, checker);
+  if (!segments || segments.length < 2) return null;
+  return `${segments.slice(0, -1).join("/")}:${segments[segments.length - 1]}`;
 }
 
 /**

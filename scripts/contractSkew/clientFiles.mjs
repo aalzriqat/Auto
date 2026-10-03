@@ -38,6 +38,17 @@ export const CLIENT_SURFACES = [
     // merge — even less coupling than the SCRUM-177 path had.
     ships: "EAS OTA update, which publishes without any Convex deploy",
   },
+  {
+    // ⚠️ SHIPPED SOURCE THAT BOTH CLIENTS BUNDLE. `packages/shared` is imported
+    // by the web app and by mobile, so a Convex call placed there reaches users
+    // through whichever surface bundles it. It had no entry here, so such a call
+    // was invisible to discovery AND to the unscanned-file backstop's notion of
+    // what is covered.
+    name: "shared",
+    dirs: ["packages/shared/src"],
+    tsconfig: "packages/shared/tsconfig.json",
+    ships: "bundled into the web and mobile clients",
+  },
 ];
 
 /** Kept for callers that only want the web dirs (the historical default). */
@@ -52,7 +63,7 @@ const EXTS = new Set([".ts", ".tsx"]);
  * and cannot skew at all.
  */
 const CONVEX_CALL_MARKERS =
-  /\buse(Mutation|Query|PaginatedQuery|Action)\b|\b(fetchQuery|fetchMutation|fetchAction|preloadQuery)\b/;
+  /\buse(Mutation|Query|Queries|PaginatedQuery|Action)\b|\b(fetchQuery|fetchMutation|fetchAction|preloadQuery)\b/;
 
 const SKIP_DIRS = new Set([
   "node_modules",
