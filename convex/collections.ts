@@ -549,13 +549,15 @@ async function reverseAllocationsForRefund(
     actorId: Id<"users">;
   }
 ) {
+  // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
   const activeAllocations = (
     await ctx.db
       .query("paymentAllocations")
       .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", args.receivableDocumentId))
-      .filter((q) => q.eq(q.field("status"), "ACTIVE"))
       .collect()
-  ).sort((a, b) => b.createdAt - a.createdAt);
+  )
+    .filter((allocation) => allocation.status === "ACTIVE")
+    .sort((a, b) => b.createdAt - a.createdAt);
 
   let remainingMinor = args.amountMinor;
   let coveredMinor = 0;
@@ -2270,11 +2272,12 @@ export const returnClearedCheque = mutation({
         }
 
         // Find the collection payment created when this cheque cleared
-        const clearedPayment = await ctx.db
+        // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+        const chequePayments = await ctx.db
           .query("collectionPayments")
           .withIndex("by_cheque", (q) => q.eq("chequeId", args.chequeId))
-          .filter((q) => q.eq(q.field("status"), "POSTED"))
-          .first();
+          .collect();
+        const clearedPayment = chequePayments.find((payment) => payment.status === "POSTED") ?? null;
 
         const reason = args.returnReason ?? "Cheque returned after clearing";
         const currency = await getOrgCurrency(ctx, args.orgId);
@@ -2711,19 +2714,17 @@ export const respondToApproval = mutation({
             // Block if a post-dated cheque in HELD or DEPOSITED state is
             // linked to this receivable. Cancelling the receivable would leave
             // an active financial instrument with nowhere to post when cleared.
-            const heldCheque = await ctx.db
-              .query("postDatedCheques")
-              .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "HELD"))
-              .filter((q) => q.eq(q.field("receivableId"), receivable._id))
-              .first();
-            const depositedCheque = !heldCheque
-              ? await ctx.db
-                  .query("postDatedCheques")
-                  .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "DEPOSITED"))
-                  .filter((q) => q.eq(q.field("receivableId"), receivable._id))
-                  .first()
-              : null;
-            if (heldCheque || depositedCheque) {
+            // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+            const hasActiveCheque = (
+              await ctx.db
+                .query("postDatedCheques")
+                .withIndex("by_receivable", (q) => q.eq("receivableId", receivable._id))
+                .collect()
+            ).some(
+              (cheque) =>
+                cheque.orgId === args.orgId && (cheque.status === "HELD" || cheque.status === "DEPOSITED")
+            );
+            if (hasActiveCheque) {
               throw new ConvexError(
                 "Cannot cancel a receivable with an active cheque (HELD or DEPOSITED). " +
                 "Return or cancel the cheque first, then cancel the receivable."
