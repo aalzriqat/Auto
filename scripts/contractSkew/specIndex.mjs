@@ -26,27 +26,34 @@
  * @returns {Map<string, any>} identifier -> spec entry
  */
 export function indexSpec(spec) {
+  // ⚠️ ONLY WHAT A CLIENT CAN CALL IS INDEXED (CS2-2). An `internal` function is
+  // unreachable through the public `api`; an HttpAction is keyed by path and
+  // method, never by identifier. Indexing either made a client call to an
+  // internal function look like a call to a live public one.
+  return indexCallable(spec, (fn) => fn.visibility?.kind === "public");
+}
+
+/** The function types a generated `api.*` reference can name. */
+export const CALLABLE_TYPES = new Set(["Query", "Mutation", "Action"]);
+
+/**
+ * identifier -> entry for every callable-typed entry that has a string
+ * identifier and passes `keep` (the only thing the two public indexes differ in).
+ *
+ * @param {{ functions?: Array<any> } | Array<any>} spec
+ * @param {(fn: any) => boolean} keep
+ * @returns {Map<string, any>}
+ */
+function indexCallable(spec, keep) {
   const list = Array.isArray(spec) ? spec : Array.isArray(spec?.functions) ? spec.functions : [];
   const byId = new Map();
   for (const fn of list) {
-    // ⚠️ ONLY WHAT A CLIENT CAN CALL IS INDEXED (CS2-2). An `internal` function is
-    // unreachable through the public `api`; an HttpAction is keyed by path and
-    // method, never by identifier. Indexing either made a client call to an
-    // internal function look like a call to a live public one.
-    if (
-      fn &&
-      typeof fn.identifier === "string" &&
-      CALLABLE_TYPES.has(fn.functionType) &&
-      fn.visibility?.kind === "public"
-    ) {
+    if (fn && typeof fn.identifier === "string" && CALLABLE_TYPES.has(fn.functionType) && keep(fn)) {
       byId.set(fn.identifier, fn);
     }
   }
   return byId;
 }
-
-/** The function types a generated `api.*` reference can name. */
-export const CALLABLE_TYPES = new Set(["Query", "Mutation", "Action"]);
 
 /**
  * Every entry that carries an identifier regardless of visibility. For the
@@ -57,14 +64,7 @@ export const CALLABLE_TYPES = new Set(["Query", "Mutation", "Action"]);
  * @returns {Map<string, any>}
  */
 export function indexAllNamed(spec) {
-  const list = Array.isArray(spec) ? spec : Array.isArray(spec?.functions) ? spec.functions : [];
-  const byId = new Map();
-  for (const fn of list) {
-    if (fn && typeof fn.identifier === "string" && CALLABLE_TYPES.has(fn.functionType)) {
-      byId.set(fn.identifier, fn);
-    }
-  }
-  return byId;
+  return indexCallable(spec, () => true);
 }
 
 /**

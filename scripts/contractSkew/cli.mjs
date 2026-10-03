@@ -399,12 +399,22 @@ function reportEvidenceDrift(prefix) {
  * then meet the coverage gap for the first time, so every other cause present is
  * listed here, in the same run, labelled ALSO PRESENT.
  *
- * @param {"break"|"standing"|"blocked"|"coverageGap"|"coverageIncomplete"|"drift"} primary
+ * `ordered` is the ONE list of causes, in precedence order: the first present one
+ * is reported and exits; each later present cause that is flagged `also` is
+ * reported as ALSO PRESENT (the proven-break / standing-defect / blocker details
+ * are only ever the primary report). Returns, without exiting, when none is present.
+ *
+ * @param {Array<{ present: boolean, exitCode: number, also?: boolean, report: (prefix: string) => void }>} ordered
+ * @param {string} [prefix]  prepended to the primary cause's summary line
  */
-function reportOtherCauses(primary) {
-  if (primary !== "coverageGap" && unscannedFiles > 0) reportCoverageGap("ALSO PRESENT: ");
-  if (primary !== "coverageIncomplete" && coverageIncomplete) reportCoverageIncomplete("ALSO PRESENT: ");
-  if (primary !== "drift" && baselineState.drift) reportEvidenceDrift("ALSO PRESENT: ");
+function exitOnFirstCause(ordered, prefix = "") {
+  const primary = ordered.find((cause) => cause.present);
+  if (!primary) return;
+  primary.report(prefix);
+  for (const cause of ordered) {
+    if (cause !== primary && cause.present && cause.also) cause.report("ALSO PRESENT: ");
+  }
+  process.exit(primary.exitCode);
 }
 
 // ⚠️ A client surface this control does not look at is a coverage gap, and a
@@ -495,6 +505,70 @@ const alert = alertsFor(
   deployed.rung === SUPPLIED_FILE_RUNG ? "CONTRACT SKEW" : "PRODUCTION SKEW"
 );
 
+function reportProvenBreaks() {
+  for (const f of [...classification.revisionSkew, ...classification.unclassified]) {
+    console.error(
+      `::error file=${f.file},line=${f.line}::[${f.classification}] ${f.identifier} ${f.path} — ${f.detail} [${f.dimension}]`
+    );
+  }
+  // The wording claims only what the spec's origin proves (see skewWording.mjs).
+  const suppliedSpec = strArg("spec");
+  console.error(
+    `::error::${skewSummary({
+      rung: String(deployed.rung),
+      specSource: [suppliedSpec, deployed.url].filter(Boolean).join(", "),
+      proven: classification.revisionSkew.length,
+      unclassified: classification.unclassified.length,
+      basis: classification.basis ?? "none",
+    })}`
+  );
+}
+
+function reportStandingDefects() {
+  for (const f of classification.standingDefects) {
+    console.error(
+      `::error file=${f.file},line=${f.line}::[STANDING DEFECT] ${f.identifier} ${f.path} — ${f.detail} [${f.dimension}]`
+    );
+  }
+  console.error(
+    `::error::STANDING CONTRACT DEFECT — ${classification.standingDefects.length} path(s). ` +
+      `The current backend and the live backend already agree, so DEPLOYING WILL NOT FIX THIS. ` +
+      `Basis: ${classification.basis}`
+  );
+}
+
+/**
+ * Every cause a run can have, in the precedence order the exit code follows
+ * (production mode). `key` / `value` are what the JSON report's `causes` records
+ * for it, so the report and the exit are derived from this one list; `present` is
+ * what decides the exit; `also` marks the causes listed as ALSO PRESENT when
+ * another one wins.
+ */
+const causes = [
+  { id: "break", key: "provenBreaks", value: result.breaking.length, present: alert.productionSkew, exitCode: EXIT.PRODUCTION_SKEW, report: reportProvenBreaks },
+  // ⚠️ A standing defect is a real failure and is reported as one — never
+  // suppressed, allowlisted, or softened into UNKNOWN, because it is not
+  // uncertainty. It is a known bug. But it gets its OWN exit code, because
+  // deploying the backend fixes nothing here and reporting it as skew would leave
+  // the skew alarm permanently red for something proven not to be skew. An alarm
+  // that is always on is an alarm nobody reads.
+  { id: "standing", key: "standingDefects", value: classification.standingDefects.length, present: alert.standingContractDefect, exitCode: EXIT.STANDING_DEFECT, report: reportStandingDefects },
+  // ⚠️ A client FILE that was never scanned is not the same as an unproven path
+  // inside a file that was. For an unproven path the control saw the call and
+  // could not prove one leaf; for an unscanned file it never saw the call at all,
+  // so a genuine incompatibility there produces no finding, no BREAKING, and —
+  // before this cause existed — exit 0 with a warning. A green tick over a
+  // client nobody looked at is the same false assurance as UNAVAILABLE reporting
+  // success, and it is worse for being quiet about it.
+  { id: "coverageGap", key: "unscannedClientFiles", value: unscannedFiles, present: unscannedFiles > 0, exitCode: EXIT.COVERAGE_GAP, also: true, report: reportCoverageGap },
+  // ⚠️ A call the control could not ACCOUNT FOR is not a call it found compatible.
+  // Exit 9, not 0: with an incomplete census, "no break found" only describes the
+  // calls that happened to be seen. Zero discovered calls lands here too.
+  { id: "coverageIncomplete", key: "coverageIncomplete", value: coverageProblems, present: coverageIncomplete, exitCode: EXIT.COVERAGE_INCOMPLETE, also: true, report: reportCoverageIncomplete },
+  // The reviewed debt no longer matches what the run found.
+  { id: "drift", key: "evidenceDrift", value: baselineState.drift ? baselineState.problems : [], present: baselineState.drift, exitCode: EXIT.EVIDENCE_DRIFT, also: true, report: reportEvidenceDrift },
+];
+
 const report = {
   mode,
   deployment: deployed.url,
@@ -512,13 +586,7 @@ const report = {
   baseline: { path: baselinePath, matched: baselineState.matched, drift: baselineState.problems },
   // Every cause present in this run, whatever single exit code the precedence
   // picks (D-26).
-  causes: {
-    provenBreaks: result.breaking.length,
-    standingDefects: classification.standingDefects.length,
-    unscannedClientFiles: unscannedFiles,
-    coverageIncomplete: coverageProblems,
-    evidenceDrift: baselineState.drift ? baselineState.problems : [],
-  },
+  causes: Object.fromEntries(causes.map((cause) => [cause.key, cause.value])),
   census: {
     totals: census,
     unresolved: censusGaps,
@@ -601,50 +669,29 @@ if (mode === "release") {
     );
   }
 
-  if (blockers.blocked) {
-    for (const f of blockers.intersectingUnknowns) {
-      console.error(
-        `::error file=${f.file},line=${f.line}::${f.identifier} ${f.path} is unproven and this release changes that path`
-      );
-    }
-    reportOtherCauses(releaseBreaking.length ? "break" : "blocked");
-    process.exit(releaseBreaking.length ? EXIT.RELEASE_BREAK : EXIT.BLOCKED);
-  }
-  // Unrelated unknowns are control health, not this release's problem.
-  if (blockers.unrelatedUnknowns > 0) {
+  // Unrelated unknowns are control health, not this release's problem. They are
+  // only mentioned when the release is not blocked outright.
+  if (!blockers.blocked && blockers.unrelatedUnknowns > 0) {
     console.error(
       `::warning::${blockers.unrelatedUnknowns} unproven path(s) elsewhere in the client — control coverage, not a skew`
     );
   }
 
+  // A release is held by the blockers first (a proven break, or an unproven path
+  // it changes), then by the same three causes that hold the monitor:
+  //
   // ⚠️ A COVERAGE GAP BLOCKS A RELEASE TOO, AND IT USED TO ONLY BLOCK THE
-  // MONITOR.
+  // MONITOR. Release mode reached the OK exit FIRST, so a release could go green
+  // while a client surface calling Convex was never analysed at all — not "we
+  // looked and found nothing", but "we never looked". That is the same false
+  // assurance this control exists to remove, and it is worse in the release gate
+  // than in the monitor: the monitor reports an incident that already exists, the
+  // gate decides whether to create one. (Latent today because the derived scan
+  // returns an empty list; stated rather than left to fall through.)
   //
-  // Production mode acts on `unscannedFiles` and exits COVERAGE_GAP. Release
-  // mode reached the OK exit below FIRST, so a release could go green while a
-  // client surface calling Convex was never analysed at all — not "we looked
-  // and found nothing", but "we never looked". That is the same false assurance
-  // this control exists to remove, and it is worse in the release gate than in
-  // the monitor: the monitor reports an incident that already exists, the gate
-  // decides whether to create one.
+  // An accounting gap blocks for the same reason: "we could not see every call"
+  // is not "this release is compatible".
   //
-  // Latent today because the derived scan returns an empty list. Stated at the
-  // gate rather than left to fall through, so it cannot become reachable
-  // silently the day a surface is added.
-  if (unscannedFiles > 0) {
-    reportCoverageGap("RELEASE ");
-    reportOtherCauses("coverageGap");
-    process.exit(EXIT.COVERAGE_GAP);
-  }
-
-  // An accounting gap blocks a release for the same reason a scanning gap does:
-  // "we could not see every call" is not "this release is compatible".
-  if (coverageIncomplete) {
-    reportCoverageIncomplete("RELEASE ");
-    reportOtherCauses("coverageIncomplete");
-    process.exit(EXIT.COVERAGE_INCOMPLETE);
-  }
-
   // ⚠️ BASELINE DRIFT BLOCKS A RELEASE TOO (D-26, CS2-3). It used to be a
   // warning that exited 0, on the reasoning that unrelated reviewed debt moving
   // should not stop an unrelated release. But a baseline that is ABSENT,
@@ -652,13 +699,25 @@ if (mode === "release") {
   // "reviewed debt" the UNKNOWN wording rests on is not what was reviewed — so
   // exit 0 here would be a green tick over evidence nobody checked. D-24 ruled
   // drift its own non-zero exit with no release carve-out. What an unrelated
-  // unknown cannot do is block by itself: that stays exit 4, above, and only
-  // when it overlaps a path THIS release changes.
-  if (baselineState.drift) {
-    reportEvidenceDrift("RELEASE ");
-    reportOtherCauses("drift");
-    process.exit(EXIT.EVIDENCE_DRIFT);
-  }
+  // unknown cannot do is block by itself: that stays exit 4, and only when it
+  // overlaps a path THIS release changes.
+  exitOnFirstCause(
+    [
+      {
+        present: blockers.blocked,
+        exitCode: releaseBreaking.length ? EXIT.RELEASE_BREAK : EXIT.BLOCKED,
+        report: () => {
+          for (const f of blockers.intersectingUnknowns) {
+            console.error(
+              `::error file=${f.file},line=${f.line}::${f.identifier} ${f.path} is unproven and this release changes that path`
+            );
+          }
+        },
+      },
+      ...causes.filter((cause) => cause.also),
+    ],
+    "RELEASE "
+  );
 
   // The same honest sentence as production mode: a release that clears with
   // reviewed debt remaining is UNKNOWN about that debt, never a PASS.
@@ -674,79 +733,9 @@ if (mode === "release") {
 emit(report);
 
 // Skew first, because it is the one that is an incident. A backend that is
-// behind is fixable in minutes, and somebody has to be told now.
-if (alert.productionSkew) {
-  for (const f of [...classification.revisionSkew, ...classification.unclassified]) {
-    console.error(
-      `::error file=${f.file},line=${f.line}::[${f.classification}] ${f.identifier} ${f.path} — ${f.detail} [${f.dimension}]`
-    );
-  }
-  // The wording claims only what the spec's origin proves (see skewWording.mjs).
-  const suppliedSpec = strArg("spec");
-  console.error(
-    `::error::${skewSummary({
-      rung: String(deployed.rung),
-      specSource: [suppliedSpec, deployed.url].filter(Boolean).join(", "),
-      proven: classification.revisionSkew.length,
-      unclassified: classification.unclassified.length,
-      basis: classification.basis ?? "none",
-    })}`
-  );
-  reportOtherCauses("break");
-  process.exit(EXIT.PRODUCTION_SKEW);
-}
-
-// ⚠️ A standing defect is a real failure and is reported as one — never
-// suppressed, allowlisted, or softened into UNKNOWN, because it is not
-// uncertainty. It is a known bug. But it gets its OWN exit code, because
-// deploying the backend fixes nothing here and reporting it as skew would leave
-// the skew alarm permanently red for something proven not to be skew. An alarm
-// that is always on is an alarm nobody reads.
-if (alert.standingContractDefect) {
-  for (const f of classification.standingDefects) {
-    console.error(
-      `::error file=${f.file},line=${f.line}::[STANDING DEFECT] ${f.identifier} ${f.path} — ${f.detail} [${f.dimension}]`
-    );
-  }
-  console.error(
-    `::error::STANDING CONTRACT DEFECT — ${classification.standingDefects.length} path(s). ` +
-      `The current backend and the live backend already agree, so DEPLOYING WILL NOT FIX THIS. ` +
-      `Basis: ${classification.basis}`
-  );
-  reportOtherCauses("standing");
-  process.exit(EXIT.STANDING_DEFECT);
-}
-// ⚠️ A client FILE that was never scanned is not the same as an unproven path
-// inside a file that was. For an unproven path the control saw the call and
-// could not prove one leaf; for an unscanned file it never saw the call at all,
-// so a genuine incompatibility there produces no finding, no BREAKING, and —
-// before this branch existed — exit 0 with a warning. A green tick over a
-// client nobody looked at is the same false assurance as UNAVAILABLE reporting
-// success, and it is worse for being quiet about it.
-//
-// This costs nothing today: the derived scan currently returns an empty list.
-// It exists so that the day someone adds a client surface, the control says so
-// instead of passing.
-if (unscannedFiles > 0) {
-  reportCoverageGap("");
-  reportOtherCauses("coverageGap");
-  process.exit(EXIT.COVERAGE_GAP);
-}
-
-// ⚠️ A call the control could not ACCOUNT FOR is not a call it found compatible.
-// Exit 9, not 0: with an incomplete census, "no break found" only describes the
-// calls that happened to be seen. Zero discovered calls lands here too.
-if (coverageIncomplete) {
-  reportCoverageIncomplete("");
-  reportOtherCauses("coverageIncomplete");
-  process.exit(EXIT.COVERAGE_INCOMPLETE);
-}
-
-// The reviewed debt no longer matches what the run found.
-if (baselineState.drift) {
-  reportEvidenceDrift("");
-  process.exit(EXIT.EVIDENCE_DRIFT);
-}
+// behind is fixable in minutes, and somebody has to be told now. Then, in the
+// order of `causes`: standing defect, coverage gap, coverage incomplete, drift.
+exitOnFirstCause(causes);
 
 if (unproven.length > 0 || verdict !== "PASS") {
   // ⚠️ Explicitly NOT an outage claim and NOT a PASS: no break was proven among

@@ -39,6 +39,7 @@
 import path from "node:path";
 import ts from "typescript";
 import { normalizeSurfacePath } from "./clientFiles.mjs";
+import { unaliasSymbol } from "./clientPaths.mjs";
 
 /** @typedef {"IMMEDIATE"|"DEFERRED"|"REQUEST_MAP"|"LOCAL"|"REFERENCE_CONSTRUCTOR"|"SERVER_ONLY"|"UNSUPPORTED"} EntryKind */
 
@@ -191,7 +192,15 @@ export function runCensus({ program, files, extraction, entryTable = ENTRY_TABLE
         inScope.has(normalizeSurfacePath(sf.fileName))
     );
 
-  const relFile = (sf) => toPosix(path.relative(process.cwd(), sf.fileName));
+  /** @type {Map<import("typescript").SourceFile, string>} */
+  const relFiles = new Map();
+  const relFile = (sf) => {
+    const cached = relFiles.get(sf);
+    if (cached !== undefined) return cached;
+    const rel = toPosix(path.relative(process.cwd(), sf.fileName));
+    relFiles.set(sf, rel);
+    return rel;
+  };
   const siteOf = (sf, node) => {
     const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart());
     return `${relFile(sf)}:${line + 1}:${character + 1}`;
@@ -216,16 +225,7 @@ export function runCensus({ program, files, extraction, entryTable = ENTRY_TABLE
   const skipsByMap = byMap(extraction.provedSkips ?? []);
 
   // ── Symbol helpers ─────────────────────────────────────────────────────────
-  const unalias = (symbol) => {
-    if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
-      try {
-        return checker.getAliasedSymbol(symbol) ?? symbol;
-      } catch {
-        /* not an alias after all */
-      }
-    }
-    return symbol ?? null;
-  };
+  const unalias = (symbol) => unaliasSymbol(checker, symbol);
   const resolve = (node) => unalias(checker.getSymbolAtLocation(node));
 
   // ⚠️ THE SYMBOL A USE SITE MEANS, NOT THE ONE ITS SPELLING NAMES.
@@ -246,6 +246,10 @@ export function runCensus({ program, files, extraction, entryTable = ENTRY_TABLE
 
   const isRootDeclarationFile = (sf) =>
     ROOT_DECLARATION_FILES.some((re) => re.test(toPosix(sf.fileName)));
+  const isFollowedEntry = (key) => {
+    const kind = key ? entryTable[key] : undefined;
+    return Boolean(kind) && kind !== "LOCAL" && kind !== "SERVER_ONLY";
+  };
 
   // ⚠️ The ROOT is the exported VARIABLE (`api`, `internal`), not everything the
   // declaring file contains. Testing only the file matched every property of
@@ -253,9 +257,7 @@ export function runCensus({ program, files, extraction, entryTable = ENTRY_TABLE
   // every type in that file, turning one reference into thousands of "escapes".
   const isRootSymbol = (symbol) =>
     (symbol?.declarations ?? []).some(
-      (d) =>
-        ts.isVariableDeclaration(d) &&
-        ROOT_DECLARATION_FILES.some((re) => re.test(toPosix(d.getSourceFile().fileName)))
+      (d) => ts.isVariableDeclaration(d) && isRootDeclarationFile(d.getSourceFile())
     );
 
   // True once ANY symbol resolved into the installed `convex` package. A program
@@ -263,9 +265,15 @@ export function runCensus({ program, files, extraction, entryTable = ENTRY_TABLE
   // `convex` install), so an empty census would be blindness, not cleanliness.
   let sdkResolved = false;
 
-  /** `Owner.method` / `exportName` for a declaration inside the convex package. */
+  /** @type {Map<import("typescript").Symbol, string | null>} */
+  const sdkKeys = new Map();
+  /** `Owner.method` / `exportName` for a declaration inside the convex package (memoised by symbol). */
   const sdkKeyOf = (symbol) => {
-    for (const d of symbol?.declarations ?? []) {
+    if (!symbol) return null;
+    const cached = sdkKeys.get(symbol);
+    if (cached !== undefined) return cached;
+    let key = null;
+    for (const d of symbol.declarations ?? []) {
       if (!/\/node_modules\/convex\//.test(toPosix(d.getSourceFile().fileName))) continue;
       const name = d.name && ts.isIdentifier(d.name) ? d.name.text : symbol.name;
       const parent = d.parent;
@@ -274,9 +282,11 @@ export function runCensus({ program, files, extraction, entryTable = ENTRY_TABLE
           ? parent.name.text
           : null;
       sdkResolved = true;
-      return owner ? `${owner}.${name}` : name;
+      key = owner ? `${owner}.${name}` : name;
+      break;
     }
-    return null;
+    sdkKeys.set(symbol, key);
+    return key;
   };
 
   const unwrapOut = (node) => {
@@ -338,13 +348,10 @@ export function runCensus({ program, files, extraction, entryTable = ENTRY_TABLE
     );
   };
 
-  const isStringLiteralLike = (node) =>
-    Boolean(node) && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node));
-
   /** The member an `x["literal"]` access names, resolved through the checker. */
   const elementMemberSymbol = (access) => {
     const key = access.argumentExpression;
-    if (!isStringLiteralLike(key)) return null;
+    if (!ts.isStringLiteralLike(key)) return null;
     return (
       checker.getSymbolAtLocation(key) ??
       checker.getTypeAtLocation(access.expression).getProperty(key.text) ??
@@ -420,6 +427,10 @@ export function runCensus({ program, files, extraction, entryTable = ENTRY_TABLE
       reason,
     });
   };
+
+  /** An SDK entry point taken as a VALUE (not called): what it later receives cannot be followed. */
+  const recordValueUse = (sf, node, key, reason) => record(sf, node, `value:${key}`, "UNRESOLVED", reason);
+  const usedAsValue = (key) => `${key} is used as a value, not called, so its arguments cannot be followed`;
 
   /** Disposition of a site the extractor is supposed to hold a record for. */
   const reconcile = (sf, node, role, what) => {
@@ -503,11 +514,8 @@ export function runCensus({ program, files, extraction, entryTable = ENTRY_TABLE
         const isMember = parent && ts.isPropertyAccessExpression(parent) && parent.name === node;
         // Only module-level exports can be aliased as plain values; a member
         // that is not called is a method reference.
-        if (!callee && (!isMember || key.includes("."))) {
-          const kind = entryTable[key];
-          if (kind !== "LOCAL" && kind !== "SERVER_ONLY") {
-            record(sf, node, `value:${key}`, "UNRESOLVED", `${key} is used as a value, not called, so its arguments cannot be followed`);
-          }
+        if (!callee && (!isMember || key.includes(".")) && isFollowedEntry(key)) {
+          recordValueUse(sf, node, key, usedAsValue(key));
         }
       }
     }
@@ -524,9 +532,8 @@ export function runCensus({ program, files, extraction, entryTable = ENTRY_TABLE
     ) {
       const member = checker.getTypeAtLocation(node.parent).getProperty(node.name.text);
       const key = sdkKeyOf(member ?? null);
-      const kind = key ? entryTable[key] : undefined;
-      if (key && kind && kind !== "LOCAL" && kind !== "SERVER_ONLY") {
-        record(sf, node.name, `value:${key}`, "UNRESOLVED", `${key} is destructured off its client, so the calls made through the new name cannot be followed`);
+      if (isFollowedEntry(key)) {
+        recordValueUse(sf, node.name, key, `${key} is destructured off its client, so the calls made through the new name cannot be followed`);
       }
     }
 
@@ -536,10 +543,13 @@ export function runCensus({ program, files, extraction, entryTable = ENTRY_TABLE
       const isCallee = parent && ts.isCallExpression(parent) && unwrapOut(parent.expression) === node;
       if (!isCallee && !inTypePosition(node)) {
         const key = sdkKeyOf(elementMemberSymbol(node));
-        const kind = key ? entryTable[key] : undefined;
-        if (key && kind && key.includes(".") && kind !== "LOCAL" && kind !== "SERVER_ONLY") {
-          record(sf, node, `value:${key}`, "UNRESOLVED", `${key} is used as a value, not called, so its arguments cannot be followed`);
-        } else if (!isStringLiteralLike(node.argumentExpression) && isConvexClientType(node.expression)) {
+        // `includes(".")`: only a class / interface MEMBER (`Owner.method`) is a
+        // method taken as a value here. A module-level export (no owner) reached
+        // through a bracket access is a namespace member, which the property-access
+        // form above skips the same way (`isMember && !key.includes(".")`).
+        if (key?.includes(".") && isFollowedEntry(key)) {
+          recordValueUse(sf, node, key, usedAsValue(key));
+        } else if (!ts.isStringLiteralLike(node.argumentExpression) && isConvexClientType(node.expression)) {
           record(sf, node, "value:element-access", "UNRESOLVED", "a member of a Convex client is chosen by a computed key, so it cannot be followed");
         }
       }
@@ -555,7 +565,7 @@ export function runCensus({ program, files, extraction, entryTable = ENTRY_TABLE
       // what the literal RESOLVES to on the client's type. A computed key on a
       // Convex client cannot be resolved at all, so it is an explicit gap.
       symbol = elementMemberSymbol(callee);
-      if (!symbol && !isStringLiteralLike(callee.argumentExpression) && isConvexClientType(callee.expression)) {
+      if (!symbol && !ts.isStringLiteralLike(callee.argumentExpression) && isConvexClientType(callee.expression)) {
         return record(sf, node, "sdk:element-access", "UNRESOLVED", "a Convex client method is chosen by a computed key, so the call cannot be followed");
       }
     }
@@ -594,8 +604,9 @@ export function runCensus({ program, files, extraction, entryTable = ENTRY_TABLE
       }
       case "DEFERRED": {
         if (!arg0) return record(sf, node, role, "UNACCOUNTED", `${key} called with no function reference`);
-        sdkOwnedSites.add(siteOf(sf, arg0));
-        const unresolved = unresolvedAt.get(siteOf(sf, arg0));
+        const argSite = siteOf(sf, arg0);
+        sdkOwnedSites.add(argSite);
+        const unresolved = unresolvedAt.get(argSite);
         if (unresolved) {
           return record(sf, arg0, role, "UNRESOLVED", `${unresolved.cause}: ${unresolved.reason}`);
         }
@@ -676,9 +687,15 @@ export function runCensus({ program, files, extraction, entryTable = ENTRY_TABLE
     const declarationNames = new Set(deferredBindings.values());
     eachFile((node, sf) => {
       if (!ts.isIdentifier(node) || declarationNames.has(node)) return;
-      // Both lookups, as before: the alias-resolved symbol and the raw one.
+      // The raw lookup can differ from `useSymbolOf` only for a shorthand property
+      // (which answers with the property symbol, not the variable). For anything
+      // else `useSymbolOf` is the raw symbol, unaliased, and a bound variable is
+      // never an alias, so a second lookup could not find a different binding.
       const used = useSymbolOf(node);
-      if (!deferredBindings.has(used) && !deferredBindings.has(checker.getSymbolAtLocation(node))) return;
+      const isBound =
+        deferredBindings.has(used) ||
+        (ts.isShorthandPropertyAssignment(node.parent) && deferredBindings.has(checker.getSymbolAtLocation(node)));
+      if (!isBound) return;
       if (isDeclarationName(node)) return;
       // `typeof update` / `Parameters<typeof update>` names the binding's TYPE
       // and sends nothing at runtime.

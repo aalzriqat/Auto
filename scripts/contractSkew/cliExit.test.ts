@@ -19,18 +19,14 @@ const FORBIDDEN_WORDING = /No production skew detected/;
 
 const str = { type: "string" };
 const required = (fieldType: unknown) => ({ fieldType, optional: false });
-const mutation = (identifier: string, fields: Record<string, unknown>) => ({
+const fnOf = (functionType: "Query" | "Mutation") => (identifier: string, fields: Record<string, unknown>) => ({
   identifier,
-  functionType: "Mutation",
+  functionType,
   visibility: { kind: "public" },
   args: { type: "object", value: fields },
 });
-const query = (identifier: string, fields: Record<string, unknown>) => ({
-  identifier,
-  functionType: "Query",
-  visibility: { kind: "public" },
-  args: { type: "object", value: fields },
-});
+const mutation = fnOf("Mutation");
+const query = fnOf("Query");
 const specOf = (...functions: unknown[]) => ({ url: "https://x.convex.cloud", functions });
 
 const TSCONFIG = JSON.stringify({
@@ -45,32 +41,23 @@ const TSCONFIG = JSON.stringify({
   },
 });
 
-/** A call the spec fully proves. */
-const PROVEN =
+/** A client file that binds `useMutation(api.vehicles.update)` and calls it with `arg`. */
+const CLIENT = (params: string, arg: string) =>
   'import { useMutation } from "convex/react";\n' +
   "declare const api: { vehicles: { update: unknown } };\n" +
-  "export const go = () => {\n" +
+  `export const go = (${params}) => {\n` +
   "  const update = useMutation(api.vehicles.update);\n" +
-  '  return update({ orgId: "o" });\n' +
+  `  return update(${arg});\n` +
   "};\n";
+
+/** A call the spec fully proves. */
+const PROVEN = CLIENT("", '{ orgId: "o" }');
 
 /** A value the type system cannot narrow: TYPE_UNKNOWN on `orgId`. */
-const UNPROVEN =
-  'import { useMutation } from "convex/react";\n' +
-  "declare const api: { vehicles: { update: unknown } };\n" +
-  "export const go = (v: unknown) => {\n" +
-  "  const update = useMutation(api.vehicles.update);\n" +
-  "  return update({ orgId: v });\n" +
-  "};\n";
+const UNPROVEN = CLIENT("v: unknown", "{ orgId: v }");
 
 /** A key the deployed backend does not declare: a proven BREAKING finding. */
-const SENDS_NOPE =
-  'import { useMutation } from "convex/react";\n' +
-  "declare const api: { vehicles: { update: unknown } };\n" +
-  "export const go = () => {\n" +
-  "  const update = useMutation(api.vehicles.update);\n" +
-  '  return update({ orgId: "o", nope: "x" });\n' +
-  "};\n";
+const SENDS_NOPE = CLIENT("", '{ orgId: "o", nope: "x" }');
 
 /** A function reference nothing can resolve statically. */
 const UNRESOLVABLE =
@@ -273,13 +260,7 @@ describe("break / unknown precedence", () => {
   test("a proven break coexisting with UNKNOWN and drift still exits 7, not 9 or 10", () => {
     const deployed = specOf(mutation("vehicles.js:update", { orgId: required(str), tag: required(str) }));
     const current = specOf(mutation("vehicles.js:update", { orgId: required(str), tag: required(str), nope: required(str) }));
-    const both =
-      'import { useMutation } from "convex/react";\n' +
-      "declare const api: { vehicles: { update: unknown } };\n" +
-      "export const go = (v: unknown) => {\n" +
-      "  const update = useMutation(api.vehicles.update);\n" +
-      '  return update({ orgId: v, tag: "t", nope: "x" });\n' +
-      "};\n";
+    const both = CLIENT("v: unknown", '{ orgId: v, tag: "t", nope: "x" }');
     const dir = scaffold({ client: both, spec: deployed, current });
     const r = production(dir, ["--current", "current.json"]);
     expect(r.code).toBe(7);

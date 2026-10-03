@@ -115,7 +115,7 @@ function stripSkipSentinel(node) {
   }
 }
 /** Direct invocation forms: convex.mutation(api.x.y, {...}) / ctx.runMutation(...). */
-const DIRECT_CALLERS = new Set([
+export const DIRECT_CALLERS = new Set([
   "mutation", "query", "action",
   "runMutation", "runQuery", "runAction",
   "fetchQuery", "fetchMutation", "fetchAction",
@@ -132,6 +132,22 @@ const DIRECT_CALLERS = new Set([
  * bare form — the one that package actually exports — was never extracted.
  */
 const BARE_DIRECT_CALLERS = new Set(["fetchQuery", "fetchMutation", "fetchAction", "preloadQuery"]);
+
+/**
+ * The name a Form B call is spelled with: `x.query` -> "query", `x["query"]` ->
+ * "query", bare `fetchQuery` -> "fetchQuery". Only called on the three shapes
+ * the Form B test above admits (a string-literal element access, never computed).
+ *
+ * @param {import("typescript").Expression} expression
+ * @returns {string}
+ */
+function calleeName(expression) {
+  if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
+  if (ts.isElementAccessExpression(expression)) {
+    return /** @type {import("typescript").StringLiteral} */ (expression.argumentExpression).text;
+  }
+  return /** @type {import("typescript").Identifier} */ (expression).text;
+}
 
 const MAX_DEPTH = 12;
 
@@ -282,10 +298,8 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
     //
     // The checker resolves each identifier to the declaration it actually binds,
     // so shadowing and same-name-different-scope stop mattering.
-    /** @type {Map<import("typescript").Symbol,string>} */
+    /** @type {Map<import("typescript").Symbol,{ id: string, via: string }>} bound symbol -> its function and the hook that produced it */
     const bound = new Map();
-    /** @type {Map<import("typescript").Symbol,string>} bound symbol -> the hook that produced it */
-    const boundVia = new Map();
     /** Hook calls already resolved by the inline-payload pass. */
     const inlineResolved = new Set();
 
@@ -302,10 +316,7 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
       ) {
         const id = resolveFunctionReference(node.initializer.arguments[0], checker);
         const symbol = checker.getSymbolAtLocation(node.name);
-        if (id && symbol) {
-          bound.set(symbol, id);
-          boundVia.set(symbol, node.initializer.expression.text);
-        }
+        if (id && symbol) bound.set(symbol, { id, via: node.initializer.expression.text });
       }
       ts.forEachChild(node, bind);
     };
@@ -435,9 +446,10 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
         // the mutation.
         if (ts.isIdentifier(node.expression)) {
           const symbol = resolveSymbol(checker, node.expression);
-          if (symbol && bound.has(symbol)) {
-            identifier = bound.get(symbol);
-            via = boundVia.get(symbol) ?? null;
+          const entry = symbol ? bound.get(symbol) : undefined;
+          if (entry) {
+            identifier = entry.id;
+            via = entry.via;
             argExpr = node.arguments[0] ?? null;
             siteNode = node.expression;
           }
@@ -462,11 +474,7 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
           const maybe = resolveFunctionReference(node.arguments[0], checker);
           if (maybe) {
             identifier = maybe;
-            via = ts.isPropertyAccessExpression(node.expression)
-              ? node.expression.name.text
-              : ts.isElementAccessExpression(node.expression)
-                ? /** @type {import("typescript").StringLiteral} */ (node.expression.argumentExpression).text
-                : /** @type {import("typescript").Identifier} */ (node.expression).text;
+            via = calleeName(node.expression);
             argExpr = node.arguments[1] ?? null;
             siteNode = node.arguments[0];
           }
@@ -1476,10 +1484,22 @@ function classifyBinder(node, identifier) {
  * matches the declaration that bound it.
  */
 function resolveSymbol(checker, node) {
-  let symbol = checker.getSymbolAtLocation(node);
+  return unaliasSymbol(checker, checker.getSymbolAtLocation(node));
+}
+
+/**
+ * Follow an alias symbol (import, re-export) to what it names; any other symbol
+ * is returned as is, and a missing one as null. Shared with the census so both
+ * passes resolve a use site to the same declaration.
+ *
+ * @param {import("typescript").TypeChecker} checker
+ * @param {import("typescript").Symbol | undefined | null} symbol
+ * @returns {import("typescript").Symbol | null}
+ */
+export function unaliasSymbol(checker, symbol) {
   if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
     try {
-      symbol = checker.getAliasedSymbol(symbol);
+      return checker.getAliasedSymbol(symbol) ?? symbol;
     } catch {
       /* not an alias after all */
     }

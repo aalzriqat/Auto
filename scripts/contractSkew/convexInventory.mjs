@@ -124,13 +124,11 @@ export function inventoryConvexEntryPoints(projectRoot) {
         const args = checker.getTypeArguments(/** @type {import("typescript").TypeReference} */ (objectType));
         if (args.some((argument) => containsReference(argument, seen, depth + 1))) return true;
       }
-      // An ANONYMOUS object type (`{ query: Ref }`) is searched member by member.
-      // A NAMED class / interface is not: it is its own entry point, and walking
-      // every member of every named parameter type would find unrelated clients.
-      if (objectType.objectFlags & ts.ObjectFlags.Anonymous && !symbol?.name?.startsWith("__")) {
-        return false;
-      }
-      if (objectType.objectFlags & ts.ObjectFlags.Anonymous) {
+      // An ANONYMOUS object type (`{ query: Ref }`, whose symbol is named `__type`
+      // / `__object`) is searched member by member. Anything else is not: a NAMED
+      // class / interface is its own entry point, and walking every member of
+      // every named parameter type would find unrelated clients.
+      if (objectType.objectFlags & ts.ObjectFlags.Anonymous && symbol?.name?.startsWith("__")) {
         return checker
           .getPropertiesOfType(type)
           .some((property) => {
@@ -153,11 +151,12 @@ export function inventoryConvexEntryPoints(projectRoot) {
 
   /** @type {Map<string,string>} */
   const keys = new Map();
+  const inventoried = new Set(declarationFiles.map((f) => path.resolve(f)));
   for (const sourceFile of program.getSourceFiles()) {
     if (!sourceFile.isDeclarationFile) continue;
     const absolute = path.resolve(sourceFile.fileName);
     // Only the package's own (non-excluded) declarations are inventoried.
-    if (!declarationFiles.some((f) => path.resolve(f) === absolute)) continue;
+    if (!inventoried.has(absolute)) continue;
     const rel = path.relative(packageDir, absolute).replace(/\\/g, "/");
     const add = (key) => {
       if (!keys.has(key)) keys.set(key, rel);

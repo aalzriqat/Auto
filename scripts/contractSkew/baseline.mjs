@@ -40,6 +40,21 @@ const describe = (entry) =>
   `${entry.surface}:${entry.file} ${entry.callSiteId} ${entry.functionId} ${entry.contractPath} [${entry.kind}]`;
 
 /**
+ * normalised identifier -> entry, over every named function, not just public
+ * ones: a function turning internal must CHANGE the fingerprint rather than
+ * vanish into the same hash as "absent". When two raw identifiers normalise to
+ * the same id the later one wins.
+ *
+ * @param {{ functions?: Array<any> } | Array<any>} spec
+ * @returns {Map<string, any>}
+ */
+function namedByNormalizedId(spec) {
+  const named = new Map();
+  for (const [id, entry] of indexAllNamed(spec)) named.set(normalizeIdentifier(id), entry);
+  return named;
+}
+
+/**
  * A fingerprint of the backend validator that governs `contractPath`.
  *
  * ⚠️ It hashes the whole top-level ARGUMENT FIELD containing the path, not the
@@ -52,14 +67,10 @@ const describe = (entry) =>
  * @param {{ functions?: Array<any> } | Array<any>} spec
  * @param {string} functionId  normalised, e.g. `vehicles:update`
  * @param {string} contractPath
+ * @param {Map<string, any>} [named]  `namedByNormalizedId(spec)`, when the caller fingerprints many findings against one spec
  */
-export function contractFingerprint(spec, functionId, contractPath) {
-  let fn;
-  // Every named function, not just public ones: a function turning internal must
-  // CHANGE the fingerprint rather than vanish into the same hash as "absent".
-  for (const [id, entry] of indexAllNamed(spec)) {
-    if (normalizeIdentifier(id) === functionId) fn = entry;
-  }
+export function contractFingerprint(spec, functionId, contractPath, named = namedByNormalizedId(spec)) {
+  const fn = named.get(functionId);
   const args = fn?.args;
   const top = /^[A-Za-z_$][\w$]*/.exec(contractPath)?.[0];
   const fields = args && typeof args === "object" && args.value && typeof args.value === "object" ? args.value : {};
@@ -92,6 +103,7 @@ function stable(value) {
 export function unprovenFrom(needsEvidence, spec) {
   /** @type {Map<string, Record<string, unknown>>} */
   const grouped = new Map();
+  const named = namedByNormalizedId(spec);
   for (const f of needsEvidence) {
     const entry = {
       surface: f.surface ?? "unknown",
@@ -101,7 +113,7 @@ export function unprovenFrom(needsEvidence, spec) {
       contractPath: f.path,
       kind: f.severity,
       cause: f.detail,
-      fingerprint: contractFingerprint(spec, f.identifier, f.path),
+      fingerprint: contractFingerprint(spec, f.identifier, f.path, named),
     };
     const key = identityOf(entry);
     const existing = grouped.get(key);

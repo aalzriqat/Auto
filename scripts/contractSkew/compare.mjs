@@ -126,6 +126,20 @@ export function compareContracts(clientCalls, spec, extraUnresolved = []) {
 
   const findings = [];
 
+  /** A break on the function itself (visibility, kind), carrying the baseline's site keys. */
+  const breakAtFunction = (call, detail) =>
+    findings.push({
+      severity: SEVERITY.BREAKING,
+      dimension: "SHAPE",
+      identifier: call.identifier,
+      path: "<function>",
+      file: call.file,
+      line: call.line,
+      siteId: call.siteId,
+      surface: call.surface,
+      detail,
+    });
+
   for (const call of clientCalls) {
     const fn = normalized.get(call.identifier);
     if (!fn) {
@@ -144,25 +158,13 @@ export function compareContracts(clientCalls, spec, extraUnresolved = []) {
       continue;
     }
 
-    const breakAtFunction = (detail) =>
-      findings.push({
-        severity: SEVERITY.BREAKING,
-        dimension: "SHAPE",
-        identifier: call.identifier,
-        path: "<function>",
-        file: call.file,
-        line: call.line,
-        siteId: call.siteId,
-        surface: call.surface,
-        detail,
-      });
-
     // ⚠️ EXISTING IS NOT CALLABLE. An `internal` function is in the spec but not
     // reachable from a client: the generated `api` never exposes it, so a
     // reference reaching it is a stale or hand-built one, and the backend
     // refuses it.
     if (fn.visibility?.kind !== "public") {
       breakAtFunction(
+        call,
         `the live deployment's function is ${fn.visibility?.kind ?? "of unknown"} visibility, not public, so a client cannot call it`,
       );
       continue;
@@ -170,6 +172,7 @@ export function compareContracts(clientCalls, spec, extraUnresolved = []) {
     const expectedType = call.via ? EXPECTED_FUNCTION_TYPE[call.via] : undefined;
     if (expectedType && fn.functionType !== expectedType) {
       breakAtFunction(
+        call,
         `\`${call.via}\` calls a ${expectedType}, but the live deployment's function is a ${fn.functionType}`,
       );
       continue;
