@@ -19,6 +19,7 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { hookPaymentLinkReceived } from "./accounting/workflowHooks";
 import { allocatePaymentToReceivable, createCanonicalPayment, getReceivableOutstandingMinor } from "./subledger";
 import { AppErrorCode, throwAppError } from "./utils/errors";
+import { PAYMENT_LINKS_PILOT_DISABLED, refuseSaleDebt } from "./utils/saleDebtContainment";
 import { fromMinorUnits, toMinorUnits, scaleForCurrency, assertValidMinorAmount } from "./utils/money";
 
 // SCRUM-571 S1. Every refusal `create`, `markSettled` and `expire` can raise is
@@ -507,6 +508,11 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
+    // SCRUM-571 S1 (D-20) P1: the payment-link pilot is shut. First statement
+    // after authentication, before validation, before runWithIdempotency, so
+    // nothing is written and even a replayed key is refused.
+    if (PAYMENT_LINKS_PILOT_DISABLED) refuseSaleDebt("PAYMENT_LINKS_DISABLED");
+
     // Before the range check, not after: NaN fails `<= 0` and would otherwise
     // be stored as the intent's amount and stranded there.
     assertValidMinorAmount(args.amountMinor, "payment amount");
@@ -729,6 +735,10 @@ export const markSettled = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    // SCRUM-571 S1 (D-20) P2: staff cannot settle a link by hand while the
+    // pilot is shut. Before runWithIdempotency; nothing is written.
+    if (PAYMENT_LINKS_PILOT_DISABLED) refuseSaleDebt("PAYMENT_LINKS_DISABLED");
 
     return await runWithIdempotency(
       ctx,
@@ -1014,6 +1024,13 @@ export const settleByExternalId = internalMutation({
       console.warn(`[paymentIntents] Cannot settle intent ${intent._id} in status ${intent.status}`);
       return await holdForIntent("INTENT_NOT_PENDING");
     }
+
+    // SCRUM-571 S1 (D-20) P3: the pilot is shut, so a verified capture is HELD
+    // for finance, never settled. One atomic write to unmatchedProviderFunds
+    // (keyed provider + externalId, so a redelivery only bumps that row); no
+    // allocation, canonical payment, posting hook or outbox event, and the
+    // intent stays PENDING. The money is reconciled by a person.
+    if (PAYMENT_LINKS_PILOT_DISABLED) return await holdForIntent("PAYMENT_LINKS_DISABLED");
 
     // D-14 (see heldCaptureFor): a held row exists, so record this redelivery on
     // it and do nothing else. `reason` is unused when the row already exists.

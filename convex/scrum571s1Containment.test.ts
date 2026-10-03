@@ -1029,4 +1029,168 @@ describe("S1 — internal subledger.createReceivable / subledger.allocate refuse
   });
 });
 
+/** A PENDING payment link inserted directly: `create` is shut, so it cannot be made through the door. */
+async function seedLink(w: World, over: Record<string, unknown> = {}) {
+  const now = Date.now();
+  return (await w.t.run((ctx) =>
+    ctx.db.insert("paymentIntents", {
+      orgId: w.orgId,
+      customerId: w.customerId,
+      createdBy: w.userId,
+      amountMinor: 100_000,
+      currency: "JOD",
+      provider: "tap",
+      externalId: "tap_p3_ref",
+      status: "PENDING",
+      idempotencyKey: crypto.randomUUID(),
+      createdAt: now,
+      updatedAt: now,
+      ...over,
+    } as never)
+  )) as Id<"paymentIntents">;
+}
+
+const settleCapture = (w: World, over: Record<string, unknown> = {}) =>
+  w.t.mutation(internal.paymentIntents.settleByExternalId, {
+    provider: "tap",
+    externalId: "tap_p3_ref",
+    amountMinor: 100_000,
+    currency: "JOD",
+    providerSignatureVerifiedAt: Date.now(),
+    providerEventId: "evt_p3_1",
+    ...over,
+  } as never);
+
+describe("P1/P2 — payment links are shut at the server boundary (create, markSettled)", () => {
+  test("P1: paymentIntents.create is refused before any write or idempotency record", async () => {
+    const w = await seedWorld();
+    const before = await counts(w.t);
+    const key = crypto.randomUUID();
+    expect(
+      await codeOf(
+        w.asFinance.mutation(api.paymentIntents.create, {
+          idempotencyKey: key,
+          orgId: w.orgId,
+          customerId: w.customerId,
+          amountMinor: 100_000,
+          currency: "JOD",
+          provider: "tap",
+          externalId: "tap_p1",
+        } as never)
+      )
+    ).toBe("PAYMENT_LINKS_DISABLED");
+    expect(await counts(w.t)).toEqual(before);
+    const intents = await w.t.run((ctx) => ctx.db.query("paymentIntents").take(10));
+    expect(intents).toHaveLength(0);
+  });
+
+  test("P2: paymentIntents.markSettled is refused, the link stays PENDING, nothing is written or recorded", async () => {
+    const w = await seedWorld();
+    const intentId = await seedLink(w);
+    const before = await counts(w.t);
+    expect(
+      await codeOf(
+        w.asFinance.mutation(api.paymentIntents.markSettled, {
+          idempotencyKey: crypto.randomUUID(),
+          orgId: w.orgId,
+          intentId,
+        } as never)
+      )
+    ).toBe("PAYMENT_LINKS_DISABLED");
+    expect(await counts(w.t)).toEqual(before);
+    expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("PENDING");
+  });
+});
+
+describe("P3 — a verified provider capture is held atomically, never settled", () => {
+  test("a PENDING link's capture is HELD with PAYMENT_LINKS_DISABLED and writes nothing economic", async () => {
+    const w = await seedWorld();
+    const intentId = await seedLink(w);
+    const before = await counts(w.t);
+
+    const result = await settleCapture(w);
+    expect(result).toMatchObject({ kind: "HELD" });
+
+    const after = await counts(w.t);
+    // Only the held-funds row is new: no allocation, payment, receipt or posting.
+    expect(after).toEqual({ ...before, unmatchedProviderFunds: before.unmatchedProviderFunds + 1 });
+    const rows = await w.t.run((ctx) => ctx.db.query("unmatchedProviderFunds").take(10));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      orgId: w.orgId,
+      intentId,
+      provider: "tap",
+      externalId: "tap_p3_ref",
+      reason: "PAYMENT_LINKS_DISABLED",
+      intentStatusAtReceipt: "PENDING",
+      amountMinor: 100_000,
+      currency: "JOD",
+      reviewStatus: "OPEN",
+      deliveryCount: 1,
+    });
+    // The verified capture is preserved and the link is untouched (not FAILED).
+    expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("PENDING");
+  });
+
+  test("redelivery is idempotent: one row, deliveryCount bumped, still nothing economic", async () => {
+    const w = await seedWorld();
+    await seedLink(w);
+    await settleCapture(w);
+    const afterFirst = await counts(w.t);
+
+    const again = await settleCapture(w, { providerEventId: "evt_p3_2" });
+    expect(again).toMatchObject({ kind: "HELD" });
+    expect(await counts(w.t)).toEqual(afterFirst);
+    const rows = await w.t.run((ctx) => ctx.db.query("unmatchedProviderFunds").take(10));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].deliveryCount).toBe(2);
+  });
+
+  test("a mismatched amount is held the same way and does not flip the link to FAILED", async () => {
+    const w = await seedWorld();
+    const intentId = await seedLink(w);
+    expect(await settleCapture(w, { amountMinor: 99_000 })).toMatchObject({ kind: "HELD" });
+    const [row] = await w.t.run((ctx) => ctx.db.query("unmatchedProviderFunds").take(10));
+    expect(row.reason).toBe("PAYMENT_LINKS_DISABLED");
+    expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("PENDING");
+  });
+
+  test("an already-SETTLED link still acknowledges idempotently with no new row", async () => {
+    const w = await seedWorld();
+    const intentId = await seedLink(w, { status: "SETTLED" });
+    const before = await counts(w.t);
+    expect(await settleCapture(w)).toEqual({ kind: "ALREADY_SETTLED", intentId });
+    expect(await counts(w.t)).toEqual(before);
+  });
+});
+
+describe("P4 — expire still works and never touches a captured link's held funds", () => {
+  test("expiring a PENDING link works while the pilot is shut", async () => {
+    const w = await seedWorld();
+    const intentId = await seedLink(w);
+    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId });
+    expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("EXPIRED");
+  });
+
+  test("expiring a link whose capture is held leaves the held row untouched", async () => {
+    const w = await seedWorld();
+    const intentId = await seedLink(w);
+    await settleCapture(w);
+    const [heldBefore] = await w.t.run((ctx) => ctx.db.query("unmatchedProviderFunds").take(10));
+    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId });
+    const rows = await w.t.run((ctx) => ctx.db.query("unmatchedProviderFunds").take(10));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual(heldBefore);
+  });
+
+  test("expire refuses a SETTLED link (a captured link is never expired)", async () => {
+    const w = await seedWorld();
+    const intentId = await seedLink(w, { status: "SETTLED" });
+    expect(
+      await codeOf(w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId }))
+    ).toBe("PAYMENT_LINK_NOT_PENDING");
+    expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("SETTLED");
+  });
+});
+
 // ── END ──

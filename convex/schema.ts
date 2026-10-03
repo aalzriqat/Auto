@@ -6573,7 +6573,9 @@ export default defineSchema({
       v.literal("UNKNOWN_REFERENCE"),
       v.literal("INTENT_NOT_PENDING"),
       v.literal("AMOUNT_OR_ACCOUNT_MISMATCH"),
-      v.literal("LIFECYCLE_REFUSED")
+      v.literal("LIFECYCLE_REFUSED"),
+      // SCRUM-571 S1 (D-20): payment links are shut; a verified capture is held, not settled.
+      v.literal("PAYMENT_LINKS_DISABLED")
     ),
     intentStatusAtReceipt: v.optional(v.string()),
     amountMinor: v.number(),
