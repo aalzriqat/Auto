@@ -656,11 +656,13 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // SCRUM-239: + applications.returnFinanceDisbursementCheque - 510 -> 511 total, 338 -> 339 analysed (orgId + tenant-checked ids; unguarded-write audit stays empty).
   // SCRUM-571 D-8: + paymentIntents.resolveUnmatchedProviderFunds - 511 -> 512 total, 339 -> 340 analysed
   // (orgId + MANAGE_FINANCE; the held row is read and its orgId compared to the caller's before the patch).
+  // SCRUM-571 D-22: + paymentIntents.linkHeldCaptureToIntent - 512 -> 513 total, 340 -> 341 analysed
+  // (orgId + MANAGE_FINANCE; the held row and the intent are both read and org-compared before the patch).
   // Skipped counts unchanged.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 512,
-      analysed: 340,
+      totalMutations: 513,
+      analysed: 341,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

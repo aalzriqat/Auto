@@ -15,6 +15,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { scaleForCurrency, assertValidMinorAmount, assertSameCurrency } from "./utils/money";
 import { requireFeature } from "./subscriptions";
+import { assertSourceIsNotSaleDebt } from "./utils/saleDebtContainment";
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -499,6 +500,8 @@ export const createReceivable = internalMutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
+    // SCRUM-571 S1 (D-20): no second debt for a sale. Before the only write.
+    await assertSourceIsNotSaleDebt(ctx, args.orgId, args);
     return createReceivableDocument(ctx, { ...args, actorId: user._id });
   },
 });
@@ -533,6 +536,9 @@ export const allocate = internalMutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
+    // SCRUM-571 S1 (D-20): no allocation to a sale invoice or its legacy mirror.
+    const target = await ctx.db.get(args.receivableDocumentId);
+    if (target && target.orgId === args.orgId) await assertSourceIsNotSaleDebt(ctx, args.orgId, target);
     return allocatePaymentToReceivable(ctx, { ...args, actorId: user._id });
   },
 });

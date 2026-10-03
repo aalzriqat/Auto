@@ -45,7 +45,10 @@ describe("Phase 3 — receivable documents", () => {
       documentType: "INVOICE",
       payerType: "CUSTOMER",
       customerId,
-      sourceType: "sales",
+      // D-20: a `sales` source is the canonical sale invoice, which
+      // subledger.createReceivable now refuses; these subledger-mechanics tests
+      // use a neutral source instead.
+      sourceType: "manual_adjustment",
       sourceId: "sale_sub_001",
       originalAmountMinor: 65000000,
       currency: "JOD",
@@ -64,7 +67,7 @@ describe("Phase 3 — receivable documents", () => {
       documentType: "INVOICE",
       payerType: "CUSTOMER",
       customerId,
-      sourceType: "sales",
+      sourceType: "manual_adjustment", // D-20: see first test in this file
       sourceId: "sale_sub_002",
       originalAmountMinor: 10000,
       currency: "JOD",
@@ -116,7 +119,7 @@ describe("Phase 3 — payment allocations", () => {
 
     const recId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
-      sourceType: "sales", sourceId: "sale_alloc_001",
+      sourceType: "manual_adjustment", sourceId: "sale_alloc_001", // D-20
       originalAmountMinor: 5000, currency: "JOD",
       issueDate: now, dueDate: now + 30 * 86400_000,
     });
@@ -140,7 +143,7 @@ describe("Phase 3 — payment allocations", () => {
 
     const recId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
-      sourceType: "sales", sourceId: "sale_partial_001",
+      sourceType: "manual_adjustment", sourceId: "sale_partial_001", // D-20
       originalAmountMinor: 10000, currency: "JOD",
       issueDate: now, dueDate: now + 30 * 86400_000,
     });
@@ -197,7 +200,7 @@ describe("Phase 3 — payment allocations", () => {
 
     const recId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
-      sourceType: "sales", sourceId: "sale_over_001",
+      sourceType: "manual_adjustment", sourceId: "sale_over_001", // D-20
       originalAmountMinor: 2000, currency: "JOD",
       issueDate: now, dueDate: now + 30 * 86400_000,
     });
@@ -219,7 +222,7 @@ describe("Phase 3 — payment allocations", () => {
 
     const recId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
-      sourceType: "sales", sourceId: "sale_rev_001",
+      sourceType: "manual_adjustment", sourceId: "sale_rev_001", // D-20
       originalAmountMinor: 4000, currency: "JOD",
       issueDate: now, dueDate: now + 30 * 86400_000,
     });
@@ -249,7 +252,7 @@ describe("Phase 3 — payment allocations", () => {
 
     const recId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
-      sourceType: "sales", sourceId: "sale_multi_pay",
+      sourceType: "manual_adjustment", sourceId: "sale_multi_pay", // D-20
       originalAmountMinor: 9000, currency: "JOD",
       issueDate: now, dueDate: now + 30 * 86400_000,
     });
@@ -276,7 +279,7 @@ describe("Phase 3 — payment allocations", () => {
 
     const recId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
-      sourceType: "sales", sourceId: "sale_curr_mismatch",
+      sourceType: "manual_adjustment", sourceId: "sale_curr_mismatch", // D-20
       originalAmountMinor: 5000, currency: "JOD",
       issueDate: now, dueDate: now + 30 * 86400_000,
     });
