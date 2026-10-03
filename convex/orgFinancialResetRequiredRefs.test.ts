@@ -5,7 +5,13 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { RESET_TABLES_FOR_TEST } from "./orgFinancialReset";
-import { rowsOf, seedBase as seedBaseFor, type Base, type LooseDb } from "../test-utils/orgResetFixtures";
+import {
+  rowsOf,
+  runContinuationBatch,
+  seedBase as seedBaseFor,
+  type Base,
+  type LooseDb,
+} from "../test-utils/orgResetFixtures";
 
 /**
  * SCRUM-549 — REQUIRED (and operationally dereferenced optional) references
@@ -255,11 +261,8 @@ async function drive(t: T, orgId: Id<"organizations">) {
   let passes = 0;
   let remaining = Infinity;
   while (remaining > 0 && passes < MAX_PASSES) {
-    const res = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-      orgId,
-      dryRun: false,
-      batchSize: 1,
-    });
+    // D-19: fresh starts are refused; exercised as a continuation.
+    const res = await runContinuationBatch(t, orgId, 1);
     remaining = res.remaining;
     passes += 1;
     for (const k of await danglingNow(t, orgId)) {

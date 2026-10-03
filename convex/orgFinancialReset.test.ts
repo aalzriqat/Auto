@@ -4,6 +4,7 @@ import schema from "./schema";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { RESET_TABLES_FOR_TEST } from "./orgFinancialReset";
+import { runContinuationBatch } from "../test-utils/orgResetFixtures";
 
 /**
  * This deletes production rows with no undo, so the tests are about what it
@@ -119,10 +120,8 @@ describe("resetOrgFinancialData", () => {
     const t = setup();
     const orgId = await seedOrg(t, "Reset Motors");
 
-    const result = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-      orgId,
-      dryRun: false,
-    });
+    // D-19: fresh starts are refused; exercised as a continuation.
+    const result = await runContinuationBatch(t, orgId);
     expect(result.total).toBe(3);
     expect(result.remaining).toBe(0);
 
@@ -142,10 +141,8 @@ describe("resetOrgFinancialData", () => {
     const target = await seedOrg(t, "Target Motors");
     const bystander = await seedOrg(t, "Bystander Motors");
 
-    await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-      orgId: target,
-      dryRun: false,
-    });
+    // D-19: fresh starts are refused; exercised as a continuation.
+    await runContinuationBatch(t, target);
 
     expect(await countFor(t, "chartOfAccounts", target)).toBe(0);
     expect(await countFor(t, "transactions", bystander)).toBe(1);
@@ -159,10 +156,8 @@ describe("resetOrgFinancialData", () => {
     const t = setup();
     const orgId = await seedOrg(t, "Status Motors");
 
-    await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-      orgId,
-      dryRun: false,
-    });
+    // D-19: fresh starts are refused; exercised as a continuation.
+    await runContinuationBatch(t, orgId);
 
     const vehicles = await t.run((ctx) =>
       ctx.db
@@ -207,10 +202,8 @@ describe("resetOrgFinancialData", () => {
       });
     });
 
-    await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-      orgId,
-      dryRun: false,
-    });
+    // D-19: fresh starts are refused; exercised as a continuation.
+    await runContinuationBatch(t, orgId);
 
     // An orphaned row is recoverable. A blob with nothing referencing it is
     // not enumerable, not deletable by any code path, and billed indefinitely —
@@ -259,17 +252,14 @@ describe("resetOrgFinancialData", () => {
     // the application in the same pass — leaving the second fee pointing at an
     // applicationId that no longer resolves. Atomicity is no help: the whole
     // broken state commits together.
-    const first = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-      orgId, dryRun: false, batchSize: 1,
-    });
+    // D-19: fresh starts are refused; exercised as a continuation.
+    const first = await runContinuationBatch(t, orgId, 1);
     expect(first.remaining).toBeGreaterThan(0);
     expect(await t.run((ctx) => ctx.db.get(ids.applicationId))).not.toBeNull();
 
     // Repeat until it settles; the parent goes only once the children are gone.
     for (let pass = 0; pass < 8; pass += 1) {
-      await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-        orgId, dryRun: false, batchSize: 1,
-      });
+      await runContinuationBatch(t, orgId, 1);
     }
 
     await t.run(async (ctx) => {
@@ -451,13 +441,8 @@ describe("resetOrgFinancialData refuses an org carrying authority lifecycle stat
 
     // batchSize 1 is the shape that could orphan: far more lifecycle rows than
     // one pass can clear.
-    await expect(
-      t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-        orgId,
-        dryRun: false,
-        batchSize: 1,
-      })
-    ).rejects.toThrow(/commitment-authority/i);
+    // D-19: fresh starts are refused; exercised as a continuation.
+    await expect(runContinuationBatch(t, orgId, 1)).rejects.toThrow(/commitment-authority/i);
 
     // THE CONTRACT: nothing was deleted. Asserted as an absence, because the
     // damage this prevents is a partial delete, not a bad return value.
@@ -490,10 +475,8 @@ describe("resetOrgFinancialData refuses an org carrying authority lifecycle stat
     const t = setup();
     const orgId = await seedOrg(t, "NoAuth");
 
-    const res = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-      orgId,
-      dryRun: false,
-    });
+    // D-19: fresh starts are refused; exercised as a continuation.
+    const res = await runContinuationBatch(t, orgId);
 
     expect(res.authorityLifecyclePresent).toBe(false);
     expect(await countFor(t, "chartOfAccounts", orgId)).toBe(0);
@@ -572,11 +555,10 @@ describe("resetOrgFinancialData never strands a surviving row's quote or sale re
       });
     };
 
+    // D-19: fresh starts are refused; exercised as a continuation.
     let remaining = Number.POSITIVE_INFINITY;
     for (let pass = 0; pass < 12 && remaining > 0; pass += 1) {
-      const res = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-        orgId, dryRun: false, batchSize: 1,
-      });
+      const res = await runContinuationBatch(t, orgId, 1);
       remaining = res.remaining;
       await assertNoDanglingReference(pass);
     }
@@ -620,11 +602,10 @@ describe("resetOrgFinancialData never strands a payrollItem's run reference", ()
       return id;
     });
 
+    // D-19: fresh starts are refused; exercised as a continuation.
     let remaining = Number.POSITIVE_INFINITY;
     for (let pass = 0; pass < 12 && remaining > 0; pass += 1) {
-      const res = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-        orgId, dryRun: false, batchSize: 1,
-      });
+      const res = await runContinuationBatch(t, orgId, 1);
       remaining = res.remaining;
       await t.run(async (ctx) => {
         const items = await ctx.db.query("payrollItems").collect();
