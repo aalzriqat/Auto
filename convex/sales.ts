@@ -113,26 +113,22 @@ export const list = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
-    let pageResult;
-
-    // `filter` (convex-helpers) keeps the paginate-until-the-page-is-full
-    // semantics of the query-level filter it replaces, without the field
-    // expression the lint rule refuses.
-    if (args.salespersonId) {
-      pageResult = await filter(
-        ctx.db
+    const salespersonId = args.salespersonId;
+    const indexed = salespersonId
+      ? ctx.db
           .query("sales")
           .withIndex("by_org_salesperson", (q) =>
-            q.eq("orgId", args.orgId).eq("salespersonId", args.salespersonId!)
-          ),
-        (sale) => sale.isDeleted !== true
-      ).paginate(args.paginationOpts);
-    } else {
-      pageResult = await filter(
-        ctx.db.query("sales").withIndex("by_org", (q) => q.eq("orgId", args.orgId)),
-        (sale) => sale.isDeleted !== true
-      ).paginate(args.paginationOpts);
-    }
+            q.eq("orgId", args.orgId).eq("salespersonId", salespersonId)
+          )
+      : ctx.db.query("sales").withIndex("by_org", (q) => q.eq("orgId", args.orgId));
+
+    // `filter` (convex-helpers) applies the predicate to each fetched page, so a
+    // page can hold fewer than `numItems` rows when deleted sales fall in it;
+    // `usePaginatedQuery` callers continue through `loadMore`. Replaces a
+    // query-level field filter the lint rule refuses.
+    const pageResult = await filter(indexed, (sale) => sale.isDeleted !== true).paginate(
+      args.paginationOpts
+    );
 
     const page = await Promise.all(
       pageResult.page.map(async (sale) => {
@@ -1164,9 +1160,7 @@ export const update = mutation({
           reversalDate: cancellationDate,
         });
       } else {
-        // SCRUM-571 S1 T2: a PENDING draft leaves no operational records to
-        // reverse, but it is still an exit of the sale, so it refuses while any
-        // sale-linked legacy receivable exists. Before the status patch below.
+        // SCRUM-571 T2: a sale exit refuses while a sale-linked legacy receivable exists.
         await assertNoSaleLinkedLegacyReceivable(ctx, args.orgId, args.saleId);
       }
     }
@@ -1230,8 +1224,7 @@ export const softDelete = mutation({
       throwAppError(AppErrorCode.SALE_ALREADY_COMPLETED, "Cannot delete a completed sale. Cancel it first.");
     }
 
-    // SCRUM-571 S1 T2: deleting a sale is an exit of it, so it refuses while any
-    // sale-linked legacy receivable exists. Before the soft-delete patch.
+    // SCRUM-571 T2: a sale exit refuses while a sale-linked legacy receivable exists.
     await assertNoSaleLinkedLegacyReceivable(ctx, args.orgId, args.saleId);
 
     await ctx.db.patch(args.saleId, {
@@ -1510,9 +1503,7 @@ export const listCommissions = query({
     // response is what these clients already had; a silently incomplete one is
     // new, invisible, and unfixable from their side.
     //
-    // The deleted-row exclusion runs over the collected rows rather than as a
-    // query-level field filter: the same rows are read either way, so the
-    // result is identical.
+    // Deleted rows excluded after the indexed read.
     const indexed = salespersonId
       ? await ctx.db
           .query("sales")

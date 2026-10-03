@@ -550,13 +550,6 @@ async function mirrorCollectionPaymentToCanonical(
 }
 
 /**
- * Unwinds ACTIVE allocations on a canonical receivable to cover a refund,
- * newest first. If the refund splits an allocation, the un-refunded remainder
- * is re-allocated from the same payment so the net reversed amount equals the
- * refund exactly. This is what reopens the canonical receivable's outstanding
- * balance to match the legacy receivable after a refund.
- */
-/**
  * SCRUM-571 S1 (D-20) R5: read-only pre-check for the refund approval. When the
  * refund would split an allocation, `reverseAllocationsForRefund` re-allocates
  * the un-refunded remainder to the document - for a sale-linked legacy
@@ -564,8 +557,6 @@ async function mirrorCollectionPaymentToCanonical(
  * the refund payment row, the mirror or any reversal is written. It mirrors the
  * walk below exactly (newest first, break once covered) and writes nothing.
  */
-const REFUND_PRECHECK_ALLOCATION_LIMIT = 500;
-
 async function assertRefundDoesNotReallocateToSaleLinkedDoc(
   ctx: MutationCtx,
   receivable: Doc<"receivables">,
@@ -581,8 +572,8 @@ async function assertRefundDoesNotReallocateToSaleLinkedDoc(
   const allocations = await ctx.db
     .query("paymentAllocations")
     .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", canonical._id))
-    .take(REFUND_PRECHECK_ALLOCATION_LIMIT + 1);
-  if (allocations.length > REFUND_PRECHECK_ALLOCATION_LIMIT) assertReceivableNotSaleLinked(receivable);
+    .take(ALLOCATION_HISTORY_PROBE_LIMIT + 1);
+  if (allocations.length > ALLOCATION_HISTORY_PROBE_LIMIT) assertReceivableNotSaleLinked(receivable);
   const active = allocations
     .filter((allocation) => allocation.status === "ACTIVE")
     .sort((a, b) => b.createdAt - a.createdAt);
@@ -594,6 +585,13 @@ async function assertRefundDoesNotReallocateToSaleLinkedDoc(
   }
 }
 
+/**
+ * Unwinds ACTIVE allocations on a canonical receivable to cover a refund,
+ * newest first. If the refund splits an allocation, the un-refunded remainder
+ * is re-allocated from the same payment so the net reversed amount equals the
+ * refund exactly. This is what reopens the canonical receivable's outstanding
+ * balance to match the legacy receivable after a refund.
+ */
 async function reverseAllocationsForRefund(
   ctx: MutationCtx,
   args: {

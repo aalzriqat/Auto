@@ -56,7 +56,11 @@ export async function saleHasLegacyReceivable(
   return rows.length > LEGACY_ROW_READ_LIMIT || rows.some((row) => row.orgId === orgId);
 }
 
-/** T1/T2: refuse while any legacy receivable row exists for the sale. */
+/**
+ * T1/T2: refuse while any legacy receivable row exists for the sale. Guards every
+ * exit door: completion, completed-sale cancel, draft cancel (`sales.update`,
+ * `applications.cancelApplication`) and `sales.softDelete`.
+ */
 export async function assertNoSaleLinkedLegacyReceivable(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,

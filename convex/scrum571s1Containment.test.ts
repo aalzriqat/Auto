@@ -791,53 +791,88 @@ describe("T1/T2 — a sale with ANY legacy receivable cannot complete or cancel"
   });
 });
 
-/** A user who may edit, approve and delete sales and cancel a finalized deal. Never the sale's salesperson. */
-async function seedDealActor(w: World) {
-  const clerkId = `s571s1_deal_${crypto.randomUUID().slice(0, 8)}`;
-  const userId = await w.t.run((ctx) =>
-    ctx.db.insert("users", { clerkId, email: `${clerkId}@example.com`, name: "Deal Manager" })
-  );
-  const roleId = await w.t.run((ctx) =>
-    ctx.db.insert("roles", {
-      orgId: w.orgId,
-      name: `Deal Manager ${clerkId}`,
-      permissions: [
-        "view:sales",
-        "edit:sales",
-        "delete:sales",
-        "approve:requests",
-        "create:finance_application",
-        "approve:finance_application",
-        "finalize:financed_deal",
-      ],
-    })
-  );
+/** A user with the given permissions in the world's org, as an identity-bound test client. */
+async function seedActor(w: World, name: string, permissions: string[]) {
+  const clerkId = `s571s1_${name.toLowerCase().replace(/\s+/g, "_")}_${crypto.randomUUID().slice(0, 8)}`;
+  const userId = await w.t.run((ctx) => ctx.db.insert("users", { clerkId, email: `${clerkId}@example.com`, name }));
+  const roleId = await w.t.run((ctx) => ctx.db.insert("roles", { orgId: w.orgId, name: `${name} ${clerkId}`, permissions }));
   await w.t.run((ctx) => ctx.db.insert("memberships", { orgId: w.orgId, userId, roleId }));
   return w.t.withIdentity({ subject: clerkId, clerkId });
 }
 
-type DraftDoor = "sales.update" | "sales.softDelete" | "applications.cancelApplication";
-const DRAFT_DOORS: DraftDoor[] = ["sales.update", "sales.softDelete", "applications.cancelApplication"];
+/** A user who may edit, approve and delete sales and cancel a finalized deal. Never the sale's salesperson. */
+function seedDealActor(w: World) {
+  return seedActor(w, "Deal Manager", [
+    "view:sales",
+    "edit:sales",
+    "delete:sales",
+    "approve:requests",
+    "create:finance_application",
+    "approve:finance_application",
+    "finalize:financed_deal",
+  ]);
+}
+
+type DealActor = Awaited<ReturnType<typeof seedDealActor>>;
+
+/** A CLOSED finance application pointing at the (already completed or draft) sale. */
+async function insertClosedApplication(w: World, vehicleId: Id<"vehicles">, saleId: Id<"sales">) {
+  const applicationId = await insertApplication(w, vehicleId);
+  await w.t.run((ctx) => ctx.db.patch(applicationId, { status: "CLOSED", finalizedSaleId: saleId }));
+  return applicationId;
+}
+
+const cancelApplication = (actor: DealActor, w: World, applicationId: Id<"financeApplications">) =>
+  actor.mutation(api.applications.cancelApplication, {
+    orgId: w.orgId,
+    applicationId,
+    idempotencyKey: crypto.randomUUID(),
+  });
+
+interface DealIds {
+  saleId: Id<"sales">;
+  applicationId: Id<"financeApplications"> | undefined;
+}
+
+interface DoorSpec {
+  /** Only the application door needs a CLOSED application pointing at the draft. */
+  needsApplication: boolean;
+  run: (actor: DealActor, w: World, deal: DealIds) => Promise<unknown>;
+  /** What a successful exit through this door leaves behind (the control outcome). */
+  expectedExit: { saleStatus?: "CANCELLED"; saleDeleted?: true; appStatus?: "CANCELLED" };
+}
+
+const DRAFT_DOOR_SPECS = {
+  "sales.update": {
+    needsApplication: false,
+    run: (actor, w, { saleId }) => actor.mutation(api.sales.update, { orgId: w.orgId, saleId, status: "CANCELLED" }),
+    expectedExit: { saleStatus: "CANCELLED" },
+  },
+  "sales.softDelete": {
+    needsApplication: false,
+    run: (actor, w, { saleId }) => actor.mutation(api.sales.softDelete, { orgId: w.orgId, saleId }),
+    expectedExit: { saleDeleted: true },
+  },
+  "applications.cancelApplication": {
+    needsApplication: true,
+    run: (actor, w, { applicationId }) => {
+      if (!applicationId) throw new Error("cancelApplication door needs an application");
+      return cancelApplication(actor, w, applicationId);
+    },
+    expectedExit: { saleStatus: "CANCELLED", appStatus: "CANCELLED" },
+  },
+} satisfies Record<string, DoorSpec>;
+
+type DraftDoor = keyof typeof DRAFT_DOOR_SPECS;
+const DRAFT_DOORS = Object.keys(DRAFT_DOOR_SPECS) as DraftDoor[];
 
 /** A PENDING draft sale (plus a CLOSED application pointing at it for the application door) and the door that exits it. */
 async function openDraftDeal(w: World, door: DraftDoor) {
+  const spec: DoorSpec = DRAFT_DOOR_SPECS[door];
   const { saleId, vehicleId } = await insertSale(w, "PENDING");
-  let applicationId: Id<"financeApplications"> | undefined;
-  if (door === "applications.cancelApplication") {
-    applicationId = await insertApplication(w, vehicleId);
-    await w.t.run((ctx) => ctx.db.patch(applicationId!, { status: "CLOSED", finalizedSaleId: saleId }));
-  }
+  const applicationId = spec.needsApplication ? await insertClosedApplication(w, vehicleId, saleId) : undefined;
   const actor = await seedDealActor(w);
-  const run = () =>
-    door === "sales.update"
-      ? actor.mutation(api.sales.update, { orgId: w.orgId, saleId, status: "CANCELLED" })
-      : door === "sales.softDelete"
-        ? actor.mutation(api.sales.softDelete, { orgId: w.orgId, saleId })
-        : actor.mutation(api.applications.cancelApplication, {
-            orgId: w.orgId,
-            applicationId: applicationId!,
-            idempotencyKey: crypto.randomUUID(),
-          });
+  const run = () => spec.run(actor, w, { saleId, applicationId });
   const state = () =>
     w.t.run(async (ctx) => {
       const sale = await ctx.db.get(saleId);
@@ -869,10 +904,7 @@ describe("SCRUM-571 S1 T2 — every exit of a DRAFT sale refuses while any sale-
       const w = await seedWorld();
       const deal = await openDraftDeal(w, door);
       expect(await codeOf(deal.run())).toBeUndefined();
-      const after = await deal.state();
-      if (door === "sales.softDelete") expect(after.saleDeleted).toBe(true);
-      else expect(after.saleStatus).toBe("CANCELLED");
-      if (door === "applications.cancelApplication") expect(after.appStatus).toBe("CANCELLED");
+      expect(await deal.state()).toMatchObject(DRAFT_DOOR_SPECS[door].expectedExit);
     });
 
     test(`${door}: control, a row linked to ANOTHER sale does not block`, async () => {
@@ -913,19 +945,12 @@ describe("SCRUM-571 S1 T2 — a COMPLETED sale cannot be cancelled through a pub
     test(`applications.cancelApplication on a CLOSED deal with a ${status} legacy receivable is refused and rolled back`, async () => {
       const w = await seedWorld();
       const { saleId, vehicleId } = await insertSale(w, "COMPLETED");
-      const applicationId = await insertApplication(w, vehicleId);
-      await w.t.run((ctx) => ctx.db.patch(applicationId, { status: "CLOSED", finalizedSaleId: saleId }));
+      const applicationId = await insertClosedApplication(w, vehicleId, saleId);
       await insertLegacyReceivable(w, { saleId, status });
       const actor = await seedDealActor(w);
       const before = await counts(w.t);
 
-      const code = await codeOf(
-        actor.mutation(api.applications.cancelApplication, {
-          orgId: w.orgId,
-          applicationId,
-          idempotencyKey: crypto.randomUUID(),
-        })
-      );
+      const code = await codeOf(cancelApplication(actor, w, applicationId));
 
       expect(code).toBe("SALE_HAS_LEGACY_RECEIVABLE");
       expect((await w.t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("COMPLETED");
@@ -937,7 +962,8 @@ describe("SCRUM-571 S1 T2 — a COMPLETED sale cannot be cancelled through a pub
 });
 
 describe("R5 — a refund that would re-allocate a remainder to a sale-linked legacy doc is refused up front", () => {
-  async function paidReceivable(w: World, saleLinked: boolean) {
+  /** A 500 receivable fully paid by `payments` (oldest first), optionally linked to a sale afterwards. */
+  async function paidReceivable(w: World, saleLinked: boolean, payments: number[] = [500]) {
     const receivableId = await w.asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
       orgId: w.orgId,
@@ -948,14 +974,16 @@ describe("R5 — a refund that would re-allocate a remainder to a sale-linked le
       dueDate: DUE(),
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    await w.asFinance.mutation(api.collections.recordPayment, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId: w.orgId,
-      receivableId,
-      amount: 500,
-      method: "CASH",
-      paymentDate: Date.now(),
-    });
+    for (const amount of payments) {
+      await w.asFinance.mutation(api.collections.recordPayment, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: w.orgId,
+        receivableId,
+        amount,
+        method: "CASH",
+        paymentDate: Date.now(),
+      });
+    }
     if (saleLinked) {
       // A pre-release row: the writer is closed, so link it directly.
       const { saleId } = await insertSale(w, "PENDING");
@@ -999,28 +1027,7 @@ describe("R5 — a refund that would re-allocate a remainder to a sale-linked le
 
   test("a split across the OLDER of two allocations on a sale-linked doc is still refused before any write", async () => {
     const w = await seedWorld();
-    const receivableId = await w.asFinance.mutation(api.collections.createReceivable, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId: w.orgId,
-      customerId: w.customerId,
-      sourceType: "INTERNAL_INSTALLMENT",
-      title: "R5 two payments",
-      amount: 500,
-      dueDate: DUE(),
-      creditSystemKey: "MISCELLANEOUS_INCOME",
-    });
-    for (const amount of [300, 200]) {
-      await w.asFinance.mutation(api.collections.recordPayment, {
-        idempotencyKey: crypto.randomUUID(),
-        orgId: w.orgId,
-        receivableId,
-        amount,
-        method: "CASH",
-        paymentDate: Date.now(),
-      });
-    }
-    const { saleId } = await insertSale(w, "PENDING");
-    await w.t.run((ctx) => ctx.db.patch(receivableId, { saleId }));
+    const receivableId = await paidReceivable(w, true, [300, 200]);
     // 250 covers the newer 200 allocation, then splits the older 300 one.
     const requestId = await request(w, receivableId, 250);
     const before = await counts(w.t);
@@ -1397,7 +1404,7 @@ describe("P4 — expire still works and never touches a captured link's held fun
         reviewStatus: "OPEN",
         firstReceivedAt: Date.now(),
         lastReceivedAt: Date.now(),
-      } as never)
+      })
     );
     await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId });
     expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("EXPIRED");

@@ -3617,8 +3617,7 @@ export const cancelApplication = mutation({
                 // the deal, so the sale goes with it — but `createDraft` performs
                 // no inventory, deposit, CRM or accounting side effects, so there
                 // is nothing to reverse and nothing to hand back.
-                // SCRUM-571 S1 T2: still an exit of the sale, so it refuses while
-                // any sale-linked legacy receivable exists, before the patch.
+                // SCRUM-571 T2: a sale exit refuses while a sale-linked legacy receivable exists.
                 await assertNoSaleLinkedLegacyReceivable(ctx, args.orgId, sale._id);
                 await ctx.db.patch(sale._id, { status: "CANCELLED" });
               }
