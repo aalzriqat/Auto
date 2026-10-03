@@ -92,6 +92,24 @@ describe("DealClosingReadinessList — reason codes", () => {
     expect(screen.getByTestId("closing-check-reason-COSTS_CLOSABLE").textContent).toBe(ar.ClosingReason_WITHHELD_COSTS_CLOSABLE);
   });
 
+  // SCRUM-420: the FINANCING_RECONCILED row needs no layout change -- the generic list renders it, in both locales.
+  test.each([
+    ["ar", tAr, true],
+    ["en", (key: string) => en[key] || key, false],
+  ] as const)("a flagged-financing row shows its %s label and reason, and the withheld form", (_locale, t, arabic) => {
+    const row = { key: "FINANCING_RECONCILED", status: "BLOCKED", reason: "x", reasonCode: "FINANCING_RECONCILIATION_FLAGGED" };
+    const { unmount } = render(<DealClosingReadinessList t={t} readiness={view(row, { checks: [row] })} />);
+    expect(screen.getByTestId("closing-check-FINANCING_RECONCILED").textContent).toContain(t("ClosingCheck_FINANCING_RECONCILED"));
+    const reason = screen.getByTestId("closing-check-reason-FINANCING_RECONCILED").textContent ?? "";
+    expect(reason).toBe(t("ClosingReason_FINANCING_RECONCILIATION_FLAGGED"));
+    expect(/[؀-ۿ]/.test(reason)).toBe(arabic);
+    unmount();
+
+    const withheld = { ...row, reason: WITHHELD_READINESS_REASON_FALLBACK, reasonCode: "WITHHELD_FINANCING_RECONCILED" };
+    render(<DealClosingReadinessList t={t} readiness={view(withheld, { checks: [withheld] })} />);
+    expect(screen.getByTestId("closing-check-reason-FINANCING_RECONCILED").textContent).toBe(t("ClosingReason_WITHHELD_FINANCING_RECONCILED"));
+  });
+
   test("the no-verdict reason is translated from its code", () => {
     render(
       <DealClosingReadinessList

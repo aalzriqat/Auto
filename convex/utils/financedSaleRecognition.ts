@@ -622,6 +622,27 @@ export async function evaluateClosingReadiness(
     return invoice.ok ? ["READY", null] : ["BLOCKED", reasonOf(invoice.refusal.code, invoice.refusal.message)];
   });
 
+  // SCRUM-420: a deal whose financing figures are flagged for a reconciliation
+  // review (`needsFinancingReconciliation`) is not closable on ANY route, and
+  // finalizeDeal reaches this evaluator through `resolveFinancedSalePlan`, so a
+  // direct call is refused before its first write. APPENDED LAST, never first:
+  // the first unmet check (array order) is the reason a refused finalize states,
+  // and an existing refusal must keep stating itself. Never flagged (`undefined`)
+  // is NOT_APPLICABLE; reviewed (`false`) is READY. `resolveFinancingReconciliation`
+  // is the one way the flag is cleared by a person.
+  if (app.needsFinancingReconciliation === true) {
+    add(
+      "FINANCING_RECONCILED",
+      "BLOCKED",
+      reasonOf(
+        "FINANCING_RECONCILIATION_FLAGGED",
+        "This deal's financing figures are flagged for reconciliation review, so it cannot be finalized yet. Review the figures and record the review before finalizing."
+      )
+    );
+  } else {
+    add("FINANCING_RECONCILED", app.needsFinancingReconciliation === false ? "READY" : "NOT_APPLICABLE", null);
+  }
+
   const state = overallReadinessState(checks);
   const readiness: ClosingReadiness = { state, checks };
   // A READY verdict is one every row check passed, so the rows were read.
