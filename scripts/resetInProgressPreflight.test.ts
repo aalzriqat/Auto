@@ -5,7 +5,8 @@
  * read and a zero total; everything else is a refusal that prints no org data.
  */
 import { describe, expect, test } from "vitest";
-import { PREFLIGHT_PROTOCOL, runResetPreflight } from "./resetInProgressPreflight.mjs";
+import { PREFLIGHT_FN, PREFLIGHT_PROTOCOL, renderOutcome, runResetPreflight } from "./resetInProgressPreflight.mjs";
+import * as queryModule from "../convex/orgResetPreflight";
 
 const DEPLOYMENT = "kindly-hound-172";
 const KEY = `prod:${DEPLOYMENT}|secretpart`;
@@ -124,5 +125,31 @@ describe("runResetPreflight", () => {
   test("output never contains an org id even if the backend sent one", () => {
     const { outcome } = walk([good({ inProgress: 1, orgId: "jx7abc0org", orgName: "Secret Dealer" })]);
     expect(JSON.stringify(outcome)).not.toMatch(/jx7abc0org|Secret Dealer/);
+  });
+
+  // main() prints exactly renderOutcome(outcome), so this is the printed text.
+  test("rendered output (refusal and success) carries no org id or name", () => {
+    const leaky = { orgId: "jx7abc0org", orgName: "Secret Dealer" };
+    const refusal = walk([good({ inProgress: 1, ...leaky })]).outcome;
+    const success = walk([good({ ...leaky })]).outcome;
+    expect(refusal.ok).toBe(false);
+    expect(success.ok).toBe(true);
+    for (const text of [renderOutcome(refusal), renderOutcome(success)]) {
+      expect(text).not.toMatch(/jx7abc0org|Secret Dealer/);
+    }
+    expect(renderOutcome(success)).toContain("scanned 3, in progress 0");
+  });
+});
+
+describe("pin between the release script and the deployed query", () => {
+  test("the script's protocol literal equals the query module's", () => {
+    expect(PREFLIGHT_PROTOCOL).toBe(queryModule.RESET_PREFLIGHT_PROTOCOL);
+  });
+
+  test("PREFLIGHT_FN names the module and the exported query", () => {
+    const [moduleName, exportName] = PREFLIGHT_FN.split(":");
+    expect(moduleName).toBe("orgResetPreflight");
+    expect(Object.keys(queryModule)).toContain(exportName);
+    expect(exportName).toBe("countOrgsWithResetInProgress");
   });
 });

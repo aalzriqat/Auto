@@ -10,6 +10,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
+import { RESET_PREFLIGHT_PROTOCOL } from "./orgResetPreflight";
 
 const MODULES = import.meta.glob("./**/*.*s");
 
@@ -32,7 +33,7 @@ describe("countOrgsWithResetInProgress", () => {
   test("fields absent are not counted", async () => {
     const t = await seed([{}, {}]);
     const r = await page(t, 10);
-    expect(r).toMatchObject({ protocol: "SCRUM-565/N9/v1", scanned: 2, inProgress: 0, isDone: true });
+    expect(r).toMatchObject({ protocol: RESET_PREFLIGHT_PROTOCOL, scanned: 2, inProgress: 0, isDone: true });
   });
 
   test("equal generations are not counted", async () => {

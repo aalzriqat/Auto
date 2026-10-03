@@ -120,12 +120,19 @@ export function main() {
     deployKey: process.env.CONVEX_DEPLOY_KEY,
     expectedDeployment: (process.env.CONVEX_PROD_DEPLOYMENT ?? "").trim(),
   });
+  const rendered = renderOutcome(outcome);
   if (!outcome.ok) {
-    console.error(`\n✖ ${outcome.reason}\n`);
+    console.error(rendered);
     return 1;
   }
-  console.log(`\n✔ No organization is mid financial reset (scanned ${outcome.scanned}, in progress ${outcome.inProgress}).\n`);
+  console.log(rendered);
   return 0;
+}
+
+/** The exact text `main()` prints (public logs): totals and fixed wording only. */
+export function renderOutcome(outcome) {
+  if (!outcome.ok) return `\n✖ ${outcome.reason}\n`;
+  return `\n✔ No organization is mid financial reset (scanned ${outcome.scanned}, in progress ${outcome.inProgress}).\n`;
 }
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : undefined;
