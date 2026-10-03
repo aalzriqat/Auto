@@ -925,6 +925,41 @@ describe("SCRUM-571 S1 T2 — every exit of a DRAFT sale refuses while any sale-
   }
 });
 
+describe("SCRUM-571 S1 T2 — cancelApplication on a DRAFT deal rolls back the cheque it would have cancelled", () => {
+  // resolveLinkedChequesForCancellation PATCHES a HELD finance-company cheque to
+  // CANCELLED before the draft-sale guard runs. The refusal must be an uncaught
+  // throw so that patch is rolled back with everything else.
+  test("a HELD finance-company cheque stays HELD when the draft exit is refused by a sale-linked legacy receivable", async () => {
+    const w = await seedWorld();
+    const { saleId, vehicleId } = await insertSale(w, "PENDING");
+    const applicationId = await insertClosedApplication(w, vehicleId, saleId);
+    const chequeId = await insertCheque(w, { fcApplicationId: applicationId, status: "HELD" });
+    await insertLegacyReceivable(w, { saleId });
+    const actor = await seedDealActor(w);
+    const chequeBefore = await w.t.run((ctx) => ctx.db.get(chequeId));
+    const before = await counts(w.t);
+
+    expect(await codeOf(cancelApplication(actor, w, applicationId))).toBe("SALE_HAS_LEGACY_RECEIVABLE");
+
+    expect(await w.t.run((ctx) => ctx.db.get(chequeId))).toEqual(chequeBefore);
+    expect(chequeBefore?.status).toBe("HELD");
+    expect((await w.t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("PENDING");
+    expect((await w.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
+    expect(await counts(w.t)).toEqual(before);
+  });
+
+  test("control: with no sale-linked legacy receivable the same cancellation does cancel the HELD cheque", async () => {
+    const w = await seedWorld();
+    const { saleId, vehicleId } = await insertSale(w, "PENDING");
+    const applicationId = await insertClosedApplication(w, vehicleId, saleId);
+    const chequeId = await insertCheque(w, { fcApplicationId: applicationId, status: "HELD" });
+    const actor = await seedDealActor(w);
+
+    expect(await codeOf(cancelApplication(actor, w, applicationId))).toBeUndefined();
+    expect((await w.t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("CANCELLED");
+  });
+});
+
 describe("SCRUM-571 S1 T2 — a COMPLETED sale cannot be cancelled through a public door while a legacy receivable exists", () => {
   for (const status of ["OPEN", "CANCELLED"] as const) {
     test(`sales.update (status CANCELLED) with a ${status} legacy receivable is refused and rolled back`, async () => {
@@ -1057,6 +1092,90 @@ describe("R5 — a refund that would re-allocate a remainder to a sale-linked le
       status: "APPROVED",
     });
     expect((await w.t.run((ctx) => ctx.db.get(receivableId)))?.outstandingAmount).toBe(200);
+  });
+
+  // Regression (SCRUM-571 S1 R5 bounded read): the pre-check reads at most
+  // ALLOCATION_HISTORY_PROBE_LIMIT + 1 allocations. A sale-linked document with
+  // more history than that cannot be walked completely, so the refusal must come
+  // from the fail-closed branch. The refund below is the FULL amount, which never
+  // splits an allocation, so ONLY the over-limit branch can refuse it.
+  describe("over the allocation probe limit", () => {
+    async function withExtraHistory(w: World, receivableId: Id<"receivables">, extra: number) {
+      await w.t.run(async (ctx) => {
+        const receivable = await ctx.db.get(receivableId);
+        const docId = receivable!.canonicalReceivableDocumentId!;
+        const paymentId = await ctx.db.insert("canonicalPayments", {
+          orgId: w.orgId,
+          direction: "IN",
+          method: "CASH",
+          amountMinor: 1,
+          currency: "JOD",
+          scale: 3,
+          status: "SETTLED",
+          idempotencyKey: `r5_probe_${crypto.randomUUID()}`,
+          receivedAt: Date.now(),
+          createdAt: Date.now(),
+          createdBy: w.userId,
+        });
+        for (let i = 0; i < extra; i++) {
+          await ctx.db.insert("paymentAllocations", {
+            orgId: w.orgId,
+            paymentId,
+            receivableDocumentId: docId,
+            amountMinor: 1,
+            currency: "JOD",
+            scale: 3,
+            allocationDate: Date.now(),
+            status: "REVERSED",
+            createdBy: w.userId,
+            createdAt: Date.now(),
+          });
+        }
+      });
+    }
+
+    const approve = (w: World, requestId: Id<"approvalRequests">) =>
+      w.asApprover.mutation(api.collections.respondToApproval, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: w.orgId,
+        requestId,
+        status: "APPROVED",
+      });
+
+    test("a sale-linked receivable with more than the probe limit of allocations is refused through the fail-closed branch, writing nothing", async () => {
+      const { ALLOCATION_HISTORY_PROBE_LIMIT } = await import("./collections");
+      const w = await seedWorld();
+      const receivableId = await paidReceivable(w, true);
+      await withExtraHistory(w, receivableId, ALLOCATION_HISTORY_PROBE_LIMIT + 1);
+      const requestId = await request(w, receivableId, 500);
+      const before = await counts(w.t);
+
+      expect(await codeOf(approve(w, requestId))).toBe("SALE_DEBT_RECEIPT_REFUSED");
+
+      expect(await counts(w.t)).toEqual(before);
+      expect((await w.t.run((ctx) => ctx.db.get(receivableId)))?.outstandingAmount).toBe(0);
+    });
+
+    test("control: the same history on a NON-sale receivable is not refused", async () => {
+      const { ALLOCATION_HISTORY_PROBE_LIMIT } = await import("./collections");
+      const w = await seedWorld();
+      const receivableId = await paidReceivable(w, false);
+      await withExtraHistory(w, receivableId, ALLOCATION_HISTORY_PROBE_LIMIT + 1);
+      const requestId = await request(w, receivableId, 500);
+
+      expect(await codeOf(approve(w, requestId))).toBeUndefined();
+    });
+
+    test("control: a sale-linked receivable AT the limit (history fully readable) and a full refund is not refused by the bound", async () => {
+      const { ALLOCATION_HISTORY_PROBE_LIMIT } = await import("./collections");
+      const w = await seedWorld();
+      const receivableId = await paidReceivable(w, true);
+      // 1 real allocation + (LIMIT - 1) extras = LIMIT rows: still within the probe.
+      await withExtraHistory(w, receivableId, ALLOCATION_HISTORY_PROBE_LIMIT - 1);
+      const requestId = await request(w, receivableId, 500);
+
+      expect(await codeOf(approve(w, requestId))).toBeUndefined();
+    });
   });
 });
 
