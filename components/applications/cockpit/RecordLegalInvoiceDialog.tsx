@@ -45,11 +45,18 @@ function parseMajor(value: string, scale: number): number | null {
  * the two calendars, and while the operator's day has not begun on the ledger
  * nothing is pre-filled and the operator must pick the paper's date.
  */
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
 function invoiceDayBounds() {
   const localDay = todayDateInput();
   const ledgerDay = economicTodayDateInput();
   const localDayNotOpen = localDay > ledgerDay;
-  return { localDayNotOpen, latestDay: localDayNotOpen ? ledgerDay : localDay };
+  return {
+    localDayNotOpen,
+    latestDay: localDayNotOpen ? ledgerDay : localDay,
+    /** The operator's clock time at which the ledger's next day begins. */
+    nextLedgerDayAt: economicDateInputToMs(ledgerDay) + ONE_DAY_MS,
+  };
 }
 
 function defaultInvoiceDay(): string {
@@ -111,7 +118,7 @@ export function RecordLegalInvoiceDialog({
   const [issuedToOther, setIssuedToOther] = useState(() => existing?.issuedToOther ?? "");
   const [localError, setLocalError] = useState<string | null>(null);
 
-  const { localDayNotOpen, latestDay } = invoiceDayBounds();
+  const { localDayNotOpen, latestDay, nextLedgerDayAt } = invoiceDayBounds();
   const amountMinor = parseMajor(amount, scale);
   const isInvalid =
     amountMinor === null ||
@@ -189,7 +196,10 @@ export function RecordLegalInvoiceDialog({
             />
             {localDayNotOpen && (
               <p id="legal-invoice-date-hint" className="text-xs text-muted-foreground">
-                {t("LegalInvoiceDateNotOpenYet")}
+                {t("LegalInvoiceDateNotOpenYet").replace(
+                  "{time}",
+                  new Date(nextLedgerDayAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                )}
               </p>
             )}
           </div>

@@ -106,6 +106,26 @@ describe("the date a legal invoice is recorded under", () => {
     expect(submitButton().disabled).toBe(true);
   });
 
+  test.each([
+    ["Asia/Amman", "03:00"],
+    ["Asia/Tokyo", "09:00"],
+  ])("the hint names the %s clock time the ledger's day begins", (tz, expected) => {
+    at(EARLY_MORNING_IN_AMMAN, tz);
+    render(
+      <RecordLegalInvoiceDialog
+        open
+        submitting={false}
+        error={null}
+        scale={3}
+        currency="JOD"
+        t={(key: string) => (key === "LegalInvoiceDateNotOpenYet" ? "opens at {time}" : key)}
+        onOpenChange={() => {}}
+        onSubmit={async () => {}}
+      />
+    );
+    expect(screen.getByText(/^opens at /).textContent).toContain(expected);
+  });
+
   test("on the 1st of a month before 03:00 the previous month is never pre-filled", () => {
     at(MONTH_START_IN_AMMAN);
     expect(new Date().getDate()).toBe(1);
