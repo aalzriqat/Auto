@@ -47,7 +47,7 @@
  * posts once the account is present, so both directions stay exercised.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import schema from "./schema";
@@ -61,6 +61,13 @@ import {
   occurrenceIdempotencyKey,
   RECEIPT_PAYLOAD_VERSION,
 } from "./accounting/receiptOccurrence";
+
+// SCRUM-565: this file tests the deletion behaviour itself, so it opens the destructive-reset gate
+// for THIS file only. The gate's own refusal is proven, unmocked, in orgFinancialReset.scrum565gate.test.ts.
+vi.mock("./utils/resetProtocol", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/resetProtocol")>()),
+  RESET_PROTOCOL_COMPLETE: true,
+}));
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 

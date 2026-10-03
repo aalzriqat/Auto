@@ -3,6 +3,12 @@ import { internalMutation } from "./functions";
 import type { DatabaseReader } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { orgResetState } from "./utils/orgResetGeneration";
+import { throwAppError, AppErrorCode } from "./utils/errors";
+import {
+  RESET_PROTOCOL_VERSION,
+  RESET_PROTOCOL_COMPLETE,
+  RESET_PROTOCOL_INCOMPLETE_MESSAGE,
+} from "./utils/resetProtocol";
 
 /**
  * One-off operational tool: clears an organization's accounting, sales and
@@ -441,6 +447,10 @@ export const resetOrgFinancialData = internalMutation({
      * Reported on a dry run so an operator learns it before the destructive form.
      */
     cashDrawerStatePresent: boolean;
+    /** SCRUM-565. The protocol version this build implements. */
+    protocolVersion: number;
+    /** SCRUM-565. False until the final SCRUM-565 slice ships; every destructive run refuses while false. */
+    protocolComplete: boolean;
   }> => {
     const dryRun = args.dryRun ?? true;
     const limit = Math.min(Math.max(args.batchSize ?? RESET_DELETE_BATCH, 1), RESET_DELETE_BATCH);
@@ -449,6 +459,16 @@ export const resetOrgFinancialData = internalMutation({
     // to act on, which dealership this actually hit.
     const org = await ctx.db.get(args.orgId);
     const orgName = org?.name ?? null;
+
+    // ⚠️ SCRUM-565 (D-10) — THE CLOSED GATE. FIRST REFUSAL, BEFORE THE GENERATION BUMP.
+    // This protocol leaves positions standing without their basis, so until the final
+    // SCRUM-565 slice flips RESET_PROTOCOL_COMPLETE every destructive invocation refuses —
+    // a fresh run AND a continuation of an org already mid-reset (`inProgress`); there is no
+    // exception. It precedes every other refusal so the operator is never told to "suspend
+    // the org" for a reset that cannot run. Thrown, so the transaction aborts with no write.
+    if (!dryRun && !RESET_PROTOCOL_COMPLETE) {
+      throwAppError(AppErrorCode.RESET_PROTOCOL_INCOMPLETE, RESET_PROTOCOL_INCOMPLETE_MESSAGE);
+    }
 
     // ⚠️ FAIL-CLOSED PREFLIGHT, TAKEN BEFORE ANY DELETE OR STORAGE WRITE.
     // (SCRUM-208 c15892, Option C.)
@@ -649,6 +669,8 @@ export const resetOrgFinancialData = internalMutation({
       orgSuspended,
       pendingPaymentIntentsPresent,
       cashDrawerStatePresent,
+      protocolVersion: RESET_PROTOCOL_VERSION,
+      protocolComplete: RESET_PROTOCOL_COMPLETE,
     };
   },
 });

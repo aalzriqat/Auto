@@ -106,6 +106,9 @@ export const AppErrorCode = {
   // ServerError_<code>.
   COMMAND_RECORDED_BEFORE_RESET: "COMMAND_RECORDED_BEFORE_RESET",
   ORG_FINANCIAL_RESET_IN_PROGRESS: "ORG_FINANCIAL_RESET_IN_PROGRESS",
+  // SCRUM-565 S1a. The destructive reset is closed until its protocol is complete.
+  // Translated under ServerError_<code>.
+  RESET_PROTOCOL_INCOMPLETE: "RESET_PROTOCOL_INCOMPLETE",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];
