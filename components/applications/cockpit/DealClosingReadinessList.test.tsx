@@ -92,6 +92,57 @@ describe("DealClosingReadinessList — reason codes", () => {
     expect(screen.getByTestId("closing-check-reason-COSTS_CLOSABLE").textContent).toBe(ar.ClosingReason_WITHHELD_COSTS_CLOSABLE);
   });
 
+  // SCRUM-420: the FINANCING_RECONCILED row needs no layout change -- the generic list renders it, in both locales.
+  test.each([
+    ["ar", tAr, true],
+    ["en", (key: string) => en[key] || key, false],
+  ] as const)("a flagged-financing row shows its %s label and reason, and the withheld form", (_locale, t, arabic) => {
+    const row = { key: "FINANCING_RECONCILED", status: "BLOCKED", reason: "x", reasonCode: "FINANCING_RECONCILIATION_FLAGGED" };
+    const { unmount } = render(<DealClosingReadinessList t={t} readiness={view(row, { checks: [row] })} />);
+    expect(screen.getByTestId("closing-check-FINANCING_RECONCILED").textContent).toContain(t("ClosingCheck_FINANCING_RECONCILED"));
+    const reason = screen.getByTestId("closing-check-reason-FINANCING_RECONCILED").textContent ?? "";
+    expect(reason).toBe(t("ClosingReason_FINANCING_RECONCILIATION_FLAGGED"));
+    expect(/[؀-ۿ]/.test(reason)).toBe(arabic);
+    unmount();
+
+    const withheld = { ...row, reason: WITHHELD_READINESS_REASON_FALLBACK, reasonCode: "WITHHELD_FINANCING_RECONCILED" };
+    render(<DealClosingReadinessList t={t} readiness={view(withheld, { checks: [withheld] })} />);
+    expect(screen.getByTestId("closing-check-reason-FINANCING_RECONCILED").textContent).toBe(t("ClosingReason_WITHHELD_FINANCING_RECONCILED"));
+  });
+
+  // L3: the tests above read copy through `t`, which returns the key on a miss (and `tAr` falls back to en),
+  // so they could pass against an absent entry. Pin the dictionaries themselves. The reason codes' entries are
+  // covered by lib/i18n/closingReadinessReasons.test.ts; the check label and the two generic fallbacks are not.
+  test.each(["ClosingCheck_FINANCING_RECONCILED", "ClosingCheck_UNKNOWN", "ClosingReason_UNKNOWN"])(
+    "%s has non-empty en copy and Arabic-script ar copy",
+    (key) => {
+      expect(en[key]?.trim()).toBeTruthy();
+      expect(ar[key]).toMatch(/[؀-ۿ]/);
+    }
+  );
+
+  // S420-01: a backend that ships a check/reason before this bundle knows it must never put a
+  // raw dictionary key on screen (`t()` returns the key on a miss).
+  test.each([
+    ["en", (key: string) => en[key] || key, false],
+    ["ar", tAr, true],
+  ] as const)("an unknown check and reason code render generic %s copy, never a raw key", (_locale, t, arabic) => {
+    const row = { key: "FUTURE_CHECK", status: "BLOCKED", reason: "server english", reasonCode: "FUTURE_REASON_CODE" };
+    render(<DealClosingReadinessList t={t} readiness={view(row, { checks: [row] })} />);
+    const item = screen.getByTestId("closing-check-FUTURE_CHECK");
+    expect(item.textContent).not.toContain("ClosingCheck_");
+    expect(item.textContent).not.toContain("ClosingReason_");
+    expect(item.textContent).toContain(t("ClosingCheck_UNKNOWN"));
+    const reason = screen.getByTestId("closing-check-reason-FUTURE_CHECK").textContent ?? "";
+    expect(reason).toBe(t("ClosingReason_UNKNOWN"));
+    expect(/[؀-ۿ]/.test(reason)).toBe(arabic);
+  });
+
+  test("closingReasonText reports an unknown code's generic copy as not translated", () => {
+    const result = closingReasonText((key) => en[key] || key, "FUTURE_REASON_CODE" as never, undefined, "server english");
+    expect(result).toEqual({ text: en.ClosingReason_UNKNOWN, translated: false });
+  });
+
   test("the no-verdict reason is translated from its code", () => {
     render(
       <DealClosingReadinessList

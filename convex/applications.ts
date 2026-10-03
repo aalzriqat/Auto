@@ -4771,7 +4771,9 @@ export const finalizeDeal = mutation({
         // evaluator (`evaluateClosingReadiness`, SCRUM-407) — the same one the
         // deal screen shows — and refuses on the first unmet accounting
         // condition: a known remittance, configured fees recorded, the custody
-        // family on the books and settled, reconciled costs, the legal invoice.
+        // family on the books and settled, reconciled costs, the legal invoice,
+        // and a financing reconciliation flag that has been reviewed
+        // (FINANCING_RECONCILED, SCRUM-420).
         // The retired `CLASSIFIED` stamp is never read.
         //
         // How this financed sale will be recognised, frozen before anything is
