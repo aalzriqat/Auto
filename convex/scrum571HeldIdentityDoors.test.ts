@@ -98,8 +98,26 @@ const createArgs = (w: World, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const newLink = (w: World, over: Record<string, unknown> = {}) =>
+// D-20: payment links are shut, so the public `create` door always refuses
+// (PAYMENT_LINKS_DISABLED) before it reads the provider reference. `createLink`
+// calls the real door to prove that; `newLink` seeds a PENDING intent directly
+// for the tests that exercise the webhook and quarantine behaviour.
+const createLink = (w: World, over: Record<string, unknown> = {}) =>
   w.asFinance.mutation(api.paymentIntents.create, createArgs(w, over) as never);
+
+const newLink = (w: World, over: Record<string, unknown> = {}): Promise<Id<"paymentIntents">> => {
+  const { idempotencyKey, ...rest } = createArgs(w, over) as Record<string, unknown>;
+  return w.t.run((ctx) =>
+    ctx.db.insert("paymentIntents", {
+      ...rest,
+      createdBy: w.userId,
+      status: "PENDING",
+      idempotencyKey: idempotencyKey as string,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    } as never)
+  ) as Promise<Id<"paymentIntents">>;
+};
 
 const capture = (w: World, over: Record<string, unknown> = {}) =>
   w.t.mutation(internal.paymentIntents.settleByExternalId, {
@@ -199,20 +217,22 @@ const STATES: HeldState[] = [
 ];
 
 describe.each(STATES)("SCRUM-571 D-14 — held identity $name", (state) => {
-  test("create refuses PAYMENT_LINK_PROVIDER_REFERENCE_UNAVAILABLE and inserts no intent", async () => {
+  // D-20: the shutdown refuses create before the quarantine lookup, so the
+  // PROVIDER_REFERENCE_UNAVAILABLE refusal is dormant; create still inserts nothing.
+  test("create is refused (PAYMENT_LINKS_DISABLED) and inserts no intent", async () => {
     const w = await makeWorld();
     await state.seed(w);
     const before = await economicCounts(w.t);
-    const out = await refusal(newLink(w, { externalId: EXT, idempotencyKey: "create-key-1" }));
-    expect(out.code).toBe("PAYMENT_LINK_PROVIDER_REFERENCE_UNAVAILABLE");
+    const out = await refusal(createLink(w, { externalId: EXT, idempotencyKey: "create-key-1" }));
+    expect(out.code).toBe("PAYMENT_LINKS_DISABLED");
     expect(await economicCounts(w.t)).toEqual(before);
   });
 
-  test("create normalizes the reference like the webhook writer (case-insensitive provider, trimmed id)", async () => {
+  test("create with a differently-cased provider and padded id is refused the same way", async () => {
     const w = await makeWorld();
     await state.seed(w);
-    const out = await refusal(newLink(w, { provider: " TAP ", externalId: `  ${EXT}  ` }));
-    expect(out.code).toBe("PAYMENT_LINK_PROVIDER_REFERENCE_UNAVAILABLE");
+    const out = await refusal(createLink(w, { provider: " TAP ", externalId: `  ${EXT}  ` }));
+    expect(out.code).toBe("PAYMENT_LINKS_DISABLED");
   });
 
   test("webhook redelivery returns HELD with the SAME row, bumps deliveryCount, settles nothing", async () => {
@@ -235,20 +255,22 @@ describe.each(STATES)("SCRUM-571 D-14 — held identity $name", (state) => {
     }
   });
 
-  test("markSettled with externalId supplied refuses SETTLEMENT_REQUIRES_REVIEW, and a retry of the same key still refuses", async () => {
+  // D-20: markSettled is shut before the quarantine check; both the first call
+  // and a retry of the same key are refused and record nothing.
+  test("markSettled with externalId supplied is refused (PAYMENT_LINKS_DISABLED), and a retry of the same key still refuses", async () => {
     const w = await makeWorld();
     let intentId = await state.seed(w);
     // (iv): no intent can carry the reference; settle an intent that has none.
     if (!intentId) {
-      intentId = await w.asFinance.mutation(api.paymentIntents.create, createArgs(w, { externalId: undefined }) as never);
+      intentId = await newLink(w, { externalId: undefined });
     }
     const before = await economicCounts(w.t);
     const key = `settle-key-${state.name}`;
 
     const first = await refusal(settle(w, intentId, { externalId: EXT, idempotencyKey: key }));
-    expect(first.code).toBe("PAYMENT_LINK_SETTLEMENT_REQUIRES_REVIEW");
+    expect(first.code).toBe("PAYMENT_LINKS_DISABLED");
     const retry = await refusal(settle(w, intentId, { externalId: EXT, idempotencyKey: key }));
-    expect(retry.code).toBe("PAYMENT_LINK_SETTLEMENT_REQUIRES_REVIEW");
+    expect(retry.code).toBe("PAYMENT_LINKS_DISABLED");
 
     expect(await economicCounts(w.t)).toEqual(before);
     expect((await doc(w, intentId))?.status).toBe("PENDING");
@@ -263,7 +285,7 @@ describe("SCRUM-571 D-14 — markSettled with externalId omitted", () => {
     const intentId = await STATES[0].seed(w);
     const before = await economicCounts(w.t);
     const out = await refusal(settle(w, intentId!));
-    expect(out.code).toBe("PAYMENT_LINK_SETTLEMENT_REQUIRES_REVIEW");
+    expect(out.code).toBe("PAYMENT_LINKS_DISABLED"); // D-20: shut before the quarantine check
     expect(await economicCounts(w.t)).toEqual(before);
   });
 });
@@ -274,19 +296,21 @@ describe("SCRUM-571 D-14 — cross-door and cross-tenant", () => {
     await STATES[3].seed(w);
 
     const other: World = { t: w.t, ...(await seed(w.t, "_other")) };
-    const mine = await refusal(newLink(w));
-    const theirs = await refusal(newLink(other));
-    expect(mine.code).toBe("PAYMENT_LINK_PROVIDER_REFERENCE_UNAVAILABLE");
+    const mine = await refusal(createLink(w));
+    const theirs = await refusal(createLink(other));
+    // D-20: the shutdown refuses identically for every org, so a held reference
+    // belonging to nobody (or to another tenant) is still not disclosed.
+    expect(mine.code).toBe("PAYMENT_LINKS_DISABLED");
     expect(theirs).toEqual(mine);
   });
 
-  test("one provider identity never belongs to two intents: B (no externalId) settled with A's externalId refuses PROVIDER_ID_IN_USE", async () => {
+  test("D-20: B (no externalId) settled with A's externalId is refused by the shutdown, and neither intent moves", async () => {
     const w = await makeWorld();
     const a = await newLink(w, { externalId: "ext-A-owner" });
     const b = await newLink(w, { externalId: undefined });
     const before = await economicCounts(w.t);
     const out = await refusal(settle(w, b, { externalId: "ext-A-owner" }));
-    expect(out.code).toBe("PAYMENT_LINK_PROVIDER_ID_IN_USE");
+    expect(out.code).toBe("PAYMENT_LINKS_DISABLED");
     expect(await economicCounts(w.t)).toEqual(before);
     expect((await doc(w, a))?.status).toBe("PENDING");
     expect((await doc(w, b))?.status).toBe("PENDING");
@@ -294,27 +318,33 @@ describe("SCRUM-571 D-14 — cross-door and cross-tenant", () => {
 });
 
 describe("SCRUM-571 D-14 — controls", () => {
-  test("a clean identity still settles at both doors", async () => {
+  // D-20: no identity settles at either door while the pilot is shut. A clean
+  // identity's capture is held (PAYMENT_LINKS_DISABLED) and markSettled refuses.
+  test("a clean identity no longer settles at either door; the capture is held and nothing settles", async () => {
     const w = await makeWorld();
     const viaWebhook = await newLink(w, { externalId: "ext-clean-1", amountMinor: 100_000 });
-    expect(await capture(w, { externalId: "ext-clean-1" })).toEqual({ kind: "SETTLED", intentId: viaWebhook });
+    const held = await capture(w, { externalId: "ext-clean-1" });
+    expect(held).toMatchObject({ kind: "HELD" });
+    expect((await doc(w, viaWebhook))?.status).toBe("PENDING");
 
     const viaStaff = await newLink(w, { externalId: "ext-clean-2", amountMinor: 100_000 });
-    await settle(w, viaStaff);
-    expect((await doc(w, viaStaff))?.status).toBe("SETTLED");
-    expect(await heldRows(w)).toHaveLength(0);
+    expect((await refusal(settle(w, viaStaff))).code).toBe("PAYMENT_LINKS_DISABLED");
+    expect((await doc(w, viaStaff))?.status).toBe("PENDING");
+    const rows = await heldRows(w);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].reason).toBe("PAYMENT_LINKS_DISABLED");
   });
 
-  test("a held row for a DIFFERENT externalId does not block create, webhook or markSettled", async () => {
+  test("a held row for a DIFFERENT externalId does not merge with another identity's capture", async () => {
     const w = await makeWorld();
     await capture(w, { externalId: "ext-someone-else" });
     expect(await heldRows(w)).toHaveLength(1);
 
     const a = await newLink(w, { externalId: "ext-free-1" });
-    expect(await capture(w, { externalId: "ext-free-1" })).toEqual({ kind: "SETTLED", intentId: a });
-    const b = await newLink(w, { externalId: "ext-free-2" });
-    await settle(w, b);
-    expect((await doc(w, b))?.status).toBe("SETTLED");
+    expect(await capture(w, { externalId: "ext-free-1" })).toMatchObject({ kind: "HELD" });
+    expect((await doc(w, a))?.status).toBe("PENDING");
+    // Two identities, two rows: the held row is keyed per (provider, externalId).
+    expect(await heldRows(w)).toHaveLength(2);
   });
 });
 

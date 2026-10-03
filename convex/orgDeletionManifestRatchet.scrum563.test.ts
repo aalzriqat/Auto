@@ -288,16 +288,25 @@ describe("SCRUM-563 R6.11 — a SETTLED payment intent after reset and reactivat
       issueDate: Date.now(),
       dueDate: Date.now(),
     });
-    const intentId = await d.asUser.mutation(api.paymentIntents.create, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId: d.orgId,
-      customerId: d.customerId,
-      receivableDocumentId,
-      amountMinor: 1_000_000,
-      currency: "JOD",
-      provider: "tap",
-      externalId: "tap_pin",
-    });
+    // D-20: create/settle are shut, so the already-SETTLED intent the pilot left
+    // behind is seeded directly. That leftover is exactly what this pin covers.
+    const intentId = await d.t.run((ctx) =>
+      ctx.db.insert("paymentIntents", {
+        orgId: d.orgId,
+        customerId: d.customerId,
+        receivableDocumentId,
+        amountMinor: 1_000_000,
+        currency: "JOD",
+        provider: "tap",
+        externalId: "tap_pin",
+        status: "SETTLED",
+        idempotencyKey: crypto.randomUUID(),
+        createdBy: d.userId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        settledAt: Date.now(),
+      })
+    );
     const settle = () =>
       d.t.mutation(internal.paymentIntents.settleByExternalId, {
         provider: "tap",
@@ -306,7 +315,6 @@ describe("SCRUM-563 R6.11 — a SETTLED payment intent after reset and reactivat
         currency: "JOD",
         providerSignatureVerifiedAt: Date.now(),
       });
-    await settle();
     expect((await d.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("SETTLED");
 
     // Real reset: suspend, run to completion, reactivate (state flip only; the

@@ -174,6 +174,34 @@ async function seedTargetDocument(dealer: Awaited<ReturnType<typeof seedDealer>>
   });
 }
 
+/**
+ * D-20 (SCRUM-571 S1): `paymentIntents.create` is shut, so the PENDING intent the
+ * pilot would have issued is seeded directly.
+ */
+async function seedIntent(
+  t: Harness,
+  dealer: Awaited<ReturnType<typeof seedDealer>>,
+  externalId: string,
+) {
+  const receivableDocumentId = await seedTargetDocument(dealer);
+  return await t.run((ctx) =>
+    ctx.db.insert("paymentIntents", {
+      orgId: dealer.orgId,
+      customerId: dealer.customerId,
+      receivableDocumentId,
+      amountMinor: 1_000_000,
+      currency: "JOD",
+      provider: "tap",
+      externalId,
+      status: "PENDING",
+      idempotencyKey: crypto.randomUUID(),
+      createdBy: dealer.userId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  );
+}
+
 async function suspend(t: Harness, orgId: Id<"organizations">) {
   await t.run((ctx) =>
     ctx.db.patch(orgId, {
@@ -196,16 +224,7 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
   test("F1: a SUSPENDED org receives no economic footprint from settleByExternalId", async () => {
     const t = convexTestWithComponents(schema, MODULE_GLOB);
     const dealer = await seedDealer(t, "f1");
-    const intentId = await dealer.asUser.mutation(api.paymentIntents.create, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId: dealer.orgId,
-      customerId: dealer.customerId,
-      receivableDocumentId: await seedTargetDocument(dealer),
-      amountMinor: 1_000_000,
-      currency: "JOD",
-      provider: "tap",
-      externalId: "tap_f1",
-    });
+    const intentId = await seedIntent(t, dealer, "tap_f1");
 
     await suspend(t, dealer.orgId);
     const before = await economicFootprint(t, dealer.orgId);
@@ -224,19 +243,11 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
     expect(intent?.status).not.toBe("SETTLED");
   });
 
-  test("F1 CONTROL: an ACTIVE org still settles normally", async () => {
+  // D-20: an ACTIVE org's capture is HELD for finance (pilot shut), not settled.
+  test("F1 CONTROL: an ACTIVE org's capture is held, not settled, while the pilot is shut", async () => {
     const t = convexTestWithComponents(schema, MODULE_GLOB);
     const dealer = await seedDealer(t, "f1ctl");
-    const intentId = await dealer.asUser.mutation(api.paymentIntents.create, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId: dealer.orgId,
-      customerId: dealer.customerId,
-      receivableDocumentId: await seedTargetDocument(dealer),
-      amountMinor: 1_000_000,
-      currency: "JOD",
-      provider: "tap",
-      externalId: "tap_f1ctl",
-    });
+    const intentId = await seedIntent(t, dealer, "tap_f1ctl");
 
     await t.mutation(internal.paymentIntents.settleByExternalId, {
       provider: "tap",
@@ -247,23 +258,16 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
     });
 
     const intent = await t.run((ctx) => ctx.db.get(intentId));
-    expect(intent?.status).toBe("SETTLED");
-    expect((await economicFootprint(t, dealer.orgId)).canonicalPayments).toBeGreaterThan(0);
+    expect(intent?.status).toBe("PENDING");
+    expect((await economicFootprint(t, dealer.orgId)).canonicalPayments).toBe(0);
+    const held = await t.run((ctx) => ctx.db.query("unmatchedProviderFunds").collect());
+    expect(held.map((r) => r.reason)).toEqual(["PAYMENT_LINKS_DISABLED"]);
   });
 
   test("F2: an org with destructivePurgeStartedAt receives no economic footprint", async () => {
     const t = convexTestWithComponents(schema, MODULE_GLOB);
     const dealer = await seedDealer(t, "f2");
-    await dealer.asUser.mutation(api.paymentIntents.create, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId: dealer.orgId,
-      customerId: dealer.customerId,
-      receivableDocumentId: await seedTargetDocument(dealer),
-      amountMinor: 1_000_000,
-      currency: "JOD",
-      provider: "tap",
-      externalId: "tap_f2",
-    });
+    await seedIntent(t, dealer, "tap_f2");
 
     await markDestructivePurgeStarted(t, dealer.orgId);
     const before = await economicFootprint(t, dealer.orgId);
@@ -283,26 +287,8 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
     const t = convexTestWithComponents(schema, MODULE_GLOB);
     const blocked = await seedDealer(t, "xorga");
     const healthy = await seedDealer(t, "xorgb");
-    await blocked.asUser.mutation(api.paymentIntents.create, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId: blocked.orgId,
-      customerId: blocked.customerId,
-      receivableDocumentId: await seedTargetDocument(blocked),
-      amountMinor: 1_000_000,
-      currency: "JOD",
-      provider: "tap",
-      externalId: "tap_xa",
-    });
-    const healthyIntentId = await healthy.asUser.mutation(api.paymentIntents.create, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId: healthy.orgId,
-      customerId: healthy.customerId,
-      receivableDocumentId: await seedTargetDocument(healthy),
-      amountMinor: 1_000_000,
-      currency: "JOD",
-      provider: "tap",
-      externalId: "tap_xb",
-    });
+    await seedIntent(t, blocked, "tap_xa");
+    const healthyIntentId = await seedIntent(t, healthy, "tap_xb");
     await suspend(t, blocked.orgId);
 
     const blockedBefore = await economicFootprint(t, blocked.orgId);
@@ -324,7 +310,12 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
 
     expect(await economicFootprint(t, blocked.orgId)).toEqual(blockedBefore);
     const healthyIntent = await t.run((ctx) => ctx.db.get(healthyIntentId));
-    expect(healthyIntent?.status).toBe("SETTLED");
+    // D-20: the healthy org's capture is held (pilot shut), not settled, and is
+    // held under ITS org while the suspended org's hold is a LIFECYCLE_REFUSED row.
+    expect(healthyIntent?.status).toBe("PENDING");
+    const held = await t.run((ctx) => ctx.db.query("unmatchedProviderFunds").collect());
+    expect(held.find((r) => r.orgId === healthy.orgId)?.reason).toBe("PAYMENT_LINKS_DISABLED");
+    expect(held.find((r) => r.orgId === blocked.orgId)?.reason).toBe("LIFECYCLE_REFUSED");
   });
 });
 
