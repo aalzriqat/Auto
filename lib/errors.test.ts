@@ -265,6 +265,22 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(recalc).not.toBe("en");
   });
 
+  it("the SCRUM-571 payment-link refusals resolve to Arabic in ar and the server text in en", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { PAYMENT_LINK_REFUSALS } = await import("../convex/paymentIntents");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    // Derived from the server table so a new refusal cannot ship untranslated.
+    for (const code of [...Object.keys(PAYMENT_LINK_REFUSALS), "PAYMENT_LINK_RECEIPT_MANUAL_REFUSED"]) {
+      const error = new ConvexError({ code, message: "server text" });
+      const arText = getLocalizedErrorMessage(error, ar);
+      expect(arText).toMatch(/[؀-ۿ]/);
+      expect(arText).not.toBe("server text");
+      expect(arText).toBe((dictionaries.ar as Record<string, string>)[`ServerError_${code}`]);
+      expect(getLocalizedErrorMessage(error, en)).toBe((dictionaries.en as Record<string, string>)[`ServerError_${code}`]);
+    }
+  });
+
   it("the English dictionary text equals the server's message for both codes", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     expect(dictionaries.en.ServerError_COMMISSION_BASE_UNUSABLE).toContain("{baseCurrency}");

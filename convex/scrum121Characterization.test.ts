@@ -677,7 +677,7 @@ describe("SCRUM-121 characterization of current main", () => {
         currency: "JOD",
         provider: "stripe",
       })
-    ).rejects.toThrow(/Receivable document not found/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_DOCUMENT_NOT_FOUND" } });
 
     await t.run(async (ctx) => {
       const intents = await ctx.db
@@ -687,10 +687,32 @@ describe("SCRUM-121 characterization of current main", () => {
       expect(intents).toHaveLength(0); // nothing was stored to fail later
     });
 
-    // CONTROL — same intent shape without the unvalidated document settles.
+    // CONTROL — same intent shape aimed at a real document of THIS org and
+    // payer settles. (SCRUM-571 S1: an untargeted intent is itself refused now,
+    // so the control must carry a valid target to isolate the foreign one.)
+    const ownDocId = await t.run((ctx) =>
+      ctx.db.insert("receivableDocuments", {
+        orgId,
+        documentType: "INVOICE",
+        documentNumber: "OWN-0001",
+        payerType: "CUSTOMER",
+        customerId,
+        sourceType: "legacy_receivable",
+        sourceId: "own-source",
+        originalAmountMinor: 500_000,
+        currency: "JOD",
+        scale: 3,
+        issueDate: Date.now(),
+        dueDate: DUE(),
+        status: "OPEN",
+        createdAt: Date.now(),
+        createdBy: userId,
+      })
+    );
     const cleanIntentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
+      receivableDocumentId: ownDocId,
       amountMinor: 100_000,
       currency: "JOD",
       provider: "stripe",
@@ -1142,11 +1164,12 @@ describe("SCRUM-121A — Codex F2, validated independently", () => {
       // Not cancelled, and the money is untouched: the refusal is a zero-delta,
       // not a partial cancellation that stopped halfway.
       expect(doc?.status).not.toBe("CANCELLED");
-      const allocs = await ctx.db
-        .query("paymentAllocations")
-        .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
-        .filter((q) => q.eq(q.field("status"), "ACTIVE"))
-        .collect();
+      const allocs = (
+        await ctx.db
+          .query("paymentAllocations")
+          .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
+          .collect()
+      ).filter((a) => a.status === "ACTIVE");
       expect(allocs).toHaveLength(1);
       expect(allocs[0]!.amountMinor).toBe(400_000);
       // The approval request itself rolled back with everything else — the
@@ -1445,11 +1468,12 @@ describe("SCRUM-121A — c16581 evidence fixtures", () => {
     const allocationId = await t.run(async (ctx) => {
       const doc = await ctx.db.get(docId);
       expect(doc?.status).toBe("CANCELLED");
-      const allocs = await ctx.db
-        .query("paymentAllocations")
-        .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
-        .filter((q) => q.eq(q.field("status"), "ACTIVE"))
-        .collect();
+      const allocs = (
+        await ctx.db
+          .query("paymentAllocations")
+          .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
+          .collect()
+      ).filter((a) => a.status === "ACTIVE");
       expect(allocs).toHaveLength(1);
       return allocs[0]!._id as Id<"paymentAllocations">;
     });
@@ -1619,7 +1643,7 @@ describe("SCRUM-121A — c16581 evidence fixtures", () => {
         currency: "JOD",
         provider: "tap",
       })
-    ).rejects.toThrow(/document belongs to a different payer/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_DOCUMENT_PAYER_MISMATCH" } });
     // The same total-rollback control, now measured on the free side of the
     // boundary: the refusal costs a request instead of a confirmed receipt.
     expect(await snapshotMoneyWorld(t)).toBe(before);
@@ -1690,12 +1714,13 @@ describe("SCRUM-121A — c16581 evidence fixtures", () => {
 
     const statusAfter = async () => (await t.run((ctx) => ctx.db.get(docId)))?.status;
     const activeCount = async () =>
-      (await t.run((ctx) =>
-        ctx.db
-          .query("paymentAllocations")
-          .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
-          .filter((q) => q.eq(q.field("status"), "ACTIVE"))
-          .collect()
+      (await t.run(async (ctx) =>
+        (
+          await ctx.db
+            .query("paymentAllocations")
+            .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
+            .collect()
+        ).filter((a) => a.status === "ACTIVE")
       )).length;
 
     expect(await statusAfter()).toBe("PAID");
@@ -1909,7 +1934,7 @@ describe("SCRUM-121A — EV6, the withdrawn payer", () => {
     await t.run(async (ctx) => {
       const role = await ctx.db
         .query("roles")
-        .filter((q) => q.eq(q.field("orgId"), orgId))
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
         .first();
       await ctx.db.patch(role!._id, {
         permissions: [...role!.permissions, "delete:customers"],
@@ -2123,11 +2148,12 @@ describe("SCRUM-121A — Codex R3 findings, validated independently", () => {
     await t.run(async (ctx) => {
       const doc = await ctx.db.get(docId);
       expect(doc?.status).toBe("PAID");
-      const allocs = await ctx.db
-        .query("paymentAllocations")
-        .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
-        .filter((q) => q.eq(q.field("status"), "ACTIVE"))
-        .collect();
+      const allocs = (
+        await ctx.db
+          .query("paymentAllocations")
+          .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
+          .collect()
+      ).filter((a) => a.status === "ACTIVE");
       expect(allocs).toHaveLength(1);
     });
 
@@ -2139,11 +2165,12 @@ describe("SCRUM-121A — Codex R3 findings, validated independently", () => {
     await t.run(async (ctx) => {
       const doc = await ctx.db.get(docId);
       expect(doc?.status).toBe("CANCELLED");
-      const allocs = await ctx.db
-        .query("paymentAllocations")
-        .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
-        .filter((q) => q.eq(q.field("status"), "ACTIVE"))
-        .collect();
+      const allocs = (
+        await ctx.db
+          .query("paymentAllocations")
+          .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
+          .collect()
+      ).filter((a) => a.status === "ACTIVE");
       // CANCELLED + ACTIVE on the finance side. The planned reversal guard
       // would make this permanently uncorrectable.
       expect(allocs).toHaveLength(1);
@@ -2199,11 +2226,12 @@ describe("SCRUM-121A — Codex R3 findings, validated independently", () => {
       const row = await ctx.db.get(receivableId);
       expect(row?.outstandingAmount).toBe(600);
       const docId = row!.canonicalReceivableDocumentId!;
-      const allocs = await ctx.db
-        .query("paymentAllocations")
-        .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
-        .filter((q) => q.eq(q.field("status"), "ACTIVE"))
-        .collect();
+      const allocs = (
+        await ctx.db
+          .query("paymentAllocations")
+          .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
+          .collect()
+      ).filter((a) => a.status === "ACTIVE");
       expect(allocs).toHaveLength(1);
       expect(allocs[0]!.amountMinor).toBe(400_000);
     });
@@ -2268,7 +2296,7 @@ describe("SCRUM-121A-PRE — R3-05, saleId is never correlated", () => {
         orgId, customerId, receivableId: receivableA, receivableDocumentId: docB,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
-    ).rejects.toThrow(/does not match the selected receivable/);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_RECEIVABLE_DOCUMENT_MISMATCH" } });
 
     // INVERTED after the Sonnet MAX seat's Finding 1. This asserted that
     // document B plus a saleId related to nothing was accepted and stored with
@@ -2285,7 +2313,7 @@ describe("SCRUM-121A-PRE — R3-05, saleId is never correlated", () => {
         orgId, customerId, receivableDocumentId: docB, saleId: unrelatedSaleId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
-    ).rejects.toThrow(/sale does not match the selected debt/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_SALE_DEBT_MISMATCH" } });
 
     await t.run(async (ctx) => {
       const intents = await ctx.db
@@ -2498,7 +2526,7 @@ describe("SCRUM-121A-PRE — Codex R4 findings, validated independently", () => 
     const { orgId, userId, customerId, asFinance } = await seedFinanceMember(t);
 
     await t.run(async (ctx) => {
-      const role = await ctx.db.query("roles").filter((q) => q.eq(q.field("orgId"), orgId)).first();
+      const role = await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
       await ctx.db.patch(role!._id, {
         permissions: [...role!.permissions, "create:finance_application", "finalize:financed_deal"],
       });
@@ -2581,11 +2609,12 @@ describe("SCRUM-121A-PRE — Codex R4 findings, validated independently", () => 
     await t.run(async (ctx) => {
       const doc = await ctx.db.get(docId);
       expect(doc?.status).not.toBe("CANCELLED");
-      const allocs = await ctx.db
-        .query("paymentAllocations")
-        .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
-        .filter((q) => q.eq(q.field("status"), "ACTIVE"))
-        .collect();
+      const allocs = (
+        await ctx.db
+          .query("paymentAllocations")
+          .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
+          .collect()
+      ).filter((a) => a.status === "ACTIVE");
       expect(allocs).toHaveLength(1);
       expect(allocs[0]!.amountMinor).toBe(10_000_000);
       // The application is untouched too. The gate is hoisted above every write
@@ -2722,7 +2751,7 @@ describe("SCRUM-121A-PRE — Codex R5 findings, validated independently", () => 
     const { orgId, customerId, asFinance } = await seedFinanceMember(t);
 
     await t.run(async (ctx) => {
-      const role = await ctx.db.query("roles").filter((q) => q.eq(q.field("orgId"), orgId)).first();
+      const role = await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
       await ctx.db.patch(role!._id, {
         permissions: [...role!.permissions, "delete:customers"],
       });
@@ -2757,7 +2786,7 @@ describe("SCRUM-121A-PRE — Codex R5 findings, validated independently", () => 
         currency: "JOD",
         provider: "tap",
       })
-    ).rejects.toThrow(/removed and can no longer be sent a payment request/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_CUSTOMER_REMOVED" } });
 
     await expect(
       asFinance.mutation(api.collections.registerCheque, {
@@ -2848,7 +2877,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         orgId, customerId, receivableId,
         amountMinor: 100_000, currency: "USD", provider: "tap",
       })
-    ).rejects.toThrow(/currency does not match/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_DOCUMENT_CURRENCY_MISMATCH" } });
 
     // SALE-ONLY with no document to collect against — UNPROVEN_TARGET.
     const { saleId } = await seedVehicleAndSale(t, orgId, customerId, userId);
@@ -2857,7 +2886,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         orgId, customerId, saleId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
-    ).rejects.toThrow(/no accounting document to collect against/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_SALE_NO_DOCUMENT" } });
 
     // SALE contradicting a document that WAS proved. The sale names a debt of
     // its own; the two cannot both be the target.
@@ -2876,7 +2905,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         orgId, customerId, receivableId, saleId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
-    ).rejects.toThrow(/sale does not match the selected debt/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_SALE_DEBT_MISMATCH" } });
 
     // TERMINAL canonical status, reached through the document rather than the
     // legacy row — the legacy terminal check cannot see this.
@@ -2886,7 +2915,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         orgId, customerId, receivableId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
-    ).rejects.toThrow(/can no longer accept payments/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_DEBT_CLOSED" } });
 
     // CONTROL — restore the one field each refusal turned on, and the same call
     // succeeds. Without this the four rejections above would also pass against
@@ -2994,7 +3023,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     // is reached on its merits rather than by falling out at the permission
     // check — which would make this test pass without exercising the gate.
     await t.run(async (ctx) => {
-      const role = await ctx.db.query("roles").filter((q) => q.eq(q.field("orgId"), orgId)).first();
+      const role = await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
       await ctx.db.patch(role!._id, {
         permissions: [...role!.permissions, "create:finance_application", "finalize:financed_deal"],
       });
@@ -3029,10 +3058,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     const docId = await t.run(async (ctx) => {
       const { createReceivableDocument, createCanonicalPayment, allocatePaymentToReceivable } =
         await import("./subledger");
-      const company = await ctx.db
-        .query("financeCompanies")
-        .filter((q) => q.eq(q.field("orgId"), orgId))
-        .first();
+      const company = (await ctx.db.query("financeCompanies").collect()).find((c) => c.orgId === orgId) ?? null;
       const id = await createReceivableDocument(ctx as never, {
         orgId, documentType: "INVOICE", payerType: "FINANCE_COMPANY",
         financeCompanyId: company!._id, customerId,
@@ -3072,10 +3098,9 @@ describe("SCRUM-121A-PRE — verification floor", () => {
       // reversed is still COMPLETED.
       expect((await ctx.db.get(app!.finalizedSaleId!))?.status).toBe("COMPLETED");
       // …and the idempotency STARTED row rolled back with everything else.
-      const started = await ctx.db
-        .query("commandIdempotency")
-        .filter((q) => q.eq(q.field("orgId"), orgId))
-        .collect();
+      const started = (await ctx.db.query("commandIdempotency").collect()).filter(
+        (r) => r.orgId === orgId
+      );
       expect(started).toHaveLength(0);
     });
   });
@@ -3093,7 +3118,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     const { orgId, userId, customerId, asFinance } = await seedFinanceMember(t);
 
     await t.run(async (ctx) => {
-      const role = await ctx.db.query("roles").filter((q) => q.eq(q.field("orgId"), orgId)).first();
+      const role = await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
       await ctx.db.patch(role!._id, {
         permissions: [...role!.permissions, "create:finance_application", "finalize:financed_deal"],
       });
@@ -3321,7 +3346,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     const { orgId, userId, customerId, asFinance } = await seedFinanceMember(t);
 
     await t.run(async (ctx) => {
-      const role = await ctx.db.query("roles").filter((q) => q.eq(q.field("orgId"), orgId)).first();
+      const role = await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
       await ctx.db.patch(role!._id, {
         permissions: [...role!.permissions, "create:finance_application", "finalize:financed_deal"],
       });

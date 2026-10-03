@@ -163,7 +163,9 @@ export function DialogFooterActions({
 }>) {
   return (
     <>
-      <Button variant="outline" onClick={onCancel}>
+      {/* Cancel is unavailable while the submit is in flight: it cannot be
+          recalled, and closing would hide its outcome (SCRUM-571 S1). */}
+      <Button variant="outline" onClick={onCancel} disabled={submitting}>
         {cancelLabel}
       </Button>
       <Button

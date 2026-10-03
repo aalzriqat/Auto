@@ -104,6 +104,149 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This request was recorded before the organization's financial data was reset and can no longer be replayed. Start a new operation.",
     "سُجّل هذا الطلب قبل إعادة ضبط البيانات المالية للمنشأة ولم يعد بالإمكان إعادة إرساله. يرجى بدء عملية جديدة.",
   ],
+  // SCRUM-571 S1. The English text must equal the server message in convex/paymentIntents.ts
+  // and convex/collections.ts respectively.
+  ServerError_PAYMENT_LINK_TARGET_REQUIRED: [
+    "A payment link must be created against a specific receivable, sale or receivable document. Nothing has been changed.",
+    "يجب إنشاء رابط الدفع مقابل ذمة أو عملية بيع أو مستند ذمة محدد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_EXCEEDS_OUTSTANDING: [
+    "The payment link amount cannot exceed what is still owed on this debt, less payment links already sent and not yet paid. Expiring an unpaid link frees its amount. Nothing has been changed.",
+    "لا يمكن أن يتجاوز مبلغ رابط الدفع ما تبقى مستحقاً على هذه الذمة بعد خصم روابط الدفع التي أُرسلت ولم تُسدَّد بعد. ويؤدي إنهاء صلاحية رابط غير مدفوع إلى تحرير مبلغه. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_NOT_FOUND: [
+    "This payment link could not be found. Nothing has been changed.",
+    "تعذّر العثور على رابط الدفع هذا. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_NOT_PENDING: [
+    "Only a payment link that is still waiting for payment can be expired. Nothing has been changed.",
+    "لا يمكن إنهاء صلاحية إلا رابط دفع ما زال بانتظار السداد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_AMOUNT_NOT_POSITIVE: [
+    "The payment link amount must be greater than zero. Nothing has been changed.",
+    "يجب أن يكون مبلغ رابط الدفع أكبر من صفر. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_PROVIDER_REQUIRED: [
+    "Choose a payment provider for the payment link. Nothing has been changed.",
+    "اختر مزوّد الدفع لرابط الدفع. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_CURRENCY_REQUIRED: [
+    "The payment link needs a currency. Nothing has been changed.",
+    "يحتاج رابط الدفع إلى عملة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_CHECKOUT_URL_INVALID: [
+    "The checkout URL is not a valid web address. Check it and try again. Nothing has been changed.",
+    "عنوان صفحة الدفع ليس عنوان ويب صالحاً. تحقق منه وأعد المحاولة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_CHECKOUT_URL_NOT_HTTPS: [
+    "The checkout URL must start with https://. Nothing has been changed.",
+    "يجب أن يبدأ عنوان صفحة الدفع بـ https://. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_EXTERNAL_ID_REQUIRED: [
+    "Enter the provider reference when a checkout URL is supplied. Nothing has been changed.",
+    "أدخل مرجع المزوّد عند إدخال عنوان صفحة الدفع. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_CUSTOMER_NOT_FOUND: [
+    "This customer could not be found. Nothing has been changed.",
+    "تعذّر العثور على هذا العميل. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_CUSTOMER_REMOVED: [
+    "This customer has been removed and can no longer be sent a payment link. Nothing has been changed.",
+    "تمت إزالة هذا العميل ولم يعد بالإمكان إرسال رابط دفع إليه. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_RECEIVABLE_NOT_FOUND: [
+    "This receivable could not be found. Nothing has been changed.",
+    "تعذّر العثور على هذه الذمة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_RECEIVABLE_CUSTOMER_MISMATCH: [
+    "This receivable belongs to a different customer. Nothing has been changed.",
+    "هذه الذمة تخص عميلاً آخر. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_RECEIVABLE_NO_DOCUMENT: [
+    "This receivable has no accounting document to collect against, so a payment link cannot be created for it. Nothing has been changed.",
+    "ليس لهذه الذمة مستند محاسبي يمكن التحصيل مقابله، لذا لا يمكن إنشاء رابط دفع لها. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_RECEIVABLE_DOCUMENT_MISMATCH: [
+    "The selected receivable document does not belong to the selected receivable. Nothing has been changed.",
+    "مستند الذمة المحدد لا يخص الذمة المحددة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_SALE_NOT_FOUND: [
+    "This sale could not be found. Nothing has been changed.",
+    "تعذّر العثور على عملية البيع هذه. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_SALE_CUSTOMER_MISMATCH: [
+    "This sale belongs to a different customer. Nothing has been changed.",
+    "عملية البيع هذه تخص عميلاً آخر. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_SALE_NO_DOCUMENT: [
+    "This sale has no accounting document to collect against yet. Nothing has been changed.",
+    "ليس لعملية البيع هذه مستند محاسبي يمكن التحصيل مقابله بعد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_SALE_DEBT_MISMATCH: [
+    "The selected sale does not match the selected debt. Choose a matching sale and debt. Nothing has been changed.",
+    "عملية البيع المحددة لا تطابق الذمة المحددة. اختر عملية بيع وذمة متطابقتين. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_DOCUMENT_NOT_FOUND: [
+    "This receivable document could not be found. Nothing has been changed.",
+    "تعذّر العثور على مستند الذمة هذا. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_DOCUMENT_PAYER_MISMATCH: [
+    "This receivable document belongs to a different payer than the selected customer. Nothing has been changed.",
+    "مستند الذمة هذا يخص جهة دافعة غير العميل المحدد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_DOCUMENT_CURRENCY_MISMATCH: [
+    "The payment link currency must match the currency of the debt. Nothing has been changed.",
+    "يجب أن تطابق عملة رابط الدفع عملة الذمة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_DEBT_CLOSED: [
+    "This debt can no longer accept payments. Nothing has been changed.",
+    "لم تعد هذه الذمة تقبل دفعات. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_EXCEEDS_RECEIVABLE: [
+    "The payment link amount cannot exceed what is still owed on this receivable. Nothing has been changed.",
+    "لا يمكن أن يتجاوز مبلغ رابط الدفع ما تبقى مستحقاً على هذه الذمة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_PROVIDER_ID_IN_USE: [
+    "A payment link with this provider reference already exists. Use a different reference. Nothing has been changed.",
+    "يوجد رابط دفع بهذا المرجع لدى المزوّد بالفعل. استخدم مرجعاً مختلفاً. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_NOT_SETTLEABLE: [
+    "Only a payment link that is still waiting for payment can be marked settled. Nothing has been changed.",
+    "لا يمكن تحديد رابط الدفع كمُسوّى إلا إذا كان ما زال بانتظار السداد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_PROVIDER_ID_MISMATCH: [
+    "The settlement ID does not match this payment link's provider reference. Check it and try again. Nothing has been changed.",
+    "معرّف التسوية لا يطابق مرجع المزوّد لرابط الدفع هذا. تحقق منه وأعد المحاولة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_PROVIDER_REFERENCE_UNAVAILABLE: [
+    "This provider reference is unavailable. Ask finance to review it. Nothing has been changed.",
+    "مرجع المزوّد هذا غير متاح. اطلب من قسم المالية مراجعته. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_SETTLEMENT_REQUIRES_REVIEW: [
+    "This payment must be reviewed before the link can be marked settled. Nothing has been changed.",
+    "يجب مراجعة هذه الدفعة قبل تحديد رابط الدفع كمُسوّى. لم يتم تغيير أي شيء.",
+  ],
+  // SCRUM-571 D-8 — resolving a held provider payment.
+  ServerError_UNMATCHED_FUNDS_NOT_FOUND: [
+    "This held payment could not be found. Nothing has been changed.",
+    "تعذّر العثور على هذه الدفعة المحتجزة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_UNMATCHED_FUNDS_ALREADY_RESOLVED: [
+    "This held payment has already been marked as resolved. Nothing has been changed.",
+    "تم إغلاق مراجعة هذه الدفعة المحتجزة مسبقاً. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_UNMATCHED_FUNDS_NOTE_REQUIRED: [
+    "Enter a note describing how this payment was handled. Nothing has been changed.",
+    "أدخل ملاحظة توضح كيف تم التعامل مع هذه الدفعة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_UNMATCHED_FUNDS_NOTE_TOO_LONG: [
+    "The note is too long. Shorten it to 1000 characters or fewer. Nothing has been changed.",
+    "الملاحظة طويلة جداً. اختصرها إلى 1000 حرف أو أقل. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_RECEIPT_MANUAL_REFUSED: [
+    "A payment-link receipt cannot be recorded manually. It is recorded automatically when the payment link is settled. Nothing has been changed.",
+    "لا يمكن تسجيل قبض رابط الدفع يدويًا، إذ يُسجَّل تلقائيًا عند تسوية رابط الدفع. لم يتم تغيير أي شيء.",
+  ],
   ServerError_ORG_FINANCIAL_RESET_IN_PROGRESS: [
     "This organization's financial reset has not finished. It cannot be returned to service until the reset completes.",
     "لم تكتمل إعادة ضبط البيانات المالية لهذه المنشأة. لا يمكن إعادتها إلى الخدمة قبل اكتمال إعادة الضبط.",
@@ -875,6 +1018,32 @@ export const commonEn = {
   ExternalSettlementId: "External settlement ID",
   PaymentLinkCreated: "Payment link recorded.",
   PaymentLinkSettled: "Payment link settled.",
+  ExpirePaymentLink: "Expire link",
+  ExpirePaymentLinkTitle: "Expire this payment link?",
+  ExpirePaymentLinkDescription:
+    "Expiring the payment link for {customer} ({amount}) frees its amount here so a new link can be issued. It does not deactivate the link at the payment provider: do that there too. If a payment still arrives on this link, it will be held for review, not applied to the debt.",
+  PaymentLinkExpired: "Payment link expired.",
+  HeldPaymentsTitle: "Payments held for review",
+  HeldPaymentsDesc:
+    "Payments the provider confirmed that were not applied to any debt. Nothing here has changed what a customer owes. Record the money through the normal receipt flow, expire the payment link if it is still awaiting payment, then mark the item resolved. A held payment's reference cannot be used to settle a payment link.",
+  HeldPaymentsRawMinor: "{amount} {currency} (smallest unit)",
+  HeldPaymentsLoading: "Loading held payments...",
+  HeldPaymentsEmpty: "No payments are being held for review.",
+  HeldPaymentsError: "Held payments could not be loaded. Refresh the page to try again.",
+  HeldPaymentsReason_UNKNOWN_REFERENCE: "Unknown payment reference",
+  HeldPaymentsReason_INTENT_NOT_PENDING: "Link was no longer awaiting payment",
+  HeldPaymentsReason_AMOUNT_OR_ACCOUNT_MISMATCH: "Amount, currency or account did not match",
+  HeldPaymentsReason_LIFECYCLE_REFUSED: "Organization is suspended or closing",
+  HeldPaymentsReceived: "Received",
+  HeldPaymentsDeliveries: "Deliveries",
+  HeldPaymentsConflict: "Amount differs between deliveries",
+  HeldPaymentsResolve: "Resolve",
+  HeldPaymentsResolved: "Resolved",
+  HeldPaymentsResolveTitle: "Resolve this held payment?",
+  HeldPaymentsResolveDescription:
+    "Record how this payment was handled. This does not move any money or change any balance: record the funds through the normal receipt flow first.",
+  HeldPaymentsNoteLabel: "How was it handled?",
+  HeldPaymentsResolvedToast: "Held payment marked as resolved.",
   LoadingPaymentLinks: "Loading payment links...",
   NoPaymentLinksFound: "No payment links found.",
   OpenCashDrawer: "Open Cash Drawer",
@@ -1832,6 +2001,32 @@ export const commonAr = {
   ExternalSettlementId: "معرف التسوية الخارجي",
   PaymentLinkCreated: "تم تسجيل رابط الدفع.",
   PaymentLinkSettled: "تمت تسوية رابط الدفع.",
+  ExpirePaymentLink: "إنهاء صلاحية الرابط",
+  ExpirePaymentLinkTitle: "هل تريد إنهاء صلاحية رابط الدفع هذا؟",
+  ExpirePaymentLinkDescription:
+    "إنهاء صلاحية رابط الدفع الخاص بـ {customer} ({amount}) يُحرّر مبلغه هنا لإصدار رابط جديد، لكنه لا يعطّل الرابط لدى مزوّد الدفع، لذا عطّله هناك أيضاً. وإذا وصلت دفعة عبر هذا الرابط رغم ذلك فستُحتجز للمراجعة ولن تُطبَّق على الدين.",
+  PaymentLinkExpired: "تم إنهاء صلاحية رابط الدفع.",
+  HeldPaymentsTitle: "دفعات محتجزة للمراجعة",
+  HeldPaymentsDesc:
+    "دفعات أكّدها مزوّد الدفع ولم تُطبَّق على أي دين. لم يتغير هنا أي مبلغ مستحق على العميل. سجّل المبلغ عبر مسار الإيصالات المعتاد، وأنهِ صلاحية رابط الدفع إن كان ما زال بانتظار السداد، ثم أغلق مراجعة البند. لا يمكن استخدام مرجع دفعة محتجزة لتسوية رابط دفع.",
+  HeldPaymentsRawMinor: "{amount} {currency} (أصغر وحدة)",
+  HeldPaymentsLoading: "جاري تحميل الدفعات المحتجزة...",
+  HeldPaymentsEmpty: "لا توجد دفعات محتجزة للمراجعة.",
+  HeldPaymentsError: "تعذّر تحميل الدفعات المحتجزة. حدّث الصفحة وحاول مجدداً.",
+  HeldPaymentsReason_UNKNOWN_REFERENCE: "مرجع دفع غير معروف",
+  HeldPaymentsReason_INTENT_NOT_PENDING: "الرابط لم يعد بانتظار الدفع",
+  HeldPaymentsReason_AMOUNT_OR_ACCOUNT_MISMATCH: "المبلغ أو العملة أو الحساب غير مطابق",
+  HeldPaymentsReason_LIFECYCLE_REFUSED: "المنشأة موقوفة أو قيد الإغلاق",
+  HeldPaymentsReceived: "وقت الاستلام",
+  HeldPaymentsDeliveries: "عدد مرات الوصول",
+  HeldPaymentsConflict: "المبلغ يختلف بين مرات الوصول",
+  HeldPaymentsResolve: "إغلاق المراجعة",
+  HeldPaymentsResolved: "تمت المراجعة",
+  HeldPaymentsResolveTitle: "هل تريد إغلاق مراجعة هذه الدفعة المحتجزة؟",
+  HeldPaymentsResolveDescription:
+    "سجّل كيف تم التعامل مع هذه الدفعة. هذا لا ينقل أي أموال ولا يغيّر أي رصيد: سجّل المبلغ أولاً عبر مسار الإيصالات المعتاد.",
+  HeldPaymentsNoteLabel: "كيف تم التعامل معها؟",
+  HeldPaymentsResolvedToast: "تم إغلاق مراجعة الدفعة المحتجزة.",
   LoadingPaymentLinks: "جاري تحميل روابط الدفع...",
   NoPaymentLinksFound: "لا توجد روابط دفع.",
   OpenCashDrawer: "فتح صندوق النقد",

@@ -275,10 +275,24 @@ describe("SCRUM-563 R5(b) — outbox dispatch honours the org lifecycle before p
 describe("SCRUM-563 R6.11 — a SETTLED payment intent after reset and reactivation creates nothing (pin; see SCRUM-565)", () => {
   test("settleByExternalId on the leftover SETTLED intent returns early with the ledger counts unchanged", async () => {
     const d = await seedDealer("pin");
+    // SCRUM-571 S1: an intent needs a target document (refused otherwise).
+    const receivableDocumentId = await d.asUser.mutation(internal.subledger.createReceivable, {
+      orgId: d.orgId,
+      documentType: "INVOICE",
+      payerType: "CUSTOMER",
+      customerId: d.customerId,
+      sourceType: "test_intent",
+      sourceId: "scrum563_pin_receivable",
+      originalAmountMinor: 1_000_000,
+      currency: "JOD",
+      issueDate: Date.now(),
+      dueDate: Date.now(),
+    });
     const intentId = await d.asUser.mutation(api.paymentIntents.create, {
       idempotencyKey: crypto.randomUUID(),
       orgId: d.orgId,
       customerId: d.customerId,
+      receivableDocumentId,
       amountMinor: 1_000_000,
       currency: "JOD",
       provider: "tap",

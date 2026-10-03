@@ -1868,7 +1868,7 @@ http.route({
 
       if (verification.value.kind === "settled") {
         const settlement = verification.value;
-        await ctx.runMutation(internal.paymentIntents.settleByExternalId, {
+        const outcome = await ctx.runMutation(internal.paymentIntents.settleByExternalId, {
           provider: settlement.provider,
           externalId: settlement.externalId,
           amountMinor: settlement.amountMinor,
@@ -1879,6 +1879,20 @@ http.route({
           ...(settlement.providerEventType ? { providerEventType: settlement.providerEventType } : {}),
           ...(settlement.providerAccountId ? { providerAccountId: settlement.providerAccountId } : {}),
         });
+        // SCRUM-571 D-8: 200 only for an outcome that is durable. SETTLED and
+        // ALREADY_SETTLED are a settlement; HELD names its unmatched-funds row.
+        // Anything else is not acknowledged: the throw is caught below and
+        // answered 500, so the provider retries.
+        switch (outcome.kind) {
+          case "SETTLED":
+          case "ALREADY_SETTLED":
+          case "HELD":
+            break;
+          default: {
+            const unexpected: never = outcome;
+            throw new Error(`[payment-webhook] unexpected settlement outcome: ${JSON.stringify(unexpected)}`);
+          }
+        }
       }
 
       return new Response(JSON.stringify({ ok: true }), {

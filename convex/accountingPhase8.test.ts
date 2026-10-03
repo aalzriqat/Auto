@@ -6,6 +6,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -121,11 +122,12 @@ describe("Phase 8 — sale cancellation reversal", () => {
       idempotencyKey: "cancel_sale_001",
     });
 
-    const beforeEvents = await t.run((ctx) =>
-      ctx.db.query("accountingEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "SALE_COMPLETED"))
-        .collect()
+    const beforeEvents = await t.run(async (ctx) =>
+      (
+        await ctx.db.query("accountingEvents")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
+      ).filter((e) => e.eventType === "SALE_COMPLETED")
     );
     expect(beforeEvents).toHaveLength(1);
     expect(beforeEvents[0].status).toBe("POSTED");
@@ -135,11 +137,12 @@ describe("Phase 8 — sale cancellation reversal", () => {
 
     await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
 
-    const reversalEvents = await t.run((ctx) =>
-      ctx.db.query("accountingEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "JOURNAL_REVERSAL"))
-        .collect()
+    const reversalEvents = await t.run(async (ctx) =>
+      (
+        await ctx.db.query("accountingEvents")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
+      ).filter((e) => e.eventType === "JOURNAL_REVERSAL")
     );
     expect(reversalEvents).toHaveLength(1);
 
@@ -306,12 +309,37 @@ describe("Phase 8 — sale cancellation reversal", () => {
 
 // ─── Payment intent settlement ────────────────────────────────────────────────
 
+// SCRUM-571 S1: an untargeted payment intent is refused, so every intent below
+// that is not about a specific receivable is aimed at a real canonical document.
+async function seedCustomerDocument(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  asUser: any,
+  orgId: Id<"organizations">,
+  customerId: Id<"customers">,
+  tag: string,
+  originalAmountMinor: number,
+): Promise<Id<"receivableDocuments">> {
+  return await asUser.mutation(internal.subledger.createReceivable, {
+    orgId,
+    documentType: "INVOICE",
+    payerType: "CUSTOMER",
+    customerId,
+    sourceType: "test_intent",
+    sourceId: `${tag}_receivable`,
+    originalAmountMinor,
+    currency: "JOD",
+    issueDate: Date.now(),
+    dueDate: Date.now(),
+  });
+}
+
 describe("Phase 8 — payment intent settlement", () => {
   test("creates a payment intent and settles it posting GL entry", async () => {
     const { t, orgId, asUser, customerId } = await seedDealer("pi1");
+    const receivableDocumentId = await seedCustomerDocument(asUser, orgId, customerId, "pi1", 5000_000);
 
     const intentId = await asUser.mutation(api.paymentIntents.create, {
-      orgId, customerId,
+      orgId, customerId, receivableDocumentId,
       amountMinor: 5000_000, currency: "JOD", provider: "tap",
       idempotencyKey: "pi_tap_001",
     });
@@ -337,11 +365,12 @@ describe("Phase 8 — payment intent settlement", () => {
     expect(canonicalPayment?.provider).toBe("tap");
     expect(canonicalPayment?.providerTransactionId).toBe("tap_charge_abc123");
 
-    const glEvents = await t.run((ctx) =>
-      ctx.db.query("accountingEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "PAYMENT_LINK_RECEIVED"))
-        .collect()
+    const glEvents = await t.run(async (ctx) =>
+      (
+        await ctx.db.query("accountingEvents")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
+      ).filter((e) => e.eventType === "PAYMENT_LINK_RECEIVED")
     );
     expect(glEvents).toHaveLength(1);
     expect(glEvents[0].status).toBe("POSTED");
@@ -349,9 +378,10 @@ describe("Phase 8 — payment intent settlement", () => {
 
   test("internal settleByExternalId idempotent on duplicate webhook", async () => {
     const { t, orgId, asUser, customerId } = await seedDealer("pi2");
+    const receivableDocumentId = await seedCustomerDocument(asUser, orgId, customerId, "pi2", 1000_000);
 
     const intentId = await asUser.mutation(api.paymentIntents.create, {
-      orgId, customerId, amountMinor: 1000_000, currency: "JOD", provider: "stripe",
+      orgId, customerId, receivableDocumentId, amountMinor: 1000_000, currency: "JOD", provider: "stripe",
       externalId: "stripe_pi_abc",
       checkoutUrl: "https://checkout.stripe.com/c/pay/stripe_pi_abc",
       providerAccountId: "acct_phase8",
@@ -383,21 +413,24 @@ describe("Phase 8 — payment intent settlement", () => {
     expect(settled?.providerAmountMinor).toBe(1000_000);
     expect(settled?.providerCurrency).toBe("JOD");
 
-    const glEvents = await t.run((ctx) =>
-      ctx.db.query("accountingEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "PAYMENT_LINK_RECEIVED"))
-        .collect()
+    const glEvents = await t.run(async (ctx) =>
+      (
+        await ctx.db.query("accountingEvents")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
+      ).filter((e) => e.eventType === "PAYMENT_LINK_RECEIVED")
     );
     expect(glEvents).toHaveLength(1);
   });
 
   test("internal settleByExternalId rejects signed provider money mismatch before posting", async () => {
     const { t, orgId, asUser, customerId } = await seedDealer("pi_mismatch");
+    const receivableDocumentId = await seedCustomerDocument(asUser, orgId, customerId, "pi_mismatch", 1000_000);
 
     const intentId = await asUser.mutation(api.paymentIntents.create, {
       orgId,
       customerId,
+      receivableDocumentId,
       amountMinor: 1000_000,
       currency: "JOD",
       provider: "tap",
@@ -417,18 +450,19 @@ describe("Phase 8 — payment intent settlement", () => {
       providerEventType: "tap.charge.CAPTURED",
       providerAccountId: "merchant_123",
     });
-    expect(result).toBeNull();
+    expect(result).toMatchObject({ kind: "HELD" });
 
     const failed = await t.run((ctx) => ctx.db.get(intentId));
     expect(failed?.status).toBe("FAILED");
     expect(failed?.providerAmountMinor).toBe(999_000);
     expect(failed?.canonicalPaymentId).toBeUndefined();
 
-    const glEvents = await t.run((ctx) =>
-      ctx.db.query("accountingEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "PAYMENT_LINK_RECEIVED"))
-        .collect()
+    const glEvents = await t.run(async (ctx) =>
+      (
+        await ctx.db.query("accountingEvents")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
+      ).filter((e) => e.eventType === "PAYMENT_LINK_RECEIVED")
     );
     expect(glEvents).toHaveLength(0);
   });
@@ -564,9 +598,10 @@ describe("Phase 8 — payment intent settlement", () => {
 
   test("expiring a pending intent marks it EXPIRED without posting GL", async () => {
     const { t, orgId, asUser, customerId } = await seedDealer("pi3");
+    const receivableDocumentId = await seedCustomerDocument(asUser, orgId, customerId, "pi3", 500_000);
 
     const intentId = await asUser.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
-      orgId, customerId, amountMinor: 500_000, currency: "JOD", provider: "telr",
+      orgId, customerId, receivableDocumentId, amountMinor: 500_000, currency: "JOD", provider: "telr",
     });
 
     await asUser.mutation(api.paymentIntents.expire, { orgId, intentId });
