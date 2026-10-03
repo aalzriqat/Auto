@@ -3,6 +3,7 @@ import { query, MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id, TableNames } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
+import { filter } from "convex-helpers/server/filter";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
@@ -35,6 +36,7 @@ import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
 import { classifySaleTimeCredits, customerBilledLinesMinor, sumBilledLinesMinor, completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
+import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment";
 import { planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -113,20 +115,23 @@ export const list = query({
 
     let pageResult;
 
+    // `filter` (convex-helpers) keeps the paginate-until-the-page-is-full
+    // semantics of the query-level filter it replaces, without the field
+    // expression the lint rule refuses.
     if (args.salespersonId) {
-      pageResult = await ctx.db
-        .query("sales")
-        .withIndex("by_org_salesperson", (q) =>
-          q.eq("orgId", args.orgId).eq("salespersonId", args.salespersonId!)
-        )
-        .filter((q) => q.neq(q.field("isDeleted"), true))
-        .paginate(args.paginationOpts);
+      pageResult = await filter(
+        ctx.db
+          .query("sales")
+          .withIndex("by_org_salesperson", (q) =>
+            q.eq("orgId", args.orgId).eq("salespersonId", args.salespersonId!)
+          ),
+        (sale) => sale.isDeleted !== true
+      ).paginate(args.paginationOpts);
     } else {
-      pageResult = await ctx.db
-        .query("sales")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .filter((q) => q.neq(q.field("isDeleted"), true))
-        .paginate(args.paginationOpts);
+      pageResult = await filter(
+        ctx.db.query("sales").withIndex("by_org", (q) => q.eq("orgId", args.orgId)),
+        (sale) => sale.isDeleted !== true
+      ).paginate(args.paginationOpts);
     }
 
     const page = await Promise.all(
@@ -153,7 +158,7 @@ export const list = query({
         };
       })
     );
-    
+
     return { ...pageResult, page };
   },
 });
@@ -1158,6 +1163,11 @@ export const update = mutation({
           actorId: user._id,
           reversalDate: cancellationDate,
         });
+      } else {
+        // SCRUM-571 S1 T2: a PENDING draft leaves no operational records to
+        // reverse, but it is still an exit of the sale, so it refuses while any
+        // sale-linked legacy receivable exists. Before the status patch below.
+        await assertNoSaleLinkedLegacyReceivable(ctx, args.orgId, args.saleId);
       }
     }
 
@@ -1219,6 +1229,10 @@ export const softDelete = mutation({
     if (sale.status === "COMPLETED") {
       throwAppError(AppErrorCode.SALE_ALREADY_COMPLETED, "Cannot delete a completed sale. Cancel it first.");
     }
+
+    // SCRUM-571 S1 T2: deleting a sale is an exit of it, so it refuses while any
+    // sale-linked legacy receivable exists. Before the soft-delete patch.
+    await assertNoSaleLinkedLegacyReceivable(ctx, args.orgId, args.saleId);
 
     await ctx.db.patch(args.saleId, {
       isDeleted: true,
@@ -1495,19 +1509,22 @@ export const listCommissions = query({
     // answer — and a shipped bundle has no cursor to look past it. A slow
     // response is what these clients already had; a silently incomplete one is
     // new, invisible, and unfixable from their side.
-    const sales = salespersonId
+    //
+    // The deleted-row exclusion runs over the collected rows rather than as a
+    // query-level field filter: the same rows are read either way, so the
+    // result is identical.
+    const indexed = salespersonId
       ? await ctx.db
           .query("sales")
           .withIndex("by_org_salesperson", (q) =>
             q.eq("orgId", args.orgId).eq("salespersonId", salespersonId)
           )
-          .filter((q) => q.neq(q.field("isDeleted"), true))
           .collect()
       : await ctx.db
           .query("sales")
           .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-          .filter((q) => q.neq(q.field("isDeleted"), true))
           .collect();
+    const sales = indexed.filter((sale) => sale.isDeleted !== true);
 
     const orgSettings = await ctx.db
       .query("orgSettings")
