@@ -36,7 +36,10 @@
  *   6  COVERAGE GAP     a client file that calls Convex was never scanned, so
  *                       the control cannot answer for it at all
  *   7  PRODUCTION SKEW  proven break against the DEPLOYED backend. The ONLY
- *                       code that may carry a deploy instruction.
+ *                       code that may carry a deploy instruction — and only
+ *                       when the spec was FETCHED. A `--spec` file is not known
+ *                       to be production: same code, "CONTRACT SKEW against the
+ *                       supplied spec", no deploy instruction (skewWording.mjs).
  *   8  RELEASE BREAK    release-mode: shipping this candidate WOULD introduce a
  *                       skew. A decision still available to us — deploying the
  *                       backend is not the remedy, so it is not code 7.
@@ -76,6 +79,7 @@ import { createClientProgram, extractClientCalls } from "./clientPaths.mjs";
 import { runCensus } from "./census.mjs";
 import { evaluateBaseline, loadBaseline, unprovenFrom } from "./baseline.mjs";
 import { specProblems } from "./specIndex.mjs";
+import { skewSummary, SUPPLIED_FILE_RUNG } from "./skewWording.mjs";
 import { compareContracts, blockersForRelease } from "./compare.mjs";
 import { CLIENT_SURFACES, listSurfaceFiles, unscannedConvexClients } from "./clientFiles.mjs";
 import { fetchDeployedSpec, isDeploymentName, readSpecFile, redact } from "./fetchSpec.mjs";
@@ -448,7 +452,8 @@ const alert = alertsFor(
   classification,
   coverageWarning,
   result.needsEvidence?.length ?? 0,
-  result.coverage.clientCallSitesUnresolved
+  result.coverage.clientCallSitesUnresolved,
+  deployed.rung === SUPPLIED_FILE_RUNG ? "CONTRACT SKEW" : "PRODUCTION SKEW"
 );
 
 const report = {
@@ -617,10 +622,16 @@ if (alert.productionSkew) {
       `::error file=${f.file},line=${f.line}::[${f.classification}] ${f.identifier} ${f.path} — ${f.detail} [${f.dimension}]`
     );
   }
+  // The wording claims only what the spec's origin proves (see skewWording.mjs).
+  const suppliedSpec = strArg("spec");
   console.error(
-    `::error::PRODUCTION SKEW — ${classification.revisionSkew.length} proven, ` +
-      `${classification.unclassified.length} unclassified. Deploy the Convex backend at this commit. ` +
-      `Basis: ${classification.basis}`
+    `::error::${skewSummary({
+      rung: String(deployed.rung),
+      specSource: [suppliedSpec, deployed.url].filter(Boolean).join(", "),
+      proven: classification.revisionSkew.length,
+      unclassified: classification.unclassified.length,
+      basis: classification.basis ?? "none",
+    })}`
   );
   process.exit(EXIT.PRODUCTION_SKEW);
 }

@@ -150,14 +150,16 @@ export function classifyBreaking(breaking, evidence = {}) {
  * @param {boolean} coverageWarning
  * @param {number} needsEvidenceCount
  * @param {number} unresolvedCount
+ * @param {string} [skewLabel] "PRODUCTION SKEW" only when the spec is known to be
+ *   production; a supplied spec file passes "CONTRACT SKEW" (see skewWording.mjs).
  */
-export function alertsFor(classification, coverageWarning, needsEvidenceCount, unresolvedCount) {
+export function alertsFor(classification, coverageWarning, needsEvidenceCount, unresolvedCount, skewLabel = "PRODUCTION SKEW") {
   const skewCount = classification.revisionSkew.length + classification.unclassified.length;
   const standingCount = classification.standingDefects.length;
 
   const parts = [];
   if (classification.revisionSkew.length) {
-    parts.push(`PRODUCTION SKEW: ${classification.revisionSkew.length} path(s) where the deployed backend is behind the current one`);
+    parts.push(`${skewLabel}: ${classification.revisionSkew.length} path(s) where the deployed backend is behind the current one`);
   }
   if (classification.unclassified.length) {
     parts.push(`${classification.unclassified.length} incompatibility(ies) could not be classified — treated as skew`);

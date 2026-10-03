@@ -206,13 +206,14 @@ describe("exit-code table: one subprocess test per row", () => {
     expect(production(dir).code).toBe(6);
   }, 300_000);
 
-  test("7 PRODUCTION SKEW — proven break the current backend would accept: the only deploy instruction", () => {
+  test("7 SKEW (supplied spec) — exits 7 with target-neutral wording and NO deploy instruction", () => {
     const deployed = specOf(mutation("vehicles.js:update", { orgId: required(str) }));
     const current = specOf(mutation("vehicles.js:update", { orgId: required(str), nope: required(str) }));
     const dir = scaffold({ client: SENDS_NOPE, spec: deployed, current });
     const r = production(dir, ["--current", "current.json"]);
     expect(r.code).toBe(7);
-    expect(r.all).toMatch(/Deploy the Convex backend/);
+    expect(r.all).toMatch(/CONTRACT SKEW against the supplied spec \(spec\.json/);
+    expect(r.all).not.toMatch(/Deploy the Convex backend|PRODUCTION SKEW/);
   }, 300_000);
 
   test("8 RELEASE BREAK — release: the candidate introduces a proven incompatibility", () => {
