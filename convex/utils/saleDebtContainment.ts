@@ -28,7 +28,7 @@ export const SALE_DEBT_CONTAINMENT_REFUSALS = {
   SALE_HAS_LEGACY_RECEIVABLE:
     "This sale still has a separate receivable record that must be resolved before the sale can be completed or cancelled. Contact support. Nothing has been changed.",
   SALE_DEBT_RECEIPT_REFUSED:
-    "Payments, credits and cheques for a sale cannot be recorded against a separate receivable. Record them against the sale invoice. Nothing has been changed.",
+    "Payments, credits and cheques for a sale cannot be recorded against a separate receivable. Nothing has been changed.",
   PAYMENT_LINKS_DISABLED: "Payment links are not available yet. Nothing has been changed.",
 } as const satisfies Record<string, string>;
 

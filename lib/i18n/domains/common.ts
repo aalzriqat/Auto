@@ -257,8 +257,8 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "لا يزال لهذه العملية سجل ذمة مدينة منفصل يجب معالجته قبل إتمام البيع أو إلغائه. تواصل مع الدعم. لم يتم تغيير أي شيء.",
   ],
   ServerError_SALE_DEBT_RECEIPT_REFUSED: [
-    "Payments, credits and cheques for a sale cannot be recorded against a separate receivable. Record them against the sale invoice. Nothing has been changed.",
-    "لا يمكن تسجيل الدفعات أو الأرصدة أو الشيكات الخاصة بعملية بيع على ذمة مدينة منفصلة. سجّلها على فاتورة البيع. لم يتم تغيير أي شيء.",
+    "Payments, credits and cheques for a sale cannot be recorded against a separate receivable. Nothing has been changed.",
+    "لا يمكن تسجيل الدفعات أو الأرصدة الدائنة أو الشيكات الخاصة بعملية بيع على ذمة مدينة منفصلة. لم يتم تغيير أي شيء.",
   ],
   ServerError_PAYMENT_LINKS_DISABLED: [
     "Payment links are not available yet. Nothing has been changed.",
