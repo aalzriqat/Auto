@@ -1,9 +1,11 @@
 /**
- * SCRUM-571 S1 (Codex N1) — sales.list must not return an empty first page while
- * live sales exist. The old convex-helpers `filter(...).paginate()` filtered AFTER
- * the page was fetched, so a first page made only of soft-deleted sales came back
- * empty (with isDone false), which a `usePaginatedQuery` caller reads as "no
- * sales". The stream-based form filters BEFORE the page is cut.
+ * SCRUM-571 S1 — sales.list must not return an empty first page while live sales
+ * exist. The current implementation is a native `.paginate()` over the
+ * `by_org_deleted` / `by_org_salesperson_deleted` indexes with
+ * `.lt("isDeleted", true)` (D-23 Q2), so soft-deleted rows are excluded by the
+ * index range BEFORE the page is cut. History: Codex N1 found that the earlier
+ * convex-helpers `filter(...).paginate()` filtered after the page was fetched
+ * and could return an empty first page with isDone false.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
@@ -193,7 +195,7 @@ describe("sales.list — native isDeleted-index pagination (D-23 Q2)", () => {
     expect(seen).toEqual([unsetA, unsetB, explicitFalse]);
   });
 
-  test("cursor transition: a cursor from the OLD by_org shape presented to the new list", async () => {
+  test("cursor transition (characterises convex-test only, NOT platform behaviour): a native by_org cursor presented to the new list", async () => {
     const w = await makeWorld();
     for (let i = 0; i < 5; i++) await addSale(w);
     const oldPage = await w.t.run((ctx) =>
@@ -211,11 +213,33 @@ describe("sales.list — native isDeleted-index pagination (D-23 Q2)", () => {
     } catch (e) {
       outcome = { kind: "threw", message: String((e as Error)?.message ?? e) };
     }
-    // OBSERVED under convex-test (not the real platform): no throw and no
-    // InvalidCursor reset; the foreign cursor yields an EMPTY page marked
-    // isDone, i.e. silent truncation of the list. convex-test does not prove
-    // the real backend's behaviour, so D-23 requires a preview-platform check
-    // before production deploy (fallback: a new query identity).
+    // The cursor here is a native `by_org` cursor. Production's old cursor is
+    // native `by_org` + the isDeleted filter (the convex-helpers stream form
+    // never shipped). convex-test does not fingerprint cursors, so this
+    // asserts a harness artefact (empty page, isDone), not platform behaviour.
+    // On the real platform a different index/filter changes the query
+    // fingerprint and raises InvalidCursor, which usePaginatedQuery turns into
+    // a client reset; that is accepted on platform-source + client-source
+    // evidence per D-23a.
     expect(outcome).toEqual({ kind: "returned", page: [], isDone: true, splitCursor: null, pageStatus: null });
+  });
+
+  test("endCursor pins the page end: a re-run with endCursor ignores sales added after page 1", async () => {
+    const w = await makeWorld();
+    for (let i = 0; i < 5; i++) await addSale(w);
+    const page1 = await list(w, 2);
+    expect(page1.page).toHaveLength(2);
+    await addSale(w);
+
+    // numItems is larger than the pinned range, so only endCursor can bound it.
+    const pinned = await w.asUser.query(api.sales.list, {
+      orgId: w.orgId,
+      paginationOpts: { numItems: 10, cursor: null, endCursor: page1.continueCursor },
+    });
+    expect(ids(pinned)).toEqual(ids(page1));
+
+    // Control: without endCursor the same call returns all 6 live sales.
+    const unpinned = await list(w, 10);
+    expect(unpinned.page).toHaveLength(6);
   });
 });

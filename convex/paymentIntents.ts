@@ -250,6 +250,8 @@ async function markIntentCaptureHeld(
   const [current, row] = await Promise.all([ctx.db.get(intentId), ctx.db.get(heldId)]);
   if (!current || !row || !CAPTURE_HELD_FROM.has(current.status)) return;
   // Strict: a row with no orgId or no intentId proves nothing about this intent.
+  // Relies on the held row carrying orgId+intentId (holdForIntent inserts both); any future door
+  // that sets an intent's provider externalId must keep the quarantine refusals in `create` and `markSettled`.
   if (row.orgId !== current.orgId || row.intentId !== current._id) {
     console.error(`[paymentIntents] Held capture ${heldId} does not belong to intent ${intentId}; not linked`);
     return;
