@@ -199,6 +199,8 @@ describe("PaymentLinksPanel: Payments held for review (SCRUM-571 D-8)", () => {
     render(<PaymentLinksPanel />);
     expect(screen.getByText("HeldPaymentsTitle")).toBeTruthy();
     expect(screen.getByText("HeldPaymentsEmpty")).toBeTruthy();
+    // The empty state is a row of the table, so the column headers show too.
+    expect(screen.getByRole("columnheader", { name: "HeldPaymentsReceived" })).toBeTruthy();
   });
 
   test("shows an error state instead of crashing the panel when the query fails", () => {
@@ -233,7 +235,7 @@ describe("PaymentLinksPanel: Payments held for review (SCRUM-571 D-8)", () => {
     expect(screen.getByText("HeldPaymentsResolved")).toBeTruthy();
   });
 
-  test("Resolve requires a note, then submits it trimmed", async () => {
+  test("Resolve requires a note, then submits it as typed (the server trims)", async () => {
     const resolve = vi.fn().mockResolvedValue(null);
     stubs.mutations.set("paymentIntents:resolveUnmatchedProviderFunds", resolve);
     stubs.held = [held({})];
@@ -250,8 +252,9 @@ describe("PaymentLinksPanel: Payments held for review (SCRUM-571 D-8)", () => {
     expect(confirm.disabled).toBe(false);
 
     fireEvent.click(confirm);
+    // Sent as typed: the server trims and validates the note.
     await waitFor(() =>
-      expect(resolve).toHaveBeenCalledWith({ orgId: "org1", id: "uf1", note: "Refunded through the bank" })
+      expect(resolve).toHaveBeenCalledWith({ orgId: "org1", id: "uf1", note: "  Refunded through the bank  " })
     );
     const { toast } = await import("@/components/ui/sonner");
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith("HeldPaymentsResolvedToast"));
@@ -274,4 +277,73 @@ describe("PaymentLinksPanel: Payments held for review (SCRUM-571 D-8)", () => {
     finish(null);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
+});
+
+// Cancel is only one way out of a dialog. Escape and a click outside go through
+// the primitive's own dismissal, so the in-flight guard has to cover them too.
+describe("PaymentLinksPanel: a dialog cannot be dismissed while its command is in flight", () => {
+  const press = (key: string) => fireEvent.keyDown(document.activeElement ?? document.body, { key });
+  const clickOutside = () => {
+    fireEvent.pointerDown(document.body);
+    fireEvent.mouseDown(document.body);
+    fireEvent.click(document.body);
+  };
+  const routes = [
+    ["Escape", () => press("Escape")],
+    ["an outside click", clickOutside],
+  ] as const;
+
+  type Opener = { mutation: string; open: () => Promise<HTMLElement>; confirmName: string };
+  const openers: Record<string, Opener> = {
+    Expire: {
+      mutation: "paymentIntents:expire",
+      confirmName: "ExpirePaymentLink",
+      open: async () => {
+        stubs.rows = [intent({})];
+        render(<PaymentLinksPanel />);
+        fireEvent.click(screen.getByRole("button", { name: "ExpirePaymentLink" }));
+        return await screen.findByRole("dialog");
+      },
+    },
+    Resolve: {
+      mutation: "paymentIntents:resolveUnmatchedProviderFunds",
+      confirmName: "HeldPaymentsResolve",
+      open: async () => {
+        stubs.held = [held({})];
+        render(<PaymentLinksPanel />);
+        fireEvent.click(screen.getByRole("button", { name: "HeldPaymentsResolve" }));
+        const dialog = await screen.findByRole("dialog");
+        fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "done" } });
+        return dialog;
+      },
+    },
+  };
+
+  for (const [name, opener] of Object.entries(openers)) {
+    for (const [route, dismiss] of routes) {
+      test(`${name}: ${route} does not close it mid-submit, and does once the submit is refused`, async () => {
+        let fail: (reason: unknown) => void = () => {};
+        const mutation = vi.fn().mockReturnValue(new Promise((_resolve, reject) => (fail = reject)));
+        stubs.mutations.set(opener.mutation, mutation);
+        const dialog = await opener.open();
+
+        fireEvent.click(within(dialog).getByRole("button", { name: opener.confirmName }));
+        await waitFor(() => expect(mutation).toHaveBeenCalled());
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        dismiss();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(screen.queryByRole("dialog")).not.toBeNull();
+
+        // A refusal keeps the dialog open with the failure shown; the close
+        // routes are available again.
+        fail(new Error("nope"));
+        await waitFor(() =>
+          expect((within(dialog).getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(false)
+        );
+        dismiss();
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      });
+    }
+  }
 });

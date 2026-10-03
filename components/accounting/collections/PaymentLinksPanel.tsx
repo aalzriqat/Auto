@@ -1,6 +1,6 @@
 "use client";
 
-import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Component, memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { ExternalLink, Plus } from "lucide-react";
 import { api } from "@/convex/_generated/api";
@@ -17,7 +17,15 @@ import { toast } from "@/components/ui/sonner";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
-import { DialogFooterActions, scaleForCurrency, useAccountingSubmit } from "../AccountingTabShared";
+import { busyCloseGuard } from "@/components/ui/busyCloseGuard";
+import {
+  AccountingEmptyRow,
+  AccountingTableFrame,
+  DialogFooterActions,
+  LoadingAccountingState,
+  scaleForCurrency,
+  useAccountingSubmit,
+} from "../AccountingTabShared";
 
 type ReceivableRow = Doc<"receivables"> & {
   customerName: string;
@@ -28,7 +36,24 @@ type PaymentIntentRow = Doc<"paymentIntents"> & {
   customerName: string | null;
 };
 
-type HeldPaymentRow = Doc<"unmatchedProviderFunds">;
+// The columns `listUnmatchedProviderFunds` returns: only what the panel shows.
+type HeldPaymentRow = Pick<
+  Doc<"unmatchedProviderFunds">,
+  | "_id"
+  | "amountMinor"
+  | "currency"
+  | "provider"
+  | "externalId"
+  | "reason"
+  | "intentStatusAtReceipt"
+  | "deliveryCount"
+  | "amountConflict"
+  | "reviewStatus"
+  | "lastReceivedAt"
+  | "firstReceivedAt"
+  | "resolvedAt"
+  | "resolutionNote"
+>;
 
 function intentStatusClass(status: PaymentIntentRow["status"]) {
   if (status === "SETTLED") return "text-emerald-700 dark:text-emerald-300";
@@ -41,8 +66,8 @@ function intentStatusClass(status: PaymentIntentRow["status"]) {
 // shown, while formatMinorAmount would switch to the intent's own currency.
 function useIntentAmount() {
   const formatCurrency = useCurrencyFormatter();
-  return (intent: PaymentIntentRow) =>
-    formatCurrency(intent.amountMinor / Math.pow(10, scaleForCurrency(intent.currency)));
+  return ({ amountMinor, currency }: Readonly<{ amountMinor: number; currency: string }>) =>
+    formatCurrency(amountMinor / Math.pow(10, scaleForCurrency(currency)));
 }
 
 export function PaymentLinksPanel() {
@@ -125,9 +150,7 @@ export function PaymentLinksPanel() {
       <CreatePaymentLinkDialog open={createOpen} onOpenChange={setCreateOpen} />
       <SettlePaymentLinkDialog intent={settleIntent} onOpenChange={(open) => !open && setSettleIntent(null)} />
       <ExpirePaymentLinkDialog intent={expireIntent} onOpenChange={(open) => !open && setExpireIntent(null)} />
-      <HeldPaymentsErrorBoundary fallback={<HeldPaymentsSectionShell state="error" />}>
-        <HeldPaymentsSection orgId={activeOrgId} />
-      </HeldPaymentsErrorBoundary>
+      <HeldPaymentsSection orgId={activeOrgId} />
     </div>
   );
 }
@@ -140,15 +163,20 @@ class HeldPaymentsErrorBoundary extends Component<{ children: ReactNode; fallbac
   static getDerivedStateFromError() {
     return { failed: true };
   }
+  componentDidCatch(error: unknown) {
+    console.error(error);
+  }
   render() {
     return this.state.failed ? this.props.fallback : this.props.children;
   }
 }
 
-function HeldPaymentsSectionShell({ state, children }: Readonly<{ state: "loading" | "empty" | "error" | "rows"; children?: ReactNode }>) {
+// `orgId` is the only prop and is stable, so the section re-renders only when
+// its own state (the row being resolved) changes.
+const HeldPaymentsSection = memo(function HeldPaymentsSection({ orgId }: Readonly<{ orgId: Id<"organizations"> }>) {
   const { t } = useLanguage();
-  const message =
-    state === "loading" ? t("HeldPaymentsLoading" as any) : state === "empty" ? t("HeldPaymentsEmpty" as any) : state === "error" ? t("HeldPaymentsError" as any) : null;
+  const [resolving, setResolving] = useState<HeldPaymentRow | null>(null);
+
   return (
     <section className="space-y-2 pt-2" aria-labelledby="held-payments-title">
       <div>
@@ -157,46 +185,52 @@ function HeldPaymentsSectionShell({ state, children }: Readonly<{ state: "loadin
         </h3>
         <p className="text-sm text-muted-foreground">{t("HeldPaymentsDesc" as any)}</p>
       </div>
-      {message ? (
-        <div
-          role={state === "error" ? "alert" : undefined}
-          className={`rounded-md border border-border px-4 py-6 text-center text-sm ${state === "error" ? "text-rose-700 dark:text-rose-300" : "text-muted-foreground"}`}
-        >
-          {message}
-        </div>
-      ) : (
-        children
-      )}
+      {/* Only the query and its table sit inside the boundary: a render error
+          in the Resolve dialog must not be reported as "could not load". */}
+      <HeldPaymentsErrorBoundary
+        fallback={
+          <div role="alert" className="rounded-md border border-border px-4 py-6 text-center text-sm text-rose-700 dark:text-rose-300">
+            {t("HeldPaymentsError" as any)}
+          </div>
+        }
+      >
+        <HeldPaymentsTable orgId={orgId} onResolve={setResolving} />
+      </HeldPaymentsErrorBoundary>
+      <ResolveHeldPaymentDialog row={resolving} onOpenChange={(open) => !open && setResolving(null)} />
     </section>
   );
-}
+});
 
-function HeldPaymentsSection({ orgId }: Readonly<{ orgId: Id<"organizations"> }>) {
+function HeldPaymentsTable({ orgId, onResolve }: Readonly<{ orgId: Id<"organizations">; onResolve: (row: HeldPaymentRow) => void }>) {
   const { t, locale } = useLanguage();
-  const formatCurrency = useCurrencyFormatter();
+  const heldAmount = useIntentAmount();
+  const received = useMemo(
+    () => new Intl.DateTimeFormat(locale === "ar" ? "ar" : "en-US", { dateStyle: "short", timeStyle: "short" }),
+    [locale]
+  );
   const held = useQuery(api.paymentIntents.listUnmatchedProviderFunds, { orgId });
-  const [resolving, setResolving] = useState<HeldPaymentRow | null>(null);
 
-  if (held === undefined) return <HeldPaymentsSectionShell state="loading" />;
-  if (held.length === 0) return <HeldPaymentsSectionShell state="empty" />;
+  if (held === undefined) return <LoadingAccountingState label={t("HeldPaymentsLoading" as any)} />;
 
   return (
-    <HeldPaymentsSectionShell state="rows">
-      <div className="rounded-md border border-border overflow-x-auto">
-        <Table>
-          <TableHeader className="bg-muted/50">
-            <TableRow>
-              <TableHead>{t("PaymentProvider" as any)}</TableHead>
-              <TableHead>{t("Reference" as any)}</TableHead>
-              <TableHead>{t("Status" as any)}</TableHead>
-              <TableHead>{t("HeldPaymentsReceived" as any)}</TableHead>
-              <TableHead>{t("HeldPaymentsDeliveries" as any)}</TableHead>
-              <TableHead className="text-end">{t("Amount" as any)}</TableHead>
-              <TableHead className="text-end">{t("Actions" as any)}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {held.map((row: HeldPaymentRow) => (
+    <AccountingTableFrame>
+      <Table>
+        <TableHeader className="bg-muted/50">
+          <TableRow>
+            <TableHead>{t("PaymentProvider" as any)}</TableHead>
+            <TableHead>{t("Reference" as any)}</TableHead>
+            <TableHead>{t("Status" as any)}</TableHead>
+            <TableHead>{t("HeldPaymentsReceived" as any)}</TableHead>
+            <TableHead>{t("HeldPaymentsDeliveries" as any)}</TableHead>
+            <TableHead className="text-end">{t("Amount" as any)}</TableHead>
+            <TableHead className="text-end">{t("Actions" as any)}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {held.length === 0 ? (
+            <AccountingEmptyRow colSpan={7} label={t("HeldPaymentsEmpty" as any)} />
+          ) : (
+            held.map((row: HeldPaymentRow) => (
               <TableRow key={row._id}>
                 <TableCell className="uppercase">{row.provider}</TableCell>
                 <TableCell className="text-muted-foreground">{row.externalId}</TableCell>
@@ -208,14 +242,12 @@ function HeldPaymentsSection({ orgId }: Readonly<{ orgId: Id<"organizations"> }>
                     </span>
                   )}
                 </TableCell>
-                <TableCell className="text-muted-foreground">{new Date(row.lastReceivedAt).toLocaleString(locale)}</TableCell>
+                <TableCell className="text-muted-foreground">{received.format(row.lastReceivedAt)}</TableCell>
                 <TableCell>{row.deliveryCount}</TableCell>
-                <TableCell className="text-end font-semibold">
-                  {formatCurrency(row.amountMinor / Math.pow(10, scaleForCurrency(row.currency)))}
-                </TableCell>
+                <TableCell className="text-end font-semibold">{heldAmount(row)}</TableCell>
                 <TableCell className="text-end">
                   {row.reviewStatus === "OPEN" ? (
-                    <Button size="sm" variant="outline" onClick={() => setResolving(row)}>
+                    <Button size="sm" variant="outline" onClick={() => onResolve(row)}>
                       {t("HeldPaymentsResolve" as any)}
                     </Button>
                   ) : (
@@ -223,12 +255,11 @@ function HeldPaymentsSection({ orgId }: Readonly<{ orgId: Id<"organizations"> }>
                   )}
                 </TableCell>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-      <ResolveHeldPaymentDialog row={resolving} onOpenChange={(open) => !open && setResolving(null)} />
-    </HeldPaymentsSectionShell>
+            ))
+          )}
+        </TableBody>
+      </Table>
+    </AccountingTableFrame>
   );
 }
 
@@ -239,22 +270,26 @@ function ResolveHeldPaymentDialog({ row, onOpenChange }: Readonly<{ row: HeldPay
   const [note, setNote] = useState("");
   const { submitting, submitWithFeedback } = useAccountingSubmit();
 
-  useEffect(() => {
-    setNote("");
-  }, [row]);
+  // Every way out clears the note, so the next row never opens on a stale one.
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen) setNote("");
+    onOpenChange(nextOpen);
+  }
+  const guard = busyCloseGuard(submitting, handleOpenChange);
 
   async function submit() {
     if (!activeOrgId || !row) return;
     await submitWithFeedback(async () => {
-      await resolveHeldPayment({ orgId: activeOrgId, id: row._id, note: note.trim() });
+      // The server trims and validates; `note.trim()` only gates the button.
+      await resolveHeldPayment({ orgId: activeOrgId, id: row._id, note });
       toast.success(t("HeldPaymentsResolvedToast" as any));
-      onOpenChange(false);
+      handleOpenChange(false);
     });
   }
 
   return (
-    <Dialog open={row !== null} onOpenChange={onOpenChange}>
-      <DialogContent>
+    <Dialog open={row !== null} onOpenChange={guard.onOpenChange}>
+      <DialogContent {...guard.content}>
         <DialogHeader>
           <DialogTitle>{t("HeldPaymentsResolveTitle" as any)}</DialogTitle>
           <DialogDescription>{t("HeldPaymentsResolveDescription" as any)}</DialogDescription>
@@ -270,10 +305,9 @@ function ResolveHeldPaymentDialog({ row, onOpenChange }: Readonly<{ row: HeldPay
           <DialogFooterActions
             cancelLabel={t("Cancel" as any)}
             confirmLabel={t("HeldPaymentsResolve" as any)}
-            onCancel={() => onOpenChange(false)}
+            onCancel={() => handleOpenChange(false)}
             onConfirm={submit}
             submitting={submitting}
-            cancelDisabled={submitting}
             disabled={!note.trim()}
           />
         </DialogFooter>
@@ -323,8 +357,14 @@ function CreatePaymentLinkDialog({ open, onOpenChange }: Readonly<{ open: boolea
     if (selectedReceivable) setAmount(String(selectedReceivable.outstandingAmount));
   }, [selectedReceivable]);
 
+  // A closed dialog never carries its attempt's key into the next one. In an
+  // effect, not in `reset`, because `busyCloseGuard` takes the close handler
+  // during render and a ref write there reads as a render-time ref access.
+  useEffect(() => {
+    if (!open) idempotencyKeyRef.current = null;
+  }, [open]);
+
   function reset() {
-    idempotencyKeyRef.current = null;
     setReceivableId("");
     setAmount("");
     setProvider("tap");
@@ -364,10 +404,11 @@ function CreatePaymentLinkDialog({ open, onOpenChange }: Readonly<{ open: boolea
     if (!nextOpen) reset();
     onOpenChange(nextOpen);
   }
+  const guard = busyCloseGuard(submitting, handleOpenChange);
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-xl">
+    <Dialog open={open} onOpenChange={guard.onOpenChange}>
+      <DialogContent className="max-w-xl" {...guard.content}>
         <DialogHeader>
           <DialogTitle>{t("NewPaymentLink" as any)}</DialogTitle>
           <DialogDescription>{t("PaymentLinksDesc" as any)}</DialogDescription>
@@ -418,10 +459,9 @@ function SettlePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
     idempotencyKeyRef.current = null;
   }, [intent]);
 
-  function handleOpenChange(nextOpen: boolean) {
-    if (!nextOpen) idempotencyKeyRef.current = null;
-    onOpenChange(nextOpen);
-  }
+  // The attempt key is cleared by the effect above whenever `intent` changes,
+  // and closing the dialog clears `intent`, so no close route needs to touch it.
+  const guard = busyCloseGuard(submitting, onOpenChange);
 
   async function submit() {
     if (!activeOrgId || !intent) return;
@@ -435,13 +475,13 @@ function SettlePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
       });
       idempotencyKeyRef.current = null;
       toast.success(t("PaymentLinkSettled" as any));
-      handleOpenChange(false);
+      onOpenChange(false);
     });
   }
 
   return (
-    <Dialog open={intent !== null} onOpenChange={handleOpenChange}>
-      <DialogContent>
+    <Dialog open={intent !== null} onOpenChange={guard.onOpenChange}>
+      <DialogContent {...guard.content}>
         <DialogHeader>
           <DialogTitle>{t("SettlePaymentLink" as any)}</DialogTitle>
           <DialogDescription>{intent?.customerName ?? "-"}</DialogDescription>
@@ -451,7 +491,7 @@ function SettlePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
           <DialogFooterActions
             cancelLabel={t("Cancel" as any)}
             confirmLabel={submitting ? t("Saving" as any) : t("MarkSettled" as any)}
-            onCancel={() => handleOpenChange(false)}
+            onCancel={() => onOpenChange(false)}
             onConfirm={submit}
             submitting={submitting}
           />
@@ -478,10 +518,11 @@ function ExpirePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
   }
 
   const amount = intent ? intentAmount(intent) : "";
+  const guard = busyCloseGuard(submitting, onOpenChange);
 
   return (
-    <Dialog open={intent !== null} onOpenChange={onOpenChange}>
-      <DialogContent>
+    <Dialog open={intent !== null} onOpenChange={guard.onOpenChange}>
+      <DialogContent {...guard.content}>
         <DialogHeader>
           <DialogTitle>{t("ExpirePaymentLinkTitle" as any)}</DialogTitle>
           <DialogDescription>
@@ -495,7 +536,6 @@ function ExpirePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
             onCancel={() => onOpenChange(false)}
             onConfirm={submit}
             submitting={submitting}
-            cancelDisabled={submitting}
             confirmVariant="destructive"
           />
         </DialogFooter>
