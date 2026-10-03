@@ -74,6 +74,8 @@ jobs:
     # a run from any other ref cannot reach the credential — it fails closed
     # rather than falling back to something weaker.
     environment: contract-skew-prod-read
+    outputs:
+      code: ${{ steps.detect.outputs.code }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -151,11 +153,15 @@ jobs:
           # Exit 1 now means the control did not complete, and is answered with
           # unavailable-class guidance. Nothing can reach 7 by accident.
           case "$code" in
-            0) echo "No production skew detected." ;;
+            0) echo "Exit 0 - read the verdict line the CLI printed above. PASS and UNKNOWN both exit 0, and neither covers HTTP action bodies; only Convex argument contracts are checked." ;;
+            2) echo "::error::USAGE ERROR (exit 2) - the workflow invoked the CLI incorrectly. This is a workflow defect, NOT a verdict about the backend." ;;
+            4) echo "::error::BLOCKED (exit 4) - an unproven path overlaps a path this release changes. NOT a pass." ;;
+            9) echo "::error::COVERAGE INCOMPLETE (exit 9) - at least one call site could not be accounted for, or none were found. NOT a pass and NOT a proven skew; do not deploy on this." ;;
+            10) echo "::error::EVIDENCE DRIFT (exit 10) - the unproven paths differ from scripts/contractSkew/needs-evidence-baseline.json. NOT a skew; a person must review the report and update the baseline." ;;
             7) echo "::error::PRODUCTION SKEW — the deployed backend is behind the current one. Deploy the Convex backend at this commit." ;;
             8) echo "::error::RELEASE BREAK — shipping this candidate would introduce a skew. Deploying the backend is NOT the remedy; fix the client or the candidate." ;;
             1) echo "::error::CONTROL FAILED TO COMPLETE (raw exit 1) — this is a tooling or runtime failure, NOT a verdict about the backend. DO NOT DEPLOY on this result. Investigate the job log." ;;
-            3) echo "::error::Control UNAVAILABLE — the credential could not read the production function spec. This is NOT a pass." ;;
+            3) echo "::error::Control UNAVAILABLE - no authoritative evidence could be obtained (credential, deployment identity, or a spec this control cannot read). This is NOT a pass." ;;
             6) echo "::error::COVERAGE GAP — a client file calling Convex is in no scanned surface. The control cannot answer for it, so this is NOT a pass." ;;
             5) echo "::error::STANDING CONTRACT DEFECT — a client disagrees with a backend that is ALREADY deployed. This is a product bug, NOT a missing deploy; deploying will not fix it." ;;
             *) echo "::error::contract-skew exited $code" ;;
@@ -170,3 +176,41 @@ jobs:
           path: skew-report.json
           retention-days: 30
           if-no-files-found: ignore
+
+  # ⚠️ A RED RUN NOBODY IS WATCHING IS NOT AN ALERT. The job fails at 04:00 and
+  # the only trace is a row in the Actions tab. This opens (or updates) ONE issue
+  # with a fixed title so a failure becomes something a person is notified about,
+  # without a pile of duplicates after a night of hourly failures.
+  #
+  # A separate job, NOT a step in `detect`: `issues: write` is scoped to this job
+  # alone, and it never receives the production read key or the environment. It
+  # uses the built-in GITHUB_TOKEN only - no new secret.
+  #
+  # Untrusted values reach `run:` through `env:` only, never `${{ }}` interpolated
+  # into the script text.
+  notify:
+    needs: detect
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the single contract-skew issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EXIT_CODE: ${{ needs.detect.outputs.code }}
+          TRIGGER: ${{ github.event_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          title="Contract skew monitor: latest run failed"
+          body="$(printf 'The contract-skew monitor did not pass.\n\n- exit code: %s (empty means the job died before the CLI reported one)\n- trigger: %s\n- commit: %s\n- run: %s\n\nExit codes: 7 proven production skew (deploy the backend); 8 release break; 5 standing defect; 3 unavailable; 6 coverage gap; 9 coverage incomplete; 10 evidence drift against needs-evidence-baseline.json; 1 tooling failure. Only 7 carries a deploy instruction.\n\nThis single issue is updated in place while the monitor stays red; close it once a run passes.' "${EXIT_CODE:-none}" "$TRIGGER" "$COMMIT" "$RUN_URL")"
+          number="$(gh issue list --repo "$REPO" --state open --search "\"$title\" in:title" --json number,title --jq "map(select(.title == \"$title\")) | .[0].number // empty")"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --title "$title" --body "$body"
+          fi

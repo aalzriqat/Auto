@@ -106,7 +106,7 @@ export const RUNGS = [
     name: "REPO_READ_KEY",
     env: "CONVEX_PROD_READ_KEY",
     unattended: true,
-    note: "repository secret, read-only scope — the only rung a scheduled run can reach",
+    note: "environment secret in `contract-skew-prod-read` (main-only, read-only scope) — the only rung a scheduled run can reach",
   },
   {
     name: "ENV_OPERATOR_KEY",
