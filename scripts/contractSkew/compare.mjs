@@ -27,8 +27,24 @@
  * argument validator in the function spec (they are keyed by path+method), so
  * webhook request-body contracts are NOT covered by this control.
  */
-import { indexSpec, normalizeIdentifier } from "./specIndex.mjs";
+import { indexAllNamed, normalizeIdentifier } from "./specIndex.mjs";
 import { validatorTree, compareNode } from "./contractTree.mjs";
+
+/**
+ * What KIND of Convex function each hook / SDK method can call (CS2-2). The
+ * backend refuses a `useQuery` of a mutation exactly as firmly as an unknown
+ * field, so a mismatch is a PROVEN break, not an unknown.
+ *
+ * ⚠️ A `via` absent from this table is not checked for type — it is never
+ * guessed. Visibility is checked for every call regardless.
+ */
+export const EXPECTED_FUNCTION_TYPE = {
+  useQuery: "Query", usePaginatedQuery: "Query", useQueries: "Query",
+  fetchQuery: "Query", preloadQuery: "Query", query: "Query", runQuery: "Query",
+  watchQuery: "Query", prewarmQuery: "Query", onUpdate: "Query", consistentQuery: "Query",
+  useMutation: "Mutation", mutation: "Mutation", runMutation: "Mutation", fetchMutation: "Mutation",
+  useAction: "Action", action: "Action", runAction: "Action", fetchAction: "Action",
+};
 
 /**
  * Does an evidence gap block a specific candidate release?
@@ -103,8 +119,8 @@ export const SEVERITY = {
  * @param {object} spec        parsed `convex function-spec --prod` output
  */
 export function compareContracts(clientCalls, spec, extraUnresolved = []) {
-  const byId = indexSpec(spec);
-  /** identifier(normalized) -> spec entry */
+  const byId = indexAllNamed(spec);
+  /** identifier(normalized) -> spec entry (public AND internal: see the visibility check below) */
   const normalized = new Map();
   for (const [id, fn] of byId) normalized.set(normalizeIdentifier(id), fn);
 
@@ -125,6 +141,37 @@ export function compareContracts(clientCalls, spec, extraUnresolved = []) {
         line: call.line,
         detail: "the live deployment exposes no such function",
       });
+      continue;
+    }
+
+    const breakAtFunction = (detail) =>
+      findings.push({
+        severity: SEVERITY.BREAKING,
+        dimension: "SHAPE",
+        identifier: call.identifier,
+        path: "<function>",
+        file: call.file,
+        line: call.line,
+        siteId: call.siteId,
+        surface: call.surface,
+        detail,
+      });
+
+    // ⚠️ EXISTING IS NOT CALLABLE. An `internal` function is in the spec but not
+    // reachable from a client: the generated `api` never exposes it, so a
+    // reference reaching it is a stale or hand-built one, and the backend
+    // refuses it.
+    if (fn.visibility?.kind !== "public") {
+      breakAtFunction(
+        `the live deployment's function is ${fn.visibility?.kind ?? "of unknown"} visibility, not public, so a client cannot call it`,
+      );
+      continue;
+    }
+    const expectedType = call.via ? EXPECTED_FUNCTION_TYPE[call.via] : undefined;
+    if (expectedType && fn.functionType !== expectedType) {
+      breakAtFunction(
+        `\`${call.via}\` calls a ${expectedType}, but the live deployment's function is a ${fn.functionType}`,
+      );
       continue;
     }
 

@@ -284,6 +284,8 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
     // so shadowing and same-name-different-scope stop mattering.
     /** @type {Map<import("typescript").Symbol,string>} */
     const bound = new Map();
+    /** @type {Map<import("typescript").Symbol,string>} bound symbol -> the hook that produced it */
+    const boundVia = new Map();
     /** Hook calls already resolved by the inline-payload pass. */
     const inlineResolved = new Set();
 
@@ -300,7 +302,10 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
       ) {
         const id = resolveFunctionReference(node.initializer.arguments[0], checker);
         const symbol = checker.getSymbolAtLocation(node.name);
-        if (id && symbol) bound.set(symbol, id);
+        if (id && symbol) {
+          bound.set(symbol, id);
+          boundVia.set(symbol, node.initializer.expression.text);
+        }
       }
       ts.forEachChild(node, bind);
     };
@@ -422,6 +427,8 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
          * @type {import("typescript").Node}
          */
         let siteNode = node;
+        /** The hook or SDK method that made this call (the comparator checks it against the function's type). */
+        let via = null;
 
         // Form A: boundVariable({...}) — resolved through the symbol so a
         // same-named local (a useState setter, a prop) cannot be mistaken for
@@ -430,6 +437,7 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
           const symbol = resolveSymbol(checker, node.expression);
           if (symbol && bound.has(symbol)) {
             identifier = bound.get(symbol);
+            via = boundVia.get(symbol) ?? null;
             argExpr = node.arguments[0] ?? null;
             siteNode = node.expression;
           }
@@ -442,11 +450,23 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
           node.arguments.length > 0 &&
           ((ts.isPropertyAccessExpression(node.expression) &&
             DIRECT_CALLERS.has(node.expression.name.text)) ||
+            // `client["query"](api.x.y, {...})` is the same call (CS2-1). Only a
+            // string-literal member can be named; a computed one is the census's
+            // to record.
+            (ts.isElementAccessExpression(node.expression) &&
+              (ts.isStringLiteral(node.expression.argumentExpression) ||
+                ts.isNoSubstitutionTemplateLiteral(node.expression.argumentExpression)) &&
+              DIRECT_CALLERS.has(node.expression.argumentExpression.text)) ||
             (ts.isIdentifier(node.expression) && BARE_DIRECT_CALLERS.has(node.expression.text)))
         ) {
           const maybe = resolveFunctionReference(node.arguments[0], checker);
           if (maybe) {
             identifier = maybe;
+            via = ts.isPropertyAccessExpression(node.expression)
+              ? node.expression.name.text
+              : ts.isElementAccessExpression(node.expression)
+                ? /** @type {import("typescript").StringLiteral} */ (node.expression.argumentExpression).text
+                : /** @type {import("typescript").Identifier} */ (node.expression).text;
             argExpr = node.arguments[1] ?? null;
             siteNode = node.arguments[0];
           }
@@ -477,6 +497,7 @@ export function extractClientCalls(rootFiles, tsconfigPath, options = {}) {
             payload,
             unknowns: acc.unknowns,
             casts: acc.casts,
+            ...(via ? { via } : {}),
             siteId: siteOf(sourceFile, siteNode),
           });
         }

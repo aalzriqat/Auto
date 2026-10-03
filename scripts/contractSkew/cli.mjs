@@ -47,9 +47,14 @@
  *                       by the extractor, unresolved/unaccounted by the
  *                       independent census, or NO call sites discovered at all.
  *   10 EVIDENCE DRIFT   the unproven paths differ from the reviewed baseline
- *                       (new, removed, duplicated, expired, malformed, or the
- *                       contract under an entry changed). Not a skew. In
- *                       release mode drift is a warning, not a block.
+ *                       (new, removed, duplicated, expired, malformed, absent,
+ *                       or the contract under an entry changed). Not a skew.
+ *                       Blocks in release mode too (D-26): the UNKNOWN wording
+ *                       rests on that baseline.
+ *
+ * Precedence when several causes are present: 7 > 4 > 9 > 10 > 0 (plus 5/6/8 as
+ * documented). The exit code names the most actionable cause; stderr and the JSON
+ * report's `causes` list EVERY cause present.
  *
  * ⚠️ WHY PROVEN SKEW IS NOT EXIT 1, AND WHY THAT MATTERS MORE THAN IT LOOKS.
  *
@@ -368,6 +373,40 @@ function reportCoverageIncomplete(prefix) {
   console.error(`::error::${prefix}COVERAGE INCOMPLETE - ${coverageProblems.join("; ")}.`);
 }
 
+function reportCoverageGap(prefix) {
+  for (const entry of unscanned) {
+    console.error(
+      `::error file=${entry.file}::calls Convex but is in no scanned client surface — this control cannot answer for it`
+    );
+  }
+  console.error(
+    `::error::${prefix}COVERAGE GAP — ${unscannedFiles} client file(s) calling Convex were never scanned. Add them to CLIENT_SURFACES in scripts/contractSkew/clientFiles.mjs.`
+  );
+}
+
+function reportEvidenceDrift(prefix) {
+  for (const problem of baselineState.problems) console.error(`::error::[evidence drift] ${problem}`);
+  console.error(
+    `::error::${prefix}EVIDENCE DRIFT - ${baselineState.problems.length} difference(s) between the unproven paths found and ${baselinePath}. ` +
+      `Not a skew; a person must review the report and update the baseline.`
+  );
+}
+
+/**
+ * ⚠️ THE EXIT CODE NAMES THE MOST ACTIONABLE CAUSE; IT MUST NOT HIDE THE REST
+ * (D-26). Precedence is 7 > 4 > 9 > 10 > 0, so a run with a proven break AND an
+ * unresolved call site exits 7. An operator who fixes the break and re-runs would
+ * then meet the coverage gap for the first time, so every other cause present is
+ * listed here, in the same run, labelled ALSO PRESENT.
+ *
+ * @param {"break"|"standing"|"blocked"|"coverageGap"|"coverageIncomplete"|"drift"} primary
+ */
+function reportOtherCauses(primary) {
+  if (primary !== "coverageGap" && unscannedFiles > 0) reportCoverageGap("ALSO PRESENT: ");
+  if (primary !== "coverageIncomplete" && coverageIncomplete) reportCoverageIncomplete("ALSO PRESENT: ");
+  if (primary !== "drift" && baselineState.drift) reportEvidenceDrift("ALSO PRESENT: ");
+}
+
 // ⚠️ A client surface this control does not look at is a coverage gap, and a
 // coverage gap must never read as PASS. Without this, the day the web client
 // became fully proven the run would report PASS while dozens of mobile files
@@ -471,6 +510,15 @@ const report = {
   },
   unproven,
   baseline: { path: baselinePath, matched: baselineState.matched, drift: baselineState.problems },
+  // Every cause present in this run, whatever single exit code the precedence
+  // picks (D-26).
+  causes: {
+    provenBreaks: result.breaking.length,
+    standingDefects: classification.standingDefects.length,
+    unscannedClientFiles: unscannedFiles,
+    coverageIncomplete: coverageProblems,
+    evidenceDrift: baselineState.drift ? baselineState.problems : [],
+  },
   census: {
     totals: census,
     unresolved: censusGaps,
@@ -559,6 +607,7 @@ if (mode === "release") {
         `::error file=${f.file},line=${f.line}::${f.identifier} ${f.path} is unproven and this release changes that path`
       );
     }
+    reportOtherCauses(releaseBreaking.length ? "break" : "blocked");
     process.exit(releaseBreaking.length ? EXIT.RELEASE_BREAK : EXIT.BLOCKED);
   }
   // Unrelated unknowns are control health, not this release's problem.
@@ -583,14 +632,8 @@ if (mode === "release") {
   // gate rather than left to fall through, so it cannot become reachable
   // silently the day a surface is added.
   if (unscannedFiles > 0) {
-    for (const entry of unscanned) {
-      console.error(
-        `::error file=${entry.file}::calls Convex but is in no scanned client surface — this control cannot answer for it`
-      );
-    }
-    console.error(
-      `::error::COVERAGE GAP — ${unscannedFiles} client file(s) calling Convex were never scanned, so this release cannot be cleared. Add them to CLIENT_SURFACES in scripts/contractSkew/clientFiles.mjs.`
-    );
+    reportCoverageGap("RELEASE ");
+    reportOtherCauses("coverageGap");
     process.exit(EXIT.COVERAGE_GAP);
   }
 
@@ -598,16 +641,32 @@ if (mode === "release") {
   // "we could not see every call" is not "this release is compatible".
   if (coverageIncomplete) {
     reportCoverageIncomplete("RELEASE ");
+    reportOtherCauses("coverageIncomplete");
     process.exit(EXIT.COVERAGE_INCOMPLETE);
   }
 
-  // Baseline drift is reported but does NOT block a release: unrelated reviewed
-  // debt moving must not stop every unrelated release. What blocks is an unknown
-  // that overlaps what THIS release changes (exit 4, above).
+  // ⚠️ BASELINE DRIFT BLOCKS A RELEASE TOO (D-26, CS2-3). It used to be a
+  // warning that exited 0, on the reasoning that unrelated reviewed debt moving
+  // should not stop an unrelated release. But a baseline that is ABSENT,
+  // malformed, expired or no longer matching the contract under it means the
+  // "reviewed debt" the UNKNOWN wording rests on is not what was reviewed — so
+  // exit 0 here would be a green tick over evidence nobody checked. D-24 ruled
+  // drift its own non-zero exit with no release carve-out. What an unrelated
+  // unknown cannot do is block by itself: that stays exit 4, above, and only
+  // when it overlaps a path THIS release changes.
   if (baselineState.drift) {
-    for (const problem of baselineState.problems) console.error(`::warning::[evidence drift] ${problem}`);
+    reportEvidenceDrift("RELEASE ");
+    reportOtherCauses("drift");
+    process.exit(EXIT.EVIDENCE_DRIFT);
   }
 
+  // The same honest sentence as production mode: a release that clears with
+  // reviewed debt remaining is UNKNOWN about that debt, never a PASS.
+  if (unproven.length > 0 || verdict !== "PASS") {
+    console.error(
+      `No proven skew in accounted Convex argument calls; verdict UNKNOWN: ${unproven.length} reviewed paths remain unverified.`
+    );
+  }
   process.exit(EXIT.OK);
 }
 
@@ -633,6 +692,7 @@ if (alert.productionSkew) {
       basis: classification.basis ?? "none",
     })}`
   );
+  reportOtherCauses("break");
   process.exit(EXIT.PRODUCTION_SKEW);
 }
 
@@ -653,6 +713,7 @@ if (alert.standingContractDefect) {
       `The current backend and the live backend already agree, so DEPLOYING WILL NOT FIX THIS. ` +
       `Basis: ${classification.basis}`
   );
+  reportOtherCauses("standing");
   process.exit(EXIT.STANDING_DEFECT);
 }
 // ⚠️ A client FILE that was never scanned is not the same as an unproven path
@@ -667,14 +728,8 @@ if (alert.standingContractDefect) {
 // It exists so that the day someone adds a client surface, the control says so
 // instead of passing.
 if (unscannedFiles > 0) {
-  for (const entry of unscanned) {
-    console.error(
-      `::error file=${entry.file}::calls Convex but is in no scanned client surface — this control cannot answer for it`
-    );
-  }
-  console.error(
-    `::error::COVERAGE GAP — ${unscannedFiles} client file(s) calling Convex were never scanned. Add them to CLIENT_SURFACES in scripts/contractSkew/clientFiles.mjs.`
-  );
+  reportCoverageGap("");
+  reportOtherCauses("coverageGap");
   process.exit(EXIT.COVERAGE_GAP);
 }
 
@@ -683,16 +738,13 @@ if (unscannedFiles > 0) {
 // calls that happened to be seen. Zero discovered calls lands here too.
 if (coverageIncomplete) {
   reportCoverageIncomplete("");
+  reportOtherCauses("coverageIncomplete");
   process.exit(EXIT.COVERAGE_INCOMPLETE);
 }
 
 // The reviewed debt no longer matches what the run found.
 if (baselineState.drift) {
-  for (const problem of baselineState.problems) console.error(`::error::[evidence drift] ${problem}`);
-  console.error(
-    `::error::EVIDENCE DRIFT - ${baselineState.problems.length} difference(s) between the unproven paths found and ${baselinePath}. ` +
-      `Not a skew; a person must review the report and update the baseline.`
-  );
+  reportEvidenceDrift("");
   process.exit(EXIT.EVIDENCE_DRIFT);
 }
 

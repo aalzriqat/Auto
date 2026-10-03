@@ -21,7 +21,7 @@
  */
 import fs from "node:fs";
 import crypto from "node:crypto";
-import { indexSpec, normalizeIdentifier } from "./specIndex.mjs";
+import { indexAllNamed, normalizeIdentifier } from "./specIndex.mjs";
 
 /**
  * Fields that identify a finding, in key order. `fingerprint` and `cause` are
@@ -55,13 +55,19 @@ const describe = (entry) =>
  */
 export function contractFingerprint(spec, functionId, contractPath) {
   let fn;
-  for (const [id, entry] of indexSpec(spec)) {
+  // Every named function, not just public ones: a function turning internal must
+  // CHANGE the fingerprint rather than vanish into the same hash as "absent".
+  for (const [id, entry] of indexAllNamed(spec)) {
     if (normalizeIdentifier(id) === functionId) fn = entry;
   }
   const args = fn?.args;
   const top = /^[A-Za-z_$][\w$]*/.exec(contractPath)?.[0];
   const fields = args && typeof args === "object" && args.value && typeof args.value === "object" ? args.value : {};
-  const scope = top && Object.hasOwn(fields, top) ? { field: top, validator: fields[top] } : { whole: args ?? null };
+  const arg = top && Object.hasOwn(fields, top) ? { field: top, validator: fields[top] } : { whole: args ?? null };
+  // ⚠️ The function's KIND and VISIBILITY are part of the contract (CS2-2): a
+  // query turned into a mutation, or a public function made internal, changes
+  // what a reviewed finding was reviewed against.
+  const scope = { ...arg, functionType: fn?.functionType ?? null, visibility: fn?.visibility?.kind ?? null };
   return crypto.createHash("sha256").update(stable(scope)).digest("hex").slice(0, 16);
 }
 

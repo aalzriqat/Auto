@@ -41,8 +41,33 @@ describe("specProblems", () => {
   });
 
   test("a callable entry with a non-object args validator is still a problem", () => {
-    const bad = { identifier: "a.js:b", functionType: "Mutation", args: { type: "string" } };
+    const bad = { ...callable("a.js:b"), args: { type: "string" } };
     expect(specProblems({ functions: [bad] })).toHaveLength(1);
+  });
+
+  test("CS2-2: a hybrid HttpAction entry carrying an identifier or args is a problem", () => {
+    expect(specProblems({ functions: [{ ...http("GET", "/x"), identifier: "a.js:b" }] })).toHaveLength(1);
+    expect(specProblems({ functions: [{ ...http("GET", "/x"), args: { type: "object", value: {} } }] })).toHaveLength(1);
+  });
+
+  test("CS2-2: a real route entry beside callables stays accepted (control)", () => {
+    expect(specProblems({ functions: [callable("a.js:b"), http("GET", "/x")] })).toEqual([]);
+  });
+
+  test("CS2-2: duplicate normalized identifiers are a problem", () => {
+    expect(specProblems({ functions: [callable("a.js:b"), callable("a.ts:b")] })).toHaveLength(1);
+    expect(specProblems({ functions: [callable("a.js:b"), callable("a.js:c")] })).toEqual([]);
+  });
+
+  test("CS2-2 (L-1): an entry without visibility makes the document malformed", () => {
+    const { visibility: _omit, ...noVisibility } = callable("a.js:b");
+    expect(specProblems({ functions: [noVisibility] })).toHaveLength(1);
+  });
+
+  test("CS2-2 (M-1): only PUBLIC Query/Mutation/Action entries are indexed", () => {
+    const internal = { ...callable("a.js:hidden"), visibility: { kind: "internal" } };
+    const index = indexSpec({ functions: [callable("a.js:shown", "Query"), internal, http("GET", "/h")] });
+    expect([...index.keys()]).toEqual(["a.js:shown"]);
   });
 
   test("HttpAction entries are excluded from the argument-contract index", () => {

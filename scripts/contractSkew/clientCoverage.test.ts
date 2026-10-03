@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { extractClientCalls } from "./clientPaths.mjs";
-import { CLIENT_SURFACES, listSurfaceFiles } from "./clientFiles.mjs";
+import { CLIENT_SURFACES, listSurfaceFiles, unscannedConvexClients } from "./clientFiles.mjs";
 
 /**
  * SCRUM-178 v2, Codex CS-1 / D-24 (1): shipped Convex calls the v1 extractor
@@ -129,6 +131,54 @@ describe("a binder bound to a simple name never suppresses an unresolved referen
   test("an alias that is not a literal api path is recorded, not dropped", () => {
     const line = lineOf("escapes", "return useQuery(ref, {});");
     expect(out.unresolvedBinders.some((u) => u.line === line)).toBe(true);
+  });
+});
+
+describe("CS2-1: an SDK call through an element access is extracted like the dot form", () => {
+  const out = extract("elementAccess");
+
+  test('`client["query"](api.vehicles.list, …)` yields a call with identifier, line and payload', () => {
+    const line = lineOf("elementAccess", 'client["query"](api.vehicles.list');
+    const call = out.calls.find((c) => c.line === line);
+    expect(call, "the bracket call was never extracted").toBeDefined();
+    expect(call!.identifier).toBe("vehicles:list");
+    expect(pathsOf(call!.payload)).toEqual(expect.arrayContaining(["orgId"]));
+  });
+
+  test("the dot form beside it is extracted identically (control)", () => {
+    const line = lineOf("elementAccess", "client.query(api.vehicles.list");
+    const call = out.calls.find((c) => c.line === line);
+    expect(call?.identifier).toBe("vehicles:list");
+  });
+
+  test("a non-literal member name is NOT extracted as a call", () => {
+    const line = lineOf("elementAccess", "client[method](ref");
+    expect(out.calls.some((c) => c.line === line)).toBe(false);
+  });
+});
+
+describe("L-4: an unscanned file is recognised by the SDK client it uses, not only by a hook", () => {
+  const scan = (text: string) => {
+    const root = mkdtempSync(path.join(tmpdir(), "skew-unscanned-"));
+    try {
+      writeFileSync(path.join(root, "orphan.ts"), text);
+      return unscannedConvexClients(root, []).map((m) => m.file);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+
+  test.each([
+    ['import { ConvexHttpClient } from "convex/browser";'],
+    ['import { useConvex } from "convex/react"; export const c = () => useConvex();'],
+    ["export const q = (c: any, ref: any) => c.query(ref, {});"],
+    ['export const q = (c: any, ref: any) => c["mutation"](ref, {});'],
+  ])("%s is reported as an unscanned Convex client", (text) => {
+    expect(scan(text)).toEqual(["orphan.ts"]);
+  });
+
+  test("a file with none of those is not reported (control)", () => {
+    expect(scan("export const add = (a: number, b: number) => a + b;")).toEqual([]);
   });
 });
 

@@ -22,6 +22,13 @@ const required = (fieldType: unknown) => ({ fieldType, optional: false });
 const mutation = (identifier: string, fields: Record<string, unknown>) => ({
   identifier,
   functionType: "Mutation",
+  visibility: { kind: "public" },
+  args: { type: "object", value: fields },
+});
+const query = (identifier: string, fields: Record<string, unknown>) => ({
+  identifier,
+  functionType: "Query",
+  visibility: { kind: "public" },
   args: { type: "object", value: fields },
 });
 const specOf = (...functions: unknown[]) => ({ url: "https://x.convex.cloud", functions });
@@ -361,6 +368,166 @@ describe("the needs-evidence baseline", () => {
     );
     expect(committed.entries).toEqual([]);
   });
+});
+
+const releaseArgs = ["--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json", "--baseline", "baseline.json"];
+
+describe("CS2-3 / D-26: baseline drift blocks a RELEASE too (exit 10, never a warning)", () => {
+  const same = () => specOf(mutation("vehicles.js:update", { orgId: required(str) }));
+
+  test("a clean release (empty baseline, everything proven) exits 0", () => {
+    const dir = scaffold({ client: PROVEN, candidate: same() });
+    const r = run(dir, releaseArgs);
+    expect(r.code).toBe(0);
+  }, 300_000);
+
+  test("an ABSENT baseline exits 10 in release mode", () => {
+    const dir = scaffold({ client: PROVEN, candidate: same(), baseline: "absent" });
+    const r = run(dir, releaseArgs);
+    expect(r.code).toBe(10);
+    expect(r.all).toMatch(/EVIDENCE DRIFT/);
+    expect(r.all).toMatch(/baseline/i);
+  }, 300_000);
+
+  test("a CHANGED baseline (a reviewed entry went malformed) exits 10 in release mode", () => {
+    const dir = scaffold({ client: UNPROVEN, candidate: same() });
+    baselineFrom(dir, (e) => ({ ...e, rationale: "" }));
+    const r = run(dir, releaseArgs);
+    expect(r.code).toBe(10);
+    expect(r.all).toMatch(/malformed/i);
+  }, 300_000);
+
+  test("baselined-only debt that this release does not touch exits 0 with the UNKNOWN wording", () => {
+    const dir = scaffold({ client: UNPROVEN, candidate: same() });
+    baselineFrom(dir);
+    const r = run(dir, releaseArgs);
+    expect(r.code).toBe(0);
+    expect(r.all).toContain(
+      "No proven skew in accounted Convex argument calls; verdict UNKNOWN: 1 reviewed paths remain unverified."
+    );
+    expect(r.all).not.toMatch(FORBIDDEN_WORDING);
+  }, 300_000);
+});
+
+describe("D-26 exit precedence: the code names one cause, the output names ALL of them", () => {
+  const BREAK_AND_UNRESOLVED =
+    'import { useMutation, useQuery } from "convex/react";\n' +
+    "declare const api: { vehicles: { update: unknown } } & Record<string, Record<string, never>>;\n" +
+    "export const go = () => {\n" +
+    "  const update = useMutation(api.vehicles.update);\n" +
+    '  return update({ orgId: "o", nope: "x" });\n' +
+    "};\n" +
+    "export const dynamic = (name: string) => useQuery(api.vehicles[name], {});\n";
+
+  test("a proven break plus an unresolved call site exits 7 AND names the coverage gap", () => {
+    const dir = scaffold({ client: BREAK_AND_UNRESOLVED });
+    const r = production(dir);
+    expect(r.code).toBe(7);
+    expect(r.stderr).toMatch(/COVERAGE INCOMPLETE/);
+    expect(r.stderr).toMatch(/ALSO PRESENT/);
+    const causes = reportOf(dir).causes;
+    expect(causes.provenBreaks).toBeGreaterThan(0);
+    expect(causes.coverageIncomplete.length).toBeGreaterThan(0);
+  }, 300_000);
+
+  test("a coverage gap plus drift exits 6 AND names the drift", () => {
+    const dir = scaffold({ client: UNPROVEN, extra: { "somewhere/Screen.tsx": "const x = useQuery(api.a.b, {});" } });
+    const r = production(dir);
+    expect(r.code).toBe(6);
+    expect(r.stderr).toMatch(/EVIDENCE DRIFT/);
+    expect(reportOf(dir).causes.evidenceDrift.length).toBeGreaterThan(0);
+  }, 300_000);
+});
+
+describe("CS-3: a Convex hook result that escapes through a shorthand property is not silently dropped", () => {
+  const SHORTHAND =
+    'import { useMutation } from "convex/react";\n' +
+    "declare const api: { vehicles: { update: unknown } };\n" +
+    "export function useVehicleActions() {\n" +
+    "  const update = useMutation(api.vehicles.update);\n" +
+    "  return { update };\n" +
+    "}\n";
+
+  test("the control (a proven call alone) exits 0", () => {
+    const dir = scaffold({ client: PROVEN });
+    expect(production(dir).code).toBe(0);
+  }, 300_000);
+
+  test("a proven call beside `return { update }` exits 9 and names the shorthand site", () => {
+    const dir = scaffold({ client: PROVEN, extra: { "app/actions.tsx": SHORTHAND } });
+    const r = production(dir);
+    expect(r.code).toBe(9);
+    expect(r.stderr).toMatch(/actions\.tsx/);
+    expect(r.stderr).toMatch(/census UNRESOLVED/);
+  }, 300_000);
+});
+
+describe("CS2-1: an SDK call through an element access is both counted and compared", () => {
+  const BRACKET =
+    'import type { ConvexReactClient } from "convex/react";\n' +
+    "declare const api: { vehicles: { list: unknown } };\n" +
+    "declare const client: ConvexReactClient;\n" +
+    'export const go = () => client["query"](api.vehicles.list, { orgId: "o" });\n';
+  const listSpec = (fields: Record<string, unknown>) => specOf(query("vehicles.js:list", fields));
+  const twoSurfaces = (spec: unknown) =>
+    scaffold({
+      client: PROVEN,
+      spec: specOf(mutation("vehicles.js:update", { orgId: required(str) }), ...(spec as { functions: unknown[] }).functions),
+      extra: { "packages/shared/tsconfig.json": TSCONFIG, "packages/shared/src/bracket.tsx": BRACKET },
+    });
+
+  test("the bracket call is extracted on its surface and compared: matching spec exits 0", () => {
+    const dir = twoSurfaces(listSpec({ orgId: required(str) }));
+    const r = production(dir);
+    expect(r.code).toBe(0);
+    const surfaces = reportOf(dir).scope.surfaces as Array<{ name: string; callSites: number }>;
+    expect(surfaces.find((s) => s.name === "shared")?.callSites).toBe(1);
+  }, 300_000);
+
+  test("an altered spec (the field the client sends is no longer declared) exits 7", () => {
+    const dir = twoSurfaces(listSpec({}));
+    const r = production(dir);
+    expect(r.code).toBe(7);
+  }, 300_000);
+});
+
+describe("CS2-2: the spec is validated before it is trusted", () => {
+  const route = { functionType: "HttpAction", method: "GET", path: "/health" };
+  const base = () => mutation("vehicles.js:update", { orgId: required(str) });
+
+  test("a hybrid HttpAction entry carrying an identifier exits 3", () => {
+    const dir = scaffold({ client: PROVEN, spec: specOf(base(), { ...route, identifier: "vehicles.js:update" }) });
+    expect(production(dir).code).toBe(3);
+  }, 120_000);
+
+  test("duplicate normalized identifiers exit 3", () => {
+    const dir = scaffold({ client: PROVEN, spec: specOf(base(), mutation("vehicles.ts:update", {})) });
+    expect(production(dir).code).toBe(3);
+  }, 120_000);
+
+  test("a real route entry beside the function is accepted (control)", () => {
+    const dir = scaffold({ client: PROVEN, spec: specOf(base(), route) });
+    expect(production(dir).code).toBe(0);
+  }, 300_000);
+
+  test("a client call to an INTERNAL function is a proven break (7)", () => {
+    const internal = { ...base(), visibility: { kind: "internal" } };
+    const dir = scaffold({ client: PROVEN, spec: specOf(internal) });
+    const r = production(dir);
+    expect(r.code).toBe(7);
+    expect(r.all).toMatch(/not public/);
+  }, 300_000);
+
+  test("a query hook calling a mutation is a proven break (7)", () => {
+    const wrongKind =
+      'import { useQuery } from "convex/react";\n' +
+      "declare const api: { vehicles: { update: unknown } };\n" +
+      'export const go = () => useQuery(api.vehicles.update, { orgId: "o" });\n';
+    const dir = scaffold({ client: wrongKind });
+    const r = production(dir);
+    expect(r.code).toBe(7);
+    expect(r.all).toMatch(/calls a Query/);
+  }, 300_000);
 });
 
 describe("wording", () => {

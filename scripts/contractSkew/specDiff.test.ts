@@ -17,6 +17,7 @@ import { unscannedConvexClients } from "./clientFiles.mjs";
 const fn = (identifier: string, fields: Record<string, unknown>) => ({
   identifier,
   functionType: "Mutation",
+  visibility: { kind: "public" },
   args: { type: "object", value: fields },
 });
 const required = (fieldType: unknown) => ({ fieldType, optional: false });

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { compareContracts, SEVERITY, blockersForRelease, pathsOverlap } from "./compare.mjs";
 import { clientNode, mergeClientNodes, validatorTree } from "./contractTree.mjs";
+import { contractFingerprint } from "./baseline.mjs";
+import { changedContractPaths } from "./specDiff.mjs";
 
 /**
  * ⚠️ FIXTURE SHIM, NOT A MODEL.
@@ -643,6 +645,7 @@ describe("an array element is checked exactly as hard as a top-level field", () 
       {
         identifier: "w.js:save",
         functionType: "Mutation",
+        visibility: { kind: "public" },
         args: { type: "object", value: { [name]: { fieldType, optional: false } } },
       },
     ],
@@ -759,6 +762,7 @@ describe("a required field is still required once its optional parent IS sent", 
       {
         identifier: "w.js:save",
         functionType: "Mutation",
+        visibility: { kind: "public" },
         args: { type: "object", value: { profile: { fieldType: PROFILE, optional: true } } },
       },
     ],
@@ -854,6 +858,7 @@ describe("a nullable enum keeps its enumeration", () => {
       {
         identifier: "w.js:save",
         functionType: "Mutation",
+        visibility: { kind: "public" },
         args: { type: "object", value: { status: { fieldType: NULLABLE, optional: false } } },
       },
     ],
@@ -908,5 +913,77 @@ describe("a nullable enum keeps its enumeration", () => {
       []
     );
     expect(result.breaking).toHaveLength(0);
+  });
+});
+
+describe("CS2-2: a client call must hit a PUBLIC function of the RIGHT kind", () => {
+  const entry = (identifier: string, functionType: string, visibility: string) => ({
+    functions: [{ identifier, functionType, visibility: { kind: visibility }, args: obj({}) }],
+  });
+  const viaCall = (identifier: string, via: string) => ({ ...call(identifier, sent([])), via });
+
+  test("a public function called through its matching hook passes (control)", () => {
+    const result = compareContracts([viaCall("a:q", "useQuery")], entry("a.js:q", "Query", "public"), []);
+    expect(result.breaking).toEqual([]);
+    expect(result.verdict).toBe("PASS");
+  });
+
+  test("an INTERNAL function called from the client is a proven break", () => {
+    const result = compareContracts([viaCall("a:q", "useQuery")], entry("a.js:q", "Query", "internal"), []);
+    expect(result.breaking).toHaveLength(1);
+    expect(result.breaking[0].path).toBe("<function>");
+    expect(result.breaking[0].detail).toMatch(/not public/);
+    expect(result.verdict).toBe("FAIL");
+  });
+
+  test("a query hook calling a mutation is a proven break", () => {
+    const result = compareContracts([viaCall("a:m", "useQuery")], entry("a.js:m", "Mutation", "public"), []);
+    expect(result.breaking).toHaveLength(1);
+    expect(result.breaking[0].detail).toMatch(/calls a Query.*is a Mutation/);
+  });
+
+  test("useMutation of a query and useAction of a mutation are breaks; the matching kinds pass", () => {
+    expect(compareContracts([viaCall("a:q", "useMutation")], entry("a.js:q", "Query", "public"), []).breaking).toHaveLength(1);
+    expect(compareContracts([viaCall("a:m", "useAction")], entry("a.js:m", "Mutation", "public"), []).breaking).toHaveLength(1);
+    expect(compareContracts([viaCall("a:m", "useMutation")], entry("a.js:m", "Mutation", "public"), []).breaking).toEqual([]);
+    expect(compareContracts([viaCall("a:x", "useAction")], entry("a.js:x", "Action", "public"), []).breaking).toEqual([]);
+  });
+
+  test("the SDK method forms map to the same kinds", () => {
+    expect(compareContracts([viaCall("a:q", "query")], entry("a.js:q", "Query", "public"), []).breaking).toEqual([]);
+    expect(compareContracts([viaCall("a:m", "mutation")], entry("a.js:m", "Mutation", "public"), []).breaking).toEqual([]);
+    expect(compareContracts([viaCall("a:m", "action")], entry("a.js:m", "Mutation", "public"), []).breaking).toHaveLength(1);
+  });
+
+  test("a call whose hook is unknown is not type-checked (never guessed), visibility still is", () => {
+    expect(compareContracts([call("a:m", sent([]))], entry("a.js:m", "Mutation", "public"), []).breaking).toEqual([]);
+    expect(compareContracts([call("a:m", sent([]))], entry("a.js:m", "Mutation", "internal"), []).breaking).toHaveLength(1);
+  });
+});
+
+describe("CS2-2: kind and visibility are part of the contract fingerprint and the spec diff", () => {
+  const withKind = (functionType: string, visibility = "public") => ({
+    functions: [{ identifier: "a.js:b", functionType, visibility: { kind: visibility }, args: obj({ x: field(str) }) }],
+  });
+
+  test("changing the kind changes the fingerprint", () => {
+    expect(contractFingerprint(withKind("Query"), "a:b", "x")).not.toBe(contractFingerprint(withKind("Mutation"), "a:b", "x"));
+  });
+  test("changing the visibility changes the fingerprint", () => {
+    expect(contractFingerprint(withKind("Query"), "a:b", "x")).not.toBe(
+      contractFingerprint(withKind("Query", "internal"), "a:b", "x"),
+    );
+  });
+  test("an identical spec has an identical fingerprint (control)", () => {
+    expect(contractFingerprint(withKind("Query"), "a:b", "x")).toBe(contractFingerprint(withKind("Query"), "a:b", "x"));
+  });
+  test("specDiff records a kind change even when the arguments are identical", () => {
+    const changes = changedContractPaths(withKind("Query"), withKind("Mutation"));
+    expect(changes).toEqual([
+      expect.objectContaining({ identifier: "a:b", path: "<function>", change: "TYPE_CHANGED", deployed: "Query", candidate: "Mutation" }),
+    ]);
+  });
+  test("public -> internal reads as the function being removed from the public surface", () => {
+    expect(changedContractPaths(withKind("Query"), withKind("Query", "internal")).map((c) => c.change)).toContain("FUNCTION_REMOVED");
   });
 });

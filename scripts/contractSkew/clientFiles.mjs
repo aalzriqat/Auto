@@ -63,7 +63,7 @@ const EXTS = new Set([".ts", ".tsx"]);
  * and cannot skew at all.
  */
 const CONVEX_CALL_MARKERS =
-  /\buse(Mutation|Query|Queries|PaginatedQuery|Action)\b|\b(fetchQuery|fetchMutation|fetchAction|preloadQuery)\b/;
+  /\buse(Mutation|Query|Queries|PaginatedQuery|Action)\b|\b(fetchQuery|fetchMutation|fetchAction|preloadQuery)\b|\b(ConvexHttpClient|ConvexReactClient|useConvex)\b|\.(query|mutation|action)\s*\(|\[\s*["'`](query|mutation|action)["'`]\s*\]\s*\(/;
 
 const SKIP_DIRS = new Set([
   "node_modules",
@@ -83,6 +83,9 @@ const SKIP_DIRS = new Set([
   "cypress",
   "e2e",
   "testsprite_tests",
+  // Shared test harness helpers (`convexTest(...).query(...)`). Reported as
+  // unscanned clients once `.query(` became a marker (L-4); they ship to nobody.
+  "test-utils",
 ]);
 
 function isScannableSourceFile(name) {

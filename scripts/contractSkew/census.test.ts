@@ -35,7 +35,7 @@ const lineOf = (name: string, needle: string) =>
 
 // One type-checked program for every fixture: building a program is the slow
 // part (~13s), and the census filters by file anyway.
-const FIXTURES = ["realForms", "requestMaps", "escapes", "deferred", "unrelatedApi"];
+const FIXTURES = ["realForms", "requestMaps", "escapes", "deferred", "unrelatedApi", "shorthand", "elementAccess"];
 const fixtureFiles = FIXTURES.map(fixture);
 let shared: ReturnType<typeof createClientProgram> | undefined;
 const sharedProgram = () => (shared ??= createClientProgram(fixtureFiles, "tsconfig.json"));
@@ -143,6 +143,65 @@ describe("census reconciliation, by site identity", () => {
     const census = runCensus({ program, files, extraction: blank as never }) as unknown as Census;
     expect(census.unaccounted.length).toBeGreaterThan(0);
     expect(census.incomplete).toBe(true);
+  });
+});
+
+describe("CS-3: a shorthand property is a use of the variable (symbol meaning, not spelling)", () => {
+  const census = censusOf(["shorthand"]);
+  const dispositions = (needle: string) => at(census, "shorthand", needle).map((c) => c.disposition);
+
+  test("`return { update }` hands a bound mutation onward: UNRESOLVED at that site", () => {
+    expect(dispositions("return { update };")).toEqual(["UNRESOLVED"]);
+  });
+
+  test("the explicit `{ update: update }` control is UNRESOLVED too (same meaning, same record)", () => {
+    expect(dispositions("return { update: update };")).toEqual(["UNRESOLVED"]);
+  });
+
+  test("the generated `api` root named by shorthand is not silently skipped", () => {
+    expect(dispositions("const holder = { api };")).toEqual(["UNRESOLVED"]);
+  });
+
+  test("L-6: an SDK method pulled off a client by shorthand destructure is recorded UNRESOLVED", () => {
+    expect(dispositions("const { mutation } = client;")).toEqual(["UNRESOLVED"]);
+  });
+});
+
+describe("CS2-1: element-access SDK calls are recognised by the resolved member", () => {
+  const census = censusOf(["elementAccess"]);
+  const dispositions = (needle: string) => at(census, "elementAccess", needle).map((c) => c.disposition);
+
+  test("the dot form is a TRANSMISSION (control)", () => {
+    expect(dispositions("client.query(api.vehicles.list")).toEqual(["TRANSMISSION"]);
+  });
+
+  test('`client["query"](api.…)` reconciles exactly like the dot form', () => {
+    expect(dispositions('client["query"](api.vehicles.list')).toEqual(["TRANSMISSION"]);
+  });
+
+  test('`client["query"](unknownRef)` is not silent: a gap is recorded at the site', () => {
+    const found = at(census, "elementAccess", 'client["query"](ref');
+    expect(found.length).toBeGreaterThan(0);
+    for (const c of found) expect(["UNRESOLVED", "UNACCOUNTED"]).toContain(c.disposition);
+  });
+
+  test("a non-literal member on a Convex client type is UNRESOLVED", () => {
+    expect(dispositions("client[method](ref")).toEqual(["UNRESOLVED"]);
+  });
+
+  test('`const q = client["query"]` (a method taken as a value) is UNRESOLVED', () => {
+    expect(dispositions('const q = client["query"]')).toEqual(["UNRESOLVED"]);
+  });
+
+  test("makeFunctionReference outside the root declaration is UNRESOLVED, never dropped", () => {
+    expect(dispositions('makeFunctionReference("vehicles:list")')).toEqual(["UNRESOLVED"]);
+  });
+
+  test("L-3: a BaseConvexClient string-name method is a coverage gap", () => {
+    expect(dispositions('base.mutation("vehicles:update"')).toEqual(["UNRESOLVED"]);
+    expect(ENTRY_TABLE["BaseConvexClient.mutation"]).toBe("UNSUPPORTED");
+    expect(ENTRY_TABLE["BaseConvexClient.subscribe"]).toBe("UNSUPPORTED");
+    expect(ENTRY_TABLE["BaseConvexClient.action"]).toBe("UNSUPPORTED");
   });
 });
 

@@ -29,7 +29,40 @@ export function indexSpec(spec) {
   const list = Array.isArray(spec) ? spec : Array.isArray(spec?.functions) ? spec.functions : [];
   const byId = new Map();
   for (const fn of list) {
-    if (fn && typeof fn.identifier === "string") byId.set(fn.identifier, fn);
+    // ⚠️ ONLY WHAT A CLIENT CAN CALL IS INDEXED (CS2-2). An `internal` function is
+    // unreachable through the public `api`; an HttpAction is keyed by path and
+    // method, never by identifier. Indexing either made a client call to an
+    // internal function look like a call to a live public one.
+    if (
+      fn &&
+      typeof fn.identifier === "string" &&
+      CALLABLE_TYPES.has(fn.functionType) &&
+      fn.visibility?.kind === "public"
+    ) {
+      byId.set(fn.identifier, fn);
+    }
+  }
+  return byId;
+}
+
+/** The function types a generated `api.*` reference can name. */
+export const CALLABLE_TYPES = new Set(["Query", "Mutation", "Action"]);
+
+/**
+ * Every entry that carries an identifier regardless of visibility. For the
+ * comparator only: it needs to tell "the backend has no such function" from
+ * "the backend has it but it is internal" — two different breaks.
+ *
+ * @param {{ functions?: Array<any> } | Array<any>} spec
+ * @returns {Map<string, any>}
+ */
+export function indexAllNamed(spec) {
+  const list = Array.isArray(spec) ? spec : Array.isArray(spec?.functions) ? spec.functions : [];
+  const byId = new Map();
+  for (const fn of list) {
+    if (fn && typeof fn.identifier === "string" && CALLABLE_TYPES.has(fn.functionType)) {
+      byId.set(fn.identifier, fn);
+    }
   }
   return byId;
 }
@@ -53,6 +86,8 @@ export function specProblems(spec) {
       : null;
   if (!list) return ["the document has no `functions` array"];
   const problems = [];
+  /** @type {Set<string>} */
+  const seenIdentifiers = new Set();
   for (const fn of list) {
     // `convex function-spec` also lists every http.ts route as
     // `{functionType:"HttpAction", method, path}`. The pinned convex package
@@ -65,12 +100,29 @@ export function specProblems(spec) {
       if (typeof fn.method !== "string" || typeof fn.path !== "string") {
         problems.push("an HttpAction entry has no string `method` and `path`");
       }
+      // A route carries no identifier and no argument validator. An entry that
+      // claims to be both a route and a callable function is a document this
+      // tool does not understand — and one the comparator would otherwise
+      // silently ignore while a function by that name goes unchecked.
+      if (fn.identifier !== undefined || fn.args !== undefined) {
+        problems.push(
+          `an HttpAction entry (${fn.method} ${fn.path}) carries ${fn.identifier !== undefined ? "an `identifier`" : "`args`"}; a route is neither callable nor validated`,
+        );
+      }
       continue;
     }
     if (!fn || typeof fn !== "object" || typeof fn.identifier !== "string") {
       problems.push("a function entry has no string `identifier`");
       continue;
     }
+    if (typeof fn.visibility?.kind !== "string") {
+      problems.push(`${fn.identifier}: the entry has no \`visibility.kind\`, so public and internal cannot be told apart`);
+    }
+    const normalizedId = normalizeIdentifier(fn.identifier);
+    if (seenIdentifiers.has(normalizedId)) {
+      problems.push(`${normalizedId}: appears more than once in the document`);
+    }
+    seenIdentifiers.add(normalizedId);
     const args = fn.args;
     if (args === undefined || args === null) continue;
     const type = typeof args === "object" ? args.type : undefined;

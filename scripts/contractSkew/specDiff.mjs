@@ -278,6 +278,20 @@ export function changedContractPaths(deployedSpec, candidateSpec) {
     // `pathsOverlap` would have to special-case.
     const kind = !before ? "FUNCTION_ADDED" : !after ? "FUNCTION_REMOVED" : null;
 
+    // A function whose KIND changed (Query -> Mutation) keeps its arguments, so
+    // the path loop below sees nothing, yet every `useQuery` of it is now a
+    // call the backend refuses. Visibility needs no record here: indexSpec
+    // lists public functions only, so public -> internal is FUNCTION_REMOVED.
+    if (before && after && before.functionType !== after.functionType) {
+      changes.push({
+        identifier,
+        path: "<function>",
+        change: "TYPE_CHANGED",
+        deployed: String(before.functionType),
+        candidate: String(after.functionType),
+      });
+    }
+
     const beforePaths = pathsOf(before);
     const afterPaths = pathsOf(after);
 

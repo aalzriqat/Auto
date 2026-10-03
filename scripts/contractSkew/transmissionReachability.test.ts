@@ -23,6 +23,11 @@ const objectValidator = (fields: Record<string, Validator>): Validator => ({
 const functionSpec = (definitions: Record<string, Validator>) => ({
   functions: Object.entries(definitions).map(([identifier, args]) => ({
     identifier: identifier.replace(":", ".js:"),
+    // CS2-2: only public Query/Mutation/Action entries are indexed. The fixtures
+    // call these through query hooks, except the two mutations; the hook/kind
+    // check has its own tests in contractSkew.test.ts (CS2-2).
+    functionType: /acceptOffer|declineOffer/.test(identifier) ? "Mutation" : "Query",
+    visibility: { kind: "public" },
     args,
   })),
 });

@@ -52,18 +52,21 @@ permissions:
 
 concurrency:
   group: contract-skew
-  # ⚠️ NEVER CANCEL THIS ONE. Three triggers share this group — the hourly cron,
-  # every push to `main`, and manual dispatch — so cancelling means a merge kills
-  # the hourly run in flight, and the next hourly tick kills a merge-triggered
-  # run that is still going.
+  # ⚠️ NEVER CANCEL A RUN IN PROGRESS. Three triggers share this group — the
+  # hourly cron, every push to `main`, and manual dispatch — so cancelling would
+  # let a merge kill the hourly run in flight, and the next hourly tick kill a
+  # merge-triggered run that is still going.
+  #
+  # ⚠️ THIS DOES NOT MEAN NOTHING IS EVER CANCELLED. With `cancel-in-progress:
+  # false` GitHub still keeps at most ONE pending run per group: a newer queued
+  # run REPLACES an older pending one, which is then cancelled without ever
+  # starting. A person can also cancel a run by hand. So the `notify` job below
+  # fires on `cancelled()` as well as `failure()`.
   #
   # A cancelled run answers NOTHING. It is neither a pass nor a failure, it
   # uploads no report, and `gh pr checks` renders it as a plain fail. That is
   # exactly the silent gap the header above rejects: a control that did not look
-  # must never read as a control that looked. Merge is also the highest-value
-  # moment to check, and it is the one cancellation would most often destroy.
-  #
-  # Queueing costs one runner-minute. Cancelling costs the answer.
+  # must never read as a control that looked.
   cancel-in-progress: false
 
 jobs:
@@ -190,7 +193,7 @@ jobs:
   # into the script text.
   notify:
     needs: detect
-    if: ${{ failure() }}
+    if: ${{ failure() || cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
