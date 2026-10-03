@@ -54,6 +54,19 @@ export function specProblems(spec) {
   if (!list) return ["the document has no `functions` array"];
   const problems = [];
   for (const fn of list) {
+    // `convex function-spec` also lists every http.ts route as
+    // `{functionType:"HttpAction", method, path}`. The pinned convex package
+    // declares exactly these kinds (UdfType = Query | Mutation | Action |
+    // HttpAction; its own `convex run` filters `functionType !== "HttpAction"`).
+    // A route has no `identifier` and is not callable through the generated
+    // `api`, so it carries no argument contract: accepted here when well-formed,
+    // and absent from indexSpec().
+    if (fn && typeof fn === "object" && fn.functionType === "HttpAction") {
+      if (typeof fn.method !== "string" || typeof fn.path !== "string") {
+        problems.push("an HttpAction entry has no string `method` and `path`");
+      }
+      continue;
+    }
     if (!fn || typeof fn !== "object" || typeof fn.identifier !== "string") {
       problems.push("a function entry has no string `identifier`");
       continue;
