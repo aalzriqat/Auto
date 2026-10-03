@@ -1,6 +1,16 @@
 import type { Doc } from "../_generated/dataModel";
 
 /**
+ * SCRUM-565 D-19 — the single switch for the no-new-start barrier.
+ *
+ * While true, a destructive `resetOrgFinancialData` is refused unless the
+ * organization is ALREADY mid-reset (a continuation). The same constant is
+ * attested by `orgResetPreflight:countOrgsWithResetInProgress`, so the release
+ * workflow reads from the live backend the value the guard actually enforces.
+ */
+export const FRESH_RESET_STARTS_BLOCKED = true as const;
+
+/**
  * SCRUM-563 — the one definition of an organization's financial-reset state,
  * and the one place the protocol is explained.
  *

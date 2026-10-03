@@ -17,7 +17,7 @@
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expectAppError } from "../test-utils/expectAppError";
-import { resetOrgToCompletion } from "../test-utils/orgResetFixtures";
+import { beginInProgressReset, resetOrgToCompletion, runContinuationBatch } from "../test-utils/orgResetFixtures";
 import { seedOrgWithMember } from "../test-utils/seedOrg";
 import { expect, test, describe, vi, beforeEach, afterEach } from "vitest";
 import schema from "./schema";
@@ -103,13 +103,8 @@ async function resetAndReactivate(s: Setup) {
   await unsuspend(s);
 }
 
-async function resetBatch(t: Harness, orgId: Id<"organizations">, batchSize?: number) {
-  return await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-    orgId,
-    dryRun: false,
-    ...(batchSize === undefined ? {} : { batchSize }),
-  });
-}
+// D-19: fresh starts are refused; exercised as a continuation.
+const resetBatch = runContinuationBatch;
 
 async function orgState(t: Harness, orgId: Id<"organizations">) {
   const org = await t.run((ctx) => ctx.db.get(orgId));
@@ -268,8 +263,21 @@ describe("SCRUM-563 R1 — generation lifecycle", () => {
 
   test("a refused destructive run (org not suspended) does not bump the generation", async () => {
     const s = await setup();
-    await expect(resetBatch(s.t, s.orgId)).rejects.toThrow();
-    expect((await orgState(s.t, s.orgId)).generation).toBeUndefined();
+    // D-19: fresh starts are refused; exercised as a continuation.
+    await beginInProgressReset(s.t, s.orgId);
+    await expect(resetBatch(s.t, s.orgId)).rejects.toThrow(/Suspend this organization/);
+    expect(await orgState(s.t, s.orgId)).toMatchObject({ generation: 1 });
+  });
+
+  test("D-19: a fresh destructive run on a suspended clean org is refused and writes nothing", async () => {
+    const s = await setup();
+    await createExpense(s, "A");
+    await suspend(s.t, s.orgId);
+    await expect(
+      s.t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId: s.orgId, dryRun: false })
+    ).rejects.toThrow(/Fresh financial resets are disabled/);
+    expect(await orgState(s.t, s.orgId)).toEqual({ generation: undefined, completed: undefined, suspended: true });
+    expect((await footprint(s.t, s.orgId)).expenses).toBe(1);
   });
 });
 
@@ -301,9 +309,12 @@ describe("SCRUM-563 F1 — cash drawer state refuses the reset (its own replay s
     await seedCash(s);
     await suspend(s.t, s.orgId);
 
+    // D-19: fresh starts are refused; exercised as a continuation.
     await expect(resetBatch(s.t, s.orgId)).rejects.toThrow(/cash drawer/i);
 
-    expect((await orgState(s.t, s.orgId)).generation).toBeUndefined();
+    // Seeded to in-progress by the helper; the refused batch must not bump it again.
+    expect(await orgState(s.t, s.orgId)).toMatchObject({ generation: 1 });
+    expect((await orgState(s.t, s.orgId)).completed ?? 0).toBe(0);
     expect(await cashRows(s)).toEqual({ sessions: 1, movements: 1 });
     expect((await footprint(s.t, s.orgId)).expenses).toBe(1);
   });
@@ -337,7 +348,11 @@ describe("SCRUM-563 F1 — cash drawer state refuses the reset (its own replay s
     expect((await cashRows(s)).movements).toBe(1);
 
     await suspend(s.t, s.orgId);
-    await expect(resetBatch(s.t, s.orgId)).rejects.toThrow(/cash drawer/i);
+    // D-19: a fresh start is refused (by the barrier, ahead of the cash check); the
+    // cash refusal itself is covered through the continuation path in (a).
+    await expect(
+      s.t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId: s.orgId, dryRun: false })
+    ).rejects.toThrow();
 
     // No reset ever completed, so K can never be replayed across one.
     expect((await orgState(s.t, s.orgId)).generation).toBeUndefined();

@@ -2,7 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { internalMutation } from "./functions";
 import type { DatabaseReader } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { orgResetState } from "./utils/orgResetGeneration";
+import { FRESH_RESET_STARTS_BLOCKED, orgResetState } from "./utils/orgResetGeneration";
 
 /**
  * One-off operational tool: clears an organization's accounting, sales and
@@ -456,6 +456,32 @@ export const resetOrgFinancialData = internalMutation({
     const org = await ctx.db.get(args.orgId);
     const orgName = org?.name ?? null;
 
+    // ⚠️ SCRUM-565 D-19 — THE NO-NEW-START BARRIER. FIRST REFUSAL A DESTRUCTIVE
+    // CALL CAN HIT, BEFORE ANY OTHER CHECK AND BEFORE ANY WRITE.
+    //
+    // Invariant: once this is deployed and older invocations have finished, no
+    // organization can NEWLY enter "reset in progress"; a reset already in
+    // progress can only continue. A fresh start is a destructive call for an org
+    // that has no row (nowhere to record a generation, so it would delete
+    // unrecorded) or whose reset is not in progress (`generation === completed`).
+    // Continuations and every dry run are untouched.
+    //
+    // Why first: the barrier is a property of the call, not of the org's data, so
+    // the answer must not depend on suspension, pending intents, authority or
+    // cash state — otherwise an operator fixing those in turn would reach the
+    // barrier last and still be refused. Nothing above this line writes (only
+    // `ctx.db.get`), and nothing below it runs, so the refusal commits no change.
+    if (
+      FRESH_RESET_STARTS_BLOCKED &&
+      !(args.dryRun ?? true) &&
+      (org === null || !orgResetState(org).inProgress)
+    ) {
+      throw new ConvexError(
+        "Fresh financial resets are disabled (SCRUM-565 D-19). Only an already in-progress " +
+          "reset can continue. Refusing before any deletion."
+      );
+    }
+
     // ⚠️ FAIL-CLOSED PREFLIGHT, TAKEN BEFORE ANY DELETE OR STORAGE WRITE.
     // (SCRUM-208 c15892, Option C.)
     //
@@ -509,7 +535,9 @@ export const resetOrgFinancialData = internalMutation({
     // suspended org passes no tenant auth, so no user writer runs between passes.
     // A PENDING payment intent blocks as defence in depth: settlement already
     // holds for a suspended org, but the org could be unsuspended mid-reset
-    // (SCRUM-563). A missing organizations row skips the suspension check.
+    // (SCRUM-563). A destructive call for a missing organizations row never
+    // reaches this point: D-19 refuses it above as a fresh start, so the
+    // `org !== null` guard below only serves dry runs.
     // Rationale and limits: see the header docblock. Both refusals stay
     // English (internal operator tool).
     const orgSuspended = org?.suspended === true;
@@ -553,10 +581,15 @@ export const resetOrgFinancialData = internalMutation({
       );
     }
 
-    // ⚠️ SCRUM-563 — protocol in `utils/orgResetGeneration.ts`. The bump happens
-    // BEFORE the first delete, in this same mutation. A continuation batch finds
-    // a reset in progress and does not bump again. Dry runs and refused runs
-    // (thrown above) write nothing; a missing org row has nowhere to record it.
+    // ⚠️ SCRUM-563 — protocol in `utils/orgResetGeneration.ts`. A continuation
+    // batch finds a reset in progress and does not bump again. Dry runs and
+    // refused runs (thrown above) write nothing.
+    //
+    // SCRUM-565 D-19: while `FRESH_RESET_STARTS_BLOCKED` holds, the bump below is
+    // unreachable (a destructive call with no reset in progress was refused at the
+    // top). It stays so that flipping the switch restores the SCRUM-563 protocol
+    // unchanged — the bump still happens BEFORE the first delete, in this same
+    // mutation.
     const resetState = orgResetState(org);
     let resetGeneration = resetState.generation;
     if (!dryRun && org !== null && !resetState.inProgress) {
