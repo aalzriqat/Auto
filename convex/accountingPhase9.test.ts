@@ -759,7 +759,7 @@ describe("Phase 9 — commission payment GL posting", () => {
 // ─── Payment-link settlement must never discard a confirmed payment ──────────
 
 describe("payment intent settlement clamping", () => {
-  test("settles even when the receivable was partly paid through another channel", async () => {
+  test("a capture on a partly-paid receivable is held without throwing while the pilot is shut", async () => {
     const { t, orgId, asUser, customerId, userId } = await seedDealer("clamp");
 
     // A 1,000.000 JOD receivable, and a payment link raised for the full amount.
@@ -812,8 +812,9 @@ describe("payment intent settlement clamping", () => {
     // The provider now confirms the link. This must not throw: a throw rolls
     // back the whole mutation, so a payment the provider has already taken
     // would be lost, and its retries would fail identically.
-    // D-20: while the pilot is shut the capture is HELD instead of settled; the
-    // no-throw property (the funds-boundary rule) is what this test still proves.
+    // D-22: while the pilot is shut the capture is HELD instead of settled; the
+    // intent goes terminal CAPTURE_HELD, linked to the held row. The no-throw
+    // property (the funds-boundary rule) is what this test still proves.
     const outcome = await t.mutation(internal.paymentIntents.settleByExternalId, {
       provider: "tap",
       externalId: "tap_clamp_1",
@@ -824,7 +825,8 @@ describe("payment intent settlement clamping", () => {
     expect(outcome).toMatchObject({ kind: "HELD" });
 
     const intent = await t.run((ctx) => ctx.db.get(intentId));
-    expect(intent?.status).toBe("PENDING");
+    expect(intent?.status).toBe("CAPTURE_HELD");
+    expect(intent?.heldFundsId).toBe((outcome as { heldId?: unknown }).heldId);
     expect(intent?.canonicalPaymentId).toBeUndefined();
   });
 });

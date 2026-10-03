@@ -243,7 +243,8 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
     expect(intent?.status).not.toBe("SETTLED");
   });
 
-  // D-20: an ACTIVE org's capture is HELD for finance (pilot shut), not settled.
+  // D-22: an ACTIVE org's capture is HELD for finance (pilot shut), not settled;
+  // the intent goes terminal CAPTURE_HELD, linked to the held row.
   test("F1 CONTROL: an ACTIVE org's capture is held, not settled, while the pilot is shut", async () => {
     const t = convexTestWithComponents(schema, MODULE_GLOB);
     const dealer = await seedDealer(t, "f1ctl");
@@ -258,10 +259,11 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
     });
 
     const intent = await t.run((ctx) => ctx.db.get(intentId));
-    expect(intent?.status).toBe("PENDING");
+    expect(intent?.status).toBe("CAPTURE_HELD");
     expect((await economicFootprint(t, dealer.orgId)).canonicalPayments).toBe(0);
     const held = await t.run((ctx) => ctx.db.query("unmatchedProviderFunds").collect());
     expect(held.map((r) => r.reason)).toEqual(["PAYMENT_LINKS_DISABLED"]);
+    expect(intent?.heldFundsId).toBe(held[0]!._id);
   });
 
   test("F2: an org with destructivePurgeStartedAt receives no economic footprint", async () => {
@@ -287,7 +289,7 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
     const t = convexTestWithComponents(schema, MODULE_GLOB);
     const blocked = await seedDealer(t, "xorga");
     const healthy = await seedDealer(t, "xorgb");
-    await seedIntent(t, blocked, "tap_xa");
+    const blockedIntentId = await seedIntent(t, blocked, "tap_xa");
     const healthyIntentId = await seedIntent(t, healthy, "tap_xb");
     await suspend(t, blocked.orgId);
 
@@ -310,12 +312,21 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
 
     expect(await economicFootprint(t, blocked.orgId)).toEqual(blockedBefore);
     const healthyIntent = await t.run((ctx) => ctx.db.get(healthyIntentId));
-    // D-20: the healthy org's capture is held (pilot shut), not settled, and is
-    // held under ITS org while the suspended org's hold is a LIFECYCLE_REFUSED row.
-    expect(healthyIntent?.status).toBe("PENDING");
+    // D-22: the healthy org's capture is held (pilot shut), not settled; its
+    // intent is terminal CAPTURE_HELD, linked to the row held under ITS org,
+    // while the suspended org's hold is a LIFECYCLE_REFUSED row.
+    expect(healthyIntent?.status).toBe("CAPTURE_HELD");
     const held = await t.run((ctx) => ctx.db.query("unmatchedProviderFunds").collect());
-    expect(held.find((r) => r.orgId === healthy.orgId)?.reason).toBe("PAYMENT_LINKS_DISABLED");
-    expect(held.find((r) => r.orgId === blocked.orgId)?.reason).toBe("LIFECYCLE_REFUSED");
+    const healthyHeld = held.find((r) => r.orgId === healthy.orgId);
+    expect(healthyHeld?.reason).toBe("PAYMENT_LINKS_DISABLED");
+    expect(healthyIntent?.heldFundsId).toBe(healthyHeld?._id);
+    const blockedHeld = held.find((r) => r.orgId === blocked.orgId);
+    expect(blockedHeld?.reason).toBe("LIFECYCLE_REFUSED");
+    // The suspended org's intent is likewise terminal CAPTURE_HELD, linked to its
+    // LIFECYCLE_REFUSED row (the provider capture is recorded, never dropped).
+    const blockedIntent = await t.run((ctx) => ctx.db.get(blockedIntentId));
+    expect(blockedIntent?.status).toBe("CAPTURE_HELD");
+    expect(blockedIntent?.heldFundsId).toBe(blockedHeld?._id);
   });
 });
 
