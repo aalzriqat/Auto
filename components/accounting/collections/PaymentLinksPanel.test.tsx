@@ -14,13 +14,16 @@ const stubs = vi.hoisted(() => ({
   t: (key: string): string => key,
   held: [] as unknown[] | undefined,
   heldThrows: false,
+  // Org switching: the active org, and the one org (if any) whose held query fails.
+  activeOrg: "org1",
+  heldThrowsForOrg: null as string | null,
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => stubs.t(key), isRtl: false, locale: "en" }),
 }));
 vi.mock("@/components/providers/OrgProvider", () => ({
-  useOrg: () => ({ activeOrgId: "org1" }),
+  useOrg: () => ({ activeOrgId: stubs.activeOrg }),
 }));
 vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/hooks/useCurrencyFormatter", () => ({
@@ -34,8 +37,9 @@ vi.mock("convex/react", async () => {
   return {
     usePaginatedQuery: () => ({ results: stubs.rows, status: "Exhausted", loadMore: () => {} }),
     // Convex's useQuery throws the server error during render; mirror that.
-    useQuery: () => {
+    useQuery: (_reference: unknown, args?: { orgId?: string }) => {
       if (stubs.heldThrows) throw new Error("query failed");
+      if (stubs.heldThrowsForOrg !== null && args?.orgId === stubs.heldThrowsForOrg) throw new Error("query failed");
       return stubs.held;
     },
     useMutation: (reference: never) => stubs.mutations.get(getFunctionName(reference)) ?? vi.fn(),
@@ -62,6 +66,8 @@ afterEach(() => {
   stubs.rows = [];
   stubs.held = [];
   stubs.heldThrows = false;
+  stubs.activeOrg = "org1";
+  stubs.heldThrowsForOrg = null;
   stubs.mutations.clear();
   stubs.t = (key: string) => key;
   vi.clearAllMocks();
@@ -213,6 +219,21 @@ describe("PaymentLinksPanel: Payments held for review (SCRUM-571 D-8)", () => {
     expect(screen.getByText("HeldPaymentsError")).toBeTruthy();
     // The payment links table above is unaffected.
     expect(screen.getByText("Layla Nasser")).toBeTruthy();
+    quiet.mockRestore();
+  });
+
+  test("switching org clears a held-payments load error from the previous org", () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    stubs.activeOrg = "orgA";
+    stubs.heldThrowsForOrg = "orgA";
+    const { rerender } = render(<PaymentLinksPanel />);
+    expect(screen.getByText("HeldPaymentsError")).toBeTruthy();
+
+    stubs.activeOrg = "orgB";
+    stubs.held = [];
+    rerender(<PaymentLinksPanel />);
+    expect(screen.queryByText("HeldPaymentsError")).toBeNull();
+    expect(screen.getByText("HeldPaymentsEmpty")).toBeTruthy();
     quiet.mockRestore();
   });
 

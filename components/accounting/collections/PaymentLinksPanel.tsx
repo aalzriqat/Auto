@@ -156,7 +156,7 @@ export function PaymentLinksPanel() {
       <CreatePaymentLinkDialog open={createOpen} onOpenChange={setCreateOpen} />
       <SettlePaymentLinkDialog intent={settleIntent} onOpenChange={(open) => !open && setSettleIntent(null)} />
       <ExpirePaymentLinkDialog intent={expireIntent} onOpenChange={(open) => !open && setExpireIntent(null)} />
-      <HeldPaymentsSection orgId={activeOrgId} />
+      <HeldPaymentsSection key={activeOrgId} orgId={activeOrgId} />
     </div>
   );
 }
@@ -177,8 +177,9 @@ class HeldPaymentsErrorBoundary extends Component<{ children: ReactNode; fallbac
   }
 }
 
-// `orgId` is the only prop and is stable, so the section re-renders only when
-// its own state (the row being resolved) changes.
+// `orgId` is the only prop, and the call site keys this section by org, so an
+// org switch remounts it: that clears the error boundary's failure and any open
+// Resolve row. Otherwise it re-renders only when its own state changes.
 const HeldPaymentsSection = memo(function HeldPaymentsSection({ orgId }: Readonly<{ orgId: Id<"organizations"> }>) {
   const { t } = useLanguage();
   const [resolving, setResolving] = useState<HeldPaymentRow | null>(null);
