@@ -936,10 +936,59 @@ function collectIdentifierFromSymbol(node, symbol, context) {
   const type = symbol
     ? checker.getTypeOfSymbolAtLocation(symbol, node)
     : checker.getTypeAtLocation(node);
+  const narrowed = isShorthandName(node) ? shorthandUseSiteBranches(checker, node, type) : null;
+  if (narrowed) {
+    // Merge exactly as the union branch of collectPaths does (an `undefined`
+    // branch is absence), over only the branches the checker keeps at this call.
+    let merged = null;
+    for (const branch of narrowed) {
+      if (branch.getFlags() & ts.TypeFlags.Undefined) continue;
+      merged = mergeClientNodes(
+        merged,
+        collectPaths(checker, branch, prefix, acc, depth + 1, seen, "LITERAL"),
+      );
+    }
+    return applyUseSiteRefinement(merged ?? clientNode.unresolved(), refinement);
+  }
   return applyUseSiteRefinement(
     collectPaths(checker, type, prefix, acc, depth, seen, "LITERAL"),
     refinement,
   );
+}
+
+function isShorthandName(node) {
+  return ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node;
+}
+
+/**
+ * ⚠️ THE TYPE AT THE CALL SITE, FOR A SHORTHAND PROPERTY.
+ *
+ * `getTypeOfSymbolAtLocation(symbol, location)` applies control-flow narrowing
+ * only when `location` is an expression REFERENCING the symbol. The name of a
+ * shorthand assignment (`{ quoteId }`) is a declaration name, so it came back as
+ * the binding's DECLARED type and silently discarded `if (!quoteId) return;`.
+ * That produced "client can send [null]" for correctly guarded code — a false
+ * production-skew alarm. `getTypeAtLocation(shorthand.name)` DOES go through the
+ * flow-narrowed expression check, but it widens literals (`"A"` -> `string`),
+ * which would turn a provable enum into an unprovable scalar. So the narrowed
+ * type is used only to decide WHICH branches of the declared union survive; the
+ * surviving branches are the declared ones, literals intact.
+ *
+ * @param {import("typescript").TypeChecker} checker
+ * @param {import("typescript").Identifier} node
+ * @param {import("typescript").Type} declared
+ * @returns {import("typescript").Type[] | null} surviving branches, or null when
+ *   nothing was narrowed (the caller then behaves exactly as before)
+ */
+function shorthandUseSiteBranches(checker, node, declared) {
+  if (!declared.isUnion()) return null;
+  const narrowed = checker.getTypeAtLocation(node);
+  const narrowedParts = narrowed.isUnion() ? narrowed.types : [narrowed];
+  const kept = declared.types.filter((branch) =>
+    narrowedParts.some((part) => part === branch || checker.getBaseTypeOfLiteralType(branch) === part),
+  );
+  if (kept.length === 0 || kept.length === declared.types.length) return null;
+  return kept;
 }
 
 function isUndefinedExpression(node) {
