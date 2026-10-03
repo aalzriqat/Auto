@@ -10,7 +10,8 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
-import { RESET_PREFLIGHT_PROTOCOL } from "./orgResetPreflight";
+import { RESET_PREFLIGHT_PROTOCOL, assertPageComplete } from "./orgResetPreflight";
+import { FRESH_RESET_STARTS_BLOCKED } from "./utils/orgResetGeneration";
 
 const MODULES = import.meta.glob("./**/*.*s");
 
@@ -80,7 +81,53 @@ describe("countOrgsWithResetInProgress", () => {
   test("returns exactly the allowed keys and no org identifier", async () => {
     const t = await seed([{ financialResetGeneration: 1 }]);
     const r = await page(t, 10);
-    expect(Object.keys(r).sort()).toEqual(["continueCursor", "inProgress", "isDone", "protocol", "scanned"]);
+    expect(Object.keys(r).sort()).toEqual([
+      "continueCursor",
+      "deploymentUrl",
+      "freshStartsBlocked",
+      "inProgress",
+      "isDone",
+      "protocol",
+      "scanned",
+    ]);
     expect(JSON.stringify(r)).not.toContain("Secret Org");
+  });
+
+  // D-19: the attestation the release workflow reads from the LIVE backend.
+  test("attests protocol v2 and that fresh starts are blocked", async () => {
+    const t = await seed([{}]);
+    const r = await page(t, 10);
+    expect(RESET_PREFLIGHT_PROTOCOL).toBe("SCRUM-565/N9/v2");
+    expect(r.protocol).toBe("SCRUM-565/N9/v2");
+    expect(r.freshStartsBlocked).toBe(true);
+    expect(r.freshStartsBlocked).toBe(FRESH_RESET_STARTS_BLOCKED);
+  });
+
+  test("reports the deployment url from the runtime environment, or null", async () => {
+    const original = process.env.CONVEX_CLOUD_URL;
+    try {
+      process.env.CONVEX_CLOUD_URL = "https://kindly-hound-172.convex.cloud";
+      const t = await seed([{}]);
+      expect((await page(t, 10)).deploymentUrl).toBe("https://kindly-hound-172.convex.cloud");
+      delete process.env.CONVEX_CLOUD_URL;
+      expect((await page(t, 10)).deploymentUrl).toBeNull();
+    } finally {
+      if (original === undefined) delete process.env.CONVEX_CLOUD_URL;
+      else process.env.CONVEX_CLOUD_URL = original;
+    }
+  });
+});
+
+// convex-test cannot produce a SplitRequired page, so the decision is tested at
+// its unit seam: the same function the handler calls before it returns.
+describe("assertPageComplete (L1: never return a partial page as complete)", () => {
+  test("throws on SplitRequired", () => {
+    expect(() => assertPageComplete("SplitRequired")).toThrow(/split/i);
+  });
+
+  test("accepts a normal page, null, undefined and SplitRecommended (a complete page)", () => {
+    for (const status of [null, undefined, "SplitRecommended"] as const) {
+      expect(() => assertPageComplete(status)).not.toThrow();
+    }
   });
 });
