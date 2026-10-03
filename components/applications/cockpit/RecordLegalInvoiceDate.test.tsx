@@ -286,6 +286,128 @@ describe("the date a legal invoice is recorded under", () => {
     expect(captured[0]!.legalInvoiceDate).toBeLessThanOrEqual(Date.now());
   });
 
+  describe("a Save in the second before the refresh lands (Sol 6 SCRUM-596-1, Opus L-1)", () => {
+    // Frozen timers: the clock moves past midnight but the refresh has not run,
+    // as in the deliberate one-second lag or a machine waking from sleep.
+    function frozenAt(instant: Date, tz: string) {
+      process.env.TZ = tz;
+      vi.useFakeTimers();
+      vi.setSystemTime(instant);
+    }
+
+    test("behind UTC, a stale untouched default is refreshed, not sent", async () => {
+      frozenAt(new Date("2026-09-01T03:59:59Z"), "America/New_York");
+      const captured: RecordLegalInvoiceValues[] = [];
+      renderDialog(captured);
+      fillRequired();
+      expect(dateInput().value).toBe("2026-08-31");
+
+      vi.setSystemTime(new Date("2026-09-01T04:00:00.500Z"));
+      await act(async () => {
+        fireEvent.click(submitButton());
+      });
+      expect(captured).toHaveLength(0);
+      expect(dateInput().value).toBe("2026-09-01");
+
+      await act(async () => {
+        fireEvent.click(submitButton());
+      });
+      expect(captured).toHaveLength(1);
+      expect(captured[0]!.legalInvoiceDate).toBe(Date.UTC(2026, 8, 1));
+    });
+
+    test("ahead of UTC, a stale untouched default is cleared, not sent", async () => {
+      frozenAt(new Date("2026-09-30T20:59:59Z"), "Asia/Amman");
+      const captured: RecordLegalInvoiceValues[] = [];
+      renderDialog(captured);
+      fillRequired();
+      expect(dateInput().value).toBe("2026-09-30");
+
+      vi.setSystemTime(new Date("2026-09-30T21:00:00.500Z"));
+      await act(async () => {
+        fireEvent.click(submitButton());
+      });
+      expect(captured).toHaveLength(0);
+      expect(dateInput().value).toBe("");
+      expect(submitButton().disabled).toBe(true);
+    });
+
+    test("at the ledger's midnight a blank default stays unsendable", async () => {
+      frozenAt(new Date("2026-08-09T23:59:59Z"), "Asia/Amman");
+      const captured: RecordLegalInvoiceValues[] = [];
+      renderDialog(captured);
+      fillRequired();
+      expect(dateInput().value).toBe("");
+
+      vi.setSystemTime(new Date("2026-08-10T00:00:00.500Z"));
+      await act(async () => {
+        fireEvent.click(submitButton());
+      });
+      expect(captured).toHaveLength(0);
+    });
+
+    test("an explicit pick is sent as picked at the boundary", async () => {
+      frozenAt(new Date("2026-09-30T20:59:59Z"), "Asia/Amman");
+      const captured: RecordLegalInvoiceValues[] = [];
+      renderDialog(captured);
+      fillRequired();
+      // A different day from the default: re-picking the same value fires no change.
+      fireEvent.change(dateInput(), { target: { value: "2026-09-28" } });
+
+      vi.setSystemTime(new Date("2026-09-30T21:00:00.500Z"));
+      await act(async () => {
+        fireEvent.click(submitButton());
+      });
+      expect(captured).toHaveLength(1);
+      expect(captured[0]!.legalInvoiceDate).toBe(Date.UTC(2026, 8, 28));
+    });
+  });
+
+  test("a day picked before midnight is kept and sent after it (Opus L-3)", async () => {
+    at(new Date("2026-09-30T20:50:00Z"));
+    const captured: RecordLegalInvoiceValues[] = [];
+    renderDialog(captured);
+    fillRequired();
+    fireEvent.change(dateInput(), { target: { value: "2026-09-29" } });
+
+    await act(async () => {
+      vi.advanceTimersByTime(20 * 60_000);
+    });
+    expect(dateInput().value).toBe("2026-09-29");
+    fireEvent.click(submitButton());
+    await vi.waitFor(() => expect(captured).toHaveLength(1));
+    expect(captured[0]!.legalInvoiceDate).toBe(Date.UTC(2026, 8, 29));
+  });
+
+  test("the stored date is captured at open, like the other stored fields (Opus L-2)", () => {
+    at(NOON_IN_AMMAN);
+    const props = {
+      open: true,
+      submitting: false,
+      error: null,
+      scale: 3,
+      currency: "JOD",
+      t: (key: string) => key,
+      onOpenChange: () => {},
+      onSubmit: async () => {},
+    };
+    const { rerender } = render(
+      <RecordLegalInvoiceDialog
+        {...props}
+        existing={{ amountMinor: 12_500_000, number: "INV-0596", date: Date.UTC(2026, 7, 5) }}
+      />
+    );
+    // Another user saves a different invoice meanwhile.
+    rerender(
+      <RecordLegalInvoiceDialog
+        {...props}
+        existing={{ amountMinor: 9_000_000, number: "INV-OTHER", date: Date.UTC(2026, 7, 8) }}
+      />
+    );
+    expect(dateInput().value).toBe("2026-08-05");
+    expect((screen.getByLabelText("LegalInvoiceNumber") as HTMLInputElement).value).toBe("INV-0596");
+  });
+
   test("a stored date is not replaced by the day turning over", async () => {
     at(new Date("2026-09-30T20:50:00Z"));
     render(

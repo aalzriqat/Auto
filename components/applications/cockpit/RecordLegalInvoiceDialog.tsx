@@ -110,7 +110,7 @@ export function RecordLegalInvoiceDialog({
   const [number, setNumber] = useState(() => existing?.number ?? "");
   // A stored date was accepted by the server, so it stays saveable even
   // where it is past this operator's local day (an editor behind UTC).
-  const storedDay = existing?.date ? msToDateInput(existing.date) : null;
+  const [storedDay] = useState(() => (existing?.date ? msToDateInput(existing.date) : null));
   // Only an explicit pick is state. An untouched default means "today", so it
   // is derived on every render and never carries yesterday past midnight.
   const [pickedDay, setPickedDay] = useState<string | null>(null);
@@ -151,9 +151,20 @@ export function RecordLegalInvoiceDialog({
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (submitting || isInvalid) return;
+    if (pickedDay === null && storedDay === null) {
+      // The refresh lands just after midnight (or late, after sleep): a default
+      // rendered yesterday is shown anew rather than sent.
+      const fresh = invoiceDayBounds();
+      if ((fresh.localDayNotOpen ? "" : fresh.latestDay) !== date) {
+        refreshBounds((n) => n + 1);
+        return;
+      }
+    }
 
     setLocalError(null);
     try {
+      // The caller closes the dialog once the save succeeds; on a refusal it
+      // stays open with the operator's entries and the reason.
       await onSubmit({
         legalInvoiceAmountMinor: amountMinor,
         legalInvoiceNumber: number.trim(),
@@ -161,7 +172,6 @@ export function RecordLegalInvoiceDialog({
         issuedTo,
         issuedToOther: issuedTo === "OTHER" ? issuedToOther.trim() : undefined,
       });
-      onOpenChange(false);
     } catch (caught) {
       setLocalError(caught instanceof Error ? caught.message : t("UnexpectedError"));
     }
