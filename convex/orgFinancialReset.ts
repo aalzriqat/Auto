@@ -2,7 +2,11 @@ import { v, ConvexError } from "convex/values";
 import { internalMutation } from "./functions";
 import type { DatabaseReader } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { FRESH_RESET_STARTS_BLOCKED, orgResetState } from "./utils/orgResetGeneration";
+import {
+  beginResetGenerationPatch,
+  isFreshResetStartRefused,
+  orgResetState,
+} from "./utils/orgResetGeneration";
 
 /**
  * One-off operational tool: clears an organization's accounting, sales and
@@ -471,11 +475,7 @@ export const resetOrgFinancialData = internalMutation({
     // cash state — otherwise an operator fixing those in turn would reach the
     // barrier last and still be refused. Nothing above this line writes (only
     // `ctx.db.get`), and nothing below it runs, so the refusal commits no change.
-    if (
-      FRESH_RESET_STARTS_BLOCKED &&
-      !(args.dryRun ?? true) &&
-      (org === null || !orgResetState(org).inProgress)
-    ) {
+    if (isFreshResetStartRefused(org, dryRun)) {
       throw new ConvexError(
         "Fresh financial resets are disabled (SCRUM-565 D-19). Only an already in-progress " +
           "reset can continue. Refusing before any deletion."
@@ -593,8 +593,9 @@ export const resetOrgFinancialData = internalMutation({
     const resetState = orgResetState(org);
     let resetGeneration = resetState.generation;
     if (!dryRun && org !== null && !resetState.inProgress) {
-      resetGeneration = resetState.generation + 1;
-      await ctx.db.patch(args.orgId, { financialResetGeneration: resetGeneration });
+      const beginPatch = beginResetGenerationPatch(org);
+      resetGeneration = beginPatch.financialResetGeneration;
+      await ctx.db.patch(args.orgId, beginPatch);
     }
 
     const perTable: Record<string, number> = {};

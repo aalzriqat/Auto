@@ -11,7 +11,6 @@ import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
 import { RESET_PREFLIGHT_PROTOCOL, assertPageComplete } from "./orgResetPreflight";
-import { FRESH_RESET_STARTS_BLOCKED } from "./utils/orgResetGeneration";
 
 const MODULES = import.meta.glob("./**/*.*s");
 
@@ -100,7 +99,8 @@ describe("countOrgsWithResetInProgress", () => {
     expect(RESET_PREFLIGHT_PROTOCOL).toBe("SCRUM-565/N9/v2");
     expect(r.protocol).toBe("SCRUM-565/N9/v2");
     expect(r.freshStartsBlocked).toBe(true);
-    expect(r.freshStartsBlocked).toBe(FRESH_RESET_STARTS_BLOCKED);
+    // The release contract is the literal true, not "whatever the constant is".
+    expect(r.freshStartsBlocked).toBe(true);
   });
 
   test("reports the deployment url from the runtime environment, or null", async () => {
