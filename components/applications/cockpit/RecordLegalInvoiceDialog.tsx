@@ -65,11 +65,6 @@ function invoiceDayBounds() {
   };
 }
 
-function defaultInvoiceDay(): string {
-  const { localDayNotOpen, latestDay } = invoiceDayBounds();
-  return localDayNotOpen ? "" : latestDay;
-}
-
 type IssuedTo = "CUSTOMER" | "FINANCE_COMPANY" | "OTHER";
 
 export type RecordLegalInvoiceValues = {
@@ -116,9 +111,9 @@ export function RecordLegalInvoiceDialog({
   // A stored date was accepted by the server, so it stays saveable even
   // where it is past this operator's local day (an editor behind UTC).
   const storedDay = existing?.date ? msToDateInput(existing.date) : null;
-  const [date, setDate] = useState(() =>
-    storedDay ?? defaultInvoiceDay()
-  );
+  // Only an explicit pick is state. An untouched default means "today", so it
+  // is derived on every render and never carries yesterday past midnight.
+  const [pickedDay, setPickedDay] = useState<string | null>(null);
   const [issuedTo, setIssuedTo] = useState<IssuedTo>(() =>
     existing?.issuedTo === "CUSTOMER" || existing?.issuedTo === "OTHER"
       ? existing.issuedTo
@@ -128,6 +123,7 @@ export function RecordLegalInvoiceDialog({
   const [localError, setLocalError] = useState<string | null>(null);
 
   const { localDayNotOpen, latestDay, nextLedgerDayAt, nextBoundaryAt } = invoiceDayBounds();
+  const date = pickedDay ?? storedDay ?? (localDayNotOpen ? "" : latestDay);
   // The bounds follow both clocks, so re-render when the local or the ledger's
   // day turns over, and when the tab regains focus or visibility in case its
   // timer was suspended. The operator's pick is state and survives.
@@ -216,7 +212,7 @@ export function RecordLegalInvoiceDialog({
               type="date"
               max={storedDay && storedDay > latestDay ? storedDay : latestDay}
               value={date}
-              onChange={(e) => setDate(e.target.value)}
+              onChange={(e) => setPickedDay(e.target.value)}
               aria-describedby={localDayNotOpen ? "legal-invoice-date-hint" : undefined}
               required
             />

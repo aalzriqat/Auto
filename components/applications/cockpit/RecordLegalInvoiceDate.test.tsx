@@ -238,20 +238,73 @@ describe("the date a legal invoice is recorded under", () => {
     expect(dateInput().value).toBe("2026-08-28");
   });
 
-  test("ahead of UTC, local midnight brings the hint even with yesterday still in the field", async () => {
-    // 23:50 on 9 August in Amman; at 00:00 local the 10th has not opened on the ledger.
-    at(new Date("2026-08-09T20:50:00Z"));
-    renderDialog([]);
-    expect(dateInput().value).toBe("2026-08-09");
+  test("ahead of UTC, an untouched default does not carry the old month past local midnight", async () => {
+    // 23:50 on 30 September in Amman (Sol 6 on 37dcee78b): left open past 00:00,
+    // the pre-fill would file a 1 October paper under September.
+    at(new Date("2026-09-30T20:50:00Z"));
+    const captured: RecordLegalInvoiceValues[] = [];
+    renderDialog(captured);
+    fillRequired();
+    expect(dateInput().value).toBe("2026-09-30");
     expect(document.querySelector("#legal-invoice-date-hint")).toBeNull();
 
     await act(async () => {
       vi.advanceTimersByTime(20 * 60_000);
     });
+    expect(new Date().getDate()).toBe(1);
     expect(document.querySelector("#legal-invoice-date-hint")).not.toBeNull();
-    expect(dateInput().max).toBe("2026-08-09");
-    // A real past day the server accepts: kept, not cleared.
-    expect(dateInput().value).toBe("2026-08-09");
+    expect(dateInput().max).toBe("2026-09-30");
+    expect(dateInput().value).toBe("");
+    expect(submitButton().disabled).toBe(true);
+    // Typed fields survive.
+    expect((screen.getByLabelText("LegalInvoiceNumber") as HTMLInputElement).value).toBe("INV-0596");
+
+    // A September paper is still recordable, but only by picking it.
+    fireEvent.change(dateInput(), { target: { value: "2026-09-30" } });
+    fireEvent.click(submitButton());
+    await vi.waitFor(() => expect(captured).toHaveLength(1));
+    expect(captured[0]!.legalInvoiceDate).toBe(Date.UTC(2026, 8, 30));
+    expect(captured[0]!.legalInvoiceDate).toBeLessThanOrEqual(Date.now());
+  });
+
+  test("behind UTC, an untouched default follows local midnight to the new day", async () => {
+    // 23:59:30 on 31 August in New York; no hint ever shows here, so a stale
+    // default would be silent.
+    at(new Date("2026-09-01T03:59:30Z"), "America/New_York");
+    const captured: RecordLegalInvoiceValues[] = [];
+    renderDialog(captured);
+    fillRequired();
+    expect(dateInput().value).toBe("2026-08-31");
+
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(dateInput().value).toBe("2026-09-01");
+    fireEvent.click(submitButton());
+    await vi.waitFor(() => expect(captured).toHaveLength(1));
+    expect(captured[0]!.legalInvoiceDate).toBe(Date.UTC(2026, 8, 1));
+    expect(captured[0]!.legalInvoiceDate).toBeLessThanOrEqual(Date.now());
+  });
+
+  test("a stored date is not replaced by the day turning over", async () => {
+    at(new Date("2026-09-30T20:50:00Z"));
+    render(
+      <RecordLegalInvoiceDialog
+        open
+        submitting={false}
+        error={null}
+        scale={3}
+        currency="JOD"
+        existing={{ amountMinor: 12_500_000, number: "INV-0596", date: Date.UTC(2026, 8, 28) }}
+        t={(key: string) => key}
+        onOpenChange={() => {}}
+        onSubmit={async () => {}}
+      />
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(20 * 60_000);
+    });
+    expect(dateInput().value).toBe("2026-09-28");
   });
 
   test("the refresh lands after the boundary, never before, and re-arms for the next one", async () => {
