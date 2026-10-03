@@ -450,7 +450,7 @@ describe("Phase 8 — payment intent settlement", () => {
       providerEventType: "tap.charge.CAPTURED",
       providerAccountId: "merchant_123",
     });
-    expect(result).toBeNull();
+    expect(result).toMatchObject({ kind: "HELD" });
 
     const failed = await t.run((ctx) => ctx.db.get(intentId));
     expect(failed?.status).toBe("FAILED");

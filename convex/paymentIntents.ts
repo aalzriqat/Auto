@@ -91,6 +91,18 @@ export const UNMATCHED_FUNDS_REFUSALS = {
 const UNMATCHED_FUNDS_NOTE_MAX = 1000;
 // The most recent distinct provider event ids kept per held capture.
 const UNMATCHED_FUNDS_EVENT_IDS_MAX = 20;
+// Rows returned by `listUnmatchedProviderFunds` (OPEN first, then RESOLVED).
+const HELD_LIST_LIMIT = 100;
+
+/**
+ * What `settleByExternalId` did with a verified capture. HELD carries the id of
+ * the durable unmatched-funds row, so the HTTP route cannot acknowledge a
+ * capture that has neither a settlement nor a held record.
+ */
+export type SettleOutcome =
+  | { kind: "SETTLED"; intentId: Id<"paymentIntents"> }
+  | { kind: "ALREADY_SETTLED"; intentId: Id<"paymentIntents"> }
+  | { kind: "HELD"; heldId: Id<"unmatchedProviderFunds"> };
 
 function refuseUnmatchedFunds(code: keyof typeof UNMATCHED_FUNDS_REFUSALS): never {
   return throwAppError(AppErrorCode[code], UNMATCHED_FUNDS_REFUSALS[code]);
@@ -125,7 +137,7 @@ async function recordUnmatchedProviderFunds(
     providerAccountId?: string;
     providerEventId?: string;
   }
-): Promise<void> {
+): Promise<Id<"unmatchedProviderFunds">> {
   const now = Date.now();
   const existing = await ctx.db
     .query("unmatchedProviderFunds")
@@ -133,7 +145,7 @@ async function recordUnmatchedProviderFunds(
     .unique();
 
   if (!existing) {
-    await ctx.db.insert("unmatchedProviderFunds", {
+    return await ctx.db.insert("unmatchedProviderFunds", {
       orgId: capture.orgId,
       provider: capture.provider,
       externalId: capture.externalId,
@@ -150,12 +162,12 @@ async function recordUnmatchedProviderFunds(
       firstReceivedAt: now,
       lastReceivedAt: now,
     });
-    return;
   }
 
   const conflictNow =
     existing.amountMinor !== capture.amountMinor || existing.currency !== capture.currency;
-  const newlyConflicting = conflictNow && !existing.amountConflict;
+  const amountConflict = existing.amountConflict || conflictNow;
+  const reopen = conflictNow && !existing.amountConflict && existing.reviewStatus === "RESOLVED";
   const knownEventIds = existing.providerEventIds;
   const providerEventIds =
     capture.providerEventId && !knownEventIds.includes(capture.providerEventId)
@@ -166,9 +178,10 @@ async function recordUnmatchedProviderFunds(
     deliveryCount: existing.deliveryCount + 1,
     lastReceivedAt: now,
     providerEventIds,
-    amountConflict: existing.amountConflict || conflictNow,
-    ...(newlyConflicting && existing.reviewStatus === "RESOLVED" ? { reviewStatus: "OPEN" as const } : {}),
+    amountConflict,
+    ...(reopen ? { reviewStatus: "OPEN" as const } : {}),
   });
+  return existing._id;
 }
 
 // Outstanding on the canonical document less the amount reserved by PENDING
@@ -745,7 +758,7 @@ export const expire = mutation({
     intentId: v.id("paymentIntents"),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
     const intent = await ctx.db.get(args.intentId);
     // One message for a missing row and another org's row: never disclose that a
@@ -778,8 +791,8 @@ export const listUnmatchedProviderFunds = query({
       .query("unmatchedProviderFunds")
       .withIndex("by_org_review", (q) => q.eq("orgId", args.orgId).eq("reviewStatus", "OPEN"))
       .order("desc")
-      .take(100);
-    const room = 100 - open.length;
+      .take(HELD_LIST_LIMIT);
+    const room = HELD_LIST_LIMIT - open.length;
     const resolved =
       room > 0
         ? await ctx.db
@@ -788,7 +801,24 @@ export const listUnmatchedProviderFunds = query({
             .order("desc")
             .take(room)
         : [];
-    return [...open, ...resolved];
+    // Only what the panel displays: provider event ids and the resolver's user
+    // id stay server-side.
+    return [...open, ...resolved].map((row) => ({
+      _id: row._id,
+      amountMinor: row.amountMinor,
+      currency: row.currency,
+      provider: row.provider,
+      externalId: row.externalId,
+      reason: row.reason,
+      intentStatusAtReceipt: row.intentStatusAtReceipt,
+      deliveryCount: row.deliveryCount,
+      amountConflict: row.amountConflict,
+      reviewStatus: row.reviewStatus,
+      lastReceivedAt: row.lastReceivedAt,
+      firstReceivedAt: row.firstReceivedAt,
+      resolvedAt: row.resolvedAt,
+      resolutionNote: row.resolutionNote,
+    }));
   },
 });
 
@@ -842,7 +872,7 @@ export const settleByExternalId = internalMutation({
     providerAccountId: v.optional(v.string()),
     providerPayload: v.optional(v.any()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<SettleOutcome> => {
     const provider = args.provider.trim().toLowerCase();
     const externalId = args.externalId.trim();
     const currency = normalizeCurrency(args.currency);
@@ -854,10 +884,11 @@ export const settleByExternalId = internalMutation({
       )
       .unique();
 
-    // SCRUM-571 D-8. Every `return null` below is answered 200 by the HTTP route,
-    // so each one first leaves a durable, finance-visible outcome in THIS
-    // transaction (recordUnmatchedProviderFunds), except an already-SETTLED
-    // intent, whose earlier settlement IS the outcome.
+    // SCRUM-571 D-8. Every non-settling exit below is answered 200 by the HTTP
+    // route, so each one first leaves a durable, finance-visible outcome in THIS
+    // transaction (recordUnmatchedProviderFunds, whose row id is the HELD
+    // outcome), except an already-SETTLED intent, whose earlier settlement IS
+    // the outcome (ALREADY_SETTLED).
     const capture = {
       provider,
       externalId,
@@ -869,9 +900,25 @@ export const settleByExternalId = internalMutation({
 
     if (!intent) {
       console.warn(`[paymentIntents] Unknown externalId for provider ${provider}: ${externalId}`);
-      await recordUnmatchedProviderFunds(ctx, { ...capture, reason: "UNKNOWN_REFERENCE" });
-      return null;
+      const heldId = await recordUnmatchedProviderFunds(ctx, { ...capture, reason: "UNKNOWN_REFERENCE" });
+      return { kind: "HELD", heldId };
     }
+
+    // The intent-scoped holds share one shape. `intent.status` is read at the
+    // call, so the mismatch exit (which patches the intent to FAILED on the row
+    // but not on this in-memory copy) still records the PRE-patch PENDING.
+    const holdForIntent = async (
+      reason: Doc<"unmatchedProviderFunds">["reason"]
+    ): Promise<SettleOutcome> => ({
+      kind: "HELD",
+      heldId: await recordUnmatchedProviderFunds(ctx, {
+        ...capture,
+        orgId: intent.orgId,
+        intentId: intent._id,
+        intentStatusAtReceipt: intent.status,
+        reason,
+      }),
+    });
 
     // ⚠️ SCRUM-302 — ORGANIZATION LIFECYCLE, CHECKED BEFORE ANY ECONOMIC EFFECT.
     //
@@ -915,30 +962,15 @@ export const settleByExternalId = internalMutation({
       // The webhook log above is operator telemetry; this row is the finance
       // record. A redelivery for an intent that already settled has nothing to
       // recover, so it keeps the log only.
-      if (intent.status !== "SETTLED") {
-        await recordUnmatchedProviderFunds(ctx, {
-          ...capture,
-          orgId: intent.orgId,
-          intentId: intent._id,
-          intentStatusAtReceipt: intent.status,
-          reason: "LIFECYCLE_REFUSED",
-        });
-      }
-      return null;
+      if (intent.status === "SETTLED") return { kind: "ALREADY_SETTLED", intentId: intent._id };
+      return await holdForIntent("LIFECYCLE_REFUSED");
     }
 
-    if (intent.status === "SETTLED") return intent._id; // already settled
+    if (intent.status === "SETTLED") return { kind: "ALREADY_SETTLED", intentId: intent._id };
 
     if (intent.status !== "PENDING") {
       console.warn(`[paymentIntents] Cannot settle intent ${intent._id} in status ${intent.status}`);
-      await recordUnmatchedProviderFunds(ctx, {
-        ...capture,
-        orgId: intent.orgId,
-        intentId: intent._id,
-        intentStatusAtReceipt: intent.status,
-        reason: "INTENT_NOT_PENDING",
-      });
-      return null;
+      return await holdForIntent("INTENT_NOT_PENDING");
     }
 
     const now = Date.now();
@@ -972,14 +1004,7 @@ export const settleByExternalId = internalMutation({
         ...verifiedProviderPatch,
         updatedAt: now,
       });
-      await recordUnmatchedProviderFunds(ctx, {
-        ...capture,
-        orgId: intent.orgId,
-        intentId: intent._id,
-        intentStatusAtReceipt: intent.status,
-        reason: "AMOUNT_OR_ACCOUNT_MISMATCH",
-      });
-      return null;
+      return await holdForIntent("AMOUNT_OR_ACCOUNT_MISMATCH");
     }
 
     const canonicalLinks = await createCanonicalIntentSettlement(
@@ -1014,6 +1039,6 @@ export const settleByExternalId = internalMutation({
       occurredAt: now,
     });
 
-    return intent._id;
+    return { kind: "SETTLED", intentId: intent._id };
   },
 });

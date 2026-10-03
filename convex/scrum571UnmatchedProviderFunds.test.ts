@@ -16,7 +16,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Id, TableNames } from "./_generated/dataModel";
 import { commonAr, commonEn } from "../lib/i18n/domains/common";
 import { AppErrorCode } from "./utils/errors";
 import { UNMATCHED_FUNDS_REFUSALS } from "./paymentIntents";
@@ -130,6 +130,11 @@ const heldRows = (w: World) => w.t.run((ctx) => ctx.db.query("unmatchedProviderF
 
 const outstanding = (w: World) => w.t.run(async (ctx) => (await ctx.db.get(w.receivableId))!.outstandingAmount);
 
+const doc = <T extends TableNames>(w: World, id: Id<T>) => w.t.run((ctx) => ctx.db.get(id));
+
+const otherOrg = (w: World) =>
+  w.t.run((ctx) => ctx.db.insert("organizations", { name: "Other", createdAt: Date.now() }));
+
 async function refusal(promise: Promise<unknown>): Promise<{ code?: string; message?: string }> {
   try {
     await promise;
@@ -149,7 +154,7 @@ describe("SCRUM-571 D-8 — a verified capture on a link that is no longer PENDI
     const owedBefore = await outstanding(w);
 
     const result = await capture(w, { providerAccountId: undefined });
-    expect(result).toBeNull();
+    expect(result).toMatchObject({ kind: "HELD" });
 
     const rows = await heldRows(w);
     expect(rows).toHaveLength(1);
@@ -167,7 +172,7 @@ describe("SCRUM-571 D-8 — a verified capture on a link that is no longer PENDI
       amountConflict: false,
       providerEventIds: ["evt_1"],
     });
-    expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("EXPIRED");
+    expect((await doc(w, intentId))?.status).toBe("EXPIRED");
     expect(await economicCounts(w.t)).toEqual(before);
     expect(await outstanding(w)).toBe(owedBefore);
   });
@@ -197,7 +202,7 @@ describe("SCRUM-571 D-8 — an unknown reference is held with no organization", 
     const w = await makeWorld();
     const before = await economicCounts(w.t);
     const result = await capture(w, { externalId: "tap_nobody_knows", amountMinor: 55_000 });
-    expect(result).toBeNull();
+    expect(result).toMatchObject({ kind: "HELD" });
 
     const rows = await heldRows(w);
     expect(rows).toHaveLength(1);
@@ -221,8 +226,8 @@ describe("SCRUM-571 D-8 — an amount, currency or account mismatch is held", ()
     const intentId = await newLink(w);
     const before = await economicCounts(w.t);
 
-    expect(await capture(w, { amountMinor: 99_000 })).toBeNull();
-    expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("FAILED");
+    expect(await capture(w, { amountMinor: 99_000 })).toMatchObject({ kind: "HELD" });
+    expect((await doc(w, intentId))?.status).toBe("FAILED");
     let rows = await heldRows(w);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
@@ -237,7 +242,7 @@ describe("SCRUM-571 D-8 — an amount, currency or account mismatch is held", ()
 
     // The same capture again: the intent is FAILED now, so it takes the
     // non-PENDING path, but it is the same capture and must stay one record.
-    expect(await capture(w, { amountMinor: 99_000, providerEventId: "evt_2" })).toBeNull();
+    expect(await capture(w, { amountMinor: 99_000, providerEventId: "evt_2" })).toMatchObject({ kind: "HELD" });
     rows = await heldRows(w);
     expect(rows).toHaveLength(1);
     expect(rows[0].deliveryCount).toBe(2);
@@ -245,7 +250,7 @@ describe("SCRUM-571 D-8 — an amount, currency or account mismatch is held", ()
     expect(await economicCounts(w.t)).toEqual(before);
   });
 
-  test("a provider-account mismatch and a currency mismatch are held too", async () => {
+  test("a provider-account mismatch is held", async () => {
     const w = await makeWorld();
     await newLink(w, { providerAccountId: "acct_A" });
     await capture(w, { providerAccountId: "acct_B" });
@@ -253,20 +258,21 @@ describe("SCRUM-571 D-8 — an amount, currency or account mismatch is held", ()
     expect(rows).toHaveLength(1);
     expect(rows[0].reason).toBe("AMOUNT_OR_ACCOUNT_MISMATCH");
     expect(rows[0].providerAccountId).toBe("acct_B");
+  });
 
-    const w2 = await makeWorld();
-    await newLink(w2);
-    await capture(w2, { currency: "USD" });
-    const rows2 = await heldRows(w2);
-    expect(rows2).toHaveLength(1);
-    expect(rows2[0]).toMatchObject({ reason: "AMOUNT_OR_ACCOUNT_MISMATCH", currency: "USD" });
+  test("a currency mismatch is held", async () => {
+    const w = await makeWorld();
+    await newLink(w);
+    await capture(w, { currency: "USD" });
+    const rows = await heldRows(w);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ reason: "AMOUNT_OR_ACCOUNT_MISMATCH", currency: "USD" });
   });
 });
 
 describe("SCRUM-571 D-8 — redelivery dedupes on the capture, not the event", () => {
   async function heldOnce(w: World) {
-    await newLink(w);
-    const intentId = (await w.t.run((ctx) => ctx.db.query("paymentIntents").first()))!._id as Id<"paymentIntents">;
+    const intentId = await newLink(w);
     await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId });
     await capture(w, { providerEventId: "evt_1" });
   }
@@ -352,11 +358,11 @@ describe("SCRUM-571 D-8 — a SETTLED link is an idempotent acknowledgement, wit
     const w = await makeWorld();
     const intentId = await newLink(w);
 
-    expect(await capture(w)).toBe(intentId);
+    expect(await capture(w)).toMatchObject({ kind: "SETTLED", intentId });
     const afterFirst = await economicCounts(w.t);
-    expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("SETTLED");
+    expect((await doc(w, intentId))?.status).toBe("SETTLED");
 
-    expect(await capture(w, { providerEventId: "evt_dup" })).toBe(intentId);
+    expect(await capture(w, { providerEventId: "evt_dup" })).toMatchObject({ kind: "ALREADY_SETTLED", intentId });
     expect(await heldRows(w)).toHaveLength(0);
     expect(await economicCounts(w.t)).toEqual(afterFirst);
   });
@@ -364,8 +370,8 @@ describe("SCRUM-571 D-8 — a SETTLED link is an idempotent acknowledgement, wit
   test("PENDING control: a normal settlement settles and writes ZERO records", async () => {
     const w = await makeWorld();
     const intentId = await newLink(w);
-    expect(await capture(w)).toBe(intentId);
-    const intent = await w.t.run((ctx) => ctx.db.get(intentId));
+    expect(await capture(w)).toMatchObject({ kind: "SETTLED", intentId });
+    const intent = await doc(w, intentId);
     expect(intent?.status).toBe("SETTLED");
     expect(intent?.canonicalPaymentId).toBeTruthy();
     expect(intent?.paymentAllocationId).toBeTruthy();
@@ -385,7 +391,7 @@ describe("SCRUM-571 D-8 — a lifecycle refusal keeps its webhook log AND writes
     await suspend(w);
     const before = await economicCounts(w.t);
 
-    expect(await capture(w)).toBeNull();
+    expect(await capture(w)).toMatchObject({ kind: "HELD" });
 
     expect(await refusalLogs(w)).toHaveLength(1);
     const rows = await heldRows(w);
@@ -397,7 +403,7 @@ describe("SCRUM-571 D-8 — a lifecycle refusal keeps its webhook log AND writes
       intentStatusAtReceipt: "PENDING",
       reviewStatus: "OPEN",
     });
-    expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("PENDING");
+    expect((await doc(w, intentId))?.status).toBe("PENDING");
     expect(await economicCounts(w.t)).toEqual(before);
   });
 
@@ -406,8 +412,66 @@ describe("SCRUM-571 D-8 — a lifecycle refusal keeps its webhook log AND writes
     await newLink(w);
     await capture(w);
     await suspend(w);
-    expect(await capture(w, { providerEventId: "evt_late" })).toBeNull();
+    expect(await capture(w, { providerEventId: "evt_late" })).toMatchObject({ kind: "ALREADY_SETTLED" });
     expect(await refusalLogs(w)).toHaveLength(1);
+    expect(await heldRows(w)).toHaveLength(0);
+  });
+});
+
+describe("SCRUM-571 D-8 — settleByExternalId returns a typed outcome; HELD always names a durable row", () => {
+  const suspend = (w: World) =>
+    w.t.run((ctx) => ctx.db.patch(w.orgId, { suspended: true, suspendedAt: Date.now(), suspendedReason: "D-8 test" }));
+
+  test("unknown reference: HELD with the id of the one row", async () => {
+    const w = await makeWorld();
+    const result = await capture(w, { externalId: "tap_kind_unknown" });
+    const [row] = await heldRows(w);
+    expect(result).toEqual({ kind: "HELD", heldId: row._id });
+  });
+
+  test("non-PENDING intent: HELD, and a redelivery names the SAME row", async () => {
+    const w = await makeWorld();
+    const intentId = await newLink(w);
+    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId });
+    const first = await capture(w);
+    const second = await capture(w, { providerEventId: "evt_2" });
+    const [row] = await heldRows(w);
+    expect(first).toEqual({ kind: "HELD", heldId: row._id });
+    expect(second).toEqual({ kind: "HELD", heldId: row._id });
+  });
+
+  test("mismatch: HELD, and the row records the PRE-patch PENDING status", async () => {
+    const w = await makeWorld();
+    await newLink(w);
+    const result = await capture(w, { amountMinor: 99_000 });
+    const [row] = await heldRows(w);
+    expect(result).toEqual({ kind: "HELD", heldId: row._id });
+    expect(row.intentStatusAtReceipt).toBe("PENDING");
+  });
+
+  test("lifecycle-refused on a non-SETTLED intent: HELD", async () => {
+    const w = await makeWorld();
+    await newLink(w);
+    await suspend(w);
+    const result = await capture(w);
+    const [row] = await heldRows(w);
+    expect(result).toEqual({ kind: "HELD", heldId: row._id });
+  });
+
+  test("success: SETTLED with the intent id; a plain repeat: ALREADY_SETTLED", async () => {
+    const w = await makeWorld();
+    const intentId = await newLink(w);
+    expect(await capture(w)).toEqual({ kind: "SETTLED", intentId });
+    expect(await capture(w, { providerEventId: "evt_dup" })).toEqual({ kind: "ALREADY_SETTLED", intentId });
+    expect(await heldRows(w)).toHaveLength(0);
+  });
+
+  test("lifecycle-refused on an ALREADY SETTLED intent: ALREADY_SETTLED, no record", async () => {
+    const w = await makeWorld();
+    const intentId = await newLink(w);
+    await capture(w);
+    await suspend(w);
+    expect(await capture(w, { providerEventId: "evt_late" })).toEqual({ kind: "ALREADY_SETTLED", intentId });
     expect(await heldRows(w)).toHaveLength(0);
   });
 });
@@ -438,7 +502,7 @@ async function insertHeld(
 describe("SCRUM-571 D-8 — paymentIntents.listUnmatchedProviderFunds", () => {
   test("shows this org's rows OPEN first, hides other orgs' rows and no-org rows", async () => {
     const w = await makeWorld();
-    const otherOrgId = await w.t.run((ctx) => ctx.db.insert("organizations", { name: "Other", createdAt: Date.now() }));
+    const otherOrgId = await otherOrg(w);
     const resolved = await insertHeld(w, { externalId: "mine_resolved", reviewStatus: "RESOLVED", resolvedAt: Date.now() });
     const open = await insertHeld(w, { externalId: "mine_open" });
     await insertHeld(w, { externalId: "theirs", orgId: otherOrgId });
@@ -446,6 +510,32 @@ describe("SCRUM-571 D-8 — paymentIntents.listUnmatchedProviderFunds", () => {
 
     const list = await w.asFinance.query(api.paymentIntents.listUnmatchedProviderFunds, { orgId: w.orgId });
     expect(list.map((r) => r._id)).toEqual([open, resolved]);
+  });
+
+  test("returns only the displayed fields: no provider event ids, no resolver id, no org or intent ids", async () => {
+    const w = await makeWorld();
+    await insertHeld(w, { externalId: "shape", resolvedBy: w.userId, providerEventIds: ["evt_secret"] });
+    const [row] = await w.asFinance.query(api.paymentIntents.listUnmatchedProviderFunds, { orgId: w.orgId });
+    expect(Object.keys(row).sort()).toEqual(
+      [
+        "_id",
+        "amountConflict",
+        "amountMinor",
+        "currency",
+        "deliveryCount",
+        "externalId",
+        "firstReceivedAt",
+        "intentStatusAtReceipt",
+        "lastReceivedAt",
+        "provider",
+        "reason",
+        "resolutionNote",
+        "resolvedAt",
+        "reviewStatus",
+      ].filter((key) => key in row)
+    );
+    expect(row).not.toHaveProperty("providerEventIds");
+    expect(row).not.toHaveProperty("resolvedBy");
   });
 
   test("is gated on manage:finance, the same permission that reads payment intents", async () => {
@@ -471,7 +561,7 @@ describe("SCRUM-571 D-8 — paymentIntents.resolveUnmatchedProviderFunds", () =>
       note: "  Reconciled through the bank receipt door  ",
     });
 
-    const row = await w.t.run((ctx) => ctx.db.get(id));
+    const row = await doc(w, id);
     expect(row).toMatchObject({
       reviewStatus: "RESOLVED",
       resolvedBy: w.userId,
@@ -485,18 +575,24 @@ describe("SCRUM-571 D-8 — paymentIntents.resolveUnmatchedProviderFunds", () =>
   test("refuses with coded errors: empty note, too-long note, already resolved, missing and foreign rows", async () => {
     const w = await makeWorld();
     const id = await insertHeld(w, { externalId: "refusals" });
-    const otherOrgId = await w.t.run((ctx) => ctx.db.insert("organizations", { name: "Other", createdAt: Date.now() }));
+    const otherOrgId = await otherOrg(w);
     const foreign = await insertHeld(w, { externalId: "foreign", orgId: otherOrgId });
     const platform = await insertHeld(w, { externalId: "platform", orgId: undefined });
     const gone = await insertHeld(w, { externalId: "gone" });
     await w.t.run((ctx) => ctx.db.delete(gone));
-    const resolve = (rowId: Id<"unmatchedProviderFunds">, note: string) =>
-      refusal(w.asFinance.mutation(api.paymentIntents.resolveUnmatchedProviderFunds, { orgId: w.orgId, id: rowId, note }));
+    const seen = new Set<string | undefined>();
+    const resolve = async (rowId: Id<"unmatchedProviderFunds">, note: string) => {
+      const out = await refusal(
+        w.asFinance.mutation(api.paymentIntents.resolveUnmatchedProviderFunds, { orgId: w.orgId, id: rowId, note })
+      );
+      seen.add(out.code);
+      return out;
+    };
 
     expect((await resolve(id, "")).code).toBe("UNMATCHED_FUNDS_NOTE_REQUIRED");
     expect((await resolve(id, "   \n ")).code).toBe("UNMATCHED_FUNDS_NOTE_REQUIRED");
     expect((await resolve(id, "x".repeat(1001))).code).toBe("UNMATCHED_FUNDS_NOTE_TOO_LONG");
-    expect((await w.t.run((ctx) => ctx.db.get(id)))?.reviewStatus).toBe("OPEN");
+    expect((await doc(w, id))?.reviewStatus).toBe("OPEN");
 
     const missing = await resolve(gone, "ok");
     const other = await resolve(foreign, "ok");
@@ -505,12 +601,18 @@ describe("SCRUM-571 D-8 — paymentIntents.resolveUnmatchedProviderFunds", () =>
     // One message for missing, foreign and platform-scope rows: never disclose another tenant's row.
     expect(other).toEqual(missing);
     expect(platformRow).toEqual(missing);
-    expect((await w.t.run((ctx) => ctx.db.get(foreign)))?.reviewStatus).toBe("OPEN");
+    expect((await doc(w, foreign))?.reviewStatus).toBe("OPEN");
 
     expect((await resolve(id, "done")).code).toBeUndefined();
     const twice = await resolve(id, "again");
     expect(twice.code).toBe("UNMATCHED_FUNDS_ALREADY_RESOLVED");
-    expect((await w.t.run((ctx) => ctx.db.get(id)))?.resolutionNote).toBe("done");
+    expect((await doc(w, id))?.resolutionNote).toBe("done");
+
+    // Every refusal in the table is reachable and was exercised above. Derived
+    // from the table, so a new code without a case here fails this test.
+    const codes = Object.keys(UNMATCHED_FUNDS_REFUSALS);
+    expect(codes.length).toBeGreaterThan(0);
+    for (const code of codes) expect(seen.has(code), `${code} was never exercised`).toBe(true);
   });
 
   test("is gated on manage:finance", async () => {
@@ -520,7 +622,7 @@ describe("SCRUM-571 D-8 — paymentIntents.resolveUnmatchedProviderFunds", () =>
       w.asViewer.mutation(api.paymentIntents.resolveUnmatchedProviderFunds, { orgId: w.orgId, id, note: "nope" })
     );
     expect(out.code).toBe("FORBIDDEN");
-    expect((await w.t.run((ctx) => ctx.db.get(id)))?.reviewStatus).toBe("OPEN");
+    expect((await doc(w, id))?.reviewStatus).toBe("OPEN");
   });
 });
 
@@ -550,7 +652,7 @@ describe("SCRUM-571 D-8 — EN/AR parity for every new message", () => {
     "HeldPaymentsResolvedToast",
     "ExpirePaymentLinkDescription",
   ];
-  const serverKeys = Object.keys(UNMATCHED_FUNDS_REFUSALS ?? {}).map((code) => `ServerError_${code}`);
+  const serverKeys = Object.keys(UNMATCHED_FUNDS_REFUSALS).map((code) => `ServerError_${code}`);
 
   test.each([...uiKeys, ...serverKeys])("%s has non-empty EN and AR with matching placeholders", (key) => {
     expect(en[key], `en ${key}`).toBeTruthy();
@@ -561,9 +663,8 @@ describe("SCRUM-571 D-8 — EN/AR parity for every new message", () => {
   });
 
   test("the server English text equals the dictionary entry the UI translates from", () => {
-    const table = UNMATCHED_FUNDS_REFUSALS ?? {};
-    expect(Object.keys(table).length).toBeGreaterThan(0);
-    for (const [code, message] of Object.entries(table)) {
+    expect(Object.keys(UNMATCHED_FUNDS_REFUSALS).length).toBeGreaterThan(0);
+    for (const [code, message] of Object.entries(UNMATCHED_FUNDS_REFUSALS)) {
       expect(en[`ServerError_${code}`]).toBe(message);
       expect(AppErrorCode[code as keyof typeof AppErrorCode]).toBe(code);
     }
