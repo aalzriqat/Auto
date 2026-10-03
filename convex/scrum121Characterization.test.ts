@@ -1401,7 +1401,10 @@ describe("SCRUM-121 — Codex findings, validated independently", () => {
       const row = await ctx.db.get(receivableId);
       // The debt stays closed.
       expect(row?.status).toBe("CANCELLED");
-      expect((await ctx.db.get(intentId))?.status).toBe("PENDING");
+      // D-22: the hold is the intent's terminal transition, linked to the held row.
+      const intent = await ctx.db.get(intentId);
+      expect(intent?.status).toBe("CAPTURE_HELD");
+      expect(intent?.heldFundsId).toBe((outcome as { heldId?: unknown }).heldId);
     });
   });
 });
@@ -2693,7 +2696,8 @@ describe("SCRUM-121A-PRE — Codex R5 findings, validated independently", () => 
       expect(payments).toHaveLength(0);
 
       const intent = await ctx.db.get(intentId);
-      expect(intent?.status).toBe("PENDING");
+      // D-22: the hold moves the intent to CAPTURE_HELD, linked to the held row.
+      expect(intent?.status).toBe("CAPTURE_HELD");
       expect(intent?.collectionPaymentId).toBeUndefined();
       expect(intent?.canonicalPaymentId).toBeUndefined();
       expect(intent?.paymentAllocationId).toBeUndefined();
@@ -2701,6 +2705,7 @@ describe("SCRUM-121A-PRE — Codex R5 findings, validated independently", () => 
       const held = await ctx.db.query("unmatchedProviderFunds").collect();
       expect(held).toHaveLength(1);
       expect(held[0]!.reason).toBe("PAYMENT_LINKS_DISABLED");
+      expect(intent?.heldFundsId).toBe(held[0]!._id);
     });
   });
 

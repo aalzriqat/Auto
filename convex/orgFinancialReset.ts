@@ -540,8 +540,13 @@ export const resetOrgFinancialData = internalMutation({
     // (SCRUM-563). A destructive call for a missing organizations row never
     // reaches this point: D-19 refuses it above as a fresh start, so the
     // `org !== null` guard below only serves dry runs.
-    // Rationale and limits: see the header docblock. Both refusals stay
-    // English (internal operator tool).
+    // Rationale and limits: see the header docblock. The suspension and
+    // pending-intent refusals (like the authority-lifecycle and cash-drawer
+    // ones) are English-only (internal operator tool); the held-capture refusal
+    // below (D-22) carries an Arabic sentence in the same string.
+    // The held-capture refusal is unconditional, including on a continuation:
+    // it is the S1 stand-in for D-15's HALT. Provenance-based carry-forward of
+    // captures that arrived during the reset is S4 (SCRUM-565, D-23).
     const orgSuspended = org?.suspended === true;
     if (!dryRun && org !== null && !orgSuspended) {
       throw new ConvexError(

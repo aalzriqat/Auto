@@ -219,6 +219,29 @@ describe("D-22 — the hold is the intent's terminal transition", () => {
     await capture(w2);
     expect((await intentDoc(w2, intent2))?.status).toBe("PENDING");
   });
+
+  // D-23 (Opus L-3, Codex no-org gap): ownership is positive, not "not contradicted".
+  // A held row with NO orgId, or with NO intentId, proves nothing about this intent.
+  test.each([
+    { name: "no orgId", row: { orgId: undefined, intentId: "SELF" } },
+    { name: "no intentId", row: { orgId: "SELF", intentId: undefined } },
+    { name: "neither orgId nor intentId", row: { orgId: undefined, intentId: undefined } },
+  ])("a held row with $name does not move the intent to CAPTURE_HELD", async ({ row }) => {
+    const w = await makeWorld();
+    const intentId = await seedLink(w);
+    const heldId = await insertHeld(w, {
+      orgId: row.orgId === "SELF" ? w.orgId : undefined,
+      intentId: row.intentId === "SELF" ? intentId : undefined,
+    });
+
+    expect(await capture(w)).toMatchObject({ kind: "HELD", heldId });
+
+    // The hold is still recorded (D-14); only the intent link is withheld.
+    expect(await heldRows(w)).toHaveLength(1);
+    const intent = await intentDoc(w, intentId);
+    expect(intent?.status).toBe("PENDING");
+    expect(intent?.heldFundsId).toBeUndefined();
+  });
 });
 
 describe("D-22 readers", () => {

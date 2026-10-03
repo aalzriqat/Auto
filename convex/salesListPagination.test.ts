@@ -65,9 +65,26 @@ async function addSale(w: World, over: { isDeleted?: boolean; salespersonId?: Id
       salePrice: 1000,
       saleDate: Date.now(),
       status: "COMPLETED",
-      ...(over.isDeleted ? { isDeleted: true } : {}),
+      // undefined = field unset; true/false are written explicitly.
+      ...(over.isDeleted === undefined ? {} : { isDeleted: over.isDeleted }),
     } as never)
   );
+}
+
+const ids = (r: { page: Array<{ _id: string }> }) => r.page.map((s) => s._id);
+
+async function walk(w: World, numItems: number, salespersonId?: Id<"users">) {
+  const seen: string[] = [];
+  const sizes: number[] = [];
+  let cursor: string | null = null;
+  for (let guard = 0; guard < 50; guard++) {
+    const page: Awaited<ReturnType<typeof list>> = await list(w, numItems, cursor, salespersonId);
+    seen.push(...ids(page));
+    sizes.push(page.page.length);
+    if (page.isDone) break;
+    cursor = page.continueCursor;
+  }
+  return { seen, sizes };
 }
 
 const list = (w: World, numItems: number, cursor: string | null = null, salespersonId?: Id<"users">) =>
@@ -127,5 +144,78 @@ describe("sales.list — soft-deleted rows never produce an empty first page", (
     }
     expect(seen).toEqual(expected);
     expect(new Set(seen).size).toBe(seen.length);
+  });
+});
+
+describe("sales.list — native isDeleted-index pagination (D-23 Q2)", () => {
+  test.each([
+    ["org branch", false],
+    ["salesperson branch", true],
+  ])("%s: every page is full past soft-deleted rows, and a walk returns each live sale once", async (_name, withRep) => {
+    const w = await makeWorld();
+    const rep = withRep ? w.userId : undefined;
+    const live: string[] = [];
+    // Deleted runs longer than a page, interleaved with live rows.
+    for (let i = 0; i < 6; i++) await addSale(w, { isDeleted: true });
+    for (let i = 0; i < 3; i++) live.push(await addSale(w));
+    for (let i = 0; i < 5; i++) await addSale(w, { isDeleted: true });
+    for (let i = 0; i < 4; i++) live.push(await addSale(w));
+    // A different rep's sales must not leak into the salesperson branch.
+    if (withRep) await addSale(w, { salespersonId: w.otherUserId });
+    const deleted = await addSale(w, { isDeleted: true });
+
+    const first = await list(w, 3, null, rep);
+    expect(first.page).toHaveLength(3);
+
+    const { seen, sizes } = await walk(w, 3, rep);
+    expect(seen).toEqual(live);
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(seen).not.toContain(deleted);
+    // Every page except the last is full: no short pages caused by deleted rows.
+    expect(sizes.slice(0, -1).every((n) => n === 3)).toBe(true);
+  });
+
+  test.each([
+    ["org branch", false],
+    ["salesperson branch", true],
+  ])("%s: an explicit isDeleted:false row is listed, after the unset rows (ordering policy)", async (_name, withRep) => {
+    const w = await makeWorld();
+    const rep = withRep ? w.userId : undefined;
+    // Creation order: explicit-false FIRST, then two unset rows. The
+    // isDeleted index sorts unset (undefined) before false, so the policy is
+    // unset rows first, then false rows, regardless of creation time.
+    const explicitFalse = await addSale(w, { isDeleted: false });
+    const unsetA = await addSale(w);
+    const unsetB = await addSale(w);
+    await addSale(w, { isDeleted: true });
+
+    const { seen } = await walk(w, 2, rep);
+    expect(seen).toEqual([unsetA, unsetB, explicitFalse]);
+  });
+
+  test("cursor transition: a cursor from the OLD by_org shape presented to the new list", async () => {
+    const w = await makeWorld();
+    for (let i = 0; i < 5; i++) await addSale(w);
+    const oldPage = await w.t.run((ctx) =>
+      ctx.db
+        .query("sales")
+        .withIndex("by_org", (q) => q.eq("orgId", w.orgId))
+        .paginate({ numItems: 2, cursor: null })
+    );
+    expect(oldPage.isDone).toBe(false);
+
+    let outcome: { kind: "threw"; message: string } | { kind: "returned"; page: string[]; isDone: boolean; splitCursor?: unknown; pageStatus?: unknown };
+    try {
+      const r = await list(w, 2, oldPage.continueCursor);
+      outcome = { kind: "returned", page: ids(r), isDone: r.isDone, splitCursor: r.splitCursor, pageStatus: r.pageStatus };
+    } catch (e) {
+      outcome = { kind: "threw", message: String((e as Error)?.message ?? e) };
+    }
+    // OBSERVED under convex-test (not the real platform): no throw and no
+    // InvalidCursor reset; the foreign cursor yields an EMPTY page marked
+    // isDone, i.e. silent truncation of the list. convex-test does not prove
+    // the real backend's behaviour, so D-23 requires a preview-platform check
+    // before production deploy (fallback: a new query identity).
+    expect(outcome).toEqual({ kind: "returned", page: [], isDone: true, splitCursor: null, pageStatus: null });
   });
 });

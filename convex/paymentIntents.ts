@@ -238,9 +238,9 @@ const CAPTURE_HELD_FROM: ReadonlySet<Doc<"paymentIntents">["status"]> = new Set(
  * SCRUM-571 S1 (D-22): move the intent a capture was held for to CAPTURE_HELD
  * and link the held row. Writes only `status`, `heldFundsId` and `updatedAt` on
  * the intent. Reads the intent fresh, so a status patched earlier in the same
- * mutation is what is judged. If the held row names another org or another
- * intent the intent is left alone for investigation (the hold itself is already
- * recorded, which D-14 requires).
+ * mutation is what is judged. Unless the held row names exactly this org AND this
+ * intent (a missing orgId or intentId does not qualify) the intent is left alone
+ * for investigation (the hold itself is already recorded, which D-14 requires).
  */
 async function markIntentCaptureHeld(
   ctx: MutationCtx,
@@ -249,7 +249,8 @@ async function markIntentCaptureHeld(
 ): Promise<void> {
   const [current, row] = await Promise.all([ctx.db.get(intentId), ctx.db.get(heldId)]);
   if (!current || !row || !CAPTURE_HELD_FROM.has(current.status)) return;
-  if ((row.orgId && row.orgId !== current.orgId) || (row.intentId && row.intentId !== current._id)) {
+  // Strict: a row with no orgId or no intentId proves nothing about this intent.
+  if (row.orgId !== current.orgId || row.intentId !== current._id) {
     console.error(`[paymentIntents] Held capture ${heldId} does not belong to intent ${intentId}; not linked`);
     return;
   }

@@ -377,6 +377,37 @@ describe("resetOrgFinancialData preflight (SCRUM-559 I1)", () => {
     expect(await totalRows(t, orgId)).toEqual(before);
   });
 
+  // D-23 Q1: the unconditional refusal is the S1 stand-in for D-15's HALT. A
+  // continuation (reset already in progress) with a held row refuses BEFORE any
+  // deletion, and repeating the call is stable.
+  test.each([
+    { name: "an OPEN held capture", tag: "ContHeldOpen", status: "OPEN" as const },
+    { name: "a RESOLVED held capture", tag: "ContHeldResolved", status: "RESOLVED" as const },
+  ])("D-23: a continuation with $name refuses before any deletion, twice, with the generation unchanged", async ({ tag, status }) => {
+    const { t, orgId } = await seedPreflightOrg(tag, { heldCaptures: [status] });
+    await beginInProgressReset(t, orgId);
+    const readGeneration = () =>
+      t.run(async (ctx) => {
+        const org = await ctx.db.get(orgId);
+        return {
+          generation: org?.financialResetGeneration,
+          completed: org?.financialResetCompletedGeneration,
+        };
+      });
+    const before = await totalRows(t, orgId);
+    expect(sum(before)).toBeGreaterThan(0);
+    const generationBefore = await readGeneration();
+    expect(generationBefore.generation).not.toEqual(generationBefore.completed);
+
+    for (let call = 0; call < 2; call += 1) {
+      await expect(
+        t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId, dryRun: false })
+      ).rejects.toThrow(/verified provider capture is held/);
+      expect(await totalRows(t, orgId)).toEqual(before);
+      expect(await readGeneration()).toEqual(generationBefore);
+    }
+  });
+
   test("a PENDING intent of ANOTHER organization does not block this one", async () => {
     const t = setup();
     const orgId = await t.run(async (ctx) => {

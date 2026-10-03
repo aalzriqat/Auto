@@ -3,8 +3,6 @@ import { query, MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id, TableNames } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
-import { stream } from "convex-helpers/server/stream";
-import schema from "./schema";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
@@ -115,17 +113,17 @@ export const list = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
     const salespersonId = args.salespersonId;
-    const salesStream = stream(ctx.db, schema).query("sales");
-    const indexed = salespersonId
-      ? salesStream.withIndex("by_org_salesperson", (q) =>
-          q.eq("orgId", args.orgId).eq("salespersonId", salespersonId)
-        )
-      : salesStream.withIndex("by_org", (q) => q.eq("orgId", args.orgId));
-
-    // stream filterWith drops soft-deleted rows before the page is cut (a page is short only at the true end).
-    const pageResult = await indexed
-      .filterWith(async (sale) => sale.isDeleted !== true)
-      .paginate(args.paginationOpts);
+    // Native paginate over the isDeleted index keeps reactive page ends pinned.
+    const pageResult = await (salespersonId
+      ? ctx.db
+          .query("sales")
+          .withIndex("by_org_salesperson_deleted", (q) =>
+            q.eq("orgId", args.orgId).eq("salespersonId", salespersonId).lt("isDeleted", true)
+          )
+      : ctx.db
+          .query("sales")
+          .withIndex("by_org_deleted", (q) => q.eq("orgId", args.orgId).lt("isDeleted", true))
+    ).paginate(args.paginationOpts);
 
     const page = await Promise.all(
       pageResult.page.map(async (sale) => {

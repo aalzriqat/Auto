@@ -2073,6 +2073,10 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_salesperson", ["orgId", "salespersonId"])
+    // sales.list pages these natively: `.lt("isDeleted", true)` keeps unset and
+    // false rows and skips soft-deleted ones inside the index range.
+    .index("by_org_deleted", ["orgId", "isDeleted"])
+    .index("by_org_salesperson_deleted", ["orgId", "salespersonId", "isDeleted"])
     // Same ordering guarantee as by_org_saleDate, but scoped to one
     // salesperson. by_org_salesperson orders by _creationTime, so paging a
     // single rep's commissions through it would order by when the row was
