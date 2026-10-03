@@ -48,10 +48,12 @@ async function economicCounts(t: Harness) {
   });
 }
 
-async function seed(t: Harness) {
-  const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "D14 Dealer", createdAt: Date.now() }));
+// `tag` makes a second, fully independent org/user in the same harness.
+async function seed(t: Harness, tag = "") {
+  const clerkId = `d14_user${tag}`;
+  const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `D14 Dealer${tag}`, createdAt: Date.now() }));
   const userId = await t.run((ctx) =>
-    ctx.db.insert("users", { clerkId: "d14_user", email: "u@example.com", name: "Finance User" })
+    ctx.db.insert("users", { clerkId, email: `u${tag}@example.com`, name: `Finance User${tag}` })
   );
   const roleId = await t.run((ctx) =>
     ctx.db.insert("roles", { orgId, name: "Finance Manager", permissions: ["view:finance", "manage:finance", "approve:requests"] })
@@ -60,7 +62,7 @@ async function seed(t: Harness) {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Layla", lastName: "Nasser", phone: "+962790000000" })
   );
-  const asFinance = t.withIdentity({ subject: "d14_user", clerkId: "d14_user" });
+  const asFinance = t.withIdentity({ subject: clerkId, clerkId });
   const receivableId = await asFinance.mutation(api.collections.createReceivable, {
     idempotencyKey: crypto.randomUUID(),
     orgId,
@@ -139,14 +141,22 @@ type HeldState = {
   seed: (w: World) => Promise<Id<"paymentIntents"> | null>;
 };
 
+// New link, then verified captures while the org is suspended (each is held as
+// LIFECYCLE_REFUSED), then the org is reactivated. Returns the PENDING intent.
+async function holdViaSuspension(w: World, ...laterCaptures: Record<string, unknown>[]) {
+  const intentId = await newLink(w);
+  await setSuspended(w, true);
+  await capture(w);
+  for (const over of laterCaptures) await capture(w, over);
+  await setSuspended(w, false);
+  return intentId;
+}
+
 const STATES: HeldState[] = [
   {
     name: "(i) OPEN LIFECYCLE_REFUSED row, no conflict",
     seed: async (w) => {
-      const intentId = await newLink(w);
-      await setSuspended(w, true);
-      await capture(w);
-      await setSuspended(w, false);
+      const intentId = await holdViaSuspension(w);
       const [row] = await heldRows(w);
       expect(row).toMatchObject({ reason: "LIFECYCLE_REFUSED", reviewStatus: "OPEN", amountConflict: false });
       expect((await doc(w, intentId))?.status).toBe("PENDING");
@@ -156,11 +166,7 @@ const STATES: HeldState[] = [
   {
     name: "(ii) OPEN row with amountConflict",
     seed: async (w) => {
-      const intentId = await newLink(w);
-      await setSuspended(w, true);
-      await capture(w);
-      await capture(w, { providerEventId: "evt_2", amountMinor: 250_000 });
-      await setSuspended(w, false);
+      const intentId = await holdViaSuspension(w, { providerEventId: "evt_2", amountMinor: 250_000 });
       const [row] = await heldRows(w);
       expect(row).toMatchObject({ reviewStatus: "OPEN", amountConflict: true });
       return intentId;
@@ -169,10 +175,7 @@ const STATES: HeldState[] = [
   {
     name: "(iii) RESOLVED row",
     seed: async (w) => {
-      const intentId = await newLink(w);
-      await setSuspended(w, true);
-      await capture(w);
-      await setSuspended(w, false);
+      const intentId = await holdViaSuspension(w);
       const [row] = await heldRows(w);
       await w.asFinance.mutation(api.paymentIntents.resolveUnmatchedProviderFunds, {
         orgId: w.orgId,
@@ -270,50 +273,9 @@ describe("SCRUM-571 D-14 — cross-door and cross-tenant", () => {
     const w = await makeWorld();
     await STATES[3].seed(w);
 
-    const otherOrgId = await w.t.run((ctx) => ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() }));
-    const otherUser = await w.t.run((ctx) =>
-      ctx.db.insert("users", { clerkId: "d14_other", email: "o@example.com", name: "Other Finance" })
-    );
-    const otherRole = await w.t.run((ctx) =>
-      ctx.db.insert("roles", { orgId: otherOrgId, name: "Finance Manager", permissions: ["view:finance", "manage:finance"] })
-    );
-    await w.t.run((ctx) => ctx.db.insert("memberships", { orgId: otherOrgId, userId: otherUser, roleId: otherRole }));
-    const otherCustomer = await w.t.run((ctx) =>
-      ctx.db.insert("customers", { orgId: otherOrgId, firstName: "Omar", lastName: "Other", phone: "+962790000009" })
-    );
-    const otherDoc = await w.t.run((ctx) =>
-      ctx.db.insert("receivableDocuments", {
-        orgId: otherOrgId,
-        documentType: "INVOICE",
-        documentNumber: "DOC-OTHER-1",
-        payerType: "CUSTOMER",
-        customerId: otherCustomer,
-        sourceType: "legacy_receivable",
-        sourceId: crypto.randomUUID(),
-        originalAmountMinor: 900_000,
-        currency: "JOD",
-        scale: 3,
-        issueDate: Date.now(),
-        dueDate: DUE(),
-        status: "OPEN",
-        createdBy: otherUser,
-        createdAt: Date.now(),
-      } as never)
-    );
-    const asOther = w.t.withIdentity({ subject: "d14_other", clerkId: "d14_other" });
+    const other: World = { t: w.t, ...(await seed(w.t, "_other")) };
     const mine = await refusal(newLink(w));
-    const theirs = await refusal(
-      asOther.mutation(api.paymentIntents.create, {
-        idempotencyKey: crypto.randomUUID(),
-        orgId: otherOrgId,
-        customerId: otherCustomer,
-        receivableDocumentId: otherDoc,
-        amountMinor: 100_000,
-        currency: "JOD",
-        provider: "tap",
-        externalId: EXT,
-      } as never)
-    );
+    const theirs = await refusal(newLink(other));
     expect(mine.code).toBe("PAYMENT_LINK_PROVIDER_REFERENCE_UNAVAILABLE");
     expect(theirs).toEqual(mine);
   });

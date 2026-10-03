@@ -62,17 +62,15 @@ function intentStatusClass(status: PaymentIntentRow["status"]) {
   return "text-amber-700 dark:text-amber-300";
 }
 
-// SCRUM-571 D-14 (F-2): every record is shown in ITS OWN currency at ITS OWN
-// scale, never the org's. A provider capture can arrive in any currency, and
-// scaleForCurrency THROWS on an unknown code, which would take the whole
-// section down: an unknown currency renders the raw minor units instead.
+// SCRUM-571 D-14: amounts render in the record's own currency and scale; an
+// unknown code (scaleForCurrency throws) falls back to the raw minor units.
 function useIntentAmount() {
   const { t } = useLanguage();
   const formatInCurrency = useCurrencyFormatterInCurrency();
   return ({ amountMinor, currency }: Readonly<{ amountMinor: number; currency: string }>) => {
     const scale = supportedCurrencyScale(currency);
     if (scale === null) {
-      return interpolate(t("HeldPaymentsRawMinor" as any), { amount: amountMinor, currency });
+      return interpolate(t("HeldPaymentsRawMinor"), { amount: amountMinor, currency });
     }
     return formatInCurrency(amountMinor / Math.pow(10, scale), currency, scale);
   };

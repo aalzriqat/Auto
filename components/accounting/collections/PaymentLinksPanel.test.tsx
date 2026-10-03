@@ -231,17 +231,15 @@ describe("PaymentLinksPanel: Payments held for review (SCRUM-571 D-8)", () => {
   });
 
   describe("each row is shown in its own currency at its own scale (SCRUM-571 D-14 F-2)", () => {
-    test("JOD 100.001 (100001 minor, scale 3) renders three decimals", () => {
-      stubs.held = [held({ amountMinor: 100_001, currency: "JOD" })];
+    test.each([
+      { label: "JOD 100.001 (100001 minor, scale 3) renders three decimals", amountMinor: 100_001, currency: "JOD", shown: "100.001 JOD" },
+      { label: "a USD row in a JOD org renders as USD with two decimals", amountMinor: 12_345, currency: "USD", shown: "123.45 USD" },
+    ])("$label", ({ amountMinor, currency, shown }) => {
+      stubs.held = [held({ amountMinor, currency })];
       render(<PaymentLinksPanel />);
-      expect(screen.getByText("100.001 JOD")).toBeTruthy();
-    });
-
-    test("a USD row in a JOD org renders as USD with two decimals", () => {
-      stubs.held = [held({ amountMinor: 12_345, currency: "USD" })];
-      render(<PaymentLinksPanel />);
-      expect(screen.getByText("123.45 USD")).toBeTruthy();
-      expect(screen.queryByText(/JOD/)).toBeNull();
+      expect(screen.getByText(shown)).toBeTruthy();
+      // The org's own currency must not leak onto a row in another currency.
+      if (currency !== "JOD") expect(screen.queryByText(/JOD/)).toBeNull();
     });
 
     // CAD is not in the UI's CURRENCY_SCALES table (it takes the raw-minor path
