@@ -10,6 +10,13 @@ import { RESET_TABLES_FOR_TEST } from "./orgFinancialReset";
  * must NOT touch at least as much as what it removes.
  */
 
+// SCRUM-565: this file tests the deletion behaviour itself, so it opens the destructive-reset gate
+// for THIS file only. The gate's own refusal is proven, unmocked, in orgFinancialReset.scrum565gate.test.ts.
+vi.mock("./utils/resetProtocol", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/resetProtocol")>()),
+  RESET_PROTOCOL_COMPLETE: true,
+}));
+
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),

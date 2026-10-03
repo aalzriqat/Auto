@@ -32,6 +32,13 @@ import { settleOutbox, makeDue, heldRows, outboxRows } from "../test-utils/outbo
 import { resetOrgToCompletion } from "../test-utils/orgResetFixtures";
 import { seedOrgWithMember } from "../test-utils/seedOrg";
 
+// SCRUM-565: opens the destructive-reset gate for THIS file only (the gate itself is proven unmocked in
+// orgFinancialReset.scrum565gate.test.ts).
+vi.mock("./utils/resetProtocol", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/resetProtocol")>()),
+  RESET_PROTOCOL_COMPLETE: true,
+}));
+
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),

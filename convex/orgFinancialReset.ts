@@ -3,6 +3,12 @@ import { internalMutation } from "./functions";
 import type { DatabaseReader } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { orgResetState } from "./utils/orgResetGeneration";
+import { throwAppError, AppErrorCode } from "./utils/errors";
+import {
+  RESET_PROTOCOL_VERSION,
+  RESET_PROTOCOL_COMPLETE,
+  RESET_PROTOCOL_INCOMPLETE_MESSAGE,
+} from "./utils/resetProtocol";
 
 /**
  * One-off operational tool: clears an organization's accounting, sales and
@@ -441,8 +447,17 @@ export const resetOrgFinancialData = internalMutation({
      * Reported on a dry run so an operator learns it before the destructive form.
      */
     cashDrawerStatePresent: boolean;
+    /** SCRUM-565. The protocol version this build implements. */
+    protocolVersion: number;
+    /** SCRUM-565. False until the final SCRUM-565 slice ships; every destructive run refuses while false. */
+    protocolComplete: boolean;
   }> => {
     const dryRun = args.dryRun ?? true;
+    // SCRUM-565 D-10: closed source-constant gate. First refusal, before any read or generation bump;
+    // fresh and continuation runs both refuse.
+    if (!dryRun && !RESET_PROTOCOL_COMPLETE) {
+      throwAppError(AppErrorCode.RESET_PROTOCOL_INCOMPLETE, RESET_PROTOCOL_INCOMPLETE_MESSAGE);
+    }
     const limit = Math.min(Math.max(args.batchSize ?? RESET_DELETE_BATCH, 1), RESET_DELETE_BATCH);
 
     // Named in the result so an operator can see, in the output they are about
@@ -649,6 +664,8 @@ export const resetOrgFinancialData = internalMutation({
       orgSuspended,
       pendingPaymentIntentsPresent,
       cashDrawerStatePresent,
+      protocolVersion: RESET_PROTOCOL_VERSION,
+      protocolComplete: RESET_PROTOCOL_COMPLETE,
     };
   },
 });

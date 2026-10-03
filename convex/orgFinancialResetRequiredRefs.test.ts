@@ -23,6 +23,13 @@ import { rowsOf, seedBase as seedBaseFor, type Base, type LooseDb } from "../tes
  * `scripts/orgFinancialResetReferenceCoverage.test.ts`.
  */
 
+// SCRUM-565: opens the destructive-reset gate for THIS file only (the gate itself is proven unmocked in
+// orgFinancialReset.scrum565gate.test.ts).
+vi.mock("./utils/resetProtocol", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/resetProtocol")>()),
+  RESET_PROTOCOL_COMPLETE: true,
+}));
+
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),

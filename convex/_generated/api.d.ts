@@ -221,6 +221,7 @@ import type * as utils_prepaidSourceLedger from "../utils/prepaidSourceLedger.js
 import type * as utils_profitApproval from "../utils/profitApproval.js";
 import type * as utils_quoteDepositPosting from "../utils/quoteDepositPosting.js";
 import type * as utils_quoteEconomicsAnchor from "../utils/quoteEconomicsAnchor.js";
+import type * as utils_resetProtocol from "../utils/resetProtocol.js";
 import type * as utils_saleCancellation from "../utils/saleCancellation.js";
 import type * as utils_saleCompletion from "../utils/saleCompletion.js";
 import type * as utils_saleHelpers from "../utils/saleHelpers.js";
@@ -479,6 +480,7 @@ declare const fullApi: ApiFromModules<{
   "utils/profitApproval": typeof utils_profitApproval;
   "utils/quoteDepositPosting": typeof utils_quoteDepositPosting;
   "utils/quoteEconomicsAnchor": typeof utils_quoteEconomicsAnchor;
+  "utils/resetProtocol": typeof utils_resetProtocol;
   "utils/saleCancellation": typeof utils_saleCancellation;
   "utils/saleCompletion": typeof utils_saleCompletion;
   "utils/saleHelpers": typeof utils_saleHelpers;

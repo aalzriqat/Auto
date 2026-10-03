@@ -47,9 +47,7 @@
  * posts once the account is present, so both directions stay exercised.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
@@ -61,6 +59,13 @@ import {
   occurrenceIdempotencyKey,
   RECEIPT_PAYLOAD_VERSION,
 } from "./accounting/receiptOccurrence";
+
+// SCRUM-565: this file tests the deletion behaviour itself, so it opens the destructive-reset gate
+// for THIS file only. The gate's own refusal is proven, unmocked, in orgFinancialReset.scrum565gate.test.ts.
+vi.mock("./utils/resetProtocol", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils/resetProtocol")>()),
+  RESET_PROTOCOL_COMPLETE: true,
+}));
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -1372,16 +1377,17 @@ describe("SCRUM-218-C §10 RM-01 — a bounced cheque cannot silently strand spe
 });
 
 describe("SCRUM-218-C §9 — runtime authority is never persisted or cached", () => {
-  const SOURCES = [
-    "./accounting/receiptMovement.ts",
-    "./collections.ts",
-  ].map((rel) => ({
-    rel,
-    text: readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8"),
-  }));
+  // SCRUM-565: raw glob, not node:fs (no Node builtin under convex/); the count and length checks fail loudly on an unmatched path.
+  const RAW_SOURCES: Record<string, string> = import.meta.glob(
+    ["./accounting/receiptMovement.ts", "./collections.ts"],
+    { query: "?raw", import: "default", eager: true },
+  );
+  const SOURCES = Object.entries(RAW_SOURCES).map(([rel, text]) => ({ rel, text }));
 
   test("no module-scope cache of a receipt identity exists", () => {
+    expect(SOURCES).toHaveLength(2);
     for (const { rel, text } of SOURCES) {
+      expect(text.length, `${rel} source not loaded`).toBeGreaterThan(0);
       const moduleScope = text
         .split("\n")
         .filter((l) => /^(const|let|var)\s/.test(l))
