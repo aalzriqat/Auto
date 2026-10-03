@@ -8,6 +8,7 @@ import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -60,6 +61,10 @@ function intentStatusClass(status: PaymentIntentRow["status"]) {
   if (status === "SETTLED") return "text-emerald-700 dark:text-emerald-300";
   if (status === "FAILED" || status === "EXPIRED") return "text-rose-700 dark:text-rose-300";
   return "text-amber-700 dark:text-amber-300";
+}
+
+function statusLabelKey(status: PaymentIntentRow["status"]) {
+  return `PaymentLinkStatus_${status}`;
 }
 
 // SCRUM-571 D-14: amounts render in the record's own currency and scale; an
@@ -123,7 +128,7 @@ export function PaymentLinksPanel() {
                   <TableCell>{intent.customerName ?? "-"}</TableCell>
                   <TableCell className="uppercase">{intent.provider}</TableCell>
                   <TableCell className={intentStatusClass(intent.status)}>
-                    {intent.status === "CAPTURE_HELD" ? t("PaymentLinkStatus_CAPTURE_HELD" as any) : intent.status}
+                    {t(statusLabelKey(intent.status) as any)}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{intent.externalId ?? "-"}</TableCell>
                   <TableCell className="text-right font-semibold">
@@ -549,11 +554,10 @@ function ExpirePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
           </DialogDescription>
         </DialogHeader>
         <label className="flex items-start gap-2 text-sm">
-          <input
-            type="checkbox"
-            className="mt-1"
+          <Checkbox
             checked={providerChecked}
-            onChange={(event) => setProviderChecked(event.target.checked)}
+            onCheckedChange={(checked) => setProviderChecked(checked === true)}
+            className="mt-0.5"
           />
           <span>{t("ExpireProviderCheckedLabel" as any)}</span>
         </label>

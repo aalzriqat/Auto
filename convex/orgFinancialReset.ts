@@ -561,21 +561,13 @@ export const resetOrgFinancialData = internalMutation({
           "with the provider before resetting. Refusing before any deletion."
       );
     }
-    // SCRUM-571 S1 (D-22). A verified provider capture held for this org (an
-    // `unmatchedProviderFunds` row, OPEN or RESOLVED) blocks a destructive run.
-    // The reset keeps those rows and the payment intents that point at them
-    // (D-8), and a RESOLVED review is only a note, never proof of an economic
-    // outcome (D-14). Once a CAPTURE_HELD link replaces its PENDING state the
-    // PENDING check above no longer sees it, so this is its visible blocker.
-    // `by_org_review` once per status, `.first()` each.
+    // SCRUM-571 S1 (D-22). The reset keeps unmatchedProviderFunds rows (D-8), and a
+    // RESOLVED review is not an economic outcome (D-14), so any row blocks a
+    // destructive run: this is the blocker once the link leaves PENDING.
     const heldProviderCapturesPresent =
       (await ctx.db
         .query("unmatchedProviderFunds")
-        .withIndex("by_org_review", (q) => q.eq("orgId", args.orgId).eq("reviewStatus", "OPEN"))
-        .first()) !== null ||
-      (await ctx.db
-        .query("unmatchedProviderFunds")
-        .withIndex("by_org_review", (q) => q.eq("orgId", args.orgId).eq("reviewStatus", "RESOLVED"))
+        .withIndex("by_org_review", (q) => q.eq("orgId", args.orgId))
         .first()) !== null;
     if (!dryRun && heldProviderCapturesPresent) {
       // Operator-only string: English, with the Arabic sentence in the same

@@ -878,11 +878,9 @@ export const expire = mutation({
     if (!intent || intent.orgId !== args.orgId) {
       refusePaymentLink("PAYMENT_LINK_NOT_FOUND");
     }
-    // SCRUM-571 S1 (D-21/D-22): a verified capture held for review means the
-    // customer may have paid this link. Expiring it would show it as unpaid, so
-    // it refuses, and BEFORE the generic not-pending refusal so a held link
-    // gets the truthful message. A CAPTURE_HELD link, or a link whose provider
-    // reference has a held row (stranded PENDING by pre-D-22 code), never expires.
+    // SCRUM-571 S1 (D-21/D-22): `status === "CAPTURE_HELD"` is a deliberate backstop
+    // beside the `heldCaptureFor` probe, which also covers PENDING links stranded
+    // by pre-D-22 code. It sits before NOT_PENDING on purpose, for the truthful message.
     if (
       intent.status === "CAPTURE_HELD" ||
       (intent.externalId && (await heldCaptureFor(ctx, intent.provider, intent.externalId)))

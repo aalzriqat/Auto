@@ -122,11 +122,7 @@ export const list = query({
         )
       : salesStream.withIndex("by_org", (q) => q.eq("orgId", args.orgId));
 
-    // `filterWith` on a convex-helpers stream drops soft-deleted rows BEFORE the
-    // page is cut, so a page is only short at the true end of the data. The older
-    // `filter(...).paginate()` filtered each fetched page afterwards, which
-    // returned an EMPTY first page (isDone false) whenever the first raw page was
-    // all deleted sales. Replaces a query-level field filter the lint rule refuses.
+    // stream filterWith drops soft-deleted rows before the page is cut (a page is short only at the true end).
     const pageResult = await indexed
       .filterWith(async (sale) => sale.isDeleted !== true)
       .paginate(args.paginationOpts);

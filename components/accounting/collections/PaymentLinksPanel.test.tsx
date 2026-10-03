@@ -127,6 +127,18 @@ describe("PaymentLinksPanel: Expire link", () => {
     expect(settle).toEqual([]);
   });
 
+  test("a non-held status renders its translated label, not the raw status", () => {
+    stubs.rows = [intent({ status: "SETTLED" })];
+    render(<PaymentLinksPanel />);
+    expect(screen.getByText("PaymentLinkStatus_SETTLED")).toBeTruthy();
+    expect(screen.queryByText("SETTLED")).toBeNull();
+    for (const locale of [commonEn, commonAr] as Record<string, string>[]) {
+      for (const status of ["PENDING", "SETTLED", "FAILED", "EXPIRED", "REFUNDED", "CAPTURE_HELD"]) {
+        expect(locale[`PaymentLinkStatus_${status}`]).toBeTruthy();
+      }
+    }
+  });
+
   test("Cancel closes the dialog without calling the server", async () => {
     const expire = vi.fn();
     stubs.mutations.set("paymentIntents:expire", expire);

@@ -1065,6 +1065,11 @@ export const commonEn = {
   HeldPaymentsDesc:
     "Payments the provider confirmed that were not applied to any debt. Nothing here has changed what a customer owes. A payment link with a held payment shows as capture held for review and cannot be expired. Record the money through the normal receipt flow, then mark the item resolved. Closing a review does not settle the payment link or change the customer's balance. A held payment's reference cannot be used to settle a payment link.",
   PaymentLinkStatus_CAPTURE_HELD: "Capture held for review",
+  PaymentLinkStatus_PENDING: "Pending",
+  PaymentLinkStatus_SETTLED: "Settled",
+  PaymentLinkStatus_FAILED: "Failed",
+  PaymentLinkStatus_EXPIRED: "Expired",
+  PaymentLinkStatus_REFUNDED: "Refunded",
   ExpireProviderCheckedLabel:
     "I checked this link in the payment provider's dashboard and it shows no payment.",
   HeldPaymentsRawMinor: "{amount} {currency} (smallest unit)",
@@ -2052,6 +2057,11 @@ export const commonAr = {
   HeldPaymentsDesc:
     "دفعات أكّدها مزوّد الدفع ولم تُطبَّق على أي دين. لم يتغير هنا أي مبلغ مستحق على العميل. يظهر رابط الدفع الذي عليه دفعة محتجزة بحالة «دفعة مؤكدة محتجزة للمراجعة» ولا يمكن إنهاء صلاحيته. سجّل المبلغ عبر مسار الإيصالات المعتاد، ثم أغلق مراجعة البند. إغلاق المراجعة لا يسوّي رابط الدفع ولا يغيّر رصيد العميل. لا يمكن استخدام مرجع دفعة محتجزة لتسوية رابط دفع.",
   PaymentLinkStatus_CAPTURE_HELD: "دفعة مؤكدة محتجزة للمراجعة",
+  PaymentLinkStatus_PENDING: "قيد الانتظار",
+  PaymentLinkStatus_SETTLED: "مسدد",
+  PaymentLinkStatus_FAILED: "فشل",
+  PaymentLinkStatus_EXPIRED: "منتهي الصلاحية",
+  PaymentLinkStatus_REFUNDED: "مسترد",
   ExpireProviderCheckedLabel: "تحققت من هذا الرابط في لوحة مزوّد الدفع ولا يظهر أي دفعة.",
   HeldPaymentsRawMinor: "{amount} {currency} (أصغر وحدة)",
   HeldPaymentsLoading: "جاري تحميل الدفعات المحتجزة...",
