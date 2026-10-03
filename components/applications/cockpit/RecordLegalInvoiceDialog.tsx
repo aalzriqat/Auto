@@ -20,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { dateInputToUtcMs, msToDateInput, todayDateInput } from "@/lib/dateInput";
+import { economicDateInputToMs, economicTodayDateInput, msToDateInput } from "@/lib/dateInput";
 
 function parseMajor(value: string, scale: number): number | null {
   const trimmed = value.trim();
@@ -74,7 +74,7 @@ export function RecordLegalInvoiceDialog({
   );
   const [number, setNumber] = useState(() => existing?.number ?? "");
   const [date, setDate] = useState(() =>
-    existing?.date ? msToDateInput(existing.date) : todayDateInput()
+    existing?.date ? msToDateInput(existing.date) : economicTodayDateInput()
   );
   const [issuedTo, setIssuedTo] = useState<IssuedTo>(() =>
     existing?.issuedTo === "CUSTOMER" || existing?.issuedTo === "OTHER"
@@ -100,7 +100,7 @@ export function RecordLegalInvoiceDialog({
       await onSubmit({
         legalInvoiceAmountMinor: amountMinor,
         legalInvoiceNumber: number.trim(),
-        legalInvoiceDate: dateInputToUtcMs(date),
+        legalInvoiceDate: economicDateInputToMs(date),
         issuedTo,
         issuedToOther: issuedTo === "OTHER" ? issuedToOther.trim() : undefined,
       });
@@ -153,7 +153,7 @@ export function RecordLegalInvoiceDialog({
             <Input
               id="legal-invoice-date"
               type="date"
-              max={todayDateInput()}
+              max={economicTodayDateInput()}
               value={date}
               onChange={(e) => setDate(e.target.value)}
               required
