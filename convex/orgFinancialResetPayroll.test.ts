@@ -1,7 +1,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
-import { internal } from "./_generated/api";
+import { runContinuationBatch } from "../test-utils/orgResetFixtures";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -57,9 +57,8 @@ describe("resetOrgFinancialData never strands a payroll item's commissionSaleIds
 
     let remaining = Number.POSITIVE_INFINITY;
     for (let pass = 0; pass < 12 && remaining > 0; pass += 1) {
-      const res = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-        orgId, dryRun: false, batchSize: 1,
-      });
+      // D-19: fresh starts are refused; exercised as a continuation.
+      const res = await runContinuationBatch(t, orgId, 1);
       remaining = res.remaining;
       await t.run(async (ctx) => {
         const items = await ctx.db.query("payrollItems").collect();

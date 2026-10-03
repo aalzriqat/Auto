@@ -2,25 +2,56 @@ import type { Id } from "../convex/_generated/dataModel";
 import type { MutationCtx } from "../convex/_generated/server";
 import { RESET_ORG_INDEX_FOR_TEST } from "../convex/orgFinancialReset";
 import { internal } from "../convex/_generated/api";
+import { beginResetGenerationPatch, orgResetState } from "../convex/utils/orgResetGeneration";
 import type { convexTestWithComponents } from "./convexTest";
+
+type Harness = ReturnType<typeof convexTestWithComponents>;
+
+/**
+ * D-19 (SCRUM-565): fresh destructive resets are refused; only a reset that is
+ * already in progress can continue. This puts an org into that state the way the
+ * old first destructive batch did: `financialResetGeneration` moves to
+ * `completed + 1`, `financialResetCompletedGeneration` is left alone. A no-op
+ * when the org is already mid-reset or has no row.
+ */
+export async function beginInProgressReset(t: Harness, orgId: Id<"organizations">) {
+  await t.run(async (ctx) => {
+    const org = await ctx.db.get(orgId);
+    if (org === null || orgResetState(org).inProgress) return;
+    await ctx.db.patch(orgId, beginResetGenerationPatch(org));
+  });
+}
+
+/** One destructive batch against an org that is already mid-reset. */
+async function runDestructiveBatch(t: Harness, orgId: Id<"organizations">, batchSize?: number) {
+  return await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
+    orgId,
+    dryRun: false,
+    ...(batchSize === undefined ? {} : { batchSize }),
+  });
+}
+
+/** One destructive batch, run as a continuation (the only destructive path D-19 leaves). */
+export async function runContinuationBatch(t: Harness, orgId: Id<"organizations">, batchSize?: number) {
+  await beginInProgressReset(t, orgId);
+  return await runDestructiveBatch(t, orgId, batchSize);
+}
 
 /**
  * Runs destructive reset batches until one reports `remaining === 0`. THROWS if
  * that never happens within `maxBatches`, so a reset that stalls fails loudly
- * instead of letting the test assert against a half-reset org.
+ * instead of letting the test assert against a half-reset org. Seeds the
+ * in-progress state first (D-19).
  */
 export async function resetOrgToCompletion(
-  t: ReturnType<typeof convexTestWithComponents>,
+  t: Harness,
   orgId: Id<"organizations">,
   batchSize?: number,
   maxBatches = 40
 ) {
+  await beginInProgressReset(t, orgId);
   for (let i = 0; i < maxBatches; i += 1) {
-    const result = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-      orgId,
-      dryRun: false,
-      ...(batchSize === undefined ? {} : { batchSize }),
-    });
+    const result = await runDestructiveBatch(t, orgId, batchSize);
     if (result.remaining === 0) return result;
   }
   throw new Error(`org financial reset did not reach remaining === 0 within ${maxBatches} batches`);
