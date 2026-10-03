@@ -218,6 +218,14 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "The settlement ID does not match this payment link's provider reference. Check it and try again. Nothing has been changed.",
     "معرّف التسوية لا يطابق مرجع المزوّد لرابط الدفع هذا. تحقق منه وأعد المحاولة. لم يتم تغيير أي شيء.",
   ],
+  ServerError_PAYMENT_LINK_PROVIDER_REFERENCE_UNAVAILABLE: [
+    "This provider reference is unavailable. Ask finance to review it. Nothing has been changed.",
+    "مرجع المزوّد هذا غير متاح. اطلب من قسم المالية مراجعته. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_SETTLEMENT_REQUIRES_REVIEW: [
+    "This payment must be reviewed before the link can be marked settled. Nothing has been changed.",
+    "يجب مراجعة هذه الدفعة قبل تحديد رابط الدفع كمُسوّى. لم يتم تغيير أي شيء.",
+  ],
   // SCRUM-571 D-8 — resolving a held provider payment.
   ServerError_UNMATCHED_FUNDS_NOT_FOUND: [
     "This held payment could not be found. Nothing has been changed.",

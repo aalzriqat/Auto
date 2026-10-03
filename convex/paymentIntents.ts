@@ -70,6 +70,10 @@ export const PAYMENT_LINK_REFUSALS = {
     "Only a payment link that is still waiting for payment can be marked settled. Nothing has been changed.",
   PAYMENT_LINK_PROVIDER_ID_MISMATCH:
     "The settlement ID does not match this payment link's provider reference. Check it and try again. Nothing has been changed.",
+  PAYMENT_LINK_PROVIDER_REFERENCE_UNAVAILABLE:
+    "This provider reference is unavailable. Ask finance to review it. Nothing has been changed.",
+  PAYMENT_LINK_SETTLEMENT_REQUIRES_REVIEW:
+    "This payment must be reviewed before the link can be marked settled. Nothing has been changed.",
 } as const satisfies Record<string, string>;
 
 function refusePaymentLink(code: keyof typeof PAYMENT_LINK_REFUSALS): never {
@@ -182,6 +186,28 @@ async function recordUnmatchedProviderFunds(
     ...(reopen ? { reviewStatus: "OPEN" as const } : {}),
   });
   return existing._id;
+}
+
+/**
+ * SCRUM-571 D-14. Once ANY `unmatchedProviderFunds` row exists for a (provider,
+ * externalId), in any state, that identity is quarantined: a verified capture
+ * ends in exactly one settlement OR exactly one held row, never both, and the
+ * money may already have been recorded by finance through the receipt flow. No
+ * door may create an intent with it or settle an intent with it.
+ *
+ * `provider` and `externalId` must already be normalized exactly as the webhook
+ * writer does (`settleByExternalId`: provider trimmed + lower-cased, externalId
+ * trimmed), which `create` and `intent.provider` also guarantee.
+ */
+async function heldCaptureFor(
+  ctx: MutationCtx,
+  provider: string,
+  externalId: string
+): Promise<Doc<"unmatchedProviderFunds"> | null> {
+  return await ctx.db
+    .query("unmatchedProviderFunds")
+    .withIndex("by_provider_external", (q) => q.eq("provider", provider).eq("externalId", externalId))
+    .unique();
 }
 
 // Outstanding on the canonical document less the amount reserved by PENDING
@@ -649,6 +675,12 @@ export const create = mutation({
         }
 
         if (externalId) {
+          // D-14, checked FIRST: one refusal whether the held row is this org's,
+          // another org's or has no org, so a foreign or platform row is never
+          // disclosed, and a held identity is never reported as a plain duplicate.
+          if (await heldCaptureFor(ctx, provider, externalId)) {
+            refusePaymentLink("PAYMENT_LINK_PROVIDER_REFERENCE_UNAVAILABLE");
+          }
           const existing = await ctx.db
             .query("paymentIntents")
             .withIndex("by_external_id", (q) =>
@@ -717,6 +749,21 @@ export const markSettled = mutation({
         const externalId = optionalTrimmed(args.externalId);
         if (externalId && intent.externalId && externalId !== intent.externalId) {
           refusePaymentLink("PAYMENT_LINK_PROVIDER_ID_MISMATCH");
+        }
+
+        // SCRUM-571 D-14 — a held provider identity is quarantined. Throws, so
+        // the transaction rolls back and no completed idempotency record exists.
+        const effectiveExternalId = externalId ?? intent.externalId;
+        if (effectiveExternalId && (await heldCaptureFor(ctx, intent.provider, effectiveExternalId))) {
+          refusePaymentLink("PAYMENT_LINK_SETTLEMENT_REQUIRES_REVIEW");
+        }
+        // One provider identity must never belong to two intents.
+        if (externalId && !intent.externalId) {
+          const owner = await ctx.db
+            .query("paymentIntents")
+            .withIndex("by_external_id", (q) => q.eq("provider", intent.provider).eq("externalId", externalId))
+            .unique();
+          if (owner && owner._id !== intent._id) refusePaymentLink("PAYMENT_LINK_PROVIDER_ID_IN_USE");
         }
 
         const now = Date.now();
@@ -970,6 +1017,17 @@ export const settleByExternalId = internalMutation({
 
     if (intent.status !== "PENDING") {
       console.warn(`[paymentIntents] Cannot settle intent ${intent._id} in status ${intent.status}`);
+      return await holdForIntent("INTENT_NOT_PENDING");
+    }
+
+    // SCRUM-571 D-14. A held row already exists for this identity: it is
+    // quarantined, so this redelivery is recorded on THAT row and nothing else
+    // happens. The lifecycle check above runs before the amount comparison, so
+    // that row may never have been compared to the intent, and finance may
+    // already have recorded the money. No intent patch, settlement or GL here.
+    // `reason` is ignored by recordUnmatchedProviderFunds when a row exists (only
+    // the insert branch reads it), so the value passed is irrelevant.
+    if (await heldCaptureFor(ctx, provider, externalId)) {
       return await holdForIntent("INTENT_NOT_PENDING");
     }
 

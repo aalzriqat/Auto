@@ -677,6 +677,40 @@ const REFUSAL_CASES: ReadonlyArray<{ code: string; run: (w: World) => Promise<un
     },
   },
   {
+    // D-14: surfaced by the Create dialog (create refuses a held provider reference).
+    code: "PAYMENT_LINK_PROVIDER_REFERENCE_UNAVAILABLE",
+    run: async (w) => {
+      await w.t.run((ctx) =>
+        ctx.db.insert("unmatchedProviderFunds", {
+          provider: "tap", externalId: "ext-held", reason: "UNKNOWN_REFERENCE", amountMinor: 1, currency: "JOD",
+          providerEventIds: [], deliveryCount: 1, amountConflict: false, reviewStatus: "OPEN",
+          firstReceivedAt: Date.now(), lastReceivedAt: Date.now(),
+        })
+      );
+      return createWith(w, { externalId: "ext-held" });
+    },
+  },
+  {
+    // D-14: surfaced by the Settle dialog (markSettled refuses a held provider reference).
+    code: "PAYMENT_LINK_SETTLEMENT_REQUIRES_REVIEW",
+    run: async (w) => {
+      const intentId = await createWith(w, {});
+      await w.t.run((ctx) =>
+        ctx.db.insert("unmatchedProviderFunds", {
+          provider: "tap", externalId: "ext-held", reason: "UNKNOWN_REFERENCE", amountMinor: 1, currency: "JOD",
+          providerEventIds: [], deliveryCount: 1, amountConflict: false, reviewStatus: "OPEN",
+          firstReceivedAt: Date.now(), lastReceivedAt: Date.now(),
+        })
+      );
+      return w.asFinance.mutation(api.paymentIntents.markSettled, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: w.orgId,
+        intentId: intentId as Id<"paymentIntents">,
+        externalId: "ext-held",
+      });
+    },
+  },
+  {
     code: "PAYMENT_LINK_PROVIDER_ID_MISMATCH",
     run: async (w) => {
       const intentId = await createWith(w, { externalId: "ext-A" });
