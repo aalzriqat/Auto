@@ -47,6 +47,10 @@ function parseMajor(value: string, scale: number): number | null {
  */
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
+function untouchedDefault(bounds: { localDayNotOpen: boolean; latestDay: string }) {
+  return bounds.localDayNotOpen ? "" : bounds.latestDay;
+}
+
 function invoiceDayBounds() {
   const localDay = todayDateInput();
   const ledgerDay = economicTodayDateInput();
@@ -111,8 +115,11 @@ export function RecordLegalInvoiceDialog({
   // A stored date was accepted by the server, so it stays saveable even
   // where it is past this operator's local day (an editor behind UTC).
   const [storedDay] = useState(() => (existing?.date ? msToDateInput(existing.date) : null));
-  // Only an explicit pick is state. An untouched default means "today", so it
-  // is derived on every render and never carries yesterday past midnight.
+  // The pre-fill is offered only for the day the form opened on. If the day
+  // changes while it is open, neither the old day nor the new one is assumed:
+  // a pick of the shown day fires no change event, so "untouched" cannot be
+  // told from "confirmed" (Sol 6 SCRUM-596-3) and the operator picks again.
+  const [openedDefault] = useState(() => untouchedDefault(invoiceDayBounds()));
   const [pickedDay, setPickedDay] = useState<string | null>(null);
   const [issuedTo, setIssuedTo] = useState<IssuedTo>(() =>
     existing?.issuedTo === "CUSTOMER" || existing?.issuedTo === "OTHER"
@@ -122,8 +129,17 @@ export function RecordLegalInvoiceDialog({
   const [issuedToOther, setIssuedToOther] = useState(() => existing?.issuedToOther ?? "");
   const [localError, setLocalError] = useState<string | null>(null);
 
-  const { localDayNotOpen, latestDay, nextLedgerDayAt, nextBoundaryAt } = invoiceDayBounds();
-  const date = pickedDay ?? storedDay ?? (localDayNotOpen ? "" : latestDay);
+  const bounds = invoiceDayBounds();
+  const { localDayNotOpen, latestDay, nextLedgerDayAt, nextBoundaryAt } = bounds;
+  const dayChangedWhileOpen = (current: typeof bounds) =>
+    pickedDay === null && storedDay === null && untouchedDefault(current) !== openedDefault;
+  const dayChanged = dayChangedWhileOpen(bounds);
+  const date = pickedDay ?? storedDay ?? (dayChanged ? "" : openedDefault);
+  const dateHintId = localDayNotOpen
+    ? "legal-invoice-date-hint"
+    : dayChanged
+      ? "legal-invoice-date-changed"
+      : undefined;
   // The bounds follow both clocks, so re-render when the local or the ledger's
   // day turns over, and when the tab regains focus or visibility in case its
   // timer was suspended. The operator's pick is state and survives.
@@ -151,14 +167,11 @@ export function RecordLegalInvoiceDialog({
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (submitting || isInvalid) return;
-    if (pickedDay === null && storedDay === null) {
-      // The refresh lands just after midnight (or late, after sleep): a default
-      // rendered yesterday is shown anew rather than sent.
-      const fresh = invoiceDayBounds();
-      if ((fresh.localDayNotOpen ? "" : fresh.latestDay) !== date) {
-        refreshBounds((n) => n + 1);
-        return;
-      }
+    if (!dayChanged && dayChangedWhileOpen(invoiceDayBounds())) {
+      // The refresh lands just after midnight (or late, after sleep): the
+      // pre-fill of a day that has ended is withdrawn rather than sent.
+      refreshBounds((n) => n + 1);
+      return;
     }
 
     setLocalError(null);
@@ -223,7 +236,7 @@ export function RecordLegalInvoiceDialog({
               max={storedDay && storedDay > latestDay ? storedDay : latestDay}
               value={date}
               onChange={(e) => setPickedDay(e.target.value)}
-              aria-describedby={localDayNotOpen ? "legal-invoice-date-hint" : undefined}
+              aria-describedby={dateHintId}
               required
             />
             {localDayNotOpen && (
@@ -244,6 +257,11 @@ export function RecordLegalInvoiceDialog({
                           part,
                         ]
                   )}
+              </p>
+            )}
+            {dateHintId === "legal-invoice-date-changed" && (
+              <p id="legal-invoice-date-changed" className="text-xs text-muted-foreground">
+                {t("LegalInvoiceDateDayChanged")}
               </p>
             )}
           </div>

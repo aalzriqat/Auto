@@ -1263,6 +1263,10 @@ const dealOverviewMessages = defineBilingualMessages({
     "Today's date opens on the ledger at {time} (midnight UTC). Pick the date printed on the invoice; if it is today, save the invoice after that time.",
     "يبدأ تاريخ اليوم في الدفاتر الساعة {time} (منتصف الليل بتوقيت UTC). اختر التاريخ المطبوع على الفاتورة، وإن كان تاريخ اليوم فاحفظ الفاتورة بعد ذلك الوقت.",
   ],
+  LegalInvoiceDateDayChanged: [
+    "The day changed while this form was open. Pick the date printed on the invoice.",
+    "تغيّر اليوم أثناء فتح هذا النموذج. اختر التاريخ المطبوع على الفاتورة.",
+  ],
   LegalInvoiceIssuedTo: ["Issued to", "صادرة إلى"],
   LegalInvoiceIssuedToOther: ["Specify recipient", "تحديد المستلم"],
   SubmitLegalInvoice: ["Save Legal Invoice", "حفظ الفاتورة القانونية"],

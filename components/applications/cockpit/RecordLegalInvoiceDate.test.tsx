@@ -267,23 +267,77 @@ describe("the date a legal invoice is recorded under", () => {
     expect(captured[0]!.legalInvoiceDate).toBeLessThanOrEqual(Date.now());
   });
 
-  test("behind UTC, an untouched default follows local midnight to the new day", async () => {
-    // 23:59:30 on 31 August in New York; no hint ever shows here, so a stale
-    // default would be silent.
+  test("behind UTC, a day change while open blanks the untouched default and says why", async () => {
+    // 23:59:30 on 31 August in New York. Neither the old day nor the new one is
+    // filed silently: the operator picks the paper's date (Sol 6 SCRUM-596-3).
     at(new Date("2026-09-01T03:59:30Z"), "America/New_York");
     const captured: RecordLegalInvoiceValues[] = [];
     renderDialog(captured);
     fillRequired();
     expect(dateInput().value).toBe("2026-08-31");
+    expect(document.querySelector("#legal-invoice-date-changed")).toBeNull();
 
     await act(async () => {
       vi.advanceTimersByTime(60_000);
     });
-    expect(dateInput().value).toBe("2026-09-01");
+    expect(dateInput().value).toBe("");
+    expect(submitButton().disabled).toBe(true);
+    expect(document.querySelector("#legal-invoice-date-changed")?.textContent).toBe(
+      "LegalInvoiceDateDayChanged"
+    );
+    expect(dateInput().getAttribute("aria-describedby")).toBe("legal-invoice-date-changed");
+
+    fireEvent.change(dateInput(), { target: { value: "2026-09-01" } });
+    expect(document.querySelector("#legal-invoice-date-changed")).toBeNull();
     fireEvent.click(submitButton());
     await vi.waitFor(() => expect(captured).toHaveLength(1));
     expect(captured[0]!.legalInvoiceDate).toBe(Date.UTC(2026, 8, 1));
     expect(captured[0]!.legalInvoiceDate).toBeLessThanOrEqual(Date.now());
+  });
+
+  test("re-selecting the shown day before midnight cannot become the next day (Sol 6 SCRUM-596-3)", async () => {
+    at(new Date("2026-09-01T03:59:30Z"), "America/New_York");
+    const captured: RecordLegalInvoiceValues[] = [];
+    renderDialog(captured);
+    fillRequired();
+    // The same value: like a native picker, React fires no change for it.
+    fireEvent.change(dateInput(), { target: { value: "2026-08-31" } });
+
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(dateInput().value).not.toBe("2026-09-01");
+    await act(async () => {
+      fireEvent.click(submitButton());
+    });
+    expect(captured.map((v) => v.legalInvoiceDate)).not.toContain(Date.UTC(2026, 8, 1));
+  });
+
+  test("ahead of UTC, opened before the ledger's day, the day opening asks for a pick", async () => {
+    // Opened blank at 02:59:30 in Amman; at 03:00 the not-open hint gives way
+    // to the day-changed hint and nothing is filled in.
+    at(new Date("2026-08-09T23:59:30Z"));
+    renderDialog([]);
+    expect(dateInput().value).toBe("");
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(dateInput().value).toBe("");
+    expect(document.querySelector("#legal-invoice-date-hint")).toBeNull();
+    expect(document.querySelector("#legal-invoice-date-changed")).not.toBeNull();
+  });
+
+  test("ahead of UTC, left open from before midnight until past 03:00 stays blank", async () => {
+    at(new Date("2026-09-30T20:50:00Z"));
+    renderDialog([]);
+    fillRequired();
+    expect(dateInput().value).toBe("2026-09-30");
+    await act(async () => {
+      vi.advanceTimersByTime(3 * 60 * 60_000 + 20 * 60_000);
+    });
+    expect(dateInput().value).toBe("");
+    expect(submitButton().disabled).toBe(true);
+    expect(document.querySelector("#legal-invoice-date-changed")).not.toBeNull();
   });
 
   describe("a Save in the second before the refresh lands (Sol 6 SCRUM-596-1, Opus L-1)", () => {
@@ -295,7 +349,7 @@ describe("the date a legal invoice is recorded under", () => {
       vi.setSystemTime(instant);
     }
 
-    test("behind UTC, a stale untouched default is refreshed, not sent", async () => {
+    test("behind UTC, a stale untouched default is blanked, not sent", async () => {
       frozenAt(new Date("2026-09-01T03:59:59Z"), "America/New_York");
       const captured: RecordLegalInvoiceValues[] = [];
       renderDialog(captured);
@@ -307,13 +361,9 @@ describe("the date a legal invoice is recorded under", () => {
         fireEvent.click(submitButton());
       });
       expect(captured).toHaveLength(0);
-      expect(dateInput().value).toBe("2026-09-01");
-
-      await act(async () => {
-        fireEvent.click(submitButton());
-      });
-      expect(captured).toHaveLength(1);
-      expect(captured[0]!.legalInvoiceDate).toBe(Date.UTC(2026, 8, 1));
+      expect(dateInput().value).toBe("");
+      expect(submitButton().disabled).toBe(true);
+      expect(document.querySelector("#legal-invoice-date-changed")).not.toBeNull();
     });
 
     test("ahead of UTC, a stale untouched default is cleared, not sent", async () => {
