@@ -33,11 +33,12 @@ export async function getReceivableOutstandingMinor(
   // getReceivableBalance would show a cancelled sale as still owing in full.
   if (doc.status === "CANCELLED") return 0;
 
-  const activeAllocations = await ctx.db
+  // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+  const receivableAllocations = await ctx.db
     .query("paymentAllocations")
     .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivableId))
-    .filter((q) => q.eq(q.field("status"), "ACTIVE"))
     .collect();
+  const activeAllocations = receivableAllocations.filter((a) => a.status === "ACTIVE");
 
   const allocated = activeAllocations.reduce((s, a) => s + a.amountMinor, 0);
   return Math.max(0, doc.originalAmountMinor - allocated);
@@ -50,11 +51,12 @@ async function getPaymentUnappliedMinor(
   const payment = await ctx.db.get(paymentId);
   if (!payment) throw new ConvexError("Payment not found.");
 
-  const activeAllocations = await ctx.db
+  // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+  const paymentAllocations = await ctx.db
     .query("paymentAllocations")
     .withIndex("by_payment", (q) => q.eq("paymentId", paymentId))
-    .filter((q) => q.eq(q.field("status"), "ACTIVE"))
     .collect();
+  const activeAllocations = paymentAllocations.filter((a) => a.status === "ACTIVE");
 
   const allocated = activeAllocations.reduce((s, a) => s + a.amountMinor, 0);
   return Math.max(0, payment.amountMinor - allocated);
@@ -325,11 +327,12 @@ export async function voidCanonicalPayment(
   if (!payment || payment.orgId !== args.orgId) throw new ConvexError("Payment not found.");
   if (payment.status === "VOIDED") return;
 
-  const activeAllocations = await ctx.db
+  // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+  const paymentAllocations = await ctx.db
     .query("paymentAllocations")
     .withIndex("by_payment", (q) => q.eq("paymentId", args.paymentId))
-    .filter((q) => q.eq(q.field("status"), "ACTIVE"))
     .collect();
+  const activeAllocations = paymentAllocations.filter((a) => a.status === "ACTIVE");
   if (activeAllocations.length > 0) {
     throw new ConvexError("Cannot void a payment with active allocations — reverse them first.");
   }
