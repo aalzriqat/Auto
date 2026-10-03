@@ -1265,7 +1265,11 @@ const dealOverviewMessages = defineBilingualMessages({
   ],
   LegalInvoiceDateDayChanged: [
     "The day changed while this form was open. Pick the date printed on the invoice.",
-    "تغيّر اليوم أثناء فتح هذا النموذج. اختر التاريخ المطبوع على الفاتورة.",
+    "تغيّر اليوم بينما كان هذا النموذج مفتوحًا. اختر التاريخ المطبوع على الفاتورة.",
+  ],
+  LegalInvoiceDateNowOpen: [
+    "Today's date is now open on the ledger. Pick the date printed on the invoice.",
+    "أصبح تاريخ اليوم متاحًا الآن في الدفاتر. اختر التاريخ المطبوع على الفاتورة.",
   ],
   LegalInvoiceIssuedTo: ["Issued to", "صادرة إلى"],
   LegalInvoiceIssuedToOther: ["Specify recipient", "تحديد المستلم"],

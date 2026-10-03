@@ -261,7 +261,8 @@ export function RecordLegalInvoiceDialog({
             )}
             {dateHintId === "legal-invoice-date-changed" && (
               <p id="legal-invoice-date-changed" className="text-xs text-muted-foreground">
-                {t("LegalInvoiceDateDayChanged")}
+                {/* Opened blank before the ledger's day: only the ledger moved. */}
+                {t(openedDefault === "" ? "LegalInvoiceDateNowOpen" : "LegalInvoiceDateDayChanged")}
               </p>
             )}
           </div>

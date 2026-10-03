@@ -306,7 +306,8 @@ describe("the date a legal invoice is recorded under", () => {
     await act(async () => {
       vi.advanceTimersByTime(60_000);
     });
-    expect(dateInput().value).not.toBe("2026-09-01");
+    expect(dateInput().value).toBe("");
+    expect(document.querySelector("#legal-invoice-date-changed")).not.toBeNull();
     await act(async () => {
       fireEvent.click(submitButton());
     });
@@ -324,7 +325,10 @@ describe("the date a legal invoice is recorded under", () => {
     });
     expect(dateInput().value).toBe("");
     expect(document.querySelector("#legal-invoice-date-hint")).toBeNull();
-    expect(document.querySelector("#legal-invoice-date-changed")).not.toBeNull();
+    // Only the ledger's day opened; the local day did not change (Opus L1).
+    expect(document.querySelector("#legal-invoice-date-changed")?.textContent).toBe(
+      "LegalInvoiceDateNowOpen"
+    );
   });
 
   test("ahead of UTC, left open from before midnight until past 03:00 stays blank", async () => {
