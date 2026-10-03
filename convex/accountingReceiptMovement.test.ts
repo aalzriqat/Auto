@@ -1377,16 +1377,15 @@ describe("SCRUM-218-C §10 RM-01 — a bounced cheque cannot silently strand spe
 });
 
 describe("SCRUM-218-C §9 — runtime authority is never persisted or cached", () => {
-  // SCRUM-565: the sources are loaded through Vite's raw glob rather than node:fs, so this file
-  // carries no Node builtin (the convex-lint hook forbids them under convex/). The length assertion
-  // below makes a path that matches nothing fail loudly instead of scanning an empty string.
+  // SCRUM-565: raw glob, not node:fs (no Node builtin under convex/); the count and length checks fail loudly on an unmatched path.
   const RAW_SOURCES: Record<string, string> = import.meta.glob(
     ["./accounting/receiptMovement.ts", "./collections.ts"],
     { query: "?raw", import: "default", eager: true },
   );
-  const SOURCES = ["./accounting/receiptMovement.ts", "./collections.ts"].map((rel) => ({ rel, text: RAW_SOURCES[rel] ?? "" }));
+  const SOURCES = Object.entries(RAW_SOURCES).map(([rel, text]) => ({ rel, text }));
 
   test("no module-scope cache of a receipt identity exists", () => {
+    expect(SOURCES).toHaveLength(2);
     for (const { rel, text } of SOURCES) {
       expect(text.length, `${rel} source not loaded`).toBeGreaterThan(0);
       const moduleScope = text

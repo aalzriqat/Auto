@@ -15,6 +15,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { RESET_PROTOCOL_INCOMPLETE_MESSAGE } from "./utils/resetProtocol";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }), check: vi.fn().mockResolvedValue({ ok: true }) },
@@ -28,7 +29,7 @@ const GATE_MESSAGE =
   "The financial reset is temporarily disabled while its safety checks are being completed. Nothing was deleted.";
 const GATE_MESSAGE_AR = "إعادة الضبط المالي معطّلة مؤقتًا حتى تكتمل فحوصات الأمان الخاصة بها. لم يُحذف أي شيء.";
 
-type Harness = ReturnType<typeof convexTestWithComponents>;
+type Harness = ReturnType<typeof convexTestWithComponents<typeof schema>>;
 
 async function seedResetOrg(
   t: Harness,
@@ -108,6 +109,17 @@ describe("SCRUM-565 S1a — destructive reset gate", () => {
     );
     await expectNoWrites(t, seed, { generation: undefined, completed: undefined });
   });
+
+  test("5. the gate precedes the org read: a destructive call on a deleted org refuses with the gate error", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const seed = await seedResetOrg(t, { suspended: true });
+    await t.run((ctx) => ctx.db.delete(seed.orgId));
+    await expectAppError(
+      t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId: seed.orgId, dryRun: false }),
+      GATE_CODE,
+      GATE_MESSAGE
+    );
+  });
 });
 
 describe("SCRUM-565 S1a — EN/AR parity", () => {
@@ -116,6 +128,7 @@ describe("SCRUM-565 S1a — EN/AR parity", () => {
     const en = dictionaries.en as Record<string, string>;
     const ar = dictionaries.ar as Record<string, string>;
     expect(en.ServerError_RESET_PROTOCOL_INCOMPLETE).toBe(GATE_MESSAGE);
+    expect(en.ServerError_RESET_PROTOCOL_INCOMPLETE).toBe(RESET_PROTOCOL_INCOMPLETE_MESSAGE);
     expect(ar.ServerError_RESET_PROTOCOL_INCOMPLETE).toBe(GATE_MESSAGE_AR);
   });
 });

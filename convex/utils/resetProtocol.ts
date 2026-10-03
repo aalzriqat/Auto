@@ -1,19 +1,13 @@
 /**
- * SCRUM-565 — the version and completeness of the financial-reset protocol.
+ * SCRUM-565 — the closed gate on the destructive financial reset.
  *
- * `resetOrgFinancialData` deletes an organization's financial rows in several
- * committed batches. Its original protocol leaves positions standing without
- * the basis that explains them, so until every SCRUM-565 slice has shipped,
- * every DESTRUCTIVE invocation (a fresh run AND a continuation) refuses with
- * `RESET_PROTOCOL_INCOMPLETE` before it writes anything. Dry runs still run.
+ * `RESET_PROTOCOL_COMPLETE` is false until every SCRUM-565 slice has shipped; while it is, every
+ * destructive `resetOrgFinancialData` call (fresh or continuation) refuses with
+ * `RESET_PROTOCOL_INCOMPLETE` before reading or writing anything. Dry runs still run.
  *
- * ONLY THE FINAL SCRUM-565 SLICE FLIPS `RESET_PROTOCOL_COMPLETE`. Nothing at
- * runtime (no argument, env var or setting) may open this gate: it is a source
- * constant so that opening it is a reviewed diff.
- *
- * A certification verdict, once one exists, is bound to
- * (orgId, generation, protocolVersion): a verdict reached under another
- * version or generation proves nothing about this run.
+ * Only the final SCRUM-565 slice flips it, and it is a source constant on purpose: there is never a
+ * runtime switch (argument, env var or setting), so opening the gate is a reviewed diff. The
+ * run/verdict model bound to (orgId, generation, protocolVersion) lands in S4 (D-15).
  */
 export const RESET_PROTOCOL_VERSION = 1;
 

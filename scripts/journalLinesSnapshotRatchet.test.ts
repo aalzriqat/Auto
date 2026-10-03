@@ -20,6 +20,7 @@
 import { describe, expect, test } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { convexSourceFiles } from "./commitmentWriteGuard";
 
 const CONVEX_ROOT = path.resolve(__dirname, "..", "convex");
 
@@ -39,23 +40,9 @@ export function scanSource(file: string, text: string): JournalLinesWriter | nul
   return { file, inserts, paired: SNAPSHOT_INCREMENT.test(text) };
 }
 
-function listSources(dir: string): string[] {
-  const out: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === "_generated" || entry.name === "node_modules") continue;
-      out.push(...listSources(full));
-    } else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
-      out.push(full);
-    }
-  }
-  return out;
-}
-
 function scanTree(): JournalLinesWriter[] {
   const writers: JournalLinesWriter[] = [];
-  for (const full of listSources(CONVEX_ROOT)) {
+  for (const full of convexSourceFiles(CONVEX_ROOT)) {
     const rel = path.relative(CONVEX_ROOT, full).split(path.sep).join("/");
     const hit = scanSource(rel, fs.readFileSync(full, "utf8"));
     if (hit) writers.push(hit);

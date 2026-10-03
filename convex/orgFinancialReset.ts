@@ -453,22 +453,17 @@ export const resetOrgFinancialData = internalMutation({
     protocolComplete: boolean;
   }> => {
     const dryRun = args.dryRun ?? true;
-    const limit = Math.min(Math.max(args.batchSize ?? RESET_DELETE_BATCH, 1), RESET_DELETE_BATCH);
+    // SCRUM-565 D-10: closed source-constant gate. First refusal, before any read or generation bump;
+    // fresh and continuation runs both refuse.
+    if (!dryRun && !RESET_PROTOCOL_COMPLETE) {
+      throwAppError(AppErrorCode.RESET_PROTOCOL_INCOMPLETE, RESET_PROTOCOL_INCOMPLETE_MESSAGE);
+    }
+    const limit =Math.min(Math.max(args.batchSize ?? RESET_DELETE_BATCH, 1), RESET_DELETE_BATCH);
 
     // Named in the result so an operator can see, in the output they are about
     // to act on, which dealership this actually hit.
     const org = await ctx.db.get(args.orgId);
     const orgName = org?.name ?? null;
-
-    // ⚠️ SCRUM-565 (D-10) — THE CLOSED GATE. FIRST REFUSAL, BEFORE THE GENERATION BUMP.
-    // This protocol leaves positions standing without their basis, so until the final
-    // SCRUM-565 slice flips RESET_PROTOCOL_COMPLETE every destructive invocation refuses —
-    // a fresh run AND a continuation of an org already mid-reset (`inProgress`); there is no
-    // exception. It precedes every other refusal so the operator is never told to "suspend
-    // the org" for a reset that cannot run. Thrown, so the transaction aborts with no write.
-    if (!dryRun && !RESET_PROTOCOL_COMPLETE) {
-      throwAppError(AppErrorCode.RESET_PROTOCOL_INCOMPLETE, RESET_PROTOCOL_INCOMPLETE_MESSAGE);
-    }
 
     // ⚠️ FAIL-CLOSED PREFLIGHT, TAKEN BEFORE ANY DELETE OR STORAGE WRITE.
     // (SCRUM-208 c15892, Option C.)
