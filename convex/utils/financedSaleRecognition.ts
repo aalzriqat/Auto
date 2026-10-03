@@ -714,7 +714,8 @@ export async function resolveFinancedSalePlan(
 ): Promise<FinancedSalePostingPlan | FinancedSalePostingPlanV2 | undefined> {
   // The finalize door re-runs the SAME evaluator the deal screen shows — never
   // a client's verdict, never the retired stamp — and refuses on the first
-  // unmet condition, before anything is written (SCRUM-407 P1.4).
+  // unmet condition, before anything is written (SCRUM-407 P1.4) — including a
+  // financing reconciliation flag not yet reviewed (FINANCING_RECONCILED, SCRUM-420).
   const evaluation = await evaluateClosingReadiness(ctx, app, opts);
   // Thrown uncaught, before the first write, and redacted by the SAME pure
   // function the readiness query uses.

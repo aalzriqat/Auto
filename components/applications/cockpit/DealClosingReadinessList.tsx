@@ -57,7 +57,19 @@ export function closingReasonText(
   diagnostic: string
 ): { text: string; translated: boolean } {
   if (!code) return { text: diagnostic, translated: false };
-  return { text: interpolate(t(closingReasonMessageKey(code)), localizedParams(t, params)), translated: true };
+  const key = closingReasonMessageKey(code);
+  const template = t(key);
+  // `t` returns the key itself on a miss (a backend that shipped a reason before this bundle
+  // did): say the generic line, never the raw key (S420-01).
+  if (!template || template === key) return { text: t("ClosingReason_UNKNOWN"), translated: false };
+  return { text: interpolate(template, localizedParams(t, params)), translated: true };
+}
+
+/** A check's label, or the generic one when this bundle has no copy for the key (S420-01). */
+function closingCheckLabel(t: (key: string) => string, checkKey: string): string {
+  const key = `ClosingCheck_${checkKey}`;
+  const label = t(key);
+  return !label || label === key ? t("ClosingCheck_UNKNOWN") : label;
 }
 
 /**
@@ -231,7 +243,7 @@ export function DealClosingReadinessList({
                         : "min-w-0 text-xs font-medium"
                     }
                   >
-                    {t(`ClosingCheck_${check.key}`)}
+                    {closingCheckLabel(t, check.key)}
                   </span>
                   <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
                     {t(STATUS_LABEL[check.status])}

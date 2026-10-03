@@ -2205,9 +2205,9 @@ export function DealCockpit({
 
     /**
      * A deal flagged for financing reconciliation (SCRUM-417, G7) — a figure on
-     * it could not be trusted when it was derived. `finalizeDeal` does NOT
-     * refuse on the flag itself (verified on this branch), but it is the one
-     * review the product records, and closing posts journals from those
+     * it could not be trusted when it was derived. `finalizeDeal` refuses on
+     * the flag (SCRUM-420, the FINANCING_RECONCILED closing check), and it is
+     * the one review the product records; closing posts journals from those
      * figures — so the review comes first. It takes the same permission as the
      * close (`confirm:finance_disbursement`), so it never strands the closer.
      */

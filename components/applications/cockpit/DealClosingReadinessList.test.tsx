@@ -110,6 +110,44 @@ describe("DealClosingReadinessList — reason codes", () => {
     expect(screen.getByTestId("closing-check-reason-FINANCING_RECONCILED").textContent).toBe(t("ClosingReason_WITHHELD_FINANCING_RECONCILED"));
   });
 
+  // L3: the test above reads copy through `t`, which returns the key on a miss, so it could
+  // pass against an absent entry. Pin the dictionaries themselves.
+  test.each([
+    "ClosingCheck_FINANCING_RECONCILED",
+    "ClosingReason_FINANCING_RECONCILIATION_FLAGGED",
+    "ClosingReason_WITHHELD_FINANCING_RECONCILED",
+    "ClosingCheck_UNKNOWN",
+    "ClosingReason_UNKNOWN",
+  ])("%s has non-empty en and ar copy that is not the key", (key) => {
+    for (const dict of [en, ar]) {
+      expect(typeof dict[key]).toBe("string");
+      expect(dict[key].trim().length).toBeGreaterThan(0);
+      expect(dict[key]).not.toBe(key);
+    }
+  });
+
+  // S420-01: a backend that ships a check/reason before this bundle knows it must never put a
+  // raw dictionary key on screen (`t()` returns the key on a miss).
+  test.each([
+    ["en", (key: string) => en[key] || key, false],
+    ["ar", tAr, true],
+  ] as const)("an unknown check and reason code render generic %s copy, never a raw key", (_locale, t, arabic) => {
+    const row = { key: "FUTURE_CHECK", status: "BLOCKED", reason: "server english", reasonCode: "FUTURE_REASON_CODE" };
+    render(<DealClosingReadinessList t={t} readiness={view(row, { checks: [row] })} />);
+    const item = screen.getByTestId("closing-check-FUTURE_CHECK");
+    expect(item.textContent).not.toContain("ClosingCheck_");
+    expect(item.textContent).not.toContain("ClosingReason_");
+    expect(item.textContent).toContain(t("ClosingCheck_UNKNOWN"));
+    const reason = screen.getByTestId("closing-check-reason-FUTURE_CHECK").textContent ?? "";
+    expect(reason).toBe(t("ClosingReason_UNKNOWN"));
+    expect(/[؀-ۿ]/.test(reason)).toBe(arabic);
+  });
+
+  test("closingReasonText reports an unknown code's generic copy as not translated", () => {
+    const result = closingReasonText((key) => en[key] || key, "FUTURE_REASON_CODE" as never, undefined, "server english");
+    expect(result).toEqual({ text: en.ClosingReason_UNKNOWN, translated: false });
+  });
+
   test("the no-verdict reason is translated from its code", () => {
     render(
       <DealClosingReadinessList
