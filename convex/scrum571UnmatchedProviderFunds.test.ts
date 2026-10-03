@@ -248,9 +248,9 @@ describe("SCRUM-571 D-8 — an unknown reference is held with no organization", 
 describe("SCRUM-571 D-8 — an amount, currency or account mismatch is held", () => {
   // D-20: the pilot shutdown hold precedes the mismatch check, so a PENDING
   // intent's capture is held as PAYMENT_LINKS_DISABLED whatever its amount,
-  // account or currency, and the intent is NOT flipped to FAILED (it stays
-  // PENDING). The AMOUNT_OR_ACCOUNT_MISMATCH reason returns when links reopen.
-  test("PENDING intent, wrong amount: held as PAYMENT_LINKS_DISABLED, intent stays PENDING, nothing economic; redelivery stays ONE record", async () => {
+  // account or currency, and the intent is NOT flipped to FAILED (D-22: it moves
+  // to CAPTURE_HELD). The AMOUNT_OR_ACCOUNT_MISMATCH reason returns when links reopen.
+  test("PENDING intent, wrong amount: held as PAYMENT_LINKS_DISABLED, intent moves to CAPTURE_HELD, nothing economic; redelivery stays ONE record", async () => {
     const w = await makeWorld();
     const intentId = await newLink(w);
     const before = await economicCounts(w.t);

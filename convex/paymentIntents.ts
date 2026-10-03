@@ -908,10 +908,11 @@ export const expire = mutation({
 });
 
 /**
- * SCRUM-571 S1 (D-22) repair: link a held capture to its payment link that the
- * pre-D-22 code left PENDING. Moves the link to CAPTURE_HELD and nothing else:
- * no payment, allocation, posting, outbox event or idempotency record. Whatever
- * the row's `reviewStatus`. Naturally idempotent. Every refusal precedes any write.
+ * SCRUM-571 S1 (D-22/D-25) repair: link a held capture to its payment link that
+ * the pre-D-22 code left PENDING, EXPIRED or FAILED (CAPTURE_HELD_FROM). Patches
+ * status, heldFundsId and updatedAt only, so providerStatusChecked* is kept: no
+ * payment, allocation, posting, outbox event or idempotency record. Whatever the
+ * row's `reviewStatus`. Naturally idempotent. Every refusal precedes any write.
  */
 export const linkHeldCaptureToIntent = mutation({
   args: {
@@ -931,7 +932,13 @@ export const linkHeldCaptureToIntent = mutation({
       refuseHeldCaptureLink("UNMATCHED_FUNDS_INTENT_MISMATCH");
     }
     if (intent.status === "CAPTURE_HELD" && intent.heldFundsId === row._id) return;
-    if (intent.status !== "PENDING") refuseHeldCaptureLink("UNMATCHED_FUNDS_INTENT_NOT_LINKABLE");
+    // Same set the hold itself moves (CAPTURE_HELD_FROM). SETTLED, REFUNDED and a
+    // CAPTURE_HELD link to a different row refuse, as does an eligible intent that
+    // already names a different held row.
+    if (!CAPTURE_HELD_FROM.has(intent.status)) refuseHeldCaptureLink("UNMATCHED_FUNDS_INTENT_NOT_LINKABLE");
+    if (intent.heldFundsId && intent.heldFundsId !== row._id) {
+      refuseHeldCaptureLink("UNMATCHED_FUNDS_INTENT_NOT_LINKABLE");
+    }
 
     await ctx.db.patch(intent._id, {
       status: "CAPTURE_HELD",
@@ -1141,7 +1148,7 @@ export const settleByExternalId = internalMutation({
     // for finance, never settled. One atomic write to unmatchedProviderFunds
     // (keyed provider + externalId, so a redelivery only bumps that row); no
     // allocation, canonical payment, posting hook or outbox event, and the
-    // intent stays PENDING. The money is reconciled by a person.
+    // intent moves to CAPTURE_HELD (D-22). The money is reconciled by a person.
     if (PAYMENT_LINKS_PILOT_DISABLED) return await holdForIntent("PAYMENT_LINKS_DISABLED");
 
     // D-14 (see heldCaptureFor): a held row exists, so record this redelivery on

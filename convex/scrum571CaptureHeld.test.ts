@@ -386,6 +386,41 @@ describe("D-22 repair — linkHeldCaptureToIntent", () => {
     expect(await intentDoc(w, intentId)).toEqual(once);
   });
 
+  describe.each(["EXPIRED", "FAILED"] as const)("CR-2: an intent that is %s (a late capture arrived after it)", (status) => {
+    test.each(["OPEN", "RESOLVED"] as const)(
+      "links a held row (%s), keeps the attestation fields, writes nothing economic, and a repeat is a no-op",
+      async (reviewStatus) => {
+        const w = await makeWorld();
+        const checkedAt = 1_700_000_000_000;
+        const intentId = await seedLink(w, {
+          status,
+          providerStatusCheckedAt: checkedAt,
+          providerStatusCheckedBy: w.userId,
+        });
+        const heldId = await insertHeld(w, { intentId, reviewStatus });
+        const before = await economicCounts(w.t);
+        const intentBefore = await intentDoc(w, intentId);
+
+        await link(w, heldId);
+
+        const once = await intentDoc(w, intentId);
+        expect(once).toMatchObject({ status: "CAPTURE_HELD", heldFundsId: heldId });
+        expect(once?.providerStatusCheckedAt).toBe(checkedAt);
+        expect(once?.providerStatusCheckedBy).toBe(w.userId);
+        // Only status, heldFundsId and updatedAt differ.
+        const { status: _s, heldFundsId: _h, updatedAt: _u, ...restAfter } = once as Record<string, unknown>;
+        const { status: _s2, heldFundsId: _h2, updatedAt: _u2, ...restBefore } = intentBefore as Record<string, unknown>;
+        expect(restAfter).toEqual(restBefore);
+        expect((await w.t.run((ctx) => ctx.db.get(heldId)))?.reviewStatus).toBe(reviewStatus);
+        expect(await economicCounts(w.t)).toEqual(before);
+
+        await link(w, heldId);
+        expect(await intentDoc(w, intentId)).toEqual(once);
+        expect(await economicCounts(w.t)).toEqual(before);
+      }
+    );
+  });
+
   test("every refusal precedes any write", async () => {
     const w = await makeWorld();
     const otherOrg = await w.t.run((ctx) => ctx.db.insert("organizations", { name: "Other", createdAt: Date.now() }));
@@ -410,8 +445,12 @@ describe("D-22 repair — linkHeldCaptureToIntent", () => {
 
     const settled = await seedLink(w, { externalId: "tap_settled", status: "SETTLED" });
     const settledRow = await insertHeld(w, { externalId: "tap_settled", intentId: settled });
-    const expired = await seedLink(w, { externalId: "tap_expired", status: "EXPIRED" });
-    const expiredRow = await insertHeld(w, { externalId: "tap_expired", intentId: expired });
+    const refunded = await seedLink(w, { externalId: "tap_refunded", status: "REFUNDED" });
+    const refundedRow = await insertHeld(w, { externalId: "tap_refunded", intentId: refunded });
+    // An EXPIRED intent already carrying a DIFFERENT row id is not linkable.
+    const otherRowId = await insertHeld(w, { externalId: "tap_elsewhere" });
+    const expiredElsewhere = await seedLink(w, { externalId: "tap_expired_else", status: "EXPIRED", heldFundsId: otherRowId });
+    const expiredElsewhereRow = await insertHeld(w, { externalId: "tap_expired_else", intentId: expiredElsewhere });
 
     const otherHeldIntent = await seedLink(w, { externalId: "tap_held_other", status: "CAPTURE_HELD" });
     const otherHeldRow = await insertHeld(w, { externalId: "tap_held_other", intentId: otherHeldIntent });
@@ -434,7 +473,8 @@ describe("D-22 repair — linkHeldCaptureToIntent", () => {
     expect(await code(foreignIntentRow)).toBe("UNMATCHED_FUNDS_INTENT_NOT_FOUND");
     expect(await code(mismatchRow)).toBe("UNMATCHED_FUNDS_INTENT_MISMATCH");
     expect(await code(settledRow)).toBe("UNMATCHED_FUNDS_INTENT_NOT_LINKABLE");
-    expect(await code(expiredRow)).toBe("UNMATCHED_FUNDS_INTENT_NOT_LINKABLE");
+    expect(await code(refundedRow)).toBe("UNMATCHED_FUNDS_INTENT_NOT_LINKABLE");
+    expect(await code(expiredElsewhereRow)).toBe("UNMATCHED_FUNDS_INTENT_NOT_LINKABLE");
     // CAPTURE_HELD but linked to a DIFFERENT held row id is not an idempotent no-op.
     expect(await code(otherHeldRow)).toBe("UNMATCHED_FUNDS_INTENT_NOT_LINKABLE");
 

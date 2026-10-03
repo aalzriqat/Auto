@@ -439,7 +439,7 @@ describe("Phase 8 — payment intent settlement", () => {
     expect(glEvents.filter((e) => e.eventType === "PAYMENT_LINK_RECEIVED")).toHaveLength(0);
   });
 
-  test("internal settleByExternalId holds a signed provider money mismatch without touching the intent", async () => {
+  test("internal settleByExternalId holds a signed provider money mismatch and moves the intent to CAPTURE_HELD (D-22)", async () => {
     const { t, orgId, asUser, customerId, userId } = await seedDealer("pi_mismatch");
     const receivableDocumentId = await seedCustomerDocument(asUser, orgId, customerId, "pi_mismatch", 1000_000);
     const intentId = await seedPendingIntent(t, {

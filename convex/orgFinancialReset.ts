@@ -578,10 +578,14 @@ export const resetOrgFinancialData = internalMutation({
       // Operator-only string: English, with the Arabic sentence in the same
       // string because a thrown string cannot be translated by key.
       throw new ConvexError(
-        "A verified provider capture is held for this organization and must be disposed of " +
-          "before the reset. Refusing before any deletion. " +
-          "توجد دفعة مؤكدة من مزوّد الدفع محتجزة لهذه المنشأة ويجب معالجتها قبل إعادة الضبط. " +
-          "تم الرفض قبل أي حذف."
+        "A verified provider capture remains recorded for this organization. This reset cannot " +
+          "continue while the held record exists, even if its review is marked resolved. " +
+          "Refusing before any deletion. Keep the organization suspended and escalate for the " +
+          "reviewed reset recovery path (SCRUM-565 S4), which is not available in this version. " +
+          "توجد دفعة مؤكدة من مزوّد الدفع محفوظة لهذه المنشأة. لا يمكن متابعة إعادة الضبط ما دام " +
+          "سجل الدفعة المحتجزة موجودًا، حتى إذا وُسمت مراجعتها بأنها محلولة. تم الرفض قبل أي حذف. " +
+          "أبقِ المنشأة معلّقة وصعّد الحالة إلى مسار استرداد إعادة الضبط المعتمد (SCRUM-565 S4)، " +
+          "وهو غير متاح في هذا الإصدار."
       );
     }
 

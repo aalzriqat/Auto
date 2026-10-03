@@ -355,13 +355,13 @@ describe("resetOrgFinancialData preflight (SCRUM-559 I1)", () => {
       name: "a suspended organization with an OPEN held provider capture",
       tag: "HeldOpen",
       opts: { heldCaptures: ["OPEN"] as const },
-      refusal: /verified provider capture is held/,
+      refusal: /verified provider capture remains recorded/,
     },
     {
       name: "a suspended organization with only a RESOLVED held provider capture",
       tag: "HeldResolved",
       opts: { heldCaptures: ["RESOLVED"] as const },
-      refusal: /verified provider capture is held/,
+      refusal: /verified provider capture remains recorded/,
     },
   ])("$name is refused and ZERO rows are deleted", async ({ tag, opts, refusal }) => {
     const { t, orgId } = await seedPreflightOrg(tag, opts);
@@ -402,7 +402,7 @@ describe("resetOrgFinancialData preflight (SCRUM-559 I1)", () => {
     for (let call = 0; call < 2; call += 1) {
       await expect(
         t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId, dryRun: false })
-      ).rejects.toThrow(/verified provider capture is held/);
+      ).rejects.toThrow(/verified provider capture remains recorded/);
       expect(await totalRows(t, orgId)).toEqual(before);
       expect(await readGeneration()).toEqual(generationBefore);
     }
