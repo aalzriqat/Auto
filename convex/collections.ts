@@ -564,6 +564,8 @@ async function mirrorCollectionPaymentToCanonical(
  * the refund payment row, the mirror or any reversal is written. It mirrors the
  * walk below exactly (newest first, break once covered) and writes nothing.
  */
+const REFUND_PRECHECK_ALLOCATION_LIMIT = 500;
+
 async function assertRefundDoesNotReallocateToSaleLinkedDoc(
   ctx: MutationCtx,
   receivable: Doc<"receivables">,
@@ -572,12 +574,16 @@ async function assertRefundDoesNotReallocateToSaleLinkedDoc(
   if (!receivable.saleId) return;
   const canonical = await findCanonicalReceivableForLegacy(ctx, receivable);
   if (!canonical) return;
-  const active = (
-    await ctx.db
-      .query("paymentAllocations")
-      .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", canonical._id))
-      .collect()
-  )
+  // Bounded read. A document with more allocations than the limit cannot be
+  // walked completely, and an incomplete walk cannot prove the refund will not
+  // split an allocation, so it fails CLOSED: this receivable is sale-linked
+  // (checked above), hence the refusal.
+  const allocations = await ctx.db
+    .query("paymentAllocations")
+    .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", canonical._id))
+    .take(REFUND_PRECHECK_ALLOCATION_LIMIT + 1);
+  if (allocations.length > REFUND_PRECHECK_ALLOCATION_LIMIT) assertReceivableNotSaleLinked(receivable);
+  const active = allocations
     .filter((allocation) => allocation.status === "ACTIVE")
     .sort((a, b) => b.createdAt - a.createdAt);
   let remainingMinor = amountMinor;
