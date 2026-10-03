@@ -55,6 +55,18 @@ const refusalOf = (caller: DealCaller, s: Seeded) =>
 const readiness = (caller: DealCaller, s: Seeded) =>
   caller.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId: s.applicationId });
 
+// After handover every economics input is sealed except the settlement-input cost writers, which call
+// `recomputeEconomicsForApplication` (only for a line deducted from the settlement); recording and reconciling one drives it.
+async function driveRecomputeWithDeductedFee(s: Seeded, n: number) {
+  const feeId = await s.asOwner.mutation(api.financeDealCosts.recordDealFee, {
+    expectedCurrency: "JOD", orgId: s.orgId, applicationId: s.applicationId, feeType: "OTHER_CLOSING_EXPENSE",
+    paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
+    deductedFromSettlement: true, actualAmountMinor: 0, description: `Fee ${n} (drives the recompute)`,
+    idempotencyKey: `gate-fee-${n}:` + s.applicationId,
+  });
+  await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Matched." });
+}
+
 // One flagged deal serves the two READ-ONLY readiness tests (T7); every test that
 // finalizes or mutates seeds its own.
 let flaggedForReads: Promise<Seeded> | undefined;
@@ -160,16 +172,10 @@ describe("SCRUM-420 — a deal flagged needsFinancingReconciliation cannot final
     const s = await seedDeal({ flag: undefined });
     // Setup, not the writer under test: the deal's company retains the customer's payment.
     await s.t.run((ctx) => ctx.db.patch(s.applicationId, { customerContributionSettlement: "RETAINED_BY_COMPANY" }));
+    // Precondition of "raised by the writer": nothing has set the flag yet.
+    expect((await s.readApp()).needsFinancingReconciliation).toBeUndefined();
 
-    // After handover every economics input is sealed except the settlement-input cost writers, which
-    // call `recomputeEconomicsForApplication` (only for a line deducted from the settlement); recording one drives it.
-    const secondFeeId = await s.asOwner.mutation(api.financeDealCosts.recordDealFee, {
-      expectedCurrency: "JOD", orgId: s.orgId, applicationId: s.applicationId, feeType: "OTHER_CLOSING_EXPENSE",
-      paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
-      deductedFromSettlement: true, actualAmountMinor: 0, description: "Second fee (drives the recompute)",
-      idempotencyKey: "gate-fee-2:" + s.applicationId,
-    });
-    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId: secondFeeId, notes: "Matched." });
+    await driveRecomputeWithDeductedFee(s, 2);
     const flagged = await s.readApp();
     expect(flagged.needsFinancingReconciliation).toBe(true);
     expect(flagged.financingReconciliationReason).toMatch(/keeps the customer/i);
@@ -191,6 +197,40 @@ describe("SCRUM-420 — a deal flagged needsFinancingReconciliation cannot final
     });
     expect(await finalize(s.asOwner, s, "gate-after-real-resolve")).toBeTruthy();
     expect((await s.counts()).sales).toBe(1);
+  });
+
+  // Closure of the re-flag lifecycle with the REAL writer on both sides: no direct patch of the flag anywhere.
+  test("T17d: after a real resolve, a second REAL deducted-fee write re-raises the flag and finalize is refused again", async () => {
+    const s = await seedDeal({ flag: undefined });
+    await s.t.run((ctx) => ctx.db.patch(s.applicationId, { customerContributionSettlement: "RETAINED_BY_COMPANY" }));
+    expect((await s.readApp()).needsFinancingReconciliation).toBeUndefined();
+
+    await driveRecomputeWithDeductedFee(s, 2);
+    expect((await s.readApp()).needsFinancingReconciliation).toBe(true);
+
+    await s.asOwner.mutation(api.financingEconomics.resolveFinancingReconciliation, {
+      orgId: s.orgId, applicationId: s.applicationId, note: "Reviewed the retained customer payment.",
+    });
+    // Immediately before the next write the flag is cleared (resolve writes `false`).
+    expect((await s.readApp()).needsFinancingReconciliation).toBe(false);
+
+    await driveRecomputeWithDeductedFee(s, 3);
+    const reflagged = await s.readApp();
+    expect(reflagged.needsFinancingReconciliation).toBe(true);
+    expect(reflagged.financingReconciliationReason).toMatch(/keeps the customer/i);
+
+    const before = await s.counts();
+    const served = await readiness(s.asOwner, s);
+    expect(served.state).toBe("BLOCKED");
+    expect(served.checks.find((c) => c.key === "FINANCING_RECONCILED")).toMatchObject({
+      status: "BLOCKED", reasonCode: "FINANCING_RECONCILIATION_FLAGGED",
+    });
+    const error = await refusalOf(s.asOwner, s);
+    expect(error.data).toMatchObject({ code: "FINANCING_RECONCILIATION_FLAGGED" });
+    const after = await s.counts();
+    expect(after).toEqual(before);
+    expect(after.sales).toBe(0);
+    expect((await s.readApp()).finalizedSaleId).toBeUndefined();
   });
 
   test("T17b: resolve, then a recompute re-raises the flag, finalize is refused, resolve again, finalize succeeds (direct-route-independent)", async () => {
