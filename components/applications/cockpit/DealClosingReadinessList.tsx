@@ -57,7 +57,24 @@ export function closingReasonText(
   diagnostic: string
 ): { text: string; translated: boolean } {
   if (!code) return { text: diagnostic, translated: false };
-  return { text: interpolate(t(closingReasonMessageKey(code)), localizedParams(t, params)), translated: true };
+  // A backend that shipped a reason before this bundle did: say the generic line (S420-01).
+  const { text, missed } = translateOr(t, closingReasonMessageKey(code), "ClosingReason_UNKNOWN");
+  if (missed) return { text, translated: false };
+  return { text: interpolate(text, localizedParams(t, params)), translated: true };
+}
+
+/**
+ * `t(key)`, or the generic `fallbackKey` copy when this bundle has no entry for it. `t` returns
+ * the key itself on a miss, so the raw key is never put on screen (S420-01).
+ */
+function translateOr(t: (key: string) => string, key: string, fallbackKey: string): { text: string; missed: boolean } {
+  const text = t(key);
+  return !text || text === key ? { text: t(fallbackKey), missed: true } : { text, missed: false };
+}
+
+/** A check's label, or the generic one when this bundle has no copy for the key (S420-01). */
+function closingCheckLabel(t: (key: string) => string, checkKey: string): string {
+  return translateOr(t, `ClosingCheck_${checkKey}`, "ClosingCheck_UNKNOWN").text;
 }
 
 /**
@@ -231,7 +248,7 @@ export function DealClosingReadinessList({
                         : "min-w-0 text-xs font-medium"
                     }
                   >
-                    {t(`ClosingCheck_${check.key}`)}
+                    {closingCheckLabel(t, check.key)}
                   </span>
                   <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
                     {t(STATUS_LABEL[check.status])}

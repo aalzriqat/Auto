@@ -18,11 +18,21 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
 
-vi.mock("@/components/providers/LanguageProvider", () => ({
-  // Identity `t`, so a missing translation surfaces as its key rather than
-  // silently rendering something plausible.
-  useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
-}));
+vi.mock("@/components/providers/LanguageProvider", async () => {
+  const { dictionaries } = await import("@/lib/i18n/dictionaries");
+  const en = dictionaries.en as Record<string, string>;
+  return {
+    // Identity `t`, so a missing translation surfaces as its key rather than
+    // silently rendering something plausible. The one exception is a closing-readiness
+    // REASON: the list swaps a reason key with no translation for a generic line
+    // (SCRUM-420 S420-01), so identity there would test the fallback, not the code.
+    useLanguage: () => ({
+      t: (key: string) => (key.startsWith("ClosingReason_") ? (en[key] ?? key) : key),
+      isRtl: false,
+      locale: "en",
+    }),
+  };
+});
 
 vi.mock("@/hooks/useCurrency", () => ({
   useCurrency: () => ({
@@ -93,6 +103,9 @@ import { DealCockpit } from "./DealCockpit";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { toast } from "@/components/ui/sonner";
 import { WITHHELD_READINESS_REASON_FALLBACK } from "@/lib/closingReadinessReasonCodes";
+import { dictionaries } from "@/lib/i18n/dictionaries";
+
+const WITHHELD_COSTS_CLOSABLE_EN = (dictionaries.en as Record<string, string>).ClosingReason_WITHHELD_COSTS_CLOSABLE;
 
 const { queryResults, permissions, mutationCalls, mutationFailures } = stubs;
 
@@ -1074,9 +1087,9 @@ describe("the mutations behind the buttons", () => {
     fireEvent.click(await screen.findByRole("button", { name: /ConfirmFinalizeAction/ }));
 
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith("ClosingReason_WITHHELD_COSTS_CLOSABLE");
+      expect(toast.error).toHaveBeenCalledWith(WITHHELD_COSTS_CLOSABLE_EN);
     });
-    expect(await screen.findByText("ClosingReason_WITHHELD_COSTS_CLOSABLE")).toBeTruthy();
+    expect(await screen.findByText(WITHHELD_COSTS_CLOSABLE_EN)).toBeTruthy();
     expect(screen.queryByText(WITHHELD_READINESS_REASON_FALLBACK)).toBeNull();
   });
 

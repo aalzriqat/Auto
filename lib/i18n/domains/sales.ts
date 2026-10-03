@@ -1306,6 +1306,13 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingCheck_HANDOVER_COSTS_PAID: ["Handover costs are paid", "مصاريف التسليم مدفوعة"],
   ClosingCheck_FIRST_PAYMENT_RECORDED: ["The customer's first payment is recorded", "الدفعة الأولى للعميل مسجَّلة"],
   ClosingCheck_LEGAL_INVOICE_RECORDED: ["The legal invoice is recorded", "الفاتورة القانونية مسجَّلة"],
+  // SCRUM-420 — generic fallback for a check this bundle has no copy for (S420-01).
+  ClosingCheck_UNKNOWN: ["Another closing check", "شرط إغلاق آخر"],
+  ClosingReason_UNKNOWN: [
+    "This check isn't met yet, so the deal can't be finalized.",
+    "هذا الشرط لم يتحقق بعد، لذا لا يمكن إغلاق الصفقة.",
+  ],
+  ClosingCheck_FINANCING_RECONCILED: ["The financing figures have been reviewed", "تمت مراجعة أرقام التمويل"],
   // SCRUM-414 — why a check is not met, by the server's reason code (lib/closingReadinessReasonCodes.ts).
   ClosingReason_REMITTANCE_APPROVAL_MISSING: [
     "The finance company's approved purchase amount is not recorded yet, so what it will remit is not known. Record the approval before closing.",
@@ -1485,6 +1492,15 @@ const dealOverviewMessages = defineBilingualMessages({
     "لم تُسجَّل الدفعة الأولى للعميل بعد.",
   ],
   ClosingReason_WITHHELD_LEGAL_INVOICE_RECORDED: ["The legal invoice is not recorded yet.", "لم تُسجَّل الفاتورة القانونية بعد."],
+  // SCRUM-420 — the financing figures are flagged for a reconciliation review.
+  ClosingReason_FINANCING_RECONCILIATION_FLAGGED: [
+    "This deal's financing figures are flagged for reconciliation review. Review them and record the review before closing.",
+    "أرقام التمويل في هذه الصفقة موسومة لمراجعة التسوية. راجِعها وسجِّل ما راجعته قبل الإغلاق.",
+  ],
+  ClosingReason_WITHHELD_FINANCING_RECONCILED: [
+    "The financing figures are still flagged for review.",
+    "ما زالت أرقام التمويل موسومة لمراجعة التسوية.",
+  ],
   ClosingReason_WITHHELD_UNAVAILABLE: [
     "This deal's closing readiness cannot be determined from its current records. Someone with finance access can see why.",
     "لا يمكن تحديد جاهزية إغلاق هذه الصفقة من سجلاتها الحالية. يمكن لمن لديه صلاحية الاطلاع على المالية معرفة السبب.",

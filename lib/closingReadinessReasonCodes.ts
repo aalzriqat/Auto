@@ -25,6 +25,8 @@ export const CLOSING_READINESS_CHECK_KEYS = [
   "HANDOVER_COSTS_PAID",
   "FIRST_PAYMENT_RECORDED",
   "LEGAL_INVOICE_RECORDED",
+  // SCRUM-420: the financing figures are not flagged for reconciliation review. Appended LAST.
+  "FINANCING_RECONCILED",
 ] as const;
 
 export type ClosingReadinessCheckKey = (typeof CLOSING_READINESS_CHECK_KEYS)[number];
@@ -91,6 +93,8 @@ export const CLOSING_READINESS_REASON_PARAMS = {
   LEGAL_INVOICE_MISSING: [],
   LEGAL_INVOICE_UNUSABLE: [],
   LEGAL_INVOICE_WRONG_RECIPIENT: [],
+  // FINANCING_RECONCILED (SCRUM-420): the deal's financing figures are flagged for a reconciliation review.
+  FINANCING_RECONCILIATION_FLAGGED: [],
   // A check refused for a reason the evaluator does not classify.
   CHECK_REFUSED: [],
   // No verdict could be formed (`getClosingReadiness.unavailableReason`).

@@ -622,6 +622,23 @@ export async function evaluateClosingReadiness(
     return invoice.ok ? ["READY", null] : ["BLOCKED", reasonOf(invoice.refusal.code, invoice.refusal.message)];
   });
 
+  // SCRUM-420: a deal flagged for financing reconciliation (true) is BLOCKED; reviewed
+  // (false) is READY; never flagged (undefined) is NOT_APPLICABLE. This gates finalizeDeal
+  // (via resolveFinancedSalePlan) and the readiness screen; the other completion doors are
+  // refused separately (SCRUM-504 finance-claim guard / SCRUM-69). APPENDED LAST: the first
+  // unmet check in array order is the stated refusal, which existing refusals must keep.
+  const flagged = app.needsFinancingReconciliation;
+  add(
+    "FINANCING_RECONCILED",
+    flagged === true ? "BLOCKED" : flagged === false ? "READY" : "NOT_APPLICABLE",
+    flagged === true
+      ? reasonOf(
+          "FINANCING_RECONCILIATION_FLAGGED",
+          "This deal's financing figures are flagged for reconciliation review, so it cannot be finalized yet. Review the figures and record the review before finalizing."
+        )
+      : null
+  );
+
   const state = overallReadinessState(checks);
   const readiness: ClosingReadiness = { state, checks };
   // A READY verdict is one every row check passed, so the rows were read.
@@ -697,7 +714,8 @@ export async function resolveFinancedSalePlan(
 ): Promise<FinancedSalePostingPlan | FinancedSalePostingPlanV2 | undefined> {
   // The finalize door re-runs the SAME evaluator the deal screen shows — never
   // a client's verdict, never the retired stamp — and refuses on the first
-  // unmet condition, before anything is written (SCRUM-407 P1.4).
+  // unmet condition, before anything is written (SCRUM-407 P1.4) — including a
+  // financing reconciliation flag not yet reviewed (FINANCING_RECONCILED, SCRUM-420).
   const evaluation = await evaluateClosingReadiness(ctx, app, opts);
   // Thrown uncaught, before the first write, and redacted by the SAME pure
   // function the readiness query uses.

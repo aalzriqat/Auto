@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { salesAr, salesEn } from "./domains/sales";
 import {
+  CLOSING_READINESS_CHECK_KEYS,
   CLOSING_READINESS_REASON_CODES,
   WITHHELD_CLOSING_READINESS_REASON_CODES,
   closingReasonMessageKey,
@@ -31,6 +32,16 @@ describe("closing-readiness reason codes", () => {
     const declared = [...closingReasonParamNames(code)].sort();
     expect(placeholders(english!), `${key} (en) placeholders`).toEqual(declared);
     expect(placeholders(arabic!), `${key} (ar) placeholders`).toEqual(declared);
+  });
+
+  // SCRUM-420: the checklist row label for every check the evaluator can emit is translated in both locales.
+  test.each(CLOSING_READINESS_CHECK_KEYS.map((key) => [key]))("check %s has an English and an Arabic ClosingCheck_ label", (key) => {
+    const english = en[`ClosingCheck_${key}`];
+    const arabic = ar[`ClosingCheck_${key}`];
+    expect(english, `ClosingCheck_${key} (en)`).toEqual(expect.any(String));
+    expect(arabic, `ClosingCheck_${key} (ar)`).toEqual(expect.any(String));
+    expect(english!.trim()).not.toBe("");
+    expect(arabic).toMatch(ARABIC);
   });
 
   test("the list names each code once", () => {
