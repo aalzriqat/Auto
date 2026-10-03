@@ -24,7 +24,9 @@ vi.mock("@/components/providers/OrgProvider", () => ({
 }));
 vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/hooks/useCurrencyFormatter", () => ({
-  useCurrencyFormatter: () => (n: number) => `${n} JOD`,
+  useCurrencyFormatter: () => (n: number, digits = 0) => `${n.toFixed(digits)} JOD`,
+  // A row is formatted in ITS OWN currency at its own scale (SCRUM-571 D-14 F-2).
+  useCurrencyFormatterInCurrency: () => (n: number, currency: string, digits = 0) => `${n.toFixed(digits)} ${currency}`,
 }));
 vi.mock("@/hooks/useCurrency", () => ({ useCurrency: () => ({ code: "JOD" }) }));
 vi.mock("convex/react", async () => {
@@ -139,7 +141,7 @@ describe("PaymentLinksPanel: Expire link", () => {
     const dialog = await screen.findByRole("dialog");
     const text = dialog.textContent ?? "";
     expect(text).toContain("Layla Nasser");
-    expect(text).toContain("600 JOD");
+    expect(text).toContain("600.000 JOD");
     expect(text).toMatch(/deactivate/i);
     expect(text).toMatch(/held for review/i);
     expect(text).not.toMatch(/will stop accepting payment/i);
@@ -221,11 +223,50 @@ describe("PaymentLinksPanel: Payments held for review (SCRUM-571 D-8)", () => {
     ];
     render(<PaymentLinksPanel />);
     expect(screen.getByText("tap_chg_late")).toBeTruthy();
-    expect(screen.getAllByText("250 JOD").length).toBe(2);
+    expect(screen.getAllByText("250.000 JOD").length).toBe(2);
     expect(screen.getByText("HeldPaymentsReason_INTENT_NOT_PENDING")).toBeTruthy();
     expect(screen.getByText("HeldPaymentsReason_UNKNOWN_REFERENCE")).toBeTruthy();
     expect(screen.getAllByText("HeldPaymentsConflict")).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "HeldPaymentsResolve" })).toHaveLength(2);
+  });
+
+  describe("each row is shown in its own currency at its own scale (SCRUM-571 D-14 F-2)", () => {
+    test("JOD 100.001 (100001 minor, scale 3) renders three decimals", () => {
+      stubs.held = [held({ amountMinor: 100_001, currency: "JOD" })];
+      render(<PaymentLinksPanel />);
+      expect(screen.getByText("100.001 JOD")).toBeTruthy();
+    });
+
+    test("a USD row in a JOD org renders as USD with two decimals", () => {
+      stubs.held = [held({ amountMinor: 12_345, currency: "USD" })];
+      render(<PaymentLinksPanel />);
+      expect(screen.getByText("123.45 USD")).toBeTruthy();
+      expect(screen.queryByText(/JOD/)).toBeNull();
+    });
+
+    // CAD is not in the UI's CURRENCY_SCALES table (it takes the raw-minor path
+    // below), so a supported two-decimal currency stands in for the "other" one.
+    test("a EUR row beside a JOD row: each renders in its own currency", () => {
+      stubs.held = [
+        held({ _id: "uf_jod", externalId: "ref_jod", amountMinor: 5_000, currency: "JOD" }),
+        held({ _id: "uf_eur", externalId: "ref_eur", amountMinor: 5_000, currency: "EUR" }),
+      ];
+      render(<PaymentLinksPanel />);
+      expect(screen.getByText("5.000 JOD")).toBeTruthy();
+      expect(screen.getByText("50.00 EUR")).toBeTruthy();
+    });
+
+    test("an unknown currency renders the raw minor units and does not crash the section", () => {
+      stubs.t = (key: string) => (key === "HeldPaymentsRawMinor" ? (commonEn as Record<string, string>)[key] : key);
+      stubs.held = [
+        held({ _id: "uf_xyz", externalId: "ref_xyz", amountMinor: 250_000, currency: "XYZ" }),
+        held({ _id: "uf_ok", externalId: "ref_ok", amountMinor: 1_000, currency: "JOD" }),
+      ];
+      render(<PaymentLinksPanel />);
+      expect(screen.getByText("250000 XYZ (smallest unit)")).toBeTruthy();
+      expect(screen.queryByText("HeldPaymentsError")).toBeNull();
+      expect(screen.getByText("1.000 JOD")).toBeTruthy();
+    });
   });
 
   test("a RESOLVED row has no Resolve action", () => {

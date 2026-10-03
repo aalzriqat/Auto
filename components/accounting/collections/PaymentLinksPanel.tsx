@@ -16,7 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { toast } from "@/components/ui/sonner";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { useCurrency } from "@/hooks/useCurrency";
-import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
+import { useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
 import { busyCloseGuard } from "@/components/ui/busyCloseGuard";
 import {
   AccountingEmptyRow,
@@ -24,6 +24,7 @@ import {
   DialogFooterActions,
   LoadingAccountingState,
   scaleForCurrency,
+  supportedCurrencyScale,
   useAccountingSubmit,
 } from "../AccountingTabShared";
 
@@ -61,13 +62,20 @@ function intentStatusClass(status: PaymentIntentRow["status"]) {
   return "text-amber-700 dark:text-amber-300";
 }
 
-// The org-currency formatter is deliberately kept (not formatMinorAmount): it
-// formats in the org's currency with the org locale, which the list has always
-// shown, while formatMinorAmount would switch to the intent's own currency.
+// SCRUM-571 D-14 (F-2): every record is shown in ITS OWN currency at ITS OWN
+// scale, never the org's. A provider capture can arrive in any currency, and
+// scaleForCurrency THROWS on an unknown code, which would take the whole
+// section down: an unknown currency renders the raw minor units instead.
 function useIntentAmount() {
-  const formatCurrency = useCurrencyFormatter();
-  return ({ amountMinor, currency }: Readonly<{ amountMinor: number; currency: string }>) =>
-    formatCurrency(amountMinor / Math.pow(10, scaleForCurrency(currency)));
+  const { t } = useLanguage();
+  const formatInCurrency = useCurrencyFormatterInCurrency();
+  return ({ amountMinor, currency }: Readonly<{ amountMinor: number; currency: string }>) => {
+    const scale = supportedCurrencyScale(currency);
+    if (scale === null) {
+      return interpolate(t("HeldPaymentsRawMinor" as any), { amount: amountMinor, currency });
+    }
+    return formatInCurrency(amountMinor / Math.pow(10, scale), currency, scale);
+  };
 }
 
 export function PaymentLinksPanel() {

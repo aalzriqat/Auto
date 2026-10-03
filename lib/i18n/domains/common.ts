@@ -233,7 +233,7 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ],
   ServerError_UNMATCHED_FUNDS_ALREADY_RESOLVED: [
     "This held payment has already been marked as resolved. Nothing has been changed.",
-    "تم تعليم هذه الدفعة المحتجزة كمحلولة مسبقاً. لم يتم تغيير أي شيء.",
+    "تم إغلاق مراجعة هذه الدفعة المحتجزة مسبقاً. لم يتم تغيير أي شيء.",
   ],
   ServerError_UNMATCHED_FUNDS_NOTE_REQUIRED: [
     "Enter a note describing how this payment was handled. Nothing has been changed.",
@@ -1025,7 +1025,8 @@ export const commonEn = {
   PaymentLinkExpired: "Payment link expired.",
   HeldPaymentsTitle: "Payments held for review",
   HeldPaymentsDesc:
-    "Payments the provider confirmed that were not applied to any debt. Nothing here has changed what a customer owes: reconcile the money through the normal receipt flow, then mark the item resolved.",
+    "Payments the provider confirmed that were not applied to any debt. Nothing here has changed what a customer owes. Record the money through the normal receipt flow, expire the payment link if it is still awaiting payment, then mark the item resolved. A held payment's reference cannot be used to settle a payment link.",
+  HeldPaymentsRawMinor: "{amount} {currency} (smallest unit)",
   HeldPaymentsLoading: "Loading held payments...",
   HeldPaymentsEmpty: "No payments are being held for review.",
   HeldPaymentsError: "Held payments could not be loaded. Refresh the page to try again.",
@@ -1040,7 +1041,7 @@ export const commonEn = {
   HeldPaymentsResolved: "Resolved",
   HeldPaymentsResolveTitle: "Resolve this held payment?",
   HeldPaymentsResolveDescription:
-    "Record how this payment was handled. This does not move any money or change any balance: reconcile the funds through the normal receipt flow first.",
+    "Record how this payment was handled. This does not move any money or change any balance: record the funds through the normal receipt flow first.",
   HeldPaymentsNoteLabel: "How was it handled?",
   HeldPaymentsResolvedToast: "Held payment marked as resolved.",
   LoadingPaymentLinks: "Loading payment links...",
@@ -2007,7 +2008,8 @@ export const commonAr = {
   PaymentLinkExpired: "تم إنهاء صلاحية رابط الدفع.",
   HeldPaymentsTitle: "دفعات محتجزة للمراجعة",
   HeldPaymentsDesc:
-    "دفعات أكّدها مزوّد الدفع ولم تُطبَّق على أي دين. لم يتغير هنا أي مبلغ مستحق على العميل: سوِّ المبلغ عبر مسار الإيصالات المعتاد ثم علّم البند كمحلول.",
+    "دفعات أكّدها مزوّد الدفع ولم تُطبَّق على أي دين. لم يتغير هنا أي مبلغ مستحق على العميل. سجّل المبلغ عبر مسار الإيصالات المعتاد، وأنهِ صلاحية رابط الدفع إن كان ما زال بانتظار السداد، ثم أغلق مراجعة البند. لا يمكن استخدام مرجع دفعة محتجزة لتسوية رابط دفع.",
+  HeldPaymentsRawMinor: "{amount} {currency} (أصغر وحدة)",
   HeldPaymentsLoading: "جاري تحميل الدفعات المحتجزة...",
   HeldPaymentsEmpty: "لا توجد دفعات محتجزة للمراجعة.",
   HeldPaymentsError: "تعذّر تحميل الدفعات المحتجزة. حدّث الصفحة وحاول مجدداً.",
@@ -2018,13 +2020,13 @@ export const commonAr = {
   HeldPaymentsReceived: "وقت الاستلام",
   HeldPaymentsDeliveries: "عدد مرات الوصول",
   HeldPaymentsConflict: "المبلغ يختلف بين مرات الوصول",
-  HeldPaymentsResolve: "تسوية",
-  HeldPaymentsResolved: "تمت التسوية",
-  HeldPaymentsResolveTitle: "هل تريد تسوية هذه الدفعة المحتجزة؟",
+  HeldPaymentsResolve: "إغلاق المراجعة",
+  HeldPaymentsResolved: "تمت المراجعة",
+  HeldPaymentsResolveTitle: "هل تريد إغلاق مراجعة هذه الدفعة المحتجزة؟",
   HeldPaymentsResolveDescription:
-    "سجّل كيف تم التعامل مع هذه الدفعة. هذا لا ينقل أي أموال ولا يغيّر أي رصيد: سوِّ المبلغ أولاً عبر مسار الإيصالات المعتاد.",
+    "سجّل كيف تم التعامل مع هذه الدفعة. هذا لا ينقل أي أموال ولا يغيّر أي رصيد: سجّل المبلغ أولاً عبر مسار الإيصالات المعتاد.",
   HeldPaymentsNoteLabel: "كيف تم التعامل معها؟",
-  HeldPaymentsResolvedToast: "تم تعليم الدفعة المحتجزة كمحلولة.",
+  HeldPaymentsResolvedToast: "تم إغلاق مراجعة الدفعة المحتجزة.",
   LoadingPaymentLinks: "جاري تحميل روابط الدفع...",
   NoPaymentLinksFound: "لا توجد روابط دفع.",
   OpenCashDrawer: "فتح صندوق النقد",
