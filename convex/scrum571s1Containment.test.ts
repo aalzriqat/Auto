@@ -1134,7 +1134,7 @@ describe("R5 — a refund that would re-allocate a remainder to a sale-linked le
       });
     }
 
-    const approve = (w: World, requestId: Id<"approvalRequests">) =>
+    const approve = (w: World, requestId: Id<"collectionApprovalRequests">) =>
       w.asApprover.mutation(api.collections.respondToApproval, {
         idempotencyKey: crypto.randomUUID(),
         orgId: w.orgId,

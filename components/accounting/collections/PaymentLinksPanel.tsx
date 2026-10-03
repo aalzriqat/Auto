@@ -519,9 +519,13 @@ function ExpirePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
   // D-22: the operator attests they checked the provider. Cleared whenever the
   // dialog is pointed at another link (or closed), so it is never carried over.
   const [providerChecked, setProviderChecked] = useState(false);
-  useEffect(() => {
+  const [checkedFor, setCheckedFor] = useState<PaymentIntentRow | null>(intent);
+  if (checkedFor !== intent) {
+    // Adjusting state during render (not in an effect) keeps the reset in the
+    // same pass as the intent change, so a stale tick never reaches the button.
+    setCheckedFor(intent);
     setProviderChecked(false);
-  }, [intent]);
+  }
 
   async function submit() {
     if (!activeOrgId || !intent || !providerChecked) return;
