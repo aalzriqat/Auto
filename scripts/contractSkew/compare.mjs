@@ -153,7 +153,15 @@ export function compareContracts(clientCalls, spec, extraUnresolved = []) {
     // different path maps and had to re-derive structure from strings at each,
     // which is where the array-element blind spot and the union merge came
     // from.
-    const site = { identifier: call.identifier, file: call.file, line: call.line };
+    // `siteId` and `surface` are what the needs-evidence baseline keys on: a
+    // finding is identified by WHERE it is, not by how many there are.
+    const site = {
+      identifier: call.identifier,
+      file: call.file,
+      line: call.line,
+      siteId: call.siteId,
+      surface: call.surface,
+    };
     const walked = compareNode(call.payload, validatorTree(fn.args), "", {
       site,
       frameworkSupplied,

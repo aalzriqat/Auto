@@ -875,7 +875,13 @@ describe("an unreadable spec is UNAVAILABLE, never a proven skew", () => {
   test("a supplied spec file is NOT the unattended monitor, so it needs no identity", () => {
     // A human handing in evidence may legitimately skip the check; only the
     // unattended monitor is required to prove what it looked at.
-    expect(runWith(["--mode", "production", "--spec", "spec.json"], scaffoldSpec())).toBe(0);
+    //
+    // D-24: this scaffold has no client calls, and zero discovered calls must
+    // NOT pass, so the run ends at COVERAGE_INCOMPLETE (9). What this test pins
+    // is only that it got PAST the identity requirement - not 3.
+    const code = runWith(["--mode", "production", "--spec", "spec.json"], scaffoldSpec());
+    expect(code).toBe(9);
+    expect(code, "a supplied spec must not demand a deployment identity").not.toBe(3);
   });
 });
 
@@ -917,10 +923,12 @@ describe("an unscanned client file fails the run rather than passing it", () => 
     return dir;
   };
 
-  test("exit 0 with nothing unscanned, exit 6 once one file appears", () => {
+  test("nothing unscanned is NOT a pass (no calls found: 9), exit 6 once one file appears", () => {
     const dir = scaffold();
     try {
-      expect(runIn(dir)).toBe(0);
+      // D-24: this scaffold discovers zero Convex calls. That used to exit 0;
+      // a scan that found nothing proves nothing, so it is now 9.
+      expect(runIn(dir)).toBe(9);
       // Vary exactly one thing.
       fs.mkdirSync(path.join(dir, "somewhere"), { recursive: true });
       fs.writeFileSync(path.join(dir, "somewhere", "Screen.tsx"), "const x = useQuery(api.a.b, {});");
@@ -956,7 +964,8 @@ describe("an unscanned client file fails the run rather than passing it", () => 
   test("RELEASE mode also refuses to clear a release with an unscanned client file", () => {
     const dir = scaffold();
     try {
-      expect(runRelease(dir)).toBe(0);
+      // D-24: zero discovered calls blocks a release too (9), no longer 0.
+      expect(runRelease(dir)).toBe(9);
       fs.mkdirSync(path.join(dir, "somewhere"), { recursive: true });
       fs.writeFileSync(path.join(dir, "somewhere", "Screen.tsx"), "const x = useQuery(api.a.b, {});");
       expect(runRelease(dir)).toBe(6);
@@ -1033,7 +1042,12 @@ describe("release mode distinguishes PROVED UNSAFE from CANNOT PROVE SAFE", () =
   const cli = path.resolve("scripts/contractSkew/cli.mjs");
 
   const releaseDir = (deployedArgs: Record<string, unknown>, candidateArgs: Record<string, unknown>, client: string) => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rel-split-"));
+    // Inside the repository so `convex/react` RESOLVES: the independent census
+    // starts from that import symbol and, in a bare temp dir, is blind - which
+    // the CLI now treats as an incomplete accounting (exit 9), not as a pass.
+    const cache = path.resolve("node_modules/.cache/skew-exit");
+    fs.mkdirSync(cache, { recursive: true });
+    const dir = fs.mkdtempSync(path.join(cache, "rel-split-"));
     fs.writeFileSync(path.join(dir, "spec.json"), JSON.stringify(spec(fn("vehicles.js:update", deployedArgs))));
     fs.writeFileSync(path.join(dir, "candidate.json"), JSON.stringify(spec(fn("vehicles.js:update", candidateArgs))));
     fs.writeFileSync(

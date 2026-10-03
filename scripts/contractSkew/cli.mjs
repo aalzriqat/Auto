@@ -5,7 +5,9 @@
  * SCRUM-177 was a merged frontend served against a backend that had never been
  * deployed, for 33.5 hours, and nothing noticed. A control that only runs when
  * a person remembers to run it would not have caught it either, so this exists
- * to be invoked by a cron and by a release gate rather than by a human.
+ * to be invoked by a cron (`contract-skew.yml`, production mode) rather than by
+ * a human. Release mode exists and is tested, but NO workflow invokes it yet -
+ * it is a check to run by hand against a candidate spec, not an active gate.
  *
  * Two modes, because two different questions are being asked:
  *
@@ -15,12 +17,15 @@
  *                 decision still available to us.
  *
  * Exit codes are deliberately distinct, and UNAVAILABLE is not success:
- *   0  PASS         proven compatible, complete coverage
- *   0  UNKNOWN      no proven break, but coverage is incomplete (warning only)
+ *   0  PASS         proven compatible: every call accounted for, no unproven
+ *                   path, empty baseline. Scope: Convex ARGUMENT CONTRACTS only.
+ *   0  UNKNOWN      no proven break among the accounted calls, and every
+ *                   unproven path is in the reviewed baseline. Never a PASS.
  *   1  TOOLING FAILURE  the control did not complete. Node's DEFAULT for an
- *                       uncaught throw, so this is the code you get when
- *                       nothing classified anything. NOT a verdict about the
- *                       backend — do NOT deploy on it.
+ *                       uncaught throw. NOT a verdict about the backend, and
+ *                       the uncaught-throw boundary below turns most of these
+ *                       into 3 - so 1 means the process died before even
+ *                       that boundary could run. Do NOT deploy on it.
  *   2  usage error
  *   3  UNAVAILABLE  no authoritative evidence could be obtained — a DELIBERATE
  *                   classification, reached through the error boundary
@@ -35,6 +40,13 @@
  *   8  RELEASE BREAK    release-mode: shipping this candidate WOULD introduce a
  *                       skew. A decision still available to us — deploying the
  *                       backend is not the remedy, so it is not code 7.
+ *   9  COVERAGE INCOMPLETE  a call site could not be accounted for: unresolved
+ *                       by the extractor, unresolved/unaccounted by the
+ *                       independent census, or NO call sites discovered at all.
+ *   10 EVIDENCE DRIFT   the unproven paths differ from the reviewed baseline
+ *                       (new, removed, duplicated, expired, malformed, or the
+ *                       contract under an entry changed). Not a skew. In
+ *                       release mode drift is a warning, not a block.
  *
  * ⚠️ WHY PROVEN SKEW IS NOT EXIT 1, AND WHY THAT MATTERS MORE THAN IT LOOKS.
  *
@@ -58,13 +70,19 @@
  * kill the process before any JavaScript runs.
  */
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { extractClientCalls } from "./clientPaths.mjs";
+import { createClientProgram, extractClientCalls } from "./clientPaths.mjs";
+import { runCensus } from "./census.mjs";
+import { evaluateBaseline, loadBaseline, unprovenFrom } from "./baseline.mjs";
+import { specProblems } from "./specIndex.mjs";
 import { compareContracts, blockersForRelease } from "./compare.mjs";
 import { CLIENT_SURFACES, listSurfaceFiles, unscannedConvexClients } from "./clientFiles.mjs";
 import { fetchDeployedSpec, isDeploymentName, readSpecFile, redact } from "./fetchSpec.mjs";
 import { changedContractPaths, summarizeChanges } from "./specDiff.mjs";
 import { classifyBreaking, alertsFor, releaseBlockingFindings } from "./classify.mjs";
+
+const DEFAULT_BASELINE = fileURLToPath(new URL("./needs-evidence-baseline.json", import.meta.url));
 
 const EXIT = {
   OK: 0,
@@ -82,6 +100,11 @@ const EXIT = {
   // Release-mode proven break. Deploying the backend is not the remedy here,
   // so this is deliberately NOT 7 and carries no deploy instruction.
   RELEASE_BREAK: 8,
+  // A call site the control could not account for (unresolved, unaccounted, or
+  // none discovered at all). Not a skew and not a pass.
+  COVERAGE_INCOMPLETE: 9,
+  // The unproven paths differ from the reviewed baseline. Not a skew.
+  EVIDENCE_DRIFT: 10,
 };
 
 /**
@@ -243,6 +266,14 @@ if (!deployed.ok) {
   process.exit(EXIT.UNAVAILABLE);
 }
 
+// ⚠️ A SPEC THIS CONTROL CANNOT READ IS NOT EVIDENCE. See specProblems().
+const specIssues = specProblems(deployed.spec);
+if (specIssues.length) {
+  unavailable(
+    `the function spec is not in the shape this control understands (${specIssues.length} problem(s)): ${specIssues.slice(0, 5).join("; ")}`
+  );
+}
+
 // ── 2. What the client actually sends ────────────────────────────────────────
 //
 // One TypeScript program PER SURFACE. The web app and the mobile app are typed
@@ -254,6 +285,12 @@ const calls = [];
 const unresolvedBinders = [];
 const scannedFiles = [];
 const surfaces = [];
+const census = { candidates: 0, TRANSMISSION: 0, NON_TRANSMISSION: 0, UNRESOLVED: 0, UNACCOUNTED: 0 };
+/** @type {Array<{surface:string,siteId:string,file:string,line:number,disposition:string,reason:string}>} */
+const censusGaps = [];
+/** @type {Array<{surface:string,siteId:string,kind:string}>} */
+const censusOrphans = [];
+const blindSurfaces = [];
 
 for (const surface of CLIENT_SURFACES) {
   const files = listSurfaceFiles(root, surface);
@@ -261,10 +298,25 @@ for (const surface of CLIENT_SURFACES) {
     surfaces.push({ name: surface.name, ships: surface.ships, filesScanned: 0, callSites: 0 });
     continue;
   }
-  const extracted = extractClientCalls(files, surface.tsconfig);
-  calls.push(...extracted.calls);
+  // One program per surface, shared by the extractor and the independent census
+  // so they look at exactly the same types.
+  const program = createClientProgram(files, surface.tsconfig);
+  const extracted = extractClientCalls(files, surface.tsconfig, { program });
+  calls.push(...extracted.calls.map((c) => ({ ...c, surface: surface.name })));
   unresolvedBinders.push(...extracted.unresolvedBinders);
   scannedFiles.push(...files);
+
+  const surfaceCensus = runCensus({ program, files, extraction: extracted });
+  census.candidates += surfaceCensus.totals.candidates;
+  for (const key of ["TRANSMISSION", "NON_TRANSMISSION", "UNRESOLVED", "UNACCOUNTED"]) {
+    census[key] += surfaceCensus.totals[key];
+  }
+  for (const c of [...surfaceCensus.unresolved, ...surfaceCensus.unaccounted]) {
+    censusGaps.push({ surface: surface.name, siteId: c.siteId, file: c.file, line: c.line, disposition: c.disposition, reason: c.reason });
+  }
+  for (const o of surfaceCensus.orphans) censusOrphans.push({ surface: surface.name, siteId: o.siteId, kind: o.kind });
+  if (surfaceCensus.blind) blindSurfaces.push(surface.name);
+
   surfaces.push({
     name: surface.name,
     ships: surface.ships,
@@ -274,6 +326,43 @@ for (const surface of CLIENT_SURFACES) {
 }
 
 const result = compareContracts(calls, deployed.spec, unresolvedBinders);
+const unproven = unprovenFrom(result.needsEvidence, deployed.spec);
+
+// ⚠️ THE MONITOR READS THIS FILE AND NEVER WRITES IT. See baseline.mjs.
+const baselinePath = strArg("baseline") ?? DEFAULT_BASELINE;
+const baselineState = evaluateBaseline(unproven, loadBaseline(baselinePath));
+
+// Why this run cannot claim to have accounted for every call.
+const coverageProblems = [];
+if (calls.length + unresolvedBinders.length === 0) {
+  coverageProblems.push("no Convex call sites were discovered, so nothing was checked - a scan that found nothing proves nothing");
+}
+if (result.coverage.clientCallSitesUnresolved > 0) {
+  coverageProblems.push(`${result.coverage.clientCallSitesUnresolved} call site(s) the extractor could not resolve`);
+}
+if (censusGaps.length) {
+  coverageProblems.push(`${censusGaps.length} census candidate(s) unresolved or unaccounted for`);
+}
+if (censusOrphans.length) {
+  coverageProblems.push(`${censusOrphans.length} extractor record(s) the independent census does not recognise`);
+}
+if (blindSurfaces.length) {
+  coverageProblems.push(
+    `the independent census resolved no symbol into the installed convex package on: ${blindSurfaces.join(", ")} (is convex installed?)`
+  );
+}
+const coverageIncomplete = coverageProblems.length > 0;
+
+function reportCoverageIncomplete(prefix) {
+  for (const s of result.coverage.unresolvedSites) {
+    console.error(`::error file=${s.file},line=${s.line}::${s.identifier} - ${s.reason}`);
+  }
+  for (const g of censusGaps) {
+    console.error(`::error file=${g.file},line=${g.line}::[census ${g.disposition}] ${g.reason}`);
+  }
+  for (const o of censusOrphans) console.error(`::error::[census orphan] ${o.siteId} ${o.kind}`);
+  console.error(`::error::${prefix}COVERAGE INCOMPLETE - ${coverageProblems.join("; ")}.`);
+}
 
 // ⚠️ A client surface this control does not look at is a coverage gap, and a
 // coverage gap must never read as PASS. Without this, the day the web client
@@ -282,7 +371,12 @@ const result = compareContracts(calls, deployed.spec, unresolvedBinders);
 // app" arriving as a green tick.
 const unscanned = unscannedConvexClients(root, scannedFiles);
 const unscannedFiles = unscanned.length;
-const verdict = result.verdict === "PASS" && unscannedFiles > 0 ? "UNKNOWN" : result.verdict;
+// PASS is only the gap-free, empty-baseline case, and only about Convex argument
+// contracts: anything less than complete accounting is UNKNOWN.
+const verdict =
+  result.verdict === "PASS" && (unscannedFiles > 0 || coverageIncomplete || baselineState.matched > 0)
+    ? "UNKNOWN"
+    : result.verdict;
 const coverageWarning = result.alert.coverageWarning || verdict !== result.verdict;
 
 // ── 2b. Is an incompatibility a MISSING DEPLOY, or a client that is simply
@@ -369,6 +463,14 @@ const report = {
     revisionSkew: classification.revisionSkew.length,
     standingDefects: classification.standingDefects.length,
     unclassified: classification.unclassified.length,
+  },
+  unproven,
+  baseline: { path: baselinePath, matched: baselineState.matched, drift: baselineState.problems },
+  census: {
+    totals: census,
+    unresolved: censusGaps,
+    orphans: censusOrphans,
+    blindSurfaces,
   },
   scope: {
     surfaces,
@@ -487,6 +589,20 @@ if (mode === "release") {
     process.exit(EXIT.COVERAGE_GAP);
   }
 
+  // An accounting gap blocks a release for the same reason a scanning gap does:
+  // "we could not see every call" is not "this release is compatible".
+  if (coverageIncomplete) {
+    reportCoverageIncomplete("RELEASE ");
+    process.exit(EXIT.COVERAGE_INCOMPLETE);
+  }
+
+  // Baseline drift is reported but does NOT block a release: unrelated reviewed
+  // debt moving must not stop every unrelated release. What blocks is an unknown
+  // that overlaps what THIS release changes (exit 4, above).
+  if (baselineState.drift) {
+    for (const problem of baselineState.problems) console.error(`::warning::[evidence drift] ${problem}`);
+  }
+
   process.exit(EXIT.OK);
 }
 
@@ -551,12 +667,35 @@ if (unscannedFiles > 0) {
   process.exit(EXIT.COVERAGE_GAP);
 }
 
-if (alert.coverageWarning) {
-  // ⚠️ Explicitly NOT an outage claim. This says the control cannot see
-  // everything, which is a different sentence from "production is broken".
-  console.error(
-    `::warning::contract-skew coverage incomplete — ${result.coverage.clientCallSitesUnresolved} unresolved call site(s), ` +
-      `${result.needsEvidence?.length ?? 0} unproven path(s). No skew detected.`
-  );
+// ⚠️ A call the control could not ACCOUNT FOR is not a call it found compatible.
+// Exit 9, not 0: with an incomplete census, "no break found" only describes the
+// calls that happened to be seen. Zero discovered calls lands here too.
+if (coverageIncomplete) {
+  reportCoverageIncomplete("");
+  process.exit(EXIT.COVERAGE_INCOMPLETE);
 }
+
+// The reviewed debt no longer matches what the run found.
+if (baselineState.drift) {
+  for (const problem of baselineState.problems) console.error(`::error::[evidence drift] ${problem}`);
+  console.error(
+    `::error::EVIDENCE DRIFT - ${baselineState.problems.length} difference(s) between the unproven paths found and ${baselinePath}. ` +
+      `Not a skew; a person must review the report and update the baseline.`
+  );
+  process.exit(EXIT.EVIDENCE_DRIFT);
+}
+
+if (unproven.length > 0 || verdict !== "PASS") {
+  // ⚠️ Explicitly NOT an outage claim and NOT a PASS: no break was proven among
+  // the calls accounted for, and the reviewed paths remain unverified.
+  console.error(
+    `No proven skew in accounted Convex argument calls; verdict UNKNOWN: ${unproven.length} reviewed paths remain unverified.`
+  );
+  process.exit(EXIT.OK);
+}
+
+console.error(
+  `No skew detected in Convex argument contracts: ${result.coverage.clientCallSitesResolved} call site(s) proven, none unaccounted for. ` +
+    `HTTP action bodies and deferred server-side calls are out of scope.`
+);
 process.exit(EXIT.OK);

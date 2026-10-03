@@ -35,6 +35,40 @@ export function indexSpec(spec) {
 }
 
 /**
+ * ⚠️ A SPEC THIS CONTROL CANNOT READ IS NOT EVIDENCE. The comparator treats a
+ * missing or oddly-shaped `args` as "any", which would turn a malformed or
+ * truncated document into a quiet pass. Anything whose argument contract is not
+ * an object validator (or an explicit `any`) means the document is not the
+ * `convex function-spec` shape this tool understands, and the run must say it
+ * could not look rather than guess.
+ *
+ * @param {unknown} spec
+ * @returns {string[]} one problem per offending function; empty means usable
+ */
+export function specProblems(spec) {
+  const list = Array.isArray(spec)
+    ? spec
+    : spec && typeof spec === "object" && Array.isArray(/** @type {any} */ (spec).functions)
+      ? /** @type {any} */ (spec).functions
+      : null;
+  if (!list) return ["the document has no `functions` array"];
+  const problems = [];
+  for (const fn of list) {
+    if (!fn || typeof fn !== "object" || typeof fn.identifier !== "string") {
+      problems.push("a function entry has no string `identifier`");
+      continue;
+    }
+    const args = fn.args;
+    if (args === undefined || args === null) continue;
+    const type = typeof args === "object" ? args.type : undefined;
+    if (type !== "object" && type !== "any") {
+      problems.push(`${fn.identifier}: args is a ${JSON.stringify(type ?? typeof args)} validator, not an object`);
+    }
+  }
+  return problems;
+}
+
+/**
  * Convex identifiers in a spec are file-based (`vehicles.js:importBulk`), while
  * client code references `api.vehicles.importBulk`. Normalize both to
  * `vehicles:importBulk` so the two sides can be compared at all.
