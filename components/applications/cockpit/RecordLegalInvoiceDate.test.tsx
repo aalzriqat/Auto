@@ -257,6 +257,9 @@ describe("the date a legal invoice is recorded under", () => {
   test("the refresh lands after the boundary, never before, and re-arms for the next one", async () => {
     // 02:59:30 Amman on 10 August; the ledger day opens at 00:00:00Z.
     at(new Date("2026-08-09T23:59:30Z"));
+    // Frozen clock: real time leaking in would make the 200 ms window flaky.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-09T23:59:30Z"));
     renderDialog([]);
     const advance = async (ms: number) => {
       await act(async () => {
