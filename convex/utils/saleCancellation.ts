@@ -30,11 +30,12 @@ async function getActiveReceivableAllocations(
   ctx: MutationCtx,
   receivableDocumentId: Id<"receivableDocuments">
 ) {
-  return await ctx.db
+  // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+  const allocations = await ctx.db
     .query("paymentAllocations")
     .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivableDocumentId))
-    .filter((q) => q.eq(q.field("status"), "ACTIVE"))
     .collect();
+  return allocations.filter((allocation) => allocation.status === "ACTIVE");
 }
 
 /**
@@ -164,16 +165,17 @@ async function assertTradeInVehicleSafeToReverse(
     );
   }
 
-  const capitalizedExpense = await ctx.db
+  // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+  // First match in index order, early exit - same row the old `.first()` chose.
+  let capitalizedExpense: Doc<"expenses"> | null = null;
+  for await (const expense of ctx.db
     .query("expenses")
-    .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.tradeInVehicleId))
-    .filter((q) =>
-      q.and(
-        q.eq(q.field("accountingTreatment"), "CAPITALIZED_INVENTORY"),
-        q.neq(q.field("isDeleted"), true)
-      )
-    )
-    .first();
+    .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.tradeInVehicleId))) {
+    if (expense.accountingTreatment === "CAPITALIZED_INVENTORY" && expense.isDeleted !== true) {
+      capitalizedExpense = expense;
+      break;
+    }
+  }
   if (capitalizedExpense) {
     throw new ConvexError(
       "Cannot automatically cancel: this trade-in vehicle has received capitalized repair/prep costs since being accepted. Use a manual accounting correction."
@@ -688,11 +690,12 @@ async function reinstateAppliedDeposits(
   // for them would look for an event that was never written, find nothing, and
   // return quietly, leaving the deposit reinstated in the subledger while the
   // GL still showed its liability discharged.
-  const legacyDeposits = await ctx.db
+  // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+  const quoteDepositRows = await ctx.db
     .query("deposits")
     .withIndex("by_quote", (q) => q.eq("quoteId", args.quoteId!))
-    .filter((q) => q.eq(q.field("status"), "APPLIED"))
     .collect();
+  const legacyDeposits = quoteDepositRows.filter((deposit) => deposit.status === "APPLIED");
 
   for (const deposit of legacyDeposits) {
     if (touchedDeposits.has(deposit._id.toString())) continue;
@@ -781,13 +784,14 @@ async function voidSaleCashflowTransaction(
   // `saleId` are never selected: `transactions.add` writes manual VEHICLE_SALE
   // rows that belong to no sale, and no cancellation is entitled to void them.
   // There is no legacy fallback here by design (c16229 item 5).
-  const saleRows = await ctx.db
+  // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+  const allSaleRows = await ctx.db
     .query("transactions")
     .withIndex("by_org_sale", (q) =>
       q.eq("orgId", args.orgId).eq("saleId", args.sale._id)
     )
-    .filter((q) => q.neq(q.field("isDeleted"), true))
     .collect();
+  const saleRows = allSaleRows.filter((row) => row.isDeleted !== true);
 
   for (const row of saleRows) {
     await ctx.db.patch(row._id, {
