@@ -779,6 +779,8 @@ describe("SCRUM-571 S1 — every new refusal is translated in both locales", () 
       "PAYMENT_LINK_EXCEEDS_OUTSTANDING",
       "PAYMENT_LINK_NOT_FOUND",
       "PAYMENT_LINK_NOT_PENDING",
+      // Exercised in scrum571s1Containment.test.ts (P4: expire of a held link).
+      "PAYMENT_LINK_CAPTURE_HELD",
     ]);
     expect(Object.keys(PAYMENT_LINK_REFUSALS).filter((code) => !exercised.has(code))).toEqual([]);
   });

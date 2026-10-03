@@ -75,6 +75,8 @@ export const PAYMENT_LINK_REFUSALS = {
     "This provider reference is unavailable. Ask finance to review it. Nothing has been changed.",
   PAYMENT_LINK_SETTLEMENT_REQUIRES_REVIEW:
     "This payment must be reviewed before the link can be marked settled. Nothing has been changed.",
+  PAYMENT_LINK_CAPTURE_HELD:
+    "This payment link has a payment held for review, so it cannot be expired. Resolve the held payment first. Nothing has been changed.",
 } as const satisfies Record<string, string>;
 
 function refusePaymentLink(code: keyof typeof PAYMENT_LINK_REFUSALS): never {
@@ -825,6 +827,12 @@ export const expire = mutation({
     }
     if (intent.status !== "PENDING") {
       refusePaymentLink("PAYMENT_LINK_NOT_PENDING");
+    }
+    // SCRUM-571 S1 (D-21): a verified capture held for review means the customer
+    // may have paid this link. Expiring it would show it as unpaid, so it refuses
+    // until the held payment is resolved. An unpaid link with no held row expires.
+    if (intent.externalId && (await heldCaptureFor(ctx, intent.provider, intent.externalId))) {
+      refusePaymentLink("PAYMENT_LINK_CAPTURE_HELD");
     }
 
     await ctx.db.patch(args.intentId, {

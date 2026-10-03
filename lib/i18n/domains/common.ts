@@ -226,6 +226,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This payment must be reviewed before the link can be marked settled. Nothing has been changed.",
     "يجب مراجعة هذه الدفعة قبل تحديد رابط الدفع كمُسوّى. لم يتم تغيير أي شيء.",
   ],
+  ServerError_PAYMENT_LINK_CAPTURE_HELD: [
+    "This payment link has a payment held for review, so it cannot be expired. Resolve the held payment first. Nothing has been changed.",
+    "يوجد على رابط الدفع هذا مبلغ محجوز للمراجعة، لذلك لا يمكن إنهاء صلاحيته. عالج المبلغ المحجوز أولاً. لم يتم تغيير أي شيء.",
+  ],
   // SCRUM-571 D-8 — resolving a held provider payment.
   ServerError_UNMATCHED_FUNDS_NOT_FOUND: [
     "This held payment could not be found. Nothing has been changed.",
