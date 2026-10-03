@@ -222,6 +222,78 @@ describe("the date a legal invoice is recorded under", () => {
     expect(captured[0]!.legalInvoiceDate).toBeLessThanOrEqual(Date.now());
   });
 
+  test("behind UTC, a dialog left open across local midnight lets the operator pick the new day", async () => {
+    // 23:59:30 on 31 August in New York; the ledger is already on 1 September (Sol 6 on 8846fc9d4).
+    at(new Date("2026-09-01T03:59:30Z"), "America/New_York");
+    renderDialog([]);
+    fillRequired();
+    fireEvent.change(dateInput(), { target: { value: "2026-08-28" } });
+    expect(dateInput().max).toBe("2026-08-31");
+
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(dateInput().max).toBe("2026-09-01");
+    // The operator's pick is state and survives the refresh.
+    expect(dateInput().value).toBe("2026-08-28");
+  });
+
+  test("ahead of UTC, local midnight brings the hint even with yesterday still in the field", async () => {
+    // 23:50 on 9 August in Amman; at 00:00 local the 10th has not opened on the ledger.
+    at(new Date("2026-08-09T20:50:00Z"));
+    renderDialog([]);
+    expect(dateInput().value).toBe("2026-08-09");
+    expect(document.querySelector("#legal-invoice-date-hint")).toBeNull();
+
+    await act(async () => {
+      vi.advanceTimersByTime(20 * 60_000);
+    });
+    expect(document.querySelector("#legal-invoice-date-hint")).not.toBeNull();
+    expect(dateInput().max).toBe("2026-08-09");
+    // A real past day the server accepts: kept, not cleared.
+    expect(dateInput().value).toBe("2026-08-09");
+  });
+
+  test("the refresh lands after the boundary, never before, and re-arms for the next one", async () => {
+    // 02:59:30 Amman on 10 August; the ledger day opens at 00:00:00Z.
+    at(new Date("2026-08-09T23:59:30Z"));
+    renderDialog([]);
+    const advance = async (ms: number) => {
+      await act(async () => {
+        vi.advanceTimersByTime(ms);
+      });
+    };
+
+    await advance(30_000 + 900); // 00:00:00.9Z — still before the refresh lands
+    expect(dateInput().max).toBe("2026-08-09");
+    await advance(200); // 00:00:01.1Z
+    expect(dateInput().max).toBe("2026-08-10");
+    expect(document.querySelector("#legal-invoice-date-hint")).toBeNull();
+
+    // Local midnight in Amman (21:00Z): the 11th has not opened on the ledger yet.
+    await advance(21 * 60 * 60_000);
+    expect(document.querySelector("#legal-invoice-date-hint")).not.toBeNull();
+    expect(dateInput().max).toBe("2026-08-10");
+
+    // The ledger's next midnight.
+    await advance(3 * 60 * 60_000);
+    expect(dateInput().max).toBe("2026-08-11");
+    expect(document.querySelector("#legal-invoice-date-hint")).toBeNull();
+  });
+
+  test("a tab made visible again after the ledger's midnight refreshes the cap", () => {
+    at(new Date("2026-08-09T23:59:30Z"));
+    renderDialog([]);
+    expect(dateInput().max).toBe("2026-08-09");
+
+    vi.useRealTimers();
+    at(new Date("2026-08-10T00:05:00Z"));
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(dateInput().max).toBe("2026-08-10");
+  });
+
   test("returning to the tab after the ledger's midnight refreshes the cap", () => {
     // A suspended tab's timer may not fire; focus must still bring the day in.
     at(new Date("2026-08-09T23:59:30Z"));

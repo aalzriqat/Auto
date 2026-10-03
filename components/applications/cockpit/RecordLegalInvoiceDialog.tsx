@@ -51,11 +51,17 @@ function invoiceDayBounds() {
   const localDay = todayDateInput();
   const ledgerDay = economicTodayDateInput();
   const localDayNotOpen = localDay > ledgerDay;
+  const nextLedgerDayAt = economicDateInputToMs(ledgerDay) + ONE_DAY_MS;
+  const now = new Date();
+  // Local construction, so a DST change still lands on midnight.
+  const nextLocalDayAt = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
   return {
     localDayNotOpen,
     latestDay: localDayNotOpen ? ledgerDay : localDay,
     /** The operator's clock time at which the ledger's next day begins. */
-    nextLedgerDayAt: economicDateInputToMs(ledgerDay) + ONE_DAY_MS,
+    nextLedgerDayAt,
+    /** Either calendar turning over moves the bounds. */
+    nextBoundaryAt: Math.min(nextLedgerDayAt, nextLocalDayAt),
   };
 }
 
@@ -121,22 +127,24 @@ export function RecordLegalInvoiceDialog({
   const [issuedToOther, setIssuedToOther] = useState(() => existing?.issuedToOther ?? "");
   const [localError, setLocalError] = useState<string | null>(null);
 
-  const { localDayNotOpen, latestDay, nextLedgerDayAt } = invoiceDayBounds();
-  // The bounds follow the clock, so re-render when the ledger's next day
-  // begins, and on focus for a tab whose timer was suspended. The operator's
-  // pick is state and survives.
+  const { localDayNotOpen, latestDay, nextLedgerDayAt, nextBoundaryAt } = invoiceDayBounds();
+  // The bounds follow both clocks, so re-render when the local or the ledger's
+  // day turns over, and when the tab regains focus or visibility in case its
+  // timer was suspended. The operator's pick is state and survives.
   const [, refreshBounds] = useState(0);
   useEffect(() => {
     if (!open) return;
     const refresh = () => refreshBounds((n) => n + 1);
     // A second late: a timer that fires early would re-render on the old day.
-    const timer = setTimeout(refresh, Math.max(0, nextLedgerDayAt - Date.now()) + 1000);
+    const timer = setTimeout(refresh, Math.max(0, nextBoundaryAt - Date.now()) + 1000);
     window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
     return () => {
       clearTimeout(timer);
       window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
     };
-  }, [open, nextLedgerDayAt]);
+  }, [open, nextBoundaryAt]);
   const amountMinor = parseMajor(amount, scale);
   const isInvalid =
     amountMinor === null ||
