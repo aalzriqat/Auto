@@ -160,7 +160,7 @@ describe("SCRUM-571 D-8 — a verified capture on a link that is no longer PENDI
   test("expired link, then a verified late webhook: one OPEN record, nothing economic", async () => {
     const w = await makeWorld();
     const intentId = await newLink(w);
-    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId });
+    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId, providerStatusConfirmed: true });
     const before = await economicCounts(w.t);
     const owedBefore = await outstanding(w);
 
@@ -183,7 +183,7 @@ describe("SCRUM-571 D-8 — a verified capture on a link that is no longer PENDI
       amountConflict: false,
       providerEventIds: ["evt_1"],
     });
-    expect((await doc(w, intentId))?.status).toBe("EXPIRED");
+    expect((await doc(w, intentId))?.status).toBe("CAPTURE_HELD");
     expect(await economicCounts(w.t)).toEqual(before);
     expect(await outstanding(w)).toBe(owedBefore);
   });
@@ -205,7 +205,7 @@ describe("SCRUM-571 D-8 — a verified capture on a link that is no longer PENDI
   test("expire still works on a PENDING link while the pilot is shut, and creating a new one is refused", async () => {
     const w = await makeWorld();
     const first = await newLink(w, { amountMinor: 1_000_000, externalId: "ext_full_1" });
-    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId: first });
+    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId: first, providerStatusConfirmed: true });
     expect((await doc(w, first))?.status).toBe("EXPIRED");
     await expect(
       w.asFinance.mutation(api.paymentIntents.create, {
@@ -256,7 +256,7 @@ describe("SCRUM-571 D-8 — an amount, currency or account mismatch is held", ()
     const before = await economicCounts(w.t);
 
     expect(await capture(w, { amountMinor: 99_000 })).toMatchObject({ kind: "HELD" });
-    expect((await doc(w, intentId))?.status).toBe("PENDING");
+    expect((await doc(w, intentId))?.status).toBe("CAPTURE_HELD");
     let rows = await heldRows(w);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
@@ -300,7 +300,7 @@ describe("SCRUM-571 D-8 — an amount, currency or account mismatch is held", ()
 describe("SCRUM-571 D-8 — redelivery dedupes on the capture, not the event", () => {
   async function heldOnce(w: World) {
     const intentId = await newLink(w);
-    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId });
+    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId, providerStatusConfirmed: true });
     await capture(w, { providerEventId: "evt_1" });
   }
 
@@ -399,7 +399,7 @@ describe("SCRUM-571 D-8 — a SETTLED link is an idempotent acknowledgement, wit
     const before = await economicCounts(w.t);
     expect(await capture(w)).toMatchObject({ kind: "HELD" });
     const intent = await doc(w, intentId);
-    expect(intent?.status).toBe("PENDING");
+    expect(intent?.status).toBe("CAPTURE_HELD");
     expect(intent?.canonicalPaymentId).toBeUndefined();
     expect(intent?.paymentAllocationId).toBeUndefined();
     expect(await heldRows(w)).toHaveLength(1);
@@ -431,7 +431,7 @@ describe("SCRUM-571 D-8 — a lifecycle refusal keeps its webhook log AND writes
       intentStatusAtReceipt: "PENDING",
       reviewStatus: "OPEN",
     });
-    expect((await doc(w, intentId))?.status).toBe("PENDING");
+    expect((await doc(w, intentId))?.status).toBe("CAPTURE_HELD");
     expect(await economicCounts(w.t)).toEqual(before);
   });
 
@@ -459,7 +459,7 @@ describe("SCRUM-571 D-8 — settleByExternalId returns a typed outcome; HELD alw
   test("non-PENDING intent: HELD, and a redelivery names the SAME row", async () => {
     const w = await makeWorld();
     const intentId = await newLink(w);
-    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId });
+    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId, providerStatusConfirmed: true });
     const first = await capture(w);
     const second = await capture(w, { providerEventId: "evt_2" });
     const [row] = await heldRows(w);
@@ -493,7 +493,7 @@ describe("SCRUM-571 D-8 — settleByExternalId returns a typed outcome; HELD alw
     const result = await capture(w);
     const [row] = await heldRows(w);
     expect(result).toEqual({ kind: "HELD", heldId: row._id });
-    expect((await doc(w, pendingId))?.status).toBe("PENDING");
+    expect((await doc(w, pendingId))?.status).toBe("CAPTURE_HELD");
 
     const settledId = await newLink(w, { status: "SETTLED", externalId: "tap_chg_settled" });
     expect(await capture(w, { externalId: "tap_chg_settled", providerEventId: "evt_dup" })).toEqual({

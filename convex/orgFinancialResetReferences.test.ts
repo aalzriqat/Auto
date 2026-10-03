@@ -312,13 +312,25 @@ async function insertIntent(ctx: MutationCtx, b: Base, status: IntentStatus, k: 
 /** An org that owns financial rows in several reset tables, plus one payment intent per `intents` entry. */
 async function seedPreflightOrg(
   tag: string,
-  opts: { suspended?: boolean; intents?: ReadonlyArray<IntentStatus> } = {}
+  opts: {
+    suspended?: boolean;
+    intents?: ReadonlyArray<IntentStatus>;
+    /** SCRUM-571 S1 (D-22): one `unmatchedProviderFunds` row per entry, with that review status. */
+    heldCaptures?: ReadonlyArray<"OPEN" | "RESOLVED">;
+  } = {}
 ) {
   const t = setup();
   const orgId = await t.run(async (ctx) => {
     const b = await seedBase(ctx, tag, opts.suspended ?? true);
     for (const seed of ALL_SEEDS) await seed(ctx, b);
     for (const [i, status] of (opts.intents ?? []).entries()) await insertIntent(ctx, b, status, `${status}-${i}`);
+    for (const [i, reviewStatus] of (opts.heldCaptures ?? []).entries()) {
+      await ctx.db.insert("unmatchedProviderFunds", {
+        orgId: b.orgId, provider: "TEST", externalId: `held-${tag}-${i}`, reason: "INTENT_NOT_PENDING",
+        amountMinor: 1000, currency: "JOD", providerEventIds: [], deliveryCount: 1, amountConflict: false,
+        reviewStatus, firstReceivedAt: b.now, lastReceivedAt: b.now,
+      });
+    }
     return b.orgId;
   });
   return { t, orgId };
@@ -337,6 +349,19 @@ describe("resetOrgFinancialData preflight (SCRUM-559 I1)", () => {
       tag: "PendingIntent",
       opts: { intents: ["PENDING"] as const },
       refusal: /pending online payment intents/,
+    },
+    // SCRUM-571 S1 (D-22): a held provider capture of ANY review status blocks.
+    {
+      name: "a suspended organization with an OPEN held provider capture",
+      tag: "HeldOpen",
+      opts: { heldCaptures: ["OPEN"] as const },
+      refusal: /verified provider capture is held/,
+    },
+    {
+      name: "a suspended organization with only a RESOLVED held provider capture",
+      tag: "HeldResolved",
+      opts: { heldCaptures: ["RESOLVED"] as const },
+      refusal: /verified provider capture is held/,
     },
   ])("$name is refused and ZERO rows are deleted", async ({ tag, opts, refusal }) => {
     const { t, orgId } = await seedPreflightOrg(tag, opts);
@@ -376,6 +401,27 @@ describe("resetOrgFinancialData preflight (SCRUM-559 I1)", () => {
     expect(result.pendingPaymentIntentsPresent).toBe(false);
     expect(result.orgSuspended).toBe(true);
     expect(sum(await totalRows(t, orgId))).toBeLessThan(before);
+  });
+
+  test("D-22: a held provider capture of ANOTHER organization does not block this one, and the dry run reports the flag", async () => {
+    const t = setup();
+    const { orgId, otherId } = await t.run(async (ctx) => {
+      const other = await seedBase(ctx, "OtherHeldOrg");
+      await ctx.db.insert("unmatchedProviderFunds", {
+        orgId: other.orgId, provider: "TEST", externalId: "held-other", reason: "INTENT_NOT_PENDING",
+        amountMinor: 1000, currency: "JOD", providerEventIds: [], deliveryCount: 1, amountConflict: false,
+        reviewStatus: "OPEN", firstReceivedAt: other.now, lastReceivedAt: other.now,
+      });
+      const b = await seedBase(ctx, "ThisHeldOrg");
+      for (const seed of ALL_SEEDS) await seed(ctx, b);
+      return { orgId: b.orgId, otherId: other.orgId };
+    });
+    const dry = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId });
+    expect(dry.heldProviderCapturesPresent).toBe(false);
+    const otherDry = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId: otherId });
+    expect(otherDry.heldProviderCapturesPresent).toBe(true);
+    const result = await onePass(t, orgId);
+    expect(result.total).toBeGreaterThan(0);
   });
 
   test("a dry run on an unsuspended organization works, reports both conditions and deletes nothing", async () => {

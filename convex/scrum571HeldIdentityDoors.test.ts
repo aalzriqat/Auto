@@ -177,7 +177,7 @@ const STATES: HeldState[] = [
       const intentId = await holdViaSuspension(w);
       const [row] = await heldRows(w);
       expect(row).toMatchObject({ reason: "LIFECYCLE_REFUSED", reviewStatus: "OPEN", amountConflict: false });
-      expect((await doc(w, intentId))?.status).toBe("PENDING");
+      expect((await doc(w, intentId))?.status).toBe("CAPTURE_HELD");
       return intentId;
     },
   },
@@ -250,7 +250,7 @@ describe.each(STATES)("SCRUM-571 D-14 — held identity $name", (state) => {
     expect(await economicCounts(w.t)).toEqual(before);
     if (intentId) {
       const intent = await doc(w, intentId);
-      expect(intent?.status).toBe("PENDING");
+      expect(intent?.status).toBe("CAPTURE_HELD");
       expect(intent?.canonicalPaymentId).toBeUndefined();
     }
   });
@@ -273,7 +273,8 @@ describe.each(STATES)("SCRUM-571 D-14 — held identity $name", (state) => {
     expect(retry.code).toBe("PAYMENT_LINKS_DISABLED");
 
     expect(await economicCounts(w.t)).toEqual(before);
-    expect((await doc(w, intentId))?.status).toBe("PENDING");
+    // D-22: a hold moves the link it names to CAPTURE_HELD; a fresh link (state iv) stays PENDING.
+    expect((await doc(w, intentId))?.status).toBe(state.name.startsWith("(iv)") ? "PENDING" : "CAPTURE_HELD");
     const stored = await w.t.run((ctx) => ctx.db.query("commandIdempotency").take(1000));
     expect(stored.filter((r) => r.idempotencyKey === key)).toEqual([]);
   });
@@ -325,7 +326,7 @@ describe("SCRUM-571 D-14 — controls", () => {
     const viaWebhook = await newLink(w, { externalId: "ext-clean-1", amountMinor: 100_000 });
     const held = await capture(w, { externalId: "ext-clean-1" });
     expect(held).toMatchObject({ kind: "HELD" });
-    expect((await doc(w, viaWebhook))?.status).toBe("PENDING");
+    expect((await doc(w, viaWebhook))?.status).toBe("CAPTURE_HELD");
 
     const viaStaff = await newLink(w, { externalId: "ext-clean-2", amountMinor: 100_000 });
     expect((await refusal(settle(w, viaStaff))).code).toBe("PAYMENT_LINKS_DISABLED");
@@ -342,7 +343,7 @@ describe("SCRUM-571 D-14 — controls", () => {
 
     const a = await newLink(w, { externalId: "ext-free-1" });
     expect(await capture(w, { externalId: "ext-free-1" })).toMatchObject({ kind: "HELD" });
-    expect((await doc(w, a))?.status).toBe("PENDING");
+    expect((await doc(w, a))?.status).toBe("CAPTURE_HELD");
     // Two identities, two rows: the held row is keyed per (provider, externalId).
     expect(await heldRows(w)).toHaveLength(2);
   });

@@ -227,8 +227,8 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "يجب مراجعة هذه الدفعة قبل تحديد رابط الدفع كمُسوّى. لم يتم تغيير أي شيء.",
   ],
   ServerError_PAYMENT_LINK_CAPTURE_HELD: [
-    "This payment link has a payment held for review, so it cannot be expired. Resolve the held payment first. Nothing has been changed.",
-    "يوجد على رابط الدفع هذا مبلغ محجوز للمراجعة، لذلك لا يمكن إنهاء صلاحيته. عالج المبلغ المحجوز أولاً. لم يتم تغيير أي شيء.",
+    "The provider confirmed a capture for this link. It is held for review and the link cannot be expired. Ask finance to review the held payment. Nothing has been changed.",
+    "أكد مزوّد الدفع تحصيل دفعة لهذا الرابط، وهي محتجزة للمراجعة. لا يمكن إنهاء صلاحية الرابط. اطلب من المالية مراجعة الدفعة المحتجزة. لم يتغير شيء.",
   ],
   // SCRUM-571 D-8 — resolving a held provider payment.
   ServerError_UNMATCHED_FUNDS_NOT_FOUND: [
@@ -238,6 +238,23 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ServerError_UNMATCHED_FUNDS_ALREADY_RESOLVED: [
     "This held payment has already been marked as resolved. Nothing has been changed.",
     "تم إغلاق مراجعة هذه الدفعة المحتجزة مسبقاً. لم يتم تغيير أي شيء.",
+  ],
+  // SCRUM-571 S1 (D-22) — linking a held capture to its payment link.
+  ServerError_UNMATCHED_FUNDS_NO_INTENT: [
+    "This held payment is not linked to a payment link, so there is nothing to repair. Nothing has been changed.",
+    "هذه الدفعة المحتجزة غير مرتبطة برابط دفع، فلا يوجد ما يلزم إصلاحه. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_UNMATCHED_FUNDS_INTENT_NOT_FOUND: [
+    "The payment link for this held payment could not be found. Nothing has been changed.",
+    "تعذّر العثور على رابط الدفع الخاص بهذه الدفعة المحتجزة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_UNMATCHED_FUNDS_INTENT_MISMATCH: [
+    "This held payment does not match the payment link's provider reference. Ask support to investigate. Nothing has been changed.",
+    "هذه الدفعة المحتجزة لا تطابق مرجع المزوّد لرابط الدفع. اطلب من الدعم التحقيق في الأمر. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_UNMATCHED_FUNDS_INTENT_NOT_LINKABLE: [
+    "This payment link is not in a state that can be linked to the held payment. Nothing has been changed.",
+    "رابط الدفع هذا ليس في حالة تسمح بربطه بالدفعة المحتجزة. لم يتم تغيير أي شيء.",
   ],
   ServerError_UNMATCHED_FUNDS_NOTE_REQUIRED: [
     "Enter a note describing how this payment was handled. Nothing has been changed.",
@@ -257,8 +274,8 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "دَين عملية البيع هو فاتورة البيع نفسها، ولا يمكن إنشاء ذمة مدينة منفصلة لعملية بيع. لم يتم تغيير أي شيء.",
   ],
   ServerError_SALE_HAS_LEGACY_RECEIVABLE: [
-    "This sale still has a separate receivable record that must be resolved before the sale can be completed or cancelled. Contact support. Nothing has been changed.",
-    "لا يزال لهذه العملية سجل ذمة مدينة منفصل يجب معالجته قبل إتمام البيع أو إلغائه. تواصل مع الدعم. لم يتم تغيير أي شيء.",
+    "This sale still has a separate receivable record that must be resolved before the sale can be completed, cancelled or deleted. Contact support. Nothing has been changed.",
+    "لا يزال لهذه العملية سجل ذمة مدينة منفصل يجب معالجته قبل إتمام البيع أو إلغائه أو حذفه. تواصل مع الدعم. لم يتم تغيير أي شيء.",
   ],
   ServerError_SALE_DEBT_RECEIPT_REFUSED: [
     "Payments, credits and cheques for a sale cannot be recorded against a separate receivable. Nothing has been changed.",
@@ -1046,7 +1063,10 @@ export const commonEn = {
   PaymentLinkExpired: "Payment link expired.",
   HeldPaymentsTitle: "Payments held for review",
   HeldPaymentsDesc:
-    "Payments the provider confirmed that were not applied to any debt. Nothing here has changed what a customer owes. Record the money through the normal receipt flow, expire the payment link if it is still awaiting payment, then mark the item resolved. A held payment's reference cannot be used to settle a payment link.",
+    "Payments the provider confirmed that were not applied to any debt. Nothing here has changed what a customer owes. A payment link with a held payment shows as capture held for review and cannot be expired. Record the money through the normal receipt flow, then mark the item resolved. Closing a review does not settle the payment link or change the customer's balance. A held payment's reference cannot be used to settle a payment link.",
+  PaymentLinkStatus_CAPTURE_HELD: "Capture held for review",
+  ExpireProviderCheckedLabel:
+    "I checked this link in the payment provider's dashboard and it shows no payment.",
   HeldPaymentsRawMinor: "{amount} {currency} (smallest unit)",
   HeldPaymentsLoading: "Loading held payments...",
   HeldPaymentsEmpty: "No payments are being held for review.",
@@ -2030,7 +2050,9 @@ export const commonAr = {
   PaymentLinkExpired: "تم إنهاء صلاحية رابط الدفع.",
   HeldPaymentsTitle: "دفعات محتجزة للمراجعة",
   HeldPaymentsDesc:
-    "دفعات أكّدها مزوّد الدفع ولم تُطبَّق على أي دين. لم يتغير هنا أي مبلغ مستحق على العميل. سجّل المبلغ عبر مسار الإيصالات المعتاد، وأنهِ صلاحية رابط الدفع إن كان ما زال بانتظار السداد، ثم أغلق مراجعة البند. لا يمكن استخدام مرجع دفعة محتجزة لتسوية رابط دفع.",
+    "دفعات أكّدها مزوّد الدفع ولم تُطبَّق على أي دين. لم يتغير هنا أي مبلغ مستحق على العميل. يظهر رابط الدفع الذي عليه دفعة محتجزة بحالة «دفعة مؤكدة محتجزة للمراجعة» ولا يمكن إنهاء صلاحيته. سجّل المبلغ عبر مسار الإيصالات المعتاد، ثم أغلق مراجعة البند. إغلاق المراجعة لا يسوّي رابط الدفع ولا يغيّر رصيد العميل. لا يمكن استخدام مرجع دفعة محتجزة لتسوية رابط دفع.",
+  PaymentLinkStatus_CAPTURE_HELD: "دفعة مؤكدة محتجزة للمراجعة",
+  ExpireProviderCheckedLabel: "تحققت من هذا الرابط في لوحة مزوّد الدفع ولا يظهر أي دفعة.",
   HeldPaymentsRawMinor: "{amount} {currency} (أصغر وحدة)",
   HeldPaymentsLoading: "جاري تحميل الدفعات المحتجزة...",
   HeldPaymentsEmpty: "لا توجد دفعات محتجزة للمراجعة.",

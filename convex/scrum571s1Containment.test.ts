@@ -1323,8 +1323,8 @@ describe("P3 — a verified provider capture is held atomically, never settled",
       reviewStatus: "OPEN",
       deliveryCount: 1,
     });
-    // The verified capture is preserved and the link is untouched (not FAILED).
-    expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("PENDING");
+    // D-22: the verified capture is preserved and the link is CAPTURE_HELD (not unpaid, not FAILED).
+    expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("CAPTURE_HELD");
   });
 
   test("redelivery is idempotent: one row, deliveryCount bumped, still nothing economic", async () => {
@@ -1347,7 +1347,7 @@ describe("P3 — a verified provider capture is held atomically, never settled",
     expect(await settleCapture(w, { amountMinor: 99_000 })).toMatchObject({ kind: "HELD" });
     const [row] = await w.t.run((ctx) => ctx.db.query("unmatchedProviderFunds").take(10));
     expect(row.reason).toBe("PAYMENT_LINKS_DISABLED");
-    expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("PENDING");
+    expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("CAPTURE_HELD");
   });
 
   test("an already-SETTLED link still acknowledges idempotently with no new row", async () => {
@@ -1363,11 +1363,11 @@ describe("P4 — expire still works and never touches a captured link's held fun
   test("expiring a PENDING link works while the pilot is shut", async () => {
     const w = await seedWorld();
     const intentId = await seedLink(w);
-    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId });
+    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId, providerStatusConfirmed: true });
     expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("EXPIRED");
   });
 
-  test("expire REFUSES a link whose capture is held: the link stays PENDING and the held row is unchanged", async () => {
+  test("expire REFUSES a link whose capture is held: the link stays CAPTURE_HELD and the held row is unchanged", async () => {
     const w = await seedWorld();
     const intentId = await seedLink(w);
     await settleCapture(w);
@@ -1375,11 +1375,11 @@ describe("P4 — expire still works and never touches a captured link's held fun
     const before = await counts(w.t);
 
     expect(
-      await codeOf(w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId }))
+      await codeOf(w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId, providerStatusConfirmed: true }))
     ).toBe("PAYMENT_LINK_CAPTURE_HELD");
 
     const intent = await w.t.run((ctx) => ctx.db.get(intentId));
-    expect(intent?.status).toBe("PENDING");
+    expect(intent?.status).toBe("CAPTURE_HELD");
     const rows = await w.t.run((ctx) => ctx.db.query("unmatchedProviderFunds").take(10));
     expect(rows).toHaveLength(1);
     expect(rows[0]).toEqual(heldBefore);
@@ -1406,7 +1406,7 @@ describe("P4 — expire still works and never touches a captured link's held fun
         lastReceivedAt: Date.now(),
       })
     );
-    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId });
+    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId, providerStatusConfirmed: true });
     expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("EXPIRED");
   });
 
@@ -1414,7 +1414,7 @@ describe("P4 — expire still works and never touches a captured link's held fun
     const w = await seedWorld();
     const intentId = await seedLink(w, { status: "SETTLED" });
     expect(
-      await codeOf(w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId }))
+      await codeOf(w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId, providerStatusConfirmed: true }))
     ).toBe("PAYMENT_LINK_NOT_PENDING");
     expect((await w.t.run((ctx) => ctx.db.get(intentId)))?.status).toBe("SETTLED");
   });

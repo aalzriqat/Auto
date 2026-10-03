@@ -73,6 +73,10 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+// D-22: expiring a link needs the operator to attest they checked the provider.
+const tickProviderChecked = (dialog: HTMLElement) =>
+  fireEvent.click(within(dialog).getByRole("checkbox", { name: "ExpireProviderCheckedLabel" }));
+
 describe("PaymentLinksPanel: Expire link", () => {
   test.each(["SETTLED", "EXPIRED", "FAILED"])("is disabled for a %s link", (status) => {
     stubs.rows = [intent({ status })];
@@ -90,10 +94,37 @@ describe("PaymentLinksPanel: Expire link", () => {
     const dialog = await screen.findByRole("dialog");
     expect(expire).not.toHaveBeenCalled();
 
+    tickProviderChecked(dialog);
     fireEvent.click(within(dialog).getByRole("button", { name: "ExpirePaymentLink" }));
-    await waitFor(() => expect(expire).toHaveBeenCalledWith({ orgId: "org1", intentId: "pi1" }));
+    await waitFor(() => expect(expire).toHaveBeenCalledWith({ orgId: "org1", intentId: "pi1", providerStatusConfirmed: true }));
     const { toast } = await import("@/components/ui/sonner");
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith("PaymentLinkExpired"));
+  });
+
+  test("D-22: the confirm button is disabled until the provider check is attested, and untick disables it again", async () => {
+    const expire = vi.fn().mockResolvedValue(null);
+    stubs.mutations.set("paymentIntents:expire", expire);
+    stubs.rows = [intent({})];
+    render(<PaymentLinksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: "ExpirePaymentLink" }));
+    const dialog = await screen.findByRole("dialog");
+    const confirm = within(dialog).getByRole("button", { name: "ExpirePaymentLink" }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    fireEvent.click(confirm);
+    expect(expire).not.toHaveBeenCalled();
+    tickProviderChecked(dialog);
+    expect(confirm.disabled).toBe(false);
+    tickProviderChecked(dialog);
+    expect(confirm.disabled).toBe(true);
+  });
+
+  test("D-22: a CAPTURE_HELD link shows the held label and offers neither Expire nor Settle", () => {
+    stubs.rows = [intent({ status: "CAPTURE_HELD" })];
+    render(<PaymentLinksPanel />);
+    expect(screen.getByText("PaymentLinkStatus_CAPTURE_HELD")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "ExpirePaymentLink" }) as HTMLButtonElement).disabled).toBe(true);
+    const settle = screen.queryAllByRole("button").filter((b) => (b as HTMLButtonElement).disabled === false && /Settle/i.test(b.textContent ?? ""));
+    expect(settle).toEqual([]);
   });
 
   test("Cancel closes the dialog without calling the server", async () => {
@@ -119,6 +150,7 @@ describe("PaymentLinksPanel: Expire link", () => {
     const cancel = within(dialog).getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
     expect(cancel.disabled).toBe(false);
 
+    tickProviderChecked(dialog);
     fireEvent.click(within(dialog).getByRole("button", { name: "ExpirePaymentLink" }));
     await waitFor(() => expect(expire).toHaveBeenCalled());
     expect(cancel.disabled).toBe(true);
@@ -134,6 +166,7 @@ describe("PaymentLinksPanel: Expire link", () => {
     render(<PaymentLinksPanel />);
     fireEvent.click(screen.getByRole("button", { name: "ExpirePaymentLink" }));
     const dialog = await screen.findByRole("dialog");
+    tickProviderChecked(dialog);
     fireEvent.click(within(dialog).getByRole("button", { name: "ExpirePaymentLink" }));
     await waitFor(() => expect(expire).toHaveBeenCalled());
     await waitFor(() => expect((within(dialog).getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(false));
@@ -166,6 +199,7 @@ describe("PaymentLinksPanel: Expire link", () => {
     render(<PaymentLinksPanel />);
     fireEvent.click(screen.getByRole("button", { name: "ExpirePaymentLink" }));
     const dialog = await screen.findByRole("dialog");
+    tickProviderChecked(dialog);
     fireEvent.click(within(dialog).getByRole("button", { name: "ExpirePaymentLink" }));
     const { toast } = await import("@/components/ui/sonner");
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
@@ -362,7 +396,9 @@ describe("PaymentLinksPanel: a dialog cannot be dismissed while its command is i
         stubs.rows = [intent({})];
         render(<PaymentLinksPanel />);
         fireEvent.click(screen.getByRole("button", { name: "ExpirePaymentLink" }));
-        return await screen.findByRole("dialog");
+        const dialog = await screen.findByRole("dialog");
+        tickProviderChecked(dialog);
+        return dialog;
       },
     },
     Resolve: {

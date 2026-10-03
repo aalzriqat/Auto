@@ -427,7 +427,7 @@ describe("Phase 8 — payment intent settlement", () => {
     expect(second).toMatchObject({ kind: "HELD" });
 
     const intent = await t.run((ctx) => ctx.db.get(intentId));
-    expect(intent?.status).toBe("PENDING");
+    expect(intent?.status).toBe("CAPTURE_HELD");
     const held = await t.run((ctx) => ctx.db.query("unmatchedProviderFunds").collect());
     expect(held).toHaveLength(1);
     expect(held[0].reason).toBe("PAYMENT_LINKS_DISABLED");
@@ -460,10 +460,10 @@ describe("Phase 8 — payment intent settlement", () => {
     });
     expect(result).toMatchObject({ kind: "HELD" });
 
-    // D-20: the shutdown hold comes before the mismatch check, so the intent is
-    // not moved to FAILED; the capture (with its own amount) is on the held row.
+    // D-20/D-22: the shutdown hold comes before the mismatch check, so the intent is
+    // not moved to FAILED; it is CAPTURE_HELD and the capture (own amount) is on the held row.
     const intent = await t.run((ctx) => ctx.db.get(intentId));
-    expect(intent?.status).toBe("PENDING");
+    expect(intent?.status).toBe("CAPTURE_HELD");
     expect(intent?.canonicalPaymentId).toBeUndefined();
     const held = await t.run((ctx) => ctx.db.query("unmatchedProviderFunds").collect());
     expect(held).toHaveLength(1);
@@ -528,7 +528,7 @@ describe("Phase 8 — payment intent settlement", () => {
       const receivable = await ctx.db.get(receivableId);
       expect(receivable?.outstandingAmount).toBe(1_000);
       const intent = await ctx.db.get(intentId);
-      expect(intent?.status).toBe("PENDING");
+      expect(intent?.status).toBe("CAPTURE_HELD");
       expect(intent?.collectionPaymentId).toBeUndefined();
       expect(intent?.canonicalPaymentId).toBeUndefined();
     });
@@ -572,7 +572,7 @@ describe("Phase 8 — payment intent settlement", () => {
       amountMinor: 500_000, provider: "telr", idempotencyKey: crypto.randomUUID(),
     });
 
-    await asUser.mutation(api.paymentIntents.expire, { orgId, intentId });
+    await asUser.mutation(api.paymentIntents.expire, { orgId, intentId, providerStatusConfirmed: true });
 
     const expired = await t.run((ctx) => ctx.db.get(intentId));
     expect(expired?.status).toBe("EXPIRED");

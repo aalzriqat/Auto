@@ -445,6 +445,8 @@ export const resetOrgFinancialData = internalMutation({
     orgSuspended: boolean;
     /** SCRUM-559. True when a PENDING online payment intent exists, which makes a destructive reset refuse. */
     pendingPaymentIntentsPresent: boolean;
+    /** SCRUM-571 S1 (D-22). True when any held provider capture exists for the org, OPEN or RESOLVED; a destructive reset refuses. */
+    heldProviderCapturesPresent: boolean;
     /**
      * SCRUM-563. True when the org has cash drawer sessions or movements, which this
      * reset does not remove and which therefore make a destructive reset refuse.
@@ -557,6 +559,32 @@ export const resetOrgFinancialData = internalMutation({
       throw new ConvexError(
         "This organization has pending online payment intents. Settle, fail or expire them " +
           "with the provider before resetting. Refusing before any deletion."
+      );
+    }
+    // SCRUM-571 S1 (D-22). A verified provider capture held for this org (an
+    // `unmatchedProviderFunds` row, OPEN or RESOLVED) blocks a destructive run.
+    // The reset keeps those rows and the payment intents that point at them
+    // (D-8), and a RESOLVED review is only a note, never proof of an economic
+    // outcome (D-14). Once a CAPTURE_HELD link replaces its PENDING state the
+    // PENDING check above no longer sees it, so this is its visible blocker.
+    // `by_org_review` once per status, `.first()` each.
+    const heldProviderCapturesPresent =
+      (await ctx.db
+        .query("unmatchedProviderFunds")
+        .withIndex("by_org_review", (q) => q.eq("orgId", args.orgId).eq("reviewStatus", "OPEN"))
+        .first()) !== null ||
+      (await ctx.db
+        .query("unmatchedProviderFunds")
+        .withIndex("by_org_review", (q) => q.eq("orgId", args.orgId).eq("reviewStatus", "RESOLVED"))
+        .first()) !== null;
+    if (!dryRun && heldProviderCapturesPresent) {
+      // Operator-only string: English, with the Arabic sentence in the same
+      // string because a thrown string cannot be translated by key.
+      throw new ConvexError(
+        "A verified provider capture is held for this organization and must be disposed of " +
+          "before the reset. Refusing before any deletion. " +
+          "توجد دفعة مؤكدة من مزوّد الدفع محتجزة لهذه المنشأة ويجب معالجتها قبل إعادة الضبط. " +
+          "تم الرفض قبل أي حذف."
       );
     }
 
@@ -688,6 +716,7 @@ export const resetOrgFinancialData = internalMutation({
       authorityLifecyclePresent,
       orgSuspended,
       pendingPaymentIntentsPresent,
+      heldProviderCapturesPresent,
       cashDrawerStatePresent,
     };
   },

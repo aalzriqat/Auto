@@ -433,7 +433,7 @@ describe("SCRUM-571 S1 — pending payment links reserve the document's outstand
   test("D-20: expire still works on a seeded PENDING link", async () => {
     const w = await makeWorld();
     const first = await seedIntent(w, { amountMinor: 600_000 });
-    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId: first });
+    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId: first, providerStatusConfirmed: true });
     expect((await w.t.run((ctx) => ctx.db.get(first)))?.status).toBe("EXPIRED");
   });
 
@@ -481,9 +481,9 @@ describe("SCRUM-571 S1 — paymentIntents.expire refusals are coded", () => {
         updatedAt: Date.now(),
       })
     );
-    await asFinance.mutation(api.paymentIntents.expire, { orgId, intentId });
+    await asFinance.mutation(api.paymentIntents.expire, { orgId, intentId, providerStatusConfirmed: true });
 
-    expect(await codeOf(asFinance.mutation(api.paymentIntents.expire, { orgId, intentId }))).toBe(
+    expect(await codeOf(asFinance.mutation(api.paymentIntents.expire, { orgId, intentId, providerStatusConfirmed: true }))).toBe(
       "PAYMENT_LINK_NOT_PENDING"
     );
     const row = await t.run((ctx) => ctx.db.get(intentId));
@@ -532,10 +532,10 @@ describe("SCRUM-571 S1 — paymentIntents.expire refusals are coded", () => {
     });
 
     const foreign = await asFinance
-      .mutation(api.paymentIntents.expire, { orgId, intentId: foreignIntentId })
+      .mutation(api.paymentIntents.expire, { orgId, intentId: foreignIntentId, providerStatusConfirmed: true })
       .catch((e: { data?: { code?: string; message?: string } }) => e.data);
     const missing = await asFinance
-      .mutation(api.paymentIntents.expire, { orgId, intentId: missingIntentId })
+      .mutation(api.paymentIntents.expire, { orgId, intentId: missingIntentId, providerStatusConfirmed: true })
       .catch((e: { data?: { code?: string; message?: string } }) => e.data);
 
     expect(foreign?.code).toBe("PAYMENT_LINK_NOT_FOUND");

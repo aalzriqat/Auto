@@ -6530,8 +6530,17 @@ export default defineSchema({
       v.literal("SETTLED"),
       v.literal("FAILED"),
       v.literal("EXPIRED"),
-      v.literal("REFUNDED")
+      v.literal("REFUNDED"),
+      // SCRUM-571 S1 (D-22): the provider reported a capture for this link that
+      // AutoFlow has neither settled nor applied; the capture sits in
+      // `unmatchedProviderFunds` (heldFundsId). Terminal: never reserved as
+      // collectible, never shown as unpaid, never expirable.
+      v.literal("CAPTURE_HELD")
     ),
+    heldFundsId: v.optional(v.id("unmatchedProviderFunds")),
+    // D-22: operator attestation recorded by `expire` that the provider shows no payment.
+    providerStatusCheckedAt: v.optional(v.number()),
+    providerStatusCheckedBy: v.optional(v.id("users")),
     idempotencyKey: v.string(),
     providerPayload: v.optional(v.any()),
     providerEventId: v.optional(v.string()),

@@ -122,7 +122,9 @@ export function PaymentLinksPanel() {
                 <TableRow key={intent._id}>
                   <TableCell>{intent.customerName ?? "-"}</TableCell>
                   <TableCell className="uppercase">{intent.provider}</TableCell>
-                  <TableCell className={intentStatusClass(intent.status)}>{intent.status}</TableCell>
+                  <TableCell className={intentStatusClass(intent.status)}>
+                    {intent.status === "CAPTURE_HELD" ? t("PaymentLinkStatus_CAPTURE_HELD" as any) : intent.status}
+                  </TableCell>
                   <TableCell className="text-muted-foreground">{intent.externalId ?? "-"}</TableCell>
                   <TableCell className="text-right font-semibold">
                     {intentAmount(intent)}
@@ -514,11 +516,17 @@ function ExpirePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
   const intentAmount = useIntentAmount();
   const expirePaymentLink = useMutation(api.paymentIntents.expire);
   const { submitting, submitWithFeedback } = useAccountingSubmit();
+  // D-22: the operator attests they checked the provider. Cleared whenever the
+  // dialog is pointed at another link (or closed), so it is never carried over.
+  const [providerChecked, setProviderChecked] = useState(false);
+  useEffect(() => {
+    setProviderChecked(false);
+  }, [intent]);
 
   async function submit() {
-    if (!activeOrgId || !intent) return;
+    if (!activeOrgId || !intent || !providerChecked) return;
     await submitWithFeedback(async () => {
-      await expirePaymentLink({ orgId: activeOrgId, intentId: intent._id });
+      await expirePaymentLink({ orgId: activeOrgId, intentId: intent._id, providerStatusConfirmed: true });
       toast.success(t("PaymentLinkExpired" as any));
       onOpenChange(false);
     });
@@ -536,6 +544,15 @@ function ExpirePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
             {interpolate(t("ExpirePaymentLinkDescription" as any), { customer: intent?.customerName ?? "-", amount })}
           </DialogDescription>
         </DialogHeader>
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={providerChecked}
+            onChange={(event) => setProviderChecked(event.target.checked)}
+          />
+          <span>{t("ExpireProviderCheckedLabel" as any)}</span>
+        </label>
         <DialogFooter>
           <DialogFooterActions
             cancelLabel={t("Cancel" as any)}
@@ -543,6 +560,7 @@ function ExpirePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
             onCancel={() => onOpenChange(false)}
             onConfirm={submit}
             submitting={submitting}
+            disabled={!providerChecked}
             confirmVariant="destructive"
           />
         </DialogFooter>
