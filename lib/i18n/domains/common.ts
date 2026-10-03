@@ -111,7 +111,7 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   // SCRUM-565 S1a. The English text must equal the server message in convex/utils/resetProtocol.ts.
   ServerError_RESET_PROTOCOL_INCOMPLETE: [
     "The financial reset is temporarily disabled while its safety checks are being completed. Nothing was deleted.",
-    "إعادة الضبط المالي معطّلة مؤقتًا حتى تكتمل فحوصات الأمان الخاصة بها. لم يُحذف أي شيء.",
+    "إعادة ضبط البيانات المالية معطّلة مؤقتًا حتى تكتمل فحوصات الأمان الخاصة بها. لم يُحذف أي شيء.",
   ],
   FinanceCompanyReceivables: ["Finance-company receivables", "ذمم شركات التمويل"],
   FinanceCompanyReceivablesDesc: ["Amounts due from finance companies. Open the originating deal to review or settle them.", "المبالغ المستحقة من شركات التمويل. افتح الصفقة الأصلية للمراجعة أو التسوية."],

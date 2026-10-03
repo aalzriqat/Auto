@@ -458,7 +458,7 @@ export const resetOrgFinancialData = internalMutation({
     if (!dryRun && !RESET_PROTOCOL_COMPLETE) {
       throwAppError(AppErrorCode.RESET_PROTOCOL_INCOMPLETE, RESET_PROTOCOL_INCOMPLETE_MESSAGE);
     }
-    const limit =Math.min(Math.max(args.batchSize ?? RESET_DELETE_BATCH, 1), RESET_DELETE_BATCH);
+    const limit = Math.min(Math.max(args.batchSize ?? RESET_DELETE_BATCH, 1), RESET_DELETE_BATCH);
 
     // Named in the result so an operator can see, in the output they are about
     // to act on, which dealership this actually hit.

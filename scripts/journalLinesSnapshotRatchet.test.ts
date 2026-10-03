@@ -3,9 +3,9 @@
  *
  * INVARIANT: the all-time ledger position of an account is the sum of its
  * accountSnapshots, so a source file that inserts a `journalLines` row without
- * also maintaining the snapshot silently diverges the two. The reset
- * preflight reads the snapshot sum as the proof that nothing was posted, which
- * makes an unpaired writer a way to evade it.
+ * also maintaining the snapshot silently diverges the two. The planned reset
+ * preflight (SCRUM-565 S1b) will read the snapshot sum as the proof that
+ * nothing was posted, which would make an unpaired writer a way to evade it.
  *
  * Enforcement is file-level and deliberately conservative: every non-test
  * convex source that contains an `insert("journalLines"` must also reference

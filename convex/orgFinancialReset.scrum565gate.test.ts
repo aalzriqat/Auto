@@ -27,7 +27,7 @@ const MODULES = import.meta.glob("./**/*.*s");
 const GATE_CODE = "RESET_PROTOCOL_INCOMPLETE";
 const GATE_MESSAGE =
   "The financial reset is temporarily disabled while its safety checks are being completed. Nothing was deleted.";
-const GATE_MESSAGE_AR = "إعادة الضبط المالي معطّلة مؤقتًا حتى تكتمل فحوصات الأمان الخاصة بها. لم يُحذف أي شيء.";
+const GATE_MESSAGE_AR = "إعادة ضبط البيانات المالية معطّلة مؤقتًا حتى تكتمل فحوصات الأمان الخاصة بها. لم يُحذف أي شيء.";
 
 type Harness = ReturnType<typeof convexTestWithComponents<typeof schema>>;
 
@@ -119,6 +119,9 @@ describe("SCRUM-565 S1a — destructive reset gate", () => {
       GATE_CODE,
       GATE_MESSAGE
     );
+    // Zero writes: the org stays deleted (nothing recreated) and the seeded reset-table row survives.
+    expect(await t.run((ctx) => ctx.db.get(seed.orgId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(seed.expenseId))).not.toBeNull();
   });
 });
 
