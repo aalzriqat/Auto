@@ -31,7 +31,9 @@ beforeAll(() => {
   process.env.TZ = "Asia/Amman";
 });
 afterAll(() => {
-  process.env.TZ = ORIGINAL_TZ;
+  // Assigning `undefined` would store the string "undefined" for later tests in this worker.
+  if (ORIGINAL_TZ === undefined) delete process.env.TZ;
+  else process.env.TZ = ORIGINAL_TZ;
 });
 afterEach(() => {
   cleanup();
