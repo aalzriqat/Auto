@@ -352,7 +352,7 @@ describe("SCRUM-563 F1 — cash drawer state refuses the reset (its own replay s
     // cash refusal itself is covered through the continuation path in (a).
     await expect(
       s.t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId: s.orgId, dryRun: false })
-    ).rejects.toThrow();
+    ).rejects.toThrow(/Fresh financial resets are disabled/);
 
     // No reset ever completed, so K can never be replayed across one.
     expect((await orgState(s.t, s.orgId)).generation).toBeUndefined();
