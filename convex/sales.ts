@@ -3,7 +3,8 @@ import { query, MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id, TableNames } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
-import { filter } from "convex-helpers/server/filter";
+import { stream } from "convex-helpers/server/stream";
+import schema from "./schema";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
@@ -114,21 +115,21 @@ export const list = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
     const salespersonId = args.salespersonId;
+    const salesStream = stream(ctx.db, schema).query("sales");
     const indexed = salespersonId
-      ? ctx.db
-          .query("sales")
-          .withIndex("by_org_salesperson", (q) =>
-            q.eq("orgId", args.orgId).eq("salespersonId", salespersonId)
-          )
-      : ctx.db.query("sales").withIndex("by_org", (q) => q.eq("orgId", args.orgId));
+      ? salesStream.withIndex("by_org_salesperson", (q) =>
+          q.eq("orgId", args.orgId).eq("salespersonId", salespersonId)
+        )
+      : salesStream.withIndex("by_org", (q) => q.eq("orgId", args.orgId));
 
-    // `filter` (convex-helpers) applies the predicate to each fetched page, so a
-    // page can hold fewer than `numItems` rows when deleted sales fall in it;
-    // `usePaginatedQuery` callers continue through `loadMore`. Replaces a
-    // query-level field filter the lint rule refuses.
-    const pageResult = await filter(indexed, (sale) => sale.isDeleted !== true).paginate(
-      args.paginationOpts
-    );
+    // `filterWith` on a convex-helpers stream drops soft-deleted rows BEFORE the
+    // page is cut, so a page is only short at the true end of the data. The older
+    // `filter(...).paginate()` filtered each fetched page afterwards, which
+    // returned an EMPTY first page (isDone false) whenever the first raw page was
+    // all deleted sales. Replaces a query-level field filter the lint rule refuses.
+    const pageResult = await indexed
+      .filterWith(async (sale) => sale.isDeleted !== true)
+      .paginate(args.paginationOpts);
 
     const page = await Promise.all(
       pageResult.page.map(async (sale) => {
