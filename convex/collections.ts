@@ -2715,16 +2715,16 @@ export const respondToApproval = mutation({
             // linked to this receivable. Cancelling the receivable would leave
             // an active financial instrument with nowhere to post when cleared.
             // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
-            const receivableCheques = await ctx.db
-              .query("postDatedCheques")
-              .withIndex("by_receivable", (q) => q.eq("receivableId", receivable._id))
-              .collect();
-            const scopedCheques = receivableCheques.filter((cheque) => cheque.orgId === args.orgId);
-            const heldCheque = scopedCheques.find((cheque) => cheque.status === "HELD") ?? null;
-            const depositedCheque = !heldCheque
-              ? scopedCheques.find((cheque) => cheque.status === "DEPOSITED") ?? null
-              : null;
-            if (heldCheque || depositedCheque) {
+            const hasActiveCheque = (
+              await ctx.db
+                .query("postDatedCheques")
+                .withIndex("by_receivable", (q) => q.eq("receivableId", receivable._id))
+                .collect()
+            ).some(
+              (cheque) =>
+                cheque.orgId === args.orgId && (cheque.status === "HELD" || cheque.status === "DEPOSITED")
+            );
+            if (hasActiveCheque) {
               throw new ConvexError(
                 "Cannot cancel a receivable with an active cheque (HELD or DEPOSITED). " +
                 "Return or cancel the cheque first, then cancel the receivable."

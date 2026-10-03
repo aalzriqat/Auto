@@ -116,6 +116,14 @@ describe("reverseAllocationsForRefund - ACTIVE allocations, newest first", () =>
       return { smallId: small._id, bigId: big._id };
     });
 
+    const allocationsOf = (receivableDocumentId: Id<"receivableDocuments">) =>
+      t.run((ctx) =>
+        ctx.db
+          .query("paymentAllocations")
+          .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivableDocumentId))
+          .collect()
+      );
+
     async function refund(amount: number) {
       const requestId = await asFinance.mutation(api.collections.requestApproval, {
         orgId,
@@ -135,12 +143,7 @@ describe("reverseAllocationsForRefund - ACTIVE allocations, newest first", () =>
 
     // Refund 1: reverses the NEWEST (700), re-allocates the 600 remainder.
     await refund(100);
-    const afterFirst = await t.run(async (ctx) =>
-      ctx.db
-        .query("paymentAllocations")
-        .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", canonicalId))
-        .collect()
-    );
+    const afterFirst = await allocationsOf(canonicalId);
     expect(afterFirst.find((r) => r._id === seeded.bigId)?.status).toBe("REVERSED");
     expect(afterFirst.find((r) => r._id === seeded.smallId)?.status).toBe("ACTIVE");
     // The reversal also leaves a REVERSED mirror row (same 700 amount, newest
@@ -152,12 +155,7 @@ describe("reverseAllocationsForRefund - ACTIVE allocations, newest first", () =>
     // Refund 2: the REVERSED 700 row must be skipped; the 600 remainder (newest
     // ACTIVE) goes first, then the 300 row covers the last 50.
     await refund(650);
-    const afterSecond = await t.run(async (ctx) =>
-      ctx.db
-        .query("paymentAllocations")
-        .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", canonicalId))
-        .collect()
-    );
+    const afterSecond = await allocationsOf(canonicalId);
     const active = afterSecond.filter((r) => r.status === "ACTIVE");
     expect(active.reduce((sum, r) => sum + r.amountMinor, 0)).toBe(250_000);
     expect(active).toHaveLength(1);
@@ -318,13 +316,39 @@ describe("CANCEL_RECEIVABLE - active cheque gate (HELD / DEPOSITED, same org)", 
     return await t.run(async (ctx) => (await ctx.db.get(receivableId))?.status);
   }
 
-  test("a HELD cheque blocks the cancel and nothing is written", async () => {
+  type ChequeStatus = "HELD" | "DEPOSITED" | "CLEARED" | "RETURNED" | "REPLACED" | "CANCELLED";
+  /** Where a seeded cheque points: the target receivable, another one, or another org's row on the target. */
+  type ChequeRow = [status: ChequeStatus, placement?: "other-receivable" | "other-org"];
+
+  /** Seeds a target receivable (plus a sibling), the given cheques, and a pending CANCEL request. */
+  async function cancelWith(rows: ChequeRow[]) {
     const t = convexTestWithComponents(schema, MODULES);
     const f = await seedFinance(t);
-    const receivableId = await seedReceivable(f, "Idx held");
-    await insertCheque(t, f, { receivableId, status: "HELD", chequeNumber: "IDX-H-1" });
-
+    const receivableId = await seedReceivable(f, "Idx target");
+    const otherReceivableId = await seedReceivable(f, "Idx other receivable");
+    // Constructed directly: schema does not tie a cheque's orgId to its
+    // receivable's, so a cross-org row can exist and must stay invisible here.
+    const otherOrgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "IdxReads Other Dealer", createdAt: Date.now() })
+    );
+    for (const [i, [status, placement]] of rows.entries()) {
+      await insertCheque(t, f, {
+        receivableId: placement === "other-receivable" ? otherReceivableId : receivableId,
+        orgId: placement === "other-org" ? otherOrgId : undefined,
+        status,
+        chequeNumber: `IDX-${i}`,
+      });
+    }
     const requestId = await requestCancel(f, receivableId);
+    return { t, f, receivableId, otherReceivableId, requestId };
+  }
+
+  test.each<[string, ChequeRow[]]>([
+    ["a HELD cheque", [["HELD"]]],
+    ["a DEPOSITED cheque (no HELD one)", [["DEPOSITED"]]],
+    ["a HELD and a DEPOSITED cheque together", [["DEPOSITED"], ["HELD"]]],
+  ])("%s blocks the cancel and nothing is written", async (_name, rows) => {
+    const { t, f, receivableId, requestId } = await cancelWith(rows);
     await expect(approve(f, requestId)).rejects.toThrow(ACTIVE_CHEQUE_REFUSAL);
 
     expect(await statusOf(t, receivableId)).toBe("OPEN");
@@ -332,71 +356,24 @@ describe("CANCEL_RECEIVABLE - active cheque gate (HELD / DEPOSITED, same org)", 
     expect(request?.status).toBe("PENDING");
   });
 
-  test("a DEPOSITED cheque (no HELD one) blocks the cancel", async () => {
-    const t = convexTestWithComponents(schema, MODULES);
-    const f = await seedFinance(t);
-    const receivableId = await seedReceivable(f, "Idx deposited");
-    await insertCheque(t, f, { receivableId, status: "DEPOSITED", chequeNumber: "IDX-D-1" });
-
-    const requestId = await requestCancel(f, receivableId);
-    await expect(approve(f, requestId)).rejects.toThrow(ACTIVE_CHEQUE_REFUSAL);
-    expect(await statusOf(t, receivableId)).toBe("OPEN");
-  });
-
-  test("a HELD and a DEPOSITED cheque together still refuse with the same message", async () => {
-    const t = convexTestWithComponents(schema, MODULES);
-    const f = await seedFinance(t);
-    const receivableId = await seedReceivable(f, "Idx both");
-    await insertCheque(t, f, { receivableId, status: "DEPOSITED", chequeNumber: "IDX-B-1" });
-    await insertCheque(t, f, { receivableId, status: "HELD", chequeNumber: "IDX-B-2" });
-
-    const requestId = await requestCancel(f, receivableId);
-    await expect(approve(f, requestId)).rejects.toThrow(ACTIVE_CHEQUE_REFUSAL);
-    expect(await statusOf(t, receivableId)).toBe("OPEN");
-  });
-
-  test("CLEARED / RETURNED / REPLACED / CANCELLED cheques do not block the cancel", async () => {
-    const t = convexTestWithComponents(schema, MODULES);
-    const f = await seedFinance(t);
-    const receivableId = await seedReceivable(f, "Idx inactive cheques");
-    await insertCheque(t, f, { receivableId, status: "CLEARED", chequeNumber: "IDX-I-1" });
-    await insertCheque(t, f, { receivableId, status: "RETURNED", chequeNumber: "IDX-I-2" });
-    await insertCheque(t, f, { receivableId, status: "REPLACED", chequeNumber: "IDX-I-3" });
-    await insertCheque(t, f, { receivableId, status: "CANCELLED", chequeNumber: "IDX-I-4" });
-
-    const requestId = await requestCancel(f, receivableId);
+  test.each<[string, ChequeRow[]]>([
+    [
+      "CLEARED / RETURNED / REPLACED / CANCELLED cheques",
+      [["CLEARED"], ["RETURNED"], ["REPLACED"], ["CANCELLED"]],
+    ],
+    [
+      "a HELD / DEPOSITED cheque on a DIFFERENT receivable",
+      [["HELD", "other-receivable"], ["DEPOSITED", "other-receivable"]],
+    ],
+    [
+      "another org's HELD / DEPOSITED cheque carrying this receivableId (tenant scope)",
+      [["HELD", "other-org"], ["DEPOSITED", "other-org"]],
+    ],
+  ])("%s do(es) not block the cancel", async (_name, rows) => {
+    const { t, f, receivableId, otherReceivableId, requestId } = await cancelWith(rows);
     await approve(f, requestId);
-    expect(await statusOf(t, receivableId)).toBe("CANCELLED");
-  });
 
-  test("a HELD cheque on a DIFFERENT receivable does not block", async () => {
-    const t = convexTestWithComponents(schema, MODULES);
-    const f = await seedFinance(t);
-    const receivableId = await seedReceivable(f, "Idx target");
-    const otherReceivableId = await seedReceivable(f, "Idx other receivable");
-    await insertCheque(t, f, { receivableId: otherReceivableId, status: "HELD", chequeNumber: "IDX-R-1" });
-    await insertCheque(t, f, { receivableId: otherReceivableId, status: "DEPOSITED", chequeNumber: "IDX-R-2" });
-
-    const requestId = await requestCancel(f, receivableId);
-    await approve(f, requestId);
     expect(await statusOf(t, receivableId)).toBe("CANCELLED");
     expect(await statusOf(t, otherReceivableId)).toBe("OPEN");
-  });
-
-  test("another org's HELD / DEPOSITED cheque carrying this receivableId does not block (tenant scope)", async () => {
-    const t = convexTestWithComponents(schema, MODULES);
-    const f = await seedFinance(t);
-    const otherOrgId = await t.run((ctx) =>
-      ctx.db.insert("organizations", { name: "IdxReads Other Dealer", createdAt: Date.now() })
-    );
-    const receivableId = await seedReceivable(f, "Idx tenant");
-    // Constructed directly: schema does not tie a cheque's orgId to its
-    // receivable's, so a cross-org row can exist and must stay invisible here.
-    await insertCheque(t, f, { receivableId, status: "HELD", orgId: otherOrgId, chequeNumber: "IDX-T-1" });
-    await insertCheque(t, f, { receivableId, status: "DEPOSITED", orgId: otherOrgId, chequeNumber: "IDX-T-2" });
-
-    const requestId = await requestCancel(f, receivableId);
-    await approve(f, requestId);
-    expect(await statusOf(t, receivableId)).toBe("CANCELLED");
   });
 });
