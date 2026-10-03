@@ -238,3 +238,16 @@ auditConfig:
     # GHSA-86w9-cpqp-85rv (both @expo/cli and @expo/code-signing-certificates
     # must resolve to the patched version).
     - GHSA-86w9-cpqp-85rv
+    # GHSA-vfj7-8cjw-p6xm: braces <=3.0.3 can exhaust the Node stack on a
+    # deeply nested, attacker-controlled brace pattern. No patched npm release
+    # exists. Every locked path passes through micromatch 4.0.8 and reaches
+    # shadcn's generation CLI, Next ESLint tooling, or Expo/Metro/Jest build
+    # and test tooling. No product source imports these glob packages or passes
+    # request input to them as a pattern. Tooling that processes an untrusted
+    # pattern remains exposed; this exception is not a fix.
+    # Keep the high audit for every other advisory. Remove this entry when
+    # every locked path uses a version the advisory marks fixed, or all paths
+    # are removed. Reassess immediately if a shipped runtime gains a path from
+    # untrusted input to these packages. Ruling: D-16 / SCRUM-583 (Jira c21755);
+    # fail-closed audit hardening is SCRUM-584; shadcn hygiene is SCRUM-585.
+    - GHSA-vfj7-8cjw-p6xm
