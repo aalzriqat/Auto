@@ -654,11 +654,13 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // 337 -> 338 analysed. `orgId` plus a caller-supplied `applicationId` read through
   // `requireOwnedRow` after `requireTenantAuth`; the unguarded-write audit stays empty.
   // SCRUM-239: + applications.returnFinanceDisbursementCheque - 510 -> 511 total, 338 -> 339 analysed (orgId + tenant-checked ids; unguarded-write audit stays empty).
+  // SCRUM-571 D-8: + paymentIntents.resolveUnmatchedProviderFunds - 511 -> 512 total, 339 -> 340 analysed
+  // (orgId + MANAGE_FINANCE; the held row is read and its orgId compared to the caller's before the patch).
   // Skipped counts unchanged.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 511,
-      analysed: 339,
+      totalMutations: 512,
+      analysed: 340,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

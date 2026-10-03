@@ -209,6 +209,9 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "invitations", index: "by_org" },
   { kind: "orgRows", table: "memberships", index: "by_org" },
   { kind: "orgRows", table: "roles", index: "by_org" },
+  // SCRUM-571 D-8: held provider payments. Appended last (the order is pinned).
+  // Rows with no orgId (UNKNOWN_REFERENCE) belong to no tenant and survive.
+  { kind: "orgRows", table: "unmatchedProviderFunds", index: "by_org_review" },
 ];
 
 async function findActiveDeletionRequest(ctx: MutationCtx, orgId: Id<"organizations">) {

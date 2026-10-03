@@ -181,6 +181,12 @@ const RESET_TABLES = [
   // both (hence after `sales`). A document references no table listed later.
   "receivableDocuments",
   "quotes",
+  // SCRUM-571 D-8: `unmatchedProviderFunds` is deliberately NOT listed. A held
+  // provider payment is evidence that money moved at the provider with no
+  // settlement, so a financial reset must not erase it (it is the recovery route,
+  // and it is not a financial authority: it creates no AR, allocation, payment
+  // or posting). It is still deleted with the organization (adminOrgs
+  // ORGANIZATION_DELETION_STEPS).
 ] as const;
 
 type ResetTable = (typeof RESET_TABLES)[number];

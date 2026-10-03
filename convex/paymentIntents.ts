@@ -76,6 +76,101 @@ function refusePaymentLink(code: keyof typeof PAYMENT_LINK_REFUSALS): never {
   return throwAppError(AppErrorCode[code], PAYMENT_LINK_REFUSALS[code]);
 }
 
+// SCRUM-571 D-8. Refusals of `resolveUnmatchedProviderFunds`. Kept apart from
+// PAYMENT_LINK_REFUSALS, whose test asserts every key there is exercised by the
+// payment-link dialogs. English text equals `ServerError_<code>` in
+// lib/i18n/domains/common.ts.
+export const UNMATCHED_FUNDS_REFUSALS = {
+  UNMATCHED_FUNDS_NOT_FOUND: "This held payment could not be found. Nothing has been changed.",
+  UNMATCHED_FUNDS_ALREADY_RESOLVED: "This held payment has already been marked as resolved. Nothing has been changed.",
+  UNMATCHED_FUNDS_NOTE_REQUIRED:
+    "Enter a note describing how this payment was handled. Nothing has been changed.",
+  UNMATCHED_FUNDS_NOTE_TOO_LONG: "The note is too long. Shorten it to 1000 characters or fewer. Nothing has been changed.",
+} as const satisfies Record<string, string>;
+
+const UNMATCHED_FUNDS_NOTE_MAX = 1000;
+// The most recent distinct provider event ids kept per held capture.
+const UNMATCHED_FUNDS_EVENT_IDS_MAX = 20;
+
+function refuseUnmatchedFunds(code: keyof typeof UNMATCHED_FUNDS_REFUSALS): never {
+  return throwAppError(AppErrorCode[code], UNMATCHED_FUNDS_REFUSALS[code]);
+}
+
+/**
+ * SCRUM-571 D-8: give a verified provider capture that did not settle an
+ * intent its durable outcome. One row per capture, keyed (provider,
+ * externalId), so a provider redelivery updates the row instead of adding one.
+ *
+ * Writes ONLY to `unmatchedProviderFunds`: no receivable, allocation, canonical
+ * payment, posting hook or outbox event. The money is reconciled by a person
+ * through the existing receipt doors.
+ *
+ * Reopen rule: a RESOLVED row stays RESOLVED on a plain redelivery (the
+ * operator already handled this capture), but reopens when a delivery newly
+ * carries a different amount or currency, because the decision they recorded
+ * was made about different money. The earlier resolution fields are kept as
+ * history on the reopened row.
+ */
+async function recordUnmatchedProviderFunds(
+  ctx: MutationCtx,
+  capture: {
+    provider: string;
+    externalId: string;
+    amountMinor: number;
+    currency: string;
+    reason: Doc<"unmatchedProviderFunds">["reason"];
+    orgId?: Id<"organizations">;
+    intentId?: Id<"paymentIntents">;
+    intentStatusAtReceipt?: string;
+    providerAccountId?: string;
+    providerEventId?: string;
+  }
+): Promise<void> {
+  const now = Date.now();
+  const existing = await ctx.db
+    .query("unmatchedProviderFunds")
+    .withIndex("by_provider_external", (q) => q.eq("provider", capture.provider).eq("externalId", capture.externalId))
+    .unique();
+
+  if (!existing) {
+    await ctx.db.insert("unmatchedProviderFunds", {
+      orgId: capture.orgId,
+      provider: capture.provider,
+      externalId: capture.externalId,
+      intentId: capture.intentId,
+      reason: capture.reason,
+      intentStatusAtReceipt: capture.intentStatusAtReceipt,
+      amountMinor: capture.amountMinor,
+      currency: capture.currency,
+      providerAccountId: capture.providerAccountId,
+      providerEventIds: capture.providerEventId ? [capture.providerEventId] : [],
+      deliveryCount: 1,
+      amountConflict: false,
+      reviewStatus: "OPEN",
+      firstReceivedAt: now,
+      lastReceivedAt: now,
+    });
+    return;
+  }
+
+  const conflictNow =
+    existing.amountMinor !== capture.amountMinor || existing.currency !== capture.currency;
+  const newlyConflicting = conflictNow && !existing.amountConflict;
+  const knownEventIds = existing.providerEventIds;
+  const providerEventIds =
+    capture.providerEventId && !knownEventIds.includes(capture.providerEventId)
+      ? [...knownEventIds, capture.providerEventId].slice(-UNMATCHED_FUNDS_EVENT_IDS_MAX)
+      : knownEventIds;
+
+  await ctx.db.patch(existing._id, {
+    deliveryCount: existing.deliveryCount + 1,
+    lastReceivedAt: now,
+    providerEventIds,
+    amountConflict: existing.amountConflict || conflictNow,
+    ...(newlyConflicting && existing.reviewStatus === "RESOLVED" ? { reviewStatus: "OPEN" as const } : {}),
+  });
+}
+
 // Outstanding on the canonical document less the amount reserved by PENDING
 // intents. Links already sent and not yet paid reserve their amount: two links
 // each within outstanding could otherwise settle for more than the debt in
@@ -670,6 +765,68 @@ export const expire = mutation({
 });
 
 /**
+ * SCRUM-571 D-8: payments the provider confirmed that settled nothing, for the
+ * "Payments held for review" panel. Same permission as `list`. OPEN rows first,
+ * then the most recent RESOLVED ones, 100 rows at most. Rows with no
+ * organization (UNKNOWN_REFERENCE) belong to no tenant and are never returned.
+ */
+export const listUnmatchedProviderFunds = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const open = await ctx.db
+      .query("unmatchedProviderFunds")
+      .withIndex("by_org_review", (q) => q.eq("orgId", args.orgId).eq("reviewStatus", "OPEN"))
+      .order("desc")
+      .take(100);
+    const room = 100 - open.length;
+    const resolved =
+      room > 0
+        ? await ctx.db
+            .query("unmatchedProviderFunds")
+            .withIndex("by_org_review", (q) => q.eq("orgId", args.orgId).eq("reviewStatus", "RESOLVED"))
+            .order("desc")
+            .take(room)
+        : [];
+    return [...open, ...resolved];
+  },
+});
+
+/**
+ * SCRUM-571 D-8: record that a person has dealt with a held payment. NO
+ * economic effect: the money itself is reconciled manually through the
+ * existing receipt doors (collections / deposits); this only closes the review
+ * item with who, when and why.
+ */
+export const resolveUnmatchedProviderFunds = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    id: v.id("unmatchedProviderFunds"),
+    note: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    const note = args.note.trim();
+    if (!note) refuseUnmatchedFunds("UNMATCHED_FUNDS_NOTE_REQUIRED");
+    if (note.length > UNMATCHED_FUNDS_NOTE_MAX) refuseUnmatchedFunds("UNMATCHED_FUNDS_NOTE_TOO_LONG");
+
+    const row = await ctx.db.get(args.id);
+    // One message for missing, another org's and platform-scope (no org) rows:
+    // never disclose that a foreign tenant's held payment exists.
+    if (!row || row.orgId !== args.orgId) refuseUnmatchedFunds("UNMATCHED_FUNDS_NOT_FOUND");
+    if (row.reviewStatus === "RESOLVED") refuseUnmatchedFunds("UNMATCHED_FUNDS_ALREADY_RESOLVED");
+
+    await ctx.db.patch(args.id, {
+      reviewStatus: "RESOLVED",
+      resolvedBy: user._id,
+      resolvedAt: Date.now(),
+      resolutionNote: note,
+    });
+  },
+});
+
+/**
  * Internal webhook entry-point: settle an intent by provider + externalId.
  * Called from the HTTP webhook handler; runs in a trusted (internal) context.
  */
@@ -697,9 +854,22 @@ export const settleByExternalId = internalMutation({
       )
       .unique();
 
+    // SCRUM-571 D-8. Every `return null` below is answered 200 by the HTTP route,
+    // so each one first leaves a durable, finance-visible outcome in THIS
+    // transaction (recordUnmatchedProviderFunds), except an already-SETTLED
+    // intent, whose earlier settlement IS the outcome.
+    const capture = {
+      provider,
+      externalId,
+      amountMinor: args.amountMinor,
+      currency,
+      providerAccountId,
+      providerEventId: optionalTrimmed(args.providerEventId),
+    };
+
     if (!intent) {
-      // Unknown intent — return gracefully so webhook caller gets 200
       console.warn(`[paymentIntents] Unknown externalId for provider ${provider}: ${externalId}`);
+      await recordUnmatchedProviderFunds(ctx, { ...capture, reason: "UNKNOWN_REFERENCE" });
       return null;
     }
 
@@ -742,6 +912,18 @@ export const settleByExternalId = internalMutation({
       console.error(
         `[paymentIntents] Refused ${provider} settlement for ${intent._id}: ${lifecycle.code}`
       );
+      // The webhook log above is operator telemetry; this row is the finance
+      // record. A redelivery for an intent that already settled has nothing to
+      // recover, so it keeps the log only.
+      if (intent.status !== "SETTLED") {
+        await recordUnmatchedProviderFunds(ctx, {
+          ...capture,
+          orgId: intent.orgId,
+          intentId: intent._id,
+          intentStatusAtReceipt: intent.status,
+          reason: "LIFECYCLE_REFUSED",
+        });
+      }
       return null;
     }
 
@@ -749,6 +931,13 @@ export const settleByExternalId = internalMutation({
 
     if (intent.status !== "PENDING") {
       console.warn(`[paymentIntents] Cannot settle intent ${intent._id} in status ${intent.status}`);
+      await recordUnmatchedProviderFunds(ctx, {
+        ...capture,
+        orgId: intent.orgId,
+        intentId: intent._id,
+        intentStatusAtReceipt: intent.status,
+        reason: "INTENT_NOT_PENDING",
+      });
       return null;
     }
 
@@ -782,6 +971,13 @@ export const settleByExternalId = internalMutation({
         status: "FAILED",
         ...verifiedProviderPatch,
         updatedAt: now,
+      });
+      await recordUnmatchedProviderFunds(ctx, {
+        ...capture,
+        orgId: intent.orgId,
+        intentId: intent._id,
+        intentStatusAtReceipt: intent.status,
+        reason: "AMOUNT_OR_ACCOUNT_MISMATCH",
       });
       return null;
     }

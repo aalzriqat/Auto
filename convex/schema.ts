@@ -6552,6 +6552,48 @@ export default defineSchema({
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_receivable", ["receivableId"]),
 
+  // SCRUM-571 D-8 — a signature-verified provider capture that did NOT settle an
+  // intent. `paymentIntents.settleByExternalId` answers the provider 200 only
+  // after the capture has a durable outcome: exactly one settlement, OR exactly
+  // one row here. A row is finance-visible evidence that money moved at the
+  // provider and needs a human decision. It is NOT a receivable, an allocation,
+  // a canonical payment or a posting, and nothing here ever creates one: the
+  // money is reconciled manually through the existing receipt doors, and
+  // `resolveUnmatchedProviderFunds` only records that a person did so.
+  //
+  // One row per capture, keyed (provider, externalId): redelivery bumps
+  // `deliveryCount` instead of inserting. `orgId` is absent only for
+  // UNKNOWN_REFERENCE, where no tenant can be named.
+  unmatchedProviderFunds: defineTable({
+    orgId: v.optional(v.id("organizations")),
+    provider: v.string(),
+    externalId: v.string(),
+    intentId: v.optional(v.id("paymentIntents")),
+    reason: v.union(
+      v.literal("UNKNOWN_REFERENCE"),
+      v.literal("INTENT_NOT_PENDING"),
+      v.literal("AMOUNT_OR_ACCOUNT_MISMATCH"),
+      v.literal("LIFECYCLE_REFUSED")
+    ),
+    intentStatusAtReceipt: v.optional(v.string()),
+    amountMinor: v.number(),
+    currency: v.string(),
+    providerAccountId: v.optional(v.string()),
+    // Bounded: the 20 most recent distinct provider event ids.
+    providerEventIds: v.array(v.string()),
+    deliveryCount: v.number(),
+    // A later delivery of the same capture carried a different amount/currency.
+    amountConflict: v.boolean(),
+    reviewStatus: v.union(v.literal("OPEN"), v.literal("RESOLVED")),
+    resolvedBy: v.optional(v.id("users")),
+    resolvedAt: v.optional(v.number()),
+    resolutionNote: v.optional(v.string()),
+    firstReceivedAt: v.number(),
+    lastReceivedAt: v.number(),
+  })
+    .index("by_provider_external", ["provider", "externalId"])
+    .index("by_org_review", ["orgId", "reviewStatus"]),
+
   // ─── Dealer Network Marketplace (Phase 56+) ──────────────────────────────
   // Cross-org layer: a dealer's marketplace presence is an opt-in flag on top
   // of their existing dealer-site inventory (see docs/dealer_network_marketplace_master_plan.md
