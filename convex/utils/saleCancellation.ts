@@ -24,6 +24,7 @@ import {
   worstAuthorityOutcome,
 } from "../commitments";
 import { beginUserRun } from "./commitmentKernel";
+import { assertNoSaleLinkedLegacyReceivable } from "./saleDebtContainment";
 import { auditLog } from "../financialAudit";
 
 async function getActiveReceivableAllocations(
@@ -812,6 +813,12 @@ export async function cancelCompletedSaleOperationalRecords(
     reversalDate: number;
   }
 ) {
+  // SCRUM-571 S1 (D-20) T2: first statement, before every write below. A
+  // legacy receivable for the sale (any status) means two debts exist for one
+  // sale; refuse until it is resolved. Callers that wrote earlier in the same
+  // mutation are rolled back by the uncaught throw.
+  await assertNoSaleLinkedLegacyReceivable(ctx, args.orgId, args.sale._id);
+
   if (args.sale.commissionPaidAt != null) {
     throw new ConvexError(
       "Cannot automatically cancel a sale after commission has been paid. Use a manual accounting correction."

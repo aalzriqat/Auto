@@ -8,13 +8,22 @@
  * was written — no payment, allocation, posting, or idempotency record.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+
+vi.mock("./rateLimit", () => ({
+  rateLimiter: {
+    limit: vi.fn().mockResolvedValue({ ok: true }),
+    check: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
+  },
+  checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
+}));
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { commonAr, commonEn } from "../lib/i18n/domains/common";
 import { AppErrorCode } from "./utils/errors";
-import { SALE_DEBT_CONTAINMENT_REFUSALS } from "./utils/saleDebtContainment";
+import { SALE_DEBT_CONTAINMENT_REFUSALS, saleHasLegacyReceivable } from "./utils/saleDebtContainment";
+import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 
 const DUE = () => Date.now() + 7 * 24 * 60 * 60 * 1000;
 
@@ -69,7 +78,7 @@ export async function seedWorld() {
     ctx.db.insert("roles", {
       orgId,
       name: "Finance Manager",
-      permissions: ["view:finance", "manage:finance", "approve:requests", "manage:sales", "view:sales"],
+      permissions: ["view:finance", "manage:finance", "approve:requests", "manage:sales", "view:sales", "create:sales"],
     })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
@@ -114,6 +123,7 @@ export async function insertSale(w: World, status: "PENDING" | "COMPLETED" = "PE
       saleDate: Date.now(),
       status,
     });
+    if (status === "COMPLETED") await ctx.db.patch(vehicleId, { soldBySaleId: saleId });
     return { saleId, vehicleId };
   });
 }
@@ -668,6 +678,115 @@ describe("SCRUM-571 s1 R4 — replace and deposit refuse a sale-linked customer 
     const chequeId = await insertCheque(w, { saleId });
     await w.asFinance.mutation(api.collections.returnCheque, { orgId: w.orgId, chequeId });
     expect((await w.t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("RETURNED");
+  });
+});
+
+describe("T1/T2 — a sale with ANY legacy receivable cannot complete or cancel", () => {
+  const STATUSES = ["OPEN", "PAID", "REFUNDED", "CANCELLED"] as const;
+
+  for (const status of STATUSES) {
+    test(`T1 completeDraft refuses a ${status} legacy receivable; the draft stays PENDING and nothing is written`, async () => {
+      const w = await seedWorld();
+      const { saleId } = await insertSale(w, "PENDING");
+      await insertLegacyReceivable(w, { saleId, status });
+      const before = await counts(w.t);
+
+      const code = await codeOf(
+        w.asFinance.mutation(api.sales.completeDraft, {
+          orgId: w.orgId,
+          saleId,
+          idempotencyKey: crypto.randomUUID(),
+        })
+      );
+
+      expect(code).toBe("SALE_HAS_LEGACY_RECEIVABLE");
+      expect(await counts(w.t)).toEqual(before);
+      expect((await w.t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("PENDING");
+    });
+  }
+
+  test("T1 a legacy receivable of ANOTHER sale does not block this one (control)", async () => {
+    const w = await seedWorld();
+    const mine = await insertSale(w, "PENDING");
+    const other = await insertSale(w, "PENDING");
+    await insertLegacyReceivable(w, { saleId: other.saleId });
+
+    const code = await codeOf(
+      w.asFinance.mutation(api.sales.completeDraft, {
+        orgId: w.orgId,
+        saleId: mine.saleId,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    );
+    expect(code).not.toBe("SALE_HAS_LEGACY_RECEIVABLE");
+  });
+
+  test("T1 a sale with no legacy receivable gets past the guard (control)", async () => {
+    const w = await seedWorld();
+    const { saleId } = await insertSale(w, "PENDING");
+    const code = await codeOf(
+      w.asFinance.mutation(api.sales.completeDraft, {
+        orgId: w.orgId,
+        saleId,
+        idempotencyKey: crypto.randomUUID(),
+      })
+    );
+    expect(code).not.toBe("SALE_HAS_LEGACY_RECEIVABLE");
+  });
+
+  for (const status of STATUSES) {
+    test(`T2 cancelling a COMPLETED sale refuses a ${status} legacy receivable before any write`, async () => {
+      const w = await seedWorld();
+      const { saleId, vehicleId } = await insertSale(w, "COMPLETED");
+      await insertLegacyReceivable(w, { saleId, status });
+      const before = await counts(w.t);
+      const sale = (await w.t.run((ctx) => ctx.db.get(saleId)))!;
+
+      const code = await codeOf(
+        w.t.run((ctx) =>
+          cancelCompletedSaleOperationalRecords(ctx, {
+            orgId: w.orgId,
+            sale,
+            actorId: w.userId,
+            reason: "t2",
+            reversalDate: Date.now(),
+          })
+        )
+      );
+
+      expect(code).toBe("SALE_HAS_LEGACY_RECEIVABLE");
+      expect(await counts(w.t)).toEqual(before);
+      expect((await w.t.run((ctx) => ctx.db.get(vehicleId)))?.status).toBe("SOLD");
+    });
+  }
+
+  test("T2 a completed sale with no legacy receivable still cancels its operational records (control)", async () => {
+    const w = await seedWorld();
+    const { saleId } = await insertSale(w, "COMPLETED");
+    const sale = (await w.t.run((ctx) => ctx.db.get(saleId)))!;
+    const code = await codeOf(
+      w.t.run((ctx) =>
+        cancelCompletedSaleOperationalRecords(ctx, {
+          orgId: w.orgId,
+          sale,
+          actorId: w.userId,
+          reason: "t2 control",
+          reversalDate: Date.now(),
+        })
+      )
+    );
+    expect(code).toBeUndefined();
+  });
+
+  test("T1/T2 a same-id legacy row in ANOTHER org is not this org's debt", async () => {
+    const w = await seedWorld();
+    const { saleId } = await insertSale(w, "PENDING");
+    const otherOrg = await w.t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Other", createdAt: Date.now() })
+    );
+    await insertLegacyReceivable(w, { saleId, orgId: otherOrg });
+    const present = await w.t.run((ctx) => saleHasLegacyReceivable(ctx, w.orgId, saleId));
+    expect(present).toBe(false);
   });
 });
 
