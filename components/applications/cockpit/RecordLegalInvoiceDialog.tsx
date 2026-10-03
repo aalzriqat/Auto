@@ -20,7 +20,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { economicDateInputToMs, economicTodayDateInput, msToDateInput } from "@/lib/dateInput";
+import {
+  economicDateInputToMs,
+  economicTodayDateInput,
+  msToDateInput,
+  todayDateInput,
+} from "@/lib/dateInput";
 
 function parseMajor(value: string, scale: number): number | null {
   const trimmed = value.trim();
@@ -28,6 +33,28 @@ function parseMajor(value: string, scale: number): number | null {
   const parsed = Number(trimmed);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return Math.round(parsed * Math.pow(10, scale));
+}
+
+/**
+ * The legal invoice date is a DOCUMENT date — the one printed on the paper —
+ * so, unlike a movement date, it is never pre-filled with the ledger's UTC day
+ * when that differs from the operator's own day: at 01:30 in Amman on
+ * 1 October that would silently file an invoice dated 1 October under
+ * 30 September, i.e. in the previous period (SCRUM-596). The server refuses a
+ * day its clock has not reached, so the latest pickable day is the earlier of
+ * the two calendars, and while the operator's day has not begun on the ledger
+ * nothing is pre-filled and the operator must pick the paper's date.
+ */
+function invoiceDayBounds() {
+  const localDay = todayDateInput();
+  const ledgerDay = economicTodayDateInput();
+  const localDayNotOpen = localDay > ledgerDay;
+  return { localDayNotOpen, latestDay: localDayNotOpen ? ledgerDay : localDay };
+}
+
+function defaultInvoiceDay(): string {
+  const { localDayNotOpen, latestDay } = invoiceDayBounds();
+  return localDayNotOpen ? "" : latestDay;
 }
 
 type IssuedTo = "CUSTOMER" | "FINANCE_COMPANY" | "OTHER";
@@ -74,7 +101,7 @@ export function RecordLegalInvoiceDialog({
   );
   const [number, setNumber] = useState(() => existing?.number ?? "");
   const [date, setDate] = useState(() =>
-    existing?.date ? msToDateInput(existing.date) : economicTodayDateInput()
+    existing?.date ? msToDateInput(existing.date) : defaultInvoiceDay()
   );
   const [issuedTo, setIssuedTo] = useState<IssuedTo>(() =>
     existing?.issuedTo === "CUSTOMER" || existing?.issuedTo === "OTHER"
@@ -84,6 +111,7 @@ export function RecordLegalInvoiceDialog({
   const [issuedToOther, setIssuedToOther] = useState(() => existing?.issuedToOther ?? "");
   const [localError, setLocalError] = useState<string | null>(null);
 
+  const { localDayNotOpen, latestDay } = invoiceDayBounds();
   const amountMinor = parseMajor(amount, scale);
   const isInvalid =
     amountMinor === null ||
@@ -153,11 +181,17 @@ export function RecordLegalInvoiceDialog({
             <Input
               id="legal-invoice-date"
               type="date"
-              max={economicTodayDateInput()}
+              max={latestDay}
               value={date}
               onChange={(e) => setDate(e.target.value)}
+              aria-describedby={localDayNotOpen ? "legal-invoice-date-hint" : undefined}
               required
             />
+            {localDayNotOpen && (
+              <p id="legal-invoice-date-hint" className="text-xs text-muted-foreground">
+                {t("LegalInvoiceDateNotOpenYet")}
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">

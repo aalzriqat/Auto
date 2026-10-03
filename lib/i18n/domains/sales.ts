@@ -1259,6 +1259,10 @@ const dealOverviewMessages = defineBilingualMessages({
   LegalInvoiceAmount: ["Invoice amount", "مبلغ الفاتورة"],
   LegalInvoiceNumber: ["Invoice number", "رقم الفاتورة"],
   LegalInvoiceDate: ["Invoice date", "تاريخ الفاتورة"],
+  LegalInvoiceDateNotOpenYet: [
+    "Today's date opens on the ledger at midnight UTC (03:00 in Jordan). Pick the date printed on the invoice; if it is today, save the invoice after that time.",
+    "يبدأ تاريخ اليوم في الدفاتر عند منتصف الليل بتوقيت UTC (الساعة 03:00 بتوقيت الأردن). اختر التاريخ المطبوع على الفاتورة، وإن كان تاريخ اليوم فاحفظ الفاتورة بعد ذلك الوقت.",
+  ],
   LegalInvoiceIssuedTo: ["Issued to", "صادرة إلى"],
   LegalInvoiceIssuedToOther: ["Specify recipient", "تحديد المستلم"],
   SubmitLegalInvoice: ["Save Legal Invoice", "حفظ الفاتورة القانونية"],
