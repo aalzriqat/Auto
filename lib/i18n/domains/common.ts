@@ -247,6 +247,23 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "A payment-link receipt cannot be recorded manually. It is recorded automatically when the payment link is settled. Nothing has been changed.",
     "لا يمكن تسجيل قبض رابط الدفع يدويًا، إذ يُسجَّل تلقائيًا عند تسوية رابط الدفع. لم يتم تغيير أي شيء.",
   ],
+  // SCRUM-571 slice 1 (D-18/D-20) — competing sale debt containment.
+  ServerError_SALE_DEBT_COMPETING_RECEIVABLE_REFUSED: [
+    "A sale's customer debt is its sale invoice. A separate receivable cannot be created for a sale. Nothing has been changed.",
+    "دَين عملية البيع هو فاتورة البيع نفسها، ولا يمكن إنشاء ذمة مدينة منفصلة لعملية بيع. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_SALE_HAS_LEGACY_RECEIVABLE: [
+    "This sale still has a separate receivable record that must be resolved before the sale can be completed or cancelled. Contact support. Nothing has been changed.",
+    "لا يزال لهذه العملية سجل ذمة مدينة منفصل يجب معالجته قبل إتمام البيع أو إلغائه. تواصل مع الدعم. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_SALE_DEBT_RECEIPT_REFUSED: [
+    "Payments, credits and cheques for a sale cannot be recorded against a separate receivable. Record them against the sale invoice. Nothing has been changed.",
+    "لا يمكن تسجيل الدفعات أو الأرصدة أو الشيكات الخاصة بعملية بيع على ذمة مدينة منفصلة. سجّلها على فاتورة البيع. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINKS_DISABLED: [
+    "Payment links are not available yet. Nothing has been changed.",
+    "روابط الدفع غير متاحة حاليًا. لم يتم تغيير أي شيء.",
+  ],
   ServerError_ORG_FINANCIAL_RESET_IN_PROGRESS: [
     "This organization's financial reset has not finished. It cannot be returned to service until the reset completes.",
     "لم تكتمل إعادة ضبط البيانات المالية لهذه المنشأة. لا يمكن إعادتها إلى الخدمة قبل اكتمال إعادة الضبط.",

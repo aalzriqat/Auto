@@ -650,15 +650,17 @@ describe("Collections", () => {
       })
     );
 
-    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
-      idempotencyKey: crypto.randomUUID(),
+    // D-20: createReceivable refuses a saleId now, so the pre-existing legacy
+    // row this test exercises is seeded directly (it models a row created
+    // before the release). The property under test - cancelling it posts no GL
+    // and does not error - is unchanged.
+    const receivableId = await insertReceivable(t, {
       orgId,
       customerId,
+      createdBy: userId,
       saleId,
-      sourceType: "INTERNAL_INSTALLMENT",
       title: "Sale-linked balance",
       amount: 400,
-      dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
     });
 
     const noEventPosted = await t.run((ctx) =>
@@ -1238,26 +1240,43 @@ describe("Collections", () => {
       creditSystemKey: undefined,
     })).rejects.toThrow("credit account");
 
+    // D-20: a sale-linked legacy receivable can no longer be created (the sale's
+    // debt is its invoice), so the original "all links persist" property is
+    // exercised through the allowed path (no saleId), and the saleId case now
+    // asserts the refusal.
+    await expect(
+      asFinance.mutation(api.collections.createReceivable, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId,
+        customerId,
+        saleId: related.saleId,
+        sourceType: "OTHER",
+        title: "Sale-linked receivable",
+        amount: 321.1234,
+        dueDate: Date.now() + 3 * 24 * 60 * 60 * 1000,
+        creditSystemKey: "MISCELLANEOUS_INCOME",
+      })
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_COMPETING_RECEIVABLE_REFUSED" } });
+
     const saleLinkedReceivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       vehicleId: related.vehicleId,
-      saleId: related.saleId,
       quoteId: related.quoteId,
       applicationId: related.applicationId,
       assignedTo: userId,
       sourceType: "OTHER",
-      title: "Sale-linked receivable",
+      title: "Linked receivable",
       amount: 321.1234,
       dueDate: Date.now() + 3 * 24 * 60 * 60 * 1000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
     await t.run(async (ctx) => {
       const receivable = await ctx.db.get(saleLinkedReceivableId);
       expect(receivable).toMatchObject({
         vehicleId: related.vehicleId,
-        saleId: related.saleId,
         quoteId: related.quoteId,
         applicationId: related.applicationId,
         assignedTo: userId,
@@ -1383,11 +1402,26 @@ describe("Collections", () => {
       paymentDate: Date.now(),
     })).rejects.toThrow("cannot exceed the outstanding");
 
+    // D-20: a caller-supplied saleId on a receipt is refused until the invoice
+    // receipt resolver exists, so the ad-hoc property below (rounding, canonical
+    // mirror, no allocation) is exercised through the allowed path with no saleId.
+    await expect(
+      asFinance.mutation(api.collections.recordPayment, {
+        orgId,
+        customerId,
+        vehicleId,
+        saleId,
+        amount: 12.3456,
+        method: "CASH",
+        paymentDate: Date.now(),
+        idempotencyKey: "ad-hoc-payment-with-sale",
+      })
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_RECEIPT_REFUSED" } });
+
     const adHocPaymentId = await asFinance.mutation(api.collections.recordPayment, {
       orgId,
       customerId,
       vehicleId,
-      saleId,
       amount: 12.3456,
       method: "CASH",
       paymentDate: Date.now(),
@@ -1402,8 +1436,8 @@ describe("Collections", () => {
         method: "CASH",
         customerId,
         vehicleId,
-        saleId,
       });
+      expect(payment?.saleId).toBeUndefined();
       expect(payment?.paymentAllocationId).toBeUndefined();
       const canonical = payment?.canonicalPaymentId ? await ctx.db.get(payment.canonicalPaymentId) : null;
       expect(canonical?.method).toBe("CASH");

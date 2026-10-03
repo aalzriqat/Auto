@@ -2358,47 +2358,26 @@ describe("SCRUM-121A-PRE — R3-05, saleId is never correlated", () => {
       });
     });
 
-    // The receivable names the pending sale, which therefore has no canonical
-    // document of its own yet.
-    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId, customerId, saleId, sourceType: "INTERNAL_INSTALLMENT",
-      title: "Owed against a deal still in progress",
-      amount: 1000, dueDate: DUE(), creditSystemKey: "MISCELLANEOUS_INCOME",
-    });
-
+    // D-20: a receivable can no longer be created against ANY sale, pending or
+    // not (the sale's debt is its sale invoice). This control's original
+    // property — a receivable billed alongside its own pending sale — is
+    // therefore retired; what remains true is that the creation is refused
+    // before any write and the payment-link flow that depended on it is shut
+    // (D-20 P1/P2, asserted in scrum571s1Containment.test.ts).
+    await expect(
+      asFinance.mutation(api.collections.createReceivable, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId, customerId, saleId, sourceType: "INTERNAL_INSTALLMENT",
+        title: "Owed against a deal still in progress",
+        amount: 1000, dueDate: DUE(), creditSystemKey: "MISCELLANEOUS_INCOME",
+      })
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_COMPETING_RECEIVABLE_REFUSED" } });
     await t.run(async (ctx) => {
+      expect((await ctx.db.query("receivables").collect()).length).toBe(0);
       expect((await ctx.db.get(saleId))?.canonicalReceivableDocumentId).toBeUndefined();
-      expect((await ctx.db.get(receivableId))?.saleId).toBe(saleId);
-    });
-
-    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
-      orgId, customerId, receivableId, saleId,
-      amountMinor: 100_000, currency: "JOD", provider: "tap",
-    });
-    expect(intentId).toBeTruthy();
-
-    // …and the end-to-end assertion the cross-family seat's verification floor
-    // asked for: the intent and the receipt settlement produces must identify
-    // the SAME sale.
-    //
-    // This is the half that made the finding matter rather than being cosmetic.
-    // The legacy mirror stamps `saleId: receivable.saleId` — the RECEIVABLE's
-    // sale, never the intent's — so before the correlation landed an intent
-    // could name S2 while its own receipt named S1, and the two records of one
-    // payment disagreed about which deal it belonged to. Equality here is only
-    // guaranteed because creation now refuses the pair that could differ.
-    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId });
-    await t.run(async (ctx) => {
-      const intent = await ctx.db.get(intentId);
-      expect(intent?.status).toBe("SETTLED");
-      const receipt = intent?.collectionPaymentId ? await ctx.db.get(intent.collectionPaymentId) : null;
-      expect(receipt).toBeTruthy();
-      expect(receipt?.saleId).toBe(saleId);
-      expect(intent?.saleId).toBe(saleId);
-      expect(receipt?.saleId).toBe(intent?.saleId);
     });
   });
+
 });
 
 /**
@@ -2944,9 +2923,12 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     );
     const other = await seedVehicleAndSale(t, orgId, otherCustomerId, userId);
 
+    // D-20: createReceivable refuses a saleId, so the debt carries its VEHICLE
+    // only (the vehicle contradiction below is the property that survives); a
+    // pre-existing sale-linked row is covered by the receipt refusals below.
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
-      orgId, customerId, vehicleId, saleId,
+      orgId, customerId, vehicleId,
       sourceType: "INTERNAL_INSTALLMENT",
       title: "Correlated debt",
       amount: 1000,
@@ -2962,33 +2944,44 @@ describe("SCRUM-121A-PRE — verification floor", () => {
       })
     ).rejects.toThrow(/vehicle does not match/i);
 
-    // Receivable mode: the caller names a different sale.
+    // D-20: a caller-named sale is refused outright on every receipt shape (the
+    // contradiction checks that used to fire for it are now preempted by the
+    // containment refusal, which fires before any of them).
+    // Receivable mode: the caller names a sale.
     await expect(
       asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
         orgId, receivableId, saleId: other.saleId,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
-    ).rejects.toThrow(/sale does not match/i);
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_RECEIPT_REFUSED" } });
 
-    // Ad-hoc mode: no receivable, and the sale belongs to somebody else. This
-    // is the shape that stored cleanly while attributing the canonical payment
-    // to one customer and every operational reader to another.
+    // Ad-hoc mode: no receivable, and the sale belongs to somebody else.
     await expect(
       asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
         orgId, customerId, saleId: other.saleId,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
-    ).rejects.toThrow(/sale belongs to a different customer/i);
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_RECEIPT_REFUSED" } });
 
-    // CONTROL — the ad-hoc shape stays supported when it is consistent, and a
-    // vehicle-only ad-hoc payment stays unconstrained: a vehicle does not imply
-    // a customer, and refusing that would refuse legitimate counter takings.
+    // …and a legacy receivable that already carries a sale (a row created
+    // before the release) cannot be collected against either.
+    const preexistingSaleLinked = await t.run((ctx) =>
+      ctx.db.insert("receivables", {
+        orgId, customerId, vehicleId, saleId, sourceType: "INTERNAL_INSTALLMENT",
+        title: "Pre-existing sale-linked debt", originalAmount: 1000, outstandingAmount: 1000,
+        dueDate: DUE(), status: "OPEN", createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
     await expect(
       asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
-        orgId, customerId, saleId, vehicleId,
-        amount: 100, method: "CASH", paymentDate: Date.now(),
+        orgId, receivableId: preexistingSaleLinked, amount: 100, method: "CASH", paymentDate: Date.now(),
       })
-    ).resolves.toBeTruthy();
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_RECEIPT_REFUSED" } });
+
+    // CONTROL — a vehicle-only ad-hoc payment stays unconstrained: a vehicle
+    // does not imply a customer, and refusing that would refuse legitimate
+    // counter takings. (The consistent-sale ad-hoc control was removed: a
+    // caller sale is refused by D-20.)
     await expect(
       asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
         orgId, customerId, vehicleId: other.vehicleId,
@@ -3218,19 +3211,21 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         orgId, receivableId, saleId: salesB.saleId,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
-    ).rejects.toThrow(/sale belongs to a different customer/i);
+    // D-20: a caller-named sale is refused outright now, which preempts the
+    // old "belongs to a different customer" contradiction check.
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_RECEIPT_REFUSED" } });
     expect(await snapshotMoneyWorld(t)).toBe(before);
 
-    // …and the vehicle variant: the receivable carries no vehicle, so a
-    // caller-filled vehicle that disagrees with the resolved sale is the same
-    // hole one field over.
-    const receivableWithSale = await asFinance.mutation(api.collections.createReceivable, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId, customerId: customerB, saleId: salesB.saleId,
-      sourceType: "INTERNAL_INSTALLMENT",
-      title: "B's debt, sale but no vehicle",
-      amount: 1000, dueDate: DUE(), creditSystemKey: "MISCELLANEOUS_INCOME",
-    });
+    // D-20: the vehicle variant. A sale-linked legacy receivable can no longer
+    // be created, so the pre-release row is seeded directly; collecting against
+    // it is refused whatever vehicle the caller names, and nothing is written.
+    const receivableWithSale = await t.run((ctx) =>
+      ctx.db.insert("receivables", {
+        orgId, customerId: customerB, saleId: salesB.saleId, sourceType: "INTERNAL_INSTALLMENT",
+        title: "B's debt, sale but no vehicle", originalAmount: 1000, outstandingAmount: 1000,
+        dueDate: DUE(), status: "OPEN", createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
     const strangerVehicle = await t.run((ctx) =>
       ctx.db.insert("vehicles", {
         orgId, make: "Ford", model: "Focus", year: 2019, mileage: 900, color: "Green",
@@ -3242,17 +3237,16 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         orgId, receivableId: receivableWithSale, vehicleId: strangerVehicle,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
-    ).rejects.toThrow(/sale is for a different vehicle/i);
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_RECEIPT_REFUSED" } });
 
-    // CONTROL — the same gap-filling is still ACCEPTED when it agrees. The
-    // point of the rule is that an absent field stays fillable; only a
-    // contradiction is refused.
+    // D-20: the gap-filling control (agreeing vehicle accepted) no longer
+    // applies to a sale-linked receivable: it is refused whatever the vehicle.
     await expect(
       asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
         orgId, receivableId: receivableWithSale, vehicleId: salesB.vehicleId,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
-    ).resolves.toBeTruthy();
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_RECEIPT_REFUSED" } });
   });
 
   /**
