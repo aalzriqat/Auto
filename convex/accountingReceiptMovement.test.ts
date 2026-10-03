@@ -48,8 +48,6 @@
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
@@ -1379,16 +1377,18 @@ describe("SCRUM-218-C §10 RM-01 — a bounced cheque cannot silently strand spe
 });
 
 describe("SCRUM-218-C §9 — runtime authority is never persisted or cached", () => {
-  const SOURCES = [
-    "./accounting/receiptMovement.ts",
-    "./collections.ts",
-  ].map((rel) => ({
-    rel,
-    text: readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8"),
-  }));
+  // SCRUM-565: the sources are loaded through Vite's raw glob rather than node:fs, so this file
+  // carries no Node builtin (the convex-lint hook forbids them under convex/). The length assertion
+  // below makes a path that matches nothing fail loudly instead of scanning an empty string.
+  const RAW_SOURCES: Record<string, string> = import.meta.glob(
+    ["./accounting/receiptMovement.ts", "./collections.ts"],
+    { query: "?raw", import: "default", eager: true },
+  );
+  const SOURCES = ["./accounting/receiptMovement.ts", "./collections.ts"].map((rel) => ({ rel, text: RAW_SOURCES[rel] ?? "" }));
 
   test("no module-scope cache of a receipt identity exists", () => {
     for (const { rel, text } of SOURCES) {
+      expect(text.length, `${rel} source not loaded`).toBeGreaterThan(0);
       const moduleScope = text
         .split("\n")
         .filter((l) => /^(const|let|var)\s/.test(l))
