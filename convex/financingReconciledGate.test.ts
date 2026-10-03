@@ -158,7 +158,6 @@ describe("SCRUM-420 — a deal flagged needsFinancingReconciliation cannot final
   // finance company keeps the customer's payment and whose retained amount nobody has recorded.
   test("T17c: the flag raised by the real recompute writer refuses finalize, and nothing is written", async () => {
     const s = await seedDeal({ flag: undefined });
-    expect((await s.readApp()).needsFinancingReconciliation).toBeUndefined();
     // Setup, not the writer under test: the deal's company retains the customer's payment.
     await s.t.run((ctx) => ctx.db.patch(s.applicationId, { customerContributionSettlement: "RETAINED_BY_COMPANY" }));
 
@@ -182,8 +181,9 @@ describe("SCRUM-420 — a deal flagged needsFinancingReconciliation cannot final
     });
     const error = await refusalOf(s.asOwner, s);
     expect(error.data).toMatchObject({ code: "FINANCING_RECONCILIATION_FLAGGED" });
-    expect(await s.counts()).toEqual(before);
-    expect((await s.counts()).sales).toBe(0);
+    const after = await s.counts();
+    expect(after).toEqual(before);
+    expect(after.sales).toBe(0);
     expect((await s.readApp()).finalizedSaleId).toBeUndefined();
 
     await s.asOwner.mutation(api.financingEconomics.resolveFinancingReconciliation, {

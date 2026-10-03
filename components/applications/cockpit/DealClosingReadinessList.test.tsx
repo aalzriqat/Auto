@@ -110,21 +110,16 @@ describe("DealClosingReadinessList — reason codes", () => {
     expect(screen.getByTestId("closing-check-reason-FINANCING_RECONCILED").textContent).toBe(t("ClosingReason_WITHHELD_FINANCING_RECONCILED"));
   });
 
-  // L3: the test above reads copy through `t`, which returns the key on a miss, so it could
-  // pass against an absent entry. Pin the dictionaries themselves.
-  test.each([
-    "ClosingCheck_FINANCING_RECONCILED",
-    "ClosingReason_FINANCING_RECONCILIATION_FLAGGED",
-    "ClosingReason_WITHHELD_FINANCING_RECONCILED",
-    "ClosingCheck_UNKNOWN",
-    "ClosingReason_UNKNOWN",
-  ])("%s has non-empty en and ar copy that is not the key", (key) => {
-    for (const dict of [en, ar]) {
-      expect(typeof dict[key]).toBe("string");
-      expect(dict[key].trim().length).toBeGreaterThan(0);
-      expect(dict[key]).not.toBe(key);
+  // L3: the tests above read copy through `t`, which returns the key on a miss (and `tAr` falls back to en),
+  // so they could pass against an absent entry. Pin the dictionaries themselves. The reason codes' entries are
+  // covered by lib/i18n/closingReadinessReasons.test.ts; the check label and the two generic fallbacks are not.
+  test.each(["ClosingCheck_FINANCING_RECONCILED", "ClosingCheck_UNKNOWN", "ClosingReason_UNKNOWN"])(
+    "%s has non-empty en copy and Arabic-script ar copy",
+    (key) => {
+      expect(en[key]?.trim()).toBeTruthy();
+      expect(ar[key]).toMatch(/[؀-ۿ]/);
     }
-  });
+  );
 
   // S420-01: a backend that ships a check/reason before this bundle knows it must never put a
   // raw dictionary key on screen (`t()` returns the key on a miss).
