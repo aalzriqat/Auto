@@ -1,0 +1,29 @@
+{
+  "//": [
+    "The detector's own type-check project.",
+    "",
+    "WHY THIS EXISTS. The root tsconfig includes only **/*.ts and **/*.tsx and",
+    "leaves checkJs off, so `pnpm typecheck` never type-checked a single line of",
+    "this detector — its .mjs modules were pulled in as imports and given syntax",
+    "checking only. Every JSDoc type in them was decorative. That was proven by",
+    "injecting a JSDoc violation and getting zero diagnostics, and it is not a",
+    "cosmetic gap: the defect that ended the flat model was a semantic dimension",
+    "added to one consumer of a shared record and not the other, which a checked",
+    "type would have refused to compile."
+  ],
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "types": ["node"],
+    "moduleResolution": "bundler",
+    "module": "esnext",
+    "strict": true,
+    "noImplicitAny": false,
+    "incremental": false,
+    "plugins": []
+  },
+  "include": ["**/*.mjs", "**/*.ts", "**/*.tsx"],
+  "exclude": ["node_modules"]
+}
