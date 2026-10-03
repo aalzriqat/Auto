@@ -622,26 +622,22 @@ export async function evaluateClosingReadiness(
     return invoice.ok ? ["READY", null] : ["BLOCKED", reasonOf(invoice.refusal.code, invoice.refusal.message)];
   });
 
-  // SCRUM-420: a deal whose financing figures are flagged for a reconciliation
-  // review (`needsFinancingReconciliation`) is not closable on ANY route, and
-  // finalizeDeal reaches this evaluator through `resolveFinancedSalePlan`, so a
-  // direct call is refused before its first write. APPENDED LAST, never first:
-  // the first unmet check (array order) is the reason a refused finalize states,
-  // and an existing refusal must keep stating itself. Never flagged (`undefined`)
-  // is NOT_APPLICABLE; reviewed (`false`) is READY. `resolveFinancingReconciliation`
-  // is the one way the flag is cleared by a person.
-  if (app.needsFinancingReconciliation === true) {
-    add(
-      "FINANCING_RECONCILED",
-      "BLOCKED",
-      reasonOf(
-        "FINANCING_RECONCILIATION_FLAGGED",
-        "This deal's financing figures are flagged for reconciliation review, so it cannot be finalized yet. Review the figures and record the review before finalizing."
-      )
-    );
-  } else {
-    add("FINANCING_RECONCILED", app.needsFinancingReconciliation === false ? "READY" : "NOT_APPLICABLE", null);
-  }
+  // SCRUM-420: a deal flagged for financing reconciliation (true) is BLOCKED; reviewed
+  // (false) is READY; never flagged (undefined) is NOT_APPLICABLE. This gates finalizeDeal
+  // (via resolveFinancedSalePlan) and the readiness screen; the other completion doors are
+  // refused separately (SCRUM-504 finance-claim guard / SCRUM-69). APPENDED LAST: the first
+  // unmet check in array order is the stated refusal, which existing refusals must keep.
+  const flagged = app.needsFinancingReconciliation;
+  add(
+    "FINANCING_RECONCILED",
+    flagged === true ? "BLOCKED" : flagged === false ? "READY" : "NOT_APPLICABLE",
+    flagged === true
+      ? reasonOf(
+          "FINANCING_RECONCILIATION_FLAGGED",
+          "This deal's financing figures are flagged for reconciliation review, so it cannot be finalized yet. Review the figures and record the review before finalizing."
+        )
+      : null
+  );
 
   const state = overallReadinessState(checks);
   const readiness: ClosingReadiness = { state, checks };

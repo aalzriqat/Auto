@@ -1,10 +1,7 @@
-import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
-import schema from "./schema";
 import { api } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
-import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { WITHHELD_READINESS_REASON_FALLBACK } from "../lib/closingReadinessReasonCodes";
+import { refusalOf as finalizeRefusalOf, seedCloseableFinancedDeal, type DealCaller } from "../test-utils/seedCloseableFinancedDeal";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -22,120 +19,17 @@ vi.mock("./rateLimit", () => ({
  * `resolveFinancedSalePlan` before its first write. Clearing the flag goes
  * through the existing `resolveFinancingReconciliation`.
  */
-const MODULES = import.meta.glob("./**/*.ts");
-const JOD_SCALE = 1000;
-
-const OWNER_PERMS = [
-  "create:sales", "view:sales", "edit:sales",
-  "view:vehicles", "create:vehicles", "edit:vehicles",
-  "view:customers", "create:customers",
-  "approve:requests",
-  "view:finance_applications", "create:finance_application",
-  "review:finance_application", "approve:finance_application",
-  "finalize:financed_deal", "confirm:finance_disbursement",
-  "verify:finance_documents", "register:vehicle_handover",
-  "register:expected_payment",
-  "manage:finance", "view:finance",
-  "view:commissions", "manage:commissions",
-  "view:reports", "manage:settings",
-];
-
-const MANAGER_TEMPLATE = DEFAULT_ROLE_TEMPLATES.find((template) => template.name === "MANAGER")!;
-
-/** Rows a finalize writes; a refusal must leave every count where it was. */
-const WRITTEN_TABLES = [
-  "sales",
-  "journalEntries",
-  "receivables",
-  "receivableDocuments",
-  "accountingEvents",
-  "pendingAccountingEvents",
-  "commandIdempotency",
-] as const;
-
-type FlagState = true | false | undefined;
-
-async function seedDeal(opts: { flag: FlagState; reconcileFee?: boolean }) {
-  const t = convexTestWithComponents(schema, MODULES);
-  const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Reconciled Gate Co", createdAt: Date.now() }));
-  await t.run((ctx) =>
-    ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
-  );
-  const ownerRoleId = await t.run((ctx) =>
-    ctx.db.insert("roles", { orgId, name: "OWNER", permissions: OWNER_PERMS, isSystemOwnerRole: true })
-  );
-  const managerRoleId = await t.run((ctx) =>
-    ctx.db.insert("roles", { orgId, name: "MANAGER", permissions: MANAGER_TEMPLATE.permissions })
-  );
-  const member = async (clerkId: string, roleId: Id<"roles">) => {
-    const userId = await t.run((ctx) => ctx.db.insert("users", { clerkId, email: `${clerkId}@x.com` }));
-    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
-    return t.withIdentity({ subject: clerkId, clerkId });
-  };
-  const asOwner = await member("owner_u", ownerRoleId);
-  const asApprover = await member("appr_u", ownerRoleId);
-  const asManager = await member("mgr_u", managerRoleId);
-
-  await t.run((ctx) =>
-    ctx.db.insert("orgSettings", { orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH", "BANK_TRANSFER"] })
-  );
-  await asOwner.mutation(api.chartOfAccounts.initialize, { orgId });
-  const fiscalYear = new Date().getUTCFullYear();
-  await asOwner.mutation(api.accountingPeriods.create, {
-    orgId,
-    startDate: Date.UTC(fiscalYear, 0, 1),
-    endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
-    fiscalYear,
-    periodNumber: 1,
+async function seedDeal(opts: { flag?: boolean; reconcileFee?: boolean }) {
+  const deal = await seedCloseableFinancedDeal({
+    orgName: "Reconciled Gate Co",
+    buyerLastName: "Gate",
+    vin: "VINGATE420",
+    companyName: "Gate Finance",
+    feeDescription: "Courier (dealership bore none)",
+    feeAmountMinor: 0,
+    feeKeyPrefix: "gate-fee:",
   });
-  const period = (await asOwner.query(api.accountingPeriods.list, { orgId }))[0];
-  await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
-
-  const customerId = await t.run((ctx) => ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: "Gate" }));
-  const customerStatusId = await t.run((ctx) =>
-    ctx.db.insert("orgCustomerStatuses", { orgId, label: "Eligible", isActive: true, order: 1 })
-  );
-  const vehicleId = await t.run((ctx) =>
-    ctx.db.insert("vehicles", {
-      orgId, vin: "VINGATE420", make: "Kia", model: "Sportage", year: 2024, mileage: 10,
-      color: "Blue", fuelType: "Gasoline", transmission: "Automatic",
-      sellingPrice: 20000, status: "AVAILABLE", sourceType: "STOCK", purchasePrice: 15000,
-    })
-  );
-  const companyId = await t.run((ctx) =>
-    ctx.db.insert("financeCompanies", {
-      orgId, name: "Gate Finance", profitRate: 5, maxTermMonths: 60, gracePeriodMonths: 0, isActive: true,
-      defaultLtvPercent: 100, adminFees: 0,
-    })
-  );
-  const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
-    orgId, customerId, vehicleId, vehiclePrice: 20000, downPayment: 0, termMonths: 48,
-    mode: "CONFIGURED_FINANCE_COMPANY", companyId,
-    customerEligibilityStatusIds: [customerStatusId], totalFinancedAmount: 20000,
-  });
-  const applicationId = await asOwner.mutation(api.applications.createFromQuote, { orgId, quoteId });
-  await asOwner.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
-  await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
-  await asOwner.mutation(api.financingEconomics.recordSubmittedQuotation, {
-    orgId, applicationId, submittedQuotationMinor: 20000 * JOD_SCALE, source: "MANUAL_ENTRY",
-  });
-  await asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId, applicationId, approvedAmountMinor: 20000 * JOD_SCALE, basis: "MANUAL", notes: "Approved.",
-  });
-  await registerHandover(asOwner, api, orgId, applicationId);
-  await asOwner.mutation(api.applications.registerExpectedPayment, {
-    orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
-  });
-  await asOwner.mutation(api.financeDealCosts.recordLegalInvoice, {
-    orgId, applicationId, legalInvoiceAmountMinor: 20000 * JOD_SCALE,
-    legalInvoiceNumber: "INV-" + applicationId, legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
-  });
-  const feeId = await asOwner.mutation(api.financeDealCosts.recordDealFee, {
-    expectedCurrency: "JOD", orgId, applicationId, feeType: "OTHER_CLOSING_EXPENSE",
-    paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
-    deductedFromSettlement: false, actualAmountMinor: 0, description: "Courier (dealership bore none)",
-    idempotencyKey: "gate-fee:" + applicationId,
-  });
+  const { t, orgId, applicationId, feeId, asOwner } = deal;
   if (opts.reconcileFee !== false) {
     await asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Matched." });
   }
@@ -146,39 +40,29 @@ async function seedDeal(opts: { flag: FlagState; reconcileFee?: boolean }) {
       financingReconciliationReason: opts.flag === true ? "SCRUM-420 fixture: figures flagged for review." : undefined,
     })
   );
-
-  const counts = async () =>
-    await t.run(async (ctx) => {
-      const out: Record<string, number> = {};
-      for (const table of WRITTEN_TABLES) out[table] = (await ctx.db.query(table).take(1000)).length;
-      return out;
-    });
   const readApp = async () => (await t.run((ctx) => ctx.db.get(applicationId)))!;
-
-  return { t, orgId, applicationId, asOwner, asManager, counts, readApp };
+  return { ...deal, readApp };
 }
 
 type Seeded = Awaited<ReturnType<typeof seedDeal>>;
-type Caller = Seeded["asOwner"];
 
-const finalize = (caller: Caller, s: Seeded, key = "gate-finalize:" + s.applicationId) =>
+const finalize = (caller: DealCaller, s: Seeded, key = "gate-finalize:" + s.applicationId) =>
   caller.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId: s.applicationId, idempotencyKey: key });
 
-async function refusalOf(caller: Caller, s: Seeded) {
-  try {
-    await finalize(caller, s);
-  } catch (error) {
-    return error as { data?: unknown; message?: string };
-  }
-  throw new Error("finalizeDeal was expected to refuse");
-}
+const refusalOf = (caller: DealCaller, s: Seeded) =>
+  finalizeRefusalOf(caller, s.orgId, s.applicationId, "gate-finalize:" + s.applicationId);
 
-const readiness = (caller: Caller, s: Seeded) =>
+const readiness = (caller: DealCaller, s: Seeded) =>
   caller.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId: s.applicationId });
+
+// One flagged deal serves the two READ-ONLY readiness tests (T7); every test that
+// finalizes or mutates seeds its own.
+let flaggedForReads: Promise<Seeded> | undefined;
+const flaggedDealForReads = () => (flaggedForReads ??= seedDeal({ flag: true }));
 
 describe("SCRUM-420 — a deal flagged needsFinancingReconciliation cannot finalize", () => {
   test("T7: a flagged, otherwise-closeable financed deal is not ready; FINANCING_RECONCILED is BLOCKED and ordered LAST", async () => {
-    const s = await seedDeal({ flag: true });
+    const s = await flaggedDealForReads();
     const served = await readiness(s.asOwner, s);
     const blocked = served.checks.filter((check) => check.status === "BLOCKED" || check.status === "UNAVAILABLE");
 
@@ -193,7 +77,7 @@ describe("SCRUM-420 — a deal flagged needsFinancingReconciliation cannot final
   });
 
   test("T7: a below-finance-tier caller is served the WITHHELD code, with no figures or reason text", async () => {
-    const s = await seedDeal({ flag: true });
+    const s = await flaggedDealForReads();
     const served = await readiness(s.asManager, s);
     const check = served.checks.find((c) => c.key === "FINANCING_RECONCILED");
     expect(check).toMatchObject({ status: "BLOCKED", reasonCode: "WITHHELD_FINANCING_RECONCILED", reason: WITHHELD_READINESS_REASON_FALLBACK });
@@ -241,21 +125,16 @@ describe("SCRUM-420 — a deal flagged needsFinancingReconciliation cannot final
     expect((await s.counts()).sales).toBe(1);
   });
 
-  test("control: an unflagged deal (flag never set) is unaffected — NOT_APPLICABLE, and finalize succeeds", async () => {
-    const s = await seedDeal({ flag: undefined });
+  test.each([
+    ["never set (undefined)", undefined, "NOT_APPLICABLE"],
+    ["cleared (false)", false, "READY"],
+  ] as const)("control: a deal whose flag was %s is unaffected — %s, and finalize succeeds", async (_label, flag, status) => {
+    const s = await seedDeal({ flag });
     const served = await readiness(s.asOwner, s);
     expect(served.state).toBe("READY");
-    expect(served.checks.find((c) => c.key === "FINANCING_RECONCILED")).toMatchObject({ status: "NOT_APPLICABLE" });
+    expect(served.checks.find((c) => c.key === "FINANCING_RECONCILED")).toMatchObject({ status });
     expect(await finalize(s.asOwner, s)).toBeTruthy();
     expect((await s.counts()).sales).toBe(1);
-  });
-
-  test("control: a deal whose flag was cleared (false) is unaffected — READY, and finalize succeeds", async () => {
-    const s = await seedDeal({ flag: false });
-    const served = await readiness(s.asOwner, s);
-    expect(served.state).toBe("READY");
-    expect(served.checks.find((c) => c.key === "FINANCING_RECONCILED")).toMatchObject({ status: "READY" });
-    expect(await finalize(s.asOwner, s)).toBeTruthy();
   });
 
   test("T18: a flagged deal with an EXISTING unmet check still surfaces the existing reason (the new check is appended LAST)", async () => {
