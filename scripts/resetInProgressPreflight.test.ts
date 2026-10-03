@@ -46,7 +46,7 @@ function walk(pages: Array<Page | { ok: false; reason: string }>, extra: Record<
   return { outcome, calls };
 }
 
-const reasonOf = (outcome: { ok: boolean }) => (outcome as { reason: string }).reason;
+const reasonOf = (outcome: { ok: boolean; reason?: string }) => outcome.reason;
 
 describe("runResetPreflight", () => {
   test("passes on an all-zero multi-page walk and totals the pages", () => {
@@ -246,7 +246,9 @@ describe("entrypoint and CLI wrapper (L3)", () => {
       const value = process.env[name];
       if (value !== undefined) base[name] = value;
     }
-    return spawnSync(process.execPath, [SCRIPT], { cwd: REPO_ROOT, env: { ...base, ...env }, encoding: "utf8", timeout: 60_000 });
+    // Next's ProcessEnv augmentation makes NODE_ENV required; this env is deliberately minimal.
+    const childEnv = { ...base, ...env } as NodeJS.ProcessEnv;
+    return spawnSync(process.execPath, [SCRIPT], { cwd: REPO_ROOT, env: childEnv, encoding: "utf8", timeout: 60_000 });
   }
 
   test("with no key it exits 1 with a refusal and prints no secret-like value", () => {
