@@ -22,6 +22,7 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { commonAr, commonEn } from "../lib/i18n/domains/common";
 import { AppErrorCode } from "./utils/errors";
+import { PAYMENT_LINK_REFUSALS } from "./paymentIntents";
 
 const DUE = () => Date.now() + 7 * 24 * 60 * 60 * 1000;
 
@@ -83,14 +84,77 @@ async function seed(t: ReturnType<typeof convexTestWithComponents>) {
   return { orgId, userId, customerId, asFinance, receivableId, receivableDocumentId };
 }
 
-async function codeOf(promise: Promise<unknown>): Promise<string | undefined> {
+async function refusal(promise: Promise<unknown>): Promise<{ code?: string; message?: string }> {
   try {
     await promise;
   } catch (error) {
-    return (error as { data?: { code?: string } }).data?.code ?? `plain:${String(error)}`;
+    const data = (error as { data?: { code?: string; message?: string } }).data;
+    return { code: data?.code ?? `plain:${String(error)}`, message: data?.message };
   }
-  return undefined;
+  return {};
 }
+
+const codeOf = async (promise: Promise<unknown>) => (await refusal(promise)).code;
+
+type World = Awaited<ReturnType<typeof seed>> & { t: ReturnType<typeof convexTestWithComponents> };
+
+async function makeWorld(): Promise<World> {
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+  return { t, ...(await seed(t)) };
+}
+
+const baseCreate = (w: World) => ({
+  idempotencyKey: crypto.randomUUID(),
+  orgId: w.orgId,
+  customerId: w.customerId,
+  receivableDocumentId: w.receivableDocumentId,
+  amountMinor: 100_000,
+  currency: "JOD",
+  provider: "tap",
+});
+
+const createWith = (w: World, over: Record<string, unknown>) =>
+  w.asFinance.mutation(api.paymentIntents.create, { ...baseCreate(w), ...over } as never);
+
+const otherCustomer = (w: World) =>
+  w.t.run((ctx) =>
+    ctx.db.insert("customers", { orgId: w.orgId, firstName: "Omar", lastName: "Other", phone: "+962790000009" })
+  );
+
+const insertDocument = (w: World, customerId: Id<"customers">) =>
+  w.t.run((ctx) =>
+    ctx.db.insert("receivableDocuments", {
+      orgId: w.orgId,
+      documentType: "INVOICE",
+      documentNumber: `DOC-${crypto.randomUUID().slice(0, 8)}`,
+      payerType: "CUSTOMER",
+      customerId,
+      sourceType: "legacy_receivable",
+      sourceId: crypto.randomUUID(),
+      originalAmountMinor: 900_000,
+      currency: "JOD",
+      scale: 3,
+      issueDate: Date.now(),
+      dueDate: DUE(),
+      status: "OPEN",
+      createdAt: Date.now(),
+      createdBy: w.userId,
+    })
+  );
+
+const insertSale = (w: World, over: { customerId?: Id<"customers">; canonicalReceivableDocumentId?: Id<"receivableDocuments"> }) =>
+  w.t.run(async (ctx) => {
+    const vehicleId = await ctx.db.insert("vehicles", {
+      orgId: w.orgId, make: "Kia", model: "Rio", year: 2021, mileage: 30_000,
+      color: "Blue", fuelType: "PETROL", transmission: "AUTOMATIC",
+      sellingPrice: 15_000, status: "AVAILABLE",
+    });
+    return await ctx.db.insert("sales", {
+      orgId: w.orgId, vehicleId, customerId: over.customerId ?? w.customerId, salespersonId: w.userId,
+      salePrice: 15_000, saleDate: Date.now(), status: "PENDING",
+      ...(over.canonicalReceivableDocumentId ? { canonicalReceivableDocumentId: over.canonicalReceivableDocumentId } : {}),
+    });
+  });
 
 describe("SCRUM-571 S1 — paymentIntents.create refuses an untargeted intent", () => {
   test("no receivableId, saleId or receivableDocumentId is refused and writes nothing", async () => {
@@ -127,157 +191,81 @@ describe("SCRUM-571 S1 — paymentIntents.create refuses an untargeted intent", 
 });
 
 describe("SCRUM-571 S1 — paymentIntents.create caps at the document's outstanding", () => {
-  test("document target over outstanding is refused and writes nothing", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, receivableDocumentId } = await seed(t);
-    const before = await counts(t);
-
-    const code = await codeOf(
-      asFinance.mutation(api.paymentIntents.create, {
-        idempotencyKey: crypto.randomUUID(),
-        orgId,
-        customerId,
-        receivableDocumentId,
-        amountMinor: 1_000_001,
-        currency: "JOD",
-        provider: "tap",
-      })
-    );
-    expect(code).toBe("PAYMENT_LINK_EXCEEDS_OUTSTANDING");
-    expect(await counts(t)).toEqual(before);
-  });
-
-  test("document target exactly at outstanding is accepted", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, receivableDocumentId } = await seed(t);
-    const intentId = await asFinance.mutation(api.paymentIntents.create, {
+  // `target` names the identifier the intent is created against; `setup` puts
+  // the world into the state the case needs and returns the create overrides.
+  type CapCase = {
+    name: string;
+    target: "document" | "sale" | "receivable";
+    amountMinor: number;
+    setup?: (w: World) => Promise<void>;
+  };
+  const targetArgs = async (w: World, target: CapCase["target"]): Promise<Record<string, unknown>> => {
+    if (target === "document") return { receivableDocumentId: w.receivableDocumentId };
+    if (target === "receivable") return { receivableId: w.receivableId, receivableDocumentId: undefined };
+    const saleId = await insertSale(w, { canonicalReceivableDocumentId: w.receivableDocumentId });
+    return { saleId, receivableDocumentId: undefined };
+  };
+  const partlyAllocate = async (w: World) => {
+    await w.asFinance.mutation(api.collections.recordPayment, {
       idempotencyKey: crypto.randomUUID(),
-      orgId,
-      customerId,
-      receivableDocumentId,
-      amountMinor: 1_000_000,
-      currency: "JOD",
-      provider: "tap",
-    });
-    const intent = await t.run((ctx) => ctx.db.get(intentId));
-    expect(intent?.amountMinor).toBe(1_000_000);
-    expect(intent?.receivableDocumentId).toBe(receivableDocumentId);
-  });
-
-  test("sale target over outstanding is refused; at outstanding is accepted", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, userId, customerId, asFinance, receivableDocumentId } = await seed(t);
-    const saleId = await t.run(async (ctx) => {
-      const vehicleId = await ctx.db.insert("vehicles", {
-        orgId, make: "Kia", model: "Rio", year: 2021, mileage: 30_000,
-        color: "Blue", fuelType: "PETROL", transmission: "AUTOMATIC",
-        sellingPrice: 15_000, status: "AVAILABLE",
-      });
-      return await ctx.db.insert("sales", {
-        orgId, vehicleId, customerId, salespersonId: userId,
-        salePrice: 15_000, saleDate: Date.now(), status: "PENDING",
-        canonicalReceivableDocumentId: receivableDocumentId,
-      });
-    });
-    const before = await counts(t);
-    const base = { orgId, customerId, saleId, currency: "JOD", provider: "tap" };
-
-    expect(
-      await codeOf(
-        asFinance.mutation(api.paymentIntents.create, {
-          ...base, idempotencyKey: crypto.randomUUID(), amountMinor: 1_000_001,
-        })
-      )
-    ).toBe("PAYMENT_LINK_EXCEEDS_OUTSTANDING");
-    expect(await counts(t)).toEqual(before);
-
-    const intentId = await asFinance.mutation(api.paymentIntents.create, {
-      ...base, idempotencyKey: crypto.randomUUID(), amountMinor: 1_000_000,
-    });
-    expect(intentId).toBeTruthy();
-  });
-
-  test("the legacy receivableId path is still capped, with its own coded refusal", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, receivableId } = await seed(t);
-    expect(
-      await codeOf(
-        asFinance.mutation(api.paymentIntents.create, {
-          idempotencyKey: crypto.randomUUID(),
-          orgId,
-          customerId,
-          receivableId,
-          amountMinor: 1_000_001,
-          currency: "JOD",
-          provider: "tap",
-        })
-      )
-    ).toBe("PAYMENT_LINK_EXCEEDS_RECEIVABLE");
-  });
-
-  test("the stricter of the legacy and document caps applies", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, receivableId } = await seed(t);
-    // Legacy mirror drifts ABOVE the document (2000 vs 1000): only the
-    // document cap can refuse 1_500_000.
-    await t.run((ctx) => ctx.db.patch(receivableId, { outstandingAmount: 2000 }));
-    expect(
-      await codeOf(
-        asFinance.mutation(api.paymentIntents.create, {
-          idempotencyKey: crypto.randomUUID(),
-          orgId,
-          customerId,
-          receivableId,
-          amountMinor: 1_500_000,
-          currency: "JOD",
-          provider: "tap",
-        })
-      )
-    ).toBe("PAYMENT_LINK_EXCEEDS_OUTSTANDING");
-  });
-
-  test("a partly allocated document caps at what is still owed", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, receivableId, receivableDocumentId } = await seed(t);
-    await asFinance.mutation(api.collections.recordPayment, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId,
-      receivableId,
+      orgId: w.orgId,
+      receivableId: w.receivableId,
       amount: 400,
       method: "CASH",
       paymentDate: Date.now(),
     });
-    const base = { orgId, customerId, receivableDocumentId, currency: "JOD", provider: "tap" };
-    expect(
-      await codeOf(
-        asFinance.mutation(api.paymentIntents.create, {
-          ...base, idempotencyKey: crypto.randomUUID(), amountMinor: 600_001,
-        })
-      )
-    ).toBe("PAYMENT_LINK_EXCEEDS_OUTSTANDING");
-    const intentId = await asFinance.mutation(api.paymentIntents.create, {
-      ...base, idempotencyKey: crypto.randomUUID(), amountMinor: 600_000,
-    });
-    expect(intentId).toBeTruthy();
+  };
+
+  const REFUSED: Array<CapCase & { code: string }> = [
+    { name: "document target over outstanding", target: "document", amountMinor: 1_000_001, code: "PAYMENT_LINK_EXCEEDS_OUTSTANDING" },
+    { name: "sale target over outstanding", target: "sale", amountMinor: 1_000_001, code: "PAYMENT_LINK_EXCEEDS_OUTSTANDING" },
+    { name: "the legacy receivableId path is still capped, with its own coded refusal", target: "receivable", amountMinor: 1_000_001, code: "PAYMENT_LINK_EXCEEDS_RECEIVABLE" },
+    {
+      // Legacy mirror drifts ABOVE the document (2000 vs 1000): only the
+      // document cap can refuse 1_500_000.
+      name: "the stricter of the legacy and document caps applies",
+      target: "receivable",
+      amountMinor: 1_500_000,
+      code: "PAYMENT_LINK_EXCEEDS_OUTSTANDING",
+      setup: async (w) => {
+        await w.t.run((ctx) => ctx.db.patch(w.receivableId, { outstandingAmount: 2000 }));
+      },
+    },
+    { name: "a partly allocated document caps at what is still owed", target: "document", amountMinor: 600_001, code: "PAYMENT_LINK_EXCEEDS_OUTSTANDING", setup: partlyAllocate },
+    {
+      name: "a document that is not open for payment is refused (control)",
+      target: "document",
+      amountMinor: 1,
+      code: "PAYMENT_LINK_DEBT_CLOSED",
+      setup: async (w) => {
+        await w.t.run((ctx) => ctx.db.patch(w.receivableDocumentId, { status: "PAID" }));
+      },
+    },
+  ];
+
+  test.each(REFUSED.map((c) => [c.name, c] as const))("%s is refused and writes nothing", async (_name, c) => {
+    const w = await makeWorld();
+    await c.setup?.(w);
+    const before = await counts(w.t);
+    const code = await codeOf(createWith(w, { amountMinor: c.amountMinor, ...(await targetArgs(w, c.target)) }));
+    expect(code).toBe(c.code);
+    expect(await counts(w.t)).toEqual(before);
   });
 
-  test("a document that is not open for payment is refused (control)", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, receivableDocumentId } = await seed(t);
-    await t.run((ctx) => ctx.db.patch(receivableDocumentId, { status: "PAID" }));
-    expect(
-      await codeOf(
-        asFinance.mutation(api.paymentIntents.create, {
-          idempotencyKey: crypto.randomUUID(),
-          orgId,
-          customerId,
-          receivableDocumentId,
-          amountMinor: 1,
-          currency: "JOD",
-          provider: "tap",
-        })
-      )
-    ).toBe("PAYMENT_LINK_DEBT_CLOSED");
+  const ACCEPTED: CapCase[] = [
+    { name: "document target exactly at outstanding", target: "document", amountMinor: 1_000_000 },
+    { name: "sale target at outstanding", target: "sale", amountMinor: 1_000_000 },
+    { name: "a partly allocated document at what is still owed", target: "document", amountMinor: 600_000, setup: partlyAllocate },
+  ];
+
+  test.each(ACCEPTED.map((c) => [c.name, c] as const))("%s is accepted", async (_name, c) => {
+    const w = await makeWorld();
+    await c.setup?.(w);
+    const intentId = await createWith(w, { amountMinor: c.amountMinor, ...(await targetArgs(w, c.target)) });
+    expect(intentId).toBeTruthy();
+    const intent = await w.t.run((ctx) => ctx.db.get(intentId as Id<"paymentIntents">));
+    expect(intent?.amountMinor).toBe(c.amountMinor);
+    if (c.target === "document") expect(intent?.receivableDocumentId).toBe(w.receivableDocumentId);
   });
 });
 
@@ -558,75 +546,6 @@ describe("SCRUM-571 S1 — paymentIntents.expire refusals are coded", () => {
 // Step 5: the Create and Settle dialogs show server refusals through
 // getLocalizedErrorMessage, so every refusal `create` and `markSettled` can
 // raise must be coded, and its English text must equal the common.ts entry.
-type World = Awaited<ReturnType<typeof seed>> & { t: ReturnType<typeof convexTestWithComponents> };
-
-async function makeWorld(): Promise<World> {
-  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-  return { t, ...(await seed(t)) };
-}
-
-const baseCreate = (w: World) => ({
-  idempotencyKey: crypto.randomUUID(),
-  orgId: w.orgId,
-  customerId: w.customerId,
-  receivableDocumentId: w.receivableDocumentId,
-  amountMinor: 100_000,
-  currency: "JOD",
-  provider: "tap",
-});
-
-const createWith = (w: World, over: Record<string, unknown>) =>
-  w.asFinance.mutation(api.paymentIntents.create, { ...baseCreate(w), ...over } as never);
-
-const otherCustomer = (w: World) =>
-  w.t.run((ctx) =>
-    ctx.db.insert("customers", { orgId: w.orgId, firstName: "Omar", lastName: "Other", phone: "+962790000009" })
-  );
-
-const insertDocument = (w: World, customerId: Id<"customers">) =>
-  w.t.run((ctx) =>
-    ctx.db.insert("receivableDocuments", {
-      orgId: w.orgId,
-      documentType: "INVOICE",
-      documentNumber: `DOC-${crypto.randomUUID().slice(0, 8)}`,
-      payerType: "CUSTOMER",
-      customerId,
-      sourceType: "legacy_receivable",
-      sourceId: crypto.randomUUID(),
-      originalAmountMinor: 900_000,
-      currency: "JOD",
-      scale: 3,
-      issueDate: Date.now(),
-      dueDate: DUE(),
-      status: "OPEN",
-      createdAt: Date.now(),
-      createdBy: w.userId,
-    })
-  );
-
-const insertSale = (w: World, over: { customerId?: Id<"customers">; canonicalReceivableDocumentId?: Id<"receivableDocuments"> }) =>
-  w.t.run(async (ctx) => {
-    const vehicleId = await ctx.db.insert("vehicles", {
-      orgId: w.orgId, make: "Kia", model: "Rio", year: 2021, mileage: 30_000,
-      color: "Blue", fuelType: "PETROL", transmission: "AUTOMATIC",
-      sellingPrice: 15_000, status: "AVAILABLE",
-    });
-    return await ctx.db.insert("sales", {
-      orgId: w.orgId, vehicleId, customerId: over.customerId ?? w.customerId, salespersonId: w.userId,
-      salePrice: 15_000, saleDate: Date.now(), status: "PENDING",
-      ...(over.canonicalReceivableDocumentId ? { canonicalReceivableDocumentId: over.canonicalReceivableDocumentId } : {}),
-    });
-  });
-
-async function refusal(promise: Promise<unknown>): Promise<{ code?: string; message?: string }> {
-  try {
-    await promise;
-  } catch (error) {
-    return (error as { data?: { code?: string; message?: string } }).data ?? { code: `plain:${String(error)}` };
-  }
-  return {};
-}
-
 const REFUSAL_CASES: ReadonlyArray<{ code: string; run: (w: World) => Promise<unknown> }> = [
   { code: "PAYMENT_LINK_AMOUNT_NOT_POSITIVE", run: (w) => createWith(w, { amountMinor: 0 }) },
   { code: "PAYMENT_LINK_PROVIDER_REQUIRED", run: (w) => createWith(w, { provider: "   " }) },
@@ -805,20 +724,32 @@ describe("SCRUM-571 S1 — every uncoded throw in create/markSettled is now a co
 });
 
 describe("SCRUM-571 S1 — every new refusal is translated in both locales", () => {
+  // Derived from the server table, so a refusal added there without an en/ar
+  // entry fails here. RECEIPT_MANUAL_REFUSED lives in collections.ts.
   const codes = [
-    "PAYMENT_LINK_TARGET_REQUIRED",
-    "PAYMENT_LINK_EXCEEDS_OUTSTANDING",
+    ...Object.keys(PAYMENT_LINK_REFUSALS),
     "PAYMENT_LINK_RECEIPT_MANUAL_REFUSED",
-    "PAYMENT_LINK_NOT_FOUND",
-    "PAYMENT_LINK_NOT_PENDING",
-    ...REFUSAL_CASES.map((c) => c.code),
   ] as Array<keyof typeof AppErrorCode>;
+
+  test("every case in the refusal table is exercised by a refusal case or an earlier suite", () => {
+    const exercised = new Set([
+      ...REFUSAL_CASES.map((c) => c.code),
+      "PAYMENT_LINK_TARGET_REQUIRED",
+      "PAYMENT_LINK_EXCEEDS_OUTSTANDING",
+      "PAYMENT_LINK_NOT_FOUND",
+      "PAYMENT_LINK_NOT_PENDING",
+    ]);
+    expect(Object.keys(PAYMENT_LINK_REFUSALS).filter((code) => !exercised.has(code))).toEqual([]);
+  });
 
   test.each(codes)("ServerError_%s exists in en and ar", (code) => {
     const en = (commonEn as Record<string, string>)[`ServerError_${code}`];
     const ar = (commonAr as Record<string, string>)[`ServerError_${code}`];
     expect(en).toBeTruthy();
     expect(ar).toBeTruthy();
+    if (code in PAYMENT_LINK_REFUSALS) {
+      expect(en).toBe((PAYMENT_LINK_REFUSALS as Record<string, string>)[code]);
+    }
     expect(ar).toMatch(/[؀-ۿ]/);
     expect(ar).not.toBe(en);
   });

@@ -13,11 +13,10 @@ import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "@/components/ui/sonner";
-import { getLocalizedErrorMessage } from "@/lib/errors";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
-import { scaleForCurrency } from "../AccountingTabShared";
+import { DialogFooterActions, scaleForCurrency, useAccountingSubmit } from "../AccountingTabShared";
 
 type ReceivableRow = Doc<"receivables"> & {
   customerName: string;
@@ -34,10 +33,19 @@ function intentStatusClass(status: PaymentIntentRow["status"]) {
   return "text-amber-700 dark:text-amber-300";
 }
 
+// The org-currency formatter is deliberately kept (not formatMinorAmount): it
+// formats in the org's currency with the org locale, which the list has always
+// shown, while formatMinorAmount would switch to the intent's own currency.
+function useIntentAmount() {
+  const formatCurrency = useCurrencyFormatter();
+  return (intent: PaymentIntentRow) =>
+    formatCurrency(intent.amountMinor / Math.pow(10, scaleForCurrency(intent.currency)));
+}
+
 export function PaymentLinksPanel() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const formatCurrency = useCurrencyFormatter();
+  const intentAmount = useIntentAmount();
   const [createOpen, setCreateOpen] = useState(false);
   const [settleIntent, setSettleIntent] = useState<PaymentIntentRow | null>(null);
   const [expireIntent, setExpireIntent] = useState<PaymentIntentRow | null>(null);
@@ -83,7 +91,7 @@ export function PaymentLinksPanel() {
                   <TableCell className={intentStatusClass(intent.status)}>{intent.status}</TableCell>
                   <TableCell className="text-muted-foreground">{intent.externalId ?? "-"}</TableCell>
                   <TableCell className="text-right font-semibold">
-                    {formatCurrency(intent.amountMinor / Math.pow(10, scaleForCurrency(intent.currency)))}
+                    {intentAmount(intent)}
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
@@ -142,7 +150,7 @@ function CreatePaymentLinkDialog({ open, onOpenChange }: Readonly<{ open: boolea
   const [externalId, setExternalId] = useState("");
   const [checkoutUrl, setCheckoutUrl] = useState("");
   const [providerAccountId, setProviderAccountId] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const { submitting, submitWithFeedback } = useAccountingSubmit();
 
   const { results: receivables } = usePaginatedQuery(
     api.collections.listReceivables,
@@ -176,8 +184,7 @@ function CreatePaymentLinkDialog({ open, onOpenChange }: Readonly<{ open: boolea
       toast.error(t("AmountDue" as any));
       return;
     }
-    setSubmitting(true);
-    try {
+    await submitWithFeedback(async () => {
       idempotencyKeyRef.current ??= `payment-link:${crypto.randomUUID()}`;
       await createPaymentLink({
         orgId: activeOrgId,
@@ -194,11 +201,7 @@ function CreatePaymentLinkDialog({ open, onOpenChange }: Readonly<{ open: boolea
       });
       toast.success(t("PaymentLinkCreated" as any));
       handleOpenChange(false);
-    } catch (error) {
-      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
-    } finally {
-      setSubmitting(false);
-    }
+    });
   }
 
   function handleOpenChange(nextOpen: boolean) {
@@ -232,10 +235,14 @@ function CreatePaymentLinkDialog({ open, onOpenChange }: Readonly<{ open: boolea
           <Input value={providerAccountId} onChange={(event) => setProviderAccountId(event.target.value)} placeholder={t("ProviderAccountIdOptional" as any)} />
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => handleOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button onClick={submit} disabled={submitting || !selectedReceivable || !amount || !provider || (Boolean(checkoutUrl.trim()) && !externalId.trim())}>
-            {submitting ? t("Saving" as any) : t("Create" as any)}
-          </Button>
+          <DialogFooterActions
+            cancelLabel={t("Cancel" as any)}
+            confirmLabel={submitting ? t("Saving" as any) : t("Create" as any)}
+            onCancel={() => handleOpenChange(false)}
+            onConfirm={submit}
+            submitting={submitting}
+            disabled={!selectedReceivable || !amount || !provider || (Boolean(checkoutUrl.trim()) && !externalId.trim())}
+          />
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -248,7 +255,7 @@ function SettlePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
   const settlePaymentLink = useMutation(api.paymentIntents.markSettled);
   const idempotencyKeyRef = useRef<string | null>(null);
   const [externalId, setExternalId] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const { submitting, submitWithFeedback } = useAccountingSubmit();
 
   useEffect(() => {
     setExternalId(intent?.externalId ?? "");
@@ -262,8 +269,7 @@ function SettlePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
 
   async function submit() {
     if (!activeOrgId || !intent) return;
-    setSubmitting(true);
-    try {
+    await submitWithFeedback(async () => {
       idempotencyKeyRef.current ??= `settle-payment-link:${crypto.randomUUID()}`;
       await settlePaymentLink({
         orgId: activeOrgId,
@@ -274,11 +280,7 @@ function SettlePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
       idempotencyKeyRef.current = null;
       toast.success(t("PaymentLinkSettled" as any));
       handleOpenChange(false);
-    } catch (error) {
-      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
-    } finally {
-      setSubmitting(false);
-    }
+    });
   }
 
   return (
@@ -290,8 +292,13 @@ function SettlePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
         </DialogHeader>
         <Input value={externalId} onChange={(event) => setExternalId(event.target.value)} placeholder={t("ExternalSettlementId" as any)} />
         <DialogFooter>
-          <Button variant="outline" onClick={() => handleOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button onClick={submit} disabled={submitting}>{submitting ? t("Saving" as any) : t("MarkSettled" as any)}</Button>
+          <DialogFooterActions
+            cancelLabel={t("Cancel" as any)}
+            confirmLabel={submitting ? t("Saving" as any) : t("MarkSettled" as any)}
+            onCancel={() => handleOpenChange(false)}
+            onConfirm={submit}
+            submitting={submitting}
+          />
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -301,25 +308,20 @@ function SettlePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
 function ExpirePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: PaymentIntentRow | null; onOpenChange: (open: boolean) => void }>) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const formatCurrency = useCurrencyFormatter();
+  const intentAmount = useIntentAmount();
   const expirePaymentLink = useMutation(api.paymentIntents.expire);
-  const [submitting, setSubmitting] = useState(false);
+  const { submitting, submitWithFeedback } = useAccountingSubmit();
 
   async function submit() {
     if (!activeOrgId || !intent) return;
-    setSubmitting(true);
-    try {
+    await submitWithFeedback(async () => {
       await expirePaymentLink({ orgId: activeOrgId, intentId: intent._id });
       toast.success(t("PaymentLinkExpired" as any));
       onOpenChange(false);
-    } catch (error) {
-      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
-    } finally {
-      setSubmitting(false);
-    }
+    });
   }
 
-  const amount = intent ? formatCurrency(intent.amountMinor / Math.pow(10, scaleForCurrency(intent.currency))) : "";
+  const amount = intent ? intentAmount(intent) : "";
 
   return (
     <Dialog open={intent !== null} onOpenChange={onOpenChange}>
@@ -331,8 +333,14 @@ function ExpirePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>{t("Cancel" as any)}</Button>
-          <Button onClick={submit} disabled={submitting}>{t("ExpirePaymentLink" as any)}</Button>
+          <DialogFooterActions
+            cancelLabel={t("Cancel" as any)}
+            confirmLabel={t("ExpirePaymentLink" as any)}
+            onCancel={() => onOpenChange(false)}
+            onConfirm={submit}
+            submitting={submitting}
+            confirmVariant="destructive"
+          />
         </DialogFooter>
       </DialogContent>
     </Dialog>

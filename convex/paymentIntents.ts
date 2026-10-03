@@ -21,14 +21,17 @@ import { allocatePaymentToReceivable, createCanonicalPayment, getReceivableOutst
 import { AppErrorCode, throwAppError } from "./utils/errors";
 import { fromMinorUnits, toMinorUnits, scaleForCurrency, assertValidMinorAmount } from "./utils/money";
 
-// SCRUM-571 S1. English text equals `ServerError_<code>` in lib/i18n/domains/common.ts.
-const PAYMENT_LINK_TARGET_REQUIRED_MESSAGE =
-  "A payment link must be created against a specific receivable, sale or receivable document. Nothing has been changed.";
-const PAYMENT_LINK_EXCEEDS_OUTSTANDING_MESSAGE =
-  "The payment link amount cannot exceed what is still owed on this debt, less payment links already sent and not yet paid. Expiring an unpaid link frees its amount. Nothing has been changed.";
-// Every refusal `create` and `markSettled` can raise is coded so the Create and
-// Settle dialogs render it translated. English text equals `ServerError_<code>`.
-const PAYMENT_LINK_REFUSALS = {
+// SCRUM-571 S1. Every refusal `create`, `markSettled` and `expire` can raise is
+// coded so the dialogs render it translated. English text equals
+// `ServerError_<code>` in lib/i18n/domains/common.ts.
+export const PAYMENT_LINK_REFUSALS = {
+  PAYMENT_LINK_TARGET_REQUIRED:
+    "A payment link must be created against a specific receivable, sale or receivable document. Nothing has been changed.",
+  PAYMENT_LINK_EXCEEDS_OUTSTANDING:
+    "The payment link amount cannot exceed what is still owed on this debt, less payment links already sent and not yet paid. Expiring an unpaid link frees its amount. Nothing has been changed.",
+  PAYMENT_LINK_NOT_FOUND: "This payment link could not be found. Nothing has been changed.",
+  PAYMENT_LINK_NOT_PENDING:
+    "Only a payment link that is still waiting for payment can be expired. Nothing has been changed.",
   PAYMENT_LINK_AMOUNT_NOT_POSITIVE: "The payment link amount must be greater than zero. Nothing has been changed.",
   PAYMENT_LINK_PROVIDER_REQUIRED: "Choose a payment provider for the payment link. Nothing has been changed.",
   PAYMENT_LINK_CURRENCY_REQUIRED: "The payment link needs a currency. Nothing has been changed.",
@@ -67,15 +70,35 @@ const PAYMENT_LINK_REFUSALS = {
     "Only a payment link that is still waiting for payment can be marked settled. Nothing has been changed.",
   PAYMENT_LINK_PROVIDER_ID_MISMATCH:
     "The settlement ID does not match this payment link's provider reference. Check it and try again. Nothing has been changed.",
-} as const;
+} as const satisfies Record<string, string>;
 
 function refusePaymentLink(code: keyof typeof PAYMENT_LINK_REFUSALS): never {
   return throwAppError(AppErrorCode[code], PAYMENT_LINK_REFUSALS[code]);
 }
 
-const PAYMENT_LINK_NOT_FOUND_MESSAGE = "This payment link could not be found. Nothing has been changed.";
-const PAYMENT_LINK_NOT_PENDING_MESSAGE =
-  "Only a payment link that is still waiting for payment can be expired. Nothing has been changed.";
+// Outstanding on the canonical document less the amount reserved by PENDING
+// intents. Links already sent and not yet paid reserve their amount: two links
+// each within outstanding could otherwise settle for more than the debt in
+// total. Every PENDING intent counts regardless of expiresAt (only an explicit
+// expiry frees it); concurrent creates are serialized by OCC on this read set.
+// The caller has proved the document's payer is `customerId`, so every intent
+// for it is under (orgId, customerId).
+async function getDocumentUncommittedMinor(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  customerId: Id<"customers">,
+  receivableDocumentId: Id<"receivableDocuments">
+): Promise<number> {
+  const documentOutstandingMinor = await getReceivableOutstandingMinor(ctx, receivableDocumentId);
+  const customerIntents = await ctx.db
+    .query("paymentIntents")
+    .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customerId))
+    .collect();
+  const reservedMinor = customerIntents
+    .filter((i) => i.status === "PENDING" && i.receivableDocumentId === receivableDocumentId)
+    .reduce((sum, i) => sum + i.amountMinor, 0);
+  return documentOutstandingMinor - reservedMinor;
+}
 
 const statusValidator = v.union(
   v.literal("PENDING"),
@@ -113,11 +136,11 @@ function validateCheckoutUrl(checkoutUrl: string | undefined): string | undefine
   try {
     parsed = new URL(trimmed);
   } catch {
-    return refusePaymentLink("PAYMENT_LINK_CHECKOUT_URL_INVALID");
+    refusePaymentLink("PAYMENT_LINK_CHECKOUT_URL_INVALID");
   }
 
   if (parsed.protocol !== "https:") {
-    return refusePaymentLink("PAYMENT_LINK_CHECKOUT_URL_NOT_HTTPS");
+    refusePaymentLink("PAYMENT_LINK_CHECKOUT_URL_NOT_HTTPS");
   }
   return trimmed;
 }
@@ -364,7 +387,7 @@ export const create = mutation({
     // Creation only: an intent already issued without a target must still
     // settle (the provider may hold the money), so no settle path changes.
     if (!args.receivableId && !args.saleId && !args.receivableDocumentId) {
-      throwAppError(AppErrorCode.PAYMENT_LINK_TARGET_REQUIRED, PAYMENT_LINK_TARGET_REQUIRED_MESSAGE);
+      refusePaymentLink("PAYMENT_LINK_TARGET_REQUIRED");
     }
 
     return await runWithIdempotency(
@@ -506,23 +529,14 @@ export const create = mutation({
         // drift. Settlement clamps the allocation but posts the gross amount,
         // so an over-cap intent would credit AR for money no document absorbs.
         if (receivableDocumentId) {
-          const documentOutstandingMinor = await getReceivableOutstandingMinor(ctx, receivableDocumentId);
-          // Links already sent and not yet paid reserve their amount: two links
-          // each within outstanding could otherwise settle for more than the
-          // debt in total. Every PENDING intent counts regardless of expiresAt
-          // (only an explicit expiry frees it); concurrent creates are
-          // serialized by OCC on this read set. The document's payer was proved
-          // to be args.customerId above, so every intent for it is under
-          // (orgId, customerId).
-          const customerIntents = await ctx.db
-            .query("paymentIntents")
-            .withIndex("by_org_customer", (q) => q.eq("orgId", args.orgId).eq("customerId", args.customerId))
-            .collect();
-          const reservedMinor = customerIntents
-            .filter((i) => i.status === "PENDING" && i.receivableDocumentId === receivableDocumentId)
-            .reduce((sum, i) => sum + i.amountMinor, 0);
-          if (args.amountMinor > documentOutstandingMinor - reservedMinor) {
-            throwAppError(AppErrorCode.PAYMENT_LINK_EXCEEDS_OUTSTANDING, PAYMENT_LINK_EXCEEDS_OUTSTANDING_MESSAGE);
+          const uncommittedMinor = await getDocumentUncommittedMinor(
+            ctx,
+            args.orgId,
+            args.customerId,
+            receivableDocumentId
+          );
+          if (args.amountMinor > uncommittedMinor) {
+            refusePaymentLink("PAYMENT_LINK_EXCEEDS_OUTSTANDING");
           }
         }
 
@@ -586,7 +600,7 @@ export const markSettled = mutation({
       async () => {
         const intent = await ctx.db.get(args.intentId);
         if (!intent || intent.orgId !== args.orgId) {
-          throwAppError(AppErrorCode.PAYMENT_LINK_NOT_FOUND, PAYMENT_LINK_NOT_FOUND_MESSAGE);
+          refusePaymentLink("PAYMENT_LINK_NOT_FOUND");
         }
         if (intent.status === "SETTLED") return; // idempotent
         if (intent.status !== "PENDING") {
@@ -642,10 +656,10 @@ export const expire = mutation({
     // One message for a missing row and another org's row: never disclose that a
     // foreign tenant's payment link exists.
     if (!intent || intent.orgId !== args.orgId) {
-      throwAppError(AppErrorCode.PAYMENT_LINK_NOT_FOUND, PAYMENT_LINK_NOT_FOUND_MESSAGE);
+      refusePaymentLink("PAYMENT_LINK_NOT_FOUND");
     }
     if (intent.status !== "PENDING") {
-      throwAppError(AppErrorCode.PAYMENT_LINK_NOT_PENDING, PAYMENT_LINK_NOT_PENDING_MESSAGE);
+      refusePaymentLink("PAYMENT_LINK_NOT_PENDING");
     }
 
     await ctx.db.patch(args.intentId, {

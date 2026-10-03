@@ -267,9 +267,11 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
 
   it("the SCRUM-571 payment-link refusals resolve to Arabic in ar and the server text in en", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
+    const { PAYMENT_LINK_REFUSALS } = await import("../convex/paymentIntents");
     const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
     const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
-    for (const code of ["PAYMENT_LINK_EXCEEDS_OUTSTANDING", "PAYMENT_LINK_TARGET_REQUIRED", "PAYMENT_LINK_RECEIPT_MANUAL_REFUSED"]) {
+    // Derived from the server table so a new refusal cannot ship untranslated.
+    for (const code of [...Object.keys(PAYMENT_LINK_REFUSALS), "PAYMENT_LINK_RECEIPT_MANUAL_REFUSED"]) {
       const error = new ConvexError({ code, message: "server text" });
       const arText = getLocalizedErrorMessage(error, ar);
       expect(arText).toMatch(/[؀-ۿ]/);
