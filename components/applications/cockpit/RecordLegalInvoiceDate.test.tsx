@@ -21,7 +21,7 @@
  * under a UTC runner the local and UTC days coincide and this could not fail.
  */
 import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 // Identity `t`, as in `SettlementAdviceCorrectionDate.test.tsx` (DialogContent reads the language).
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -198,6 +198,42 @@ describe("the date a legal invoice is recorded under", () => {
     fireEvent.click(submitButton());
     await vi.waitFor(() => expect(captured).toHaveLength(1));
     expect(captured[0]!.legalInvoiceDate).toBe(Date.UTC(2026, 7, 10));
+  });
+
+  test("a dialog left open across the ledger's midnight lets the operator pick the new day", async () => {
+    // 02:59:30 in Amman — opened, filled, then left untouched past 03:00 (Sol 6 on 1f8a5d419).
+    at(new Date("2026-08-09T23:59:30Z"));
+    const captured: RecordLegalInvoiceValues[] = [];
+    renderDialog(captured);
+    fillRequired();
+    expect(dateInput().max).toBe("2026-08-09");
+
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(dateInput().max).toBe("2026-08-10");
+    expect(document.querySelector("#legal-invoice-date-hint")).toBeNull();
+
+    fireEvent.change(dateInput(), { target: { value: "2026-08-10" } });
+    expect(dateInput().validity.rangeOverflow).toBe(false);
+    fireEvent.click(submitButton());
+    await vi.waitFor(() => expect(captured).toHaveLength(1));
+    expect(captured[0]!.legalInvoiceDate).toBe(Date.UTC(2026, 7, 10));
+    expect(captured[0]!.legalInvoiceDate).toBeLessThanOrEqual(Date.now());
+  });
+
+  test("returning to the tab after the ledger's midnight refreshes the cap", () => {
+    // A suspended tab's timer may not fire; focus must still bring the day in.
+    at(new Date("2026-08-09T23:59:30Z"));
+    renderDialog([]);
+    expect(dateInput().max).toBe("2026-08-09");
+
+    vi.useRealTimers();
+    at(new Date("2026-08-10T00:05:00Z"));
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(dateInput().max).toBe("2026-08-10");
   });
 
   test("a backdated day is still sent as that day, not clamped to now", async () => {

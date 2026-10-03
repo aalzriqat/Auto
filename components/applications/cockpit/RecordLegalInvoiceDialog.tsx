@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -122,6 +122,21 @@ export function RecordLegalInvoiceDialog({
   const [localError, setLocalError] = useState<string | null>(null);
 
   const { localDayNotOpen, latestDay, nextLedgerDayAt } = invoiceDayBounds();
+  // The bounds follow the clock, so re-render when the ledger's next day
+  // begins, and on focus for a tab whose timer was suspended. The operator's
+  // pick is state and survives.
+  const [, refreshBounds] = useState(0);
+  useEffect(() => {
+    if (!open) return;
+    const refresh = () => refreshBounds((n) => n + 1);
+    // A second late: a timer that fires early would re-render on the old day.
+    const timer = setTimeout(refresh, Math.max(0, nextLedgerDayAt - Date.now()) + 1000);
+    window.addEventListener("focus", refresh);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [open, nextLedgerDayAt]);
   const amountMinor = parseMajor(amount, scale);
   const isInvalid =
     amountMinor === null ||
