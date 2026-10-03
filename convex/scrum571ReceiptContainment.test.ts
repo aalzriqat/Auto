@@ -197,20 +197,22 @@ describe("SCRUM-571 S1 — paymentIntents.create caps at the document's outstand
     expect(intentId).toBeTruthy();
   });
 
-  test("the legacy receivableId path is still capped, with its original message", async () => {
+  test("the legacy receivableId path is still capped, with its own coded refusal", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, asFinance, receivableId } = await seed(t);
-    await expect(
-      asFinance.mutation(api.paymentIntents.create, {
-        idempotencyKey: crypto.randomUUID(),
-        orgId,
-        customerId,
-        receivableId,
-        amountMinor: 1_000_001,
-        currency: "JOD",
-        provider: "tap",
-      })
-    ).rejects.toThrow("Payment link amount cannot exceed the receivable outstanding amount.");
+    expect(
+      await codeOf(
+        asFinance.mutation(api.paymentIntents.create, {
+          idempotencyKey: crypto.randomUUID(),
+          orgId,
+          customerId,
+          receivableId,
+          amountMinor: 1_000_001,
+          currency: "JOD",
+          provider: "tap",
+        })
+      )
+    ).toBe("PAYMENT_LINK_EXCEEDS_RECEIVABLE");
   });
 
   test("the stricter of the legacy and document caps applies", async () => {
@@ -263,17 +265,19 @@ describe("SCRUM-571 S1 — paymentIntents.create caps at the document's outstand
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, asFinance, receivableDocumentId } = await seed(t);
     await t.run((ctx) => ctx.db.patch(receivableDocumentId, { status: "PAID" }));
-    await expect(
-      asFinance.mutation(api.paymentIntents.create, {
-        idempotencyKey: crypto.randomUUID(),
-        orgId,
-        customerId,
-        receivableDocumentId,
-        amountMinor: 1,
-        currency: "JOD",
-        provider: "tap",
-      })
-    ).rejects.toThrow("This debt can no longer accept payments.");
+    expect(
+      await codeOf(
+        asFinance.mutation(api.paymentIntents.create, {
+          idempotencyKey: crypto.randomUUID(),
+          orgId,
+          customerId,
+          receivableDocumentId,
+          amountMinor: 1,
+          currency: "JOD",
+          provider: "tap",
+        })
+      )
+    ).toBe("PAYMENT_LINK_DEBT_CLOSED");
   });
 });
 
@@ -551,6 +555,255 @@ describe("SCRUM-571 S1 — paymentIntents.expire refusals are coded", () => {
   });
 });
 
+// Step 5: the Create and Settle dialogs show server refusals through
+// getLocalizedErrorMessage, so every refusal `create` and `markSettled` can
+// raise must be coded, and its English text must equal the common.ts entry.
+type World = Awaited<ReturnType<typeof seed>> & { t: ReturnType<typeof convexTestWithComponents> };
+
+async function makeWorld(): Promise<World> {
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+  return { t, ...(await seed(t)) };
+}
+
+const baseCreate = (w: World) => ({
+  idempotencyKey: crypto.randomUUID(),
+  orgId: w.orgId,
+  customerId: w.customerId,
+  receivableDocumentId: w.receivableDocumentId,
+  amountMinor: 100_000,
+  currency: "JOD",
+  provider: "tap",
+});
+
+const createWith = (w: World, over: Record<string, unknown>) =>
+  w.asFinance.mutation(api.paymentIntents.create, { ...baseCreate(w), ...over } as never);
+
+const otherCustomer = (w: World) =>
+  w.t.run((ctx) =>
+    ctx.db.insert("customers", { orgId: w.orgId, firstName: "Omar", lastName: "Other", phone: "+962790000009" })
+  );
+
+const insertDocument = (w: World, customerId: Id<"customers">) =>
+  w.t.run((ctx) =>
+    ctx.db.insert("receivableDocuments", {
+      orgId: w.orgId,
+      documentType: "INVOICE",
+      documentNumber: `DOC-${crypto.randomUUID().slice(0, 8)}`,
+      payerType: "CUSTOMER",
+      customerId,
+      sourceType: "legacy_receivable",
+      sourceId: crypto.randomUUID(),
+      originalAmountMinor: 900_000,
+      currency: "JOD",
+      scale: 3,
+      issueDate: Date.now(),
+      dueDate: DUE(),
+      status: "OPEN",
+      createdAt: Date.now(),
+      createdBy: w.userId,
+    })
+  );
+
+const insertSale = (w: World, over: { customerId?: Id<"customers">; canonicalReceivableDocumentId?: Id<"receivableDocuments"> }) =>
+  w.t.run(async (ctx) => {
+    const vehicleId = await ctx.db.insert("vehicles", {
+      orgId: w.orgId, make: "Kia", model: "Rio", year: 2021, mileage: 30_000,
+      color: "Blue", fuelType: "PETROL", transmission: "AUTOMATIC",
+      sellingPrice: 15_000, status: "AVAILABLE",
+    });
+    return await ctx.db.insert("sales", {
+      orgId: w.orgId, vehicleId, customerId: over.customerId ?? w.customerId, salespersonId: w.userId,
+      salePrice: 15_000, saleDate: Date.now(), status: "PENDING",
+      ...(over.canonicalReceivableDocumentId ? { canonicalReceivableDocumentId: over.canonicalReceivableDocumentId } : {}),
+    });
+  });
+
+async function refusal(promise: Promise<unknown>): Promise<{ code?: string; message?: string }> {
+  try {
+    await promise;
+  } catch (error) {
+    return (error as { data?: { code?: string; message?: string } }).data ?? { code: `plain:${String(error)}` };
+  }
+  return {};
+}
+
+const REFUSAL_CASES: ReadonlyArray<{ code: string; run: (w: World) => Promise<unknown> }> = [
+  { code: "PAYMENT_LINK_AMOUNT_NOT_POSITIVE", run: (w) => createWith(w, { amountMinor: 0 }) },
+  { code: "PAYMENT_LINK_PROVIDER_REQUIRED", run: (w) => createWith(w, { provider: "   " }) },
+  { code: "PAYMENT_LINK_CURRENCY_REQUIRED", run: (w) => createWith(w, { currency: "   " }) },
+  { code: "PAYMENT_LINK_CHECKOUT_URL_INVALID", run: (w) => createWith(w, { checkoutUrl: "not a url", externalId: "ext-1" }) },
+  { code: "PAYMENT_LINK_CHECKOUT_URL_NOT_HTTPS", run: (w) => createWith(w, { checkoutUrl: "http://pay.example.com/x", externalId: "ext-1" }) },
+  { code: "PAYMENT_LINK_EXTERNAL_ID_REQUIRED", run: (w) => createWith(w, { checkoutUrl: "https://pay.example.com/x" }) },
+  {
+    code: "PAYMENT_LINK_CUSTOMER_NOT_FOUND",
+    run: async (w) => {
+      const foreign = await w.t.run(async (ctx) => {
+        const orgId = await ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() });
+        return await ctx.db.insert("customers", { orgId, firstName: "Sam", lastName: "Foreign", phone: "+962790000008" });
+      });
+      return createWith(w, { customerId: foreign });
+    },
+  },
+  {
+    code: "PAYMENT_LINK_CUSTOMER_REMOVED",
+    run: async (w) => {
+      await w.t.run((ctx) => ctx.db.patch(w.customerId, { isDeleted: true }));
+      return createWith(w, {});
+    },
+  },
+  {
+    code: "PAYMENT_LINK_RECEIVABLE_NOT_FOUND",
+    run: async (w) => {
+      await w.t.run((ctx) => ctx.db.delete(w.receivableId));
+      return createWith(w, { receivableDocumentId: undefined, receivableId: w.receivableId });
+    },
+  },
+  {
+    code: "PAYMENT_LINK_RECEIVABLE_CUSTOMER_MISMATCH",
+    run: async (w) => {
+      const other = await otherCustomer(w);
+      return createWith(w, { customerId: other, receivableDocumentId: undefined, receivableId: w.receivableId });
+    },
+  },
+  {
+    code: "PAYMENT_LINK_RECEIVABLE_NO_DOCUMENT",
+    run: async (w) => {
+      await w.t.run((ctx) => ctx.db.patch(w.receivableId, { canonicalReceivableDocumentId: undefined }));
+      return createWith(w, { receivableDocumentId: undefined, receivableId: w.receivableId });
+    },
+  },
+  {
+    code: "PAYMENT_LINK_RECEIVABLE_DOCUMENT_MISMATCH",
+    run: async (w) => {
+      const otherDoc = await insertDocument(w, w.customerId);
+      return createWith(w, { receivableId: w.receivableId, receivableDocumentId: otherDoc });
+    },
+  },
+  {
+    code: "PAYMENT_LINK_SALE_NOT_FOUND",
+    run: async (w) => {
+      const saleId = await insertSale(w, {});
+      await w.t.run((ctx) => ctx.db.delete(saleId));
+      return createWith(w, { receivableDocumentId: undefined, saleId });
+    },
+  },
+  {
+    code: "PAYMENT_LINK_SALE_CUSTOMER_MISMATCH",
+    run: async (w) => {
+      const other = await otherCustomer(w);
+      const saleId = await insertSale(w, { customerId: other });
+      return createWith(w, { receivableDocumentId: undefined, saleId });
+    },
+  },
+  {
+    code: "PAYMENT_LINK_SALE_NO_DOCUMENT",
+    run: async (w) => {
+      const saleId = await insertSale(w, {});
+      return createWith(w, { receivableDocumentId: undefined, saleId });
+    },
+  },
+  {
+    code: "PAYMENT_LINK_SALE_DEBT_MISMATCH",
+    run: async (w) => {
+      const otherDoc = await insertDocument(w, w.customerId);
+      const saleId = await insertSale(w, { canonicalReceivableDocumentId: w.receivableDocumentId });
+      return createWith(w, { receivableDocumentId: otherDoc, saleId });
+    },
+  },
+  {
+    code: "PAYMENT_LINK_DOCUMENT_NOT_FOUND",
+    run: async (w) => {
+      const gone = await insertDocument(w, w.customerId);
+      await w.t.run((ctx) => ctx.db.delete(gone));
+      return createWith(w, { receivableDocumentId: gone });
+    },
+  },
+  {
+    code: "PAYMENT_LINK_DOCUMENT_PAYER_MISMATCH",
+    run: async (w) => {
+      const other = await otherCustomer(w);
+      const doc = await insertDocument(w, other);
+      return createWith(w, { receivableDocumentId: doc });
+    },
+  },
+  { code: "PAYMENT_LINK_DOCUMENT_CURRENCY_MISMATCH", run: (w) => createWith(w, { currency: "USD" }) },
+  {
+    code: "PAYMENT_LINK_DEBT_CLOSED",
+    run: async (w) => {
+      await w.t.run((ctx) => ctx.db.patch(w.receivableDocumentId, { status: "PAID" }));
+      return createWith(w, {});
+    },
+  },
+  {
+    code: "PAYMENT_LINK_EXCEEDS_RECEIVABLE",
+    run: (w) => createWith(w, { receivableDocumentId: undefined, receivableId: w.receivableId, amountMinor: 1_000_001 }),
+  },
+  {
+    code: "PAYMENT_LINK_PROVIDER_ID_IN_USE",
+    run: async (w) => {
+      await createWith(w, { externalId: "ext-dup" });
+      return createWith(w, { externalId: "ext-dup" });
+    },
+  },
+  {
+    code: "PAYMENT_LINK_NOT_SETTLEABLE",
+    run: async (w) => {
+      const intentId = await createWith(w, {});
+      await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId: intentId as Id<"paymentIntents"> });
+      return w.asFinance.mutation(api.paymentIntents.markSettled, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: w.orgId,
+        intentId: intentId as Id<"paymentIntents">,
+      });
+    },
+  },
+  {
+    code: "PAYMENT_LINK_PROVIDER_ID_MISMATCH",
+    run: async (w) => {
+      const intentId = await createWith(w, { externalId: "ext-A" });
+      return w.asFinance.mutation(api.paymentIntents.markSettled, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: w.orgId,
+        intentId: intentId as Id<"paymentIntents">,
+        externalId: "ext-B",
+      });
+    },
+  },
+];
+
+describe("SCRUM-571 S1 — every uncoded throw in create/markSettled is now a coded refusal", () => {
+  test.each(REFUSAL_CASES.map((c) => [c.code, c] as const))("%s", async (_code, c) => {
+    const w = await makeWorld();
+    const before = await counts(w.t);
+    const out = await refusal(c.run(w));
+    expect(out.code).toBe(c.code);
+    // The server's English text equals the dictionary entry the UI translates from.
+    expect(out.message).toBe((commonEn as Record<string, string>)[`ServerError_${c.code}`]);
+    expect(out.message).toMatch(/Nothing has been changed\.$/);
+    // A refusal never mutates payment state beyond what the case itself set up.
+    expect((await counts(w.t)).journalEntries).toBe(before.journalEntries);
+  });
+
+  test("markSettled's not-found for a foreign-org intent is the shared PAYMENT_LINK_NOT_FOUND", async () => {
+    const w = await makeWorld();
+    const foreign = await w.t.run(async (ctx) => {
+      const otherOrg = await ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() });
+      const c = await ctx.db.insert("customers", { orgId: otherOrg, firstName: "Sam", lastName: "Foreign", phone: "+962790000007" });
+      return await ctx.db.insert("paymentIntents", {
+        orgId: otherOrg, customerId: c, amountMinor: 1, currency: "JOD", provider: "tap",
+        status: "PENDING", idempotencyKey: "foreign-settle", createdBy: w.userId,
+        createdAt: Date.now(), updatedAt: Date.now(),
+      });
+    });
+    const out = await refusal(
+      w.asFinance.mutation(api.paymentIntents.markSettled, {
+        idempotencyKey: crypto.randomUUID(), orgId: w.orgId, intentId: foreign,
+      })
+    );
+    expect(out.code).toBe("PAYMENT_LINK_NOT_FOUND");
+  });
+});
+
 describe("SCRUM-571 S1 — every new refusal is translated in both locales", () => {
   const codes = [
     "PAYMENT_LINK_TARGET_REQUIRED",
@@ -558,7 +811,8 @@ describe("SCRUM-571 S1 — every new refusal is translated in both locales", () 
     "PAYMENT_LINK_RECEIPT_MANUAL_REFUSED",
     "PAYMENT_LINK_NOT_FOUND",
     "PAYMENT_LINK_NOT_PENDING",
-  ] as const;
+    ...REFUSAL_CASES.map((c) => c.code),
+  ] as Array<keyof typeof AppErrorCode>;
 
   test.each(codes)("ServerError_%s exists in en and ar", (code) => {
     const en = (commonEn as Record<string, string>)[`ServerError_${code}`];

@@ -677,7 +677,7 @@ describe("SCRUM-121 characterization of current main", () => {
         currency: "JOD",
         provider: "stripe",
       })
-    ).rejects.toThrow(/Receivable document not found/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_DOCUMENT_NOT_FOUND" } });
 
     await t.run(async (ctx) => {
       const intents = await ctx.db
@@ -1643,7 +1643,7 @@ describe("SCRUM-121A — c16581 evidence fixtures", () => {
         currency: "JOD",
         provider: "tap",
       })
-    ).rejects.toThrow(/document belongs to a different payer/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_DOCUMENT_PAYER_MISMATCH" } });
     // The same total-rollback control, now measured on the free side of the
     // boundary: the refusal costs a request instead of a confirmed receipt.
     expect(await snapshotMoneyWorld(t)).toBe(before);
@@ -2296,7 +2296,7 @@ describe("SCRUM-121A-PRE — R3-05, saleId is never correlated", () => {
         orgId, customerId, receivableId: receivableA, receivableDocumentId: docB,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
-    ).rejects.toThrow(/does not match the selected receivable/);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_RECEIVABLE_DOCUMENT_MISMATCH" } });
 
     // INVERTED after the Sonnet MAX seat's Finding 1. This asserted that
     // document B plus a saleId related to nothing was accepted and stored with
@@ -2313,7 +2313,7 @@ describe("SCRUM-121A-PRE — R3-05, saleId is never correlated", () => {
         orgId, customerId, receivableDocumentId: docB, saleId: unrelatedSaleId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
-    ).rejects.toThrow(/sale does not match the selected debt/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_SALE_DEBT_MISMATCH" } });
 
     await t.run(async (ctx) => {
       const intents = await ctx.db
@@ -2786,7 +2786,7 @@ describe("SCRUM-121A-PRE — Codex R5 findings, validated independently", () => 
         currency: "JOD",
         provider: "tap",
       })
-    ).rejects.toThrow(/removed and can no longer be sent a payment request/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_CUSTOMER_REMOVED" } });
 
     await expect(
       asFinance.mutation(api.collections.registerCheque, {
@@ -2877,7 +2877,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         orgId, customerId, receivableId,
         amountMinor: 100_000, currency: "USD", provider: "tap",
       })
-    ).rejects.toThrow(/currency does not match/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_DOCUMENT_CURRENCY_MISMATCH" } });
 
     // SALE-ONLY with no document to collect against — UNPROVEN_TARGET.
     const { saleId } = await seedVehicleAndSale(t, orgId, customerId, userId);
@@ -2886,7 +2886,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         orgId, customerId, saleId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
-    ).rejects.toThrow(/no accounting document to collect against/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_SALE_NO_DOCUMENT" } });
 
     // SALE contradicting a document that WAS proved. The sale names a debt of
     // its own; the two cannot both be the target.
@@ -2905,7 +2905,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         orgId, customerId, receivableId, saleId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
-    ).rejects.toThrow(/sale does not match the selected debt/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_SALE_DEBT_MISMATCH" } });
 
     // TERMINAL canonical status, reached through the document rather than the
     // legacy row — the legacy terminal check cannot see this.
@@ -2915,7 +2915,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         orgId, customerId, receivableId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
-    ).rejects.toThrow(/can no longer accept payments/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_DEBT_CLOSED" } });
 
     // CONTROL — restore the one field each refusal turned on, and the same call
     // succeeds. Without this the four rejections above would also pass against

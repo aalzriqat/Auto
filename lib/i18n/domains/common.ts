@@ -122,6 +122,102 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Only a payment link that is still waiting for payment can be expired. Nothing has been changed.",
     "لا يمكن إنهاء صلاحية إلا رابط دفع ما زال بانتظار السداد. لم يتم تغيير أي شيء.",
   ],
+  ServerError_PAYMENT_LINK_AMOUNT_NOT_POSITIVE: [
+    "The payment link amount must be greater than zero. Nothing has been changed.",
+    "يجب أن يكون مبلغ رابط الدفع أكبر من صفر. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_PROVIDER_REQUIRED: [
+    "Choose a payment provider for the payment link. Nothing has been changed.",
+    "اختر مزوّد الدفع لرابط الدفع. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_CURRENCY_REQUIRED: [
+    "The payment link needs a currency. Nothing has been changed.",
+    "يحتاج رابط الدفع إلى عملة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_CHECKOUT_URL_INVALID: [
+    "The checkout URL is not a valid web address. Check it and try again. Nothing has been changed.",
+    "عنوان صفحة الدفع ليس عنوان ويب صالحاً. تحقق منه وأعد المحاولة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_CHECKOUT_URL_NOT_HTTPS: [
+    "The checkout URL must start with https://. Nothing has been changed.",
+    "يجب أن يبدأ عنوان صفحة الدفع بـ https://. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_EXTERNAL_ID_REQUIRED: [
+    "Enter the provider reference when a checkout URL is supplied. Nothing has been changed.",
+    "أدخل مرجع المزوّد عند إدخال عنوان صفحة الدفع. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_CUSTOMER_NOT_FOUND: [
+    "This customer could not be found. Nothing has been changed.",
+    "تعذّر العثور على هذا العميل. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_CUSTOMER_REMOVED: [
+    "This customer has been removed and can no longer be sent a payment link. Nothing has been changed.",
+    "تمت إزالة هذا العميل ولم يعد بالإمكان إرسال رابط دفع إليه. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_RECEIVABLE_NOT_FOUND: [
+    "This receivable could not be found. Nothing has been changed.",
+    "تعذّر العثور على هذه الذمة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_RECEIVABLE_CUSTOMER_MISMATCH: [
+    "This receivable belongs to a different customer. Nothing has been changed.",
+    "هذه الذمة تخص عميلاً آخر. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_RECEIVABLE_NO_DOCUMENT: [
+    "This receivable has no accounting document to collect against, so a payment link cannot be created for it. Nothing has been changed.",
+    "ليس لهذه الذمة مستند محاسبي يمكن التحصيل مقابله، لذا لا يمكن إنشاء رابط دفع لها. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_RECEIVABLE_DOCUMENT_MISMATCH: [
+    "The selected receivable document does not belong to the selected receivable. Nothing has been changed.",
+    "مستند الذمة المحدد لا يخص الذمة المحددة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_SALE_NOT_FOUND: [
+    "This sale could not be found. Nothing has been changed.",
+    "تعذّر العثور على عملية البيع هذه. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_SALE_CUSTOMER_MISMATCH: [
+    "This sale belongs to a different customer. Nothing has been changed.",
+    "عملية البيع هذه تخص عميلاً آخر. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_SALE_NO_DOCUMENT: [
+    "This sale has no accounting document to collect against yet. Nothing has been changed.",
+    "ليس لعملية البيع هذه مستند محاسبي يمكن التحصيل مقابله بعد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_SALE_DEBT_MISMATCH: [
+    "The selected sale does not match the selected debt. Choose a matching sale and debt. Nothing has been changed.",
+    "عملية البيع المحددة لا تطابق الذمة المحددة. اختر عملية بيع وذمة متطابقتين. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_DOCUMENT_NOT_FOUND: [
+    "This receivable document could not be found. Nothing has been changed.",
+    "تعذّر العثور على مستند الذمة هذا. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_DOCUMENT_PAYER_MISMATCH: [
+    "This receivable document belongs to a different payer than the selected customer. Nothing has been changed.",
+    "مستند الذمة هذا يخص جهة دافعة غير العميل المحدد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_DOCUMENT_CURRENCY_MISMATCH: [
+    "The payment link currency must match the currency of the debt. Nothing has been changed.",
+    "يجب أن تطابق عملة رابط الدفع عملة الذمة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_DEBT_CLOSED: [
+    "This debt can no longer accept payments. Nothing has been changed.",
+    "لم تعد هذه الذمة تقبل دفعات. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_EXCEEDS_RECEIVABLE: [
+    "The payment link amount cannot exceed what is still owed on this receivable. Nothing has been changed.",
+    "لا يمكن أن يتجاوز مبلغ رابط الدفع ما تبقى مستحقاً على هذه الذمة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_PROVIDER_ID_IN_USE: [
+    "A payment link with this provider reference already exists. Use a different reference. Nothing has been changed.",
+    "يوجد رابط دفع بهذا المرجع لدى المزوّد بالفعل. استخدم مرجعاً مختلفاً. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_NOT_SETTLEABLE: [
+    "Only a payment link that is still waiting for payment can be marked settled. Nothing has been changed.",
+    "لا يمكن تحديد رابط الدفع كمُسوّى إلا إذا كان ما زال بانتظار السداد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_PROVIDER_ID_MISMATCH: [
+    "The settlement ID does not match this payment link's provider reference. Check it and try again. Nothing has been changed.",
+    "معرّف التسوية لا يطابق مرجع المزوّد لرابط الدفع هذا. تحقق منه وأعد المحاولة. لم يتم تغيير أي شيء.",
+  ],
   ServerError_PAYMENT_LINK_RECEIPT_MANUAL_REFUSED: [
     "A payment-link receipt cannot be recorded manually. It is recorded automatically when the payment link is settled. Nothing has been changed.",
     "لا يمكن تسجيل قبض رابط الدفع يدويًا، إذ يُسجَّل تلقائيًا عند تسوية رابط الدفع. لم يتم تغيير أي شيء.",

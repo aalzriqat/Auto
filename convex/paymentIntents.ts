@@ -8,7 +8,7 @@
 // a cycle, so it goes above every local import.
 import { orgEconomicLifecycleBlock } from "./utils/orgLifecycle";
 import { recordWebhookLog } from "./utils/webhookLog";
-import { v, ConvexError } from "convex/values";
+import { v } from "convex/values";
 import { query, internalQuery, MutationCtx } from "./_generated/server";
 import { mutation, internalMutation } from "./functions";
 import { paginationOptsValidator } from "convex/server";
@@ -26,6 +26,53 @@ const PAYMENT_LINK_TARGET_REQUIRED_MESSAGE =
   "A payment link must be created against a specific receivable, sale or receivable document. Nothing has been changed.";
 const PAYMENT_LINK_EXCEEDS_OUTSTANDING_MESSAGE =
   "The payment link amount cannot exceed what is still owed on this debt, less payment links already sent and not yet paid. Expiring an unpaid link frees its amount. Nothing has been changed.";
+// Every refusal `create` and `markSettled` can raise is coded so the Create and
+// Settle dialogs render it translated. English text equals `ServerError_<code>`.
+const PAYMENT_LINK_REFUSALS = {
+  PAYMENT_LINK_AMOUNT_NOT_POSITIVE: "The payment link amount must be greater than zero. Nothing has been changed.",
+  PAYMENT_LINK_PROVIDER_REQUIRED: "Choose a payment provider for the payment link. Nothing has been changed.",
+  PAYMENT_LINK_CURRENCY_REQUIRED: "The payment link needs a currency. Nothing has been changed.",
+  PAYMENT_LINK_CHECKOUT_URL_INVALID:
+    "The checkout URL is not a valid web address. Check it and try again. Nothing has been changed.",
+  PAYMENT_LINK_CHECKOUT_URL_NOT_HTTPS: "The checkout URL must start with https://. Nothing has been changed.",
+  PAYMENT_LINK_EXTERNAL_ID_REQUIRED:
+    "Enter the provider reference when a checkout URL is supplied. Nothing has been changed.",
+  PAYMENT_LINK_CUSTOMER_NOT_FOUND: "This customer could not be found. Nothing has been changed.",
+  PAYMENT_LINK_CUSTOMER_REMOVED:
+    "This customer has been removed and can no longer be sent a payment link. Nothing has been changed.",
+  PAYMENT_LINK_RECEIVABLE_NOT_FOUND: "This receivable could not be found. Nothing has been changed.",
+  PAYMENT_LINK_RECEIVABLE_CUSTOMER_MISMATCH:
+    "This receivable belongs to a different customer. Nothing has been changed.",
+  PAYMENT_LINK_RECEIVABLE_NO_DOCUMENT:
+    "This receivable has no accounting document to collect against, so a payment link cannot be created for it. Nothing has been changed.",
+  PAYMENT_LINK_RECEIVABLE_DOCUMENT_MISMATCH:
+    "The selected receivable document does not belong to the selected receivable. Nothing has been changed.",
+  PAYMENT_LINK_SALE_NOT_FOUND: "This sale could not be found. Nothing has been changed.",
+  PAYMENT_LINK_SALE_CUSTOMER_MISMATCH: "This sale belongs to a different customer. Nothing has been changed.",
+  PAYMENT_LINK_SALE_NO_DOCUMENT:
+    "This sale has no accounting document to collect against yet. Nothing has been changed.",
+  PAYMENT_LINK_SALE_DEBT_MISMATCH:
+    "The selected sale does not match the selected debt. Choose a matching sale and debt. Nothing has been changed.",
+  PAYMENT_LINK_DOCUMENT_NOT_FOUND: "This receivable document could not be found. Nothing has been changed.",
+  PAYMENT_LINK_DOCUMENT_PAYER_MISMATCH:
+    "This receivable document belongs to a different payer than the selected customer. Nothing has been changed.",
+  PAYMENT_LINK_DOCUMENT_CURRENCY_MISMATCH:
+    "The payment link currency must match the currency of the debt. Nothing has been changed.",
+  PAYMENT_LINK_DEBT_CLOSED: "This debt can no longer accept payments. Nothing has been changed.",
+  PAYMENT_LINK_EXCEEDS_RECEIVABLE:
+    "The payment link amount cannot exceed what is still owed on this receivable. Nothing has been changed.",
+  PAYMENT_LINK_PROVIDER_ID_IN_USE:
+    "A payment link with this provider reference already exists. Use a different reference. Nothing has been changed.",
+  PAYMENT_LINK_NOT_SETTLEABLE:
+    "Only a payment link that is still waiting for payment can be marked settled. Nothing has been changed.",
+  PAYMENT_LINK_PROVIDER_ID_MISMATCH:
+    "The settlement ID does not match this payment link's provider reference. Check it and try again. Nothing has been changed.",
+} as const;
+
+function refusePaymentLink(code: keyof typeof PAYMENT_LINK_REFUSALS): never {
+  return throwAppError(AppErrorCode[code], PAYMENT_LINK_REFUSALS[code]);
+}
+
 const PAYMENT_LINK_NOT_FOUND_MESSAGE = "This payment link could not be found. Nothing has been changed.";
 const PAYMENT_LINK_NOT_PENDING_MESSAGE =
   "Only a payment link that is still waiting for payment can be expired. Nothing has been changed.";
@@ -66,11 +113,11 @@ function validateCheckoutUrl(checkoutUrl: string | undefined): string | undefine
   try {
     parsed = new URL(trimmed);
   } catch {
-    throw new ConvexError("Checkout URL must be a valid URL.");
+    return refusePaymentLink("PAYMENT_LINK_CHECKOUT_URL_INVALID");
   }
 
   if (parsed.protocol !== "https:") {
-    throw new ConvexError("Checkout URL must use HTTPS.");
+    return refusePaymentLink("PAYMENT_LINK_CHECKOUT_URL_NOT_HTTPS");
   }
   return trimmed;
 }
@@ -297,16 +344,16 @@ export const create = mutation({
     // Before the range check, not after: NaN fails `<= 0` and would otherwise
     // be stored as the intent's amount and stranded there.
     assertValidMinorAmount(args.amountMinor, "payment amount");
-    if (args.amountMinor <= 0) throw new ConvexError("Amount must be positive.");
+    if (args.amountMinor <= 0) refusePaymentLink("PAYMENT_LINK_AMOUNT_NOT_POSITIVE");
     const provider = args.provider.trim().toLowerCase();
-    if (!provider) throw new ConvexError("Provider is required.");
+    if (!provider) refusePaymentLink("PAYMENT_LINK_PROVIDER_REQUIRED");
     const currency = normalizeCurrency(args.currency);
-    if (!currency) throw new ConvexError("Currency is required.");
+    if (!currency) refusePaymentLink("PAYMENT_LINK_CURRENCY_REQUIRED");
     const externalId = optionalTrimmed(args.externalId);
     const checkoutUrl = validateCheckoutUrl(args.checkoutUrl);
     const providerAccountId = optionalTrimmed(args.providerAccountId);
     if (checkoutUrl && !externalId) {
-      throw new ConvexError("Provider external ID is required when a checkout URL is stored.");
+      refusePaymentLink("PAYMENT_LINK_EXTERNAL_ID_REQUIRED");
     }
 
     // SCRUM-571 S1 (c21732) — an intent with no target has no document to
@@ -343,7 +390,7 @@ export const create = mutation({
       },
       async () => {
         const customer = await ctx.db.get(args.customerId);
-        if (!customer || customer.orgId !== args.orgId) throw new ConvexError("Customer not found.");
+        if (!customer || customer.orgId !== args.orgId) refusePaymentLink("PAYMENT_LINK_CUSTOMER_NOT_FOUND");
         // SCRUM-121A-PRE §3.3 — a withdrawn payer cannot be sent a NEW request
         // to pay. `customers.softDelete` refuses a customer who has leads or
         // sales and says nothing about money owed, so a payer carrying an open
@@ -356,7 +403,7 @@ export const create = mutation({
         // one. That is the funds boundary, and it is why this check lives here
         // and not in the settlement helper.
         if (customer.isDeleted) {
-          throw new ConvexError("This customer has been removed and can no longer be sent a payment request.");
+          refusePaymentLink("PAYMENT_LINK_CUSTOMER_REMOVED");
         }
 
         // SCRUM-121A-PRE §3.2 — resolve ONE authoritative canonical document
@@ -373,13 +420,13 @@ export const create = mutation({
         let legacyReceivableSaleId: Id<"sales"> | undefined;
         if (args.receivableId) {
           const receivable = await ctx.db.get(args.receivableId);
-          if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
-          if (receivable.customerId !== args.customerId) throw new ConvexError("Receivable customer does not match.");
+          if (!receivable || receivable.orgId !== args.orgId) refusePaymentLink("PAYMENT_LINK_RECEIVABLE_NOT_FOUND");
+          if (receivable.customerId !== args.customerId) refusePaymentLink("PAYMENT_LINK_RECEIVABLE_CUSTOMER_MISMATCH");
           if (!receivable.canonicalReceivableDocumentId) {
-            throw new ConvexError("Receivable is missing its canonical accounting document.");
+            refusePaymentLink("PAYMENT_LINK_RECEIVABLE_NO_DOCUMENT");
           }
           if (receivableDocumentId && receivableDocumentId !== receivable.canonicalReceivableDocumentId) {
-            throw new ConvexError("Payment intent receivable document does not match the selected receivable.");
+            refusePaymentLink("PAYMENT_LINK_RECEIVABLE_DOCUMENT_MISMATCH");
           }
           receivableDocumentId = receivable.canonicalReceivableDocumentId;
           legacyOutstandingMinor = toMinorUnits(receivable.outstandingAmount, currency);
@@ -388,18 +435,18 @@ export const create = mutation({
 
         if (args.saleId) {
           const sale = await ctx.db.get(args.saleId);
-          if (!sale || sale.orgId !== args.orgId) throw new ConvexError("Sale not found.");
-          if (sale.customerId !== args.customerId) throw new ConvexError("Sale customer does not match.");
+          if (!sale || sale.orgId !== args.orgId) refusePaymentLink("PAYMENT_LINK_SALE_NOT_FOUND");
+          if (sale.customerId !== args.customerId) refusePaymentLink("PAYMENT_LINK_SALE_CUSTOMER_MISMATCH");
           if (sale.canonicalReceivableDocumentId) {
             if (receivableDocumentId && receivableDocumentId !== sale.canonicalReceivableDocumentId) {
-              throw new ConvexError("Payment intent sale does not match the selected debt.");
+              refusePaymentLink("PAYMENT_LINK_SALE_DEBT_MISMATCH");
             }
             receivableDocumentId = sale.canonicalReceivableDocumentId;
           } else if (!receivableDocumentId) {
             // A supplied sale is a target, never decorative metadata. If it
             // names no document and nothing else does either, the intent has
             // nowhere to allocate and would settle into an unattributed receipt.
-            throw new ConvexError("This sale has no accounting document to collect against.");
+            refusePaymentLink("PAYMENT_LINK_SALE_NO_DOCUMENT");
           } else if (!legacyReceivableSaleId || legacyReceivableSaleId !== args.saleId) {
             // The sale carries no document of its own — `canonicalReceivableDocumentId`
             // is written only at completion — while a document was resolved from
@@ -416,7 +463,7 @@ export const create = mutation({
             // wrong: `createReceivable` accepts a `saleId` with no completion
             // requirement, so a receivable legitimately naming a PENDING sale is
             // an ordinary state, and that call must keep working.
-            throw new ConvexError("Payment intent sale does not match the selected debt.");
+            refusePaymentLink("PAYMENT_LINK_SALE_DEBT_MISMATCH");
           }
         }
 
@@ -433,21 +480,21 @@ export const create = mutation({
         if (receivableDocumentId) {
           const document = await ctx.db.get(receivableDocumentId);
           if (!document || document.orgId !== args.orgId) {
-            throw new ConvexError("Receivable document not found.");
+            refusePaymentLink("PAYMENT_LINK_DOCUMENT_NOT_FOUND");
           }
           if (document.payerType !== "CUSTOMER" || document.customerId !== args.customerId) {
-            throw new ConvexError("Receivable document belongs to a different payer.");
+            refusePaymentLink("PAYMENT_LINK_DOCUMENT_PAYER_MISMATCH");
           }
           if (document.currency !== currency) {
-            throw new ConvexError("Receivable document currency does not match the payment currency.");
+            refusePaymentLink("PAYMENT_LINK_DOCUMENT_CURRENCY_MISMATCH");
           }
           if (document.status !== "OPEN" && document.status !== "PARTIALLY_PAID") {
-            throw new ConvexError("This debt can no longer accept payments.");
+            refusePaymentLink("PAYMENT_LINK_DEBT_CLOSED");
           }
         }
 
         if (legacyOutstandingMinor !== null && args.amountMinor > legacyOutstandingMinor) {
-          throw new ConvexError("Payment link amount cannot exceed the receivable outstanding amount.");
+          refusePaymentLink("PAYMENT_LINK_EXCEEDS_RECEIVABLE");
         }
 
         // SCRUM-571 S1 (c21732) — cap at the CANONICAL document's outstanding
@@ -486,7 +533,7 @@ export const create = mutation({
               q.eq("provider", provider).eq("externalId", externalId)
             )
             .unique();
-          if (existing) throw new ConvexError("Provider payment intent already exists.");
+          if (existing) refusePaymentLink("PAYMENT_LINK_PROVIDER_ID_IN_USE");
         }
 
         const now = Date.now();
@@ -538,14 +585,16 @@ export const markSettled = mutation({
       },
       async () => {
         const intent = await ctx.db.get(args.intentId);
-        if (!intent || intent.orgId !== args.orgId) throw new ConvexError("Payment intent not found.");
+        if (!intent || intent.orgId !== args.orgId) {
+          throwAppError(AppErrorCode.PAYMENT_LINK_NOT_FOUND, PAYMENT_LINK_NOT_FOUND_MESSAGE);
+        }
         if (intent.status === "SETTLED") return; // idempotent
         if (intent.status !== "PENDING") {
-          throw new ConvexError(`Cannot settle a ${intent.status} payment intent.`);
+          refusePaymentLink("PAYMENT_LINK_NOT_SETTLEABLE");
         }
         const externalId = optionalTrimmed(args.externalId);
         if (externalId && intent.externalId && externalId !== intent.externalId) {
-          throw new ConvexError("External provider ID does not match this payment intent.");
+          refusePaymentLink("PAYMENT_LINK_PROVIDER_ID_MISMATCH");
         }
 
         const now = Date.now();
