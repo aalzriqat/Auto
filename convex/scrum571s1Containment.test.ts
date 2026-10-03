@@ -790,4 +790,79 @@ describe("T1/T2 — a sale with ANY legacy receivable cannot complete or cancel"
   });
 });
 
+describe("R5 — a refund that would re-allocate a remainder to a sale-linked legacy doc is refused up front", () => {
+  async function paidReceivable(w: World, saleLinked: boolean) {
+    const receivableId = await w.asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId: w.orgId,
+      customerId: w.customerId,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "R5 debt",
+      amount: 500,
+      dueDate: DUE(),
+      creditSystemKey: "MISCELLANEOUS_INCOME",
+    });
+    await w.asFinance.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId: w.orgId,
+      receivableId,
+      amount: 500,
+      method: "CASH",
+      paymentDate: Date.now(),
+    });
+    if (saleLinked) {
+      // A pre-release row: the writer is closed, so link it directly.
+      const { saleId } = await insertSale(w, "PENDING");
+      await w.t.run((ctx) => ctx.db.patch(receivableId, { saleId }));
+    }
+    return receivableId;
+  }
+
+  async function request(w: World, receivableId: Id<"receivables">, amount: number) {
+    return await w.asFinance.mutation(api.collections.requestApproval, {
+      orgId: w.orgId,
+      receivableId,
+      requestType: "REFUND",
+      requestedAmount: amount,
+      disbursementMethod: "CASH",
+      reason: "R5 refund",
+    });
+  }
+
+  test("partial refund on a sale-linked legacy doc is refused before any write", async () => {
+    const w = await seedWorld();
+    const receivableId = await paidReceivable(w, true);
+    const requestId = await request(w, receivableId, 200);
+    const before = await counts(w.t);
+    const allocationsBefore = await w.t.run((ctx) => ctx.db.query("paymentAllocations").take(1000));
+
+    const code = await codeOf(
+      w.asApprover.mutation(api.collections.respondToApproval, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: w.orgId,
+        requestId,
+        status: "APPROVED",
+      })
+    );
+
+    expect(code).toBe("SALE_DEBT_RECEIPT_REFUSED");
+    expect(await counts(w.t)).toEqual(before);
+    expect(await w.t.run((ctx) => ctx.db.query("paymentAllocations").take(1000))).toEqual(allocationsBefore);
+    expect((await w.t.run((ctx) => ctx.db.get(receivableId)))?.outstandingAmount).toBe(0);
+  });
+
+  test("control: the same partial refund on a NON-sale legacy doc still works", async () => {
+    const w = await seedWorld();
+    const receivableId = await paidReceivable(w, false);
+    const requestId = await request(w, receivableId, 200);
+    await w.asApprover.mutation(api.collections.respondToApproval, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId: w.orgId,
+      requestId,
+      status: "APPROVED",
+    });
+    expect((await w.t.run((ctx) => ctx.db.get(receivableId)))?.outstandingAmount).toBe(200);
+  });
+});
+
 // ── END ──

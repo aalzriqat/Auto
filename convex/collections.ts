@@ -556,6 +556,38 @@ async function mirrorCollectionPaymentToCanonical(
  * refund exactly. This is what reopens the canonical receivable's outstanding
  * balance to match the legacy receivable after a refund.
  */
+/**
+ * SCRUM-571 S1 (D-20) R5: read-only pre-check for the refund approval. When the
+ * refund would split an allocation, `reverseAllocationsForRefund` re-allocates
+ * the un-refunded remainder to the document - for a sale-linked legacy
+ * receivable that is a fresh allocation against a competing debt. Refuse BEFORE
+ * the refund payment row, the mirror or any reversal is written. It mirrors the
+ * walk below exactly (newest first, break once covered) and writes nothing.
+ */
+async function assertRefundDoesNotReallocateToSaleLinkedDoc(
+  ctx: MutationCtx,
+  receivable: Doc<"receivables">,
+  amountMinor: number
+) {
+  if (!receivable.saleId) return;
+  const canonical = await findCanonicalReceivableForLegacy(ctx, receivable);
+  if (!canonical) return;
+  const active = (
+    await ctx.db
+      .query("paymentAllocations")
+      .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", canonical._id))
+      .collect()
+  )
+    .filter((allocation) => allocation.status === "ACTIVE")
+    .sort((a, b) => b.createdAt - a.createdAt);
+  let remainingMinor = amountMinor;
+  for (const allocation of active) {
+    if (remainingMinor <= 0) break;
+    if (allocation.amountMinor > remainingMinor) assertReceivableNotSaleLinked(receivable);
+    remainingMinor -= allocation.amountMinor;
+  }
+}
+
 async function reverseAllocationsForRefund(
   ctx: MutationCtx,
   args: {
@@ -2855,6 +2887,12 @@ export const respondToApproval = mutation({
             assertRefundableReceivableStatus(receivable.status);
             const paidAmount = roundMoney(receivable.originalAmount - receivable.outstandingAmount, currency);
             if (refundAmount > paidAmount) throw new ConvexError("Refund amount cannot exceed collected amount.");
+            // SCRUM-571 S1 (D-20) R5: before the first write of this branch.
+            await assertRefundDoesNotReallocateToSaleLinkedDoc(
+              ctx,
+              receivable,
+              toMinorUnits(refundAmount, currency)
+            );
 
             // Use the method captured at request time so the GL entry posts to
             // the correct cash account (bank vs. cash on hand vs. cheque).
