@@ -5,7 +5,14 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { RESET_TABLES_FOR_TEST } from "./orgFinancialReset";
-import { rowsOf, seedBase as seedBaseFor, type Base, type LooseDb } from "../test-utils/orgResetFixtures";
+import {
+  beginInProgressReset,
+  rowsOf,
+  runContinuationBatch,
+  seedBase as seedBaseFor,
+  type Base,
+  type LooseDb,
+} from "../test-utils/orgResetFixtures";
 
 /**
  * SCRUM-559 — the organization financial reset.
@@ -105,8 +112,9 @@ async function totalRows(t: T, orgId: Id<"organizations">): Promise<Record<strin
 
 const sum = (counts: Record<string, number>) => Object.values(counts).reduce((a, b) => a + b, 0);
 
+// D-19: fresh starts are refused; exercised as a continuation.
 function onePass(t: T, orgId: Id<"organizations">) {
-  return t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId, dryRun: false, batchSize: 1 });
+  return runContinuationBatch(t, orgId, 1);
 }
 
 // ── Seed helpers ────────────────────────────────────────────────────────────
@@ -335,6 +343,8 @@ describe("resetOrgFinancialData preflight (SCRUM-559 I1)", () => {
     const before = await totalRows(t, orgId);
     expect(sum(before)).toBeGreaterThan(0);
 
+    // D-19: fresh starts are refused; exercised as a continuation.
+    await beginInProgressReset(t, orgId);
     await expect(
       t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId, dryRun: false })
     ).rejects.toThrow(refusal);

@@ -114,6 +114,7 @@ import type * as orgCustomerStatuses from "../orgCustomerStatuses.js";
 import type * as orgFinancialReset from "../orgFinancialReset.js";
 import type * as orgLeadSources from "../orgLeadSources.js";
 import type * as orgPipelineStages from "../orgPipelineStages.js";
+import type * as orgResetPreflight from "../orgResetPreflight.js";
 import type * as orgSettings from "../orgSettings.js";
 import type * as orgValuationCompanies from "../orgValuationCompanies.js";
 import type * as organizations from "../organizations.js";
@@ -372,6 +373,7 @@ declare const fullApi: ApiFromModules<{
   orgFinancialReset: typeof orgFinancialReset;
   orgLeadSources: typeof orgLeadSources;
   orgPipelineStages: typeof orgPipelineStages;
+  orgResetPreflight: typeof orgResetPreflight;
   orgSettings: typeof orgSettings;
   orgValuationCompanies: typeof orgValuationCompanies;
   organizations: typeof organizations;

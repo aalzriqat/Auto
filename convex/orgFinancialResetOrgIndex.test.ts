@@ -4,6 +4,7 @@ import schema from "./schema";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { seedAuthorityEvent, seedAuthorityWork } from "../test-utils/authorityWork";
+import { runContinuationBatch } from "../test-utils/orgResetFixtures";
 import { RESET_ORG_INDEX_FOR_TEST, RESET_TABLES_FOR_TEST } from "./orgFinancialReset";
 
 /**
@@ -105,10 +106,8 @@ describe("resetOrgFinancialData tenant scoping through the org indexes", () => {
     await seedAuthorityEvent(t, a, userA, "idx_a_pending");
     const bRows = await seedAuthority(t, b, "b");
 
-    const result = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-      orgId: a,
-      dryRun: false,
-    });
+    // D-19: fresh starts are refused; exercised as a continuation.
+    const result = await runContinuationBatch(t, a);
 
     // The preflight is scoped: B's work/attempt must not make A refuse.
     expect(result.authorityLifecyclePresent).toBe(false);
@@ -141,9 +140,8 @@ describe("resetOrgFinancialData tenant scoping through the org indexes", () => {
 
     const dryA = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId: a });
     expect(dryA.authorityLifecyclePresent).toBe(true);
-    await expect(
-      t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId: a, dryRun: false })
-    ).rejects.toThrow(/commitment-authority/i);
+    // D-19: fresh starts are refused; exercised as a continuation.
+    await expect(runContinuationBatch(t, a)).rejects.toThrow(/commitment-authority/i);
 
     // CONTROL: an org with no authority rows is not refused just because other
     // orgs hold them.
