@@ -107,8 +107,11 @@ export function RecordLegalInvoiceDialog({
     existing?.amountMinor !== undefined ? String(existing.amountMinor / Math.pow(10, scale)) : ""
   );
   const [number, setNumber] = useState(() => existing?.number ?? "");
+  // A stored date was accepted by the server, so it stays saveable even
+  // where it is past this operator's local day (an editor behind UTC).
+  const storedDay = existing?.date ? msToDateInput(existing.date) : null;
   const [date, setDate] = useState(() =>
-    existing?.date ? msToDateInput(existing.date) : defaultInvoiceDay()
+    storedDay ?? defaultInvoiceDay()
   );
   const [issuedTo, setIssuedTo] = useState<IssuedTo>(() =>
     existing?.issuedTo === "CUSTOMER" || existing?.issuedTo === "OTHER"
@@ -188,7 +191,7 @@ export function RecordLegalInvoiceDialog({
             <Input
               id="legal-invoice-date"
               type="date"
-              max={latestDay}
+              max={storedDay && storedDay > latestDay ? storedDay : latestDay}
               value={date}
               onChange={(e) => setDate(e.target.value)}
               aria-describedby={localDayNotOpen ? "legal-invoice-date-hint" : undefined}
@@ -196,10 +199,22 @@ export function RecordLegalInvoiceDialog({
             />
             {localDayNotOpen && (
               <p id="legal-invoice-date-hint" className="text-xs text-muted-foreground">
-                {t("LegalInvoiceDateNotOpenYet").replace(
-                  "{time}",
-                  new Date(nextLedgerDayAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                )}
+                {/* The time is isolated so Arabic text cannot reorder "03:00 AM". */}
+                {t("LegalInvoiceDateNotOpenYet")
+                  .split("{time}")
+                  .flatMap((part, index) =>
+                    index === 0
+                      ? [part]
+                      : [
+                          <bdi key={index} dir="ltr">
+                            {new Date(nextLedgerDayAt).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </bdi>,
+                          part,
+                        ]
+                  )}
               </p>
             )}
           </div>

@@ -123,7 +123,12 @@ describe("the date a legal invoice is recorded under", () => {
         onSubmit={async () => {}}
       />
     );
-    expect(screen.getByText(/^opens at /).textContent).toContain(expected);
+    const hint = document.querySelector("#legal-invoice-date-hint");
+    expect(hint?.textContent).toMatch(/^opens at /);
+    expect(hint?.textContent).toContain(expected);
+    // Isolated left-to-right, or Arabic text reorders it to "AM 03:00".
+    const time = document.querySelector('#legal-invoice-date-hint bdi[dir="ltr"]');
+    expect(time?.textContent).toContain(expected);
   });
 
   test("on the 1st of a month before 03:00 the previous month is never pre-filled", () => {
@@ -166,6 +171,33 @@ describe("the date a legal invoice is recorded under", () => {
 
     const sent = await submitWith(null);
     expect(sent.legalInvoiceDate).toBe(Date.UTC(2026, 7, 9));
+  });
+
+  test("an editor behind UTC can re-save a stored date past their local day unchanged", async () => {
+    // Recorded in Amman as 10 August; edited in New York at 22:00 on 9 August.
+    at(EVENING_IN_NEW_YORK, "America/New_York");
+    const captured: RecordLegalInvoiceValues[] = [];
+    render(
+      <RecordLegalInvoiceDialog
+        open
+        submitting={false}
+        error={null}
+        scale={3}
+        currency="JOD"
+        existing={{ amountMinor: 12_500_000, number: "INV-0596", date: Date.UTC(2026, 7, 10) }}
+        t={(key: string) => key}
+        onOpenChange={() => {}}
+        onSubmit={async (values) => {
+          captured.push(values);
+        }}
+      />
+    );
+    expect(dateInput().value).toBe("2026-08-10");
+    expect(dateInput().validity.rangeOverflow).toBe(false);
+    fireEvent.change(screen.getByLabelText("LegalInvoiceNumber"), { target: { value: "INV-0596-A" } });
+    fireEvent.click(submitButton());
+    await vi.waitFor(() => expect(captured).toHaveLength(1));
+    expect(captured[0]!.legalInvoiceDate).toBe(Date.UTC(2026, 7, 10));
   });
 
   test("a backdated day is still sent as that day, not clamped to now", async () => {
