@@ -83,6 +83,24 @@ export function assertReceivableNotSaleLinked(
 }
 
 /**
+ * S1: refuse a subledger document that IS (or mirrors) a sale's customer debt:
+ * source `sales` (the canonical sale invoice) or `legacy_receivable` whose
+ * legacy row carries a saleId (same org). Any other source is unaffected.
+ */
+export async function assertSourceIsNotSaleDebt(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  source: { sourceType: string; sourceId: string }
+): Promise<void> {
+  if (source.sourceType === "sales") refuseSaleDebt("SALE_DEBT_RECEIPT_REFUSED");
+  if (source.sourceType !== "legacy_receivable") return;
+  const receivableId = ctx.db.normalizeId("receivables", source.sourceId);
+  if (!receivableId) return;
+  const receivable = await ctx.db.get(receivableId);
+  if (receivable && receivable.orgId === orgId) assertReceivableNotSaleLinked(receivable);
+}
+
+/**
  * R1/R2: the pre-wrapper form for a receipt door. Refuses a caller-supplied
  * saleId outright and a receivable (same org) that carries one. A receivable
  * that does not exist, or belongs to another org, is left to the door's own

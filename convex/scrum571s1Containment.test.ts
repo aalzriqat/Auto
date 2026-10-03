@@ -18,7 +18,7 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { commonAr, commonEn } from "../lib/i18n/domains/common";
 import { AppErrorCode } from "./utils/errors";
@@ -862,6 +862,170 @@ describe("R5 — a refund that would re-allocate a remainder to a sale-linked le
       status: "APPROVED",
     });
     expect((await w.t.run((ctx) => ctx.db.get(receivableId)))?.outstandingAmount).toBe(200);
+  });
+});
+
+describe("S1 — internal subledger.createReceivable / subledger.allocate refuse sale debt", () => {
+  async function withAccounting(w: World) {
+    await w.t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId: w.orgId,
+        plan: "professional",
+        status: "active",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+  }
+
+  const docArgs = (w: World, sourceType: string, sourceId: string) => ({
+    orgId: w.orgId,
+    documentType: "INVOICE" as const,
+    payerType: "CUSTOMER" as const,
+    customerId: w.customerId,
+    sourceType,
+    sourceId,
+    originalAmountMinor: 100_000,
+    currency: "JOD",
+    issueDate: Date.now(),
+    dueDate: Date.now() + 86_400_000,
+  });
+
+  async function insertDoc(w: World, sourceType: string, sourceId: string) {
+    return await w.t.run((ctx) =>
+      ctx.db.insert("receivableDocuments", {
+        orgId: w.orgId,
+        documentNumber: `S1-${crypto.randomUUID().slice(0, 8)}`,
+        documentType: "INVOICE",
+        payerType: "CUSTOMER",
+        customerId: w.customerId,
+        sourceType,
+        sourceId,
+        originalAmountMinor: 100_000,
+        currency: "JOD",
+        scale: 3,
+        issueDate: Date.now(),
+        dueDate: Date.now() + 86_400_000,
+        status: "OPEN",
+        createdBy: w.userId,
+        createdAt: Date.now(),
+      })
+    );
+  }
+
+  async function insertPayment(w: World) {
+    return await w.t.run((ctx) =>
+      ctx.db.insert("canonicalPayments", {
+        orgId: w.orgId,
+        direction: "IN",
+        payerType: "CUSTOMER",
+        customerId: w.customerId,
+        method: "CASH",
+        amountMinor: 50_000,
+        currency: "JOD",
+        scale: 3,
+        status: "SETTLED",
+        idempotencyKey: `s1-${crypto.randomUUID()}`,
+        createdBy: w.userId,
+        createdAt: Date.now(),
+      })
+    );
+  }
+
+  test("createReceivable with a `sales` source is refused and writes nothing", async () => {
+    const w = await seedWorld();
+    await withAccounting(w);
+    const { saleId } = await insertSale(w, "PENDING");
+    const before = await counts(w.t);
+    const code = await codeOf(
+      w.asFinance.mutation(internal.subledger.createReceivable, docArgs(w, "sales", saleId))
+    );
+    expect(code).toBe("SALE_DEBT_RECEIPT_REFUSED");
+    expect(await counts(w.t)).toEqual(before);
+  });
+
+  test("createReceivable mirroring a sale-linked legacy receivable is refused", async () => {
+    const w = await seedWorld();
+    await withAccounting(w);
+    const { saleId } = await insertSale(w, "PENDING");
+    const legacy = await insertLegacyReceivable(w, { saleId });
+    const before = await counts(w.t);
+    const code = await codeOf(
+      w.asFinance.mutation(internal.subledger.createReceivable, docArgs(w, "legacy_receivable", legacy))
+    );
+    expect(code).toBe("SALE_DEBT_RECEIPT_REFUSED");
+    expect(await counts(w.t)).toEqual(before);
+  });
+
+  test("control: createReceivable for an unrelated source and for a non-sale legacy receivable works", async () => {
+    const w = await seedWorld();
+    await withAccounting(w);
+    const plain = await insertLegacyReceivable(w, {});
+    await expect(
+      w.asFinance.mutation(internal.subledger.createReceivable, docArgs(w, "manual_adjustment", "m1"))
+    ).resolves.toBeTruthy();
+    await expect(
+      w.asFinance.mutation(internal.subledger.createReceivable, docArgs(w, "legacy_receivable", plain))
+    ).resolves.toBeTruthy();
+  });
+
+  test("allocate to a sale invoice document is refused and writes nothing", async () => {
+    const w = await seedWorld();
+    await withAccounting(w);
+    const { saleId } = await insertSale(w, "COMPLETED");
+    const docId = await insertDoc(w, "sales", saleId);
+    const paymentId = await insertPayment(w);
+    const before = await counts(w.t);
+    const code = await codeOf(
+      w.asFinance.mutation(internal.subledger.allocate, {
+        orgId: w.orgId,
+        paymentId,
+        receivableDocumentId: docId,
+        amountMinor: 10_000,
+      })
+    );
+    expect(code).toBe("SALE_DEBT_RECEIPT_REFUSED");
+    expect(await counts(w.t)).toEqual(before);
+  });
+
+  test("allocate to the canonical mirror of a sale-linked legacy receivable is refused", async () => {
+    const w = await seedWorld();
+    await withAccounting(w);
+    const { saleId } = await insertSale(w, "PENDING");
+    const legacy = await insertLegacyReceivable(w, { saleId });
+    const docId = await insertDoc(w, "legacy_receivable", legacy);
+    const paymentId = await insertPayment(w);
+    const before = await counts(w.t);
+    const code = await codeOf(
+      w.asFinance.mutation(internal.subledger.allocate, {
+        orgId: w.orgId,
+        paymentId,
+        receivableDocumentId: docId,
+        amountMinor: 10_000,
+      })
+    );
+    expect(code).toBe("SALE_DEBT_RECEIPT_REFUSED");
+    expect(await counts(w.t)).toEqual(before);
+  });
+
+  test("control: allocate to an unrelated doc and to a non-sale legacy mirror works", async () => {
+    const w = await seedWorld();
+    await withAccounting(w);
+    const plain = await insertLegacyReceivable(w, {});
+    const manual = await insertDoc(w, "manual_adjustment", "m2");
+    const mirror = await insertDoc(w, "legacy_receivable", plain);
+    const p1 = await insertPayment(w);
+    const p2 = await insertPayment(w);
+    await expect(
+      w.asFinance.mutation(internal.subledger.allocate, {
+        orgId: w.orgId, paymentId: p1, receivableDocumentId: manual, amountMinor: 10_000,
+      })
+    ).resolves.toBeTruthy();
+    await expect(
+      w.asFinance.mutation(internal.subledger.allocate, {
+        orgId: w.orgId, paymentId: p2, receivableDocumentId: mirror, amountMinor: 10_000,
+      })
+    ).resolves.toBeTruthy();
   });
 });
 
