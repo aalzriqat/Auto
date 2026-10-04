@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -134,6 +135,27 @@ describe("main", () => {
     fs.writeFileSync(lcov, rec("components/a.tsx"));
     expect(main([lcov, root])).toBe(1);
     expect(main([])).toBe(1);
+  });
+});
+
+describe("CLI entry point", () => {
+  const script = path.resolve(process.cwd(), "scripts/validateLcovSources.cjs");
+  const run = (lcovText: string) => {
+    const lcov = path.join(root, "lcov.info");
+    fs.writeFileSync(lcov, lcovText);
+    return spawnSync(process.execPath, [script, lcov, root], { encoding: "utf8" });
+  };
+
+  test("running the script directly executes main: exit 0 and reports the record count", () => {
+    const ok = run(rec("convex/a.ts"));
+    expect(ok.status).toBe(0);
+    expect(ok.stdout).toContain("Validated 1 LCOV source records.");
+  });
+
+  test("running the script directly exits non-zero for an out-of-scope source", () => {
+    const bad = run(rec("components/a.tsx"));
+    expect(bad.status).toBe(1);
+    expect(bad.stderr).toMatch(/refuses/);
   });
 });
 

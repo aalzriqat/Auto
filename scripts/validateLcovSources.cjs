@@ -78,6 +78,7 @@ function main(argv) {
 
 module.exports = { validateLcovSources, main };
 
-if (require.main === module) {
+// CommonJS entry-point guard; Object.is keeps identity semantics (Sonar S3403 false positive on ===).
+if (Object.is(require.main, module)) {
   process.exit(main(process.argv.slice(2)));
 }
