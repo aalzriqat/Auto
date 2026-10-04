@@ -141,6 +141,7 @@ describe("socialIntegrations.getConnectionStatus / disconnect", () => {
       ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
         orgId,
         instagramBusinessAccountId: "ig_123",
+        instagramWebhookAccountId: "ig_hook_123",
         instagramAccessToken: "token_abc",
         instagramPageName: "My Dealership",
       }),
@@ -162,6 +163,7 @@ describe("socialIntegrations.getConnectionStatus / disconnect", () => {
       ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
         orgId,
         instagramBusinessAccountId: "ig_123",
+        instagramWebhookAccountId: "ig_hook_123",
         instagramAccessToken: "token_abc",
       }),
     );
@@ -172,6 +174,58 @@ describe("socialIntegrations.getConnectionStatus / disconnect", () => {
       api.socialIntegrations.getConnectionStatus,
       { orgId },
     );
+    expect(status.instagramConnected).toBe(false);
+  });
+
+  // SCRUM-623: webhooks are routed only by the webhook account id, so a
+  // connection without one can never receive a DM or comment.
+  test("refuses to save credentials without a webhook account id", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOwner(t);
+    const save = (instagramWebhookAccountId: string | undefined) =>
+      t.run((ctx) =>
+        ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
+          orgId,
+          instagramBusinessAccountId: "ig_123",
+          instagramAccessToken: "token_abc",
+          ...(instagramWebhookAccountId === undefined ? {} : { instagramWebhookAccountId }),
+        } as never),
+      );
+
+    await expect(save(undefined)).rejects.toThrow();
+    await expect(save("   ")).rejects.toThrow();
+    const row = await t.run((ctx) =>
+      ctx.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .unique(),
+    );
+    expect(row?.instagramAccessToken).toBeUndefined();
+  });
+
+  test("a stored token and business id without a webhook account id is not reported connected", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+    await t.run(async (ctx) => {
+      const existing = await ctx.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .unique();
+      const legacy = { instagramBusinessAccountId: "ig_123", instagramAccessToken: "token_abc" };
+      if (existing) {
+        await ctx.db.patch(existing._id, legacy);
+      } else {
+        await ctx.db.insert("orgSettings", {
+          orgId,
+          currency: "JOD",
+          currencySymbol: "JD",
+          enabledPaymentTypes: [],
+          ...legacy,
+        });
+      }
+    });
+
+    const status = await asOwner.query(api.socialIntegrations.getConnectionStatus, { orgId });
     expect(status.instagramConnected).toBe(false);
   });
 });
@@ -197,6 +251,7 @@ describe("socialIntegrations.setAutoPostEnabled", () => {
       ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
         orgId,
         instagramBusinessAccountId: "ig_123",
+        instagramWebhookAccountId: "ig_hook_123",
         instagramAccessToken: "token_abc",
       }),
     );
@@ -256,6 +311,7 @@ describe("socialIntegrations.setInstagramLeadCreationConfig", () => {
       ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
         orgId,
         instagramBusinessAccountId: "ig_123",
+        instagramWebhookAccountId: "ig_hook_123",
         instagramAccessToken: "token_abc",
       }),
     );
@@ -422,7 +478,7 @@ describe("socialIntegrations: an Instagram account belongs to one org", () => {
     t: T,
     orgId: Id<"organizations">,
     instagramBusinessAccountId: string,
-    instagramWebhookAccountId?: string,
+    instagramWebhookAccountId: string,
   ) =>
     t.run((ctx) =>
       ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {

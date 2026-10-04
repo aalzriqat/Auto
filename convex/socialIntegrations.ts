@@ -208,7 +208,9 @@ export const getConnectionStatus = query({
 
     return {
       instagramConnected: Boolean(
-        settings?.instagramAccessToken && settings?.instagramBusinessAccountId,
+        settings?.instagramAccessToken &&
+          settings?.instagramBusinessAccountId &&
+          settings?.instagramWebhookAccountId,
       ),
       instagramPageName: settings?.instagramPageName,
       socialAutoPostEnabled: settings?.socialAutoPostEnabled ?? false,
@@ -487,13 +489,18 @@ export const saveInstagramCredentials = internalMutation({
   args: {
     orgId: v.id("organizations"),
     instagramBusinessAccountId: v.string(),
-    instagramWebhookAccountId: v.optional(v.string()),
+    // Required (SCRUM-623): webhooks are routed only by this id, so a
+    // connection saved without it would look connected and never receive one.
+    instagramWebhookAccountId: v.string(),
     instagramAccessToken: v.string(),
     instagramTokenExpiresAt: v.optional(v.number()),
     instagramPageName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { orgId, ...fields } = args;
+    if (!fields.instagramWebhookAccountId.trim()) {
+      throw new ConvexError(INSTAGRAM_CONNECT_FAILURE_MESSAGE);
+    }
     await assertInstagramAccountFree(ctx, orgId, fields);
     const existing = await ctx.db
       .query("orgSettings")
