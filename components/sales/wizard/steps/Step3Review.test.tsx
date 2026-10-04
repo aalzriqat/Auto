@@ -153,6 +153,24 @@ describe("Step3Review — required documents (SCRUM-628 F-08)", () => {
     expect(screen.getAllByText("RequiredDocuments")).toHaveLength(1);
   });
 
+  /**
+   * Review (Codex, d6289db7): with the duplicate list gone, the one that remained
+   * printed the raw Arabic name in an English review and no required marker.
+   */
+  test("an English review translates seeded names and marks only required documents", () => {
+    stubs.rules = [
+      { _id: "rule_id", documentName: "هوية/كفيل انثى", isRequired: true },
+      { _id: "rule_opt", companyId: COMPANY, documentName: "QA Optional Form", isRequired: false },
+    ];
+    renderReview(3_000);
+
+    expect(screen.getByText("ID / Female Guarantor")).toBeTruthy();
+    expect(screen.queryByText("هوية/كفيل انثى")).toBeNull();
+    const markers = screen.getAllByTestId("doc-required-marker");
+    expect(markers).toHaveLength(1);
+    expect(markers[0].parentElement?.textContent).toContain("ID / Female Guarantor");
+  });
+
   test("the Other provider still lists the org-wide documents every deal needs", () => {
     stubs.rules = RULES;
     renderReview(3_000, OTHER_COMPANY_ID);

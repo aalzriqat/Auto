@@ -18,7 +18,7 @@ import { ArrowLeft, CheckCircle2, Car, User, TrendingUp, FileText } from "lucide
 import  ReviewVehicleCard  from "../components/ReviewVehicleCard";
 import  ReviewVehicleListCard  from "../components/ReviewVehicleListCard";
 import  ReviewCustomerCard  from "../components/ReviewCustomerCard";
-import  ReviewFinanceSummary  from "../components/ReviewFinanceSummary";
+import  ReviewFinanceSummary, { documentDisplayName }  from "../components/ReviewFinanceSummary";
 import { buildWizardQuotePayload } from "../quotePayload";
 
 export function Step3Review({
@@ -41,7 +41,7 @@ export function Step3Review({
   }) => void;
 }) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, isRtl } = useLanguage();
   const saveQuote = useMutation(api.quotes.saveQuote);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -315,8 +315,11 @@ export function Step3Review({
                       doc.isRequired ? "bg-amber-400" : "bg-muted-foreground"
                     )}
                   />
-                  <span className="text-muted-foreground">
-                    {doc.documentName}
+                  <span className={doc.isRequired ? "text-foreground/80" : "text-muted-foreground"}>
+                    {documentDisplayName(doc.documentName, isRtl)}
+                    {doc.isRequired && (
+                      <span className="text-amber-400 ms-1" data-testid="doc-required-marker">*</span>
+                    )}
                   </span>
                 </div>
               ))}
