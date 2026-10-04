@@ -141,6 +141,7 @@ describe("socialIntegrations.getConnectionStatus / disconnect", () => {
       ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
         orgId,
         instagramBusinessAccountId: "ig_123",
+        instagramWebhookAccountId: "ig_hook_123",
         instagramAccessToken: "token_abc",
         instagramPageName: "My Dealership",
       }),
@@ -162,6 +163,7 @@ describe("socialIntegrations.getConnectionStatus / disconnect", () => {
       ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
         orgId,
         instagramBusinessAccountId: "ig_123",
+        instagramWebhookAccountId: "ig_hook_123",
         instagramAccessToken: "token_abc",
       }),
     );
@@ -174,6 +176,166 @@ describe("socialIntegrations.getConnectionStatus / disconnect", () => {
     );
     expect(status.instagramConnected).toBe(false);
   });
+
+  // SCRUM-623: webhooks are routed only by the webhook account id, so a
+  // connection without one can never receive a DM or comment.
+  test("refuses to save credentials without a webhook account id", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOwner(t);
+    const save = (instagramWebhookAccountId: string | undefined) =>
+      t.run((ctx) =>
+        ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
+          orgId,
+          instagramBusinessAccountId: "ig_123",
+          instagramAccessToken: "token_abc",
+          ...(instagramWebhookAccountId === undefined ? {} : { instagramWebhookAccountId }),
+        } as never),
+      );
+
+    await expect(save(undefined)).rejects.toThrow();
+    await expect(save("   ")).rejects.toThrow();
+    const row = await t.run((ctx) =>
+      ctx.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .unique(),
+    );
+    expect(row?.instagramAccessToken).toBeUndefined();
+  });
+
+  test("a stored token and business id without a webhook account id is not reported connected", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+    await t.run(async (ctx) => {
+      const existing = await ctx.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .unique();
+      const legacy = { instagramBusinessAccountId: "ig_123", instagramAccessToken: "token_abc" };
+      if (existing) {
+        await ctx.db.patch(existing._id, legacy);
+      } else {
+        await ctx.db.insert("orgSettings", {
+          orgId,
+          currency: "JOD",
+          currencySymbol: "JD",
+          enabledPaymentTypes: [],
+          ...legacy,
+        });
+      }
+    });
+
+    const status = await asOwner.query(api.socialIntegrations.getConnectionStatus, { orgId });
+    expect(status.instagramConnected).toBe(false);
+  });
+});
+
+// SCRUM-623-04: the refresh reads the token, waits on Meta, then writes. A
+// Disconnect or reconnect landing in that wait must not be undone by the write.
+describe("socialIntegrations.refreshInstagramToken", () => {
+  async function seedConnected(t: ReturnType<typeof convexTestWithComponents>) {
+    const owner = await seedOwner(t);
+    await t.run((ctx) =>
+      ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
+        orgId: owner.orgId,
+        instagramBusinessAccountId: "ig_123",
+        instagramWebhookAccountId: "ig_hook_123",
+        instagramAccessToken: "token_old",
+      }),
+    );
+    return owner;
+  }
+
+  function stubRefresh(during: () => Promise<unknown>) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        await during();
+        return jsonResponse({ access_token: "token_refreshed", expires_in: 5184000 });
+      }),
+    );
+  }
+
+  const makeT = () => convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+  const readRow = (t: ReturnType<typeof makeT>, orgId: Id<"organizations">) =>
+    t.run((ctx) =>
+      ctx.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .unique(),
+    );
+
+  test("refreshes the token of the connection it read", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedConnected(t);
+    stubRefresh(async () => {});
+
+    await t.action(internal.socialIntegrations.refreshInstagramToken, { orgId });
+
+    const row = await readRow(t, orgId);
+    expect(row?.instagramAccessToken).toBe("token_refreshed");
+    expect(row?.instagramTokenExpiresAt).toBeGreaterThan(Date.now());
+    vi.unstubAllGlobals();
+  });
+
+  test("a refresh finishing after Disconnect does not restore the token", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedConnected(t);
+    stubRefresh(() => asOwner.mutation(api.socialIntegrations.disconnect, { orgId }));
+
+    await t.action(internal.socialIntegrations.refreshInstagramToken, { orgId });
+
+    const row = await readRow(t, orgId);
+    expect(row?.instagramAccessToken).toBeUndefined();
+    expect(row?.instagramTokenExpiresAt).toBeUndefined();
+    const status = await asOwner.query(api.socialIntegrations.getConnectionStatus, { orgId });
+    expect(status.instagramConnected).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  test("a refresh finishing after a reconnect does not overwrite the new connection's token", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedConnected(t);
+    stubRefresh(async () => {
+      await asOwner.mutation(api.socialIntegrations.disconnect, { orgId });
+      await t.run((ctx) =>
+        ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
+          orgId,
+          instagramBusinessAccountId: "ig_456",
+          instagramWebhookAccountId: "ig_hook_456",
+          instagramAccessToken: "token_new_connection",
+        }),
+      );
+    });
+
+    await t.action(internal.socialIntegrations.refreshInstagramToken, { orgId });
+
+    const row = await readRow(t, orgId);
+    expect(row?.instagramAccessToken).toBe("token_new_connection");
+    expect(row?.instagramBusinessAccountId).toBe("ig_456");
+    vi.unstubAllGlobals();
+  });
+
+  test.each(["instagramWebhookAccountId", "instagramBusinessAccountId"] as const)(
+    "does not keep a legacy connection without %s alive",
+    async (missing) => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const { orgId } = await seedConnected(t);
+      await t.run(async (ctx) => {
+        const row = await ctx.db
+          .query("orgSettings")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .unique();
+        await ctx.db.patch(row!._id, { [missing]: undefined });
+      });
+      stubRefresh(async () => {});
+
+      await t.action(internal.socialIntegrations.refreshInstagramToken, { orgId });
+
+      expect((await readRow(t, orgId))?.instagramAccessToken).toBe("token_old");
+      vi.unstubAllGlobals();
+    },
+  );
 });
 
 describe("socialIntegrations.setAutoPostEnabled", () => {
@@ -197,6 +359,7 @@ describe("socialIntegrations.setAutoPostEnabled", () => {
       ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
         orgId,
         instagramBusinessAccountId: "ig_123",
+        instagramWebhookAccountId: "ig_hook_123",
         instagramAccessToken: "token_abc",
       }),
     );
@@ -256,6 +419,7 @@ describe("socialIntegrations.setInstagramLeadCreationConfig", () => {
       ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
         orgId,
         instagramBusinessAccountId: "ig_123",
+        instagramWebhookAccountId: "ig_hook_123",
         instagramAccessToken: "token_abc",
       }),
     );
@@ -364,7 +528,7 @@ describe("socialIntegrations.exchangeCodeForToken", () => {
         }
 
         if (url.includes(`/v21.0/${instagramUserId}`) && method === "GET") {
-          return jsonResponse({
+          return jsonTextResponse({
             username: "dealer_ig",
             user_id: "webhook_123",
           });
@@ -422,7 +586,7 @@ describe("socialIntegrations: an Instagram account belongs to one org", () => {
     t: T,
     orgId: Id<"organizations">,
     instagramBusinessAccountId: string,
-    instagramWebhookAccountId?: string,
+    instagramWebhookAccountId: string,
   ) =>
     t.run((ctx) =>
       ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
