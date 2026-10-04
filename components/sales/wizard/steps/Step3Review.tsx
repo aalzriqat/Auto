@@ -291,14 +291,17 @@ export function Step3Review({
       )}
 
       {/* DOCUMENTS */}
-      {selectedResult && !selectedResult.isCash && !downPaymentCoversPrice && (
+      {/* The "Other" provider has no rules here, so nothing can be said about its documents. */}
+      {selectedResult && !selectedResult.isCash && !isManualFinance && !downPaymentCoversPrice && (
         <div className={cn("border rounded-xl p-4", accentClass)}>
           <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 flex items-center gap-1">
             <FileText className="w-3.5 h-3.5" />
             {t("RequiredDocuments")}
           </p>
 
-          {(selectedResult.companyDocs?.length ?? 0) === 0 ? (
+          {documentRules === undefined ? (
+            <p className="text-sm text-muted-foreground" aria-busy="true">{t("Loading" as any)}</p>
+          ) : (selectedResult.companyDocs?.length ?? 0) === 0 ? (
             <p className="text-sm text-muted-foreground">{t("NoRequiredDocuments" as any)}</p>
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">

@@ -36,6 +36,8 @@ export function VehicleCostBar({ vehicleId, purchasePrice, salePrice }: VehicleC
   // Cost/profit data is sensitive — don't show this bar at all to roles
   // without VIEW_EXPENSES (e.g. SALES), rather than crash on the query.
   if (permissionsLoading || !canViewExpenses) return null;
+  // No org means the total is never asked for: a skeleton would never resolve.
+  if (!activeOrgId) return null;
   // Hold the collapsed panel's height while the total loads, so the inputs
   // below do not jump when it arrives (SCRUM-628 F-06).
   if (totalExpenses === undefined) {

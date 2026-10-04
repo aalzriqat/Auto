@@ -11,13 +11,14 @@ const stubs = vi.hoisted(() => ({
   total: undefined as number | undefined,
   permissions: ["view:expenses"] as string[],
   permissionsLoading: false,
+  orgId: "org1" as string | null,
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
 }));
 vi.mock("@/components/providers/OrgProvider", () => ({
-  useOrg: () => ({ activeOrgId: "org1" }),
+  useOrg: () => ({ activeOrgId: stubs.orgId }),
 }));
 vi.mock("@/hooks/useCurrencyFormatter", () => ({
   useCurrencyFormatter: () => (n: number) => `${n} JOD`,
@@ -44,6 +45,7 @@ afterEach(() => {
   stubs.total = undefined;
   stubs.permissions = [PERMISSIONS.VIEW_EXPENSES];
   stubs.permissionsLoading = false;
+  stubs.orgId = "org1";
 });
 
 describe("VehicleCostBar — no layout shift (SCRUM-628 F-06)", () => {
@@ -64,6 +66,12 @@ describe("VehicleCostBar — no layout shift (SCRUM-628 F-06)", () => {
 
   test("a viewer without the expense permission gets nothing, not a placeholder", () => {
     stubs.permissions = [];
+    const { container } = renderBar();
+    expect(container.innerHTML).toBe("");
+  });
+
+  test("with no active organization it renders nothing rather than a skeleton that never resolves", () => {
+    stubs.orgId = null;
     const { container } = renderBar();
     expect(container.innerHTML).toBe("");
   });

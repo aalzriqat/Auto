@@ -18,6 +18,7 @@ const COMPANY = "company_1" as Id<"financeCompanies">;
 const stubs = vi.hoisted(() => ({
   saveQuote: vi.fn(async () => "quote_1"),
   orgSettings: null as null | { currency: string },
+  rules: [] as unknown[] | undefined,
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -54,7 +55,7 @@ vi.mock("convex/react", async () => {
           },
         ];
       }
-      if (name === "documents:listRules") return [];
+      if (name === "documents:listRules") return stubs.rules;
       if (name === "orgSettings:get") return stubs.orgSettings;
       return null;
     },
@@ -66,10 +67,11 @@ vi.mock("../components/ReviewVehicleListCard", () => ({ default: () => null }));
 vi.mock("../components/ReviewCustomerCard", () => ({ default: () => null }));
 
 import { Step3Review } from "./Step3Review";
+import { OTHER_COMPANY_ID } from "../types";
 
 const customer = { _id: "customer_1", firstName: "QA", lastName: "TEST" } as unknown as Doc<"customers">;
 
-function renderReview(downPayment: number) {
+function renderReview(downPayment: number, selectedCompanyId: string = COMPANY) {
   return render(
     <Step3Review
       paymentType="INSTALLMENT"
@@ -79,7 +81,9 @@ function renderReview(downPayment: number) {
         desiredProfit: 500,
         downPayment,
         termMonths: 48,
-        selectedCompanyId: COMPANY,
+        selectedCompanyId,
+        manualProfitRate: 5,
+        manualExecutionFees: 250,
         customerStatuses: [],
       }}
       selectedCustomer={customer}
@@ -93,6 +97,7 @@ afterEach(() => {
   cleanup();
   stubs.saveQuote.mockClear();
   stubs.orgSettings = null;
+  stubs.rules = [];
 });
 
 describe("Step3Review — committed deal terms (SCRUM-609 F-03)", () => {
@@ -122,6 +127,21 @@ describe("Step3Review — required documents (SCRUM-628 F-08)", () => {
 
     expect(screen.getByText("RequiredDocuments")).toBeTruthy();
     expect(screen.getByText("NoRequiredDocuments")).toBeTruthy();
+  });
+
+  test("while the rules load it says so, never that nothing is required", () => {
+    stubs.rules = undefined;
+    renderReview(3_000);
+
+    expect(screen.getByText("Loading")).toBeTruthy();
+    expect(screen.queryByText("NoRequiredDocuments")).toBeNull();
+  });
+
+  test("the Other provider has no rules here, so no documents claim is made", () => {
+    renderReview(3_000, OTHER_COMPANY_ID);
+
+    expect(screen.queryByText("RequiredDocuments")).toBeNull();
+    expect(screen.queryByText("NoRequiredDocuments")).toBeNull();
   });
 });
 

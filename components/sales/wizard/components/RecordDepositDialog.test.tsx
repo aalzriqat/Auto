@@ -17,6 +17,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 const stubs = vi.hoisted(() => ({
   calls: [] as Array<{ name: string; args: Record<string, unknown> }>,
   permissions: [] as string[],
+  currency: "JOD",
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -28,9 +29,9 @@ vi.mock("@/components/providers/OrgProvider", () => ({
 vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/hooks/useCurrency", () => ({
   useCurrency: () => ({
-    code: "JOD",
-    symbol: "JOD",
-    displayLabel: "JOD",
+    code: stubs.currency,
+    symbol: stubs.currency,
+    displayLabel: stubs.currency,
     format: (n: number) => `${n} JOD`,
     formatCompact: (n: number) => String(n),
   }),
@@ -101,6 +102,7 @@ async function submitAmount(amount: string) {
 beforeEach(() => {
   stubs.calls.length = 0;
   stubs.permissions = [];
+  stubs.currency = "JOD";
 });
 afterEach(cleanup);
 
@@ -193,5 +195,39 @@ describe("RecordDepositDialog — the amount field (SCRUM-628 F-05)", () => {
     await submitAmount("100.255");
     await waitFor(() => expect(onRequested).toHaveBeenCalled());
     expect(stubs.calls[0].args).toMatchObject({ amount: 100.255 });
+  });
+
+  test("understands an Arabic decimal separator", async () => {
+    const { onRequested } = renderDialog();
+    await submitAmount("١٠٠٫٥");
+    await waitFor(() => expect(onRequested).toHaveBeenCalled());
+    expect(stubs.calls[0].args).toMatchObject({ amount: 100.5 });
+  });
+
+  test("follows a two-decimal currency: a third decimal is refused", async () => {
+    stubs.currency = "USD";
+    renderDialog();
+    await submitAmount("1.234");
+    await screen.findByText("DepositAmountInvalid");
+    expect(stubs.calls).toEqual([]);
+  });
+
+  test("a two-decimal currency still takes its cents", async () => {
+    stubs.currency = "USD";
+    const { onRequested } = renderDialog();
+    await submitAmount("1.23");
+    await waitFor(() => expect(onRequested).toHaveBeenCalled());
+    expect(stubs.calls[0].args).toMatchObject({ amount: 1.23 });
+  });
+
+  /**
+   * Review D-01: above about 9 trillion JOD a float cannot carry the fils, so
+   * this figure would have left as ...002. It is refused, never changed.
+   */
+  test("refuses an amount the number it is sent as cannot carry exactly", async () => {
+    renderDialog();
+    await submitAmount("9007198254740.001");
+    await screen.findByText("DepositAmountInvalid");
+    expect(stubs.calls).toEqual([]);
   });
 });

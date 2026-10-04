@@ -161,7 +161,11 @@ export default function Step1QuoteSetup({
   const selectCompany = (id: string) => {
     setSelectedCompanyId(id);
     setCompanyResetByEdit(false);
-    form.clearErrors("vehicleId");
+    // Only the "pick a company" error is answered by picking one; a company's
+    // own refusal (status not accepted, fees missing) stays until Next re-checks.
+    if (form.getFieldState("vehicleId").error?.message === t("PleaseSelectFinanceCompany" as any)) {
+      form.clearErrors("vehicleId");
+    }
   };
 
   const watchedVehicleId = form.watch("vehicleId");

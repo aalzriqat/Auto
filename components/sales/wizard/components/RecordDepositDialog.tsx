@@ -40,6 +40,19 @@ import { formatMinorAsMajor, parseMajorToMinor } from "@/lib/financeFeeTemplateF
 type Translate = (key: string) => string;
 
 /**
+ * The major-unit number the mutations take, or null when that number cannot
+ * carry exactly the minor units typed. Above about 9 trillion JOD a float has
+ * no room for the fils, so "9007198254740.001" would leave as ...002; refusing
+ * it here keeps a typed amount from ever reaching the server as another one.
+ */
+function exactMajorAmount(minor: number, scale: number): number | null {
+  if (!Number.isSafeInteger(minor)) return null;
+  // Back to major units through the exact decimal text, never by float division.
+  const amount = Number(formatMinorAsMajor(minor, scale));
+  return Math.round(amount * 10 ** scale) === minor ? amount : null;
+}
+
+/**
  * The amount is text parsed exactly as money is parsed elsewhere (SCRUM-628
  * F-05): a `type=number` field let "60E-" and "-5" through to an English
  * message. No sign, no exponent, no more decimals than the currency carries;
@@ -56,6 +69,8 @@ function buildDepositSchema(t: Translate, scale: number) {
         });
       } else if (parsed.minor <= 0) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, message: t("DepositAmountPositive") });
+      } else if (exactMajorAmount(parsed.minor, scale) === null) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: t("DepositAmountInvalid") });
       }
     }),
     notes: z.string().optional(),
@@ -122,8 +137,8 @@ export function RecordDepositDialog({
     }
     const parsed = parseMajorToMinor(values.amount, scale);
     if (!parsed.ok || parsed.minor <= 0) return;
-    // Back to major units through the exact decimal text, never by float division.
-    const amount = Number(formatMinorAsMajor(parsed.minor, scale));
+    const amount = exactMajorAmount(parsed.minor, scale);
+    if (amount === null) return;
     setIsSubmitting(true);
     try {
       if (canRecord && method) {
