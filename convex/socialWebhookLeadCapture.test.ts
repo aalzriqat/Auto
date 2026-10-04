@@ -483,7 +483,7 @@ describe("cross-cutting", () => {
     expect((await snapshot(t, orgA)).fbEvents).toHaveLength(0);
     expect((await snapshot(t, orgB)).fbEvents).toHaveLength(0);
     // The dropped entry leaves a durable error row, so it is not mistaken for
-    // an unconnected Page and can be found and replayed once one org disconnects.
+    // an unconnected Page.
     expect(await ambiguityLogs(t, "facebook")).toHaveLength(1);
   });
 

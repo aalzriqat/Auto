@@ -1193,7 +1193,8 @@ http.route({
       if (ambiguous) {
         // Connected to more than one org (SCRUM-622): never guess the tenant.
         // Acknowledged like an unrecognized account, but recorded, so the
-        // dropped entry stays findable for replay once one org disconnects.
+        // drop is visible. The row names the account only; it is not linked
+        // to the stored payload, so it does not by itself enable a replay.
         await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
           source: "instagram",
           status: "error",
@@ -1651,8 +1652,9 @@ http.route({
       );
       if (ambiguous) {
         // Connected to more than one org (SCRUM-622): never guess the tenant.
-        // Acknowledged like an unrecognized Page, but recorded, so the dropped
-        // entry stays findable for replay once one org disconnects.
+        // Acknowledged like an unrecognized Page, but recorded, so the drop is
+        // visible. The row names the Page only; it is not linked to the stored
+        // payload, so it does not by itself enable a replay.
         await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
           source: "facebook",
           status: "error",
