@@ -39,7 +39,15 @@ export type SaleListRow = {
   applicationId?: string;
   /** FINANCED is a property of the SALE, not of whether an application exists. */
   financingType?: "CASH" | "FINANCED" | "LEASE";
+  /** The linked application's queue facts, served with the sale (Codex SCRUM-603-1). */
+  linkedApplication?: ApplicationQueueFacts;
 };
+
+/** What `applicationReason` reads — all of it, and only it. */
+export type ApplicationQueueFacts = Pick<
+  ApplicationListRow,
+  "status" | "companyId" | "disbursedAt" | "supplierSettlementRoute" | "hasPendingDepositResolution"
+>;
 
 const APPLICATION_STATUS_LABEL: Record<string, string> = {
   DRAFT: "Draft",
@@ -51,7 +59,7 @@ const APPLICATION_STATUS_LABEL: Record<string, string> = {
   CANCELLED: "Cancelled",
 };
 
-export function applicationReason(app: ApplicationListRow): { reason: DealReason | null; waitingOn: DealWaitingOn } {
+export function applicationReason(app: ApplicationQueueFacts): { reason: DealReason | null; waitingOn: DealWaitingOn } {
   // A held deposit on a stopped deal is real cash with no owner — first,
   // whatever the status says.
   if (app.hasPendingDepositResolution) return { reason: "DEPOSIT_PENDING", waitingOn: "DEALERSHIP" };
@@ -108,6 +116,19 @@ export function applicationRow(
   };
 }
 
+// A sale still to be completed is the dealership's move. Past that, a
+// financed deal's queue state is its application's — an unpaid financier
+// receipt or a held deposit — read through the one rule, never re-derived.
+function saleQueue(
+  sale: SaleListRow,
+  externallyFinanced: boolean
+): { reason: DealReason | null; waitingOn: DealWaitingOn } {
+  if (sale.status === "PENDING") {
+    return { reason: externallyFinanced ? "SALE_PENDING" : "CASH_PENDING", waitingOn: "DEALERSHIP" };
+  }
+  return sale.linkedApplication ? applicationReason(sale.linkedApplication) : { reason: null, waitingOn: "NONE" };
+}
+
 export function saleRow(
   sale: SaleListRow,
   orgId: string,
@@ -120,6 +141,7 @@ export function saleRow(
   // absence would label those "Cash" and queue them as a cash sale to complete.
   const externallyFinanced =
     sale.applicationId !== undefined || sale.financingType === "FINANCED" || sale.financingType === "LEASE";
+  const queue = saleQueue(sale, externallyFinanced);
   return {
     key: `sale_${sale._id}`,
     href: `/${orgId}/sales/${sale._id}/deal`,
@@ -131,8 +153,8 @@ export function saleRow(
       sale.status === "PENDING" ? "SaleStatusPending" : sale.status === "COMPLETED" ? "SaleStatusCompleted" : "Cancelled"
     ),
     statusTone: sale.status === "COMPLETED" ? "done" : sale.status === "CANCELLED" ? "stopped" : "active",
-    reason: sale.status === "PENDING" ? (externallyFinanced ? "SALE_PENDING" : "CASH_PENDING") : null,
-    waitingOn: sale.status === "PENDING" ? "DEALERSHIP" : "NONE",
+    reason: queue.reason,
+    waitingOn: queue.waitingOn,
     since: sale.saleDate,
     salespersonName: sale.salespersonName,
     amountLabel: formatAmount(sale.salePrice),
@@ -164,4 +186,23 @@ export function mergeDealRows(
       .filter((sale) => sale.applicationId === undefined || !loadedApplicationIds.has(sale.applicationId))
       .map((sale) => saleRow(sale, orgId, t, formatAmount)),
   ];
+}
+
+export type PagingStatus = "LoadingFirstPage" | "CanLoadMore" | "LoadingMore" | "Exhausted";
+
+/**
+ * Folds the paginated sources' statuses into what the Deals list may claim.
+ * `complete` is an allow-list — every source Exhausted — never the absence of
+ * the other flags: a first page in flight sets neither (SCRUM-603-2).
+ */
+export function dealsPaging(statuses: readonly PagingStatus[]): {
+  complete: boolean;
+  canLoadMore: boolean;
+  loadingMore: boolean;
+} {
+  return {
+    complete: statuses.every((s) => s === "Exhausted"),
+    canLoadMore: statuses.includes("CanLoadMore"),
+    loadingMore: statuses.includes("LoadingMore"),
+  };
 }

@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioCardGroup } from "./RadioCardGroup";
 import { isApprovalFarFromEvidence } from "@/lib/financingEconomics";
+import { parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
 import {
   Dialog,
   DialogContent,
@@ -154,10 +155,12 @@ export function RecordApprovedPurchaseDialog({
         ? submittedQuotationMinor
         : null;
 
-  const parsed = Number(amount);
+  // Exact, never rounded (SCRUM-605) — see the quotation dialog.
+  const strict = parseMajorToMinor(amount, Math.round(Math.log10(factor)));
   const entered = amount.trim() !== "";
-  const amountInvalid = basis === "MANUAL" && entered && !(parsed > 0);
-  const typedMinor = entered && parsed > 0 ? Math.round(parsed * factor) : null;
+  const amountTooPrecise = !strict.ok && strict.problem === "TOO_PRECISE";
+  const amountInvalid = basis === "MANUAL" && entered && !(strict.ok && strict.minor > 0);
+  const typedMinor = strict.ok && strict.minor > 0 ? strict.minor : null;
   const approvedMinor = basis === "MANUAL" ? typedMinor : impliedMinor;
 
   const notesRequired = basis === "MANUAL";
@@ -299,7 +302,7 @@ export function RecordApprovedPurchaseDialog({
               />
               {amountInvalid && (
                 <p role="alert" className="text-xs font-medium text-destructive">
-                  {t("ApprovedAmountInvalid")}
+                  {t(amountTooPrecise ? "AmountTooPrecise" : "ApprovedAmountInvalid")}
                 </p>
               )}
             </div>

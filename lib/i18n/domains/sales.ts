@@ -507,6 +507,10 @@ const dealRailMessages = defineBilingualMessages({
   LoadingDeals: ["Loading deals…", "جارٍ تحميل الصفقات…"],
   NoDealsFound: ["No deals match these filters.", "لا توجد صفقات مطابقة لهذه التصفية."],
   DealsQueueEmpty: ["Nothing is waiting on the dealership right now.", "لا شيء بانتظار المعرض حاليًا."],
+  DealsQueueEmptyLoadedOnly: [
+    "Nothing on the loaded deals is waiting on the dealership. Older deals are not loaded yet and may still need action — load more to check them.",
+    "لا شيء في الصفقات المحمّلة بانتظار المعرض. الصفقات الأقدم لم تُحمَّل بعد وقد تحتاج إجراءً — حمّل المزيد للتحقق منها.",
+  ],
   DealsReasonColumn: ["Waiting on", "بانتظار"],
   DealsCustomerVehicleColumn: ["Customer · vehicle", "العميل · السيارة"],
   DealsTypeColumn: ["Type · financier", "النوع · جهة التمويل"],
@@ -1259,6 +1263,18 @@ const dealOverviewMessages = defineBilingualMessages({
   LegalInvoiceAmount: ["Invoice amount", "مبلغ الفاتورة"],
   LegalInvoiceNumber: ["Invoice number", "رقم الفاتورة"],
   LegalInvoiceDate: ["Invoice date", "تاريخ الفاتورة"],
+  LegalInvoiceDateNotOpenYet: [
+    "Today's date opens on the ledger at {time} (midnight UTC). Pick the date printed on the invoice; if it is today, save the invoice after that time.",
+    "يبدأ تاريخ اليوم في الدفاتر الساعة {time} (منتصف الليل بتوقيت UTC). اختر التاريخ المطبوع على الفاتورة، وإن كان تاريخ اليوم فاحفظ الفاتورة بعد ذلك الوقت.",
+  ],
+  LegalInvoiceDateDayChanged: [
+    "The day changed while this form was open. Pick the date printed on the invoice.",
+    "تغيّر اليوم بينما كان هذا النموذج مفتوحًا. اختر التاريخ المطبوع على الفاتورة.",
+  ],
+  LegalInvoiceDateNowOpen: [
+    "Today's date is now open on the ledger. Pick the date printed on the invoice.",
+    "أصبح تاريخ اليوم متاحًا الآن في الدفاتر. اختر التاريخ المطبوع على الفاتورة.",
+  ],
   LegalInvoiceIssuedTo: ["Issued to", "صادرة إلى"],
   LegalInvoiceIssuedToOther: ["Specify recipient", "تحديد المستلم"],
   SubmitLegalInvoice: ["Save Legal Invoice", "حفظ الفاتورة القانونية"],
@@ -1810,6 +1826,8 @@ export const salesEn = {
   TaxAmount: "Tax Amount",
   DealerFees: "Dealer Fees",
   DownPayment: "Down Payment",
+  DownPaymentMustBeBelowPrice: "The down payment must be less than the sale price for a financed quote.",
+  FinanceOptionsAwaitValidDownPayment: "Financing options appear once the down payment is below the sale price.",
   TradeInVehicle: "Trade-in Vehicle",
   TradeInValue: "Trade-in Value",
   FinancingType: "Financing Type",
@@ -2821,6 +2839,7 @@ export const salesEn = {
   QuotationOverrideReasonPlaceholder: "e.g. agreed by phone with the branch manager",
   QuotationOverrideReasonRequired: "Say why the amount sent differs from the calculated figure.",
   QuotationAmountInvalid: "Enter an amount greater than zero.",
+  AmountTooPrecise: "This currency does not have that many decimal places — check the amount.",
   QuotationRecorded: "Quotation recorded",
 
   TheirAppraisalLabel: "Recorded appraisal of the vehicle",
@@ -2898,6 +2917,8 @@ export const salesAr = {
   TaxAmount: "مبلغ الضريبة",
   DealerFees: "رسوم المعرض",
   DownPayment: "الدفعة المقدمة",
+  DownPaymentMustBeBelowPrice: "يجب أن تكون الدفعة المقدمة أقل من سعر البيع لعروض التمويل.",
+  FinanceOptionsAwaitValidDownPayment: "تظهر خيارات التمويل عندما تصبح الدفعة المقدمة أقل من سعر البيع.",
   TradeInVehicle: "مركبة الاستبدال",
   TradeInValue: "قيمة الاستبدال",
   FinancingType: "نوع التمويل",
@@ -3796,6 +3817,7 @@ export const salesAr = {
   QuotationOverrideReasonPlaceholder: "مثال: اتُّفق عليه هاتفياً مع مدير الفرع",
   QuotationOverrideReasonRequired: "وضِّح سبب اختلاف المبلغ المُرسَل عن الرقم المحتسَب.",
   QuotationAmountInvalid: "أدخل مبلغاً أكبر من صفر.",
+  AmountTooPrecise: "هذه العملة لا تحتمل هذا العدد من الخانات العشرية — راجع المبلغ.",
   QuotationRecorded: "تم تسجيل عرض السعر",
 
   TheirAppraisalLabel: "التخمين المسجَّل للمركبة",
