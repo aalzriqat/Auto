@@ -307,6 +307,19 @@ describe("Codex review of ac09a2914 (F614-1..3)", () => {
     expect(submissionsToReadBack(subs).map((s) => s.role)).toEqual(["seed", "control"]);
   });
 
+  it("F614-4: a create the server confirmed is read back whatever the UI reported", () => {
+    const subs = [
+      // An error toast after a confirmed create (e.g. a failed custom-field save first).
+      { role: "attempt", outcome: "rejected-toast", value: "QA", created: { args: {}, id: "c9" } },
+      // Control: the same UI outcome with no confirmed create stays out.
+      { role: "seed", outcome: "rejected-toast", value: "QA", created: { args: {}, id: undefined } },
+      { role: "control", outcome: "rejected-inline", value: "QA" },
+      // UI-accepted without a confirmed id stays in, so it shows as unverified (no-id).
+      { role: "variant", outcome: "accepted", value: "QA", created: undefined },
+    ] as const;
+    expect(submissionsToReadBack(subs).map((s) => s.role)).toEqual(["attempt", "variant"]);
+  });
+
   it("F614-3: the server's own field must equal the typed value exactly", () => {
     const expected = hostileValue("unicode", "T2");
     const server = (readBack: string) => judge({ rule: "unicode", field: notes, outcome: "accepted", expected, readBack, readBackFrom: "server-document" });

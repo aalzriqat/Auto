@@ -169,9 +169,15 @@ export function summarizeReadBack(typed: string, rb: ReadBack) {
 /**
  * Every submission that saved a typed value gets its own read-back: a
  * dup-variant attempt can save its seed and its control too (Codex F614-2).
+ * "Saved" is the UI's word or the server's: a create the server confirmed
+ * is traced even when the UI then showed an error (Codex F614-4).
  */
-export function submissionsToReadBack<S extends { outcome: Outcome; value?: string }>(subs: readonly S[]): (S & { value: string })[] {
-  return subs.filter((s): s is S & { value: string } => isAccepted(s.outcome) && s.value !== undefined);
+export function submissionsToReadBack<S extends { outcome: Outcome; value?: string; created?: { id: unknown } }>(
+  subs: readonly S[],
+): (S & { value: string })[] {
+  return subs.filter(
+    (s): s is S & { value: string } => s.value !== undefined && (isAccepted(s.outcome) || typeof s.created?.id === "string"),
+  );
 }
 
 /** Collapse whitespace the way a rendered table cell does. */

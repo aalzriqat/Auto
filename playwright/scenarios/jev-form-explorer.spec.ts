@@ -733,6 +733,9 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
         let lastRb: ReturnType<typeof readBackOf> | undefined;
         for (const s of submissionsToReadBack(submissions)) {
           const id = s.created?.id;
+          if (s.outcome !== "accepted" && s.outcome !== "accepted-silent") {
+            steps.push(`${s.role} ${s.tag}: the server confirmed the create although the UI reported ${s.outcome}`);
+          }
           let doc = typeof id === "string" ? docFromQueries(id) : undefined;
           if (!doc && typeof id === "string") {
             await listFor(s.tag);
