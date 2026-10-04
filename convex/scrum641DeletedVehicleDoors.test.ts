@@ -721,7 +721,7 @@ describe("7. profit-approval authority", () => {
     // SOLD > ARCHIVED > DELETED (SCRUM-653); the profit VERDICT must still block.
     const sold = await vehicle(seed, { minimumProfit: 1_000 });
     await directSale(seed, sold, seed.customerA);
-    await seed.t.run((ctx) => ctx.db.patch(sold, { isDeleted: true }));
+    await forceDeleted(seed, sold); // ABNORMAL: a SOLD car is flagged deleted.
     expect(await profitStatus(seed, sold)).toEqual({ status: "VEHICLE_DELETED" });
   });
 

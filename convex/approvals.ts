@@ -218,9 +218,7 @@ export const profitApprovalStatus = query({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.orgId !== args.orgId) return null;
-    // SCRUM-641: deleted car gets its own blocked state (null reads as non-blocking); see vehicleLiveness.ts.
-    // Every soft-deleted car blocks, whatever its status: an ARCHIVED or SOLD one would otherwise read as an
-    // ordinary verdict and the screen would stay enabled until the server refused on submit.
+    // SCRUM-641: every soft-deleted car blocks, whatever its status (see vehicleLiveness.ts).
     if (isVehicleDeleted(vehicle)) return { status: "VEHICLE_DELETED" as const };
 
     const currency = await getOrgCurrency(ctx, args.orgId);

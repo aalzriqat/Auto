@@ -9,9 +9,8 @@ import { AppErrorCode, throwAppError } from "./errors";
  * quote, draft, hold, deposit, allocation, profit approval, finance approval or sale asks the same
  * question and refuses with the same coded error.
  *
- * ⚠️ PRECEDENCE IS PART OF THE CONTRACT. A car that is deleted AND sold (or archived) keeps
- * reporting SOLD (or ARCHIVED): that is the more specific, older fact and the one callers and
- * tests already know. DELETED is reported only for a car that is otherwise sellable.
+ * ⚠️ PRECEDENCE IS PART OF THE CONTRACT. The throwing guard keeps SOLD > ARCHIVED > DELETED; the
+ * profit verdict (approvals.profitApprovalStatus) blocks every deleted car (D-40).
  *
  * ⚠️ NEVER FOR A FOREIGN CAR. `assertVehicleNotDeleted` takes a car the caller has already proven
  * is in its organisation; `requireCommercialVehicle` proves it itself. Reporting DELETED for
@@ -37,9 +36,8 @@ type DeletedVehicleRefusal = keyof typeof DELETED_VEHICLE_MESSAGES;
 
 /**
  * The ONE precedence ordering (SOLD, then ARCHIVED, then DELETED) for a soft-deleted car; null for a live one.
- * Every consumer reads this rather than restating the order.
  */
-export function deletedVehicleRefusal(vehicle: Doc<"vehicles">): DeletedVehicleRefusal | null {
+function deletedVehicleRefusal(vehicle: Doc<"vehicles">): DeletedVehicleRefusal | null {
   if (!isVehicleDeleted(vehicle)) return null;
   if (vehicle.status === "SOLD") return AppErrorCode.VEHICLE_ALREADY_SOLD;
   if (vehicle.status === "ARCHIVED") return AppErrorCode.VEHICLE_ARCHIVED;
