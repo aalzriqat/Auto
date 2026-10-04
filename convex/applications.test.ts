@@ -3149,3 +3149,65 @@ describe("applications required document enforcement", () => {
     });
   });
 });
+
+/**
+ * The Deals page loads one page from each list and sorts only what it loaded,
+ * so the server must hand back the newest records first. Oldest-first paging
+ * hid every new deal behind "Load more" once an org passed one page
+ * (SCRUM-603).
+ */
+describe("deal lists page newest first (SCRUM-603)", () => {
+  test("applications.list returns the newest application on the first page", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+    });
+    const oldestId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    // Two later rows with the same references, so each one enriches like a real deal.
+    const newestId = await t.run(async (ctx) => {
+      const { _id, _creationTime, ...row } = (await ctx.db.get(oldestId))!;
+      await ctx.db.insert("financeApplications", row);
+      return await ctx.db.insert("financeApplications", row);
+    });
+
+    const page = await asUser.query(api.applications.list, {
+      orgId,
+      paginationOpts: { numItems: 1, cursor: null },
+    });
+
+    expect(page.page.map((a) => a._id)).toEqual([newestId]);
+  });
+
+  test("sales.list returns the newest sale on the first page", async () => {
+    const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
+    const [, , newestId] = await t.run(async (ctx) => {
+      const ids: Array<Id<"sales">> = [];
+      for (let i = 0; i < 3; i++) {
+        ids.push(
+          await ctx.db.insert("sales", {
+            orgId,
+            vehicleId,
+            customerId,
+            salespersonId: userId,
+            salePrice: 20_000,
+            saleDate: Date.now(),
+            status: "COMPLETED",
+          })
+        );
+      }
+      return ids;
+    });
+
+    const page = await asUser.query(api.sales.list, {
+      orgId,
+      paginationOpts: { numItems: 1, cursor: null },
+    });
+
+    expect(page.page.map((s) => s._id)).toEqual([newestId]);
+  });
+});

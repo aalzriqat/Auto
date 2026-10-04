@@ -1713,11 +1713,15 @@ export const list = query({
       pageResult = await ctx.db
         .query("financeApplications")
         .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", args.status as "APPROVED" | "REJECTED" | "DRAFT" | "PENDING_DOCS" | "UNDER_REVIEW" | "CLOSED"))
+        // Newest first: the Deals page shows the first page, and oldest-first
+        // hid every new deal once an org passed one page (SCRUM-603).
+        .order("desc")
         .paginate(args.paginationOpts);
     } else {
       pageResult = await ctx.db
         .query("financeApplications")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .order("desc")
         .paginate(args.paginationOpts);
     }
 

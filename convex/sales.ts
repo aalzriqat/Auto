@@ -119,12 +119,15 @@ export const list = query({
         .withIndex("by_org_salesperson", (q) =>
           q.eq("orgId", args.orgId).eq("salespersonId", args.salespersonId!)
         )
+        // Newest first, like the Deals page that reads it (SCRUM-603).
+        .order("desc")
         .filter((q) => q.neq(q.field("isDeleted"), true))
         .paginate(args.paginationOpts);
     } else {
       pageResult = await ctx.db
         .query("sales")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .order("desc")
         .filter((q) => q.neq(q.field("isDeleted"), true))
         .paginate(args.paginationOpts);
     }
