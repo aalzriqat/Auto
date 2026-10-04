@@ -95,16 +95,21 @@ export function judge(a: Attempt): Verdict {
   // A closed dialog with no toast still saved the value: the rule's finding
   // stands, and only an otherwise clean save is downgraded to the advisory.
   if (a.outcome === "accepted-silent" && verdict.kind !== "finding") {
-    return { kind: "advisory", check: "silent-accept", reason: `${where}: the dialog closed without any confirmation.` };
+    // Keep an inconclusive rule's reason: the advisory must not read as verified.
+    const unverified = verdict.kind === "inconclusive" ? ` Also ${verdict.reason}.` : "";
+    return { kind: "advisory", check: "silent-accept", reason: `${where}: the dialog closed without any confirmation.${unverified}` };
   }
   return verdict;
 }
 
+/** Rules whose only question is "was it saved?". */
+type SavedOnlyRule = "blank-required" | "garbage-phone" | "garbage-email" | "negative" | "too-long";
+
 /**
- * Rules whose only question is "was it saved?": the verdict when it was.
- * Anything not saved is ok here; a raw error or silent ignore was caught above.
+ * The verdict for a SavedOnlyRule when the value was saved. Anything not
+ * saved is ok here; a raw error or silent ignore was caught above.
  */
-const WHEN_SAVED: Partial<Record<Rule, (a: Attempt, where: string) => Verdict>> = {
+const WHEN_SAVED: Record<SavedOnlyRule, (a: Attempt, where: string) => Verdict> = {
   "blank-required": (a) => ({
     kind: "finding",
     check: "blank-required-accepted",
@@ -121,23 +126,43 @@ const WHEN_SAVED: Partial<Record<Rule, (a: Attempt, where: string) => Verdict>> 
   "too-long": (_a, where) => ({ kind: "advisory", check: "no-length-limit", reason: `${where}: 2,000 characters were saved with no limit.` }),
 };
 
+function isSavedOnly(r: Rule): r is SavedOnlyRule {
+  return Object.hasOwn(WHEN_SAVED, r);
+}
+
 function judgeRule(a: Attempt, where: string): Verdict {
-  const whenSaved = WHEN_SAVED[a.rule];
-  if (whenSaved) return isAccepted(a.outcome) ? whenSaved(a, where) : ok(where);
+  if (isSavedOnly(a.rule)) return isAccepted(a.outcome) ? WHEN_SAVED[a.rule](a, where) : ok(where);
   switch (a.rule) {
     case "markup":
-      if (a.scriptRan) return { kind: "finding", check: "markup-executed", reason: `${where}: the saved HTML payload ran as script.` };
-      // `false` only when the payload was seen rendered; otherwise nothing could have run.
+      if (a.scriptRan) return { kind: "finding", check: "markup-executed", reason: `${where}: the HTML payload ran as script.` };
+      // See markupScriptRan: `false` needs evidence, anything else is unknown.
       if (a.scriptRan === undefined) return inconclusive(where, "the saved payload was never seen rendered");
       return ok(where);
     case "unicode":
       return judgeUnicode(a, where);
     case "dup-variant":
       return judgeDupVariant(a, where);
-    default:
-      // dup-exact is the control: it says whether this field is meant to be unique at all.
+    case "dup-exact":
+      // The control: it says whether this field is meant to be unique at all.
       return ok(where);
+    default: {
+      const unhandled: never = a.rule;
+      throw new Error(`No verdict for rule ${String(unhandled)}`);
+    }
   }
+}
+
+/**
+ * Whether a markup payload ran, from what the explorer saw. Each reading is
+ * taken after a settle wait, because an <img onerror> fires only once the
+ * image request has failed (Opus #437 F1). "Did not run" needs evidence:
+ * either the value was refused (only the dialog and its toast ever showed
+ * it), or it was saved and its row was seen rendered in the list.
+ */
+export function markupScriptRan(o: { ranBefore: boolean; ranAfter: boolean; saved: boolean; rendered: boolean }): boolean | undefined {
+  if (o.ranBefore || o.ranAfter) return true;
+  if (!o.saved || o.rendered) return false;
+  return undefined;
 }
 
 function judgeUnicode(a: Attempt, where: string): Verdict {

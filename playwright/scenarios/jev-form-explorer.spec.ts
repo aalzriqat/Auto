@@ -7,6 +7,7 @@ import {
   hostileValue,
   judge,
   kindOf,
+  markupScriptRan,
   phonePair,
   rulesFor,
   type Attempt,
@@ -616,23 +617,35 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       }
       if (last.dialog) await closeDialog(last.dialog);
 
-      if ((c.rule === "unicode" || c.rule === "markup") && (a.outcome === "accepted" || a.outcome === "accepted-silent")) {
-        const xssRan = async () => Boolean(await page.evaluate(() => (window as unknown as { __qaFormXss?: number }).__qaFormXss));
-        // Read the detector before readBack navigates away: a run in this
-        // document (a toast echoing the value, say) would otherwise be lost.
-        const ranBeforeReadBack = c.rule === "markup" && (await xssRan());
+      const saved = a.outcome === "accepted" || a.outcome === "accepted-silent";
+      // Lists show names and titles only. For any other field the row is
+      // found through the tagged name, so its text cannot prove or disprove
+      // the round-trip: leave it unread (inconclusive), never "mangled".
+      const shownInList = c.field.kind === "name" || c.field.kind === "title";
+      if (c.rule === "unicode" && saved) {
         const readBackText = await readBack(c.form, last.tag);
-        // Lists show names and titles only. For any other field the row is
-        // found through the tagged name, so its text cannot prove or disprove
-        // the round-trip: leave it unread (inconclusive), never "mangled".
-        const rendered = (c.field.kind === "name" || c.field.kind === "title") && readBackText !== undefined;
-        if (c.field.kind === "name" || c.field.kind === "title") {
+        if (shownInList) {
           a.readBack = readBackText;
           a.expected = last.value;
         }
-        // "Did not run" is only claimed where the payload was seen rendered;
-        // elsewhere it stays undefined, which the oracle calls inconclusive.
-        if (c.rule === "markup") a.scriptRan = ranBeforeReadBack || (await xssRan()) ? true : rendered ? false : undefined;
+      }
+      if (c.rule === "markup") {
+        // onerror fires only after the image request fails, so each reading
+        // waits up to 2s for the detector instead of sampling it at once.
+        const ranWithin2s = () =>
+          page
+            .waitForFunction(() => Boolean((window as unknown as { __qaFormXss?: number }).__qaFormXss), null, { timeout: 2_000 })
+            .then(
+              () => true,
+              () => false,
+            );
+        // Read this document first: readBack navigates, and a run here (a toast
+        // echoing the value, say) would otherwise be lost.
+        const ranBefore = await ranWithin2s();
+        const readBackDone = saved && !ranBefore;
+        const readBackText = readBackDone ? await readBack(c.form, last.tag) : undefined;
+        const ranAfter = readBackDone && (await ranWithin2s());
+        a.scriptRan = markupScriptRan({ ranBefore, ranAfter, saved, rendered: shownInList && readBackText !== undefined });
       }
 
       const verdict = judge(a);

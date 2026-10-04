@@ -5,6 +5,7 @@ import {
   hostileValue,
   judge,
   kindOf,
+  markupScriptRan,
   phonePair,
   rulesFor,
   type Attempt,
@@ -71,6 +72,33 @@ describe("judge — fixed verdicts, no model involved", () => {
 
   it("markup saved where it never rendered is inconclusive, not ok (CodeRabbit #437)", () => {
     expect(judge({ rule: "markup", field: notes, outcome: "accepted" }).kind).toBe("inconclusive");
+  });
+
+  it("refused markup is ok only when the detector stayed quiet (Opus #437 F2)", () => {
+    expect(judge({ rule: "markup", field: notes, outcome: "rejected-inline", scriptRan: false }).kind).toBe("ok");
+    expect(judge({ rule: "markup", field: notes, outcome: "rejected-toast", scriptRan: true }).check).toBe("markup-executed");
+  });
+
+  it("a silent save of unverified markup says it is unverified (Opus #437 F3)", () => {
+    const v = judge({ rule: "markup", field: notes, outcome: "accepted-silent" });
+    expect(v.check).toBe("silent-accept");
+    expect(v.reason).toContain("never seen rendered");
+  });
+
+  describe("markupScriptRan — what the explorer saw (Opus #437 F1)", () => {
+    const seen = { ranBefore: false, ranAfter: false, saved: true, rendered: true };
+    it("any reading that caught the payload running means it ran", () => {
+      expect(markupScriptRan({ ...seen, ranBefore: true })).toBe(true);
+      expect(markupScriptRan({ ...seen, ranAfter: true })).toBe(true);
+      expect(markupScriptRan({ ...seen, rendered: false, ranAfter: true })).toBe(true);
+    });
+    it("did-not-run needs a refusal or a rendered row", () => {
+      expect(markupScriptRan(seen)).toBe(false);
+      expect(markupScriptRan({ ...seen, saved: false, rendered: false })).toBe(false);
+    });
+    it("saved but never seen rendered is unknown", () => {
+      expect(markupScriptRan({ ...seen, rendered: false })).toBeUndefined();
+    });
   });
 
   it("unicode must be accepted and read back unchanged", () => {
