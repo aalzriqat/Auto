@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioCardGroup } from "./RadioCardGroup";
 import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
+import { parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
 import {
   Dialog,
   DialogContent,
@@ -96,10 +97,12 @@ export function RecordAppraisalDialog({
     setReappraisalReason("");
   }, [open]);
 
-  const parsed = Number(amount);
+  // Exact, never rounded (SCRUM-605) — see the quotation dialog.
+  const strict = parseMajorToMinor(amount, Math.round(Math.log10(factor)));
   const entered = amount.trim() !== "";
-  const amountInvalid = entered && !(parsed > 0);
-  const enteredMinor = entered && parsed > 0 ? Math.round(parsed * factor) : null;
+  const amountTooPrecise = !strict.ok && strict.problem === "TOO_PRECISE";
+  const amountInvalid = entered && !(strict.ok && strict.minor > 0);
+  const enteredMinor = strict.ok && strict.minor > 0 ? strict.minor : null;
   const isReappraisal = existingAppraisalMinor !== null;
   const reasonMissing = isReappraisal && reappraisalReason.trim() === "";
   const canSubmit =
@@ -138,7 +141,7 @@ export function RecordAppraisalDialog({
             />
             {amountInvalid && (
               <p role="alert" className="text-xs font-medium text-destructive">
-                {t("AppraisalAmountInvalid")}
+                {t(amountTooPrecise ? "AmountTooPrecise" : "AppraisalAmountInvalid")}
               </p>
             )}
           </div>

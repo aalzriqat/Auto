@@ -132,6 +132,28 @@ describe("the dialog never invents a destination the operator left blank", () =>
     });
   });
 
+  test("a destination with more decimals than the currency holds is not a decision — never rounded into a reconciling figure (SCRUM-605)", () => {
+    const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
+    renderDialog({ onSubmit });
+    // Rounded to fils this is exactly the gap, and used to submit as such.
+    fireEvent.change(input("GapCashToDealer"), { target: { value: `${GAP_MAJOR}.0004` } });
+    fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
+    fireEvent.change(input("GapToFinanceCompany"), { target: { value: "0" } });
+    expect(confirmButton().disabled).toBe(true);
+    // Every box is filled, so "incomplete" would send the operator hunting for
+    // a blank that is not there; the message names the actual problem.
+    expect(readiness()).toBe("AmountTooPrecise");
+    fireEvent.click(confirmButton());
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  test("a blank destination beside a too-precise one is still reported as too precise, not hidden behind 'incomplete'", () => {
+    renderDialog();
+    fireEvent.change(input("GapCashToDealer"), { target: { value: `${GAP_MAJOR}.0004` } });
+    expect(confirmButton().disabled).toBe(true);
+    expect(readiness()).toBe("AmountTooPrecise");
+  });
+
   test("destinations that do not add up to the customer's part are named, not silently blocked", () => {
     renderDialog();
     fireEvent.change(input("GapCashToDealer"), { target: { value: "600" } });
@@ -157,6 +179,14 @@ describe("who covers it", () => {
     fireEvent.change(input("GapCustomerShare"), { target: { value: "0" } });
     expect(confirmButton().disabled).toBe(true);
     expect(readiness()).toBe("GapSplitLeavesCustomerNothing");
+  });
+
+  test("a SPLIT customer share finer than the currency is named as too precise, not as missing (SCRUM-605)", () => {
+    renderDialog();
+    fireEvent.click(radio(/^GapSplit/));
+    fireEvent.change(input("GapCustomerShare"), { target: { value: "600.0004" } });
+    expect(confirmButton().disabled).toBe(true);
+    expect(readiness()).toBe("AmountTooPrecise");
   });
 
   test("a real SPLIT derives the dealership's part and submits both", () => {
