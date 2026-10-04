@@ -14,7 +14,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 import { formatInCurrency } from "@/lib/currencyFormat";
 
@@ -180,5 +180,28 @@ describe.skipIf(!ENABLED)("held-payments visual fixtures (SCRUM-571 S1)", () => 
     expect(screen.getByRole("dialog").textContent).toContain(t("ExpirePaymentLinkTitle"));
     write("expire-dialog");
     expect(document.body.innerHTML.length).toBeGreaterThan(100);
+
+    // f. D-22: the Expire dialog with the provider-check attestation, unticked
+    // (Expire disabled) and then ticked (Expire enabled).
+    const confirmButton = () =>
+      within(screen.getByRole("dialog")).getByRole("button", { name: t("ExpirePaymentLink") }) as HTMLButtonElement;
+    const attest = within(screen.getByRole("dialog")).getByRole("checkbox");
+    expect(attest.getAttribute("aria-checked")).toBe("false");
+    expect(confirmButton().disabled).toBe(true);
+    write("expire-dialog-attest");
+    fireEvent.click(attest);
+    expect(attest.getAttribute("aria-checked")).toBe("true");
+    expect(confirmButton().disabled).toBe(false);
+    write("expire-dialog-attest-checked");
+    cleanup();
+
+    // g. D-22: a payment link whose capture is held for review shows its label.
+    stubs.held = HELD;
+    stubs.rows = [
+      link({ _id: "pi3", customerName: "Sami Qudah", status: "CAPTURE_HELD", externalId: "chg_TS55D3320261001" }),
+      ...(stubs.rows as unknown[]),
+    ];
+    render(<PaymentLinksPanel />);
+    write("capture-held-row");
   });
 });

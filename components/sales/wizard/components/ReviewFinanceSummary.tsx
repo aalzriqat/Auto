@@ -20,6 +20,11 @@ const DOC_TRANSLATIONS: Record<string, string> = {
   "هوية/كفيل انثى": "ID / Female Guarantor",
 };
 
+/** A document rule's name in the page language; custom names without a translation stay as entered. */
+export function documentDisplayName(name: string, isRtl: boolean): string {
+  return isRtl ? name : DOC_TRANSLATIONS[name] || name;
+}
+
 interface CompanyDoc {
   _id: string;
   documentName: string;
@@ -192,7 +197,7 @@ export default function ReviewFinanceSummary({
                       : "text-muted-foreground"
                   }
                 >
-                  {isRtl ? doc.documentName : (DOC_TRANSLATIONS[doc.documentName] || doc.documentName)}
+                  {documentDisplayName(doc.documentName, isRtl)}
                   {doc.isRequired && (
                     <span className="text-amber-400 ms-1">*</span>
                   )}

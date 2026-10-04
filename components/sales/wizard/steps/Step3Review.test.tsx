@@ -18,6 +18,7 @@ const COMPANY = "company_1" as Id<"financeCompanies">;
 const stubs = vi.hoisted(() => ({
   saveQuote: vi.fn(async () => "quote_1"),
   orgSettings: null as null | { currency: string },
+  rules: [] as unknown[] | undefined,
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -54,7 +55,7 @@ vi.mock("convex/react", async () => {
           },
         ];
       }
-      if (name === "documents:listRules") return [];
+      if (name === "documents:listRules") return stubs.rules;
       if (name === "orgSettings:get") return stubs.orgSettings;
       return null;
     },
@@ -66,10 +67,11 @@ vi.mock("../components/ReviewVehicleListCard", () => ({ default: () => null }));
 vi.mock("../components/ReviewCustomerCard", () => ({ default: () => null }));
 
 import { Step3Review } from "./Step3Review";
+import { OTHER_COMPANY_ID } from "../types";
 
 const customer = { _id: "customer_1", firstName: "QA", lastName: "TEST" } as unknown as Doc<"customers">;
 
-function renderReview(downPayment: number) {
+function renderReview(downPayment: number, selectedCompanyId: string = COMPANY) {
   return render(
     <Step3Review
       paymentType="INSTALLMENT"
@@ -79,7 +81,9 @@ function renderReview(downPayment: number) {
         desiredProfit: 500,
         downPayment,
         termMonths: 48,
-        selectedCompanyId: COMPANY,
+        selectedCompanyId,
+        manualProfitRate: 5,
+        manualExecutionFees: 250,
         customerStatuses: [],
       }}
       selectedCustomer={customer}
@@ -93,6 +97,7 @@ afterEach(() => {
   cleanup();
   stubs.saveQuote.mockClear();
   stubs.orgSettings = null;
+  stubs.rules = [];
 });
 
 describe("Step3Review — committed deal terms (SCRUM-609 F-03)", () => {
@@ -113,6 +118,66 @@ describe("Step3Review — committed deal terms (SCRUM-609 F-03)", () => {
     const terms = screen.getByTestId("review-deal-terms");
     expect(within(terms).getAllByText(/SAR/)).toHaveLength(2);
     expect(screen.queryByText(/JOD/)).toBeNull();
+  });
+});
+
+describe("Step3Review — required documents (SCRUM-628 F-08)", () => {
+  test("a finance company with no required documents says so instead of an empty box", () => {
+    renderReview(3_000);
+
+    expect(screen.getByText("RequiredDocuments")).toBeTruthy();
+    expect(screen.getByText("NoRequiredDocuments")).toBeTruthy();
+  });
+
+  test("while the rules load it says so, never that nothing is required", () => {
+    stubs.rules = undefined;
+    renderReview(3_000);
+
+    expect(screen.getByText("Loading")).toBeTruthy();
+    expect(screen.queryByText("NoRequiredDocuments")).toBeNull();
+  });
+
+  const RULES = [
+    { _id: "rule_org", documentName: "QA National ID", isRequired: true },
+    { _id: "rule_co", companyId: COMPANY, documentName: "QA Bindar Form", isRequired: true },
+    { _id: "rule_other_co", companyId: "company_2", documentName: "QA Rival Form", isRequired: true },
+  ];
+
+  test("a finance company lists its own and org-wide documents, each once", () => {
+    stubs.rules = RULES;
+    renderReview(3_000);
+
+    expect(screen.getAllByText("QA National ID")).toHaveLength(1);
+    expect(screen.getAllByText("QA Bindar Form")).toHaveLength(1);
+    expect(screen.queryByText("QA Rival Form")).toBeNull();
+    expect(screen.getAllByText("RequiredDocuments")).toHaveLength(1);
+  });
+
+  /**
+   * Review (Codex, d6289db7): with the duplicate list gone, the one that remained
+   * printed the raw Arabic name in an English review and no required marker.
+   */
+  test("an English review translates seeded names and marks only required documents", () => {
+    stubs.rules = [
+      { _id: "rule_id", documentName: "هوية/كفيل انثى", isRequired: true },
+      { _id: "rule_opt", companyId: COMPANY, documentName: "QA Optional Form", isRequired: false },
+    ];
+    renderReview(3_000);
+
+    expect(screen.getByText("ID / Female Guarantor")).toBeTruthy();
+    expect(screen.queryByText("هوية/كفيل انثى")).toBeNull();
+    const markers = screen.getAllByTestId("doc-required-marker");
+    expect(markers).toHaveLength(1);
+    expect(markers[0].parentElement?.textContent).toContain("ID / Female Guarantor");
+  });
+
+  test("the Other provider still lists the org-wide documents every deal needs", () => {
+    stubs.rules = RULES;
+    renderReview(3_000, OTHER_COMPANY_ID);
+
+    expect(screen.getAllByText("QA National ID")).toHaveLength(1);
+    expect(screen.queryByText("QA Bindar Form")).toBeNull();
+    expect(screen.queryByText("NoRequiredDocuments")).toBeNull();
   });
 });
 

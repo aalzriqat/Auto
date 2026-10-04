@@ -156,8 +156,32 @@ const insertSale = (w: World, over: { customerId?: Id<"customers">; canonicalRec
     });
   });
 
+// D-20: payment-link pilot shutdown. `paymentIntents.create` and `markSettled`
+// refuse every request with PAYMENT_LINKS_DISABLED before reading the target,
+// the amount or any other field, so the target/cap/reservation behaviours below
+// are dormant until the pilot reopens. Each superseded test is converted to
+// assert the shut outcome (refused, nothing written) rather than skipped: the
+// invariant catalog treats skipped tests as no evidence.
+const seedIntent = (w: World, over: Record<string, unknown> = {}) =>
+  w.t.run((ctx) =>
+    ctx.db.insert("paymentIntents", {
+      orgId: w.orgId,
+      customerId: w.customerId,
+      createdBy: w.userId,
+      receivableDocumentId: w.receivableDocumentId,
+      amountMinor: 100_000,
+      currency: "JOD",
+      provider: "tap",
+      status: "PENDING",
+      idempotencyKey: crypto.randomUUID(),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      ...over,
+    } as never)
+  ) as Promise<Id<"paymentIntents">>;
+
 describe("SCRUM-571 S1 — paymentIntents.create refuses an untargeted intent", () => {
-  test("no receivableId, saleId or receivableDocumentId is refused and writes nothing", async () => {
+  test("D-20: an untargeted request is refused (by the shutdown) and writes nothing", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, asFinance } = await seed(t);
     const before = await counts(t);
@@ -172,21 +196,22 @@ describe("SCRUM-571 S1 — paymentIntents.create refuses an untargeted intent", 
         provider: "tap",
       })
     );
-    expect(code).toBe("PAYMENT_LINK_TARGET_REQUIRED");
+    expect(code).toBe("PAYMENT_LINKS_DISABLED");
     expect(await counts(t)).toEqual(before);
   });
 
-  test("a refused untargeted attempt does not consume its idempotency key", async () => {
+  test("D-20: a refused attempt does not consume its idempotency key (nothing is recorded)", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, asFinance, receivableDocumentId } = await seed(t);
     const idempotencyKey = crypto.randomUUID();
     const base = { idempotencyKey, orgId, customerId, amountMinor: 100_000, currency: "JOD", provider: "tap" };
 
-    expect(await codeOf(asFinance.mutation(api.paymentIntents.create, base))).toBe(
-      "PAYMENT_LINK_TARGET_REQUIRED"
+    expect(await codeOf(asFinance.mutation(api.paymentIntents.create, base))).toBe("PAYMENT_LINKS_DISABLED");
+    expect(await codeOf(asFinance.mutation(api.paymentIntents.create, { ...base, receivableDocumentId }))).toBe(
+      "PAYMENT_LINKS_DISABLED"
     );
-    const intentId = await asFinance.mutation(api.paymentIntents.create, { ...base, receivableDocumentId });
-    expect(intentId).toBeTruthy();
+    const keys = await t.run((ctx) => ctx.db.query("commandIdempotency").take(100));
+    expect(keys.filter((k) => k.idempotencyKey === idempotencyKey)).toHaveLength(0);
   });
 });
 
@@ -248,7 +273,10 @@ describe("SCRUM-571 S1 — paymentIntents.create caps at the document's outstand
     await c.setup?.(w);
     const before = await counts(w.t);
     const code = await codeOf(createWith(w, { amountMinor: c.amountMinor, ...(await targetArgs(w, c.target)) }));
-    expect(code).toBe(c.code);
+    // D-20: `c.code` is the dormant cap/state refusal that returns when payment
+    // links reopen; today the shutdown refuses first, whatever the amount.
+    expect(code).toBe("PAYMENT_LINKS_DISABLED");
+    expect(c.code).toMatch(/^PAYMENT_LINK_/);
     expect(await counts(w.t)).toEqual(before);
   });
 
@@ -258,14 +286,15 @@ describe("SCRUM-571 S1 — paymentIntents.create caps at the document's outstand
     { name: "a partly allocated document at what is still owed", target: "document", amountMinor: 600_000, setup: partlyAllocate },
   ];
 
-  test.each(ACCEPTED.map((c) => [c.name, c] as const))("%s is accepted", async (_name, c) => {
+  // D-20: an at-or-under-outstanding request used to be accepted. While the pilot
+  // is shut it is refused identically and no intent row is created.
+  test.each(ACCEPTED.map((c) => [c.name, c] as const))("%s is refused while the pilot is shut", async (_name, c) => {
     const w = await makeWorld();
     await c.setup?.(w);
-    const intentId = await createWith(w, { amountMinor: c.amountMinor, ...(await targetArgs(w, c.target)) });
-    expect(intentId).toBeTruthy();
-    const intent = await w.t.run((ctx) => ctx.db.get(intentId as Id<"paymentIntents">));
-    expect(intent?.amountMinor).toBe(c.amountMinor);
-    if (c.target === "document") expect(intent?.receivableDocumentId).toBe(w.receivableDocumentId);
+    const before = await counts(w.t);
+    const code = await codeOf(createWith(w, { amountMinor: c.amountMinor, ...(await targetArgs(w, c.target)) }));
+    expect(code).toBe("PAYMENT_LINKS_DISABLED");
+    expect(await counts(w.t)).toEqual(before);
   });
 });
 
@@ -384,83 +413,50 @@ describe("SCRUM-571 S1 — pending payment links reserve the document's outstand
     provider: "tap",
   });
 
-  test("two links each within outstanding but together over it: the second is refused", async () => {
+  // D-20: with `create` shut no reservation can be made, so the reservation
+  // arithmetic is dormant. What survives is: a second link is refused outright,
+  // and expiring a (seeded) PENDING link works and releases it.
+  test("D-20: neither the first nor the second link can be created", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, asFinance, receivableDocumentId } = await seed(t);
-    await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 600_000));
     const before = await counts(t);
 
     expect(
       await codeOf(asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 600_000)))
-    ).toBe("PAYMENT_LINK_EXCEEDS_OUTSTANDING");
+    ).toBe("PAYMENT_LINKS_DISABLED");
+    expect(
+      await codeOf(asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 400_000)))
+    ).toBe("PAYMENT_LINKS_DISABLED");
     expect(await counts(t)).toEqual(before);
-
-    // Exactly the remainder is still accepted.
-    const ok = await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 400_000));
-    expect(ok).toBeTruthy();
   });
 
-  test("expiring the first link frees its amount for the second", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, receivableDocumentId } = await seed(t);
-    const first = await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 600_000));
+  test("D-20: expire still works on a seeded PENDING link", async () => {
+    const w = await makeWorld();
+    const first = await seedIntent(w, { amountMinor: 600_000 });
+    await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId: first, providerStatusConfirmed: true });
+    expect((await w.t.run((ctx) => ctx.db.get(first)))?.status).toBe("EXPIRED");
+  });
+
+  test("D-20: markSettled is refused and a PENDING link is left untouched", async () => {
+    const w = await makeWorld();
+    const pending = await seedIntent(w, { amountMinor: 300_000 });
+    const before = await counts(w.t);
     expect(
-      await codeOf(asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 600_000)))
-    ).toBe("PAYMENT_LINK_EXCEEDS_OUTSTANDING");
-
-    await asFinance.mutation(api.paymentIntents.expire, { orgId, intentId: first });
-    const second = await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 600_000));
-    expect(second).toBeTruthy();
+      await codeOf(
+        w.asFinance.mutation(api.paymentIntents.markSettled, {
+          idempotencyKey: crypto.randomUUID(),
+          orgId: w.orgId,
+          intentId: pending,
+        })
+      )
+    ).toBe("PAYMENT_LINKS_DISABLED");
+    expect((await w.t.run((ctx) => ctx.db.get(pending)))?.status).toBe("PENDING");
+    expect(await counts(w.t)).toEqual(before);
   });
 
-  test("a SETTLED or EXPIRED intent does not reserve", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, receivableDocumentId } = await seed(t);
-    const settled = await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 300_000));
-    const expired = await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 300_000));
-    await asFinance.mutation(api.paymentIntents.markSettled, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId,
-      intentId: settled,
-    });
-    await asFinance.mutation(api.paymentIntents.expire, { orgId, intentId: expired });
-
-    // Outstanding is now 700_000 (300_000 allocated); the expired 300_000 and
-    // the settled 300_000 must not be reserved a second time.
-    expect(
-      await codeOf(asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 700_001)))
-    ).toBe("PAYMENT_LINK_EXCEEDS_OUTSTANDING");
-    const ok = await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 700_000));
-    expect(ok).toBeTruthy();
-  });
-
-  test("a pending intent for a different document of the same customer does not reserve", async () => {
-    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, userId, customerId, asFinance, receivableDocumentId } = await seed(t);
-    const otherDocumentId = await t.run((ctx) =>
-      ctx.db.insert("receivableDocuments", {
-        orgId,
-        documentType: "INVOICE",
-        documentNumber: "OTHER-0001",
-        payerType: "CUSTOMER",
-        customerId,
-        sourceType: "legacy_receivable",
-        sourceId: "other-source",
-        originalAmountMinor: 900_000,
-        currency: "JOD",
-        scale: 3,
-        issueDate: Date.now(),
-        dueDate: DUE(),
-        status: "OPEN",
-        createdAt: Date.now(),
-        createdBy: userId,
-      })
-    );
-    await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, otherDocumentId, 900_000));
-
-    const ok = await asFinance.mutation(api.paymentIntents.create, link(orgId, customerId, receivableDocumentId, 1_000_000));
-    expect(ok).toBeTruthy();
-  });
+  // D-20: "a pending intent for a different document does not reserve" and "a
+  // SETTLED or EXPIRED intent does not reserve" cannot be exercised while links
+  // cannot be created or settled; they return with the pilot.
 });
 
 // The PENDING happy path (expire frees the reservation) is covered above by
@@ -468,19 +464,26 @@ describe("SCRUM-571 S1 — pending payment links reserve the document's outstand
 describe("SCRUM-571 S1 — paymentIntents.expire refusals are coded", () => {
   test("a non-PENDING intent is refused with PAYMENT_LINK_NOT_PENDING and is not changed", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, receivableDocumentId } = await seed(t);
-    const intentId = await asFinance.mutation(api.paymentIntents.create, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId,
-      customerId,
-      receivableDocumentId,
-      amountMinor: 100_000,
-      currency: "JOD",
-      provider: "tap",
-    });
-    await asFinance.mutation(api.paymentIntents.expire, { orgId, intentId });
+    const { orgId, customerId, userId, asFinance, receivableDocumentId } = await seed(t);
+    // D-20: `create` is shut; the PENDING link is seeded directly.
+    const intentId = await t.run((ctx) =>
+      ctx.db.insert("paymentIntents", {
+        orgId,
+        customerId,
+        receivableDocumentId,
+        amountMinor: 100_000,
+        currency: "JOD",
+        provider: "tap",
+        status: "PENDING",
+        idempotencyKey: crypto.randomUUID(),
+        createdBy: userId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+    await asFinance.mutation(api.paymentIntents.expire, { orgId, intentId, providerStatusConfirmed: true });
 
-    expect(await codeOf(asFinance.mutation(api.paymentIntents.expire, { orgId, intentId }))).toBe(
+    expect(await codeOf(asFinance.mutation(api.paymentIntents.expire, { orgId, intentId, providerStatusConfirmed: true }))).toBe(
       "PAYMENT_LINK_NOT_PENDING"
     );
     const row = await t.run((ctx) => ctx.db.get(intentId));
@@ -529,10 +532,10 @@ describe("SCRUM-571 S1 — paymentIntents.expire refusals are coded", () => {
     });
 
     const foreign = await asFinance
-      .mutation(api.paymentIntents.expire, { orgId, intentId: foreignIntentId })
+      .mutation(api.paymentIntents.expire, { orgId, intentId: foreignIntentId, providerStatusConfirmed: true })
       .catch((e: { data?: { code?: string; message?: string } }) => e.data);
     const missing = await asFinance
-      .mutation(api.paymentIntents.expire, { orgId, intentId: missingIntentId })
+      .mutation(api.paymentIntents.expire, { orgId, intentId: missingIntentId, providerStatusConfirmed: true })
       .catch((e: { data?: { code?: string; message?: string } }) => e.data);
 
     expect(foreign?.code).toBe("PAYMENT_LINK_NOT_FOUND");
@@ -669,19 +672,18 @@ const REFUSAL_CASES: ReadonlyArray<{ code: string; run: (w: World) => Promise<un
   {
     code: "PAYMENT_LINK_PROVIDER_ID_IN_USE",
     run: async (w) => {
-      await createWith(w, { externalId: "ext-dup" });
+      await seedIntent(w, { externalId: "ext-dup" });
       return createWith(w, { externalId: "ext-dup" });
     },
   },
   {
     code: "PAYMENT_LINK_NOT_SETTLEABLE",
     run: async (w) => {
-      const intentId = await createWith(w, {});
-      await w.asFinance.mutation(api.paymentIntents.expire, { orgId: w.orgId, intentId: intentId as Id<"paymentIntents"> });
+      const intentId = await seedIntent(w, { status: "EXPIRED" });
       return w.asFinance.mutation(api.paymentIntents.markSettled, {
         idempotencyKey: crypto.randomUUID(),
         orgId: w.orgId,
-        intentId: intentId as Id<"paymentIntents">,
+        intentId,
       });
     },
   },
@@ -697,12 +699,12 @@ const REFUSAL_CASES: ReadonlyArray<{ code: string; run: (w: World) => Promise<un
     // D-14: surfaced by the Settle dialog (markSettled refuses a held provider reference).
     code: "PAYMENT_LINK_SETTLEMENT_REQUIRES_REVIEW",
     run: async (w) => {
-      const intentId = await createWith(w, {});
+      const intentId = await seedIntent(w, {});
       await insertHeld(w, "ext-held");
       return w.asFinance.mutation(api.paymentIntents.markSettled, {
         idempotencyKey: crypto.randomUUID(),
         orgId: w.orgId,
-        intentId: intentId as Id<"paymentIntents">,
+        intentId,
         externalId: "ext-held",
       });
     },
@@ -710,25 +712,31 @@ const REFUSAL_CASES: ReadonlyArray<{ code: string; run: (w: World) => Promise<un
   {
     code: "PAYMENT_LINK_PROVIDER_ID_MISMATCH",
     run: async (w) => {
-      const intentId = await createWith(w, { externalId: "ext-A" });
+      const intentId = await seedIntent(w, { externalId: "ext-A" });
       return w.asFinance.mutation(api.paymentIntents.markSettled, {
         idempotencyKey: crypto.randomUUID(),
         orgId: w.orgId,
-        intentId: intentId as Id<"paymentIntents">,
+        intentId,
         externalId: "ext-B",
       });
     },
   },
 ];
 
+// D-20: every case below used to reach its own coded refusal inside `create` /
+// `markSettled`. The pilot shutdown now refuses first, so each case is asserted
+// to be preempted by PAYMENT_LINKS_DISABLED (coded, EN text equal to the
+// dictionary entry, nothing mutated). `c.code` stays as the dormant refusal's
+// name so the exhaustiveness check below keeps naming every code that returns
+// when the pilot reopens.
 describe("SCRUM-571 S1 — every uncoded throw in create/markSettled is now a coded refusal", () => {
-  test.each(REFUSAL_CASES.map((c) => [c.code, c] as const))("%s", async (_code, c) => {
+  test.each(REFUSAL_CASES.map((c) => [c.code, c] as const))("%s (preempted by the shutdown)", async (_code, c) => {
     const w = await makeWorld();
     const before = await counts(w.t);
     const out = await refusal(c.run(w));
-    expect(out.code).toBe(c.code);
+    expect(out.code).toBe("PAYMENT_LINKS_DISABLED");
     // The server's English text equals the dictionary entry the UI translates from.
-    expect(out.message).toBe((commonEn as Record<string, string>)[`ServerError_${c.code}`]);
+    expect(out.message).toBe((commonEn as Record<string, string>)["ServerError_PAYMENT_LINKS_DISABLED"]);
     expect(out.message).toMatch(/Nothing has been changed\.$/);
     // A refusal never mutates payment state beyond what the case itself set up.
     expect((await counts(w.t)).journalEntries).toBe(before.journalEntries);
@@ -750,7 +758,9 @@ describe("SCRUM-571 S1 — every uncoded throw in create/markSettled is now a co
         idempotencyKey: crypto.randomUUID(), orgId: w.orgId, intentId: foreign,
       })
     );
-    expect(out.code).toBe("PAYMENT_LINK_NOT_FOUND");
+    // D-20: the shutdown refuses before the intent is even looked up, so a
+    // foreign-org intent cannot be told apart from any other (still no leak).
+    expect(out.code).toBe("PAYMENT_LINKS_DISABLED");
   });
 });
 
@@ -769,6 +779,8 @@ describe("SCRUM-571 S1 — every new refusal is translated in both locales", () 
       "PAYMENT_LINK_EXCEEDS_OUTSTANDING",
       "PAYMENT_LINK_NOT_FOUND",
       "PAYMENT_LINK_NOT_PENDING",
+      // Exercised in scrum571s1Containment.test.ts (P4: expire of a held link).
+      "PAYMENT_LINK_CAPTURE_HELD",
     ]);
     expect(Object.keys(PAYMENT_LINK_REFUSALS).filter((code) => !exercised.has(code))).toEqual([]);
   });
