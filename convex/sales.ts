@@ -135,8 +135,8 @@ export const list = query({
 
     const page = await Promise.all(
       pageResult.page.map(async (sale) => {
-        // Fetch the three hydration reads together — they are independent, and
-        // awaiting them in sequence made each row cost three round trips
+        // Fetch the four hydration reads together — they are independent, and
+        // awaiting them in sequence made each row cost four round trips
         // instead of one.
         const [vehicle, customer, salesperson, application] = await Promise.all([
           ctx.db.get(sale.vehicleId),
