@@ -3,6 +3,7 @@ import { query } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
+import { AppErrorCode, throwAppError } from "./utils/errors";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, notifyUser, getActorName } from "./utils/notifications";
 import { getOrgCurrency } from "./accounting/workflowHooks";
@@ -261,13 +262,6 @@ export const respondToApproval = mutation({
       throw new ConvexError("This approval request has already been resolved.");
     }
 
-    await ctx.db.patch(args.requestId, {
-      status: args.status,
-      approvedBy: user._id,
-      notes: args.notes,
-      respondedAt: Date.now(),
-    });
-
     // The request is proven in-org above; the vehicle it references is not.
     // Without this an approval carrying a foreign vehicle id would put that
     // car's year/make/model into a notification — the same unchecked
@@ -275,6 +269,25 @@ export const respondToApproval = mutation({
     // result rather than merely rendering it.
     const vehicle = await ctx.db.get(request.vehicleId);
     const vehicleInOrg = vehicle && vehicle.orgId === args.orgId ? vehicle : null;
+
+    // SCRUM-113. A request is APPROVED only while its vehicle exists in this
+    // org and is not soft-deleted: an approval over a vanished car can never be
+    // revisited and its resume path points at nothing. REJECTED stays allowed
+    // in every one of those states - it is the manager's way to clear the row.
+    if (args.status === "APPROVED" && (!vehicleInOrg || vehicleInOrg.isDeleted)) {
+      throwAppError(
+        AppErrorCode.APPROVAL_VEHICLE_UNAVAILABLE,
+        "This vehicle is no longer available in this dealership, so the request can't be approved. Reject it instead."
+      );
+    }
+
+    await ctx.db.patch(args.requestId, {
+      status: args.status,
+      approvedBy: user._id,
+      notes: args.notes,
+      respondedAt: Date.now(),
+    });
+
     const saleLabel = vehicleInOrg
       ? `${vehicleInOrg.year} ${vehicleInOrg.make} ${vehicleInOrg.model}`
       : "the requested sale";
