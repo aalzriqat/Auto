@@ -8,7 +8,11 @@ import { resolveOrgId } from "../utils";
  * `undefined` / `[object Object]` rendered as text. Horizontal overflow at
  * phone width is recorded as an annotation, not a failure.
  *
- * It only navigates; it never clicks, so it cannot change data.
+ * It only navigates; it never clicks. That is not strictly read-only: like any
+ * signed-in visit, the dashboard's mount effects still run — e.g.
+ * FloatingMessenger marks incoming direct messages delivered
+ * (`directMessages.markDelivered`). Run it only against QA data on a
+ * disposable preview or localhost, never production.
  */
 
 const ROUTES = [

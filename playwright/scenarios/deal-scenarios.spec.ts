@@ -650,9 +650,10 @@ async function step(
   action: () => Promise<void>,
   knownDefect?: { key: string; posts: ExpectedLedgerDelta },
 ): Promise<void> {
-  const client = await authenticatedConvexClient(page);
-  const before = await snapshotLedger(client, orgId);
+  const before = await snapshotLedger(await authenticatedConvexClient(page), orgId);
   await action();
+  // A long UI action can outlive the Clerk token the first client carried.
+  const client = await authenticatedConvexClient(page);
   // Postings land through the outbox; give it the time a dealer would.
   await expect
     .poll(async () => {
@@ -705,6 +706,9 @@ test.describe("financed deals, start to finish, checked through the ledger", () 
     test(`${s.id}: ${s.title}`, async ({ page, browser }) => {
       const orgId = (await resolveOrgId(page)) as Id<"organizations">;
       const client = await authenticatedConvexClient(page);
+      // The matrix runs ~40 min; open the month this test posts in, not only
+      // the one beforeAll saw, or a run across a month end holds postings.
+      await ensureLedgerMonthOpen(client, orgId);
       const model = `QA-${s.id}-${testDataSuffix()}`;
 
       await step(`${s.id} acquisition`, page, orgId, acquired(s.vehicle.costPaidBy), async () => {
@@ -776,9 +780,9 @@ async function noMovement(
   orgId: Id<"organizations">,
   action: () => Promise<void>,
 ): Promise<void> {
-  const client = await authenticatedConvexClient(page);
-  const before = await snapshotLedger(client, orgId);
+  const before = await snapshotLedger(await authenticatedConvexClient(page), orgId);
   await action();
+  const client = await authenticatedConvexClient(page);
   await drainOutbox(client, orgId);
   const delta = await ledgerDelta(client, orgId, before);
   console.log(`LEDGER ${label}`, JSON.stringify(delta.byCode));
@@ -1040,6 +1044,9 @@ test.describe("cancelled financed deals: the reversal and the deposit decision, 
     test(`${s.id}: ${s.title}`, async ({ page, browser }) => {
       const orgId = (await resolveOrgId(page)) as Id<"organizations">;
       const client = await authenticatedConvexClient(page);
+      // The matrix runs ~40 min; open the month this test posts in, not only
+      // the one beforeAll saw, or a run across a month end holds postings.
+      await ensureLedgerMonthOpen(client, orgId);
       const model = `QA-${s.id}-${testDataSuffix()}`;
 
       await step(`${s.id} acquisition`, page, orgId, acquired(s.vehicle.costPaidBy), async () => {
