@@ -436,6 +436,18 @@ describe("(e) completeSale itself: the door must name the sale's own application
     expect((await s.t.run((ctx) => ctx.db.get(f.vehicleId)))?.status).toBe("AVAILABLE");
   });
 
+  test("a forged door with no applicationId on a FINANCED sale with no applicationId is refused (undefined must not equal undefined)", async () => {
+    const s = await seedDealer();
+    const f = await financedArgs(s);
+    const forged = { kind: "FINANCE_FINALIZATION", applicationId: undefined } as unknown as Parameters<
+      typeof completeSale
+    >[2];
+    await expectFinancedSaleRequiresDeal(
+      s.t.run((ctx) => completeSale(ctx, { ...f.args, applicationId: undefined }, forged))
+    );
+    expect((await s.t.run((ctx) => ctx.db.get(f.vehicleId)))?.status).toBe("AVAILABLE");
+  });
+
   test("no door at all is refused for a FINANCED sale that names an application", async () => {
     const s = await seedDealer();
     const f = await financedArgs(s);

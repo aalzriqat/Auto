@@ -448,7 +448,11 @@ async function prepareSaleCompletion(
   // any write. Same code and message as the SCRUM-504 absent-application refusal.
   if (
     args.financingType === "FINANCED" &&
-    !(door?.kind === "FINANCE_FINALIZATION" && door.applicationId === args.applicationId)
+    !(
+      door?.kind === "FINANCE_FINALIZATION" &&
+      args.applicationId !== undefined &&
+      door.applicationId === args.applicationId
+    )
   ) {
     throwAppError(AppErrorCode.FINANCED_SALE_REQUIRES_DEAL, FINANCED_SALE_REQUIRES_DEAL_MESSAGE);
   }
