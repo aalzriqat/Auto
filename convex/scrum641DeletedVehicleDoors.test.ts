@@ -180,7 +180,6 @@ async function softDelete(seed: Seed, vehicleId: Id<"vehicles">) {
   expect((await get(seed, vehicleId))?.isDeleted, "precondition: car is deleted").toBe(true);
 }
 
-/** ABNORMAL STATE: sets the flag directly, bypassing the product door's commitment refusal. */
 /** A soft-deleted car owned by a SECOND organisation inside the same database. */
 async function foreignDeletedVehicle(seed: Seed, vin: string) {
   return await seed.t.run(async (ctx) => {
@@ -202,6 +201,7 @@ async function foreignDeletedVehicle(seed: Seed, vin: string) {
   });
 }
 
+/** ABNORMAL STATE: sets the flag directly, bypassing the product door's commitment refusal. */
 async function forceDeleted(seed: Seed, vehicleId: Id<"vehicles">) {
   await seed.t.run((ctx) => ctx.db.patch(vehicleId, { isDeleted: true, deletedAt: Date.now() }));
 }
@@ -704,8 +704,8 @@ describe("7. profit-approval authority", () => {
   test("R2-F1: every soft-deleted car reads a blocking VEHICLE_DELETED verdict, whatever its status", async () => {
     // Real lifecycle: archive through the product door, then soft-delete (softDelete allows ARCHIVED).
     const { seed, v } = await profitSeed();
-    expect(await profitStatus(seed, v), "control: a live car gets an ordinary verdict").not.toEqual({
-      status: "VEHICLE_DELETED",
+    expect(await profitStatus(seed, v), "control: a live car gets an ordinary verdict").toMatchObject({
+      status: "REQUIRED",
     });
     await seed.asUser.mutation(api.vehicles.update, {
       orgId: seed.orgId,
@@ -718,9 +718,10 @@ describe("7. profit-approval authority", () => {
     expect(await profitStatus(seed, v)).toEqual({ status: "VEHICLE_DELETED" });
 
     // Sold-then-deleted is unreachable through the doors, so it is force-patched. The server GUARD keeps
-    // SOLD > ARCHIVED > DELETED (SCRUM-653); the profit VERDICT must still block.
+    // SOLD > ARCHIVED > DELETED (SCRUM-654); the profit VERDICT must still block.
     const sold = await vehicle(seed, { minimumProfit: 1_000 });
     await directSale(seed, sold, seed.customerA);
+    expect((await get(seed, sold))?.status, "precondition: sold").toBe("SOLD");
     await forceDeleted(seed, sold); // ABNORMAL: a SOLD car is flagged deleted.
     expect(await profitStatus(seed, sold)).toEqual({ status: "VEHICLE_DELETED" });
   });
