@@ -16,10 +16,9 @@ import {
 } from "./utils/vehicleStatusGuards";
 import { assertVehicleImagesAllowed } from "./utils/storageValidation";
 import { acquisitionPaymentMethodValidator, type AcquisitionPaymentMethod } from "./utils/paymentMethods";
-import { postVehicleAcquisitionIfOwned, hasVehicleAcquisitionAccountingExposure } from "./vehicles";
+import { postVehicleAcquisitionIfOwned, hasVehicleAcquisitionAccountingExposure, throwVehicleCostPosted } from "./vehicles";
 import { retroactiveOwnershipChangeRefusal } from "./utils/vehicleOwnership";
 import { supplierCostRecoveryConversionRefusal } from "./utils/costBearer";
-import { throwAppError, AppErrorCode } from "./utils/errors";
 
 type VehicleEditPayload = {
   vin?: string;
@@ -418,10 +417,7 @@ export const resolve = mutation({
           ? await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, request.vehicleId)
           : false;
         if (("purchasePrice" in payload || "sourceCost" in payload) && resolveAcquisitionAlreadyExposed) {
-          throwAppError(
-            AppErrorCode.VEHICLE_COST_POSTED,
-            "This vehicle's purchase cost has already been posted to accounting and can't be edited directly. Use 'Correct purchase cost' instead."
-          );
+          throwVehicleCostPosted();
         }
         const resolveAcquisitionSourceType = payload.sourceType ?? previousVehicle.sourceType;
         const resolveAcquisitionPurchasePrice = "purchasePrice" in payload ? payload.purchasePrice : previousVehicle.purchasePrice;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { format } from "date-fns";
 import { toast } from "@/components/ui/sonner";
@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/select";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { getLocalizedErrorMessage } from "@/lib/errors";
+import { useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
 
 type CorrectionType =
   | "PRIOR_PERIOD_RESTATEMENT"
@@ -56,13 +57,30 @@ export function CorrectAcquisitionCostDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }>) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      {/* Mounted only while open and keyed by vehicle: a fresh open is a fresh intent, so a
+          half-typed correction is never carried across vehicles or reopenings. */}
+      {open && <CorrectionForm key={vehicle._id} vehicle={vehicle} onOpenChange={onOpenChange} />}
+    </Dialog>
+  );
+}
+
+function CorrectionForm({
+  vehicle,
+  onOpenChange,
+}: Readonly<{
+  vehicle: Doc<"vehicles">;
+  onOpenChange: (open: boolean) => void;
+}>) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const tx = t as (key: any) => string;
+  const tx = t as (key: string) => string;
+  const formatMoney = useCurrencyFormatterInCurrency();
   const correct = useMutation(api.vehicles.correctAcquisitionCost);
   const context = useQuery(
     api.vehicles.getAcquisitionCostCorrectionContext,
-    open && activeOrgId ? { orgId: activeOrgId, vehicleId: vehicle._id } : "skip"
+    activeOrgId ? { orgId: activeOrgId, vehicleId: vehicle._id } : "skip"
   );
 
   const [newCost, setNewCost] = useState("");
@@ -71,26 +89,16 @@ export function CorrectAcquisitionCostDialog({
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // A fresh open is a fresh intent: never carry a half-typed correction across vehicles.
-  useEffect(() => {
-    if (open) {
-      setNewCost("");
-      setType(undefined);
-      setMethod(undefined);
-      setReason("");
-      setBusy(false);
-    }
-  }, [open, vehicle._id]);
-
   const allowedTypes = (context?.allowedTypes ?? []) as CorrectionType[];
   const currentCost = context?.currentCost ?? 0;
   const parsed = newCost.trim() === "" ? NaN : Number(newCost);
   const amountValid = Number.isFinite(parsed) && parsed >= 0;
   const unchanged = amountValid && parsed === currentCost;
   const needsMethod = type === "CASH_REFUND";
+  const canCorrect = context !== undefined && context.blockedReason === null;
   const canSubmit =
     !busy &&
-    context?.eligible === true &&
+    canCorrect &&
     amountValid &&
     !unchanged &&
     type !== undefined &&
@@ -112,15 +120,14 @@ export function CorrectAcquisitionCostDialog({
       toast.success(tx("CostCorrectionDone"));
       onOpenChange(false);
     } catch (error) {
-      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
+      toast.error(getLocalizedErrorMessage(error, tx));
       setBusy(false);
     }
   };
 
-  const blocked = context && !context.eligible ? context.blockedReason : null;
+  const blocked = context?.blockedReason ?? null;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{tx("CostCorrectionAction")}</DialogTitle>
@@ -143,7 +150,7 @@ export function CorrectAcquisitionCostDialog({
             <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
               <dt className="text-muted-foreground">{tx("CostCorrectionCurrentCost")}</dt>
               <dd className="text-end font-medium tabular-nums">
-                {currentCost.toLocaleString()} {context.currency}
+                {formatMoney(currentCost, context.currency, Number.isInteger(currentCost) ? 0 : 3)}
               </dd>
               {context.originalPaymentMethod && (
                 <>
@@ -155,8 +162,8 @@ export function CorrectAcquisitionCostDialog({
             {context.payable && (
               <p className="text-sm text-muted-foreground tabular-nums">
                 {tx("CostCorrectionPayable")
-                  .replace("{due}", context.payable.amountDue.toLocaleString())
-                  .replace("{paid}", context.payable.amountPaid.toLocaleString())}
+                  .replace("{due}", formatMoney(context.payable.amountDue, context.currency, 3))
+                  .replace("{paid}", formatMoney(context.payable.amountPaid, context.currency, 3))}
               </p>
             )}
 
@@ -252,13 +259,12 @@ export function CorrectAcquisitionCostDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             {tx("Cancel")}
           </Button>
-          {context?.eligible === true && allowedTypes.length > 0 && (
+          {canCorrect && allowedTypes.length > 0 && (
             <Button onClick={() => void submit()} disabled={!canSubmit}>
               {busy ? tx("CostCorrectionSubmitting") : tx("CostCorrectionSubmit")}
             </Button>
           )}
         </DialogFooter>
       </DialogContent>
-    </Dialog>
   );
 }

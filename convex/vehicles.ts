@@ -1108,6 +1108,14 @@ export async function hasVehicleAcquisitionAccountingExposure(
   return pendingPost !== null;
 }
 
+/** The refusal for a direct edit of a posted purchase cost (vehicles.update and vehicleEdits.resolve). */
+export function throwVehicleCostPosted(): never {
+  throwAppError(
+    AppErrorCode.VEHICLE_COST_POSTED,
+    "This vehicle's purchase cost has already been posted to accounting and can't be edited directly. Use 'Correct purchase cost' instead."
+  );
+}
+
 /**
  * STRICTER than `hasVehicleAcquisitionAccountingExposure`, and deliberately local.
  *
@@ -1361,10 +1369,7 @@ export const update = mutation({
       : false;
 
     if (("purchasePrice" in patch || "sourceCost" in patch) && acquisitionAlreadyExposed) {
-      throwAppError(
-        AppErrorCode.VEHICLE_COST_POSTED,
-        "This vehicle's purchase cost has already been posted to accounting and can't be edited directly. Use 'Correct purchase cost' instead."
-      );
+      throwVehicleCostPosted();
     }
 
     const acquisitionSourceType = (patch.sourceType as "STOCK" | "SOURCED" | undefined) ?? vehicle.sourceType;
@@ -1644,14 +1649,31 @@ async function findPostedAcquisitionEvent(
   orgId: Id<"organizations">,
   vehicleId: Id<"vehicles">
 ): Promise<Doc<"accountingEvents"> | null> {
-  const events = await ctx.db
+  return ctx.db
     .query("accountingEvents")
     .withIndex("by_org_source", (q) =>
       q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId.toString())
     )
-    .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
-    .collect();
-  return events.find((event) => event.status === "POSTED") ?? null;
+    .filter((q) =>
+      q.and(q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"), q.eq(q.field("status"), "POSTED"))
+    )
+    .first();
+}
+
+/** The acquisition's outbox POST row in the given status, if one is queued. */
+async function findQueuedAcquisitionPost(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">,
+  status: "PENDING" | "FAILED"
+): Promise<Doc<"pendingAccountingEvents"> | null> {
+  return ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", orgId).eq("idempotencyKey", `vehicle_acquired_${vehicleId}`)
+    )
+    .filter((q) => q.and(q.eq(q.field("kind"), "POST"), q.eq(q.field("status"), status)))
+    .first();
 }
 
 /** How the car was paid, read from the posted event's payload. `undefined` = legacy/unknown (treated as cash). */
@@ -1742,7 +1764,6 @@ export function costCorrectionCounterKey(
     case "CASH_REFUND":
       return disbursementAccountKey(paymentMethod);
     case "PRIOR_PERIOD_RESTATEMENT":
-    default:
       return SYSTEM_KEYS.RETAINED_EARNINGS;
   }
 }
@@ -1821,7 +1842,10 @@ export const correctAcquisitionCost = mutation({
     // a delta on top of the ledger's existing balance, so the base entry
     // must already be settled — correcting against a still-pending base
     // could post before it, or interleave unpredictably with it.
-    const acquisitionEvent = await findPostedAcquisitionEvent(ctx, args.orgId, args.vehicleId);
+    const [currency, acquisitionEvent] = await Promise.all([
+      getOrgCurrency(ctx, args.orgId),
+      findPostedAcquisitionEvent(ctx, args.orgId, args.vehicleId),
+    ]);
     if (!acquisitionEvent) {
       throwAppError(
         AppErrorCode.COST_CORRECTION_NOT_POSTED,
@@ -1829,7 +1853,6 @@ export const correctAcquisitionCost = mutation({
       );
     }
 
-    const currency = await getOrgCurrency(ctx, args.orgId);
     // An amount that does not survive the round trip through the currency's minor units would
     // be stored as typed but posted rounded, so the vehicle and the ledger would disagree by
     // the rounding. Refused before any write.
@@ -1856,44 +1879,39 @@ export const correctAcquisitionCost = mutation({
     // ── The correction-type matrix, enforced from the ORIGINAL payment method.
     const { row, count: payableCount } = await loadAcquisitionPayable(ctx, args.vehicleId);
     const originalMethod = resolveOriginalPaymentMethod(acquisitionEvent, payableCount);
-    const onAccount = originalMethod === "ON_ACCOUNT";
-    let payableToAdjust: Doc<"vehicleSupplierPayables"> | null = null;
-    if (onAccount) {
-      if (AP_CORRECTION_TYPES.includes(args.correctionType)) {
-        if (newMinor === 0) {
-          throwAppError(
-            AppErrorCode.COST_CORRECTION_INVALID_AMOUNT,
-            "The new purchase cost must be a valid amount, zero or more."
-          );
-        }
-        if (!isPayableAdjustable(row, currency, previousCost)) {
-          throwAppError(
-            AppErrorCode.COST_CORRECTION_PAYABLE_NOT_ADJUSTABLE,
-            "The supplier balance for this vehicle has been partly paid, disputed or settled, so the invoice can't be corrected automatically. Contact finance to record a supplier credit or adjustment."
-          );
-        }
-        payableToAdjust = row;
-      } else if (args.correctionType === "CASH_REFUND" && !(row && deriveSettlementStatus(row) === "PAID")) {
+    const rewritesPayable = originalMethod === "ON_ACCOUNT" && AP_CORRECTION_TYPES.includes(args.correctionType);
+    const payableAdjustable = isPayableAdjustable(row, currency, previousCost);
+    if (rewritesPayable) {
+      if (newMinor === 0) {
         throwAppError(
-          AppErrorCode.COST_CORRECTION_TYPE_NOT_ALLOWED,
-          "This correction type doesn't fit how the vehicle was paid for. Choose one of the other options."
+          AppErrorCode.COST_CORRECTION_INVALID_AMOUNT,
+          "The new purchase cost must be a valid amount, zero or more."
         );
       }
-    } else if (AP_CORRECTION_TYPES.includes(args.correctionType)) {
+      if (!payableAdjustable) {
+        throwAppError(
+          AppErrorCode.COST_CORRECTION_PAYABLE_NOT_ADJUSTABLE,
+          "The supplier balance for this vehicle has been partly paid, disputed or settled, so the invoice can't be corrected automatically. Contact finance to record a supplier credit or adjustment."
+        );
+      }
+    }
+    if (!allowedAcquisitionCorrectionTypes(originalMethod, row, payableAdjustable).includes(args.correctionType)) {
       throwAppError(
         AppErrorCode.COST_CORRECTION_TYPE_NOT_ALLOWED,
         "This correction type doesn't fit how the vehicle was paid for. Choose one of the other options."
       );
     }
+    const payableToAdjust = rewritesPayable ? row : null;
 
     // ── It posts now or not at all. Both halves are checked BEFORE the first
     // write, so a refusal leaves the vehicle, the payable and the ledger as they were.
     const now = Date.now();
     const counterKey = costCorrectionCounterKey(args.correctionType, args.paymentMethod);
-    const accountsMapped =
-      (await isSystemAccountMapped(ctx, args.orgId, counterKey)) &&
-      (await isSystemAccountMapped(ctx, args.orgId, SYSTEM_KEYS.VEHICLE_INVENTORY));
-    if (!accountsMapped || !(await isPostableNow(ctx, args.orgId, now))) {
+    const [counterMapped, inventoryMapped] = await Promise.all([
+      isSystemAccountMapped(ctx, args.orgId, counterKey),
+      isSystemAccountMapped(ctx, args.orgId, SYSTEM_KEYS.VEHICLE_INVENTORY),
+    ]);
+    if (!counterMapped || !inventoryMapped || !(await isPostableNow(ctx, args.orgId, now))) {
       throwAppError(
         AppErrorCode.COST_CORRECTION_NOT_POSTABLE_NOW,
         "This correction can't be posted right now because the accounting period is closed or the required account is missing. Ask your accountant to open the period or set up the account, then try again."
@@ -2007,15 +2025,17 @@ export const getAcquisitionCostCorrectionContext = query({
 
     const vehicle = await loadOwnedLiveVehicle(ctx, args.orgId, args.vehicleId);
 
-    const currency = await getOrgCurrency(ctx, args.orgId);
     const currentCost = vehicle.purchasePrice ?? 0;
-    const corrections = (
-      await ctx.db
+    const [currency, correctionRows, event] = await Promise.all([
+      getOrgCurrency(ctx, args.orgId),
+      ctx.db
         .query("vehicleCostCorrections")
         .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
         .order("desc")
-        .take(5)
-    ).map((row) => ({
+        .take(5),
+      findPostedAcquisitionEvent(ctx, args.orgId, args.vehicleId),
+    ]);
+    const corrections = correctionRows.map((row) => ({
       previousCost: row.previousCost,
       newCost: row.newCost,
       reason: row.reason,
@@ -2023,56 +2043,42 @@ export const getAcquisitionCostCorrectionContext = query({
       createdAt: row.createdAt,
     }));
 
-    const event = await findPostedAcquisitionEvent(ctx, args.orgId, args.vehicleId);
-    let blockedReason: "SOLD" | "SOURCED" | "NOT_POSTED" | "PENDING_POST" | "POST_FAILED" | null = null;
-    if (vehicle.sourceType === "SOURCED") blockedReason = "SOURCED";
-    else if (vehicle.status === "SOLD") blockedReason = "SOLD";
-    else if (!event) {
-      const queued = await ctx.db
-        .query("pendingAccountingEvents")
-        .withIndex("by_org_idempotency", (q) =>
-          q.eq("orgId", args.orgId).eq("idempotencyKey", `vehicle_acquired_${args.vehicleId}`)
-        )
-        .collect();
-      // Three different truths, three different instructions: still queued (wait for the period
-      // or the chart), dead-lettered (finance must resolve it), and never attempted at all.
-      if (queued.some((row) => row.kind === "POST" && row.status === "PENDING")) blockedReason = "PENDING_POST";
-      else if (queued.some((row) => row.kind === "POST" && row.status === "FAILED")) blockedReason = "POST_FAILED";
-      else blockedReason = "NOT_POSTED";
-    }
-
-    const acquisitionPayables = event ? await loadAcquisitionPayable(ctx, args.vehicleId) : null;
-    const originalPaymentMethod =
-      event && acquisitionPayables ? resolveOriginalPaymentMethod(event, acquisitionPayables.count) ?? null : null;
-    let payable: { status: string; amountDue: number; amountPaid: number } | null = null;
-    let allowedTypes: AcquisitionCostCorrectionType[] = [];
-    if (blockedReason === null && event) {
-      let payableRow: Doc<"vehicleSupplierPayables"> | null = null;
-      if (originalPaymentMethod === "ON_ACCOUNT") {
-        payableRow = acquisitionPayables?.row ?? null;
-        if (payableRow) {
-          payable = {
-            status: payableRow.status,
-            amountDue: payableRow.amountDue,
-            amountPaid: payableRow.amountPaid ?? 0,
-          };
-        }
-      }
-      allowedTypes = allowedAcquisitionCorrectionTypes(
-        originalPaymentMethod ?? undefined,
-        payableRow,
-        isPayableAdjustable(payableRow, currency, currentCost)
-      );
-    }
-
-    return {
-      eligible: blockedReason === null,
+    const blocked = (blockedReason: "SOLD" | "SOURCED" | "NOT_POSTED" | "PENDING_POST" | "POST_FAILED") => ({
       blockedReason,
       currentCost,
       currency,
-      originalPaymentMethod,
-      payable,
-      allowedTypes,
+      originalPaymentMethod: null,
+      payable: null,
+      allowedTypes: [] as AcquisitionCostCorrectionType[],
+      corrections,
+    });
+    if (vehicle.sourceType === "SOURCED") return blocked("SOURCED");
+    if (vehicle.status === "SOLD") return blocked("SOLD");
+    if (!event) {
+      // Three different truths, three different instructions: still queued (wait for the period
+      // or the chart), dead-lettered (finance must resolve it), and never attempted at all.
+      if (await findQueuedAcquisitionPost(ctx, args.orgId, args.vehicleId, "PENDING")) return blocked("PENDING_POST");
+      if (await findQueuedAcquisitionPost(ctx, args.orgId, args.vehicleId, "FAILED")) return blocked("POST_FAILED");
+      return blocked("NOT_POSTED");
+    }
+
+    const { row, count } = await loadAcquisitionPayable(ctx, args.vehicleId);
+    const originalPaymentMethod = resolveOriginalPaymentMethod(event, count);
+    const payableRow = originalPaymentMethod === "ON_ACCOUNT" ? row : null;
+
+    return {
+      blockedReason: null,
+      currentCost,
+      currency,
+      originalPaymentMethod: originalPaymentMethod ?? null,
+      payable: payableRow
+        ? { status: payableRow.status, amountDue: payableRow.amountDue, amountPaid: payableRow.amountPaid ?? 0 }
+        : null,
+      allowedTypes: allowedAcquisitionCorrectionTypes(
+        originalPaymentMethod,
+        payableRow,
+        isPayableAdjustable(payableRow, currency, currentCost)
+      ),
       corrections,
     };
   },

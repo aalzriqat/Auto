@@ -353,7 +353,7 @@ describe("SCRUM-650 correctAcquisitionCost — preconditions", () => {
     expect(await snapshot(d.t, d.orgId, vehicleId)).toEqual(before);
 
     const context = await d.asOwner.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: d.orgId, vehicleId });
-    expect(context).toMatchObject({ eligible: false, blockedReason: "PENDING_POST", allowedTypes: [] });
+    expect(context).toMatchObject({ blockedReason: "PENDING_POST", allowedTypes: [] });
   });
 
   test("7a. a closed period refuses NOT_POSTABLE_NOW: nothing queued, nothing patched", async () => {
@@ -467,7 +467,7 @@ describe("SCRUM-650 getAcquisitionCostCorrectionContext", () => {
     const vehicleId = await createOnAccountVehicle(d, 12500);
     let context = await d.asOwner.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: d.orgId, vehicleId });
     expect(context).toMatchObject({
-      eligible: true, blockedReason: null, currentCost: 12500, currency: "JOD",
+      blockedReason: null, currentCost: 12500, currency: "JOD",
       originalPaymentMethod: "ON_ACCOUNT",
       payable: { status: "PENDING", amountDue: 12500, amountPaid: 0 },
       allowedTypes: ["SUPPLIER_INVOICE_ERROR", "VENDOR_CREDIT", "PRIOR_PERIOD_RESTATEMENT"],
@@ -488,14 +488,14 @@ describe("SCRUM-650 getAcquisitionCostCorrectionContext", () => {
     const vehicleId = await createCashVehicle(d);
     const context = await d.asOwner.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: d.orgId, vehicleId });
     expect(context).toMatchObject({
-      eligible: true, originalPaymentMethod: "CASH", payable: null,
+      blockedReason: null, originalPaymentMethod: "CASH", payable: null,
       allowedTypes: ["CASH_REFUND", "PRIOR_PERIOD_RESTATEMENT"],
     });
     const noCostId = await d.asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, vin: "1HGCM82633A000003",
     });
     const blocked = await d.asOwner.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: d.orgId, vehicleId: noCostId });
-    expect(blocked).toMatchObject({ eligible: false, blockedReason: "NOT_POSTED" });
+    expect(blocked).toMatchObject({ blockedReason: "NOT_POSTED" });
   });
 });
 
