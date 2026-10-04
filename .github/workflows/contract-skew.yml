@@ -1,0 +1,222 @@
+# Does the code on `main` match the backend users are actually served by?
+#
+# SCRUM-177: #227 merged, Vercel published the frontend within minutes, the
+# Convex backend was never deployed, and both opening-balance entry paths were
+# refused for 33.5 hours. Nothing detected it. The frontend and the backend ship
+# through different systems — Vercel's GitHub integration on merge, and
+# `deploy-production.yml` by manual dispatch — so a merge routinely ships half a
+# change, and the half that is missing is invisible from the repository.
+#
+# ⚠️ This runs on a schedule and on merge to main ON PURPOSE. A control that
+# only runs when someone remembers to run it would not have caught SCRUM-177
+# either, because nobody remembered for a day and a half.
+#
+# ⚠️ MAIN ONLY, and deliberately NOT on pull requests. Reading the live function
+# spec needs a Convex key carrying `deployment:data:view` — the capability Convex
+# itself named when a `deployment:metrics:view`-only key was refused. That
+# capability is wider than "read function metadata", so the credential must not
+# be reachable from a branch: a workflow file added on any branch would otherwise
+# be able to read it. It lives in the `contract-skew-prod-read` environment,
+# whose deployment-branch policy admits `main` alone. Declaring that environment
+# here is what binds the job to that policy.
+#
+# ⚠️ That environment has NO required reviewer and NO wait timer, which is the
+# other half of the design. The `production` environment — where
+# `CONVEX_PROD_DEPLOY_KEY` and `CONVEX_PROD_OPERATOR_KEY` live — requires a human
+# approver, so a job reading those would wait for a person on every fire. A
+# control that needs a human before it can look is not a control.
+#
+# ⚠️ UNAVAILABLE fails the job rather than passing it. A control that cannot see
+# production has not checked production, and a green tick that means "I did not
+# look" is worse than no control at all — it is the same false assurance that
+# let SCRUM-177 run for a day and a half.
+
+name: Contract skew
+
+on:
+  schedule:
+    # Hourly. SCRUM-177's exposure was 33.5 hours; this bounds the same failure
+    # to roughly one. Cheap: one Node process and one read of the function spec.
+    - cron: '17 * * * *'
+  push:
+    # The highest-value moment. A merge is when skew is CREATED, so checking
+    # here catches it in minutes rather than at the next hourly tick.
+    branches: [main]
+  workflow_dispatch:
+
+# No workflow-level grant: each job declares exactly what it needs (Sonar
+# githubactions:S8264), so a job added later starts with nothing.
+permissions: {}
+
+concurrency:
+  group: contract-skew
+  # ⚠️ NEVER CANCEL A RUN IN PROGRESS. Three triggers share this group — the
+  # hourly cron, every push to `main`, and manual dispatch — so cancelling would
+  # let a merge kill the hourly run in flight, and the next hourly tick kill a
+  # merge-triggered run that is still going.
+  #
+  # ⚠️ THIS DOES NOT MEAN NOTHING IS EVER CANCELLED. With `cancel-in-progress:
+  # false` GitHub still keeps at most ONE pending run per group: a newer queued
+  # run REPLACES an older pending one, which is then cancelled without ever
+  # starting. A person can also cancel a run by hand. So the `notify` job below
+  # fires on `cancelled()` as well as `failure()`.
+  #
+  # A cancelled run answers NOTHING. It is neither a pass nor a failure, it
+  # uploads no report, and `gh pr checks` renders it as a plain fail. That is
+  # exactly the silent gap the header above rejects: a control that did not look
+  # must never read as a control that looked.
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # To read `deploy-production.yml`'s run history and learn which commit is
+      # actually deployed. Read-only, and it grants nothing over production.
+      actions: read
+    # The binding control. The environment's branch policy admits `main` only, so
+    # a run from any other ref cannot reach the credential — it fails closed
+    # rather than falling back to something weaker.
+    environment: contract-skew-prod-read
+    outputs:
+      code: ${{ steps.detect.outputs.code }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          # Full history: the classifier compares `convex/` between HEAD and the
+          # deployed commit, and a shallow clone does not contain that commit.
+          # It fails closed if the commit is missing, so a shallow checkout would
+          # not be silently wrong — it would just alarm forever.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.21.1'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # Which commit is actually deployed? `deploy-production.yml` asserts that
+      # its `commit_sha` input equals main's tip, twice, and fails the run if it
+      # does not — so for a SUCCESSFUL run the run's own head_sha and the
+      # deployed commit are the same thing by construction.
+      #
+      # If no successful run is found the flag is simply omitted, and the
+      # classifier fails closed to "unclassified", which alarms. A missing deploy
+      # record must never read as "nothing changed".
+      - name: Find the commit that is actually deployed
+        id: deployed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          sha="$(gh api "repos/${REPO}/actions/workflows/deploy-production.yml/runs?status=success&per_page=1" --jq '.workflow_runs[0].head_sha // empty' || true)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          if [ -n "$sha" ]; then
+            echo "Deployed commit: $sha"
+          else
+            echo "::warning::No successful production deploy run found; incompatibilities will be reported as unclassified."
+          fi
+
+      # ⚠️ `CONVEX_PROD_DEPLOYMENT` is passed so the fetcher can REFUSE a spec
+      # from any other deployment. A preview key silently addresses a preview
+      # backend, and a control that verified a deployment nobody is served by
+      # would report success with total confidence — the 2026-08-07 targeting
+      # error in monitoring form.
+      - name: Compare the client on main against the deployed backend
+        id: detect
+        env:
+          CONVEX_PROD_READ_KEY: ${{ secrets.CONVEX_PROD_READ_KEY }}
+          CONVEX_PROD_DEPLOYMENT: ${{ vars.CONVEX_PROD_DEPLOYMENT }}
+          DEPLOYED_SHA: ${{ steps.deployed.outputs.sha }}
+        run: |
+          set +e
+          if [ -n "$DEPLOYED_SHA" ]; then
+            node scripts/contractSkew/cli.mjs --mode production --json skew-report.json --deployed-sha "$DEPLOYED_SHA"
+          else
+            node scripts/contractSkew/cli.mjs --mode production --json skew-report.json
+          fi
+          code=$?
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          # ⚠️ THE DEPLOY INSTRUCTION BELONGS TO CODE 7 AND NOTHING ELSE.
+          #
+          # It used to belong to exit 1 — which is ALSO Node's default for any
+          # uncaught throw, so a bad dependency install or a syntax error in a
+          # transitively imported module rendered as "Deploy the Convex backend
+          # at this commit." A broken toolchain told an operator to change
+          # production. Reproduced, not theorised.
+          #
+          # Exit 1 now means the control did not complete, and is answered with
+          # unavailable-class guidance. Nothing can reach 7 by accident.
+          case "$code" in
+            0) echo "Exit 0 - read the verdict line the CLI printed above. PASS and UNKNOWN both exit 0, and neither covers HTTP action bodies; only Convex argument contracts are checked." ;;
+            2) echo "::error::USAGE ERROR (exit 2) - the workflow invoked the CLI incorrectly. This is a workflow defect, NOT a verdict about the backend." ;;
+            4) echo "::error::BLOCKED (exit 4) - an unproven path overlaps a path this release changes. NOT a pass." ;;
+            9) echo "::error::COVERAGE INCOMPLETE (exit 9) - at least one call site could not be accounted for, or none were found. NOT a pass and NOT a proven skew; do not deploy on this." ;;
+            10) echo "::error::EVIDENCE DRIFT (exit 10) - the unproven paths differ from scripts/contractSkew/needs-evidence-baseline.json. NOT a skew; a person must review the report and update the baseline." ;;
+            7) echo "::error::PRODUCTION SKEW (exit 7) - the deployed backend refuses calls the client makes. Whether deploying the backend fixes them is decided per call: read the CLI summary above. It states whether a deploy is proven to fix them, only the likely remedy (some breaks unclassified), or withheld with the calls a deploy will not fix listed." ;;
+            8) echo "::error::RELEASE BREAK — shipping this candidate would introduce a skew. Deploying the backend is NOT the remedy; fix the client or the candidate." ;;
+            1) echo "::error::CONTROL FAILED TO COMPLETE (raw exit 1) — this is a tooling or runtime failure, NOT a verdict about the backend. DO NOT DEPLOY on this result. Investigate the job log." ;;
+            3) echo "::error::Control UNAVAILABLE - no authoritative evidence could be obtained (credential, deployment identity, or a spec this control cannot read). This is NOT a pass." ;;
+            6) echo "::error::COVERAGE GAP — a client file calling Convex is in no scanned surface. The control cannot answer for it, so this is NOT a pass." ;;
+            5) echo "::error::STANDING CONTRACT DEFECT — a client disagrees with a backend that is ALREADY deployed. This is a product bug, NOT a missing deploy; deploying will not fix it." ;;
+            *) echo "::error::contract-skew exited $code" ;;
+          esac
+          exit "$code"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: contract-skew-report
+          path: skew-report.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # ⚠️ A RED RUN NOBODY IS WATCHING IS NOT AN ALERT. The job fails at 04:00 and
+  # the only trace is a row in the Actions tab. This opens (or updates) ONE issue
+  # with a fixed title so a failure becomes something a person is notified about,
+  # without a pile of duplicates after a night of hourly failures.
+  #
+  # A separate job, NOT a step in `detect`: `issues: write` is scoped to this job
+  # alone, and it never receives the production read key or the environment. It
+  # uses the built-in GITHUB_TOKEN only - no new secret.
+  #
+  # Untrusted values reach `run:` through `env:` only, never `${{ }}` interpolated
+  # into the script text.
+  notify:
+    needs: detect
+    if: ${{ failure() || cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the single contract-skew issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EXIT_CODE: ${{ needs.detect.outputs.code }}
+          TRIGGER: ${{ github.event_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          title="Contract skew monitor: latest run failed"
+          body="$(printf 'The contract-skew monitor did not pass.\n\n- exit code: %s (empty means the job died before the CLI reported one)\n- trigger: %s\n- commit: %s\n- run: %s\n\nExit codes: 7 proven production skew; 8 release break; 5 standing defect; 3 unavailable; 6 coverage gap; 9 coverage incomplete; 10 evidence drift against needs-evidence-baseline.json; 1 tooling failure. Only 7 can carry deploy advice, and only the CLI summary in the run log says whether it is proven, merely the likely remedy (unclassified breaks), or withheld: read it before deploying, it lists any call a deploy will not fix.\n\nThis single issue is updated in place while the monitor stays red; close it once a run passes.' "${EXIT_CODE:-none}" "$TRIGGER" "$COMMIT" "$RUN_URL")"
+          number="$(gh issue list --repo "$REPO" --state open --search "\"$title\" in:title" --json number,title --jq "map(select(.title == \"$title\")) | .[0].number // empty")"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --title "$title" --body "$body"
+          fi
