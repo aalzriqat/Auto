@@ -56,8 +56,8 @@ const RUN = `F614-${Date.now().toString(36)}${Math.floor(Math.random() * 36 ** 2
 /** The id customers.create returned for this run's seed customer; leads may only use it. */
 let seedId: string | undefined;
 
-/** A Convex mutation the page sent, with its result once the server answered. */
-type SentMutation = { udfPath: string; args: Record<string, unknown> | undefined; result?: unknown };
+/** A Convex mutation the page sent; `ok` and `result` once the server confirmed it. */
+type SentMutation = { udfPath: string; args: Record<string, unknown> | undefined; ok?: boolean; result?: unknown };
 
 /** A Convex sync-protocol frame as JSON, or undefined. */
 function parseFrame(payload: string | Buffer): Record<string, unknown> | undefined {
@@ -242,6 +242,7 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
   test("hostile input into create forms", async ({ page, baseURL }) => {
     test.skip(process.env.JEV_FORM_EXPLORER !== "1", "Opt-in: set JEV_FORM_EXPLORER=1. It writes QA TEST records.");
     test.info().annotations.push({ type: "run", description: `${RUN} seed=${SEED} attempts=${MAX_ATTEMPTS}` });
+    seedId = undefined;
 
     await page.addInitScript(() => {
       localStorage.setItem("autoflow-locale", "en");
@@ -267,7 +268,7 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       ws.on("framereceived", (f) => {
         const m = parseFrame(f.payload);
         const sent = m?.type === "MutationResponse" && m.success === true ? byRequest.get(m.requestId) : undefined;
-        if (sent) sent.result = m?.result;
+        if (sent) Object.assign(sent, { ok: true, result: m?.result });
       });
     });
     const attestation = await attest(page, baseURL, sockets);
@@ -498,15 +499,28 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
         const seeded = await submit(customerForm, dialog);
         await closeDialog(dialog);
         // Only a confirmed save with exactly one returned id lets lead
-        // attempts use it; otherwise they are skipped.
-        const created = mutations.slice(mark).filter((m) => m.udfPath === "customers:create");
-        const id = created.length === 1 ? created[0].result : undefined;
+        // attempts use it; otherwise they are skipped. A create resent after
+        // a reconnect answers with the same id, so it still counts as one.
+        const ids = new Set(mutations.slice(mark).filter((m) => m.udfPath === "customers:create" && m.ok).map((m) => m.result));
+        const id = ids.size === 1 ? [...ids][0] : undefined;
         seedId = seeded.outcome === "accepted" && typeof id === "string" ? id : undefined;
         test.info().annotations.push({ type: "seed-customer", description: `${seedTag}: ${seeded.outcome}, id ${seedId ?? "unknown"}` });
       }
     }
 
-    let leadSavesChecked = 0;
+    // Every frame before `checked` has been checked: a cursor that only moves
+    // forward, so a frame sent between attempts is never skipped.
+    let checked = 0;
+    /** Stops the run if any lead save sent since the last check named a customer other than this run's seed. */
+    const checkLeadCustomers = () => {
+      const stray = mutations.slice(checked).find((m) => m.udfPath === "leads:create" && m.args?.customerId !== seedId);
+      checked = mutations.length;
+      if (stray) {
+        saveReport();
+        throw new Error(`A lead save sent customerId ${String(stray.args?.customerId)}, not this run's seed ${seedId ?? "(none)"}.`);
+      }
+    };
+    let leadSavesConfirmed = 0;
     let pool: Candidate[] = shuffle(
       FORMS.filter(inScope).flatMap((form) => (fieldsByForm.get(form.id) ?? []).flatMap((field) => rulesFor(field).map((rule) => ({ form, field, rule })))),
       random,
@@ -518,6 +532,13 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       pool = pool.filter((p) => p !== c);
       const fields = fieldsByForm.get(c.form.id) ?? [];
       const attemptMark = mutations.length;
+      // The outcome of each submission this attempt makes (dup-variant makes up to three).
+      const submissions: string[] = [];
+      const tracked = async (...args: Parameters<typeof attemptOnce>) => {
+        const r = await attemptOnce(...args);
+        submissions.push(r.outcome);
+        return r;
+      };
       let a: Attempt;
       let last: Awaited<ReturnType<typeof attemptOnce>>;
       let setupFailed: string | undefined;
@@ -526,7 +547,7 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
         // Seed a record with a local-format number, retry it exactly (the
         // control: is this field policed at all?), then in +962 format.
         const pair = phonePair(Date.now() % 10_000_000);
-        const seeded = await attemptOnce(c, fields, { label: c.field.label, value: pair.local });
+        const seeded = await tracked(c, fields, { label: c.field.label, value: pair.local });
         if (seeded.dialog) await closeDialog(seeded.dialog);
         if (seeded.setupFailed) {
           a = { rule: c.rule, field: c.field, outcome: seeded.outcome };
@@ -536,9 +557,9 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
           a = { rule: c.rule, field: c.field, outcome: seeded.outcome, toast: seeded.toast };
           last = seeded;
         } else {
-          const control = await attemptOnce({ ...c, rule: "dup-exact" }, fields, { label: c.field.label, value: pair.local });
+          const control = await tracked({ ...c, rule: "dup-exact" }, fields, { label: c.field.label, value: pair.local });
           if (control.dialog) await closeDialog(control.dialog);
-          last = await attemptOnce(c, fields, { label: c.field.label, value: pair.intl });
+          last = await tracked(c, fields, { label: c.field.label, value: pair.intl });
           setupFailed = control.setupFailed ?? last.setupFailed;
           a = {
             rule: c.rule,
@@ -550,21 +571,27 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
           };
         }
       } else {
-        last = await attemptOnce(c, fields);
+        last = await tracked(c, fields);
         setupFailed = last.setupFailed;
         a = { rule: c.rule, field: c.field, outcome: last.outcome, toast: last.toast, warned: last.warned };
       }
 
-      // Read back what each lead save actually sent: any customer but this
-      // run's seed stops the run (Codex F614-05 verification floor).
-      const strayLeads = mutations
-        .slice(attemptMark)
-        .filter((m) => m.udfPath === "leads:create" && m.args?.customerId !== seedId);
-      if (strayLeads.length > 0) {
-        saveReport();
-        throw new Error(`A lead save sent customerId ${String(strayLeads[0].args?.customerId)}, not this run's seed ${seedId ?? "(none)"}.`);
+      // Read back what each lead save actually sent (Codex F614-05
+      // verification floor): any customer but this run's seed stops the run,
+      // and so does a save the UI reported without a confirmed seed-bound
+      // leads:create of its own behind it. The check is never vacuous.
+      checkLeadCustomers();
+      if (c.form.id === "lead") {
+        const saved = submissions.filter((o) => o === "accepted" || o === "accepted-silent").length;
+        const confirmed = mutations
+          .slice(attemptMark)
+          .filter((m) => m.udfPath === "leads:create" && m.ok && m.args?.customerId === seedId).length;
+        if (confirmed < saved) {
+          saveReport();
+          throw new Error(`Attempt ${n}: ${saved} lead save(s) reported but ${confirmed} confirmed leads:create for this run's seed seen.`);
+        }
+        leadSavesConfirmed += confirmed;
       }
-      leadSavesChecked += mutations.slice(attemptMark).filter((m) => m.udfPath === "leads:create").length;
 
       if (setupFailed) {
         if (last.dialog) await closeDialog(last.dialog);
@@ -608,11 +635,9 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       saveReport();
     }
 
-    // The customer check above is vacuous if lead saves were never seen on
-    // the socket: a saved lead with nothing checked stops the run.
-    const leadsSaved = records.filter((r) => r.form === "lead" && (r.outcome === "accepted" || r.outcome === "accepted-silent")).length;
-    test.info().annotations.push({ type: "lead-customer-check", description: `${leadSavesChecked} lead save(s) sent this run's seed; ${leadsSaved} lead attempt(s) saved` });
-    if (leadsSaved > 0 && leadSavesChecked === 0) throw new Error("Leads were saved but no leads:create was seen, so their customer was not checked.");
+    // A save sent late, after its own attempt was checked, is still caught here.
+    checkLeadCustomers();
+    test.info().annotations.push({ type: "lead-customer-check", description: `${leadSavesConfirmed} confirmed lead save(s), all for this run's seed` });
 
     for (const r of records.filter((x) => x.verdict.kind === "finding" || x.verdict.kind === "advisory")) {
       test.info().annotations.push({ type: `${r.verdict.kind}:${r.verdict.check}`, description: `#${r.n} ${r.form} — ${r.verdict.reason}` });
