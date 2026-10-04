@@ -53,8 +53,21 @@ const appeared = (l: Locator, timeout: number) => l.waitFor({ state: "visible", 
 // The full clock plus a random suffix: a tag that repeats would let this run
 // mistake an older run's records for its own (Codex F614-05).
 const RUN = `F614-${Date.now().toString(36)}${Math.floor(Math.random() * 36 ** 2).toString(36).padStart(2, "0")}`.toUpperCase();
-/** Set once this run's seed customer is confirmed saved; leads may only use it. */
-let seedConfirmed = false;
+/** The id customers.create returned for this run's seed customer; leads may only use it. */
+let seedId: string | undefined;
+
+/** A Convex mutation the page sent, with its result once the server answered. */
+type SentMutation = { udfPath: string; args: Record<string, unknown> | undefined; result?: unknown };
+
+/** A Convex sync-protocol frame as JSON, or undefined. */
+function parseFrame(payload: string | Buffer): Record<string, unknown> | undefined {
+  try {
+    const m: unknown = JSON.parse(typeof payload === "string" ? payload : payload.toString("utf8"));
+    return m && typeof m === "object" ? (m as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** The only screens it may submit on. Each entry is reviewed by a person. */
 type FormSpec = {
@@ -109,7 +122,7 @@ const FORMS: FormSpec[] = [
     // The customer picker is required: choose the customer this run seeded,
     // never a record another lane created.
     prepare: async (dialog) => {
-      if (!seedConfirmed) return "this run's seed customer was not confirmed saved";
+      if (!seedId) return "this run's seed customer was not confirmed saved";
       // LeadDialog renders t("SelectCustomer") || "Select a customer".
       const picker = dialog.getByRole("button", { name: /^Select\s?(a\s)?customer$/i });
       if (!(await appeared(picker, 5_000))) return "customer picker not found";
@@ -120,9 +133,10 @@ const FORMS: FormSpec[] = [
       await search.fill(`QA TEST ${RUN}-SEED`);
       const options = box.locator('[data-testid^="searchable-option-"]');
       // The server also returns full-text matches ranked by shared words, so
-      // every "QA TEST" customer can appear. Exactly one option may carry this
-      // run's unique tag (Codex F614-05) — never pick a look-alike.
-      const seedOptions = options.filter({ hasText: `QA TEST ${RUN}-SEED` });
+      // every "QA TEST" customer can appear. Pick the seed by the id the
+      // server gave it, not by its text (Codex F614-05): a look-alike name
+      // can never be chosen.
+      const seedOptions = box.locator(`[data-testid="searchable-option-${seedId}"]`);
       const found = await expect.poll(() => seedOptions.count(), { timeout: 10_000 }).toBe(1).then(() => true, () => false);
       if (!found) {
         const labels = (await options.allInnerTexts()).slice(0, 3).map((s) => s.replace(/\s+/g, " ").slice(0, 60));
@@ -236,7 +250,26 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       }
     });
     const sockets: string[] = [];
-    page.on("websocket", (ws) => sockets.push(ws.url()));
+    // Every mutation the page sends, read off the Convex socket: the seed's
+    // id comes from customers.create's answer, and each lead save is checked
+    // against it (Codex F614-05).
+    const mutations: SentMutation[] = [];
+    page.on("websocket", (ws) => {
+      sockets.push(ws.url());
+      const byRequest = new Map<unknown, SentMutation>();
+      ws.on("framesent", (f) => {
+        const m = parseFrame(f.payload);
+        if (m?.type !== "Mutation" || typeof m.udfPath !== "string") return;
+        const sent: SentMutation = { udfPath: m.udfPath, args: (m.args as Record<string, unknown>[] | undefined)?.[0] };
+        byRequest.set(m.requestId, sent);
+        mutations.push(sent);
+      });
+      ws.on("framereceived", (f) => {
+        const m = parseFrame(f.payload);
+        const sent = m?.type === "MutationResponse" && m.success === true ? byRequest.get(m.requestId) : undefined;
+        if (sent) sent.result = m?.result;
+      });
+    });
     const attestation = await attest(page, baseURL, sockets);
     test.skip(Boolean(attestation.refusal), attestation.refusal ?? "");
     const expected = convexDeploymentOf(process.env.NEXT_PUBLIC_CONVEX_URL);
@@ -461,14 +494,19 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
         const values = new Map<string, string>();
         for (const f of customerFields) if (f.required) values.set(f.label, baselineValue(f.kind, seedTag, Date.now()));
         await fill(dialog, customerFields, values);
+        const mark = mutations.length;
         const seeded = await submit(customerForm, dialog);
         await closeDialog(dialog);
-        // Only a confirmed save lets lead attempts use it; otherwise they are skipped.
-        seedConfirmed = seeded.outcome === "accepted";
-        test.info().annotations.push({ type: "seed-customer", description: `${seedTag}: ${seeded.outcome}` });
+        // Only a confirmed save with exactly one returned id lets lead
+        // attempts use it; otherwise they are skipped.
+        const created = mutations.slice(mark).filter((m) => m.udfPath === "customers:create");
+        const id = created.length === 1 ? created[0].result : undefined;
+        seedId = seeded.outcome === "accepted" && typeof id === "string" ? id : undefined;
+        test.info().annotations.push({ type: "seed-customer", description: `${seedTag}: ${seeded.outcome}, id ${seedId ?? "unknown"}` });
       }
     }
 
+    let leadSavesChecked = 0;
     let pool: Candidate[] = shuffle(
       FORMS.filter(inScope).flatMap((form) => (fieldsByForm.get(form.id) ?? []).flatMap((field) => rulesFor(field).map((rule) => ({ form, field, rule })))),
       random,
@@ -479,6 +517,7 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       const c = pool[Math.min(picked, pool.length - 1)];
       pool = pool.filter((p) => p !== c);
       const fields = fieldsByForm.get(c.form.id) ?? [];
+      const attemptMark = mutations.length;
       let a: Attempt;
       let last: Awaited<ReturnType<typeof attemptOnce>>;
       let setupFailed: string | undefined;
@@ -515,6 +554,17 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
         setupFailed = last.setupFailed;
         a = { rule: c.rule, field: c.field, outcome: last.outcome, toast: last.toast, warned: last.warned };
       }
+
+      // Read back what each lead save actually sent: any customer but this
+      // run's seed stops the run (Codex F614-05 verification floor).
+      const strayLeads = mutations
+        .slice(attemptMark)
+        .filter((m) => m.udfPath === "leads:create" && m.args?.customerId !== seedId);
+      if (strayLeads.length > 0) {
+        saveReport();
+        throw new Error(`A lead save sent customerId ${String(strayLeads[0].args?.customerId)}, not this run's seed ${seedId ?? "(none)"}.`);
+      }
+      leadSavesChecked += mutations.slice(attemptMark).filter((m) => m.udfPath === "leads:create").length;
 
       if (setupFailed) {
         if (last.dialog) await closeDialog(last.dialog);
@@ -557,6 +607,12 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       records.push({ n, form: c.form.id, field: c.field.label, rule: c.rule, outcome: a.outcome, verdict, toast: a.toast?.slice(0, 300), screenshot: shot });
       saveReport();
     }
+
+    // The customer check above is vacuous if lead saves were never seen on
+    // the socket: a saved lead with nothing checked stops the run.
+    const leadsSaved = records.filter((r) => r.form === "lead" && (r.outcome === "accepted" || r.outcome === "accepted-silent")).length;
+    test.info().annotations.push({ type: "lead-customer-check", description: `${leadSavesChecked} lead save(s) sent this run's seed; ${leadsSaved} lead attempt(s) saved` });
+    if (leadsSaved > 0 && leadSavesChecked === 0) throw new Error("Leads were saved but no leads:create was seen, so their customer was not checked.");
 
     for (const r of records.filter((x) => x.verdict.kind === "finding" || x.verdict.kind === "advisory")) {
       test.info().annotations.push({ type: `${r.verdict.kind}:${r.verdict.check}`, description: `#${r.n} ${r.form} — ${r.verdict.reason}` });
