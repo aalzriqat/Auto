@@ -34,7 +34,9 @@ import { refusalReason, servedDeployments, convexDeploymentOf } from "./formExpl
 
 const MAX_ATTEMPTS = Number(process.env.JEV_FORM_EXPLORER_ATTEMPTS ?? 30);
 const SEED = Number(process.env.JEV_FORM_EXPLORER_SEED ?? Date.now() % 100_000);
-const RUN = `F${(Date.now() % 1_000_000).toString(36).toUpperCase()}`;
+// "QA TEST F614-…" is the prefix agreed with the #430 scenario lane, which
+// shares this preview org and looks its own records up by exact name.
+const RUN = `F614-${(Date.now() % 1_000_000).toString(36).toUpperCase()}`;
 
 /** The only screens it may submit on. Each entry is reviewed by a person. */
 type FormSpec = {
@@ -72,10 +74,11 @@ const FORMS: FormSpec[] = [
     title: /^Add Lead$/,
     submit: /^Add Lead$/,
     success: /Lead added successfully/,
-    // The customer picker is required: choose an existing QA TEST customer.
+    // The customer picker is required: choose the customer this run seeded,
+    // never a record another lane created.
     prepare: async (dialog, page) => {
       await dialog.getByRole("button", { name: /Select customer/ }).click();
-      await page.getByPlaceholder(/^Search/).last().fill("QA TEST");
+      await page.getByPlaceholder(/^Search/).last().fill(`QA TEST ${RUN}-SEED`);
       const option = page.locator('[data-testid^="searchable-option-"]').first();
       if (!(await option.isVisible({ timeout: 8_000 }).catch(() => false))) return false;
       await option.click();
@@ -298,13 +301,15 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       c: Candidate,
       fields: Field[],
       override?: { label: string; value: string },
-    ): Promise<{ outcome: Outcome; toast?: string; warned: boolean; tag: string; value?: string; dialog?: Locator }> {
+    ): Promise<{ outcome: Outcome; toast?: string; warned: boolean; tag: string; value?: string; dialog?: Locator; setupFailed?: string }> {
       const tag = `${RUN}${(++slot).toString().padStart(2, "0")}`;
+      // A failure of the explorer's own setup says nothing about the app:
+      // it is reported as inconclusive, never as "Save did nothing".
       const dialog = await openForm(c.form);
-      if (!dialog) return { outcome: "ignored", toast: "form did not open", warned: false, tag };
+      if (!dialog) return { outcome: "ignored", warned: false, tag, setupFailed: "form did not open" };
       if (c.form.prepare && !(await c.form.prepare(dialog, page))) {
         await closeDialog(dialog);
-        return { outcome: "ignored", toast: "required picker had no QA TEST option", warned: false, tag };
+        return { outcome: "ignored", warned: false, tag, setupFailed: "required picker had no seeded option" };
       }
       const values = new Map<string, string>();
       for (const f of fields) if (f.required) values.set(f.label, baselineValue(f.kind, tag, Date.now() + slot));
@@ -332,6 +337,23 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       await closeDialog(dialog);
     }
 
+    // The lead form needs a customer: seed one for this run so the picker
+    // never attaches leads to another lane's records.
+    const customerForm = FORMS.find((f) => f.id === "customer");
+    const customerFields = fieldsByForm.get("customer");
+    if (customerForm && customerFields) {
+      const dialog = await openForm(customerForm);
+      if (dialog) {
+        const seedTag = `${RUN}-SEED`;
+        const values = new Map<string, string>();
+        for (const f of customerFields) if (f.required) values.set(f.label, baselineValue(f.kind, seedTag, Date.now()));
+        await fill(dialog, customerFields, values);
+        const seeded = await submit(customerForm, dialog);
+        await closeDialog(dialog);
+        test.info().annotations.push({ type: "seed-customer", description: `${seedTag}: ${seeded.outcome}` });
+      }
+    }
+
     let pool: Candidate[] = shuffle(
       FORMS.flatMap((form) => (fieldsByForm.get(form.id) ?? []).flatMap((field) => rulesFor(field).map((rule) => ({ form, field, rule })))),
       random,
@@ -344,6 +366,7 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       const fields = fieldsByForm.get(c.form.id) ?? [];
       let a: Attempt;
       let last: Awaited<ReturnType<typeof attemptOnce>>;
+      let setupFailed: string | undefined;
 
       if (c.rule === "dup-variant") {
         // Seed a record with a local-format number, retry it exactly (the
@@ -351,13 +374,18 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
         const pair = phonePair(Date.now() % 10_000_000);
         const seeded = await attemptOnce(c, fields, { label: c.field.label, value: pair.local });
         if (seeded.dialog) await closeDialog(seeded.dialog);
-        if (seeded.outcome !== "accepted") {
+        if (seeded.setupFailed) {
+          a = { rule: c.rule, field: c.field, outcome: seeded.outcome };
+          last = seeded;
+          setupFailed = seeded.setupFailed;
+        } else if (seeded.outcome !== "accepted") {
           a = { rule: c.rule, field: c.field, outcome: seeded.outcome, toast: seeded.toast };
           last = seeded;
         } else {
           const control = await attemptOnce({ ...c, rule: "dup-exact" }, fields, { label: c.field.label, value: pair.local });
           if (control.dialog) await closeDialog(control.dialog);
           last = await attemptOnce(c, fields, { label: c.field.label, value: pair.intl });
+          setupFailed = control.setupFailed ?? last.setupFailed;
           a = {
             rule: c.rule,
             field: c.field,
@@ -369,7 +397,21 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
         }
       } else {
         last = await attemptOnce(c, fields);
+        setupFailed = last.setupFailed;
         a = { rule: c.rule, field: c.field, outcome: last.outcome, toast: last.toast, warned: last.warned };
+      }
+
+      if (setupFailed) {
+        if (last.dialog) await closeDialog(last.dialog);
+        records.push({
+          n,
+          form: c.form.id,
+          field: c.field.label,
+          rule: c.rule,
+          outcome: a.outcome,
+          verdict: { kind: "inconclusive", check: "setup", reason: `${c.field.label} (${c.rule}): ${setupFailed}` },
+        });
+        continue;
       }
 
       let shot: string | undefined;
