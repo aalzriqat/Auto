@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { applicationReason, mergeDealRows, type ApplicationListRow, type SaleListRow } from "./dealRows";
+import { applicationReason, dealsPaging, mergeDealRows, type ApplicationListRow, type PagingStatus, type SaleListRow } from "./dealRows";
 
 const t = (key: string) => key;
 const fmt = (major: number) => `${major} JD`;
@@ -113,8 +113,40 @@ describe("one entry per deal", () => {
     expect(coalesced.map((row) => row.key)).toEqual(["app_app_101"]);
   });
 
+  test("Codex SCRUM-603-1 — a sale whose application is off-page still waits on the financier", () => {
+    const linked = { status: "CLOSED", companyId: "company_1", hasPendingDepositResolution: false };
+    const rows = mergeDealRows(
+      [],
+      [sale({ _id: "sale_fin", status: "COMPLETED", applicationId: "app_101", linkedApplication: linked })],
+      "org1",
+      t,
+      fmt
+    );
+    expect(rows[0]).toMatchObject({ key: "sale_sale_fin", kind: "FINANCED", reason: "AWAITING_RECEIPT", waitingOn: "OTHERS" });
+    // Paid out, or cancelled with a held deposit: the application's rule decides, not the sale's status.
+    const paid = { ...linked, disbursedAt: 5_000 };
+    expect(mergeDealRows([], [sale({ status: "COMPLETED", applicationId: "app_101", linkedApplication: paid })], "org1", t, fmt)[0]).toMatchObject({ reason: null, waitingOn: "NONE" });
+    const held = { ...linked, status: "CANCELLED", hasPendingDepositResolution: true };
+    expect(mergeDealRows([], [sale({ status: "CANCELLED", applicationId: "app_101", linkedApplication: held })], "org1", t, fmt)[0]).toMatchObject({ reason: "DEPOSIT_PENDING", waitingOn: "DEALERSHIP" });
+    // A sale still to be completed is the dealership's move whatever the application says.
+    expect(mergeDealRows([], [sale({ status: "PENDING", applicationId: "app_101", linkedApplication: linked })], "org1", t, fmt)[0]).toMatchObject({ reason: "SALE_PENDING", waitingOn: "DEALERSHIP" });
+  });
   test("a financed row with no recorded financed amount shows no amount rather than zero", () => {
     const rows = mergeDealRows([app({ financedAmount: 0 })], [], "org1", t, fmt);
     expect(rows[0].amountLabel).toBeNull();
   });
+});
+
+describe("completeness of the two paginated sources is proven, never inferred (SCRUM-603-2)", () => {
+  const statuses: PagingStatus[] = ["LoadingFirstPage", "CanLoadMore", "LoadingMore", "Exhausted"];
+  for (const a of statuses) {
+    for (const s of statuses) {
+      test(`applications ${a} × sales ${s}`, () => {
+        const paging = dealsPaging([a, s]);
+        expect(paging.complete).toBe(a === "Exhausted" && s === "Exhausted");
+        expect(paging.canLoadMore).toBe(a === "CanLoadMore" || s === "CanLoadMore");
+        expect(paging.loadingMore).toBe(a === "LoadingMore" || s === "LoadingMore");
+      });
+    }
+  }
 });

@@ -67,7 +67,9 @@ async function seed(t: any, suffix: string) {
 }
 
 describe("money entry points reject NaN", () => {
-  test("paymentIntents.create refuses a NaN amount", async () => {
+  // D-20: payment links are shut, so create refuses every request (NaN included)
+  // before it reads the amount. The NaN guard is unreachable until the pilot reopens.
+  test("paymentIntents.create refuses a NaN amount (shut by D-20)", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seed(t, "pi");
 
@@ -79,7 +81,7 @@ describe("money entry points reject NaN", () => {
         amountMinor: NaN,
         currency: "JOD",
       })
-    ).rejects.toThrow(/invalid minor-unit/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
 
     const rows = await t.run((ctx: any) => ctx.db.query("paymentIntents").collect());
     expect(rows).toHaveLength(0);

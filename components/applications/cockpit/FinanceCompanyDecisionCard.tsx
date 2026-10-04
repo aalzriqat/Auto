@@ -356,7 +356,9 @@ export function FinanceCompanyDecisionCard({
       value: money(facts.dealerContributionMinor),
     });
   }
-  if (facts.appliedLtvPercent !== null) {
+  // The rate is known before any approved amount exists; alone it reads as a
+  // figure the deal has not produced yet (SCRUM-628 F-17).
+  if (facts.appliedLtvPercent !== null && facts.financeCompanyFundedPortionMinor !== null) {
     derived.push({
       key: "ltv",
       label: t("DerivedAppliedLtv"),

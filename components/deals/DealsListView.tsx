@@ -112,6 +112,7 @@ export function DealsListView({
   loading,
   canLoadMore,
   loadingMore,
+  complete,
   onLoadMore,
   newDealHref,
   t,
@@ -121,6 +122,8 @@ export function DealsListView({
   loading: boolean;
   canLoadMore: boolean;
   loadingMore: boolean;
+  /** Every source is exhausted: the only state that may claim "all loaded". */
+  complete: boolean;
   onLoadMore: () => void;
   /** Present only for a caller who may start a deal. */
   newDealHref: string | null;
@@ -168,7 +171,16 @@ export function DealsListView({
   }, [loaded, view, reason, kind, search]);
 
   const filtersActive = reason !== null || kind !== null || search.trim() !== "";
-  const countSuffix = canLoadMore ? "+" : "";
+  // Completeness is proven (every source exhausted), never inferred from the
+  // absence of canLoadMore/loadingMore: a page in flight, first or later,
+  // sets neither on its own (SCRUM-603-2).
+  const incomplete = !complete;
+  const rowsLoaded = rows !== undefined && !loading;
+  const countSuffix = incomplete ? "+" : "";
+  // The queue is built from loaded rows only: with more to load, an empty
+  // queue proves nothing about older deals (SCRUM-603-2).
+  let emptyKey = "NoDealsFound";
+  if (view === "needs" && !filtersActive) emptyKey = incomplete ? "DealsQueueEmptyLoadedOnly" : "DealsQueueEmpty";
 
   return (
     <div className="flex-1 space-y-4 p-4 pt-6 md:p-8">
@@ -292,9 +304,7 @@ export function DealsListView({
         {rows === undefined || loading ? (
           <p className="p-6 text-center text-sm text-muted-foreground">{t("LoadingDeals")}</p>
         ) : visible.length === 0 ? (
-          <p className="p-6 text-center text-sm text-muted-foreground">
-            {t(view === "needs" && !filtersActive ? "DealsQueueEmpty" : "NoDealsFound")}
-          </p>
+          <p className="p-6 text-center text-sm text-muted-foreground">{t(emptyKey)}</p>
         ) : (
           <>
             {/* Cards on a phone, a table above it: the same rows, one source. */}
@@ -414,17 +424,25 @@ export function DealsListView({
           </>
         )}
 
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t p-3 text-xs text-muted-foreground">
-          <span>
-            <bdi dir="ltr">{visible.length}</bdi> {t("DealsShownOf")} <bdi dir="ltr">{loaded.length}</bdi>{" "}
-            {t(canLoadMore ? "DealsLoadedMoreAvailable" : "DealsLoadedAll")}
-          </span>
-          {canLoadMore && (
-            <Button type="button" variant="outline" size="sm" disabled={loadingMore} onClick={onLoadMore}>
-              {t("LoadMore")}
-            </Button>
-          )}
-        </div>
+        {rowsLoaded && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t p-3 text-xs text-muted-foreground">
+            <span>
+              <bdi dir="ltr">{visible.length}</bdi> {t("DealsShownOf")} <bdi dir="ltr">{loaded.length}</bdi>{" "}
+              {t(incomplete ? "DealsLoadedMoreAvailable" : "DealsLoadedAll")}
+            </span>
+            {incomplete && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={loadingMore || !canLoadMore}
+                onClick={onLoadMore}
+              >
+                {t("LoadMore")}
+              </Button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

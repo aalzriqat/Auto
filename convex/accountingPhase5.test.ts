@@ -193,7 +193,7 @@ describe("Phase 5 — AR aging", () => {
       documentType: "INVOICE",
       payerType: "CUSTOMER",
       customerId,
-      sourceType: "sales",
+      sourceType: "manual_adjustment", // D-20: `sales` source is refused by subledger.createReceivable
       sourceId: "sale_aging_001",
       originalAmountMinor: 100000,
       currency: "JOD",
@@ -219,7 +219,7 @@ describe("Phase 5 — AR aging", () => {
 
     const recId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
-      sourceType: "sales", sourceId: "sale_paid_aging",
+      sourceType: "manual_adjustment", sourceId: "sale_paid_aging", // D-20
       originalAmountMinor: 5000, currency: "JOD",
       issueDate: now, dueDate: now - 10 * 86400_000,
     });
@@ -248,7 +248,7 @@ describe("Phase 5 — AR aging", () => {
 
     const recId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
-      sourceType: "sales", sourceId: "sale_reversed_alloc",
+      sourceType: "manual_adjustment", sourceId: "sale_reversed_alloc", // D-20
       originalAmountMinor: 5000, currency: "JOD",
       issueDate: now, dueDate: now - 10 * 86400_000,
     });
@@ -308,7 +308,7 @@ describe("Phase 5 — AR aging", () => {
         documentType: "INVOICE",
         payerType: "CUSTOMER",
         customerId,
-        sourceType: "sales",
+        sourceType: "manual_adjustment", // D-20
         sourceId: receivable.sourceId,
         originalAmountMinor: receivable.amount,
         currency: "JOD",
@@ -344,7 +344,7 @@ describe("Phase 5 — subledger reconciliation", () => {
       documentType: "INVOICE",
       payerType: "CUSTOMER",
       customerId,
-      sourceType: "sales",
+      sourceType: "manual_adjustment", // D-20
       sourceId: "sale_recon_partial",
       originalAmountMinor: 100_000,
       currency: "JOD",

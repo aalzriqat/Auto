@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
 
 /**
  * Records the quotation the dealership SENT the finance company.
@@ -168,12 +169,14 @@ export function RecordSubmittedQuotationDialog({
     setAmount(String(calculation.minor / factor));
   }, [open, calculation, factor]);
 
-  const parsed = Number(amount);
+  // Exact, never rounded (SCRUM-605): "21428.57213000" once rounded to the
+  // calculated 21428.572 and went on the record as SYSTEM_CALCULATED — a figure
+  // the operator never typed, under a provenance they never claimed.
+  const strict = parseMajorToMinor(amount, Math.round(Math.log10(factor)));
   const entered = amount.trim() !== "";
-  // `!(x > 0)` rather than `x <= 0`: they differ on NaN, and a non-numeric entry
-  // must count as invalid. `NaN <= 0` is false, which would let it through.
-  const amountInvalid = entered && !(parsed > 0);
-  const enteredMinor = entered && parsed > 0 ? Math.round(parsed * factor) : null;
+  const amountTooPrecise = !strict.ok && strict.problem === "TOO_PRECISE";
+  const amountInvalid = entered && !(strict.ok && strict.minor > 0);
+  const enteredMinor = strict.ok && strict.minor > 0 ? strict.minor : null;
 
   const calculatedMinor = calculation.state === "AVAILABLE" ? calculation.minor : null;
   const hasCalculation = calculatedMinor !== null;
@@ -237,7 +240,7 @@ export function RecordSubmittedQuotationDialog({
             />
             {amountInvalid && (
               <p role="alert" className="text-xs font-medium text-destructive">
-                {t("QuotationAmountInvalid")}
+                {t(amountTooPrecise ? "AmountTooPrecise" : "QuotationAmountInvalid")}
               </p>
             )}
 

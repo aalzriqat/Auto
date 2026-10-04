@@ -18,7 +18,7 @@ import {
   proveReservedReceiptAuthority,
   assertExistingRowIsSameOccurrence,
 } from "./postingEngine";
-import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting, expensePostedKey, simplePayloadHash, RECEIPT_CREDIT_APPLIED_EVENT_TYPE, RECEIPT_CREDIT_APPLIED_SOURCE_TYPE, type FinancedSalePlanPayload } from "./postingRules";
+import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting, expensePostedKey, simplePayloadHash, RECEIPT_CREDIT_APPLIED_EVENT_TYPE, RECEIPT_CREDIT_APPLIED_SOURCE_TYPE, type FinancedSalePlanPayload, financeReceiptAccountKey, type FinanceReceiptMethod } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { handoverDirectPostKey, handoverDirectReversalKey } from "../utils/handoverCostPayment";
 import { forwardPostKey, forwardReversalKey } from "../utils/financeCompanyForward";
@@ -2553,12 +2553,20 @@ export async function hookFinanceCashReceived(
      * Absent means 1, whose keys are byte-identical to the historical ones.
      */
     disbursementVersion?: number;
+    /**
+     * SCRUM-599: the receipt's method of record — the value written to its
+     * canonical payment in the same transaction. Picks the debited account.
+     */
+    paymentMethod: FinanceReceiptMethod;
   }
 ) {
   const keys = financeDisbursementKeys(args.applicationId, args.disbursementVersion);
   await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "FINANCE_CASH_RECEIVED",
+    // An org whose chart cannot resolve the account the money landed in queues
+    // the receipt (with its method) instead of rolling back the confirmation.
+    requiredSystemKeys: [financeReceiptAccountKey(args.paymentMethod)],
     sourceType: "financeApplications",
     sourceId: keys.sourceId,
     eventVersion: keys.eventVersion,
@@ -2573,6 +2581,7 @@ export async function hookFinanceCashReceived(
       amountMinor: args.amountMinor,
       currency: args.currency,
       customerId: args.customerId?.toString(),
+      paymentMethod: args.paymentMethod,
     },
   });
 }

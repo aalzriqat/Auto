@@ -796,15 +796,21 @@ describe("R9 — receivable creation under retry", () => {
       amount: 500,
       dueDate: 1_760_000_000_000,
     };
-    await asAdmin.mutation(api.collections.createReceivable, args);
-    const arAfterFirst = netOn(await ledgerLines(t, orgId), "ACCOUNTS_RECEIVABLE_CUSTOMERS");
-
-    await asAdmin.mutation(api.collections.createReceivable, args);
-    expect(
-      netOn(await ledgerLines(t, orgId), "ACCOUNTS_RECEIVABLE_CUSTOMERS"),
-      "the retry recognised accounts receivable a second time"
-    ).toBe(arAfterFirst);
-    expect(arAfterFirst).toBeGreaterThanOrEqual(arBefore);
+    // D-20: a sale-linked legacy receivable can no longer be created (the sale's
+    // debt is its invoice, recognised once at completion). The original
+    // property - AR is never recognised a second time by this door, first call
+    // or retry - now holds because BOTH calls are refused and the ledger does
+    // not move.
+    for (const attempt of [1, 2]) {
+      await expect(
+        asAdmin.mutation(api.collections.createReceivable, args),
+        `attempt ${attempt}`
+      ).rejects.toMatchObject({ data: { code: "SALE_DEBT_COMPETING_RECEIVABLE_REFUSED" } });
+      expect(
+        netOn(await ledgerLines(t, orgId), "ACCOUNTS_RECEIVABLE_CUSTOMERS"),
+        "a refused sale-linked receivable moved accounts receivable"
+      ).toBe(arBefore);
+    }
   });
 });
 

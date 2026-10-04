@@ -2067,12 +2067,19 @@ export default defineSchema({
     commissionPaidBy: v.optional(v.id("users")),
     commissionPaymentMethod: v.optional(paymentMethodValidator),
     commissionPaymentIdempotencyKey: v.optional(v.string()),
-    isDeleted: v.optional(v.boolean()),
+    // A sale is either live (unset) or soft-deleted (true); `false` is
+    // unrepresentable, so the by_org_deleted / by_org_salesperson_deleted index
+    // orders live sales by creation time (SCRUM-571 S1, D-28).
+    isDeleted: v.optional(v.literal(true)),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
     .index("by_org_salesperson", ["orgId", "salespersonId"])
+    // sales.list pages these natively: `.lt("isDeleted", true)` keeps the unset
+    // (live) rows and skips soft-deleted ones inside the index range.
+    .index("by_org_deleted", ["orgId", "isDeleted"])
+    .index("by_org_salesperson_deleted", ["orgId", "salespersonId", "isDeleted"])
     // Same ordering guarantee as by_org_saleDate, but scoped to one
     // salesperson. by_org_salesperson orders by _creationTime, so paging a
     // single rep's commissions through it would order by when the row was
@@ -6530,8 +6537,17 @@ export default defineSchema({
       v.literal("SETTLED"),
       v.literal("FAILED"),
       v.literal("EXPIRED"),
-      v.literal("REFUNDED")
+      v.literal("REFUNDED"),
+      // SCRUM-571 S1 (D-22): the provider reported a capture for this link that
+      // AutoFlow has neither settled nor applied; the capture sits in
+      // `unmatchedProviderFunds` (heldFundsId). Terminal: never reserved as
+      // collectible, never shown as unpaid, never expirable.
+      v.literal("CAPTURE_HELD")
     ),
+    heldFundsId: v.optional(v.id("unmatchedProviderFunds")),
+    // D-22: operator attestation recorded by `expire` that the provider shows no payment.
+    providerStatusCheckedAt: v.optional(v.number()),
+    providerStatusCheckedBy: v.optional(v.id("users")),
     idempotencyKey: v.string(),
     providerPayload: v.optional(v.any()),
     providerEventId: v.optional(v.string()),
@@ -6573,7 +6589,9 @@ export default defineSchema({
       v.literal("UNKNOWN_REFERENCE"),
       v.literal("INTENT_NOT_PENDING"),
       v.literal("AMOUNT_OR_ACCOUNT_MISMATCH"),
-      v.literal("LIFECYCLE_REFUSED")
+      v.literal("LIFECYCLE_REFUSED"),
+      // SCRUM-571 S1 (D-20): payment links are shut; a verified capture is held, not settled.
+      v.literal("PAYMENT_LINKS_DISABLED")
     ),
     intentStatusAtReceipt: v.optional(v.string()),
     amountMinor: v.number(),
