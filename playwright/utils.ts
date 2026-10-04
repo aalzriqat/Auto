@@ -92,7 +92,7 @@ export function testDataSuffix(): string {
 }
 
 /** 17-character, VIN-safe test identifier: only allowed letters/digits, unique enough for CI. */
-function testVin(): string {
+export function testVin(): string {
   const timePart = Date.now().toString().slice(-10);
   const randomPart = randomInt(0, 10_000).toString().padStart(4, "0");
 
