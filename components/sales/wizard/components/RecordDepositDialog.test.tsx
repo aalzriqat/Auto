@@ -237,4 +237,19 @@ describe("RecordDepositDialog — the amount field (SCRUM-628 F-05)", () => {
     await screen.findByText("DepositAmountInvalid");
     expect(stubs.calls).toEqual([]);
   });
+
+  /**
+   * Review D-01 (closure): "8800000000000.029" and "...03" are the same number,
+   * though ×1000 rounds back to ...029. Neither path may receive the changed figure.
+   */
+  test.each([[[] as string[]], [[CONFIRM]]])("refuses an amount whose number reads as another (permissions %j)", async (permissions) => {
+    stubs.permissions = permissions;
+    renderDialog();
+    if (permissions.length) {
+      fireEvent.change(screen.getByTestId("method-select"), { target: { value: "BANK_TRANSFER" } });
+    }
+    await submitAmount("8800000000000.029");
+    await screen.findByText("DepositAmountInvalid");
+    expect(stubs.calls).toEqual([]);
+  });
 });

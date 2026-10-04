@@ -49,7 +49,10 @@ function exactMajorAmount(minor: number, scale: number): number | null {
   if (!Number.isSafeInteger(minor)) return null;
   // Back to major units through the exact decimal text, never by float division.
   const amount = Number(formatMinorAsMajor(minor, scale));
-  return Math.round(amount * 10 ** scale) === minor ? amount : null;
+  // Compare the text the number is sent as, not float arithmetic on it:
+  // "8800000000000.029" is the same number as "...03", yet ×1000 rounds back to ...029.
+  const sent = parseMajorToMinor(String(amount), scale);
+  return sent.ok && sent.minor === minor ? amount : null;
 }
 
 /**
