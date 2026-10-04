@@ -8,11 +8,20 @@ import {
   getInvalidPermissions,
   isReservedRoleName,
   isSystemOwnerRole,
+  isUnqualifiedOwnerNamed,
+  newlyAddedLegacyPermissions,
   normalizeRoleName,
-  transitionalDealGrants,
 } from "./utils/permissions";
 import { notifyOwner, getActorName } from "./utils/notifications";
 import { requireFeature } from "./subscriptions";
+import { AppErrorCode, throwAppError } from "./utils/errors";
+
+// Translated under ServerError_PERMISSION_RETIRED; the EN dictionary text equals this string.
+const RETIRED_PERMISSION_MESSAGE =
+  'The "Finalize financed deal" permission is no longer used. Grant "Record the supplier payment route" or "Cancel a closed financed deal" instead.';
+
+const OWNER_NAMED_ROLE_LOCKED_MESSAGE =
+  "This role is named OWNER but is not the system owner role, so its permissions cannot be edited. Rename it to a different name first.";
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -83,13 +92,11 @@ export const create = mutation({
     if (invalidPermissions.length > 0) {
       throw new ConvexError(`Invalid permissions: ${invalidPermissions.join(", ")}`);
     }
-    // SCRUM-413: this authority is being split into manage:supplier_settlement
-    // and cancel:closed_deal, and is retired at cutover. A new role has no
-    // reason to start carrying it.
-    if (args.permissions.includes(PERMISSIONS.FINALIZE_FINANCED_DEAL)) {
-      throw new ConvexError(
-        "finalize:financed_deal is being retired. Grant manage:supplier_settlement or cancel:closed_deal instead."
-      );
+    // SCRUM-413: finalize:financed_deal was split into
+    // manage:supplier_settlement and cancel:closed_deal and is retired. A new
+    // role has no reason to start carrying it.
+    if (newlyAddedLegacyPermissions(args.permissions, []).length > 0) {
+      throwAppError(AppErrorCode.PERMISSION_RETIRED, RETIRED_PERMISSION_MESSAGE);
     }
 
     // Prevent duplicate role names within the same org
@@ -150,6 +157,12 @@ export const update = mutation({
       throw new ConvexError("The OWNER role permissions cannot be customized.");
     }
 
+    // S413B-4/L-2: an OWNER-named row that did not qualify must not gain owner-scale authority
+    // from an edit; see isUnqualifiedOwnerNamed.
+    if (args.permissions !== undefined && isUnqualifiedOwnerNamed(role)) {
+      throwAppError(AppErrorCode.OWNER_NAMED_ROLE_LOCKED, OWNER_NAMED_ROLE_LOCKED_MESSAGE);
+    }
+
     const patch: Record<string, unknown> = {};
     if (args.name !== undefined) {
       const roleName = args.name.trim();
@@ -186,21 +199,13 @@ export const update = mutation({
       if (invalidPermissions.length > 0) {
         throw new ConvexError(`Invalid permissions: ${invalidPermissions.join(", ")}`);
       }
+      // SCRUM-413: a retired permission already stored on the role may
+      // round-trip through an edit; a NEWLY added one is refused. Editing or
+      // renaming a role never grants anything the caller did not send.
+      if (newlyAddedLegacyPermissions(args.permissions, role.permissions).length > 0) {
+        throwAppError(AppErrorCode.PERMISSION_RETIRED, RETIRED_PERMISSION_MESSAGE);
+      }
       patch.permissions = dedupePermissions(args.permissions);
-    }
-
-    // SCRUM-413 transition: while the deal doors still check
-    // finalize:financed_deal, a role edited into holding it (or renamed to
-    // MANAGER while holding it) is given the matching split authority too, so
-    // the cutover cannot deny it. Same pure rule as the migration.
-    if (patch.permissions !== undefined || patch.name !== undefined) {
-      const next = {
-        ...role,
-        name: (patch.name as string | undefined) ?? role.name,
-        permissions: (patch.permissions as string[] | undefined) ?? role.permissions,
-      };
-      const owed = transitionalDealGrants(next);
-      if (owed.length > 0) patch.permissions = [...next.permissions, ...owed];
     }
 
     if (Object.keys(patch).length > 0) {

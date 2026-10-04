@@ -1062,14 +1062,14 @@ export const update = mutation({
           if (planVersionOf(app) === 2) {
             try {
               await requireTenantAuth(ctx, args.orgId, [
-                PERMISSIONS.FINALIZE_FINANCED_DEAL,
+                PERMISSIONS.CANCEL_CLOSED_DEAL,
                 PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
               ]);
             } catch {
               throw new ConvexError("A manager cancels a finalized deal.");
             }
             const forwardBlock = forwardCancelRefusal(await deriveForwardState(ctx, app));
-            if (forwardBlock !== null) throw new ConvexError(forwardBlock);
+            if (forwardBlock !== null) throwAppError(forwardBlock.code, forwardBlock.message);
           }
           if (app.disbursedAt) {
             throw new ConvexError(

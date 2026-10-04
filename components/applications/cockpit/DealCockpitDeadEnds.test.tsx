@@ -349,7 +349,7 @@ describe("S4 -- a blocker on another page links to it, for the caller who can ac
 
   test("a held vehicle deposit links to the vehicles page for a caller who may resolve it", () => {
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
     permissions.add(PERMISSIONS.APPROVE_REQUESTS);
     permissions.add(PERMISSIONS.VIEW_VEHICLES);
     queryResults.set(COCKPIT_QUERY, settlement());
@@ -362,7 +362,7 @@ describe("S4 -- a blocker on another page links to it, for the caller who can ac
 
   test("a caller who cannot resolve deposits gets no link and is told who does", () => {
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
     permissions.add(PERMISSIONS.VIEW_VEHICLES);
     queryResults.set(COCKPIT_QUERY, settlement());
     queryResults.set(APP_QUERY, heldDepositApp());
@@ -373,7 +373,7 @@ describe("S4 -- a blocker on another page links to it, for the caller who can ac
 
   test("a resolver who cannot open the vehicles page is told, rather than linked to a refusal", () => {
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
     permissions.add(PERMISSIONS.APPROVE_REQUESTS);
     queryResults.set(COCKPIT_QUERY, settlement());
     queryResults.set(APP_QUERY, heldDepositApp());
