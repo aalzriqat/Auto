@@ -289,6 +289,12 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This organization's financial reset has not finished. It cannot be returned to service until the reset completes.",
     "لم تكتمل إعادة ضبط البيانات المالية لهذه المنشأة. لا يمكن إعادتها إلى الخدمة قبل اكتمال إعادة الضبط.",
   ],
+  // SCRUM-113. `approvals.respondToApproval` refuses APPROVED when the request's vehicle is
+  // missing, foreign or soft-deleted; REJECTED stays allowed.
+  ServerError_APPROVAL_VEHICLE_UNAVAILABLE: [
+    "This vehicle is no longer available in this dealership, so the request can't be approved. Reject it instead.",
+    "لم تعد هذه المركبة متاحة في هذا المعرض، لذا لا يمكن الموافقة على الطلب. يُرجى رفضه بدلاً من ذلك.",
+  ],
   FinanceCompanyReceivables: ["Finance-company receivables", "ذمم شركات التمويل"],
   FinanceCompanyReceivablesDesc: ["Amounts due from finance companies. Open the originating deal to review or settle them.", "المبالغ المستحقة من شركات التمويل. افتح الصفقة الأصلية للمراجعة أو التسوية."],
   DocumentNumber: ["Document number", "رقم المستند"],

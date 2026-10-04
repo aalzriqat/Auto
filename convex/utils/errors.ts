@@ -156,6 +156,10 @@ export const AppErrorCode = {
   SALE_HAS_LEGACY_RECEIVABLE: "SALE_HAS_LEGACY_RECEIVABLE",
   SALE_DEBT_RECEIPT_REFUSED: "SALE_DEBT_RECEIPT_REFUSED",
   PAYMENT_LINKS_DISABLED: "PAYMENT_LINKS_DISABLED",
+  // SCRUM-113. `approvals.respondToApproval` refuses APPROVED when the request's vehicle is
+  // missing, in another organisation or soft-deleted; REJECTED stays allowed. Translated under
+  // ServerError_<code>.
+  APPROVAL_VEHICLE_UNAVAILABLE: "APPROVAL_VEHICLE_UNAVAILABLE",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];
