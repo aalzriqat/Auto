@@ -474,6 +474,26 @@ describe("socialIntegrations: an Instagram account belongs to one org", () => {
     await expect(save(t, orgB, "ig_biz", "ig_hook")).resolves.toBeNull();
   });
 
+  test("a downgraded org can still disconnect, releasing the account for another org", async () => {
+    // The refusal above tells the second org to disconnect in the first one.
+    // That has to be possible even after the holder dropped below the plan
+    // that includes the Social Inbox, or the account is locked for good.
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId: orgA, asOwner } = await seedOwner(t);
+    const orgB = await newOrg(t);
+    await save(t, orgA, "ig_biz", "ig_hook");
+    await t.run(async (ctx) => {
+      const sub = await ctx.db
+        .query("subscriptions")
+        .withIndex("by_org", (q) => q.eq("orgId", orgA))
+        .unique();
+      await ctx.db.patch(sub!._id, { plan: "starter" });
+    });
+
+    await asOwner.mutation(api.socialIntegrations.disconnect, { orgId: orgA });
+    await expect(save(t, orgB, "ig_biz", "ig_hook")).resolves.toBeNull();
+  });
+
   test("the OAuth callback tells the dealer the account is in use, not 'try again later'", async () => {
     const json = (body: unknown) =>
       new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });

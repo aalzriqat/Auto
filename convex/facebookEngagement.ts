@@ -88,8 +88,9 @@ const MAX_AUTO_REPLY_RETRIES = 3;
 
 /**
  * Reverse-lookup used by the webhook: maps the Page ID Meta sends in entry[].id back to an org.
- * A Page held by two orgs resolves to none — the tenant is never guessed — and
- * the caller skips that entry rather than failing the whole batch (SCRUM-622).
+ * A Page held by two orgs resolves to no settings with `ambiguous: true` — the
+ * tenant is never guessed — and the caller records and skips that entry rather
+ * than failing the whole batch (SCRUM-622).
  */
 export const getSettingsByFacebookPageId = internalQuery({
   args: { facebookPageId: v.string() },
@@ -98,11 +99,8 @@ export const getSettingsByFacebookPageId = internalQuery({
       .query("orgSettings")
       .withIndex("by_facebook_page_id", (q) => q.eq("facebookPageId", args.facebookPageId))
       .take(2);
-    if (holders.length > 1) {
-      console.error(`Facebook Page ${args.facebookPageId} is connected to more than one org; skipping its events`);
-      return null;
-    }
-    return holders[0] ?? null;
+    if (holders.length > 1) return { settings: null, ambiguous: true };
+    return { settings: holders[0] ?? null, ambiguous: false };
   },
 });
 

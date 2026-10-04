@@ -366,12 +366,14 @@ export const disconnectByInstagramUserId = internalMutation({
   },
 });
 
-/** Disconnects Instagram for the org. Owner-only. */
+/** Disconnects Instagram for the org. Owner-only.
+ *  Intentionally NOT gated behind requireFeature, matching Facebook's
+ *  disconnect: a downgraded org must still be able to revoke its credentials
+ *  and release the account, which another org cannot connect while it holds it. */
 export const disconnect = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
-    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const settings = await ctx.db
       .query("orgSettings")

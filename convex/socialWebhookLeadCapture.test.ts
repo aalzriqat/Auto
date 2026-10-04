@@ -466,6 +466,11 @@ describe("Instagram", () => {
   });
 });
 
+async function ambiguityLogs(t: ReturnType<typeof newT>, source: "facebook" | "instagram") {
+  const rows = await t.run((ctx) => ctx.db.query("webhookLogs").collect());
+  return rows.filter((row) => row.source === source && row.status === "error" && /more than one org/.test(row.summary));
+}
+
 describe("cross-cutting", () => {
   // SCRUM-622: an ambiguous page/account is skipped — never guessed — and the
   // delivery is acknowledged instead of failing forever on redelivery.
@@ -477,6 +482,16 @@ describe("cross-cutting", () => {
     expect(res.status).toBe(200);
     expect((await snapshot(t, orgA)).fbEvents).toHaveLength(0);
     expect((await snapshot(t, orgB)).fbEvents).toHaveLength(0);
+    // The dropped entry leaves a durable error row, so it is not mistaken for
+    // an unconnected Page and can be found and replayed once one org disconnects.
+    expect(await ambiguityLogs(t, "facebook")).toHaveLength(1);
+  });
+
+  test("SCRUM-622: an unconnected Page is skipped without an ambiguity row", async () => {
+    const t = newT();
+    await seedOrg(t, { ...PROD_LIKE_FB, facebookPageId: "some_other_page" });
+    expect((await post(t, "/facebook-webhook", fbDm("psid_nobody", "hi"))).status).toBe(200);
+    expect(await ambiguityLogs(t, "facebook")).toHaveLength(0);
   });
 
   test("SCRUM-622: the same Instagram account connected to two orgs", async () => {
@@ -487,6 +502,7 @@ describe("cross-cutting", () => {
     expect(res.status).toBe(200);
     expect((await snapshot(t, orgA)).igEvents).toHaveLength(0);
     expect((await snapshot(t, orgB)).igEvents).toHaveLength(0);
+    expect(await ambiguityLogs(t, "instagram")).toHaveLength(1);
   });
 
   // Known defect SCRUM-625 — flip to `test` when fixed.

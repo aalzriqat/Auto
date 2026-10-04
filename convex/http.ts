@@ -1184,12 +1184,23 @@ http.route({
         continue;
       }
 
-      const settings = await ctx.runQuery(
+      const { settings, ambiguous } = await ctx.runQuery(
         internal.instagramEngagement.getSettingsByInstagramAccountId,
         {
           instagramBusinessAccountId: igAccountId,
         },
       );
+      if (ambiguous) {
+        // Connected to more than one org (SCRUM-622): never guess the tenant.
+        // Acknowledged like an unrecognized account, but recorded, so the
+        // dropped entry stays findable for replay once one org disconnects.
+        await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+          source: "instagram",
+          status: "error",
+          summary: `Instagram account ${igAccountId} is connected to more than one org; entry skipped`,
+        });
+        continue;
+      }
       if (!settings) {
         // Unrecognized account (not connected to any org, or already
         // disconnected) — acknowledge so Meta doesn't retry forever.
@@ -1632,12 +1643,23 @@ http.route({
         continue;
       }
 
-      const settings = await ctx.runQuery(
+      const { settings, ambiguous } = await ctx.runQuery(
         internal.facebookEngagement.getSettingsByFacebookPageId,
         {
           facebookPageId: pageId,
         },
       );
+      if (ambiguous) {
+        // Connected to more than one org (SCRUM-622): never guess the tenant.
+        // Acknowledged like an unrecognized Page, but recorded, so the dropped
+        // entry stays findable for replay once one org disconnects.
+        await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+          source: "facebook",
+          status: "error",
+          summary: `Facebook Page ${pageId} is connected to more than one org; entry skipped`,
+        });
+        continue;
+      }
       if (!settings) {
         // Unrecognized Page (not connected to any org, or already
         // disconnected) — acknowledge so Meta doesn't retry forever.
