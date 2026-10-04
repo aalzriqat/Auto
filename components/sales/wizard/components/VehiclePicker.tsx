@@ -188,6 +188,16 @@ export default function VehiclePicker({
         </span>
         <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform", open && "rotate-180")} />
       </button>
+      {/* SCRUM-629 F-27: quotable, but say what the server will refuse next. */}
+      {selected?.status === "RESERVED" && (
+        <p
+          role="status"
+          data-testid="vehicle-picker-reserved-note"
+          className="mt-1.5 text-xs text-amber-700 dark:text-amber-400"
+        >
+          {t("ReservedQuoteWarning" as any)}
+        </p>
+      )}
 
       {/* Dropdown */}
       {open && (

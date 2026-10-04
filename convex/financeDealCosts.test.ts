@@ -1615,6 +1615,41 @@ describe("a deducted cost write establishes the remittance from what the company
     expect(await closingCheck(seed, "REMITTANCE_KNOWN")).toMatchObject({ status: "READY" });
   });
 
+  // SCRUM-629 F-22 (ruling c21924): READY asserts the AGREED first payment is
+  // known, and never while there is nothing to judge it against.
+  test("without the approval the first-payment check is not ready, even with the amount on file", async () => {
+    const seed = await financedSeed("fp_inputs_approval");
+    await seed.t.run((ctx) => ctx.db.patch(seed.applicationId, { approvedDealerPurchaseAmountMinor: undefined }));
+    expect(await closingCheck(seed, "FIRST_PAYMENT_RECORDED")).toMatchObject({
+      status: "UNAVAILABLE",
+      reasonCode: "FIRST_PAYMENT_INPUTS_PENDING",
+    });
+  });
+
+  // F-22 self-attack: a manual-finance deal has no quotation by design and is
+  // gated on its letter. finalizeDeal refuses any UNAVAILABLE check, so treating
+  // "no quotation" as missing input would make such a deal unfinalizable.
+  test("an approved deal with no quotation is not held by this check", async () => {
+    const seed = await financedSeed("fp_inputs_no_quote");
+    await seed.t.run((ctx) =>
+      ctx.db.patch(seed.applicationId, { submittedQuotationMinor: undefined, customerFirstPaymentMinor: undefined })
+    );
+    // Not READY (READY now claims the agreed amount is known, and none is stored),
+    // and not a refusal either: NOT_APPLICABLE never moves the overall verdict.
+    expect(await closingCheck(seed, "FIRST_PAYMENT_RECORDED")).toMatchObject({ status: "NOT_APPLICABLE", reason: null });
+  });
+
+  test("an approved deal with no quotation but a stored first payment: the check is ready", async () => {
+    const seed = await financedSeed("fp_inputs_no_quote_known");
+    await seed.t.run((ctx) => ctx.db.patch(seed.applicationId, { submittedQuotationMinor: undefined }));
+    expect(await closingCheck(seed, "FIRST_PAYMENT_RECORDED")).toMatchObject({ status: "READY" });
+  });
+
+  test("quotation, approval and an agreed first payment (even zero): the check is ready", async () => {
+    const seed = await financedSeed("fp_known");
+    expect(await closingCheck(seed, "FIRST_PAYMENT_RECORDED")).toMatchObject({ status: "READY" });
+  });
+
   test("a cost the company does NOT withhold leaves the remittance alone", async () => {
     const seed = await financedSeed("remit_gross");
     // The remittance as approval derived it; a cost the company does not
