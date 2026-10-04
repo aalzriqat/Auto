@@ -14,7 +14,8 @@ import Step2Customer from "@/components/sales/wizard/steps/Step2Customer";
 import { Step3Review } from "@/components/sales/wizard/steps/Step3Review";
 import { Step4QuoteSuccess } from "@/components/sales/wizard/steps/Step4QuoteSuccess";
 
-import { X, Banknote, CreditCard, RotateCcw } from "lucide-react";
+import { X, Banknote, CreditCard, RotateCcw, MessageSquarePlus } from "lucide-react";
+import { openFeedbackPanel, useSuppressFeedbackTrigger } from "@/components/feedback/feedbackWidgetStore";
 import { Button } from "@/components/ui/button";
 
 import type { WizardData, PaymentType } from "@/components/sales/wizard/types";
@@ -45,6 +46,7 @@ export function SalesWizard({
 }) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  useSuppressFeedbackTrigger();
 
   const saveDraftMutation = useMutation(api.wizardDrafts.saveDraft);
   const clearDraftMutation = useMutation(api.wizardDrafts.clearDraft);
@@ -190,12 +192,24 @@ export function SalesWizard({
             {t("StepLabel" as any)} {currentStep} {t("StepOf" as any)} 3
           </p>
         </div>
-        <button
-          onClick={handleClose}
-          className="p-2 rounded-full hover:bg-muted transition"
-        >
-          <X className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-1">
+          {/* The floating feedback trigger is hidden here so it cannot cover the step actions (SCRUM-609 F-01). */}
+          <button
+            type="button"
+            onClick={openFeedbackPanel}
+            aria-label={t("FeedbackWidgetTitle" as any)}
+            title={t("FeedbackWidgetTitle" as any)}
+            className="p-2 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground transition"
+          >
+            <MessageSquarePlus className="w-5 h-5" />
+          </button>
+          <button
+            onClick={handleClose}
+            className="p-2 rounded-full hover:bg-muted transition"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
       </div>
 
       {/* RESUME PROMPT */}

@@ -3,6 +3,7 @@
 import { cn } from "@/lib/utils";
 import { FileText } from "lucide-react";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useCurrency } from "@/hooks/useCurrency";
 
 const DOC_TRANSLATIONS: Record<string, string> = {
   "هوية": "ID Card",
@@ -35,8 +36,15 @@ interface ReviewFinanceSummaryProps {
   takafulAmount?: number;
   desiredProfit?: number;
   companyDocs?: CompanyDoc[];
+  /** The terms the salesperson commits to (SCRUM-609 F-03): shown above what the financier derives. */
+  salePrice?: number;
+  downPayment?: number;
+  termMonths?: number;
   className?: string;
 }
+
+const formatAmount = (value: number) =>
+  (value || 0).toLocaleString(undefined, { minimumFractionDigits: 2 });
 
 export default function ReviewFinanceSummary({
   isCash,
@@ -48,9 +56,14 @@ export default function ReviewFinanceSummary({
   takafulAmount = 0,
   desiredProfit = 0,
   companyDocs = [],
+  salePrice,
+  downPayment,
+  termMonths,
   className,
 }: ReviewFinanceSummaryProps) {
   const { isRtl, t } = useLanguage();
+  const currency = useCurrency();
+  const showDealTerms = !isCash && salePrice !== undefined;
 
   return (
     <div className={cn("rounded-xl border p-5 space-y-4", className)}>
@@ -65,6 +78,33 @@ export default function ReviewFinanceSummary({
         )}
       </div>
 
+      {/* Committed deal terms */}
+      {showDealTerms && (
+        <dl
+          data-testid="review-deal-terms"
+          className="grid grid-cols-3 gap-3 rounded-lg bg-muted/40 px-3 py-2 text-sm"
+        >
+          <div>
+            <dt className="text-xs text-muted-foreground">{t("SalePrice" as any)}</dt>
+            <dd className="font-semibold tabular-nums">
+              {formatAmount(salePrice ?? 0)} {currency.displayLabel}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">{t("DownPayment" as any)}</dt>
+            <dd className="font-semibold tabular-nums">
+              {formatAmount(downPayment ?? 0)} {currency.displayLabel}
+            </dd>
+          </div>
+          {termMonths !== undefined && (
+            <div>
+              <dt className="text-xs text-muted-foreground">{t("TermMonths" as any)}</dt>
+              <dd className="font-semibold tabular-nums">{termMonths}</dd>
+            </div>
+          )}
+        </dl>
+      )}
+
       {/* Main stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {!isCash ? (
@@ -76,7 +116,7 @@ export default function ReviewFinanceSummary({
                 {(monthlyInstallment || 0).toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                 })}
-                <span className="text-xs text-muted-foreground ms-1">{t("JOD" as any)}</span>
+                <span className="text-xs text-muted-foreground ms-1">{currency.displayLabel}</span>
               </p>
             </div>
 
@@ -87,7 +127,7 @@ export default function ReviewFinanceSummary({
                 {(totalFinancedAmount || 0).toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                 })}{" "}
-                {t("JOD" as any)}
+                {currency.displayLabel}
               </p>
             </div>
 
@@ -98,7 +138,7 @@ export default function ReviewFinanceSummary({
                 {(totalProfit || 0).toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                 })}{" "}
-                {t("JOD" as any)}
+                {currency.displayLabel}
               </p>
             </div>
 
@@ -109,7 +149,7 @@ export default function ReviewFinanceSummary({
                 {(desiredProfit || 0).toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                 })}{" "}
-                {t("JOD" as any)}
+                {currency.displayLabel}
               </p>
             </div>
           </>
@@ -122,7 +162,7 @@ export default function ReviewFinanceSummary({
               {(totalFinancedAmount || 0).toLocaleString(undefined, {
                 minimumFractionDigits: 2,
               })}{" "}
-              {t("JOD" as any)}
+              {currency.displayLabel}
             </p>
           </div>
         )}
