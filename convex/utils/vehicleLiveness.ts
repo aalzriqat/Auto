@@ -27,10 +27,6 @@ export const VEHICLE_DELETED_MESSAGE =
 /** True when the vehicle is soft-deleted. */
 export const isVehicleDeleted = (v: Doc<"vehicles">): boolean => v.isDeleted === true;
 
-/**
- * The ONE precedence ordering (SOLD, then ARCHIVED, then DELETED) for a soft-deleted car; null for a live one.
- * Every consumer reads this rather than restating the order.
- */
 const DELETED_VEHICLE_MESSAGES = {
   [AppErrorCode.VEHICLE_ALREADY_SOLD]: "This vehicle has already been sold.",
   [AppErrorCode.VEHICLE_ARCHIVED]: "Cannot sell an archived vehicle. Restore it first.",
@@ -39,6 +35,10 @@ const DELETED_VEHICLE_MESSAGES = {
 
 type DeletedVehicleRefusal = keyof typeof DELETED_VEHICLE_MESSAGES;
 
+/**
+ * The ONE precedence ordering (SOLD, then ARCHIVED, then DELETED) for a soft-deleted car; null for a live one.
+ * Every consumer reads this rather than restating the order.
+ */
 export function deletedVehicleRefusal(vehicle: Doc<"vehicles">): DeletedVehicleRefusal | null {
   if (!isVehicleDeleted(vehicle)) return null;
   if (vehicle.status === "SOLD") return AppErrorCode.VEHICLE_ALREADY_SOLD;
