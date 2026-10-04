@@ -31,7 +31,7 @@ function preview(overrides: Record<string, unknown> = {}) {
     ...FIXTURE,
     name: DEPLOYMENT,
     reference: "preview/" + PREVIEW_NAME,
-    previewIdentifier: PREVIEW_NAME,
+    previewIdentifier: null,
     createTime: CREATED_AT,
     expiresAt: CREATED_AT + 5 * 24 * 60 * 60 * 1000,
     deploymentUrl: "https://" + DEPLOYMENT + ".convex.cloud",
@@ -205,7 +205,7 @@ describe("SCRUM-377 preview deployment lifecycle", () => {
     });
 
     it("accepts a matching previewIdentifier when reference differs (the old contract)", async () => {
-      const { fetchImpl } = api(preview({ reference: "preview/another-name" }));
+      const { fetchImpl } = api(preview({ reference: "preview/another-name", previewIdentifier: PREVIEW_NAME }));
       await expect(deletePreview({ env: env(), fetchImpl })).resolves.toMatchObject({ deleted: true });
     });
 
@@ -227,7 +227,7 @@ describe("SCRUM-377 preview deployment lifecycle", () => {
       ["an upper-case scheme", "PREVIEW/" + PREVIEW_NAME],
       ["a padded reference", " " + REF],
       ["a trailing newline", REF + "\n"],
-      ["a bare name without the scheme", PREVIEW_NAME + "/preview"],
+      ["a name with a trailing /preview but no scheme", PREVIEW_NAME + "/preview"],
       ["a non-string", { toString: () => REF }],
     ])("never matches %s", async (_label, reference) => {
       expect(carriesPreviewIdentity({ reference, previewIdentifier: null }, PREVIEW_NAME)).toBe(false);
@@ -253,6 +253,48 @@ describe("SCRUM-377 preview deployment lifecycle", () => {
       expect(writes(calls)).toEqual([]);
     });
 
+    it.each([
+      ["kind absent", { kind: undefined }],
+      ["isDefault absent", { isDefault: undefined }],
+      ["isDefault null", { isDefault: null }],
+      ["isDefault the string false", { isDefault: "false" }],
+    ])("refuses when %s: no PATCH, no delete POST", async (_label, overrides) => {
+      const pinned = api(preview(overrides));
+      await expect(pinPreview({ env: env(), fetchImpl: pinned.fetchImpl, now: () => NOW })).rejects.toThrow();
+      expect(pinned.calls.map((c) => c.method)).toEqual(["GET"]);
+      const deleted = api(preview(overrides));
+      await expect(deletePreview({ env: env(), fetchImpl: deleted.fetchImpl })).rejects.toThrow();
+      expect(deleted.calls.map((c) => c.method)).toEqual(["GET"]);
+    });
+
+    it("control: the complete response (kind cloud, isDefault false) pins and deletes", async () => {
+      const pinned = api(preview({ kind: "cloud", isDefault: false }));
+      await pinPreview({ env: env(), fetchImpl: pinned.fetchImpl, now: () => NOW });
+      expect(pinned.calls.map((c) => c.method)).toEqual(["GET", "PATCH"]);
+      const deleted = api(preview({ kind: "cloud", isDefault: false }));
+      await expect(deletePreview({ env: env(), fetchImpl: deleted.fetchImpl })).resolves.toMatchObject({ deleted: true });
+      expect(deleted.calls.map((c) => c.method)).toEqual(["GET", "POST"]);
+    });
+
+    it("refuses when the other identity field is malformed, even if one field matches", async () => {
+      expect(carriesPreviewIdentity({ reference: REF, previewIdentifier: 42 }, PREVIEW_NAME)).toBe(false);
+      expect(carriesPreviewIdentity({ reference: 42, previewIdentifier: PREVIEW_NAME }, PREVIEW_NAME)).toBe(false);
+      for (const overrides of [{ previewIdentifier: 42 }, { reference: 42, previewIdentifier: PREVIEW_NAME }]) {
+        const { calls, fetchImpl } = api(preview(overrides));
+        await expect(deletePreview({ env: env(), fetchImpl })).rejects.toThrow();
+        expect(calls.map((c) => c.method)).toEqual(["GET"]);
+      }
+    });
+
+    it.each([
+      ["a createTime that differs from the recorded one", { createTime: CREATED_AT + 1 }],
+      ["a missing createTime", { createTime: undefined }],
+    ])("with only the reference matching, delete refuses %s", async (_label, overrides) => {
+      const { calls, fetchImpl } = api(preview({ previewIdentifier: null, ...overrides }));
+      await expect(deletePreview({ env: env(), fetchImpl })).rejects.toThrow();
+      expect(writes(calls)).toEqual([]);
+    });
+
     it("a matching reference never rescues a protected deployment name", async () => {
       const { calls, fetchImpl } = api(preview({ name: "kindly-hound-172", previewIdentifier: null }));
       await expect(
@@ -272,7 +314,8 @@ describe("SCRUM-377 preview deployment lifecycle", () => {
     });
   });
 
-  it("only warns, exits 0, and never prints key bytes", async () => {    const lines: string[] = [];
+  it("only warns, exits 0, and never prints key bytes", async () => {
+    const lines: string[] = [];
     const failing = (async () => {
       throw new Error("socket hang up " + SECRET);
     }) as unknown as typeof fetch;

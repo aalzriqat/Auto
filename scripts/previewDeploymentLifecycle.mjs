@@ -132,10 +132,12 @@ export async function callManagementApi(
  */
 export function carriesPreviewIdentity(d, previewName) {
   if (!d || typeof d !== "object" || typeof previewName !== "string" || previewName === "") return false;
-  return (
-    (typeof d.reference === "string" && d.reference === "preview/" + previewName) ||
-    (typeof d.previewIdentifier === "string" && d.previewIdentifier === previewName)
-  );
+  // A malformed field on either side voids the match, even if the other matches.
+  if (d.reference !== undefined && d.reference !== null && typeof d.reference !== "string") return false;
+  if (d.previewIdentifier !== undefined && d.previewIdentifier !== null && typeof d.previewIdentifier !== "string") {
+    return false;
+  }
+  return d.reference === "preview/" + previewName || d.previewIdentifier === previewName;
 }
 
 /** Diagnostic form of an observed field: a bounded, inert string, or its type. */
@@ -167,8 +169,8 @@ export async function readOwnPreview({ deployKey, previewName, deploymentName, f
   if (!d || typeof d !== "object" || Array.isArray(d)) refuse("Convex Management API returned a non-object.");
   if (d.name !== deploymentName) refuse("Deployment name does not match the requested deployment.");
   if (d.deploymentType !== "preview") refuse("Deployment " + deploymentName + " is not a preview deployment.");
-  if (d.kind !== undefined && d.kind !== "cloud") refuse("Deployment " + deploymentName + " is not a cloud deployment.");
-  if (d.isDefault === true) refuse("Deployment " + deploymentName + " is a default deployment.");
+  if (d.kind !== "cloud") refuse("Deployment " + deploymentName + " is not a cloud deployment.");
+  if (d.isDefault !== false) refuse("Deployment " + deploymentName + " is a default deployment.");
   if (!carriesPreviewIdentity(d, previewName)) {
     refuse(
       "Deployment " + deploymentName + " does not carry this run's preview identifier (observed reference: " +
