@@ -1527,13 +1527,13 @@ export interface DealStageFacts extends LifecycleFacts {
   /** Every required document uploaded, verified or waived. */
   requiredDocumentsComplete: boolean;
   /**
-   * Whether any document rule applies to this deal at all.
+   * Whether any REQUIRED document rule applies to this deal.
    *
    * Absent means "assume it does", so a caller that does not answer keeps the
-   * old behaviour. When it is `false` the stage is not rendered: an org with no
-   * `companyDocumentRules` has no paperwork gate, and the documents CARD is
-   * already absent rather than empty in that case — the rail has to agree with
-   * it, or the screen shows a blocker for a checklist that does not exist.
+   * old behaviour. When it is `false` the DELIVERY_ACTIONS stage keeps its
+   * position on the rail but is NOT_APPLICABLE (SCRUM-629 F-07): an optional
+   * document is never a gate, so a deal with none required has no paperwork
+   * step to wait on — and none to claim as finished.
    */
   documentRulesApply?: boolean;
   /**
@@ -1656,11 +1656,11 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
     // zero is not a gap, and `undefined` means none was ever recorded.
     APPROVED_PURCHASE: facts.approvedDealerPurchaseAmountMinor !== undefined && gapResolved,
     // Every required document verified or waived. `every` over an empty
-    // checklist is true, so a deal with no document rules — no paperwork
-    // gate at all — has this stage complete rather than absent: the lifecycle
-    // keeps its eight steps, and the documents card is still absent on its
-    // own account.
-    DELIVERY_ACTIONS: facts.requiredDocumentsComplete,
+    // checklist is true, so with no required rule this would claim paperwork
+    // that never existed was finished — before the credit decision, even
+    // (SCRUM-629 F-07). That deal's stage is NOT_APPLICABLE instead (below):
+    // the rail keeps its eight positions, and nothing is shown as done.
+    DELIVERY_ACTIONS: facts.requiredDocumentsComplete && facts.documentRulesApply !== false,
     // Either route's evidence closes it. Read as an OR rather than by route
     // because the route is not always recorded, and an unknown route must not
     // make a disbursement that demonstrably happened unreadable.
@@ -1736,15 +1736,16 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
     SETTLEMENT: true,
   };
 
-  // DISBURSEMENT only, and only on PROVEN evidence (SCRUM-446). Evidence that
-  // the money actually moved wins (`complete` is checked first), and a stopped
-  // deal is stopped, not "not needed".
+  // DISBURSEMENT only on PROVEN evidence (SCRUM-446), and DELIVERY_ACTIONS only
+  // when no required document rule applies (SCRUM-629 F-07). Evidence that the
+  // money actually moved wins (`complete` is checked first), and a stopped deal
+  // is stopped, not "not needed".
   const notApplicable: Record<FinancedDealStageKey, boolean> = {
     APPLICATION: false,
     CREDIT_DECISION: false,
     APPRAISAL: false,
     APPROVED_PURCHASE: false,
-    DELIVERY_ACTIONS: false,
+    DELIVERY_ACTIONS: facts.documentRulesApply === false && !stopped,
     DISBURSEMENT: facts.financierLeg === "NONE" && !complete.DISBURSEMENT && !stopped,
     HANDOVER: false,
     SETTLEMENT: false,

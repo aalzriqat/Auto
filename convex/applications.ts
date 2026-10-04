@@ -25,7 +25,11 @@ import { PERMISSIONS, isSystemOwnerRole, type Permission } from "./utils/permiss
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
-import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
+import {
+  depositMethodValidator,
+  displayableDepositReference,
+  type DepositMethod,
+} from "./utils/depositRecording";
 import {
   assertNoPendingDepositRequest,
   assertReservationAdoptableWithoutDeposit,
@@ -57,6 +61,7 @@ import {
 } from "../lib/closingReadinessReasonCodes";
 import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
+import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment";
 import { MAX_IDEMPOTENCY_KEY_LENGTH, runWithIdempotency } from "./utils/idempotency";
 import { registerChequeCore, markChequeClearedCore, assertNoActiveAllocations } from "./collections";
 import {
@@ -1433,7 +1438,8 @@ async function buildCockpitMoney(
       position: customerPosition({ routeKnown, unreadableDeposits, heldDepositMinor }),
       amountMinor: heldDepositMinor,
       currency,
-      reference: depositPayment?.externalReference,
+      // Never the machine key `Deposit <id>` (SCRUM-629 F-23).
+      reference: displayableDepositReference(depositPayment?.externalReference),
     },
     settlesDirect && routeKnown
       ? {
@@ -1713,11 +1719,15 @@ export const list = query({
       pageResult = await ctx.db
         .query("financeApplications")
         .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", args.status as "APPROVED" | "REJECTED" | "DRAFT" | "PENDING_DOCS" | "UNDER_REVIEW" | "CLOSED"))
+        // Newest first: the Deals page shows the first page, and oldest-first
+        // hid every new deal once an org passed one page (SCRUM-603).
+        .order("desc")
         .paginate(args.paginationOpts);
     } else {
       pageResult = await ctx.db
         .query("financeApplications")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .order("desc")
         .paginate(args.paginationOpts);
     }
 
@@ -2181,10 +2191,10 @@ export const dealCockpit = query({
       // appraisal moot when the economics could be computed without one.
       fundingSplitComputed: app.financeCompanyFundedPortionMinor !== undefined,
       requiredDocumentsComplete,
-      // Whether this deal has a paperwork gate at all. The documents CARD is
-      // already absent rather than empty when no rule applies; without this the
-      // rail would still show a blocker for a checklist that does not exist.
-      documentRulesApply: applicableRules.length > 0,
+      // Whether this deal has a paperwork gate at all: only a REQUIRED rule
+      // makes one (SCRUM-629 F-07). Without any, the stage is NOT_APPLICABLE
+      // rather than complete over an empty checklist.
+      documentRulesApply: requiredDocs.length > 0,
       // The direct route's own disbursement evidence. Without it the stage
       // stays blocked forever on a deal whose money has entirely moved,
       // because the financier paid the supplier and never paid the dealership.
@@ -3616,6 +3626,8 @@ export const cancelApplication = mutation({
                 // the deal, so the sale goes with it — but `createDraft` performs
                 // no inventory, deposit, CRM or accounting side effects, so there
                 // is nothing to reverse and nothing to hand back.
+                // SCRUM-571 T2: a sale exit refuses while a sale-linked legacy receivable exists.
+                await assertNoSaleLinkedLegacyReceivable(ctx, args.orgId, sale._id);
                 await ctx.db.patch(sale._id, { status: "CANCELLED" });
               }
             }

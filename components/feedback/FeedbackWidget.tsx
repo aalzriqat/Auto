@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/sonner";
 import { MessageSquarePlus, Bug, Lightbulb, X, ChevronLeft } from "lucide-react";
+import { closeFeedbackPanel, openFeedbackPanel, useFeedbackWidgetState } from "./feedbackWidgetStore";
 
 type FeedbackType = "BUG" | "FEATURE";
 
@@ -18,11 +19,15 @@ export function FeedbackWidget() {
   const { t } = useLanguage();
   const submit = useMutation(api.feedback.submit);
 
-  const [open, setOpen] = useState(false);
+  const { open, suppressors } = useFeedbackWidgetState();
   const [type, setType] = useState<FeedbackType | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // The open flag lives in a module store; the form state does not. Close on
+  // unmount so a remount never shows an open panel with an emptied form.
+  useEffect(() => () => closeFeedbackPanel(), []);
 
   const reset = () => {
     setType(null);
@@ -32,7 +37,7 @@ export function FeedbackWidget() {
   };
 
   const handleClose = () => {
-    setOpen(false);
+    closeFeedbackPanel();
     reset();
   };
 
@@ -62,15 +67,17 @@ export function FeedbackWidget() {
 
   return (
     <>
-      {/* Floating trigger button */}
-      <button
-        onClick={() => setOpen(true)}
-        className="fixed bottom-[5.5rem] end-5 z-40 flex items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-lg ring-1 ring-black/10 hover:bg-primary/90 transition-colors"
-        aria-label={t("FeedbackWidgetTitle" as any)}
-      >
-        <MessageSquarePlus className="h-4 w-4" />
-        <span className="hidden sm:inline">{t("FeedbackWidgetTitle" as any)}</span>
-      </button>
+      {/* Floating trigger button — hidden while a full-screen flow offers its own entry (SCRUM-609 F-01) */}
+      {suppressors === 0 && (
+        <button
+          onClick={openFeedbackPanel}
+          className="fixed bottom-[5.5rem] end-5 z-40 flex items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-lg ring-1 ring-black/10 hover:bg-primary/90 transition-colors"
+          aria-label={t("FeedbackWidgetTitle" as any)}
+        >
+          <MessageSquarePlus className="h-4 w-4" />
+          <span className="hidden sm:inline">{t("FeedbackWidgetTitle" as any)}</span>
+        </button>
+      )}
 
       {/* Panel overlay */}
       {open && (

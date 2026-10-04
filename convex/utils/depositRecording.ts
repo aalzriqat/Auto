@@ -16,6 +16,17 @@ export const depositMethodValidator = v.union(
 
 export type DepositMethod = "CASH" | "BANK_TRANSFER" | "PAYMENT_LINK" | "CARD" | "CHEQUE" | "OTHER";
 
+/**
+ * Every recorded deposit's payment carries the reference `Deposit <id>`. It is a
+ * machine key (`deposits.ts` matches payments on it), not anything an operator
+ * wrote, so a screen must not present it as a receipt number (SCRUM-629 F-23).
+ * Returns the reference only when a person could have written it.
+ */
+export function displayableDepositReference(reference: string | undefined): string | undefined {
+  if (reference === undefined || /^Deposit [a-z0-9]+$/.test(reference)) return undefined;
+  return reference;
+}
+
 export function normalizeCurrency(currency: string): string {
   const normalized = currency.trim().toUpperCase();
   if (!normalized) throw new ConvexError("Currency is required.");

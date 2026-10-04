@@ -6,6 +6,7 @@ import { api, internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 import { FC_RETURN_MESSAGES } from "./utils/fcCheque";
+import { allocatePaymentToReceivable } from "./subledger";
 import { salesAr } from "../lib/i18n/domains/sales";
 
 type TestConvex = ConvexTestInstance<typeof schema>;
@@ -514,9 +515,14 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
           idempotencyKey: `af5671-${crypto.randomUUID()}`, createdBy: s.userId, createdAt: Date.now(),
         })
       );
-      await s.asOwner.mutation(internal.subledger.allocate, {
-        orgId: s.orgId, paymentId, receivableDocumentId: receivableId, amountMinor,
-      });
+      // D-20: internal.subledger.allocate now refuses a sale invoice (the
+      // customer receipt resolver is a later slice), so this fixture calls the
+      // same allocation helper the receipt paths use, directly.
+      await s.t.run((ctx) =>
+        allocatePaymentToReceivable(ctx, {
+          orgId: s.orgId, paymentId, receivableDocumentId: receivableId, amountMinor, actorId: s.userId,
+        })
+      );
     }
 
     test("(1) an unpaid stock CASH deal is not SETTLEMENT COMPLETE, and the overview reads the same stage", async () => {

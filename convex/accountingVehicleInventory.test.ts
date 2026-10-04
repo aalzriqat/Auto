@@ -115,12 +115,13 @@ async function linesForEvent(
   sourceId: string,
   eventType: string
 ) {
-  const event = await t.run((ctx) =>
-    ctx.db
-      .query("accountingEvents")
-      .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType).eq("sourceId", sourceId))
-      .filter((q) => q.eq(q.field("eventType"), eventType))
-      .first()
+  const event = await t.run(async (ctx) =>
+    (
+      await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType).eq("sourceId", sourceId))
+        .collect()
+    ).find((e) => e.eventType === eventType) ?? null
   );
   expect(event).not.toBeNull();
   expect(event!.status).toBe("POSTED");
@@ -163,8 +164,8 @@ describe("Fix #1 — vehicle acquisition capitalizes into Vehicle Inventory", ()
     expect(invLine.debitMinor).toBe(10_000_000); // JOD scale 3
     expect(cashLine.creditMinor).toBe(10_000_000);
 
-    const legacyTx = await t.run((ctx) =>
-      ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).filter((q) => q.eq(q.field("category"), "VEHICLE_PURCHASE")).first()
+    const legacyTx = await t.run(async (ctx) =>
+      (await ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).find((tx) => tx.category === "VEHICLE_PURCHASE") ?? null
     );
     expect(legacyTx?.amount).toBe(10000);
     expect(legacyTx?.type).toBe("OUT");
@@ -321,11 +322,15 @@ describe("A cancelled sale's receivable stops counting as AR — but only from i
         createdBy: userId, createdAt: Date.now(),
       })
     );
+    // D-20: a sale invoice's receivable is the sale's own debt, so subledger.allocate
+    // now refuses it up front with SALE_DEBT_RECEIPT_REFUSED (a receipt for a sale
+    // is recorded against the sale invoice, never a separate receivable) — before
+    // it ever reaches the old "exceeds receivable outstanding balance" check.
     await expect(
       asOwner.mutation(internal.subledger.allocate, {
         orgId, paymentId: strayPaymentId, receivableDocumentId: receivableId, amountMinor: 1_000_000,
       })
-    ).rejects.toThrow(/exceeds receivable outstanding balance/);
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_RECEIPT_REFUSED" } });
   });
 });
 
@@ -467,10 +472,10 @@ describe("Trade-in vehicles net against the sale's AR", () => {
     const asApprover = await addCancellationApprover(t, orgId, "ti_cancel");
     await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
 
-    const event = await t.run((ctx) =>
-      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) =>
+    const event = await t.run(async (ctx) =>
+      (await ctx.db.query("accountingEvents").withIndex("by_org_source", (q) =>
         q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", tradeInVehicleId)
-      ).filter((q) => q.eq(q.field("eventType"), "TRADE_IN_ACCEPTED")).first()
+      ).collect()).find((e) => e.eventType === "TRADE_IN_ACCEPTED") ?? null
     );
     expect(event?.status).toBe("REVERSED");
     expect(event?.reversedByEventId).toBeTruthy();
@@ -536,10 +541,10 @@ describe("Trade-in vehicles net against the sale's AR", () => {
     });
     await asApprover.mutation(api.sales.update, { orgId, saleId: saleB, status: "CANCELLED" });
 
-    const secondEvent = await t.run((ctx) =>
-      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) =>
+    const secondEvent = await t.run(async (ctx) =>
+      (await ctx.db.query("accountingEvents").withIndex("by_org_source", (q) =>
         q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", reusedVehicleId)
-      ).filter((q) => q.eq(q.field("eventType"), "TRADE_IN_ACCEPTED")).collect()
+      ).collect()).filter((e) => e.eventType === "TRADE_IN_ACCEPTED")
     );
     // Both this vehicle's TRADE_IN_ACCEPTED events (one per sale) must have
     // actually been reversed — a vehicle-only reversal key would let the
@@ -826,9 +831,9 @@ describe("Resold warranty/GAP products defer the dealer's margin", () => {
     );
     expect(deferralBefore?.recognizedMinor).toBeGreaterThan(0);
 
-    const recognizedEvents = await t.run((ctx) =>
-      ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "FI_COMMISSION_RECOGNIZED")).collect()
+    const recognizedEvents = await t.run(async (ctx) =>
+      (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect()).filter((e) => e.eventType === "FI_COMMISSION_RECOGNIZED")
     );
     expect(recognizedEvents).toHaveLength(1);
 
@@ -913,9 +918,9 @@ describe("Monthly F&I commission recognition cron", () => {
     const summary: string = await t.action(internal.crons.triggerFiCommissionRecognition, {});
     expect(summary).toMatch(/posted 1\/1/i);
 
-    const events = await t.run((ctx) =>
-      ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "FI_COMMISSION_RECOGNIZED")).collect()
+    const events = await t.run(async (ctx) =>
+      (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect()).filter((e) => e.eventType === "FI_COMMISSION_RECOGNIZED")
     );
     expect(events).toHaveLength(1);
     const lines = await t.run((ctx) =>
@@ -935,9 +940,9 @@ describe("Monthly F&I commission recognition cron", () => {
     const secondSummary: string = await t.action(internal.crons.triggerFiCommissionRecognition, {});
     expect(secondSummary).toMatch(/posted 0\/1/i);
     expect(
-      await t.run((ctx) =>
-        ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId))
-          .filter((q) => q.eq(q.field("eventType"), "FI_COMMISSION_RECOGNIZED")).collect()
+      await t.run(async (ctx) =>
+        (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()).filter((e) => e.eventType === "FI_COMMISSION_RECOGNIZED")
       )
     ).toHaveLength(1);
   });
@@ -1051,12 +1056,11 @@ async function seedFiDeferral(suffix: string, saleDate: number) {
       orgId, deferralId: deferral!._id, yearMonth, occurredAt, systemActorId: userId,
     });
   const fiEvents = () =>
-    t.run((ctx) =>
-      ctx.db.query("accountingEvents")
+    t.run(async (ctx) =>
+      (await ctx.db.query("accountingEvents")
         .withIndex("by_org_source", (q) =>
           q.eq("orgId", orgId).eq("sourceType", "dealerProductDeferrals").eq("sourceId", deferral!._id.toString()))
-        .filter((q) => q.eq(q.field("eventType"), "FI_COMMISSION_RECOGNIZED"))
-        .collect()
+        .collect()).filter((e) => e.eventType === "FI_COMMISSION_RECOGNIZED")
     );
   const deferralNow = () => t.run((ctx) => ctx.db.get(deferral!._id));
   return { ...seed, saleId, deferral: deferral!, recognize, fiEvents, deferralNow };
@@ -1124,9 +1128,9 @@ describe("SCRUM-537 — F&I recognition posts one GL occurrence per month", () =
     const [seedPeriod] = await s.asOwner.query(api.accountingPeriods.list, { orgId: s.orgId });
     await s.t.run((ctx) => ctx.db.patch(seedPeriod._id, { startDate: Date.UTC(2025, 5, 1) }));
     await s.recognize("2025-05", Date.UTC(2025, 4, 15));
-    const queued = await s.t.run((ctx) =>
-      ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", s.orgId).eq("status", "PENDING"))
-        .filter((q) => q.eq(q.field("eventType"), "FI_COMMISSION_RECOGNIZED")).collect()
+    const queued = await s.t.run(async (ctx) =>
+      (await ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", s.orgId).eq("status", "PENDING"))
+        .collect()).filter((e) => e.eventType === "FI_COMMISSION_RECOGNIZED")
     );
     expect(queued).toHaveLength(1);
     expect(queued[0].kind).toBe("POST");
@@ -1306,8 +1310,8 @@ describe("Fix #11 — flipping a SOURCED vehicle to owned stock capitalizes it",
     expect(invLine.debitMinor).toBe(9_000_000); // sourceCost mirrored into purchasePrice at creation
     expect(cashLine.creditMinor).toBe(9_000_000);
 
-    const legacyTx = await t.run((ctx) =>
-      ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).filter((q) => q.eq(q.field("category"), "VEHICLE_PURCHASE")).first()
+    const legacyTx = await t.run(async (ctx) =>
+      (await ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).find((tx) => tx.category === "VEHICLE_PURCHASE") ?? null
     );
     expect(legacyTx?.amount).toBe(9000);
 
@@ -1356,12 +1360,13 @@ describe("Fix #11 — flipping a SOURCED vehicle to owned stock capitalizes it",
       orgId, vehicleId, purchasePrice: 7500, purchasePaymentMethod: "BANK_TRANSFER",
     });
 
-    event = await t.run((ctx) =>
-      ctx.db
-        .query("accountingEvents")
-        .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId))
-        .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
-        .first()
+    event = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query("accountingEvents")
+          .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId))
+          .collect()
+      ).find((e) => e.eventType === "VEHICLE_ACQUIRED") ?? null
     );
     expect(event).not.toBeNull();
     expect(event!.status).toBe("POSTED");
@@ -1394,8 +1399,8 @@ describe("Fix #13 — ON_ACCOUNT credit purchases for owned vehicles", () => {
     expect(payable?.status).toBe("PENDING");
 
     // No cash actually moved — the legacy transactions table shouldn't record one.
-    const legacyTx = await t.run((ctx) =>
-      ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).filter((q) => q.eq(q.field("category"), "VEHICLE_PURCHASE")).first()
+    const legacyTx = await t.run(async (ctx) =>
+      (await ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()).find((tx) => tx.category === "VEHICLE_PURCHASE") ?? null
     );
     expect(legacyTx).toBeNull();
   });
@@ -2765,9 +2770,9 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(10_000_000);
     // The legacy cash transaction is not idempotent the way the GL event is, so
     // a re-import must not reach it at all.
-    const txns = await t.run((ctx) =>
-      ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("category"), "VEHICLE_PURCHASE")).collect()
+    const txns = await t.run(async (ctx) =>
+      (await ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect()).filter((tx) => tx.category === "VEHICLE_PURCHASE")
     );
     expect(txns).toHaveLength(1);
   });
@@ -2903,9 +2908,9 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
     // 10,000 + 7,000 + 7,000 — each car once. A repost would read 34,000,000.
     expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(24_000_000);
-    const txns = await t.run((ctx) =>
-      ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("category"), "VEHICLE_PURCHASE")).collect()
+    const txns = await t.run(async (ctx) =>
+      (await ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect()).filter((tx) => tx.category === "VEHICLE_PURCHASE")
     );
     expect(txns).toHaveLength(3);
   });
@@ -3250,13 +3255,16 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     const { t, orgId, asOwner } = await seedPurchased("s59cur", "IMPORTCUR000001A", 10000);
     const vehicle = await vehicleByVin(t, orgId, "IMPORTCUR000001A");
     await t.run(async (ctx) => {
-      const event = await ctx.db
-        .query("accountingEvents")
-        .withIndex("by_org_source", (q) =>
-          q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicle!._id.toString())
-        )
-        .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
-        .unique();
+      const acquisitionEvents = (
+        await ctx.db
+          .query("accountingEvents")
+          .withIndex("by_org_source", (q) =>
+            q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicle!._id.toString())
+          )
+          .collect()
+      ).filter((e) => e.eventType === "VEHICLE_ACQUIRED");
+      if (acquisitionEvents.length > 1) throw new Error("expected at most one VEHICLE_ACQUIRED event");
+      const event = acquisitionEvents[0] ?? null;
       await ctx.db.patch(event!._id, {
         payload: { ...(event!.payload as Record<string, unknown>), currency: "USD" },
       });
@@ -3280,13 +3288,16 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     const { t, orgId, asOwner } = await seedPurchased("s59nopm", "IMPORTNOPM00001A", 10000);
     const vehicle = await vehicleByVin(t, orgId, "IMPORTNOPM00001A");
     await t.run(async (ctx) => {
-      const event = await ctx.db
-        .query("accountingEvents")
-        .withIndex("by_org_source", (q) =>
-          q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicle!._id.toString())
-        )
-        .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
-        .unique();
+      const acquisitionEvents = (
+        await ctx.db
+          .query("accountingEvents")
+          .withIndex("by_org_source", (q) =>
+            q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicle!._id.toString())
+          )
+          .collect()
+      ).filter((e) => e.eventType === "VEHICLE_ACQUIRED");
+      if (acquisitionEvents.length > 1) throw new Error("expected at most one VEHICLE_ACQUIRED event");
+      const event = acquisitionEvents[0] ?? null;
       const { paymentMethod: _dropped, ...rest } = event!.payload as Record<string, unknown>;
       await ctx.db.patch(event!._id, { payload: rest });
     });
@@ -3462,13 +3473,16 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     const { t, orgId, asOwner } = await seedPurchased("s59blind", "IMPORTBLIND0001A", 10000);
     const vehicle = await vehicleByVin(t, orgId, "IMPORTBLIND0001A");
     await t.run(async (ctx) => {
-      const event = await ctx.db
-        .query("accountingEvents")
-        .withIndex("by_org_source", (q) =>
-          q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicle!._id.toString())
-        )
-        .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
-        .unique();
+      const acquisitionEvents = (
+        await ctx.db
+          .query("accountingEvents")
+          .withIndex("by_org_source", (q) =>
+            q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicle!._id.toString())
+          )
+          .collect()
+      ).filter((e) => e.eventType === "VEHICLE_ACQUIRED");
+      if (acquisitionEvents.length > 1) throw new Error("expected at most one VEHICLE_ACQUIRED event");
+      const event = acquisitionEvents[0] ?? null;
       const { costMinor: _dropped, ...rest } = event!.payload as Record<string, unknown>;
       await ctx.db.patch(event!._id, { payload: rest });
     });

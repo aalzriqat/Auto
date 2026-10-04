@@ -1,5 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, internalQuery, internalAction } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { mutation, internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import { requireOwner, requireTenantAuth } from "./utils/tenancy";
@@ -364,12 +366,14 @@ export const disconnectByInstagramUserId = internalMutation({
   },
 });
 
-/** Disconnects Instagram for the org. Owner-only. */
+/** Disconnects Instagram for the org. Owner-only.
+ *  Intentionally NOT gated behind requireFeature, matching Facebook's
+ *  disconnect: a downgraded org must still be able to revoke its credentials
+ *  and release the account, which another org cannot connect while it holds it. */
 export const disconnect = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
-    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const settings = await ctx.db
       .query("orgSettings")
@@ -447,6 +451,38 @@ export const consumeOAuthState = internalMutation({
   },
 });
 
+export const INSTAGRAM_ACCOUNT_IN_USE_MESSAGE =
+  "This Instagram account is already connected to another AutoFlow organization. Disconnect it there first.";
+
+/**
+ * The webhook resolves an org by the webhook account id and the deauthorize
+ * callback by the business id, so each may belong to one org only (SCRUM-622).
+ */
+async function assertInstagramAccountFree(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  ids: { instagramBusinessAccountId: string; instagramWebhookAccountId?: string },
+) {
+  const byBusiness = await ctx.db
+    .query("orgSettings")
+    .withIndex("by_instagram_business_account_id", (q) =>
+      q.eq("instagramBusinessAccountId", ids.instagramBusinessAccountId),
+    )
+    .take(2);
+  const webhookAccountId = ids.instagramWebhookAccountId;
+  const byWebhook = webhookAccountId
+    ? await ctx.db
+        .query("orgSettings")
+        .withIndex("by_instagram_webhook_account_id", (q) =>
+          q.eq("instagramWebhookAccountId", webhookAccountId),
+        )
+        .take(2)
+    : [];
+  if ([...byBusiness, ...byWebhook].some((settings) => settings.orgId !== orgId)) {
+    throw new ConvexError(INSTAGRAM_ACCOUNT_IN_USE_MESSAGE);
+  }
+}
+
 export const saveInstagramCredentials = internalMutation({
   args: {
     orgId: v.id("organizations"),
@@ -458,6 +494,7 @@ export const saveInstagramCredentials = internalMutation({
   },
   handler: async (ctx, args) => {
     const { orgId, ...fields } = args;
+    await assertInstagramAccountFree(ctx, orgId, fields);
     const existing = await ctx.db
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", orgId))

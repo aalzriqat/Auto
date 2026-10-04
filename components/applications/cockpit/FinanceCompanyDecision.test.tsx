@@ -675,6 +675,15 @@ describe("the derived figures", () => {
     // Derived, therefore not editable: the card has no inputs at all.
     expect(document.querySelectorAll("input").length).toBe(0);
   });
+
+  test("the applied LTV is not shown before there is a funded portion to apply it to (SCRUM-628 F-17)", () => {
+    // The rate is configured before any valuation or approved amount exists;
+    // on its own it reads as a figure the deal has not produced yet.
+    renderCockpit(wiring({ facts: { appliedLtvPercent: 90, financeCompanyFundedPortionMinor: null } }));
+
+    expect(screen.queryByText("DerivedAppliedLtv")).toBeNull();
+    expect(screen.queryByText("90%")).toBeNull();
+  });
 });
 
 describe("recording the submitted quotation", () => {
@@ -2133,6 +2142,39 @@ describe("the submitted quotation is prefilled from the calculation", () => {
     );
     expect(amountField().value).toBe("12500");
     expect(screen.getByText("QuotationDiffersFromCalculation")).toBeTruthy();
+  });
+
+  /**
+   * SCRUM-605 (scenario F21): typing into a field the late prefill had just
+   * filled produced "21428.57213000". Rounded to the currency it EQUALLED the
+   * calculation, so it said "matches" and went on the record as
+   * SYSTEM_CALCULATED — a figure nobody typed, under a provenance nobody chose.
+   */
+  test("an entry with more decimals than the currency holds is refused, never rounded into a match", () => {
+    const onSubmit = vi.fn();
+    render(
+      <RecordSubmittedQuotationDialog
+        {...dialogProps({ calculation: { state: "AVAILABLE", minor: 21_428_572 }, onSubmit })}
+      />
+    );
+    expect(amountField().value).toBe("21428.572");
+    fireEvent.change(amountField(), { target: { value: "21428.57213000" } });
+
+    expect(screen.queryByText("QuotationMatchesCalculation")).toBeNull();
+    expect(submitButton().disabled).toBe(true);
+    fireEvent.click(submitButton());
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByText("AmountTooPrecise")).toBeTruthy();
+
+    // Trailing zeros past the scale are the same figure, not extra precision.
+    fireEvent.change(amountField(), { target: { value: "21428.5720" } });
+    expect(screen.queryByText("AmountTooPrecise")).toBeNull();
+    fireEvent.click(submitButton());
+    expect(onSubmit).toHaveBeenCalledWith({
+      submittedQuotationMinor: 21_428_572,
+      source: "SYSTEM_CALCULATED",
+      overrideReason: undefined,
+    });
   });
 
   /**

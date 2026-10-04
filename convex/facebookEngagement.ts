@@ -86,14 +86,21 @@ const MAX_AUTO_REPLY_RETRIES = 3;
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-/** Reverse-lookup used by the webhook: maps the Page ID Meta sends in entry[].id back to an org. */
+/**
+ * Reverse-lookup used by the webhook: maps the Page ID Meta sends in entry[].id back to an org.
+ * A Page held by two orgs resolves to no settings with `ambiguous: true` — the
+ * tenant is never guessed — and the caller records and skips that entry rather
+ * than failing the whole batch (SCRUM-622).
+ */
 export const getSettingsByFacebookPageId = internalQuery({
   args: { facebookPageId: v.string() },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const holders = await ctx.db
       .query("orgSettings")
       .withIndex("by_facebook_page_id", (q) => q.eq("facebookPageId", args.facebookPageId))
-      .unique();
+      .take(2);
+    if (holders.length > 1) return { settings: null, ambiguous: true };
+    return { settings: holders[0] ?? null, ambiguous: false };
   },
 });
 

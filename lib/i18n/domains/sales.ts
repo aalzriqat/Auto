@@ -89,6 +89,10 @@ const dealStepMessages = defineBilingualMessages({
     "No finance company pays the dealership on this deal.",
     "لا توجد شركة تمويل تدفع للمعرض في هذه الصفقة.",
   ],
+  StageNotApplicableReasonDeliveryActions: [
+    "No documents are required on this deal.",
+    "لا توجد مستندات مطلوبة في هذه الصفقة.",
+  ],
   StageViewAnnounceShowing: ["Showing step", "عرض الخطوة"],
   StageViewAnnounceBack: ["Back to the current step", "العودة إلى الخطوة الحالية"],
   // ROUND 2 (SCRUM-417 UX4): the deal is closed and this step waits on the finance company.
@@ -507,6 +511,10 @@ const dealRailMessages = defineBilingualMessages({
   LoadingDeals: ["Loading deals…", "جارٍ تحميل الصفقات…"],
   NoDealsFound: ["No deals match these filters.", "لا توجد صفقات مطابقة لهذه التصفية."],
   DealsQueueEmpty: ["Nothing is waiting on the dealership right now.", "لا شيء بانتظار المعرض حاليًا."],
+  DealsQueueEmptyLoadedOnly: [
+    "Nothing on the loaded deals is waiting on the dealership. Older deals are not loaded yet and may still need action — load more to check them.",
+    "لا شيء في الصفقات المحمّلة بانتظار المعرض. الصفقات الأقدم لم تُحمَّل بعد وقد تحتاج إجراءً — حمّل المزيد للتحقق منها.",
+  ],
   DealsReasonColumn: ["Waiting on", "بانتظار"],
   DealsCustomerVehicleColumn: ["Customer · vehicle", "العميل · السيارة"],
   DealsTypeColumn: ["Type · financier", "النوع · جهة التمويل"],
@@ -1316,7 +1324,8 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingCheck_CUSTODY_SETTLED: ["Employee custody is settled", "عهدة الموظفين مسوّاة"],
   ClosingCheck_COSTS_CLOSABLE: ["Deal costs are recorded and reconciled", "مصاريف الصفقة مسجَّلة ومسوّاة"],
   ClosingCheck_HANDOVER_COSTS_PAID: ["Handover costs are paid", "مصاريف التسليم مدفوعة"],
-  ClosingCheck_FIRST_PAYMENT_RECORDED: ["The customer's first payment is recorded", "الدفعة الأولى للعميل مسجَّلة"],
+  // SCRUM-629 F-22: the AGREED amount is known — not that the money was received (SCRUM-635).
+  ClosingCheck_FIRST_PAYMENT_RECORDED: ["The agreed first payment is known", "الدفعة الأولى المتفق عليها معروفة"],
   ClosingCheck_LEGAL_INVOICE_RECORDED: ["The legal invoice is recorded", "الفاتورة القانونية مسجَّلة"],
   // SCRUM-420 — generic fallback for a check this bundle has no copy for (S420-01).
   ClosingCheck_UNKNOWN: ["Another closing check", "شرط إغلاق آخر"],
@@ -1441,6 +1450,13 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingReason_FIRST_PAYMENT_MISSING: [
     "The customer's first payment is not recorded, so the funding split cannot be established. Record it before closing.",
     "لم تُسجَّل الدفعة الأولى للعميل، لذلك لا يمكن تحديد توزيع التمويل. سجّلها قبل الإغلاق.",
+  ],
+  // SCRUM-629 F-08: a PENDING_DOCS application on a deal that needs no document.
+  AppStatusSubmitted: ["Submitted", "مُقدَّم"],
+  // SCRUM-629 F-22
+  ClosingReason_FIRST_PAYMENT_INPUTS_PENDING: [
+    "The finance company's approval must be recorded before the agreed first payment can be checked.",
+    "يجب تسجيل موافقة شركة التمويل قبل التحقق من الدفعة الأولى المتفق عليها.",
   ],
   ClosingReason_LEGAL_INVOICE_MISSING: [
     "No legal invoice is recorded. Revenue is posted from its amount, so record it before closing.",
@@ -1805,7 +1821,40 @@ const serverErrorMessages = defineBilingualMessages({
   ],
 });
 
+/**
+ * SCRUM-628 (QA wave 2A): strings the quote wizard rendered in English whatever
+ * the language. "Create & Select" is bound by the English E2E suites — keep it.
+ */
+const quoteWizardQaMessages = defineBilingualMessages({
+  NewCustomerFormTitle: ["New Customer", "عميل جديد"],
+  CreateAndSelectCustomer: ["Create & Select", "إنشاء واختيار"],
+  CustomerCreatedSuccess: ["Customer created successfully", "تم إنشاء العميل بنجاح"],
+  CustomerFirstNameRequired: ["First name is required", "الاسم الأول مطلوب"],
+  CustomerLastNameRequired: ["Last name is required", "الاسم الأخير مطلوب"],
+  CustomerEmailInvalid: ["Enter a valid email address", "أدخل بريدًا إلكترونيًا صحيحًا"],
+  CustomerFirstNamePlaceholder: ["Ahmad", "أحمد"],
+  CustomerLastNamePlaceholder: ["Al-Rashid", "الرشيد"],
+  CustomerNationalIdPlaceholder: ["ID number", "رقم الهوية"],
+  CustomerAddressPlaceholder: ["City, Country", "المدينة، الدولة"],
+  PleaseSelectFinanceCompany: ["Please select a financing company", "يرجى اختيار شركة التمويل"],
+  FinanceCompanyResetByEdit: [
+    "The quote terms changed, so the finance company choice was cleared. Choose a company again from the updated offers.",
+    "تغيّرت شروط العرض، لذلك أُلغي اختيار شركة التمويل. اختر الشركة مجددًا من العروض المحدّثة.",
+  ],
+  CustomerStatusesLoading: ["Loading customer statuses…", "جارٍ تحميل حالات العميل…"],
+  DepositAmountInvalid: [
+    "Enter the amount as a number, without a sign, and with no more decimals than the currency allows.",
+    "أدخل المبلغ كرقم، دون إشارة، وبعدد منازل عشرية لا يتجاوز ما تسمح به العملة.",
+  ],
+  DepositAmountPositive: ["The amount must be greater than zero.", "يجب أن يكون المبلغ أكبر من صفر."],
+  QuoteWizardComplete: ["Quote created", "تم إنشاء العرض"],
+  NoRequiredDocuments: [
+    "This finance company has no required documents set up.",
+    "لا توجد مستندات مطلوبة معرّفة لدى شركة التمويل هذه.",
+  ],
+});
 export const salesEn = {
+  ...quoteWizardQaMessages.en,
   ...serverErrorMessages.en,
   ...dealRailMessages.en,
   ...dealStepMessages.en,
@@ -1822,6 +1871,8 @@ export const salesEn = {
   TaxAmount: "Tax Amount",
   DealerFees: "Dealer Fees",
   DownPayment: "Down Payment",
+  DownPaymentMustBeBelowPrice: "The down payment must be less than the sale price for a financed quote.",
+  FinanceOptionsAwaitValidDownPayment: "Financing options appear once the down payment is below the sale price.",
   TradeInVehicle: "Trade-in Vehicle",
   TradeInValue: "Trade-in Value",
   FinancingType: "Financing Type",
@@ -2440,6 +2491,8 @@ export const salesEn = {
   SearchVehiclePicker: "Search by make, model, year, VIN…",
   NoVehiclesMatchSearch: "No vehicles match your search",
   ReservedPendingDeal: "Reserved — pending deal",
+  ReservedQuoteWarning:
+    "This car is reserved, possibly by another deal. You can quote it, but a deposit or finance application will be refused unless it belongs to the deal holding the car.",
   Sourced: "Sourced",
   VINPendingLabel: "VIN pending",
   SourceVehicleForCustomer: "Source a vehicle for this customer",
@@ -2833,6 +2886,7 @@ export const salesEn = {
   QuotationOverrideReasonPlaceholder: "e.g. agreed by phone with the branch manager",
   QuotationOverrideReasonRequired: "Say why the amount sent differs from the calculated figure.",
   QuotationAmountInvalid: "Enter an amount greater than zero.",
+  AmountTooPrecise: "This currency does not have that many decimal places — check the amount.",
   QuotationRecorded: "Quotation recorded",
 
   TheirAppraisalLabel: "Recorded appraisal of the vehicle",
@@ -2894,6 +2948,7 @@ export const salesEn = {
 };
 
 export const salesAr = {
+  ...quoteWizardQaMessages.ar,
   ...serverErrorMessages.ar,
   ...dealRailMessages.ar,
   ...dealStepMessages.ar,
@@ -2910,6 +2965,8 @@ export const salesAr = {
   TaxAmount: "مبلغ الضريبة",
   DealerFees: "رسوم المعرض",
   DownPayment: "الدفعة المقدمة",
+  DownPaymentMustBeBelowPrice: "يجب أن تكون الدفعة المقدمة أقل من سعر البيع لعروض التمويل.",
+  FinanceOptionsAwaitValidDownPayment: "تظهر خيارات التمويل عندما تصبح الدفعة المقدمة أقل من سعر البيع.",
   TradeInVehicle: "مركبة الاستبدال",
   TradeInValue: "قيمة الاستبدال",
   FinancingType: "نوع التمويل",
@@ -3520,6 +3577,8 @@ export const salesAr = {
   SearchVehiclePicker: "ابحث بالشركة، الموديل، السنة، رقم الهيكل…",
   NoVehiclesMatchSearch: "لا توجد مركبات تطابق بحثك",
   ReservedPendingDeal: "محجوزة — صفقة قيد الإنجاز",
+  ReservedQuoteWarning:
+    "هذه السيارة محجوزة، وقد تكون لصفقة أخرى. يمكنك إعداد عرض سعر لها، لكن سيُرفض العربون أو طلب التمويل ما لم يكن ضمن الصفقة الحاجزة للسيارة.",
   Sourced: "مورَّدة",
   VINPendingLabel: "رقم الهيكل قيد الانتظار",
   SourceVehicleForCustomer: "توريد مركبة لهذا العميل",
@@ -3808,6 +3867,7 @@ export const salesAr = {
   QuotationOverrideReasonPlaceholder: "مثال: اتُّفق عليه هاتفياً مع مدير الفرع",
   QuotationOverrideReasonRequired: "وضِّح سبب اختلاف المبلغ المُرسَل عن الرقم المحتسَب.",
   QuotationAmountInvalid: "أدخل مبلغاً أكبر من صفر.",
+  AmountTooPrecise: "هذه العملة لا تحتمل هذا العدد من الخانات العشرية — راجع المبلغ.",
   QuotationRecorded: "تم تسجيل عرض السعر",
 
   TheirAppraisalLabel: "التخمين المسجَّل للمركبة",

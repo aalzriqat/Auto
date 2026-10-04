@@ -40,6 +40,9 @@ import {
 
 export type Step1Values = z.infer<typeof step1Schema>;
 
+/** The one vehicleId error that choosing a finance company answers. */
+const COMPANY_REQUIRED_ERROR = "companyRequired";
+
 // ─────────────────────────────────────────────────────────────
 // Props
 // ─────────────────────────────────────────────────────────────
@@ -89,17 +92,30 @@ export default function Step1QuoteSetup({
     initialData.customerStatuses || []
   );
 
+  // An edit that changes the offers clears the chosen company. Say so, rather
+  // than let Next fail later with no visible cause (SCRUM-628 F-26).
+  const [companyResetByEdit, setCompanyResetByEdit] = useState(false);
+  const resetCompanySelection = () => {
+    if (selectedCompanyId !== undefined) setCompanyResetByEdit(true);
+    setSelectedCompanyId(undefined);
+  };
+
   const toggleStatus = (id: string) => {
     setCustomerStatuses((prev) =>
       prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]
     );
-    setSelectedCompanyId(undefined); // Reset selection when requirements change
+    resetCompanySelection(); // Reset selection when requirements change
   };
 
-  const customerStatusOptions = useQuery(
+  // Undefined while loading: "none configured" is only true once the list has
+  // loaded empty (SCRUM-628 F-12).
+  const customerStatusRows = useQuery(
     api.orgCustomerStatuses.list,
     activeOrgId ? { orgId: activeOrgId } : "skip"
-  )?.filter((s: Doc<"orgCustomerStatuses">) => s.isActive) ?? [];
+  );
+  const customerStatusesLoading = customerStatusRows === undefined;
+  const customerStatusOptions =
+    customerStatusRows?.filter((s: Doc<"orgCustomerStatuses">) => s.isActive) ?? [];
 
   const financeCompanies = useQuery(
     api.finance.listCompanies,
@@ -145,6 +161,17 @@ export default function Step1QuoteSetup({
     },
   });
 
+  const selectCompany = (id: string) => {
+    setSelectedCompanyId(id);
+    setCompanyResetByEdit(false);
+    // Only the "pick a company" error is answered by picking one; a company's
+    // own refusal (status not accepted, fees missing) stays until Next re-checks.
+    // Matched by type, not text: the message changes with the language.
+    if (form.getFieldState("vehicleId").error?.type === COMPANY_REQUIRED_ERROR) {
+      form.clearErrors("vehicleId");
+    }
+  };
+
   const watchedVehicleId = form.watch("vehicleId");
   const watchedPrice = form.watch("vehiclePrice");
   const watchedProfit = form.watch("desiredProfit");
@@ -168,7 +195,7 @@ export default function Step1QuoteSetup({
       "vehiclePrice",
       items.reduce((sum, item) => sum + (item.unitPrice || 0), 0)
     );
-    setSelectedCompanyId(undefined);
+    resetCompanySelection();
   };
 
   // Resolve against the merged picker list, not just AVAILABLE stock — a sourced
@@ -182,6 +209,12 @@ export default function Step1QuoteSetup({
   // asks the backend about that price. `blocked` holds Next disabled while the
   // verdict loads, so it never flickers enabled on a below-minimum deal.
   const quotedPrice = (Number(watchedPrice) || 0) + (Number(watchedProfit) || 0);
+  // SCRUM-609 F-25: a financed quote needs something left to finance; the
+  // server refuses this case, so stop here instead of at Generate.
+  const downPaymentCoversPrice =
+    paymentType === "INSTALLMENT" &&
+    quotedPrice > 0 &&
+    !((Number(watchedDown) || 0) < quotedPrice);
   const profitApproval = useProfitApproval({
     orgId: activeOrgId,
     vehicleId: watchedVehicleId as Id<"vehicles"> | undefined,
@@ -234,9 +267,15 @@ export default function Step1QuoteSetup({
 
   const onSubmit = (values: Step1Values) => {
     if (paymentType === "INSTALLMENT") {
+      if (downPaymentCoversPrice) {
+        form.setFocus("downPayment");
+        return;
+      }
+
       if (!selectedCompanyId) {
         form.setError("vehicleId", {
-          message: "Please select a financing company",
+          type: COMPANY_REQUIRED_ERROR,
+          message: t("PleaseSelectFinanceCompany" as any),
         });
         return;
       }
@@ -420,7 +459,7 @@ export default function Step1QuoteSetup({
                     onChange={(id, price) => {
                       field.onChange(id);
                       form.setValue("vehiclePrice", price);
-                      setSelectedCompanyId(undefined);
+                      resetCompanySelection();
                     }}
                     onSourceVehicle={async (data) => {
                       if (!activeOrgId) throw new Error("No org selected");
@@ -469,7 +508,7 @@ export default function Step1QuoteSetup({
                     disabled={isCash && vehicleItems.length > 1}
                     onChange={(e) => {
                       field.onChange(e);
-                      setSelectedCompanyId(undefined);
+                      resetCompanySelection();
                     }}
                   />
                 </FormControl>
@@ -499,7 +538,7 @@ export default function Step1QuoteSetup({
                         {...field}
                         onChange={(e) => {
                           field.onChange(e);
-                          setSelectedCompanyId(undefined);
+                          resetCompanySelection();
                         }}
                       />
                     </FormControl>
@@ -514,8 +553,20 @@ export default function Step1QuoteSetup({
                   <FormItem>
                     <FormLabel>{t("DownPayment" as any)}</FormLabel>
                     <FormControl>
-                      <Input type="number" {...field} />
+                      <Input
+                        type="number"
+                        {...field}
+                        // Only set when true: an explicit `undefined` would override
+                        // FormControl's aria-invalid for schema errors (Slot merge order).
+                        {...(downPaymentCoversPrice ? { "aria-invalid": true } : {})}
+                      />
                     </FormControl>
+                    {downPaymentCoversPrice && (
+                      <p role="alert" className="text-sm font-medium text-destructive">
+                        {t("DownPaymentMustBeBelowPrice" as any)}
+                      </p>
+                    )}
+                    <FormMessage />
                   </FormItem>
                 )}
               />
@@ -534,7 +585,7 @@ export default function Step1QuoteSetup({
                         {...field}
                         onChange={(e) => {
                           field.onChange(e);
-                          setSelectedCompanyId(undefined);
+                          resetCompanySelection();
                         }}
                       />
                     </FormControl>
@@ -552,7 +603,11 @@ export default function Step1QuoteSetup({
             <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
               {t("CustomerStatusReqs")}
             </label>
-            {customerStatusOptions.length === 0 ? (
+            {customerStatusesLoading ? (
+              <p className="text-sm text-muted-foreground" aria-busy="true">
+                {t("CustomerStatusesLoading" as any)}
+              </p>
+            ) : customerStatusOptions.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 {t("NoCustomerStatusesConfigured" as any) ?? "No customer statuses configured yet — set them up in Finance Settings."}
               </p>
@@ -579,7 +634,24 @@ export default function Step1QuoteSetup({
         )}
 
         {/* Finance panel */}
-        {!isCash && (
+        {!isCash && downPaymentCoversPrice && (
+          <p
+            data-testid="finance-panel-blocked"
+            className="rounded-xl border border-dashed px-4 py-6 text-center text-sm text-muted-foreground"
+          >
+            {t("FinanceOptionsAwaitValidDownPayment" as any)}
+          </p>
+        )}
+        {!isCash && !downPaymentCoversPrice && companyResetByEdit && !selectedCompanyId && (
+          <p
+            role="status"
+            data-testid="finance-company-reset-notice"
+            className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-700 dark:text-amber-300"
+          >
+            {t("FinanceCompanyResetByEdit" as any)}
+          </p>
+        )}
+        {!isCash && !downPaymentCoversPrice && (
           <FinancePanel
             vehicleId={watchedVehicleId}
             vehiclePrice={Number(watchedPrice) || 0}
@@ -587,7 +659,7 @@ export default function Step1QuoteSetup({
             downPayment={Number(watchedDown) || 0}
             termMonths={Number(watchedTerm) || 0}
             selectedCompanyId={selectedCompanyId}
-            onSelectCompany={setSelectedCompanyId}
+            onSelectCompany={selectCompany}
             customerStatuses={customerStatuses}
             manualProfitRate={manualProfitRate}
             manualInsuranceRate={manualInsuranceRate}
