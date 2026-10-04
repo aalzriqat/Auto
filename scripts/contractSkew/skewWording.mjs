@@ -51,27 +51,35 @@ function describeRejected(f) {
  *   unclassified: number,
  *   basis: string,
  *   rejectedElsewhere?: Array<Record<string, any>>,
- *   callOutcomes?: { fixed: number, stillFails: number, unproven: number }
+ *   callOutcomes: { fixed: number, stillFails: number, unproven: number }
  * }} input
  *   `proven` / `unclassified` are BREAK counts (the pinned counts string). Every
  *   "call(s)" figure comes from `callOutcomes`, which counts distinct call sites
- *   (classify.mjs `callOutcomesOf`). When it is not supplied it is derived from the
- *   break counts, one break per call, which is all a caller without sites can say.
+ *   (classify.mjs `callOutcomesOf`). It is REQUIRED: there is no fallback, because
+ *   deriving it from break counts would bring back one-break-is-one-call, and a
+ *   caller that forgets it must fail loudly rather than print a wrong count.
  * @returns {string}
  */
 export function skewSummary({ rung, specSource, proven, unclassified, basis, rejectedElsewhere = [], callOutcomes }) {
+  const valid = (/** @type {unknown} */ n) => Number.isInteger(n) && /** @type {number} */ (n) >= 0;
+  if (!callOutcomes || !valid(callOutcomes.fixed) || !valid(callOutcomes.stillFails) || !valid(callOutcomes.unproven)) {
+    throw new Error(`skewSummary: callOutcomes is required, with non-negative integer fixed / stillFails / unproven (got ${JSON.stringify(callOutcomes)})`);
+  }
   const counts = `${proven} proven, ${unclassified} unclassified`;
   const listed = rejectedElsewhere.map(describeRejected).join("; ");
-  const { fixed, stillFails, unproven } = callOutcomes ?? {
-    fixed: proven - rejectedElsewhere.length,
-    stillFails: rejectedElsewhere.length,
-    unproven: 0,
-  };
-  const reason = listed ? `: ${listed}` : " (a standing defect at the same call)";
+  const { fixed, stillFails, unproven } = callOutcomes;
+  // U-7: name only what is true. The current spec is quoted as refusing the calls only
+  // when `rejectedElsewhere` says so; a call that fails solely through a standing
+  // defect at the same call is worded as that, not as a current-spec refusal.
   const notFixed =
     stillFails > 0
-      ? `Deploying the backend alone will not make ${stillFails} of these call(s) succeed — the current spec still refuses them${reason}. `
+      ? listed
+        ? `Deploying the backend alone will not make ${stillFails} of these call(s) succeed — the current spec still refuses them: ${listed}. `
+        : `Deploying the backend alone will not make ${stillFails} call(s) succeed, because a standing defect sits at the same call. `
       : "";
+  const stillFailsWhy = listed
+    ? `because the current spec also refuses them: ${listed}`
+    : "because a standing defect sits at the same call";
   if (rung === SUPPLIED_FILE_RUNG) {
     return (
       `CONTRACT SKEW against the supplied spec (${specSource}) — ${counts}. ` +
@@ -94,7 +102,7 @@ export function skewSummary({ rung, specSource, proven, unclassified, basis, rej
   if (stillFails > 0) {
     advice =
       fixed > 0
-        ? `Deploying the Convex backend at this commit fixes ${fixed} call(s), but ${stillFails} call(s) will still fail because the current spec also refuses them${reason}. `
+        ? `Deploying the Convex backend at this commit fixes ${fixed} call(s), but ${stillFails} call(s) will still fail ${stillFailsWhy}. `
         : notFixed;
     advice += notProven;
   } else if (fixed > 0 && unproven > 0) {

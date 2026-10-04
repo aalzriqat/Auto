@@ -97,7 +97,7 @@ import { compareContracts, blockersForRelease, classifyRelease, findingKey } fro
 import { CLIENT_SURFACES, listSurfaceFiles, unscannedConvexClients } from "./clientFiles.mjs";
 import { fetchDeployedSpec, isDeploymentName, readSpecFile, redact } from "./fetchSpec.mjs";
 import { changedContractPaths, summarizeChanges } from "./specDiff.mjs";
-import { classifyBreaking, alertsFor } from "./classify.mjs";
+import { classifyBreaking, alertsFor, distinctCallCount } from "./classify.mjs";
 
 const DEFAULT_BASELINE = fileURLToPath(new URL("./needs-evidence-baseline.json", import.meta.url));
 
@@ -447,6 +447,9 @@ if (validatorGaps.length) {
   // The rows are per spec (deployed / candidate / current, each tagged), but the
   // sentence counts CALLS: one call seen through two specs is one call (L-4).
   // A row with no siteId cannot be placed, so it is identified by its line.
+  // ⚠️ Deliberately NOT `distinctCallCount`: that gives a site-less finding a key unique to
+  // its object (never a match), so one site-less call seen through two specs would count
+  // twice here, which is exactly what this dedupe (L-4) exists to prevent.
   const gapCalls = new Set(validatorGaps.map((g) => (g.siteId ? JSON.stringify([g.surface ?? "", g.siteId]) : JSON.stringify([g.surface ?? "", g.file, g.line, g.identifier]))));
   coverageProblems.push(`${gapCalls.size} call(s) into a validator this control cannot compare (no argument validator, v.record(), empty v.union())`);
 }
@@ -677,7 +680,7 @@ function reportProvenBreaks(prefix) {
     // Breaks the candidate FIXES were already taken out of `skewCount` (L-2); what
     // is left is refused by the deployed backend and NOT fixed by the candidate.
     console.error(
-      `::notice::${prefix}DEPLOYED BACKEND CURRENTLY REFUSES ${skewCount} call path(s) this candidate does not fix; ` +
+      `::notice::${prefix}DEPLOYED BACKEND CURRENTLY REFUSES ${skewCount} break(s) this candidate does not fix; ` +
         `any it still breaks are reported as a RELEASE BREAK.`
     );
     return;
@@ -736,7 +739,7 @@ function reportReleaseBreaks(prefix) {
     );
   }
   console.error(
-    `::error::${prefix}RELEASE BREAK - ${breaks.length} call(s) this candidate would introduce or leave broken on a path it changes. ` +
+    `::error::${prefix}RELEASE BREAK - ${distinctCallCount(breaks)} call(s) this candidate would introduce or leave broken on a path it changes. ` +
       `Deploying the backend is not the remedy; change the candidate or the client.`
   );
 }
@@ -839,7 +842,10 @@ const report = {
     // D-30: skew calls the current spec ALSO refuses - a deploy does not fix these.
     rejectedByCurrent: classification.rejectedElsewhere.length,
     // D-31: DISTINCT CALL SITES by what a deploy does to them (the fields above count breaks).
-    callOutcomes: classification.callOutcomes,
+    // null in a release: there the classification falls to the changed-path rung, where
+    // "the path moved" reads as FIXED, which can contradict `releaseBreaks` for the same
+    // call. A release has its own facts (releaseFixed / releaseBreaks / releaseIndeterminate).
+    callOutcomes: mode === "release" ? null : classification.callOutcomes,
   },
   // Every coverage gap, tagged with the spec it was found against (N-4).
   gaps: validatorGaps,
@@ -983,12 +989,12 @@ if (release) {
   if (verdict === "STANDING") {
     // N-3: nothing is unverified; a known break exists that this release does not own.
     console.error(
-      `No release break; verdict STANDING: a known standing break exists (${standingCount} call path(s) refused by the deployed backend and the candidate alike, on a path this release does not change). Exit 0 because this release does not introduce it.`
+      `No release break; verdict STANDING: a known standing break exists (${standingCount} break(s) refused by the deployed backend and the candidate alike, on a path this release does not change). Exit 0 because this release does not introduce it.`
     );
   } else if (unproven.length > 0 || verdict !== "PASS") {
     console.error(
       `No proven skew in accounted Convex argument calls; verdict UNKNOWN: ${unproven.length} reviewed paths remain unverified.` +
-        (hasStanding ? ` A known standing break also exists (${standingCount} call path(s)), not introduced by this release.` : "")
+        (hasStanding ? ` A known standing break also exists (${standingCount} break(s)), not introduced by this release.` : "")
     );
   }
   process.exit(EXIT.OK);

@@ -1014,6 +1014,73 @@ describe("SCRUM-178 v2 batch 5 (D-30): acceptance is per call, absence is not ac
     }, 300_000);
   });
 
+  describe("batch 8 (D-31): every call count is distinct call sites, and callOutcomes is wired", () => {
+    const TWO_BREAKS_ONE_CALL = CLIENT("", '{ orgId: "o", nope: "x", other: "y" }');
+    const num = { type: "number" };
+
+    test("U-3 (N7-2): --spec + --current, two breaks at ONE call both REJECTED_OTHER -> callOutcomes {0,1,0} and '1 of these call(s)'", () => {
+      const dir = scaffold({
+        client: TWO_BREAKS_ONE_CALL,
+        spec: specOf(upd(ORG)),
+        current: specOf(upd({ ...ORG, nope: required(num), other: required(num) })),
+      });
+      const r = current(dir);
+      expect(r.code, r.stderr).toBe(7);
+      const rep = reportOf(dir);
+      expect(rep.causes.provenBreaks).toBe(2);
+      expect(rep.classification.rejectedByCurrent).toBe(2);
+      expect(rep.classification.callOutcomes).toEqual({ fixed: 0, stillFails: 1, unproven: 0 });
+      expect(r.stderr).toMatch(/will not make 1 of these call\(s\) succeed/);
+      expect(r.stderr).not.toMatch(/2 of these call\(s\)/);
+      expect(r.stderr).toMatch(/2 proven, 0 unclassified/);
+      // The alert summary counts the same distinct call.
+      expect(rep.alert.summary).toMatch(/\b1 call\(s\) the deployed backend refuses/);
+    }, 300_000);
+
+    test("U-1: release, two breaks at one call -> '1 call(s)'; two calls -> '2 call(s)' (never the break count)", () => {
+      const one = scaffold({
+        client: TWO_BREAKS_ONE_CALL,
+        spec: specOf(upd({ ...ORG, nope: required(str), other: required(str) })),
+        candidate: specOf(upd({ ...ORG, nope: required(num), other: required(num) })),
+      });
+      const r1 = run(one, releaseArgsJ);
+      expect(r1.code, r1.stderr).toBe(8);
+      expect(reportOf(one).causes.releaseBreaks).toBe(2);
+      expect(r1.stderr).toMatch(/RELEASE BREAK - 1 call\(s\) this candidate would introduce/);
+      const two = scaffold({
+        client: sameLine("", '{ orgId: "o", tag: "s" }', '{ orgId: "o", tag: "t" }'),
+        spec: specOf(upd({ ...ORG, tag: required(str) })),
+        candidate: specOf(upd({ ...ORG, tag: required(num) })),
+      });
+      const r2 = run(two, releaseArgsJ);
+      expect(r2.code, r2.stderr).toBe(8);
+      expect(reportOf(two).causes.releaseBreaks).toBe(2);
+      expect(r2.stderr).toMatch(/RELEASE BREAK - 2 call\(s\) this candidate would introduce/);
+    }, 300_000);
+
+    test("U-6 (N7-5): in release mode the JSON callOutcomes is null (release has its own facts), and the exit is still 8", () => {
+      const dir = scaffold({
+        client: PROVEN,
+        spec: specOf(upd({ orgId: required(num) })),
+        candidate: specOf(upd({ orgId: required({ type: "boolean" }) })),
+      });
+      const r = run(dir, releaseArgsJ);
+      expect(r.code, r.stderr).toBe(8);
+      const rep = reportOf(dir);
+      expect(rep.classification.callOutcomes).toBeNull();
+      expect(rep.causes.releaseBreaks).toBe(1);
+    }, 300_000);
+
+    test("U-1: no break count is worded as 'call path(s)' in the release standing sentences", () => {
+      const spec = specOf(upd(ORG));
+      const dir = scaffold({ client: TWO_BREAKS_ONE_CALL, spec, candidate: spec });
+      const r = run(dir, releaseArgsJ);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr).toMatch(/\(2 break\(s\) refused by the deployed backend and the candidate alike/);
+      expect(r.stderr).not.toMatch(/call path\(s\)/);
+    }, 300_000);
+  });
+
   describe("M-1 (batch 6): an UNCLASSIFIED skew is not worded as a proven deploy fix", () => {
     // ⚠️ `--spec` is the SUPPLIED_FILE rung, which never gives deploy advice at
     // all, and the credential-ladder rungs cannot run offline. So the CLI tests pin

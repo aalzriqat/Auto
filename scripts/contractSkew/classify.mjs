@@ -22,6 +22,25 @@
 import { acceptanceAt, ACCEPTANCE, pathsOverlap, findingKey } from "./compare.mjs";
 
 /**
+ * A CALL's identity (D-31): [surface, siteId]. The ONE key behind both the per-call
+ * outcomes and every operator-facing "call(s)" figure, so they cannot drift.
+ *
+ * @param {Record<string, any>} f
+ */
+const callKey = (f) => findingKey(f, ["surface", "siteId"]);
+
+/**
+ * How many distinct CALLS a list of findings touches. A break count is a different
+ * number and must be labelled "break(s)", never "call(s)".
+ *
+ * @param {Array<Record<string, any>>} findings
+ * @returns {number}
+ */
+export function distinctCallCount(findings) {
+  return new Set(findings.map((f) => callKey(f))).size;
+}
+
+/**
  * SCRUM-178 v2 batch 7 (D-31). WHAT A DEPLOY DOES IS DECIDED PER CALL, NOT PER BREAK.
  * A call (`siteKey` = [surface, siteId]) is FIXED only when EVERY deployed break at
  * it is accepted by the current spec. One call can carry several breaks, and one
@@ -33,8 +52,8 @@ import { acceptanceAt, ACCEPTANCE, pathsOverlap, findingKey } from "./compare.mj
  *   FIXED        otherwise: every break there is accepted (REVISION_SKEW)
  *
  * A call whose breaks are ALL standing is not counted: no deploy claim concerns it.
- * `findingKey` over [surface, siteId] is the same call identity `acceptanceAt` uses,
- * and gives a site-less finding a key unique to itself.
+ * `callKey` is the same call identity `acceptanceAt` uses, and gives a site-less
+ * finding a key unique to itself.
  *
  * @param {Array<Record<string, any>>} classified
  * @returns {{ fixed: number, stillFails: number, unproven: number }}
@@ -43,7 +62,7 @@ export function callOutcomesOf(classified) {
   /** @type {Map<string, Array<Record<string, any>>>} */
   const sites = new Map();
   for (const f of classified) {
-    const key = findingKey(f, ["surface", "siteId"]);
+    const key = callKey(f);
     const group = sites.get(key);
     if (group) group.push(f);
     else sites.set(key, [f]);
@@ -274,8 +293,10 @@ export function alertsFor(classification, coverageWarning, needsEvidenceCount, u
   // D-30: a call the current spec ALSO refuses is not "behind the current one" in
   // any way a deploy repairs, so it is counted and worded apart from the ones a
   // deploy does fix.
-  const rejectedElsewhere = classification.rejectedElsewhere?.length ?? 0;
-  const fixableSkew = classification.revisionSkew.length - rejectedElsewhere;
+  const rejectedElsewhereBreaks = classification.rejectedElsewhere?.length ?? 0;
+  // D-31: the sentence below says "call(s)", so it counts distinct call sites.
+  const rejectedElsewhere = distinctCallCount(/** @type {any[]} */ (classification.rejectedElsewhere ?? []));
+  const fixableSkew = classification.revisionSkew.length - rejectedElsewhereBreaks;
   if (fixableSkew > 0) {
     parts.push(`${skewLabel}: ${fixableSkew} path(s) where the deployed backend is behind the current one`);
   }

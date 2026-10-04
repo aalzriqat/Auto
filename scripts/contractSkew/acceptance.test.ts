@@ -269,7 +269,7 @@ describe("L-2 (batch 6): a <root> unknown is relevant to a <function> break", ()
 });
 
 describe("Q4: the exit-7 deploy instruction is conditional on the per-site disposition", () => {
-  const base = { rung: "ENV_KEY", specSource: "", proven: 2, unclassified: 0, basis: "b" };
+  const base = { rung: "ENV_KEY", specSource: "", proven: 2, unclassified: 0, basis: "b", callOutcomes: { fixed: 2, stillFails: 0, unproven: 0 } };
 
   test("nothing rejected elsewhere (or no current spec): the deploy instruction is given", () => {
     expect(skewSummary({ ...base, rejectedElsewhere: [] })).toMatch(/Deploy the Convex backend at this commit/);
@@ -281,7 +281,7 @@ describe("Q4: the exit-7 deploy instruction is conditional on the per-site dispo
       { ...at(SITE_A, "tag"), currentRejects: [at(SITE_A, "other", { detail: "current still says no" })] },
     ];
     // `rejectedElsewhere` is a subset of the proven skew, so the only proven call is the rejected one.
-    const text = skewSummary({ ...base, proven: 1, rejectedElsewhere: rejected });
+    const text = skewSummary({ ...base, proven: 1, rejectedElsewhere: rejected, callOutcomes: { fixed: 0, stillFails: 1, unproven: 0 } });
     expect(text).not.toMatch(/Deploy the Convex backend/);
     expect(text).toMatch(/will not (make|fix)/i);
     expect(text).toContain("w:save");
@@ -290,7 +290,7 @@ describe("Q4: the exit-7 deploy instruction is conditional on the per-site dispo
 
   test("a supplied spec file stays free of deploy advice, and names rejected calls too", () => {
     const rejected = [{ ...at(SITE_A, "tag"), currentRejects: [at(SITE_A, "other")] }];
-    const text = skewSummary({ ...base, rung: "SUPPLIED_FILE", rejectedElsewhere: rejected });
+    const text = skewSummary({ ...base, rung: "SUPPLIED_FILE", rejectedElsewhere: rejected, callOutcomes: { fixed: 1, stillFails: 1, unproven: 0 } });
     expect(text).not.toMatch(/Deploy the Convex backend/);
     expect(text).toContain("w:save");
   });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { classifyBreaking, alertsFor, CLASSIFICATION } from "./classify.mjs";
+import { classifyBreaking, alertsFor, CLASSIFICATION, distinctCallCount } from "./classify.mjs";
 import { blockersForRelease, pathsOverlap } from "./compare.mjs";
 import { skewSummary } from "./skewWording.mjs";
 
@@ -308,5 +308,80 @@ describe("callOutcomes: per-call, not per-break (D-31)", () => {
     const mixed = classifyBreaking([brk("A", "x"), brk("A", "y")], { changedPaths: [{ identifier: "w:A", path: "x" }] });
     expect(mixed.classified.map((f) => f.classification)).toEqual(["REVISION_SKEW", "STANDING_DEFECT"]);
     expect(mixed.callOutcomes).toEqual({ fixed: 0, stillFails: 1, unproven: 0 });
+  });
+
+  const summaryOf = (result: ReturnType<typeof classifyBreaking>, rung = "ENV_KEY") =>
+    skewSummary({
+      rung,
+      specSource: "",
+      proven: result.revisionSkew.length,
+      unclassified: result.unclassified.length,
+      basis: "b",
+      rejectedElsewhere: result.rejectedElsewhere,
+      callOutcomes: result.callOutcomes,
+    });
+
+  test("U-2 (N7-1): one call fixed, another UNPROVEN: no plain deploy line; says what is fixed and what is not proven", () => {
+    const result = classifyBreaking([brk("A", "x"), brk("B", "y")], {
+      currentResult: { breaking: [], gaps: [{ surface: "web", siteId: "B", path: "y" }] },
+    });
+    expect(result.callOutcomes).toEqual({ fixed: 1, stillFails: 0, unproven: 1 });
+    const text = summaryOf(result);
+    // `fixed > 0 && stillFails === 0 && unclassified === 0` holds here, so ONLY the
+    // `unproven === 0` term keeps the plain instruction out.
+    expect(text).not.toMatch(/Deploy the Convex backend at this commit\./);
+    expect(text).toMatch(/fixes 1 call\(s\), but 1 call\(s\) are not proven/);
+  });
+
+  test("U-4 (N7-3): a call whose breaks are ALL standing is not counted at all", () => {
+    // Whole-tree rung: everything is a standing defect.
+    const identical = classifyBreaking([brk("A", "x"), brk("A", "y")], { backendIdenticalToDeployed: true });
+    expect(identical.standingDefects).toHaveLength(2);
+    expect(identical.callOutcomes).toEqual({ fixed: 0, stillFails: 0, unproven: 0 });
+    // Current-spec rung: call A is refused by current for the same reason (REJECTED_SAME),
+    // call B is accepted. A is not a call a deploy concerns, so B is the only one counted
+    // and the plain deploy line is given.
+    const mixed = classifyBreaking([brk("A", "x"), brk("B", "y")], { currentResult: { breaking: [brk("A", "x")] } });
+    expect(mixed.classified.map((f) => f.classification)).toEqual(["STANDING_DEFECT", "REVISION_SKEW"]);
+    expect(mixed.callOutcomes).toEqual({ fixed: 1, stillFails: 0, unproven: 0 });
+    expect(summaryOf(mixed)).toMatch(/Deploy the Convex backend at this commit\./);
+  });
+});
+
+describe("distinctCallCount: every operator-facing call count is distinct call sites (D-31)", () => {
+  const brk = (siteId: string | undefined, path: string, surface = "web") => ({
+    surface,
+    file: "x.tsx",
+    line: 1,
+    identifier: "w:save",
+    ...(siteId ? { siteId } : {}),
+    path,
+    dimension: "FIELD",
+    severity: "BREAKING",
+    detail: "d",
+  });
+
+  test("U-1: two breaks at one site are 1 call; two sites are 2; the same siteId on web and mobile is 2; a site-less finding is its own call", () => {
+    expect(distinctCallCount([brk("A", "x"), brk("A", "y")])).toBe(1);
+    expect(distinctCallCount([brk("A", "x"), brk("B", "y")])).toBe(2);
+    expect(distinctCallCount([brk("A", "x", "web"), brk("A", "x", "mobile")])).toBe(2);
+    expect(distinctCallCount([brk(undefined, "x"), brk(undefined, "y")])).toBe(2);
+    expect(distinctCallCount([])).toBe(0);
+  });
+
+  test("U-1: the alert summary says '1 call(s)' for two REJECTED_OTHER breaks at one site, and '2 call(s)' for two sites", () => {
+    const current = (...sites: string[]) => ({ breaking: sites.map((s) => brk(s, "elsewhere")) });
+    const one = classifyBreaking([brk("A", "x"), brk("A", "y")], { currentResult: current("A") });
+    expect(one.rejectedElsewhere).toHaveLength(2);
+    const oneSummary = alertsFor(one, false, 0, 0).summary;
+    expect(oneSummary).toMatch(/\b1 call\(s\) the deployed backend refuses/);
+    expect(oneSummary).not.toMatch(/\b2 call\(s\)/);
+    const two = classifyBreaking([brk("A", "x"), brk("B", "y")], { currentResult: current("A", "B") });
+    expect(alertsFor(two, false, 0, 0).summary).toMatch(/\b2 call\(s\) the deployed backend refuses/);
+    // Same siteId on two surfaces is two calls.
+    const surfaces = classifyBreaking([brk("A", "x", "web"), brk("A", "x", "mobile")], {
+      currentResult: { breaking: [brk("A", "elsewhere", "web"), brk("A", "elsewhere", "mobile")] },
+    });
+    expect(alertsFor(surfaces, false, 0, 0).summary).toMatch(/\b2 call\(s\) the deployed backend refuses/);
   });
 });
