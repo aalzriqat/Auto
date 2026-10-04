@@ -364,7 +364,7 @@ describe("socialIntegrations.exchangeCodeForToken", () => {
         }
 
         if (url.includes(`/v21.0/${instagramUserId}`) && method === "GET") {
-          return jsonResponse({
+          return jsonTextResponse({
             username: "dealer_ig",
             user_id: "webhook_123",
           });

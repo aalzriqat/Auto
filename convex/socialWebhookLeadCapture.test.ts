@@ -598,35 +598,122 @@ describe("Jordanian mobile extraction", () => {
 });
 
 describe("Instagram connect when the profile lookup fails", () => {
-  // Known defect SCRUM-623 — flip to `test` when fixed.
-  test.fails("a transient profile failure must not leave an org 'connected' but deaf to every webhook", async () => {
+  // SCRUM-623: the IG webhook route resolves orgs ONLY by
+  // instagramWebhookAccountId, so a connection persisted without it is
+  // "connected" yet deaf to every comment/DM.
+  const jsonResponse = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+  function stubInstagramGraph(profile: () => Response) {
     vi.stubEnv("INSTAGRAM_APP_ID", "ig_app");
     vi.stubEnv("CONVEX_SITE_URL", "https://example.convex.site");
-    const json = (status: number, body: unknown) =>
-      new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string | URL) => {
         const url = String(input);
-        if (url.includes("api.instagram.com/oauth/access_token")) return json(200, { access_token: "short", user_id: 1234 });
-        if (url.includes("graph.instagram.com/access_token")) return json(200, { access_token: "long", expires_in: 5184000 });
-        if (url.includes("subscribed_apps")) return json(200, { success: true });
-        // The profile read (username,user_id): a transient Graph outage.
-        return json(500, { error: { message: "An unexpected error has occurred. Please retry your request later." } });
+        if (url.includes("api.instagram.com/oauth/access_token")) {
+          return jsonResponse(200, { access_token: "short", user_id: 1234 });
+        }
+        if (url.includes("graph.instagram.com/access_token")) {
+          return jsonResponse(200, { access_token: "long", expires_in: 5184000 });
+        }
+        if (url.includes("subscribed_apps")) return jsonResponse(200, { success: true });
+        if (url.includes("fields=username%2Cuser_id") || url.includes("fields=username,user_id")) {
+          return profile();
+        }
+        throw new Error(`unexpected fetch ${url}`);
       }),
+    );
+  }
+
+  type OrgId = Awaited<ReturnType<typeof seedOrg>>;
+
+  async function connect(t: T, orgId: OrgId) {
+    const { internal } = await import("./_generated/api");
+    return t.action(internal.socialIntegrations.exchangeCodeForToken, { orgId, code: "abc" });
+  }
+
+  const readSettings = (t: T, orgId: OrgId) =>
+    t.run((ctx) =>
+      ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique(),
+    );
+
+  test("a profile 500 fails the connect and persists nothing", async () => {
+    stubInstagramGraph(() =>
+      jsonResponse(500, { error: { message: "An unexpected error has occurred." } }),
     );
     const t = newT();
     const orgId = await seedOrg(t, {});
-    const { internal } = await import("./_generated/api");
-    await t.action(internal.socialIntegrations.exchangeCodeForToken, { orgId, code: "abc" });
-    const settings = await t.run((ctx) =>
-      ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique(),
+    await expect(connect(t, orgId)).rejects.toThrow(/Instagram connection failed/);
+    const settings = await readSettings(t, orgId);
+    expect(settings?.instagramAccessToken).toBeUndefined();
+    expect(settings?.instagramBusinessAccountId).toBeUndefined();
+    expect(settings?.instagramWebhookAccountId).toBeUndefined();
+  });
+
+  test("a non-ok profile response is refused even if its body carries a user_id", async () => {
+    stubInstagramGraph(() => jsonResponse(500, { username: "dealer", user_id: "17841400000000003" }));
+    const t = newT();
+    const orgId = await seedOrg(t, {});
+    await expect(connect(t, orgId)).rejects.toThrow(/Instagram connection failed/);
+    const settings = await readSettings(t, orgId);
+    expect(settings?.instagramAccessToken).toBeUndefined();
+    expect(settings?.instagramWebhookAccountId).toBeUndefined();
+  });
+
+  test("a profile 200 without user_id fails the connect and persists nothing", async () => {
+    stubInstagramGraph(() => jsonResponse(200, { username: "dealer" }));
+    const t = newT();
+    const orgId = await seedOrg(t, {});
+    await expect(connect(t, orgId)).rejects.toThrow(/Instagram connection failed/);
+    const settings = await readSettings(t, orgId);
+    expect(settings?.instagramAccessToken).toBeUndefined();
+    expect(settings?.instagramBusinessAccountId).toBeUndefined();
+    expect(settings?.instagramWebhookAccountId).toBeUndefined();
+  });
+
+  test("a failed reconnect leaves the previously working connection untouched", async () => {
+    stubInstagramGraph(() => jsonResponse(500, { error: { message: "transient" } }));
+    const t = newT();
+    const orgId = await seedOrg(t, {
+      instagramAccessToken: "old",
+      instagramBusinessAccountId: "1234",
+      instagramWebhookAccountId: "17841400000000001",
+    });
+    await expect(connect(t, orgId)).rejects.toThrow(/Instagram connection failed/);
+    const settings = await readSettings(t, orgId);
+    expect(settings?.instagramAccessToken).toBe("old");
+    expect(settings?.instagramBusinessAccountId).toBe("1234");
+    expect(settings?.instagramWebhookAccountId).toBe("17841400000000001");
+  });
+
+  test("an unquoted 17-digit user_id keeps its exact value", async () => {
+    stubInstagramGraph(
+      () =>
+        new Response('{"username":"dealer","user_id":17841400000000001,"id":"1234"}', {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
     );
+    const t = newT();
+    const orgId = await seedOrg(t, {});
+    await connect(t, orgId);
+    const settings = await readSettings(t, orgId);
+    expect(settings?.instagramWebhookAccountId).toBe("17841400000000001");
+  });
+
+  test("happy path stores the token, both ids and the display name", async () => {
+    stubInstagramGraph(() =>
+      jsonResponse(200, { username: "dealer", user_id: "17841400000000002" }),
+    );
+    const t = newT();
+    const orgId = await seedOrg(t, {});
+    await connect(t, orgId);
+    const settings = await readSettings(t, orgId);
     expect(settings?.instagramAccessToken).toBe("long");
     expect(settings?.instagramBusinessAccountId).toBe("1234");
-    // Either the connect fails loudly, or the webhook id is captured — never
-    // a silent "connected" with nothing routable.
-    expect(settings?.instagramWebhookAccountId).toBeDefined();
+    expect(settings?.instagramWebhookAccountId).toBe("17841400000000002");
+    expect(settings?.instagramPageName).toBe("dealer");
   });
 });
 

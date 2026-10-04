@@ -598,13 +598,18 @@ export const exchangeCodeForToken = internalAction({
       throw new ConvexError(INSTAGRAM_CONNECT_FAILURE_MESSAGE);
     }
 
-    // 3. Fetch the username for display purposes ("Connected as @handle"),
-    // and the profile's "user_id" field — a *different* ID from `igUserId`
+    // 3. Fetch the profile's "user_id" field — a *different* ID from `igUserId`
     // above. Confirmed by direct API probe: `id` (igUserId) is what Graph
     // API path calls (subscribed_apps, messages) expect, but Meta's webhook
-    // payloads use `user_id` in entry[].id. Both must be captured.
+    // payloads use `user_id` in entry[].id. The webhook route resolves orgs
+    // only by that id, so a connection saved without it would look connected
+    // yet drop every comment/DM (SCRUM-623): a failed lookup fails the
+    // connect before anything is persisted. The username is display-only
+    // ("Connected as @handle") and stays optional.
     let username: string | undefined;
     let webhookAccountId: string | undefined;
+    let profileStatus: number | undefined;
+    let profileError: string | undefined;
     try {
       const profileUrl = new URL(
         `https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${igUserId}`,
@@ -612,11 +617,28 @@ export const exchangeCodeForToken = internalAction({
       profileUrl.searchParams.set("fields", "username,user_id");
       profileUrl.searchParams.set("access_token", longLivedToken);
       const profileRes = await fetch(profileUrl.toString());
-      const profileJson = await profileRes.json();
-      username = profileJson.username;
-      webhookAccountId = profileJson.user_id;
+      profileStatus = profileRes.status;
+      // Same unquoted-number guard as step 1: `user_id` can exceed
+      // Number.MAX_SAFE_INTEGER.
+      const profileJson = await readMetaJson(profileRes, (text) =>
+        text.replace(/"user_id"\s*:\s*(\d+)/, '"user_id":"$1"'),
+      );
+      if (profileRes.ok) {
+        username = stringField(profileJson, "username");
+        webhookAccountId = stringField(profileJson, "user_id") || undefined;
+      }
+      profileError = getMetaErrorMessage(profileJson, profileRes.statusText);
     } catch {
-      // Non-fatal — connection still succeeds without a display name.
+      // Never log the thrown error: a fetch failure can echo the request URL,
+      // which carries the access token.
+      profileError = "profile request failed";
+    }
+    if (!webhookAccountId) {
+      console.error("Instagram profile lookup failed", {
+        status: profileStatus,
+        error: profileError,
+      });
+      throw new ConvexError(INSTAGRAM_CONNECT_FAILURE_MESSAGE);
     }
 
     await ctx.runMutation(
