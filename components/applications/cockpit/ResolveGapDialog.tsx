@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioCardGroup } from "./RadioCardGroup";
 import { validateGapShares } from "@/lib/financingEconomics";
+import { parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
 import {
   Dialog,
   DialogContent,
@@ -80,12 +81,16 @@ const EMPTY: Draft = {
  * not a decision.
  */
 function toMinor(value: string, factor: number): number | null {
-  const trimmed = value.trim();
-  if (trimmed === "") return null;
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed) || parsed < 0) return null;
-  const minor = Math.round(parsed * factor);
-  return Number.isSafeInteger(minor) ? minor : null;
+  // Exact, never rounded (SCRUM-605): a figure with more decimals than the
+  // currency holds is not a decision either. Negatives fail the parse.
+  const parsed = parseMajorToMinor(value, Math.round(Math.log10(factor)));
+  return parsed.ok ? parsed.minor : null;
+}
+
+/** Filled in, but finer than the currency — a different remedy from blank. */
+function isTooPrecise(value: string, factor: number): boolean {
+  const parsed = parseMajorToMinor(value, Math.round(Math.log10(factor)));
+  return !parsed.ok && parsed.problem === "TOO_PRECISE";
 }
 
 /**
@@ -210,6 +215,11 @@ export function ResolveGapDialog({
 
   const destinationsDecided =
     cashMinor !== null && installmentsMinor !== null && toFinanceCompanyMinor !== null;
+  // Only the boxes this mode actually reads.
+  const shareTooPrecise = draft.mode === "SPLIT" && isTooPrecise(draft.customerShare, factor);
+  const destinationTooPrecise =
+    !noCustomerPart &&
+    [draft.cash, draft.installments, draft.toFinanceCompany].some((v) => isTooPrecise(v, factor));
 
   /**
    * ONE readiness verdict, consumed by both the message and the button.
@@ -221,6 +231,8 @@ export function ResolveGapDialog({
    */
   type Readiness =
     | "READY"
+    /** A figure is filled in with more decimals than the currency holds. */
+    | "TOO_PRECISE"
     /** Some destination box is still blank; blank is not a decision. */
     | "DESTINATIONS_INCOMPLETE"
     /** The customer share is not a usable number yet. */
@@ -233,6 +245,7 @@ export function ResolveGapDialog({
     | "ALLOCATION_MISMATCH";
 
   const verdict: Readiness = (() => {
+    if (shareTooPrecise) return "TOO_PRECISE";
     if (customerShareMinor === null || dealerShareMinor === null) return "SHARE_MISSING";
     if (draft.mode === "SPLIT") {
       // Checked BEFORE the arithmetic, because both endpoints reconcile
@@ -241,6 +254,7 @@ export function ResolveGapDialog({
       if (customerShareMinor >= gapMinor) return "SPLIT_IS_WHOLE_GAP";
       if (customerShareMinor <= 0) return "SPLIT_LEAVES_CUSTOMER_NOTHING";
     }
+    if (destinationTooPrecise) return "TOO_PRECISE";
     if (!destinationsDecided) return "DESTINATIONS_INCOMPLETE";
     // The SHARED arithmetic, so the screen and the mutation cannot disagree
     // about what reconciles.
@@ -256,6 +270,7 @@ export function ResolveGapDialog({
 
   /** What to say instead, so a disabled button is never unexplained. */
   const BLOCKED_REASON: Record<Exclude<Readiness, "READY">, string> = {
+    TOO_PRECISE: "AmountTooPrecise",
     DESTINATIONS_INCOMPLETE: "GapDestinationsIncomplete",
     SHARE_MISSING: "GapShareMissing",
     SPLIT_IS_WHOLE_GAP: "GapSplitIsWholeGap",

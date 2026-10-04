@@ -2136,6 +2136,39 @@ describe("the submitted quotation is prefilled from the calculation", () => {
   });
 
   /**
+   * SCRUM-605 (scenario F21): typing into a field the late prefill had just
+   * filled produced "21428.57213000". Rounded to the currency it EQUALLED the
+   * calculation, so it said "matches" and went on the record as
+   * SYSTEM_CALCULATED — a figure nobody typed, under a provenance nobody chose.
+   */
+  test("an entry with more decimals than the currency holds is refused, never rounded into a match", () => {
+    const onSubmit = vi.fn();
+    render(
+      <RecordSubmittedQuotationDialog
+        {...dialogProps({ calculation: { state: "AVAILABLE", minor: 21_428_572 }, onSubmit })}
+      />
+    );
+    expect(amountField().value).toBe("21428.572");
+    fireEvent.change(amountField(), { target: { value: "21428.57213000" } });
+
+    expect(screen.queryByText("QuotationMatchesCalculation")).toBeNull();
+    expect(submitButton().disabled).toBe(true);
+    fireEvent.click(submitButton());
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByText("AmountTooPrecise")).toBeTruthy();
+
+    // Trailing zeros past the scale are the same figure, not extra precision.
+    fireEvent.change(amountField(), { target: { value: "21428.5720" } });
+    expect(screen.queryByText("AmountTooPrecise")).toBeNull();
+    fireEvent.click(submitButton());
+    expect(onSubmit).toHaveBeenCalledWith({
+      submittedQuotationMinor: 21_428_572,
+      source: "SYSTEM_CALCULATED",
+      overrideReason: undefined,
+    });
+  });
+
+  /**
    * Direction is asserted on the dialog element the component renders —
    * `DialogContent` sets `dir` from `useLanguage().isRtl` — in BOTH languages,
    * so the Arabic assertion can actually fail (Codex-high LOW on 229608039:
