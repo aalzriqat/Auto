@@ -215,4 +215,18 @@ describe("SCRUM-413 PR-B S413B-2 - prepareSplitDealAuthorities readiness covers 
     const result = await s.t.query(internal.migrateRoles.prepareSplitDealAuthorities, {});
     expect(result).toMatchObject({ unqualifiedOwnerNamed: 1, retiredCarriers: 0, ready: false });
   });
+
+  // D-37: an OWNER-named row with an explicit `false` is unqualified. It is an
+  // owner-review item (counted, ready=false) and is never stamped.
+  test("an explicit-false OWNER-named row is counted in unqualifiedOwnerNamed and blocks ready", async () => {
+    const s = await seedOrg("diag_explicit_false");
+    await s.asOwner.mutation(api.memberships.syncRolePermissionsToTemplate, { orgId: s.orgId });
+    const falseId = await insertRole(s, "OWNER", [CREATE_APP], false);
+    const result = await s.t.query(internal.migrateRoles.prepareSplitDealAuthorities, {});
+    expect(result).toMatchObject({ unqualifiedOwnerNamed: 1, unstampedOwners: 0, retiredCarriers: 0, ready: false });
+    expect(result.records.find((r: any) => r.roleId === falseId)).toMatchObject({
+      ownerFlagSkipped: true, stampOwnerFlag: false, ownerQualified: false,
+    });
+    expect((await roleOf(s, falseId)).isSystemOwnerRole).toBe(false);
+  });
 });

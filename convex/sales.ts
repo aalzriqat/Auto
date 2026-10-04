@@ -1069,7 +1069,7 @@ export const update = mutation({
               throw new ConvexError("A manager cancels a finalized deal.");
             }
             const forwardBlock = forwardCancelRefusal(await deriveForwardState(ctx, app));
-            if (forwardBlock !== null) throw new ConvexError(forwardBlock);
+            if (forwardBlock !== null) throwAppError(forwardBlock.code, forwardBlock.message);
           }
           if (app.disbursedAt) {
             throw new ConvexError(

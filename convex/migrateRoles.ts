@@ -417,7 +417,7 @@ interface SplitDealAuthorityRecord {
    * backfill, stamps it). Reported only here.
    */
   stampOwnerFlag: boolean;
-  /** Named like the owner, unflagged, and NOT qualified: reported, never stamped. */
+  /** Named like the owner and NOT qualified (unflagged or explicit false): reported, never stamped. */
   ownerFlagSkipped: boolean;
   /** Still stores a retired permission string. Inert: no door reads it. */
   carriesRetiredPermission: boolean;
@@ -444,7 +444,9 @@ interface SplitDealAuthorityRecord {
  * fallback (`unqualifiedOwnerNamed`). The retired string itself is inert (no
  * door reads it), so that part is hygiene; the owner counts are about identity.
  * Stamp-only rows are reported even when they carry no retired string. An
- * explicit `isSystemOwnerRole: false` is a deliberate demotion and is not counted.
+ * OWNER-named row with an explicit `isSystemOwnerRole: false` does not qualify
+ * either, so it is counted in `unqualifiedOwnerNamed` (an owner-review item)
+ * and is never stamped.
  */
 export const prepareSplitDealAuthorities = internalQuery({
   args: {},
@@ -458,8 +460,9 @@ export const prepareSplitDealAuthorities = internalQuery({
       const ownerQualified = isSystemOwnerRole(role);
       const unflagged = role.isSystemOwnerRole === undefined;
       const stampOwnerFlag = unflagged && ownerQualified;
-      const ownerFlagSkipped =
-        unflagged && !ownerQualified && normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME;
+      // Unflagged OR explicit `false`: an OWNER-named row that does not qualify is
+      // an owner-review item either way. It is never stamped.
+      const ownerFlagSkipped = !ownerQualified && normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME;
       const carriesRetiredPermission = LEGACY_PERMISSIONS.some((permission) => held.has(permission));
       const holdsRoute = held.has(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
       const holdsCancelClosed = held.has(PERMISSIONS.CANCEL_CLOSED_DEAL);

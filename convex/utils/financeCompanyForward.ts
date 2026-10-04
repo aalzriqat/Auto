@@ -1,5 +1,6 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
+import { AppErrorCode } from "./errors";
 import { planVersionOf } from "./financedSalePostingPlan";
 
 /**
@@ -239,8 +240,17 @@ export async function deriveForwardState(ctx: QueryCtx, app: ForwardApp): Promis
   };
 }
 
-const FORWARD_MISMATCH_CANCEL_REFUSAL =
-  "The record of the payment to the finance company does not match the books. An accountant reviews it before this deal can be cancelled.";
+/**
+ * A coded cancel refusal. Thrown with `throwAppError(code, message)`; the EN
+ * dictionary entry `ServerError_<code>` equals `message` (lib/errors.test.ts).
+ */
+export type ForwardCancelRefusal = { code: AppErrorCode; message: string };
+
+const FORWARD_MISMATCH_CANCEL_REFUSAL: ForwardCancelRefusal = {
+  code: AppErrorCode.FORWARD_CANCEL_NEEDS_REPAIR,
+  message:
+    "The record of the payment to the finance company does not match the books. An accountant reviews it before this deal can be cancelled.",
+};
 
 /**
  * The CLOSED-cancellation gate. Cancelling reverses the sale, which would leave
@@ -248,7 +258,7 @@ const FORWARD_MISMATCH_CANCEL_REFUSAL =
  * that is on the books, or in ANY unsettled state, refuses the cancel and names
  * who acts next. RETURNED and REVERSED versions do not block. No amounts.
  */
-export function forwardCancelRefusal(proof: ForwardProof): string | null {
+export function forwardCancelRefusal(proof: ForwardProof): ForwardCancelRefusal | null {
   const blocking = proof.versions.find((version) => FORWARD_BLOCKS_CANCEL.has(version.state));
   // Fails CLOSED: a proof that could not be read (over the version limit,
   // `deriveForwardState` returns NEEDS_REPAIR with NO versions) is not "nothing
@@ -256,12 +266,24 @@ export function forwardCancelRefusal(proof: ForwardProof): string | null {
   if (blocking === undefined) return proof.state === "NEEDS_REPAIR" ? FORWARD_MISMATCH_CANCEL_REFUSAL : null;
   switch (blocking.state) {
     case "ON_BOOKS":
-      return "The deposit and the dealership's contribution have already been paid to the finance company. A manager reports the payment as returned by the company, or an accountant records the correction, before this deal can be cancelled.";
+      return {
+        code: AppErrorCode.FORWARD_CANCEL_ON_BOOKS,
+        message:
+          "The deposit and the dealership's contribution have already been paid to the finance company. A manager reports the payment as returned by the company, or an accountant records the correction, before this deal can be cancelled.",
+      };
     case "POSTING_PENDING":
     case "POSTING_FAILED":
-      return "The payment to the finance company is not yet settled on the books. An accountant resolves it before this deal can be cancelled.";
+      return {
+        code: AppErrorCode.FORWARD_CANCEL_POSTING_UNSETTLED,
+        message:
+          "The payment to the finance company is not yet settled on the books. An accountant resolves it before this deal can be cancelled.",
+      };
     case "REVERSAL_PENDING":
-      return "The reversal of the payment to the finance company is not yet posted. An accountant posts it before this deal can be cancelled.";
+      return {
+        code: AppErrorCode.FORWARD_CANCEL_REVERSAL_PENDING,
+        message:
+          "The reversal of the payment to the finance company is not yet posted. An accountant posts it before this deal can be cancelled.",
+      };
     default:
       return FORWARD_MISMATCH_CANCEL_REFUSAL;
   }

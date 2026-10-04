@@ -337,6 +337,33 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(source.match(/throwAppError\(AppErrorCode\.PERMISSION_RETIRED, RETIRED_PERMISSION_MESSAGE\)/g)).toHaveLength(2);
   });
 
+  it("SCRUM-413 D-37 every forward cancel refusal has an AR entry and its EN equals the server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { forwardCancelRefusal } = await import("../convex/utils/financeCompanyForward");
+    const proofOf = (versionStates: string[], state: string) =>
+      ({ applies: true, dueMinor: 1, state, versions: versionStates.map((s) => ({ state: s })) }) as never;
+    const cases: Array<[unknown, string]> = [
+      [proofOf(["ON_BOOKS"], "ON_BOOKS"), "FORWARD_CANCEL_ON_BOOKS"],
+      [proofOf(["POSTING_PENDING"], "POSTING_PENDING"), "FORWARD_CANCEL_POSTING_UNSETTLED"],
+      [proofOf(["POSTING_FAILED"], "POSTING_FAILED"), "FORWARD_CANCEL_POSTING_UNSETTLED"],
+      [proofOf(["REVERSAL_PENDING"], "REVERSAL_PENDING"), "FORWARD_CANCEL_REVERSAL_PENDING"],
+      [proofOf(["NEEDS_REPAIR"], "NEEDS_REPAIR"), "FORWARD_CANCEL_NEEDS_REPAIR"],
+      // Fail-closed: an unreadable proof (no versions) is NEEDS_REPAIR.
+      [proofOf([], "NEEDS_REPAIR"), "FORWARD_CANCEL_NEEDS_REPAIR"],
+    ];
+    const ar = dictionaries.ar as Record<string, string>;
+    const en = dictionaries.en as Record<string, string>;
+    for (const [proof, code] of cases) {
+      const refusal = forwardCancelRefusal(proof as never);
+      expect(refusal?.code).toBe(code);
+      expect(en[`ServerError_${code}`]).toBe(refusal?.message);
+      expect(ar[`ServerError_${code}`]).toMatch(/[؀-ۿ]/);
+      const error = new ConvexError({ code, message: refusal?.message });
+      expect(getLocalizedErrorMessage(error, (k: string) => ar[k] ?? k)).toBe(ar[`ServerError_${code}`]);
+    }
+    expect(forwardCancelRefusal(proofOf([], "SETTLED"))).toBeNull();
+  });
+
   it("the English dictionary text equals the server's message for both codes", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     expect(dictionaries.en.ServerError_COMMISSION_BASE_UNUSABLE).toContain("{baseCurrency}");
