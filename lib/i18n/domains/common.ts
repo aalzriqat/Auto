@@ -295,6 +295,12 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This vehicle is no longer available in this dealership, so the request can't be approved. Reject it instead.",
     "لم تعد هذه المركبة متاحة في هذا المعرض، لذا لا يمكن الموافقة على الطلب. يُرجى رفضه بدلاً من ذلك.",
   ],
+  // SCRUM-413. `roles.create` / `roles.update` refuse a newly added retired permission. The
+  // authority names match the FinancedDeal* labels in settings.ts.
+  ServerError_PERMISSION_RETIRED: [
+    "The \"Finalize financed deal\" permission is no longer used. Grant \"Record the supplier payment route\" or \"Cancel a closed financed deal\" instead.",
+    "صلاحية \"إتمام الصفقة الممولة\" لم تعد مستخدمة. امنح صلاحية \"تسجيل مسار الدفع للمورّد\" أو \"إلغاء صفقة ممولة مغلقة\" بدلاً منها.",
+  ],
   FinanceCompanyReceivables: ["Finance-company receivables", "ذمم شركات التمويل"],
   FinanceCompanyReceivablesDesc: ["Amounts due from finance companies. Open the originating deal to review or settle them.", "المبالغ المستحقة من شركات التمويل. افتح الصفقة الأصلية للمراجعة أو التسوية."],
   DocumentNumber: ["Document number", "رقم المستند"],

@@ -1,5 +1,6 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
+import { ConvexError } from "convex/values";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
@@ -28,6 +29,17 @@ const CANCEL_CLOSED = PERMISSIONS.CANCEL_CLOSED_DEAL;
 // A string literal: the constant left PERMISSIONS when the permission retired.
 const FINALIZE = "finalize:financed_deal";
 const CREATE_APP = PERMISSIONS.CREATE_FINANCE_APPLICATION;
+
+// The refusal is a coded ConvexError (PERMISSION_RETIRED), localized client-side.
+async function codeOf(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof ConvexError) return (error.data as { code?: unknown })?.code;
+    throw error;
+  }
+  return undefined;
+}
 
 async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
@@ -170,9 +182,9 @@ describe("SCRUM-413 role writers", () => {
     const t = convexTestWithComponents(schema, MODULES);
     const { orgId, asOwner } = await setupOwnerOrg(t, "scrum413_create_owner");
 
-    await expect(
-      asOwner.mutation(api.roles.create, { orgId, name: "Closer", permissions: [FINALIZE] })
-    ).rejects.toThrow(/finalize:financed_deal is being retired/);
+    expect(
+      await codeOf(asOwner.mutation(api.roles.create, { orgId, name: "Closer", permissions: [FINALIZE] }))
+    ).toBe("PERMISSION_RETIRED");
   });
 
   test("roles.update refuses a NEWLY added finalize:financed_deal", async () => {
@@ -180,9 +192,9 @@ describe("SCRUM-413 role writers", () => {
     const { orgId, asOwner } = await setupOwnerOrg(t, "scrum413_update_add_owner");
     const roleId = await insertRole(t, orgId, "SALES", [CREATE_APP]);
 
-    await expect(
-      asOwner.mutation(api.roles.update, { orgId, roleId, permissions: [CREATE_APP, FINALIZE] })
-    ).rejects.toThrow(/finalize:financed_deal is being retired/);
+    expect(
+      await codeOf(asOwner.mutation(api.roles.update, { orgId, roleId, permissions: [CREATE_APP, FINALIZE] }))
+    ).toBe("PERMISSION_RETIRED");
     const role = await t.run((ctx: any) => ctx.db.get(roleId)) as any;
     expect(role?.permissions).toEqual([CREATE_APP]);
   });

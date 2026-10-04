@@ -160,6 +160,10 @@ export const AppErrorCode = {
   // missing, in another organisation or soft-deleted; REJECTED stays allowed. Translated under
   // ServerError_<code>.
   APPROVAL_VEHICLE_UNAVAILABLE: "APPROVAL_VEHICLE_UNAVAILABLE",
+  // SCRUM-413. `roles.create` / `roles.update` refuse a newly added `finalize:financed_deal`
+  // (retired; split into manage:supplier_settlement and cancel:closed_deal). Translated under
+  // ServerError_<code>.
+  PERMISSION_RETIRED: "PERMISSION_RETIRED",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];

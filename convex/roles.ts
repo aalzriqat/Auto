@@ -13,9 +13,11 @@ import {
 } from "./utils/permissions";
 import { notifyOwner, getActorName } from "./utils/notifications";
 import { requireFeature } from "./subscriptions";
+import { AppErrorCode, throwAppError } from "./utils/errors";
 
+// Translated under ServerError_PERMISSION_RETIRED; the EN dictionary text equals this string.
 const RETIRED_PERMISSION_MESSAGE =
-  "finalize:financed_deal is being retired. Grant manage:supplier_settlement or cancel:closed_deal instead.";
+  'The "Finalize financed deal" permission is no longer used. Grant "Record the supplier payment route" or "Cancel a closed financed deal" instead.';
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -90,7 +92,7 @@ export const create = mutation({
     // manage:supplier_settlement and cancel:closed_deal and is retired. A new
     // role has no reason to start carrying it.
     if (newlyAddedLegacyPermissions(args.permissions, []).length > 0) {
-      throw new ConvexError(RETIRED_PERMISSION_MESSAGE);
+      throwAppError(AppErrorCode.PERMISSION_RETIRED, RETIRED_PERMISSION_MESSAGE);
     }
 
     // Prevent duplicate role names within the same org
@@ -191,7 +193,7 @@ export const update = mutation({
       // round-trip through an edit; a NEWLY added one is refused. Editing or
       // renaming a role never grants anything the caller did not send.
       if (newlyAddedLegacyPermissions(args.permissions, role.permissions).length > 0) {
-        throw new ConvexError(RETIRED_PERMISSION_MESSAGE);
+        throwAppError(AppErrorCode.PERMISSION_RETIRED, RETIRED_PERMISSION_MESSAGE);
       }
       patch.permissions = dedupePermissions(args.permissions);
     }

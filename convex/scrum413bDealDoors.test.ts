@@ -400,3 +400,50 @@ describe("SCRUM-413 PR-B D-d - the cockpit projection mirrors the door", () => {
     expect(await mayCancel(s, applicationId, "OWNER")).toBe(true);
   });
 });
+
+describe("SCRUM-413 PR-B D-b - the entry gate and replay across actors (non-CLOSED)", () => {
+  /** Every row a cancel could touch, as comparable JSON. */
+  async function snapshot(s: Seeded, applicationId: Id<"financeApplications">) {
+    return await s.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      return JSON.stringify({
+        application: app,
+        vehicle: await ctx.db.get(s.vehicleId),
+        quote: app?.quoteId ? await ctx.db.get(app.quoteId) : null,
+        sales: await ctx.db.query("sales").collect(),
+        deposits: await ctx.db.query("deposits").collect(),
+        journalEntries: await ctx.db.query("journalEntries").collect(),
+        idempotency: await ctx.db.query("commandIdempotency").collect(),
+      });
+    });
+  }
+
+  test("a CANCEL_CLOSED-only holder replaying a CREATE holder's key is served the stored outcome and changes nothing", async () => {
+    const s = await seed("replay");
+    const applicationId = await underReview(s);
+    const key = crypto.randomUUID();
+
+    // A CREATE holder cancels with key K.
+    expect(await refusalOf(cancelAs(s, applicationId, "SALES", key))).toBeNull();
+    const afterFirst = await snapshot(s, applicationId);
+    expect(JSON.parse(afterFirst).application.status).toBe("CANCELLED");
+
+    // A CANCEL_CLOSED-only holder (no CREATE) replays K with the same args.
+    const replay = await refusalOf(cancelAs(s, applicationId, "CANCEL_ONLY", key));
+    expect(replay).toBeNull();
+    // Served from the stored record: no new mutation of any kind, not even a new record.
+    expect(await snapshot(s, applicationId)).toBe(afterFirst);
+  });
+
+  test("the same CANCEL_CLOSED-only holder with a FRESH key on a non-CLOSED application is refused and nothing changes", async () => {
+    const s = await seed("fresh");
+    const applicationId = await underReview(s);
+    const before = await snapshot(s, applicationId);
+
+    const refusal = await refusalOf(cancelAs(s, applicationId, "CANCEL_ONLY"));
+    expect(refusal).not.toBeNull();
+    expect(refusal).toMatch(/create:finance_application/);
+    expect(await snapshot(s, applicationId)).toBe(before);
+    expect(JSON.parse(before).application.status).toBe("UNDER_REVIEW");
+  });
+});
