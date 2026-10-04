@@ -137,10 +137,28 @@ describe("Step3Review — required documents (SCRUM-628 F-08)", () => {
     expect(screen.queryByText("NoRequiredDocuments")).toBeNull();
   });
 
-  test("the Other provider has no rules here, so no documents claim is made", () => {
+  const RULES = [
+    { _id: "rule_org", documentName: "QA National ID", isRequired: true },
+    { _id: "rule_co", companyId: COMPANY, documentName: "QA Bindar Form", isRequired: true },
+    { _id: "rule_other_co", companyId: "company_2", documentName: "QA Rival Form", isRequired: true },
+  ];
+
+  test("a finance company lists its own and org-wide documents, each once", () => {
+    stubs.rules = RULES;
+    renderReview(3_000);
+
+    expect(screen.getAllByText("QA National ID")).toHaveLength(1);
+    expect(screen.getAllByText("QA Bindar Form")).toHaveLength(1);
+    expect(screen.queryByText("QA Rival Form")).toBeNull();
+    expect(screen.getAllByText("RequiredDocuments")).toHaveLength(1);
+  });
+
+  test("the Other provider still lists the org-wide documents every deal needs", () => {
+    stubs.rules = RULES;
     renderReview(3_000, OTHER_COMPANY_ID);
 
-    expect(screen.queryByText("RequiredDocuments")).toBeNull();
+    expect(screen.getAllByText("QA National ID")).toHaveLength(1);
+    expect(screen.queryByText("QA Bindar Form")).toBeNull();
     expect(screen.queryByText("NoRequiredDocuments")).toBeNull();
   });
 });

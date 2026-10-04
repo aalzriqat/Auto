@@ -40,6 +40,9 @@ import {
 
 export type Step1Values = z.infer<typeof step1Schema>;
 
+/** The one vehicleId error that choosing a finance company answers. */
+const COMPANY_REQUIRED_ERROR = "companyRequired";
+
 // ─────────────────────────────────────────────────────────────
 // Props
 // ─────────────────────────────────────────────────────────────
@@ -163,7 +166,8 @@ export default function Step1QuoteSetup({
     setCompanyResetByEdit(false);
     // Only the "pick a company" error is answered by picking one; a company's
     // own refusal (status not accepted, fees missing) stays until Next re-checks.
-    if (form.getFieldState("vehicleId").error?.message === t("PleaseSelectFinanceCompany" as any)) {
+    // Matched by type, not text: the message changes with the language.
+    if (form.getFieldState("vehicleId").error?.type === COMPANY_REQUIRED_ERROR) {
       form.clearErrors("vehicleId");
     }
   };
@@ -270,6 +274,7 @@ export default function Step1QuoteSetup({
 
       if (!selectedCompanyId) {
         form.setError("vehicleId", {
+          type: COMPANY_REQUIRED_ERROR,
           message: t("PleaseSelectFinanceCompany" as any),
         });
         return;

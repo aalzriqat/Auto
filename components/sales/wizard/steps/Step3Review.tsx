@@ -142,7 +142,8 @@ export function Step3Review({
         monthlyInstallment: result.monthlyInstallment,
         totalProfit: result.totalProfit,
         takafulAmount: result.takafulAmount,
-        companyDocs: [] as any[],
+        // A manual financier has no rules of its own, but org-wide ones (e.g. ID) still apply.
+        companyDocs: documentRules?.filter((r: Doc<"companyDocumentRules">) => !r.companyId) ?? [],
       };
     }
 
@@ -286,13 +287,14 @@ export function Step3Review({
             salePrice={effectivePrice}
             downPayment={wizardData.downPayment || 0}
             termMonths={wizardData.termMonths}
+            // The documents box below is the one list, with its loading and empty states.
+            companyDocs={[]}
           />
         )
       )}
 
       {/* DOCUMENTS */}
-      {/* The "Other" provider has no rules here, so nothing can be said about its documents. */}
-      {selectedResult && !selectedResult.isCash && !isManualFinance && !downPaymentCoversPrice && (
+      {selectedResult && !selectedResult.isCash && !downPaymentCoversPrice && (
         <div className={cn("border rounded-xl p-4", accentClass)}>
           <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 flex items-center gap-1">
             <FileText className="w-3.5 h-3.5" />

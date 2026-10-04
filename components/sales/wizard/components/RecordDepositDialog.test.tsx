@@ -224,6 +224,13 @@ describe("RecordDepositDialog — the amount field (SCRUM-628 F-05)", () => {
    * Review D-01: above about 9 trillion JOD a float cannot carry the fils, so
    * this figure would have left as ...002. It is refused, never changed.
    */
+  test("a large amount the number carries exactly is still accepted", async () => {
+    const { onRequested } = renderDialog();
+    await submitAmount("999999999999.999");
+    await waitFor(() => expect(onRequested).toHaveBeenCalled());
+    expect(stubs.calls[0].args).toMatchObject({ amount: 999999999999.999 });
+  });
+
   test("refuses an amount the number it is sent as cannot carry exactly", async () => {
     renderDialog();
     await submitAmount("9007198254740.001");
