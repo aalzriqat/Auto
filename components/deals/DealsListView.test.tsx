@@ -121,4 +121,17 @@ describe("the Deals list is a needs-action queue first", () => {
     expect(screen.getByText("DealsQueueEmptyLoadedOnly")).toBeTruthy();
     expect(screen.getByRole("button", { name: "LoadMore" })).toBeTruthy();
   });
+
+  test("while a page is loading the queue is still incomplete, even if no source can load more (SCRUM-603-2 re-ruling)", () => {
+    // One source mid-LoadingMore, the other Exhausted: canLoadMore is false,
+    // yet older rows are still arriving.
+    renderList({ rows: [row({ reason: null, waitingOn: "NONE" })], canLoadMore: false, loadingMore: true });
+    expect(screen.queryByText("DealsQueueEmpty")).toBeNull();
+    expect(screen.getByText("DealsQueueEmptyLoadedOnly")).toBeTruthy();
+    expect(screen.queryByText(/DealsLoadedAll/)).toBeNull();
+    expect(screen.getByText(/DealsLoadedMoreAvailable/)).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /DealsAll/ }).textContent).toContain("1+");
+    const button = screen.getByRole("button", { name: "LoadMore" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
 });

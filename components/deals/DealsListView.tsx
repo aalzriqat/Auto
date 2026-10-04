@@ -168,7 +168,10 @@ export function DealsListView({
   }, [loaded, view, reason, kind, search]);
 
   const filtersActive = reason !== null || kind !== null || search.trim() !== "";
-  const countSuffix = canLoadMore ? "+" : "";
+  // A page in flight is as incomplete as one not yet requested: with one
+  // source loading and the other exhausted, canLoadMore alone reads false.
+  const incomplete = canLoadMore || loadingMore;
+  const countSuffix = incomplete ? "+" : "";
 
   return (
     <div className="flex-1 space-y-4 p-4 pt-6 md:p-8">
@@ -297,7 +300,7 @@ export function DealsListView({
                 empty queue proves nothing about older deals (SCRUM-603-2). */}
             {t(
               view === "needs" && !filtersActive
-                ? canLoadMore
+                ? incomplete
                   ? "DealsQueueEmptyLoadedOnly"
                   : "DealsQueueEmpty"
                 : "NoDealsFound"
@@ -425,9 +428,9 @@ export function DealsListView({
         <div className="flex flex-wrap items-center justify-between gap-2 border-t p-3 text-xs text-muted-foreground">
           <span>
             <bdi dir="ltr">{visible.length}</bdi> {t("DealsShownOf")} <bdi dir="ltr">{loaded.length}</bdi>{" "}
-            {t(canLoadMore ? "DealsLoadedMoreAvailable" : "DealsLoadedAll")}
+            {t(incomplete ? "DealsLoadedMoreAvailable" : "DealsLoadedAll")}
           </span>
-          {canLoadMore && (
+          {incomplete && (
             <Button type="button" variant="outline" size="sm" disabled={loadingMore} onClick={onLoadMore}>
               {t("LoadMore")}
             </Button>
