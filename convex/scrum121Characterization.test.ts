@@ -677,7 +677,10 @@ describe("SCRUM-121 characterization of current main", () => {
         currency: "JOD",
         provider: "stripe",
       })
-    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_DOCUMENT_NOT_FOUND" } });
+    // D-20 (SCRUM-571 S1): create is shut for every request, so the refusal is now
+    // PAYMENT_LINKS_DISABLED (the foreign-document check is unreachable until the
+    // pilot reopens). The property kept: nothing is stored to fail later.
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
 
     await t.run(async (ctx) => {
       const intents = await ctx.db
@@ -709,31 +712,93 @@ describe("SCRUM-121 characterization of current main", () => {
         createdBy: userId,
       })
     );
-    const cleanIntentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
-      orgId,
-      customerId,
-      receivableDocumentId: ownDocId,
-      amountMinor: 100_000,
-      currency: "JOD",
-      provider: "stripe",
-    });
+    // D-20: the control is shut as well; with the pilot closed, a valid target
+    // is refused the same way and no receipt lands.
     await expect(
-      asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId: cleanIntentId })
-    ).resolves.toBeNull();
+      asFinance.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
+        orgId,
+        customerId,
+        receivableDocumentId: ownDocId,
+        amountMinor: 100_000,
+        currency: "JOD",
+        provider: "stripe",
+      })
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
 
     await t.run(async (ctx) => {
-      const clean = await ctx.db.get(cleanIntentId);
-      expect(clean?.status).toBe("SETTLED");
-      // The control receipt DID land as a canonical payment; the foreign-target
-      // one above did not. That difference is caused by the unvalidated target.
       const payments = await ctx.db
         .query("canonicalPayments")
         .withIndex("by_org", (q) => q.eq("orgId", orgId))
         .collect();
-      expect(payments).toHaveLength(1);
+      expect(payments).toHaveLength(0);
     });
   });
 });
+
+/**
+ * D-20 (SCRUM-571 S1): `paymentIntents.create` is shut, so a PENDING intent the
+ * pilot would have issued is seeded directly. Tests below that characterised how
+ * a late settlement mutated money now assert the shutdown instead: the intent
+ * cannot be settled by hand (`markSettled` refused) or by webhook (HELD), so the
+ * defect they described is unreachable.
+ */
+async function seedPilotIntent(
+  t: ReturnType<typeof convexTestWithComponents>,
+  args: {
+    orgId: Id<"organizations">;
+    customerId: Id<"customers">;
+    createdBy: Id<"users">;
+    receivableId?: Id<"receivables">;
+    receivableDocumentId?: Id<"receivableDocuments">;
+    amountMinor: number;
+    provider: string;
+    externalId?: string;
+  }
+): Promise<Id<"paymentIntents">> {
+  return await t.run((ctx) =>
+    ctx.db.insert("paymentIntents", {
+      ...args,
+      currency: "JOD",
+      status: "PENDING",
+      idempotencyKey: crypto.randomUUID(),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  );
+}
+
+/**
+ * D-20: the ACTIVE allocation a settled payment link used to leave on a document
+ * is now constructed directly through the same canonical writers settlement used
+ * (`createCanonicalPayment` + `allocatePaymentToReceivable`). The tests that need
+ * "a document with an ACTIVE allocation" are about the cancellation gate and the
+ * reversal writer, not about payment links.
+ */
+async function applyDirectCanonicalAllocation(
+  t: ReturnType<typeof convexTestWithComponents>,
+  args: {
+    orgId: Id<"organizations">;
+    userId: Id<"users">;
+    customerId: Id<"customers">;
+    receivableDocumentId: Id<"receivableDocuments">;
+    amountMinor: number;
+    key: string;
+  }
+) {
+  return await t.run(async (ctx) => {
+    const { createCanonicalPayment, allocatePaymentToReceivable } = await import("./subledger");
+    const paymentId = await createCanonicalPayment(ctx as never, {
+      orgId: args.orgId, direction: "IN", payerType: "CUSTOMER", customerId: args.customerId,
+      method: "CASH", amountMinor: args.amountMinor, currency: "JOD",
+      idempotencyKey: args.key, actorId: args.userId, status: "SETTLED",
+    });
+    await allocatePaymentToReceivable(ctx as never, {
+      orgId: args.orgId, paymentId, receivableDocumentId: args.receivableDocumentId,
+      amountMinor: args.amountMinor, actorId: args.userId,
+    });
+    return paymentId;
+  });
+}
 
 /**
  * Every GL command a path queues, normalized and ordered so it can be compared
@@ -880,7 +945,7 @@ describe("SCRUM-121A — golden GL baselines from current main", () => {
 
   test("payment-link settlement queues the GROSS receipt — the CODEX-01 baseline 218 must change, not 121A", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -892,13 +957,12 @@ describe("SCRUM-121A — golden GL baselines from current main", () => {
       dueDate: DUE(),
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
-      orgId,
-      customerId,
-      receivableId,
-      amountMinor: 100_000,
-      currency: "JOD",
-      provider: "stripe",
+    // D-20: the GROSS-receipt overstatement lived in payment-link settlement, which
+    // is shut. The intent is seeded; settling it by hand is refused, so the link
+    // contributes no receipt at all and only the 60 cash payment is queued.
+    const intentId = await seedPilotIntent(t, {
+      orgId, customerId, createdBy: userId, receivableId,
+      amountMinor: 100_000, provider: "stripe",
     });
     await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
@@ -907,16 +971,16 @@ describe("SCRUM-121A — golden GL baselines from current main", () => {
       method: "CASH",
       paymentDate: Date.now(),
     });
-    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId });
+    await expect(
+      asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId })
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
 
     const commands = await accountingCommands(t, orgId);
     const money = commands.filter(
       (c) => c.eventType === "COLLECTION_PAYMENT" || c.eventType === "PAYMENT_LINK_RECEIVED"
     );
-    // 60 applied by cash + 100 GROSS for the link whose allocation was only 40.
     expect(money).toEqual([
       { eventType: "COLLECTION_PAYMENT", sourceType: "collectionPayments", amountMinor: 60_000, currency: "JOD" },
-      { eventType: "PAYMENT_LINK_RECEIVED", sourceType: "paymentIntents", amountMinor: 100_000, currency: "JOD" },
     ]);
   });
 });
@@ -998,7 +1062,7 @@ describe("SCRUM-121A — Sonnet MAX F1, validated independently", () => {
    */
   test("F1_late_intent_settles_against_a_REFUNDED_receivable_and_applies_real_money", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -1012,13 +1076,11 @@ describe("SCRUM-121A — Sonnet MAX F1, validated independently", () => {
     });
 
     // A payment link is raised while the debt is live, and stays PENDING.
-    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
-      orgId,
-      customerId,
-      receivableId,
-      amountMinor: 400_000,
-      currency: "JOD",
-      provider: "stripe",
+    // D-20: create is shut, so the pilot-era intent is seeded; the late
+    // settlement this test characterised is now refused (asserted below).
+    const intentId = await seedPilotIntent(t, {
+      orgId, customerId, createdBy: userId, receivableId,
+      amountMinor: 400_000, provider: "stripe",
     });
 
     // The customer pays 600 in cash, then the whole 600 is refunded.
@@ -1050,31 +1112,24 @@ describe("SCRUM-121A — Sonnet MAX F1, validated independently", () => {
       return row?.canonicalReceivableDocumentId;
     });
 
-    // The stale intent settles.
-    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId });
+    // The stale intent can no longer settle (D-20 P2).
+    await expect(
+      asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId })
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
 
     await t.run(async (ctx) => {
       const row = await ctx.db.get(receivableId);
-      // The REFUNDED terminal label is gone and real money was applied.
-      expect(row?.status).not.toBe("REFUNDED");
-      expect(row?.outstandingAmount).toBe(600); // 1000 - 400 applied
+      // The REFUNDED terminal label survives and no money was applied.
+      expect(row?.status).toBe("REFUNDED");
+      expect(row?.outstandingAmount).toBe(1000);
 
       const intent = await ctx.db.get(intentId);
-      const paymentRow = intent?.collectionPaymentId
-        ? await ctx.db.get(intent.collectionPaymentId)
-        : null;
-      expect(paymentRow?.amount).toBe(400); // NOT the inert 0 of the CANCELLED case
-      expect(paymentRow?.status).toBe("POSTED");
-
-      // And the canonical side allocated too — the §2 writer guard would NOT
-      // refuse this, because the refund legitimately reopened the document to
-      // OPEN. Canonical says collectible; the legacy row said REFUNDED.
-      const alloc = intent?.paymentAllocationId ? await ctx.db.get(intent.paymentAllocationId) : null;
-      expect(alloc?.amountMinor).toBe(400_000);
-      expect(alloc?.status).toBe("ACTIVE");
+      expect(intent?.status).toBe("PENDING");
+      expect(intent?.collectionPaymentId).toBeUndefined();
+      expect(intent?.paymentAllocationId).toBeUndefined();
       if (canonicalDocId) {
         const doc = await ctx.db.get(canonicalDocId);
-        expect(doc?.status).toBe("PARTIALLY_PAID");
+        expect(doc?.status).toBe("OPEN");
       }
     });
   });
@@ -1099,7 +1154,7 @@ describe("SCRUM-121A — Codex F2, validated independently", () => {
    */
   test("CODEX121A02_document_only_intent_leaves_an_ACTIVE_allocation_under_a_CANCELLED_document", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, userId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -1117,20 +1172,19 @@ describe("SCRUM-121A — Codex F2, validated independently", () => {
       return row!.canonicalReceivableDocumentId!;
     });
 
-    // Document-only intent: the supported shape proven by accountingPhase8.
-    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
-      orgId,
-      customerId,
-      receivableDocumentId: docId,
-      amountMinor: 400_000,
-      currency: "JOD",
-      provider: "tap",
+    // D-20: a document-only payment-link settlement can no longer happen, so the
+    // canonical-only allocation it used to leave is constructed directly.
+    await applyDirectCanonicalAllocation(t, {
+      orgId, userId, customerId, receivableDocumentId: docId, amountMinor: 400_000, key: "codex121a02",
     });
-    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId });
 
     await t.run(async (ctx) => {
-      const intent = await ctx.db.get(intentId);
-      const alloc = intent?.paymentAllocationId ? await ctx.db.get(intent.paymentAllocationId) : null;
+      const alloc = (
+        await ctx.db
+          .query("paymentAllocations")
+          .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", docId))
+          .collect()
+      )[0];
       expect(alloc?.status).toBe("ACTIVE");
       expect(alloc?.amountMinor).toBe(400_000);
       // The legacy row never learned about it — the mirror needs receivableId.
@@ -1195,15 +1249,15 @@ describe("SCRUM-121A — Codex F2, validated independently", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
-    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
+    // D-20: the legacy mirror used to run via a settled receivableId-linked
+    // intent; a direct collection payment runs the same mirror (paidAmount > 0).
+    await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
-      customerId,
       receivableId,
-      amountMinor: 400_000,
-      currency: "JOD",
-      provider: "tap",
+      amount: 400,
+      method: "CASH",
+      paymentDate: Date.now(),
     });
-    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId });
 
     const cancelReq = await asFinance.mutation(api.collections.requestApproval, {
       orgId,
@@ -1235,7 +1289,7 @@ describe("SCRUM-121 — Codex findings, validated independently", () => {
    */
   test("CODEX01_gl_event_carries_gross_receipt_while_allocation_is_capped", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -1248,13 +1302,12 @@ describe("SCRUM-121 — Codex findings, validated independently", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
-    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
-      orgId,
-      customerId,
-      receivableId,
-      amountMinor: 100_000,
-      currency: "JOD",
-      provider: "stripe",
+    // D-20: seeded; the gross-receipt GL credit this test reproduced lived in
+    // payment-link settlement, which is shut. The test now proves no link event
+    // is queued and the debt reflects the cash payment only.
+    const intentId = await seedPilotIntent(t, {
+      orgId, customerId, createdBy: userId, receivableId,
+      amountMinor: 100_000, provider: "stripe",
     });
 
     // Another channel settles 60 of the same debt first.
@@ -1266,52 +1319,28 @@ describe("SCRUM-121 — Codex findings, validated independently", () => {
       paymentDate: Date.now(),
     });
 
-    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId });
+    await expect(
+      asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId })
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
 
     await t.run(async (ctx) => {
       const row = await ctx.db.get(receivableId);
-      expect(row?.outstandingAmount).toBe(0);
+      expect(row?.outstandingAmount).toBe(40); // only the 60 cash payment applied
 
       const intent = await ctx.db.get(intentId);
-      const alloc = intent?.paymentAllocationId ? await ctx.db.get(intent.paymentAllocationId) : null;
-      expect(alloc?.amountMinor).toBe(40_000); // capped to what was still owed
+      expect(intent?.paymentAllocationId).toBeUndefined();
+      expect(intent?.canonicalPaymentId).toBeUndefined();
 
-      const canonical = intent?.canonicalPaymentId ? await ctx.db.get(intent.canonicalPaymentId) : null;
-      expect(canonical?.amountMinor).toBe(100_000); // gross actually received
-
-      // No chart is seeded here, so the GL commands are durably enqueued
-      // rather than posted. The PAYLOAD is what the posting rule will consume,
-      // and ruleCollectionPayment credits ACCOUNTS_RECEIVABLE_CUSTOMERS by
-      // exactly this amountMinor — so the payload is the GL claim.
       const queued = await ctx.db
         .query("pendingAccountingEvents")
         .withIndex("by_org_status", (q) => q.eq("orgId", orgId))
         .collect();
-
-      const linkEvent = queued.find((e) => e.eventType === "PAYMENT_LINK_RECEIVED");
-      // The GL command carries the GROSS 100, not the applied 40.
-      expect((linkEvent?.payload as { amountMinor?: number } | undefined)?.amountMinor).toBe(100_000);
-
-      // What each event will actually credit to Customer AR.
-      //
-      // ⚠️ THE TWO PATHS NOW ANSWER DIFFERENTLY, AND THAT IS THE POINT.
-      // SCRUM-218-C made a direct collection credit AR by `appliedMinor` only —
-      // so this must read that field, not the gross, or it would measure a claim
-      // the direct path no longer makes. `PAYMENT_LINK_RECEIVED` still credits
-      // its gross `amountMinor`, because Payment Links are DEFERRED and 218-C
-      // deliberately did not touch them.
+      // The GROSS payment-link credit (CODEX-01) can no longer be queued.
+      expect(queued.find((e) => e.eventType === "PAYMENT_LINK_RECEIVED")).toBeUndefined();
       const arCredited = queued
-        .filter((e) => e.eventType === "COLLECTION_PAYMENT" || e.eventType === "PAYMENT_LINK_RECEIVED")
-        .reduce((s, e) => {
-          const p = e.payload as { amountMinor?: number; appliedMinor?: number };
-          return s + (e.eventType === "COLLECTION_PAYMENT" ? (p?.appliedMinor ?? 0) : (p?.amountMinor ?? 0));
-        }, 0);
-      // AR is STILL credited 60 + 100 = 160 against a debt of 100. CODEX-01 is
-      // not fixed by 218-C and this test must keep reproducing it: the surviving
-      // half is the payment-link gross credit, which belongs to the deferred
-      // Payment-Link scope. If this ever drops to 60, Payment Links have been
-      // brought in scope without a ruling.
-      expect(arCredited).toBe(160_000);
+        .filter((e) => e.eventType === "COLLECTION_PAYMENT")
+        .reduce((s, e) => s + ((e.payload as { appliedMinor?: number })?.appliedMinor ?? 0), 0);
+      expect(arCredited).toBe(60_000);
     });
   });
 
@@ -1322,7 +1351,7 @@ describe("SCRUM-121 — Codex findings, validated independently", () => {
    */
   test("CODEX04_pending_intent_settling_after_cancellation_rewrites_CANCELLED_to_PAID", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -1335,13 +1364,10 @@ describe("SCRUM-121 — Codex findings, validated independently", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
-    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
-      orgId,
-      customerId,
-      receivableId,
-      amountMinor: 100_000,
-      currency: "JOD",
-      provider: "stripe",
+    // D-20: create is shut; the pilot-era PENDING intent is seeded.
+    const intentId = await seedPilotIntent(t, {
+      orgId, customerId, createdBy: userId, receivableId,
+      amountMinor: 100_000, provider: "stripe", externalId: "stripe_cancelled_mid_flight",
     });
 
     // Cancellation does not consider pending intents.
@@ -1360,16 +1386,25 @@ describe("SCRUM-121 — Codex findings, validated independently", () => {
       expect((await ctx.db.get(receivableId))?.status).toBe("CANCELLED");
     });
 
-    // The provider settles anyway.
-    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId });
+    // The provider settles anyway: by hand (refused, D-20 P2) ...
+    await expect(
+      asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId })
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
+    // ... or by webhook (held, D-20 P3).
+    const outcome = await t.mutation(internal.paymentIntents.settleByExternalId, {
+      provider: "stripe", externalId: "stripe_cancelled_mid_flight", amountMinor: 100_000, currency: "JOD",
+      providerSignatureVerifiedAt: Date.now(),
+    });
+    expect(outcome).toMatchObject({ kind: "HELD" });
 
     await t.run(async (ctx) => {
       const row = await ctx.db.get(receivableId);
-      // INVERTED by the §6 implementation. This asserted "PAID" against
-      // unmodified main and failed the moment the fix landed, which is the
-      // failing-first proof for this defect. It now asserts the debt stays
-      // closed.
+      // The debt stays closed.
       expect(row?.status).toBe("CANCELLED");
+      // D-22: the hold is the intent's terminal transition, linked to the held row.
+      const intent = await ctx.db.get(intentId);
+      expect(intent?.status).toBe("CAPTURE_HELD");
+      expect(intent?.heldFundsId).toBe((outcome as { heldId?: unknown }).heldId);
     });
   });
 });
@@ -1436,15 +1471,11 @@ describe("SCRUM-121A — c16581 evidence fixtures", () => {
     // state is now CONSTRUCTED directly, and the defect it demonstrates is
     // reachable ONLY by construction. SCRUM-218 closes the constructed case;
     // 121A-PRE has closed the reachable one.
-    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
-      orgId,
-      customerId,
-      receivableDocumentId: docId,
-      amountMinor: 400_000,
-      currency: "JOD",
-      provider: "tap",
+    // D-20: the ACTIVE allocation a settled document-only link used to leave is
+    // constructed directly through the canonical writers.
+    await applyDirectCanonicalAllocation(t, {
+      orgId, userId, customerId, receivableDocumentId: docId, amountMinor: 400_000, key: "ev1",
     });
-    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId });
 
     // First, prove the public route is shut — so "constructed" below is a
     // statement about this branch, not an assumption carried over from before.
@@ -1643,7 +1674,9 @@ describe("SCRUM-121A — c16581 evidence fixtures", () => {
         currency: "JOD",
         provider: "tap",
       })
-    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_DOCUMENT_PAYER_MISMATCH" } });
+    // D-20: create is shut for every request, so the payer-mismatch check is
+    // unreachable; the refusal is PAYMENT_LINKS_DISABLED and still writes nothing.
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
     // The same total-rollback control, now measured on the free side of the
     // boundary: the refusal costs a request instead of a confirmed receipt.
     expect(await snapshotMoneyWorld(t)).toBe(before);
@@ -1832,7 +1865,7 @@ describe("SCRUM-121A — golden GL baselines for the paths 121A changes", () => 
    */
   test("G5_settling_after_cancellation_queues_the_gross_receipt_and_121A_must_not_change_it", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -1844,13 +1877,10 @@ describe("SCRUM-121A — golden GL baselines for the paths 121A changes", () => 
       dueDate: DUE(),
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
-      orgId,
-      customerId,
-      receivableId,
-      amountMinor: 400_000,
-      currency: "JOD",
-      provider: "tap",
+    // D-20: seeded; the gross receipt this baseline pinned can no longer be queued.
+    const intentId = await seedPilotIntent(t, {
+      orgId, customerId, createdBy: userId, receivableId,
+      amountMinor: 400_000, provider: "tap",
     });
     const cancelReq = await asFinance.mutation(api.collections.requestApproval, {
       orgId,
@@ -1865,7 +1895,9 @@ describe("SCRUM-121A — golden GL baselines for the paths 121A changes", () => 
     });
 
     const baseline = await accountingCommands(t, orgId);
-    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId });
+    await expect(
+      asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId })
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
 
     const after = await accountingCommands(t, orgId);
     const key = (c: unknown) => JSON.stringify(c);
@@ -1875,19 +1907,9 @@ describe("SCRUM-121A — golden GL baselines for the paths 121A changes", () => 
     // exactly what G4 does, and exactly how a GL-neutrality claim passes while
     // being false. Both directions are pinned.
     const removed = baseline.filter((b) => !after.some((c) => key(c) === key(b)));
-    expect({ added, removed }).toMatchInlineSnapshot(`
-      {
-        "added": [
-          {
-            "amountMinor": 400000,
-            "currency": "JOD",
-            "eventType": "PAYMENT_LINK_RECEIVED",
-            "sourceType": "paymentIntents",
-          },
-        ],
-        "removed": [],
-      }
-    `);
+    // D-20: was one gross PAYMENT_LINK_RECEIVED of 400000; settlement is shut, so
+    // nothing is queued or removed.
+    expect({ added, removed }).toEqual({ added: [], removed: [] });
 
     // INVERTED by §6. The defect this baseline sat next to: the legacy row was
     // resurrected. The fix flipped THIS and left the command list above
@@ -2296,7 +2318,11 @@ describe("SCRUM-121A-PRE — R3-05, saleId is never correlated", () => {
         orgId, customerId, receivableId: receivableA, receivableDocumentId: docB,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
-    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_RECEIVABLE_DOCUMENT_MISMATCH" } });
+    // D-20 (SCRUM-571 S1): create is shut for every request, so neither the
+    // receivable-vs-document control above nor the saleId correlation below is
+    // reachable; each is refused as PAYMENT_LINKS_DISABLED. The kept property is
+    // that no intent is stored and the receivable never learns a saleId.
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
 
     // INVERTED after the Sonnet MAX seat's Finding 1. This asserted that
     // document B plus a saleId related to nothing was accepted and stored with
@@ -2313,7 +2339,7 @@ describe("SCRUM-121A-PRE — R3-05, saleId is never correlated", () => {
         orgId, customerId, receivableDocumentId: docB, saleId: unrelatedSaleId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
-    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_SALE_DEBT_MISMATCH" } });
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
 
     await t.run(async (ctx) => {
       const intents = await ctx.db
@@ -2358,47 +2384,26 @@ describe("SCRUM-121A-PRE — R3-05, saleId is never correlated", () => {
       });
     });
 
-    // The receivable names the pending sale, which therefore has no canonical
-    // document of its own yet.
-    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId, customerId, saleId, sourceType: "INTERNAL_INSTALLMENT",
-      title: "Owed against a deal still in progress",
-      amount: 1000, dueDate: DUE(), creditSystemKey: "MISCELLANEOUS_INCOME",
-    });
-
+    // D-20: a receivable can no longer be created against ANY sale, pending or
+    // not (the sale's debt is its sale invoice). This control's original
+    // property — a receivable billed alongside its own pending sale — is
+    // therefore retired; what remains true is that the creation is refused
+    // before any write and the payment-link flow that depended on it is shut
+    // (D-20 P1/P2, asserted in scrum571s1Containment.test.ts).
+    await expect(
+      asFinance.mutation(api.collections.createReceivable, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId, customerId, saleId, sourceType: "INTERNAL_INSTALLMENT",
+        title: "Owed against a deal still in progress",
+        amount: 1000, dueDate: DUE(), creditSystemKey: "MISCELLANEOUS_INCOME",
+      })
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_COMPETING_RECEIVABLE_REFUSED" } });
     await t.run(async (ctx) => {
+      expect((await ctx.db.query("receivables").collect()).length).toBe(0);
       expect((await ctx.db.get(saleId))?.canonicalReceivableDocumentId).toBeUndefined();
-      expect((await ctx.db.get(receivableId))?.saleId).toBe(saleId);
-    });
-
-    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
-      orgId, customerId, receivableId, saleId,
-      amountMinor: 100_000, currency: "JOD", provider: "tap",
-    });
-    expect(intentId).toBeTruthy();
-
-    // …and the end-to-end assertion the cross-family seat's verification floor
-    // asked for: the intent and the receipt settlement produces must identify
-    // the SAME sale.
-    //
-    // This is the half that made the finding matter rather than being cosmetic.
-    // The legacy mirror stamps `saleId: receivable.saleId` — the RECEIVABLE's
-    // sale, never the intent's — so before the correlation landed an intent
-    // could name S2 while its own receipt named S1, and the two records of one
-    // payment disagreed about which deal it belonged to. Equality here is only
-    // guaranteed because creation now refuses the pair that could differ.
-    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId });
-    await t.run(async (ctx) => {
-      const intent = await ctx.db.get(intentId);
-      expect(intent?.status).toBe("SETTLED");
-      const receipt = intent?.collectionPaymentId ? await ctx.db.get(intent.collectionPaymentId) : null;
-      expect(receipt).toBeTruthy();
-      expect(receipt?.saleId).toBe(saleId);
-      expect(intent?.saleId).toBe(saleId);
-      expect(receipt?.saleId).toBe(intent?.saleId);
     });
   });
+
 });
 
 /**
@@ -2426,7 +2431,7 @@ describe("SCRUM-121A-PRE — Codex R4 findings, validated independently", () => 
    */
   test("PRE04_the_zero_applied_lineage_row_and_both_readers_that_surface_it", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -2438,13 +2443,13 @@ describe("SCRUM-121A-PRE — Codex R4 findings, validated independently", () => 
       dueDate: DUE(),
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
-      orgId,
-      customerId,
-      receivableId,
-      amountMinor: 400_000,
-      currency: "JOD",
-      provider: "tap",
+    // D-20: payment links are shut, so `create` refuses and the zero-applied
+    // lineage row that markSettled used to write after a cancellation can no
+    // longer be produced. The intent is seeded directly and the test now pins
+    // the shut outcome: no lineage row, nothing applied, debt stays CANCELLED.
+    const intentId = await seedPilotIntent(t, {
+      orgId, customerId, createdBy: userId, receivableId,
+      amountMinor: 400_000, provider: "tap", externalId: "tap_pre04",
     });
     const cancelReq = await asFinance.mutation(api.collections.requestApproval, {
       orgId,
@@ -2457,49 +2462,29 @@ describe("SCRUM-121A-PRE — Codex R4 findings, validated independently", () => 
       requestId: cancelReq,
       status: "APPROVED",
     });
-    await asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId });
+    await expect(
+      asFinance.mutation(api.paymentIntents.markSettled, { idempotencyKey: crypto.randomUUID(), orgId, intentId })
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
 
-    const paymentId = await t.run(async (ctx) => {
+    await t.run(async (ctx) => {
+      // D-20: no lineage row, no allocation, and the intent is untouched.
       const rows = await ctx.db
         .query("collectionPayments")
         .withIndex("by_org_paymentDate", (q) => q.eq("orgId", orgId))
         .collect();
-      expect(rows).toHaveLength(1);
-      const row = rows[0]!;
-      // The lineage row exists and is honest about applying nothing.
-      expect(row.amount).toBe(0);
-      expect(row.status).toBe("POSTED");
-      expect(row.method).toBe("PAYMENT_LINK");
-      expect(row.direction).toBe("IN");
-      expect(row.receivableId).toBe(receivableId);
-      expect(row.customerId).toBe(customerId);
-      expect(row.canonicalPaymentId).toBeTruthy();
-      // No allocation was made against the cancelled debt.
-      expect(row.paymentAllocationId).toBeUndefined();
-
-      // Linked in both directions: the intent points at the row too.
+      expect(rows).toHaveLength(0);
       const intent = await ctx.db.get(intentId);
-      expect(intent?.collectionPaymentId).toBe(row._id);
-      return row._id;
+      expect(intent?.status).toBe("PENDING");
+      expect(intent?.collectionPaymentId).toBeUndefined();
+      expect((await ctx.db.get(receivableId))?.status).toBe("CANCELLED");
     });
 
-    // Reader 1 — the receipt/audit list surfaces it.
+    // Neither lineage reader has anything to surface.
     const listed = await asFinance.query(api.collections.listPayments, {
       orgId,
       paginationOpts: { numItems: 20, cursor: null },
     });
-    expect(listed.page.some((p: { _id: string }) => p._id === paymentId)).toBe(true);
-
-    // Reader 2 — daily collections surfaces it as a PAYMENT_LINK entry, while
-    // contributing zero to the method total. Both halves matter: dropping the
-    // row would leave the total identical and silently lose the receipt.
-    const daily = await asFinance.query(api.collections.dailyCollectionList, {
-      orgId,
-      businessDate: Date.now(),
-    });
-    const dailyRows = (daily as { rows?: Array<{ _id: string }> }).rows ?? [];
-    expect(dailyRows.some((p) => p._id === paymentId)).toBe(true);
-    expect((daily as { totalsByMethod?: Record<string, number> }).totalsByMethod?.PAYMENT_LINK ?? 0).toBe(0);
+    expect(listed.page).toHaveLength(0);
   });
 
   /**
@@ -2652,7 +2637,7 @@ describe("SCRUM-121A-PRE — Codex R5 findings, validated independently", () => 
    */
   test("PRE09_the_webhook_door_preserves_the_same_lineage_links_and_timestamps", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+    const { orgId, customerId, userId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -2664,14 +2649,10 @@ describe("SCRUM-121A-PRE — Codex R5 findings, validated independently", () => 
       dueDate: DUE(),
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
-    const intentId = await asFinance.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
-      orgId,
-      customerId,
-      receivableId,
-      amountMinor: 400_000,
-      currency: "JOD",
-      provider: "tap",
-      externalId: "tap_pre09",
+    // D-20: `create` is shut; the intent is seeded directly.
+    const intentId = await seedPilotIntent(t, {
+      orgId, customerId, createdBy: userId, receivableId,
+      amountMinor: 400_000, provider: "tap", externalId: "tap_pre09",
     });
 
     const before = await t.run(async (ctx) => {
@@ -2692,44 +2673,39 @@ describe("SCRUM-121A-PRE — Codex R5 findings, validated independently", () => 
     });
 
     // The OTHER door: the internal webhook settlement, not markSettled.
-    await t.mutation(internal.paymentIntents.settleByExternalId, {
+    const outcome = await t.mutation(internal.paymentIntents.settleByExternalId, {
       provider: "tap",
       externalId: "tap_pre09",
       amountMinor: 400_000,
       currency: "JOD",
       providerSignatureVerifiedAt: Date.now(),
     });
+    // D-20: the webhook door holds the verified capture instead of settling.
+    expect((outcome as { kind?: string }).kind).toBe("HELD");
 
     await t.run(async (ctx) => {
       const row = await ctx.db.get(receivableId);
-      // INVERTED with §6: the webhook door leaves the debt closed too. Both
-      // settlement entry points share createCanonicalIntentSettlement, and
-      // this is what proves the fix is in the shared helper rather than in one
-      // wrapper.
       expect(row?.status).toBe("CANCELLED");
-      // The timestamps §6 promises to keep writing DO advance here — pinning
-      // them so an implementation that suppresses the whole patch is caught.
-      expect(row?.lastPaymentAt).toBeDefined();
-      expect(row?.lastPaymentAt).not.toBe(before.lastPaymentAt);
-      expect(row?.updatedAt).not.toBe(before.updatedAt);
+      // Nothing settled, so neither timestamp moved.
+      expect(row?.lastPaymentAt).toBe(before.lastPaymentAt);
 
       const payments = await ctx.db
         .query("collectionPayments")
         .withIndex("by_org_paymentDate", (q) => q.eq("orgId", orgId))
         .collect();
-      expect(payments).toHaveLength(1);
-      const payment = payments[0]!;
-      expect(payment.amount).toBe(0);
-      expect(payment.status).toBe("POSTED");
-      expect(payment.paymentAllocationId).toBeUndefined();
+      expect(payments).toHaveLength(0);
 
-      // Both sides name the SAME canonical receipt. PRE04 asserted each link
-      // existed; it never asserted they agree.
       const intent = await ctx.db.get(intentId);
-      expect(intent?.collectionPaymentId).toBe(payment._id);
-      expect(intent?.canonicalPaymentId).toBeTruthy();
-      expect(payment.canonicalPaymentId).toBe(intent?.canonicalPaymentId);
+      // D-22: the hold moves the intent to CAPTURE_HELD, linked to the held row.
+      expect(intent?.status).toBe("CAPTURE_HELD");
+      expect(intent?.collectionPaymentId).toBeUndefined();
+      expect(intent?.canonicalPaymentId).toBeUndefined();
       expect(intent?.paymentAllocationId).toBeUndefined();
+
+      const held = await ctx.db.query("unmatchedProviderFunds").collect();
+      expect(held).toHaveLength(1);
+      expect(held[0]!.reason).toBe("PAYMENT_LINKS_DISABLED");
+      expect(intent?.heldFundsId).toBe(held[0]!._id);
     });
   });
 
@@ -2786,7 +2762,9 @@ describe("SCRUM-121A-PRE — Codex R5 findings, validated independently", () => 
         currency: "JOD",
         provider: "tap",
       })
-    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_CUSTOMER_REMOVED" } });
+    // D-20: the pilot shutdown refuses first, so the withdrawn-payer refusal
+    // behind it is unreachable on this door until payment links reopen.
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
 
     await expect(
       asFinance.mutation(api.collections.registerCheque, {
@@ -2877,7 +2855,10 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         orgId, customerId, receivableId,
         amountMinor: 100_000, currency: "USD", provider: "tap",
       })
-    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_DOCUMENT_CURRENCY_MISMATCH" } });
+    // D-20: every row of this matrix is now preempted by the pilot shutdown,
+    // which fires before any target is resolved. The per-mode refusals return
+    // when payment links reopen.
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
 
     // SALE-ONLY with no document to collect against — UNPROVEN_TARGET.
     const { saleId } = await seedVehicleAndSale(t, orgId, customerId, userId);
@@ -2886,7 +2867,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         orgId, customerId, saleId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
-    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_SALE_NO_DOCUMENT" } });
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } }); // D-20
 
     // SALE contradicting a document that WAS proved. The sale names a debt of
     // its own; the two cannot both be the target.
@@ -2905,7 +2886,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         orgId, customerId, receivableId, saleId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
-    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_SALE_DEBT_MISMATCH" } });
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } }); // D-20
 
     // TERMINAL canonical status, reached through the document rather than the
     // legacy row — the legacy terminal check cannot see this.
@@ -2915,11 +2896,11 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         orgId, customerId, receivableId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
-    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINK_DEBT_CLOSED" } });
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } }); // D-20
 
-    // CONTROL — restore the one field each refusal turned on, and the same call
-    // succeeds. Without this the four rejections above would also pass against
-    // a mutation that refused everything.
+    // D-20: the original CONTROL (the consistent call succeeds) cannot hold
+    // while the pilot is shut; the same call is refused identically and nothing
+    // is written, which is the property that matters now.
     await t.run((ctx) => ctx.db.patch(docId, { status: "OPEN" }));
     await t.run((ctx) => ctx.db.patch(saleId, { canonicalReceivableDocumentId: docId }));
     await expect(
@@ -2927,7 +2908,14 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         orgId, customerId, receivableId, saleId,
         amountMinor: 100_000, currency: "JOD", provider: "tap",
       })
-    ).resolves.toBeTruthy();
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
+    await t.run(async (ctx) => {
+      const intents = await ctx.db
+        .query("paymentIntents")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect();
+      expect(intents).toHaveLength(0);
+    });
   });
 
   /**
@@ -2944,9 +2932,12 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     );
     const other = await seedVehicleAndSale(t, orgId, otherCustomerId, userId);
 
+    // D-20: createReceivable refuses a saleId, so the debt carries its VEHICLE
+    // only (the vehicle contradiction below is the property that survives); a
+    // pre-existing sale-linked row is covered by the receipt refusals below.
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
-      orgId, customerId, vehicleId, saleId,
+      orgId, customerId, vehicleId,
       sourceType: "INTERNAL_INSTALLMENT",
       title: "Correlated debt",
       amount: 1000,
@@ -2962,33 +2953,44 @@ describe("SCRUM-121A-PRE — verification floor", () => {
       })
     ).rejects.toThrow(/vehicle does not match/i);
 
-    // Receivable mode: the caller names a different sale.
+    // D-20: a caller-named sale is refused outright on every receipt shape (the
+    // contradiction checks that used to fire for it are now preempted by the
+    // containment refusal, which fires before any of them).
+    // Receivable mode: the caller names a sale.
     await expect(
       asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
         orgId, receivableId, saleId: other.saleId,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
-    ).rejects.toThrow(/sale does not match/i);
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_RECEIPT_REFUSED" } });
 
-    // Ad-hoc mode: no receivable, and the sale belongs to somebody else. This
-    // is the shape that stored cleanly while attributing the canonical payment
-    // to one customer and every operational reader to another.
+    // Ad-hoc mode: no receivable, and the sale belongs to somebody else.
     await expect(
       asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
         orgId, customerId, saleId: other.saleId,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
-    ).rejects.toThrow(/sale belongs to a different customer/i);
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_RECEIPT_REFUSED" } });
 
-    // CONTROL — the ad-hoc shape stays supported when it is consistent, and a
-    // vehicle-only ad-hoc payment stays unconstrained: a vehicle does not imply
-    // a customer, and refusing that would refuse legitimate counter takings.
+    // …and a legacy receivable that already carries a sale (a row created
+    // before the release) cannot be collected against either.
+    const preexistingSaleLinked = await t.run((ctx) =>
+      ctx.db.insert("receivables", {
+        orgId, customerId, vehicleId, saleId, sourceType: "INTERNAL_INSTALLMENT",
+        title: "Pre-existing sale-linked debt", originalAmount: 1000, outstandingAmount: 1000,
+        dueDate: DUE(), status: "OPEN", createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
     await expect(
       asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
-        orgId, customerId, saleId, vehicleId,
-        amount: 100, method: "CASH", paymentDate: Date.now(),
+        orgId, receivableId: preexistingSaleLinked, amount: 100, method: "CASH", paymentDate: Date.now(),
       })
-    ).resolves.toBeTruthy();
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_RECEIPT_REFUSED" } });
+
+    // CONTROL — a vehicle-only ad-hoc payment stays unconstrained: a vehicle
+    // does not imply a customer, and refusing that would refuse legitimate
+    // counter takings. (The consistent-sale ad-hoc control was removed: a
+    // caller sale is refused by D-20.)
     await expect(
       asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
         orgId, customerId, vehicleId: other.vehicleId,
@@ -3218,19 +3220,21 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         orgId, receivableId, saleId: salesB.saleId,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
-    ).rejects.toThrow(/sale belongs to a different customer/i);
+    // D-20: a caller-named sale is refused outright now, which preempts the
+    // old "belongs to a different customer" contradiction check.
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_RECEIPT_REFUSED" } });
     expect(await snapshotMoneyWorld(t)).toBe(before);
 
-    // …and the vehicle variant: the receivable carries no vehicle, so a
-    // caller-filled vehicle that disagrees with the resolved sale is the same
-    // hole one field over.
-    const receivableWithSale = await asFinance.mutation(api.collections.createReceivable, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId, customerId: customerB, saleId: salesB.saleId,
-      sourceType: "INTERNAL_INSTALLMENT",
-      title: "B's debt, sale but no vehicle",
-      amount: 1000, dueDate: DUE(), creditSystemKey: "MISCELLANEOUS_INCOME",
-    });
+    // D-20: the vehicle variant. A sale-linked legacy receivable can no longer
+    // be created, so the pre-release row is seeded directly; collecting against
+    // it is refused whatever vehicle the caller names, and nothing is written.
+    const receivableWithSale = await t.run((ctx) =>
+      ctx.db.insert("receivables", {
+        orgId, customerId: customerB, saleId: salesB.saleId, sourceType: "INTERNAL_INSTALLMENT",
+        title: "B's debt, sale but no vehicle", originalAmount: 1000, outstandingAmount: 1000,
+        dueDate: DUE(), status: "OPEN", createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
     const strangerVehicle = await t.run((ctx) =>
       ctx.db.insert("vehicles", {
         orgId, make: "Ford", model: "Focus", year: 2019, mileage: 900, color: "Green",
@@ -3242,17 +3246,16 @@ describe("SCRUM-121A-PRE — verification floor", () => {
         orgId, receivableId: receivableWithSale, vehicleId: strangerVehicle,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
-    ).rejects.toThrow(/sale is for a different vehicle/i);
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_RECEIPT_REFUSED" } });
 
-    // CONTROL — the same gap-filling is still ACCEPTED when it agrees. The
-    // point of the rule is that an absent field stays fillable; only a
-    // contradiction is refused.
+    // D-20: the gap-filling control (agreeing vehicle accepted) no longer
+    // applies to a sale-linked receivable: it is refused whatever the vehicle.
     await expect(
       asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
         orgId, receivableId: receivableWithSale, vehicleId: salesB.vehicleId,
         amount: 100, method: "CASH", paymentDate: Date.now(),
       })
-    ).resolves.toBeTruthy();
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_RECEIPT_REFUSED" } });
   });
 
   /**

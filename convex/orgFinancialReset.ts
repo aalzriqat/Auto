@@ -445,6 +445,8 @@ export const resetOrgFinancialData = internalMutation({
     orgSuspended: boolean;
     /** SCRUM-559. True when a PENDING online payment intent exists, which makes a destructive reset refuse. */
     pendingPaymentIntentsPresent: boolean;
+    /** SCRUM-571 S1 (D-22). True when any held provider capture exists for the org, OPEN or RESOLVED; a destructive reset refuses. */
+    heldProviderCapturesPresent: boolean;
     /**
      * SCRUM-563. True when the org has cash drawer sessions or movements, which this
      * reset does not remove and which therefore make a destructive reset refuse.
@@ -538,8 +540,13 @@ export const resetOrgFinancialData = internalMutation({
     // (SCRUM-563). A destructive call for a missing organizations row never
     // reaches this point: D-19 refuses it above as a fresh start, so the
     // `org !== null` guard below only serves dry runs.
-    // Rationale and limits: see the header docblock. Both refusals stay
-    // English (internal operator tool).
+    // Rationale and limits: see the header docblock. The suspension and
+    // pending-intent refusals (like the authority-lifecycle and cash-drawer
+    // ones) are English-only (internal operator tool); the held-capture refusal
+    // below (D-22) carries an Arabic sentence in the same string.
+    // The held-capture refusal is unconditional, including on a continuation:
+    // it is the S1 stand-in for D-15's HALT. Provenance-based carry-forward of
+    // captures that arrived during the reset is S4 (SCRUM-565, D-23).
     const orgSuspended = org?.suspended === true;
     if (!dryRun && org !== null && !orgSuspended) {
       throw new ConvexError(
@@ -557,6 +564,28 @@ export const resetOrgFinancialData = internalMutation({
       throw new ConvexError(
         "This organization has pending online payment intents. Settle, fail or expire them " +
           "with the provider before resetting. Refusing before any deletion."
+      );
+    }
+    // SCRUM-571 S1 (D-22). The reset keeps unmatchedProviderFunds rows (D-8), and a
+    // RESOLVED review is not an economic outcome (D-14), so any row blocks a
+    // destructive run: this is the blocker once the link leaves PENDING.
+    const heldProviderCapturesPresent =
+      (await ctx.db
+        .query("unmatchedProviderFunds")
+        .withIndex("by_org_review", (q) => q.eq("orgId", args.orgId))
+        .first()) !== null;
+    if (!dryRun && heldProviderCapturesPresent) {
+      // Operator-only string: English, with the Arabic sentence in the same
+      // string because a thrown string cannot be translated by key.
+      throw new ConvexError(
+        "A verified provider capture remains recorded for this organization. This reset cannot " +
+          "continue while the held record exists, even if its review is marked resolved. " +
+          "Refusing before any deletion. Keep the organization suspended and escalate for the " +
+          "reviewed reset recovery path (SCRUM-565 S4), which is not available in this version. " +
+          "توجد دفعة مؤكدة من مزوّد الدفع محفوظة لهذه المنشأة. لا يمكن متابعة إعادة الضبط ما دام " +
+          "سجل الدفعة المحتجزة موجودًا، حتى إذا وُسمت مراجعتها بأنها محلولة. تم الرفض قبل أي حذف. " +
+          "أبقِ المنشأة معلّقة وصعّد الحالة إلى مسار استرداد إعادة الضبط المعتمد (SCRUM-565 S4)، " +
+          "وهو غير متاح في هذا الإصدار."
       );
     }
 
@@ -688,6 +717,7 @@ export const resetOrgFinancialData = internalMutation({
       authorityLifecyclePresent,
       orgSuspended,
       pendingPaymentIntentsPresent,
+      heldProviderCapturesPresent,
       cashDrawerStatePresent,
     };
   },
