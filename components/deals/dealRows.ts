@@ -202,7 +202,7 @@ export function dealsPaging(statuses: readonly PagingStatus[]): {
 } {
   return {
     complete: statuses.every((s) => s === "Exhausted"),
-    canLoadMore: statuses.some((s) => s === "CanLoadMore"),
-    loadingMore: statuses.some((s) => s === "LoadingMore"),
+    canLoadMore: statuses.includes("CanLoadMore"),
+    loadingMore: statuses.includes("LoadingMore"),
   };
 }

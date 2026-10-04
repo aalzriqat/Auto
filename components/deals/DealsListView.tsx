@@ -177,6 +177,10 @@ export function DealsListView({
   const incomplete = !complete;
   const rowsLoaded = rows !== undefined && !loading;
   const countSuffix = incomplete ? "+" : "";
+  // The queue is built from loaded rows only: with more to load, an empty
+  // queue proves nothing about older deals (SCRUM-603-2).
+  let emptyKey = "NoDealsFound";
+  if (view === "needs" && !filtersActive) emptyKey = incomplete ? "DealsQueueEmptyLoadedOnly" : "DealsQueueEmpty";
 
   return (
     <div className="flex-1 space-y-4 p-4 pt-6 md:p-8">
@@ -300,17 +304,7 @@ export function DealsListView({
         {rows === undefined || loading ? (
           <p className="p-6 text-center text-sm text-muted-foreground">{t("LoadingDeals")}</p>
         ) : visible.length === 0 ? (
-          <p className="p-6 text-center text-sm text-muted-foreground">
-            {/* The queue is built from loaded rows only: with more to load, an
-                empty queue proves nothing about older deals (SCRUM-603-2). */}
-            {t(
-              view === "needs" && !filtersActive
-                ? incomplete
-                  ? "DealsQueueEmptyLoadedOnly"
-                  : "DealsQueueEmpty"
-                : "NoDealsFound"
-            )}
-          </p>
+          <p className="p-6 text-center text-sm text-muted-foreground">{t(emptyKey)}</p>
         ) : (
           <>
             {/* Cards on a phone, a table above it: the same rows, one source. */}
