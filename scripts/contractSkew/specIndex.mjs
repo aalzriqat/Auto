@@ -18,6 +18,7 @@
  *   { type: "union",  value: [ <validator>, ... ] }
  *   { type: "literal" | "string" | "number" | "boolean" | "id" | "any" | ... }
  */
+import { validatorProblems } from "./contractTree.mjs";
 
 /**
  * Index a whole function-spec document by function identifier.
@@ -117,21 +118,53 @@ export function specProblems(spec) {
     }
     if (typeof fn.visibility?.kind !== "string") {
       problems.push(`${fn.identifier}: the entry has no \`visibility.kind\`, so public and internal cannot be told apart`);
+    } else if (!VISIBILITY_KINDS.has(fn.visibility.kind)) {
+      // Values, not just types: only what Convex emits (modules.d.ts: "public" |
+      // "internal") is understood. Anything else would be indexed as neither
+      // public nor callable and vanish without a word.
+      problems.push(`${fn.identifier}: unknown \`visibility.kind\` ${JSON.stringify(fn.visibility.kind)}`);
+    }
+    if (!FUNCTION_TYPES.has(fn.functionType)) {
+      problems.push(`${fn.identifier}: unknown \`functionType\` ${JSON.stringify(fn.functionType)}`);
     }
     const normalizedId = normalizeIdentifier(fn.identifier);
     if (seenIdentifiers.has(normalizedId)) {
       problems.push(`${normalizedId}: appears more than once in the document`);
     }
     seenIdentifiers.add(normalizedId);
+
+    // ⚠️ SCRUM-178 v2 batch 3 (SPEC-1, D-27). `if (args === undefined || args ===
+    // null) continue;` USED TO SIT HERE, so a function whose `args` key was
+    // MISSING skipped every check and was then compared as `any` — a truncated or
+    // foreign document read as a function that accepts anything. The two cases
+    // are different and are no longer merged:
+    //   · `args` ABSENT      -> not the shape this control understands: a problem.
+    //   · `args: null`       -> Convex rendered "no validator known" (legitimate).
+    //                           Indexed as an unknown-validator function: a call
+    //                           to it is an unwaivable coverage gap (compare.mjs),
+    //                           an uncalled one costs nothing.
+    if (!("args" in fn)) {
+      problems.push(`${fn.identifier}: the entry has no \`args\` key (an absent validator is not the same as \`args: null\`)`);
+      continue;
+    }
     const args = fn.args;
-    if (args === undefined || args === null) continue;
+    if (args === null) continue;
     const type = typeof args === "object" ? args.type : undefined;
     if (type !== "object" && type !== "any") {
       problems.push(`${fn.identifier}: args is a ${JSON.stringify(type ?? typeof args)} validator, not an object`);
+      continue;
     }
+    // The whole tree, not just its top: a nested malformed validator reads as
+    // `any` further down, which is a quiet pass.
+    problems.push(...validatorProblems(args, `${fn.identifier} args`));
   }
   return problems;
 }
+
+/** Every function type `convex function-spec` renders (the pinned package's UdfType). */
+const FUNCTION_TYPES = new Set(["Query", "Mutation", "Action", "HttpAction"]);
+/** Every visibility the pinned package emits (convex/dist/esm-types/cli/lib/deployApi/modules.d.ts). */
+const VISIBILITY_KINDS = new Set(["public", "internal"]);
 
 /**
  * Convex identifiers in a spec are file-based (`vehicles.js:importBulk`), while

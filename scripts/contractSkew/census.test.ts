@@ -35,7 +35,18 @@ const lineOf = (name: string, needle: string) =>
 
 // One type-checked program for every fixture: building a program is the slow
 // part (~13s), and the census filters by file anyway.
-const FIXTURES = ["realForms", "requestMaps", "escapes", "deferred", "unrelatedApi", "shorthand", "elementAccess"];
+const FIXTURES = [
+  "realForms",
+  "requestMaps",
+  "escapes",
+  "deferred",
+  "unrelatedApi",
+  "shorthand",
+  "elementAccess",
+  "aliasChain",
+  "aliasChainB",
+  "aliasChainRoot",
+];
 const fixtureFiles = FIXTURES.map(fixture);
 let shared: ReturnType<typeof createClientProgram> | undefined;
 const sharedProgram = () => (shared ??= createClientProgram(fixtureFiles, "tsconfig.json"));
@@ -128,6 +139,27 @@ describe("census reconciliation, by site identity", () => {
     const census = censusOf(["deferred"]);
     expect(at(census, "deferred", "Parameters<typeof update>")).toEqual([]);
     expect(at(census, "deferred", "useConvexAuth()")).toEqual([]);
+    expect(census.unaccounted).toEqual([]);
+  });
+
+  test("L-b: a 14-link alias chain ending in an invoked mutation is accounted, not capped at 12 passes", () => {
+    const census = censusOf(["aliasChain"]);
+    expect(at(census, "aliasChain", "return create({ orgId").map((c) => c.disposition)).toEqual(["TRANSMISSION"]);
+    expect(at(census, "aliasChain", "const create = useMutation(t14)").map((c) => c.disposition)).toEqual(["NON_TRANSMISSION"]);
+    expect(at(census, "aliasChain", "const t1 = api").map((c) => c.disposition)).toEqual(["NON_TRANSMISSION"]);
+    expect(census.unaccounted).toEqual([]);
+  });
+
+  test("L-b: the same chain ending in a hand-off is UNRESOLVED (exit 9), never silent", () => {
+    const census = censusOf(["aliasChain"]);
+    const ends = at(census, "aliasChain", "return e14;");
+    expect(ends.map((c) => c.disposition)).toEqual(["UNRESOLVED"]);
+    expect(census.incomplete).toBe(true);
+  });
+
+  test("L-b: a cross-file 14-link chain is followed to its root", () => {
+    const census = censusOf(["aliasChainB", "aliasChainRoot"]);
+    expect(at(census, "aliasChainB", "return create({ orgId").map((c) => c.disposition)).toEqual(["TRANSMISSION"]);
     expect(census.unaccounted).toEqual([]);
   });
 

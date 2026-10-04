@@ -40,7 +40,16 @@
  *         | {kind: "id", table?: string}
  *         | {kind: "object", fields: Map<string, {node: ValidatorNode, optional: boolean}>}
  *         | {kind: "array", element: ValidatorNode}
- *         | {kind: "union", branches: ValidatorNode[]}} ValidatorNode
+ *         | {kind: "union", branches: ValidatorNode[]}
+ *         | {kind: "unsupported", reason: string, source: unknown}} ValidatorNode
+ *
+ * ⚠️ `unsupported` IS A VALIDATOR THIS COMPARATOR DOES NOT MODEL, and it is NOT
+ * `any`. The spec renders it validly (a `v.record()`, an empty `v.union()`), so
+ * it is not malformed and not exit 3 — but a client value that reaches it cannot
+ * be proven against anything, and "accepts anything" would be a false PASS. It
+ * is reported as a COVERAGE_GAP (exit 9) the moment a client sends something
+ * there. `source` is the raw rendered node, kept so a change to it is visible to
+ * `specDiff` and the release blocker.
  *
  * ⚠️ `id` IS A CLIENT DOMAIN IN ITS OWN RIGHT, NOT A FLAVOUR OF `scalar`.
  * `GenericId<T>` is `string & { __tableName: T }`, and the extractor used to
@@ -77,7 +86,14 @@
  * `any` ended the comparison before anything was checked, which also made the
  * `SCALAR_OK.bytes` entry below unreachable dead code that read as coverage.
  */
-const DYNAMIC = new Set(["any", "unknown", "record"]);
+// ⚠️ SCRUM-178 v2 batch 3 (SPEC-1, D-27). `record` AND `unknown` WERE HERE AND
+// ARE GONE. `v.record(k, v)` constrains every value and the keys, so treating it
+// as `any` let a payload through that Convex refuses. It is now `unsupported` (a
+// coverage gap), never `any`. `unknown` is not a validator type Convex renders at
+// all (validator.d.ts: null number bigint boolean string bytes any literal id
+// array record union object), so it is rejected by `validatorProblems` instead
+// of being quietly widened.
+const DYNAMIC = new Set(["any"]);
 
 /**
  * Convex's rendered spec is already a tree; this only normalizes it.
@@ -111,11 +127,87 @@ export function validatorTree(node) {
 
   if (type === "union") {
     const branches = (Array.isArray(node.value) ? node.value : []).map(validatorTree);
-    return branches.length ? { kind: "union", branches } : { kind: "any" };
+    // ⚠️ AN EMPTY UNION ACCEPTS NOTHING, so it can never be `any`. The SDK can
+    // construct one (`v.union(...members)` takes `T extends Validator[]`), so it
+    // is legitimate-but-unsatisfiable rather than malformed: a gap, not exit 3.
+    return branches.length ? { kind: "union", branches } : { kind: "unsupported", reason: "an empty v.union() accepts no value", source: node };
   }
+
+  if (type === "record") return { kind: "unsupported", reason: "v.record() is not modelled by this comparator", source: node };
 
   if (type === "id") return { kind: "id", table: node.tableName };
   return { kind: "scalar", type: type ?? "unknown" };
+}
+
+/**
+ * Every validator `type` the comparator can interpret, DERIVED from what
+ * `validatorTree` / `compareNode` handle rather than listed independently:
+ * the structural kinds above, plus every scalar `compareNode` can compare
+ * (`SCALAR_OK`) and `bytes` / `bigint`, which it handles explicitly. A type in
+ * neither set falls to the unmodelled-scalar fallback and can only ever be
+ * reported TYPE_UNKNOWN, which is not the same as the spec being understood.
+ */
+const STRUCTURAL_TYPES = new Set(["any", "null", "literal", "object", "array", "union", "id", "record"]);
+const scalarTypes = () => new Set([...Object.keys(SCALAR_OK), "bytes", "bigint"]);
+
+/**
+ * ⚠️ RECURSIVE. A validator is a tree, and the first version of the spec check
+ * only looked at the top object, so a nested field with no `fieldType`, an
+ * unknown `type`, or a record whose value validator is garbage rendered as `any`
+ * further down and let a call through. Returns one message per problem, each
+ * naming where it is.
+ *
+ * @param {unknown} node
+ * @param {string} where  e.g. `vehicles.js:update args`
+ * @returns {string[]}
+ */
+export function validatorProblems(node, where) {
+  if (!node || typeof node !== "object" || Array.isArray(node)) return [`${where}: not a validator object`];
+  const n = /** @type {Record<string, any>} */ (node);
+  const type = n.type;
+  if (typeof type !== "string") return [`${where}: validator has no \`type\``];
+  const scalars = scalarTypes();
+  if (!STRUCTURAL_TYPES.has(type) && !scalars.has(type)) return [`${where}: unknown validator type "${type}"`];
+
+  switch (type) {
+    case "object": {
+      if (!n.value || typeof n.value !== "object" || Array.isArray(n.value)) return [`${where}: object validator has no \`value\` map`];
+      const out = [];
+      for (const [name, entry] of Object.entries(n.value)) {
+        const e = /** @type {Record<string, any>} */ (entry);
+        if (!e || typeof e !== "object" || !("fieldType" in e)) {
+          out.push(`${where}.${name}: field has no \`fieldType\``);
+          continue;
+        }
+        out.push(...validatorProblems(e.fieldType, `${where}.${name}`));
+      }
+      return out;
+    }
+    case "array":
+      return validatorProblems(n.value, `${where}[*]`);
+    case "union": {
+      if (!Array.isArray(n.value)) return [`${where}: union validator has no \`value\` array`];
+      // An empty array is legitimate (see validatorTree): a gap, not a problem.
+      return n.value.flatMap((branch, i) => validatorProblems(branch, `${where}|${i}`));
+    }
+    case "record": {
+      const out = [];
+      out.push(...validatorProblems(n.keys, `${where}{keys}`));
+      const values = n.values;
+      if (!values || typeof values !== "object" || !("fieldType" in values)) {
+        out.push(`${where}{values}: record has no \`values.fieldType\``);
+      } else {
+        out.push(...validatorProblems(values.fieldType, `${where}{values}`));
+      }
+      return out;
+    }
+    case "literal":
+      return "value" in n ? [] : [`${where}: literal validator has no \`value\``];
+    case "id":
+      return typeof n.tableName === "string" ? [] : [`${where}: id validator has no \`tableName\``];
+    default:
+      return [];
+  }
 }
 
 // ── Client side ──────────────────────────────────────────────────────────────
@@ -469,6 +561,9 @@ export const SEVERITY = {
   BREAKING: "BREAKING",
   SHAPE_UNKNOWN: "SHAPE_UNKNOWN",
   TYPE_UNKNOWN: "TYPE_UNKNOWN",
+  // The validator at this path is one this comparator does not model. Not an
+  // unknown VALUE (waivable in the baseline) but an unwaivable hole in coverage.
+  COVERAGE_GAP: "COVERAGE_GAP",
 };
 
 /** Coarse scalar compatibility, used only when nothing sharper is available. */
@@ -533,6 +628,15 @@ export function compareNode(client, validator, path, ctx) {
 
   // A validator that accepts anything ends the comparison.
   if (validator.kind === "any") return { findings, compatible: true };
+
+  // ⚠️ A VALIDATOR WE DO NOT MODEL ACCEPTS NOTHING WE CAN VOUCH FOR. Reached only
+  // for a client value that is actually sent here, so an optional field the
+  // client never sends does not raise a gap. Not BREAKING (we proved nothing) and
+  // not a waivable unknown: an unwaivable coverage gap.
+  if (validator.kind === "unsupported") {
+    add(SEVERITY.COVERAGE_GAP, "SHAPE", `the backend declares ${validator.reason}, which this control cannot compare, so this value is NOT verified`);
+    return { findings, compatible: true };
+  }
 
   // Assertions never create runtime evidence. A type claim is transparent to
   // comparison because its operand already carries the honest domain. A `!`
@@ -1032,6 +1136,7 @@ export function describeValidator(validator) {
     case "union":
     case "id":
     case "any":
+    case "unsupported":
       return validator.kind;
     default:
       return validator.type ?? "unresolved";

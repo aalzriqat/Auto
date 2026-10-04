@@ -1709,7 +1709,9 @@ function unwrapReferenceExpression(node) {
  * literal path (a computed key, a mutable binding, a parameter, a call).
  */
 function referenceChain(node, checker, depth = 0, seen = new Set()) {
-  if (depth > 8) return null;
+  // SCRUM-178 v2 batch 3 (Opus L-b): no depth bound. A cycle is cut by `seen`
+  // (each hop adds its symbol), so the walk terminates on its own; a numeric
+  // cap only made a long but perfectly literal alias chain "unresolvable".
   const segments = [];
   let current = unwrapReferenceExpression(node);
   for (;;) {

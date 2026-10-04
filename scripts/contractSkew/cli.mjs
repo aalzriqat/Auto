@@ -85,11 +85,11 @@ import { runCensus } from "./census.mjs";
 import { evaluateBaseline, loadBaseline, unprovenFrom } from "./baseline.mjs";
 import { specProblems } from "./specIndex.mjs";
 import { skewSummary, SUPPLIED_FILE_RUNG } from "./skewWording.mjs";
-import { compareContracts, blockersForRelease } from "./compare.mjs";
+import { compareContracts, blockersForRelease, classifyRelease } from "./compare.mjs";
 import { CLIENT_SURFACES, listSurfaceFiles, unscannedConvexClients } from "./clientFiles.mjs";
 import { fetchDeployedSpec, isDeploymentName, readSpecFile, redact } from "./fetchSpec.mjs";
 import { changedContractPaths, summarizeChanges } from "./specDiff.mjs";
-import { classifyBreaking, alertsFor, releaseBlockingFindings } from "./classify.mjs";
+import { classifyBreaking, alertsFor } from "./classify.mjs";
 
 const DEFAULT_BASELINE = fileURLToPath(new URL("./needs-evidence-baseline.json", import.meta.url));
 
@@ -137,7 +137,7 @@ const EXIT = {
  * throw into a DELIBERATE `UNAVAILABLE` (3) rather than leaving it on the raw
  * default, so the run says "I could not look" instead of "I did not finish".
  *
- * ⚠️ AND THIS IS THE SECOND TIME. `readSpecOrUnavailable` below was written to
+ * ⚠️ AND THIS IS THE SECOND TIME. `readValidatedSpec` below was written to
  * fix exactly this for the two spec reads — it fixed the INSTANCES, not the
  * CLASS. The very next thing that same commit did was add a throw for an
  * unreadable tsconfig, reached through an unguarded `extractClientCalls`, and
@@ -275,13 +275,63 @@ if (!deployed.ok) {
   process.exit(EXIT.UNAVAILABLE);
 }
 
-// ⚠️ A SPEC THIS CONTROL CANNOT READ IS NOT EVIDENCE. See specProblems().
-const specIssues = specProblems(deployed.spec);
-if (specIssues.length) {
-  unavailable(
-    `the function spec is not in the shape this control understands (${specIssues.length} problem(s)): ${specIssues.slice(0, 5).join("; ")}`
-  );
+// ⚠️ A SPEC THIS CONTROL CANNOT READ IS NOT EVIDENCE, IN ANY ROLE. See
+// specProblems(). One validator for every spec this run touches (deployed,
+// current, candidate): before batch 3 only the deployed one was checked, so a
+// malformed --current or --candidate was trusted — it classified breaks and
+// decided what a release "changed" while nothing had looked at it.
+function requireUsableSpec(role, spec, origin) {
+  const issues = specProblems(spec);
+  if (issues.length) {
+    unavailable(
+      `the ${role} function spec${origin ? ` (${origin})` : ""} is not in the shape this control understands (${issues.length} problem(s)): ${issues.slice(0, 5).join("; ")}`
+    );
+  }
+  return spec;
 }
+requireUsableSpec("deployed", deployed.spec, strArg("spec"));
+
+/**
+ * ⚠️ AN UNREADABLE SPEC IS UNAVAILABLE, NEVER FAIL.
+ *
+ * `readSpecFile` throws for a missing file, a path outside the bounded roots,
+ * and invalid JSON. Uncaught, the exception escapes and Node exits 1 — which
+ * this CLI once defined as a PROVEN production skew. This reader names WHICH
+ * role failed and which file it was — a message worth having when a scheduled
+ * run reports UNAVAILABLE at 04:00 and nobody is watching — and then runs the
+ * same structural validation as the deployed spec. The boundary at the top of
+ * this file is the floor, not the replacement.
+ *
+ * @param {string} role  "current" | "candidate"
+ * @param {string} specPath
+ */
+function readValidatedSpec(role, specPath) {
+  let spec;
+  try {
+    spec = readSpecFile(specPath);
+  } catch (error) {
+    const detail = String(/** @type {Error} */ (error)?.message ?? error);
+    unavailable(`could not read the ${role} spec at ${specPath}: ${detail}`);
+  }
+  return requireUsableSpec(role, spec, specPath);
+}
+
+// Every non-deployed spec is read ONCE, validated, and before the (slow) client
+// scan so a bad one costs nothing. `--current` evidence defaults to the candidate
+// in release mode, so the candidate is never read a second time.
+const candidatePathArg = arg("candidate");
+if (mode === "release" && typeof candidatePathArg !== "string") {
+  console.error("--mode release requires --candidate <function-spec.json>");
+  process.exit(EXIT.USAGE);
+}
+const candidateSpec =
+  mode === "release" && typeof candidatePathArg === "string"
+    ? readValidatedSpec("candidate", candidatePathArg)
+    : undefined;
+const currentSpec =
+  typeof arg("current") === "string"
+    ? readValidatedSpec("current", String(arg("current")))
+    : candidateSpec;
 
 // ── 2. What the client actually sends ────────────────────────────────────────
 //
@@ -335,6 +385,9 @@ for (const surface of CLIENT_SURFACES) {
 }
 
 const result = compareContracts(calls, deployed.spec, unresolvedBinders);
+// ⚠️ R1: in release mode the SAME calls are compared against the candidate too.
+// What a release introduces is what the candidate breaks, not what is live.
+const candidateResult = candidateSpec ? compareContracts(calls, candidateSpec) : undefined;
 const unproven = unprovenFrom(result.needsEvidence, deployed.spec);
 
 // ⚠️ THE MONITOR READS THIS FILE AND NEVER WRITES IT. See baseline.mjs.
@@ -348,6 +401,24 @@ if (calls.length + unresolvedBinders.length === 0) {
 }
 if (result.coverage.clientCallSitesUnresolved > 0) {
   coverageProblems.push(`${result.coverage.clientCallSitesUnresolved} call site(s) the extractor could not resolve`);
+}
+// ⚠️ A call into a validator this control cannot compare (`args: null`, a
+// `v.record()`, an empty union) is a gap in what was PROVEN, not an unproven
+// value: unwaivable, so it lives here and never in the baseline. Deduped across
+// the two specs by site, because the same call can hit it on both.
+const validatorGaps = (() => {
+  const seen = new Set();
+  const out = [];
+  for (const g of /** @type {any[]} */ ([...result.gaps, ...(candidateResult?.gaps ?? [])])) {
+    const key = JSON.stringify([g.surface ?? "", g.file, g.line, g.identifier, g.path, g.detail]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(g);
+  }
+  return out;
+})();
+if (validatorGaps.length) {
+  coverageProblems.push(`${validatorGaps.length} call(s) into a validator this control cannot compare (no argument validator, v.record(), empty v.union())`);
 }
 if (censusGaps.length) {
   coverageProblems.push(`${censusGaps.length} census candidate(s) unresolved or unaccounted for`);
@@ -365,6 +436,9 @@ const coverageIncomplete = coverageProblems.length > 0;
 function reportCoverageIncomplete(prefix) {
   for (const s of result.coverage.unresolvedSites) {
     console.error(`::error file=${s.file},line=${s.line}::${s.identifier} - ${s.reason}`);
+  }
+  for (const g of validatorGaps) {
+    console.error(`::error file=${g.file},line=${g.line}::[coverage gap] ${g.identifier} ${g.path} — ${g.detail}`);
   }
   for (const g of censusGaps) {
     console.error(`::error file=${g.file},line=${g.line}::[census ${g.disposition}] ${g.reason}`);
@@ -399,23 +473,41 @@ function reportEvidenceDrift(prefix) {
  * then meet the coverage gap for the first time, so every other cause present is
  * listed here, in the same run, labelled ALSO PRESENT.
  *
- * `ordered` is the ONE list of causes, in precedence order: the first present one
- * is reported and exits; each later present cause that is flagged `also` is
- * reported as ALSO PRESENT (the proven-break / standing-defect / blocker details
- * are only ever the primary report). Returns, without exiting, when none is present.
+ * SCRUM-178 v2 batch 3 (R3, Opus L-c): `ordered` is the ONE list of causes — the
+ * exit code, the stderr report and the JSON `causes` object are all read from it
+ * and nothing else. It is ROLE-AWARE: a cause carries an `exit` per mode, and a
+ * cause with no exit in this mode (a standing defect or a deployed skew during a
+ * release, a release break during the monitor) can never be the primary, but is
+ * still reported when present. The primary is the first present cause that HAS an
+ * exit in this mode; EVERY other present cause is reported as ALSO PRESENT —
+ * including a standing defect, which used to be silent behind a skew.
  *
- * @param {Array<{ present: boolean, exitCode: number, also?: boolean, report: (prefix: string) => void }>} ordered
+ * Returns, without exiting, when no cause with an exit is present (after
+ * reporting the exit-less ones that are, so they cannot be lost behind a green
+ * tick).
+ *
+ * @param {Cause[]} ordered
  * @param {string} [prefix]  prepended to the primary cause's summary line
  */
 function exitOnFirstCause(ordered, prefix = "") {
-  const primary = ordered.find((cause) => cause.present);
-  if (!primary) return;
+  const modeKey = mode === "release" ? "release" : "production";
+  const primary = ordered.find((cause) => cause.present && cause.exit[modeKey] !== undefined);
+  if (!primary) {
+    for (const cause of ordered) if (cause.present) cause.report("ALSO PRESENT: ");
+    return;
+  }
   primary.report(prefix);
   for (const cause of ordered) {
-    if (cause !== primary && cause.present && cause.also) cause.report("ALSO PRESENT: ");
+    if (cause !== primary && cause.present) cause.report("ALSO PRESENT: ");
   }
-  process.exit(primary.exitCode);
+  process.exit(primary.exit[modeKey]);
 }
+
+/**
+ * @typedef {{ id: string, key: string, value: unknown, present: boolean,
+ *             exit: { production?: number, release?: number },
+ *             report: (prefix: string) => void }} Cause
+ */
 
 // ⚠️ A client surface this control does not look at is a coverage gap, and a
 // coverage gap must never read as PASS. Without this, the day the web client
@@ -434,12 +526,6 @@ const coverageWarning = result.alert.coverageWarning || verdict !== result.verdi
 
 // ── 2b. Is an incompatibility a MISSING DEPLOY, or a client that is simply
 //        wrong? Same symptom, opposite response. See classify.mjs.
-const currentSpecPath =
-  typeof arg("current") === "string"
-    ? arg("current")
-    : mode === "release" && typeof arg("candidate") === "string"
-      ? arg("candidate")
-      : undefined;
 const deployedSha = strArg("deployed-sha");
 
 /**
@@ -461,37 +547,9 @@ function backendUnchangedSince(sha) {
   }
 }
 
-/**
- * ⚠️ AN UNREADABLE SPEC IS UNAVAILABLE, NEVER FAIL.
- *
- * `readSpecFile` throws for a missing file, a path outside the bounded roots,
- * and invalid JSON. Uncaught, the exception escapes and Node exits 1 — which
- * this CLI defines as a PROVEN production skew. A mistyped path or a truncated
- * artifact download would then be reported as an incident, and somebody would
- * be sent looking for a break that does not exist.
- *
- * The primary fetch already gets this right; these two readers did not.
- *
- * The boundary at the top of this file now catches these too. This stays
- * because it names WHICH read failed and which file it was — a message worth
- * having when a scheduled run reports UNAVAILABLE at 04:00 and nobody is
- * watching. The boundary is the floor, not the replacement.
- */
-function readSpecOrUnavailable(specPath, what) {
-  try {
-    return readSpecFile(specPath);
-  } catch (error) {
-    const detail = String(/** @type {Error} */ (error)?.message ?? error);
-    unavailable(`could not read the ${what} spec at ${specPath}: ${detail}`);
-  }
-}
-
 const backendEvidence = { deployedSha };
-if (currentSpecPath) {
-  backendEvidence.changedPaths = changedContractPaths(
-    deployed.spec,
-    readSpecOrUnavailable(currentSpecPath, "current backend")
-  );
+if (currentSpec) {
+  backendEvidence.changedPaths = changedContractPaths(deployed.spec, currentSpec);
 } else if (deployedSha) {
   backendEvidence.backendIdenticalToDeployed = backendUnchangedSince(String(deployedSha));
 }
@@ -505,7 +563,46 @@ const alert = alertsFor(
   deployed.rung === SUPPLIED_FILE_RUNG ? "CONTRACT SKEW" : "PRODUCTION SKEW"
 );
 
-function reportProvenBreaks() {
+// ── 2c. Release facts (R1). Same calls, both specs.
+/** @param {any[]} list */
+const dedupeFindings = (list) => {
+  const seen = new Set();
+  return list.filter((f) => {
+    const key = JSON.stringify([f.surface ?? "", f.file, f.line, f.identifier, f.path, f.dimension, f.severity]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+const changedByCandidate = candidateSpec ? changedContractPaths(deployed.spec, candidateSpec) : [];
+const releaseFacts =
+  candidateResult ? classifyRelease(result, candidateResult, changedByCandidate) : undefined;
+// An unproven path or a coverage gap blocks only where the candidate changes
+// something. The unknowns are the UNION of what each spec leaves unproven.
+const releaseBlockers = candidateResult
+  ? blockersForRelease(
+      {
+        breaking: [],
+        needsEvidence: dedupeFindings([...result.needsEvidence, ...candidateResult.needsEvidence]),
+        gaps: validatorGaps,
+      },
+      changedByCandidate
+    )
+  : undefined;
+const skewCount = classification.revisionSkew.length + classification.unclassified.length;
+
+/** @param {string} prefix */
+function reportProvenBreaks(prefix) {
+  if (mode === "release") {
+    // The deployed backend currently refuses these calls. That is information
+    // for a RELEASE, not a verdict on it: a candidate that fixes one is good news
+    // and one it still breaks is reported as a RELEASE BREAK.
+    console.error(
+      `::notice::${prefix}DEPLOYED BACKEND CURRENTLY REFUSES ${skewCount} call path(s) the candidate changes; ` +
+        `${releaseFacts?.fixedByCandidate.length ?? 0} of them are FIXED BY THIS CANDIDATE and are not release breaks.`
+    );
+    return;
+  }
   for (const f of [...classification.revisionSkew, ...classification.unclassified]) {
     console.error(
       `::error file=${f.file},line=${f.line}::[${f.classification}] ${f.identifier} ${f.path} — ${f.detail} [${f.dimension}]`
@@ -514,7 +611,7 @@ function reportProvenBreaks() {
   // The wording claims only what the spec's origin proves (see skewWording.mjs).
   const suppliedSpec = strArg("spec");
   console.error(
-    `::error::${skewSummary({
+    `::error::${prefix}${skewSummary({
       rung: String(deployed.rung),
       specSource: [suppliedSpec, deployed.url].filter(Boolean).join(", "),
       proven: classification.revisionSkew.length,
@@ -524,35 +621,75 @@ function reportProvenBreaks() {
   );
 }
 
-function reportStandingDefects() {
+/** @param {string} prefix */
+function reportStandingDefects(prefix) {
+  // An error in the monitor, where it is the exit; a warning in a release, where
+  // it is real and un-suppressed but not introduced by this candidate.
+  const level = mode === "release" ? "warning" : "error";
   for (const f of classification.standingDefects) {
     console.error(
-      `::error file=${f.file},line=${f.line}::[STANDING DEFECT] ${f.identifier} ${f.path} — ${f.detail} [${f.dimension}]`
+      `::${level} file=${f.file},line=${f.line}::[STANDING DEFECT] ${f.identifier} ${f.path} — ${f.detail} [${f.dimension}]`
     );
   }
   console.error(
-    `::error::STANDING CONTRACT DEFECT — ${classification.standingDefects.length} path(s). ` +
-      `The current backend and the live backend already agree, so DEPLOYING WILL NOT FIX THIS. ` +
+    `::${level}::${prefix}STANDING CONTRACT DEFECT — ${classification.standingDefects.length} path(s). ` +
+      `The current backend and the live backend already agree, so DEPLOYING WILL NOT FIX THIS` +
+      (mode === "release" ? ", and this candidate does not introduce it. " : ". ") +
       `Basis: ${classification.basis}`
   );
 }
 
+/** @param {string} prefix */
+function reportReleaseBreaks(prefix) {
+  for (const f of releaseFacts?.releaseBreaks ?? []) {
+    console.error(
+      `::error file=${f.file},line=${f.line}::[RELEASE BREAK] ${f.identifier} ${f.path} — ${f.detail} [${f.dimension}]`
+    );
+  }
+  console.error(
+    `::error::${prefix}RELEASE BREAK - ${releaseFacts?.releaseBreaks.length ?? 0} call(s) this candidate would introduce or leave broken on a path it changes. ` +
+      `Deploying the backend is not the remedy; change the candidate or the client.`
+  );
+}
+
+/** @param {string} prefix */
+function reportReleaseBlockers(prefix) {
+  for (const f of releaseBlockers?.intersectingUnknowns ?? []) {
+    console.error(
+      `::error file=${f.file},line=${f.line}::${f.identifier} ${f.path} is unproven and this release changes that path`
+    );
+  }
+  for (const g of releaseBlockers?.intersectingGaps ?? []) {
+    console.error(
+      `::error file=${g.file},line=${g.line}::${g.identifier} ${g.path} cannot be compared (${g.detail}) and this release changes it`
+    );
+  }
+  console.error(
+    `::error::${prefix}BLOCKED - ${(releaseBlockers?.intersectingUnknowns.length ?? 0) + (releaseBlockers?.intersectingGaps.length ?? 0)} unproven path(s) or coverage gap(s) intersect a contract path this release changes.`
+  );
+}
+
 /**
- * Every cause a run can have, in the precedence order the exit code follows
- * (production mode). `key` / `value` are what the JSON report's `causes` records
- * for it, so the report and the exit are derived from this one list; `present` is
- * what decides the exit; `also` marks the causes listed as ALSO PRESENT when
- * another one wins.
+ * Every cause a run can have, in ONE precedence order. `key` / `value` are what
+ * the JSON report's `causes` records, `present` decides the exit, `exit` says
+ * which exit code the cause carries in which MODE (no entry = it can never be
+ * the primary there, but is still reported), and `report` prints it. The exit
+ * code, the stderr and the JSON are all read from this list (R3).
  */
+/** @type {Cause[]} */
 const causes = [
-  { id: "break", key: "provenBreaks", value: result.breaking.length, present: alert.productionSkew, exitCode: EXIT.PRODUCTION_SKEW, report: reportProvenBreaks },
+  { id: "deployedSkew", key: "provenBreaks", value: skewCount, present: alert.productionSkew, exit: { production: EXIT.PRODUCTION_SKEW }, report: reportProvenBreaks },
   // ⚠️ A standing defect is a real failure and is reported as one — never
   // suppressed, allowlisted, or softened into UNKNOWN, because it is not
   // uncertainty. It is a known bug. But it gets its OWN exit code, because
   // deploying the backend fixes nothing here and reporting it as skew would leave
   // the skew alarm permanently red for something proven not to be skew. An alarm
   // that is always on is an alarm nobody reads.
-  { id: "standing", key: "standingDefects", value: classification.standingDefects.length, present: alert.standingContractDefect, exitCode: EXIT.STANDING_DEFECT, report: reportStandingDefects },
+  { id: "standing", key: "standingDefects", value: classification.standingDefects.length, present: classification.standingDefects.length > 0, exit: { production: EXIT.STANDING_DEFECT }, report: reportStandingDefects },
+  // Release-only causes: what THIS candidate would introduce or leave broken
+  // (R1), then what it changes that cannot be proven. Never present in the monitor.
+  { id: "releaseBreak", key: "releaseBreaks", value: releaseFacts?.releaseBreaks.length ?? 0, present: (releaseFacts?.releaseBreaks.length ?? 0) > 0, exit: { release: EXIT.RELEASE_BREAK }, report: reportReleaseBreaks },
+  { id: "releaseBlocker", key: "releaseBlockers", value: (releaseBlockers?.intersectingUnknowns.length ?? 0) + (releaseBlockers?.intersectingGaps.length ?? 0), present: Boolean(releaseBlockers?.blocked), exit: { release: EXIT.BLOCKED }, report: reportReleaseBlockers },
   // ⚠️ A client FILE that was never scanned is not the same as an unproven path
   // inside a file that was. For an unproven path the control saw the call and
   // could not prove one leaf; for an unscanned file it never saw the call at all,
@@ -560,13 +697,13 @@ const causes = [
   // before this cause existed — exit 0 with a warning. A green tick over a
   // client nobody looked at is the same false assurance as UNAVAILABLE reporting
   // success, and it is worse for being quiet about it.
-  { id: "coverageGap", key: "unscannedClientFiles", value: unscannedFiles, present: unscannedFiles > 0, exitCode: EXIT.COVERAGE_GAP, also: true, report: reportCoverageGap },
+  { id: "coverageGap", key: "unscannedClientFiles", value: unscannedFiles, present: unscannedFiles > 0, exit: { production: EXIT.COVERAGE_GAP, release: EXIT.COVERAGE_GAP }, report: reportCoverageGap },
   // ⚠️ A call the control could not ACCOUNT FOR is not a call it found compatible.
   // Exit 9, not 0: with an incomplete census, "no break found" only describes the
   // calls that happened to be seen. Zero discovered calls lands here too.
-  { id: "coverageIncomplete", key: "coverageIncomplete", value: coverageProblems, present: coverageIncomplete, exitCode: EXIT.COVERAGE_INCOMPLETE, also: true, report: reportCoverageIncomplete },
+  { id: "coverageIncomplete", key: "coverageIncomplete", value: coverageProblems, present: coverageIncomplete, exit: { production: EXIT.COVERAGE_INCOMPLETE, release: EXIT.COVERAGE_INCOMPLETE }, report: reportCoverageIncomplete },
   // The reviewed debt no longer matches what the run found.
-  { id: "drift", key: "evidenceDrift", value: baselineState.drift ? baselineState.problems : [], present: baselineState.drift, exitCode: EXIT.EVIDENCE_DRIFT, also: true, report: reportEvidenceDrift },
+  { id: "drift", key: "evidenceDrift", value: baselineState.drift ? baselineState.problems : [], present: baselineState.drift, exit: { production: EXIT.EVIDENCE_DRIFT, release: EXIT.EVIDENCE_DRIFT }, report: reportEvidenceDrift },
 ];
 
 const report = {
@@ -636,36 +773,41 @@ function emit(payload) {
 
 // ── 3. Release mode adds the path-sensitive blocker ──────────────────────────
 if (mode === "release") {
-  const candidatePath = arg("candidate");
-  if (typeof candidatePath !== "string") {
-    console.error("--mode release requires --candidate <function-spec.json>");
-    process.exit(EXIT.USAGE);
-  }
-  const candidate = readSpecOrUnavailable(candidatePath, "candidate");
-  const changed = changedContractPaths(deployed.spec, candidate);
-
-  // ⚠️ Only SKEW blocks a release. A standing defect is by definition not
-  // introduced by this candidate — the current backend and the live backend
-  // already agree about it — so blocking on it would stop every unrelated
-  // release forever, which is the same "permanently red for something proven
-  // not to be skew" failure, relocated from the monitor into the release gate.
-  // It is still reported below; it just is not this release's fault.
-  const releaseBreaking = releaseBlockingFindings(classification);
-  const blockers = blockersForRelease({ ...result, breaking: releaseBreaking }, changed);
+  // ⚠️ SCRUM-178 v2 batch 3 (R1, D-24). The candidate was read and validated ONCE
+  // (readValidatedSpec above) and the SAME calls were compared against it. A
+  // release break is a break the CANDIDATE would introduce, or leave broken on a
+  // path it changes; a break the deployed backend already has, on a path the
+  // candidate leaves alone, is standing (not this release's fault), and one only
+  // the deployed backend has is FIXED by this candidate. Only skew-vs-deployed
+  // used to be consulted, which called a fix a break and a break a pass.
+  const releaseBlocked = releaseBlockers;
+  const blockers = /** @type {NonNullable<typeof releaseBlocked>} */ (releaseBlocked);
+  const changed = changedByCandidate;
+  const facts = /** @type {NonNullable<typeof releaseFacts>} */ (releaseFacts);
 
   report.changedPaths = changed.length;
   report.changedBreakdown = summarizeChanges(changed);
   report.blocked = blockers.blocked;
   report.intersectingUnknowns = blockers.intersectingUnknowns;
+  report.intersectingGaps = blockers.intersectingGaps;
   report.unrelatedUnknowns = blockers.unrelatedUnknowns;
+  report.release = {
+    breaks: facts.releaseBreaks.length,
+    standingAgainstBoth: facts.standingAgainstBoth.length,
+    fixedByCandidate: facts.fixedByCandidate.length,
+  };
 
   emit(report);
 
-  // Reported on every release outcome, blocked or not, so it can never be lost
-  // behind a green tick.
-  for (const f of classification.standingDefects) {
+  for (const f of facts.fixedByCandidate) {
     console.error(
-      `::warning file=${f.file},line=${f.line}::[STANDING DEFECT] ${f.identifier} ${f.path} — pre-existing, not introduced by this release, and deploying will not fix it`
+      `::notice file=${f.file},line=${f.line}::FIXED BY THIS CANDIDATE: ${f.identifier} ${f.path} is refused by the deployed backend but accepted by the candidate`
+    );
+  }
+
+  for (const f of facts.standingAgainstBoth) {
+    console.error(
+      `::warning file=${f.file},line=${f.line}::[STANDING] ${f.identifier} ${f.path} is refused by BOTH the deployed backend and the candidate on a path this release does not change; not introduced by this release`
     );
   }
 
@@ -701,23 +843,7 @@ if (mode === "release") {
   // drift its own non-zero exit with no release carve-out. What an unrelated
   // unknown cannot do is block by itself: that stays exit 4, and only when it
   // overlaps a path THIS release changes.
-  exitOnFirstCause(
-    [
-      {
-        present: blockers.blocked,
-        exitCode: releaseBreaking.length ? EXIT.RELEASE_BREAK : EXIT.BLOCKED,
-        report: () => {
-          for (const f of blockers.intersectingUnknowns) {
-            console.error(
-              `::error file=${f.file},line=${f.line}::${f.identifier} ${f.path} is unproven and this release changes that path`
-            );
-          }
-        },
-      },
-      ...causes.filter((cause) => cause.also),
-    ],
-    "RELEASE "
-  );
+  exitOnFirstCause(causes, "RELEASE ");
 
   // The same honest sentence as production mode: a release that clears with
   // reviewed debt remaining is UNKNOWN about that debt, never a PASS.

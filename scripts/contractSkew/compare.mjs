@@ -92,26 +92,86 @@ export function pathsOverlap(a, b) {
  * @param {Array<{identifier:string, path:string}>} changed  contract paths the release alters
  */
 export function blockersForRelease(result, changed) {
-  const blocking = result.needsEvidence.filter((finding) =>
+  const touches = (finding) =>
     changed.some(
       (change) =>
-        change.identifier === finding.identifier && pathsOverlap(change.path, finding.path)
-    )
-  );
+        change.identifier === finding.identifier &&
+        // A gap on the FUNCTION itself (`<function>`, e.g. `args: null`) has no
+        // field path, so any change to that function touches it.
+        (finding.path === "<function>" || pathsOverlap(change.path, finding.path))
+    );
+  const blocking = result.needsEvidence.filter(touches);
+  // A coverage gap (SPEC-1) is unwaivable and, on a path the release changes, a
+  // blocker too. Absent on a plain compareContracts() result in older callers.
+  const gaps = (result.gaps ?? []).filter(touches);
   return {
     // A proven break blocks regardless of which paths the release touches.
-    blocked: result.breaking.length > 0 || blocking.length > 0,
+    blocked: result.breaking.length > 0 || blocking.length > 0 || gaps.length > 0,
     breaking: result.breaking,
     intersectingUnknowns: blocking,
+    intersectingGaps: gaps,
     // Everything else is real, tracked, and not this release's problem.
     unrelatedUnknowns: result.needsEvidence.length - blocking.length,
   };
+}
+
+/**
+ * The identity of a break: WHERE it is and WHAT it is. Two runs of the same
+ * client against two specs produce the same key for "the same break", which is
+ * what lets a release be compared against what is already live.
+ */
+export const breakKey = (f) =>
+  JSON.stringify([f.surface ?? "", f.file, f.line, f.identifier, f.path, f.dimension]);
+
+/**
+ * SCRUM-178 v2 batch 3 (R1, D-27). A RELEASE IS ANSWERABLE FOR WHAT IT
+ * INTRODUCES, MEASURED AGAINST THE SPEC IT WOULD SHIP, NOT THE ONE LIVE TODAY.
+ *
+ * Release mode used to compare the client only against the DEPLOYED spec and use
+ * the candidate just to decide which paths "changed". Every deployed break on a
+ * changed path then read as release-introduced: a candidate that FIXES a break
+ * (adds the field the client already sends) exited 8, and a candidate that
+ * REMOVES a function the client calls exited 0 because the deployed spec still
+ * had it. Both inverted.
+ *
+ * Inputs are the SAME calls compared against both specs:
+ *   deployed  compareContracts(calls, deployedSpec)
+ *   candidate compareContracts(calls, candidateSpec)
+ *
+ *   RELEASE BREAK   a candidate break whose identity is not in the deployed
+ *                   break set, or one on a path the candidate changed
+ *   STANDING        a candidate break also present against the deployed spec, on
+ *                   a path the candidate does not change: not this release's
+ *   FIXED           a deployed break the candidate no longer has
+ *
+ * @param {{breaking: any[]}} deployed
+ * @param {{breaking: any[]}} candidate
+ * @param {Array<{identifier: string, path: string}>} changed
+ */
+export function classifyRelease(deployed, candidate, changed) {
+  const deployedKeys = new Set(deployed.breaking.map(breakKey));
+  const candidateKeys = new Set(candidate.breaking.map(breakKey));
+  const onChangedPath = (f) =>
+    changed.some(
+      (change) =>
+        change.identifier === f.identifier &&
+        (f.path === "<function>" || change.path === "<function>" || pathsOverlap(change.path, f.path))
+    );
+  const releaseBreaks = [];
+  const standingAgainstBoth = [];
+  for (const f of candidate.breaking) {
+    if (!deployedKeys.has(breakKey(f)) || onChangedPath(f)) releaseBreaks.push(f);
+    else standingAgainstBoth.push(f);
+  }
+  const fixedByCandidate = deployed.breaking.filter((f) => !candidateKeys.has(breakKey(f)));
+  return { releaseBreaks, standingAgainstBoth, fixedByCandidate };
 }
 
 export const SEVERITY = {
   BREAKING: "BREAKING",
   SHAPE_UNKNOWN: "SHAPE_UNKNOWN",
   TYPE_UNKNOWN: "TYPE_UNKNOWN",
+  COVERAGE_GAP: "COVERAGE_GAP",
 };
 
 /**
@@ -153,6 +213,8 @@ export function compareContracts(clientCalls, spec, extraUnresolved = []) {
         path: "<function>",
         file: call.file,
         line: call.line,
+        siteId: call.siteId,
+        surface: call.surface,
         detail: "the live deployment exposes no such function",
       });
       continue;
@@ -212,6 +274,25 @@ export function compareContracts(clientCalls, spec, extraUnresolved = []) {
       siteId: call.siteId,
       surface: call.surface,
     };
+    // ⚠️ `args: null` (SPEC-1) IS A FUNCTION WE KNOW NOTHING ABOUT, NOT ONE THAT
+    // ACCEPTS ANYTHING. A call to it is an unwaivable coverage gap: not BREAKING
+    // (nothing proven), not a baselinable unknown. A function nobody calls never
+    // reaches this line, so it costs nothing. Absent `args` is treated the same
+    // here as defence in depth; `specProblems` already refuses such a document.
+    if (fn.args === null || fn.args === undefined) {
+      findings.push({
+        severity: SEVERITY.COVERAGE_GAP,
+        dimension: "SHAPE",
+        identifier: call.identifier,
+        path: "<function>",
+        file: call.file,
+        line: call.line,
+        siteId: call.siteId,
+        surface: call.surface,
+        detail: "the backend declares no argument validator for this function (`args: null`), so this call is NOT verified",
+      });
+      continue;
+    }
     const walked = compareNode(call.payload, validatorTree(fn.args), "", {
       site,
       frameworkSupplied,
@@ -220,7 +301,12 @@ export function compareContracts(clientCalls, spec, extraUnresolved = []) {
   }
 
   const breaking = findings.filter((f) => f.severity === SEVERITY.BREAKING);
-  const needsEvidence = findings.filter((f) => f.severity !== SEVERITY.BREAKING);
+  // Gaps are NOT evidence to be baselined: they are kept out of `needsEvidence`
+  // so they can never be waived, and reported on their own list.
+  const gaps = findings.filter((f) => f.severity === SEVERITY.COVERAGE_GAP);
+  const needsEvidence = findings.filter(
+    (f) => f.severity !== SEVERITY.BREAKING && f.severity !== SEVERITY.COVERAGE_GAP
+  );
 
   // ── Coverage. A verdict without a denominator is not a verdict.
   //
@@ -252,7 +338,7 @@ export function compareContracts(clientCalls, spec, extraUnresolved = []) {
   // UNKNOWN exists so that "we missed a wrapper" can never render as green.
   const verdict = breaking.length
     ? "FAIL"
-    : needsEvidence.length || coverage.clientCallSitesUnresolved > 0
+    : needsEvidence.length || gaps.length || coverage.clientCallSitesUnresolved > 0
       ? "UNKNOWN"
       : "PASS";
 
@@ -282,6 +368,7 @@ export function compareContracts(clientCalls, spec, extraUnresolved = []) {
     findings,
     breaking,
     needsEvidence,
+    gaps,
     coverage,
     scope: {
       covered: "Convex function argument validators (queries, mutations, actions)",

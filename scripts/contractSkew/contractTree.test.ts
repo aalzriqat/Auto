@@ -7,6 +7,7 @@ import {
   admitsAtLeast,
   describeClient,
   SEVERITY,
+  validatorProblems,
 } from "./contractTree.mjs";
 
 /**
@@ -516,11 +517,27 @@ describe("Convex scalar semantics, not approximations of them", () => {
     expect(breaking(run(cObj({ b: cStr }), vObj({ b: [{ type: "bytes" }] })))).toHaveLength(1);
   });
 
-  test("v.record() and v.any() remain genuinely dynamic", () => {
-    // The fix must not over-correct: these two really do accept anything.
-    for (const kind of ["any", "record", "unknown"]) {
-      expect(run(cObj({ x: cStr }), vObj({ x: [{ type: kind }] })).findings).toHaveLength(0);
-    }
+  test("v.any() remains genuinely dynamic; record and unknown types do not pass as any", () => {
+    expect(run(cObj({ x: cStr }), vObj({ x: [{ type: "any" }] })).findings).toHaveLength(0);
+    // SCRUM-178 v2 batch 3 (SPEC-1): `record` was in DYNAMIC and so accepted
+    // anything. It is now an unsupported node: a client value reaching it is a
+    // COVERAGE_GAP, never a quiet pass.
+    const record = run(cObj({ x: cStr }), vObj({ x: [{ type: "record" }] })).findings;
+    expect(record.map((f) => f.severity)).toEqual(["COVERAGE_GAP"]);
+    // An unknown type is not understood at all: a spec problem, not `any`.
+    expect(validatorProblems({ type: "unknown" }, "x").length).toBeGreaterThan(0);
+  });
+
+  test("an empty v.union() does not pass as any (unsatisfiable, so a gap)", () => {
+    const f = run(cObj({ x: cStr }), vObj({ x: [{ type: "union", value: [] }] })).findings;
+    expect(f.map((x) => x.severity)).toEqual(["COVERAGE_GAP"]);
+  });
+
+  test("validatorProblems is recursive", () => {
+    expect(validatorProblems({ type: "object", value: { a: { optional: false } } }, "w")).not.toEqual([]);
+    expect(validatorProblems({ type: "array", value: { type: "nope" } }, "w")).not.toEqual([]);
+    expect(validatorProblems({ type: "union", value: [{ type: "string" }, { type: "nope" }] }, "w")).not.toEqual([]);
+    expect(validatorProblems({ type: "object", value: { a: { fieldType: { type: "string" }, optional: false } } }, "w")).toEqual([]);
   });
 });
 

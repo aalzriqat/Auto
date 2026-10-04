@@ -92,6 +92,9 @@ function digestValue(node) {
       return ["s", node.type];
     case "id":
       return ["i", node.table ?? ""];
+    case "unsupported":
+      // The raw node, so any change to a record / empty union is visible.
+      return ["x", node.reason, JSON.stringify(node.source ?? null)];
     default:
       return [node.kind];
   }
@@ -123,6 +126,8 @@ function signatureOf(node, optional) {
       return `${head}:${node.type}`;
     case "id":
       return `${head}:${node.table ?? ""}`;
+    case "unsupported":
+      return `${head}:${digest(node)}`;
     case "union":
       // ⚠️ THE UNION CARRIES A FULL RECURSIVE DIGEST OF ITS BRANCHES, and the
       // reason is a round-1 review finding that disproved this module's own
@@ -229,7 +234,14 @@ export function encodeSignatures(set) {
 
 function pathsOf(fn) {
   const out = new Map();
-  if (!fn || !fn.args) return out;
+  if (!fn) return out;
+  // `args: null` is a function whose argument validator is unknown (SPEC-1). It
+  // is recorded at `<function>`, the same path a gap on it is reported at, so a
+  // null <-> declared change is a changed path rather than an invisible one.
+  if (fn.args === null || fn.args === undefined) {
+    out.set("<function>", "args:unknown");
+    return out;
+  }
   const root = validatorTree(fn.args);
   // ⚠️ The ARGUMENT OBJECT ITSELF gets no entry. Convex always renders it as an
   // object, so its own signature can never change, and emitting it would give

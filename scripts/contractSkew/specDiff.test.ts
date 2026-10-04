@@ -1093,11 +1093,26 @@ describe("release mode distinguishes PROVED UNSAFE from CANNOT PROVE SAFE", () =
     "  return update({ orgId: v });\n" +
     "};\n";
 
-  test("PROVED UNSAFE — a break the candidate introduces exits RELEASE_BREAK (8)", () => {
-    // The candidate declares `nope`; the deployed backend does not; the client
-    // already sends it. Shipping this candidate means the client is broken
-    // against what is live — a proven incompatibility, not an unknown.
+  test("a candidate that FIXES a deployed break is not a release break (R1)", () => {
+    // The candidate declares `nope`, the deployed backend does not, the client
+    // sends it. Shipping this makes the client WORK. It used to exit 8, because
+    // only the deployed spec was consulted.
     const dir = releaseDir({ orgId: required(str) }, { orgId: required(str), nope: required(str) }, SENDS_NOPE);
+    try {
+      expect(runRelease(dir)).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test("PROVED UNSAFE — a break the candidate introduces exits RELEASE_BREAK (8)", () => {
+    // The candidate adds a REQUIRED argument the client never sends: shipping it
+    // breaks a call that works today — a proven incompatibility, not an unknown.
+    const dir = releaseDir(
+      { orgId: required(str) },
+      { orgId: required(str), extra: required(str) },
+      SENDS_NOPE.replace(', nope: "x"', "")
+    );
     try {
       const code = runRelease(dir);
       expect(code).toBe(8);

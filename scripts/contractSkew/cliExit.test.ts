@@ -211,9 +211,12 @@ describe("exit-code table: one subprocess test per row", () => {
   }, 300_000);
 
   test("8 RELEASE BREAK — release: the candidate introduces a proven incompatibility", () => {
+    // ⚠️ SCRUM-178 v2 batch 3 (R1): this USED to be a candidate that ADDED `nope`
+    // while the client sent it — a FIX that the old code called a break. The
+    // candidate now adds a REQUIRED argument the client never sends.
     const deployed = specOf(mutation("vehicles.js:update", { orgId: required(str) }));
-    const candidate = specOf(mutation("vehicles.js:update", { orgId: required(str), nope: required(str) }));
-    const dir = scaffold({ client: SENDS_NOPE, spec: deployed, candidate });
+    const candidate = specOf(mutation("vehicles.js:update", { orgId: required(str), extra: required(str) }));
+    const dir = scaffold({ client: PROVEN, spec: deployed, candidate });
     const r = run(dir, ["--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json", "--baseline", "baseline.json"]);
     expect(r.code).toBe(8);
     expect(r.all).not.toMatch(/Deploy the Convex backend/);
@@ -253,6 +256,174 @@ describe("exit-code table: one subprocess test per row", () => {
     expect(r.code).toBe(10);
     expect(r.all).toMatch(/EVIDENCE DRIFT/);
     expect(r.all).not.toMatch(FORBIDDEN_WORDING);
+  }, 300_000);
+});
+
+const releaseArgsJ = ["--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json", "--baseline", "baseline.json", "--json", "report.json"];
+const DEPLOYED = specOf(mutation("vehicles.js:update", { orgId: required(str) }));
+
+describe("SCRUM-178 v2 batch 3 R1: release mode compares the candidate, not just the deployed spec", () => {
+  const release = (client: string, candidate: unknown, spec: unknown = DEPLOYED) => {
+    const dir = scaffold({ client, spec, candidate });
+    return { dir, r: run(dir, releaseArgsJ) };
+  };
+
+  test("candidate REMOVES a called function -> 8", () => {
+    const { dir, r } = release(PROVEN, specOf(mutation("vehicles.js:other", {})));
+    expect(r.code).toBe(8);
+    expect(r.stderr).toMatch(/RELEASE BREAK/);
+    expect(r.stderr).toMatch(/uses-convex\.tsx/);
+    expect(reportOf(dir).causes.releaseBreaks).toBeGreaterThan(0);
+  }, 300_000);
+
+  test("candidate makes the called function INTERNAL -> 8", () => {
+    const internal = { ...mutation("vehicles.js:update", { orgId: required(str) }), visibility: { kind: "internal" } };
+    expect(release(PROVEN, specOf(internal)).r.code).toBe(8);
+  }, 300_000);
+
+  test("candidate turns the Mutation into a Query -> 8", () => {
+    expect(release(PROVEN, specOf(query("vehicles.js:update", { orgId: required(str) }))).r.code).toBe(8);
+  }, 300_000);
+
+  test("candidate adds a REQUIRED arg the client omits -> 8", () => {
+    const { dir, r } = release(PROVEN, specOf(mutation("vehicles.js:update", { orgId: required(str), extra: required(str) })));
+    expect(r.code).toBe(8);
+    expect(reportOf(dir).release.breaks).toBeGreaterThan(0);
+  }, 300_000);
+
+  test("a break present against BOTH on an unchanged path is STANDING, not a release break", () => {
+    const { dir, r } = release(SENDS_NOPE, DEPLOYED);
+    expect(r.code).not.toBe(8);
+    expect(r.code).toBe(0);
+    expect(reportOf(dir).release.standingAgainstBoth).toBe(1);
+    expect(r.stderr).toMatch(/\[STANDING\]/);
+  }, 300_000);
+
+  test("a candidate that FIXES a deployed break exits 0 and says so", () => {
+    const { dir, r } = release(SENDS_NOPE, specOf(mutation("vehicles.js:update", { orgId: required(str), nope: required(str) })));
+    expect(r.code).toBe(0);
+    expect(r.stderr).toMatch(/FIXED BY THIS CANDIDATE/);
+    expect(reportOf(dir).release.fixedByCandidate).toBe(1);
+  }, 300_000);
+
+  test("a proven break AND an unproven value on a changed path -> 8, with BLOCKED also present", () => {
+    const client =
+      'import { useMutation } from "convex/react";\n' +
+      "declare const api: { vehicles: { update: unknown } };\n" +
+      "export const go = (v: unknown) => {\n" +
+      "  const update = useMutation(api.vehicles.update);\n" +
+      '  update({ orgId: "o" });\n' +
+      "  return update({ orgId: v });\n" +
+      "};\n";
+    const { dir, r } = release(client, specOf(mutation("vehicles.js:update", { orgId: required({ type: "number" }) })));
+    expect(r.code).toBe(8);
+    expect(r.stderr).toMatch(/BLOCKED/);
+    expect(r.stderr).toMatch(/ALSO PRESENT/);
+    const causes = reportOf(dir).causes;
+    expect(causes.releaseBreaks).toBeGreaterThan(0);
+    expect(causes.releaseBlockers).toBeGreaterThan(0);
+  }, 300_000);
+});
+
+describe("SCRUM-178 v2 batch 3 R2 + SPEC-1: every spec role is validated, recursively", () => {
+  const fnWith = (patch: Record<string, unknown>) => ({ ...mutation("vehicles.js:update", { orgId: required(str) }), ...patch });
+  const { args: _omit, ...noArgs } = mutation("vehicles.js:update", {});
+  const bad: Record<string, unknown> = {
+    "absent args key": noArgs,
+    "object field without fieldType": fnWith({ args: { type: "object", value: { orgId: { optional: false } } } }),
+    "unknown validator type": fnWith({ args: { type: "object", value: { orgId: required({ type: "nope" }) } } }),
+    "unknown functionType": fnWith({ functionType: "Banana" }),
+    "unknown visibility": fnWith({ visibility: { kind: "private" } }),
+    "record with an invalid value validator": fnWith({
+      args: { type: "object", value: { orgId: required({ type: "record", keys: { type: "string" }, values: {} }) } },
+    }),
+  };
+
+  for (const [name, entry] of Object.entries(bad)) {
+    test(`${name}: exit 3 naming the role (deployed, current, candidate)`, () => {
+      const broken = specOf(entry);
+      const roles: Array<[string, Project, string[]]> = [
+        ["deployed", { client: PROVEN, spec: broken }, ["--mode", "production", "--spec", "spec.json", "--baseline", "baseline.json"]],
+        ["current", { client: PROVEN, current: broken }, ["--mode", "production", "--spec", "spec.json", "--current", "current.json", "--baseline", "baseline.json"]],
+        ["candidate", { client: PROVEN, candidate: broken }, ["--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json", "--baseline", "baseline.json"]],
+      ];
+      for (const [role, project, args] of roles) {
+        const r = run(scaffold(project), args);
+        expect(r.code, `${name} as ${role}`).toBe(3);
+        expect(r.stderr, `${name} as ${role}`).toContain(role);
+      }
+    }, 300_000);
+  }
+
+  test("a call to an `args: null` function is an unwaivable gap: exit 9 with file:line", () => {
+    const nullArgs = { ...mutation("vehicles.js:update", {}), args: null };
+    const dir = scaffold({ client: PROVEN, spec: specOf(nullArgs) });
+    const r = production(dir);
+    expect(r.code).toBe(9);
+    expect(r.stderr).toMatch(/uses-convex\.tsx/);
+    expect(reportOf(dir).causes.coverageIncomplete.join(" ")).toMatch(/cannot compare/);
+  }, 300_000);
+
+  test("an UNCALLED `args: null` function costs nothing", () => {
+    const nullArgs = { ...mutation("vehicles.js:neverCalled", {}), args: null };
+    const dir = scaffold({ client: PROVEN, spec: specOf(mutation("vehicles.js:update", { orgId: required(str) }), nullArgs) });
+    expect(production(dir).code).toBe(0);
+  }, 300_000);
+
+  test("a record-typed arg the client reaches is a gap (9), never a pass", () => {
+    const rec = mutation("vehicles.js:update", { orgId: required({ type: "record", keys: { type: "string" }, values: required(str) }) });
+    const dir = scaffold({ client: PROVEN, spec: specOf(rec) });
+    expect(production(dir).code).toBe(9);
+  }, 300_000);
+
+  test("an empty union the client reaches is a gap (9), never `any`", () => {
+    const empty = mutation("vehicles.js:update", { orgId: required({ type: "union", value: [] }) });
+    const dir = scaffold({ client: PROVEN, spec: specOf(empty) });
+    expect(production(dir).code).toBe(9);
+  }, 300_000);
+
+  test("release: a candidate that turns the called function's args into null is BLOCKED (4)", () => {
+    const nullArgs = { ...mutation("vehicles.js:update", {}), args: null };
+    const dir = scaffold({ client: PROVEN, spec: DEPLOYED, candidate: specOf(nullArgs) });
+    const r = run(dir, releaseArgsJ);
+    expect(r.code).toBe(4);
+    expect(r.stderr).toMatch(/BLOCKED/);
+  }, 300_000);
+});
+
+describe("SCRUM-178 v2 batch 3 R3: exit, stderr and JSON come from one cause list", () => {
+  test("a skew break + a standing defect + an unscanned file: primary 7, the other two ALSO PRESENT in stderr and JSON", () => {
+    const client =
+      'import { useMutation } from "convex/react";\n' +
+      "declare const api: { vehicles: { update: unknown; other: unknown } };\n" +
+      "export const go = () => {\n" +
+      "  const update = useMutation(api.vehicles.update);\n" +
+      "  const other = useMutation(api.vehicles.other);\n" +
+      '  update({ orgId: "o", nope: "x" });\n' +
+      '  return other({ orgId: "o", bad: "x" });\n' +
+      "};\n";
+    const deployed = specOf(
+      mutation("vehicles.js:update", { orgId: required(str) }),
+      mutation("vehicles.js:other", { orgId: required(str) })
+    );
+    const current = specOf(
+      mutation("vehicles.js:update", { orgId: required(str), nope: required(str) }),
+      mutation("vehicles.js:other", { orgId: required(str) })
+    );
+    const dir = scaffold({
+      client,
+      spec: deployed,
+      current,
+      extra: { "somewhere/Screen.tsx": "const x = useQuery(api.a.b, {});" },
+    });
+    const r = production(dir, ["--current", "current.json"]);
+    expect(r.code).toBe(7);
+    expect(r.stderr).toMatch(/ALSO PRESENT: .*STANDING/);
+    expect(r.stderr).toMatch(/ALSO PRESENT: .*(COVERAGE GAP|unscanned)/i);
+    const causes = reportOf(dir).causes;
+    expect(causes.provenBreaks).toBe(1);
+    expect(causes.standingDefects).toBe(1);
+    expect(causes.unscannedClientFiles).toBeGreaterThanOrEqual(1);
   }, 300_000);
 });
 

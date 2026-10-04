@@ -17,6 +17,31 @@ const callable = (identifier: string, functionType = "Mutation") => ({
 });
 const http = (method: string, path: string) => ({ functionType: "HttpAction", method, path });
 
+describe("specProblems: SPEC-1 (batch 3)", () => {
+  const withArgs = (args: unknown) => ({ functions: [{ ...callable("a.js:b"), args }] });
+  test("an ABSENT `args` key is a problem; `args: null` is not", () => {
+    const { args: _drop, ...noArgs } = callable("a.js:b");
+    expect(specProblems({ functions: [noArgs] })).toHaveLength(1);
+    expect(specProblems({ functions: [{ ...noArgs, args: null }] })).toEqual([]);
+  });
+  test("nested malformed validators are problems at any depth", () => {
+    expect(specProblems(withArgs({ type: "object", value: { x: { optional: false } } }))).not.toEqual([]);
+    expect(
+      specProblems(withArgs({ type: "object", value: { x: { fieldType: { type: "array", value: { type: "nope" } }, optional: false } } }))
+    ).not.toEqual([]);
+    expect(
+      specProblems(withArgs({ type: "object", value: { x: { fieldType: { type: "record", keys: { type: "string" }, values: {} }, optional: false } } }))
+    ).not.toEqual([]);
+  });
+  test("unknown functionType and visibility values are problems", () => {
+    expect(specProblems({ functions: [{ ...callable("a.js:b"), functionType: "Banana" }] })).not.toEqual([]);
+    expect(specProblems({ functions: [{ ...callable("a.js:b"), visibility: { kind: "private" } }] })).not.toEqual([]);
+  });
+  test("an empty union is a legitimate (unsatisfiable) validator, not a spec problem", () => {
+    expect(specProblems(withArgs({ type: "object", value: { x: { fieldType: { type: "union", value: [] }, optional: false } } }))).toEqual([]);
+  });
+});
+
 describe("specProblems", () => {
   test("a spec with valid HttpAction route entries is accepted", () => {
     const spec = { url: "https://x.convex.cloud", functions: [callable("a.js:b"), http("GET", "/health"), http("POST", "/webhook")] };

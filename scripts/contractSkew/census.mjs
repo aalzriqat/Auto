@@ -461,8 +461,14 @@ export function runCensus({ program, files, extraction, entryTable = ENTRY_TABLE
     }
   };
 
-  for (let pass = 0; pass < 12; pass++) {
-    let grew = false;
+  // SCRUM-178 v2 batch 3 (Opus L-b). This ran a fixed 12 passes and stopped
+  // silently, so an alias chain of 13+ links left its tail untracked and a
+  // reference escaping through that tail was never a candidate. The set only
+  // GROWS and is bounded by the program's const declarations, so iterating
+  // until a pass adds nothing is guaranteed to terminate, and it is the only
+  // stopping rule that cannot hide a link.
+  for (let grew = true; grew; ) {
+    grew = false;
     eachFile((node) => {
       if (!ts.isIdentifier(node) || isDeclarationName(node) || inTypePosition(node)) return;
       if (!isTrackedRoot(useSymbolOf(node))) return;
@@ -484,7 +490,6 @@ export function runCensus({ program, files, extraction, entryTable = ENTRY_TABLE
         }
       }
     });
-    if (!grew) break;
   }
 
   // ── Phase 2: SDK entry-point calls ─────────────────────────────────────────
