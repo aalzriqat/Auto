@@ -183,3 +183,22 @@ export function mergeDealRows(
       .map((sale) => saleRow(sale, orgId, t, formatAmount)),
   ];
 }
+
+export type PagingStatus = "LoadingFirstPage" | "CanLoadMore" | "LoadingMore" | "Exhausted";
+
+/**
+ * Folds the paginated sources' statuses into what the Deals list may claim.
+ * `complete` is an allow-list — every source Exhausted — never the absence of
+ * the other flags: a first page in flight sets neither (SCRUM-603-2).
+ */
+export function dealsPaging(statuses: readonly PagingStatus[]): {
+  complete: boolean;
+  canLoadMore: boolean;
+  loadingMore: boolean;
+} {
+  return {
+    complete: statuses.every((s) => s === "Exhausted"),
+    canLoadMore: statuses.some((s) => s === "CanLoadMore"),
+    loadingMore: statuses.some((s) => s === "LoadingMore"),
+  };
+}

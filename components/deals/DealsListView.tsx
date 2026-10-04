@@ -112,6 +112,7 @@ export function DealsListView({
   loading,
   canLoadMore,
   loadingMore,
+  complete,
   onLoadMore,
   newDealHref,
   t,
@@ -121,6 +122,8 @@ export function DealsListView({
   loading: boolean;
   canLoadMore: boolean;
   loadingMore: boolean;
+  /** Every source is exhausted: the only state that may claim "all loaded". */
+  complete: boolean;
   onLoadMore: () => void;
   /** Present only for a caller who may start a deal. */
   newDealHref: string | null;
@@ -168,9 +171,11 @@ export function DealsListView({
   }, [loaded, view, reason, kind, search]);
 
   const filtersActive = reason !== null || kind !== null || search.trim() !== "";
-  // A page in flight is as incomplete as one not yet requested: with one
-  // source loading and the other exhausted, canLoadMore alone reads false.
-  const incomplete = canLoadMore || loadingMore;
+  // Completeness is proven (every source exhausted), never inferred from the
+  // absence of canLoadMore/loadingMore: a page in flight, first or later,
+  // sets neither on its own (SCRUM-603-2).
+  const incomplete = !complete;
+  const rowsLoaded = rows !== undefined && !loading;
   const countSuffix = incomplete ? "+" : "";
 
   return (
@@ -425,17 +430,25 @@ export function DealsListView({
           </>
         )}
 
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t p-3 text-xs text-muted-foreground">
-          <span>
-            <bdi dir="ltr">{visible.length}</bdi> {t("DealsShownOf")} <bdi dir="ltr">{loaded.length}</bdi>{" "}
-            {t(incomplete ? "DealsLoadedMoreAvailable" : "DealsLoadedAll")}
-          </span>
-          {incomplete && (
-            <Button type="button" variant="outline" size="sm" disabled={loadingMore} onClick={onLoadMore}>
-              {t("LoadMore")}
-            </Button>
-          )}
-        </div>
+        {rowsLoaded && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t p-3 text-xs text-muted-foreground">
+            <span>
+              <bdi dir="ltr">{visible.length}</bdi> {t("DealsShownOf")} <bdi dir="ltr">{loaded.length}</bdi>{" "}
+              {t(incomplete ? "DealsLoadedMoreAvailable" : "DealsLoadedAll")}
+            </span>
+            {incomplete && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={loadingMore || !canLoadMore}
+                onClick={onLoadMore}
+              >
+                {t("LoadMore")}
+              </Button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

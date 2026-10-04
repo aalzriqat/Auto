@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { applicationReason, mergeDealRows, type ApplicationListRow, type SaleListRow } from "./dealRows";
+import { applicationReason, dealsPaging, mergeDealRows, type ApplicationListRow, type PagingStatus, type SaleListRow } from "./dealRows";
 
 const t = (key: string) => key;
 const fmt = (major: number) => `${major} JD`;
@@ -135,4 +135,18 @@ describe("one entry per deal", () => {
     const rows = mergeDealRows([app({ financedAmount: 0 })], [], "org1", t, fmt);
     expect(rows[0].amountLabel).toBeNull();
   });
+});
+
+describe("completeness of the two paginated sources is proven, never inferred (SCRUM-603-2)", () => {
+  const statuses: PagingStatus[] = ["LoadingFirstPage", "CanLoadMore", "LoadingMore", "Exhausted"];
+  for (const a of statuses) {
+    for (const s of statuses) {
+      test(`applications ${a} × sales ${s}`, () => {
+        const paging = dealsPaging([a, s]);
+        expect(paging.complete).toBe(a === "Exhausted" && s === "Exhausted");
+        expect(paging.canLoadMore).toBe(a === "CanLoadMore" || s === "CanLoadMore");
+        expect(paging.loadingMore).toBe(a === "LoadingMore" || s === "LoadingMore");
+      });
+    }
+  }
 });

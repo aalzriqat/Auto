@@ -32,6 +32,9 @@ const rows: DealRow[] = [
 ];
 
 function renderList(overrides: Partial<React.ComponentProps<typeof DealsListView>> = {}) {
+  // Unless a case says otherwise, both sources are exhausted exactly when
+  // neither can load more nor is loading more.
+  const complete = overrides.complete ?? (!overrides.canLoadMore && !overrides.loadingMore && !overrides.loading);
   return render(
     <DealsListView
       rows={rows}
@@ -42,6 +45,7 @@ function renderList(overrides: Partial<React.ComponentProps<typeof DealsListView
       newDealHref="/org1/sales"
       t={t}
       {...overrides}
+      complete={complete}
     />
   );
 }
@@ -131,6 +135,23 @@ describe("the Deals list is a needs-action queue first", () => {
     expect(screen.queryByText(/DealsLoadedAll/)).toBeNull();
     expect(screen.getByText(/DealsLoadedMoreAvailable/)).toBeTruthy();
     expect(screen.getByRole("tab", { name: /DealsAll/ }).textContent).toContain("1+");
+    const button = screen.getByRole("button", { name: "LoadMore" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+
+  test("while the first page is loading nothing claims every deal is loaded (SCRUM-603-2, Reviewer B F-1)", () => {
+    // Both sources LoadingFirstPage (or one of them, the other Exhausted):
+    // neither flag is set, yet nothing is proven complete.
+    renderList({ rows: undefined, loading: true, canLoadMore: false, loadingMore: false, complete: false });
+    expect(screen.getByText("LoadingDeals")).toBeTruthy();
+    expect(screen.queryByText(/DealsLoadedAll/)).toBeNull();
+    expect(screen.getByRole("tab", { name: /DealsNeedsAction/ }).textContent).toContain("+");
+    expect(screen.queryByRole("button", { name: "LoadMore" })).toBeNull();
+  });
+
+  test("an incomplete queue with nothing loadable right now offers no dead Load more click", () => {
+    renderList({ canLoadMore: false, loadingMore: false, complete: false });
+    expect(screen.queryByText(/DealsLoadedAll/)).toBeNull();
     const button = screen.getByRole("button", { name: "LoadMore" }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
   });
