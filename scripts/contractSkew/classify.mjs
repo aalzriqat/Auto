@@ -19,7 +19,7 @@
  * as its own contract-health failure — visible, un-suppressed, and not
  * downgraded to UNKNOWN, because it is not uncertainty. It is a known bug.
  */
-import { breakKey, pathsOverlap } from "./compare.mjs";
+import { acceptanceAt, ACCEPTANCE, pathsOverlap } from "./compare.mjs";
 
 export const CLASSIFICATION = {
   REVISION_SKEW: "REVISION_SKEW",
@@ -29,42 +29,44 @@ export const CLASSIFICATION = {
   COVERAGE_INCOMPLETE: "COVERAGE_INCOMPLETE",
 };
 
-const WHOLE_FUNCTION = "<function>";
-const siteOf = (/** @type {any} */ f) => JSON.stringify([f.surface ?? "", f.file, f.line, f.identifier]);
-
 /**
- * SCRUM-178 v2 batch 4 (F-2). WHEN A VALIDATED CURRENT SPEC IS SUPPLIED, THE
- * SAME CALLS ARE COMPARED AGAINST IT AND EACH DEPLOYED BREAK IS CLASSIFIED BY ITS
- * IDENTITY (`breakKey`), never by whether a path "changed".
+ * SCRUM-178 v2 batches 4 and 5 (F-2, D-30). WHEN A VALIDATED CURRENT SPEC IS
+ * SUPPLIED, THE SAME CALLS ARE COMPARED AGAINST IT AND EACH DEPLOYED BREAK IS
+ * CLASSIFIED BY WHAT THE CURRENT SPEC SAYS AT THAT SAME CALL (`acceptanceAt`, the
+ * rule the release gate shares), never by whether a path "changed" and never by
+ * the mere absence of a break.
  *
- *   present against current too                 STANDING_DEFECT: current refuses
- *       the same call, so deploying it fixes nothing — even if the path moved.
- *   absent against current, and current is fully comparable at that call
- *       (no gap and no unknown on an overlapping path)    REVISION_SKEW.
- *   current has a gap or an unknown at that call      COVERAGE_INCOMPLETE: absence
- *       of a break there proves nothing, so no deploy advice is given.
+ *   REJECTED_SAME   STANDING_DEFECT: current refuses the same call for the same
+ *       reason, so deploying fixes nothing — even if the path moved.
+ *   REJECTED_OTHER  REVISION_SKEW (the deployed backend IS behind) but flagged: the
+ *       current spec ALSO refuses this call, at another path, so deploying does
+ *       NOT make it succeed. Named in the output; no fix claim.
+ *   UNPROVEN        COVERAGE_INCOMPLETE: current has a gap or an unknown at that
+ *       call, so absence of a break proves nothing and no deploy advice is given.
+ *   ACCEPTED        REVISION_SKEW: current accepts the call; deploying fixes it.
  *
  * @param {any[]} breaking        the deployed breaks
  * @param {{ breaking: any[], gaps?: any[], needsEvidence?: any[] }} currentResult
  */
 export function classifyAgainstCurrent(breaking, currentResult) {
-  const currentBreaks = new Set(currentResult.breaking.map(breakKey));
-  const unsure = [...(currentResult.gaps ?? []), ...(currentResult.needsEvidence ?? [])];
-  /** @param {any} f */
-  const uncertainAt = (f) =>
-    unsure.some(
-      (u) =>
-        siteOf(u) === siteOf(f) &&
-        (f.path === WHOLE_FUNCTION ? u.path === WHOLE_FUNCTION : u.path === WHOLE_FUNCTION || pathsOverlap(u.path, f.path))
-    );
-  const classified = breaking.map((finding) => ({
-    ...finding,
-    classification: currentBreaks.has(breakKey(finding))
-      ? CLASSIFICATION.STANDING_DEFECT
-      : uncertainAt(finding)
-        ? CLASSIFICATION.COVERAGE_INCOMPLETE
-        : CLASSIFICATION.REVISION_SKEW,
-  }));
+  const classified = breaking.map((finding) => {
+    const { disposition, rejectedAt } = acceptanceAt(finding, currentResult);
+    const base = { ...finding, acceptance: disposition };
+    switch (disposition) {
+      case ACCEPTANCE.REJECTED_SAME:
+        return { ...base, classification: CLASSIFICATION.STANDING_DEFECT };
+      case ACCEPTANCE.UNPROVEN:
+        return { ...base, classification: CLASSIFICATION.COVERAGE_INCOMPLETE };
+      case ACCEPTANCE.REJECTED_OTHER:
+        return {
+          ...base,
+          classification: CLASSIFICATION.REVISION_SKEW,
+          currentRejects: rejectedAt.map((b) => ({ path: b.path, dimension: b.dimension, severity: b.severity, detail: b.detail })),
+        };
+      default:
+        return { ...base, classification: CLASSIFICATION.REVISION_SKEW };
+    }
+  });
   const only = (/** @type {string} */ kind) => classified.filter((f) => f.classification === kind);
   return {
     classified,
@@ -72,6 +74,8 @@ export function classifyAgainstCurrent(breaking, currentResult) {
     standingDefects: only(CLASSIFICATION.STANDING_DEFECT),
     unclassified: /** @type {any[]} */ ([]),
     uncertain: only(CLASSIFICATION.COVERAGE_INCOMPLETE),
+    /** Deployed breaks the current spec ALSO refuses (at another path): skew, but not fixed by a deploy. */
+    rejectedElsewhere: classified.filter((f) => f.acceptance === ACCEPTANCE.REJECTED_OTHER),
     basis: `the same client calls compared against the supplied current spec (${currentResult.breaking.length} break(s) there)`,
   };
 }
@@ -115,7 +119,8 @@ export function classifyAgainstCurrent(breaking, currentResult) {
 /**
  * @typedef {{ identifier: string, path: string, severity?: string, dimension?: string,
  *             file?: string, line?: number, detail?: string }} BreakingFinding
- * @typedef {BreakingFinding & { classification: string }} ClassifiedFinding
+ * @typedef {BreakingFinding & { classification: string, acceptance?: string,
+ *             currentRejects?: Array<{ path: string, dimension?: string, severity?: string, detail?: string }> }} ClassifiedFinding
  */
 
 /**
@@ -123,7 +128,8 @@ export function classifyAgainstCurrent(breaking, currentResult) {
  * @param {BackendEvidence} evidence
  * @returns {{ classified: ClassifiedFinding[], revisionSkew: ClassifiedFinding[],
  *             standingDefects: ClassifiedFinding[], unclassified: ClassifiedFinding[],
- *             uncertain: ClassifiedFinding[], basis: string }}
+ *             uncertain: ClassifiedFinding[], rejectedElsewhere: ClassifiedFinding[],
+ *             basis: string }}
  */
 export function classifyBreaking(breaking, evidence = {}) {
   const { changedPaths, backendIdenticalToDeployed, deployedSha, currentResult } = evidence;
@@ -186,6 +192,7 @@ export function classifyBreaking(breaking, evidence = {}) {
     standingDefects: classified.filter((f) => f.classification === CLASSIFICATION.STANDING_DEFECT),
     unclassified: classified.filter((f) => f.classification === CLASSIFICATION.UNCLASSIFIED),
     uncertain: /** @type {any[]} */ ([]),
+    rejectedElsewhere: /** @type {any[]} */ ([]),
     basis,
   };
 }
@@ -199,8 +206,9 @@ export function classifyBreaking(breaking, evidence = {}) {
  * degrades to unclassified. Failing closed there is the whole point.
  */
 /**
- * @param {{ revisionSkew: unknown[], standingDefects: unknown[], unclassified: unknown[], uncertain?: unknown[] }} classification
+ * @param {{ revisionSkew: unknown[], standingDefects: unknown[], unclassified: unknown[], uncertain?: unknown[], rejectedElsewhere?: unknown[] }} classification
  *   Only the lengths are read; the findings themselves are not inspected here.
+ *   `rejectedElsewhere` is a SUBSET of `revisionSkew`: calls the current spec also refuses.
  * @param {boolean} coverageWarning
  * @param {number} needsEvidenceCount
  * @param {number} unresolvedCount
@@ -212,8 +220,18 @@ export function alertsFor(classification, coverageWarning, needsEvidenceCount, u
   const standingCount = classification.standingDefects.length;
 
   const parts = [];
-  if (classification.revisionSkew.length) {
-    parts.push(`${skewLabel}: ${classification.revisionSkew.length} path(s) where the deployed backend is behind the current one`);
+  // D-30: a call the current spec ALSO refuses is not "behind the current one" in
+  // any way a deploy repairs, so it is counted and worded apart from the ones a
+  // deploy does fix.
+  const rejectedElsewhere = classification.rejectedElsewhere?.length ?? 0;
+  const fixableSkew = classification.revisionSkew.length - rejectedElsewhere;
+  if (fixableSkew > 0) {
+    parts.push(`${skewLabel}: ${fixableSkew} path(s) where the deployed backend is behind the current one`);
+  }
+  if (rejectedElsewhere > 0) {
+    parts.push(
+      `${skewLabel}: ${rejectedElsewhere} call(s) the deployed backend refuses and the current spec ALSO refuses at another path — deploying will not fix these`
+    );
   }
   if (classification.unclassified.length) {
     parts.push(`${classification.unclassified.length} incompatibility(ies) could not be classified — treated as skew`);

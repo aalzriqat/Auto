@@ -860,6 +860,9 @@ describe("SCRUM-178 v2 batch 4", () => {
       expect(rep.causes.releaseBreaks).toBe(0);
       expect(rep.causes.provenBreaks).toBe(0);
       expect(rep.verdict).not.toBe("FAIL");
+      // Batch 5 (B4-2): the control for "UNPROVEN is not fixed" - a candidate that
+      // truly accepts the call is a PASS, not merely "not a FAIL".
+      expect(rep.verdict).toBe("PASS");
       expect(r.stderr).toMatch(/1 deployed break\(s\) FIXED BY THIS CANDIDATE/);
     }, 300_000);
   });
@@ -872,6 +875,156 @@ describe("SCRUM-178 v2 batch 4", () => {
       expect(r.code).toBe(0);
       expect(r.stderr).toMatch(/STANDING CONTRACT DEFECT/);
       expect(r.stderr).not.toMatch(/ALSO PRESENT/);
+    }, 300_000);
+  });
+});
+
+describe("SCRUM-178 v2 batch 5 (D-30): acceptance is per call, absence is not acceptance", () => {
+  const upd = (fields: Record<string, unknown>) => mutation("vehicles.js:update", fields);
+  const ORG = { orgId: required(str) };
+  const nullArgs = { identifier: "vehicles.js:update", functionType: "Mutation", visibility: { kind: "public" }, args: null };
+  const current = (dir: string) => production(dir, ["--current", "current.json"]);
+  const HEAD =
+    'import { useMutation } from "convex/react";\n' +
+    "declare const api: { vehicles: { update: unknown } };\n";
+  /** Two calls to the SAME function on ONE source line: distinct columns, distinct siteIds. */
+  const sameLine = (params: string, a: string, b: string) =>
+    HEAD +
+    `export const go = (${params}) => {\n` +
+    "  const update = useMutation(api.vehicles.update);\n" +
+    `  update(${a}); update(${b});\n` +
+    "};\n";
+
+  describe("B4-1: siteId is part of the identity", () => {
+    test("deployed rejects A, current accepts A and rejects B (same line, function, path, dimension) -> 7 REVISION_SKEW, not 5", () => {
+      const dir = scaffold({
+        client: sameLine("", '{ orgId: "o", tag: 1 }', '{ orgId: "o", tag: "s" }'),
+        spec: specOf(upd({ ...ORG, tag: required(str) })),
+        current: specOf(upd({ ...ORG, tag: required({ type: "number" }) })),
+      });
+      const r = current(dir);
+      expect(r.code, r.stderr).toBe(7);
+      const causes = reportOf(dir).causes;
+      expect(causes.provenBreaks).toBe(1);
+      expect(causes.standingDefects).toBe(0);
+    }, 300_000);
+
+    test("two same-line gaps stay two: distinct in stderr and in the JSON report", () => {
+      const dir = scaffold({
+        client: sameLine("", '{ orgId: "o" }', '{ orgId: "p" }'),
+        spec: specOf(nullArgs),
+      });
+      const r = production(dir);
+      expect(r.code).toBe(9);
+      expect(r.stderr.match(/\[coverage gap\]/g) ?? []).toHaveLength(2);
+      const gaps = reportOf(dir).gaps as Array<{ siteId: string }>;
+      expect(gaps).toHaveLength(2);
+      expect(new Set(gaps.map((g) => g.siteId)).size).toBe(2);
+    }, 300_000);
+  });
+
+  describe("B4-2 / N-1: one acceptance rule for production --current and release", () => {
+    test("two-site isolation (CLI): an unknown at site B on the same path leaves site A's skew at 7", () => {
+      const dir = scaffold({
+        client: sameLine("v: unknown", '{ orgId: "o", tag: 1 }', "{ orgId: \"o\", tag: v }"),
+        spec: specOf(upd({ ...ORG, tag: required(str) })),
+        current: specOf(upd({ ...ORG, tag: required({ type: "number" }) })),
+      });
+      const r = current(dir);
+      expect(r.code, r.stderr).toBe(7);
+      const rep = reportOf(dir);
+      expect(rep.causes.provenBreaks).toBe(1);
+      expect(rep.classification.coverageIncomplete).toBe(0);
+    }, 300_000);
+
+    test("REJECTED_OTHER: current still rejects the call at another path -> stays 7, names the current break, no fix claim", () => {
+      // Deployed does not declare `nope`; current declares it as a number and the
+      // client sends a string. The call is refused by BOTH, for different reasons.
+      const dir = scaffold({
+        client: SENDS_NOPE,
+        spec: specOf(upd(ORG)),
+        current: specOf(upd({ ...ORG, nope: required({ type: "number" }) })),
+      });
+      const r = current(dir);
+      expect(r.code, r.stderr).toBe(7);
+      expect(r.stderr).toMatch(/current spec (ALSO )?(still )?rejects this call at nope/i);
+      expect(r.stderr).toMatch(/will not (make|fix)/i);
+      expect(r.stderr).not.toMatch(/Deploy the Convex backend/);
+      const rep = reportOf(dir);
+      expect(rep.classification.rejectedByCurrent).toBe(1);
+      const entry = (rep.breaking as Array<{ acceptance: string; currentRejects: unknown[] }>)[0];
+      expect(entry.acceptance).toBe("REJECTED_OTHER");
+      expect(entry.currentRejects[0]).toMatchObject({ path: "nope", dimension: "VALUE" });
+      expect(rep.alert.summary).not.toMatch(/behind the current one/);
+      expect(JSON.stringify(rep)).not.toMatch(/Deploy the Convex backend/);
+    }, 300_000);
+
+    test("release (Codex B4-2): deployed rejects `nope`, candidate has `args: null` -> releaseFixed 0, indeterminate listed, exit 4", () => {
+      const dir = scaffold({ client: SENDS_NOPE, spec: specOf(upd(ORG)), candidate: specOf(nullArgs) });
+      const r = run(dir, releaseArgsJ);
+      expect(r.code, r.stderr).toBe(4);
+      const rep = reportOf(dir);
+      expect(rep.causes.releaseFixed).toBe(0);
+      expect(rep.release.fixedByCandidate).toBe(0);
+      expect(rep.release.indeterminate).toBe(1);
+      expect(rep.causes.releaseIndeterminate).toBe(1);
+      expect(r.stderr).not.toMatch(/FIXED BY THIS CANDIDATE/);
+      expect(r.stderr).toMatch(/INDETERMINATE/);
+      expect(rep.verdict).not.toBe("PASS");
+    }, 300_000);
+
+    test("release control: a candidate that truly accepts -> releaseFixed 1, exit 0, PASS", () => {
+      const dir = scaffold({ client: SENDS_NOPE, spec: specOf(upd(ORG)), candidate: specOf(upd({ ...ORG, nope: required(str) })) });
+      const r = run(dir, releaseArgsJ);
+      expect(r.code, r.stderr).toBe(0);
+      const rep = reportOf(dir);
+      expect(rep.causes.releaseFixed).toBe(1);
+      expect(rep.release.indeterminate).toBe(0);
+      expect(rep.verdict).toBe("PASS");
+    }, 300_000);
+  });
+
+  describe("N-3: a release with only a standing break says so", () => {
+    const sameSpec = () => specOf(upd(ORG));
+
+    test("standing-only: verdict STANDING, exit 0, the sentence names a known standing break, never '0 reviewed paths remain unverified'", () => {
+      const dir = scaffold({ client: SENDS_NOPE, spec: sameSpec(), candidate: sameSpec() });
+      const r = run(dir, releaseArgsJ);
+      expect(r.code, r.stderr).toBe(0);
+      expect(reportOf(dir).verdict).toBe("STANDING");
+      expect(r.stderr).toMatch(/known standing break/i);
+      expect(r.stderr).not.toMatch(/UNKNOWN: 0 reviewed paths remain unverified/);
+    }, 300_000);
+
+    test("a standing break AND baselined unknown debt keeps both facts", () => {
+      const client = CLIENT("v: unknown", '{ orgId: v, nope: "x" }');
+      const dir = scaffold({ client, spec: sameSpec(), candidate: sameSpec() });
+      baselineFrom(dir);
+      const r = run(dir, releaseArgsJ);
+      expect(r.code, r.stderr).toBe(0);
+      expect(reportOf(dir).verdict).toBe("UNKNOWN");
+      expect(r.stderr).toMatch(/known standing break/i);
+      expect(r.stderr).toContain("verdict UNKNOWN: 1 reviewed paths remain unverified");
+    }, 300_000);
+  });
+
+  describe("N-4: every gap says which spec it came from", () => {
+    test("identical gaps against deployed and current stay two, attributed to each role", () => {
+      const dir = scaffold({ client: PROVEN, spec: specOf(nullArgs), current: specOf(nullArgs) });
+      const r = current(dir);
+      expect(r.code).toBe(9);
+      const gaps = reportOf(dir).gaps as Array<{ spec: string }>;
+      expect(gaps.map((g) => g.spec).sort()).toEqual(["current", "deployed"]);
+      expect(r.stderr).toMatch(/\[coverage gap\].*\[spec: deployed\]/);
+      expect(r.stderr).toMatch(/\[coverage gap\].*\[spec: current\]/);
+    }, 300_000);
+
+    test("a candidate's gap is attributed to the candidate", () => {
+      const dir = scaffold({ client: PROVEN, spec: DEPLOYED, candidate: specOf(nullArgs) });
+      const r = run(dir, releaseArgsJ);
+      expect(r.code).toBe(4);
+      expect((reportOf(dir).gaps as Array<{ spec: string }>).map((g) => g.spec)).toEqual(["candidate"]);
+      expect(r.stderr).toMatch(/\[spec: candidate\]/);
     }, 300_000);
   });
 });

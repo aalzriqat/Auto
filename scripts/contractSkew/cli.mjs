@@ -21,6 +21,9 @@
  *                   path, empty baseline. Scope: Convex ARGUMENT CONTRACTS only.
  *   0  UNKNOWN      no proven break among the accounted calls, and every
  *                   unproven path is in the reviewed baseline. Never a PASS.
+ *   0  STANDING     release-mode only: no release break and nothing unproven, but a
+ *                   known standing break exists that this release does not own
+ *                   (N-3). Never a PASS.
  *   1  TOOLING FAILURE  the control did not complete. Node's DEFAULT for an
  *                       uncaught throw. NOT a verdict about the backend, and
  *                       the uncaught-throw boundary below turns most of these
@@ -40,6 +43,9 @@
  *                       when the spec was FETCHED. A `--spec` file is not known
  *                       to be production: same code, "CONTRACT SKEW against the
  *                       supplied spec", no deploy instruction (skewWording.mjs).
+ *                       Even a fetched spec gets it only when deploying is proven
+ *                       to fix every call: a call the current spec ALSO refuses is
+ *                       listed instead, with no deploy instruction (D-30).
  *   8  RELEASE BREAK    release-mode: shipping this candidate WOULD introduce a
  *                       skew. A decision still available to us — deploying the
  *                       backend is not the remedy, so it is not code 7.
@@ -421,9 +427,19 @@ const dedupeFindings = (list, fields) => {
     return true;
   });
 };
+// ⚠️ SCRUM-178 v2 batch 5. A gap is identified by WHICH CALL (siteId, not just
+// file:line: two calls on one line are two sites) and by WHICH SPEC it was found
+// against. Identical details from two roles stay two gaps, each attributed, so a
+// reader can tell a deployed-spec gap from a candidate-spec gap.
+/** @param {string} role */
+const tagged = (role) => (/** @type {any} */ g) => ({ ...g, spec: role });
 const validatorGaps = dedupeFindings(
-  [...result.gaps, ...(candidateResult?.gaps ?? []), ...(currentResult?.gaps ?? [])],
-  ["surface", "file", "line", "identifier", "path", "detail"]
+  [
+    ...result.gaps.map(tagged("deployed")),
+    ...(candidateResult?.gaps ?? []).map(tagged("candidate")),
+    ...(currentResult?.gaps ?? []).map(tagged("current")),
+  ],
+  ["surface", "file", "line", "identifier", "siteId", "path", "detail", "spec"]
 );
 if (validatorGaps.length) {
   coverageProblems.push(`${validatorGaps.length} call(s) into a validator this control cannot compare (no argument validator, v.record(), empty v.union())`);
@@ -444,7 +460,7 @@ function reportCoverageIncomplete(prefix) {
     console.error(`::error file=${s.file},line=${s.line}::${s.identifier} - ${s.reason}`);
   }
   for (const g of validatorGaps) {
-    console.error(`::error file=${g.file},line=${g.line}::[coverage gap] ${g.identifier} ${g.path} — ${g.detail}`);
+    console.error(`::error file=${g.file},line=${g.line}::[coverage gap] ${g.identifier} ${g.path} — ${g.detail} [spec: ${g.spec}]`);
   }
   for (const f of classification.uncertain) {
     console.error(
@@ -569,7 +585,7 @@ function releaseStateOf() {
       breaking: [],
       needsEvidence: dedupeFindings(
         [...result.needsEvidence, ...candidateResult.needsEvidence],
-        ["surface", "file", "line", "identifier", "path", "dimension", "severity"]
+        ["surface", "file", "line", "identifier", "siteId", "path", "dimension", "severity"]
       ),
       gaps: validatorGaps,
     },
@@ -584,6 +600,7 @@ function releaseStateOf() {
 }
 const release = releaseStateOf();
 const releaseFixed = release?.facts.fixedByCandidate.length ?? 0;
+const releaseIndeterminate = release?.facts.indeterminate.length ?? 0;
 
 // ⚠️ L-2 (batch 4): a deployed break the CANDIDATE fixes is not a proven break of
 // this release. It is counted on its own (`releaseFixed`) and taken out of the
@@ -611,20 +628,32 @@ const coverageIncomplete = coverageProblems.length > 0;
 // release break. A break the deployed backend has and the candidate fixes, or one
 // both have on a path the release leaves alone, is reported but is not a FAIL
 // that exits 0.
+//
+// ⚠️ N-3 (batch 5): a release whose ONLY finding is a standing break is not
+// "UNKNOWN: 0 reviewed paths remain unverified" - nothing is unverified, and a
+// known break exists. It is STANDING: exit 0 (D-27: not this release's), but the
+// verdict says what is true. A standing break next to anything unproven stays
+// UNKNOWN and the sentence carries both facts.
+const hasStanding =
+  (release?.facts.standingAgainstBoth.length ?? 0) > 0 || classification.standingDefects.length > 0;
+const releaseUnproven =
+  result.needsEvidence.length > 0 ||
+  (candidateResult?.needsEvidence.length ?? 0) > 0 ||
+  result.gaps.length > 0 ||
+  (release?.facts.indeterminate.length ?? 0) > 0 ||
+  result.coverage.clientCallSitesUnresolved > 0;
 const baseVerdict = release
   ? release.facts.releaseBreaks.length > 0
     ? "FAIL"
-    : release.facts.standingAgainstBoth.length > 0 ||
-        classification.standingDefects.length > 0 ||
-        result.needsEvidence.length > 0 ||
-        (candidateResult?.needsEvidence.length ?? 0) > 0 ||
-        result.gaps.length > 0 ||
-        result.coverage.clientCallSitesUnresolved > 0
+    : releaseUnproven
       ? "UNKNOWN"
-      : "PASS"
+      : hasStanding
+        ? "STANDING"
+        : "PASS"
   : result.verdict;
 const verdict =
-  baseVerdict === "PASS" && (unscannedFiles > 0 || coverageIncomplete || baselineState.matched > 0)
+  (baseVerdict === "PASS" || baseVerdict === "STANDING") &&
+  (unscannedFiles > 0 || coverageIncomplete || baselineState.matched > 0)
     ? "UNKNOWN"
     : baseVerdict;
 const coverageWarning = result.alert.coverageWarning || verdict !== baseVerdict;
@@ -648,8 +677,15 @@ function reportProvenBreaks(prefix) {
     return;
   }
   for (const f of [...classification.revisionSkew, ...classification.unclassified]) {
+    // D-30: where the current spec ALSO refuses this call, say so at the line, with
+    // the current break - the reader must not take "skew" to mean "a deploy fixes it".
+    const alsoRefused = f.currentRejects
+      ? `; the current spec ALSO rejects this call at ${f.currentRejects
+          .map((/** @type {any} */ c) => `${c.path} [${c.dimension}] (${c.detail})`)
+          .join(", ")}, so deploying will not fix it`
+      : "";
     console.error(
-      `::error file=${f.file},line=${f.line}::[${f.classification}] ${f.identifier} ${f.path} — ${f.detail} [${f.dimension}]`
+      `::error file=${f.file},line=${f.line}::[${f.classification}] ${f.identifier} ${f.path} — ${f.detail} [${f.dimension}]${alsoRefused}`
     );
   }
   // The wording claims only what the spec's origin proves (see skewWording.mjs).
@@ -661,6 +697,7 @@ function reportProvenBreaks(prefix) {
       proven: classification.revisionSkew.length,
       unclassified: classification.unclassified.length,
       basis: classification.basis ?? "none",
+      rejectedElsewhere: classification.rejectedElsewhere,
     })}`
   );
 }
@@ -702,6 +739,25 @@ function reportReleaseFixed(prefix) {
   console.error(`::notice::${prefix}RELEASE: ${releaseFixed} deployed break(s) FIXED BY THIS CANDIDATE, not counted as proven breaks.`);
 }
 
+/**
+ * D-30: a deployed break the candidate cannot be compared on. No fix is claimed
+ * and none is counted in `releaseFixed`; the exit stays whatever the gap / blocker
+ * logic gives (4 or 9) - this adds no exit code of its own.
+ *
+ * @param {string} prefix
+ */
+function reportReleaseIndeterminate(prefix) {
+  const list = release?.facts.indeterminate ?? [];
+  for (const f of list) {
+    console.error(
+      `::warning file=${f.file},line=${f.line}::[INDETERMINATE] ${f.identifier} ${f.path} is refused by the deployed backend, and the candidate has a gap or an unproven value at this call, so it is NOT claimed fixed`
+    );
+  }
+  console.error(
+    `::warning::${prefix}RELEASE: ${list.length} deployed break(s) INDETERMINATE against this candidate - no fix claimed, not counted as fixed.`
+  );
+}
+
 /** @param {string} prefix */
 function reportReleaseBlockers(prefix) {
   for (const f of release?.blockers.intersectingUnknowns ?? []) {
@@ -711,7 +767,7 @@ function reportReleaseBlockers(prefix) {
   }
   for (const g of release?.blockers.intersectingGaps ?? []) {
     console.error(
-      `::error file=${g.file},line=${g.line}::${g.identifier} ${g.path} cannot be compared (${g.detail}) and this release changes it`
+      `::error file=${g.file},line=${g.line}::${g.identifier} ${g.path} cannot be compared (${g.detail}) [spec: ${g.spec}] and this release changes it`
     );
   }
   console.error(
@@ -741,6 +797,8 @@ const causes = [
   { id: "releaseBreak", key: "releaseBreaks", value: release?.facts.releaseBreaks.length ?? 0, present: (release?.facts.releaseBreaks.length ?? 0) > 0, exit: { release: EXIT.RELEASE_BREAK }, report: reportReleaseBreaks },
   // L-2: informational, never an exit. Breaks the deployed backend has and this candidate fixes.
   { id: "releaseFixed", key: "releaseFixed", value: releaseFixed, present: releaseFixed > 0, exit: {}, report: reportReleaseFixed },
+  // D-30: informational, never an exit. Deployed breaks the candidate cannot be compared on.
+  { id: "releaseIndeterminate", key: "releaseIndeterminate", value: releaseIndeterminate, present: releaseIndeterminate > 0, exit: {}, report: reportReleaseIndeterminate },
   { id: "releaseBlocker", key: "releaseBlockers", value: release?.blockingCount ?? 0, present: Boolean(release?.blockers.blocked), exit: { release: EXIT.BLOCKED }, report: reportReleaseBlockers },
   // ⚠️ A client FILE that was never scanned is not the same as an unproven path
   // inside a file that was. For an unproven path the control saw the call and
@@ -771,7 +829,11 @@ const report = {
     standingDefects: classification.standingDefects.length,
     unclassified: classification.unclassified.length,
     coverageIncomplete: classification.uncertain.length,
+    // D-30: skew calls the current spec ALSO refuses - a deploy does not fix these.
+    rejectedByCurrent: classification.rejectedElsewhere.length,
   },
+  // Every coverage gap, tagged with the spec it was found against (N-4).
+  gaps: validatorGaps,
   unproven,
   baseline: { path: baselinePath, matched: baselineState.matched, drift: baselineState.problems },
   // Every cause present in this run, whatever single exit code the precedence
@@ -847,6 +909,15 @@ if (release) {
     breaks: facts.releaseBreaks.length,
     standingAgainstBoth: facts.standingAgainstBoth.length,
     fixedByCandidate: facts.fixedByCandidate.length,
+    // D-30: deployed breaks the candidate cannot be compared on - NOT counted as fixed.
+    indeterminate: facts.indeterminate.length,
+    indeterminateBreaks: facts.indeterminate.map((f) => ({
+      identifier: f.identifier,
+      path: f.path,
+      file: f.file,
+      line: f.line,
+      siteId: f.siteId,
+    })),
   };
 
   emit(report);
@@ -899,9 +970,16 @@ if (release) {
 
   // The same honest sentence as production mode: a release that clears with
   // reviewed debt remaining is UNKNOWN about that debt, never a PASS.
-  if (unproven.length > 0 || verdict !== "PASS") {
+  const standingCount = facts.standingAgainstBoth.length || classification.standingDefects.length;
+  if (verdict === "STANDING") {
+    // N-3: nothing is unverified; a known break exists that this release does not own.
     console.error(
-      `No proven skew in accounted Convex argument calls; verdict UNKNOWN: ${unproven.length} reviewed paths remain unverified.`
+      `No release break; verdict STANDING: a known standing break exists (${standingCount} call path(s) refused by the deployed backend and the candidate alike, on a path this release does not change). Exit 0 because this release does not introduce it.`
+    );
+  } else if (unproven.length > 0 || verdict !== "PASS") {
+    console.error(
+      `No proven skew in accounted Convex argument calls; verdict UNKNOWN: ${unproven.length} reviewed paths remain unverified.` +
+        (hasStanding ? ` A known standing break also exists (${standingCount} call path(s)), not introduced by this release.` : "")
     );
   }
   process.exit(EXIT.OK);

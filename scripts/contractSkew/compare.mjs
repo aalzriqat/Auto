@@ -139,18 +139,105 @@ export function blockersForRelease(result, changed) {
  */
 export const breakKey = (f) => findingKey(f, BREAK_KEY_FIELDS);
 
+/** Per-object ids for findings that carry no `siteId` (see `findingKey`). */
+const NO_SITE_ID = new WeakMap();
+let noSiteIdCounter = 0;
+
 /**
  * A finding's identity over exactly the named fields (an absent `surface` reads
  * as ""). Every dedupe in the control is `findingKey` over its own field list, so
  * the lists stay explicit at each call site and the keying cannot drift.
  *
+ * ⚠️ SCRUM-178 v2 batch 5 (B4-1). `file:line` is not a call site: two calls to the
+ * same function on one line are two sites, and the extractor tells them apart only
+ * by column, in `siteId`. An identity that omits it merges them, and a break at one
+ * is then read as the other's. A list that names `siteId` therefore treats a
+ * finding with NO siteId as unmatchable: its key is unique to that object, so it
+ * equals itself (it can sit in a Set) and nothing else. Missing evidence is never
+ * a match.
+ *
  * @param {Record<string, any>} f
  * @param {readonly string[]} fields
  */
-export const findingKey = (f, fields) =>
-  JSON.stringify(fields.map((name) => (name === "surface" ? (f.surface ?? "") : f[name])));
+export const findingKey = (f, fields) => {
+  const parts = fields.map((name) => (name === "surface" ? (f.surface ?? "") : f[name]));
+  if (fields.includes("siteId") && !f.siteId) {
+    let id = NO_SITE_ID.get(f);
+    if (id === undefined) {
+      id = ++noSiteIdCounter;
+      NO_SITE_ID.set(f, id);
+    }
+    parts.push(`<no siteId #${id}>`);
+  }
+  return JSON.stringify(parts);
+};
 
-const BREAK_KEY_FIELDS = ["surface", "file", "line", "identifier", "path", "dimension"];
+const BREAK_KEY_FIELDS = ["surface", "file", "line", "identifier", "siteId", "path", "dimension"];
+
+/**
+ * What another spec's comparison says about ONE deployed break (SCRUM-178 v2 batch
+ * 5, D-30). THE INVARIANT: a deployed break is fixed by spec X only when X is
+ * comparable at that same call (same siteId) and accepts it at the cited break
+ * path. The absence of a break is not acceptance.
+ *
+ *   REJECTED_SAME   X refuses the same call for the same reason (same identity).
+ *   REJECTED_OTHER  X refuses the same call, at another path or dimension or at
+ *                   `<function>`: the call still fails, so a fix for THIS break is
+ *                   not a fix for the call.
+ *   UNPROVEN        X has a gap or an unknown at the same call, on the cited path,
+ *                   an ancestor or descendant of it, or at `<function>`: X cannot
+ *                   say whether it accepts the call, so nothing is claimed.
+ *   ACCEPTED        none of the above.
+ *
+ * Precedence is explicit: REJECTED_SAME > REJECTED_OTHER > UNPROVEN > ACCEPTED. A
+ * finding with no siteId cannot be located, so it is UNPROVEN, never ACCEPTED; and
+ * so is a finding on the other side that carries no siteId but sits on the same
+ * function and line, because it may be this call's.
+ *
+ * ⚠️ The cited path decides which unknowns count. An unknown at an unrelated
+ * SIBLING path says nothing about whether the cited path is accepted, so it does
+ * not make the break UNPROVEN. A break at `<function>` is judged at `<function>`
+ * only: a field-level unknown beneath it is not what that break was about (a field
+ * the other spec REJECTS is REJECTED_OTHER, which outranks it).
+ */
+export const ACCEPTANCE = {
+  ACCEPTED: "ACCEPTED",
+  REJECTED_SAME: "REJECTED_SAME",
+  REJECTED_OTHER: "REJECTED_OTHER",
+  UNPROVEN: "UNPROVEN",
+};
+
+/** @param {Record<string, any>} f */
+const siteKey = (f) => (f.siteId ? JSON.stringify([f.surface ?? "", f.siteId]) : undefined);
+/** @param {Record<string, any>} f */
+const lineKey = (f) => JSON.stringify([f.surface ?? "", f.file, f.line, f.identifier]);
+
+/**
+ * @param {Record<string, any>} finding  a deployed break
+ * @param {{ breaking?: any[], gaps?: any[], needsEvidence?: any[] }} otherResult
+ *   a compareContracts() result for the SAME calls against another spec
+ * @returns {{ disposition: string, rejectedAt: any[], unprovenAt: any[] }}
+ */
+export function acceptanceAt(finding, otherResult) {
+  const mine = siteKey(finding);
+  if (!mine) return { disposition: ACCEPTANCE.UNPROVEN, rejectedAt: [], unprovenAt: [] };
+  const breaking = otherResult.breaking ?? [];
+  const unsure = [...(otherResult.gaps ?? []), ...(otherResult.needsEvidence ?? [])];
+
+  const rejectedAt = breaking.filter((b) => siteKey(b) === mine);
+  const same = rejectedAt.filter((b) => breakKey(b) === breakKey(finding));
+  if (same.length) return { disposition: ACCEPTANCE.REJECTED_SAME, rejectedAt: same, unprovenAt: [] };
+  if (rejectedAt.length) return { disposition: ACCEPTANCE.REJECTED_OTHER, rejectedAt, unprovenAt: [] };
+
+  const relevant = (/** @type {string} */ path) =>
+    finding.path === "<function>" ? path === "<function>" : path === "<function>" || pathsOverlap(path, finding.path);
+  const unprovenAt = [
+    ...unsure.filter((u) => siteKey(u) === mine && relevant(u.path)),
+    // Cannot be placed at any site, so it may be this one's.
+    ...[...breaking, ...unsure].filter((u) => !u.siteId && lineKey(u) === lineKey(finding)),
+  ];
+  return { disposition: unprovenAt.length ? ACCEPTANCE.UNPROVEN : ACCEPTANCE.ACCEPTED, rejectedAt: [], unprovenAt };
+}
 
 /**
  * SCRUM-178 v2 batch 3 (R1, D-27). A RELEASE IS ANSWERABLE FOR WHAT IT
@@ -171,19 +258,20 @@ const BREAK_KEY_FIELDS = ["surface", "file", "line", "identifier", "path", "dime
  *                   break set, or one on a path the candidate changed
  *   STANDING        a candidate break also present against the deployed spec, on
  *                   a path the candidate does not change: not this release's
- *   FIXED           a deployed break the candidate no longer has
+ *   FIXED           a deployed break the candidate ACCEPTS at that same call
+ *                   (`acceptanceAt`: absence of a break is not acceptance)
+ *   INDETERMINATE   a deployed break the candidate cannot be compared on (a gap or
+ *                   an unknown at that call): no fix is claimed
  *
  * @param {{breaking: any[]}} deployed
- * @param {{breaking: any[]}} candidate
+ * @param {{breaking: any[], gaps?: any[], needsEvidence?: any[]}} candidate
  * @param {Array<{identifier: string, path: string}>} changed
  */
 export function classifyRelease(deployed, candidate, changed) {
   // Each break's key is computed once per side, and the changes are bucketed by
   // function so a lookup scans only that function's changes.
-  const deployedKeyed = deployed.breaking.map((f) => [f, breakKey(f)]);
+  const deployedKeys = new Set(deployed.breaking.map(breakKey));
   const candidateKeyed = candidate.breaking.map((f) => [f, breakKey(f)]);
-  const deployedKeys = new Set(deployedKeyed.map(([, key]) => key));
-  const candidateKeys = new Set(candidateKeyed.map(([, key]) => key));
   const changedByFunction = new Map();
   for (const change of changed) {
     const bucket = changedByFunction.get(change.identifier);
@@ -196,8 +284,20 @@ export function classifyRelease(deployed, candidate, changed) {
     if (!deployedKeys.has(key) || touchesChange(changedByFunction.get(f.identifier) ?? [], f)) releaseBreaks.push(f);
     else standingAgainstBoth.push(f);
   }
-  const fixedByCandidate = deployedKeyed.filter(([, key]) => !candidateKeys.has(key)).map(([f]) => f);
-  return { releaseBreaks, standingAgainstBoth, fixedByCandidate };
+  // ⚠️ D-30: "the candidate has no such break" is not "the candidate accepts the
+  // call". A deployed break is FIXED only when the candidate is comparable at that
+  // same call and accepts it (ACCEPTED). When the candidate has a gap or an unknown
+  // there it is INDETERMINATE: listed, and no fix is claimed. A call the candidate
+  // still refuses (SAME or OTHER) is not fixed either, and is already a release
+  // break or a standing one above.
+  const fixedByCandidate = [];
+  const indeterminate = [];
+  for (const f of deployed.breaking) {
+    const { disposition } = acceptanceAt(f, candidate);
+    if (disposition === ACCEPTANCE.ACCEPTED) fixedByCandidate.push(f);
+    else if (disposition === ACCEPTANCE.UNPROVEN) indeterminate.push(f);
+  }
+  return { releaseBreaks, standingAgainstBoth, fixedByCandidate, indeterminate };
 }
 
 export const SEVERITY = {

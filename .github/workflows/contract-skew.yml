@@ -161,7 +161,7 @@ jobs:
             4) echo "::error::BLOCKED (exit 4) - an unproven path overlaps a path this release changes. NOT a pass." ;;
             9) echo "::error::COVERAGE INCOMPLETE (exit 9) - at least one call site could not be accounted for, or none were found. NOT a pass and NOT a proven skew; do not deploy on this." ;;
             10) echo "::error::EVIDENCE DRIFT (exit 10) - the unproven paths differ from scripts/contractSkew/needs-evidence-baseline.json. NOT a skew; a person must review the report and update the baseline." ;;
-            7) echo "::error::PRODUCTION SKEW — the deployed backend is behind the current one. Deploy the Convex backend at this commit." ;;
+            7) echo "::error::PRODUCTION SKEW (exit 7) - the deployed backend refuses calls the client makes. Whether deploying the backend fixes them is decided per call: read the CLI summary above. It says to deploy only when that is proven for every call, and otherwise lists the calls a deploy will not fix." ;;
             8) echo "::error::RELEASE BREAK — shipping this candidate would introduce a skew. Deploying the backend is NOT the remedy; fix the client or the candidate." ;;
             1) echo "::error::CONTROL FAILED TO COMPLETE (raw exit 1) — this is a tooling or runtime failure, NOT a verdict about the backend. DO NOT DEPLOY on this result. Investigate the job log." ;;
             3) echo "::error::Control UNAVAILABLE - no authoritative evidence could be obtained (credential, deployment identity, or a spec this control cannot read). This is NOT a pass." ;;
@@ -210,7 +210,7 @@ jobs:
         run: |
           set -euo pipefail
           title="Contract skew monitor: latest run failed"
-          body="$(printf 'The contract-skew monitor did not pass.\n\n- exit code: %s (empty means the job died before the CLI reported one)\n- trigger: %s\n- commit: %s\n- run: %s\n\nExit codes: 7 proven production skew (deploy the backend); 8 release break; 5 standing defect; 3 unavailable; 6 coverage gap; 9 coverage incomplete; 10 evidence drift against needs-evidence-baseline.json; 1 tooling failure. Only 7 carries a deploy instruction.\n\nThis single issue is updated in place while the monitor stays red; close it once a run passes.' "${EXIT_CODE:-none}" "$TRIGGER" "$COMMIT" "$RUN_URL")"
+          body="$(printf 'The contract-skew monitor did not pass.\n\n- exit code: %s (empty means the job died before the CLI reported one)\n- trigger: %s\n- commit: %s\n- run: %s\n\nExit codes: 7 proven production skew; 8 release break; 5 standing defect; 3 unavailable; 6 coverage gap; 9 coverage incomplete; 10 evidence drift against needs-evidence-baseline.json; 1 tooling failure. Only 7 can carry a deploy instruction, and only the CLI summary in the run log says whether deploying fixes every call: read it before deploying, it lists any call a deploy will not fix.\n\nThis single issue is updated in place while the monitor stays red; close it once a run passes.' "${EXIT_CODE:-none}" "$TRIGGER" "$COMMIT" "$RUN_URL")"
           number="$(gh issue list --repo "$REPO" --state open --search "\"$title\" in:title" --json number,title --jq "map(select(.title == \"$title\")) | .[0].number // empty")"
           if [ -n "$number" ]; then
             gh issue comment "$number" --repo "$REPO" --body "$body"

@@ -193,7 +193,9 @@ describe("the deploy instruction belongs to ONE exit code, and never to Node's d
 
   test("ONLY the dedicated production-skew code carries a deploy instruction", () => {
     const deploying = arms()
-      .filter(([, message]) => /Deploy the Convex backend/i.test(message))
+      // D-30: arm 7 no longer says "Deploy the Convex backend" outright; it defers
+      // to the CLI summary, which advises a deploy only when it is proven for every call.
+      .filter(([, message]) => /Deploy the Convex backend|says to deploy only when/i.test(message))
       .map(([code]) => code);
     expect(deploying, "exactly one arm may tell an operator to deploy").toEqual(["7"]);
   });
