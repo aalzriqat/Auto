@@ -1826,6 +1826,12 @@ export const correctAcquisitionCost = mutation({
     }
 
     const vehicle = await loadOwnedLiveVehicle(ctx, args.orgId, args.vehicleId);
+    // loadOwnedLiveVehicle already proved this through requireOwnedRow; it is
+    // restated inline so the static tenant-write guard can see the proof
+    // before the patch below (scripts/tenantWriteGuard.ts reads the handler only).
+    if (vehicle.orgId !== args.orgId) {
+      throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
+    }
     if (vehicle.sourceType === "SOURCED") {
       throwAppError(
         AppErrorCode.COST_CORRECTION_SOURCED,
