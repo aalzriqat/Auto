@@ -203,6 +203,38 @@ describe("DealCockpit closing bindings (TASK-DEAL-04)", () => {
     });
   });
 
+  test("a refused legal invoice keeps the dialog open with the reason, and a retry closes it", async () => {
+    // SCRUM-596 / F-28: the cockpit swallowed the refusal and the dialog closed
+    // as if saved, so the operator never saw why the checklist stayed blocked.
+    setupDeal();
+    stubs.mutationFailures.set(
+      "financeDealCosts:recordLegalInvoice",
+      "The invoice date cannot be in the future."
+    );
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /RecordLegalInvoice/i }));
+    fireEvent.change(screen.getByLabelText(/LegalInvoiceAmount/i), { target: { value: "15000" } });
+    fireEvent.change(screen.getByLabelText(/LegalInvoiceNumber/i), { target: { value: "INV-999" } });
+    fireEvent.change(screen.getByLabelText(/LegalInvoiceDate/i), { target: { value: "2026-09-15" } });
+    fireEvent.click(screen.getByRole("button", { name: /SubmitLegalInvoice/i }));
+
+    await waitFor(() => {
+      expect(mutationCalls.get("financeDealCosts:recordLegalInvoice")).toHaveLength(1);
+    });
+    expect((await screen.findByRole("alert")).textContent).toContain("cannot be in the future");
+    expect((screen.getByLabelText(/LegalInvoiceNumber/i) as HTMLInputElement).value).toBe("INV-999");
+    expect((screen.getByLabelText(/LegalInvoiceDate/i) as HTMLInputElement).value).toBe("2026-09-15");
+
+    fireEvent.click(screen.getByRole("button", { name: /SubmitLegalInvoice/i }));
+    await waitFor(() => {
+      expect(mutationCalls.get("financeDealCosts:recordLegalInvoice")).toHaveLength(2);
+    });
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/LegalInvoiceNumber/i)).toBeNull();
+    });
+  });
+
   test("renders Reconcile Fee action and binds reconcileDealFee mutation", async () => {
     setupDeal();
     render(<DealCockpit orgId={ORG} applicationId={APP} />);

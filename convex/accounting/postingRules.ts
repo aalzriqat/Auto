@@ -2049,6 +2049,30 @@ export interface FinanceCashReceivedPayload {
   amountMinor: number;
   currency: string;
   customerId?: string;
+  /**
+   * SCRUM-599: the method of record of the receipt — the same value written to
+   * its canonical payment. Absent on events emitted before SCRUM-599.
+   */
+  paymentMethod?: FinanceReceiptMethod;
+}
+
+/** How a finance company's disbursement can reach the dealership. */
+export type FinanceReceiptMethod = "CASH" | "BANK_TRANSFER" | "CHEQUE";
+
+/**
+ * SCRUM-599: the account a finance-company receipt lands in. CASH is cash on
+ * hand. BANK_TRANSFER is the bank, and so is CHEQUE: confirmDisbursement clears
+ * the cheque in the same transaction, so the money is never held as a cheque.
+ *
+ * Absent means an event emitted before the method was carried, which keeps the
+ * bank posting it always had. Deliberately neither `cashAccountKey` (CHEQUE →
+ * cheques in hand) nor `disbursementAccountKey` (absent → cash on hand). Any
+ * other value is refused rather than guessed into the bank.
+ */
+export function financeReceiptAccountKey(method: unknown): SystemKey {
+  if (method === undefined || method === "BANK_TRANSFER" || method === "CHEQUE") return SYSTEM_KEYS.BANK_ACCOUNT;
+  if (method === "CASH") return SYSTEM_KEYS.CASH_ON_HAND;
+  throw new Error(`FINANCE_CASH_RECEIVED carries an unsupported payment method: ${String(method)}`);
 }
 
 export function ruleFinanceDisbursed(p: FinanceDisbursedPayload): RuleResult {
@@ -2066,8 +2090,9 @@ export function ruleFinanceDisbursed(p: FinanceDisbursedPayload): RuleResult {
 export function ruleFinanceCashReceived(p: FinanceCashReceivedPayload): RuleResult {
   return {
     lines: [
-      // Actual receipt of funds from the finance company settles their receivable
-      line(SYSTEM_KEYS.BANK_ACCOUNT, p.amountMinor, 0, "Finance company disbursement received", financePayerDims(p)),
+      // Actual receipt of funds from the finance company settles their receivable,
+      // debited to wherever the money landed (SCRUM-599).
+      line(financeReceiptAccountKey(p.paymentMethod), p.amountMinor, 0, "Finance company disbursement received", financePayerDims(p)),
       line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, 0, p.amountMinor, "Finance company receivable settled", { ...financePayerDims(p), customerId: p.customerId }),
     ],
     memo: "Finance company disbursement received",
