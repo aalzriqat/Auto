@@ -399,7 +399,8 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       const search = page.locator('main input[placeholder^="Search"]').first();
       if (!(await appeared(search, 15_000))) return undefined;
       await search.fill(tag);
-      await page.waitForTimeout(2_000);
+      // The tag is unique to this attempt, so once it shows the search has settled.
+      await appeared(page.locator("main table").filter({ hasText: tag }).first(), 2_000);
       const text = await page.locator("main table").innerText().catch(() => "");
       return text.includes(tag) ? text : undefined;
     }
@@ -439,7 +440,8 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
         await closeDialog(dialog);
         return { outcome: "ignored", warned: false, tag, setupFailed: `could not fill the form: ${String(error).slice(0, 160)}` };
       }
-      await page.waitForTimeout(1_500); // the duplicate check is debounced
+      // The duplicate check is debounced: give its warning up to 1.5s to show.
+      await appeared(dialog.getByText(DUPLICATE_WARNING).first(), 1_500);
       const warned = DUPLICATE_WARNING.test(await dialog.innerText().catch(() => ""));
       const res = await submit(c.form, dialog);
       return { ...res, warned, tag, value, dialog };
