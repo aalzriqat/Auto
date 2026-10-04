@@ -3210,4 +3210,53 @@ describe("deal lists page newest first (SCRUM-603)", () => {
 
     expect(page.page.map((s) => s._id)).toEqual([newestId]);
   });
+  // Codex SCRUM-603-1: newest-first sales and applications page independently,
+  // so a recently finalized deal can arrive as a sale whose (older) application
+  // is not loaded. Without the application's queue facts that row read
+  // "nothing to wait for" while the financier still owed the dealership.
+  test("a finalized deal's sale row carries its application's queue facts", async () => {
+    const { orgId, companyId, applicationId, asUser } = await setupFinalizedFinancedDeal();
+
+    const page = await asUser.query(api.sales.list, {
+      orgId,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    const finalized = page.page.find((s) => s.applicationId === applicationId);
+
+    expect(finalized?.linkedApplication).toEqual({
+      status: "CLOSED",
+      companyId,
+      disbursedAt: undefined,
+      supplierSettlementRoute: undefined,
+      hasPendingDepositResolution: false,
+    });
+  });
+
+  test("a sale linked to another organization's application carries no queue facts", async () => {
+    const { t, orgId, userId, customerId, vehicleId, asUser, applicationId } = await setupFinalizedFinancedDeal();
+    const other = await t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Other", createdAt: Date.now() });
+      const { _id, _creationTime, ...row } = (await ctx.db.get(applicationId))!;
+      return await ctx.db.insert("financeApplications", { ...row, orgId: otherOrgId });
+    });
+    const saleId = await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice: 20_000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        applicationId: other,
+      })
+    );
+
+    const page = await asUser.query(api.sales.list, {
+      orgId,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+
+    expect(page.page.find((s) => s._id === saleId)?.linkedApplication).toBeUndefined();
+  });
 });

@@ -39,7 +39,15 @@ export type SaleListRow = {
   applicationId?: string;
   /** FINANCED is a property of the SALE, not of whether an application exists. */
   financingType?: "CASH" | "FINANCED" | "LEASE";
+  /** The linked application's queue facts, served with the sale (Codex SCRUM-603-1). */
+  linkedApplication?: ApplicationQueueFacts;
 };
+
+/** What `applicationReason` reads — all of it, and only it. */
+export type ApplicationQueueFacts = Pick<
+  ApplicationListRow,
+  "status" | "companyId" | "disbursedAt" | "supplierSettlementRoute" | "hasPendingDepositResolution"
+>;
 
 const APPLICATION_STATUS_LABEL: Record<string, string> = {
   DRAFT: "Draft",
@@ -51,7 +59,7 @@ const APPLICATION_STATUS_LABEL: Record<string, string> = {
   CANCELLED: "Cancelled",
 };
 
-export function applicationReason(app: ApplicationListRow): { reason: DealReason | null; waitingOn: DealWaitingOn } {
+export function applicationReason(app: ApplicationQueueFacts): { reason: DealReason | null; waitingOn: DealWaitingOn } {
   // A held deposit on a stopped deal is real cash with no owner — first,
   // whatever the status says.
   if (app.hasPendingDepositResolution) return { reason: "DEPOSIT_PENDING", waitingOn: "DEALERSHIP" };
@@ -120,6 +128,16 @@ export function saleRow(
   // absence would label those "Cash" and queue them as a cash sale to complete.
   const externallyFinanced =
     sale.applicationId !== undefined || sale.financingType === "FINANCED" || sale.financingType === "LEASE";
+  // A sale still to be completed is the dealership's move. Past that, a
+  // financed deal's queue state is its application's — an unpaid financier
+  // receipt or a held deposit — read through the one rule, never re-derived.
+  const queue: { reason: DealReason | null; waitingOn: DealWaitingOn } =
+    sale.status !== "PENDING" && sale.linkedApplication
+      ? applicationReason(sale.linkedApplication)
+      : {
+          reason: sale.status === "PENDING" ? (externallyFinanced ? "SALE_PENDING" : "CASH_PENDING") : null,
+          waitingOn: sale.status === "PENDING" ? "DEALERSHIP" : "NONE",
+        };
   return {
     key: `sale_${sale._id}`,
     href: `/${orgId}/sales/${sale._id}/deal`,
@@ -131,8 +149,8 @@ export function saleRow(
       sale.status === "PENDING" ? "SaleStatusPending" : sale.status === "COMPLETED" ? "SaleStatusCompleted" : "Cancelled"
     ),
     statusTone: sale.status === "COMPLETED" ? "done" : sale.status === "CANCELLED" ? "stopped" : "active",
-    reason: sale.status === "PENDING" ? (externallyFinanced ? "SALE_PENDING" : "CASH_PENDING") : null,
-    waitingOn: sale.status === "PENDING" ? "DEALERSHIP" : "NONE",
+    reason: queue.reason,
+    waitingOn: queue.waitingOn,
     since: sale.saleDate,
     salespersonName: sale.salespersonName,
     amountLabel: formatAmount(sale.salePrice),
