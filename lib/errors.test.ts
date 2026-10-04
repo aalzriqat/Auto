@@ -306,6 +306,20 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(match?.[1]).toBe(enEntry);
   });
 
+  it("SCRUM-641 VEHICLE_DELETED resolves to its dictionary entry in ar and en, and EN equals the server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { VEHICLE_DELETED_MESSAGE } = await import("../convex/utils/vehicleLiveness");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code: "VEHICLE_DELETED", message: "server text" });
+    const arEntry = (dictionaries.ar as Record<string, string>).ServerError_VEHICLE_DELETED;
+    const enEntry = (dictionaries.en as Record<string, string>).ServerError_VEHICLE_DELETED;
+    expect(arEntry).toMatch(/[؀-ۿ]/);
+    expect(getLocalizedErrorMessage(error, ar)).toBe(arEntry);
+    expect(getLocalizedErrorMessage(error, en)).toBe(enEntry);
+    expect(enEntry).toBe(VEHICLE_DELETED_MESSAGE);
+  });
+
   it("the English dictionary text equals the server's message for both codes", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     expect(dictionaries.en.ServerError_COMMISSION_BASE_UNUSABLE).toContain("{baseCurrency}");
