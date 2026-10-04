@@ -368,7 +368,8 @@ export function RecordApprovedPurchaseDialog({
           )}
 
           {error && (
-            <p role="alert" className="text-sm font-medium text-destructive">
+            // dir="auto": a server refusal can arrive in English inside the RTL dialog (SCRUM-628 F-24).
+            <p role="alert" dir="auto" className="text-sm font-medium text-destructive">
               {error}
             </p>
           )}
