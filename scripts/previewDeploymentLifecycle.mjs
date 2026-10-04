@@ -124,6 +124,30 @@ export async function callManagementApi(
 }
 
 /**
+ * Does this deployment belong to this run's preview? Convex identifies a
+ * preview by `reference` ("preview/<name>"), which the API documents as unique
+ * within the project; `previewIdentifier` is a nullable string whose live value
+ * is not guaranteed to equal the name. Either exact match proves identity. A
+ * non-string or absent field never matches: no trimming, folding or prefixes.
+ */
+export function carriesPreviewIdentity(d, previewName) {
+  if (!d || typeof d !== "object" || typeof previewName !== "string" || previewName === "") return false;
+  // A malformed field on either side voids the match, even if the other matches.
+  if (d.reference !== undefined && d.reference !== null && typeof d.reference !== "string") return false;
+  if (d.previewIdentifier !== undefined && d.previewIdentifier !== null && typeof d.previewIdentifier !== "string") {
+    return false;
+  }
+  return d.reference === "preview/" + previewName || d.previewIdentifier === previewName;
+}
+
+/** Diagnostic form of an observed field: a bounded, inert string, or its type. */
+export function describeObserved(value) {
+  if (value === null) return "null";
+  if (typeof value !== "string") return typeof value;
+  return value.slice(0, 80).replace(/[^A-Za-z0-9/_.:-]/g, "?");
+}
+
+/**
  * GET the deployment and prove it is this run's preview. Returns null when it
  * no longer exists (already expired, or replaced by a newer run).
  */
@@ -145,10 +169,16 @@ export async function readOwnPreview({ deployKey, previewName, deploymentName, f
   if (!d || typeof d !== "object" || Array.isArray(d)) refuse("Convex Management API returned a non-object.");
   if (d.name !== deploymentName) refuse("Deployment name does not match the requested deployment.");
   if (d.deploymentType !== "preview") refuse("Deployment " + deploymentName + " is not a preview deployment.");
-  if (d.kind !== undefined && d.kind !== "cloud") refuse("Deployment " + deploymentName + " is not a cloud deployment.");
-  if (d.isDefault === true) refuse("Deployment " + deploymentName + " is a default deployment.");
-  if (d.previewIdentifier !== previewName) {
-    refuse("Deployment " + deploymentName + " does not carry this run's preview identifier.");
+  if (d.kind !== "cloud") refuse("Deployment " + deploymentName + " is not a cloud deployment (observed kind: " + describeObserved(d.kind) + ").");
+  if (d.isDefault !== false) refuse(
+      "Deployment " + deploymentName + " is not confirmed non-default (observed isDefault: " +
+        (typeof d.isDefault === "boolean" ? String(d.isDefault) : d.isDefault === null ? "null" : typeof d.isDefault) + ").",
+    );
+  if (!carriesPreviewIdentity(d, previewName)) {
+    refuse(
+      "Deployment " + deploymentName + " does not carry this run's preview identifier (observed reference: " +
+        describeObserved(d.reference) + "; previewIdentifier: " + describeObserved(d.previewIdentifier) + ").",
+    );
   }
   if (!Number.isSafeInteger(d.createTime) || d.createTime <= 0) refuse("Deployment createTime is missing.");
   return d;
