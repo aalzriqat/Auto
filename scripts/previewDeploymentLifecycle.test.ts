@@ -5,12 +5,18 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
   PIN_TTL_MS,
+  carriesPreviewIdentity,
   deletePreview,
   deploymentNameFromUrl,
+  describeObserved,
   main,
   pinPreview,
 } from "./previewDeploymentLifecycle.mjs";
 
+// A realistic PlatformDeploymentResponse for a preview (see the Convex OpenAPI).
+const FIXTURE = JSON.parse(
+  readFileSync(path.join(process.cwd(), "scripts", "__fixtures__", "convexPreviewDeployment.json"), "utf8"),
+) as Record<string, unknown>;
 const SECRET = "unit-test-secret-bytes";
 const DEPLOY_KEY = "preview:team-one:project-two|" + SECRET;
 const PREVIEW_NAME = "e2e-pr-377-abcdef1234";
@@ -22,11 +28,10 @@ type Call = { method: string; url: string; body?: unknown; auth?: string };
 
 function preview(overrides: Record<string, unknown> = {}) {
   return {
+    ...FIXTURE,
     name: DEPLOYMENT,
-    kind: "cloud",
-    deploymentType: "preview",
+    reference: "preview/" + PREVIEW_NAME,
     previewIdentifier: PREVIEW_NAME,
-    isDefault: false,
     createTime: CREATED_AT,
     expiresAt: CREATED_AT + 5 * 24 * 60 * 60 * 1000,
     deploymentUrl: "https://" + DEPLOYMENT + ".convex.cloud",
@@ -86,7 +91,10 @@ describe("SCRUM-377 preview deployment lifecycle", () => {
     ["a dev deployment", { deploymentType: "dev" }],
     ["a default deployment", { isDefault: true }],
     ["a non-cloud deployment", { kind: "local" }],
-    ["another run's preview identifier", { previewIdentifier: "e2e-pr-999-0000000000" }],
+    [
+    "another run's preview",
+    { reference: "preview/e2e-pr-999-0000000000", previewIdentifier: "e2e-pr-999-0000000000" },
+  ],
     ["a preview recreated by a newer run", { createTime: CREATED_AT + 1 }],
     ["a response naming a different deployment", { name: "other-animal-1" }],
     ["a response without createTime", { createTime: undefined }],
@@ -168,14 +176,103 @@ describe("SCRUM-377 preview deployment lifecycle", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "scrum377-"));
     const ghEnv = path.join(dir, "env");
     writeFileSync(ghEnv, "");
-    const { calls, fetchImpl } = api(preview({ previewIdentifier: "someone-else" }));
+    const { calls, fetchImpl } = api(
+      preview({ reference: "preview/someone-else", previewIdentifier: "someone-else" }),
+    );
     await expect(pinPreview({ env: env({ GITHUB_ENV: ghEnv }), fetchImpl, now: () => NOW })).rejects.toThrow();
     expect(writes(calls)).toEqual([]);
     expect(readFileSync(ghEnv, "utf8")).toBe("");
   });
 
-  it("only warns, exits 0, and never prints key bytes", async () => {
-    const lines: string[] = [];
+  describe("preview identity (reference or previewIdentifier)", () => {
+    const REF = "preview/" + PREVIEW_NAME;
+
+    it("accepts the Convex reference when previewIdentifier is null: pin and delete succeed", async () => {
+      const current = preview({ previewIdentifier: null });
+      const pinned = api(current);
+      await expect(pinPreview({ env: env(), fetchImpl: pinned.fetchImpl, now: () => NOW })).resolves.toMatchObject({
+        deploymentName: DEPLOYMENT,
+      });
+      expect(writes(pinned.calls)).toHaveLength(1);
+      const deleted = api(current);
+      await expect(deletePreview({ env: env(), fetchImpl: deleted.fetchImpl })).resolves.toMatchObject({ deleted: true });
+      expect(writes(deleted.calls)).toHaveLength(1);
+    });
+
+    it("accepts a matching reference when previewIdentifier is a different string", async () => {
+      const { fetchImpl } = api(preview({ previewIdentifier: "something-else-entirely" }));
+      await expect(deletePreview({ env: env(), fetchImpl })).resolves.toMatchObject({ deleted: true });
+    });
+
+    it("accepts a matching previewIdentifier when reference differs (the old contract)", async () => {
+      const { fetchImpl } = api(preview({ reference: "preview/another-name" }));
+      await expect(deletePreview({ env: env(), fetchImpl })).resolves.toMatchObject({ deleted: true });
+    });
+
+    it("refuses when both mismatch, and the message carries the sanitized observed values", async () => {
+      const { calls, fetchImpl } = api(preview({ reference: "preview/other", previewIdentifier: 42 }));
+      await expect(deletePreview({ env: env(), fetchImpl })).rejects.toThrow(
+        /observed reference: preview\/other; previewIdentifier: number/,
+      );
+      expect(writes(calls)).toEqual([]);
+      const nulls = api(preview({ reference: undefined, previewIdentifier: null }));
+      await expect(deletePreview({ env: env(), fetchImpl: nulls.fetchImpl })).rejects.toThrow(
+        /observed reference: undefined; previewIdentifier: null/,
+      );
+    });
+
+    it.each([
+      ["a longer name sharing the prefix", REF + "x"],
+      ["a prefix of the name", REF.slice(0, -1)],
+      ["an upper-case scheme", "PREVIEW/" + PREVIEW_NAME],
+      ["a padded reference", " " + REF],
+      ["a trailing newline", REF + "\n"],
+      ["a bare name without the scheme", PREVIEW_NAME + "/preview"],
+      ["a non-string", { toString: () => REF }],
+    ])("never matches %s", async (_label, reference) => {
+      expect(carriesPreviewIdentity({ reference, previewIdentifier: null }, PREVIEW_NAME)).toBe(false);
+      const { calls, fetchImpl } = api(preview({ reference, previewIdentifier: null }));
+      await expect(deletePreview({ env: env(), fetchImpl })).rejects.toThrow(/preview identifier/);
+      expect(writes(calls)).toEqual([]);
+    });
+
+    it("does not match case-folded or padded previewIdentifier values either", () => {
+      for (const previewIdentifier of [PREVIEW_NAME.toUpperCase(), PREVIEW_NAME + " ", [PREVIEW_NAME]]) {
+        expect(carriesPreviewIdentity({ previewIdentifier }, PREVIEW_NAME)).toBe(false);
+      }
+      expect(carriesPreviewIdentity({ reference: REF }, "")).toBe(false);
+      expect(carriesPreviewIdentity(null, PREVIEW_NAME)).toBe(false);
+    });
+
+    it.each([
+      ["a production deployment", { deploymentType: "prod" }],
+      ["a default deployment", { isDefault: true }],
+    ])("a matching reference never rescues %s", async (_label, overrides) => {
+      const { calls, fetchImpl } = api(preview({ previewIdentifier: null, ...overrides }));
+      await expect(deletePreview({ env: env(), fetchImpl })).rejects.toThrow();
+      expect(writes(calls)).toEqual([]);
+    });
+
+    it("a matching reference never rescues a protected deployment name", async () => {
+      const { calls, fetchImpl } = api(preview({ name: "kindly-hound-172", previewIdentifier: null }));
+      await expect(
+        deletePreview({ env: env({ CONVEX_PREVIEW_URL: "https://kindly-hound-172.convex.cloud" }), fetchImpl }),
+      ).rejects.toThrow(/protected/);
+      expect(calls).toEqual([]);
+    });
+
+    it("sanitizes observed values: strips control characters and newlines, caps the length", () => {
+      expect(describeObserved("a\nb\r\u0000c\u001b[31md e")).toBe("a?b??c??31md?e");
+      expect(describeObserved("preview/ok_1.2:3-4")).toBe("preview/ok_1.2:3-4");
+      expect(describeObserved("x".repeat(500))).toHaveLength(80);
+      expect(describeObserved(null)).toBe("null");
+      expect(describeObserved(undefined)).toBe("undefined");
+      expect(describeObserved({ a: 1 })).toBe("object");
+      expect(describeObserved(7)).toBe("number");
+    });
+  });
+
+  it("only warns, exits 0, and never prints key bytes", async () => {    const lines: string[] = [];
     const failing = (async () => {
       throw new Error("socket hang up " + SECRET);
     }) as unknown as typeof fetch;
@@ -184,7 +281,7 @@ describe("SCRUM-377 preview deployment lifecycle", () => {
     }
     const http500 = api(preview(), 500);
     await main(["delete"], { env: env(), fetchImpl: http500.fetchImpl, write: (l: string) => lines.push(l) });
-    expect(lines.length).toBe(4);
+    expect(lines).toHaveLength(4);
     expect(lines.every((l) => l.startsWith("::warning::"))).toBe(true);
     expect(lines.join("\n")).not.toContain(SECRET);
     expect(lines.join("\n")).not.toContain("team-one");
