@@ -173,28 +173,34 @@ test.describe("sales wizard guards (SCRUM-609)", () => {
     await gotoOrgRoute(page, "sales");
     await dismissOverlays(page);
     const trigger = page.locator("#topnav-messenger-btn");
-    await expect(trigger).toBeVisible();
+    const list = page.getByPlaceholder("Search conversations…");
+    const geometry = () =>
+      trigger.evaluate((el) => {
+        const t = el.getBoundingClientRect();
+        const headerBottom = el.closest("header")!.getBoundingClientRect().bottom;
+        const panel = document.querySelector('input[placeholder="Search conversations…"]')!
+          .closest(".fixed")!.getBoundingClientRect();
+        const hit = document.elementFromPoint(t.x + t.width / 2, t.y + t.height / 2);
+        return { gap: Math.round(panel.top - headerBottom), triggerHit: !!hit && el.contains(hit) };
+      });
+
+    // Banners can appear and be dismissed while the list is already open.
+    await trigger.click();
+    await expect(list).toBeVisible();
     await trigger.evaluate((el) => {
       const header = el.closest("header")!;
       const banner = document.createElement("div");
+      banner.id = "e2e-stand-in-banner";
       banner.style.height = "96px";
       banner.style.flexShrink = "0";
       header.parentElement!.insertBefore(banner, header);
     });
+    await expect.poll(async () => (await geometry()).gap).toBe(8);
+    expect((await geometry()).triggerHit).toBe(true);
 
-    await trigger.click();
-    const list = page.getByPlaceholder("Search conversations…");
-    await expect(list).toBeVisible();
-    const geometry = await trigger.evaluate((el) => {
-      const t = el.getBoundingClientRect();
-      const headerBottom = el.closest("header")!.getBoundingClientRect().bottom;
-      const panel = document.querySelector('input[placeholder="Search conversations…"]')!
-        .closest(".fixed")!.getBoundingClientRect();
-      const hit = document.elementFromPoint(t.x + t.width / 2, t.y + t.height / 2);
-      return { panelTop: panel.top, headerBottom, triggerHit: !!hit && el.contains(hit) };
-    });
-    expect(geometry.panelTop).toBeGreaterThanOrEqual(geometry.headerBottom);
-    expect(geometry.triggerHit).toBe(true);
+    await page.evaluate(() => document.getElementById("e2e-stand-in-banner")!.remove());
+    await expect.poll(async () => (await geometry()).gap).toBe(8);
+
     await trigger.click();
     await expect(list).toHaveCount(0);
   });

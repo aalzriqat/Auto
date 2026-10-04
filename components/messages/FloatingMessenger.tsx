@@ -41,7 +41,9 @@ function FloatingMessengerInner({ orgId }: Props) {
   const [search, setSearch] = useState("");
   const [dialogMode, setDialogMode] = useState<"dm" | "group" | null>(null);
   const [mobileOpenId, setMobileOpenId] = useState<Id<"dmConversations"> | null>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+  // Callback-ref state: the panel can mount after the list opens (it waits for
+  // getMe), and placement must run when it does.
+  const [panelEl, setPanelEl] = useState<HTMLDivElement | null>(null);
 
   const me = useQuery(api.users.getMe);
   const conversations = useQuery(api.directMessages.listConversations, { orgId });
@@ -81,9 +83,7 @@ function FloatingMessengerInner({ orgId }: Props) {
     function handlePointerDown(e: PointerEvent) {
       const target = e.target as Element;
       if (target.closest?.(`#${MESSENGER_TRIGGER_ID}`)) return;
-      if (panelRef.current && !panelRef.current.contains(target)) {
-        closeList();
-      }
+      if (panelEl && !panelEl.contains(target)) closeList();
     }
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") closeList();
@@ -94,26 +94,42 @@ function FloatingMessengerInner({ orgId }: Props) {
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isListOpen, closeList]);
+  }, [isListOpen, closeList, panelEl]);
 
-  // Drop the list just below the top bar. Banners (update, support access,
-  // impersonation) render above the bar, so its bottom edge is measured rather
-  // than assumed.
+  // Keep the list just below the top bar. Banners (update, support access,
+  // impersonation) render above the bar and can appear or be dismissed while
+  // the list is open, so the bar's bottom edge is measured and re-measured
+  // whenever the bar or anything above it changes — not assumed.
   useLayoutEffect(() => {
-    if (!isListOpen) return;
+    if (!panelEl) return;
+    const panel = panelEl;
+    const bar = document.getElementById(MESSENGER_TRIGGER_ID)?.closest("header");
+    if (!bar) return;
+    const barEl = bar;
     function place() {
-      const panel = panelRef.current;
-      const trigger = document.getElementById(MESSENGER_TRIGGER_ID);
-      if (!panel || !trigger) return;
-      const bar = trigger.closest("header") ?? trigger;
-      const top = Math.round(bar.getBoundingClientRect().bottom) + 8;
+      const top = Math.round(barEl.getBoundingClientRect().bottom) + 8;
       panel.style.top = `${top}px`;
       panel.style.maxHeight = `min(480px, calc(100dvh - ${top + 8}px))`;
     }
-    place();
+    const resizes = new ResizeObserver(place);
+    function observeBarAndAbove() {
+      resizes.disconnect();
+      resizes.observe(barEl);
+      for (let el = barEl.previousElementSibling; el; el = el.previousElementSibling) {
+        resizes.observe(el);
+      }
+      place();
+    }
+    const mutations = new MutationObserver(observeBarAndAbove);
+    if (barEl.parentElement) mutations.observe(barEl.parentElement, { childList: true });
+    observeBarAndAbove();
     window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
-  }, [isListOpen]);
+    return () => {
+      resizes.disconnect();
+      mutations.disconnect();
+      window.removeEventListener("resize", place);
+    };
+  }, [panelEl]);
 
   type ConvMember = { _id: string; name?: string; imageUrl?: string } | null;
   type ConvItem = { _id: Id<"dmConversations">; type: string; name?: string; members?: ConvMember[]; isMuted?: boolean; hasUnread?: boolean; lastMessageAt: number; lastMessageSenderId?: string; lastMessageBody?: string };
@@ -142,7 +158,7 @@ function FloatingMessengerInner({ orgId }: Props) {
           There is no floating trigger: it covered page actions (SCRUM-612). ── */}
       {isListOpen && (
         <div
-          ref={panelRef}
+          ref={setPanelEl}
           className={cn(
             // top / max-height are set from the top bar's position above.
             "fixed top-16 md:top-[4.5rem] end-2 md:end-6 z-50",
