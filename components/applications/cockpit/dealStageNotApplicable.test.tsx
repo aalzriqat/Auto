@@ -93,6 +93,8 @@ describe("the step view says it is not needed, and why", () => {
 
   test("DISBURSEMENT names its own reason; a stage the server adds later gets the generic sentence", () => {
     expect(stageNotApplicableReasonKey("DISBURSEMENT")).toBe("StageNotApplicableReasonDisbursement");
+    // SCRUM-629 F-07: a deal with no required document says why its paperwork step is not needed.
+    expect(stageNotApplicableReasonKey("DELIVERY_ACTIONS")).toBe("StageNotApplicableReasonDeliveryActions");
     expect(stageNotApplicableReasonKey("SOMETHING_NEW")).toBe("StageViewNotApplicableNote");
     expect(stageNotApplicableReasonKey("toString")).toBe("StageViewNotApplicableNote");
     expect(stageViewCopy("notApplicable", "DISBURSEMENT")).toEqual({
@@ -109,6 +111,7 @@ describe("the step view says it is not needed, and why", () => {
       "StageStateNotApplicable",
       "StageViewNotApplicableNote",
       "StageNotApplicableReasonDisbursement",
+      "StageNotApplicableReasonDeliveryActions",
       "DealStagesFinished",
       "DealStagesCompleteCount",
       "DealStagesNotNeededCount",

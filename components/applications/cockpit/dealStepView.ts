@@ -58,11 +58,13 @@ export function stageViewMode(state: DealStageState): StageViewMode {
 
 /**
  * Why a stage the server marked NOT_APPLICABLE is not needed, per stage KEY.
- * Only DISBURSEMENT is ever emitted today (SCRUM-446); a stage the server adds
- * later says the generic sentence rather than a reason nobody verified.
+ * DISBURSEMENT (SCRUM-446) and DELIVERY_ACTIONS (SCRUM-629 F-07) are emitted
+ * today; a stage the server adds later says the generic sentence rather than a
+ * reason nobody verified.
  */
 const NOT_APPLICABLE_REASON_KEY: Readonly<Record<string, string>> = {
   DISBURSEMENT: "StageNotApplicableReasonDisbursement",
+  DELIVERY_ACTIONS: "StageNotApplicableReasonDeliveryActions",
 };
 
 export function stageNotApplicableReasonKey(stageKey: string): string {

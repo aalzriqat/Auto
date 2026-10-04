@@ -91,9 +91,10 @@ async function loadOwnedRequest(
 /**
  * Record that the customer wants to put a deposit down. Writes ONE row.
  *
- * Deliberately NOT gated on the car being free: a pending request does not hold
- * the car (owner Q1), so the commitment is checked when a manager confirms,
- * which is the only moment it becomes true.
+ * A pending request does not hold the car (owner Q1): the commitment becomes
+ * true only when a manager confirms, and is checked again there. It is also
+ * checked here, read-only, so a car another deal holds is refused before the
+ * customer is asked for money (SCRUM-629 F-27).
  */
 export const request = mutation({
   args: {
@@ -157,6 +158,19 @@ export const request = mutation({
           throw new ConvexError(
             "Total deposits, including requests already waiting, cannot exceed the quote amount. Lower the amount, or ask a manager to resolve the waiting request first."
           );
+        }
+
+        // SCRUM-629 F-27 (ruling c21924): the request still does not hold the
+        // car, but asking a customer for money a manager would then have to
+        // refuse is refused up front — the SAME commitment decision `confirm`
+        // makes, for every quoted car, before anything is written or sent.
+        // `confirm` re-checks: a rival may still take the car in between.
+        for (const item of quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }]) {
+          await assertAcquirable(ctx, {
+            orgId: args.orgId,
+            vehicleId: item.vehicleId,
+            lineage: { quoteId: quote._id },
+          });
         }
 
         const now = Date.now();
