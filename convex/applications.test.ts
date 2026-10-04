@@ -3210,6 +3210,60 @@ describe("deal lists page newest first (SCRUM-603)", () => {
 
     expect(page.page.map((s) => s._id)).toEqual([newestId]);
   });
+
+  // The filtered branches read a different index, so each needs its own order.
+  test("applications.list filtered by status returns the newest matching application first", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+    });
+    const oldestId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    const { status, newestId } = await t.run(async (ctx) => {
+      const { _id, _creationTime, ...row } = (await ctx.db.get(oldestId))!;
+      await ctx.db.insert("financeApplications", row);
+      return { status: row.status, newestId: await ctx.db.insert("financeApplications", row) };
+    });
+
+    const page = await asUser.query(api.applications.list, {
+      orgId,
+      status,
+      paginationOpts: { numItems: 1, cursor: null },
+    });
+
+    expect(page.page.map((a) => a._id)).toEqual([newestId]);
+  });
+
+  test("sales.list filtered by salesperson returns the newest matching sale first", async () => {
+    const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
+    const newestId = await t.run(async (ctx) => {
+      let last: Id<"sales"> | undefined;
+      for (let i = 0; i < 3; i++) {
+        last = await ctx.db.insert("sales", {
+          orgId,
+          vehicleId,
+          customerId,
+          salespersonId: userId,
+          salePrice: 20_000,
+          saleDate: Date.now(),
+          status: "COMPLETED",
+        });
+      }
+      return last!;
+    });
+
+    const page = await asUser.query(api.sales.list, {
+      orgId,
+      salespersonId: userId,
+      paginationOpts: { numItems: 1, cursor: null },
+    });
+
+    expect(page.page.map((s) => s._id)).toEqual([newestId]);
+  });
   // Codex SCRUM-603-1: newest-first sales and applications page independently,
   // so a recently finalized deal can arrive as a sale whose (older) application
   // is not loaded. Without the application's queue facts that row read
