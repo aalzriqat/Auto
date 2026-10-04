@@ -53,6 +53,7 @@ import {
   outstandingMinorFromMajor,
 } from "./utils/money";
 import { allocatedDepositForVehicle } from "./utils/depositAllocation";
+import { pendingDepositResolution } from "./applications";
 import { planDepositSettlementApplication } from "./utils/depositSettlementPlan";
 import { checkPostingAllowed } from "./accountingPeriods";
 import { applicationProvesFinancing, hasVerifiedFinancingApplication } from "./utils/financingProvenance";
@@ -119,29 +120,50 @@ export const list = query({
         .withIndex("by_org_salesperson", (q) =>
           q.eq("orgId", args.orgId).eq("salespersonId", args.salespersonId!)
         )
+        // Newest first, like the Deals page that reads it (SCRUM-603).
+        .order("desc")
         .filter((q) => q.neq(q.field("isDeleted"), true))
         .paginate(args.paginationOpts);
     } else {
       pageResult = await ctx.db
         .query("sales")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .order("desc")
         .filter((q) => q.neq(q.field("isDeleted"), true))
         .paginate(args.paginationOpts);
     }
 
     const page = await Promise.all(
       pageResult.page.map(async (sale) => {
-        // Fetch the three hydration reads together — they are independent, and
-        // awaiting them in sequence made each row cost three round trips
+        // Fetch the four hydration reads together — they are independent, and
+        // awaiting them in sequence made each row cost four round trips
         // instead of one.
-        const [vehicle, customer, salesperson] = await Promise.all([
+        const [vehicle, customer, salesperson, application] = await Promise.all([
           ctx.db.get(sale.vehicleId),
           ctx.db.get(sale.customerId),
           ctx.db.get(sale.salespersonId),
+          sale.applicationId ? ctx.db.get(sale.applicationId) : null,
         ]);
+        // The Deals page pages sales and applications independently, newest
+        // first, so a recently finalized deal can arrive as this sale while its
+        // older application sits on a page not yet loaded. The queue state is
+        // the APPLICATION's (an unpaid financier receipt, a held deposit), so
+        // the sale carries the facts that rule reads (Codex SCRUM-603-1). Only
+        // from this org's own application.
+        const linkedApplication =
+          application && application.orgId === args.orgId
+            ? {
+                status: application.status,
+                companyId: application.companyId,
+                disbursedAt: application.disbursedAt,
+                supplierSettlementRoute: application.supplierSettlementRoute,
+                hasPendingDepositResolution: await pendingDepositResolution(ctx, application),
+              }
+            : undefined;
 
         return {
           ...sale,
+          linkedApplication,
           vehicleSummary: vehicle
             ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`
             : "Unknown",
