@@ -467,22 +467,26 @@ describe("Instagram", () => {
 });
 
 describe("cross-cutting", () => {
-  // Known defect SCRUM-622 — flip to `test` when fixed.
-  test.fails("SCRUM-622: the same Facebook page connected to two orgs does not wedge every delivery", async () => {
+  // SCRUM-622: an ambiguous page/account is skipped — never guessed — and the
+  // delivery is acknowledged instead of failing forever on redelivery.
+  test("SCRUM-622: the same Facebook page connected to two orgs does not wedge every delivery", async () => {
     const t = newT();
-    await seedOrg(t, PROD_LIKE_FB);
-    await seedOrg(t, PROD_LIKE_FB);
+    const orgA = await seedOrg(t, PROD_LIKE_FB);
+    const orgB = await seedOrg(t, PROD_LIKE_FB);
     const res = await post(t, "/facebook-webhook", fbDm("psid_dup_page", "0791234567"));
     expect(res.status).toBe(200);
+    expect((await snapshot(t, orgA)).fbEvents).toHaveLength(0);
+    expect((await snapshot(t, orgB)).fbEvents).toHaveLength(0);
   });
 
-  // Known defect SCRUM-622 — flip to `test` when fixed.
-  test.fails("SCRUM-622: the same Instagram account connected to two orgs", async () => {
+  test("SCRUM-622: the same Instagram account connected to two orgs", async () => {
     const t = newT();
-    await seedOrg(t, PROD_LIKE_IG);
-    await seedOrg(t, PROD_LIKE_IG);
+    const orgA = await seedOrg(t, PROD_LIKE_IG);
+    const orgB = await seedOrg(t, PROD_LIKE_IG);
     const res = await post(t, "/instagram-webhook", igDm("igsid_dup", "0781234567"));
     expect(res.status).toBe(200);
+    expect((await snapshot(t, orgA)).igEvents).toHaveLength(0);
+    expect((await snapshot(t, orgB)).igEvents).toHaveLength(0);
   });
 
   // Known defect SCRUM-625 — flip to `test` when fixed.
@@ -623,16 +627,29 @@ describe("Facebook surface classification", () => {
 });
 
 describe("duplicate page blast radius", () => {
-  // Known defect SCRUM-622 — flip to `test` when fixed.
-  test.fails("a duplicated page in one entry does not block another org's entry in the same batch", async () => {
+  test("a duplicated page in one entry does not block another org's entry in the same batch", async () => {
     const t = newT();
     await seedOrg(t, PROD_LIKE_FB);
     await seedOrg(t, PROD_LIKE_FB);
     const orgC = await seedOrg(t, { ...PROD_LIKE_FB, facebookPageId: "page_org_c" });
     const dupEntry = fbDm("psid_a", "0791234567").entry[0];
     const cEntry = fbDm("psid_c", "0781234567", {}, "page_org_c").entry[0];
-    // The route may throw on the duplicate; org C's entry must still land.
-    await post(t, "/facebook-webhook", { object: "page", entry: [dupEntry, cEntry] }).catch(() => undefined);
+    const res = await post(t, "/facebook-webhook", { object: "page", entry: [dupEntry, cEntry] });
+    expect(res.status).toBe(200);
     expect((await snapshot(t, orgC)).fbEvents).toHaveLength(1);
+  });
+
+  test("a duplicated Instagram account does not block another org's entry in the same batch", async () => {
+    const t = newT();
+    await seedOrg(t, PROD_LIKE_IG);
+    await seedOrg(t, PROD_LIKE_IG);
+    const orgC = await seedOrg(t, { ...PROD_LIKE_IG, instagramWebhookAccountId: "ig_org_c", instagramBusinessAccountId: "ig_biz_c" });
+    const dupEntry = igDm("igsid_a", "0791234567").entry[0];
+    const cPayload = igDm("igsid_c", "0781234567");
+    const cEntry = { ...cPayload.entry[0], id: "ig_org_c" };
+    cEntry.messaging[0].recipient.id = "ig_org_c";
+    const res = await post(t, "/instagram-webhook", { object: "instagram", entry: [dupEntry, cEntry] });
+    expect(res.status).toBe(200);
+    expect((await snapshot(t, orgC)).igEvents).toHaveLength(1);
   });
 });

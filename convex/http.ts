@@ -10,6 +10,7 @@ import { verifyPaymentWebhook } from "./utils/paymentWebhook";
 import { rateLimiter } from "./rateLimit";
 import { normalizedWebsiteHost } from "./websiteConfig";
 import { isLikelyBot } from "./utils/userAgent";
+import { INSTAGRAM_ACCOUNT_IN_USE_MESSAGE } from "./socialIntegrations";
 
 const http = httpRouter();
 const WEBHOOK_RAW_PAYLOAD_MAX_CHARS = 700_000;
@@ -969,8 +970,12 @@ http.route({
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // An account held by another org is the dealer's to resolve — say so,
+      // rather than inviting a retry that can never succeed (SCRUM-622).
       const userMessage =
-        "Instagram connection failed. Please try again later.";
+        err instanceof ConvexError && err.data === INSTAGRAM_ACCOUNT_IN_USE_MESSAGE
+          ? INSTAGRAM_ACCOUNT_IN_USE_MESSAGE
+          : "Instagram connection failed. Please try again later.";
       await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
         source: "instagram-oauth",
         status: "error",

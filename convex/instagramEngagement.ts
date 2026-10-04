@@ -76,12 +76,21 @@ const GRAPH_LOOKUP_TIMEOUT_MS = 5_000;
 export const getSettingsByInstagramAccountId = internalQuery({
   args: { instagramBusinessAccountId: v.string() },
   handler: async (ctx, args) => {
-    return await ctx.db
+    // Held by two orgs → resolves to none; the tenant is never guessed and the
+    // caller skips the entry rather than failing the whole batch (SCRUM-622).
+    const holders = await ctx.db
       .query("orgSettings")
       .withIndex("by_instagram_webhook_account_id", (q) =>
         q.eq("instagramWebhookAccountId", args.instagramBusinessAccountId)
       )
-      .unique();
+      .take(2);
+    if (holders.length > 1) {
+      console.error(
+        `Instagram account ${args.instagramBusinessAccountId} is connected to more than one org; skipping its events`
+      );
+      return null;
+    }
+    return holders[0] ?? null;
   },
 });
 

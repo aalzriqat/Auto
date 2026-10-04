@@ -2,6 +2,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -408,5 +409,106 @@ describe("socialIntegrations.exchangeCodeForToken", () => {
     ]);
 
     vi.unstubAllGlobals();
+  });
+});
+
+// SCRUM-622: the webhook resolves an org by the account's webhook id, and the
+// deauthorize callback by its business id — each may belong to one org only.
+describe("socialIntegrations: an Instagram account belongs to one org", () => {
+  type T = ReturnType<typeof convexTestWithComponents>;
+  const newOrg = (t: T) =>
+    t.run((ctx) => ctx.db.insert("organizations", { name: "Org", createdAt: Date.now() }));
+  const save = (
+    t: T,
+    orgId: Id<"organizations">,
+    instagramBusinessAccountId: string,
+    instagramWebhookAccountId?: string,
+  ) =>
+    t.run((ctx) =>
+      ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
+        orgId,
+        instagramBusinessAccountId,
+        instagramWebhookAccountId,
+        instagramAccessToken: "token",
+      }),
+    );
+
+  test("refuses a business account already connected to another org", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const orgA = await newOrg(t);
+    const orgB = await newOrg(t);
+    await save(t, orgA, "ig_biz", "ig_hook");
+    await expect(save(t, orgB, "ig_biz", "ig_hook_other")).rejects.toThrow(/already connected to another/i);
+  });
+
+  test("refuses a webhook account id already connected to another org", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const orgA = await newOrg(t);
+    const orgB = await newOrg(t);
+    await save(t, orgA, "ig_biz_a", "ig_hook");
+    await expect(save(t, orgB, "ig_biz_b", "ig_hook")).rejects.toThrow(/already connected to another/i);
+    const holders = await t.run((ctx) =>
+      ctx.db
+        .query("orgSettings")
+        .withIndex("by_instagram_webhook_account_id", (q) => q.eq("instagramWebhookAccountId", "ig_hook"))
+        .collect(),
+    );
+    expect(holders.map((s) => s.orgId)).toEqual([orgA]);
+  });
+
+  test("the same org may reconnect its own account", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const orgA = await newOrg(t);
+    await save(t, orgA, "ig_biz", "ig_hook");
+    await expect(save(t, orgA, "ig_biz", "ig_hook")).resolves.toBeNull();
+  });
+
+  test("once the first org's account is deauthorized, another org may connect it", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const orgA = await newOrg(t);
+    const orgB = await newOrg(t);
+    await save(t, orgA, "ig_biz", "ig_hook");
+    await t.run((ctx) =>
+      ctx.runMutation(internal.socialIntegrations.disconnectByInstagramUserId, { instagramBusinessAccountId: "ig_biz" }),
+    );
+    await expect(save(t, orgB, "ig_biz", "ig_hook")).resolves.toBeNull();
+  });
+
+  test("the OAuth callback tells the dealer the account is in use, not 'try again later'", async () => {
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        const url = String(input);
+        if (url.includes("api.instagram.com/oauth/access_token")) return json({ access_token: "short", user_id: "ig_biz" });
+        if (url.includes("graph.instagram.com/access_token")) return json({ access_token: "long", expires_in: 5184000 });
+        if (url.includes("subscribed_apps")) return json({ success: true });
+        return json({ username: "dealer", user_id: "ig_hook" });
+      }),
+    );
+    try {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const orgA = await newOrg(t);
+      const orgB = await newOrg(t);
+      await save(t, orgA, "ig_biz", "ig_hook");
+      await t.run((ctx) =>
+        ctx.db.insert("oauthStates", {
+          orgId: orgB,
+          state: "state_b",
+          provider: "instagram",
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 60_000,
+        }),
+      );
+
+      const res = await t.fetch("/instagram-oauth-callback?code=abc&state=state_b", { redirect: "manual" });
+
+      const location = decodeURIComponent(res.headers.get("location") ?? "");
+      expect(location).toContain("error=1");
+      expect(location).toContain("already connected to another AutoFlow organization");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
