@@ -233,10 +233,16 @@ describe("SCRUM-599 - the finance company's payment is debited to the account it
     expect((event?.payload as { paymentMethod?: string } | undefined)?.paymentMethod).toBe("CASH");
   });
 
-  test("an org whose cash account is unmapped queues the CASH receipt (with its method) and confirmation still succeeds; it posts to 1100 once mapped", async () => {
-    const { s, applicationId } = await finalizedDeal("unmapped", "CASH", "MANUAL");
+  // requiredSystemKeys covers every method, not only CASH (S599 review R2):
+  // an inactive receiving account queues the receipt instead of rolling the
+  // confirmation back, and the drain posts it to that same account.
+  test.each([
+    ["CASH", "CASH_ON_HAND"],
+    ["BANK_TRANSFER", "BANK_ACCOUNT"],
+  ] as const)("an org whose %s receiving account (%s) is unmapped queues the receipt with its method; confirmation still succeeds; it posts there once mapped", async (method, systemKey) => {
+    const { s, applicationId } = await finalizedDeal(`unmapped-${method}`, method, "MANUAL");
     const cashAccounts = await s.t.run(async (ctx) =>
-      (await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", s.orgId).eq("systemKey", "CASH_ON_HAND")).collect())
+      (await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", s.orgId).eq("systemKey", systemKey)).collect())
     );
     expect(cashAccounts.length).toBeGreaterThan(0);
     await s.t.run(async (ctx) => {
@@ -252,10 +258,10 @@ describe("SCRUM-599 - the finance company's payment is debited to the account it
       )
     );
     expect(pending).toHaveLength(1);
-    expect((pending[0].payload as { paymentMethod?: string }).paymentMethod).toBe("CASH");
-    expect(await canonicalMethod(s)).toEqual(["CASH"]);
+    expect((pending[0].payload as { paymentMethod?: string }).paymentMethod).toBe(method);
+    expect(await canonicalMethod(s)).toEqual([method]);
 
-    // Mapping restored: the queued receipt drains to the cash account, not the bank.
+    // Mapping restored: the queued receipt drains to the method's own account.
     await s.t.run(async (ctx) => {
       for (const a of cashAccounts) await ctx.db.patch(a._id, { active: true });
     });
@@ -270,7 +276,7 @@ describe("SCRUM-599 - the finance company's payment is debited to the account it
     }
     const { events, net } = await receiptNet(s);
     expect(events).toBe(1);
-    expect(net).toEqual({ CASH_ON_HAND: G, ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES: -G });
+    expect(net).toEqual({ [systemKey]: G, ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES: -G });
   });
 
   test("an unsupported method is refused rather than defaulted to the bank", () => {

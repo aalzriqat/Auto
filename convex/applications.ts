@@ -5166,7 +5166,7 @@ export const confirmDisbursement = mutation({
         }
         if (args.disbursedAmountMinor <= 0) throw new ConvexError("Disbursement amount must be positive.");
 
-        // This mutation books DR Bank / CR AR-Finance Companies: money that
+        // This mutation books DR bank (cash on hand for a CASH receipt, SCRUM-599) / CR AR-Finance Companies: money that
         // arrived in the dealership's own account, settling a receivable it
         // holds. On the direct route neither exists — the cheque went to the
         // supplier and no finance-company receivable was ever opened. Running it
@@ -5303,7 +5303,7 @@ export const confirmDisbursement = mutation({
           await ctx.db.patch(chequeToClear._id, { disbursementVersion });
         }
 
-        // Post the actual receipt of funds: DR Bank / CR Accounts Receivable —
+        // Post the actual receipt of funds: DR bank or cash on hand / CR Accounts Receivable —
         // Finance Companies. Without this the finance-company receivable opened
         // at finalizeDeal stays open forever even after the money arrives.
         // The method of record — registered before finalization
