@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -73,20 +73,47 @@ function FloatingMessengerInner({ orgId }: Props) {
     }
   }, [conversations, currentUserId, markDelivered]);
 
-  // Close list panel when clicking outside. The top-bar button toggles the list
-  // itself, so it is not "outside" — otherwise its click would close and reopen.
+  // Close list panel on a press outside it, or on Escape. The top-bar button
+  // toggles the list itself, so it is not "outside" — otherwise its click would
+  // close and reopen.
   useEffect(() => {
     if (!isListOpen) return;
-    function handleClick(e: MouseEvent) {
+    function handlePointerDown(e: PointerEvent) {
       const target = e.target as Element;
       if (target.closest?.(`#${MESSENGER_TRIGGER_ID}`)) return;
       if (panelRef.current && !panelRef.current.contains(target)) {
         closeList();
       }
     }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") closeList();
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
   }, [isListOpen, closeList]);
+
+  // Drop the list just below the top bar. Banners (update, support access,
+  // impersonation) render above the bar, so its bottom edge is measured rather
+  // than assumed.
+  useLayoutEffect(() => {
+    if (!isListOpen) return;
+    function place() {
+      const panel = panelRef.current;
+      const trigger = document.getElementById(MESSENGER_TRIGGER_ID);
+      if (!panel || !trigger) return;
+      const bar = trigger.closest("header") ?? trigger;
+      const top = Math.round(bar.getBoundingClientRect().bottom) + 8;
+      panel.style.top = `${top}px`;
+      panel.style.maxHeight = `min(480px, calc(100dvh - ${top + 8}px))`;
+    }
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [isListOpen]);
 
   type ConvMember = { _id: string; name?: string; imageUrl?: string } | null;
   type ConvItem = { _id: Id<"dmConversations">; type: string; name?: string; members?: ConvMember[]; isMuted?: boolean; hasUnread?: boolean; lastMessageAt: number; lastMessageSenderId?: string; lastMessageBody?: string };
@@ -117,6 +144,7 @@ function FloatingMessengerInner({ orgId }: Props) {
         <div
           ref={panelRef}
           className={cn(
+            // top / max-height are set from the top bar's position above.
             "fixed top-16 md:top-[4.5rem] end-2 md:end-6 z-50",
             "w-[min(320px,calc(100vw-1rem))] bg-white rounded-2xl shadow-2xl border border-slate-200/50 overflow-hidden flex flex-col",
             "max-h-[min(480px,calc(100dvh-5rem))]"

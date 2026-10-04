@@ -160,6 +160,43 @@ test.describe("sales wizard guards (SCRUM-609)", () => {
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
     await trigger.click();
     await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    // Escape closes it too.
+    await page.keyboard.press("Escape");
+    await expect(list).toHaveCount(0);
+  });
+
+  // The update / support-access / impersonation banners stack above the top
+  // bar, pushing it down; the list must still open below the bar and leave the
+  // trigger clickable. A stand-in banner is inserted where they render.
+  test("SCRUM-612: with a banner above the top bar, the Messages list opens below it", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("autoflow-locale", "en"));
+    await gotoOrgRoute(page, "sales");
+    await dismissOverlays(page);
+    const trigger = page.locator("#topnav-messenger-btn");
+    await expect(trigger).toBeVisible();
+    await trigger.evaluate((el) => {
+      const header = el.closest("header")!;
+      const banner = document.createElement("div");
+      banner.style.height = "96px";
+      banner.style.flexShrink = "0";
+      header.parentElement!.insertBefore(banner, header);
+    });
+
+    await trigger.click();
+    const list = page.getByPlaceholder("Search conversations…");
+    await expect(list).toBeVisible();
+    const geometry = await trigger.evaluate((el) => {
+      const t = el.getBoundingClientRect();
+      const headerBottom = el.closest("header")!.getBoundingClientRect().bottom;
+      const panel = document.querySelector('input[placeholder="Search conversations…"]')!
+        .closest(".fixed")!.getBoundingClientRect();
+      const hit = document.elementFromPoint(t.x + t.width / 2, t.y + t.height / 2);
+      return { panelTop: panel.top, headerBottom, triggerHit: !!hit && el.contains(hit) };
+    });
+    expect(geometry.panelTop).toBeGreaterThanOrEqual(geometry.headerBottom);
+    expect(geometry.triggerHit).toBe(true);
+    await trigger.click();
+    await expect(list).toHaveCount(0);
   });
 
   test("SCRUM-612: on a phone, feedback opens from the menu drawer", async ({ page }) => {
