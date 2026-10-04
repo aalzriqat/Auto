@@ -35,6 +35,7 @@ import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
 import { classifySaleTimeCredits, customerBilledLinesMinor, sumBilledLinesMinor, completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
+import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment";
 import { planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -112,26 +113,24 @@ export const list = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
-    let pageResult;
-
-    if (args.salespersonId) {
-      pageResult = await ctx.db
-        .query("sales")
-        .withIndex("by_org_salesperson", (q) =>
-          q.eq("orgId", args.orgId).eq("salespersonId", args.salespersonId!)
-        )
-        // Newest first, like the Deals page that reads it (SCRUM-603).
-        .order("desc")
-        .filter((q) => q.neq(q.field("isDeleted"), true))
-        .paginate(args.paginationOpts);
-    } else {
-      pageResult = await ctx.db
-        .query("sales")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .order("desc")
-        .filter((q) => q.neq(q.field("isDeleted"), true))
-        .paginate(args.paginationOpts);
-    }
+    const salespersonId = args.salespersonId;
+    // Native paginate over the isDeleted index keeps reactive page ends pinned.
+    // Newest first, like the Deals page that reads it (SCRUM-603). Inside the
+    // `.lt("isDeleted", true)` range isDeleted is unset for every live sale
+    // because the schema forbids `false` (D-28). So descending index order is
+    // creation order.
+    const pageResult = await (salespersonId
+      ? ctx.db
+          .query("sales")
+          .withIndex("by_org_salesperson_deleted", (q) =>
+            q.eq("orgId", args.orgId).eq("salespersonId", salespersonId).lt("isDeleted", true)
+          )
+      : ctx.db
+          .query("sales")
+          .withIndex("by_org_deleted", (q) => q.eq("orgId", args.orgId).lt("isDeleted", true))
+    )
+      .order("desc")
+      .paginate(args.paginationOpts);
 
     const page = await Promise.all(
       pageResult.page.map(async (sale) => {
@@ -175,7 +174,7 @@ export const list = query({
         };
       })
     );
-    
+
     return { ...pageResult, page };
   },
 });
@@ -1180,6 +1179,9 @@ export const update = mutation({
           actorId: user._id,
           reversalDate: cancellationDate,
         });
+      } else {
+        // SCRUM-571 T2: a sale exit refuses while a sale-linked legacy receivable exists.
+        await assertNoSaleLinkedLegacyReceivable(ctx, args.orgId, args.saleId);
       }
     }
 
@@ -1241,6 +1243,9 @@ export const softDelete = mutation({
     if (sale.status === "COMPLETED") {
       throwAppError(AppErrorCode.SALE_ALREADY_COMPLETED, "Cannot delete a completed sale. Cancel it first.");
     }
+
+    // SCRUM-571 T2: a sale exit refuses while a sale-linked legacy receivable exists.
+    await assertNoSaleLinkedLegacyReceivable(ctx, args.orgId, args.saleId);
 
     await ctx.db.patch(args.saleId, {
       isDeleted: true,
@@ -1517,19 +1522,20 @@ export const listCommissions = query({
     // answer — and a shipped bundle has no cursor to look past it. A slow
     // response is what these clients already had; a silently incomplete one is
     // new, invisible, and unfixable from their side.
-    const sales = salespersonId
+    //
+    // Deleted rows excluded after the indexed read.
+    const indexed = salespersonId
       ? await ctx.db
           .query("sales")
           .withIndex("by_org_salesperson", (q) =>
             q.eq("orgId", args.orgId).eq("salespersonId", salespersonId)
           )
-          .filter((q) => q.neq(q.field("isDeleted"), true))
           .collect()
       : await ctx.db
           .query("sales")
           .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-          .filter((q) => q.neq(q.field("isDeleted"), true))
           .collect();
+    const sales = indexed.filter((sale) => sale.isDeleted !== true);
 
     const orgSettings = await ctx.db
       .query("orgSettings")

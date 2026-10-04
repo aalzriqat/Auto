@@ -19,6 +19,7 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { hookPaymentLinkReceived } from "./accounting/workflowHooks";
 import { allocatePaymentToReceivable, createCanonicalPayment, getReceivableOutstandingMinor } from "./subledger";
 import { AppErrorCode, throwAppError } from "./utils/errors";
+import { PAYMENT_LINKS_PILOT_DISABLED, refuseSaleDebt } from "./utils/saleDebtContainment";
 import { fromMinorUnits, toMinorUnits, scaleForCurrency, assertValidMinorAmount } from "./utils/money";
 
 // SCRUM-571 S1. Every refusal `create`, `markSettled` and `expire` can raise is
@@ -74,6 +75,8 @@ export const PAYMENT_LINK_REFUSALS = {
     "This provider reference is unavailable. Ask finance to review it. Nothing has been changed.",
   PAYMENT_LINK_SETTLEMENT_REQUIRES_REVIEW:
     "This payment must be reviewed before the link can be marked settled. Nothing has been changed.",
+  PAYMENT_LINK_CAPTURE_HELD:
+    "The provider confirmed a capture for this link. It is held for review and the link cannot be expired. Ask finance to review the held payment. Nothing has been changed.",
 } as const satisfies Record<string, string>;
 
 function refusePaymentLink(code: keyof typeof PAYMENT_LINK_REFUSALS): never {
@@ -91,6 +94,25 @@ export const UNMATCHED_FUNDS_REFUSALS = {
     "Enter a note describing how this payment was handled. Nothing has been changed.",
   UNMATCHED_FUNDS_NOTE_TOO_LONG: "The note is too long. Shorten it to 1000 characters or fewer. Nothing has been changed.",
 } as const satisfies Record<string, string>;
+
+// SCRUM-571 S1 (D-22). Refusals of `linkHeldCaptureToIntent` (a missing or
+// foreign row reuses UNMATCHED_FUNDS_NOT_FOUND). Kept apart from
+// UNMATCHED_FUNDS_REFUSALS, whose test exercises every key through `resolve`.
+// English text equals `ServerError_<code>` in lib/i18n/domains/common.ts.
+export const HELD_CAPTURE_LINK_REFUSALS = {
+  UNMATCHED_FUNDS_NO_INTENT:
+    "This held payment is not linked to a payment link, so there is nothing to repair. Nothing has been changed.",
+  UNMATCHED_FUNDS_INTENT_NOT_FOUND:
+    "The payment link for this held payment could not be found. Nothing has been changed.",
+  UNMATCHED_FUNDS_INTENT_MISMATCH:
+    "This held payment does not match the payment link's provider reference. Ask support to investigate. Nothing has been changed.",
+  UNMATCHED_FUNDS_INTENT_NOT_LINKABLE:
+    "This payment link is not in a state that can be linked to the held payment. Nothing has been changed.",
+} as const satisfies Record<string, string>;
+
+function refuseHeldCaptureLink(code: keyof typeof HELD_CAPTURE_LINK_REFUSALS): never {
+  return throwAppError(AppErrorCode[code], HELD_CAPTURE_LINK_REFUSALS[code]);
+}
 
 const UNMATCHED_FUNDS_NOTE_MAX = 1000;
 // The most recent distinct provider event ids kept per held capture.
@@ -207,6 +229,36 @@ async function recordUnmatchedProviderFunds(
   return existing._id;
 }
 
+// Statuses a held capture may move an intent out of (D-22). SETTLED and REFUNDED
+// carry their own economic outcome and are never overwritten; CAPTURE_HELD is
+// already there.
+const CAPTURE_HELD_FROM: ReadonlySet<Doc<"paymentIntents">["status"]> = new Set(["PENDING", "EXPIRED", "FAILED"]);
+
+/**
+ * SCRUM-571 S1 (D-22): move the intent a capture was held for to CAPTURE_HELD
+ * and link the held row. Writes only `status`, `heldFundsId` and `updatedAt` on
+ * the intent. Reads the intent fresh, so a status patched earlier in the same
+ * mutation is what is judged. Unless the held row names exactly this org AND this
+ * intent (a missing orgId or intentId does not qualify) the intent is left alone
+ * for investigation (the hold itself is already recorded, which D-14 requires).
+ */
+async function markIntentCaptureHeld(
+  ctx: MutationCtx,
+  intentId: Id<"paymentIntents">,
+  heldId: Id<"unmatchedProviderFunds">
+): Promise<void> {
+  const [current, row] = await Promise.all([ctx.db.get(intentId), ctx.db.get(heldId)]);
+  if (!current || !row || !CAPTURE_HELD_FROM.has(current.status)) return;
+  // Strict: a row with no orgId or no intentId proves nothing about this intent.
+  // Relies on the held row carrying orgId+intentId (holdForIntent inserts both); any future door
+  // that sets an intent's provider externalId must keep the quarantine refusals in `create` and `markSettled`.
+  if (row.orgId !== current.orgId || row.intentId !== current._id) {
+    console.error(`[paymentIntents] Held capture ${heldId} does not belong to intent ${intentId}; not linked`);
+    return;
+  }
+  await ctx.db.patch(intentId, { status: "CAPTURE_HELD", heldFundsId: heldId, updatedAt: Date.now() });
+}
+
 // The paymentIntents row for a (provider, externalId), if any.
 async function intentByExternalId(
   ctx: MutationCtx,
@@ -226,7 +278,11 @@ async function intentByExternalId(
 // expiry frees it); concurrent creates are serialized by OCC on this read set.
 // The caller has proved the document's payer is `customerId`, so every intent
 // for it is under (orgId, customerId).
-async function getDocumentUncommittedMinor(
+//
+// SCRUM-571 S1 (D-22): only PENDING reserves. A CAPTURE_HELD link is a verified
+// capture awaiting finance, not an unpaid claim on the debt. Exported so the
+// reservation rule is testable while `create` is shut (PAYMENT_LINKS_PILOT_DISABLED).
+export async function getDocumentUncommittedMinor(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   customerId: Id<"customers">,
@@ -248,7 +304,8 @@ const statusValidator = v.union(
   v.literal("SETTLED"),
   v.literal("FAILED"),
   v.literal("EXPIRED"),
-  v.literal("REFUNDED")
+  v.literal("REFUNDED"),
+  v.literal("CAPTURE_HELD")
 );
 
 function optionalTrimmed(value?: string): string | undefined {
@@ -507,6 +564,11 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
+    // SCRUM-571 S1 (D-20) P1: the payment-link pilot is shut. First statement
+    // after authentication, before validation, before runWithIdempotency, so
+    // nothing is written and even a replayed key is refused.
+    if (PAYMENT_LINKS_PILOT_DISABLED) refuseSaleDebt("PAYMENT_LINKS_DISABLED");
+
     // Before the range check, not after: NaN fails `<= 0` and would otherwise
     // be stored as the intent's amount and stranded there.
     assertValidMinorAmount(args.amountMinor, "payment amount");
@@ -730,6 +792,10 @@ export const markSettled = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
+    // SCRUM-571 S1 (D-20) P2: staff cannot settle a link by hand while the
+    // pilot is shut. Before runWithIdempotency; nothing is written.
+    if (PAYMENT_LINKS_PILOT_DISABLED) refuseSaleDebt("PAYMENT_LINKS_DISABLED");
+
     return await runWithIdempotency(
       ctx,
       {
@@ -803,9 +869,11 @@ export const expire = mutation({
   args: {
     orgId: v.id("organizations"),
     intentId: v.id("paymentIntents"),
+    // D-22: the operator attests they checked the provider and it shows no payment.
+    providerStatusConfirmed: v.literal(true),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
     const intent = await ctx.db.get(args.intentId);
     // One message for a missing row and another org's row: never disclose that a
@@ -813,12 +881,68 @@ export const expire = mutation({
     if (!intent || intent.orgId !== args.orgId) {
       refusePaymentLink("PAYMENT_LINK_NOT_FOUND");
     }
+    // SCRUM-571 S1 (D-21/D-22): `status === "CAPTURE_HELD"` is a deliberate backstop
+    // beside the `heldCaptureFor` probe, which also covers PENDING links stranded
+    // by pre-D-22 code. It sits before NOT_PENDING on purpose, for the truthful message.
+    if (
+      intent.status === "CAPTURE_HELD" ||
+      (intent.externalId && (await heldCaptureFor(ctx, intent.provider, intent.externalId)))
+    ) {
+      refusePaymentLink("PAYMENT_LINK_CAPTURE_HELD");
+    }
     if (intent.status !== "PENDING") {
       refusePaymentLink("PAYMENT_LINK_NOT_PENDING");
     }
 
+    // D-20 provider-status condition, adapted in D-22: there is no provider
+    // client, so the check is a recorded operator attestation (the validator
+    // requires `providerStatusConfirmed: true`), stamped with who and when.
+    const now = Date.now();
     await ctx.db.patch(args.intentId, {
       status: "EXPIRED",
+      providerStatusCheckedAt: now,
+      providerStatusCheckedBy: user._id,
+      updatedAt: now,
+    });
+  },
+});
+
+/**
+ * SCRUM-571 S1 (D-22/D-25) repair: link a held capture to its payment link that
+ * the pre-D-22 code left PENDING, EXPIRED or FAILED (CAPTURE_HELD_FROM). Patches
+ * status, heldFundsId and updatedAt only, so providerStatusChecked* is kept: no
+ * payment, allocation, posting, outbox event or idempotency record. Whatever the
+ * row's `reviewStatus`. Naturally idempotent. Every refusal precedes any write.
+ */
+export const linkHeldCaptureToIntent = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    heldFundsId: v.id("unmatchedProviderFunds"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    const row = await ctx.db.get(args.heldFundsId);
+    // One message for missing and another org's (or no-org) rows.
+    if (!row || row.orgId !== args.orgId) refuseUnmatchedFunds("UNMATCHED_FUNDS_NOT_FOUND");
+    if (!row.intentId) refuseHeldCaptureLink("UNMATCHED_FUNDS_NO_INTENT");
+    const intent = await ctx.db.get(row.intentId);
+    if (!intent || intent.orgId !== args.orgId) refuseHeldCaptureLink("UNMATCHED_FUNDS_INTENT_NOT_FOUND");
+    if (intent.provider !== row.provider || intent.externalId !== row.externalId) {
+      refuseHeldCaptureLink("UNMATCHED_FUNDS_INTENT_MISMATCH");
+    }
+    if (intent.status === "CAPTURE_HELD" && intent.heldFundsId === row._id) return;
+    // Same set the hold itself moves (CAPTURE_HELD_FROM). SETTLED, REFUNDED and a
+    // CAPTURE_HELD link to a different row refuse, as does an eligible intent that
+    // already names a different held row.
+    if (!CAPTURE_HELD_FROM.has(intent.status)) refuseHeldCaptureLink("UNMATCHED_FUNDS_INTENT_NOT_LINKABLE");
+    if (intent.heldFundsId && intent.heldFundsId !== row._id) {
+      refuseHeldCaptureLink("UNMATCHED_FUNDS_INTENT_NOT_LINKABLE");
+    }
+
+    await ctx.db.patch(intent._id, {
+      status: "CAPTURE_HELD",
+      heldFundsId: row._id,
       updatedAt: Date.now(),
     });
   },
@@ -949,18 +1073,23 @@ export const settleByExternalId = internalMutation({
     // The intent-scoped holds share one shape. `intent.status` is read at the
     // call, so the mismatch exit (which patches the intent to FAILED on the row
     // but not on this in-memory copy) still records the PRE-patch PENDING.
+    //
+    // SCRUM-571 S1 (D-22): the hold is also the intent's terminal transition. In
+    // the SAME transaction the link moves to CAPTURE_HELD, so it is never shown
+    // as unpaid, never reserved as collectible and never a dead end.
     const holdForIntent = async (
       reason: Doc<"unmatchedProviderFunds">["reason"]
-    ): Promise<SettleOutcome> => ({
-      kind: "HELD",
-      heldId: await recordUnmatchedProviderFunds(ctx, {
+    ): Promise<SettleOutcome> => {
+      const heldId = await recordUnmatchedProviderFunds(ctx, {
         ...capture,
         orgId: intent.orgId,
         intentId: intent._id,
         intentStatusAtReceipt: intent.status,
         reason,
-      }),
-    });
+      });
+      await markIntentCaptureHeld(ctx, intent._id, heldId);
+      return { kind: "HELD", heldId };
+    };
 
     // ⚠️ SCRUM-302 — ORGANIZATION LIFECYCLE, CHECKED BEFORE ANY ECONOMIC EFFECT.
     //
@@ -1014,6 +1143,13 @@ export const settleByExternalId = internalMutation({
       console.warn(`[paymentIntents] Cannot settle intent ${intent._id} in status ${intent.status}`);
       return await holdForIntent("INTENT_NOT_PENDING");
     }
+
+    // SCRUM-571 S1 (D-20) P3: the pilot is shut, so a verified capture is HELD
+    // for finance, never settled. One atomic write to unmatchedProviderFunds
+    // (keyed provider + externalId, so a redelivery only bumps that row); no
+    // allocation, canonical payment, posting hook or outbox event, and the
+    // intent moves to CAPTURE_HELD (D-22). The money is reconciled by a person.
+    if (PAYMENT_LINKS_PILOT_DISABLED) return await holdForIntent("PAYMENT_LINKS_DISABLED");
 
     // D-14 (see heldCaptureFor): a held row exists, so record this redelivery on
     // it and do nothing else. `reason` is unused when the row already exists.

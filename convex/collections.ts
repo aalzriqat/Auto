@@ -28,6 +28,11 @@ import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
 import { isFcLineage, parseFaceAmountMinor, dealChequeCurrency, FC_CHEQUE_DEAL_NEXT_STEP, FC_RETURN_MESSAGES } from "./utils/fcCheque";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import {
+  assertNoSaleIdOnNewReceivable,
+  assertReceiptTargetNotSaleLinked,
+  assertReceivableNotSaleLinked,
+} from "./utils/saleDebtContainment";
+import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
   ensureReceivableDocument,
@@ -247,6 +252,17 @@ async function validateOptionalLinks(
       .unique();
     if (!membership) throw new ConvexError("Assigned user is not a member of this organization.");
   }
+}
+
+/**
+ * SCRUM-571 R3/R4: refuse a CUSTOMER cheque whose lineage is a sale, either its
+ * own saleId or its receivable's. A finance-company cheque (keyed on lineage,
+ * SCRUM-447 D9) is a different instrument and is left to its own guards.
+ */
+async function assertCustomerChequeNotSaleLinked(ctx: QueryCtx | MutationCtx, cheque: Doc<"postDatedCheques">) {
+  if (isFcLineage(cheque)) return;
+  assertReceivableNotSaleLinked(null, cheque.saleId);
+  if (cheque.receivableId) assertReceivableNotSaleLinked(await ctx.db.get(cheque.receivableId));
 }
 
 async function hydrateReceivable(ctx: QueryCtx, receivable: Doc<"receivables">) {
@@ -531,6 +547,42 @@ async function mirrorCollectionPaymentToCanonical(
   // movement's lineage; recovering it later by set-difference is impossible,
   // because every write in one Convex transaction can share a `_creationTime`.
   return { canonicalPaymentId, paymentAllocationId: patch.paymentAllocationId };
+}
+
+/**
+ * SCRUM-571 S1 (D-20) R5: read-only pre-check for the refund approval. When the
+ * refund would split an allocation, `reverseAllocationsForRefund` re-allocates
+ * the un-refunded remainder to the document - for a sale-linked legacy
+ * receivable that is a fresh allocation against a competing debt. Refuse BEFORE
+ * the refund payment row, the mirror or any reversal is written. It mirrors the
+ * walk below exactly (newest first, break once covered) and writes nothing.
+ */
+async function assertRefundDoesNotReallocateToSaleLinkedDoc(
+  ctx: MutationCtx,
+  receivable: Doc<"receivables">,
+  amountMinor: number
+) {
+  if (!receivable.saleId) return;
+  const canonical = await findCanonicalReceivableForLegacy(ctx, receivable);
+  if (!canonical) return;
+  // Bounded read. A document with more allocations than the limit cannot be
+  // walked completely, and an incomplete walk cannot prove the refund will not
+  // split an allocation, so it fails CLOSED: this receivable is sale-linked
+  // (checked above), hence the refusal.
+  const allocations = await ctx.db
+    .query("paymentAllocations")
+    .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", canonical._id))
+    .take(ALLOCATION_HISTORY_PROBE_LIMIT + 1);
+  if (allocations.length > ALLOCATION_HISTORY_PROBE_LIMIT) assertReceivableNotSaleLinked(receivable);
+  const active = allocations
+    .filter((allocation) => allocation.status === "ACTIVE")
+    .sort((a, b) => b.createdAt - a.createdAt);
+  let remainingMinor = amountMinor;
+  for (const allocation of active) {
+    if (remainingMinor <= 0) break;
+    if (allocation.amountMinor > remainingMinor) assertReceivableNotSaleLinked(receivable);
+    remainingMinor -= allocation.amountMinor;
+  }
 }
 
 /**
@@ -900,6 +952,12 @@ export const createReceivable = mutation({
 
     await validateOrgCustomer(ctx, args.orgId, args.customerId);
     await validateOptionalLinks(ctx, args.orgId, args);
+    // SCRUM-571 W1 (D-20): a sale's customer debt is its sale invoice, never a
+    // second legacy receivable. After the existence/org check so "Sale not
+    // found" keeps precedence, and BEFORE `runWithIdempotency` so a replay of a
+    // command stored before this guard existed is refused too instead of being
+    // handed its stored result.
+    assertNoSaleIdOnNewReceivable(args.saleId);
 
     const currency = await getOrgCurrency(ctx, args.orgId);
     return await runWithIdempotency(
@@ -1067,6 +1125,8 @@ export const createInstallmentPlan = mutation({
 
     await validateOrgCustomer(ctx, args.orgId, args.customerId);
     await validateOptionalLinks(ctx, args.orgId, args);
+    // SCRUM-571 W1 (D-20): see createReceivable. Refused before the wrapper.
+    assertNoSaleIdOnNewReceivable(args.saleId);
 
     const currency = await getOrgCurrency(ctx, args.orgId);
     return await runWithIdempotency(
@@ -1207,6 +1267,15 @@ export const recordPayment = mutation({
         "A payment-link receipt cannot be recorded manually. It is recorded automatically when the payment link is settled. Nothing has been changed."
       );
     }
+    // SCRUM-571 R1 (D-20): a sale's debt is its sale invoice, so a receipt may
+    // neither target a legacy receivable that carries a saleId nor carry a
+    // caller-supplied saleId (that attribution would be silently wrong or
+    // dropped until the invoice receipt resolver exists). Refused BEFORE the
+    // idempotency wrapper for the same replay reason as the guards above.
+    await assertReceiptTargetNotSaleLinked(ctx, args.orgId, {
+      receivableId: args.receivableId,
+      saleId: args.saleId,
+    });
     return await runWithIdempotency(
       ctx,
       {
@@ -1502,6 +1571,9 @@ export const applyRetainedCredit = mutation({
     if (args.appliedAt !== undefined) {
       assertValidAccountingDate(args.appliedAt, "Application date");
     }
+    // SCRUM-571 R2 (D-20): retained credit may not relieve a legacy receivable
+    // that carries a saleId. Before the wrapper, so a stored replay is refused.
+    await assertReceiptTargetNotSaleLinked(ctx, args.orgId, { receivableId: args.receivableId });
     return await runWithIdempotency(
       ctx,
       {
@@ -1705,11 +1777,17 @@ export async function registerChequeCore(
     saleId: args.saleId,
     applicationId: args.applicationId,
   });
+  // SCRUM-571 R3 (D-20): a caller-supplied saleId is refused (finance-company
+  // registration via applications.registerExpectedPayment passes none). No
+  // write has happened yet.
+  assertReceivableNotSaleLinked(null, args.saleId);
 
   let receivable: Doc<"receivables"> | null = null;
   if (args.receivableId) {
     receivable = await ctx.db.get(args.receivableId);
     if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
+    // SCRUM-571 R3 (D-20): nor may a cheque attach to a sale-linked receivable.
+    assertReceivableNotSaleLinked(receivable);
     if (receivable.customerId !== args.customerId) throw new ConvexError("Cheque customer must match receivable customer.");
     // SCRUM-121A-PRE §3.3 — a settled or voided debt cannot be given a new
     // instrument. This door checked organization and customer but never status,
@@ -1811,6 +1889,9 @@ export const depositCheque = mutation({
     const cheque = await ctx.db.get(args.chequeId);
     if (!cheque || cheque.orgId !== args.orgId || cheque.isDeleted) throw new ConvexError("Cheque not found.");
     if (cheque.status !== "HELD") throw new ConvexError("Only held cheques can be deposited.");
+    // SCRUM-571 R4 (D-20): a sale-linked customer cheque cannot advance toward a
+    // clearing that is itself refused. Finance-company cheques are unaffected.
+    await assertCustomerChequeNotSaleLinked(ctx, cheque);
     // SCRUM-447 D4: depositing the finance company's cheque is legitimate on a
     // live deal, but a cancelled deal has no instrument left to present.
     const lineageAppId = cheque.applicationId ?? cheque.originApplicationId;
@@ -1869,6 +1950,14 @@ export const clearCheque = mutation({
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // SCRUM-571 R3 (D-20): clearing a sale-linked customer cheque would post a
+    // receipt against sale lineage. Refused BEFORE the idempotency wrapper so a
+    // stored replay is refused too. A missing/foreign cheque falls through to the
+    // body's own "Cheque not found."
+    const chequeToClear = await ctx.db.get(args.chequeId);
+    if (chequeToClear && chequeToClear.orgId === args.orgId && !chequeToClear.isDeleted) {
+      await assertCustomerChequeNotSaleLinked(ctx, chequeToClear);
+    }
     return await runWithIdempotency(
       ctx,
       {
@@ -2100,6 +2189,9 @@ export const replaceCheque = mutation({
     if (oldCheque.status === "CLEARED" || oldCheque.status === "CANCELLED") {
       throw new ConvexError("Cleared or cancelled cheques cannot be replaced.");
     }
+    // SCRUM-571 R4 (D-20): the replacement would copy `saleId` onto a new HELD
+    // instrument whose clearing is refused. Finance-company cheques unaffected.
+    await assertCustomerChequeNotSaleLinked(ctx, oldCheque);
 
     const fcLineage = isFcLineage(oldCheque);
     let amount: number;
@@ -2799,6 +2891,12 @@ export const respondToApproval = mutation({
             assertRefundableReceivableStatus(receivable.status);
             const paidAmount = roundMoney(receivable.originalAmount - receivable.outstandingAmount, currency);
             if (refundAmount > paidAmount) throw new ConvexError("Refund amount cannot exceed collected amount.");
+            // SCRUM-571 S1 (D-20) R5: before the first write of this branch.
+            await assertRefundDoesNotReallocateToSaleLinkedDoc(
+              ctx,
+              receivable,
+              toMinorUnits(refundAmount, currency)
+            );
 
             // Use the method captured at request time so the GL entry posts to
             // the correct cash account (bank vs. cash on hand vs. cheque).
