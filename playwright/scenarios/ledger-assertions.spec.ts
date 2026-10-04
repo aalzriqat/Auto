@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { type LedgerDelta, expectLedgerDelta, expectOnlyKnownDefect, jod } from "../ledger";
+import { LEDGER_CURRENCY, type LedgerDelta, expectLedgerDelta, expectOnlyKnownDefect, jod, keyOf } from "../ledger";
 
 /**
  * The GL assertions the scenario matrix rests on, checked against hand-built
@@ -11,10 +11,19 @@ import { type LedgerDelta, expectLedgerDelta, expectOnlyKnownDefect, jod } from 
 type Side = { dr: number; cr: number };
 
 function delta(...journals: Array<Record<string, Partial<Side>>>): LedgerDelta {
+  return deltaIn({ entry: LEDGER_CURRENCY, lines: LEDGER_CURRENCY }, ...journals);
+}
+
+/** As `delta`, with the entries and their lines posted in the given currencies — keyed exactly as ledgerDelta keys them. */
+function deltaIn(
+  currency: { entry: string | undefined; lines: string | undefined },
+  ...journals: Array<Record<string, Partial<Side>>>
+): LedgerDelta {
   const byCode: Record<string, Side> = {};
   const newEntries: LedgerDelta["newEntries"] = journals.map((j, i) => {
     const lines: Record<string, Side> = {};
-    for (const [code, s] of Object.entries(j)) {
+    for (const [rawCode, s] of Object.entries(j)) {
+      const code = keyOf(rawCode, currency.lines);
       lines[code] = { dr: s.dr ?? 0, cr: s.cr ?? 0 };
       // As ledgerDelta: an account that did not move is not in the delta.
       if (!s.dr && !s.cr) continue;
@@ -25,7 +34,7 @@ function delta(...journals: Array<Record<string, Partial<Side>>>): LedgerDelta {
     }
     const debit = Object.values(lines).reduce((n, s) => n + s.dr, 0);
     const credit = Object.values(lines).reduce((n, s) => n + s.cr, 0);
-    return { id: `je${i}`, memo: `journal ${i}`, debit, credit, byCode: lines };
+    return { id: `je${i}`, currency: currency.entry, memo: `journal ${i}`, debit, credit, byCode: lines };
   });
   return { byCode, newEntries, unposted: [] };
 }
@@ -62,6 +71,15 @@ test.describe("GL assertion self-test", () => {
     expect(() => expectLedgerDelta(delta({ "1110": { dr: 5 }, "1100": { cr: 5 } }), {})).toThrow();
     // A new journal is a posting even when every line is zero.
     expect(() => expectLedgerDelta(delta({ "1110": { dr: 0, cr: 0 } }), {})).toThrow();
+  });
+
+  test("refuses the right lines posted in the wrong currency", () => {
+    // Codex AF-430-05 on b246aed9a: same accounts, same minor amounts, USD.
+    expect(() => expectLedgerDelta(deltaIn({ entry: "USD", lines: "USD" }, CLOSE), CLOSE)).toThrow();
+    // Lines in another currency under an entry that claims the deal currency.
+    expect(() => expectLedgerDelta(deltaIn({ entry: LEDGER_CURRENCY, lines: "USD" }, CLOSE), CLOSE)).toThrow();
+    // An entry with no denomination at all.
+    expect(() => expectLedgerDelta(deltaIn({ entry: undefined, lines: LEDGER_CURRENCY }, CLOSE), CLOSE)).toThrow();
   });
 
   test("accepts several journals when the step names them all", () => {

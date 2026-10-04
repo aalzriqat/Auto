@@ -222,13 +222,28 @@ export async function recordQuotationAmount(page: Page, dealUrl: string, amount:
   const input = dialog.locator("#submitted-quotation-amount");
   // The calculation can land while `fill` runs (between its select-all and its
   // insert): the one-shot prefill then writes the still-untouched field and the
-  // typed figure is APPENDED to it — F21 recorded "21428.57213000". Refill until
-  // the field holds exactly what was typed; once it does, the operator-touched
-  // guard keeps any later prefill out.
-  await expect(async () => {
-    await input.fill(String(amount));
-    await expect(input).toHaveValue(String(amount), { timeout: 1_000 });
-  }).toPass({ timeout: 15_000 });
+  // typed figure is APPENDED to it — F21 recorded "21428.57213000". So type
+  // only once the field has settled (the prefill landed, or never will), and
+  // type ONCE: a retry loop would turn that race into a pass and hide it (Codex
+  // F21 on b246aed9a; the UI window itself is tracked as SCRUM-607).
+  await expect(input).toBeVisible();
+  let last = await input.inputValue();
+  let stableSince = Date.now();
+  await expect
+    .poll(
+      async () => {
+        const now = await input.inputValue();
+        if (now !== last) {
+          last = now;
+          stableSince = Date.now();
+        }
+        return Date.now() - stableSince;
+      },
+      { timeout: 20_000, intervals: [250], message: "the quotation field must settle before typing" },
+    )
+    .toBeGreaterThanOrEqual(2_000);
+  await input.fill(String(amount));
+  await expect(input, "the typed quotation must be recorded exactly as typed").toHaveValue(String(amount));
   const reason = dialog.locator("#submitted-quotation-reason");
   // Rendered once the typed figure departs from the calculated one, a beat
   // after the fill — `isVisible()` asks too early.

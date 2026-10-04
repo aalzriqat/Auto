@@ -83,7 +83,13 @@ jobs:
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
 
       - name: Seed the QA dealership
-        run: node scripts/e2ePreviewBootstrap.mjs
+        # The bootstrap ends with assertE2EBootstrap: the deployment behind this
+        # exact URL is a preview and is the one seeded. Only after that passes is
+        # the URL exported as attested, so the explorer can refuse any other
+        # backend (Codex AF-430-03).
+        run: |
+          node scripts/e2ePreviewBootstrap.mjs
+          echo "SCENARIOS_PREVIEW_ATTESTED_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
           CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
@@ -96,6 +102,7 @@ jobs:
         run: pnpm exec playwright test -c playwright.scenarios.config.ts
         env:
           NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          SCENARIOS_PREVIEW_ATTESTED_URL: ${{ env.SCENARIOS_PREVIEW_ATTESTED_URL }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}

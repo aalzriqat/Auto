@@ -21,6 +21,18 @@ import type { Id } from "../convex/_generated/dataModel";
  */
 
 type Side = { dr: number; cr: number };
+
+/**
+ * Every scenario deal is denominated in the QA org's currency. A line in that
+ * currency is keyed by its account code alone, so the spec literals stay
+ * legible; a line in any other currency (or none) is keyed `code@CURRENCY`,
+ * which no expectation names — so the right amount on the right account in the
+ * WRONG currency fails instead of passing (Codex AF-430-05 on b246aed9a).
+ */
+export const LEDGER_CURRENCY = "JOD";
+export function keyOf(code: string, currency: string | undefined): string {
+  return currency === LEDGER_CURRENCY ? code : `${code}@${currency ?? "none"}`;
+}
 export type LedgerSnapshot = {
   byCode: Map<string, Side>;
   entryIds: Set<string>;
@@ -69,10 +81,11 @@ export async function snapshotLedger(
   const tb = await client.query(api.accountingReports.trialBalance, { orgId });
   const byCode = new Map<string, Side>();
   for (const row of tb.rows) {
-    const side = byCode.get(row.code) ?? { dr: 0, cr: 0 };
+    const key = keyOf(row.code, row.currency);
+    const side = byCode.get(key) ?? { dr: 0, cr: 0 };
     side.dr += row.debitMinor;
     side.cr += row.creditMinor;
-    byCode.set(row.code, side);
+    byCode.set(key, side);
   }
   return {
     byCode,
@@ -87,6 +100,8 @@ export type LedgerDelta = {
   /** Each new journal entry with its own lines, summed per account code. */
   newEntries: Array<{
     id: string;
+    /** The entry's own denomination; optional in the schema for legacy rows. */
+    currency: string | undefined;
     memo: string;
     debit: number;
     credit: number;
@@ -124,7 +139,7 @@ export async function ledgerDelta(
     if (!detail) continue;
     const entryByCode: Record<string, Side> = {};
     for (const l of detail.lines) {
-      const code = codeOf.get(l.accountId) ?? `unknown:${l.accountId}`;
+      const code = keyOf(codeOf.get(l.accountId) ?? `unknown:${l.accountId}`, l.currency);
       const side = entryByCode[code] ?? { dr: 0, cr: 0 };
       side.dr += l.debitMinor;
       side.cr += l.creditMinor;
@@ -132,6 +147,7 @@ export async function ledgerDelta(
     }
     newEntries.push({
       id,
+      currency: (detail.entry as { currency?: string }).currency,
       memo: (detail.entry as { memo?: string }).memo ?? "",
       debit: detail.lines.reduce((sum, l) => sum + l.debitMinor, 0),
       credit: detail.lines.reduce((sum, l) => sum + l.creditMinor, 0),
@@ -185,6 +201,9 @@ export function expectLedgerDelta(
 ): void {
   for (const entry of delta.newEntries) {
     expect(entry.debit, `journal entry ${entry.id} (${entry.memo}) must balance`).toBe(entry.credit);
+    expect(entry.currency, `journal entry ${entry.id} (${entry.memo}) must be denominated in the deal currency`).toBe(
+      LEDGER_CURRENCY,
+    );
   }
   expect(delta.unposted, "every accounting event the deal raised must have posted").toEqual([]);
 

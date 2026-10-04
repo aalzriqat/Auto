@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { callJev } from "../../scripts/intelligence/jevImpact.mjs";
 import { resolveOrgId } from "../utils";
@@ -10,11 +11,18 @@ import { resolveOrgId } from "../utils";
  * opinion of a screen is recorded beside them and never decides anything
  * (the SCRUM-350 rule: Jev may suggest, only fixed checks may declare).
  *
- * It does not change data: anything whose name reads as a commit (save,
- * submit, confirm, delete, post, approve, refund …) is never clicked, and any
- * dialog it opens is dismissed with Escape. It refuses to run anywhere but a
- * local app on a non-production backend, because every screen Jev judges is
- * sent to TypeSafe.
+ * It is NOT read-only, so it runs only on an attested disposable preview.
+ * Nothing whose name reads as a commit (save, submit, confirm, delete, post,
+ * approve, refund …) is clicked, every dialog it opens is dismissed with
+ * Escape, and the screens known to write on view are never reached. Some
+ * effects still write by being mounted: the floating messenger marks messages
+ * delivered on every page, and a Facebook conversation opened from the leads
+ * list syncs its history. Those touch only the attested preview's QA data
+ * (Codex AF-430-04).
+ *
+ * It refuses to run anywhere but a local app whose backend is proven to be the
+ * seeded disposable preview, because every screen Jev judges is sent to
+ * TypeSafe (Codex AF-430-03).
  */
 
 const PRODUCTION_DEPLOYMENT = "kindly-hound-172";
@@ -25,15 +33,67 @@ const COMMIT_WORDS =
   /delete|remove|cancel|void|revers|refund|forfeit|post|close|approve|reject|confirm|submit|save|send|sign ?out|log ?out|archive|pay|transfer|disburse|finali[sz]e|record|import|upload|invite|حذف|إلغاء|تأكيد|حفظ|إرسال|خروج|اعتماد|رفض|ترحيل|دفع|تسجيل/i;
 /**
  * Screens that write just by being looked at: opening a conversation marks it
- * read (ChatThread / FloatingChatWindow → directMessages.markRead), and a
- * notification link marks the notification read on click. Neither is reached,
+ * read (ChatThread / FloatingChatWindow → directMessages.markRead), opening an
+ * empty Facebook DM in the social inbox syncs its history from Facebook and
+ * stores it (SocialConversationDialog → fetchFbConversationHistory), and a
+ * notification link marks the notification read on click. None is reached,
  * whatever its name (Codex AF-430-04).
  */
-const WRITES_ON_VIEW = /\/(messages|notifications)(\/|$|\?)/;
+const WRITES_ON_VIEW = /\/(messages|notifications|social-inbox)(\/|$|\?)/;
 const BROKEN_TEXT =/\bNaN\b|\bundefined\b|\[object Object\]/;
 const ERROR_BOUNDARY = /Something went wrong|Application error|حدث خطأ ما/i;
 
 type Finding = { step: number; url: string; check: string; detail: string };
+
+/**
+ * The Convex URL proven to be the seeded disposable preview, or undefined.
+ * "Not production" is not enough: a developer's own deployment, or anything
+ * else the URL happens to name, would pass that (Codex AF-430-03). In CI the
+ * seed step exports the URL only after assertE2EBootstrap passed for it; run
+ * locally, the same assertion is run here, against the preview named by
+ * CONVEX_PREVIEW_NAME, through the bootstrap's own argv checks.
+ */
+function attestedPreviewUrl(): string | undefined {
+  if (process.env.GITHUB_ACTIONS === "true") return process.env.SCENARIOS_PREVIEW_ATTESTED_URL || undefined;
+  if (!process.env.CONVEX_PREVIEW_NAME) return undefined;
+  const res = spawnSync(process.execPath, ["--input-type=module", "-e", LOCAL_ATTESTATION], {
+    env: process.env,
+    encoding: "utf8",
+    timeout: 180_000,
+  });
+  if (res.status === 0) return process.env.NEXT_PUBLIC_CONVEX_URL;
+  const reason = (res.stderr || res.error?.message || "").split("\n").find((l) => /Error/.test(l));
+  console.warn(`Preview attestation failed: ${reason?.trim() ?? `exit ${res.status}`}`);
+  return undefined;
+}
+
+/**
+ * Runs the bootstrap's own assertExistingE2EPreview, with its own argv checks
+ * (runConvex). It runs in a child because the bootstrap is an ES module that
+ * Playwright's CommonJS transform cannot load. Node refuses to spawn
+ * `pnpm.cmd` without a shell on Windows, and the bootstrap must not use one
+ * (its JSON argv would be re-split), so locally the same validated
+ * `exec convex run …` argv goes straight to the Convex CLI.
+ */
+const LOCAL_ATTESTATION = `
+import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+const m = await import(pathToFileURL(resolve("scripts/e2ePreviewBootstrap.mjs")).href);
+const spawn = (command, args, options) => {
+  if (process.platform !== "win32") return spawnSync(command, args, options);
+  if (args[0] !== "exec" || args[1] !== "convex" || args[2] !== "run") {
+    throw new Error("Refusing to run anything but convex run for the preview attestation.");
+  }
+  return spawnSync(process.execPath, [resolve("node_modules/convex/bin/main.js"), ...args.slice(2)], options);
+};
+await m.assertExistingE2EPreview(process.env, { run: (args, label) => m.runConvex(args, label, spawn) });
+`;
+
+function sameUrl(a: string | undefined, b: string | undefined): boolean {
+  if (!a || !b) return false;
+  return a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
+}
 
 function rng(seed: number) {
   let s = seed >>> 0 || 1;
@@ -133,7 +193,10 @@ async function jevOpinion(screen: string): Promise<number | undefined> {
 test.describe("Jev explorer (advisory)", () => {
   test.describe.configure({ timeout: 900_000 });
 
-  test(`random walk, seed ${SEED}, ${STEPS} steps`, async ({ page, baseURL }) => {
+  // The seed stays out of the title: unset, it is time-derived and differs
+  // between the runner and the worker, which then cannot find the test.
+  test("random walk", async ({ page, baseURL }) => {
+    test.info().annotations.push({ type: "seed", description: `${SEED} (${STEPS} steps)` });
     const host = new URL(baseURL ?? "http://localhost:3000").hostname;
     test.skip(!["localhost", "127.0.0.1"].includes(host), "Explorer runs against a local app only.");
     test.skip(
@@ -151,6 +214,10 @@ test.describe("Jev explorer (advisory)", () => {
       process.env.NEXT_PUBLIC_CONVEX_URL ?? "",
     )?.[1];
     test.skip(!expectedDeployment, "Explorer needs NEXT_PUBLIC_CONVEX_URL naming its preview deployment.");
+    test.skip(
+      !sameUrl(attestedPreviewUrl(), process.env.NEXT_PUBLIC_CONVEX_URL),
+      "NEXT_PUBLIC_CONVEX_URL is not attested as the seeded disposable preview; not exploring.",
+    );
     const sockets: string[] = [];
     page.on("websocket", (ws) => sockets.push(ws.url()));
     await page.goto("/");
