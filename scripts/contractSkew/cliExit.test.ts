@@ -259,7 +259,8 @@ describe("exit-code table: one subprocess test per row", () => {
   }, 300_000);
 });
 
-const releaseArgsJ = ["--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json", "--baseline", "baseline.json", "--json", "report.json"];
+const releaseArgs = ["--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json", "--baseline", "baseline.json"];
+const releaseArgsJ = [...releaseArgs, "--json", "report.json"];
 const DEPLOYED = specOf(mutation("vehicles.js:update", { orgId: required(str) }));
 
 describe("SCRUM-178 v2 batch 3 R1: release mode compares the candidate, not just the deployed spec", () => {
@@ -283,6 +284,23 @@ describe("SCRUM-178 v2 batch 3 R1: release mode compares the candidate, not just
 
   test("candidate turns the Mutation into a Query -> 8", () => {
     expect(release(PROVEN, specOf(query("vehicles.js:update", { orgId: required(str) }))).r.code).toBe(8);
+  }, 300_000);
+
+  test("an unproven value on a field of a function whose ONLY change is at <function> is BLOCKED (4)", () => {
+    // The deployed spec has `update` as a Query, so the client's `useMutation` is
+    // refused there (a deployed break, FIXED by the candidate) and the payload is
+    // never walked against it. The candidate makes it a Mutation with the SAME
+    // args: the only recorded change is TYPE_CHANGED at `<function>`, while the
+    // client's unproven `orgId` (a field path) is what the candidate leaves
+    // unverified. A change to the whole function touches every path on it.
+    const asQuery = specOf(query("vehicles.js:update", { orgId: required(str) }));
+    const asMutation = specOf(mutation("vehicles.js:update", { orgId: required(str) }));
+    const { dir, r } = release(UNPROVEN, asMutation, asQuery);
+    expect(r.code).toBe(4);
+    expect(r.stderr).toMatch(/BLOCKED/);
+    const report = reportOf(dir);
+    expect(report.changedBreakdown).toEqual({ TYPE_CHANGED: 1 });
+    expect(report.intersectingUnknowns).toHaveLength(1);
   }, 300_000);
 
   test("candidate adds a REQUIRED arg the client omits -> 8", () => {
@@ -521,8 +539,6 @@ describe("the needs-evidence baseline", () => {
     expect(committed.entries).toEqual([]);
   });
 });
-
-const releaseArgs = ["--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json", "--baseline", "baseline.json"];
 
 describe("CS2-3 / D-26: baseline drift blocks a RELEASE too (exit 10, never a warning)", () => {
   const same = () => specOf(mutation("vehicles.js:update", { orgId: required(str) }));

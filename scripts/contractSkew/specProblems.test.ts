@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { indexSpec, specProblems } from "./specIndex.mjs";
+import { validatorProblems, validatorTree } from "./contractTree.mjs";
 
 /**
  * SCRUM-178 v2 F5-1. The spec sanity check rejects only entries this control
@@ -98,5 +99,51 @@ describe("specProblems", () => {
   test("HttpAction entries are excluded from the argument-contract index", () => {
     const index = indexSpec({ functions: [callable("a.js:b"), http("GET", "/health")] });
     expect([...index.keys()]).toEqual(["a.js:b"]);
+  });
+});
+
+describe("validatorProblems accepts every validator kind the comparator handles (drift guard)", () => {
+  // One node per kind `convex function-spec` renders (validator.d.ts: null number
+  // bigint boolean string bytes any literal id array record union object, plus
+  // the `float64` / `int64` names the number validators are emitted as). A kind
+  // `validatorTree` / `compareNode` learns to handle that `validatorProblems` does
+  // not know would turn every real spec into exit 3.
+  const str = { type: "string" };
+  const KINDS: Record<string, unknown> = {
+    null: { type: "null" },
+    number: { type: "number" },
+    float64: { type: "float64" },
+    int64: { type: "int64" },
+    bigint: { type: "bigint" },
+    boolean: { type: "boolean" },
+    string: str,
+    bytes: { type: "bytes" },
+    any: { type: "any" },
+    literal: { type: "literal", value: "A" },
+    id: { type: "id", tableName: "vehicles" },
+    array: { type: "array", value: str },
+    object: { type: "object", value: { a: { fieldType: str, optional: false } } },
+    record: { type: "record", keys: str, values: { fieldType: str, optional: false } },
+    union: { type: "union", value: [str, { type: "null" }] },
+  };
+
+  for (const [kind, node] of Object.entries(KINDS)) {
+    test(`${kind} is accepted, alone and nested`, () => {
+      expect(validatorProblems(node, kind)).toEqual([]);
+      expect(validatorProblems({ type: "array", value: node }, kind)).toEqual([]);
+      expect(validatorTree(node).kind).toBeDefined();
+    });
+  }
+
+  test("every fixture kind is a validator type validatorTree names (no stale fixture)", () => {
+    for (const [kind, node] of Object.entries(KINDS)) {
+      const tree = validatorTree(node) as { kind: string; type?: string };
+      // Anything not structural falls to a scalar carrying its own type name.
+      if (tree.kind === "scalar") expect(tree.type, kind).toBe((node as { type: string }).type);
+    }
+  });
+
+  test("a type outside the set is still refused", () => {
+    expect(validatorProblems({ type: "decimal128" }, "x")).toEqual(['x: unknown validator type "decimal128"']);
   });
 });

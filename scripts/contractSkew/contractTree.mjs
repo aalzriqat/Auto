@@ -86,15 +86,6 @@
  * `any` ended the comparison before anything was checked, which also made the
  * `SCALAR_OK.bytes` entry below unreachable dead code that read as coverage.
  */
-// ⚠️ SCRUM-178 v2 batch 3 (SPEC-1, D-27). `record` AND `unknown` WERE HERE AND
-// ARE GONE. `v.record(k, v)` constrains every value and the keys, so treating it
-// as `any` let a payload through that Convex refuses. It is now `unsupported` (a
-// coverage gap), never `any`. `unknown` is not a validator type Convex renders at
-// all (validator.d.ts: null number bigint boolean string bytes any literal id
-// array record union object), so it is rejected by `validatorProblems` instead
-// of being quietly widened.
-const DYNAMIC = new Set(["any"]);
-
 /**
  * Convex's rendered spec is already a tree; this only normalizes it.
  *
@@ -107,7 +98,9 @@ export function validatorTree(node) {
   if (!node || typeof node !== "object") return { kind: "any" };
   const type = node.type;
 
-  if (DYNAMIC.has(type)) return { kind: "any" };
+  // ⚠️ ONLY `any` accepts anything (SPEC-1, D-27): `record` is `unsupported`, and
+  // `unknown` is not a Convex validator type, so `validatorProblems` rejects it.
+  if (type === "any") return { kind: "any" };
   if (type === "null") return { kind: "literal", value: null };
   if (type === "literal") return { kind: "literal", value: node.value };
 
@@ -146,9 +139,25 @@ export function validatorTree(node) {
  * (`SCALAR_OK`) and `bytes` / `bigint`, which it handles explicitly. A type in
  * neither set falls to the unmodelled-scalar fallback and can only ever be
  * reported TYPE_UNKNOWN, which is not the same as the spec being understood.
+ * (`KNOWN_TYPES`, below `SCALAR_OK`.)
  */
-const STRUCTURAL_TYPES = new Set(["any", "null", "literal", "object", "array", "union", "id", "record"]);
-const scalarTypes = () => new Set([...Object.keys(SCALAR_OK), "bytes", "bigint"]);
+const STRUCTURAL_TYPES = ["any", "null", "literal", "object", "array", "union", "id", "record"];
+
+/**
+ * One `fieldType`-bearing entry (an object field, or a record's `values`): its
+ * own problem if it has no `fieldType`, otherwise the problems of the validator
+ * inside. `missing` is the message when it has none.
+ *
+ * @param {unknown} entry
+ * @param {string} where
+ * @param {string} [missing]
+ * @returns {string[]}
+ */
+function fieldProblems(entry, where, missing = "field has no `fieldType`") {
+  const e = /** @type {Record<string, any> | null | undefined} */ (entry);
+  if (!e || typeof e !== "object" || !("fieldType" in e)) return [`${where}: ${missing}`];
+  return validatorProblems(e.fieldType, where);
+}
 
 /**
  * ⚠️ RECURSIVE. A validator is a tree, and the first version of the spec check
@@ -166,22 +175,12 @@ export function validatorProblems(node, where) {
   const n = /** @type {Record<string, any>} */ (node);
   const type = n.type;
   if (typeof type !== "string") return [`${where}: validator has no \`type\``];
-  const scalars = scalarTypes();
-  if (!STRUCTURAL_TYPES.has(type) && !scalars.has(type)) return [`${where}: unknown validator type "${type}"`];
+  if (!KNOWN_TYPES.has(type)) return [`${where}: unknown validator type "${type}"`];
 
   switch (type) {
     case "object": {
       if (!n.value || typeof n.value !== "object" || Array.isArray(n.value)) return [`${where}: object validator has no \`value\` map`];
-      const out = [];
-      for (const [name, entry] of Object.entries(n.value)) {
-        const e = /** @type {Record<string, any>} */ (entry);
-        if (!e || typeof e !== "object" || !("fieldType" in e)) {
-          out.push(`${where}.${name}: field has no \`fieldType\``);
-          continue;
-        }
-        out.push(...validatorProblems(e.fieldType, `${where}.${name}`));
-      }
-      return out;
+      return Object.entries(n.value).flatMap(([name, entry]) => fieldProblems(entry, `${where}.${name}`));
     }
     case "array":
       return validatorProblems(n.value, `${where}[*]`);
@@ -190,17 +189,11 @@ export function validatorProblems(node, where) {
       // An empty array is legitimate (see validatorTree): a gap, not a problem.
       return n.value.flatMap((branch, i) => validatorProblems(branch, `${where}|${i}`));
     }
-    case "record": {
-      const out = [];
-      out.push(...validatorProblems(n.keys, `${where}{keys}`));
-      const values = n.values;
-      if (!values || typeof values !== "object" || !("fieldType" in values)) {
-        out.push(`${where}{values}: record has no \`values.fieldType\``);
-      } else {
-        out.push(...validatorProblems(values.fieldType, `${where}{values}`));
-      }
-      return out;
-    }
+    case "record":
+      return [
+        ...validatorProblems(n.keys, `${where}{keys}`),
+        ...fieldProblems(n.values, `${where}{values}`, "record has no `values.fieldType`"),
+      ];
     case "literal":
       return "value" in n ? [] : [`${where}: literal validator has no \`value\``];
     case "id":
@@ -587,6 +580,9 @@ const SCALAR_OK = {
   // instead, where the object case can be answered honestly.
 };
 
+/** Every validator `type` the comparator can interpret (see `STRUCTURAL_TYPES`). */
+const KNOWN_TYPES = new Set([...STRUCTURAL_TYPES, ...Object.keys(SCALAR_OK), "bytes", "bigint"]);
+
 const joinPath = (path, segment) => (path ? `${path}${segment}` : segment.replace(/^\./, ""));
 
 /**
@@ -945,7 +941,7 @@ export function compareNode(client, validator, path, ctx) {
   // verdict this control must never produce.
   //
   // It is reachable from a malformed or partial spec, not only from some future
-  // Convex validator kind: `validatorTree` tests `DYNAMIC.has(type)` against the
+  // Convex validator kind: `validatorTree` tests `type === "any"` against the
   // RAW type, so a node with no `type` at all is not caught there and arrives
   // here as `{kind: "scalar", type: "unknown"}`. Reproduced — a type-less node
   // against a client `string`, and a `decimal128` against a client `boolean`,

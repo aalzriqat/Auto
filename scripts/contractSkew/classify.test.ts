@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { classifyBreaking, alertsFor, releaseBlockingFindings, CLASSIFICATION } from "./classify.mjs";
+import { classifyBreaking, alertsFor, CLASSIFICATION } from "./classify.mjs";
 import { blockersForRelease, pathsOverlap } from "./compare.mjs";
 
 /**
@@ -152,30 +152,6 @@ describe("alertsFor keeps the two signals apart", () => {
     const loud = alertsFor({ ...none, revisionSkew: [IMPORT_BULK] }, true, 80, 0);
     expect(loud.summary).toMatch(/PRODUCTION SKEW/);
     expect(loud.coverageWarning).toBe(true);
-  });
-});
-
-describe("releaseBlockingFindings", () => {
-  test("a standing defect does not block a release", () => {
-    // ⚠️ This was a real defect in this tool, not a hypothetical. Passing every
-    // BREAKING finding to the release blocker made SCRUM-179 block EVERY
-    // release forever — the same failure the classification split exists to
-    // prevent, relocated from the monitor into the release gate.
-    const blocking = releaseBlockingFindings({
-      revisionSkew: [],
-      unclassified: [],
-      standingDefects: [MOBILE_EXPENSE],
-    } as never);
-    expect(blocking).toHaveLength(0);
-  });
-
-  test("skew and unclassified both block", () => {
-    const blocking = releaseBlockingFindings({
-      revisionSkew: [IMPORT_BULK],
-      unclassified: [MOBILE_EXPENSE],
-      standingDefects: [],
-    } as never);
-    expect(blocking).toHaveLength(2);
   });
 });
 

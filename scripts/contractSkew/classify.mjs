@@ -180,21 +180,3 @@ export function alertsFor(classification, coverageWarning, needsEvidenceCount, u
     summary: parts.join("; ") || "no incompatibility detected",
   };
 }
-
-/**
- * The findings a RELEASE is answerable for.
- *
- * ⚠️ Standing defects are excluded on purpose. By definition the current
- * backend and the live backend already agree about them, so they are not
- * introduced by any candidate — and blocking on them would stop every unrelated
- * release forever. That is the same "permanently red for something proven not
- * to be skew" failure as in the monitor, merely relocated into the release gate.
- * They are still reported on every release outcome; they are just not this
- * release's fault.
- *
- * @param {{ revisionSkew: ClassifiedFinding[], unclassified: ClassifiedFinding[] }} classification
- * @returns {ClassifiedFinding[]}
- */
-export function releaseBlockingFindings(classification) {
-  return [...classification.revisionSkew, ...classification.unclassified];
-}

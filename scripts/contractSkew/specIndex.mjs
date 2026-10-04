@@ -68,6 +68,11 @@ export function indexAllNamed(spec) {
   return indexCallable(spec, () => true);
 }
 
+/** Every function type `convex function-spec` renders (the pinned package's UdfType). */
+const FUNCTION_TYPES = new Set(["Query", "Mutation", "Action", "HttpAction"]);
+/** Every visibility the pinned package emits (convex/dist/esm-types/cli/lib/deployApi/modules.d.ts). */
+const VISIBILITY_KINDS = new Set(["public", "internal"]);
+
 /**
  * ⚠️ A SPEC THIS CONTROL CANNOT READ IS NOT EVIDENCE. The comparator treats a
  * missing or oddly-shaped `args` as "any", which would turn a malformed or
@@ -160,11 +165,6 @@ export function specProblems(spec) {
   }
   return problems;
 }
-
-/** Every function type `convex function-spec` renders (the pinned package's UdfType). */
-const FUNCTION_TYPES = new Set(["Query", "Mutation", "Action", "HttpAction"]);
-/** Every visibility the pinned package emits (convex/dist/esm-types/cli/lib/deployApi/modules.d.ts). */
-const VISIBILITY_KINDS = new Set(["public", "internal"]);
 
 /**
  * Convex identifiers in a spec are file-based (`vehicles.js:importBulk`), while

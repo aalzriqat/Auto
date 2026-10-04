@@ -85,7 +85,7 @@ import { runCensus } from "./census.mjs";
 import { evaluateBaseline, loadBaseline, unprovenFrom } from "./baseline.mjs";
 import { specProblems } from "./specIndex.mjs";
 import { skewSummary, SUPPLIED_FILE_RUNG } from "./skewWording.mjs";
-import { compareContracts, blockersForRelease, classifyRelease } from "./compare.mjs";
+import { compareContracts, blockersForRelease, classifyRelease, findingKey } from "./compare.mjs";
 import { CLIENT_SURFACES, listSurfaceFiles, unscannedConvexClients } from "./clientFiles.mjs";
 import { fetchDeployedSpec, isDeploymentName, readSpecFile, redact } from "./fetchSpec.mjs";
 import { changedContractPaths, summarizeChanges } from "./specDiff.mjs";
@@ -319,19 +319,14 @@ function readValidatedSpec(role, specPath) {
 // Every non-deployed spec is read ONCE, validated, and before the (slow) client
 // scan so a bad one costs nothing. `--current` evidence defaults to the candidate
 // in release mode, so the candidate is never read a second time.
-const candidatePathArg = arg("candidate");
-if (mode === "release" && typeof candidatePathArg !== "string") {
+const candidatePath = mode === "release" ? strArg("candidate") : undefined;
+if (mode === "release" && !candidatePath) {
   console.error("--mode release requires --candidate <function-spec.json>");
   process.exit(EXIT.USAGE);
 }
-const candidateSpec =
-  mode === "release" && typeof candidatePathArg === "string"
-    ? readValidatedSpec("candidate", candidatePathArg)
-    : undefined;
-const currentSpec =
-  typeof arg("current") === "string"
-    ? readValidatedSpec("current", String(arg("current")))
-    : candidateSpec;
+const candidateSpec = candidatePath ? readValidatedSpec("candidate", candidatePath) : undefined;
+const currentPath = strArg("current");
+const currentSpec = currentPath ? readValidatedSpec("current", currentPath) : candidateSpec;
 
 // ── 2. What the client actually sends ────────────────────────────────────────
 //
@@ -406,17 +401,26 @@ if (result.coverage.clientCallSitesUnresolved > 0) {
 // `v.record()`, an empty union) is a gap in what was PROVEN, not an unproven
 // value: unwaivable, so it lives here and never in the baseline. Deduped across
 // the two specs by site, because the same call can hit it on both.
-const validatorGaps = (() => {
+/**
+ * First occurrence of each finding, identified by exactly `fields` (see
+ * `findingKey`); each call site names its own list.
+ *
+ * @param {any[]} list
+ * @param {readonly string[]} fields
+ */
+const dedupeFindings = (list, fields) => {
   const seen = new Set();
-  const out = [];
-  for (const g of /** @type {any[]} */ ([...result.gaps, ...(candidateResult?.gaps ?? [])])) {
-    const key = JSON.stringify([g.surface ?? "", g.file, g.line, g.identifier, g.path, g.detail]);
-    if (seen.has(key)) continue;
+  return list.filter((f) => {
+    const key = findingKey(f, fields);
+    if (seen.has(key)) return false;
     seen.add(key);
-    out.push(g);
-  }
-  return out;
-})();
+    return true;
+  });
+};
+const validatorGaps = dedupeFindings(
+  [...result.gaps, ...(candidateResult?.gaps ?? [])],
+  ["surface", "file", "line", "identifier", "path", "detail"]
+);
 if (validatorGaps.length) {
   coverageProblems.push(`${validatorGaps.length} call(s) into a validator this control cannot compare (no argument validator, v.record(), empty v.union())`);
 }
@@ -491,16 +495,11 @@ function reportEvidenceDrift(prefix) {
  */
 function exitOnFirstCause(ordered, prefix = "") {
   const modeKey = mode === "release" ? "release" : "production";
-  const primary = ordered.find((cause) => cause.present && cause.exit[modeKey] !== undefined);
-  if (!primary) {
-    for (const cause of ordered) if (cause.present) cause.report("ALSO PRESENT: ");
-    return;
-  }
-  primary.report(prefix);
-  for (const cause of ordered) {
-    if (cause !== primary && cause.present) cause.report("ALSO PRESENT: ");
-  }
-  process.exit(primary.exit[modeKey]);
+  const present = ordered.filter((cause) => cause.present);
+  const primary = present.find((cause) => cause.exit[modeKey] !== undefined);
+  primary?.report(prefix);
+  for (const cause of present.filter((c) => c !== primary)) cause.report("ALSO PRESENT: ");
+  if (primary) process.exit(primary.exit[modeKey]);
 }
 
 /**
@@ -547,9 +546,14 @@ function backendUnchangedSince(sha) {
   }
 }
 
+// The diff is computed ONCE: `--current` defaults to the candidate in release
+// mode, and the release facts below need the same list.
+const changedByCandidate = candidateSpec ? changedContractPaths(deployed.spec, candidateSpec) : [];
+
 const backendEvidence = { deployedSha };
 if (currentSpec) {
-  backendEvidence.changedPaths = changedContractPaths(deployed.spec, currentSpec);
+  backendEvidence.changedPaths =
+    currentSpec === candidateSpec ? changedByCandidate : changedContractPaths(deployed.spec, currentSpec);
 } else if (deployedSha) {
   backendEvidence.backendIdenticalToDeployed = backendUnchangedSince(String(deployedSha));
 }
@@ -563,32 +567,30 @@ const alert = alertsFor(
   deployed.rung === SUPPLIED_FILE_RUNG ? "CONTRACT SKEW" : "PRODUCTION SKEW"
 );
 
-// ── 2c. Release facts (R1). Same calls, both specs.
-/** @param {any[]} list */
-const dedupeFindings = (list) => {
-  const seen = new Set();
-  return list.filter((f) => {
-    const key = JSON.stringify([f.surface ?? "", f.file, f.line, f.identifier, f.path, f.dimension, f.severity]);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-};
-const changedByCandidate = candidateSpec ? changedContractPaths(deployed.spec, candidateSpec) : [];
-const releaseFacts =
-  candidateResult ? classifyRelease(result, candidateResult, changedByCandidate) : undefined;
+// ── 2c. Release state (R1). Same calls, both specs; undefined in the monitor.
 // An unproven path or a coverage gap blocks only where the candidate changes
 // something. The unknowns are the UNION of what each spec leaves unproven.
-const releaseBlockers = candidateResult
-  ? blockersForRelease(
-      {
-        breaking: [],
-        needsEvidence: dedupeFindings([...result.needsEvidence, ...candidateResult.needsEvidence]),
-        gaps: validatorGaps,
-      },
-      changedByCandidate
-    )
-  : undefined;
+function releaseStateOf() {
+  if (!candidateResult) return undefined;
+  const blockers = blockersForRelease(
+    {
+      breaking: [],
+      needsEvidence: dedupeFindings(
+        [...result.needsEvidence, ...candidateResult.needsEvidence],
+        ["surface", "file", "line", "identifier", "path", "dimension", "severity"]
+      ),
+      gaps: validatorGaps,
+    },
+    changedByCandidate
+  );
+  return {
+    changed: changedByCandidate,
+    facts: classifyRelease(result, candidateResult, changedByCandidate),
+    blockers,
+    blockingCount: blockers.intersectingUnknowns.length + blockers.intersectingGaps.length,
+  };
+}
+const release = releaseStateOf();
 const skewCount = classification.revisionSkew.length + classification.unclassified.length;
 
 /** @param {string} prefix */
@@ -599,7 +601,7 @@ function reportProvenBreaks(prefix) {
     // and one it still breaks is reported as a RELEASE BREAK.
     console.error(
       `::notice::${prefix}DEPLOYED BACKEND CURRENTLY REFUSES ${skewCount} call path(s) the candidate changes; ` +
-        `${releaseFacts?.fixedByCandidate.length ?? 0} of them are FIXED BY THIS CANDIDATE and are not release breaks.`
+        `${release?.facts.fixedByCandidate.length ?? 0} of them are FIXED BY THIS CANDIDATE and are not release breaks.`
     );
     return;
   }
@@ -641,31 +643,32 @@ function reportStandingDefects(prefix) {
 
 /** @param {string} prefix */
 function reportReleaseBreaks(prefix) {
-  for (const f of releaseFacts?.releaseBreaks ?? []) {
+  const breaks = release?.facts.releaseBreaks ?? [];
+  for (const f of breaks) {
     console.error(
       `::error file=${f.file},line=${f.line}::[RELEASE BREAK] ${f.identifier} ${f.path} — ${f.detail} [${f.dimension}]`
     );
   }
   console.error(
-    `::error::${prefix}RELEASE BREAK - ${releaseFacts?.releaseBreaks.length ?? 0} call(s) this candidate would introduce or leave broken on a path it changes. ` +
+    `::error::${prefix}RELEASE BREAK - ${breaks.length} call(s) this candidate would introduce or leave broken on a path it changes. ` +
       `Deploying the backend is not the remedy; change the candidate or the client.`
   );
 }
 
 /** @param {string} prefix */
 function reportReleaseBlockers(prefix) {
-  for (const f of releaseBlockers?.intersectingUnknowns ?? []) {
+  for (const f of release?.blockers.intersectingUnknowns ?? []) {
     console.error(
       `::error file=${f.file},line=${f.line}::${f.identifier} ${f.path} is unproven and this release changes that path`
     );
   }
-  for (const g of releaseBlockers?.intersectingGaps ?? []) {
+  for (const g of release?.blockers.intersectingGaps ?? []) {
     console.error(
       `::error file=${g.file},line=${g.line}::${g.identifier} ${g.path} cannot be compared (${g.detail}) and this release changes it`
     );
   }
   console.error(
-    `::error::${prefix}BLOCKED - ${(releaseBlockers?.intersectingUnknowns.length ?? 0) + (releaseBlockers?.intersectingGaps.length ?? 0)} unproven path(s) or coverage gap(s) intersect a contract path this release changes.`
+    `::error::${prefix}BLOCKED - ${release?.blockingCount ?? 0} unproven path(s) or coverage gap(s) intersect a contract path this release changes.`
   );
 }
 
@@ -688,8 +691,8 @@ const causes = [
   { id: "standing", key: "standingDefects", value: classification.standingDefects.length, present: classification.standingDefects.length > 0, exit: { production: EXIT.STANDING_DEFECT }, report: reportStandingDefects },
   // Release-only causes: what THIS candidate would introduce or leave broken
   // (R1), then what it changes that cannot be proven. Never present in the monitor.
-  { id: "releaseBreak", key: "releaseBreaks", value: releaseFacts?.releaseBreaks.length ?? 0, present: (releaseFacts?.releaseBreaks.length ?? 0) > 0, exit: { release: EXIT.RELEASE_BREAK }, report: reportReleaseBreaks },
-  { id: "releaseBlocker", key: "releaseBlockers", value: (releaseBlockers?.intersectingUnknowns.length ?? 0) + (releaseBlockers?.intersectingGaps.length ?? 0), present: Boolean(releaseBlockers?.blocked), exit: { release: EXIT.BLOCKED }, report: reportReleaseBlockers },
+  { id: "releaseBreak", key: "releaseBreaks", value: release?.facts.releaseBreaks.length ?? 0, present: (release?.facts.releaseBreaks.length ?? 0) > 0, exit: { release: EXIT.RELEASE_BREAK }, report: reportReleaseBreaks },
+  { id: "releaseBlocker", key: "releaseBlockers", value: release?.blockingCount ?? 0, present: Boolean(release?.blockers.blocked), exit: { release: EXIT.BLOCKED }, report: reportReleaseBlockers },
   // ⚠️ A client FILE that was never scanned is not the same as an unproven path
   // inside a file that was. For an unproven path the control saw the call and
   // could not prove one leaf; for an unscanned file it never saw the call at all,
@@ -772,7 +775,9 @@ function emit(payload) {
 }
 
 // ── 3. Release mode adds the path-sensitive blocker ──────────────────────────
-if (mode === "release") {
+// `release` exists exactly when the run is in release mode with a candidate, and
+// release mode without one has already exited above (usage).
+if (release) {
   // ⚠️ SCRUM-178 v2 batch 3 (R1, D-24). The candidate was read and validated ONCE
   // (readValidatedSpec above) and the SAME calls were compared against it. A
   // release break is a break the CANDIDATE would introduce, or leave broken on a
@@ -780,10 +785,7 @@ if (mode === "release") {
   // candidate leaves alone, is standing (not this release's fault), and one only
   // the deployed backend has is FIXED by this candidate. Only skew-vs-deployed
   // used to be consulted, which called a fix a break and a break a pass.
-  const releaseBlocked = releaseBlockers;
-  const blockers = /** @type {NonNullable<typeof releaseBlocked>} */ (releaseBlocked);
-  const changed = changedByCandidate;
-  const facts = /** @type {NonNullable<typeof releaseFacts>} */ (releaseFacts);
+  const { changed, facts, blockers } = release;
 
   report.changedPaths = changed.length;
   report.changedBreakdown = summarizeChanges(changed);

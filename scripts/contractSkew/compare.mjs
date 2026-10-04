@@ -86,20 +86,37 @@ export function pathsOverlap(a, b) {
 }
 
 /**
+ * Does ONE finding sit on a contract path one of `changed` alters? The single
+ * definition of "touches" for the release gate (blockers and break
+ * classification both use it).
+ *
+ * ⚠️ `<function>` IS THE WHOLE FUNCTION, ON EITHER SIDE. A finding at `<function>`
+ * (`args: null`, a missing function) has no field path, so any change to that
+ * function touches it; a change at `<function>` (a Query -> Mutation flip, args
+ * becoming null) alters every call to the function, so it touches every finding
+ * on it. Both match on identifier alone. This used to be written twice with the
+ * second half of that rule missing from one copy, which let an unproven field
+ * ride a function-level change green: it fails closed now.
+ *
+ * @param {Array<{identifier:string, path:string}>} changed
+ * @param {{identifier:string, path:string}} finding
+ */
+export function touchesChange(changed, finding) {
+  return changed.some(
+    (change) =>
+      change.identifier === finding.identifier &&
+      (change.path === "<function>" || finding.path === "<function>" || pathsOverlap(change.path, finding.path))
+  );
+}
+
+/**
  * Which evidence gaps stand in the way of one candidate release?
  *
  * @param {object} result          a compareContracts() result
  * @param {Array<{identifier:string, path:string}>} changed  contract paths the release alters
  */
 export function blockersForRelease(result, changed) {
-  const touches = (finding) =>
-    changed.some(
-      (change) =>
-        change.identifier === finding.identifier &&
-        // A gap on the FUNCTION itself (`<function>`, e.g. `args: null`) has no
-        // field path, so any change to that function touches it.
-        (finding.path === "<function>" || pathsOverlap(change.path, finding.path))
-    );
+  const touches = (finding) => touchesChange(changed, finding);
   const blocking = result.needsEvidence.filter(touches);
   // A coverage gap (SPEC-1) is unwaivable and, on a path the release changes, a
   // blocker too. Absent on a plain compareContracts() result in older callers.
@@ -120,8 +137,20 @@ export function blockersForRelease(result, changed) {
  * client against two specs produce the same key for "the same break", which is
  * what lets a release be compared against what is already live.
  */
-export const breakKey = (f) =>
-  JSON.stringify([f.surface ?? "", f.file, f.line, f.identifier, f.path, f.dimension]);
+export const breakKey = (f) => findingKey(f, BREAK_KEY_FIELDS);
+
+/**
+ * A finding's identity over exactly the named fields (an absent `surface` reads
+ * as ""). Every dedupe in the control is `findingKey` over its own field list, so
+ * the lists stay explicit at each call site and the keying cannot drift.
+ *
+ * @param {Record<string, any>} f
+ * @param {readonly string[]} fields
+ */
+export const findingKey = (f, fields) =>
+  JSON.stringify(fields.map((name) => (name === "surface" ? (f.surface ?? "") : f[name])));
+
+const BREAK_KEY_FIELDS = ["surface", "file", "line", "identifier", "path", "dimension"];
 
 /**
  * SCRUM-178 v2 batch 3 (R1, D-27). A RELEASE IS ANSWERABLE FOR WHAT IT
@@ -149,21 +178,25 @@ export const breakKey = (f) =>
  * @param {Array<{identifier: string, path: string}>} changed
  */
 export function classifyRelease(deployed, candidate, changed) {
-  const deployedKeys = new Set(deployed.breaking.map(breakKey));
-  const candidateKeys = new Set(candidate.breaking.map(breakKey));
-  const onChangedPath = (f) =>
-    changed.some(
-      (change) =>
-        change.identifier === f.identifier &&
-        (f.path === "<function>" || change.path === "<function>" || pathsOverlap(change.path, f.path))
-    );
+  // Each break's key is computed once per side, and the changes are bucketed by
+  // function so a lookup scans only that function's changes.
+  const deployedKeyed = deployed.breaking.map((f) => [f, breakKey(f)]);
+  const candidateKeyed = candidate.breaking.map((f) => [f, breakKey(f)]);
+  const deployedKeys = new Set(deployedKeyed.map(([, key]) => key));
+  const candidateKeys = new Set(candidateKeyed.map(([, key]) => key));
+  const changedByFunction = new Map();
+  for (const change of changed) {
+    const bucket = changedByFunction.get(change.identifier);
+    if (bucket) bucket.push(change);
+    else changedByFunction.set(change.identifier, [change]);
+  }
   const releaseBreaks = [];
   const standingAgainstBoth = [];
-  for (const f of candidate.breaking) {
-    if (!deployedKeys.has(breakKey(f)) || onChangedPath(f)) releaseBreaks.push(f);
+  for (const [f, key] of candidateKeyed) {
+    if (!deployedKeys.has(key) || touchesChange(changedByFunction.get(f.identifier) ?? [], f)) releaseBreaks.push(f);
     else standingAgainstBoth.push(f);
   }
-  const fixedByCandidate = deployed.breaking.filter((f) => !candidateKeys.has(breakKey(f)));
+  const fixedByCandidate = deployedKeyed.filter(([, key]) => !candidateKeys.has(key)).map(([f]) => f);
   return { releaseBreaks, standingAgainstBoth, fixedByCandidate };
 }
 
