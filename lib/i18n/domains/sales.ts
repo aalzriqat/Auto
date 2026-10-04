@@ -1809,7 +1809,40 @@ const serverErrorMessages = defineBilingualMessages({
   ],
 });
 
+/**
+ * SCRUM-628 (QA wave 2A): strings the quote wizard rendered in English whatever
+ * the language. "Create & Select" is bound by the English E2E suites — keep it.
+ */
+const quoteWizardQaMessages = defineBilingualMessages({
+  NewCustomerFormTitle: ["New Customer", "عميل جديد"],
+  CreateAndSelectCustomer: ["Create & Select", "إنشاء واختيار"],
+  CustomerCreatedSuccess: ["Customer created successfully", "تم إنشاء العميل بنجاح"],
+  CustomerFirstNameRequired: ["First name is required", "الاسم الأول مطلوب"],
+  CustomerLastNameRequired: ["Last name is required", "الاسم الأخير مطلوب"],
+  CustomerEmailInvalid: ["Enter a valid email address", "أدخل بريدًا إلكترونيًا صحيحًا"],
+  CustomerFirstNamePlaceholder: ["Ahmad", "أحمد"],
+  CustomerLastNamePlaceholder: ["Al-Rashid", "الرشيد"],
+  CustomerNationalIdPlaceholder: ["ID number", "رقم الهوية"],
+  CustomerAddressPlaceholder: ["City, Country", "المدينة، الدولة"],
+  PleaseSelectFinanceCompany: ["Please select a financing company", "يرجى اختيار شركة التمويل"],
+  FinanceCompanyResetByEdit: [
+    "The quote terms changed, so the finance company choice was cleared. Choose a company again from the updated offers.",
+    "تغيّرت شروط العرض، لذلك أُلغي اختيار شركة التمويل. اختر الشركة مجددًا من العروض المحدّثة.",
+  ],
+  CustomerStatusesLoading: ["Loading customer statuses…", "جارٍ تحميل حالات العميل…"],
+  DepositAmountInvalid: [
+    "Enter the amount as a number, without a sign, and with no more decimals than the currency allows.",
+    "أدخل المبلغ كرقم، دون إشارة، وبعدد منازل عشرية لا يتجاوز ما تسمح به العملة.",
+  ],
+  DepositAmountPositive: ["The amount must be greater than zero.", "يجب أن يكون المبلغ أكبر من صفر."],
+  QuoteWizardComplete: ["Quote created", "تم إنشاء العرض"],
+  NoRequiredDocuments: [
+    "This finance company has no required documents set up.",
+    "لا توجد مستندات مطلوبة معرّفة لدى شركة التمويل هذه.",
+  ],
+});
 export const salesEn = {
+  ...quoteWizardQaMessages.en,
   ...serverErrorMessages.en,
   ...dealRailMessages.en,
   ...dealStepMessages.en,
@@ -2901,6 +2934,7 @@ export const salesEn = {
 };
 
 export const salesAr = {
+  ...quoteWizardQaMessages.ar,
   ...serverErrorMessages.ar,
   ...dealRailMessages.ar,
   ...dealStepMessages.ar,

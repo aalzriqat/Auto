@@ -116,6 +116,15 @@ describe("Step3Review — committed deal terms (SCRUM-609 F-03)", () => {
   });
 });
 
+describe("Step3Review — required documents (SCRUM-628 F-08)", () => {
+  test("a finance company with no required documents says so instead of an empty box", () => {
+    renderReview(3_000);
+
+    expect(screen.getByText("RequiredDocuments")).toBeTruthy();
+    expect(screen.getByText("NoRequiredDocuments")).toBeTruthy();
+  });
+});
+
 describe("Step3Review — down payment covering the price (SCRUM-609 F-25)", () => {
   test("refuses to generate and shows no negative financing", () => {
     renderReview(15_000);

@@ -298,21 +298,25 @@ export function Step3Review({
             {t("RequiredDocuments")}
           </p>
 
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
-            {selectedResult.companyDocs?.map((doc: any) => (
-              <div key={doc._id} className="flex items-center gap-2">
-                <span
-                  className={cn(
-                    "w-1.5 h-1.5 rounded-full",
-                    doc.isRequired ? "bg-amber-400" : "bg-muted-foreground"
-                  )}
-                />
-                <span className="text-muted-foreground">
-                  {doc.documentName}
-                </span>
-              </div>
-            ))}
-          </div>
+          {(selectedResult.companyDocs?.length ?? 0) === 0 ? (
+            <p className="text-sm text-muted-foreground">{t("NoRequiredDocuments" as any)}</p>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
+              {selectedResult.companyDocs?.map((doc: any) => (
+                <div key={doc._id} className="flex items-center gap-2">
+                  <span
+                    className={cn(
+                      "w-1.5 h-1.5 rounded-full",
+                      doc.isRequired ? "bg-amber-400" : "bg-muted-foreground"
+                    )}
+                  />
+                  <span className="text-muted-foreground">
+                    {doc.documentName}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

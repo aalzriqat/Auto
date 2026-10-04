@@ -13,6 +13,7 @@ import Step1QuoteSetup from "@/components/sales/wizard/steps/Step1QuoteSetup";
 import Step2Customer from "@/components/sales/wizard/steps/Step2Customer";
 import { Step3Review } from "@/components/sales/wizard/steps/Step3Review";
 import { Step4QuoteSuccess } from "@/components/sales/wizard/steps/Step4QuoteSuccess";
+import { quoteWizardStepCounter } from "@/components/sales/wizard/stepCounter";
 
 import { X, Banknote, CreditCard, RotateCcw, MessageSquarePlus } from "lucide-react";
 import { openFeedbackPanel, useSuppressFeedbackTrigger } from "@/components/feedback/feedbackWidgetStore";
@@ -173,6 +174,7 @@ export function SalesWizard({
       : "from-indigo-950/40 to-background";
 
   const Icon = paymentType === "CASH" ? Banknote : CreditCard;
+  const stepCounter = quoteWizardStepCounter(currentStep);
 
   return (
     <div
@@ -189,7 +191,9 @@ export function SalesWizard({
             {t(paymentType === "CASH" ? "NewCashQuote" as any : "NewInstallmentQuote" as any)}
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {t("StepLabel" as any)} {currentStep} {t("StepOf" as any)} 3
+            {stepCounter.kind === "COMPLETE"
+              ? t("QuoteWizardComplete" as any)
+              : `${t("StepLabel" as any)} ${stepCounter.step} ${t("StepOf" as any)} ${stepCounter.total}`}
           </p>
         </div>
         <div className="flex items-center gap-1">

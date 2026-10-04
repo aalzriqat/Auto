@@ -26,6 +26,15 @@ vi.mock("@/components/providers/OrgProvider", () => ({
   useOrg: () => ({ activeOrgId: "org1" }),
 }));
 vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@/hooks/useCurrency", () => ({
+  useCurrency: () => ({
+    code: "JOD",
+    symbol: "JOD",
+    displayLabel: "JOD",
+    format: (n: number) => `${n} JOD`,
+    formatCompact: (n: number) => String(n),
+  }),
+}));
 vi.mock("@/hooks/use-permissions", () => ({
   usePermissions: () => ({
     hasPermission: (permission: string) => stubs.permissions.includes(permission),
@@ -85,7 +94,7 @@ function renderDialog() {
 }
 
 async function submitAmount(amount: string) {
-  fireEvent.change(screen.getByRole("spinbutton"), { target: { value: amount } });
+  fireEvent.change(screen.getByLabelText("DepositAmount"), { target: { value: amount } });
   fireEvent.click(screen.getByRole("button", { name: /^(RecordDeposit|RequestDeposit)$/ }));
 }
 
@@ -133,5 +142,56 @@ describe("RecordDepositDialog — request vs record", () => {
       amount: 1500,
       method: "BANK_TRANSFER",
     });
+  });
+});
+
+/**
+ * SCRUM-628 F-05: a `type=number` input accepted "60E-" and "-5" and answered in
+ * English. The amount is now text parsed exactly as money is parsed elsewhere:
+ * no sign, no exponent, no more decimals than the currency carries, Arabic
+ * digits understood.
+ */
+describe("RecordDepositDialog — the amount field (SCRUM-628 F-05)", () => {
+  test("is a decimal text field, not a number spinner", () => {
+    renderDialog();
+    const input = screen.getByLabelText("DepositAmount") as HTMLInputElement;
+    expect(input.type).toBe("text");
+    expect(input.inputMode).toBe("decimal");
+    expect(screen.queryByRole("spinbutton")).toBeNull();
+  });
+
+  test.each(["60E-", "1e3", "-5", "+5", "abc", "1.2345"])("refuses %j with a translated message and posts nothing", async (raw) => {
+    renderDialog();
+    await submitAmount(raw);
+    await screen.findByText("DepositAmountInvalid");
+    expect(stubs.calls).toEqual([]);
+  });
+
+  test("refuses zero with a translated message", async () => {
+    renderDialog();
+    await submitAmount("0");
+    await screen.findByText("DepositAmountPositive");
+    expect(stubs.calls).toEqual([]);
+  });
+
+  test("an empty amount is refused, not sent as zero", async () => {
+    renderDialog();
+    await submitAmount("");
+    await screen.findByText("DepositAmountPositive");
+    expect(stubs.calls).toEqual([]);
+  });
+
+  test("understands Arabic-Indic digits", async () => {
+    const { onRequested } = renderDialog();
+    await submitAmount("١٥٠٠");
+    await waitFor(() => expect(onRequested).toHaveBeenCalled());
+    expect(stubs.calls[0].args).toMatchObject({ amount: 1500 });
+  });
+
+  test("keeps the currency's third decimal (fils)", async () => {
+    const { onRequested } = renderDialog();
+    await submitAmount("100.255");
+    await waitFor(() => expect(onRequested).toHaveBeenCalled());
+    expect(stubs.calls[0].args).toMatchObject({ amount: 100.255 });
   });
 });

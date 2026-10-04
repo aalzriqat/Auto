@@ -36,7 +36,21 @@ export function VehicleCostBar({ vehicleId, purchasePrice, salePrice }: VehicleC
   // Cost/profit data is sensitive — don't show this bar at all to roles
   // without VIEW_EXPENSES (e.g. SALES), rather than crash on the query.
   if (permissionsLoading || !canViewExpenses) return null;
-  if (totalExpenses === undefined) return null;
+  // Hold the collapsed panel's height while the total loads, so the inputs
+  // below do not jump when it arrives (SCRUM-628 F-06).
+  if (totalExpenses === undefined) {
+    return (
+      <div
+        data-testid="vehicle-cost-bar-loading"
+        aria-busy="true"
+        className="rounded-lg border border-slate-200 bg-slate-50 dark:bg-slate-900/30 dark:border-slate-700 p-3 text-sm"
+      >
+        <div className="flex items-center justify-between gap-1.5 mb-2">
+          <div className="h-4 w-40 rounded bg-slate-200 dark:bg-slate-700 animate-pulse motion-reduce:animate-none" />
+        </div>
+      </div>
+    );
+  }
 
   const hasCostData = purchasePrice != null;
   const totalCost = hasCostData ? purchasePrice + totalExpenses : null;
