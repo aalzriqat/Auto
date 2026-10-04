@@ -6,13 +6,13 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useMessenger } from "./MessengerContext";
+import { MESSENGER_TRIGGER_ID, useMessenger } from "./MessengerContext";
 import { FloatingChatWindow } from "./FloatingChatWindow";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import { playSound } from "@/lib/messageSounds";
 import { cn } from "@/lib/utils";
-import { MessagesSquare, MessageSquarePlus, Users, BellOff, Search, X } from "lucide-react";
+import { MessageSquarePlus, Users, BellOff, Search } from "lucide-react";
 import { NewConversationDialog } from "./NewConversationDialog";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { ChatThread } from "./ChatThread";
@@ -36,8 +36,8 @@ function formatRelativeTime(ts: number): string {
 // Desktop: floating panel + windows
 // Mobile: bottom sheet conversation list + full-screen sheet for chat
 function FloatingMessengerInner({ orgId }: Props) {
-  const { t, isRtl } = useLanguage();
-  const { isListOpen, toggleList, closeList, openChats, openChat } = useMessenger();
+  const { t } = useLanguage();
+  const { isListOpen, closeList, openChats, openChat } = useMessenger();
   const [search, setSearch] = useState("");
   const [dialogMode, setDialogMode] = useState<"dm" | "group" | null>(null);
   const [mobileOpenId, setMobileOpenId] = useState<Id<"dmConversations"> | null>(null);
@@ -45,7 +45,6 @@ function FloatingMessengerInner({ orgId }: Props) {
 
   const me = useQuery(api.users.getMe);
   const conversations = useQuery(api.directMessages.listConversations, { orgId });
-  const unreadCount = useQuery(api.directMessages.getUnreadCount, { orgId });
   const markDelivered = useMutation(api.directMessages.markDelivered);
   const currentUserId = me?._id;
 
@@ -74,11 +73,14 @@ function FloatingMessengerInner({ orgId }: Props) {
     }
   }, [conversations, currentUserId, markDelivered]);
 
-  // Close list panel when clicking outside
+  // Close list panel when clicking outside. The top-bar button toggles the list
+  // itself, so it is not "outside" — otherwise its click would close and reopen.
   useEffect(() => {
     if (!isListOpen) return;
     function handleClick(e: MouseEvent) {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+      const target = e.target as Element;
+      if (target.closest?.(`#${MESSENGER_TRIGGER_ID}`)) return;
+      if (panelRef.current && !panelRef.current.contains(target)) {
         closeList();
       }
     }
@@ -94,18 +96,6 @@ function FloatingMessengerInner({ orgId }: Props) {
     if (c.name?.toLowerCase().includes(q)) return true;
     return c.members?.some((m: ConvMember) => m?.name?.toLowerCase().includes(q));
   });
-  const displayUnreadCount = unreadCount ?? 0;
-  const hasUnreadMessages = displayUnreadCount > 0;
-
-  // FAB position
-  const fabPosition = isRtl
-    ? "fixed bottom-6 left-6 z-50"
-    : "fixed bottom-6 right-6 z-50";
-
-  // Panel position (above FAB, same side)
-  const panelPosition = isRtl
-    ? "fixed bottom-[72px] left-6 z-50"
-    : "fixed bottom-[72px] right-6 z-50";
 
   function handleSelectConversation(id: Id<"dmConversations">) {
     // Mobile: open sheet; Desktop: open floating window
@@ -121,39 +111,15 @@ function FloatingMessengerInner({ orgId }: Props) {
 
   return (
     <>
-      {/* ── FAB button ──────────────────────────────────────────────────────── */}
-      <button
-        onClick={toggleList}
-        className={cn(
-          fabPosition,
-          "h-14 w-14 rounded-full shadow-xl flex items-center justify-center transition-all duration-200",
-          "bg-gradient-to-br from-blue-600 to-blue-500 text-white hover:scale-105 active:scale-95",
-          isListOpen && "rotate-0",
-          hasUnreadMessages && !isListOpen && "autoflow-chat-attention"
-        )}
-        aria-label={t("Messages")}
-      >
-        {isListOpen ? (
-          <X className="h-6 w-6" />
-        ) : (
-          <MessagesSquare className="h-6 w-6" />
-        )}
-        {/* Unread badge */}
-        {!isListOpen && hasUnreadMessages && (
-          <span className="absolute -top-1 -end-1 min-w-[20px] h-5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1 border-2 border-white">
-            {displayUnreadCount > 9 ? "9+" : displayUnreadCount}
-          </span>
-        )}
-      </button>
-
-      {/* ── Conversation list panel ──────────────────────────────────────────── */}
+      {/* ── Conversation list panel — opened from the top-bar Messages button.
+          There is no floating trigger: it covered page actions (SCRUM-612). ── */}
       {isListOpen && (
         <div
           ref={panelRef}
           className={cn(
-            panelPosition,
-            "w-[320px] bg-white rounded-2xl shadow-2xl border border-slate-200/50 overflow-hidden flex flex-col",
-            "max-h-[480px]"
+            "fixed top-16 md:top-[4.5rem] end-2 md:end-6 z-50",
+            "w-[min(320px,calc(100vw-1rem))] bg-white rounded-2xl shadow-2xl border border-slate-200/50 overflow-hidden flex flex-col",
+            "max-h-[min(480px,calc(100dvh-5rem))]"
           )}
         >
           {/* Panel header */}
