@@ -281,6 +281,26 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     }
   });
 
+  it("SCRUM-650 purchase-cost correction refusals resolve to Arabic in ar and the server text in en", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { AppErrorCode } = await import("../convex/utils/errors");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    // Derived from the server enum so a new correction refusal cannot ship untranslated.
+    const codes = Object.values(AppErrorCode).filter(
+      (code) => code === "VEHICLE_COST_POSTED" || code.startsWith("COST_CORRECTION_")
+    );
+    expect(codes.length).toBeGreaterThanOrEqual(11);
+    for (const code of codes) {
+      const error = new ConvexError({ code, message: "server text" });
+      const arText = getLocalizedErrorMessage(error, ar);
+      expect(arText).toMatch(/[؀-ۿ]/);
+      expect(arText).not.toBe("server text");
+      expect(getLocalizedErrorMessage(error, en)).not.toBe("server text");
+      expect(getLocalizedErrorMessage(error, en)).toBe((dictionaries.en as Record<string, string>)[`ServerError_${code}`]);
+    }
+  });
+
   it("SCRUM-113 APPROVAL_VEHICLE_UNAVAILABLE resolves to its dictionary entry in ar and en", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;

@@ -16,7 +16,7 @@ import {
 } from "./utils/vehicleStatusGuards";
 import { assertVehicleImagesAllowed } from "./utils/storageValidation";
 import { acquisitionPaymentMethodValidator, type AcquisitionPaymentMethod } from "./utils/paymentMethods";
-import { postVehicleAcquisitionIfOwned, hasVehicleAcquisitionAccountingExposure } from "./vehicles";
+import { postVehicleAcquisitionIfOwned, hasVehicleAcquisitionAccountingExposure, throwVehicleCostPosted } from "./vehicles";
 import { retroactiveOwnershipChangeRefusal } from "./utils/vehicleOwnership";
 import { supplierCostRecoveryConversionRefusal } from "./utils/costBearer";
 
@@ -417,9 +417,7 @@ export const resolve = mutation({
           ? await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, request.vehicleId)
           : false;
         if (("purchasePrice" in payload || "sourceCost" in payload) && resolveAcquisitionAlreadyExposed) {
-          throw new ConvexError(
-            "This vehicle's acquisition cost has already been posted to accounting. Use a correction journal entry instead of editing purchasePrice/sourceCost directly."
-          );
+          throwVehicleCostPosted();
         }
         const resolveAcquisitionSourceType = payload.sourceType ?? previousVehicle.sourceType;
         const resolveAcquisitionPurchasePrice = "purchasePrice" in payload ? payload.purchasePrice : previousVehicle.purchasePrice;

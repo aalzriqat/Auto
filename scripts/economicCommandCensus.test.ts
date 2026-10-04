@@ -160,7 +160,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "supplierCostRecoveries.reverseReceipt": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; reverses under its own per-receipt key (SCRUM-389)" },
   "supplierReceivables.setDisputed": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "vehicleEdits.resolve": { bucket: "STATE_GUARDED", mechanism: "refuses unless request.status === PENDING; the same mutation transitions it to APPROVED/REJECTED" },
-  "vehicles.correctAcquisitionCost": { bucket: "STATE_GUARDED", mechanism: "convergent set-to-value: the retry re-reads the patched cost, delta === 0, and throws UNCAUGHT so Convex rolls back before the insert and the hook" },
+  "vehicles.correctAcquisitionCost": { bucket: "STATE_GUARDED", mechanism: "convergent set-to-value: the retry re-reads the patched cost, delta === 0, and throws COST_CORRECTION_NO_CHANGE so Convex rolls back before the insert and the hook" },
   "vehicles.create": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "vehicles.createReservation": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "vehicles.importBulk": { bucket: "IDENTITY_GUARDED", mechanism: "per-row import identity `${importId}:${row.rowId}` — a SECOND valid mechanism, not runWithIdempotency" },

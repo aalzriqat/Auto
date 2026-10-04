@@ -1087,6 +1087,10 @@ export const getProfitAndLoss = query({
         if (tx.category === "VEHICLE_SALE") {
           grossTransactionValue += grossTransactionValueForTransaction(tx);
         }
+      } else if (tx.type === "IN" && tx.category === "VEHICLE_PURCHASE") {
+        // SCRUM-650: a purchase-cost correction that brought cash back. Cash IN, but not revenue:
+        // it nets the purchase cost it corrects, so a refund of 2,700 on a 12,500 car reports 9,800.
+        if (isShowroomBorne(tx)) costOfGoodsSold -= tx.amount;
       } else if (tx.type === "OUT") {
         // SCRUM-389: a supplier-borne cost is money owed back, never COGS.
         if (!isShowroomBorne(tx)) continue;

@@ -160,6 +160,20 @@ export const AppErrorCode = {
   // missing, in another organisation or soft-deleted; REJECTED stays allowed. Translated under
   // ServerError_<code>.
   APPROVAL_VEHICLE_UNAVAILABLE: "APPROVAL_VEHICLE_UNAVAILABLE",
+  // SCRUM-650. A vehicle's recorded cost is locked once its acquisition posted, and changes only
+  // through `vehicles.correctAcquisitionCost`. Each refusal below is raised before the first
+  // write and translated under ServerError_<code>.
+  VEHICLE_COST_POSTED: "VEHICLE_COST_POSTED",
+  COST_CORRECTION_REASON_REQUIRED: "COST_CORRECTION_REASON_REQUIRED",
+  COST_CORRECTION_INVALID_AMOUNT: "COST_CORRECTION_INVALID_AMOUNT",
+  COST_CORRECTION_NO_CHANGE: "COST_CORRECTION_NO_CHANGE",
+  COST_CORRECTION_SOURCED: "COST_CORRECTION_SOURCED",
+  COST_CORRECTION_SOLD: "COST_CORRECTION_SOLD",
+  COST_CORRECTION_NOT_POSTED: "COST_CORRECTION_NOT_POSTED",
+  COST_CORRECTION_NOT_POSTABLE_NOW: "COST_CORRECTION_NOT_POSTABLE_NOW",
+  COST_CORRECTION_TYPE_NOT_ALLOWED: "COST_CORRECTION_TYPE_NOT_ALLOWED",
+  COST_CORRECTION_PAYABLE_NOT_ADJUSTABLE: "COST_CORRECTION_PAYABLE_NOT_ADJUSTABLE",
+  COST_CORRECTION_PAYMENT_METHOD_REQUIRED: "COST_CORRECTION_PAYMENT_METHOD_REQUIRED",
   // SCRUM-413. `roles.create` / `roles.update` refuse a newly added `finalize:financed_deal`
   // (retired; split into manage:supplier_settlement and cancel:closed_deal). Translated under
   // ServerError_<code>.
