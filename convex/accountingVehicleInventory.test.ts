@@ -2162,14 +2162,17 @@ describe("Review issue #5 — vehicle acquisition cost correction", () => {
       asOwner.mutation(api.vehicles.correctAcquisitionCost, {
         orgId, vehicleId, newCost: 5000, reason: "test", correctionType: "PRIOR_PERIOD_RESTATEMENT",
       })
-    ).rejects.toThrow(/hasn't posted/);
+    ).rejects.toThrow(/COST_CORRECTION_NOT_POSTED/);
   });
 
+  // SCRUM-650: these two types are only allowed on a car bought ON_ACCOUNT (a cash car has no
+  // payable, so an AP correction would leave an orphan AP balance); the cars are now ON_ACCOUNT.
   test("SUPPLIER_INVOICE_ERROR and VENDOR_CREDIT route through AP-Suppliers instead of Retained Earnings", async () => {
     const { t, orgId, asOwner } = await seedDealer("ri5c");
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(),
-      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+      orgId, ...baseVehicle, purchasePrice: 10000,
+      purchasePaymentMethod: "ON_ACCOUNT", sourcedFromName: "Credit Supplier Co",
     });
 
     await asOwner.mutation(api.vehicles.correctAcquisitionCost, {
@@ -2190,7 +2193,8 @@ describe("Review issue #5 — vehicle acquisition cost correction", () => {
 
     const vehicleId2 = await asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(),
-      orgId, ...baseVehicle, vin: "1HGCM82633A000002", purchasePrice: 10000, purchasePaymentMethod: "CASH",
+      orgId, ...baseVehicle, vin: "1HGCM82633A000002", purchasePrice: 10000,
+      purchasePaymentMethod: "ON_ACCOUNT", sourcedFromName: "Credit Supplier Co",
     });
     await asOwner.mutation(api.vehicles.correctAcquisitionCost, {
       orgId, vehicleId: vehicleId2, newCost: 9700, reason: "Supplier invoice was entered with the wrong total",
@@ -2216,7 +2220,7 @@ describe("Review issue #5 — vehicle acquisition cost correction", () => {
       asOwner.mutation(api.vehicles.correctAcquisitionCost, {
         orgId, vehicleId, newCost: 9000, reason: "Supplier refunded the overcharge", correctionType: "CASH_REFUND",
       })
-    ).rejects.toThrow(/payment method is required/i);
+    ).rejects.toThrow(/COST_CORRECTION_PAYMENT_METHOD_REQUIRED/);
 
     await asOwner.mutation(api.vehicles.correctAcquisitionCost, {
       orgId, vehicleId, newCost: 9000, reason: "Supplier refunded the overcharge",

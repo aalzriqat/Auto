@@ -295,6 +295,56 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This vehicle is no longer available in this dealership, so the request can't be approved. Reject it instead.",
     "لم تعد هذه المركبة متاحة في هذا المعرض، لذا لا يمكن الموافقة على الطلب. يُرجى رفضه بدلاً من ذلك.",
   ],
+  // SCRUM-650. `vehicles.correctAcquisitionCost` and the purchase-cost lock. The English text
+  // equals the server message.
+  ServerError_VEHICLE_NOT_FOUND: [
+    "Vehicle not found in this organization.",
+    "لم يتم العثور على المركبة في هذا المعرض.",
+  ],
+  ServerError_VEHICLE_COST_POSTED: [
+    "This vehicle's purchase cost has already been posted to accounting and can't be edited directly. Use 'Correct purchase cost' instead.",
+    "تم ترحيل تكلفة شراء هذه المركبة إلى المحاسبة ولا يمكن تعديلها مباشرة. استخدم «تصحيح تكلفة الشراء» بدلاً من ذلك.",
+  ],
+  ServerError_COST_CORRECTION_REASON_REQUIRED: [
+    "A reason is required to correct a vehicle's purchase cost.",
+    "يلزم ذكر سبب لتصحيح تكلفة شراء المركبة.",
+  ],
+  ServerError_COST_CORRECTION_INVALID_AMOUNT: [
+    "The new purchase cost must be a valid amount, zero or more.",
+    "يجب أن تكون تكلفة الشراء الجديدة مبلغاً صحيحاً، صفراً أو أكثر.",
+  ],
+  ServerError_COST_CORRECTION_NO_CHANGE: [
+    "The new purchase cost is the same as the current cost, so there is nothing to correct.",
+    "تكلفة الشراء الجديدة مطابقة للتكلفة الحالية، لذلك لا يوجد ما يستدعي التصحيح.",
+  ],
+  ServerError_COST_CORRECTION_SOURCED: [
+    "Sourced vehicles are not capitalized into inventory. Adjust the supplier payable instead.",
+    "المركبات الموردة لا تُسجَّل ضمن المخزون. عدّل ذمة المورد بدلاً من ذلك.",
+  ],
+  ServerError_COST_CORRECTION_SOLD: [
+    "This vehicle has already been sold, so its cost can no longer be corrected here. Ask your accountant for a manual journal entry.",
+    "تم بيع هذه المركبة، لذلك لم يعد بالإمكان تصحيح تكلفتها من هنا. اطلب من المحاسب إجراء قيد يدوي.",
+  ],
+  ServerError_COST_CORRECTION_NOT_POSTED: [
+    "This vehicle's purchase hasn't been posted to accounting yet, so its cost can't be corrected.",
+    "لم يتم ترحيل شراء هذه المركبة إلى المحاسبة بعد، لذلك لا يمكن تصحيح تكلفتها.",
+  ],
+  ServerError_COST_CORRECTION_NOT_POSTABLE_NOW: [
+    "This correction can't be posted right now because the accounting period is closed or the required account is missing. Ask your accountant to open the period or set up the account, then try again.",
+    "لا يمكن ترحيل هذا التصحيح الآن لأن الفترة المحاسبية مغلقة أو أن الحساب المطلوب غير موجود. اطلب من المحاسب فتح الفترة أو إعداد الحساب ثم حاول مجدداً.",
+  ],
+  ServerError_COST_CORRECTION_TYPE_NOT_ALLOWED: [
+    "This correction type doesn't fit how the vehicle was paid for. Choose one of the other options.",
+    "هذا النوع من التصحيح لا يناسب طريقة دفع ثمن المركبة. اختر أحد الخيارات الأخرى.",
+  ],
+  ServerError_COST_CORRECTION_PAYABLE_NOT_ADJUSTABLE: [
+    "The supplier balance for this vehicle has been partly paid, disputed or settled, so the invoice can't be corrected automatically. Contact finance to record a supplier credit or adjustment.",
+    "رصيد المورد لهذه المركبة سُدِّد جزئياً أو عليه نزاع أو تمت تسويته، لذلك لا يمكن تصحيح الفاتورة تلقائياً. تواصل مع المحاسبة لتسجيل رصيد دائن أو تسوية للمورد.",
+  ],
+  ServerError_COST_CORRECTION_PAYMENT_METHOD_REQUIRED: [
+    "Choose the account the refund was received into.",
+    "اختر الحساب الذي استُلم فيه المبلغ المسترد.",
+  ],
   // SCRUM-413. `roles.create` / `roles.update` refuse a newly added retired permission. The
   // authority names match the FinancedDeal* labels in settings.ts.
   ServerError_PERMISSION_RETIRED: [
