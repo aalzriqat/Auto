@@ -461,7 +461,7 @@ const LEGAL_INVOICE_ISSUED_TO_LABEL: Record<string, string> = {
  * Why the close cannot be taken — and it takes BOTH conditions, because the
  * two interact rather than merely coexisting.
  *
- * `setSupplierSettlementRoute` requires `finalize:financed_deal`, and the
+ * `setSupplierSettlementRoute` requires `manage:supplier_settlement`, and the
  * review dialog hides its selector without it. So telling a caller who lacks
  * that permission to "record the route" sends them to a screen with nothing
  * on it — the dead end this issue exists to remove, rebuilt out of two correct
@@ -1817,7 +1817,7 @@ export function DealCockpit({
    * taken.
    *
    * Each step is gated on its OWN permission — `register:vehicle_handover`,
-   * `register:expected_payment`, `finalize:financed_deal` are three separate
+   * `register:expected_payment`, `confirm:finance_disbursement` are three separate
    * strings on customizable roles, so a caller may hold one and not the next.
    * A single flag over the whole tail would hide a step somebody is entitled to
    * take, and would show one they are not.

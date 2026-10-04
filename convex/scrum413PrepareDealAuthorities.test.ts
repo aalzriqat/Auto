@@ -142,7 +142,7 @@ describe("SCRUM-413 prepareSplitDealAuthorities is diagnostic-only", () => {
     const plain = await insertRole(t, orgId, "Showroom", [CREATE_APP]);
     const before = await t.run((ctx: any) => ctx.db.query("roles").collect());
 
-    const result = await t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, {});
+    const result = await t.query(internal.migrateRoles.prepareSplitDealAuthorities, {});
 
     expect(await t.run((ctx: any) => ctx.db.query("roles").collect())).toEqual(before);
     const byId = new Map<string, any>(result.records.map((r: any) => [r.roleId, r]));
@@ -162,7 +162,7 @@ describe("SCRUM-413 prepareSplitDealAuthorities is diagnostic-only", () => {
     ) as Id<"organizations">;
     const manager = await insertRole(t, orgId, "MANAGER", [FINALIZE, CREATE_APP]);
     await expect(
-      (t.mutation as any)(internal.migrateRoles.prepareSplitDealAuthorities, { apply: true })
+      (t.query as any)(internal.migrateRoles.prepareSplitDealAuthorities, { apply: true })
     ).rejects.toThrow();
     const role = await t.run((ctx: any) => ctx.db.get(manager)) as any;
     expect(role?.permissions).toEqual([FINALIZE, CREATE_APP]);
@@ -172,7 +172,7 @@ describe("SCRUM-413 prepareSplitDealAuthorities is diagnostic-only", () => {
     const t = convexTestWithComponents(schema, MODULES);
     const { orgId } = await setupOwnerOrg(t, "scrum413_ready_owner");
     await insertRole(t, orgId, "MANAGER", [CREATE_APP, ROUTE, CANCEL_CLOSED]);
-    const result = await t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, {});
+    const result = await t.query(internal.migrateRoles.prepareSplitDealAuthorities, {});
     expect(result).toMatchObject({ ready: true, retiredCarriers: 0 });
   });
 });

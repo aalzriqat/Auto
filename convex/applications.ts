@@ -21,7 +21,7 @@ import {
   mayRecordSubmittedQuotation,
   projectFinanceApplication,
 } from "./utils/financeApplicationProjection";
-import { PERMISSIONS, isSystemOwnerRole, type Permission } from "./utils/permissions";
+import { PERMISSIONS, cancelAuthorityFor, isSystemOwnerRole, type Permission } from "./utils/permissions";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
@@ -2498,13 +2498,9 @@ export const dealCockpit = query({
          */
         mayCancelFinalized:
           isSystemOwnerRole(role) ||
-          (app.status === "CLOSED"
-            ? role.permissions.includes(PERMISSIONS.CANCEL_CLOSED_DEAL) &&
-              (planVersionOf(app) !== 2 ||
-                role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT))
-            : role.permissions.includes(PERMISSIONS.CREATE_FINANCE_APPLICATION) &&
-              (app.status !== "APPROVED" ||
-                role.permissions.includes(PERMISSIONS.APPROVE_FINANCE_APPLICATION))),
+          cancelAuthorityFor(app.status, planVersionOf(app)).every((tier) =>
+            tier.every((permission) => role.permissions.includes(permission))
+          ),
       },
       /**
        * SCRUM-239: the bank returned the finance company's cheque AFTER it
@@ -3415,8 +3411,19 @@ export const cancelApplication = mutation({
         // CANCEL_CLOSED and deliberately NOT CREATE (reversing a closed deal is
         // its own authority); every other status, including a fresh key against
         // an already-CANCELLED application, takes CREATE.
+        const authority = cancelAuthorityFor(app.status, planVersionOf(app));
         if (app.status === "CLOSED") {
-          await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CANCEL_CLOSED_DEAL]);
+          // The entry gate already loaded and validated the caller's role, so
+          // this is an in-memory check that refuses exactly as requireTenantAuth.
+          const missing = authority[0].filter(
+            (permission) => !auth.role.permissions.includes(permission)
+          );
+          if (missing.length > 0 && !isSystemOwnerRole(auth.role)) {
+            throwAppError(
+              AppErrorCode.FORBIDDEN,
+              `Forbidden: Missing required permissions: ${missing.join(", ")}`
+            );
+          }
         } else if (createRefusal !== null) {
           throw createRefusal;
         }
@@ -3460,7 +3467,7 @@ export const cancelApplication = mutation({
         // Reversing an already-APPROVED decision is more sensitive than voiding
         // a draft/in-review one, so require the same permission used to approve.
         if (app.status === "APPROVED") {
-          await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_FINANCE_APPLICATION]);
+          await requireTenantAuth(ctx, args.orgId, authority[1]);
         }
 
         // SCRUM-447 D4: resolve linked finance-company cheques before any other
@@ -3488,16 +3495,12 @@ export const cancelApplication = mutation({
         const now = Date.now();
 
         if (app.status === "CLOSED") {
-          // Undoing a finalized deal touches the sale, vehicle, deposits, and
-          // posted GL — CANCEL_CLOSED_DEAL was already required above, before
-          // any other work, for exactly this status.
-
           // SCRUM-435 (v2 deals only; v1 is unchanged): the deal has payments the
           // finance company holds, so a manager cancels it - never sales or an
           // accountant alone - and only when the forward proof allows it.
           if (planVersionOf(app) === 2) {
             try {
-              await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
+              await requireTenantAuth(ctx, args.orgId, authority[1]);
             } catch {
               throw new ConvexError("A manager cancels a finalized deal.");
             }

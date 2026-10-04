@@ -242,6 +242,28 @@ export function isSystemOwnerRole(role: RoleLike | null | undefined): boolean {
   return role.name === SYSTEM_OWNER_ROLE_NAME && holdsTheFrozenOwnerSet(role.permissions);
 }
 
+/**
+ * SCRUM-413 D-b: the ordered authority tiers needed to cancel a finance
+ * application in `status`. The single source for both `cancelApplication` (which
+ * enforces each tier at its own point in the body) and the cockpit's
+ * `mayCancelFinalized` (which holds every tier or is the owner), so the screen
+ * can never offer what the server refuses.
+ *
+ * CLOSED needs CANCEL_CLOSED_DEAL (deliberately NOT CREATE), plus the
+ * disbursement authority on a v2 deal. Every other status needs CREATE, plus the
+ * approval authority once APPROVED.
+ */
+export function cancelAuthorityFor(status: string, planVersion: number): Permission[][] {
+  if (status === "CLOSED") {
+    return planVersion === 2
+      ? [[PERMISSIONS.CANCEL_CLOSED_DEAL], [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]]
+      : [[PERMISSIONS.CANCEL_CLOSED_DEAL]];
+  }
+  return status === "APPROVED"
+    ? [[PERMISSIONS.CREATE_FINANCE_APPLICATION], [PERMISSIONS.APPROVE_FINANCE_APPLICATION]]
+    : [[PERMISSIONS.CREATE_FINANCE_APPLICATION]];
+}
+
 export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }[] = [
   {
     name: SYSTEM_OWNER_ROLE_NAME,

@@ -1,4 +1,4 @@
-import { MutationCtx } from "./_generated/server";
+import { MutationCtx, internalQuery } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import {
@@ -46,9 +46,6 @@ export const fixExistingRoles = internalMutation({
  * contain the frozen pre-SCRUM-413 owner set, so a row missing the explicit
  * flag depends on that legacy list forever. (It used to require every
  * currently-defined permission, which failed closed on every addition.)
- *
- * `prepareSplitDealAuthorities` does not use this: it must NOT flag an
- * OWNER-named row that fails the fallback, and it returns structured records.
  */
 async function patchRoleIfNeeded(
   ctx: MutationCtx,
@@ -393,14 +390,14 @@ export const backfillSeniorAccountantRole = internalMutation({
   },
 });
 
-/** One stored role's part in the SCRUM-413 preparation, before and after. */
+/** One stored role's part in the SCRUM-413 read-back report. */
 interface SplitDealAuthorityRecord {
   roleId: Id<"roles">;
   orgId: Id<"organizations">;
   name: string;
   /** Recognised as the owner by `isSystemOwnerRole` (flag, or the frozen fallback). */
   ownerQualified: boolean;
-  /** An unflagged row that qualifies through the fallback: the flag is stamped. */
+  /** An unflagged row that would qualify for the flag; reported only, never stamped. */
   stampOwnerFlag: boolean;
   /** Named like the owner, unflagged, and NOT qualified: reported, never stamped. */
   ownerFlagSkipped: boolean;
@@ -426,12 +423,11 @@ interface SplitDealAuthorityRecord {
  * `ready` means no stored role carries a retired permission string. A retired
  * string is harmless (no door reads it) so this is hygiene, not a safety gate.
  */
-export const prepareSplitDealAuthorities = internalMutation({
+export const prepareSplitDealAuthorities = internalQuery({
   args: {},
   handler: async (ctx) => {
     const roles = await ctx.db.query("roles").collect();
     const records: SplitDealAuthorityRecord[] = [];
-    let carriers = 0;
 
     for (const role of roles) {
       if (role.isDeleted) continue;
@@ -445,7 +441,6 @@ export const prepareSplitDealAuthorities = internalMutation({
       const holdsRoute = held.has(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
       const holdsCancelClosed = held.has(PERMISSIONS.CANCEL_CLOSED_DEAL);
 
-      if (carriesRetiredPermission) carriers++;
       if (!carriesRetiredPermission && !ownerFlagSkipped && !holdsRoute && !holdsCancelClosed) continue;
 
       records.push({
@@ -461,6 +456,7 @@ export const prepareSplitDealAuthorities = internalMutation({
       });
     }
 
+    const carriers = records.filter((record) => record.carriesRetiredPermission).length;
     return { ready: carriers === 0, retiredCarriers: carriers, records };
   },
 });
