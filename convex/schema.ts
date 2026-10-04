@@ -1269,6 +1269,10 @@ export default defineSchema({
       v.literal("CASH_REFUND"),
       v.literal("VENDOR_CREDIT"),
     )),
+    // Set only when the correction rewrote a supplier payable (SUPPLIER_INVOICE_ERROR /
+    // VENDOR_CREDIT): which row, and the amountDue it held before. SCRUM-650.
+    payableId: v.optional(v.id("vehicleSupplierPayables")),
+    previousAmountDue: v.optional(v.number()),
     correctedBy: v.id("users"),
     createdAt: v.number(),
   }).index("by_org_vehicle", ["orgId", "vehicleId"]),

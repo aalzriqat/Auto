@@ -44,7 +44,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { getErrorMessage } from "@/lib/errors";
+import { getErrorMessage, getLocalizedErrorMessage } from "@/lib/errors";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
@@ -278,7 +278,8 @@ export default function VehiclesPage() {
       await resolveEditRequest({ orgId: activeOrgId, requestId, status });
       toast.success(`Edit request ${status.toLowerCase()}`);
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      // Approving an edit that changes a posted cost is refused with VEHICLE_COST_POSTED.
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     }
   };
 
