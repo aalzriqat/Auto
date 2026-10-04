@@ -497,6 +497,17 @@ describe("SCRUM-650 getAcquisitionCostCorrectionContext", () => {
     const blocked = await d.asOwner.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: d.orgId, vehicleId: noCostId });
     expect(blocked).toMatchObject({ blockedReason: "NOT_POSTED" });
   });
+
+  test("a legacy PAID payable with no amountPaid reports the full amount as paid (CodeRabbit #446)", async () => {
+    const d = await seedDealer("q3");
+    const vehicleId = await createOnAccountVehicle(d, 12500);
+    await d.t.run(async (ctx) => {
+      const payable = await ctx.db.query("vehicleSupplierPayables").first();
+      await ctx.db.patch(payable!._id, { status: "PAID", amountPaid: undefined });
+    });
+    const context = await d.asOwner.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: d.orgId, vehicleId });
+    expect(context.payable).toEqual({ status: "PAID", amountDue: 12500, amountPaid: 12500 });
+  });
 });
 
 describe("SCRUM-650 the purchase-cost lock", () => {

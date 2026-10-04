@@ -2082,7 +2082,7 @@ export const getAcquisitionCostCorrectionContext = query({
       currency,
       originalPaymentMethod: originalPaymentMethod ?? null,
       payable: payableRow
-        ? { status: payableRow.status, amountDue: payableRow.amountDue, amountPaid: payableRow.amountPaid ?? 0 }
+        ? { status: payableRow.status, amountDue: payableRow.amountDue, amountPaid: settlementView(payableRow).amountPaid }
         : null,
       allowedTypes: allowedAcquisitionCorrectionTypes(
         originalPaymentMethod,
