@@ -615,15 +615,22 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       if (last.dialog) await closeDialog(last.dialog);
 
       if ((c.rule === "unicode" || c.rule === "markup") && (a.outcome === "accepted" || a.outcome === "accepted-silent")) {
+        const xssRan = async () => Boolean(await page.evaluate(() => (window as unknown as { __qaFormXss?: number }).__qaFormXss));
+        // Read the detector before readBack navigates away: a run in this
+        // document (a toast echoing the value, say) would otherwise be lost.
+        const ranBeforeReadBack = c.rule === "markup" && (await xssRan());
         const readBackText = await readBack(c.form, last.tag);
         // Lists show names and titles only. For any other field the row is
         // found through the tagged name, so its text cannot prove or disprove
         // the round-trip: leave it unread (inconclusive), never "mangled".
+        const rendered = (c.field.kind === "name" || c.field.kind === "title") && readBackText !== undefined;
         if (c.field.kind === "name" || c.field.kind === "title") {
           a.readBack = readBackText;
           a.expected = last.value;
         }
-        a.scriptRan = Boolean(await page.evaluate(() => (window as unknown as { __qaFormXss?: number }).__qaFormXss));
+        // "Did not run" is only claimed where the payload was seen rendered;
+        // elsewhere it stays undefined, which the oracle calls inconclusive.
+        if (c.rule === "markup") a.scriptRan = ranBeforeReadBack || (await xssRan()) ? true : rendered ? false : undefined;
       }
 
       const verdict = judge(a);

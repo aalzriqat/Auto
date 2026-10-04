@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  baselineValue,
   classifyErrorToast,
   hostileValue,
   judge,
@@ -68,6 +69,10 @@ describe("judge — fixed verdicts, no model involved", () => {
     expect(judge({ rule: "markup", field: notes, outcome: "accepted", scriptRan: true }).check).toBe("markup-executed");
   });
 
+  it("markup saved where it never rendered is inconclusive, not ok (CodeRabbit #437)", () => {
+    expect(judge({ rule: "markup", field: notes, outcome: "accepted" }).kind).toBe("inconclusive");
+  });
+
   it("unicode must be accepted and read back unchanged", () => {
     const expected = hostileValue("unicode", "T1");
     expect(judge({ rule: "unicode", field: notes, outcome: "rejected-inline" }).check).toBe("unicode-rejected");
@@ -131,5 +136,42 @@ describe("field model", () => {
     expect(p.local).toBe("0790001234");
     expect(p.intl).toBe("+962790001234");
     expect(p.intl.slice(-9)).toBe(p.local.slice(-9));
+  });
+
+  it("every field kind gets its own rule set", () => {
+    expect(rulesFor({ label: "Phone *", kind: "phone", required: true })).toEqual(["blank-required", "garbage-phone", "dup-variant"]);
+    expect(rulesFor({ label: "Email *", kind: "email", required: true })).toEqual(["blank-required", "garbage-email"]);
+    expect(rulesFor({ label: "Email", kind: "email", required: false })).toEqual(["garbage-email"]);
+    expect(rulesFor({ label: "Qty *", kind: "number", required: true })).toEqual(["negative"]);
+    expect(kindOf("Amount", "number", "INPUT")).toBe("number");
+  });
+
+  it("dup-exact is the control and never a verdict of its own", () => {
+    expect(judge({ rule: "dup-exact", field: phone, outcome: "accepted" }).kind).toBe("ok");
+  });
+});
+
+describe("hostile and baseline values", () => {
+  it("each hostile value carries what its rule tests", () => {
+    expect(hostileValue("blank-required", "T1").trim()).toBe("");
+    expect(hostileValue("too-long", "T1")).toHaveLength("QA TEST T1 ".length + 2_000);
+    expect(hostileValue("markup", "T1")).toMatch(/^QA TEST T1 <img [^>]*onerror=/);
+    expect(hostileValue("unicode", "T1")).toMatch(/^QA TEST T1 .*[\u0600-\u06FF]/u);
+    expect(hostileValue("garbage-phone", "T1")).not.toMatch(/\d/);
+    expect(hostileValue("garbage-email", "T1")).toContain("@@");
+    expect(Number(hostileValue("negative", "T1"))).toBeLessThan(0);
+    // Duplicate attempts get their numbers from phonePair, not from here.
+    expect(hostileValue("dup-exact", "T1")).toBe("");
+    expect(hostileValue("dup-variant", "T1")).toBe("");
+  });
+
+  it("baseline values are valid, tagged where text, and never collide", () => {
+    expect(baselineValue("name", "T1", 1)).toBe("QA TEST T1");
+    expect(baselineValue("title", "T1", 1)).toBe("QA TEST task T1");
+    expect(baselineValue("text", "T1", 1)).toBe("QA TEST T1");
+    expect(baselineValue("phone", "T1", 7)).toBe(phonePair(7).local);
+    expect(baselineValue("phone", "T1", 7)).not.toBe(baselineValue("phone", "T1", 8));
+    expect(baselineValue("email", "T1", 1)).toMatch(/^qa\.t1@example\.test$/);
+    expect(Number(baselineValue("number", "T1", 1))).toBeGreaterThan(0);
   });
 });

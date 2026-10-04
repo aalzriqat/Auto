@@ -45,7 +45,7 @@ export type Attempt = {
   readBack?: string;
   /** The value the rule expects to round-trip, for unicode/markup. */
   expected?: string;
-  /** The markup payload executed in the page. */
+  /** The markup payload executed in the page; undefined when it was never seen rendered. */
   scriptRan?: boolean;
 };
 
@@ -100,64 +100,73 @@ export function judge(a: Attempt): Verdict {
   return verdict;
 }
 
+/**
+ * Rules whose only question is "was it saved?": the verdict when it was.
+ * Anything not saved is ok here; a raw error or silent ignore was caught above.
+ */
+const WHEN_SAVED: Partial<Record<Rule, (a: Attempt, where: string) => Verdict>> = {
+  "blank-required": (a) => ({
+    kind: "finding",
+    check: "blank-required-accepted",
+    reason: `${a.field.label} is required but a whitespace-only value was saved.`,
+  }),
+  "garbage-phone": (_a, where) => ({ kind: "finding", check: "invalid-format-accepted", reason: `${where}: a malformed value was saved.` }),
+  "garbage-email": (_a, where) => ({ kind: "finding", check: "invalid-format-accepted", reason: `${where}: a malformed value was saved.` }),
+  negative: (_a, where) => ({
+    kind: "advisory",
+    check: "negative-accepted",
+    reason: `${where}: a negative number was saved; confirm whether that is meaningful.`,
+  }),
+  // Saving long text is not wrong by itself.
+  "too-long": (_a, where) => ({ kind: "advisory", check: "no-length-limit", reason: `${where}: 2,000 characters were saved with no limit.` }),
+};
+
 function judgeRule(a: Attempt, where: string): Verdict {
+  const whenSaved = WHEN_SAVED[a.rule];
+  if (whenSaved) return isAccepted(a.outcome) ? whenSaved(a, where) : ok(where);
   switch (a.rule) {
-    case "blank-required":
-      return isAccepted(a.outcome)
-        ? { kind: "finding", check: "blank-required-accepted", reason: `${a.field.label} is required but a whitespace-only value was saved.` }
-        : ok(where);
-
-    case "garbage-phone":
-    case "garbage-email":
-      return isAccepted(a.outcome)
-        ? { kind: "finding", check: "invalid-format-accepted", reason: `${where}: a malformed value was saved.` }
-        : ok(where);
-
-    case "negative":
-      return isAccepted(a.outcome)
-        ? { kind: "advisory", check: "negative-accepted", reason: `${where}: a negative number was saved; confirm whether that is meaningful.` }
-        : ok(where);
-
-    case "too-long":
-      // Saving long text is not wrong by itself; a raw error was caught above.
-      return isAccepted(a.outcome)
-        ? { kind: "advisory", check: "no-length-limit", reason: `${where}: 2,000 characters were saved with no limit.` }
-        : ok(where);
-
     case "markup":
       if (a.scriptRan) return { kind: "finding", check: "markup-executed", reason: `${where}: the saved HTML payload ran as script.` };
+      // `false` only when the payload was seen rendered; otherwise nothing could have run.
+      if (a.scriptRan === undefined) return inconclusive(where, "the saved payload was never seen rendered");
       return ok(where);
-
     case "unicode":
-      if (!isAccepted(a.outcome)) {
-        return { kind: "finding", check: "unicode-rejected", reason: `${where}: Arabic/emoji text was refused.` };
-      }
-      if (a.readBack === undefined || a.expected === undefined) return inconclusive(where, "not read back");
-      return squash(a.readBack).includes(squash(a.expected))
-        ? ok(where)
-        : { kind: "finding", check: "unicode-mangled", reason: `${where}: saved text did not read back unchanged.` };
-
-    case "dup-exact":
-      // The control: it says whether this field is meant to be unique at all.
+      return judgeUnicode(a, where);
+    case "dup-variant":
+      return judgeDupVariant(a, where);
+    default:
+      // dup-exact is the control: it says whether this field is meant to be unique at all.
       return ok(where);
-
-    case "dup-variant": {
-      // Only a defect when the app DOES police exact duplicates of this field
-      // and lets the same number through in another format (SCRUM-610 F-03).
-      // A field with no duplicate policy at all is not judged here.
-      if (!a.control) return inconclusive(where, "no exact-format control attempt");
-      const policed = a.control.warned || isRejected(a.control.outcome);
-      if (!policed) return { kind: "ok", check: "dup-variant", reason: `${where}: field has no duplicate policy; not judged.` };
-      const caught = a.warned || isRejected(a.outcome);
-      return caught
-        ? ok(where)
-        : {
-            kind: "finding",
-            check: "duplicate-format-bypass",
-            reason: `${a.field.label}: an exact duplicate is caught, but the same number in the other format was saved with no warning.`,
-          };
-    }
   }
+}
+
+function judgeUnicode(a: Attempt, where: string): Verdict {
+  if (!isAccepted(a.outcome)) {
+    return { kind: "finding", check: "unicode-rejected", reason: `${where}: Arabic/emoji text was refused.` };
+  }
+  if (a.readBack === undefined || a.expected === undefined) return inconclusive(where, "not read back");
+  return squash(a.readBack).includes(squash(a.expected))
+    ? ok(where)
+    : { kind: "finding", check: "unicode-mangled", reason: `${where}: saved text did not read back unchanged.` };
+}
+
+/**
+ * Only a defect when the app DOES police exact duplicates of this field and
+ * lets the same number through in another format (SCRUM-610 F-03). A field
+ * with no duplicate policy at all is not judged here.
+ */
+function judgeDupVariant(a: Attempt, where: string): Verdict {
+  if (!a.control) return inconclusive(where, "no exact-format control attempt");
+  const policed = a.control.warned || isRejected(a.control.outcome);
+  if (!policed) return { kind: "ok", check: "dup-variant", reason: `${where}: field has no duplicate policy; not judged.` };
+  const caught = a.warned || isRejected(a.outcome);
+  return caught
+    ? ok(where)
+    : {
+        kind: "finding",
+        check: "duplicate-format-bypass",
+        reason: `${a.field.label}: an exact duplicate is caught, but the same number in the other format was saved with no warning.`,
+      };
 }
 
 function ok(where: string): Verdict {
