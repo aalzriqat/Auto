@@ -163,6 +163,20 @@ export const AppErrorCode = {
   // SCRUM-641 (D-35): see convex/utils/vehicleLiveness.ts. Translated under ServerError_<code>.
   VEHICLE_DELETED: "VEHICLE_DELETED",
   VEHICLE_DELETED_FLAG_LOCKED: "VEHICLE_DELETED_FLAG_LOCKED",
+  // SCRUM-413. `roles.create` / `roles.update` refuse a newly added `finalize:financed_deal`
+  // (retired; split into manage:supplier_settlement and cancel:closed_deal). Translated under
+  // ServerError_<code>.
+  PERMISSION_RETIRED: "PERMISSION_RETIRED",
+  // SCRUM-413 D-37. `cancelApplication` / `sales.cancelSale` refuse to cancel a CLOSED v2 deal
+  // while the payment to the finance company is unsettled (`forwardCancelRefusal`). One code per
+  // distinct reason; the EN dictionary text equals the server message. Translated under
+  // ServerError_<code>.
+  FORWARD_CANCEL_ON_BOOKS: "FORWARD_CANCEL_ON_BOOKS",
+  FORWARD_CANCEL_POSTING_UNSETTLED: "FORWARD_CANCEL_POSTING_UNSETTLED",
+  FORWARD_CANCEL_REVERSAL_PENDING: "FORWARD_CANCEL_REVERSAL_PENDING",
+  FORWARD_CANCEL_NEEDS_REPAIR: "FORWARD_CANCEL_NEEDS_REPAIR",
+  // SCRUM-413 S413B-4/L-2
+  OWNER_NAMED_ROLE_LOCKED: "OWNER_NAMED_ROLE_LOCKED",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];

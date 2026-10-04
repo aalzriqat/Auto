@@ -257,6 +257,10 @@ const dealRailMessages = defineBilingualMessages({
     "A manager cancels a finalized deal.",
     "يلغي المدير الصفقة المُنهاة.",
   ],
+  CancelWaitsForForward: [
+    "This deal can be cancelled once the payment to the finance company is resolved.",
+    "يمكن إلغاء هذه الصفقة بعد معالجة الدفع لشركة التمويل.",
+  ],
   RecordForwardTitle: [
     "Record payment to the finance company",
     "تسجيل الدفع لشركة التمويل",
@@ -2837,7 +2841,7 @@ export const salesEn = {
    * Both blockers at once, and the pointer withheld on purpose.
    *
    * Recording the route (`setSupplierSettlementRoute`) needs
-   * `finalize:financed_deal`; closing (`finalizeDeal`) needs
+   * `manage:supplier_settlement`; closing (`finalizeDeal`) needs
    * `confirm:finance_disbursement`. Shown when the caller lacks the ROUTE
    * permission — the review dialog hides the selector from them, so sending
    * them there would be sending them to an empty screen.

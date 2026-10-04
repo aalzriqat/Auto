@@ -737,7 +737,7 @@ describe("G7 — the settlement step resolves the reconciliation flag, then name
   // after it, by the close.
   test("flagged AND the settlement route still required: the review is the step", () => {
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
     queryResults.set(COCKPIT_QUERY, { ...settlement(), supplierSettlementRouteRequired: true });
     queryResults.set(APP_QUERY, application({ needsFinancingReconciliation: true }));
     renderCockpit();
@@ -773,7 +773,7 @@ describe("G7 — the settlement step resolves the reconciliation flag, then name
 
   test("a held deposit on the direct route is named before the close is offered", () => {
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
     queryResults.set(COCKPIT_QUERY, settlement());
     queryResults.set(
       APP_QUERY,

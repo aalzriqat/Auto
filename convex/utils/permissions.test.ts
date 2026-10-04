@@ -1,5 +1,24 @@
 import { describe, it, expect } from "vitest";
-import { PERMISSIONS, ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./permissions";
+import { PERMISSIONS, ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES, cancelAuthorityFor } from "./permissions";
+
+describe("cancelAuthorityFor", () => {
+  it("CLOSED needs CANCEL_CLOSED_DEAL (not CREATE), plus disbursement authority on v2", () => {
+    expect(cancelAuthorityFor("CLOSED", 1)).toEqual([[PERMISSIONS.CANCEL_CLOSED_DEAL]]);
+    expect(cancelAuthorityFor("CLOSED", 0)).toEqual([[PERMISSIONS.CANCEL_CLOSED_DEAL]]);
+    expect(cancelAuthorityFor("CLOSED", 2)).toEqual([
+      [PERMISSIONS.CANCEL_CLOSED_DEAL],
+      [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT],
+    ]);
+  });
+
+  it("every other status needs CREATE, plus approval authority once APPROVED", () => {
+    expect(cancelAuthorityFor("IN_REVIEW", 2)).toEqual([[PERMISSIONS.CREATE_FINANCE_APPLICATION]]);
+    expect(cancelAuthorityFor("APPROVED", 2)).toEqual([
+      [PERMISSIONS.CREATE_FINANCE_APPLICATION],
+      [PERMISSIONS.APPROVE_FINANCE_APPLICATION],
+    ]);
+  });
+});
 
 describe("RBAC Permissions Configuration", () => {
   it("should have exactly 30 permissions defined in ALL_PERMISSIONS", () => {

@@ -22,7 +22,7 @@ import {
   SOCIAL_PLATFORMS,
   type SocialPlatform,
 } from "./utils/materialization";
-import { ALL_PERMISSIONS, isSystemOwnerRole, normalizeRoleName, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
+import { ALL_PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import {
   hasActiveDepositHold,
   hasActiveReservationHold,
@@ -37,7 +37,11 @@ export const backfillPermissions = internalMutation({
     const roles = await ctx.db.query("roles").collect();
 
     for (const role of roles) {
-      if (isSystemOwnerRole(role) || normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME) {
+      // SCRUM-413 S413B-3: only a row that ALREADY qualifies as the system owner
+      // (flag, or the frozen fallback, read before this write) is treated as the
+      // owner. Granting every permission to a merely OWNER-named row would hand
+      // it the frozen set and promote it through the fallback.
+      if (isSystemOwnerRole(role)) {
         // Owner gets all permissions
         await ctx.db.patch(role._id, {
           permissions: ALL_PERMISSIONS,

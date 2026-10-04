@@ -461,7 +461,7 @@ const LEGAL_INVOICE_ISSUED_TO_LABEL: Record<string, string> = {
  * Why the close cannot be taken — and it takes BOTH conditions, because the
  * two interact rather than merely coexisting.
  *
- * `setSupplierSettlementRoute` requires `finalize:financed_deal`, and the
+ * `setSupplierSettlementRoute` requires `manage:supplier_settlement`, and the
  * review dialog hides its selector without it. So telling a caller who lacks
  * that permission to "record the route" sends them to a screen with nothing
  * on it — the dead end this issue exists to remove, rebuilt out of two correct
@@ -1081,10 +1081,12 @@ export function DealCockpit({
   const canReviewApplication = !permissionsLoading && hasPermission(PERMISSIONS.REVIEW_FINANCE_APPLICATION);
   const canApproveApplication = !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
   const canCreateApplication = !permissionsLoading && hasPermission(PERMISSIONS.CREATE_FINANCE_APPLICATION);
-  // Recording the settlement route and cancelling a CLOSED deal are still
-  // gated server-side on `finalize:financed_deal`; closing the deal itself is
-  // not — see `canCloseDeal` below.
-  const canFinalizeApplication = !permissionsLoading && hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+  // SCRUM-413: recording the settlement route and cancelling a CLOSED deal are
+  // each their own server-side authority (the retired finalize permission no
+  // longer gates either); closing the deal itself is a third — see
+  // `canCloseDeal` below.
+  const canRecordSupplierRoute = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+  const canCancelClosedDeal = !permissionsLoading && hasPermission(PERMISSIONS.CANCEL_CLOSED_DEAL);
   const canVerifyDocuments = !permissionsLoading && hasPermission(PERMISSIONS.VERIFY_FINANCE_DOCUMENTS);
   const documentsSettled = deal != null && SETTLED_FINANCE_STATUSES.includes(deal.status);
   const canConfirmFinanceDisbursement =
@@ -1681,10 +1683,10 @@ export function DealCockpit({
     : undefined;
   // The route is a decision about a deal that has not posted yet; once it
   // closes, changing it is a correction and the server refuses it there too.
-  // Keyed on FINALIZE_FINANCED_DEAL, matching the server.
+  // Keyed on MANAGE_SUPPLIER_SETTLEMENT, matching the server.
   const canChooseSettlementRoute =
     app != null &&
-    canFinalizeApplication &&
+    canRecordSupplierRoute &&
     isConsignedDeal &&
     app.status !== "CLOSED" &&
     app.status !== "CANCELLED";
@@ -1733,15 +1735,29 @@ export function DealCockpit({
     app.canSettleDirectToSupplier &&
     !app.supplierDisbursementStatus;
   // Mirror the backend permission tiers exactly.
+  // SCRUM-413: a CLOSED deal is reversed with CANCEL_CLOSED_DEAL alone (no
+  // create-application authority); every other status keeps create (+ approve
+  // once APPROVED). A CLOSED deal is cancelled only on the server's own answer
+  // (`mayCancelFinalized`: the same permission tiers AND the forward gate); no
+  // answer yet means no Cancel, never a permission-only guess.
   const canCancel =
     app != null &&
     app.status !== "CANCELLED" &&
-    canCreateApplication &&
-    (app.status === "APPROVED" ? canApproveApplication : true) &&
-    (app.status === "CLOSED" ? canFinalizeApplication : true) &&
-    // SCRUM-435: a finalized v2 deal is cancelled by a manager; the server's own
-    // answer (`mayCancelFinalized`) is the only thing offered here.
-    (app.status === "CLOSED" && deal?.forward?.planV2 === true ? deal.forward.mayCancelFinalized === true : true);
+    (app.status === "CLOSED"
+      ? canCancelClosedDeal && deal?.forward?.mayCancelFinalized === true
+      : canCreateApplication && (app.status === "APPROVED" ? canApproveApplication : true));
+  // The caller holds the cancel authority but the server still refuses: with no
+  // disbursement authority the missing piece is a manager; with it, only the
+  // forward gate is left, which is not a permission.
+  const cancelHint: "MANAGER" | "FORWARD" | undefined =
+    app?.status === "CLOSED" &&
+    deal?.forward?.planV2 === true &&
+    deal.forward.mayCancelFinalized !== true &&
+    canCancelClosedDeal
+      ? canConfirmFinanceDisbursement
+        ? "FORWARD"
+        : "MANAGER"
+      : undefined;
   const forwardBlocksTransfer =
     deal?.forward?.applies === true && deal.forward.state !== "SETTLED" && deal.forward.state !== "NOT_DUE";
   const applicationDeposits: DealDeposit[] = (app?.deposits ?? []).map((deposit) => ({
@@ -1814,7 +1830,7 @@ export function DealCockpit({
    * taken.
    *
    * Each step is gated on its OWN permission — `register:vehicle_handover`,
-   * `register:expected_payment`, `finalize:financed_deal` are three separate
+   * `register:expected_payment`, `confirm:finance_disbursement` are three separate
    * strings on customizable roles, so a caller may hold one and not the next.
    * A single flag over the whole tail would hide a step somebody is entitled to
    * take, and would show one they are not.
@@ -2269,7 +2285,7 @@ export function DealCockpit({
       ? FINALIZE_DENOMINATION_REASON[finalizeDenominationBlock]
       : finalizeUnavailableReasonKey({
           routeRequired: settlementRouteRequired,
-          canRecordRoute: canFinalizeApplication,
+          canRecordRoute: canRecordSupplierRoute,
           heldDepositBlocksDirectClose:
             app?.supplierSettlementRoute === "DIRECT_TO_SUPPLIER" &&
             (app.deposits ?? []).some((deposit) => deposit.status === "HELD"),
@@ -2914,12 +2930,7 @@ export function DealCockpit({
             }
           : undefined
       }
-      cancelHint={
-        app?.status === "CLOSED" &&
-        deal?.forward?.planV2 === true &&
-        deal.forward.mayCancelFinalized !== true &&
-        canCreateApplication
-      }
+      cancelHint={cancelHint}
       settlementRoute={
         canChooseSettlementRoute && app
           ? {
@@ -4564,8 +4575,10 @@ export function DealCockpitView({
    * SCRUM-435: shown where the cancel action would be when this caller may open
    * a deal's cancellation in principle but a finalized v2 deal is cancelled by a
    * manager. Names who acts instead of leaving the deal without an answer.
+   * `FORWARD`: the caller holds every cancel authority, so the payment to the
+   * finance company is what blocks it (SCRUM-413 D-37) - never blame permissions.
    */
-  cancelHint?: boolean;
+  cancelHint?: "MANAGER" | "FORWARD";
   /**
    * SCRUM-435: void or report-returned for the payment on the books. Present only
    * for a caller the server would let do it, and only while a payment is on the
@@ -6509,7 +6522,7 @@ export function DealCockpitView({
         )}
         {!cancel && cancelHint && (
           <span className="ms-auto text-xs text-muted-foreground" data-testid="deal-cancel-manager-hint">
-            {t("ManagerCancelsFinalizedDeal")}
+            {t(cancelHint === "FORWARD" ? "CancelWaitsForForward" : "ManagerCancelsFinalizedDeal")}
           </span>
         )}
       </div>

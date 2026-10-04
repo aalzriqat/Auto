@@ -304,6 +304,36 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "A vehicle's deleted status cannot be changed by direct edit. Use the vehicle delete or restore workflow instead.",
     "لا يمكن تغيير حالة حذف السيارة عبر التعديل المباشر. استخدم إجراء حذف السيارة أو استعادتها بدلاً من ذلك.",
   ],
+  // SCRUM-413. `roles.create` / `roles.update` refuse a newly added retired permission. The
+  // authority names match the FinancedDeal* labels in settings.ts.
+  ServerError_PERMISSION_RETIRED: [
+    "The \"Finalize financed deal\" permission is no longer used. Grant \"Record the supplier payment route\" or \"Cancel a closed financed deal\" instead.",
+    "صلاحية \"إتمام الصفقة الممولة\" لم تعد مستخدمة. امنح صلاحية \"تسجيل مسار الدفع للمورّد\" أو \"إلغاء صفقة ممولة مغلقة\" بدلاً منها.",
+  ],
+  // SCRUM-413 D-37. Cancelling a CLOSED financed deal is refused while the payment to the
+  // finance company is unsettled (convex/utils/financeCompanyForward.ts forwardCancelRefusal).
+  // The EN text equals the server message.
+  ServerError_FORWARD_CANCEL_ON_BOOKS: [
+    "The deposit and the dealership's contribution have already been paid to the finance company. A manager reports the payment as returned by the company, or an accountant records the correction, before this deal can be cancelled.",
+    "تم سداد العربون ومساهمة المعرض إلى شركة التمويل بالفعل. يسجّل المدير أن الشركة أعادت الدفعة، أو يسجّل المحاسب التصحيح، قبل أن يمكن إلغاء هذه الصفقة.",
+  ],
+  ServerError_FORWARD_CANCEL_POSTING_UNSETTLED: [
+    "The payment to the finance company is not yet settled on the books. An accountant resolves it before this deal can be cancelled.",
+    "الدفعة المسدَّدة لشركة التمويل لم تُسوَّ في الدفاتر بعد. يعالجها المحاسب قبل أن يمكن إلغاء هذه الصفقة.",
+  ],
+  ServerError_FORWARD_CANCEL_REVERSAL_PENDING: [
+    "The reversal of the payment to the finance company is not yet posted. An accountant posts it before this deal can be cancelled.",
+    "عكس الدفعة المسدَّدة لشركة التمويل لم يُرحَّل بعد. يرحّله المحاسب قبل أن يمكن إلغاء هذه الصفقة.",
+  ],
+  ServerError_FORWARD_CANCEL_NEEDS_REPAIR: [
+    "The record of the payment to the finance company does not match the books. An accountant reviews it before this deal can be cancelled.",
+    "سجل الدفعة المسدَّدة لشركة التمويل لا يطابق الدفاتر. يراجعه المحاسب قبل أن يمكن إلغاء هذه الصفقة.",
+  ],
+  // SCRUM-413 S413B-4/L-2
+  ServerError_OWNER_NAMED_ROLE_LOCKED: [
+    "This role is named OWNER but is not the system owner role, so its permissions cannot be edited. Rename it to a different name first.",
+    "هذا الدور يحمل الاسم المحجوز OWNER لكنه ليس دور المالك الأساسي في النظام، لذا لا يمكن تعديل صلاحياته. غيّر اسمه إلى اسم آخر أولاً.",
+  ],
   FinanceCompanyReceivables: ["Finance-company receivables", "ذمم شركات التمويل"],
   FinanceCompanyReceivablesDesc: ["Amounts due from finance companies. Open the originating deal to review or settle them.", "المبالغ المستحقة من شركات التمويل. افتح الصفقة الأصلية للمراجعة أو التسوية."],
   DocumentNumber: ["Document number", "رقم المستند"],
