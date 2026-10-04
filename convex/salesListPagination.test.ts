@@ -149,6 +149,29 @@ describe("sales.list — soft-deleted rows never produce an empty first page", (
   });
 });
 
+describe("sales.list — newest first (SCRUM-603)", () => {
+  test.each([
+    ["org branch", false],
+    ["salesperson branch", true],
+  ])("%s: page 1 (numItems 1) is the NEWEST live sale; soft-deleted and other reps never appear", async (_name, withRep) => {
+    const w = await makeWorld();
+    const rep = withRep ? w.userId : undefined;
+    const oldest = await addSale(w);
+    await addSale(w, { isDeleted: true });
+    const middle = await addSale(w);
+    const otherRep = await addSale(w, { salespersonId: w.otherUserId });
+    const newest = await addSale(w);
+    const newestDeleted = await addSale(w, { isDeleted: true });
+
+    const first = await list(w, 1, null, rep);
+    expect(ids(first)).toEqual([newest]);
+
+    const { seen } = await walk(w, 1, rep);
+    expect(seen).not.toContain(newestDeleted);
+    expect(seen).toEqual(withRep ? [newest, middle, oldest] : [newest, otherRep, middle, oldest]);
+  });
+});
+
 describe("sales.list — native isDeleted-index pagination (D-23 Q2)", () => {
   test.each([
     ["org branch", false],
