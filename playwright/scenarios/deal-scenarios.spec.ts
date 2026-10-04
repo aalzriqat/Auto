@@ -41,9 +41,16 @@ import {
  *   OR-1  the company owes the APPROVED amount;
  *   OR-3  the dealer's contribution is contra-revenue (4180) and is forwarded
  *         to the company together with any deposit the dealer holds;
- * and from the v2 financed-sale plan:
+ * and from the owner's funding ruling (funded = approved × ratio, unfunded =
+ * approved × (1 − ratio), dealer contribution = unfunded − first payment; the
+ * company remits the full approved amount, never netted):
  *   funded       = min(approved × LTV, approved − first payment)
  *   contribution = approved − funded − first payment   (never below 0)
+ * The two agree while the first payment is at most the unfunded part, the only
+ * case the owner has ruled. Scenarios whose first payment is above it (the LTV
+ * 90 / 3,000 first-payment ones, contribution 0) pin the CURRENT formula, which
+ * lends less than approved × ratio; that case is open on SCRUM-613, and those
+ * expectations change with its ruling.
  * Nothing here imports a money helper, so a wrong formula in production cannot
  * certify itself (SCRUM-486 A10).
  *

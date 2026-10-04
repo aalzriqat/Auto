@@ -123,12 +123,28 @@ function rng(seed: number) {
   };
 }
 
+// Jev answers a few questions per call well, so a large screen is asked in
+// parallel batches rather than cut to its first dozen elements.
+const JEV_SCAN_LIMIT = 200;
+const JEV_BATCH = 12;
+const JEV_MAX_BATCHES = 8;
+
+/** First-visit tours that cover the screen and swallow the walk's clicks. */
+const TOUR_KEYS = [
+  "messenger_onboarding_seen_v1",
+  "global_search_onboarding_seen_v1",
+  "feature_spotlight_seen_v3",
+  "dealer_website_onboarding_seen_v1",
+];
+
 async function candidates(page: Page): Promise<Array<{ el: Locator; name: string }>> {
   const all = page.locator(
     'main a[href^="/"], nav a[href^="/"], main button, [role="tab"], main [role="combobox"]',
   );
   const out: Array<{ el: Locator; name: string }> = [];
-  const count = Math.min(await all.count(), 80);
+  // The same link often appears in nav and in main; ask about it once.
+  const seen = new Set<string>();
+  const count = Math.min(await all.count(), JEV_SCAN_LIMIT);
   for (let i = 0; i < count; i++) {
     const el = all.nth(i);
     if (!(await el.isVisible().catch(() => false))) continue;
@@ -139,6 +155,9 @@ async function candidates(page: Page): Promise<Array<{ el: Locator; name: string
     if (!name || COMMIT_WORDS.test(name)) continue;
     const href = await el.getAttribute("href").catch(() => null);
     if (href && WRITES_ON_VIEW.test(href)) continue;
+    const key = `${name}\u0000${href ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     out.push({ el, name });
   }
   return out;
@@ -146,38 +165,65 @@ async function candidates(page: Page): Promise<Array<{ el: Locator; name: string
 
 // "jev: true" only says a key was set. These say whether Jev actually answered,
 // so a silent outage cannot pass for a Jev-guided walk.
-const jevStats = { pickAsked: 0, pickAnswered: 0, opinionAsked: 0, opinionAnswered: 0, maxOpinion: 0 };
+const jevStats = {
+  pickAsked: 0,
+  pickAnswered: 0,
+  candidatesOffered: 0,
+  candidatesScored: 0,
+  batchesFailed: 0,
+  opinionAsked: 0,
+  opinionAnswered: 0,
+  maxOpinion: 0,
+};
 
 async function jevPick(names: string[], screen: string): Promise<number | undefined> {
   const apiKey = process.env.TYPESAFE_API_KEY;
   if (!apiKey || names.length === 0) return undefined;
-  const questions: Record<string, unknown> = {};
-  names.slice(0, 12).forEach((name, i) => {
-    questions[`c${i}`] = {
-      type: "noul",
-      instructions: `Would clicking "${name}" most likely reveal a screen state in a car-dealership app where a display or money defect could hide?`,
-      criteria: { true: "It opens new data, a dialog, a tab or a detail view.", false: "It leads nowhere new." },
-    };
-  });
+  const batches: number[][] = [];
+  for (let start = 0; start < names.length && batches.length < JEV_MAX_BATCHES; start += JEV_BATCH) {
+    batches.push(names.slice(start, start + JEV_BATCH).map((_, i) => start + i));
+  }
   jevStats.pickAsked++;
-  try {
-    const res = (await callJev({ apiKey, state: { screen: screen.slice(0, 3_000) }, questions })) as {
-      answers?: Record<string, { noul?: number }>;
-    };
-    let best = -1;
-    let bestScore = -1;
-    for (const [k, v] of Object.entries(res.answers ?? {})) {
-      const score = typeof v?.noul === "number" ? v.noul : -1;
+  jevStats.candidatesOffered += batches.flat().length;
+  // A failed batch drops only its own candidates; if every batch fails the
+  // caller falls back to the seeded random pick (SCRUM-360).
+  const answered = await Promise.all(
+    batches.map(async (batch) => {
+      const questions: Record<string, unknown> = {};
+      for (const index of batch) {
+        questions[`c${index}`] = {
+          type: "noul",
+          instructions: `Would clicking "${names[index]}" most likely reveal a screen state in a car-dealership app where a display or money defect could hide?`,
+          criteria: { true: "It opens new data, a dialog, a tab or a detail view.", false: "It leads nowhere new." },
+        };
+      }
+      try {
+        const res = (await callJev({ apiKey, state: { screen: screen.slice(0, 3_000) }, questions })) as {
+          answers?: Record<string, { noul?: number }>;
+        };
+        return { batch, answers: res.answers ?? {} };
+      } catch {
+        jevStats.batchesFailed++;
+        return undefined;
+      }
+    }),
+  );
+  let best = -1;
+  let bestScore = -1;
+  for (const result of answered) {
+    if (!result) continue;
+    for (const index of result.batch) {
+      const score = result.answers[`c${index}`]?.noul;
+      if (typeof score !== "number") continue;
+      jevStats.candidatesScored++;
       if (score > bestScore) {
         bestScore = score;
-        best = Number(k.slice(1));
+        best = index;
       }
     }
-    if (best >= 0) jevStats.pickAnswered++;
-    return best >= 0 ? best : undefined;
-  } catch {
-    return undefined; // a Jev outage only removes the suggestion (SCRUM-360)
   }
+  if (best >= 0) jevStats.pickAnswered++;
+  return best >= 0 ? best : undefined;
 }
 
 async function jevOpinion(screen: string): Promise<number | undefined> {
@@ -236,6 +282,15 @@ test.describe("Jev explorer (advisory)", () => {
     );
     const sockets: string[] = [];
     page.on("websocket", (ws) => sockets.push(ws.url()));
+    await page.addInitScript((keys) => {
+      for (const key of keys) {
+        try {
+          localStorage.setItem(key, "1");
+        } catch {
+          // storage blocked: the tour shows and Escape dismisses it
+        }
+      }
+    }, TOUR_KEYS);
     await page.goto("/");
     await expect
       .poll(() => sockets.some((u) => u.includes(".convex.cloud")), {
