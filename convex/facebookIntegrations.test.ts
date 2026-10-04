@@ -2,6 +2,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -218,5 +219,92 @@ describe("facebookIntegrations.consumeOAuthState", () => {
       ctx.runMutation(internal.facebookIntegrations.consumeOAuthState, { state: "does-not-exist" })
     );
     expect(result).toBeNull();
+  });
+});
+
+// SCRUM-622: the webhook resolves an org by Page id, so one Page may belong to
+// one org only — a second owner made every delivery for that Page ambiguous.
+describe("facebookIntegrations: a Page belongs to one org", () => {
+  async function seedSecondOrg(t: ReturnType<typeof convexTestWithComponents>) {
+    const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Other Org", createdAt: Date.now() }));
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId,
+        plan: "professional",
+        status: "active",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+    const userId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "fb_owner_b", email: "b@test.com", name: "Owner B" })
+    );
+    const roleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ["view:settings", "edit:settings"], isSystemOwnerRole: true })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+    return { orgId, asOwner: t.withIdentity({ subject: "fb_owner_b" }) };
+  }
+
+  const save = (t: ReturnType<typeof convexTestWithComponents>, orgId: Id<"organizations">, facebookPageId: string) =>
+    t.run((ctx) =>
+      ctx.runMutation(internal.facebookIntegrations.saveFacebookCredentials, {
+        orgId,
+        facebookPageId,
+        facebookPageAccessToken: "token",
+      })
+    );
+
+  test("refuses a Page already connected to another org, and leaves both orgs unchanged", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId: orgA } = await seedOwner(t);
+    const { orgId: orgB } = await seedSecondOrg(t);
+    await save(t, orgA, "page_shared");
+
+    await expect(save(t, orgB, "page_shared")).rejects.toThrow(/already connected to another/i);
+
+    const holders = await t.run((ctx) =>
+      ctx.db.query("orgSettings").withIndex("by_facebook_page_id", (q) => q.eq("facebookPageId", "page_shared")).collect()
+    );
+    expect(holders.map((s) => s.orgId)).toEqual([orgA]);
+  });
+
+  test("the same org may reconnect its own Page", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOwner(t);
+    await save(t, orgId, "page_mine");
+    await expect(save(t, orgId, "page_mine")).resolves.toBeNull();
+  });
+
+  test("once the first org disconnects, another org may connect the Page", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId: orgA, asOwner } = await seedOwner(t);
+    const { orgId: orgB } = await seedSecondOrg(t);
+    await save(t, orgA, "page_moving");
+    await asOwner.mutation(api.facebookIntegrations.disconnect, { orgId: orgA });
+    await expect(save(t, orgB, "page_moving")).resolves.toBeNull();
+  });
+
+  test("picking a Page another org holds is refused before the Page is subscribed", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId: orgA } = await seedOwner(t);
+    const { orgId: orgB, asOwner: asOwnerB } = await seedSecondOrg(t);
+    await save(t, orgA, "page_shared");
+    await t.run(async (ctx) => {
+      await ctx.db.insert("orgSettings", {
+        orgId: orgB,
+        currency: "JOD",
+        currencySymbol: "JD",
+        enabledPaymentTypes: [],
+        facebookPendingCredentials: [{ id: "page_shared", name: "Shared", token: "pending_token" }],
+      });
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    await expect(
+      asOwnerB.action(api.facebookIntegrations.selectFacebookPage, { orgId: orgB, pageId: "page_shared" })
+    ).rejects.toThrow(/already connected to another/i);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
   });
 });
