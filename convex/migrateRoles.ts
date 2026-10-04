@@ -1,17 +1,16 @@
-import { v } from "convex/values";
-import { MutationCtx } from "./_generated/server";
+import { MutationCtx, internalQuery } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import {
-  type DealAuthority,
   DEFAULT_ROLE_TEMPLATES,
+  LEGACY_PERMISSIONS,
   PERMISSIONS,
   SYSTEM_OWNER_ROLE_NAME,
+  isReservedRoleName,
   isSystemOwnerRole,
+  isUnqualifiedOwnerNamed,
+  needsOwnerFlagStamp,
   normalizeRoleName,
-  dealAuthorityGainedAtCutover,
-  dealAuthorityLostAtCutover,
-  transitionalDealGrants,
 } from "./utils/permissions";
 
 export const fixExistingRoles = internalMutation({
@@ -23,6 +22,8 @@ export const fixExistingRoles = internalMutation({
     for (const role of roles) {
       // Find the corresponding template
       const template = DEFAULT_ROLE_TEMPLATES.find((t) => normalizeRoleName(t.name) === normalizeRoleName(role.name));
+      // SCRUM-413 S413B-3: never write an unqualified OWNER-named row (see isUnqualifiedOwnerNamed).
+      if (isUnqualifiedOwnerNamed(role)) continue;
       if (template) {
         // We only want to ensure VIEW_USERS is present for these specific roles
         // Or we can just sync the permissions entirely if they haven't been customized,
@@ -43,16 +44,15 @@ export const fixExistingRoles = internalMutation({
 
 /**
  * Shared by the capability-matching backfills below: patches a role with
- * whichever permissions from `toAdd` it's missing, and — for any OWNER-named
- * row — explicitly sets `isSystemOwnerRole: true` if unset. That flag matters
+ * whichever permissions from `toAdd` it's missing, and — for an OWNER-named row
+ * that ALREADY qualifies as the system owner (`isSystemOwnerRole`, evaluated
+ * before the write) — explicitly sets `isSystemOwnerRole: true`. An OWNER-named
+ * row that does not qualify is not written at all (SCRUM-413 S413B-3). That flag matters
  * beyond just the permissions array: `isSystemOwnerRole()`'s fallback check
  * (see utils/permissions.ts) requires the stored `permissions` array to
  * contain the frozen pre-SCRUM-413 owner set, so a row missing the explicit
  * flag depends on that legacy list forever. (It used to require every
  * currently-defined permission, which failed closed on every addition.)
- *
- * `prepareSplitDealAuthorities` does not use this: it must NOT flag an
- * OWNER-named row that fails the fallback, and it returns structured records.
  */
 async function patchRoleIfNeeded(
   ctx: MutationCtx,
@@ -60,13 +60,17 @@ async function patchRoleIfNeeded(
   toAdd: Set<string>,
   updates: string[]
 ): Promise<boolean> {
+  // SCRUM-413 S413B-3: never write an unqualified OWNER-named row (see isUnqualifiedOwnerNamed).
+  if (isUnqualifiedOwnerNamed(role)) return false;
+  const ownerNamed = isReservedRoleName(role.name);
+
   const missing = [...toAdd].filter((p) => !role.permissions.includes(p));
-  const isStaleOwnerRow = normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME && !role.isSystemOwnerRole;
+  const isStaleOwnerRow = ownerNamed && role.isSystemOwnerRole !== true;
   if (missing.length === 0 && !isStaleOwnerRow) return false;
 
   await ctx.db.patch(role._id, {
     permissions: [...role.permissions, ...missing],
-    ...(normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME ? { isSystemOwnerRole: true } : {}),
+    ...(ownerNamed ? { isSystemOwnerRole: true } : {}),
   });
   updates.push(`${role.name} (${role.orgId}): +${missing.join(", ")}`);
   return true;
@@ -95,11 +99,12 @@ export const backfillFinanceApplicationPermissions = internalMutation({
         toAdd.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
         toAdd.add(PERMISSIONS.VERIFY_FINANCE_DOCUMENTS);
       }
-      // Roles that already approve other requests get approval + finalization authority.
+      // Roles that already approve other requests get approval authority.
+      // (SCRUM-413: this backfill used to add finalize:financed_deal too; that
+      // permission is retired and no backfill may mint it.)
       if (has("approve:requests")) {
         toAdd.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
         toAdd.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
-        toAdd.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
       }
       // Sales-capable roles can view/create applications for deals they work.
       if (has("create:sales")) {
@@ -115,7 +120,6 @@ export const backfillFinanceApplicationPermissions = internalMutation({
           PERMISSIONS.CREATE_FINANCE_APPLICATION,
           PERMISSIONS.REVIEW_FINANCE_APPLICATION,
           PERMISSIONS.APPROVE_FINANCE_APPLICATION,
-          PERMISSIONS.FINALIZE_FINANCED_DEAL,
           PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
           PERMISSIONS.VERIFY_FINANCE_DOCUMENTS,
         ].forEach((p) => toAdd.add(p));
@@ -397,131 +401,75 @@ export const backfillSeniorAccountantRole = internalMutation({
   },
 });
 
-/** One stored role's part in the SCRUM-413 preparation, before and after. */
+/** One stored role's part in the SCRUM-413 read-back report. */
 interface SplitDealAuthorityRecord {
   roleId: Id<"roles">;
   orgId: Id<"organizations">;
   name: string;
   /** Recognised as the owner by `isSystemOwnerRole` (flag, or the frozen fallback). */
   ownerQualified: boolean;
-  /** An unflagged row that qualifies through the fallback: the flag is stamped. */
-  stampOwnerFlag: boolean;
-  /** Named like the owner, unflagged, and NOT qualified: reported, never stamped. */
-  ownerFlagSkipped: boolean;
-  /** The authority the old doors gave it: route = FINALIZE; closed-cancel = FINALIZE + CREATE. */
-  priorRoute: boolean;
-  priorCancelClosed: boolean;
-  added: string[];
   /**
-   * Its matching template now holds the route but the stored row does not
-   * and is not owed it (e.g. ACCOUNTANT: the owner ruled accountants may
-   * record the route, but they never held that authority, so it is a NEW
-   * grant — and a stored name cannot prove a row is the default ACCOUNTANT).
-   * Listed for the owner (template sync), never granted here.
+   * An unflagged row that qualifies as the owner only through the frozen name
+   * fallback: it still needs the explicit flag (the template sync, or any
+   * backfill, stamps it). Reported only here.
    */
-  pendingOwnerAction: boolean;
-  /** Old doors it can use now but would not keep at cutover, after `added`. */
-  lostAtCutover: DealAuthority[];
-  /** The owner acknowledged exactly this loss for this role ID (see `acknowledgedLosses`). */
-  lossAcknowledged: boolean;
-  /** New doors it would start using at cutover without holding the old one (inventory only). */
-  gainedAtCutover: DealAuthority[];
+  stampOwnerFlag: boolean;
+  /** Named like the owner and NOT qualified (unflagged or explicit false): reported, never stamped. */
+  ownerFlagSkipped: boolean;
+  /** Still stores a retired permission string. Inert: no door reads it. */
+  carriesRetiredPermission: boolean;
+  /** Holds the route authority (`manage:supplier_settlement`). */
+  holdsRoute: boolean;
+  /** Holds the closed-deal cancel authority (`cancel:closed_deal`). */
+  holdsCancelClosed: boolean;
 }
 
 /**
- * SCRUM-413, preparation (PR-A): give stored roles the split deal
- * authorities BEFORE any door moves off `finalize:financed_deal`, so the
- * cutover denies no one who could act before it.
+ * SCRUM-413, read-back report (DIAGNOSTIC ONLY — it writes nothing).
  *
- * Dry-run unless `apply: true`. It only ever ADDS what
- * `transitionalDealGrants` says a role is owed (the same function every role
- * writer applies), stamps the owner flag only on rows that already qualify,
- * and removes nothing — the legacy string is stripped at cutover.
+ * PR-A used this to give stored roles the split deal authorities before the
+ * doors moved. The doors have moved (`manage:supplier_settlement` and
+ * `cancel:closed_deal`), `finalize:financed_deal` is retired, and no role
+ * writer or backfill grants authority implicitly any more — so there is
+ * nothing left to apply. What remains is the owner's inventory: which stored
+ * roles still carry the inert retired string, which hold each new authority,
+ * and which OWNER-named rows are unflagged and fail the frozen fallback.
  *
- * The audit is the returned records: this runs with no caller identity, so
- * it writes no `adminAuditLog` row rather than invent an actor. The
- * operator publishes the apply output and a post-apply dry-run to SCRUM-413
- * against the deployed commit.
- *
- * `pending: 0` only means nothing is left to write. The cutover gate is
- * `ready` on a dry-run taken just before it: also no `unresolved` role — one
- * that would lose an old door with no matching owner decision. The owner
- * resolves each by granting the replacement, removing the old string, or
- * accepting the loss (e.g. SALES, per the owner's ruling) in SCRUM-413; the
- * operator passes accepted losses as `acknowledgedLosses`. An acknowledgement
- * waives only that role ID and exactly that loss set — never a name — so a
- * later edit that changes the loss reopens it, and an acknowledgement that no
- * longer matches a loss is returned as stale and also blocks `ready`. Hence
- * the fresh dry-run. `gainedAtCutover` lists the reverse (new authority a
- * role would start using) for the owner's inventory; it does not gate.
+ * `ready` means ALL of: no stored role carries a retired permission string
+ * (`retiredCarriers`), no qualifying owner is still unflagged
+ * (`unstampedOwners`), and no unflagged OWNER-named row fails the frozen
+ * fallback (`unqualifiedOwnerNamed`). The retired string itself is inert (no
+ * door reads it), so that part is hygiene; the owner counts are about identity.
+ * Stamp-only rows are reported even when they carry no retired string. An
+ * OWNER-named row with an explicit `isSystemOwnerRole: false` does not qualify
+ * either, so it is counted in `unqualifiedOwnerNamed` (an owner-review item)
+ * and is never stamped.
  */
-export const prepareSplitDealAuthorities = internalMutation({
-  args: {
-    apply: v.optional(v.boolean()),
-    acknowledgedLosses: v.optional(
-      v.array(
-        v.object({
-          roleId: v.id("roles"),
-          orgId: v.id("organizations"),
-          lost: v.array(v.union(v.literal("route"), v.literal("cancelClosed"))),
-        })
-      )
-    ),
-  },
-  handler: async (ctx, args) => {
-    const apply = args.apply === true;
-    // One owner decision per role: a repeated role ID is ambiguous, and a Map
-    // would silently keep only the last entry (SCRUM-413-R2).
-    const acknowledgedLosses = args.acknowledgedLosses ?? [];
-    if (new Set(acknowledgedLosses.map((entry) => entry.roleId)).size !== acknowledgedLosses.length) {
-      throw new Error("acknowledgedLosses lists the same role more than once; give one decision per role");
-    }
-    const acknowledged = new Map(acknowledgedLosses.map((entry) => [entry.roleId as string, entry]));
-    // Set equality both ways, so a duplicated entry cannot stand in for a missing one.
-    const sameLoss = (a: DealAuthority[], b: DealAuthority[]) =>
-      a.every((authority) => b.includes(authority)) && b.every((authority) => a.includes(authority));
+export const prepareSplitDealAuthorities = internalQuery({
+  args: {},
+  handler: async (ctx) => {
     const roles = await ctx.db.query("roles").collect();
     const records: SplitDealAuthorityRecord[] = [];
-    let pending = 0;
-    let unresolved = 0;
-    const matchedAcknowledgements = new Set<string>();
+    let carriers = 0;
+    let unstampedOwners = 0;
+    let unqualifiedOwnerNamed = 0;
 
     for (const role of roles) {
       if (role.isDeleted) continue;
       const held = new Set(role.permissions);
       const ownerQualified = isSystemOwnerRole(role);
-      const unflagged = role.isSystemOwnerRole === undefined;
-      const stampOwnerFlag = unflagged && ownerQualified;
-      const ownerFlagSkipped =
-        unflagged && !ownerQualified && normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME;
-      const added = transitionalDealGrants(role);
-      const template = DEFAULT_ROLE_TEMPLATES.find((candidate) => candidate.name === role.name);
-      const pendingOwnerAction =
-        template !== undefined &&
-        template.permissions.includes(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT) &&
-        !held.has(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT) &&
-        !added.includes(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
-      const needsWrite = added.length > 0 || stampOwnerFlag;
-      const lostAtCutover = dealAuthorityLostAtCutover({ ...role, permissions: [...role.permissions, ...added] });
-      const ack = acknowledged.get(role._id);
-      // The decision must name this role's own organization (a mistyped or
-      // transposed role ID from another tenant stays stale).
-      const lossAcknowledged =
-        lostAtCutover.length > 0 && ack !== undefined && ack.orgId === role.orgId && sameLoss(ack.lost, lostAtCutover);
-      if (lossAcknowledged) matchedAcknowledgements.add(role._id);
-      const gainedAtCutover = dealAuthorityGainedAtCutover({ ...role, permissions: [...role.permissions, ...added] });
+      const stampOwnerFlag = needsOwnerFlagStamp(role);
+      const ownerFlagSkipped = isUnqualifiedOwnerNamed(role);
+      const carriesRetiredPermission = LEGACY_PERMISSIONS.some((permission) => held.has(permission));
+      const holdsRoute = held.has(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+      const holdsCancelClosed = held.has(PERMISSIONS.CANCEL_CLOSED_DEAL);
+      if (carriesRetiredPermission) carriers += 1;
+      if (stampOwnerFlag) unstampedOwners += 1;
+      if (ownerFlagSkipped) unqualifiedOwnerNamed += 1;
 
-      if (
-        !needsWrite &&
-        !ownerFlagSkipped &&
-        !pendingOwnerAction &&
-        lostAtCutover.length === 0 &&
-        gainedAtCutover.length === 0
-      ) {
+      if (!carriesRetiredPermission && !stampOwnerFlag && !ownerFlagSkipped && !holdsRoute && !holdsCancelClosed) {
         continue;
       }
-      if (needsWrite) pending++;
-      if (lostAtCutover.length > 0 && !lossAcknowledged) unresolved++;
 
       records.push({
         roleId: role._id,
@@ -530,31 +478,17 @@ export const prepareSplitDealAuthorities = internalMutation({
         ownerQualified,
         stampOwnerFlag,
         ownerFlagSkipped,
-        priorRoute: held.has(PERMISSIONS.FINALIZE_FINANCED_DEAL),
-        priorCancelClosed:
-          held.has(PERMISSIONS.FINALIZE_FINANCED_DEAL) && held.has(PERMISSIONS.CREATE_FINANCE_APPLICATION),
-        added,
-        pendingOwnerAction,
-        lostAtCutover,
-        lossAcknowledged,
-        gainedAtCutover,
+        carriesRetiredPermission,
+        holdsRoute,
+        holdsCancelClosed,
       });
-
-      if (apply && needsWrite) {
-        await ctx.db.patch(role._id, {
-          permissions: [...role.permissions, ...added],
-          ...(stampOwnerFlag ? { isSystemOwnerRole: true } : {}),
-        });
-      }
     }
 
-    const staleAcknowledgements = [...acknowledged.keys()].filter((roleId) => !matchedAcknowledgements.has(roleId));
     return {
-      apply,
-      pending,
-      unresolved,
-      staleAcknowledgements,
-      ready: pending === 0 && unresolved === 0 && staleAcknowledgements.length === 0,
+      ready: carriers === 0 && unstampedOwners === 0 && unqualifiedOwnerNamed === 0,
+      retiredCarriers: carriers,
+      unstampedOwners,
+      unqualifiedOwnerNamed,
       records,
     };
   },

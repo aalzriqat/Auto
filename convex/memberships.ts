@@ -10,6 +10,8 @@ import {
   ALL_PERMISSIONS,
   DEFAULT_ROLE_TEMPLATES,
   isSystemOwnerRole,
+  isUnqualifiedOwnerNamed,
+  needsOwnerFlagStamp,
 } from "./utils/permissions";
 import { writeAuditLog } from "./utils/auditLog";
 import { notifyUser, notifyManagers } from "./utils/notifications";
@@ -1425,20 +1427,28 @@ export const syncRolePermissionsToTemplate = mutation({
     for (const role of roles) {
       const template = DEFAULT_ROLE_TEMPLATES.find(t => t.name === role.name);
       if (!template) continue;
+      // S413B-4: see isUnqualifiedOwnerNamed
+      if (isUnqualifiedOwnerNamed(role)) continue;
       const synced: string[] = [...template.permissions];
       const before = new Set(role.permissions);
       const after = new Set(synced);
       const added = synced.filter((p) => !before.has(p));
       const removed = role.permissions.filter((p) => !after.has(p));
-      if (added.length === 0 && removed.length === 0) continue;
-      await ctx.db.patch(role._id, { permissions: synced });
+      // SCRUM-413 S413B-1: overwriting the permissions would de-own an unflagged owner; see needsOwnerFlagStamp.
+      const stampOwnerFlag = needsOwnerFlagStamp(role);
+      if (added.length === 0 && removed.length === 0 && !stampOwnerFlag) continue;
+      await ctx.db.patch(role._id, {
+        permissions: synced,
+        ...(stampOwnerFlag ? { isSystemOwnerRole: true } : {}),
+      });
       await writeAuditLog(ctx, user, {
         action: "role.template_sync",
         targetTable: "roles",
         targetId: role._id,
         orgId: args.orgId,
-        before: { permissions: role.permissions },
-        after: { permissions: synced },
+        // `null` is "unset": convex values cannot carry `undefined`.
+        before: { permissions: role.permissions, ...(stampOwnerFlag ? { isSystemOwnerRole: null } : {}) },
+        after: { permissions: synced, ...(stampOwnerFlag ? { isSystemOwnerRole: true } : {}) },
       });
       changes.push({ roleId: role._id, name: role.name, added, removed });
     }

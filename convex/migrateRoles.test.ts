@@ -2,6 +2,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
+import { PRE_413_OWNER_FALLBACK_PERMISSIONS } from "./utils/permissions";
 
 const MODULES = import.meta.glob("./**/*.*s");
 
@@ -67,7 +68,9 @@ describe("backfillAccountantExpensePermissions", () => {
       ctx.db.insert("organizations", { name: "Backfill Dealer 4", createdAt: Date.now() })
     );
     const roleId = await t.run((ctx) =>
-      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ["view:org"] })
+      // SCRUM-413 S413B-3: only a row that QUALIFIES as the owner (here the
+      // frozen pre-413 set, unflagged) is stamped; see the fake-owner test below.
+      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: [...PRE_413_OWNER_FALLBACK_PERMISSIONS] })
     );
 
     const result = await t.mutation(internal.migrateRoles.backfillAccountantExpensePermissions, {});
@@ -76,10 +79,27 @@ describe("backfillAccountantExpensePermissions", () => {
     const role = await t.run((ctx) => ctx.db.get(roleId));
     expect(role?.permissions).toContain("create:expenses");
     expect(role?.permissions).toContain("edit:expenses");
-    // patchRoleIfNeeded also stamps the explicit ownership flag on any stale
-    // OWNER-named row missing it — this backfill picking that up too is the
-    // whole point of sharing that helper, not just this permission pair.
+    // patchRoleIfNeeded also stamps the explicit ownership flag on a qualifying
+    // OWNER row missing it — this backfill picking that up too is the whole
+    // point of sharing that helper, not just this permission pair.
     expect(role?.isSystemOwnerRole).toBe(true);
+  });
+
+  test("an OWNER-NAMED row that does not qualify is left completely untouched (never promoted)", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Backfill Dealer 4b", createdAt: Date.now() })
+    );
+    const roleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ["view:org"] })
+    );
+
+    const result = await t.mutation(internal.migrateRoles.backfillAccountantExpensePermissions, {});
+    expect(result.updatedCount).toBe(0);
+
+    const role = await t.run((ctx) => ctx.db.get(roleId));
+    expect(role?.permissions).toEqual(["view:org"]);
+    expect(role?.isSystemOwnerRole).toBeUndefined();
   });
 });
 
@@ -90,7 +110,7 @@ describe("backfillReopenPeriodsPermission", () => {
       ctx.db.insert("organizations", { name: "Reopen Backfill Dealer", createdAt: Date.now() })
     );
     const roleId = await t.run((ctx) =>
-      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ["view:org"] })
+      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: [...PRE_413_OWNER_FALLBACK_PERMISSIONS] })
     );
 
     const result = await t.mutation(internal.migrateRoles.backfillReopenPeriodsPermission, {});

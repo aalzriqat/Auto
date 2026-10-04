@@ -118,14 +118,11 @@ export const PERMISSIONS = {
   CREATE_FINANCE_APPLICATION: "create:finance_application",
   REVIEW_FINANCE_APPLICATION: "review:finance_application",
   APPROVE_FINANCE_APPLICATION: "approve:finance_application",
-  FINALIZE_FINANCED_DEAL: "finalize:financed_deal",
-  // SCRUM-413 (owner ruling 2026-09-28): the two authorities split out of
-  // FINALIZE_FINANCED_DEAL. Recording where the finance company pays the
-  // supplier on a financed deal, and reversing a financed deal that has
-  // already closed — the latter deliberately stronger. Neither is granted to
-  // SALES. Until the cutover (PR-B) no door checks them; they exist first so
-  // stored roles can be given them BEFORE the doors move (see
-  // `transitionalDealGrants`).
+  // SCRUM-413 (owner ruling 2026-09-28): the two authorities split out of the
+  // retired `finalize:financed_deal` (see LEGACY_PERMISSIONS). Recording where
+  // the finance company pays the supplier on a financed deal, and reversing a
+  // financed deal that has already closed — the latter deliberately stronger.
+  // Neither is granted to SALES.
   MANAGE_SUPPLIER_SETTLEMENT: "manage:supplier_settlement",
   CANCEL_CLOSED_DEAL: "cancel:closed_deal",
   CONFIRM_FINANCE_DISBURSEMENT: "confirm:finance_disbursement",
@@ -162,8 +159,35 @@ export function isReservedRoleName(name: string): boolean {
   return normalizeRoleName(name) === SYSTEM_OWNER_ROLE_NAME;
 }
 
+/**
+ * SCRUM-413: permission strings that no longer exist as active authorities but
+ * may still sit on stored role rows. Validation accepts them (so an old row
+ * still round-trips through an edit), but NO door checks them, no template
+ * grants them and `roles.create` / `roles.update` refuse to add them.
+ * `finalize:financed_deal` was split into `manage:supplier_settlement` and
+ * `cancel:closed_deal`; holding the old string mints no authority.
+ */
+export const LEGACY_PERMISSIONS: readonly string[] = Object.freeze(["finalize:financed_deal"]);
+const LEGACY_PERMISSION_VALUES = new Set<string>(LEGACY_PERMISSIONS);
+
 export function getInvalidPermissions(permissions: readonly string[]): string[] {
-  return permissions.filter((permission) => !ALL_PERMISSION_VALUES.has(permission));
+  return permissions.filter(
+    (permission) => !ALL_PERMISSION_VALUES.has(permission) && !LEGACY_PERMISSION_VALUES.has(permission)
+  );
+}
+
+/**
+ * Retired permissions in `next` that were not already in `previous`. A role
+ * may keep a legacy value it already stored (round-trip); it may never gain one.
+ */
+export function newlyAddedLegacyPermissions(
+  next: readonly string[],
+  previous: readonly string[]
+): string[] {
+  const before = new Set(previous);
+  return dedupePermissions(next).filter(
+    (permission) => LEGACY_PERMISSION_VALUES.has(permission) && !before.has(permission)
+  );
 }
 
 export function dedupePermissions<T extends string>(permissions: readonly T[]): T[] {
@@ -219,76 +243,43 @@ export function isSystemOwnerRole(role: RoleLike | null | undefined): boolean {
 }
 
 /**
- * SCRUM-413 transition: the new deal authorities a stored role is owed so
- * that moving the doors off `finalize:financed_deal` denies no one who could
- * act before. It PRESERVES authority and never adds any:
- *
- * - an owner (already bypasses every check) gets both;
- * - a role stored as exactly "MANAGER" gets each one only where it already
- *   held the matching old authority — the route door took FINALIZE alone,
- *   the closed-cancel door took FINALIZE plus CREATE_FINANCE_APPLICATION;
- * - every other role gets nothing. A name is not provenance (a custom role
- *   can be called "manager"), so no other name earns a grant here; the
- *   ACCOUNTANT route grant the owner ruled is applied only by the owner.
- *   Where such a role could use an old door, `dealAuthorityLostAtCutover`
- *   reports it for the owner instead.
- *
- * Pure. The migration and every role writer call this same function, so
- * they cannot drift apart. Returns the permissions to ADD.
+ * SCRUM-413 S413B-3: a row NAMED like the owner that does not qualify as one
+ * (explicit `false`, or unflagged and short of the frozen set). Never promoted,
+ * never written by a backfill; an owner-review item in the diagnostic.
  */
-export function transitionalDealGrants(role: RoleLike): Permission[] {
-  if (role.isDeleted) return [];
-  const held = new Set(role.permissions);
-  const ROUTE = PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT;
-  const CANCEL_CLOSED = PERMISSIONS.CANCEL_CLOSED_DEAL;
-  let owed: Permission[] = [];
-  if (isSystemOwnerRole(role)) {
-    owed = [ROUTE, CANCEL_CLOSED];
-  } else if (role.name === "MANAGER" && held.has(PERMISSIONS.FINALIZE_FINANCED_DEAL)) {
-    owed = held.has(PERMISSIONS.CREATE_FINANCE_APPLICATION) ? [ROUTE, CANCEL_CLOSED] : [ROUTE];
-  }
-  return owed.filter((permission) => !held.has(permission));
-}
-
-export type DealAuthority = "route" | "cancelClosed";
-
-/**
- * SCRUM-413 transition: the old deal authorities a role can use today that it
- * would NOT keep once the doors move to the split permissions — route took
- * FINALIZE alone, closed-cancel took FINALIZE plus CREATE_FINANCE_APPLICATION.
- * Nothing here is granted: the migration reports each loss and is not ready
- * for cutover until the owner resolves it (grant the replacement, or remove
- * the old string). Owners bypass every door, so they never lose one.
- */
-export function dealAuthorityLostAtCutover(role: RoleLike): DealAuthority[] {
-  if (role.isDeleted || isSystemOwnerRole(role)) return [];
-  const held = new Set(role.permissions);
-  if (!held.has(PERMISSIONS.FINALIZE_FINANCED_DEAL)) return [];
-  const lost: DealAuthority[] = [];
-  if (!held.has(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT)) lost.push("route");
-  if (held.has(PERMISSIONS.CREATE_FINANCE_APPLICATION) && !held.has(PERMISSIONS.CANCEL_CLOSED_DEAL)) {
-    lost.push("cancelClosed");
-  }
-  return lost;
+export function isUnqualifiedOwnerNamed(role: RoleLike): boolean {
+  return isReservedRoleName(role.name) && !isSystemOwnerRole(role);
 }
 
 /**
- * SCRUM-413 transition, the mirror of `dealAuthorityLostAtCutover`: new deal
- * authorities a role holds that its old permissions do not give it today, so
- * it would start using them at cutover (e.g. the ACCOUNTANT route the owner
- * ruled, or a replacement kept after the old string was revoked). Reported for
- * the owner's inventory; never removed here.
+ * SCRUM-413 S413B-1: an unflagged row that qualifies as the owner only through
+ * the frozen fallback, so it needs the explicit flag. Evaluate on the PRE-write
+ * row: a write can change what qualifies.
  */
-export function dealAuthorityGainedAtCutover(role: RoleLike): DealAuthority[] {
-  if (role.isDeleted || isSystemOwnerRole(role)) return [];
-  const held = new Set(role.permissions);
-  const finalize = held.has(PERMISSIONS.FINALIZE_FINANCED_DEAL);
-  const gained: DealAuthority[] = [];
-  if (held.has(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT) && !finalize) gained.push("route");
-  if (held.has(PERMISSIONS.CANCEL_CLOSED_DEAL) && !(finalize && held.has(PERMISSIONS.CREATE_FINANCE_APPLICATION))) {
-    gained.push("cancelClosed");
+export function needsOwnerFlagStamp(role: RoleLike): boolean {
+  return role.isSystemOwnerRole === undefined && isSystemOwnerRole(role);
+}
+
+/**
+ * SCRUM-413 D-b: the ordered authority tiers needed to cancel a finance
+ * application in `status`. The single source for both `cancelApplication` (which
+ * enforces each tier at its own point in the body) and the cockpit's
+ * `mayCancelFinalized` (which holds every tier or is the owner), so the screen
+ * can never offer what the server refuses.
+ *
+ * CLOSED needs CANCEL_CLOSED_DEAL (deliberately NOT CREATE), plus the
+ * disbursement authority on a v2 deal. Every other status needs CREATE, plus the
+ * approval authority once APPROVED.
+ */
+export function cancelAuthorityFor(status: string, planVersion: number): Permission[][] {
+  if (status === "CLOSED") {
+    return planVersion === 2
+      ? [[PERMISSIONS.CANCEL_CLOSED_DEAL], [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]]
+      : [[PERMISSIONS.CANCEL_CLOSED_DEAL]];
   }
-  return gained;
+  return status === "APPROVED"
+    ? [[PERMISSIONS.CREATE_FINANCE_APPLICATION], [PERMISSIONS.APPROVE_FINANCE_APPLICATION]]
+    : [[PERMISSIONS.CREATE_FINANCE_APPLICATION]];
 }
 
 export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }[] = [
@@ -351,7 +342,6 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.CREATE_FINANCE_APPLICATION,
       PERMISSIONS.REVIEW_FINANCE_APPLICATION,
       PERMISSIONS.APPROVE_FINANCE_APPLICATION,
-      PERMISSIONS.FINALIZE_FINANCED_DEAL,
       PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT,
       PERMISSIONS.CANCEL_CLOSED_DEAL,
       PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
@@ -391,7 +381,6 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VIEW_COMMISSIONS,
       PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
       PERMISSIONS.CREATE_FINANCE_APPLICATION,
-      PERMISSIONS.FINALIZE_FINANCED_DEAL,
       PERMISSIONS.REGISTER_VEHICLE_HANDOVER,
       PERMISSIONS.REGISTER_EXPECTED_PAYMENT,
       PERMISSIONS.MARKETPLACE_RESPOND,

@@ -1,31 +1,45 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
+import { ConvexError } from "convex/values";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import {
   ALL_PERMISSIONS,
   DEFAULT_ROLE_TEMPLATES,
+  LEGACY_PERMISSIONS,
   PERMISSIONS,
   PRE_413_OWNER_FALLBACK_PERMISSIONS,
-  dealAuthorityGainedAtCutover,
-  dealAuthorityLostAtCutover,
+  getInvalidPermissions,
   isSystemOwnerRole,
-  transitionalDealGrants,
+  newlyAddedLegacyPermissions,
 } from "./utils/permissions";
 
 /**
- * SCRUM-413 PR-A (preparation): the split deal authorities exist and are
- * granted to stored roles BEFORE any door moves off finalize:financed_deal.
- * Nothing here changes who may act today; it proves the cutover can deny no
- * one who could act before it.
+ * SCRUM-413 PR-B: finalize:financed_deal is retired. The split authorities
+ * (route, cancel-closed) are the only active ones; the old string is a legacy
+ * value that validates on a stored row but mints nothing, is in no template,
+ * and can never be newly added. Editing or renaming a role grants nothing the
+ * caller did not send, and the migration read-back is diagnostic-only.
  */
 
 const MODULES = import.meta.glob("./**/*.*s");
 const ROUTE = PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT;
 const CANCEL_CLOSED = PERMISSIONS.CANCEL_CLOSED_DEAL;
-const FINALIZE = PERMISSIONS.FINALIZE_FINANCED_DEAL;
+// A string literal: the constant left PERMISSIONS when the permission retired.
+const FINALIZE = "finalize:financed_deal";
 const CREATE_APP = PERMISSIONS.CREATE_FINANCE_APPLICATION;
+
+// The refusal is a coded ConvexError (PERMISSION_RETIRED), localized client-side.
+async function codeOf(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof ConvexError) return (error.data as { code?: unknown })?.code;
+    throw error;
+  }
+  return undefined;
+}
 
 async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
@@ -55,7 +69,7 @@ function insertRole(t: any, orgId: Id<"organizations">, name: string, permission
   return t.run((ctx: any) => ctx.db.insert("roles", { orgId, name, permissions })) as Promise<Id<"roles">>;
 }
 
-describe("SCRUM-413 frozen owner fallback", () => {
+describe("SCRUM-413 frozen owner fallback (unchanged by the retirement)", () => {
   test("the frozen set is pinned: 77 pre-413 values, frozen, unchanged", async () => {
     expect(PRE_413_OWNER_FALLBACK_PERMISSIONS).toHaveLength(77);
     expect(Object.isFrozen(PRE_413_OWNER_FALLBACK_PERMISSIONS)).toBe(true);
@@ -67,8 +81,7 @@ describe("SCRUM-413 frozen owner fallback", () => {
     );
   });
 
-  test("an unflagged legacy OWNER holding the pre-413 set still qualifies without the new permissions", () => {
-    // Before the freeze, defining two new permissions silently de-ownered this row.
+  test("an unflagged legacy OWNER holding the pre-413 set still qualifies", () => {
     expect(isSystemOwnerRole({ name: "OWNER", permissions: [...PRE_413_OWNER_FALLBACK_PERMISSIONS] })).toBe(true);
   });
 
@@ -78,60 +91,32 @@ describe("SCRUM-413 frozen owner fallback", () => {
   });
 });
 
-describe("SCRUM-413 transitionalDealGrants", () => {
-  test.each([
-    ["flagged owner", { name: "Boss", permissions: [], isSystemOwnerRole: true }, [ROUTE, CANCEL_CLOSED]],
-    ["unflagged qualifying OWNER", { name: "OWNER", permissions: [...PRE_413_OWNER_FALLBACK_PERMISSIONS] }, [ROUTE, CANCEL_CLOSED]],
-    ["MANAGER with FINALIZE and CREATE", { name: "MANAGER", permissions: [FINALIZE, CREATE_APP] }, [ROUTE, CANCEL_CLOSED]],
-    ["MANAGER with FINALIZE only", { name: "MANAGER", permissions: [FINALIZE] }, [ROUTE]],
-    ["MANAGER without FINALIZE", { name: "MANAGER", permissions: [CREATE_APP] }, []],
-    ["lower-case custom 'manager' with both", { name: "manager", permissions: [FINALIZE, CREATE_APP] }, []],
-    ["SALES with FINALIZE and CREATE", { name: "SALES", permissions: [FINALIZE, CREATE_APP] }, []],
-    ["ACCOUNTANT with FINALIZE", { name: "ACCOUNTANT", permissions: [FINALIZE] }, []],
-    ["deleted owner", { name: "OWNER", permissions: [], isSystemOwnerRole: true, isDeleted: true }, []],
-    ["MANAGER already holding both", { name: "MANAGER", permissions: [FINALIZE, CREATE_APP, ROUTE, CANCEL_CLOSED] }, []],
-  ])("%s", (_label, role, expected) => {
-    expect(transitionalDealGrants(role)).toEqual(expected);
+describe("SCRUM-413 retired permission", () => {
+  test("finalize:financed_deal is legacy: validates on a stored row, is not an active permission", () => {
+    expect(LEGACY_PERMISSIONS).toContain(FINALIZE);
+    expect((ALL_PERMISSIONS as string[]).includes(FINALIZE)).toBe(false);
+    expect(getInvalidPermissions([FINALIZE, ROUTE])).toEqual([]);
+    expect(getInvalidPermissions(["finalize:nonsense"])).toEqual(["finalize:nonsense"]);
   });
-});
 
-describe("SCRUM-413 dealAuthorityLostAtCutover", () => {
-  test.each([
-    ["custom role with FINALIZE and CREATE", { name: "Deal Desk", permissions: [FINALIZE, CREATE_APP] }, ["route", "cancelClosed"]],
-    // Sonnet NEW-1: the edit dialog used to save a stored MANAGER as its label.
-    ["MANAGER renamed to its English label", { name: "Manager", permissions: [FINALIZE, CREATE_APP] }, ["route", "cancelClosed"]],
-    ["MANAGER renamed to its Arabic label", { name: "المدير", permissions: [FINALIZE] }, ["route"]],
-    ["custom role with FINALIZE only",{ name: "Closer", permissions: [FINALIZE] }, ["route"]],
-    ["ACCOUNTANT backfilled with FINALIZE and CREATE", { name: "ACCOUNTANT", permissions: [FINALIZE, CREATE_APP] }, ["route", "cancelClosed"]],
-    ["SALES with FINALIZE and CREATE", { name: "SALES", permissions: [FINALIZE, CREATE_APP] }, ["route", "cancelClosed"]],
-    ["role already holding both replacements", { name: "Deal Desk", permissions: [FINALIZE, CREATE_APP, ROUTE, CANCEL_CLOSED] }, []],
-    ["role holding only the route replacement", { name: "Deal Desk", permissions: [FINALIZE, CREATE_APP, ROUTE] }, ["cancelClosed"]],
-    ["CREATE without FINALIZE never reached either door", { name: "Deal Desk", permissions: [CREATE_APP] }, []],
-    ["owner bypasses every door", { name: "Boss", permissions: [FINALIZE], isSystemOwnerRole: true }, []],
-    ["deleted role", { name: "Deal Desk", permissions: [FINALIZE, CREATE_APP], isDeleted: true }, []],
-  ])("%s", (_label, role, expected) => {
-    expect(dealAuthorityLostAtCutover(role)).toEqual(expected);
-  });
-});
-
-describe("SCRUM-413 dealAuthorityGainedAtCutover", () => {
-  test.each([
-    ["ACCOUNTANT given the route by template", { name: "ACCOUNTANT", permissions: [ROUTE] }, ["route"]],
-    ["replacements kept after FINALIZE was revoked", { name: "MANAGER", permissions: [CREATE_APP, ROUTE, CANCEL_CLOSED] }, ["route", "cancelClosed"]],
-    ["cancel-closed without CREATE never reached that door", { name: "Desk", permissions: [FINALIZE, CANCEL_CLOSED] }, ["cancelClosed"]],
-    ["MANAGER holding old and new", { name: "MANAGER", permissions: [FINALIZE, CREATE_APP, ROUTE, CANCEL_CLOSED] }, []],
-    ["owner", { name: "Boss", permissions: [ROUTE], isSystemOwnerRole: true }, []],
-    ["deleted role", { name: "Desk", permissions: [ROUTE], isDeleted: true }, []],
-  ])("%s", (_label, role, expected) => {
-    expect(dealAuthorityGainedAtCutover(role)).toEqual(expected);
+  test("only a NEWLY added legacy value is reported", () => {
+    expect(newlyAddedLegacyPermissions([FINALIZE], [])).toEqual([FINALIZE]);
+    expect(newlyAddedLegacyPermissions([FINALIZE, CREATE_APP], [FINALIZE])).toEqual([]);
+    expect(newlyAddedLegacyPermissions([CREATE_APP], [FINALIZE])).toEqual([]);
   });
 });
 
 describe("SCRUM-413 default templates", () => {
   const template = (name: string) => DEFAULT_ROLE_TEMPLATES.find((r) => r.name === name)?.permissions ?? [];
 
-  test("MANAGER gets both new authorities and keeps FINALIZE until cutover", () => {
-    expect(template("MANAGER")).toEqual(expect.arrayContaining([ROUTE, CANCEL_CLOSED, FINALIZE]));
+  test("no template carries the retired permission", () => {
+    for (const { name, permissions } of DEFAULT_ROLE_TEMPLATES) {
+      expect(permissions as string[], name).not.toContain(FINALIZE);
+    }
+  });
+
+  test("MANAGER gets both new authorities", () => {
+    expect(template("MANAGER")).toEqual(expect.arrayContaining([ROUTE, CANCEL_CLOSED]));
   });
 
   test("accountants get the route authority only; SALES gets neither", () => {
@@ -144,236 +129,90 @@ describe("SCRUM-413 default templates", () => {
   });
 });
 
-describe("SCRUM-413 prepareSplitDealAuthorities", () => {
-  async function seed(t: any) {
+describe("SCRUM-413 prepareSplitDealAuthorities is diagnostic-only", () => {
+  test("it writes nothing and reports retired carriers and new-authority holders", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
     const orgId = await t.run((ctx: any) =>
       ctx.db.insert("organizations", { name: "Migration Dealer", createdAt: Date.now() })
     ) as Id<"organizations">;
-    return {
-      legacyOwner: await insertRole(t, orgId, "OWNER", [...PRE_413_OWNER_FALLBACK_PERMISSIONS]),
-      fakeOwner: await insertRole(t, orgId, "OWNER", [FINALIZE]),
-      manager: await insertRole(t, orgId, "MANAGER", [FINALIZE, CREATE_APP]),
-      sales: await insertRole(t, orgId, "SALES", [FINALIZE, CREATE_APP]),
-      accountant: await insertRole(t, orgId, "ACCOUNTANT", [PERMISSIONS.VIEW_FINANCE]),
-      dealDesk: await insertRole(t, orgId, "Deal Desk", [FINALIZE, CREATE_APP]),
-    };
-  }
-
-  test("dry-run reports and writes nothing", async () => {
-    const t = convexTestWithComponents(schema, MODULES);
-    const ids = await seed(t);
+    const legacyOwner = await insertRole(t, orgId, "OWNER", [...PRE_413_OWNER_FALLBACK_PERMISSIONS]);
+    const fakeOwner = await insertRole(t, orgId, "OWNER", [FINALIZE]);
+    const manager = await insertRole(t, orgId, "MANAGER", [FINALIZE, CREATE_APP]);
+    const accountant = await insertRole(t, orgId, "ACCOUNTANT", [ROUTE]);
+    const plain = await insertRole(t, orgId, "Showroom", [CREATE_APP]);
     const before = await t.run((ctx: any) => ctx.db.query("roles").collect());
 
-    const result = await t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, {});
+    const result = await t.query(internal.migrateRoles.prepareSplitDealAuthorities, {});
 
-    expect(result.apply).toBe(false);
-    expect(result.pending).toBe(2);
     expect(await t.run((ctx: any) => ctx.db.query("roles").collect())).toEqual(before);
     const byId = new Map<string, any>(result.records.map((r: any) => [r.roleId, r]));
-    expect(byId.get(ids.manager)).toMatchObject({ added: [ROUTE, CANCEL_CLOSED], priorRoute: true, priorCancelClosed: true });
-    expect(byId.get(ids.legacyOwner)).toMatchObject({ stampOwnerFlag: true, added: [ROUTE, CANCEL_CLOSED] });
-    expect(byId.get(ids.fakeOwner)).toMatchObject({ ownerFlagSkipped: true, stampOwnerFlag: false, added: [] });
-    expect(byId.get(ids.accountant)).toMatchObject({ pendingOwnerAction: true, added: [], lostAtCutover: [] });
-    expect(byId.get(ids.manager)).toMatchObject({ lostAtCutover: [] });
-    // SCRUM-413-A1: a role that would lose an old door is never dropped from the report.
-    expect(byId.get(ids.dealDesk)).toMatchObject({
-      added: [], priorRoute: true, priorCancelClosed: true,
-      lostAtCutover: ["route", "cancelClosed"], lossAcknowledged: false,
-    });
-    // SCRUM-413-R1: a name is not an owner decision, not even "SALES".
-    expect(byId.get(ids.sales)).toMatchObject({ added: [], lostAtCutover: ["route", "cancelClosed"], lossAcknowledged: false });
-    expect(byId.get(ids.fakeOwner)).toMatchObject({ lostAtCutover: ["route"], lossAcknowledged: false });
-    expect(result.unresolved).toBe(3);
+    expect(byId.get(manager)).toMatchObject({ carriesRetiredPermission: true, holdsRoute: false, holdsCancelClosed: false });
+    expect(byId.get(legacyOwner)).toMatchObject({ stampOwnerFlag: true, carriesRetiredPermission: true });
+    expect(byId.get(fakeOwner)).toMatchObject({ ownerFlagSkipped: true, stampOwnerFlag: false });
+    expect(byId.get(accountant)).toMatchObject({ carriesRetiredPermission: false, holdsRoute: true });
+    expect(byId.has(plain)).toBe(false);
+    expect(result.retiredCarriers).toBe(3);
     expect(result.ready).toBe(false);
   });
 
-  test("apply grants preserved authority only, then a re-run has nothing pending", async () => {
+  test("it takes no apply argument, and nothing grants the old roles new authority", async () => {
     const t = convexTestWithComponents(schema, MODULES);
-    const ids = await seed(t);
-
-    const applied = await t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, { apply: true });
-    expect(applied.pending).toBe(2);
-
-    const role = (id: Id<"roles">) => t.run((ctx: any) => ctx.db.get(id)) as Promise<any>;
-    expect((await role(ids.manager))?.permissions).toEqual([FINALIZE, CREATE_APP, ROUTE, CANCEL_CLOSED]);
-    const owner = await role(ids.legacyOwner);
-    expect(owner?.isSystemOwnerRole).toBe(true);
-    expect(owner?.permissions).toEqual(expect.arrayContaining([ROUTE, CANCEL_CLOSED]));
-    const fake = await role(ids.fakeOwner);
-    expect(fake?.isSystemOwnerRole).toBeUndefined();
-    expect(fake?.permissions).toEqual([FINALIZE]);
-    expect((await role(ids.sales))?.permissions).toEqual([FINALIZE, CREATE_APP]);
-    expect((await role(ids.accountant))?.permissions).toEqual([PERMISSIONS.VIEW_FINANCE]);
-
-    const rerun = await t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, { apply: true });
-    expect(rerun.pending).toBe(0);
-    expect(rerun.records.every((r: any) => r.added.length === 0 && !r.stampOwnerFlag)).toBe(true);
-    // The accountant stays listed for the owner: the migration never grants it.
-    expect(rerun.records.map((r: any) => r.roleId)).toContain(ids.accountant);
-    // Nothing pending to write is NOT readiness: the losses still await the owner.
-    expect(rerun.unresolved).toBe(3);
-    expect(rerun.ready).toBe(false);
-  });
-
-  test("ready only once every loss is resolved, and a later edit that re-creates one is caught", async () => {
-    const t = convexTestWithComponents(schema, MODULES);
-    const { orgId, asOwner } = await setupOwnerOrg(t, "scrum413_ready_owner");
-    const dealDesk = await insertRole(t, orgId, "Deal Desk", [FINALIZE, CREATE_APP]);
-    const sales = await insertRole(t, orgId, "SALES", [FINALIZE]);
-    const acknowledgedLosses = [{ roleId: sales, orgId, lost: ["route" as const] }];
-    const dryRun = () => t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, { acknowledgedLosses });
-
-    // The SALES loss is acknowledged by role ID; Deal Desk's is not.
-    expect(await dryRun()).toMatchObject({ pending: 0, unresolved: 1, ready: false });
-
-    // The owner resolves the loss by granting the replacements explicitly.
-    await asOwner.mutation(api.roles.update, { orgId, roleId: dealDesk, permissions: [FINALIZE, CREATE_APP, ROUTE, CANCEL_CLOSED] });
-    const ready = await dryRun();
-    expect(ready).toMatchObject({ pending: 0, unresolved: 0, ready: true });
-    expect(ready.records.find((r: any) => r.roleId === sales)).toMatchObject({ lostAtCutover: ["route"], lossAcknowledged: true });
-
-    // After readiness, an owner edit that adds the old authority to another role reopens it.
-    const closer = await insertRole(t, orgId, "Closer", [CREATE_APP]);
-    await asOwner.mutation(api.roles.update, { orgId, roleId: closer, permissions: [CREATE_APP, FINALIZE] });
-    const reopened = await dryRun();
-    expect(reopened).toMatchObject({ unresolved: 1, ready: false });
-    expect(reopened.records.find((r: any) => r.roleId === closer)?.lostAtCutover).toEqual(["route", "cancelClosed"]);
-  });
-
-  test("an acknowledgement waives only that role ID and that exact loss; a rename to SALES waives nothing", async () => {
-    const t = convexTestWithComponents(schema, MODULES);
-    const { orgId, asOwner } = await setupOwnerOrg(t, "scrum413_ack_owner");
-    // Codex R1: the default SALES is renamed away and a custom desk takes the name.
-    const seededSales = await insertRole(t, orgId, "SALES", [CREATE_APP]);
-    await asOwner.mutation(api.roles.update, { orgId, roleId: seededSales, name: "Showroom" });
-    const desk = await insertRole(t, orgId, "Deal Desk", [FINALIZE, CREATE_APP]);
-    await asOwner.mutation(api.roles.update, { orgId, roleId: desk, name: "SALES" });
-    const run = (acknowledgedLosses?: { roleId: Id<"roles">; lost: ("route" | "cancelClosed")[] }[]) =>
-      t.mutation(
-        internal.migrateRoles.prepareSplitDealAuthorities,
-        acknowledgedLosses ? { acknowledgedLosses: acknowledgedLosses.map((entry) => ({ ...entry, orgId })) } : {}
-      );
-
-    expect(await run()).toMatchObject({ unresolved: 1, ready: false });
-    // A partial acknowledgement does not cover the whole loss.
-    expect(await run([{ roleId: desk, lost: ["route"] }])).toMatchObject({ unresolved: 1, ready: false });
-    // A duplicated entry cannot stand in for the missing one.
-    expect(await run([{ roleId: desk, lost: ["route", "route"] }])).toMatchObject({ unresolved: 1, ready: false });
-    // Another role's acknowledgement does not transfer.
-    expect(await run([{ roleId: seededSales, lost: ["route", "cancelClosed"] }])).toMatchObject({ unresolved: 1, ready: false });
-    // The exact acknowledgement, in any order, clears it.
-    expect(await run([{ roleId: desk, lost: ["cancelClosed", "route"] }])).toMatchObject({ unresolved: 0, ready: true });
-
-    // A later edit that changes the loss invalidates the old acknowledgement,
-    // and the unmatched acknowledgement is returned as stale.
-    await asOwner.mutation(api.roles.update, { orgId, roleId: desk, permissions: [FINALIZE] });
-    expect(await run([{ roleId: desk, lost: ["route", "cancelClosed"] }])).toMatchObject({
-      unresolved: 1, staleAcknowledgements: [desk], ready: false,
-    });
-  });
-
-  test("a role acknowledged twice is refused in either order, before any write (SCRUM-413-R2)", async () => {
-    const t = convexTestWithComponents(schema, MODULES);
-    const { orgId } = await setupOwnerOrg(t, "scrum413_dup_ack_owner");
-    const desk = await insertRole(t, orgId, "Deal Desk", [FINALIZE, CREATE_APP]);
-    const stale = { roleId: desk, orgId, lost: ["route" as const] };
-    const exact = { roleId: desk, orgId, lost: ["route" as const, "cancelClosed" as const] };
-
-    for (const acknowledgedLosses of [[stale, exact], [exact, stale], [exact, exact]]) {
-      for (const apply of [false, true]) {
-        await expect(
-          t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, { apply, acknowledgedLosses })
-        ).rejects.toThrow(/same role more than once/);
-      }
-    }
-    const role = await t.run((ctx: any) => ctx.db.get(desk)) as any;
-    expect(role?.permissions).toEqual([FINALIZE, CREATE_APP]);
-
-    // Control: the single exact decision still clears the loss.
-    expect(
-      await t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, { acknowledgedLosses: [exact] })
-    ).toMatchObject({ unresolved: 0, ready: true });
-
-    // A decision for a deleted role matches no live loss: stale, blocks ready.
-    const gone = await insertRole(t, orgId, "Old Desk", [FINALIZE]);
-    await t.run((ctx: any) => ctx.db.patch(gone, { isDeleted: true }));
-    expect(
-      await t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, {
-        acknowledgedLosses: [exact, { roleId: gone, orgId, lost: ["route"] }],
-      })
-    ).toMatchObject({ unresolved: 0, staleAcknowledgements: [gone], ready: false });
-  });
-
-  test("a decision names its organization; a role in another organization is not waived (Sonnet R3-1)", async () => {
-    const t = convexTestWithComponents(schema, MODULES);
-    const { orgId: orgA } = await setupOwnerOrg(t, "scrum413_org_a_owner");
-    const { orgId: orgB } = await setupOwnerOrg(t, "scrum413_org_b_owner");
-    const deskB = await insertRole(t, orgB, "Deal Desk", [FINALIZE, CREATE_APP]);
-    const lost = ["route" as const, "cancelClosed" as const];
-
-    const wrongOrg = await t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, {
-      acknowledgedLosses: [{ roleId: deskB, orgId: orgA, lost }],
-    });
-    expect(wrongOrg).toMatchObject({ unresolved: 1, staleAcknowledgements: [deskB], ready: false });
-    expect(wrongOrg.records.find((r: any) => r.roleId === deskB)).toMatchObject({ lossAcknowledged: false });
-
-    // Control: the same decision naming the role's own organization clears it.
-    expect(
-      await t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, {
-        acknowledgedLosses: [{ roleId: deskB, orgId: orgB, lost }],
-      })
-    ).toMatchObject({ unresolved: 0, staleAcknowledgements: [], ready: true });
-  });
-
-  test("a stale acknowledgement alone blocks ready (Sol A1: unknown or mismatched entries are not ignored)", async () => {
-    const t = convexTestWithComponents(schema, MODULES);
-    const { orgId } = await setupOwnerOrg(t, "scrum413_stale_owner");
-    const plain = await insertRole(t, orgId, "Showroom", [CREATE_APP]);
-
-    const result = await t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, {
-      acknowledgedLosses: [{ roleId: plain, orgId, lost: ["route"] }],
-    });
-    expect(result).toMatchObject({ pending: 0, unresolved: 0, staleAcknowledgements: [plain], ready: false });
-  });
-
-  test("the inventory lists authority a role would gain at cutover without gating on it (Sol A2)", async () => {
-    const t = convexTestWithComponents(schema, MODULES);
-    const { orgId, asOwner } = await setupOwnerOrg(t, "scrum413_gain_owner");
+    const orgId = await t.run((ctx: any) =>
+      ctx.db.insert("organizations", { name: "Migration Dealer", createdAt: Date.now() })
+    ) as Id<"organizations">;
     const manager = await insertRole(t, orgId, "MANAGER", [FINALIZE, CREATE_APP]);
-    await t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, { apply: true });
-    // The owner revokes the old string but keeps the replacements.
-    await asOwner.mutation(api.roles.update, { orgId, roleId: manager, permissions: [CREATE_APP, ROUTE, CANCEL_CLOSED] });
+    await expect(
+      (t.query as any)(internal.migrateRoles.prepareSplitDealAuthorities, { apply: true })
+    ).rejects.toThrow();
+    const role = await t.run((ctx: any) => ctx.db.get(manager)) as any;
+    expect(role?.permissions).toEqual([FINALIZE, CREATE_APP]);
+  });
 
-    const result = await t.mutation(internal.migrateRoles.prepareSplitDealAuthorities, {});
-    expect(result.records.find((r: any) => r.roleId === manager)).toMatchObject({
-      lostAtCutover: [], gainedAtCutover: ["route", "cancelClosed"],
-    });
-    expect(result.ready).toBe(true);
+  test("ready once no stored role carries the retired string", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { orgId } = await setupOwnerOrg(t, "scrum413_ready_owner");
+    await insertRole(t, orgId, "MANAGER", [CREATE_APP, ROUTE, CANCEL_CLOSED]);
+    const result = await t.query(internal.migrateRoles.prepareSplitDealAuthorities, {});
+    expect(result).toMatchObject({ ready: true, retiredCarriers: 0 });
   });
 });
 
 describe("SCRUM-413 role writers", () => {
-  test("roles.create refuses the retiring finalize:financed_deal", async () => {
+  test("roles.create refuses the retired finalize:financed_deal", async () => {
     const t = convexTestWithComponents(schema, MODULES);
     const { orgId, asOwner } = await setupOwnerOrg(t, "scrum413_create_owner");
 
-    await expect(
-      asOwner.mutation(api.roles.create, { orgId, name: "Closer", permissions: [FINALIZE] })
-    ).rejects.toThrow(/finalize:financed_deal is being retired/);
+    expect(
+      await codeOf(asOwner.mutation(api.roles.create, { orgId, name: "Closer", permissions: [FINALIZE] }))
+    ).toBe("PERMISSION_RETIRED");
   });
 
-  test("renaming a role that holds the old authority to MANAGER grants the matching split authority", async () => {
+  test("roles.update refuses a NEWLY added finalize:financed_deal", async () => {
     const t = convexTestWithComponents(schema, MODULES);
-    const { orgId, asOwner } = await setupOwnerOrg(t, "scrum413_rename_owner");
+    const { orgId, asOwner } = await setupOwnerOrg(t, "scrum413_update_add_owner");
+    const roleId = await insertRole(t, orgId, "SALES", [CREATE_APP]);
+
+    expect(
+      await codeOf(asOwner.mutation(api.roles.update, { orgId, roleId, permissions: [CREATE_APP, FINALIZE] }))
+    ).toBe("PERMISSION_RETIRED");
+    const role = await t.run((ctx: any) => ctx.db.get(roleId)) as any;
+    expect(role?.permissions).toEqual([CREATE_APP]);
+  });
+
+  test("roles.update lets an already-stored legacy value round-trip, and grants nothing extra", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { orgId, asOwner } = await setupOwnerOrg(t, "scrum413_roundtrip_owner");
     const roleId = await insertRole(t, orgId, "Deal Desk", [FINALIZE, CREATE_APP]);
 
-    await asOwner.mutation(api.roles.update, { orgId, roleId, name: "MANAGER" });
+    await asOwner.mutation(api.roles.update, { orgId, roleId, permissions: [FINALIZE, CREATE_APP, PERMISSIONS.VIEW_SALES] });
 
     const role = await t.run((ctx: any) => ctx.db.get(roleId)) as any;
-    expect(role?.permissions).toEqual([FINALIZE, CREATE_APP, ROUTE, CANCEL_CLOSED]);
+    expect(role?.permissions).toEqual([FINALIZE, CREATE_APP, PERMISSIONS.VIEW_SALES]);
   });
 
-  test("a permission-only edit of a role stored as MANAGER keeps its split authority (the dialog sends no name)", async () => {
+  // Failing-first against the PR-A code: editing or renaming a role used to
+  // append the route and cancel-closed authorities for it.
+  test("editing a role stored as MANAGER does NOT auto-grant deal authorities", async () => {
     const t = convexTestWithComponents(schema, MODULES);
     const { orgId, asOwner } = await setupOwnerOrg(t, "scrum413_mgr_edit_owner");
     const roleId = await insertRole(t, orgId, "MANAGER", [FINALIZE]);
@@ -382,18 +221,18 @@ describe("SCRUM-413 role writers", () => {
 
     const role = await t.run((ctx: any) => ctx.db.get(roleId)) as any;
     expect(role?.name).toBe("MANAGER");
-    expect(role?.permissions).toEqual([FINALIZE, CREATE_APP, ROUTE, CANCEL_CLOSED]);
+    expect(role?.permissions).toEqual([FINALIZE, CREATE_APP]);
   });
 
-  test("editing a non-MANAGER role grants nothing extra", async () => {
+  test("renaming a role to MANAGER does NOT auto-grant deal authorities", async () => {
     const t = convexTestWithComponents(schema, MODULES);
-    const { orgId, asOwner } = await setupOwnerOrg(t, "scrum413_edit_owner");
-    const roleId = await insertRole(t, orgId, "SALES", [CREATE_APP]);
+    const { orgId, asOwner } = await setupOwnerOrg(t, "scrum413_rename_owner");
+    const roleId = await insertRole(t, orgId, "Deal Desk", [FINALIZE, CREATE_APP]);
 
-    await asOwner.mutation(api.roles.update, { orgId, roleId, permissions: [CREATE_APP, FINALIZE] });
+    await asOwner.mutation(api.roles.update, { orgId, roleId, name: "MANAGER" });
 
     const role = await t.run((ctx: any) => ctx.db.get(roleId)) as any;
-    expect(role?.permissions).toEqual([CREATE_APP, FINALIZE]);
+    expect(role?.permissions).toEqual([FINALIZE, CREATE_APP]);
   });
 
   test("template sync returns the per-role diff and audits each changed role once", async () => {
