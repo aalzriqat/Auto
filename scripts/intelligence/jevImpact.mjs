@@ -622,9 +622,12 @@ const CORRECTNESS_GOVERNANCE_FILES = new Set([
   // Review-evidence governance (SCRUM-644). Listed before anything reads them
   // from a base commit, so a PR editing them is classified by a base that
   // already knows them. The validator itself lives under scripts/intelligence/.
+  // The rehearsal is listed as an admitted evidence producer: editing it
+  // changes what its artifact can be cited to prove.
   ".github/review-policy.json",
   ".github/release-waivers.json",
   ".github/workflows/trusted-review-evidence.yml",
+  ".github/workflows/trusted-accounting-rehearsal.yml",
   "package.json",
   "pnpm-lock.yaml",
 ]);

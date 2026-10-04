@@ -23,16 +23,27 @@ const EVIDENCE_SHA = sha("e");
 const FOREIGN_SHA = sha("f");
 
 const TEST_FILE = "convex/deals.test.ts";
+// Titles carry the requirement id they prove, the catalog's marker convention.
+// The #431 escape class: the status-filtered branch is proven, the
+// salesperson-filtered branch only appears to be.
+const STATUS_TITLE = "proof:BOUNDARY orders the status-filtered branch newest first";
+const UNRELATED_TITLE = "proof:jev-harness routes governance files";
 const TEST_SOURCE = `
 describe("listApplications", () => {
-  test("orders the status-filtered branch newest first", () => {});
-  test.skip("orders the salesperson branch newest first", () => {});
-  test.each([])("orders page %s newest first", () => {});
+  test("${STATUS_TITLE}", () => {});
+  test("${UNRELATED_TITLE}", () => {});
+  test.skip("proof:BOUNDARY orders the salesperson branch newest first", () => {});
+  test.each([])("proof:BOUNDARY orders page %s newest first", () => {});
 });
 describe.each([])("branch %s", () => {
-  test("keeps the cursor stable", () => {});
+  test("proof:BOUNDARY keeps the cursor stable", () => {});
 });
-const unused = "orders the unregistered branch newest first";
+describe.each([])("outer %s", () => {
+  describe("inner", () => {
+    test("proof:BOUNDARY holds two levels down", () => {});
+  });
+});
+const unused = "proof:BOUNDARY orders the unregistered branch newest first";
 `;
 
 const RUNTIME_WORKFLOW = ".github/workflows/trusted-accounting-rehearsal.yml";
@@ -51,8 +62,8 @@ function validInput(overrides: Record<string, unknown> = {}) {
       policyVersion: policy.policyVersion,
       obligations: [
         {
-          requirement: "proof:status-filter-order",
-          evidence: [testEvidence("orders the status-filtered branch newest first")],
+          requirement: "proof:BOUNDARY",
+          evidence: [testEvidence(STATUS_TITLE)],
         },
         {
           requirement: "proof:accounting-runtime",
@@ -62,7 +73,7 @@ function validInput(overrides: Record<string, unknown> = {}) {
     },
     identities: { head: HEAD, base: BASE, merge: MERGE, mergeParents: [BASE, HEAD] },
     requirements: [
-      "proof:status-filter-order",
+      "proof:BOUNDARY",
       "proof:accounting-runtime",
       "review:correctness-governance",
     ],
@@ -96,15 +107,24 @@ function codes(result: { reasons: { code: string }[] }) {
 }
 
 describe("review evidence — positive control", () => {
-  test("a fully evidenced record is COMPLETE except for the reported review", () => {
+  test("every proof holding beside a required review is REVIEW_UNRESOLVED, never COMPLETE", () => {
     const result = evaluateReviewEvidence(validInput());
-    expect(result.verdict).toBe("COMPLETE");
+    expect(result.verdict).toBe("REVIEW_UNRESOLVED");
     expect(result.reasons).toEqual([]);
+    expect(result.unresolvedReviews).toEqual(["review:correctness-governance"]);
     expect(result.obligations).toEqual([
+      { requirement: "proof:BOUNDARY", status: "SATISFIED" },
       { requirement: "proof:accounting-runtime", status: "SATISFIED" },
-      { requirement: "proof:status-filter-order", status: "SATISFIED" },
       { requirement: "review:correctness-governance", status: "REPORTED_UNRESOLVED" },
     ]);
+  });
+
+  test("the same proofs with no review requirement are COMPLETE", () => {
+    const input = validInput();
+    input.requirements = input.requirements.filter((requirement) => !requirement.startsWith("review:"));
+    const result = evaluateReviewEvidence(input);
+    expect(result.verdict).toBe("COMPLETE");
+    expect(result.unresolvedReviews).toEqual([]);
   });
 
   test("a change with no requirements needs no record", () => {
@@ -114,9 +134,11 @@ describe("review evidence — positive control", () => {
 
   test("the fixture registry is what the catalog parser reports", () => {
     expect(listActiveTestRegistrations(TEST_SOURCE)).toEqual([
-      { title: "orders the status-filtered branch newest first", parameterized: false },
-      { title: "orders page %s newest first", parameterized: true },
-      { title: "keeps the cursor stable", parameterized: true },
+      { title: STATUS_TITLE, parameterized: false },
+      { title: UNRELATED_TITLE, parameterized: false },
+      { title: "proof:BOUNDARY orders page %s newest first", parameterized: true },
+      { title: "proof:BOUNDARY keeps the cursor stable", parameterized: true },
+      { title: "proof:BOUNDARY holds two levels down", parameterized: true },
     ]);
   });
 });
@@ -143,10 +165,18 @@ describe("control 1 — an unavailable runtime test does not pass", () => {
     expect(codes(evaluateReviewEvidence(input))).toEqual(["RUNTIME_UNPROVEN"]);
   });
 
-  test("two matching trusted runs are ambiguous, not either one", () => {
+  test("two trusted runs of the current merge are ambiguous, not either one", () => {
     const input = validInput();
     input.runtimeEvidence.push({ ...input.runtimeEvidence[0] });
     expect(codes(evaluateReviewEvidence(input))).toEqual(["RUNTIME_AMBIGUOUS"]);
+  });
+
+  test("an earlier push's run beside the current merge's run does not make it ambiguous", () => {
+    const input = validInput();
+    input.runtimeEvidence.push({ ...input.runtimeEvidence[0], testedSha: FOREIGN_SHA, conclusion: "failure" });
+    const result = evaluateReviewEvidence(input);
+    expect(codes(result)).toEqual([]);
+    expect(result.obligations).toContainEqual({ requirement: "proof:accounting-runtime", status: "SATISFIED" });
   });
 
   test("a workflow the policy does not admit proves nothing", () => {
@@ -159,12 +189,12 @@ describe("control 1 — an unavailable runtime test does not pass", () => {
   });
 });
 
-describe("control 2 — a stale reviewer revision does not pass", () => {
-  const title = "orders the status-filtered branch newest first";
+describe("control 2 — evidence formed at a stale revision does not pass", () => {
+  const title = STATUS_TITLE;
 
   test("evidence from a commit that is not an ancestor of head is stale", () => {
     const result = evaluateReviewEvidence(
-      withObligation("proof:status-filter-order", [testEvidence(title, { sha: FOREIGN_SHA })]),
+      withObligation("proof:BOUNDARY", [testEvidence(title, { sha: FOREIGN_SHA })]),
     );
     expect(codes(result)).toEqual(["STALE_EVIDENCE"]);
   });
@@ -172,6 +202,15 @@ describe("control 2 — a stale reviewer revision does not pass", () => {
   test("a material change after the evidence commit makes it stale", () => {
     const input = validInput();
     input.history = { ...input.history, changedFilesSince: () => ["convex/deals.ts"] };
+    expect(codes(evaluateReviewEvidence(input))).toEqual(["STALE_EVIDENCE"]);
+  });
+
+  test("a rename out of a material path is stale when both sides are reported (--no-renames)", () => {
+    const input = validInput();
+    input.history = {
+      ...input.history,
+      changedFilesSince: () => ["convex/deals.ts", "review-evidence/deals.json"],
+    };
     expect(codes(evaluateReviewEvidence(input))).toEqual(["STALE_EVIDENCE"]);
   });
 
@@ -183,7 +222,7 @@ describe("control 2 — a stale reviewer revision does not pass", () => {
 
   test("an abbreviated SHA is refused before any history lookup", () => {
     const result = evaluateReviewEvidence(
-      withObligation("proof:status-filter-order", [testEvidence(title, { sha: EVIDENCE_SHA.slice(0, 7) })]),
+      withObligation("proof:BOUNDARY", [testEvidence(title, { sha: EVIDENCE_SHA.slice(0, 7) })]),
     );
     expect(codes(result)).toEqual(["BAD_SHA"]);
   });
@@ -217,7 +256,7 @@ describe("control 3 — a missing branch obligation does not pass", () => {
   });
 
   test("an obligation with no evidence is unproven", () => {
-    const result = evaluateReviewEvidence(withObligation("proof:status-filter-order", []));
+    const result = evaluateReviewEvidence(withObligation("proof:BOUNDARY", []));
     expect(codes(result)).toEqual(["NO_EVIDENCE"]);
   });
 
@@ -230,31 +269,32 @@ describe("control 3 — a missing branch obligation does not pass", () => {
 
 describe("control 4 — a fabricated execution claim does not pass", () => {
   test.each([
-    ["a skipped test", "orders the salesperson branch newest first"],
-    ["a title that only appears in a string", "orders the unregistered branch newest first"],
-    ["a title that does not exist", "orders every branch newest first"],
+    ["a skipped test", "proof:BOUNDARY orders the salesperson branch newest first"],
+    ["a title that only appears in a string", "proof:BOUNDARY orders the unregistered branch newest first"],
+    ["a title that does not exist", "proof:BOUNDARY orders every branch newest first"],
   ])("%s is not a registered test", (_label, title) => {
     const result = evaluateReviewEvidence(
-      withObligation("proof:status-filter-order", [testEvidence(title)]),
+      withObligation("proof:BOUNDARY", [testEvidence(title)]),
     );
     expect(codes(result)).toEqual(["TEST_NOT_REGISTERED"]);
   });
 
   test("a test in a file the registry does not cover is not registered", () => {
     const result = evaluateReviewEvidence(
-      withObligation("proof:status-filter-order", [
-        testEvidence("orders the status-filtered branch newest first", { file: "convex/other.test.ts" }),
+      withObligation("proof:BOUNDARY", [
+        testEvidence(STATUS_TITLE, { file: "convex/other.test.ts" }),
       ]),
     );
     expect(codes(result)).toEqual(["TEST_NOT_REGISTERED"]);
   });
 
   test.each([
-    ["test.each", "orders page %s newest first"],
-    ["a test inside describe.each", "keeps the cursor stable"],
+    ["test.each", "proof:BOUNDARY orders page %s newest first"],
+    ["a test inside describe.each", "proof:BOUNDARY keeps the cursor stable"],
+    ["a test two levels inside describe.each", "proof:BOUNDARY holds two levels down"],
   ])("%s may run zero cases and is refused", (_label, title) => {
     const result = evaluateReviewEvidence(
-      withObligation("proof:status-filter-order", [testEvidence(title)]),
+      withObligation("proof:BOUNDARY", [testEvidence(title)]),
     );
     expect(codes(result)).toEqual(["TEST_PARAMETERIZED"]);
   });
@@ -267,9 +307,9 @@ describe("control 4 — a fabricated execution claim does not pass", () => {
 
   test("one genuine item does not rescue a fabricated one beside it", () => {
     const result = evaluateReviewEvidence(
-      withObligation("proof:status-filter-order", [
-        testEvidence("orders the status-filtered branch newest first"),
-        testEvidence("orders every branch newest first"),
+      withObligation("proof:BOUNDARY", [
+        testEvidence(STATUS_TITLE),
+        testEvidence("proof:BOUNDARY orders every branch newest first"),
       ]),
     );
     expect(codes(result)).toEqual(["TEST_NOT_REGISTERED"]);
@@ -277,7 +317,7 @@ describe("control 4 — a fabricated execution claim does not pass", () => {
 
   test("an evidence kind the validator does not know is refused", () => {
     const result = evaluateReviewEvidence(
-      withObligation("proof:status-filter-order", [{ kind: "screenshot", file: "a.png" }]),
+      withObligation("proof:BOUNDARY", [{ kind: "screenshot", file: "a.png" }]),
     );
     expect(codes(result)).toEqual(["UNKNOWN_EVIDENCE"]);
   });
@@ -313,7 +353,8 @@ describe("control 5 — the range comes from the caller, never the record", () =
     (input.record as Record<string, unknown>).head = HEAD;
     const lying = evaluateReviewEvidence(input);
     expect(lying).toEqual(honest);
-    expect(lying.verdict).toBe("COMPLETE");
+    expect(lying.verdict).toBe("REVIEW_UNRESOLVED");
+    expect(lying.reasons).toEqual([]);
   });
 
   test("a record cannot shrink the requirement set by declaring a later base", () => {
@@ -345,7 +386,7 @@ describe("control 7 — a review cannot be proven by evidence", () => {
     const input = validInput();
     input.record.obligations.push({
       requirement: "review:correctness-governance",
-      evidence: [testEvidence("orders the status-filtered branch newest first")],
+      evidence: [testEvidence(STATUS_TITLE)],
     });
     const result = evaluateReviewEvidence(input);
     expect(result.verdict).toBe("INCOMPLETE");
@@ -361,5 +402,61 @@ describe("control 7 — a review cannot be proven by evidence", () => {
       requirement: "review-invariant:deal-money-authority",
       status: "REPORTED_UNRESOLVED",
     });
+  });
+});
+
+describe("control 8 — evidence proves only the requirement it is bound to", () => {
+  test("a registered test for another requirement cannot be cited", () => {
+    const result = evaluateReviewEvidence(
+      withObligation("proof:BOUNDARY", [testEvidence(UNRELATED_TITLE)]),
+    );
+    expect(codes(result)).toEqual(["EVIDENCE_NOT_FOR_REQUIREMENT"]);
+  });
+
+  test("a governance proof cannot borrow a boundary test", () => {
+    const input = validInput();
+    input.requirements = [...input.requirements, "proof:jev-harness"];
+    input.record.obligations.push({ requirement: "proof:jev-harness", evidence: [testEvidence(STATUS_TITLE)] });
+    expect(codes(evaluateReviewEvidence(input))).toEqual(["EVIDENCE_NOT_FOR_REQUIREMENT"]);
+  });
+
+  test("the rehearsal is not proof of a catalog obligation it does not list", () => {
+    const input = validInput();
+    input.requirements = [...input.requirements, "proof:REPLAY"];
+    input.record.obligations.push({
+      requirement: "proof:REPLAY",
+      evidence: [{ kind: "runtime", workflow: RUNTIME_WORKFLOW, status: "EXECUTED" }],
+    });
+    expect(codes(evaluateReviewEvidence(input))).toEqual(["EVIDENCE_NOT_FOR_REQUIREMENT"]);
+  });
+});
+
+describe("control 9 — a malformed record is INVALID, never a crash", () => {
+  test.each([
+    ["a string record", "not-a-record"],
+    ["an array record", []],
+    ["obligations that are a string", { obligations: "proof:BOUNDARY" }],
+    ["obligations that are a single object", { obligations: { requirement: "proof:BOUNDARY" } }],
+    ["an obligation that is null", { obligations: [null] }],
+    ["an obligation with no requirement", { obligations: [{ evidence: [] }] }],
+    ["evidence that is not an array", { obligations: [{ requirement: "proof:BOUNDARY", evidence: {} }] }],
+    ["an evidence item that is null", { obligations: [{ requirement: "proof:BOUNDARY", evidence: [null] }] }],
+    ["exceptions that are a string", { exceptions: "proof:BOUNDARY" }],
+    ["exceptions that are a single object", { exceptions: { requirement: "proof:BOUNDARY" } }],
+    ["an exception that is null", { exceptions: [null] }],
+  ])("%s", (_label, shape) => {
+    const record = Array.isArray(shape) || typeof shape !== "object"
+      ? shape
+      : { policyVersion: policy.policyVersion, ...shape };
+    const result = evaluateReviewEvidence(validInput({ record }));
+    expect(result.verdict).toBe("INVALID");
+    expect(codes(result)).toEqual(["MALFORMED_RECORD"]);
+  });
+
+  test("a test file named __proto__ is not registered, not a crash", () => {
+    const result = evaluateReviewEvidence(
+      withObligation("proof:BOUNDARY", [testEvidence(STATUS_TITLE, { file: "__proto__" })]),
+    );
+    expect(codes(result)).toEqual(["TEST_NOT_REGISTERED"]);
   });
 });

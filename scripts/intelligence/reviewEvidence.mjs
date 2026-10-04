@@ -9,9 +9,13 @@
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 
+// COMPLETE is reachable only when no review requirement exists: a review can
+// never be proven here, so proofs that all hold beside a required review give
+// REVIEW_UNRESOLVED, never COMPLETE.
 export const VERDICTS = Object.freeze({
   NOT_REQUIRED: "NOT_REQUIRED",
   COMPLETE: "COMPLETE",
+  REVIEW_UNRESOLVED: "REVIEW_UNRESOLVED",
   INCOMPLETE: "INCOMPLETE",
   INVALID: "INVALID",
 });
@@ -33,7 +37,35 @@ const INVALIDATING = new Set([
   "MERGE_NOT_OF_HEAD",
   "POLICY_VERSION",
   "MISSING_RECORD",
+  "MALFORMED_RECORD",
 ]);
+
+const isPlainObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+
+// The record is candidate-controlled, so its shape is checked before any field
+// is used: a hostile shape must produce a verdict, never a crash.
+function recordShapeProblem(record) {
+  if (!isPlainObject(record)) return "record is not an object";
+  if (record.obligations !== undefined && !Array.isArray(record.obligations)) return "obligations is not an array";
+  if (record.exceptions !== undefined && !Array.isArray(record.exceptions)) return "exceptions is not an array";
+  for (const obligation of record.obligations ?? []) {
+    if (!isPlainObject(obligation) || typeof obligation.requirement !== "string") {
+      return "an obligation has no string requirement";
+    }
+    if (obligation.evidence !== undefined && !Array.isArray(obligation.evidence)) {
+      return `evidence for ${obligation.requirement} is not an array`;
+    }
+    for (const item of obligation.evidence ?? []) {
+      if (!isPlainObject(item)) return `evidence for ${obligation.requirement} holds a non-object`;
+    }
+  }
+  for (const exception of record.exceptions ?? []) {
+    if (!isPlainObject(exception) || typeof exception.requirement !== "string") {
+      return "an exception has no string requirement";
+    }
+  }
+  return undefined;
+}
 
 export function isCommitSha(value) {
   return typeof value === "string" && SHA_PATTERN.test(value);
@@ -72,7 +104,9 @@ function checkIdentities({ head, base, merge, mergeParents }, reasons) {
 }
 
 // An evidence SHA is fresh when it is a full SHA, an ancestor of head, and
-// nothing material changed between it and head.
+// nothing material changed between it and head. changedFilesSince must report
+// both sides of a rename (git diff --no-renames), or a material file renamed
+// into a non-material path would show only its harmless new name.
 function checkFreshness(sha, policy, history) {
   if (!isCommitSha(sha)) return { code: "BAD_SHA", detail: `evidence SHA ${String(sha)} is not 40-hex` };
   if (!history.isAncestor(sha)) {
@@ -85,13 +119,21 @@ function checkFreshness(sha, policy, history) {
   return undefined;
 }
 
-function checkTestEvidence(item, policy, history, testRegistry) {
+// A test proves a requirement only when its own title carries that
+// requirement's id. The binding then lives in reviewed repository code, not in
+// the record, and an unrelated test cannot be cited for an unrelated proof.
+function checkTestEvidence(item, requirement, policy, history, testRegistry) {
+  if (typeof item.title !== "string" || !item.title.includes(requirement)) {
+    return { code: "EVIDENCE_NOT_FOR_REQUIREMENT", detail: `test title does not carry ${requirement}` };
+  }
   const stale = checkFreshness(item.sha, policy, history);
   if (stale) return stale;
-  const registrations = testRegistry[item.file];
-  const matches = (registrations ?? []).filter((entry) => entry.title === item.title);
+  const registrations = typeof item.file === "string" && Object.hasOwn(testRegistry, item.file)
+    ? testRegistry[item.file]
+    : [];
+  const matches = registrations.filter((entry) => entry.title === item.title);
   if (matches.length === 0) {
-    return { code: "TEST_NOT_REGISTERED", detail: `${item.file} has no active test titled "${item.title}" at head` };
+    return { code: "TEST_NOT_REGISTERED", detail: `${String(item.file)} has no active test titled "${item.title}" at head` };
   }
   if (matches.some((entry) => entry.parameterized)) {
     return { code: "TEST_PARAMETERIZED", detail: `"${item.title}" is a .each registration and may run zero cases` };
@@ -99,13 +141,19 @@ function checkTestEvidence(item, policy, history, testRegistry) {
   return undefined;
 }
 
-function checkRuntimeEvidence(item, policy, merge, runtimeEvidence) {
+// A workflow proves only the requirements its policy entry lists in `proves`.
+// Runs are narrowed to the current merge before counting, so an earlier push's
+// run neither makes the current one ambiguous nor stands in for it.
+function checkRuntimeEvidence(item, requirement, policy, merge, runtimeEvidence) {
   if (item.status !== "EXECUTED") {
-    return { code: "RUNTIME_UNAVAILABLE", detail: `${item.workflow} is ${String(item.status)}` };
+    return { code: "RUNTIME_UNAVAILABLE", detail: `${String(item.workflow)} is ${String(item.status)}` };
   }
   const admitted = (policy.runtimeWorkflows ?? []).find((workflow) => workflow.path === item.workflow);
   if (!admitted) {
-    return { code: "RUNTIME_UNPROVEN", detail: `${item.workflow} is not an admissible runtime workflow` };
+    return { code: "RUNTIME_UNPROVEN", detail: `${String(item.workflow)} is not an admissible runtime workflow` };
+  }
+  if (!(admitted.proves ?? []).includes(requirement)) {
+    return { code: "EVIDENCE_NOT_FOR_REQUIREMENT", detail: `${admitted.path} is not admitted as proof of ${requirement}` };
   }
   const runs = runtimeEvidence.filter(
     (run) => run.workflowPath === admitted.path && run.artifact === admitted.artifact,
@@ -113,27 +161,28 @@ function checkRuntimeEvidence(item, policy, merge, runtimeEvidence) {
   if (runs.length === 0) {
     return { code: "RUNTIME_UNPROVEN", detail: `no trusted ${admitted.path} evidence was supplied` };
   }
-  if (runs.length > 1) {
-    return { code: "RUNTIME_AMBIGUOUS", detail: `${runs.length} trusted ${admitted.path} runs match` };
+  const forMerge = runs.filter((run) => run.testedSha === merge);
+  if (forMerge.length === 0) {
+    return { code: "RUNTIME_WRONG_MERGE", detail: `no trusted ${admitted.path} run tested the current merge ${merge}` };
   }
-  const [run] = runs;
-  if (run.testedSha !== merge) {
-    return { code: "RUNTIME_WRONG_MERGE", detail: `run tested ${String(run.testedSha)}, current merge is ${merge}` };
+  if (forMerge.length > 1) {
+    return { code: "RUNTIME_AMBIGUOUS", detail: `${forMerge.length} trusted ${admitted.path} runs tested ${merge}` };
   }
+  const [run] = forMerge;
   if (run.conclusion !== "success") {
     return { code: "RUNTIME_UNPROVEN", detail: `run concluded ${String(run.conclusion)}` };
   }
   return undefined;
 }
 
-function checkEvidenceItem(item, context) {
-  if (item?.kind === "test") {
-    return checkTestEvidence(item, context.policy, context.history, context.testRegistry);
+function checkEvidenceItem(item, requirement, context) {
+  if (item.kind === "test") {
+    return checkTestEvidence(item, requirement, context.policy, context.history, context.testRegistry);
   }
-  if (item?.kind === "runtime") {
-    return checkRuntimeEvidence(item, context.policy, context.identities.merge, context.runtimeEvidence);
+  if (item.kind === "runtime") {
+    return checkRuntimeEvidence(item, requirement, context.policy, context.identities.merge, context.runtimeEvidence);
   }
-  return { code: "UNKNOWN_EVIDENCE", detail: `evidence kind ${String(item?.kind)} is not admissible` };
+  return { code: "UNKNOWN_EVIDENCE", detail: `evidence kind ${String(item.kind)} is not admissible` };
 }
 
 function evaluateRequirement(requirement, record, context) {
@@ -180,7 +229,7 @@ function evaluateRequirement(requirement, record, context) {
   // Every listed item must hold: one fabricated claim is not rescued by a
   // genuine one beside it.
   const failures = evidence
-    .map((item) => checkEvidenceItem(item, context))
+    .map((item) => checkEvidenceItem(item, requirement, context))
     .filter(Boolean)
     .map((failure) => ({ ...failure, requirement }));
   return failures.length > 0
@@ -215,18 +264,23 @@ export function evaluateReviewEvidence({
   checkIdentities(identities, reasons);
 
   if (requirements.length === 0 && reasons.length === 0) {
-    return { verdict: VERDICTS.NOT_REQUIRED, reasons: [], obligations: [] };
+    return { verdict: VERDICTS.NOT_REQUIRED, reasons: [], obligations: [], unresolvedReviews: [] };
   }
   if (!record) {
     reasons.push({ code: "MISSING_RECORD", detail: "requirements exist and no evidence record was found" });
-  } else if (record.policyVersion !== policy.policyVersion) {
-    reasons.push({
-      code: "POLICY_VERSION",
-      detail: `record is stamped ${String(record.policyVersion)}, policy is ${policy.policyVersion}`,
-    });
+  } else {
+    const shapeProblem = recordShapeProblem(record);
+    if (shapeProblem) {
+      reasons.push({ code: "MALFORMED_RECORD", detail: shapeProblem });
+    } else if (record.policyVersion !== policy.policyVersion) {
+      reasons.push({
+        code: "POLICY_VERSION",
+        detail: `record is stamped ${String(record.policyVersion)}, policy is ${policy.policyVersion}`,
+      });
+    }
   }
   if (reasons.some((reason) => INVALIDATING.has(reason.code))) {
-    return { verdict: VERDICTS.INVALID, reasons, obligations: [] };
+    return { verdict: VERDICTS.INVALID, reasons, obligations: [], unresolvedReviews: [] };
   }
 
   // record.base, if present, is deliberately never read: the range comes from
@@ -238,9 +292,13 @@ export function evaluateReviewEvidence({
     return { requirement, status: result.status };
   });
 
-  return {
-    verdict: reasons.length > 0 ? VERDICTS.INCOMPLETE : VERDICTS.COMPLETE,
-    reasons,
-    obligations,
-  };
+  // Two axes: reasons say whether the proofs hold; unresolvedReviews say what
+  // still needs a review nobody here can authenticate.
+  const unresolvedReviews = obligations
+    .filter((obligation) => obligation.status === OBLIGATION_STATUS.REPORTED_UNRESOLVED)
+    .map((obligation) => obligation.requirement);
+  let verdict = VERDICTS.COMPLETE;
+  if (reasons.length > 0) verdict = VERDICTS.INCOMPLETE;
+  else if (unresolvedReviews.length > 0) verdict = VERDICTS.REVIEW_UNRESOLVED;
+  return { verdict, reasons, obligations, unresolvedReviews };
 }

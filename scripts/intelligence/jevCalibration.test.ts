@@ -884,6 +884,7 @@ describe("Jev historical calibration", () => {
     ".github/review-policy.json",
     ".github/release-waivers.json",
     ".github/workflows/trusted-review-evidence.yml",
+    ".github/workflows/trusted-accounting-rehearsal.yml",
     "scripts/intelligence/reviewEvidence.mjs",
   ])("routes review-evidence governance file %s alone (SCRUM-644)", (file) => {
     expect(extraDeterministicRequirementsForFiles([file])).toEqual([

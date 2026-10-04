@@ -13,6 +13,16 @@
     "agent writes through one account, so no verdict here can be authenticated.",
     "A requirement matching neither list fails closed.",
     "",
+    "Evidence is bound to the requirement it answers: a test only when its title",
+    "carries the requirement id, a workflow only for the ids in its 'proves'.",
+    "The rehearsal proves only its own harness-local id. It is not admitted for",
+    "a catalog obligation (proof:REPLAY and the rest) that it does not run.",
+    "",
+    "COMPLETE needs every requirement proven and none of them a review. Proofs",
+    "that hold beside a review give REVIEW_UNRESOLVED.",
+    "",
+    "'enforcement' is informational: no code reads it. S4 changes that.",
+    "",
     "Any semantic change bumps policyVersion. A record stamped with another",
     "version is refused, not migrated."
   ],
@@ -26,7 +36,8 @@
   "runtimeWorkflows": [
     {
       "path": ".github/workflows/trusted-accounting-rehearsal.yml",
-      "artifact": "trusted-accounting-rehearsal-evidence"
+      "artifact": "trusted-accounting-rehearsal-evidence",
+      "proves": ["proof:accounting-runtime"]
     }
   ]
 }
