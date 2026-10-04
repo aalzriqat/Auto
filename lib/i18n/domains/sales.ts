@@ -2492,7 +2492,7 @@ export const salesEn = {
   NoVehiclesMatchSearch: "No vehicles match your search",
   ReservedPendingDeal: "Reserved — pending deal",
   ReservedQuoteWarning:
-    "Another deal is holding this car. You can quote it, but a deposit or finance application will be refused unless it belongs to that deal.",
+    "This car is reserved, possibly by another deal. You can quote it, but a deposit or finance application will be refused unless it belongs to the deal holding the car.",
   Sourced: "Sourced",
   VINPendingLabel: "VIN pending",
   SourceVehicleForCustomer: "Source a vehicle for this customer",
@@ -3578,7 +3578,7 @@ export const salesAr = {
   NoVehiclesMatchSearch: "لا توجد مركبات تطابق بحثك",
   ReservedPendingDeal: "محجوزة — صفقة قيد الإنجاز",
   ReservedQuoteWarning:
-    "هذه السيارة محجوزة لصفقة أخرى. يمكنك إعداد عرض سعر لها، لكن سيُرفض العربون أو طلب التمويل ما لم يكن ضمن تلك الصفقة.",
+    "هذه السيارة محجوزة، وقد تكون لصفقة أخرى. يمكنك إعداد عرض سعر لها، لكن سيُرفض العربون أو طلب التمويل ما لم يكن ضمن الصفقة الحاجزة للسيارة.",
   Sourced: "مورَّدة",
   VINPendingLabel: "رقم الهيكل قيد الانتظار",
   SourceVehicleForCustomer: "توريد مركبة لهذا العميل",

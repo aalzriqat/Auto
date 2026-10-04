@@ -1634,6 +1634,14 @@ describe("a deducted cost write establishes the remittance from what the company
     await seed.t.run((ctx) =>
       ctx.db.patch(seed.applicationId, { submittedQuotationMinor: undefined, customerFirstPaymentMinor: undefined })
     );
+    // Not READY (READY now claims the agreed amount is known, and none is stored),
+    // and not a refusal either: NOT_APPLICABLE never moves the overall verdict.
+    expect(await closingCheck(seed, "FIRST_PAYMENT_RECORDED")).toMatchObject({ status: "NOT_APPLICABLE", reason: null });
+  });
+
+  test("an approved deal with no quotation but a stored first payment: the check is ready", async () => {
+    const seed = await financedSeed("fp_inputs_no_quote_known");
+    await seed.t.run((ctx) => ctx.db.patch(seed.applicationId, { submittedQuotationMinor: undefined }));
     expect(await closingCheck(seed, "FIRST_PAYMENT_RECORDED")).toMatchObject({ status: "READY" });
   });
 

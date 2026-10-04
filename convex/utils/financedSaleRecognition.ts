@@ -600,9 +600,11 @@ export async function evaluateClosingReadiness(
   // receipt gate is SCRUM-635). Without the approval there is nothing to judge
   // it against yet, which is not ready either — and adds no refusal of its own:
   // REMITTANCE_KNOWN already refuses a deal with no approval. A deal with no
-  // QUOTATION keeps the old answer: a manual-finance deal has none by design and
-  // is gated on its letter (`assertDealerEconomicsReady`), so requiring one here
-  // would leave it unable ever to finalize.
+  // QUOTATION (manual finance by design, gated on its letter by
+  // `assertDealerEconomicsReady`) is never refused here — requiring one would
+  // leave it unable ever to finalize. It is READY only when its agreed first
+  // payment is actually stored; otherwise this quotation-based check does not
+  // apply to it (NOT_APPLICABLE), rather than claiming a figure nobody recorded.
   planOnly("FIRST_PAYMENT_RECORDED", () => {
     if (app.approvedDealerPurchaseAmountMinor === undefined) {
       return [
@@ -613,7 +615,9 @@ export async function evaluateClosingReadiness(
         ),
       ];
     }
-    if (app.submittedQuotationMinor === undefined) return ["READY", null];
+    if (app.submittedQuotationMinor === undefined) {
+      return app.customerFirstPaymentMinor === undefined ? ["NOT_APPLICABLE", null] : ["READY", null];
+    }
     return app.customerFirstPaymentMinor === undefined
       ? [
           "BLOCKED",
