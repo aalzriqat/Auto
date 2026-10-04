@@ -306,6 +306,81 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(match?.[1]).toBe(enEntry);
   });
 
+  /** Asserts a coded error resolves to its Arabic and English dictionary entries; returns them. */
+  async function expectCodedEntry(code: string) {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code, message: "server text" });
+    const arEntry = (dictionaries.ar as Record<string, string>)[`ServerError_${code}`];
+    const enEntry = (dictionaries.en as Record<string, string>)[`ServerError_${code}`];
+    expect(arEntry).toMatch(/[؀-ۿ]/);
+    expect(getLocalizedErrorMessage(error, ar)).toBe(arEntry);
+    expect(getLocalizedErrorMessage(error, en)).toBe(enEntry);
+    return { dictionaries, error, en, arEntry, enEntry };
+  }
+
+  /** The string literal convex/roles.ts assigns to a top-level message constant. */
+  async function roleMessageConst(name: string) {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const source = readFileSync(join(process.cwd(), "convex", "roles.ts"), "utf8");
+    const match = new RegExp(`const ${name} =\\s*(['"])((?:(?!\\1).)+)\\1`).exec(source);
+    return { source, message: match?.[2] };
+  }
+
+  it("SCRUM-413 PERMISSION_RETIRED resolves to its dictionary entry in ar and en", async () => {
+    const { dictionaries, error, en, arEntry, enEntry } = await expectCodedEntry("PERMISSION_RETIRED");
+    expect(getLocalizedErrorMessage(error, en)).not.toBe("server text");
+    // The AR names the same two authorities the role editor labels (settings.ts).
+    expect(arEntry).toContain((dictionaries.ar as Record<string, string>).RecordSupplierRoute);
+    expect(arEntry).toContain((dictionaries.ar as Record<string, string>).CancelClosedDeal);
+    expect(enEntry).toContain((dictionaries.en as Record<string, string>).RecordSupplierRoute);
+    expect(enEntry).toContain((dictionaries.en as Record<string, string>).CancelClosedDeal);
+  });
+
+  it("SCRUM-413 OWNER_NAMED_ROLE_LOCKED resolves to its dictionary entry in ar and en, and EN equals the roles.ts message", async () => {
+    const { enEntry } = await expectCodedEntry("OWNER_NAMED_ROLE_LOCKED");
+    expect((await roleMessageConst("OWNER_NAMED_ROLE_LOCKED_MESSAGE")).message).toBe(enEntry);
+  });
+
+  it("SCRUM-413 the EN dictionary text equals the message thrown by roles.create and roles.update", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const enEntry = (dictionaries.en as Record<string, string>).ServerError_PERMISSION_RETIRED;
+    expect(enEntry).toBeTruthy();
+    const { source, message } = await roleMessageConst("RETIRED_PERMISSION_MESSAGE");
+    expect(message).toBe(enEntry);
+    // Both throws use the code, not a bare ConvexError string.
+    expect(source.match(/throwAppError\(AppErrorCode\.PERMISSION_RETIRED, RETIRED_PERMISSION_MESSAGE\)/g)).toHaveLength(2);
+  });
+
+  it("SCRUM-413 D-37 every forward cancel refusal has an AR entry and its EN equals the server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { forwardCancelRefusal } = await import("../convex/utils/financeCompanyForward");
+    const proofOf = (versionStates: string[], state: string) =>
+      ({ applies: true, dueMinor: 1, state, versions: versionStates.map((s) => ({ state: s })) }) as never;
+    const cases: Array<[unknown, string]> = [
+      [proofOf(["ON_BOOKS"], "ON_BOOKS"), "FORWARD_CANCEL_ON_BOOKS"],
+      [proofOf(["POSTING_PENDING"], "POSTING_PENDING"), "FORWARD_CANCEL_POSTING_UNSETTLED"],
+      [proofOf(["POSTING_FAILED"], "POSTING_FAILED"), "FORWARD_CANCEL_POSTING_UNSETTLED"],
+      [proofOf(["REVERSAL_PENDING"], "REVERSAL_PENDING"), "FORWARD_CANCEL_REVERSAL_PENDING"],
+      [proofOf(["NEEDS_REPAIR"], "NEEDS_REPAIR"), "FORWARD_CANCEL_NEEDS_REPAIR"],
+      // Fail-closed: an unreadable proof (no versions) is NEEDS_REPAIR.
+      [proofOf([], "NEEDS_REPAIR"), "FORWARD_CANCEL_NEEDS_REPAIR"],
+    ];
+    const ar = dictionaries.ar as Record<string, string>;
+    const en = dictionaries.en as Record<string, string>;
+    for (const [proof, code] of cases) {
+      const refusal = forwardCancelRefusal(proof as never);
+      expect(refusal?.code).toBe(code);
+      expect(en[`ServerError_${code}`]).toBe(refusal?.message);
+      expect(ar[`ServerError_${code}`]).toMatch(/[؀-ۿ]/);
+      const error = new ConvexError({ code, message: refusal?.message });
+      expect(getLocalizedErrorMessage(error, (k: string) => ar[k] ?? k)).toBe(ar[`ServerError_${code}`]);
+    }
+    expect(forwardCancelRefusal(proofOf([], "SETTLED"))).toBeNull();
+  });
+
   it("the English dictionary text equals the server's message for both codes", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     expect(dictionaries.en.ServerError_COMMISSION_BASE_UNUSABLE).toContain("{baseCurrency}");

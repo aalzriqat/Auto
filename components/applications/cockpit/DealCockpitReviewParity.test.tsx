@@ -339,11 +339,20 @@ describe("cancel — applications.cancelApplication, from the header", () => {
     expect(screen.queryByTestId("deal-cancel-application")).toBeNull();
   });
 
-  test("CLOSED needs the finalize permission, and the dialog carries the reversal warning", () => {
-    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+  test("CLOSED needs cancel:closed_deal (not create), and the dialog carries the reversal warning", () => {
+    permissions.add(PERMISSIONS.CANCEL_CLOSED_DEAL);
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
-    queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED" }));
+    // SCRUM-413 D-37: Cancel on a CLOSED deal needs the server's answer (`mayCancelFinalized`).
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        forward: {
+          planV2: false, applies: false, state: "NOT_DUE", returnedExceptionOpen: false,
+          onBooksForwardId: null, transferConfirmed: false, mayRecord: false, mayCancelFinalized: true,
+        },
+      })
+    );
     queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
     renderCockpit();
     fireEvent.click(screen.getByTestId("deal-cancel-application"));
@@ -353,7 +362,7 @@ describe("cancel — applications.cancelApplication, from the header", () => {
 
 describe("settlement route — applications.setSupplierSettlementRoute, beside the vehicle", () => {
   test("a consigned deal offers the route to a caller who can close, and records the choice", async () => {
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     queryResults.set(COCKPIT_QUERY, cockpit({ status: "APPROVED" }));
     queryResults.set(
@@ -380,7 +389,7 @@ describe("settlement route — applications.setSupplierSettlementRoute, beside t
   });
 
   test("the direct route is shown disabled with the server's reason while a deposit is held", () => {
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     queryResults.set(COCKPIT_QUERY, cockpit({ status: "APPROVED" }));
     queryResults.set(
@@ -410,7 +419,7 @@ describe("settlement route — applications.setSupplierSettlementRoute, beside t
     expect(screen.queryByTestId("deal-settlement-route")).toBeNull();
     cleanup();
 
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     queryResults.set(GET_QUERY, application({ status: "APPROVED" }));
     renderCockpit();
@@ -987,9 +996,8 @@ describe("disbursement - the payment to the finance company comes first", () => 
     expect(screen.queryByRole("button", { name: "RecordForwardToFinanceCompany" })).toBeNull();
     expect(screen.queryByRole("button", { name: "ConfirmDisbursement" })).toBeNull();
   });
-  test("a finalizer who is not a manager sees who cancels, not a cancel button", () => {
-    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+  test("a closed-deal canceller who is not a manager sees who cancels, not a cancel button", () => {
+    permissions.add(PERMISSIONS.CANCEL_CLOSED_DEAL);
     queryResults.set(
       COCKPIT_QUERY,
       cockpit({
@@ -1002,6 +1010,48 @@ describe("disbursement - the payment to the finance company comes first", () => 
     renderCockpit();
     expect(screen.queryByTestId("deal-cancel-application")).toBeNull();
     expect(screen.getByTestId("deal-cancel-manager-hint").textContent).toBe("ManagerCancelsFinalizedDeal");
+  });
+
+  // SCRUM-413 D-37: the server's answer is the only thing that offers Cancel on a CLOSED deal.
+  test("a CLOSED deal with no server answer yet (forward absent) offers no Cancel and no hint", () => {
+    permissions.add(PERMISSIONS.CANCEL_CLOSED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: forwardStages("AwaitingForwardToFinanceCompany"), forward: undefined }));
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(screen.queryByTestId("deal-cancel-application")).toBeNull();
+    expect(screen.queryByTestId("deal-cancel-manager-hint")).toBeNull();
+  });
+
+  test("a full canceller blocked ONLY by the forward gate is not told it lacks permission", () => {
+    permissions.add(PERMISSIONS.CANCEL_CLOSED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("AwaitingForwardToFinanceCompany"),
+        forward: forward({ state: "SETTLED", mayCancelFinalized: false }),
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(screen.queryByTestId("deal-cancel-application")).toBeNull();
+    const hint = screen.getByTestId("deal-cancel-manager-hint").textContent;
+    expect(hint).toBe("CancelWaitsForForward");
+    expect(hint).not.toBe("ManagerCancelsFinalizedDeal");
+  });
+
+  test("the server's yes still offers Cancel", () => {
+    permissions.add(PERMISSIONS.CANCEL_CLOSED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ status: "CLOSED", stages: forwardStages("AwaitingForwardToFinanceCompany"), forward: forward({ mayCancelFinalized: true }) })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(screen.getByTestId("deal-cancel-application")).toBeTruthy();
   });
 });
 describe("held deposit on a stopped deal — deposits.release", () => {
@@ -1713,7 +1763,7 @@ describe("the close is withheld where the server would refuse the drifted pin �
     { key: "SETTLEMENT", state: "BLOCKED", blocker: "AwaitingSettlement", authority: "DEALER" },
   ];
   function closeable() {
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
     permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
@@ -1820,7 +1870,7 @@ describe("the close is withheld where the server would refuse the drifted pin �
 
 describe("the route control sits on the step that is waiting for it", () => {
   test("while the application facts are still loading, the step keeps its blocker and names no refusal it cannot yet back with a control", () => {
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
     permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
@@ -1844,7 +1894,7 @@ describe("the route control sits on the step that is waiting for it", () => {
   });
 
   test("when the close is refused for want of the route, the control renders inside the focus row and not beside the vehicle", () => {
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
     permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);

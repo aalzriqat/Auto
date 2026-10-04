@@ -20,7 +20,7 @@ const OWNER_PERMS = [
   "approve:requests",
   "view:finance_applications", "create:finance_application",
   "review:finance_application", "approve:finance_application",
-  "finalize:financed_deal", "confirm:finance_disbursement",
+  "manage:supplier_settlement", "cancel:closed_deal", "confirm:finance_disbursement",
   "verify:finance_documents", "register:vehicle_handover",
   "register:expected_payment",
   "manage:finance", "view:finance",

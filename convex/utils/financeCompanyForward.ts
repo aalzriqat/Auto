@@ -1,5 +1,6 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
+import { AppErrorCode } from "./errors";
 import { planVersionOf } from "./financedSalePostingPlan";
 
 /**
@@ -240,25 +241,52 @@ export async function deriveForwardState(ctx: QueryCtx, app: ForwardApp): Promis
 }
 
 /**
+ * A coded cancel refusal. Thrown with `throwAppError(code, message)`; the EN
+ * dictionary entry `ServerError_<code>` equals `message` (lib/errors.test.ts).
+ */
+export type ForwardCancelRefusal = { code: AppErrorCode; message: string };
+
+const CANCEL_REFUSAL_ON_BOOKS: ForwardCancelRefusal = {
+  code: AppErrorCode.FORWARD_CANCEL_ON_BOOKS,
+  message:
+    "The deposit and the dealership's contribution have already been paid to the finance company. A manager reports the payment as returned by the company, or an accountant records the correction, before this deal can be cancelled.",
+};
+const CANCEL_REFUSAL_POSTING_UNSETTLED: ForwardCancelRefusal = {
+  code: AppErrorCode.FORWARD_CANCEL_POSTING_UNSETTLED,
+  message:
+    "The payment to the finance company is not yet settled on the books. An accountant resolves it before this deal can be cancelled.",
+};
+const CANCEL_REFUSAL_REVERSAL_PENDING: ForwardCancelRefusal = {
+  code: AppErrorCode.FORWARD_CANCEL_REVERSAL_PENDING,
+  message:
+    "The reversal of the payment to the finance company is not yet posted. An accountant posts it before this deal can be cancelled.",
+};
+const FORWARD_MISMATCH_CANCEL_REFUSAL: ForwardCancelRefusal = {
+  code: AppErrorCode.FORWARD_CANCEL_NEEDS_REPAIR,
+  message:
+    "The record of the payment to the finance company does not match the books. An accountant reviews it before this deal can be cancelled.",
+};
+/** Blocking forward state -> refusal. Any state not listed (NEEDS_REPAIR) is the mismatch refusal. */
+const CANCEL_REFUSAL_BY_STATE: Readonly<Record<string, ForwardCancelRefusal>> = {
+  ON_BOOKS: CANCEL_REFUSAL_ON_BOOKS,
+  POSTING_PENDING: CANCEL_REFUSAL_POSTING_UNSETTLED,
+  POSTING_FAILED: CANCEL_REFUSAL_POSTING_UNSETTLED,
+  REVERSAL_PENDING: CANCEL_REFUSAL_REVERSAL_PENDING,
+};
+
+/**
  * The CLOSED-cancellation gate. Cancelling reverses the sale, which would leave
  * a posted payment to the finance company with nothing to clear. So a forward
  * that is on the books, or in ANY unsettled state, refuses the cancel and names
  * who acts next. RETURNED and REVERSED versions do not block. No amounts.
  */
-export function forwardCancelRefusal(proof: ForwardProof): string | null {
+export function forwardCancelRefusal(proof: ForwardProof): ForwardCancelRefusal | null {
   const blocking = proof.versions.find((version) => FORWARD_BLOCKS_CANCEL.has(version.state));
-  if (blocking === undefined) return null;
-  switch (blocking.state) {
-    case "ON_BOOKS":
-      return "The deposit and the dealership's contribution have already been paid to the finance company. A manager reports the payment as returned by the company, or an accountant records the correction, before this deal can be cancelled.";
-    case "POSTING_PENDING":
-    case "POSTING_FAILED":
-      return "The payment to the finance company is not yet settled on the books. An accountant resolves it before this deal can be cancelled.";
-    case "REVERSAL_PENDING":
-      return "The reversal of the payment to the finance company is not yet posted. An accountant posts it before this deal can be cancelled.";
-    default:
-      return "The record of the payment to the finance company does not match the books. An accountant reviews it before this deal can be cancelled.";
-  }
+  // Fails CLOSED: a proof that could not be read (over the version limit,
+  // `deriveForwardState` returns NEEDS_REPAIR with NO versions) is not "nothing
+  // blocks", it is "cannot tell", and cancelling reverses the sale.
+  if (blocking === undefined) return proof.state === "NEEDS_REPAIR" ? FORWARD_MISMATCH_CANCEL_REFUSAL : null;
+  return CANCEL_REFUSAL_BY_STATE[blocking.state] ?? FORWARD_MISMATCH_CANCEL_REFUSAL;
 }
 
 /** A refusal message for a gate that must not echo H or C (finance tier). */

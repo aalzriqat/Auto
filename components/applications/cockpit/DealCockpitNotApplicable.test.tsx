@@ -137,7 +137,7 @@ function renderCockpit(stageDeepLink?: { value: string | null; onChange: (key: s
 
 function arrange(stages: unknown[]) {
   permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
-  permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+  permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
   queryResults.set(COCKPIT_QUERY, cockpit({ stages }));
   queryResults.set(GET_QUERY, application());
 }

@@ -809,7 +809,8 @@ function seedDealActor(w: World) {
     "approve:requests",
     "create:finance_application",
     "approve:finance_application",
-    "finalize:financed_deal",
+    "manage:supplier_settlement",
+    "cancel:closed_deal",
   ]);
 }
 

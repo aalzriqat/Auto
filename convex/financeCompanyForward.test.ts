@@ -9,9 +9,10 @@
  * Evidence boundary: convex-test only - repository behaviour, not the Convex
  * runtime (no OCC, no paginated-query limit) and not production data.
  */
-import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import {
+  C, G, H, downgradeToV1, finalizeAsOwner, readyDeal, refusalMessageOf, seedFinancedDealership,
+} from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
-import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { deriveForwardState, isReportedReturn } from "./utils/financeCompanyForward";
@@ -33,7 +34,7 @@ const ALL_PERMS = [
   "approve:requests",
   "view:finance_applications", "create:finance_application",
   "review:finance_application", "approve:finance_application",
-  "finalize:financed_deal", "confirm:finance_disbursement",
+  "manage:supplier_settlement", "cancel:closed_deal", "confirm:finance_disbursement",
   "verify:finance_documents", "register:vehicle_handover",
   "register:expected_payment",
   "manage:finance", "view:finance",
@@ -44,123 +45,26 @@ const ALL_PERMS = [
 const MANAGER_PERMS = ALL_PERMS.filter((p) => p !== "view:finance" && p !== "manage:finance");
 /** SALES: no finalization, no disbursement, no finance view. */
 const SALES_PERMS = ALL_PERMS.filter(
-  (p) => !["finalize:financed_deal", "confirm:finance_disbursement", "view:finance", "manage:finance"].includes(p)
+  (p) => !["manage:supplier_settlement", "cancel:closed_deal", "confirm:finance_disbursement", "view:finance", "manage:finance"].includes(p)
 );
 /** ACCOUNTANT: reads and posts finance, but does not finalize or confirm the transfer. */
 const ACCOUNTANT_PERMS = ["view:finance", "manage:finance", "view:finance_applications", "view:reports"];
 
-const G = 12_500_000; // minor units, JOD (3 decimals)
-const H = 200_000;
-const C = 1_375_000;
 const FORWARD = H + C; // 1,575
-const SCALE = 1_000;
 
 async function seedDealership(tag: string) {
-  const t = convexTestWithComponents(schema, MODULES);
-  const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `S435 ${tag}`, createdAt: Date.now() }));
-  await t.run((ctx) =>
-    ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
-  );
-  const mkUser = async (suffix: string, perms: string[], owner: boolean) => {
-    const userId = await t.run((ctx) =>
-      ctx.db.insert("users", { clerkId: `${tag}_${suffix}`, email: `${tag}.${suffix}@example.com`, name: suffix })
-    );
-    const roleId = await t.run((ctx) =>
-      ctx.db.insert("roles", { orgId, name: suffix.toUpperCase(), permissions: perms, ...(owner ? { isSystemOwnerRole: true } : {}) })
-    );
-    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
-    return { userId, as: t.withIdentity({ subject: `${tag}_${suffix}`, clerkId: `${tag}_${suffix}` }) };
-  };
-  const owner = await mkUser("owner", ALL_PERMS, true);
-  const approver = await mkUser("appr", ALL_PERMS, true);
-  const manager = await mkUser("mgr", MANAGER_PERMS, false);
-  const sales = await mkUser("sales", SALES_PERMS, false);
-  const accountant = await mkUser("acct", ACCOUNTANT_PERMS, false);
-  await t.run((ctx) =>
-    ctx.db.insert("orgSettings", { orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH", "BANK_TRANSFER"] })
-  );
-  await owner.as.mutation(api.chartOfAccounts.initialize, { orgId });
-  const fiscalYear = new Date().getUTCFullYear();
-  await owner.as.mutation(api.accountingPeriods.create, {
-    orgId,
-    startDate: Date.UTC(fiscalYear, 0, 1),
-    endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
-    fiscalYear,
-    periodNumber: 1,
+  const s = await seedFinancedDealership(tag, {
+    modules: MODULES, ownerPerms: ALL_PERMS, label: "S435", vinPrefix: "VIN435",
+    actors: { mgr: MANAGER_PERMS, sales: SALES_PERMS, acct: ACCOUNTANT_PERMS },
   });
-  const period = (await owner.as.query(api.accountingPeriods.list, { orgId }))[0];
-  await owner.as.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
-
-  const customerId = await t.run((ctx) => ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag }));
-  const customerStatusId = await t.run((ctx) =>
-    ctx.db.insert("orgCustomerStatuses", { orgId, label: "Eligible", isActive: true, order: 1 })
-  );
-  const vehicleId = await t.run((ctx) =>
-    ctx.db.insert("vehicles", {
-      orgId, vin: `VIN435${tag}`, make: "Kia", model: "Sportage", year: 2024, mileage: 10,
-      color: "Blue", fuelType: "Gasoline", transmission: "Automatic",
-      sellingPrice: G / SCALE, status: "AVAILABLE", sourceType: "STOCK" as const, purchasePrice: 9_000,
-    })
-  );
-  const companyId = await t.run((ctx) =>
-    ctx.db.insert("financeCompanies", {
-      orgId, name: "Jordan Auto Finance", profitRate: 5, maxTermMonths: 60,
-      gracePeriodMonths: 0, isActive: true, defaultLtvPercent: 100, adminFees: 0,
-    })
-  );
-  return { t, orgId, customerId, customerStatusId, vehicleId, companyId, owner, approver, manager, sales, accountant, fiscalYear };
+  return { ...s, manager: s.actors.mgr, sales: s.actors.sales, accountant: s.actors.acct };
 }
 type Seeded = Awaited<ReturnType<typeof seedDealership>>;
-
-/** Approved, with a held deposit H and a dealership contribution C, ready to finalize. */
-async function readyDeal(s: Seeded) {
-  const quoteId = await s.owner.as.mutation(api.quotes.saveQuote, {
-    orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId,
-    vehiclePrice: G / SCALE, downPayment: 0, termMonths: 48,
-    mode: "CONFIGURED_FINANCE_COMPANY", companyId: s.companyId,
-    customerEligibilityStatusIds: [s.customerStatusId], totalFinancedAmount: G / SCALE,
-  });
-  const applicationId = await s.owner.as.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId });
-  await s.owner.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "UNDER_REVIEW" });
-  await s.approver.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "APPROVED" });
-  await s.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
-    orgId: s.orgId, applicationId, submittedQuotationMinor: G, source: "MANUAL_ENTRY",
-  });
-  await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId: s.orgId, applicationId, approvedAmountMinor: G, basis: "MANUAL", notes: "Approved at the quotation.",
-  });
-  await registerHandover(s.owner.as, api, s.orgId, applicationId);
-  await s.owner.as.mutation(api.applications.registerExpectedPayment, {
-    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
-  });
-  await s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
-    orgId: s.orgId, applicationId, legalInvoiceAmountMinor: G, legalInvoiceNumber: `INV-${applicationId}`,
-    legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
-  });
-  const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
-    expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
-    feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
-    deductedFromSettlement: false, actualAmountMinor: 0, description: "No closing costs.",
-  });
-  await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Matched." });
-  // The deposit H the dealership holds for this customer and car, and the contribution C.
-  await s.t.run(async (ctx) => {
-    await ctx.db.insert("deposits", {
-      orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, quoteId,
-      amount: H / SCALE, amountMinor: H, currency: "JOD", method: "CASH", status: "HELD", holdActive: true,
-      createdBy: (await ctx.db.query("users").first())!._id, createdAt: Date.now(),
-    } as never);
-    await ctx.db.patch(applicationId, { customerFirstPaymentMinor: H, dealerContributionMinor: C });
-  });
-  return { applicationId, quoteId };
-}
 
 async function finalizedDeal(tag: string) {
   const s = await seedDealership(tag);
   const { applicationId } = await readyDeal(s);
-  await s.owner.as.mutation(api.applications.finalizeDeal, {
-    idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
-  });
+  await finalizeAsOwner(s, applicationId);
   return { s, applicationId };
 }
 
@@ -181,21 +85,7 @@ const confirmTransfer = (s: Seeded, applicationId: Id<"financeApplications">, am
     orgId: s.orgId, applicationId, disbursedAmountMinor: amount, idempotencyKey: crypto.randomUUID(),
   });
 
-function messageOf(error: unknown): string {
-  const data = (error as { data?: unknown })?.data;
-  if (typeof data === "object" && data !== null && typeof (data as { message?: unknown }).message === "string") {
-    return (data as { message: string }).message;
-  }
-  return String(data ?? (error as Error)?.message ?? error);
-}
-async function refusalOf(promise: Promise<unknown>): Promise<string | null> {
-  try {
-    await promise;
-  } catch (error) {
-    return messageOf(error);
-  }
-  return null;
-}
+const refusalOf = refusalMessageOf;
 
 /** Net movement per system account across every POSTED event of a type, debit-positive. */
 async function netByAccount(s: Seeded, eventType: string) {
@@ -465,8 +355,8 @@ describe("SCRUM-435 - cancelling a finalized v2 deal", () => {
     const { s, applicationId } = await finalizedDeal("can1");
     expect(await refusalOf(cancel(s, applicationId, s.sales.as))).not.toBeNull();
     expect(await refusalOf(cancel(s, applicationId, s.accountant.as))).not.toBeNull();
-    // A user who may finalize but not confirm the transfer is told a manager cancels.
-    const finalizerOnly = ["finalize:financed_deal", "create:finance_application", "view:finance_applications"];
+    // A user who may cancel a closed deal but not confirm the transfer is told a manager cancels.
+    const finalizerOnly = ["cancel:closed_deal", "create:finance_application", "view:finance_applications"];
     const userId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "can1_fin", email: "can1.fin@example.com", name: "fin" }));
     const roleId = await s.t.run((ctx) => ctx.db.insert("roles", { orgId: s.orgId, name: "FINALIZER", permissions: finalizerOnly }));
     await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId }));
@@ -510,12 +400,7 @@ describe("SCRUM-435 - cancelling a finalized v2 deal", () => {
 describe("SCRUM-435 - v1 deals are never recomputed", () => {
   test("a deal without the v2 marker is NOT_DUE and the gate does not apply", async () => {
     const { s, applicationId } = await finalizedDeal("v1");
-    await s.t.run((ctx) =>
-      ctx.db.patch(applicationId, {
-        financedSalePlanVersion: undefined, financeCompanyForwardDueMinor: undefined,
-        financedSaleRecognitionFingerprint: "v1;JOD;L12500000;G12500000;N12500000;P0;C0;H0",
-      })
-    );
+    await downgradeToV1(s, applicationId);
     const proof = await proofOf(s, applicationId);
     expect(proof.state).toBe("NOT_DUE");
     expect(proof.applies).toBe(false);
@@ -553,23 +438,24 @@ describe("SCRUM-435 - the cockpit shows the same proof, tiered by permission", (
     expect(asSales?.forward.mayCancelFinalized).toBe(false);
   });
 
-  test("a role that may finalize and confirm but not create applications is not offered the cancel", async () => {
-    // cancelApplication requires CREATE_FINANCE_APPLICATION at entry, so the cockpit must not offer it.
+  test("SCRUM-413: a role that may cancel closed deals and confirm, WITHOUT create-application, is offered and accepted", async () => {
+    // Reversing a CLOSED deal is its own authority (cancel:closed_deal) and no longer needs
+    // CREATE_FINANCE_APPLICATION, so the cockpit offers it and the server accepts it.
     const { s, applicationId } = await finalizedDeal("cock3");
-    const perms = ["finalize:financed_deal", "confirm:finance_disbursement", "view:finance_applications", "view:sales"];
+    const perms = ["cancel:closed_deal", "confirm:finance_disbursement", "view:finance_applications", "view:sales", "edit:sales", "view:vehicles", "view:customers", "approve:requests"];
     const userId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "cock3_fc", email: "cock3.fc@example.com", name: "fc" }));
     const roleId = await s.t.run((ctx) => ctx.db.insert("roles", { orgId: s.orgId, name: "FIN_CONFIRM", permissions: perms }));
     await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId }));
     const asRole = s.t.withIdentity({ subject: "cock3_fc", clerkId: "cock3_fc" });
     const cockpit = await asRole.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
-    expect(cockpit?.forward.mayCancelFinalized).toBe(false);
+    expect(cockpit?.forward.mayCancelFinalized).toBe(true);
     // Both sides of "the cockpit offers exactly what the server accepts".
     const refusal = await refusalOf(
       asRole.mutation(api.applications.cancelApplication, {
         orgId: s.orgId, applicationId, reason: "Customer withdrew.", idempotencyKey: crypto.randomUUID(),
       })
     );
-    expect(refusal).toMatch(/create:finance_application/);
+    expect(refusal).toBeNull();
   });
 });
 
