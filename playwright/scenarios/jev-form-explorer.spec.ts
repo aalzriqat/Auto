@@ -43,6 +43,8 @@ const intEnv = (name: string, fallback: number) => {
 };
 const MAX_ATTEMPTS = intEnv("JEV_FORM_EXPLORER_ATTEMPTS", 30);
 const SEED = intEnv("JEV_FORM_EXPLORER_SEED", Date.now() % 100_000);
+/** Optional comma-separated form ids to attack (e.g. "lead"); empty means all. */
+const ONLY_FORMS = (process.env.JEV_FORM_EXPLORER_FORMS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 // "QA TEST F614-…" is the prefix agreed with the #430 scenario lane, which
 // shares this preview org and looks its own records up by exact name.
 /** Visible within the timeout. (locator.isVisible ignores its timeout: it never waits.) */
@@ -63,7 +65,8 @@ type FormSpec = {
   submit: RegExp;
   success: RegExp;
   /** Fills required controls the explorer cannot type into (pickers). */
-  prepare?: (dialog: Locator, page: Page) => Promise<boolean>;
+  /** Resolves true when set, or the reason it could not be. */
+  prepare?: (dialog: Locator, page: Page) => Promise<true | string>;
 };
 
 const FORMS: FormSpec[] = [
@@ -89,11 +92,11 @@ const FORMS: FormSpec[] = [
       const year = new Date().getFullYear() + 2;
       await dialog.getByRole("button", { name: /\b20\d\d\b/ }).first().click();
       const next = page.getByRole("button", { name: /next month/i });
-      if (!(await appeared(next, 5_000))) return false;
+      if (!(await appeared(next, 5_000))) return "date picker did not open";
       for (let i = 0; i < 24; i++) await next.click();
       await page.getByRole("gridcell", { name: "15", exact: true }).first().click();
       await page.keyboard.press("Escape"); // closes the date popover only
-      return appeared(dialog.getByRole("button", { name: new RegExp(`\\b${year}\\b`) }), 5_000);
+      return (await appeared(dialog.getByRole("button", { name: new RegExp(`\\b${year}\\b`) }), 5_000)) || `due date did not move to ${year}`;
     },
   },
   {
@@ -105,19 +108,35 @@ const FORMS: FormSpec[] = [
     success: /Lead added successfully/,
     // The customer picker is required: choose the customer this run seeded,
     // never a record another lane created.
-    prepare: async (dialog, page) => {
-      if (!seedConfirmed) return false;
-      await dialog.getByRole("button", { name: /Select customer/ }).click();
-      await page.getByPlaceholder(/^Search/).last().fill(`QA TEST ${RUN}-SEED`);
-      const options = page.locator('[data-testid^="searchable-option-"]');
-      if (!(await appeared(options.first(), 8_000))) return false;
-      // Exactly one match, and it is this run's seed: never a look-alike.
-      if ((await options.count()) !== 1 || !(await options.first().innerText()).includes(`QA TEST ${RUN}-SEED`)) return false;
-      await options.first().click();
+    prepare: async (dialog) => {
+      if (!seedConfirmed) return "this run's seed customer was not confirmed saved";
+      // LeadDialog renders t("SelectCustomer") || "Select a customer".
+      const picker = dialog.getByRole("button", { name: /^Select\s?(a\s)?customer$/i });
+      if (!(await appeared(picker, 5_000))) return "customer picker not found";
+      await picker.click();
+      // Scope to this picker's own dropdown: the page has other search boxes and lists.
+      const box = picker.locator("xpath=..");
+      const search = box.locator("input").first();
+      await search.fill(`QA TEST ${RUN}-SEED`);
+      const options = box.locator('[data-testid^="searchable-option-"]');
+      // The server also returns full-text matches ranked by shared words, so
+      // every "QA TEST" customer can appear. Exactly one option may carry this
+      // run's unique tag (Codex F614-05) — never pick a look-alike.
+      const seedOptions = options.filter({ hasText: `QA TEST ${RUN}-SEED` });
+      const found = await expect.poll(() => seedOptions.count(), { timeout: 10_000 }).toBe(1).then(() => true, () => false);
+      if (!found) {
+        const labels = (await options.allInnerTexts()).slice(0, 3).map((s) => s.replace(/\s+/g, " ").slice(0, 60));
+        return `no single picker option for the seed (saw ${await seedOptions.count()} of ${await options.count()}; value "${await search.inputValue()}", first ${JSON.stringify(labels)})`;
+      }
+      await seedOptions.first().click();
       return true;
     },
   },
 ];
+
+const unknownForms = ONLY_FORMS.filter((id) => !FORMS.some((f) => f.id === id));
+if (unknownForms.length) throw new Error(`JEV_FORM_EXPLORER_FORMS names unknown forms: ${unknownForms.join(", ")}`);
+const inScope = (f: FormSpec) => ONLY_FORMS.length === 0 || ONLY_FORMS.includes(f.id);
 
 /** Screens that write just by being viewed (jev-explorer.spec.ts, Codex AF-430-04). */
 const WRITES_ON_VIEW = /\/(messages|notifications|social-inbox)(\/|$|\?)/;
@@ -364,9 +383,12 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       // it is reported as inconclusive, never as "Save did nothing".
       const dialog = await openForm(c.form);
       if (!dialog) return { outcome: "ignored", warned: false, tag, setupFailed: "form did not open" };
-      if (c.form.prepare && !(await c.form.prepare(dialog, page).catch(() => false))) {
+      const prepared = c.form.prepare
+        ? await c.form.prepare(dialog, page).catch((e: unknown) => String(e instanceof Error ? e.message : e).split("\n")[0])
+        : true;
+      if (prepared !== true) {
         await closeDialog(dialog);
-        return { outcome: "ignored", warned: false, tag, setupFailed: "could not set the form's pickers (seed customer or due date)" };
+        return { outcome: "ignored", warned: false, tag, setupFailed: `could not set the form's pickers: ${prepared}` };
       }
       const values = new Map<string, string>();
       for (const f of fields) if (f.required) values.set(f.label, baselineValue(f.kind, tag, Date.now() + slot));
@@ -432,7 +454,7 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
     // never attaches leads to another lane's records.
     const customerForm = FORMS.find((f) => f.id === "customer");
     const customerFields = fieldsByForm.get("customer");
-    if (MAX_ATTEMPTS > 0 && customerForm && customerFields) {
+    if (MAX_ATTEMPTS > 0 && FORMS.some((f) => f.id === "lead" && inScope(f)) && customerForm && customerFields) {
       const dialog = await openForm(customerForm);
       if (dialog) {
         const seedTag = `${RUN}-SEED`;
@@ -448,7 +470,7 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
     }
 
     let pool: Candidate[] = shuffle(
-      FORMS.flatMap((form) => (fieldsByForm.get(form.id) ?? []).flatMap((field) => rulesFor(field).map((rule) => ({ form, field, rule })))),
+      FORMS.filter(inScope).flatMap((form) => (fieldsByForm.get(form.id) ?? []).flatMap((field) => rulesFor(field).map((rule) => ({ form, field, rule })))),
       random,
     );
 
