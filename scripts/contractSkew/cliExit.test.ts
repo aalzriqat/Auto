@@ -1122,7 +1122,7 @@ describe("SCRUM-178 v2 batch 5 (D-30): acceptance is per call, absence is not ac
       const dir = scaffold({ client: SENDS_NOPE, spec: sameSpec(), candidate: sameSpec() });
       const r = run(dir, releaseArgsJ);
       expect(r.code, r.stderr).toBe(0);
-      expect(r.stderr).toMatch(/STANDING CONTRACT DEFECT — 1 break\(s\)\./);
+      expect(r.stderr).toMatch(/STANDING CONTRACT DEFECT — 1 break\(s\)\. The current backend/);
       expect(r.stderr).not.toMatch(/STANDING CONTRACT DEFECT — \d+ path\(s\)/);
     }, 300_000);
 
