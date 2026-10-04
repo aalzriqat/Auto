@@ -88,9 +88,6 @@ export async function postQuoteDeposit(
       orgId: args.orgId,
       vehicleId: item.vehicleId,
       lineage: { quoteId: quote._id, adoptReservationId: args.adoptReservationId },
-      // SCRUM-641: `holdVehicleForDeposit` below already reads each car and refuses a deleted one
-      // (rolled back with the transaction); skipping the extra read keeps the 4096-range budget.
-      livenessAlreadyChecked: true,
     });
   }
   for (const item of depositVehicleItems) {
@@ -126,9 +123,6 @@ export async function postQuoteDeposit(
       createdBy: args.actorId,
       evidence: { kind: "DEPOSIT", depositId },
       lineage: { quoteId: quote._id, adoptReservationId: args.adoptReservationId },
-      // SCRUM-641: `holdVehicleForDeposit` above already refused a deleted car on EVERY line
-      // in this same transaction; do not pay the read again per car.
-      livenessAlreadyChecked: true,
     });
     episodeByVehicle.set(String(item.vehicleId), claimId);
   }

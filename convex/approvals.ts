@@ -218,8 +218,9 @@ export const profitApprovalStatus = query({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.orgId !== args.orgId) return null;
-    // SCRUM-641 (D-35): a deleted car reads like a missing one — never APPROVED, whatever rows exist.
-    if (vehicle.isDeleted === true) return null;
+    // SCRUM-641 (D-35): a deleted car is never APPROVED, whatever rows exist, and the screens must
+    // not read it as "no approval needed" (null is non-blocking), so it gets its own blocked state.
+    if (vehicle.isDeleted === true) return { status: "VEHICLE_DELETED" as const };
 
     const currency = await getOrgCurrency(ctx, args.orgId);
     let decision;

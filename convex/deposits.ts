@@ -792,6 +792,11 @@ export const resolveReleasedAllocation = mutation({
       depositId: hold.depositId,
     };
 
+    // SCRUM-641 (D-35): re-holding a soft-deleted car is a fresh acquisition; refuse before any write.
+    if (args.treatment === "RETURN_TO_UNALLOCATED") {
+      await assertDepositTargetNotDeleted(ctx, args.orgId, hold.vehicleId);
+    }
+
     if (args.treatment === "REALLOCATE_TO_VEHICLE") {
       if (!args.toVehicleId) {
         throw new ConvexError("Name the vehicle that is to receive the released amount.");

@@ -39,8 +39,12 @@ export function useProfitApproval(args: {
   );
   // INVALID is deliberately not blocking: the server refuses that price with an
   // error naming the amount, which a silently disabled button would hide.
+  // VEHICLE_DELETED (SCRUM-641) blocks too: the server refuses any completion on a deleted car.
   const needsApproval =
-    verdict?.status === "REQUIRED" || verdict?.status === "PENDING" || verdict?.status === "REJECTED";
+    verdict?.status === "REQUIRED" ||
+    verdict?.status === "PENDING" ||
+    verdict?.status === "REJECTED" ||
+    verdict?.status === "VEHICLE_DELETED";
   return {
     verdict: active ? verdict : undefined,
     blocked: !!args.loading || (active && (verdict === undefined || needsApproval)),
@@ -61,6 +65,18 @@ export function ProfitApprovalNotice({ approval }: { approval: ProfitApproval })
   const [isRequesting, setIsRequesting] = useState(false);
 
   if (!verdict || !request || verdict.status === "NOT_REQUIRED" || verdict.status === "INVALID") return null;
+
+  if (verdict.status === "VEHICLE_DELETED") {
+    return (
+      <p
+        role="alert"
+        className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm font-medium text-red-700 dark:text-red-400"
+      >
+        <ShieldAlert className="h-4 w-4 shrink-0" aria-hidden="true" />
+        {t("ServerError_VEHICLE_DELETED" as any)}
+      </p>
+    );
+  }
 
   if (verdict.status === "APPROVED") {
     return (

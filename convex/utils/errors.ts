@@ -165,6 +165,7 @@ export const AppErrorCode = {
   // with this code. Reversal paths (refund, forfeit, release, rejection, cancellation) stay open.
   // Translated under ServerError_<code>.
   VEHICLE_DELETED: "VEHICLE_DELETED",
+  VEHICLE_DELETED_FLAG_LOCKED: "VEHICLE_DELETED_FLAG_LOCKED",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];

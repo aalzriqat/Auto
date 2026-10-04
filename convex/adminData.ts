@@ -154,8 +154,8 @@ function assertPatchDoesNotForgeVehicleLifecycle(
   // CHANGE is refused, so a round-tripped record that re-sends the current value still saves.
   if ("isDeleted" in next && Boolean(next.isDeleted) !== Boolean(before.isDeleted)) {
     throwAppError(
-      AppErrorCode.VALIDATION_FAILED,
-      "A vehicle's isDeleted flag is set by the vehicle delete and restore workflow, not by direct edit. Use that workflow instead."
+      AppErrorCode.VEHICLE_DELETED_FLAG_LOCKED,
+      "A vehicle's deleted status cannot be changed by direct edit. Use the vehicle delete or restore workflow instead."
     );
   }
 }

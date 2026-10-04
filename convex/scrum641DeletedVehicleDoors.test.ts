@@ -59,6 +59,9 @@ const PRICE = 30_000;
 const VEHICLE_DELETED_MESSAGE =
   "This vehicle has been deleted and can no longer be quoted, reserved, sold or take a deposit.";
 
+const ADMIN_FLAG_LOCKED_MESSAGE =
+  "A vehicle's deleted status cannot be changed by direct edit. Use the vehicle delete or restore workflow instead.";
+
 async function expectDeleted(attempt: Promise<unknown>): Promise<void> {
   await expectAppError(attempt, "VEHICLE_DELETED", VEHICLE_DELETED_MESSAGE);
 }
@@ -558,6 +561,47 @@ describe("6. reservations and finance applications", () => {
     expect((await seed.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("UNDER_REVIEW");
   });
 
+  test("updateStatus APPROVED refuses a missing or foreign car as VEHICLE_NOT_FOUND (financeApplications.vehicleId is required)", async () => {
+    const NOT_FOUND = "Vehicle not found in this organization.";
+    const live = await inFlightApplicationOnDeletedCar("c6f0");
+    await live.seed.t.run((ctx) => ctx.db.patch(live.v, { isDeleted: false })); // control: a live car approves
+    await live.seed.asManager.mutation(api.applications.updateStatus, {
+      orgId: live.seed.orgId,
+      applicationId: live.applicationId,
+      status: "APPROVED" as const,
+    });
+    expect((await live.seed.t.run((ctx) => ctx.db.get(live.applicationId)))?.status).toBe("APPROVED");
+
+    const missing = await inFlightApplicationOnDeletedCar("c6f1");
+    await missing.seed.t.run((ctx) => ctx.db.delete(missing.v)); // dangling vehicleId
+    await expectAppError(
+      missing.seed.asManager.mutation(api.applications.updateStatus, {
+        orgId: missing.seed.orgId,
+        applicationId: missing.applicationId,
+        status: "APPROVED" as const,
+      }),
+      "VEHICLE_NOT_FOUND",
+      NOT_FOUND
+    );
+    expect((await missing.seed.t.run((ctx) => ctx.db.get(missing.applicationId)))?.status).toBe("UNDER_REVIEW");
+
+    const foreign = await inFlightApplicationOnDeletedCar("c6f2");
+    const otherOrg = await foreign.seed.t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Other dealer", createdAt: Date.now() })
+    );
+    await foreign.seed.t.run((ctx) => ctx.db.patch(foreign.v, { orgId: otherOrg, isDeleted: false }));
+    await expectAppError(
+      foreign.seed.asManager.mutation(api.applications.updateStatus, {
+        orgId: foreign.seed.orgId,
+        applicationId: foreign.applicationId,
+        status: "APPROVED" as const,
+      }),
+      "VEHICLE_NOT_FOUND",
+      NOT_FOUND
+    );
+    expect((await foreign.seed.t.run((ctx) => ctx.db.get(foreign.applicationId)))?.status).toBe("UNDER_REVIEW");
+  });
+
   test("rejection and cancellation of an application on a deleted car still work", async () => {
     const rejected = await inFlightApplicationOnDeletedCar("c6d1");
     await rejected.seed.asManager.mutation(api.applications.updateStatus, {
@@ -659,7 +703,8 @@ describe("7. profit-approval authority", () => {
     );
 
     await softDelete(seed, v);
-    expect(await status(), "a deleted car is not reported APPROVED").not.toMatchObject({ status: "APPROVED" });
+    // A reason-coded BLOCKED state, never null (the screens read null as "nothing to approve").
+    expect(await status(), "a deleted car reads VEHICLE_DELETED").toEqual({ status: "VEHICLE_DELETED" });
     const deletedVehicle = await seed.t.run((ctx) => ctx.db.get(v));
     await expectDeleted(
       seed.t.run((ctx) =>
@@ -767,9 +812,11 @@ describe("9. the raw admin editor cannot flip vehicles.isDeleted", () => {
       const asAdmin = seed.t.withIdentity({ subject: "dev_1" });
       const v = await vehicle(seed);
 
-      await expect(
-        asAdmin.mutation(api.adminData.adminUpdateRecord, { table: "vehicles", id: v, patch: { isDeleted: true } })
-      ).rejects.toThrow(/isDeleted/);
+      await expectAppError(
+        asAdmin.mutation(api.adminData.adminUpdateRecord, { table: "vehicles", id: v, patch: { isDeleted: true } }),
+        "VEHICLE_DELETED_FLAG_LOCKED",
+        ADMIN_FLAG_LOCKED_MESSAGE
+      );
       expect((await seed.t.run((ctx) => ctx.db.get(v)))?.isDeleted, "still live").not.toBe(true);
 
       await asAdmin.mutation(api.adminData.adminUpdateRecord, { table: "vehicles", id: v, patch: { color: "Blue" } });
@@ -784,9 +831,11 @@ describe("9. the raw admin editor cannot flip vehicles.isDeleted", () => {
       expect((await seed.t.run((ctx) => ctx.db.get(v)))?.color).toBe("Green");
 
       await forceDeleted(seed, v);
-      await expect(
-        asAdmin.mutation(api.adminData.adminUpdateRecord, { table: "vehicles", id: v, patch: { isDeleted: false } })
-      ).rejects.toThrow(/isDeleted/);
+      await expectAppError(
+        asAdmin.mutation(api.adminData.adminUpdateRecord, { table: "vehicles", id: v, patch: { isDeleted: false } }),
+        "VEHICLE_DELETED_FLAG_LOCKED",
+        ADMIN_FLAG_LOCKED_MESSAGE
+      );
       expect((await seed.t.run((ctx) => ctx.db.get(v)))?.isDeleted).toBe(true);
     } finally {
       process.env.SUPER_ADMIN_EMAILS = previous;

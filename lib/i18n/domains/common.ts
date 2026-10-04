@@ -301,6 +301,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This vehicle has been deleted and can no longer be quoted, reserved, sold or take a deposit.",
     "تم حذف هذه السيارة ولم يعد بالإمكان تسعيرها أو حجزها أو بيعها أو استلام عربون عليها.",
   ],
+  ServerError_VEHICLE_DELETED_FLAG_LOCKED: [
+    "A vehicle's deleted status cannot be changed by direct edit. Use the vehicle delete or restore workflow instead.",
+    "لا يمكن تغيير حالة حذف السيارة عبر التعديل المباشر. استخدم إجراء حذف السيارة أو استعادتها بدلاً من ذلك.",
+  ],
   FinanceCompanyReceivables: ["Finance-company receivables", "ذمم شركات التمويل"],
   FinanceCompanyReceivablesDesc: ["Amounts due from finance companies. Open the originating deal to review or settle them.", "المبالغ المستحقة من شركات التمويل. افتح الصفقة الأصلية للمراجعة أو التسوية."],
   DocumentNumber: ["Document number", "رقم المستند"],
