@@ -248,12 +248,6 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
     expectedPayment: "CASH",
     forwardMethod: "CASH",
     expect: {
-      // The company's cash is posted to the bank (1110), not cash on hand (1100).
-      knownDefect: {
-        key: "SCRUM-599",
-        step: "disbursement",
-        posts: { "1110": { dr: jod(13_000) }, "1210": { cr: jod(13_000) } },
-      },
       close: {
         "1210": { dr: jod(13_000) },
         "4100": { cr: jod(13_000) },
@@ -381,11 +375,6 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
     expectedPayment: "CASH",
     // As F01: contribution 0, nothing to forward.
     expect: {
-      knownDefect: {
-        key: "SCRUM-599",
-        step: "disbursement",
-        posts: { "1110": { dr: jod(13_000) }, "1210": { cr: jod(13_000) } },
-      },
       close: { "1210": { dr: jod(13_000) }, "4100": { cr: jod(13_000) }, ...COST_OF_SALE },
       disbursement: { "1100": { dr: jod(13_000) }, "1210": { cr: jod(13_000) } },
     },
@@ -445,11 +434,6 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
     forwardMethod: "CARD",
     // contribution 900; forward = 900 + 900 = 1,800.
     expect: {
-      knownDefect: {
-        key: "SCRUM-599",
-        step: "disbursement",
-        posts: { "1110": { dr: jod(13_000) }, "1210": { cr: jod(13_000) } },
-      },
       deposit: { "1110": { dr: jod(900) }, "2100": { cr: jod(900) } },
       close: {
         "1210": { dr: jod(13_000) },
