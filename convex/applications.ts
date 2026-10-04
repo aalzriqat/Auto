@@ -2489,14 +2489,22 @@ export const dealCockpit = query({
           (role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT) &&
             role.permissions.includes(PERMISSIONS.VIEW_FINANCE)),
         /**
-         * A finalized v2 deal is cancelled by a manager. False for a caller the
-         * server would refuse, so the screen offers only what is accepted.
+         * Whether this caller may cancel the application in its current status,
+         * mirroring `cancelApplication` exactly (SCRUM-413 D-b): a CLOSED deal
+         * needs CANCEL_CLOSED_DEAL (and, on a v2 deal, the disbursement
+         * authority) and NOT CREATE; every other status needs CREATE, plus the
+         * approval authority once APPROVED. False for a caller the server would
+         * refuse, so the screen offers only what is accepted.
          */
         mayCancelFinalized:
           isSystemOwnerRole(role) ||
-          (role.permissions.includes(PERMISSIONS.CREATE_FINANCE_APPLICATION) &&
-            role.permissions.includes(PERMISSIONS.FINALIZE_FINANCED_DEAL) &&
-            role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT)),
+          (app.status === "CLOSED"
+            ? role.permissions.includes(PERMISSIONS.CANCEL_CLOSED_DEAL) &&
+              (planVersionOf(app) !== 2 ||
+                role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT))
+            : role.permissions.includes(PERMISSIONS.CREATE_FINANCE_APPLICATION) &&
+              (app.status !== "APPROVED" ||
+                role.permissions.includes(PERMISSIONS.APPROVE_FINANCE_APPLICATION))),
       },
       /**
        * SCRUM-239: the bank returned the finance company's cheque AFTER it
@@ -3362,7 +3370,25 @@ export const cancelApplication = mutation({
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
-    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_FINANCE_APPLICATION]);
+    // SCRUM-413 D-b: the entry gate is status-sensitive, but the status is not
+    // known until the application is loaded inside the idempotent body. So the
+    // entry admits EITHER holder (CREATE for every status but CLOSED;
+    // CANCEL_CLOSED for CLOSED), and the body then requires the one that
+    // matches the loaded status. A replay is keyed by org + operation + key,
+    // not by actor, so this entry gate is what bounds who may be served one.
+    let createRefusal: unknown = null;
+    let auth: Awaited<ReturnType<typeof requireTenantAuth>>;
+    try {
+      auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_FINANCE_APPLICATION]);
+    } catch (error) {
+      createRefusal = error;
+      try {
+        auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CANCEL_CLOSED_DEAL]);
+      } catch {
+        // Neither holder: surface the original (CREATE) refusal unchanged.
+        throw error;
+      }
+    }
 
     return await runWithIdempotency(
       ctx,
@@ -3383,6 +3409,16 @@ export const cancelApplication = mutation({
         const app = await ctx.db.get(args.applicationId);
         if (!app || app.orgId !== args.orgId) {
           throw new ConvexError("Application not found");
+        }
+
+        // SCRUM-413 D-b: the authority this status needs. CLOSED takes
+        // CANCEL_CLOSED and deliberately NOT CREATE (reversing a closed deal is
+        // its own authority); every other status, including a fresh key against
+        // an already-CANCELLED application, takes CREATE.
+        if (app.status === "CLOSED") {
+          await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CANCEL_CLOSED_DEAL]);
+        } else if (createRefusal !== null) {
+          throw createRefusal;
         }
 
         if (app.status === "CANCELLED") {
@@ -3453,9 +3489,8 @@ export const cancelApplication = mutation({
 
         if (app.status === "CLOSED") {
           // Undoing a finalized deal touches the sale, vehicle, deposits, and
-          // posted GL — require finalization authority (the same permission
-          // needed to close the deal in the first place), not just approval.
-          await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.FINALIZE_FINANCED_DEAL]);
+          // posted GL — CANCEL_CLOSED_DEAL was already required above, before
+          // any other work, for exactly this status.
 
           // SCRUM-435 (v2 deals only; v1 is unchanged): the deal has payments the
           // finance company holds, so a manager cancels it - never sales or an
@@ -4267,18 +4302,14 @@ export const setSupplierSettlementRoute = mutation({
     route: consignedSettlementRouteValidator,
   },
   handler: async (ctx, args) => {
-    // `FINALIZE_FINANCED_DEAL`, not `MANAGE_FINANCE`. The decision has to belong
-    // to whoever triggers the posting, and the default MANAGER and SALES
-    // templates hold the former and not the latter — so gating this on
-    // MANAGE_FINANCE hid the selector from exactly the people who close these
-    // deals and know which way the cheque was made out. They would finalize
-    // with no route recorded, an absent route reads as THROUGH_DEALERSHIP, and
-    // the deal posts the inversion this whole change exists to remove.
-    //
-    // Chosen over adding MANAGE_FINANCE to the MANAGER template, which would
-    // widen access to every other finance mutation and needs a role backfill.
+    // SCRUM-413 D-a: `MANAGE_SUPPLIER_SETTLEMENT`, its own authority (it was
+    // `finalize:financed_deal`, which the SALES template carried, so every
+    // salesperson could decide where the finance company's cheque was made
+    // out). The default MANAGER and ACCOUNTANT templates hold it; SALES does
+    // not. An absent route reads as THROUGH_DEALERSHIP, so whoever records
+    // it must be someone who knows which way the cheque was made out.
     const { user } = await requireTenantAuth(ctx, args.orgId, [
-      PERMISSIONS.FINALIZE_FINANCED_DEAL,
+      PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT,
     ]);
 
     const app = await ctx.db.get(args.applicationId);
@@ -4575,8 +4606,7 @@ export const finalizeDeal = mutation({
   handler: async (ctx, args) => {
     // Closing a financed deal is an ACCOUNTANT's act (owner ruling, SCRUM-407):
     // it recognizes the sale, opens the receivables and posts the journal, so it
-    // takes the disbursement authority the accountant templates hold — not
-    // `FINALIZE_FINANCED_DEAL`, which the SALES template carries.
+    // takes the disbursement authority the accountant templates hold.
     const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
     // The default MANAGER template confirms disbursements WITHOUT view:finance,
     // so a refused finalize is redacted exactly as `getClosingReadiness`

@@ -2513,7 +2513,7 @@ describe("SCRUM-121A-PRE — Codex R4 findings, validated independently", () => 
     await t.run(async (ctx) => {
       const role = await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
       await ctx.db.patch(role!._id, {
-        permissions: [...role!.permissions, "create:finance_application", "finalize:financed_deal"],
+        permissions: [...role!.permissions, "create:finance_application", "cancel:closed_deal"],
       });
     });
 
@@ -3027,7 +3027,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     await t.run(async (ctx) => {
       const role = await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
       await ctx.db.patch(role!._id, {
-        permissions: [...role!.permissions, "create:finance_application", "finalize:financed_deal"],
+        permissions: [...role!.permissions, "create:finance_application", "cancel:closed_deal"],
       });
     });
 
@@ -3122,7 +3122,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     await t.run(async (ctx) => {
       const role = await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
       await ctx.db.patch(role!._id, {
-        permissions: [...role!.permissions, "create:finance_application", "finalize:financed_deal"],
+        permissions: [...role!.permissions, "create:finance_application", "cancel:closed_deal"],
       });
     });
 
@@ -3351,7 +3351,7 @@ describe("SCRUM-121A-PRE — verification floor", () => {
     await t.run(async (ctx) => {
       const role = await ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).first();
       await ctx.db.patch(role!._id, {
-        permissions: [...role!.permissions, "create:finance_application", "finalize:financed_deal"],
+        permissions: [...role!.permissions, "create:finance_application", "cancel:closed_deal"],
       });
     });
 

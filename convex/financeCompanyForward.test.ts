@@ -33,7 +33,7 @@ const ALL_PERMS = [
   "approve:requests",
   "view:finance_applications", "create:finance_application",
   "review:finance_application", "approve:finance_application",
-  "finalize:financed_deal", "confirm:finance_disbursement",
+  "manage:supplier_settlement", "cancel:closed_deal", "confirm:finance_disbursement",
   "verify:finance_documents", "register:vehicle_handover",
   "register:expected_payment",
   "manage:finance", "view:finance",
@@ -44,7 +44,7 @@ const ALL_PERMS = [
 const MANAGER_PERMS = ALL_PERMS.filter((p) => p !== "view:finance" && p !== "manage:finance");
 /** SALES: no finalization, no disbursement, no finance view. */
 const SALES_PERMS = ALL_PERMS.filter(
-  (p) => !["finalize:financed_deal", "confirm:finance_disbursement", "view:finance", "manage:finance"].includes(p)
+  (p) => !["manage:supplier_settlement", "cancel:closed_deal", "confirm:finance_disbursement", "view:finance", "manage:finance"].includes(p)
 );
 /** ACCOUNTANT: reads and posts finance, but does not finalize or confirm the transfer. */
 const ACCOUNTANT_PERMS = ["view:finance", "manage:finance", "view:finance_applications", "view:reports"];
@@ -465,8 +465,8 @@ describe("SCRUM-435 - cancelling a finalized v2 deal", () => {
     const { s, applicationId } = await finalizedDeal("can1");
     expect(await refusalOf(cancel(s, applicationId, s.sales.as))).not.toBeNull();
     expect(await refusalOf(cancel(s, applicationId, s.accountant.as))).not.toBeNull();
-    // A user who may finalize but not confirm the transfer is told a manager cancels.
-    const finalizerOnly = ["finalize:financed_deal", "create:finance_application", "view:finance_applications"];
+    // A user who may cancel a closed deal but not confirm the transfer is told a manager cancels.
+    const finalizerOnly = ["cancel:closed_deal", "create:finance_application", "view:finance_applications"];
     const userId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "can1_fin", email: "can1.fin@example.com", name: "fin" }));
     const roleId = await s.t.run((ctx) => ctx.db.insert("roles", { orgId: s.orgId, name: "FINALIZER", permissions: finalizerOnly }));
     await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId }));
@@ -553,23 +553,24 @@ describe("SCRUM-435 - the cockpit shows the same proof, tiered by permission", (
     expect(asSales?.forward.mayCancelFinalized).toBe(false);
   });
 
-  test("a role that may finalize and confirm but not create applications is not offered the cancel", async () => {
-    // cancelApplication requires CREATE_FINANCE_APPLICATION at entry, so the cockpit must not offer it.
+  test("SCRUM-413: a role that may cancel closed deals and confirm, WITHOUT create-application, is offered and accepted", async () => {
+    // Reversing a CLOSED deal is its own authority (cancel:closed_deal) and no longer needs
+    // CREATE_FINANCE_APPLICATION, so the cockpit offers it and the server accepts it.
     const { s, applicationId } = await finalizedDeal("cock3");
-    const perms = ["finalize:financed_deal", "confirm:finance_disbursement", "view:finance_applications", "view:sales"];
+    const perms = ["cancel:closed_deal", "confirm:finance_disbursement", "view:finance_applications", "view:sales", "edit:sales", "view:vehicles", "view:customers", "approve:requests"];
     const userId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "cock3_fc", email: "cock3.fc@example.com", name: "fc" }));
     const roleId = await s.t.run((ctx) => ctx.db.insert("roles", { orgId: s.orgId, name: "FIN_CONFIRM", permissions: perms }));
     await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId }));
     const asRole = s.t.withIdentity({ subject: "cock3_fc", clerkId: "cock3_fc" });
     const cockpit = await asRole.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
-    expect(cockpit?.forward.mayCancelFinalized).toBe(false);
+    expect(cockpit?.forward.mayCancelFinalized).toBe(true);
     // Both sides of "the cockpit offers exactly what the server accepts".
     const refusal = await refusalOf(
       asRole.mutation(api.applications.cancelApplication, {
         orgId: s.orgId, applicationId, reason: "Customer withdrew.", idempotencyKey: crypto.randomUUID(),
       })
     );
-    expect(refusal).toMatch(/create:finance_application/);
+    expect(refusal).toBeNull();
   });
 });
 

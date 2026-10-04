@@ -2837,7 +2837,7 @@ export const salesEn = {
    * Both blockers at once, and the pointer withheld on purpose.
    *
    * Recording the route (`setSupplierSettlementRoute`) needs
-   * `finalize:financed_deal`; closing (`finalizeDeal`) needs
+   * `manage:supplier_settlement`; closing (`finalizeDeal`) needs
    * `confirm:finance_disbursement`. Shown when the caller lacks the ROUTE
    * permission — the review dialog hides the selector from them, so sending
    * them there would be sending them to an empty screen.

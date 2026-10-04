@@ -1081,10 +1081,12 @@ export function DealCockpit({
   const canReviewApplication = !permissionsLoading && hasPermission(PERMISSIONS.REVIEW_FINANCE_APPLICATION);
   const canApproveApplication = !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
   const canCreateApplication = !permissionsLoading && hasPermission(PERMISSIONS.CREATE_FINANCE_APPLICATION);
-  // Recording the settlement route and cancelling a CLOSED deal are still
-  // gated server-side on `finalize:financed_deal`; closing the deal itself is
-  // not — see `canCloseDeal` below.
-  const canFinalizeApplication = !permissionsLoading && hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+  // SCRUM-413: recording the settlement route and cancelling a CLOSED deal are
+  // each their own server-side authority (the retired finalize permission no
+  // longer gates either); closing the deal itself is a third — see
+  // `canCloseDeal` below.
+  const canRecordSupplierRoute = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+  const canCancelClosedDeal = !permissionsLoading && hasPermission(PERMISSIONS.CANCEL_CLOSED_DEAL);
   const canVerifyDocuments = !permissionsLoading && hasPermission(PERMISSIONS.VERIFY_FINANCE_DOCUMENTS);
   const documentsSettled = deal != null && SETTLED_FINANCE_STATUSES.includes(deal.status);
   const canConfirmFinanceDisbursement =
@@ -1681,10 +1683,10 @@ export function DealCockpit({
     : undefined;
   // The route is a decision about a deal that has not posted yet; once it
   // closes, changing it is a correction and the server refuses it there too.
-  // Keyed on FINALIZE_FINANCED_DEAL, matching the server.
+  // Keyed on MANAGE_SUPPLIER_SETTLEMENT, matching the server.
   const canChooseSettlementRoute =
     app != null &&
-    canFinalizeApplication &&
+    canRecordSupplierRoute &&
     isConsignedDeal &&
     app.status !== "CLOSED" &&
     app.status !== "CANCELLED";
@@ -1733,15 +1735,16 @@ export function DealCockpit({
     app.canSettleDirectToSupplier &&
     !app.supplierDisbursementStatus;
   // Mirror the backend permission tiers exactly.
+  // SCRUM-413: a CLOSED deal is reversed with CANCEL_CLOSED_DEAL alone (no
+  // create-application authority); every other status keeps create (+ approve
+  // once APPROVED). Where the server's own answer (`mayCancelFinalized`, the
+  // same status-sensitive rule) is present it is the only thing offered.
   const canCancel =
     app != null &&
     app.status !== "CANCELLED" &&
-    canCreateApplication &&
-    (app.status === "APPROVED" ? canApproveApplication : true) &&
-    (app.status === "CLOSED" ? canFinalizeApplication : true) &&
-    // SCRUM-435: a finalized v2 deal is cancelled by a manager; the server's own
-    // answer (`mayCancelFinalized`) is the only thing offered here.
-    (app.status === "CLOSED" && deal?.forward?.planV2 === true ? deal.forward.mayCancelFinalized === true : true);
+    (app.status === "CLOSED"
+      ? canCancelClosedDeal && (deal?.forward ? deal.forward.mayCancelFinalized === true : true)
+      : canCreateApplication && (app.status === "APPROVED" ? canApproveApplication : true));
   const forwardBlocksTransfer =
     deal?.forward?.applies === true && deal.forward.state !== "SETTLED" && deal.forward.state !== "NOT_DUE";
   const applicationDeposits: DealDeposit[] = (app?.deposits ?? []).map((deposit) => ({
@@ -2269,7 +2272,7 @@ export function DealCockpit({
       ? FINALIZE_DENOMINATION_REASON[finalizeDenominationBlock]
       : finalizeUnavailableReasonKey({
           routeRequired: settlementRouteRequired,
-          canRecordRoute: canFinalizeApplication,
+          canRecordRoute: canRecordSupplierRoute,
           heldDepositBlocksDirectClose:
             app?.supplierSettlementRoute === "DIRECT_TO_SUPPLIER" &&
             (app.deposits ?? []).some((deposit) => deposit.status === "HELD"),
@@ -2917,7 +2920,7 @@ export function DealCockpit({
         app?.status === "CLOSED" &&
         deal?.forward?.planV2 === true &&
         deal.forward.mayCancelFinalized !== true &&
-        canCreateApplication
+        canCancelClosedDeal
       }
       settlementRoute={
         canChooseSettlementRoute && app

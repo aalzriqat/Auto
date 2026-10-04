@@ -1062,7 +1062,7 @@ export const update = mutation({
           if (planVersionOf(app) === 2) {
             try {
               await requireTenantAuth(ctx, args.orgId, [
-                PERMISSIONS.FINALIZE_FINANCED_DEAL,
+                PERMISSIONS.CANCEL_CLOSED_DEAL,
                 PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
               ]);
             } catch {
