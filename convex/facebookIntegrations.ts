@@ -1,5 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { action, query, internalQuery, internalAction } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { mutation, internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import { requireOwner, requireTenantAuth } from "./utils/tenancy";
@@ -282,6 +284,23 @@ export const consumeOAuthState = internalMutation({
   },
 });
 
+export const FACEBOOK_PAGE_IN_USE_MESSAGE =
+  "This Facebook Page is already connected to another AutoFlow organization. Disconnect it there first.";
+
+/**
+ * The webhook resolves an org by Page id, so a Page may belong to one org only;
+ * a second holder made every delivery for it ambiguous (SCRUM-622).
+ */
+async function assertFacebookPageFree(ctx: MutationCtx, orgId: Id<"organizations">, facebookPageId: string) {
+  const holders = await ctx.db
+    .query("orgSettings")
+    .withIndex("by_facebook_page_id", (q) => q.eq("facebookPageId", facebookPageId))
+    .take(2);
+  if (holders.some((settings) => settings.orgId !== orgId)) {
+    throw new ConvexError(FACEBOOK_PAGE_IN_USE_MESSAGE);
+  }
+}
+
 export const saveFacebookCredentials = internalMutation({
   args: {
     orgId: v.id("organizations"),
@@ -293,6 +312,7 @@ export const saveFacebookCredentials = internalMutation({
   },
   handler: async (ctx, args) => {
     const { orgId, ...fields } = args;
+    await assertFacebookPageFree(ctx, orgId, fields.facebookPageId);
     const existing = await ctx.db
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", orgId))
@@ -482,6 +502,8 @@ export const validateFacebookPageSelectAuth = internalMutation({
     if (!cred) {
       throw new ConvexError("The selected Facebook Page is not in the pending list. Please reconnect via OAuth.");
     }
+    // Refuse before the action subscribes the Page, not only at save time.
+    await assertFacebookPageFree(ctx, args.orgId, cred.id);
     return {
       pageId: cred.id,
       pageName: cred.name,
