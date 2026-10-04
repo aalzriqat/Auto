@@ -490,11 +490,17 @@ export const saveQuote = mutation({
       manualCommission,
       manualIncludesCommissionInDebt,
       customerEligibilityStatusIds: _clientStatusIds,
+      vehicleItems,
       ...quoteArgs
     } = args;
 
     return await ctx.db.insert("quotes", {
       ...quoteArgs,
+      // SCRUM-629: an empty list is the single-vehicle shape (priced above from
+      // `vehicleId`), so it is stored as ABSENT. Every reader iterates
+      // `vehicleItems ?? [{ vehicleId }]`, and a stored `[]` would make them
+      // check and hold no car at all.
+      ...(vehicleItems && vehicleItems.length > 0 ? { vehicleItems } : {}),
       vehicleId,
       vehiclePrice,
       // Always written, never left undefined: `applications.finalizeDeal` reads

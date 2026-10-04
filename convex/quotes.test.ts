@@ -64,6 +64,26 @@ describe("quotes.get", () => {
     expect(quote?.vehiclePrice).toBe(19000);
   });
 
+  test("an empty vehicle list is stored as the single-vehicle shape, never as []", async () => {
+    // SCRUM-629 (CodeRabbit 4177755727): readers iterate
+    // `vehicleItems ?? [{ vehicleId }]`; a stored [] would skip every car check.
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 19000,
+      downPayment: 1000,
+      termMonths: 0,
+      vehicleItems: [],
+    });
+
+    const stored = await t.run((ctx) => ctx.db.get(quoteId));
+    expect(stored?.vehicleItems).toBeUndefined();
+    expect(stored?.vehicleId).toBe(vehicleId);
+  });
+
   test("throws for a quote belonging to a different org", async () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
 
