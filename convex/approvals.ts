@@ -9,7 +9,7 @@ import { notifyManagers, notifyUser, getActorName } from "./utils/notifications"
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { fromMinorUnits } from "./utils/money";
 import { profitDecision, requestMatchesTerms, requestsForTerms } from "./utils/profitApproval";
-import { assertVehicleNotDeleted } from "./utils/vehicleLiveness";
+import { assertVehicleNotDeleted, isVehicleDeleted } from "./utils/vehicleLiveness";
 
 // Exported so requestProfitApprovalArgs.test.ts can assert it still matches
 // `profitApprovalRequests.wizardSnapshot` in convex/schema.ts. Accepting a field
@@ -218,9 +218,8 @@ export const profitApprovalStatus = query({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.orgId !== args.orgId) return null;
-    // SCRUM-641 (D-35): a deleted car is never APPROVED, whatever rows exist, and the screens must
-    // not read it as "no approval needed" (null is non-blocking), so it gets its own blocked state.
-    if (vehicle.isDeleted === true) return { status: "VEHICLE_DELETED" as const };
+    // SCRUM-641: deleted car gets its own blocked state (null reads as non-blocking); see vehicleLiveness.ts.
+    if (isVehicleDeleted(vehicle)) return { status: "VEHICLE_DELETED" as const };
 
     const currency = await getOrgCurrency(ctx, args.orgId);
     let decision;

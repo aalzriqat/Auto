@@ -22,7 +22,7 @@ import { convexTestWithComponents, registerHandover } from "../test-utils/convex
 import { expectAppError } from "../test-utils/expectAppError";
 import schema from "./schema";
 import { api } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Id, TableNames } from "./_generated/dataModel";
 import { assertProfitApproved } from "./utils/profitApproval";
 
 vi.mock("./rateLimit", () => ({
@@ -67,48 +67,43 @@ async function expectDeleted(attempt: Promise<unknown>): Promise<void> {
 }
 
 let seq = 0;
+let dealerSeq = 0;
 
-async function seedDealer(suffix: string) {
+async function seedDealer() {
+  dealerSeq += 1;
+  const n = dealerSeq;
   const t = convexTestWithComponents(schema, MODULES);
-  const orgId = await t.run((ctx) =>
-    ctx.db.insert("organizations", { name: `Dealer ${suffix}`, createdAt: Date.now() })
-  );
-  await t.run((ctx) =>
-    ctx.db.insert("subscriptions", {
+  const { orgId, userId, managerId, customerA, customerB } = await t.run(async (ctx) => {
+    const now = Date.now();
+    const orgId = await ctx.db.insert("organizations", { name: `Dealer ${n}`, createdAt: now });
+    await ctx.db.insert("subscriptions", {
       orgId,
       plan: "professional",
       status: "active",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    })
-  );
-  const roleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "Admin", permissions: PERMISSIONS }));
-  const userId = await t.run((ctx) =>
-    ctx.db.insert("users", { clerkId: `user_${suffix}`, email: `${suffix}@test.com`, name: "Sales User" })
-  );
-  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
-  const managerId = await t.run((ctx) =>
-    ctx.db.insert("users", { clerkId: `mgr_${suffix}`, email: `mgr-${suffix}@test.com`, name: "Manager" })
-  );
-  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: managerId, roleId }));
-  const customerA = await t.run((ctx) =>
-    ctx.db.insert("customers", {
+      createdAt: now,
+      updatedAt: now,
+    });
+    const roleId = await ctx.db.insert("roles", { orgId, name: "Admin", permissions: PERMISSIONS });
+    const userId = await ctx.db.insert("users", { clerkId: `user_${n}`, email: `${n}@test.com`, name: "Sales User" });
+    await ctx.db.insert("memberships", { orgId, userId, roleId });
+    const managerId = await ctx.db.insert("users", { clerkId: `mgr_${n}`, email: `mgr-${n}@test.com`, name: "Manager" });
+    await ctx.db.insert("memberships", { orgId, userId: managerId, roleId });
+    const customerA = await ctx.db.insert("customers", {
       orgId,
       firstName: "Customer",
       lastName: "A",
-      phone: `+96279641${suffix.length}1`,
-      createdAt: Date.now(),
-    })
-  );
-  const customerB = await t.run((ctx) =>
-    ctx.db.insert("customers", {
+      phone: `+96279641${n}1`,
+      createdAt: now,
+    });
+    const customerB = await ctx.db.insert("customers", {
       orgId,
       firstName: "Customer",
       lastName: "B",
-      phone: `+96279641${suffix.length}2`,
-      createdAt: Date.now(),
-    })
-  );
+      phone: `+96279641${n}2`,
+      createdAt: now,
+    });
+    return { orgId, userId, managerId, customerA, customerB };
+  });
   return {
     t,
     orgId,
@@ -116,8 +111,8 @@ async function seedDealer(suffix: string) {
     managerId,
     customerA,
     customerB,
-    asUser: t.withIdentity({ subject: `user_${suffix}`, clerkId: `user_${suffix}` }),
-    asManager: t.withIdentity({ subject: `mgr_${suffix}`, clerkId: `mgr_${suffix}` }),
+    asUser: t.withIdentity({ subject: `user_${n}`, clerkId: `user_${n}` }),
+    asManager: t.withIdentity({ subject: `mgr_${n}`, clerkId: `mgr_${n}` }),
   };
 }
 type Seed = Awaited<ReturnType<typeof seedDealer>>;
@@ -157,10 +152,22 @@ async function quoteFor(seed: Seed, customerId: Id<"customers">, vehicles: Array
   });
 }
 
+/** A live car with a quote for customer A, the shape every "control" below starts from. */
+async function liveVehicleWithQuote(seed: Seed) {
+  const live = await vehicle(seed);
+  const liveQuote = await quoteFor(seed, seed.customerA, [live]);
+  return { live, liveQuote };
+}
+
+const get = <T extends TableNames>(seed: Seed, id: Id<T>) => seed.t.run((ctx) => ctx.db.get(id));
+
+const statusOf = async (seed: Seed, id: Id<TableNames>) =>
+  ((await seed.t.run((ctx) => ctx.db.get(id as never))) as { status?: string } | null)?.status;
+
 /** The product door. Throws (and the test fails) when the car is held, so the fixture is honest. */
 async function softDelete(seed: Seed, vehicleId: Id<"vehicles">) {
   await seed.asUser.mutation(api.vehicles.softDelete, { orgId: seed.orgId, vehicleId });
-  expect((await seed.t.run((ctx) => ctx.db.get(vehicleId)))?.isDeleted, "precondition: car is deleted").toBe(true);
+  expect((await get(seed, vehicleId))?.isDeleted, "precondition: car is deleted").toBe(true);
 }
 
 /** ABNORMAL STATE: sets the flag directly, bypassing the product door's commitment refusal. */
@@ -210,25 +217,60 @@ const deposit = (seed: Seed, quoteId: Id<"quotes">, amount: number) =>
     amount,
   });
 
+const requestDeposit = (seed: Seed, quoteId: Id<"quotes">, amount = 1_000) =>
+  seed.asUser.mutation(api.depositRequests.request, {
+    orgId: seed.orgId,
+    quoteId,
+    amount,
+    idempotencyKey: crypto.randomUUID(),
+  });
+
+const reserve = (seed: Seed, vehicleId: Id<"vehicles">) =>
+  seed.asUser.mutation(api.vehicles.createReservation, {
+    idempotencyKey: crypto.randomUUID(),
+    orgId: seed.orgId,
+    vehicleId,
+    customerId: seed.customerA,
+  });
+
+type ApplicationStatus = "UNDER_REVIEW" | "APPROVED" | "REJECTED";
+
+/** `status` set by the sales user, or by the manager (who alone may approve or reject). */
+const setStatus = (seed: Seed, applicationId: Id<"financeApplications">, status: ApplicationStatus, manager = false) =>
+  (manager ? seed.asManager : seed.asUser).mutation(api.applications.updateStatus, {
+    orgId: seed.orgId,
+    applicationId,
+    status,
+  });
+
+const approve = (seed: Seed, applicationId: Id<"financeApplications">) => setStatus(seed, applicationId, "APPROVED", true);
+
+/** A quote on `v` turned into an application and driven to UNDER_REVIEW. */
+async function applicationUnderReview(seed: Seed, v: Id<"vehicles">) {
+  const quoteId = await quoteFor(seed, seed.customerA, [v]);
+  const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId });
+  await setStatus(seed, applicationId, "UNDER_REVIEW");
+  return { quoteId, applicationId };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. completion doors
 // ─────────────────────────────────────────────────────────────────────────────
 describe("1. a stale quote on a car deleted afterwards cannot complete a sale", () => {
   test("completeFromQuote: refused with VEHICLE_DELETED, no writes; live car control succeeds", async () => {
-    const seed = await seedDealer("c1a");
-    const live = await vehicle(seed);
-    const liveQuote = await quoteFor(seed, seed.customerA, [live]);
+    const seed = await seedDealer();
+    const { liveQuote } = await liveVehicleWithQuote(seed);
     await expect(completeQuote(seed, liveQuote), "control: a live car completes").resolves.toHaveLength(1);
 
     const v = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     await softDelete(seed, v);
-    expect((await seed.t.run((ctx) => ctx.db.get(v)))?.status, "precondition: not SOLD/ARCHIVED").toBe("AVAILABLE");
+    expect((await get(seed, v))?.status, "precondition: not SOLD/ARCHIVED").toBe("AVAILABLE");
     await expectDeletedAndNothingWritten(seed, () => completeQuote(seed, quoteId));
   });
 
   test("sales.create (direct COMPLETED) and sales.create PENDING are refused too", async () => {
-    const seed = await seedDealer("c1b");
+    const seed = await seedDealer();
     const live = await vehicle(seed);
     await expect(directSale(seed, live, seed.customerA), "control: a live car sells").resolves.toBeTruthy();
 
@@ -245,43 +287,25 @@ describe("1. a stale quote on a car deleted afterwards cannot complete a sale", 
 // ─────────────────────────────────────────────────────────────────────────────
 describe("2. a deleted car takes no deposit and no deposit request", () => {
   test("deposits.create and depositRequests.request are refused; live control succeeds", async () => {
-    const seed = await seedDealer("c2a");
-    const live = await vehicle(seed);
-    const liveQuote = await quoteFor(seed, seed.customerA, [live]);
+    const seed = await seedDealer();
+    const { liveQuote } = await liveVehicleWithQuote(seed);
     await expect(deposit(seed, liveQuote, 1_000), "control: a live car takes a deposit").resolves.toBeTruthy();
 
     const v = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     await softDelete(seed, v);
     await expectDeletedAndNothingWritten(seed, () => deposit(seed, quoteId, 1_000));
-    await expectDeletedAndNothingWritten(seed, () =>
-      seed.asUser.mutation(api.depositRequests.request, {
-        orgId: seed.orgId,
-        quoteId,
-        amount: 1_000,
-        idempotencyKey: crypto.randomUUID(),
-      })
-    );
+    await expectDeletedAndNothingWritten(seed, () => requestDeposit(seed, quoteId));
   });
 
   test("a request made BEFORE the delete cannot be confirmed afterwards, but can still be rejected or withdrawn", async () => {
-    const seed = await seedDealer("c2b");
+    const seed = await seedDealer();
     const v = await vehicle(seed);
     const w = await vehicle(seed);
     const quoteV = await quoteFor(seed, seed.customerA, [v]);
     const quoteW = await quoteFor(seed, seed.customerB, [w]);
-    const requestV = await seed.asUser.mutation(api.depositRequests.request, {
-      orgId: seed.orgId,
-      quoteId: quoteV,
-      amount: 1_000,
-      idempotencyKey: crypto.randomUUID(),
-    });
-    const requestW = await seed.asUser.mutation(api.depositRequests.request, {
-      orgId: seed.orgId,
-      quoteId: quoteW,
-      amount: 1_000,
-      idempotencyKey: crypto.randomUUID(),
-    });
+    const requestV = await requestDeposit(seed, quoteV);
+    const requestW = await requestDeposit(seed, quoteW);
     await softDelete(seed, v);
     await softDelete(seed, w);
 
@@ -294,16 +318,16 @@ describe("2. a deleted car takes no deposit and no deposit request", () => {
         idempotencyKey: crypto.randomUUID(),
       })
     );
-    expect((await seed.t.run((ctx) => ctx.db.get(requestV)))?.status, "still pending").toBe("PENDING");
+    expect(await statusOf(seed, requestV), "still pending").toBe("PENDING");
 
     await seed.asManager.mutation(api.depositRequests.reject, {
       orgId: seed.orgId,
       requestId: requestV,
       reason: "the car was deleted",
     });
-    expect((await seed.t.run((ctx) => ctx.db.get(requestV)))?.status).toBe("REJECTED");
+    expect(await statusOf(seed, requestV)).toBe("REJECTED");
     await seed.asUser.mutation(api.depositRequests.withdraw, { orgId: seed.orgId, requestId: requestW });
-    expect((await seed.t.run((ctx) => ctx.db.get(requestW)))?.status).toBe("WITHDRAWN");
+    expect(await statusOf(seed, requestW)).toBe("WITHDRAWN");
   });
 });
 
@@ -312,13 +336,13 @@ describe("2. a deleted car takes no deposit and no deposit request", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe("3. a multi-car quote with a deleted SECONDARY car takes no deposit and holds no car", () => {
   test("refused atomically; the primary car is not held either", async () => {
-    const seed = await seedDealer("c3");
+    const seed = await seedDealer();
     const v1 = await vehicle(seed);
     const v2 = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [v1, v2]);
     await softDelete(seed, v2);
     await expectDeletedAndNothingWritten(seed, () => deposit(seed, quoteId, 6_000));
-    const primary = await seed.t.run((ctx) => ctx.db.get(v1));
+    const primary = await get(seed, v1);
     expect(primary?.status, "the primary car was not reserved").toBe("AVAILABLE");
     expect(await seed.t.run((ctx) => ctx.db.query("depositVehicleHolds").collect())).toHaveLength(0);
   });
@@ -336,31 +360,24 @@ describe("4. drafts", () => {
     salePrice: PRICE,
     saleDate: Date.now(),
   });
+  const completeDraft = (seed: Seed, saleId: Id<"sales">) =>
+    seed.asUser.mutation(api.sales.completeDraft, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId: seed.orgId,
+      saleId,
+    });
 
   test("createDraft is refused; completeDraft of a draft made before the delete is refused", async () => {
-    const seed = await seedDealer("c4");
+    const seed = await seedDealer();
     const live = await vehicle(seed);
     const liveDraft = await seed.asUser.mutation(api.sales.createDraft, draftArgs(seed, live));
-    await expect(
-      seed.asUser.mutation(api.sales.completeDraft, {
-        idempotencyKey: crypto.randomUUID(),
-        orgId: seed.orgId,
-        saleId: liveDraft,
-      }),
-      "control: a live draft completes"
-    ).resolves.toBeDefined();
+    await expect(completeDraft(seed, liveDraft), "control: a live draft completes").resolves.toBeDefined();
 
     const v = await vehicle(seed);
     const draftId = await seed.asUser.mutation(api.sales.createDraft, draftArgs(seed, v));
     await softDelete(seed, v);
-    await expectDeletedAndNothingWritten(seed, () =>
-      seed.asUser.mutation(api.sales.completeDraft, {
-        idempotencyKey: crypto.randomUUID(),
-        orgId: seed.orgId,
-        saleId: draftId,
-      })
-    );
-    expect((await seed.t.run((ctx) => ctx.db.get(draftId)))?.status, "the draft stays a draft").toBe("PENDING");
+    await expectDeletedAndNothingWritten(seed, () => completeDraft(seed, draftId));
+    expect(await statusOf(seed, draftId), "the draft stays a draft").toBe("PENDING");
 
     const w = await vehicle(seed);
     await softDelete(seed, w);
@@ -373,8 +390,8 @@ describe("4. drafts", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe("5. resolving a released deposit slice", () => {
   /** v1, v2, v3 on one quote, 9,000 deposited, 3,000 each, v1 released from the deal. */
-  async function releasedSlice(suffix: string) {
-    const seed = await seedDealer(suffix);
+  async function releasedSlice() {
+    const seed = await seedDealer();
     const [v1, v2, v3] = [await vehicle(seed), await vehicle(seed), await vehicle(seed)];
     const quoteId = await quoteFor(seed, seed.customerA, [v1, v2, v3]);
     await deposit(seed, quoteId, 9_000);
@@ -407,23 +424,23 @@ describe("5. resolving a released deposit slice", () => {
     );
 
   test("RETURN_TO_UNALLOCATED onto a deleted car is refused; the control on a live car succeeds", async () => {
-    const control = await releasedSlice("c5ctl");
+    const control = await releasedSlice();
     await expect(resolve(control.seed, control.holdId, "RETURN_TO_UNALLOCATED"), "control").resolves.toBeDefined();
 
-    const { seed, v1, holdId } = await releasedSlice("c5ret");
+    const { seed, v1, holdId } = await releasedSlice();
     await forceDeleted(seed, v1); // ABNORMAL: the released car still reads RESERVED, so softDelete refuses it.
     await expectDeletedAndNothingWritten(seed, () => resolve(seed, holdId, "RETURN_TO_UNALLOCATED"));
   });
 
   test("REALLOCATE_TO_VEHICLE onto a deleted car is refused; off a deleted car onto a live one still works", async () => {
-    const { seed, v3, holdId } = await releasedSlice("c5re");
+    const { seed, v3, holdId } = await releasedSlice();
     await forceDeleted(seed, v3); // ABNORMAL: a held car cannot be deleted through the product door.
     await expectDeletedAndNothingWritten(seed, () =>
       resolve(seed, holdId, "REALLOCATE_TO_VEHICLE", { toVehicleId: v3 })
     );
 
     // Control and a deliberate decision: money moving OFF a deleted car onto a live one is a rescue.
-    const rescue = await releasedSlice("c5res");
+    const rescue = await releasedSlice();
     await forceDeleted(rescue.seed, rescue.v1);
     await expect(
       resolve(rescue.seed, rescue.holdId, "REALLOCATE_TO_VEHICLE", { toVehicleId: rescue.v2 })
@@ -432,17 +449,17 @@ describe("5. resolving a released deposit slice", () => {
 
   test("REFUND_TO_CUSTOMER and FORFEITED still work on a deleted car", async () => {
     for (const treatment of ["REFUND_TO_CUSTOMER", "FORFEITED"] as const) {
-      const { seed, v1, holdId } = await releasedSlice(`c5pay${treatment.length}`);
+      const { seed, v1, holdId } = await releasedSlice();
       await forceDeleted(seed, v1);
       await resolve(seed, holdId, treatment, treatment === "REFUND_TO_CUSTOMER" ? { refundMethod: "CASH" } : {});
-      const hold = await seed.t.run((ctx) => ctx.db.get(holdId));
+      const hold = await get(seed, holdId);
       expect(hold?.allocationStatus).toBe("RESOLVED");
       expect(hold?.resolutionTreatment).toBe(treatment);
     }
   });
 
   test("allocateToVehicles gives no money to a deleted car; a zero allocation to it stays allowed", async () => {
-    const seed = await seedDealer("c5al");
+    const seed = await seedDealer();
     const [v1, v2] = [await vehicle(seed), await vehicle(seed)];
     const quoteId = await quoteFor(seed, seed.customerA, [v1, v2]);
     await deposit(seed, quoteId, 6_000);
@@ -476,17 +493,9 @@ describe("5. resolving a released deposit slice", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe("6. reservations and finance applications", () => {
   test("createReservation on a deleted car is refused with VEHICLE_DELETED; live control succeeds", async () => {
-    const seed = await seedDealer("c6a");
+    const seed = await seedDealer();
     const live = await vehicle(seed);
-    await expect(
-      seed.asUser.mutation(api.vehicles.createReservation, {
-        idempotencyKey: crypto.randomUUID(),
-        orgId: seed.orgId,
-        vehicleId: live,
-        customerId: seed.customerA,
-      }),
-      "control"
-    ).resolves.toBeDefined();
+    await expect(reserve(seed, live), "control").resolves.toBeDefined();
 
     const v = await vehicle(seed);
     await softDelete(seed, v);
@@ -495,19 +504,12 @@ describe("6. reservations and finance applications", () => {
     // file). The door still REFUSES — via its existing not-found check — and writes nothing, which
     // is the invariant; only the error code differs. Tighten to expectDeleted once the hook allows it.
     const before = await dbCounts(seed);
-    await expect(
-      seed.asUser.mutation(api.vehicles.createReservation, {
-        idempotencyKey: crypto.randomUUID(),
-        orgId: seed.orgId,
-        vehicleId: v,
-        customerId: seed.customerA,
-      })
-    ).rejects.toThrow(/vehicle not found in this organization/i);
+    await expect(reserve(seed, v)).rejects.toThrow(/vehicle not found in this organization/i);
     expect(await dbCounts(seed), "nothing at all was written").toEqual(before);
   });
 
   test("createFromQuote on a deleted car is refused and writes nothing (existing message kept)", async () => {
-    const seed = await seedDealer("c6b");
+    const seed = await seedDealer();
     const v = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     await softDelete(seed, v);
@@ -519,123 +521,67 @@ describe("6. reservations and finance applications", () => {
   });
 
   /** An application driven to UNDER_REVIEW, then its car flagged deleted (abnormal in-flight state). */
-  async function inFlightApplicationOnDeletedCar(suffix: string) {
-    const seed = await seedDealer(suffix);
+  async function inFlightApplicationOnDeletedCar() {
+    const seed = await seedDealer();
     const v = await vehicle(seed);
-    const quoteId = await quoteFor(seed, seed.customerA, [v]);
-    const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId });
-    await seed.asUser.mutation(api.applications.updateStatus, {
-      orgId: seed.orgId,
-      applicationId,
-      status: "UNDER_REVIEW" as const,
-    });
+    const { quoteId, applicationId } = await applicationUnderReview(seed, v);
     await forceDeleted(seed, v); // ABNORMAL: softDelete refuses a car held by an application.
     return { seed, v, quoteId, applicationId };
   }
 
   test("updateStatus APPROVED is refused on a deleted car; the live control approves", async () => {
-    const control = await seedDealer("c6c0");
+    const control = await seedDealer();
     const cv = await vehicle(control);
-    const cq = await quoteFor(control, control.customerA, [cv]);
-    const ca = await control.asUser.mutation(api.applications.createFromQuote, { orgId: control.orgId, quoteId: cq });
-    await control.asUser.mutation(api.applications.updateStatus, {
-      orgId: control.orgId,
-      applicationId: ca,
-      status: "UNDER_REVIEW" as const,
-    });
-    await control.asManager.mutation(api.applications.updateStatus, {
-      orgId: control.orgId,
-      applicationId: ca,
-      status: "APPROVED" as const,
-    });
-    expect((await control.t.run((ctx) => ctx.db.get(ca)))?.status, "control approved").toBe("APPROVED");
+    const { applicationId: ca } = await applicationUnderReview(control, cv);
+    await approve(control, ca);
+    expect(await statusOf(control, ca), "control approved").toBe("APPROVED");
 
-    const { seed, applicationId } = await inFlightApplicationOnDeletedCar("c6c1");
-    await expectDeletedAndNothingWritten(seed, () =>
-      seed.asManager.mutation(api.applications.updateStatus, {
-        orgId: seed.orgId,
-        applicationId,
-        status: "APPROVED" as const,
-      })
-    );
-    expect((await seed.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("UNDER_REVIEW");
+    const { seed, applicationId } = await inFlightApplicationOnDeletedCar();
+    await expectDeletedAndNothingWritten(seed, () => approve(seed, applicationId));
+    expect(await statusOf(seed, applicationId)).toBe("UNDER_REVIEW");
   });
 
   test("updateStatus APPROVED refuses a missing or foreign car as VEHICLE_NOT_FOUND (financeApplications.vehicleId is required)", async () => {
     const NOT_FOUND = "Vehicle not found in this organization.";
-    const live = await inFlightApplicationOnDeletedCar("c6f0");
+    const live = await inFlightApplicationOnDeletedCar();
     await live.seed.t.run((ctx) => ctx.db.patch(live.v, { isDeleted: false })); // control: a live car approves
-    await live.seed.asManager.mutation(api.applications.updateStatus, {
-      orgId: live.seed.orgId,
-      applicationId: live.applicationId,
-      status: "APPROVED" as const,
-    });
-    expect((await live.seed.t.run((ctx) => ctx.db.get(live.applicationId)))?.status).toBe("APPROVED");
+    await approve(live.seed, live.applicationId);
+    expect(await statusOf(live.seed, live.applicationId)).toBe("APPROVED");
 
-    const missing = await inFlightApplicationOnDeletedCar("c6f1");
+    const missing = await inFlightApplicationOnDeletedCar();
     await missing.seed.t.run((ctx) => ctx.db.delete(missing.v)); // dangling vehicleId
-    await expectAppError(
-      missing.seed.asManager.mutation(api.applications.updateStatus, {
-        orgId: missing.seed.orgId,
-        applicationId: missing.applicationId,
-        status: "APPROVED" as const,
-      }),
-      "VEHICLE_NOT_FOUND",
-      NOT_FOUND
-    );
-    expect((await missing.seed.t.run((ctx) => ctx.db.get(missing.applicationId)))?.status).toBe("UNDER_REVIEW");
+    await expectAppError(approve(missing.seed, missing.applicationId), "VEHICLE_NOT_FOUND", NOT_FOUND);
+    expect(await statusOf(missing.seed, missing.applicationId)).toBe("UNDER_REVIEW");
 
-    const foreign = await inFlightApplicationOnDeletedCar("c6f2");
+    const foreign = await inFlightApplicationOnDeletedCar();
     const otherOrg = await foreign.seed.t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Other dealer", createdAt: Date.now() })
     );
     await foreign.seed.t.run((ctx) => ctx.db.patch(foreign.v, { orgId: otherOrg, isDeleted: false }));
-    await expectAppError(
-      foreign.seed.asManager.mutation(api.applications.updateStatus, {
-        orgId: foreign.seed.orgId,
-        applicationId: foreign.applicationId,
-        status: "APPROVED" as const,
-      }),
-      "VEHICLE_NOT_FOUND",
-      NOT_FOUND
-    );
-    expect((await foreign.seed.t.run((ctx) => ctx.db.get(foreign.applicationId)))?.status).toBe("UNDER_REVIEW");
+    await expectAppError(approve(foreign.seed, foreign.applicationId), "VEHICLE_NOT_FOUND", NOT_FOUND);
+    expect(await statusOf(foreign.seed, foreign.applicationId)).toBe("UNDER_REVIEW");
   });
 
   test("rejection and cancellation of an application on a deleted car still work", async () => {
-    const rejected = await inFlightApplicationOnDeletedCar("c6d1");
-    await rejected.seed.asManager.mutation(api.applications.updateStatus, {
-      orgId: rejected.seed.orgId,
-      applicationId: rejected.applicationId,
-      status: "REJECTED" as const,
-    });
-    expect((await rejected.seed.t.run((ctx) => ctx.db.get(rejected.applicationId)))?.status).toBe("REJECTED");
+    const rejected = await inFlightApplicationOnDeletedCar();
+    await setStatus(rejected.seed, rejected.applicationId, "REJECTED", true);
+    expect(await statusOf(rejected.seed, rejected.applicationId)).toBe("REJECTED");
 
-    const cancelled = await inFlightApplicationOnDeletedCar("c6d2");
+    const cancelled = await inFlightApplicationOnDeletedCar();
     await cancelled.seed.asManager.mutation(api.applications.cancelApplication, {
       idempotencyKey: crypto.randomUUID(),
       orgId: cancelled.seed.orgId,
       applicationId: cancelled.applicationId,
       reason: "the car was deleted",
     });
-    expect((await cancelled.seed.t.run((ctx) => ctx.db.get(cancelled.applicationId)))?.status).toBe("CANCELLED");
+    expect(await statusOf(cancelled.seed, cancelled.applicationId)).toBe("CANCELLED");
   });
 
   test("finalizeDeal on an approved application whose car was then deleted is refused: no sale", async () => {
-    const seed = await seedDealer("c6e");
+    const seed = await seedDealer();
     const v = await vehicle(seed);
-    const quoteId = await quoteFor(seed, seed.customerA, [v]);
-    const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, { orgId: seed.orgId, quoteId });
-    await seed.asUser.mutation(api.applications.updateStatus, {
-      orgId: seed.orgId,
-      applicationId,
-      status: "UNDER_REVIEW" as const,
-    });
-    await seed.asManager.mutation(api.applications.updateStatus, {
-      orgId: seed.orgId,
-      applicationId,
-      status: "APPROVED" as const,
-    });
+    const { applicationId } = await applicationUnderReview(seed, v);
+    await approve(seed, applicationId);
     await registerHandover(seed.asUser, api, seed.orgId, applicationId);
     await seed.asUser.mutation(api.applications.registerExpectedPayment, {
       orgId: seed.orgId,
@@ -659,8 +605,8 @@ describe("6. reservations and finance applications", () => {
 // 7. profit approval
 // ─────────────────────────────────────────────────────────────────────────────
 describe("7. profit-approval authority", () => {
-  async function profitSeed(suffix: string) {
-    const seed = await seedDealer(suffix);
+  async function profitSeed() {
+    const seed = await seedDealer();
     const v = await vehicle(seed, { minimumProfit: 1_000 });
     return { seed, v };
   }
@@ -672,16 +618,16 @@ describe("7. profit-approval authority", () => {
     });
 
   test("a new request on a deleted car is refused; the live control is accepted", async () => {
-    const control = await profitSeed("c7a0");
+    const control = await profitSeed();
     await expect(request(control.seed, control.v), "control").resolves.toBeTruthy();
 
-    const { seed, v } = await profitSeed("c7a1");
+    const { seed, v } = await profitSeed();
     await softDelete(seed, v);
     await expectDeletedAndNothingWritten(seed, () => request(seed, v));
   });
 
   test("a stale APPROVED row grants nothing once the car is deleted", async () => {
-    const { seed, v } = await profitSeed("c7b");
+    const { seed, v } = await profitSeed();
     const requestId = await request(seed, v);
     await seed.asManager.mutation(api.approvals.respondToApproval, {
       orgId: seed.orgId,
@@ -691,7 +637,7 @@ describe("7. profit-approval authority", () => {
     const status = () =>
       seed.asUser.query(api.approvals.profitApprovalStatus, { orgId: seed.orgId, vehicleId: v, salePrice: PRICE });
     expect(await status(), "control: live car reads APPROVED").toMatchObject({ status: "APPROVED" });
-    const liveVehicle = await seed.t.run((ctx) => ctx.db.get(v));
+    const liveVehicle = await get(seed, v);
     await seed.t.run((ctx) =>
       assertProfitApproved(ctx as never, {
         orgId: seed.orgId,
@@ -705,7 +651,7 @@ describe("7. profit-approval authority", () => {
     await softDelete(seed, v);
     // A reason-coded BLOCKED state, never null (the screens read null as "nothing to approve").
     expect(await status(), "a deleted car reads VEHICLE_DELETED").toEqual({ status: "VEHICLE_DELETED" });
-    const deletedVehicle = await seed.t.run((ctx) => ctx.db.get(v));
+    const deletedVehicle = await get(seed, v);
     await expectDeleted(
       seed.t.run((ctx) =>
         assertProfitApproved(ctx as never, {
@@ -717,16 +663,15 @@ describe("7. profit-approval authority", () => {
         })
       )
     );
-    const row = await seed.t.run((ctx) => ctx.db.get(requestId));
-    expect(row?.status, "the approval row itself is never rewritten").toBe("APPROVED");
+    expect(await statusOf(seed, requestId), "the approval row itself is never rewritten").toBe("APPROVED");
   });
 
   test("a manager can still REJECT a pending request on a deleted car", async () => {
-    const { seed, v } = await profitSeed("c7c");
+    const { seed, v } = await profitSeed();
     const requestId = await request(seed, v);
     await softDelete(seed, v);
     await seed.asManager.mutation(api.approvals.respondToApproval, { orgId: seed.orgId, requestId, status: "REJECTED" });
-    expect((await seed.t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("REJECTED");
+    expect(await statusOf(seed, requestId)).toBe("REJECTED");
   });
 });
 
@@ -735,7 +680,7 @@ describe("7. profit-approval authority", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe("8. precedence and idempotent replay", () => {
   test("a foreign-org vehicle is NOT_FOUND, never DELETED", async () => {
-    const seed = await seedDealer("c8a");
+    const seed = await seedDealer();
     // A second organisation inside the SAME database, owning a deleted car.
     const foreignInSameDb = await seed.t.run(async (ctx) => {
       const otherOrg = await ctx.db.insert("organizations", { name: "Foreign", createdAt: Date.now() });
@@ -762,7 +707,7 @@ describe("8. precedence and idempotent replay", () => {
   });
 
   test("SOLD-then-deleted reports SOLD; ARCHIVED-then-deleted reports ARCHIVED", async () => {
-    const seed = await seedDealer("c8b");
+    const seed = await seedDealer();
     const sold = await vehicle(seed);
     await directSale(seed, sold, seed.customerA);
     await seed.t.run((ctx) => ctx.db.patch(sold, { isDeleted: true }));
@@ -781,7 +726,7 @@ describe("8. precedence and idempotent replay", () => {
   });
 
   test("a command that completed before the delete replays its recorded result; a new key is refused", async () => {
-    const seed = await seedDealer("c8c");
+    const seed = await seedDealer();
     const v = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     const key = crypto.randomUUID();
@@ -807,7 +752,7 @@ describe("9. the raw admin editor cannot flip vehicles.isDeleted", () => {
     process.env.CLERK_JWT_ISSUER_DOMAIN ??= "https://test.clerk.accounts.dev";
     process.env.NEXT_PUBLIC_APP_URL ??= "https://test.example.com";
     try {
-      const seed = await seedDealer("c9");
+      const seed = await seedDealer();
       await seed.t.run((ctx) => ctx.db.insert("users", { clerkId: "dev_1", email: "admin@autoflow.dev" }));
       const asAdmin = seed.t.withIdentity({ subject: "dev_1" });
       const v = await vehicle(seed);
@@ -817,10 +762,10 @@ describe("9. the raw admin editor cannot flip vehicles.isDeleted", () => {
         "VEHICLE_DELETED_FLAG_LOCKED",
         ADMIN_FLAG_LOCKED_MESSAGE
       );
-      expect((await seed.t.run((ctx) => ctx.db.get(v)))?.isDeleted, "still live").not.toBe(true);
+      expect((await get(seed, v))?.isDeleted, "still live").not.toBe(true);
 
       await asAdmin.mutation(api.adminData.adminUpdateRecord, { table: "vehicles", id: v, patch: { color: "Blue" } });
-      expect((await seed.t.run((ctx) => ctx.db.get(v)))?.color).toBe("Blue");
+      expect((await get(seed, v))?.color).toBe("Blue");
 
       // A round-tripped record re-sends isDeleted at its current value: that is not a change.
       await asAdmin.mutation(api.adminData.adminUpdateRecord, {
@@ -828,7 +773,7 @@ describe("9. the raw admin editor cannot flip vehicles.isDeleted", () => {
         id: v,
         patch: { isDeleted: false, color: "Green" },
       });
-      expect((await seed.t.run((ctx) => ctx.db.get(v)))?.color).toBe("Green");
+      expect((await get(seed, v))?.color).toBe("Green");
 
       await forceDeleted(seed, v);
       await expectAppError(
@@ -836,7 +781,7 @@ describe("9. the raw admin editor cannot flip vehicles.isDeleted", () => {
         "VEHICLE_DELETED_FLAG_LOCKED",
         ADMIN_FLAG_LOCKED_MESSAGE
       );
-      expect((await seed.t.run((ctx) => ctx.db.get(v)))?.isDeleted).toBe(true);
+      expect((await get(seed, v))?.isDeleted).toBe(true);
     } finally {
       process.env.SUPER_ADMIN_EMAILS = previous;
     }

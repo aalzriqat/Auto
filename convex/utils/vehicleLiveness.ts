@@ -23,9 +23,12 @@ import { AppErrorCode, throwAppError } from "./errors";
 export const VEHICLE_DELETED_MESSAGE =
   "This vehicle has been deleted and can no longer be quoted, reserved, sold or take a deposit.";
 
+/** True when the vehicle is soft-deleted. */
+export const isVehicleDeleted = (v: Doc<"vehicles">): boolean => v.isDeleted === true;
+
 /** Throws unless a vehicle the caller has already scoped to its organisation is not soft-deleted. No-op for null. */
 export function assertVehicleNotDeleted(vehicle: Doc<"vehicles"> | null | undefined): void {
-  if (!vehicle || vehicle.isDeleted !== true) return;
+  if (!vehicle || !isVehicleDeleted(vehicle)) return;
   if (vehicle.status === "SOLD") {
     throwAppError(AppErrorCode.VEHICLE_ALREADY_SOLD, "This vehicle has already been sold.");
   }

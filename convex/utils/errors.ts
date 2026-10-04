@@ -160,10 +160,7 @@ export const AppErrorCode = {
   // missing, in another organisation or soft-deleted; REJECTED stays allowed. Translated under
   // ServerError_<code>.
   APPROVAL_VEHICLE_UNAVAILABLE: "APPROVAL_VEHICLE_UNAVAILABLE",
-  // SCRUM-641 (D-35). A soft-deleted vehicle never acquires a new quote, draft, hold, deposit,
-  // allocation, profit approval, finance approval or completed sale; every such door refuses
-  // with this code. Reversal paths (refund, forfeit, release, rejection, cancellation) stay open.
-  // Translated under ServerError_<code>.
+  // SCRUM-641 (D-35): see convex/utils/vehicleLiveness.ts. Translated under ServerError_<code>.
   VEHICLE_DELETED: "VEHICLE_DELETED",
   VEHICLE_DELETED_FLAG_LOCKED: "VEHICLE_DELETED_FLAG_LOCKED",
 } as const;

@@ -343,7 +343,6 @@ export async function resolveActingRoot(
   // `vehicles.createReservation`), where there is no cache to bound; the query
   // context exists for tests and read-only callers.
   const decisionNow = Date.now();
-
   const ownership = await resolveOwnership(ctx, args.orgId, args.vehicleId);
 
   if (ownership.kind === "AMBIGUOUS") {

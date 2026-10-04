@@ -3260,10 +3260,7 @@ export const updateStatus = mutation({
       if (!quote || quote.orgId !== args.orgId) {
         throw new ConvexError("Application quote not found.");
       }
-      // SCRUM-641 (D-35): finance approval is new authority over the car. Refused for a deleted
-      // car; rejection and cancellation (other branches) stay available. A missing or foreign car
-      // is VEHICLE_NOT_FOUND: `financeApplications.vehicleId` is required, so an approval with no
-      // car in this organization is a dangling row, never a legitimate state.
+      // SCRUM-641 (D-35): approval is new authority over the car; see convex/utils/vehicleLiveness.ts.
       requireCommercialVehicle(await ctx.db.get(app.vehicleId), args.orgId);
       await assertRequiredApplicationDocumentsComplete(ctx, app, quote);
       approvedBy = auth.user._id;

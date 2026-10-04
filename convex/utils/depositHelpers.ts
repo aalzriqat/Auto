@@ -147,9 +147,7 @@ export async function holdVehicleForDeposit(
   if (vehicle.status === "ARCHIVED") {
     throwAppError(AppErrorCode.VEHICLE_ARCHIVED, "Cannot place a deposit on an archived vehicle.");
   }
-  // SCRUM-641 (D-35): the deposit door's liveness guard, a pure check on the vehicle document this
-  // function already loaded (zero additional reads). Every quote line passes through here before
-  // any receipt, payment or commitment write, and a throw rolls the whole mutation back.
+  // SCRUM-641 (D-35): zero-read liveness guard on the doc already loaded; see vehicleLiveness.ts.
   assertVehicleNotDeleted(vehicle);
   if (isHoldableStatus(vehicle.status)) {
     await ctx.db.patch(vehicleId, {
