@@ -338,8 +338,8 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "هذا النوع من التصحيح لا يناسب طريقة دفع ثمن المركبة. اختر أحد الخيارات الأخرى.",
   ],
   ServerError_COST_CORRECTION_PAYABLE_NOT_ADJUSTABLE: [
-    "The supplier balance for this vehicle can't be adjusted because it has been paid, partly paid, disputed or changed. Correct it from the supplier payables screen.",
-    "لا يمكن تعديل رصيد المورد لهذه المركبة لأنه سُدِّد أو سُدِّد جزئياً أو عليه نزاع أو تم تغييره. صحّحه من شاشة ذمم الموردين.",
+    "The supplier balance for this vehicle has been partly paid, disputed or settled, so the invoice can't be corrected automatically. Contact finance to record a supplier credit or adjustment.",
+    "رصيد المورد لهذه المركبة سُدِّد جزئياً أو عليه نزاع أو تمت تسويته، لذلك لا يمكن تصحيح الفاتورة تلقائياً. تواصل مع المحاسبة لتسجيل رصيد دائن أو تسوية للمورد.",
   ],
   ServerError_COST_CORRECTION_PAYMENT_METHOD_REQUIRED: [
     "Choose the account the refund was received into.",

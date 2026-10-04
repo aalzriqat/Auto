@@ -80,7 +80,12 @@ export function VehicleDetailsDialog({
   const canEditVehicles = !permissionsLoading && hasPermission(PERMISSIONS.EDIT_VEHICLES);
   const canViewCustomers = !permissionsLoading && hasPermission(PERMISSIONS.VIEW_CUSTOMERS);
   const canCreateVehicles = !permissionsLoading && hasPermission(PERMISSIONS.CREATE_VEHICLES);
-  const canCorrectCost = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
+  // Correcting a posted cost returns the cost, so it needs both permissions (SCRUM-650).
+  const canCorrectCost =
+    !permissionsLoading &&
+    hasPermission(PERMISSIONS.MANAGE_FINANCE) &&
+    hasPermission(PERMISSIONS.VIEW_COST_PRICE);
+  const showCorrectCostAction = canCorrectCost && !!vehicle && vehicle.status !== "SOLD" && vehicle.sourceType !== "SOURCED";
   const [costCorrectionOpen, setCostCorrectionOpen] = useState(false);
 
   const relations = useQuery(
@@ -527,7 +532,7 @@ export function VehicleDetailsDialog({
                   <div className="space-y-1">
                     <span className="text-sm font-medium text-muted-foreground">{t("PurchasePrice" as any) || "Purchase Price"}</span>
                     <p className="text-sm font-medium">{vehicle.purchasePrice.toLocaleString()} JOD</p>
-                    {canCorrectCost && vehicle.status !== "SOLD" && vehicle.sourceType !== "SOURCED" && (
+                    {showCorrectCostAction && (
                       <Button
                         type="button"
                         variant="link"
@@ -538,6 +543,20 @@ export function VehicleDetailsDialog({
                         {t("CostCorrectionAction" as any)}
                       </Button>
                     )}
+                  </div>
+                )}
+                {/* Reachable on its own when the price cell is not shown. */}
+                {showCorrectCostAction && !(canViewPurchasePrice && vehicle.purchasePrice !== undefined) && (
+                  <div className="space-y-1">
+                    <Button
+                      type="button"
+                      variant="link"
+                      size="sm"
+                      className="h-auto p-0 text-xs"
+                      onClick={() => setCostCorrectionOpen(true)}
+                    >
+                      {t("CostCorrectionAction" as any)}
+                    </Button>
                   </div>
                 )}
 

@@ -12,6 +12,8 @@ import { ConvexError } from "convex/values";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
+import { costCorrectionCounterKey } from "./vehicles";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -507,5 +509,318 @@ describe("SCRUM-650 the purchase-cost lock", () => {
     expect(data?.code).toBe("VEHICLE_COST_POSTED");
     expect(data?.message).toMatch(/Correct purchase cost/);
     expect((await d.t.run((ctx) => ctx.db.get(vehicleId)))?.purchasePrice).toBe(12500);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCRUM-650 batch 2: review fixes
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function memberFromTemplate(d: Dealer, templateName: string, suffix: string) {
+  const template = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === templateName);
+  if (!template) throw new Error(`no role template ${templateName}`);
+  const userId = await d.t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: `tpl_${suffix}`, email: `tpl.${suffix}@example.com`, name: templateName })
+  );
+  const roleId = await d.t.run((ctx) =>
+    ctx.db.insert("roles", { orgId: d.orgId, name: `${templateName} ${suffix}`, permissions: [...template.permissions] })
+  );
+  await d.t.run((ctx) => ctx.db.insert("memberships", { orgId: d.orgId, userId, roleId }));
+  return d.t.withIdentity({ subject: `tpl_${suffix}`, clerkId: `tpl_${suffix}` });
+}
+
+const RESTATE = { reason: "wrong", correctionType: "PRIOR_PERIOD_RESTATEMENT" as const };
+
+describe("SCRUM-650 batch 2 A1: the cost-visibility gate", () => {
+  test("the default ACCOUNTANT template (MANAGE_FINANCE, no VIEW_COST_PRICE) is refused by the query and the mutation; SENIOR_ACCOUNTANT is allowed", async () => {
+    const d = await seedDealer("b1");
+    const vehicleId = await createCashVehicle(d);
+    const asAccountant = await memberFromTemplate(d, "ACCOUNTANT", "b1acc");
+    const asSenior = await memberFromTemplate(d, "SENIOR_ACCOUNTANT", "b1sen");
+    const before = await snapshot(d.t, d.orgId, vehicleId);
+
+    await expect(
+      asAccountant.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: d.orgId, vehicleId })
+    ).rejects.toThrow();
+    await expect(
+      asAccountant.mutation(api.vehicles.correctAcquisitionCost, { orgId: d.orgId, vehicleId, newCost: 9800, ...RESTATE })
+    ).rejects.toThrow();
+    expect(await snapshot(d.t, d.orgId, vehicleId)).toEqual(before);
+
+    const context = await asSenior.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: d.orgId, vehicleId });
+    expect(context.currentCost).toBe(12500);
+    await asSenior.mutation(api.vehicles.correctAcquisitionCost, { orgId: d.orgId, vehicleId, newCost: 9800, ...RESTATE });
+    expect((await d.t.run((ctx) => ctx.db.get(vehicleId)))?.purchasePrice).toBe(9800);
+  });
+});
+
+describe("SCRUM-650 batch 2 A2: payable eligibility is derived from the money", () => {
+  test("a payable that was disputed and un-disputed is still correctable, and AP, payable and inventory move together", async () => {
+    const d = await seedDealer("b2");
+    const vehicleId = await createOnAccountVehicle(d, 12500);
+    const payable = await payableOf(d.t, vehicleId);
+    await d.asOwner.mutation(api.sourcingPayables.setDisputed, { orgId: d.orgId, payableId: payable!._id, disputed: true, reason: "Invoice total in question" });
+    await d.asOwner.mutation(api.sourcingPayables.setDisputed, { orgId: d.orgId, payableId: payable!._id, disputed: false });
+    const inventoryBefore = await balanceMinor(d.t, d.orgId, "VEHICLE_INVENTORY");
+
+    await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId, newCost: 9800, reason: "Supplier invoice was wrong", correctionType: "SUPPLIER_INVOICE_ERROR",
+    });
+
+    expect((await payableOf(d.t, vehicleId))?.amountDue).toBe(9800);
+    expect(await balanceMinor(d.t, d.orgId, "ACCOUNTS_PAYABLE_SUPPLIERS")).toBe(-9_800_000);
+    expect(inventoryBefore - (await balanceMinor(d.t, d.orgId, "VEHICLE_INVENTORY"))).toBe(2_700_000);
+    await d.asOwner.mutation(api.sourcingPayables.markPaid, {
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, payableId: payable!._id, paymentMethod: "BANK_TRANSFER",
+    });
+    expect(await balanceMinor(d.t, d.orgId, "ACCOUNTS_PAYABLE_SUPPLIERS")).toBe(0);
+  });
+
+  test("control: while the payable is DISPUTED the correction is refused PAYABLE_NOT_ADJUSTABLE and nothing changes", async () => {
+    const d = await seedDealer("b2c");
+    const vehicleId = await createOnAccountVehicle(d, 12500);
+    const payable = await payableOf(d.t, vehicleId);
+    await d.asOwner.mutation(api.sourcingPayables.setDisputed, { orgId: d.orgId, payableId: payable!._id, disputed: true, reason: "Invoice total in question" });
+    const before = await snapshot(d.t, d.orgId, vehicleId);
+    const data = await refusalOf(
+      d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+        orgId: d.orgId, vehicleId, newCost: 9800, reason: "wrong", correctionType: "SUPPLIER_INVOICE_ERROR",
+      })
+    );
+    expect(data?.code).toBe("COST_CORRECTION_PAYABLE_NOT_ADJUSTABLE");
+    expect(await snapshot(d.t, d.orgId, vehicleId)).toEqual(before);
+  });
+});
+
+describe("SCRUM-650 batch 2 A3: only representable amounts", () => {
+  test("9800.0004 JOD is refused INVALID_AMOUNT and nothing changes; 9800.001 succeeds", async () => {
+    const d = await seedDealer("b3");
+    const vehicleId = await createOnAccountVehicle(d, 12500);
+    const before = await snapshot(d.t, d.orgId, vehicleId);
+    const journalsBefore = (await d.t.run((ctx) => ctx.db.query("journalEntries").collect())).length;
+    const transactionsBefore = (await d.t.run((ctx) => ctx.db.query("transactions").collect())).length;
+
+    const data = await refusalOf(
+      d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+        orgId: d.orgId, vehicleId, newCost: 9800.0004, reason: "wrong", correctionType: "SUPPLIER_INVOICE_ERROR",
+      })
+    );
+    expect(data?.code).toBe("COST_CORRECTION_INVALID_AMOUNT");
+    expect(await snapshot(d.t, d.orgId, vehicleId)).toEqual(before);
+    expect((await d.t.run((ctx) => ctx.db.query("journalEntries").collect())).length).toBe(journalsBefore);
+    expect((await d.t.run((ctx) => ctx.db.query("transactions").collect())).length).toBe(transactionsBefore);
+
+    await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId, newCost: 9800.001, reason: "fine", correctionType: "SUPPLIER_INVOICE_ERROR",
+    });
+    expect((await d.t.run((ctx) => ctx.db.get(vehicleId)))?.purchasePrice).toBe(9800.001);
+  });
+});
+
+describe("SCRUM-650 batch 2 A4: the cashbook projection of a cash correction", () => {
+  const ALL_TIME = { startDate: 0, endDate: Date.UTC(2100, 0, 1) };
+  const listAll = (d: Dealer) =>
+    d.asOwner.query(api.transactions.list, { orgId: d.orgId, paginationOpts: { numItems: 100, cursor: null } });
+
+  test("cash 12,500 refunded to 9,800: the original OUT stays, an IN 2,700 is added, and P&L cost is 9,800", async () => {
+    const d = await seedDealer("b4a");
+    const vehicleId = await createCashVehicle(d, 12500, "CASH");
+    await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId, newCost: 9800, reason: "Supplier refunded", correctionType: "CASH_REFUND", paymentMethod: "CASH",
+    });
+    const rows = (await listAll(d)).page.filter((r) => r.category === "VEHICLE_PURCHASE");
+    expect(rows.map((r) => [r.type, r.amount]).sort()).toEqual([["IN", 2700], ["OUT", 12500]]);
+    const refund = rows.find((r) => r.type === "IN");
+    expect(refund?.vehicleId).toBe(vehicleId);
+    expect(refund?.description).toMatch(/correction/i);
+    const pnl = await d.asOwner.query(api.reports.getProfitAndLoss, { orgId: d.orgId, ...ALL_TIME });
+    expect(pnl.costOfGoodsSold).toBe(9800);
+    expect(pnl.totalRevenue).toBe(0);
+  });
+
+  test("an upward cash correction adds an OUT row for the extra amount", async () => {
+    const d = await seedDealer("b4b");
+    const vehicleId = await createCashVehicle(d, 12500, "CASH");
+    await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId, newCost: 13000, reason: "Paid the balance", correctionType: "CASH_REFUND", paymentMethod: "CASH",
+    });
+    const rows = (await listAll(d)).page.filter((r) => r.category === "VEHICLE_PURCHASE");
+    expect(rows.map((r) => [r.type, r.amount]).sort()).toEqual([["OUT", 12500], ["OUT", 500]]);
+    const pnl = await d.asOwner.query(api.reports.getProfitAndLoss, { orgId: d.orgId, ...ALL_TIME });
+    expect(pnl.costOfGoodsSold).toBe(13000);
+  });
+
+  test("AP and restatement corrections add no cashbook row", async () => {
+    const d = await seedDealer("b4c");
+    const onAccountId = await createOnAccountVehicle(d, 12500);
+    const cashId = await d.asOwner.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, vin: "1HGCM82633A000009",
+      purchasePrice: 8000, purchasePaymentMethod: "CASH",
+    });
+    const countRows = async () => (await d.t.run((ctx) => ctx.db.query("transactions").collect())).length;
+    const before = await countRows();
+    await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId: onAccountId, newCost: 9800, reason: "invoice", correctionType: "SUPPLIER_INVOICE_ERROR",
+    });
+    await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId: cashId, newCost: 7000, ...RESTATE,
+    });
+    expect(await countRows()).toBe(before);
+  });
+});
+
+describe("SCRUM-650 batch 2 A6: equal-value submits on a posted car", () => {
+  test("an unrelated edit that echoes the stored price still saves, but a sourceCost key is refused (why the dialog strips both)", async () => {
+    const d = await seedDealer("b6");
+    const vehicleId = await createCashVehicle(d);
+    await d.asOwner.mutation(api.vehicles.update, { orgId: d.orgId, vehicleId, color: "Red", purchasePrice: 12500 });
+    const after = await d.t.run((ctx) => ctx.db.get(vehicleId));
+    expect(after?.color).toBe("Red");
+    expect(after?.purchasePrice).toBe(12500);
+
+    const data = await refusalOf(
+      d.asOwner.mutation(api.vehicles.update, { orgId: d.orgId, vehicleId, color: "Blue", sourceCost: 0 })
+    );
+    expect(data?.code).toBe("VEHICLE_COST_POSTED");
+    expect((await d.t.run((ctx) => ctx.db.get(vehicleId)))?.color).toBe("Red");
+  });
+
+  test("getPurchaseCostLockState is true once the acquisition posted, false before, and needs no cost permission", async () => {
+    const d = await seedDealer("b6q");
+    const postedId = await createCashVehicle(d);
+    const unpostedId = await d.asOwner.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, vin: "1HGCM82633A000010",
+    });
+    expect(await d.asOwner.query(api.vehicles.getPurchaseCostLockState, { orgId: d.orgId, vehicleId: postedId })).toEqual({ locked: true });
+    expect(await d.asOwner.query(api.vehicles.getPurchaseCostLockState, { orgId: d.orgId, vehicleId: unpostedId })).toEqual({ locked: false });
+  });
+});
+
+describe("SCRUM-650 batch 2 A7: a failed acquisition post is reported as POST_FAILED", () => {
+  test("a FAILED outbox row gives blockedReason POST_FAILED, not NOT_POSTED", async () => {
+    const d = await seedDealer("b7");
+    await d.t.run((ctx) => ctx.db.patch(d.periodId, { status: "CLOSED" }));
+    const vehicleId = await createCashVehicle(d);
+    const queued = await d.t.run((ctx) =>
+      ctx.db.query("pendingAccountingEvents").withIndex("by_org_idempotency", (q) => q.eq("orgId", d.orgId).eq("idempotencyKey", `vehicle_acquired_${vehicleId}`)).first()
+    );
+    await d.t.run((ctx) => ctx.db.patch(queued!._id, { status: "FAILED" }));
+    const context = await d.asOwner.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: d.orgId, vehicleId });
+    expect(context).toMatchObject({ blockedReason: "POST_FAILED", allowedTypes: [] });
+  });
+});
+
+describe("SCRUM-650 batch 2 A9/A10: audit fields and the legacy method guard", () => {
+  test("A9: an ON_ACCOUNT correction records the payable and its previous amountDue", async () => {
+    const d = await seedDealer("b9");
+    const vehicleId = await createOnAccountVehicle(d, 12500);
+    const payable = await payableOf(d.t, vehicleId);
+    await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId, newCost: 9800, reason: "invoice", correctionType: "SUPPLIER_INVOICE_ERROR",
+    });
+    const row = await d.t.run((ctx) => ctx.db.query("vehicleCostCorrections").first());
+    expect(row).toMatchObject({ payableId: payable!._id, previousAmountDue: 12500 });
+  });
+
+  test("A10: a legacy event with no payment method plus an acquisition payable is treated as ON_ACCOUNT", async () => {
+    const d = await seedDealer("b10");
+    const vehicleId = await createOnAccountVehicle(d, 12500);
+    const event = await d.t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", d.orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId.toString())).first()
+    );
+    const { paymentMethod: _gone, ...legacyPayload } = event!.payload as Record<string, unknown>;
+    await d.t.run((ctx) => ctx.db.patch(event!._id, { payload: legacyPayload }));
+    const before = await snapshot(d.t, d.orgId, vehicleId);
+
+    const data = await refusalOf(
+      d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+        orgId: d.orgId, vehicleId, newCost: 9800, reason: "wrong", correctionType: "CASH_REFUND", paymentMethod: "CASH",
+      })
+    );
+    expect(data?.code).toBe("COST_CORRECTION_TYPE_NOT_ALLOWED");
+    expect(await snapshot(d.t, d.orgId, vehicleId)).toEqual(before);
+
+    const context = await d.asOwner.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: d.orgId, vehicleId });
+    expect(context.originalPaymentMethod).toBe("ON_ACCOUNT");
+    await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId, newCost: 9800, reason: "invoice", correctionType: "SUPPLIER_INVOICE_ERROR",
+    });
+    expect((await payableOf(d.t, vehicleId))?.amountDue).toBe(9800);
+  });
+});
+
+describe("SCRUM-650 batch 2 extras", () => {
+  test("two acquisition payables refuse AP types: the row to adjust is ambiguous", async () => {
+    const d = await seedDealer("bx1");
+    const vehicleId = await createOnAccountVehicle(d, 12500);
+    const first = await payableOf(d.t, vehicleId);
+    await d.t.run(async (ctx) => {
+      const { _id, _creationTime, ...copy } = first!;
+      await ctx.db.insert("vehicleSupplierPayables", copy);
+    });
+    const before = await snapshot(d.t, d.orgId, vehicleId);
+    const data = await refusalOf(
+      d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+        orgId: d.orgId, vehicleId, newCost: 9800, reason: "wrong", correctionType: "SUPPLIER_INVOICE_ERROR",
+      })
+    );
+    expect(data?.code).toBe("COST_CORRECTION_PAYABLE_NOT_ADJUSTABLE");
+    expect(await snapshot(d.t, d.orgId, vehicleId)).toEqual(before);
+  });
+
+  test("VENDOR_CREDIT upward raises the payable and AP together", async () => {
+    const d = await seedDealer("bx2");
+    const vehicleId = await createOnAccountVehicle(d, 12500);
+    await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId, newCost: 13000, reason: "credit note reversed", correctionType: "VENDOR_CREDIT",
+    });
+    expect((await payableOf(d.t, vehicleId))?.amountDue).toBe(13000);
+    expect(await balanceMinor(d.t, d.orgId, "ACCOUNTS_PAYABLE_SUPPLIERS")).toBe(-13_000_000);
+  });
+});
+
+describe("SCRUM-650 batch 2 A12: the counter-account mirror matches what the ledger posts", () => {
+  type Case = { original: "CASH" | "BANK_TRANSFER" | "ON_ACCOUNT" | "PAID_ON_ACCOUNT"; type: "CASH_REFUND" | "SUPPLIER_INVOICE_ERROR" | "VENDOR_CREDIT" | "PRIOR_PERIOD_RESTATEMENT"; method?: "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD" };
+  const cases: Case[] = [];
+  for (const original of ["CASH", "BANK_TRANSFER"] as const) {
+    for (const method of ["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"] as const) cases.push({ original, type: "CASH_REFUND", method });
+    cases.push({ original, type: "PRIOR_PERIOD_RESTATEMENT" });
+  }
+  cases.push({ original: "ON_ACCOUNT", type: "SUPPLIER_INVOICE_ERROR" }, { original: "ON_ACCOUNT", type: "VENDOR_CREDIT" }, { original: "ON_ACCOUNT", type: "PRIOR_PERIOD_RESTATEMENT" });
+  for (const method of ["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"] as const) cases.push({ original: "PAID_ON_ACCOUNT", type: "CASH_REFUND", method });
+
+  test.each(cases)("%j posts its counter line to the predicted account", async (c) => {
+    const d = await seedDealer(`a12_${c.original}_${c.type}_${c.method ?? "x"}`);
+    let vehicleId: Id<"vehicles">;
+    if (c.original === "CASH" || c.original === "BANK_TRANSFER") vehicleId = await createCashVehicle(d, 12500, c.original);
+    else {
+      vehicleId = await createOnAccountVehicle(d, 12500);
+      if (c.original === "PAID_ON_ACCOUNT") {
+        const payable = await payableOf(d.t, vehicleId);
+        await d.asOwner.mutation(api.sourcingPayables.markPaid, {
+          idempotencyKey: crypto.randomUUID(), orgId: d.orgId, payableId: payable!._id, paymentMethod: "BANK_TRANSFER",
+        });
+      }
+    }
+    // Both directions: down, then up.
+    for (const newCost of [9800, 11000]) {
+      await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+        orgId: d.orgId, vehicleId, newCost, reason: "parity", correctionType: c.type,
+        ...(c.method ? { paymentMethod: c.method } : {}),
+      });
+    }
+    const predicted = costCorrectionCounterKey(c.type, c.method);
+    const entries = await d.t.run((ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", d.orgId)).collect()
+    );
+    const corrections = entries.filter((e) => e.sourceType === "vehicleCostCorrections");
+    expect(corrections).toHaveLength(2);
+    for (const entry of corrections) {
+      const lines = await d.t.run((ctx) =>
+        ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id)).collect()
+      );
+      const keys = await Promise.all(lines.map(async (l) => (await d.t.run((ctx) => ctx.db.get(l.accountId)))?.systemKey));
+      expect(keys.sort()).toEqual(["VEHICLE_INVENTORY", predicted].sort());
+    }
   });
 });

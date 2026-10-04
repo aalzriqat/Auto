@@ -41,7 +41,7 @@ import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/P
 import { vehicleSchema, VehicleFormValues, VehicleDialogProps } from "./vehicle.schema";
 import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
 import { decodeVinYear, toCarBrand, cleanMfrName, validateVinChecksum } from "@/lib/vinHelpers";
-import { getErrorMessage } from "@/lib/errors";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 import { interpolate } from "@/lib/i18n/interpolate";
 import type { TranslationKey } from "@/lib/i18n/dictionaries";
 
@@ -73,6 +73,16 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
   const requestUpdate = useMutation(api.vehicleEdits.requestUpdate);
   const generateUploadUrl = useMutation(api.vehicles.generateUploadUrl);
   const deleteImage = useMutation(api.vehicles.deleteImage);
+
+  // SCRUM-650: once the acquisition has posted, the purchase price can only change
+  // through "Correct purchase cost". `undefined` while loading: the price is treated
+  // as locked and submit is held, so a posted car never sends a price it cannot change.
+  const costLockState = useQuery(
+    api.vehicles.getPurchaseCostLockState,
+    open && vehicle && activeOrgId ? { orgId: activeOrgId, vehicleId: vehicle._id } : "skip"
+  );
+  const costLockLoading = !!vehicle && costLockState === undefined;
+  const costLocked = !!vehicle && costLockState?.locked !== false;
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -310,7 +320,11 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
 
     setIsSubmitting(true);
     try {
-      const { imageIds: _formImageIds, inspectionStatus, purchasePaymentMethod, ...restValues } = values;
+      const { imageIds: _formImageIds, inspectionStatus, purchasePaymentMethod, ...allValues } = values;
+      // A posted vehicle's cost fields are never submitted: the backend lock refuses
+      // any purchasePrice/sourceCost key in the patch, even an unchanged one.
+      const { purchasePrice: _lockedPrice, sourceCost: _lockedSourceCost, ...unlockedValues } = allValues;
+      const restValues = vehicle && costLocked ? unlockedValues : allValues;
       // PARTNER_VERIFIED is display-only here (locked Select) — none of the
       // backend mutations accept it, so never resubmit it as-is.
       const trustPassportFields =
@@ -369,7 +383,8 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
       }
       onOpenChange(false);
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      // A refused cost edit (VEHICLE_COST_POSTED) needs the localized, coded message.
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setIsSubmitting(false);
     }
@@ -721,9 +736,9 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                     <FormItem>
                       <FormLabel>{t("PurchasePrice" as any) || "Purchase Price"} (JOD)</FormLabel>
                       <FormControl>
-                        <Input type="number" {...field} />
+                        <Input type="number" {...field} readOnly={!!vehicle && costLocked} aria-readonly={!!vehicle && costLocked} />
                       </FormControl>
-                      {vehicle && (
+                      {vehicle && costLocked && !costLockLoading && (
                         <p className="text-xs text-muted-foreground">{t("CostCorrectionEditHint" as any)}</p>
                       )}
                       <FormMessage />
@@ -980,7 +995,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                     {t("WizardContinue")}<ArrowRight className="h-4 w-4 ms-2 rtl:rotate-180" />
                   </Button>
                 ) : (
-                  <Button type="submit" disabled={isSubmitting}>
+                  <Button type="submit" disabled={isSubmitting || costLockLoading}>
                     {submitLabel}
                   </Button>
                 )}
