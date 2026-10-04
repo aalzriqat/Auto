@@ -507,6 +507,10 @@ const dealRailMessages = defineBilingualMessages({
   LoadingDeals: ["Loading deals…", "جارٍ تحميل الصفقات…"],
   NoDealsFound: ["No deals match these filters.", "لا توجد صفقات مطابقة لهذه التصفية."],
   DealsQueueEmpty: ["Nothing is waiting on the dealership right now.", "لا شيء بانتظار المعرض حاليًا."],
+  DealsQueueEmptyLoadedOnly: [
+    "Nothing on the loaded deals is waiting on the dealership. Older deals are not loaded yet and may still need action — load more to check them.",
+    "لا شيء في الصفقات المحمّلة بانتظار المعرض. الصفقات الأقدم لم تُحمَّل بعد وقد تحتاج إجراءً — حمّل المزيد للتحقق منها.",
+  ],
   DealsReasonColumn: ["Waiting on", "بانتظار"],
   DealsCustomerVehicleColumn: ["Customer · vehicle", "العميل · السيارة"],
   DealsTypeColumn: ["Type · financier", "النوع · جهة التمويل"],

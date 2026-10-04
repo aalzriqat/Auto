@@ -112,4 +112,13 @@ describe("the Deals list is a needs-action queue first", () => {
     renderList({ rows: [row({ reason: null, waitingOn: "NONE" })] });
     expect(screen.getByText("DealsQueueEmpty")).toBeTruthy();
   });
+
+  test("an empty queue never claims nothing is waiting while older deals are not loaded (SCRUM-603-2)", () => {
+    // Only the loaded pages feed the queue, so an older held deposit can sit
+    // on a page not yet loaded: the empty state must say so and offer it.
+    renderList({ rows: [row({ reason: null, waitingOn: "NONE" })], canLoadMore: true });
+    expect(screen.queryByText("DealsQueueEmpty")).toBeNull();
+    expect(screen.getByText("DealsQueueEmptyLoadedOnly")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "LoadMore" })).toBeTruthy();
+  });
 });

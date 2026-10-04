@@ -293,7 +293,15 @@ export function DealsListView({
           <p className="p-6 text-center text-sm text-muted-foreground">{t("LoadingDeals")}</p>
         ) : visible.length === 0 ? (
           <p className="p-6 text-center text-sm text-muted-foreground">
-            {t(view === "needs" && !filtersActive ? "DealsQueueEmpty" : "NoDealsFound")}
+            {/* The queue is built from loaded rows only: with more to load, an
+                empty queue proves nothing about older deals (SCRUM-603-2). */}
+            {t(
+              view === "needs" && !filtersActive
+                ? canLoadMore
+                  ? "DealsQueueEmptyLoadedOnly"
+                  : "DealsQueueEmpty"
+                : "NoDealsFound"
+            )}
           </p>
         ) : (
           <>
