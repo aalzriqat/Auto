@@ -19,6 +19,11 @@ const touch = (rel: string) => {
   fs.mkdirSync(path.dirname(full), { recursive: true });
   fs.writeFileSync(full, "x");
 };
+const writeLcov = (text: string): string => {
+  const lcov = path.join(root, "lcov.info");
+  fs.writeFileSync(lcov, text);
+  return lcov;
+};
 const validate = (text: string) => validateLcovSources(text, { candidateRoot: root });
 
 beforeEach(() => {
@@ -129,10 +134,9 @@ describe("validateLcovSources", () => {
 
 describe("main", () => {
   test("returns 0 for a valid artifact and 1 for an invalid one", () => {
-    const lcov = path.join(root, "lcov.info");
-    fs.writeFileSync(lcov, rec("convex/a.ts"));
+    const lcov = writeLcov(rec("convex/a.ts"));
     expect(main([lcov, root])).toBe(0);
-    fs.writeFileSync(lcov, rec("components/a.tsx"));
+    writeLcov(rec("components/a.tsx"));
     expect(main([lcov, root])).toBe(1);
     expect(main([])).toBe(1);
   });
@@ -141,8 +145,7 @@ describe("main", () => {
 describe("CLI entry point", () => {
   const script = path.resolve(process.cwd(), "scripts/validateLcovSources.cjs");
   const run = (lcovText: string) => {
-    const lcov = path.join(root, "lcov.info");
-    fs.writeFileSync(lcov, lcovText);
+    const lcov = writeLcov(lcovText);
     return spawnSync(process.execPath, [script, lcov, root], { encoding: "utf8" });
   };
 
