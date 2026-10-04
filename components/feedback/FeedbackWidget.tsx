@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -24,6 +24,10 @@ export function FeedbackWidget() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // The open flag lives in a module store; the form state does not. Close on
+  // unmount so a remount never shows an open panel with an emptied form.
+  useEffect(() => () => closeFeedbackPanel(), []);
 
   const reset = () => {
     setType(null);

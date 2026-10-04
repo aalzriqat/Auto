@@ -75,6 +75,19 @@ test.describe("sales wizard guards (SCRUM-609)", () => {
     await expect(page.getByTestId("finance-panel-blocked")).toHaveCount(0);
     await page.getByText(COMPANY_NAME, { exact: false }).first().click();
 
+    // F-25 — with a company already chosen, only the down-payment guard can
+    // stop Next: raising the down payment to the price must still be refused.
+    await page.locator('input[name="downPayment"]').fill("11100");
+    await expect(page.getByTestId("finance-panel-blocked")).toBeVisible();
+    await page.getByRole("button", { name: "Next", exact: true }).click();
+    await expect(page.getByPlaceholder(/Search by name, phone/)).toHaveCount(0);
+    // A schema error on the same field must still mark it invalid for assistive tech.
+    await page.locator('input[name="downPayment"]').fill("-5");
+    await page.getByRole("button", { name: "Next", exact: true }).click();
+    await expect(page.locator('input[name="downPayment"]')).toHaveAttribute("aria-invalid", "true");
+    await page.locator('input[name="downPayment"]').fill("3000");
+    await expect(page.getByTestId("finance-panel-blocked")).toHaveCount(0);
+
     // F-01 — the step action is the element under the pointer (trial runs the
     // hit-target check without clicking).
     const next = page.getByRole("button", { name: "Next", exact: true });

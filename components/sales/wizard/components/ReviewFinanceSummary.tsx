@@ -3,6 +3,7 @@
 import { cn } from "@/lib/utils";
 import { FileText } from "lucide-react";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useCurrency } from "@/hooks/useCurrency";
 
 const DOC_TRANSLATIONS: Record<string, string> = {
   "هوية": "ID Card",
@@ -61,6 +62,7 @@ export default function ReviewFinanceSummary({
   className,
 }: ReviewFinanceSummaryProps) {
   const { isRtl, t } = useLanguage();
+  const currency = useCurrency();
   const showDealTerms = !isCash && salePrice !== undefined;
 
   return (
@@ -85,13 +87,13 @@ export default function ReviewFinanceSummary({
           <div>
             <dt className="text-xs text-muted-foreground">{t("SalePrice" as any)}</dt>
             <dd className="font-semibold tabular-nums">
-              {formatAmount(salePrice ?? 0)} {t("JOD" as any)}
+              {formatAmount(salePrice ?? 0)} {currency.displayLabel}
             </dd>
           </div>
           <div>
             <dt className="text-xs text-muted-foreground">{t("DownPayment" as any)}</dt>
             <dd className="font-semibold tabular-nums">
-              {formatAmount(downPayment ?? 0)} {t("JOD" as any)}
+              {formatAmount(downPayment ?? 0)} {currency.displayLabel}
             </dd>
           </div>
           {termMonths !== undefined && (
@@ -114,7 +116,7 @@ export default function ReviewFinanceSummary({
                 {(monthlyInstallment || 0).toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                 })}
-                <span className="text-xs text-muted-foreground ms-1">{t("JOD" as any)}</span>
+                <span className="text-xs text-muted-foreground ms-1">{currency.displayLabel}</span>
               </p>
             </div>
 
@@ -125,7 +127,7 @@ export default function ReviewFinanceSummary({
                 {(totalFinancedAmount || 0).toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                 })}{" "}
-                {t("JOD" as any)}
+                {currency.displayLabel}
               </p>
             </div>
 
@@ -136,7 +138,7 @@ export default function ReviewFinanceSummary({
                 {(totalProfit || 0).toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                 })}{" "}
-                {t("JOD" as any)}
+                {currency.displayLabel}
               </p>
             </div>
 
@@ -147,7 +149,7 @@ export default function ReviewFinanceSummary({
                 {(desiredProfit || 0).toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                 })}{" "}
-                {t("JOD" as any)}
+                {currency.displayLabel}
               </p>
             </div>
           </>
@@ -160,7 +162,7 @@ export default function ReviewFinanceSummary({
               {(totalFinancedAmount || 0).toLocaleString(undefined, {
                 minimumFractionDigits: 2,
               })}{" "}
-              {t("JOD" as any)}
+              {currency.displayLabel}
             </p>
           </div>
         )}

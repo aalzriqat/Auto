@@ -55,4 +55,14 @@ describe("FeedbackWidget — full-screen flows (SCRUM-609 F-01)", () => {
     act(() => openFeedbackPanel());
     expect(screen.getByText("FeedbackWidgetDesc")).toBeTruthy();
   });
+
+  test("a panel left open when the widget unmounts is closed on the next mount", () => {
+    const first = render(<FeedbackWidget />);
+    act(() => openFeedbackPanel());
+    expect(screen.getByText("FeedbackWidgetDesc")).toBeTruthy();
+
+    first.unmount();
+    render(<FeedbackWidget />);
+    expect(screen.queryByText("FeedbackWidgetDesc")).toBeNull();
+  });
 });

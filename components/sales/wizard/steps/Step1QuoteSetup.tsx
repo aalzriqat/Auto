@@ -527,8 +527,10 @@ export default function Step1QuoteSetup({
                     <FormControl>
                       <Input
                         type="number"
-                        aria-invalid={downPaymentCoversPrice || undefined}
                         {...field}
+                        // Only set when true: an explicit `undefined` would override
+                        // FormControl's aria-invalid for schema errors (Slot merge order).
+                        {...(downPaymentCoversPrice ? { "aria-invalid": true } : {})}
                       />
                     </FormControl>
                     {downPaymentCoversPrice && (
