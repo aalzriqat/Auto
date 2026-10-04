@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { callJev } from "../../scripts/intelligence/jevImpact.mjs";
 import {
@@ -36,6 +37,9 @@ const MAX_ATTEMPTS = Number(process.env.JEV_FORM_EXPLORER_ATTEMPTS ?? 30);
 const SEED = Number(process.env.JEV_FORM_EXPLORER_SEED ?? Date.now() % 100_000);
 // "QA TEST F614-…" is the prefix agreed with the #430 scenario lane, which
 // shares this preview org and looks its own records up by exact name.
+/** Visible within the timeout. (locator.isVisible ignores its timeout: it never waits.) */
+const appeared = (l: Locator, timeout: number) => l.waitFor({ state: "visible", timeout }).then(() => true, () => false);
+
 const RUN = `F614-${(Date.now() % 1_000_000).toString(36).toUpperCase()}`;
 
 /** The only screens it may submit on. Each entry is reviewed by a person. */
@@ -80,7 +84,7 @@ const FORMS: FormSpec[] = [
       await dialog.getByRole("button", { name: /Select customer/ }).click();
       await page.getByPlaceholder(/^Search/).last().fill(`QA TEST ${RUN}-SEED`);
       const option = page.locator('[data-testid^="searchable-option-"]').first();
-      if (!(await option.isVisible({ timeout: 8_000 }).catch(() => false))) return false;
+      if (!(await appeared(option, 8_000))) return false;
       await option.click();
       return true;
     },
@@ -171,6 +175,8 @@ async function jevPick(cands: Candidate[]): Promise<number | undefined> {
 
 test.describe("Jev form explorer (advisory, writes to the preview)", () => {
   test.describe.configure({ timeout: 1_800_000 });
+  // No single action may wait forever: a stuck locator becomes an error.
+  test.use({ actionTimeout: 15_000, navigationTimeout: 45_000 });
 
   test("hostile input into create forms", async ({ page, baseURL }) => {
     test.skip(process.env.JEV_FORM_EXPLORER !== "1", "Opt-in: set JEV_FORM_EXPLORER=1. It writes QA TEST records.");
@@ -204,28 +210,40 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       assertBackend();
       await page.goto(`/${orgId}/${form.route}`);
       const trigger = page.getByRole("button", { name: form.trigger }).first();
-      if (!(await trigger.isVisible({ timeout: 20_000 }).catch(() => false))) return undefined;
+      if (!(await appeared(trigger, 20_000))) return undefined;
       await trigger.click();
       const dialog = page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: form.title }) });
-      if (!(await dialog.isVisible({ timeout: 10_000 }).catch(() => false))) return undefined;
+      if (!(await appeared(dialog, 10_000))) return undefined;
       return dialog;
     }
 
     /** Typable, labelled controls of an open dialog. Pickers and selects are left alone. */
+    // Walks the dialog's real inputs and reads each one's own label in a single
+    // in-page pass. (Probing every <label> with getByLabel hung: a label with
+    // no linked control makes the locator wait for an element forever.)
     async function discoverFields(dialog: Locator): Promise<Field[]> {
+      const found = await dialog
+        .evaluate((root) =>
+          [...root.querySelectorAll("input, textarea")].map((e) => {
+            const el = e as HTMLInputElement | HTMLTextAreaElement;
+            const label = (el.labels?.[0]?.textContent ?? el.getAttribute("aria-label") ?? "").replace(/\s+/g, " ").trim();
+            return {
+              label,
+              tag: el.tagName,
+              type: (el.getAttribute("type") ?? "").toLowerCase(),
+              visible: el.getClientRects().length > 0 && !el.disabled && !el.readOnly,
+              required: el.required || el.getAttribute("aria-required") === "true",
+            };
+          }),
+        )
+        .catch(() => []);
       const out: Field[] = [];
-      const labels = dialog.locator("label");
-      for (let i = 0; i < (await labels.count()); i++) {
-        const text = (await labels.nth(i).innerText().catch(() => "")).replace(/\s+/g, " ").trim();
-        if (!text) continue;
-        const control = dialog.getByLabel(text, { exact: true }).first();
-        const shape = await control
-          .evaluate((e) => ({ tag: e.tagName, type: (e.getAttribute("type") ?? "").toLowerCase() }))
-          .catch(() => undefined);
-        if (!shape || !["INPUT", "TEXTAREA"].includes(shape.tag)) continue;
-        const kind = kindOf(text, shape.type, shape.tag);
-        if (!kind) continue;
-        out.push({ label: text, kind, required: text.includes("*") });
+      for (const f of found) {
+        if (!f.label || !f.visible) continue;
+        if (f.tag === "INPUT" && !["", "text", "email", "tel", "number"].includes(f.type)) continue;
+        const kind = kindOf(f.label, f.type, f.tag);
+        if (!kind || out.some((o) => o.label === f.label)) continue;
+        out.push({ label: f.label, kind, required: f.required || f.label.includes("*") });
       }
       return out;
     }
@@ -233,7 +251,7 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
     async function fill(dialog: Locator, fields: Field[], values: Map<string, string>) {
       for (const f of fields) {
         const v = values.get(f.label);
-        if (v !== undefined) await dialog.getByLabel(f.label, { exact: true }).first().fill(v);
+        if (v !== undefined) await dialog.getByLabel(f.label, { exact: true }).first().fill(v, { timeout: 10_000 });
       }
     }
 
@@ -287,7 +305,7 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
     async function readBack(form: FormSpec, tag: string): Promise<string | undefined> {
       await page.goto(`/${orgId}/${form.route}`);
       const search = page.locator('main input[placeholder^="Search"]').first();
-      if (!(await search.isVisible({ timeout: 15_000 }).catch(() => false))) return undefined;
+      if (!(await appeared(search, 15_000))) return undefined;
       await search.fill(tag);
       await page.waitForTimeout(2_000);
       const text = await page.locator("main table").innerText().catch(() => "");
@@ -315,7 +333,12 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       for (const f of fields) if (f.required) values.set(f.label, baselineValue(f.kind, tag, Date.now() + slot));
       const value = override?.value ?? hostileValue(c.rule, tag);
       values.set(override?.label ?? c.field.label, value);
-      await fill(dialog, fields, values);
+      try {
+        await fill(dialog, fields, values);
+      } catch (error) {
+        await closeDialog(dialog);
+        return { outcome: "ignored", warned: false, tag, setupFailed: `could not fill the form: ${String(error).slice(0, 160)}` };
+      }
       await page.waitForTimeout(1_500); // the duplicate check is debounced
       const warned = DUPLICATE_WARNING.test(await dialog.innerText().catch(() => ""));
       const res = await submit(c.form, dialog);
@@ -325,6 +348,30 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
     const random = rng(SEED);
     const records: Record_[] = [];
     const fieldsByForm = new Map<string, Field[]>();
+    // Called only once the attempt pool exists, so `pool` is never in its TDZ.
+    const report = () =>
+      JSON.stringify(
+        {
+          run: RUN,
+          seed: SEED,
+          maxAttempts: MAX_ATTEMPTS,
+          jev: Boolean(process.env.TYPESAFE_API_KEY),
+          jevStats,
+          fields: Object.fromEntries(fieldsByForm),
+          untried: pool.map((p) => `${p.form.id}:${p.field.label}:${p.rule}`),
+          summary: {
+            attempts: records.length,
+            findings: records.filter((r) => r.verdict.kind === "finding").length,
+            advisories: records.filter((r) => r.verdict.kind === "advisory").length,
+            inconclusive: records.filter((r) => r.verdict.kind === "inconclusive").length,
+          },
+          records,
+        },
+        null,
+        2,
+      );
+    // Written after every attempt, so a timeout still leaves the evidence on disk.
+    const saveReport = () => writeFileSync(test.info().outputPath("jev-form-explorer.json"), report());
 
     // Discovery: open each allowed form once, list its typable fields, close it.
     for (const form of FORMS) {
@@ -439,34 +486,12 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
         await page.screenshot({ path: shot, fullPage: true });
       }
       records.push({ n, form: c.form.id, field: c.field.label, rule: c.rule, outcome: a.outcome, verdict, toast: a.toast?.slice(0, 300), screenshot: shot });
+      saveReport();
     }
 
-    const findings = records.filter((r) => r.verdict.kind === "finding");
     for (const r of records.filter((x) => x.verdict.kind === "finding" || x.verdict.kind === "advisory")) {
       test.info().annotations.push({ type: `${r.verdict.kind}:${r.verdict.check}`, description: `#${r.n} ${r.form} — ${r.verdict.reason}` });
     }
-    await test.info().attach("jev-form-explorer.json", {
-      body: JSON.stringify(
-        {
-          run: RUN,
-          seed: SEED,
-          maxAttempts: MAX_ATTEMPTS,
-          jev: Boolean(process.env.TYPESAFE_API_KEY),
-          jevStats,
-          fields: Object.fromEntries(fieldsByForm),
-          untried: pool.map((p) => `${p.form.id}:${p.field.label}:${p.rule}`),
-          summary: {
-            attempts: records.length,
-            findings: findings.length,
-            advisories: records.filter((r) => r.verdict.kind === "advisory").length,
-            inconclusive: records.filter((r) => r.verdict.kind === "inconclusive").length,
-          },
-          records,
-        },
-        null,
-        2,
-      ),
-      contentType: "application/json",
-    });
+    await test.info().attach("jev-form-explorer.json", { body: report(), contentType: "application/json" });
   });
 });
