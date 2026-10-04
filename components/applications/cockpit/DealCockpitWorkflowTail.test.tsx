@@ -223,7 +223,7 @@ function nextStepBlock(): HTMLElement {
 function grantTheWholeTail() {
   permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
   permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
-  permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+  permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
   // SCRUM-407: the close itself is an accountant's act.
   permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
 }
@@ -375,9 +375,9 @@ describe("a step the server would refuse is not offered as a step", () => {
   });
 
   test("a caller who can neither record the route nor close is not sent to look for it", () => {
-    // No FINALIZE_FINANCED_DEAL, and the route is missing too.
+    // No MANAGE_SUPPLIER_SETTLEMENT, and the route is missing too.
     //
-    // `setSupplierSettlementRoute` takes `finalize:financed_deal`, and the
+    // `setSupplierSettlementRoute` takes `manage:supplier_settlement`, and the
     // review dialog hides its selector without it — so "record the route in
     // Review" would send this caller to a screen with nothing on it. Two
     // individually correct sentences rebuilding the dead end between them.
@@ -518,7 +518,7 @@ describe("the close needs a loaded READY verdict — to be offered and to be sub
   test("the route is still named before the readiness access", () => {
     permissions.add(PERMISSIONS.VIEW_SALES);
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
     queryResults.set(
       COCKPIT_QUERY,
       cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true, supplierSettlementRouteRequired: true })
@@ -975,12 +975,12 @@ describe("three permissions, not one", () => {
   });
 
   // SCRUM-407 owner ruling: finalizing a financed deal is for accountants
-  // only. `finalize:financed_deal` alone — what the default SALES template
+  // only. `manage:supplier_settlement` alone — what the default SALES template
   // holds — no longer offers the close; the server refuses it the same way.
-  test("a caller holding finalize:financed_deal but not the accountant's permission is not offered the close", () => {
+  test("a caller holding manage:supplier_settlement but not the accountant's permission is not offered the close", () => {
     permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
     permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
     queryResults.set(
       COCKPIT_QUERY,
       cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true })

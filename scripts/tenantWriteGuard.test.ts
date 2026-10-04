@@ -658,11 +658,13 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // (orgId + MANAGE_FINANCE; the held row is read and its orgId compared to the caller's before the patch).
   // SCRUM-571 D-22: + paymentIntents.linkHeldCaptureToIntent - 512 -> 513 total, 340 -> 341 analysed
   // (orgId + MANAGE_FINANCE; the held row and the intent are both read and org-compared before the patch).
+  // SCRUM-413 PR-B /simplify: `migrateRoles.prepareSplitDealAuthorities` is now an internalQuery (it only
+  // reads) - 513 -> 512 total, 341 -> 340 analysed. Re-measured FROM THE ANALYSER on this tree.
   // Skipped counts unchanged.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 513,
-      analysed: 341,
+      totalMutations: 512,
+      analysed: 340,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

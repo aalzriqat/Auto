@@ -39,7 +39,7 @@ const ALL_PERMS = [
   "approve:requests",
   "view:finance_applications", "create:finance_application",
   "review:finance_application", "approve:finance_application",
-  "finalize:financed_deal", "confirm:finance_disbursement",
+  "manage:supplier_settlement", "cancel:closed_deal", "confirm:finance_disbursement",
   "verify:finance_documents", "register:vehicle_handover",
   "register:expected_payment",
   "manage:finance", "view:finance",
@@ -48,7 +48,7 @@ const ALL_PERMS = [
 ];
 const MANAGER_PERMS = ALL_PERMS.filter((p) => p !== "view:finance" && p !== "manage:finance");
 const SALES_PERMS = ALL_PERMS.filter(
-  (p) => !["finalize:financed_deal", "confirm:finance_disbursement", "view:finance", "manage:finance", "approve:finance_application"].includes(p)
+  (p) => !["manage:supplier_settlement", "cancel:closed_deal", "confirm:finance_disbursement", "view:finance", "manage:finance", "approve:finance_application"].includes(p)
 );
 const ACCOUNTANT_PERMS = ["view:finance", "manage:finance", "view:finance_applications", "view:reports"];
 

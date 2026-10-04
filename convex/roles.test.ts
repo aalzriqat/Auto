@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
-import { ALL_PERMISSIONS, PERMISSIONS } from "./utils/permissions";
+import { ALL_PERMISSIONS, PERMISSIONS, PRE_413_OWNER_FALLBACK_PERMISSIONS } from "./utils/permissions";
 
 async function setupOwnerOrg(t: any) {
   const orgId = await t.run((ctx: any) =>
@@ -98,9 +98,12 @@ describe("roles", () => {
       ctx.db.insert("users", { clerkId: "legacy_owner", email: "legacy-owner@test.com" })
     ) as Id<"users">;
     // A legacy org seeded before the isSystemOwnerRole flag existed. Owner
-    // status falls back to an EXACT match on the name "OWNER".
+    // status falls back to an EXACT match on the name "OWNER" plus the FROZEN
+    // pre-SCRUM-413 permission set (which includes the now-retired
+    // finalize:financed_deal; ALL_PERMISSIONS no longer does, so a legacy row
+    // is modelled with the frozen set, as real stored rows hold it).
     const ownerRoleId = await t.run((ctx: any) =>
-      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ALL_PERMISSIONS })
+      ctx.db.insert("roles", { orgId, name: "OWNER", permissions: [...PRE_413_OWNER_FALLBACK_PERMISSIONS] })
     ) as Id<"roles">;
     await t.run((ctx: any) => ctx.db.insert("memberships", { orgId, userId, roleId: ownerRoleId }));
     const asOwner = t.withIdentity({ subject: "legacy_owner" });

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { ConvexError } from "convex/values";
+import { toast } from "@/components/ui/sonner";
 import { EditRoleDialog } from "./EditRoleDialog";
 
 /**
@@ -15,7 +17,7 @@ vi.mock("convex/react", () => ({ useMutation: () => updateRole }));
 vi.mock("@/components/providers/OrgProvider", () => ({ useOrg: () => ({ activeOrgId: "org_1" }) }));
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({
-    t: (key: string) => ({ MANAGER: "Manager", Save: "Save" } as Record<string, string>)[key] ?? key,
+    t: (key: string) => ({ MANAGER: "Manager", Save: "Save", ServerError_PERMISSION_RETIRED: "localized retired text" } as Record<string, string>)[key] ?? key,
   }),
 }));
 vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -58,4 +60,18 @@ describe("EditRoleDialog", () => {
     await waitFor(() => expect(updateRole).toHaveBeenCalledTimes(1));
     expect(updateRole.mock.calls[0][0]).toMatchObject({ name: "Deal Desk" });
   });
-});
+
+  // SCRUM-413 PR-B: a retired-permission refusal reaches the user as the
+  // localized ServerError_PERMISSION_RETIRED entry, not the server's English.
+  test("a PERMISSION_RETIRED refusal is shown through the localized dictionary entry", async () => {
+    updateRole.mockRejectedValueOnce(
+      new ConvexError({ code: "PERMISSION_RETIRED", message: "server english text" })
+    );
+    render(<EditRoleDialog role={managerRole} open onOpenChange={() => {}} />);
+
+    fireEvent.click(screen.getByText("toggle-permission"));
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(toast.error).toHaveBeenCalledWith("localized retired text");
+  });});

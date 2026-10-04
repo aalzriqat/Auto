@@ -135,7 +135,7 @@ afterEach(() => {
 describe("the cockpit's profit-approval read", () => {
   test("a viewer without VIEW_VEHICLES never subscribes, so the cockpit still renders", () => {
     permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     seedFinancedDeal();
 
@@ -159,7 +159,7 @@ describe("the cockpit's profit-approval read", () => {
   test("a finalizer who may read vehicles asks about the quote's exact price", () => {
     permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     permissions.add(PERMISSIONS.VIEW_VEHICLES);
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     seedFinancedDeal();
 
