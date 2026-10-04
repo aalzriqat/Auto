@@ -89,7 +89,7 @@ export const CLOSING_READINESS_REASON_PARAMS = {
   HANDOVER_DIRECT_LEDGER_UNVERIFIABLE: [],
   // FIRST_PAYMENT_RECORDED
   FIRST_PAYMENT_MISSING: [],
-  // SCRUM-629 F-22: the quotation or the approval is not on file yet.
+  // SCRUM-629 F-22: the finance company's approval is not on file yet.
   FIRST_PAYMENT_INPUTS_PENDING: [],
   // LEGAL_INVOICE_RECORDED
   LEGAL_INVOICE_MISSING: [],
