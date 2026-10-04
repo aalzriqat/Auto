@@ -1019,14 +1019,14 @@ describe("instagramEngagement.getSettingsByInstagramAccountId", () => {
         instagramBusinessAccountId: "ig_webhook_1",
       })
     );
-    expect(found?.orgId).toBe(orgId);
+    expect(found.settings?.orgId).toBe(orgId);
 
     const notFound = await t.run((ctx) =>
       ctx.runQuery(internal.instagramEngagement.getSettingsByInstagramAccountId, {
         instagramBusinessAccountId: "does_not_exist",
       })
     );
-    expect(notFound).toBeNull();
+    expect(notFound).toEqual({ settings: null, ambiguous: false });
   });
 });
 

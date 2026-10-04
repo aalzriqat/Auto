@@ -76,12 +76,17 @@ const GRAPH_LOOKUP_TIMEOUT_MS = 5_000;
 export const getSettingsByInstagramAccountId = internalQuery({
   args: { instagramBusinessAccountId: v.string() },
   handler: async (ctx, args) => {
-    return await ctx.db
+    // Held by two orgs → no settings with `ambiguous: true`; the tenant is never
+    // guessed and the caller records and skips the entry rather than failing
+    // the whole batch (SCRUM-622).
+    const holders = await ctx.db
       .query("orgSettings")
       .withIndex("by_instagram_webhook_account_id", (q) =>
         q.eq("instagramWebhookAccountId", args.instagramBusinessAccountId)
       )
-      .unique();
+      .take(2);
+    if (holders.length > 1) return { settings: null, ambiguous: true };
+    return { settings: holders[0] ?? null, ambiguous: false };
   },
 });
 
