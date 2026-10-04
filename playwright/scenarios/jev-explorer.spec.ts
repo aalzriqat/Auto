@@ -48,13 +48,13 @@ type Finding = { step: number; url: string; check: string; detail: string };
 /**
  * The Convex URL proven to be the seeded disposable preview, or undefined.
  * "Not production" is not enough: a developer's own deployment, or anything
- * else the URL happens to name, would pass that (Codex AF-430-03). In CI the
- * seed step exports the URL only after assertE2EBootstrap passed for it; run
- * locally, the same assertion is run here, against the preview named by
- * CONVEX_PREVIEW_NAME, through the bootstrap's own argv checks.
+ * else the URL happens to name, would pass that (Codex AF-430-03). The proof is
+ * always asked of the backend itself, in CI as well as locally:
+ * assertE2EBootstrap is run against the preview named by CONVEX_PREVIEW_NAME,
+ * through the bootstrap's own argv checks. An environment variable saying "this
+ * was attested" is the caller's claim, not evidence, so none is trusted.
  */
 function attestedPreviewUrl(): string | undefined {
-  if (process.env.GITHUB_ACTIONS === "true") return process.env.SCENARIOS_PREVIEW_ATTESTED_URL || undefined;
   if (!process.env.CONVEX_PREVIEW_NAME) return undefined;
   const res = spawnSync(process.execPath, ["--input-type=module", "-e", LOCAL_ATTESTATION], {
     env: process.env,
