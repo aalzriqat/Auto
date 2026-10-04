@@ -413,6 +413,14 @@ describe("control 8 — evidence proves only the requirement it is bound to", ()
     expect(codes(result)).toEqual(["EVIDENCE_NOT_FOR_REQUIREMENT"]);
   });
 
+  test.each([
+    ["extends", "proof:BOUNDARY_X orders the status-filtered branch newest first"],
+    ["is extended by", "xproof:BOUNDARY orders the status-filtered branch newest first"],
+  ])("a title whose token %s the requirement id does not carry it", (_how, title) => {
+    const result = evaluateReviewEvidence(withObligation("proof:BOUNDARY", [testEvidence(title)]));
+    expect(codes(result)).toEqual(["EVIDENCE_NOT_FOR_REQUIREMENT"]);
+  });
+
   test("a governance proof cannot borrow a boundary test", () => {
     const input = validInput();
     input.requirements = [...input.requirements, "proof:jev-harness"];
@@ -432,6 +440,9 @@ describe("control 8 — evidence proves only the requirement it is bound to", ()
 });
 
 describe("control 9 — a malformed record is INVALID, never a crash", () => {
+  // JSON.parse can produce this; String() throws on it.
+  const UNPRINTABLE = JSON.parse('{"toString":"x"}');
+
   test.each([
     ["a string record", "not-a-record"],
     ["an array record", []],
@@ -444,13 +455,46 @@ describe("control 9 — a malformed record is INVALID, never a crash", () => {
     ["exceptions that are a string", { exceptions: "proof:BOUNDARY" }],
     ["exceptions that are a single object", { exceptions: { requirement: "proof:BOUNDARY" } }],
     ["an exception that is null", { exceptions: [null] }],
-  ])("%s", (_label, shape) => {
-    const record = Array.isArray(shape) || typeof shape !== "object"
+    ...["kind", "status", "workflow", "file", "title", "sha"].map((field): [string, unknown] => [
+      `an evidence ${field} that is an object`,
+      { obligations: [{ requirement: "proof:BOUNDARY", evidence: [{ kind: "test", [field]: UNPRINTABLE }] }] },
+    ]),
+    ["an exception jira that is an object", { exceptions: [{ requirement: "proof:BOUNDARY", jira: UNPRINTABLE }] }],
+    ["a policyVersion that is an object", { policyVersion: UNPRINTABLE }],
+  ] as [string, unknown][])("%s", (_label, shape) => {
+    const record = Array.isArray(shape) || typeof shape !== "object" || shape === null
       ? shape
       : { policyVersion: policy.policyVersion, ...shape };
     const result = evaluateReviewEvidence(validInput({ record }));
     expect(result.verdict).toBe("INVALID");
     expect(codes(result)).toEqual(["MALFORMED_RECORD"]);
+  });
+
+  test.each([
+    ["after", (good: unknown, bad: unknown) => [good, bad]],
+    ["before", (good: unknown, bad: unknown) => [bad, good]],
+  ])("a second obligation for one requirement, %s the good one, is malformed", (_order, arrange) => {
+    const input = validInput();
+    const [good, ...rest] = input.record.obligations;
+    const bad = { requirement: "proof:BOUNDARY", evidence: [testEvidence(UNRELATED_TITLE)] };
+    input.record.obligations = [...(arrange(good, bad) as typeof rest), ...rest];
+    const result = evaluateReviewEvidence(input);
+    expect(result.verdict).toBe("INVALID");
+    expect(codes(result)).toEqual(["MALFORMED_RECORD"]);
+  });
+
+  test("two exceptions for one requirement are malformed", () => {
+    const exception = { requirement: "proof:BOUNDARY", jira: "SCRUM-644" };
+    const result = evaluateReviewEvidence(
+      validInput({ record: { policyVersion: policy.policyVersion, obligations: [], exceptions: [exception, exception] } }),
+    );
+    expect(codes(result)).toEqual(["MALFORMED_RECORD"]);
+  });
+
+  test("a run conclusion that is an object is unproven, not a crash", () => {
+    const input = validInput();
+    input.runtimeEvidence[0].conclusion = UNPRINTABLE;
+    expect(codes(evaluateReviewEvidence(input))).toEqual(["RUNTIME_UNPROVEN"]);
   });
 
   test("a test file named __proto__ is not registered, not a crash", () => {

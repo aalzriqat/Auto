@@ -42,6 +42,13 @@ const INVALIDATING = new Set([
 
 const isPlainObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 
+// Formats a value for a reason's detail. String() throws on a JSON object such
+// as {"toString":"x"}, so anything that is not a primitive is named by type.
+const show = (value) => (value !== null && typeof value === "object" ? typeof value : String(value));
+
+const SCALAR_EVIDENCE_FIELDS = ["kind", "status", "workflow", "file", "title", "sha"];
+const isScalar = (value) => value === undefined || value === null || typeof value !== "object";
+
 // The record is candidate-controlled, so its shape is checked before any field
 // is used: a hostile shape must produce a verdict, never a crash.
 function recordShapeProblem(record) {
@@ -57,12 +64,31 @@ function recordShapeProblem(record) {
     }
     for (const item of obligation.evidence ?? []) {
       if (!isPlainObject(item)) return `evidence for ${obligation.requirement} holds a non-object`;
+      const nested = SCALAR_EVIDENCE_FIELDS.find((field) => !isScalar(item[field]));
+      if (nested) return `evidence for ${obligation.requirement} has a non-scalar ${nested}`;
     }
   }
   for (const exception of record.exceptions ?? []) {
     if (!isPlainObject(exception) || typeof exception.requirement !== "string") {
       return "an exception has no string requirement";
     }
+    if (!isScalar(exception.jira)) return `the exception for ${exception.requirement} has a non-scalar jira`;
+  }
+  if (!isScalar(record.policyVersion)) return "policyVersion is not a scalar";
+  // Lookups take the first entry for a requirement, so a second entry would go
+  // unread and its order would decide the verdict.
+  for (const list of ["obligations", "exceptions"]) {
+    const duplicate = firstDuplicate((record[list] ?? []).map((entry) => entry.requirement));
+    if (duplicate !== undefined) return `${list} lists ${duplicate} more than once`;
+  }
+  return undefined;
+}
+
+function firstDuplicate(values) {
+  const seen = new Set();
+  for (const value of values) {
+    if (seen.has(value)) return value;
+    seen.add(value);
   }
   return undefined;
 }
@@ -108,7 +134,7 @@ function checkIdentities({ head, base, merge, mergeParents }, reasons) {
 // both sides of a rename (git diff --no-renames), or a material file renamed
 // into a non-material path would show only its harmless new name.
 function checkFreshness(sha, policy, history) {
-  if (!isCommitSha(sha)) return { code: "BAD_SHA", detail: `evidence SHA ${String(sha)} is not 40-hex` };
+  if (!isCommitSha(sha)) return { code: "BAD_SHA", detail: `evidence SHA ${show(sha)} is not 40-hex` };
   if (!history.isAncestor(sha)) {
     return { code: "STALE_EVIDENCE", detail: `${sha} is not an ancestor of head` };
   }
@@ -119,11 +145,19 @@ function checkFreshness(sha, policy, history) {
   return undefined;
 }
 
-// A test proves a requirement only when its own title carries that
-// requirement's id. The binding then lives in reviewed repository code, not in
-// the record, and an unrelated test cannot be cited for an unrelated proof.
+// A test counts for a requirement only when its own title carries that
+// requirement's id as a whole token, so proof:BOUNDARY_X is not proof:BOUNDARY.
+// This binding is nominal. It stops a record from citing an unrelated test,
+// but the change under review writes both the title and the body, and a title
+// such as "does not prove proof:REPLAY" still carries the token. Binding to the
+// catalog's unique proof markers is S4 work.
+function carriesRequirement(title, requirement) {
+  const escaped = requirement.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\w:-])${escaped}(?![\\w:-])`).test(title);
+}
+
 function checkTestEvidence(item, requirement, policy, history, testRegistry) {
-  if (typeof item.title !== "string" || !item.title.includes(requirement)) {
+  if (typeof item.title !== "string" || !carriesRequirement(item.title, requirement)) {
     return { code: "EVIDENCE_NOT_FOR_REQUIREMENT", detail: `test title does not carry ${requirement}` };
   }
   const stale = checkFreshness(item.sha, policy, history);
@@ -133,7 +167,7 @@ function checkTestEvidence(item, requirement, policy, history, testRegistry) {
     : [];
   const matches = registrations.filter((entry) => entry.title === item.title);
   if (matches.length === 0) {
-    return { code: "TEST_NOT_REGISTERED", detail: `${String(item.file)} has no active test titled "${item.title}" at head` };
+    return { code: "TEST_NOT_REGISTERED", detail: `${show(item.file)} has no active test titled "${item.title}" at head` };
   }
   if (matches.some((entry) => entry.parameterized)) {
     return { code: "TEST_PARAMETERIZED", detail: `"${item.title}" is a .each registration and may run zero cases` };
@@ -146,11 +180,11 @@ function checkTestEvidence(item, requirement, policy, history, testRegistry) {
 // run neither makes the current one ambiguous nor stands in for it.
 function checkRuntimeEvidence(item, requirement, policy, merge, runtimeEvidence) {
   if (item.status !== "EXECUTED") {
-    return { code: "RUNTIME_UNAVAILABLE", detail: `${String(item.workflow)} is ${String(item.status)}` };
+    return { code: "RUNTIME_UNAVAILABLE", detail: `${show(item.workflow)} is ${show(item.status)}` };
   }
   const admitted = (policy.runtimeWorkflows ?? []).find((workflow) => workflow.path === item.workflow);
   if (!admitted) {
-    return { code: "RUNTIME_UNPROVEN", detail: `${String(item.workflow)} is not an admissible runtime workflow` };
+    return { code: "RUNTIME_UNPROVEN", detail: `${show(item.workflow)} is not an admissible runtime workflow` };
   }
   if (!(admitted.proves ?? []).includes(requirement)) {
     return { code: "EVIDENCE_NOT_FOR_REQUIREMENT", detail: `${admitted.path} is not admitted as proof of ${requirement}` };
@@ -170,7 +204,7 @@ function checkRuntimeEvidence(item, requirement, policy, merge, runtimeEvidence)
   }
   const [run] = forMerge;
   if (run.conclusion !== "success") {
-    return { code: "RUNTIME_UNPROVEN", detail: `run concluded ${String(run.conclusion)}` };
+    return { code: "RUNTIME_UNPROVEN", detail: `run concluded ${show(run.conclusion)}` };
   }
   return undefined;
 }
@@ -182,7 +216,7 @@ function checkEvidenceItem(item, requirement, context) {
   if (item.kind === "runtime") {
     return checkRuntimeEvidence(item, requirement, context.policy, context.identities.merge, context.runtimeEvidence);
   }
-  return { code: "UNKNOWN_EVIDENCE", detail: `evidence kind ${String(item.kind)} is not admissible` };
+  return { code: "UNKNOWN_EVIDENCE", detail: `evidence kind ${show(item.kind)} is not admissible` };
 }
 
 function evaluateRequirement(requirement, record, context) {
@@ -210,7 +244,7 @@ function evaluateRequirement(requirement, record, context) {
     if (exception) {
       return {
         status: OBLIGATION_STATUS.EXCEPTED,
-        reasons: [{ code: "EXCEPTED", requirement, detail: `excepted under ${String(exception.jira)}` }],
+        reasons: [{ code: "EXCEPTED", requirement, detail: `excepted under ${show(exception.jira)}` }],
       };
     }
     return {
@@ -275,7 +309,7 @@ export function evaluateReviewEvidence({
     } else if (record.policyVersion !== policy.policyVersion) {
       reasons.push({
         code: "POLICY_VERSION",
-        detail: `record is stamped ${String(record.policyVersion)}, policy is ${policy.policyVersion}`,
+        detail: `record is stamped ${show(record.policyVersion)}, policy is ${policy.policyVersion}`,
       });
     }
   }

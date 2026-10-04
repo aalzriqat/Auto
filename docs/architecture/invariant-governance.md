@@ -195,10 +195,13 @@ defects: an unavailable runtime proof, a stale or abbreviated evidence SHA, a
 missing obligation, a test that is skipped, unregistered or `.each`-only, a
 runtime run of another merge, a range taken from the record instead of the
 caller, a foreign policy version, evidence attached to a review, evidence cited
-for a requirement it is not bound to, and a malformed record. Only `proof:`
+for a requirement it is not bound to, a record that lists one requirement twice,
+and a malformed record. Only `proof:`
 requirements can be satisfied, and only by evidence bound to that requirement:
-a test whose title carries the requirement id, or a workflow whose policy entry
-lists it under `proves`. `review:` and `review-invariant:` requirements stay
+a test whose title carries the requirement id as a whole token, or a workflow whose policy entry
+lists it under `proves`. The title binding is nominal: it keeps a record from
+citing an unrelated test, but the change under review writes the title as well
+as the test. Binding to the catalog's unique proof markers is later work (S4). `review:` and `review-invariant:` requirements stay
 reported and unresolved, because every agent writes through one account and no
 review verdict can be authenticated. The result therefore has two axes: proofs
 that all hold beside a required review give `REVIEW_UNRESOLVED`, and `COMPLETE`
