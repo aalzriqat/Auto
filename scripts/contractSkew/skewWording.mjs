@@ -9,19 +9,26 @@
  * instructing a production deploy, would aim a person at the wrong backend.
  *
  * ⚠️ AND THE DEPLOY ADVICE IS CONDITIONAL ON WHAT IS PROVEN (SCRUM-178 v2
- * batches 5 and 6, D-30: advice is given only when deploying is proven to fix the
- * call). Exactly three cases, all still exit 7:
+ * batches 5, 6 and 7, D-30/D-31: advice is given only when deploying is proven to
+ * fix the call). THE DECISION IS PER CALL (a call = surface + siteId), never per
+ * break: a call with two accepted breaks is one call, and a call is fixed only when
+ * EVERY deployed break at it is accepted. Every "call(s)" figure is a count of
+ * distinct call sites (`callOutcomes`); the break counts string is separate. Cases,
+ * all still exit 7:
  *
- *   PROVEN        `proven > 0`, `unclassified === 0`, nothing rejected elsewhere:
- *                 the plain "Deploy the Convex backend at this commit."
- *   LIKELY ONLY   `unclassified > 0` (and nothing rejected elsewhere): the SHA /
- *                 tree / no-evidence rungs could not classify some breaks, so a
- *                 deploy is the likely remedy and is worded as NOT proven.
- *   WITHHELD      the current spec ALSO refuses a call (`rejectedElsewhere`), so
- *                 deploying alone will not make it succeed: those calls are
- *                 listed. If other calls ARE accepted by the current spec, the
- *                 summary says a deploy fixes those K and the M listed will still
- *                 fail (never a silent blanket withhold).
+ *   PROVEN        `fixed > 0` and no call still fails, none is unproven, and no
+ *                 break is unclassified: the plain "Deploy the Convex backend at
+ *                 this commit."
+ *   LIKELY ONLY   nothing fixed-and-clean to claim, but a call is unproven
+ *                 (a sibling-path break could not be compared, or the SHA / tree /
+ *                 no-evidence rungs could not classify it): a deploy is the likely
+ *                 remedy and is worded as NOT proven.
+ *   WITHHELD      a call STILL FAILS (the current spec ALSO refuses it,
+ *                 `rejectedElsewhere`, or a standing defect sits at the same call):
+ *                 deploying alone will not make it succeed, and those are listed.
+ *                 If other calls ARE fully accepted, the summary says a deploy
+ *                 fixes those K and M call(s) will still fail; unproven calls are
+ *                 named too (never a silent blanket withhold).
  */
 
 /** The rung `fetchSpec` reports for a spec file supplied by the caller. */
@@ -43,19 +50,28 @@ function describeRejected(f) {
  *   proven: number,
  *   unclassified: number,
  *   basis: string,
- *   rejectedElsewhere?: Array<Record<string, any>>
+ *   rejectedElsewhere?: Array<Record<string, any>>,
+ *   callOutcomes?: { fixed: number, stillFails: number, unproven: number }
  * }} input
+ *   `proven` / `unclassified` are BREAK counts (the pinned counts string). Every
+ *   "call(s)" figure comes from `callOutcomes`, which counts distinct call sites
+ *   (classify.mjs `callOutcomesOf`). When it is not supplied it is derived from the
+ *   break counts, one break per call, which is all a caller without sites can say.
  * @returns {string}
  */
-export function skewSummary({ rung, specSource, proven, unclassified, basis, rejectedElsewhere = [] }) {
+export function skewSummary({ rung, specSource, proven, unclassified, basis, rejectedElsewhere = [], callOutcomes }) {
   const counts = `${proven} proven, ${unclassified} unclassified`;
   const listed = rejectedElsewhere.map(describeRejected).join("; ");
-  // `rejectedElsewhere` is a subset of the proven skew: the rest are accepted by
-  // the current spec, so a deploy does fix them (L-1).
-  const fixable = proven - rejectedElsewhere.length;
-  const notFixed = rejectedElsewhere.length
-    ? `Deploying the backend alone will not make ${rejectedElsewhere.length} of these call(s) succeed — the current spec still refuses them: ${listed}. `
-    : "";
+  const { fixed, stillFails, unproven } = callOutcomes ?? {
+    fixed: proven - rejectedElsewhere.length,
+    stillFails: rejectedElsewhere.length,
+    unproven: 0,
+  };
+  const reason = listed ? `: ${listed}` : " (a standing defect at the same call)";
+  const notFixed =
+    stillFails > 0
+      ? `Deploying the backend alone will not make ${stillFails} of these call(s) succeed — the current spec still refuses them${reason}. `
+      : "";
   if (rung === SUPPLIED_FILE_RUNG) {
     return (
       `CONTRACT SKEW against the supplied spec (${specSource}) — ${counts}. ` +
@@ -64,23 +80,31 @@ export function skewSummary({ rung, specSource, proven, unclassified, basis, rej
       `Basis: ${basis}`
     );
   }
-  if (rejectedElsewhere.length) {
-    const mixed =
-      fixable > 0
-        ? `Deploying the Convex backend at this commit fixes ${fixable} call(s), but ${rejectedElsewhere.length} call(s) will still fail because the current spec also refuses them: ${listed}. `
+  // The plain instruction needs every call proven fixed and nothing left uncertain.
+  if (fixed > 0 && stillFails === 0 && unproven === 0 && unclassified === 0) {
+    return `PRODUCTION SKEW — ${counts}. Deploy the Convex backend at this commit. Basis: ${basis}`;
+  }
+  const notProven =
+    unproven > 0
+      ? `${unproven} call(s) are not proven to be fixed by a deploy. `
+      : unclassified > 0
+        ? `${unclassified} more break(s) are unclassified, so a deploy is not proven to fix those. `
+        : "";
+  let advice;
+  if (stillFails > 0) {
+    advice =
+      fixed > 0
+        ? `Deploying the Convex backend at this commit fixes ${fixed} call(s), but ${stillFails} call(s) will still fail because the current spec also refuses them${reason}. `
         : notFixed;
-    const unproven = unclassified > 0 ? `${unclassified} more break(s) are unclassified, so a deploy is not proven to fix those. ` : "";
-    return `PRODUCTION SKEW — ${counts}. ${mixed}${unproven}Basis: ${basis}`;
+    advice += notProven;
+  } else if (fixed > 0 && unproven > 0) {
+    advice = `Deploying the Convex backend at this commit fixes ${fixed} call(s), but ${notProven}`;
+  } else {
+    const tail =
+      unproven > 0
+        ? `but ${unproven} call(s) are not proven to be fixed by a deploy, so this is not proven. `
+        : `but ${unclassified} break(s) are unclassified, so this is not proven. `;
+    advice = `Deploying the Convex backend at this commit is the likely remedy, ${tail}`;
   }
-  if (unclassified > 0) {
-    return (
-      `PRODUCTION SKEW — ${counts}. Deploying the Convex backend at this commit is the likely remedy, ` +
-      `but ${unclassified} break(s) are unclassified, so this is not proven. ` +
-      `Basis: ${basis}`
-    );
-  }
-  return (
-    `PRODUCTION SKEW — ${counts}. Deploy the Convex backend at this commit. ` +
-    `Basis: ${basis}`
-  );
+  return `PRODUCTION SKEW — ${counts}. ${advice}Basis: ${basis}`;
 }

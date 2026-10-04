@@ -19,7 +19,55 @@
  * as its own contract-health failure — visible, un-suppressed, and not
  * downgraded to UNKNOWN, because it is not uncertainty. It is a known bug.
  */
-import { acceptanceAt, ACCEPTANCE, pathsOverlap } from "./compare.mjs";
+import { acceptanceAt, ACCEPTANCE, pathsOverlap, findingKey } from "./compare.mjs";
+
+/**
+ * SCRUM-178 v2 batch 7 (D-31). WHAT A DEPLOY DOES IS DECIDED PER CALL, NOT PER BREAK.
+ * A call (`siteKey` = [surface, siteId]) is FIXED only when EVERY deployed break at
+ * it is accepted by the current spec. One call can carry several breaks, and one
+ * accepted break proves nothing about its siblings.
+ *
+ *   STILL_FAILS  a break there is REJECTED_OTHER, or a STANDING_DEFECT at the same call
+ *   UNPROVEN     otherwise, a break there is COVERAGE_INCOMPLETE / UNCLASSIFIED, or the
+ *                finding has no siteId (it is its own call, and is never FIXED)
+ *   FIXED        otherwise: every break there is accepted (REVISION_SKEW)
+ *
+ * A call whose breaks are ALL standing is not counted: no deploy claim concerns it.
+ * `findingKey` over [surface, siteId] is the same call identity `acceptanceAt` uses,
+ * and gives a site-less finding a key unique to itself.
+ *
+ * @param {Array<Record<string, any>>} classified
+ * @returns {{ fixed: number, stillFails: number, unproven: number }}
+ */
+export function callOutcomesOf(classified) {
+  /** @type {Map<string, Array<Record<string, any>>>} */
+  const sites = new Map();
+  for (const f of classified) {
+    const key = findingKey(f, ["surface", "siteId"]);
+    const group = sites.get(key);
+    if (group) group.push(f);
+    else sites.set(key, [f]);
+  }
+  const outcomes = { fixed: 0, stillFails: 0, unproven: 0 };
+  for (const group of sites.values()) {
+    if (group.every((f) => f.classification === CLASSIFICATION.STANDING_DEFECT)) continue;
+    if (group.some((f) => f.acceptance === ACCEPTANCE.REJECTED_OTHER || f.classification === CLASSIFICATION.STANDING_DEFECT)) {
+      outcomes.stillFails++;
+    } else if (
+      group.some(
+        (f) =>
+          !f.siteId ||
+          f.classification === CLASSIFICATION.COVERAGE_INCOMPLETE ||
+          f.classification === CLASSIFICATION.UNCLASSIFIED
+      )
+    ) {
+      outcomes.unproven++;
+    } else {
+      outcomes.fixed++;
+    }
+  }
+  return outcomes;
+}
 
 export const CLASSIFICATION = {
   REVISION_SKEW: "REVISION_SKEW",
@@ -76,6 +124,7 @@ export function classifyAgainstCurrent(breaking, currentResult) {
     uncertain: only(CLASSIFICATION.COVERAGE_INCOMPLETE),
     /** Deployed breaks the current spec ALSO refuses (at another path): skew, but not fixed by a deploy. */
     rejectedElsewhere: classified.filter((f) => f.acceptance === ACCEPTANCE.REJECTED_OTHER),
+    callOutcomes: callOutcomesOf(classified),
     basis: `the same client calls compared against the supplied current spec (${currentResult.breaking.length} break(s) there)`,
   };
 }
@@ -129,6 +178,7 @@ export function classifyAgainstCurrent(breaking, currentResult) {
  * @returns {{ classified: ClassifiedFinding[], revisionSkew: ClassifiedFinding[],
  *             standingDefects: ClassifiedFinding[], unclassified: ClassifiedFinding[],
  *             uncertain: ClassifiedFinding[], rejectedElsewhere: ClassifiedFinding[],
+ *             callOutcomes: { fixed: number, stillFails: number, unproven: number },
  *             basis: string }}
  */
 export function classifyBreaking(breaking, evidence = {}) {
@@ -193,6 +243,7 @@ export function classifyBreaking(breaking, evidence = {}) {
     unclassified: classified.filter((f) => f.classification === CLASSIFICATION.UNCLASSIFIED),
     uncertain: /** @type {any[]} */ ([]),
     rejectedElsewhere: /** @type {any[]} */ ([]),
+    callOutcomes: callOutcomesOf(classified),
     basis,
   };
 }

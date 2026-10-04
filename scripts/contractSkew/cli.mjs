@@ -44,8 +44,10 @@
  *                       to be production: same code, "CONTRACT SKEW against the
  *                       supplied spec", no deploy instruction (skewWording.mjs).
  *                       Even a fetched spec gets it only when deploying is proven
- *                       to fix every call: a call the current spec ALSO refuses is
- *                       listed instead, with no deploy instruction (D-30).
+ *                       to fix EVERY call (per call site, D-31): a call the current
+ *                       spec ALSO refuses is listed instead, and a call that is not
+ *                       proven (a sibling break could not be compared) makes the
+ *                       advice "likely, not proven" (D-30, D-31).
  *   8  RELEASE BREAK    release-mode: shipping this candidate WOULD introduce a
  *                       skew. A decision still available to us — deploying the
  *                       backend is not the remedy, so it is not code 7.
@@ -702,6 +704,7 @@ function reportProvenBreaks(prefix) {
       unclassified: classification.unclassified.length,
       basis: classification.basis ?? "none",
       rejectedElsewhere: classification.rejectedElsewhere,
+      callOutcomes: classification.callOutcomes,
     })}`
   );
 }
@@ -835,6 +838,8 @@ const report = {
     coverageIncomplete: classification.uncertain.length,
     // D-30: skew calls the current spec ALSO refuses - a deploy does not fix these.
     rejectedByCurrent: classification.rejectedElsewhere.length,
+    // D-31: DISTINCT CALL SITES by what a deploy does to them (the fields above count breaks).
+    callOutcomes: classification.callOutcomes,
   },
   // Every coverage gap, tagged with the spec it was found against (N-4).
   gaps: validatorGaps,

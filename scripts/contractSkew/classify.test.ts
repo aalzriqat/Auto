@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { classifyBreaking, alertsFor, CLASSIFICATION } from "./classify.mjs";
 import { blockersForRelease, pathsOverlap } from "./compare.mjs";
+import { skewSummary } from "./skewWording.mjs";
 
 /**
  * The distinction these pin is the difference between "somebody must deploy
@@ -204,5 +205,108 @@ describe("a union-branch move is revision skew, not a standing defect", () => {
     ];
     const result = classifyBreaking(breaking, { changedPaths: [] });
     expect(result.classified[0].classification).toBe(CLASSIFICATION.STANDING_DEFECT);
+  });
+});
+
+/**
+ * SCRUM-178 v2 batch 7 (D-31). A deploy is claimed to fix a CALL only when EVERY
+ * deployed break at that call is ACCEPTED by the current spec. Outcomes are per
+ * distinct call site, never per break.
+ */
+describe("callOutcomes: per-call, not per-break (D-31)", () => {
+  const brk = (siteId: string | undefined, path: string, extra: Record<string, unknown> = {}) => ({
+    surface: "web",
+    file: `${siteId ?? "nosite"}.tsx`,
+    line: 1,
+    identifier: `w:${siteId ?? "nosite"}`,
+    ...(siteId ? { siteId } : {}),
+    path,
+    dimension: "FIELD",
+    severity: "BREAKING",
+    detail: "d",
+    ...extra,
+  });
+
+  test("(a) call A: two ACCEPTED breaks, call B: one REJECTED_OTHER => 1 fixed, 1 still fails (not 2)", () => {
+    const deployed = [brk("A", "x"), brk("A", "y"), brk("B", "z")];
+    const result = classifyBreaking(deployed, { currentResult: { breaking: [brk("B", "elsewhere")] } });
+    expect(result.callOutcomes).toEqual({ fixed: 1, stillFails: 1, unproven: 0 });
+    expect(result.rejectedElsewhere).toHaveLength(1);
+    const text = skewSummary({
+      rung: "ENV_KEY",
+      specSource: "",
+      proven: result.revisionSkew.length,
+      unclassified: result.unclassified.length,
+      basis: "b",
+      rejectedElsewhere: result.rejectedElsewhere,
+      callOutcomes: result.callOutcomes,
+    });
+    expect(text).toContain("3 proven, 0 unclassified");
+    expect(text).toMatch(/fixes 1 call\(s\), but 1 call\(s\) will still fail/);
+    expect(text).not.toMatch(/fixes 2 call/);
+  });
+
+  test("(b) N6-1: one ACCEPTED break plus an UNPROVEN sibling-path break at the same call => no plain deploy line", () => {
+    const deployed = [brk("A", "x"), brk("A", "y")];
+    const result = classifyBreaking(deployed, {
+      currentResult: { breaking: [], gaps: [{ surface: "web", siteId: "A", path: "y" }] },
+    });
+    expect(result.classified.map((f) => f.acceptance)).toEqual(["ACCEPTED", "UNPROVEN"]);
+    expect(result.callOutcomes).toEqual({ fixed: 0, stillFails: 0, unproven: 1 });
+    const text = skewSummary({
+      rung: "ENV_KEY",
+      specSource: "",
+      proven: result.revisionSkew.length,
+      unclassified: result.unclassified.length,
+      basis: "b",
+      rejectedElsewhere: result.rejectedElsewhere,
+      callOutcomes: result.callOutcomes,
+    });
+    expect(text).not.toMatch(/Deploy the Convex backend at this commit\./);
+    expect(text).toMatch(/1 call\(s\) are not proven to be fixed by a deploy/);
+  });
+
+  test("(c) control: two calls, one ACCEPTED break each => 2 fixed and the plain deploy line", () => {
+    const result = classifyBreaking([brk("A", "x"), brk("B", "y")], { currentResult: { breaking: [] } });
+    expect(result.callOutcomes).toEqual({ fixed: 2, stillFails: 0, unproven: 0 });
+    const text = skewSummary({
+      rung: "ENV_KEY",
+      specSource: "",
+      proven: result.revisionSkew.length,
+      unclassified: result.unclassified.length,
+      basis: "b",
+      rejectedElsewhere: result.rejectedElsewhere,
+      callOutcomes: result.callOutcomes,
+    });
+    expect(text).toMatch(/Deploy the Convex backend at this commit\./);
+  });
+
+  test("(d) a finding with no siteId is its own call and is never FIXED (current-spec and fallback classifiers)", () => {
+    const one = classifyBreaking([brk(undefined, "x")], { currentResult: { breaking: [] } });
+    expect(one.callOutcomes).toEqual({ fixed: 0, stillFails: 0, unproven: 1 });
+    // Two site-less findings are two calls, not one shared "undefined" call.
+    const two = classifyBreaking([brk(undefined, "x"), brk(undefined, "y")], { currentResult: { breaking: [] } });
+    expect(two.callOutcomes).toEqual({ fixed: 0, stillFails: 0, unproven: 2 });
+    const fallback = classifyBreaking([brk(undefined, "x"), brk(undefined, "y")], { changedPaths: [{ identifier: "w:nosite", path: "x" }, { identifier: "w:nosite", path: "y" }] });
+    expect(fallback.callOutcomes).toEqual({ fixed: 0, stillFails: 0, unproven: 2 });
+  });
+
+  test("(e) a STANDING break plus another break at the same call: the call still fails (current refuses it)", () => {
+    // current refuses A at path x for the same reason (REJECTED_SAME => STANDING); the sibling y
+    // is then REJECTED_OTHER at the same call. Either way the call is not fixed by a deploy.
+    const result = classifyBreaking([brk("A", "x"), brk("A", "y")], { currentResult: { breaking: [brk("A", "x")] } });
+    expect(result.classified.map((f) => f.classification)).toEqual(["STANDING_DEFECT", "REVISION_SKEW"]);
+    expect(result.classified[1].acceptance).toBe("REJECTED_OTHER");
+    expect(result.callOutcomes).toEqual({ fixed: 0, stillFails: 1, unproven: 0 });
+  });
+
+  test("fallback classifier: UNCLASSIFIED site is UNPROVEN, an all-REVISION_SKEW site is FIXED", () => {
+    const skew = classifyBreaking([brk("A", "x"), brk("A", "y")], { changedPaths: [{ identifier: "w:A", path: "x" }, { identifier: "w:A", path: "y" }] });
+    expect(skew.callOutcomes).toEqual({ fixed: 1, stillFails: 0, unproven: 0 });
+    const unclassified = classifyBreaking([brk("A", "x")], { backendIdenticalToDeployed: false });
+    expect(unclassified.callOutcomes).toEqual({ fixed: 0, stillFails: 0, unproven: 1 });
+    const mixed = classifyBreaking([brk("A", "x"), brk("A", "y")], { changedPaths: [{ identifier: "w:A", path: "x" }] });
+    expect(mixed.classified.map((f) => f.classification)).toEqual(["REVISION_SKEW", "STANDING_DEFECT"]);
+    expect(mixed.callOutcomes).toEqual({ fixed: 0, stillFails: 1, unproven: 0 });
   });
 });
