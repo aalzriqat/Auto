@@ -360,6 +360,38 @@ const STATUS_LABEL: Record<string, string> = {
   CANCELLED: "Cancelled",
 };
 
+/**
+ * The header badge's words. Every application is created PENDING_DOCS, so on a
+ * deal the server proved needs no document (DELIVERY_ACTIONS NOT_APPLICABLE) it
+ * read "pending documents" for documents that do not exist (SCRUM-629 F-08).
+ * Display only: the stored status and its transitions are unchanged.
+ */
+export function dealStatusBadgeKey(
+  status: string,
+  stages: ReadonlyArray<Readonly<{ key: string; state: string }>>
+): string {
+  if (
+    status === "PENDING_DOCS" &&
+    stages.some((stage) => stage.key === "DELIVERY_ACTIONS" && stage.state === "NOT_APPLICABLE")
+  ) {
+    return "AppStatusSubmitted";
+  }
+  return STATUS_LABEL[status] ?? status;
+}
+
+/**
+ * Whether the DELIVERY_ACTIONS stage still has a required document outstanding.
+ * No stage (no payload yet) and a NOT_APPLICABLE stage (no required rule,
+ * SCRUM-629 F-07) have none; any other state short of COMPLETE does.
+ */
+export function documentsOutstanding(deliveryStageState: string | undefined): boolean {
+  return (
+    deliveryStageState !== undefined &&
+    deliveryStageState !== "COMPLETE" &&
+    deliveryStageState !== "NOT_APPLICABLE"
+  );
+}
+
 const PROFIT_LINE_LABEL: Record<string, string> = {
   APPROVED_PURCHASE: "LineApprovedPurchase",
   /** PLANNED — `resolveAppraisalGap`'s allocation, never a receipt. The label says so. */
@@ -1836,10 +1868,12 @@ export function DealCockpit({
    * Whether a required document is still neither verified nor waived — the
    * SERVER's answer, read off the rail's DELIVERY_ACTIONS stage (derived with
    * the same rule filter `assertRequiredApplicationDocumentsComplete` applies
-   * before a credit approval). Never recomputed from the checklist here.
+   * before a credit approval). Never recomputed from the checklist here. A
+   * NOT_APPLICABLE stage has no required document, so nothing is outstanding
+   * (SCRUM-629 F-07) — reading it as incomplete would lock credit approval.
    */
   const deliveryStage = deal?.stages.find((stage) => stage.key === "DELIVERY_ACTIONS");
-  const documentsIncomplete = deliveryStage !== undefined && deliveryStage.state !== "COMPLETE";
+  const documentsIncomplete = documentsOutstanding(deliveryStage?.state);
   /**
    * Whether this caller can take the documents step — see
    * `documentsStepUnavailableReason`. Read off the cockpit payload's checklist,
@@ -6404,7 +6438,7 @@ export function DealCockpitView({
             <bdi className="font-normal text-muted-foreground">#{String(deal.dealRef).slice(-4)}</bdi>
           </h1>
           <Badge variant={deal.status === "APPROVED" || deal.status === "CLOSED" ? "default" : "secondary"}>
-            {t(STATUS_LABEL[deal.status] ?? deal.status)}
+            {t(dealStatusBadgeKey(deal.status, deal.stages))}
           </Badge>
           {/* Whose move the deal is on, from the same source the rail uses —
               one owner per screen, never two. */}

@@ -64,6 +64,26 @@ describe("quotes.get", () => {
     expect(quote?.vehiclePrice).toBe(19000);
   });
 
+  test("an empty vehicle list is stored as the single-vehicle shape, never as []", async () => {
+    // SCRUM-629 (CodeRabbit 4177755727): readers iterate
+    // `vehicleItems ?? [{ vehicleId }]`; a stored [] would skip every car check.
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 19000,
+      downPayment: 1000,
+      termMonths: 0,
+      vehicleItems: [],
+    });
+
+    const stored = await t.run((ctx) => ctx.db.get(quoteId));
+    expect(stored?.vehicleItems).toBeUndefined();
+    expect(stored?.vehicleId).toBe(vehicleId);
+  });
+
   test("throws for a quote belonging to a different org", async () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
 
@@ -325,5 +345,33 @@ describe("financed quote single-vehicle authority", () => {
         manualProfitRate: 5,
       })
     ).rejects.toThrow(/exactly one vehicle/i);
+  });
+});
+
+// SCRUM-629 F-09: a car that can no longer be sold is not offered to a customer.
+describe("saveQuote refuses a vehicle that can no longer be sold", () => {
+  test.each([
+    ["deleted", { isDeleted: true }],
+    ["sold", { status: "SOLD" as const }],
+    ["archived", { status: "ARCHIVED" as const }],
+  ])("%s: refused, nothing written", async (_label, patch) => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    await t.run((ctx) => ctx.db.patch(vehicleId, patch));
+    const args = { orgId, customerId, vehiclePrice: 19000, downPayment: 1000, termMonths: 0 };
+    await expect(asUser.mutation(api.quotes.saveQuote, { ...args, vehicleId })).rejects.toThrow(
+      /no longer available to quote/
+    );
+    await expect(
+      asUser.mutation(api.quotes.saveQuote, { ...args, vehicleId, vehicleItems: [{ vehicleId, unitPrice: 19000 }] })
+    ).rejects.toThrow(/no longer available to quote/);
+    expect(await t.run((ctx) => ctx.db.query("quotes").collect())).toHaveLength(0);
+  });
+
+  test("a reserved car stays quotable (the commitment boundary decides later)", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    await t.run((ctx) => ctx.db.patch(vehicleId, { status: "RESERVED" }));
+    await expect(
+      asUser.mutation(api.quotes.saveQuote, { orgId, customerId, vehicleId, vehiclePrice: 19000, downPayment: 1000, termMonths: 0 })
+    ).resolves.toBeTruthy();
   });
 });

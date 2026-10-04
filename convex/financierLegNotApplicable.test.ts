@@ -336,7 +336,10 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
     const s = await seed("preclose");
     const { applicationId } = await insertDeal(s, { status: "APPROVED", sale: "none" });
     const { all, settlement } = await stagesOf(s, applicationId);
-    expect(all.some((st) => st.state === "NOT_APPLICABLE")).toBe(false);
+    // The only stage allowed to be inapplicable before closing is the documents
+    // stage, and only because this fixture seeds no REQUIRED document rule
+    // (SCRUM-629 F-07, ruling c21924). The financier leg never is.
+    expect(all.filter((st) => st.state === "NOT_APPLICABLE").map((st) => st.key)).toEqual(["DELIVERY_ACTIONS"]);
     expect(settlement.state).not.toBe("COMPLETE");
     const profit = await profitOf(s, applicationId);
     if (profit.available && profit.basis === "MANAGEMENT_ESTIMATE") {

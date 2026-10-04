@@ -25,7 +25,11 @@ import { PERMISSIONS, isSystemOwnerRole, type Permission } from "./utils/permiss
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
-import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
+import {
+  depositMethodValidator,
+  displayableDepositReference,
+  type DepositMethod,
+} from "./utils/depositRecording";
 import {
   assertNoPendingDepositRequest,
   assertReservationAdoptableWithoutDeposit,
@@ -1434,7 +1438,8 @@ async function buildCockpitMoney(
       position: customerPosition({ routeKnown, unreadableDeposits, heldDepositMinor }),
       amountMinor: heldDepositMinor,
       currency,
-      reference: depositPayment?.externalReference,
+      // Never the machine key `Deposit <id>` (SCRUM-629 F-23).
+      reference: displayableDepositReference(depositPayment?.externalReference),
     },
     settlesDirect && routeKnown
       ? {
@@ -2186,10 +2191,10 @@ export const dealCockpit = query({
       // appraisal moot when the economics could be computed without one.
       fundingSplitComputed: app.financeCompanyFundedPortionMinor !== undefined,
       requiredDocumentsComplete,
-      // Whether this deal has a paperwork gate at all. The documents CARD is
-      // already absent rather than empty when no rule applies; without this the
-      // rail would still show a blocker for a checklist that does not exist.
-      documentRulesApply: applicableRules.length > 0,
+      // Whether this deal has a paperwork gate at all: only a REQUIRED rule
+      // makes one (SCRUM-629 F-07). Without any, the stage is NOT_APPLICABLE
+      // rather than complete over an empty checklist.
+      documentRulesApply: requiredDocs.length > 0,
       // The direct route's own disbursement evidence. Without it the stage
       // stays blocked forever on a deal whose money has entirely moved,
       // because the financier paid the supplier and never paid the dealership.
