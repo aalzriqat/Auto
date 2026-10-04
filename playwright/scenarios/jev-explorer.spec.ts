@@ -62,8 +62,14 @@ function attestedPreviewUrl(): string | undefined {
     timeout: 180_000,
   });
   if (res.status === 0) return process.env.NEXT_PUBLIC_CONVEX_URL;
-  const reason = (res.stderr || res.error?.message || "").split("\n").find((l) => /Error/.test(l));
-  console.warn(`Preview attestation failed: ${reason?.trim() ?? `exit ${res.status}`}`);
+  const lines = (res.stderr || res.error?.message || "").split("\n").filter((l) => l.trim());
+  const reason = (lines.find((l) => /Error/.test(l)) ?? lines.at(-1))?.trim() ?? `exit ${res.status}`;
+  console.warn(`Preview attestation failed: ${reason}`);
+  // A skip is green; in CI say so loudly, or the explorer could stop running
+  // every night without anyone noticing.
+  if (process.env.GITHUB_ACTIONS === "true") {
+    console.log(`::warning title=Jev explorer skipped::Preview attestation failed (${reason}); the explorer did not run.`);
+  }
   return undefined;
 }
 
@@ -89,6 +95,18 @@ const spawn = (command, args, options) => {
 };
 await m.assertExistingE2EPreview(process.env, { run: (args, label) => m.runConvex(args, label, spawn) });
 `;
+
+/**
+ * The Convex deployment a URL's host names, or undefined. The whole host must
+ * be `<name>.convex.cloud`: `<preview>.convex.cloud.example.com` names nothing.
+ */
+function convexDeploymentOf(url: string | undefined): string | undefined {
+  try {
+    return /^([a-z0-9-]+)\.convex\.cloud$/.exec(new URL(url ?? "").hostname)?.[1];
+  } catch {
+    return undefined;
+  }
+}
 
 function sameUrl(a: string | undefined, b: string | undefined): boolean {
   if (!a || !b) return false;
@@ -210,9 +228,7 @@ test.describe("Jev explorer (advisory)", () => {
     // browser actually talks to: its Convex websocket must belong to the
     // deployment named here, and that deployment must not be production
     // (Codex AF-430-03). Unverifiable means no run.
-    const expectedDeployment = /https:\/\/([a-z0-9-]+)\.convex\.cloud/.exec(
-      process.env.NEXT_PUBLIC_CONVEX_URL ?? "",
-    )?.[1];
+    const expectedDeployment = convexDeploymentOf(process.env.NEXT_PUBLIC_CONVEX_URL);
     test.skip(!expectedDeployment, "Explorer needs NEXT_PUBLIC_CONVEX_URL naming its preview deployment.");
     test.skip(
       !sameUrl(attestedPreviewUrl(), process.env.NEXT_PUBLIC_CONVEX_URL),
@@ -228,9 +244,9 @@ test.describe("Jev explorer (advisory)", () => {
       })
       .toBe(true)
       .catch(() => undefined);
-    const served = sockets
-      .map((u) => /wss:\/\/([a-z0-9-]+)\.convex\.cloud/.exec(u)?.[1])
-      .filter((d): d is string => Boolean(d));
+    // Every socket that looks like Convex must name exactly the expected
+    // deployment; one whose host only contains ".convex.cloud" names none.
+    const served = sockets.filter((u) => u.includes(".convex.cloud")).map((u) => convexDeploymentOf(u) ?? u);
     test.skip(served.length === 0, "Could not observe which backend the served app uses; not exploring.");
     test.skip(
       served.some((d) => d === PRODUCTION_DEPLOYMENT || d !== expectedDeployment),
@@ -256,8 +272,9 @@ test.describe("Jev explorer (advisory)", () => {
       await page.waitForTimeout(1_200);
       // Also every frame of the app talks only to the verified backend.
       const stray = sockets
-        .map((u) => /wss:\/\/([a-z0-9-]+)\.convex\.cloud/.exec(u)?.[1])
-        .find((d) => d && d !== expectedDeployment);
+        .filter((u) => u.includes(".convex.cloud"))
+        .map((u) => convexDeploymentOf(u) ?? u)
+        .find((d) => d !== expectedDeployment);
       if (stray) throw new Error(`The app opened a connection to ${stray}; stopping before Jev sees it.`);
       if (WRITES_ON_VIEW.test(new URL(page.url()).pathname)) {
         await page.goto(`/${orgId}/dashboard`);

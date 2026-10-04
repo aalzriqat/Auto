@@ -23,6 +23,13 @@ export default defineConfig({
   fullyParallel: false,
   timeout: 300_000,
   use: { ...base.use, video: "on", screenshot: "on", trace: "retain-on-failure" },
+  // In CI this run holds the preview deploy key, only so the explorer can ask
+  // the backend whether it is the seeded preview. The app server never needs
+  // it, so it never sees it (Playwright merges this over process.env).
+  webServer:
+    base.webServer && !Array.isArray(base.webServer)
+      ? { ...base.webServer, env: { ...base.webServer.env, CONVEX_DEPLOY_KEY: "" } }
+      : base.webServer,
   projects: [
     { ...base.projects![0], testDir: "./playwright/tests" },
     ...base.projects!.slice(1),
