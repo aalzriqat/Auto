@@ -44,7 +44,7 @@ describe("extractSharedMobileNumber", () => {
     ["962791234567", "+962791234567"],
     ["962 79 123 4567", "+962791234567"],
     ["791234567", "0791234567"],
-    ["79 123 4567", "0791234567"],
+    ["962 0791234567", "+962791234567"],
   ])("finds the mobile beside other digits: %s", (text, expected) => {
     expect(extractSharedMobileNumber(text)?.normalized).toBe(expected);
   });
@@ -53,6 +53,45 @@ describe("extractSharedMobileNumber", () => {
     for (const text of ["2020 2021", "15000, 20000", "150000 km", "12345678", "1234567890", "751234567", "Elantra 2020 15000"]) {
       expect(extractSharedMobileNumber(text)).toBeNull();
     }
+  });
+
+  // A mobile without its trunk zero is only trusted when written as one
+  // number: joining groups would turn mileage + price into a phone.
+  test.each(["78000 7500", "79000 1500", "2018 79000 8500", "7900 12345", "79 123 4567"])(
+    "separate numbers never join into a zero-less mobile: %s",
+    (text) => {
+      expect(extractSharedMobileNumber(text)).toBeNull();
+    }
+  );
+
+  // A foreign country code means a foreign number, not a Jordanian tail.
+  test.each([
+    "+213 779 123 456",
+    "+212 778 123 456",
+    "+33 7 79 12 34 56",
+    "0033 7 79 12 34 56",
+    "+971 79 123 4567",
+    "+20 100 779 123 456",
+    "+213 779123456",
+  ])("a foreign number is not read as Jordanian: %s", (text) => {
+    expect(extractSharedMobileNumber(text)).toBeNull();
+  });
+
+  test.each(["962 (0)79 910 3353", "962 0799103353", "9620799103353"])(
+    "matches a dealer number stored as %s",
+    (stored) => {
+      const excluded = ownNumberExclusions({ dealershipPhone: stored });
+      expect(excluded.size).toBe(3);
+      expect(extractSharedMobileNumber(`call ${stored}`, excluded)).toBeNull();
+    }
+  );
+
+  test("excludes every number in a field that holds several", () => {
+    const excluded = ownNumberExclusions({ dealershipPhone: "0799103353 / 0788888888" });
+    expect(extractSharedMobileNumber("Call us 0799103353 / 0788888888", excluded)).toBeNull();
+    expect(extractSharedMobileNumber("Call us 0799103353 / 0788888888 — mine 0781234567", excluded)?.normalized).toBe(
+      "0781234567"
+    );
   });
 
   test("the dealer's number glued to the sender's still yields the sender's", () => {

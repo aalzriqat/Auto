@@ -118,17 +118,15 @@ function parseCandidate(candidate: string): ParsedNumber | null {
     return local(nationalNumber.startsWith("0") ? nationalNumber : `0${nationalNumber}`, true);
   }
 
-  // The country code typed without + or 00 ("962791234567"), and a mobile
-  // typed without its trunk zero ("791234567"). Both are exact-length shapes,
-  // so a price or year cannot reach them.
-  if (/^962(?:7[789]\d{7}|6\d{7})$/.test(digits)) return local(`0${digits.slice(3)}`, true);
-  if (/^7[789]\d{7}$/.test(digits)) return local(`0${digits}`, false);
+  // The country code typed without + or 00 ("962791234567", "962 (0)79…").
+  // Exact-length, so a price or year cannot reach it.
+  if (/^9620?(?:7[789]\d{7}|6\d{7})$/.test(digits)) return local(`0${digits.replace(/^9620?/, "")}`, true);
+  // A mobile typed without its trunk zero ("791234567") — trusted only as one
+  // unbroken group. Joined from separate groups it is just as often mileage
+  // and a price: "79000 8500".
+  if (/^7[789]\d{7}$/.test(trimmed)) return local(`0${digits}`, false);
 
   return local(digits, false);
-}
-
-function localNumberFromCandidate(candidate: string): string | null {
-  return parseCandidate(candidate)?.localNumber ?? null;
 }
 
 const DIGIT_GROUP_RE = /\d+/g;
@@ -144,12 +142,24 @@ const MAX_PHONE_DIGITS = 14;
  * or two mobiles. Taken whole, such a run is no number at all. Instead the
  * run's digit groups are joined from each starting group until they first
  * form an accepted number; the groups that formed it are consumed.
+ *
+ * A run that opens with a foreign country code ("+213 …", "0033 …") is a
+ * foreign number and yields nothing: restarting inside it would read its
+ * tail as a Jordanian mobile.
  */
 function* numbersInCandidate(candidate: string): Generator<ParsedNumber> {
   const groups = [...candidate.matchAll(DIGIT_GROUP_RE)].map((m) => ({
     start: m.index ?? 0,
     end: (m.index ?? 0) + m[0].length,
   }));
+  if (groups.length === 0) return;
+
+  const runDigits = candidate.replace(/\D/g, "");
+  const firstGroup = candidate.slice(groups[0].start, groups[0].end);
+  const foreign =
+    (candidate.trim().startsWith("+") && !runDigits.startsWith(JORDAN_COUNTRY_CODE)) ||
+    (firstGroup.startsWith("00") && !runDigits.startsWith(INTERNATIONAL_PREFIX));
+  if (foreign) return;
 
   let first = 0;
   while (first < groups.length) {
@@ -171,6 +181,13 @@ function* numbersInCandidate(candidate: string): Generator<ParsedNumber> {
     } else {
       first++;
     }
+  }
+}
+
+/** Every accepted number in free text, left to right. */
+function* numbersInText(text: string): Generator<ParsedNumber> {
+  for (const candidate of normalizePhoneText(text).match(PHONE_CANDIDATE_RE) ?? []) {
+    yield* numbersInCandidate(candidate);
   }
 }
 
@@ -202,15 +219,15 @@ export function ownNumberExclusions(
   const raw = [settings.dealershipPhone, ...(settings.dealershipPhones ?? [])];
   for (const value of raw) {
     if (!value?.trim()) continue;
-    const normalized = normalizePhoneText(value).trim();
     // These settings are stored exactly as typed — `dealershipPhone` is not
     // even trimmed on write — so the same number turns up as "0799103353",
-    // "+962799103353", "00962799103353" or a bare "962799103353". The parser
-    // accepts all four; a dealer whose format it missed would get an empty
-    // exclusion set and the original bug back, silently.
-    const localNumber = localNumberFromCandidate(normalized);
-    if (!localNumber) continue;
-    for (const variant of variantsFromLocalNumber(localNumber)) excluded.add(variant);
+    // "+962799103353", "00962799103353", a bare "962799103353", or several
+    // numbers in one field. They are read with the same scanner as the DM, so
+    // whatever it can find in a message it can also exclude; a format it
+    // missed would give an empty exclusion set and the original bug back.
+    for (const { localNumber } of numbersInText(value)) {
+      for (const variant of variantsFromLocalNumber(localNumber)) excluded.add(variant);
+    }
   }
   return excluded;
 }
@@ -230,14 +247,11 @@ export function extractSharedMobileNumber(
 ): SharedMobileNumber | null {
   if (!text) return null;
 
-  const candidates = normalizePhoneText(text).match(PHONE_CANDIDATE_RE) ?? [];
-  for (const candidate of candidates) {
-    for (const { localNumber, international } of numbersInCandidate(candidate)) {
-      if (excluded?.has(localNumber)) continue;
+  for (const { localNumber, international } of numbersInText(text)) {
+    if (excluded?.has(localNumber)) continue;
 
-      const variants = variantsFromLocalNumber(localNumber);
-      return { normalized: international ? variants[1] : localNumber, variants };
-    }
+    const variants = variantsFromLocalNumber(localNumber);
+    return { normalized: international ? variants[1] : localNumber, variants };
   }
 
   return null;
