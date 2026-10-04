@@ -1,4 +1,5 @@
 import type { Doc, Id } from "../_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { AppErrorCode, throwAppError } from "./errors";
 
 /**
@@ -26,16 +27,45 @@ export const VEHICLE_DELETED_MESSAGE =
 /** True when the vehicle is soft-deleted. */
 export const isVehicleDeleted = (v: Doc<"vehicles">): boolean => v.isDeleted === true;
 
+/**
+ * The ONE precedence ordering (SOLD, then ARCHIVED, then DELETED) for a soft-deleted car; null for a live one.
+ * Every consumer reads this rather than restating the order.
+ */
+export function deletedVehicleRefusal(
+  vehicle: Doc<"vehicles">
+): "VEHICLE_ALREADY_SOLD" | "VEHICLE_ARCHIVED" | "VEHICLE_DELETED" | null {
+  if (!isVehicleDeleted(vehicle)) return null;
+  if (vehicle.status === "SOLD") return AppErrorCode.VEHICLE_ALREADY_SOLD;
+  if (vehicle.status === "ARCHIVED") return AppErrorCode.VEHICLE_ARCHIVED;
+  return AppErrorCode.VEHICLE_DELETED;
+}
+
 /** Throws unless a vehicle the caller has already scoped to its organisation is not soft-deleted. No-op for null. */
 export function assertVehicleNotDeleted(vehicle: Doc<"vehicles"> | null | undefined): void {
-  if (!vehicle || !isVehicleDeleted(vehicle)) return;
-  if (vehicle.status === "SOLD") {
+  const refusal = vehicle ? deletedVehicleRefusal(vehicle) : null;
+  if (refusal === AppErrorCode.VEHICLE_ALREADY_SOLD) {
     throwAppError(AppErrorCode.VEHICLE_ALREADY_SOLD, "This vehicle has already been sold.");
   }
-  if (vehicle.status === "ARCHIVED") {
+  if (refusal === AppErrorCode.VEHICLE_ARCHIVED) {
     throwAppError(AppErrorCode.VEHICLE_ARCHIVED, "Cannot sell an archived vehicle. Restore it first.");
   }
-  throwAppError(AppErrorCode.VEHICLE_DELETED, VEHICLE_DELETED_MESSAGE);
+  if (refusal === AppErrorCode.VEHICLE_DELETED) throwAppError(AppErrorCode.VEHICLE_DELETED, VEHICLE_DELETED_MESSAGE);
+}
+
+/**
+ * The acquisition authority's liveness check (see `commitments.ts`). With a `vehicle` the check runs on that
+ * document with no read; otherwise it reads once. A missing or foreign car is left to the caller's own
+ * not-found behaviour (never reported as DELETED).
+ */
+export async function assertAcquisitionTargetLive(
+  ctx: QueryCtx | MutationCtx,
+  args: { orgId: Id<"organizations">; vehicleId: Id<"vehicles">; vehicle?: Doc<"vehicles"> }
+): Promise<void> {
+  if (args.vehicle && args.vehicle._id !== args.vehicleId) {
+    throw new Error(`provided vehicle ${args.vehicle._id} does not match acquisition target ${args.vehicleId}`);
+  }
+  const vehicle = args.vehicle ?? (await ctx.db.get(args.vehicleId));
+  if (vehicle && vehicle.orgId === args.orgId) assertVehicleNotDeleted(vehicle);
 }
 
 /**

@@ -24,6 +24,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id, TableNames } from "./_generated/dataModel";
 import { assertProfitApproved } from "./utils/profitApproval";
+import { acquireVehicle, assertAcquirable } from "./commitments";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -269,7 +270,8 @@ describe("1. a stale quote on a car deleted afterwards cannot complete a sale", 
     await expectDeletedAndNothingWritten(seed, () => completeQuote(seed, quoteId));
   });
 
-  test("sales.create (direct COMPLETED) and sales.create PENDING are refused too", async () => {
+  // sales.create only accepts COMPLETED; the PENDING path is `createDraft`, covered in section 4.
+  test("sales.create (direct COMPLETED), with and without quote lineage, is refused too", async () => {
     const seed = await seedDealer();
     const live = await vehicle(seed);
     await expect(directSale(seed, live, seed.customerA), "control: a live car sells").resolves.toBeTruthy();
@@ -666,6 +668,18 @@ describe("7. profit-approval authority", () => {
     expect(await statusOf(seed, requestId), "the approval row itself is never rewritten").toBe("APPROVED");
   });
 
+  test("a deleted AND sold car reads SOLD, the same precedence as the throwing guard", async () => {
+    const { seed, v } = await profitSeed();
+    await directSale(seed, v, seed.customerA);
+    await seed.t.run((ctx) => ctx.db.patch(v, { isDeleted: true })); // ABNORMAL: a SOLD car is flagged deleted.
+    const status = await seed.asUser.query(api.approvals.profitApprovalStatus, {
+      orgId: seed.orgId,
+      vehicleId: v,
+      salePrice: PRICE,
+    });
+    expect(status).not.toEqual({ status: "VEHICLE_DELETED" });
+  });
+
   test("a manager can still REJECT a pending request on a deleted car", async () => {
     const { seed, v } = await profitSeed();
     const requestId = await request(seed, v);
@@ -785,5 +799,215 @@ describe("9. the raw admin editor cannot flip vehicles.isDeleted", () => {
     } finally {
       process.env.SUPER_ADMIN_EMAILS = previous;
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 10. the authority itself refuses a deleted car (F1 backstop)
+// ─────────────────────────────────────────────────────────────────────────────
+describe("10. assertAcquirable / acquireVehicle refuse a soft-deleted car themselves", () => {
+  const acquire = (seed: Seed, vehicleId: Id<"vehicles">, quoteId: Id<"quotes">, extra: Record<string, unknown> = {}) =>
+    seed.t.run((ctx) =>
+      acquireVehicle(ctx, {
+        orgId: seed.orgId,
+        vehicleId,
+        customerId: seed.customerA,
+        createdBy: seed.userId,
+        // Never reached on a refusal; a real deposit is not needed to prove the refusal.
+        evidence: { kind: "DEPOSIT", depositId: "unused" as Id<"deposits"> },
+        lineage: { quoteId },
+        ...extra,
+      })
+    );
+  const check = (seed: Seed, vehicleId: Id<"vehicles">, quoteId: Id<"quotes">, extra: Record<string, unknown> = {}) =>
+    seed.t.run((ctx) =>
+      assertAcquirable(ctx, { orgId: seed.orgId, vehicleId, lineage: { quoteId }, ...extra })
+    );
+
+  test("assertAcquirable refuses a force-deleted same-org car; the live control passes", async () => {
+    const seed = await seedDealer();
+    const { live, liveQuote } = await liveVehicleWithQuote(seed);
+    await expect(check(seed, live, liveQuote), "control").resolves.toBeNull(); // t.run serialises void as null
+
+    const v = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [v]);
+    await forceDeleted(seed, v);
+    await expectDeleted(check(seed, v, quoteId));
+  });
+
+  test("acquireVehicle refuses a force-deleted same-org car and writes no claim or root", async () => {
+    const seed = await seedDealer();
+    const v = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [v]);
+    await forceDeleted(seed, v);
+    await expectDeletedAndNothingWritten(seed, () => acquire(seed, v, quoteId));
+    const counts = await dbCounts(seed);
+    expect(counts.vehicleCommitmentClaims, "no claim").toBe(0);
+    expect(counts.commitmentRoots, "no root").toBe(0);
+  });
+
+  test("a foreign-org car is never reported as DELETED (no existence oracle)", async () => {
+    const seed = await seedDealer();
+    const quoteId = (await liveVehicleWithQuote(seed)).liveQuote;
+    const foreign = await seed.t.run(async (ctx) => {
+      const otherOrg = await ctx.db.insert("organizations", { name: "Foreign", createdAt: Date.now() });
+      return await ctx.db.insert("vehicles", {
+        orgId: otherOrg,
+        vin: "SC641FOREIGN0002",
+        make: "Kia",
+        model: "Rio",
+        year: 2022,
+        color: "Red",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 10,
+        sellingPrice: PRICE,
+        status: "AVAILABLE" as const,
+        isDeleted: true,
+      });
+    });
+    const codeOf = async (attempt: Promise<unknown>) => {
+      const error = (await attempt.then(
+        () => null,
+        (e: unknown) => e
+      )) as { data?: { code?: string } } | null;
+      return error?.data?.code ?? null;
+    };
+    expect(await codeOf(check(seed, foreign, quoteId))).not.toBe("VEHICLE_DELETED");
+    expect(await codeOf(acquire(seed, foreign, quoteId))).not.toBe("VEHICLE_DELETED");
+  });
+
+  test("a provided vehicle doc is checked with no read; a deleted doc refuses", async () => {
+    const seed = await seedDealer();
+    const v = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [v]);
+    await forceDeleted(seed, v);
+    const deletedDoc = (await get(seed, v))!;
+    await expectDeleted(check(seed, v, quoteId, { vehicle: deletedDoc }));
+    await expectDeleted(acquire(seed, v, quoteId, { vehicle: deletedDoc }));
+    // Proof that the provided doc is what is checked (not a fresh read): a live-looking copy of the
+    // car that IS deleted in the database passes the liveness check.
+    await expect(check(seed, v, quoteId, { vehicle: { ...deletedDoc, isDeleted: false } })).resolves.toBeNull();
+  });
+
+  test("a provided vehicle doc for a different car is an internal invariant error", async () => {
+    const seed = await seedDealer();
+    const a = await vehicle(seed);
+    const b = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [a]);
+    const other = (await get(seed, b))!;
+    await expect(check(seed, a, quoteId, { vehicle: other })).rejects.toThrow(/does not match/i);
+    await expect(acquire(seed, a, quoteId, { vehicle: other })).rejects.toThrow(/does not match/i);
+  });
+
+  test("a multi-car deposit with a deleted SECOND car refuses atomically: no vehicle row changes", async () => {
+    const seed = await seedDealer();
+    const v1 = await vehicle(seed);
+    const v2 = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [v1, v2]);
+    await forceDeleted(seed, v2); // ABNORMAL: pre-existing deletion on a quoted car.
+    const rows = () =>
+      seed.t.run(async (ctx) => [await ctx.db.get(v1), await ctx.db.get(v2)]);
+    const before = await rows();
+    await expectDeletedAndNothingWritten(seed, () => deposit(seed, quoteId, 6_000));
+    expect(await rows(), "neither car was patched or held").toEqual(before);
+    expect(before[0]?.status).toBe("AVAILABLE");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 11. quote status moves that open or reopen an offer on a deleted car (R1)
+// ─────────────────────────────────────────────────────────────────────────────
+describe("11. quotes.updateQuoteStatus", () => {
+  const move = (seed: Seed, quoteId: Id<"quotes">, status: "DRAFT" | "SHARED" | "ACCEPTED" | "EXPIRED") =>
+    seed.asUser.mutation(api.quotes.updateQuoteStatus, { orgId: seed.orgId, quoteId, status });
+  const notificationCount = async (seed: Seed) =>
+    (await seed.t.run((ctx) => ctx.db.query("notifications").collect())).length;
+  const withLead = async (seed: Seed, quoteId: Id<"quotes">) => {
+    const leadId = await seed.t.run(async (ctx) => {
+      const id = await ctx.db.insert("leads", {
+        orgId: seed.orgId,
+        customerId: seed.customerA,
+        source: "test",
+        stage: "NEW",
+      });
+      await ctx.db.patch(quoteId, { leadId: id });
+      return id;
+    });
+    return leadId;
+  };
+
+  test("live control: SHARED advances the lead, ACCEPTED notifies", async () => {
+    const seed = await seedDealer();
+    const { liveQuote } = await liveVehicleWithQuote(seed);
+    const leadId = await withLead(seed, liveQuote);
+    await move(seed, liveQuote, "SHARED");
+    expect(await statusOf(seed, liveQuote)).toBe("SHARED");
+    expect((await get(seed, leadId))?.stage).toBe("NEGOTIATION");
+    await move(seed, liveQuote, "ACCEPTED");
+    expect(await statusOf(seed, liveQuote)).toBe("ACCEPTED");
+    expect(await notificationCount(seed), "control: ACCEPTED notifies").toBeGreaterThan(0);
+  });
+
+  test("SHARED and ACCEPTED on a quote whose car was deleted are refused with nothing changed", async () => {
+    const seed = await seedDealer();
+    const v = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [v]);
+    const leadId = await withLead(seed, quoteId);
+    await softDelete(seed, v);
+    for (const target of ["SHARED", "ACCEPTED"] as const) {
+      await expectDeletedAndNothingWritten(seed, () => move(seed, quoteId, target));
+      expect(await statusOf(seed, quoteId), "quote unchanged").toBe("DRAFT");
+      expect((await get(seed, leadId))?.stage, "lead unchanged").toBe("NEW");
+      expect(await notificationCount(seed), "no notification").toBe(0);
+    }
+  });
+
+  test("a deleted SECONDARY line also refuses", async () => {
+    const seed = await seedDealer();
+    const v1 = await vehicle(seed);
+    const v2 = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [v1, v2]);
+    await softDelete(seed, v2);
+    await expectDeletedAndNothingWritten(seed, () => move(seed, quoteId, "SHARED"));
+    expect(await statusOf(seed, quoteId)).toBe("DRAFT");
+  });
+
+  test("a foreign car on the quote is VEHICLE_NOT_FOUND, never DELETED", async () => {
+    const seed = await seedDealer();
+    const { liveQuote } = await liveVehicleWithQuote(seed);
+    const foreign = await seed.t.run(async (ctx) => {
+      const otherOrg = await ctx.db.insert("organizations", { name: "Foreign", createdAt: Date.now() });
+      return await ctx.db.insert("vehicles", {
+        orgId: otherOrg,
+        vin: "SC641FOREIGN0003",
+        make: "Kia",
+        model: "Rio",
+        year: 2022,
+        color: "Red",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 10,
+        sellingPrice: PRICE,
+        status: "AVAILABLE" as const,
+        isDeleted: true,
+      });
+    });
+    await seed.t.run((ctx) => ctx.db.patch(liveQuote, { vehicleId: foreign, vehicleItems: undefined }));
+    await expectAppError(move(seed, liveQuote, "SHARED"), "VEHICLE_NOT_FOUND", "Vehicle not found in this organization.");
+  });
+
+  test("EXPIRED stays allowed on a deleted car; reviving it to DRAFT is refused; un-sharing stays allowed", async () => {
+    const seed = await seedDealer();
+    const v = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [v]);
+    await move(seed, quoteId, "SHARED");
+    await softDelete(seed, v);
+    await move(seed, quoteId, "DRAFT"); // SHARED -> DRAFT: withdrawing an offer is not a new acquisition
+    expect(await statusOf(seed, quoteId)).toBe("DRAFT");
+    await move(seed, quoteId, "EXPIRED");
+    expect(await statusOf(seed, quoteId)).toBe("EXPIRED");
+    await expectDeletedAndNothingWritten(seed, () => move(seed, quoteId, "DRAFT"));
+    expect(await statusOf(seed, quoteId), "still expired").toBe("EXPIRED");
   });
 });

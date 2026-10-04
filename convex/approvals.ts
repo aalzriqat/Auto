@@ -9,7 +9,7 @@ import { notifyManagers, notifyUser, getActorName } from "./utils/notifications"
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { fromMinorUnits } from "./utils/money";
 import { profitDecision, requestMatchesTerms, requestsForTerms } from "./utils/profitApproval";
-import { assertVehicleNotDeleted, isVehicleDeleted } from "./utils/vehicleLiveness";
+import { assertVehicleNotDeleted, deletedVehicleRefusal } from "./utils/vehicleLiveness";
 
 // Exported so requestProfitApprovalArgs.test.ts can assert it still matches
 // `profitApprovalRequests.wizardSnapshot` in convex/schema.ts. Accepting a field
@@ -219,7 +219,8 @@ export const profitApprovalStatus = query({
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.orgId !== args.orgId) return null;
     // SCRUM-641: deleted car gets its own blocked state (null reads as non-blocking); see vehicleLiveness.ts.
-    if (isVehicleDeleted(vehicle)) return { status: "VEHICLE_DELETED" as const };
+    // A deleted car that is also SOLD or ARCHIVED keeps the older, more specific reading (same order as the guard).
+    if (deletedVehicleRefusal(vehicle) === "VEHICLE_DELETED") return { status: "VEHICLE_DELETED" as const };
 
     const currency = await getOrgCurrency(ctx, args.orgId);
     let decision;

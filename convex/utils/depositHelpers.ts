@@ -137,9 +137,11 @@ export async function assertDepositTargetNotDeleted(
  */
 export async function holdVehicleForDeposit(
   ctx: MutationCtx,
-  vehicleId: Id<"vehicles">
+  vehicleId: Id<"vehicles">,
+  /** The car document the caller already loaded in this transaction; read here only when absent. */
+  loaded?: Doc<"vehicles">
 ): Promise<void> {
-  const vehicle = await ctx.db.get(vehicleId);
+  const vehicle = loaded ?? (await ctx.db.get(vehicleId));
   if (!vehicle) return;
   if (vehicle.status === "SOLD") {
     throwAppError(AppErrorCode.VEHICLE_ALREADY_SOLD, "This vehicle has already been sold.");

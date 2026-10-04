@@ -1896,6 +1896,7 @@ export const createReservation = mutation({
       // customer being reserved for is the operation's own participant — it
       // proves nothing by itself, and is used only to refuse.
       actingCustomerId: args.customerId,
+      vehicle: currentVehicle,
     });
 
     const reservationId = await ctx.db.insert("vehicleReservations", {
@@ -1962,6 +1963,7 @@ export const createReservation = mutation({
         quoteId: args.dealQuoteId,
         depositId: args.dealDepositId,
       },
+      vehicle: currentVehicle,
     });
 
     await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);

@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
-import { getErrorMessage } from "@/lib/errors";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 
 /**
  * SCRUM-260: the minimum-profit approval for one vehicle at one price, read
@@ -96,7 +96,7 @@ export function ProfitApprovalNotice({ approval }: { approval: ProfitApproval })
       await requestApproval(request);
     } catch (error) {
       console.error("requestProfitApproval failed", error);
-      toast.error(getErrorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t));
 
     } finally {
       setIsRequesting(false);

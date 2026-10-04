@@ -25,6 +25,7 @@ import { getOrgCurrency } from "./accounting/workflowHooks";
 import { assertMajorAmountRepresentable } from "./utils/money";
 import { assertNoPendingDepositRequest } from "./utils/depositRequestGuards";
 import { assertOperatedDealMode } from "./utils/dealModes";
+import { requireCommercialVehicle } from "./utils/vehicleLiveness";
 
 function assertFiniteNumber(val: unknown, name: string): void {
   if (val !== undefined && (typeof val !== "number" || !Number.isFinite(val))) {
@@ -551,6 +552,13 @@ export const updateQuoteStatus = mutation({
         quoteId,
         action: "expire this quote",
       });
+    }
+
+    // SCRUM-641: offering or accepting a quote (or reviving an expired one) re-opens it, so every car it
+    // quotes must still be commercial. EXPIRED and un-sharing to DRAFT stay open on a deleted car.
+    if (status === "SHARED" || status === "ACCEPTED" || (status === "DRAFT" && existing.status === "EXPIRED")) {
+      const quotedIds = new Set([existing.vehicleId, ...(existing.vehicleItems ?? []).map((item) => item.vehicleId)]);
+      for (const id of quotedIds) requireCommercialVehicle(await ctx.db.get(id), orgId);
     }
 
     await ctx.db.patch(quoteId, { status });

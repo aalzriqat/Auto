@@ -83,15 +83,21 @@ export async function postQuoteDeposit(
 
   // SCRUM-195: ask the AUTHORITY before moving a car's status; it refuses
   // BEFORE any side effect.
+  // SCRUM-641: each car is read ONCE here and the document is handed to the authority checks and the
+  // hold below, so the liveness guard costs no extra read per car.
+  const loadedVehicles = new Map<string, Doc<"vehicles">>();
   for (const item of depositVehicleItems) {
+    const vehicle = (await ctx.db.get(item.vehicleId)) ?? undefined;
+    if (vehicle) loadedVehicles.set(String(item.vehicleId), vehicle);
     await assertAcquirable(ctx, {
       orgId: args.orgId,
       vehicleId: item.vehicleId,
       lineage: { quoteId: quote._id, adoptReservationId: args.adoptReservationId },
+      vehicle,
     });
   }
   for (const item of depositVehicleItems) {
-    await holdVehicleForDeposit(ctx, item.vehicleId);
+    await holdVehicleForDeposit(ctx, item.vehicleId, loadedVehicles.get(String(item.vehicleId)));
   }
 
   const now = Date.now();
@@ -123,6 +129,7 @@ export async function postQuoteDeposit(
       createdBy: args.actorId,
       evidence: { kind: "DEPOSIT", depositId },
       lineage: { quoteId: quote._id, adoptReservationId: args.adoptReservationId },
+      vehicle: loadedVehicles.get(String(item.vehicleId)),
     });
     episodeByVehicle.set(String(item.vehicleId), claimId);
   }
