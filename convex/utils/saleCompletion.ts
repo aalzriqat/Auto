@@ -21,7 +21,7 @@ import { requireOrgMember } from "./tenancy";
 import { assertNoSaleLinkedLegacyReceivable } from "./saleDebtContainment";
 import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
 import { assertNoPendingDepositRequest } from "./depositRequestGuards";
-import { assertFinancedSaleHasDeal, assertOperatedDealMode } from "./dealModes";
+import { assertOperatedDealMode, FINANCED_SALE_REQUIRES_DEAL_MESSAGE } from "./dealModes";
 import {
   assertSaleMayCompleteForVehicle,
   consumeRootForSale,
@@ -441,9 +441,21 @@ async function prepareSaleCompletion(
   // SCRUM-495 (OR-7): every sale creation and completion path passes here, so a LEASE draft
   // cannot be completed; it can still be edited or cancelled via `sales.update`.
   assertOperatedDealMode(args.financingType);
-  // SCRUM-504: createDraft, create and completeDraft (via completeExistingSale) all pass here,
-  // inside their idempotent run. finalizeDeal passes its application, so it is unaffected.
-  assertFinancedSaleHasDeal(args.financingType, args.applicationId);
+  // SCRUM-504 / SCRUM-415 (D-33): a FINANCED sale completes ONLY through finalizeDeal's
+  // FINANCE_FINALIZATION door, and only for the sale's own application. A present applicationId
+  // on a stored row (legacy or drifted) is not authority: createDraft, create, completeDraft (via
+  // completeExistingSale) and completeSalesForLineItems pass no door and are refused here, before
+  // any write. Same code and message as the SCRUM-504 absent-application refusal.
+  if (
+    args.financingType === "FINANCED" &&
+    !(
+      door?.kind === "FINANCE_FINALIZATION" &&
+      args.applicationId !== undefined &&
+      door.applicationId === args.applicationId
+    )
+  ) {
+    throwAppError(AppErrorCode.FINANCED_SALE_REQUIRES_DEAL, FINANCED_SALE_REQUIRES_DEAL_MESSAGE);
+  }
 
   const vehicle = await ctx.db.get(args.vehicleId);
   if (vehicle?.orgId !== args.orgId) {
