@@ -248,7 +248,24 @@ test.describe("recording a financed deal's economics through the interface", () 
       const invoiceDialog = managerPage.getByRole("dialog");
       await invoiceDialog.locator("#legal-invoice-amount").fill("13000");
       await invoiceDialog.locator("#legal-invoice-number").fill(`INV-E2E-${testDataSuffix()}`);
-      await invoiceDialog.getByRole("button", { name: "Save Legal Invoice" }).click();
+      // SCRUM-596 (F-28): the invoice date is the paper's date. While the
+      // browser's day has not begun on the ledger's UTC clock (00:00-03:00 in
+      // Amman) nothing is pre-filled and saving waits for an explicit pick —
+      // never a silent move into the previous day. Either way the test picks
+      // the latest day the picker allows, which the server always accepts.
+      const invoiceDate = invoiceDialog.locator("#legal-invoice-date");
+      const save = invoiceDialog.getByRole("button", { name: "Save Legal Invoice" });
+      if (await invoiceDialog.locator("#legal-invoice-date-hint").isVisible()) {
+        await expect(invoiceDate).toHaveValue("");
+        await expect(save).toBeDisabled();
+        await managerPage.screenshot({
+          path: test.info().outputPath("legal-invoice-date-not-open-yet.png"),
+        });
+      }
+      const latestDay = await invoiceDate.getAttribute("max");
+      expect(latestDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      await invoiceDate.fill(latestDay!);
+      await save.click();
       await expect(invoiceDialog).not.toBeVisible();
       await expect(
         checklist.getByTestId("closing-check-LEGAL_INVOICE_RECORDED"),
