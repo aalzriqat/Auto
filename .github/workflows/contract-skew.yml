@@ -44,11 +44,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  # To read `deploy-production.yml`'s run history and learn which commit is
-  # actually deployed. Read-only, and it grants nothing over production.
-  actions: read
+# No workflow-level grant: each job declares exactly what it needs (Sonar
+# githubactions:S8264), so a job added later starts with nothing.
+permissions: {}
 
 concurrency:
   group: contract-skew
@@ -73,6 +71,11 @@ jobs:
   detect:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      # To read `deploy-production.yml`'s run history and learn which commit is
+      # actually deployed. Read-only, and it grants nothing over production.
+      actions: read
     # The binding control. The environment's branch policy admits `main` only, so
     # a run from any other ref cannot reach the credential — it fails closed
     # rather than falling back to something weaker.

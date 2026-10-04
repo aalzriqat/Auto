@@ -98,6 +98,7 @@ import { CLIENT_SURFACES, listSurfaceFiles, unscannedConvexClients } from "./cli
 import { fetchDeployedSpec, isDeploymentName, readSpecFile, redact } from "./fetchSpec.mjs";
 import { changedContractPaths, summarizeChanges } from "./specDiff.mjs";
 import { classifyBreaking, alertsFor, distinctCallCount } from "./classify.mjs";
+import { resolveGit } from "./gitExecutable.mjs";
 
 const DEFAULT_BASELINE = fileURLToPath(new URL("./needs-evidence-baseline.json", import.meta.url));
 
@@ -561,8 +562,11 @@ const deployedSha = strArg("deployed-sha");
  * @returns {boolean|undefined} undefined when the question could not be asked.
  */
 function backendUnchangedSince(sha) {
+  // Absolute path, never a PATH lookup. No git found is "could not ask".
+  const git = resolveGit();
+  if (!git) return undefined;
   try {
-    execFileSync("git", ["diff", "--quiet", sha, "HEAD", "--", "convex"], { stdio: "ignore" });
+    execFileSync(git, ["diff", "--quiet", sha, "HEAD", "--", "convex"], { stdio: "ignore" });
     return true;
   } catch (error) {
     // `git diff --quiet` exits 1 for "there are differences" and >1 for a real

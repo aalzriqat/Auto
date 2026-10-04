@@ -22,6 +22,7 @@
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { indexAllNamed, normalizeIdentifier } from "./specIndex.mjs";
+import { compareCodeUnits } from "./compareCodeUnits.mjs";
 
 /**
  * Fields that identify a finding, in key order. `fingerprint` and `cause` are
@@ -87,7 +88,7 @@ function stable(value) {
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
   if (value && typeof value === "object") {
     return `{${Object.keys(value)
-      .sort()
+      .sort(compareCodeUnits)
       .map((k) => `${JSON.stringify(k)}:${stable(value[k])}`)
       .join(",")}}`;
   }

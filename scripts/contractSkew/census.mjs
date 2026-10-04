@@ -40,6 +40,7 @@ import path from "node:path";
 import ts from "typescript";
 import { normalizeSurfacePath } from "./clientFiles.mjs";
 import { unaliasSymbol } from "./clientPaths.mjs";
+import { compareCodeUnits } from "./compareCodeUnits.mjs";
 
 /** @typedef {"IMMEDIATE"|"DEFERRED"|"REQUEST_MAP"|"LOCAL"|"REFERENCE_CONSTRUCTOR"|"SERVER_ONLY"|"UNSUPPORTED"} EntryKind */
 
@@ -139,7 +140,7 @@ export const ENTRY_TABLE = {
  * @param {Record<string, EntryKind>} [table]
  */
 export function unclassifiedEntryPoints(inventoryKeys, table = ENTRY_TABLE) {
-  return [...inventoryKeys].filter((key) => !(key in table)).sort();
+  return [...inventoryKeys].filter((key) => !(key in table)).sort(compareCodeUnits);
 }
 
 /**
