@@ -182,6 +182,25 @@ pnpm test:invariants
 
 It verifies catalog integrity. It does not replace the full test suite or preview rehearsals.
 
+### Review-evidence validator (SCRUM-644, bootstrap only)
+
+`.github/review-policy.json` (policy version 1) and
+`scripts/intelligence/reviewEvidence.mjs` define how a change's evidence record
+is judged against its deterministic requirements. `pnpm test:review-evidence`
+runs the validator's negative controls in the `invariant-catalog` job.
+
+**Nothing enforces a record yet** (`"enforcement": "none"`). That job runs the
+candidate's own code, so it can only show the library rejects the controlled
+defects: an unavailable runtime proof, a stale or abbreviated evidence SHA, a
+missing obligation, a test that is skipped, unregistered or `.each`-only, a
+runtime run of another merge, a range taken from the record instead of the
+caller, a foreign policy version, and evidence attached to a review. Only
+`proof:` requirements can be satisfied. `review:` and `review-invariant:`
+requirements stay reported and unresolved, because every agent writes through
+one account and no review verdict can be authenticated. Evaluating real pull
+requests belongs to a `workflow_run` controller pinned to `main`, which is
+not built yet.
+
 ## 9. Current calibration rule
 
 Existing evidence is reused rather than duplicated.

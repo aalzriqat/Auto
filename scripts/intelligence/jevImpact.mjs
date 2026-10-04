@@ -619,6 +619,12 @@ const CORRECTNESS_GOVERNANCE_FILES = new Set([
   ".github/workflows/invariant-governance.yml",
   ".github/workflows/jev-shadow-impact.yml",
   ".github/workflows/jev-historical-calibration.yml",
+  // Review-evidence governance (SCRUM-644). Listed before anything reads them
+  // from a base commit, so a PR editing them is classified by a base that
+  // already knows them. The validator itself lives under scripts/intelligence/.
+  ".github/review-policy.json",
+  ".github/release-waivers.json",
+  ".github/workflows/trusted-review-evidence.yml",
   "package.json",
   "pnpm-lock.yaml",
 ]);
