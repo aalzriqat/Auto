@@ -40,6 +40,17 @@ describe("judge — fixed verdicts, no model involved", () => {
     expect(judge(attempt({ rule: "too-long", outcome: "ignored" })).check).toBe("silent-ignore");
   });
 
+  it("a save still in progress is inconclusive, never silent-ignore (Codex F614-04)", () => {
+    expect(judge(attempt({ rule: "blank-required", outcome: "pending" })).kind).toBe("inconclusive");
+  });
+
+  it("a missed toast does not hide an invalid save (Codex F614-04)", () => {
+    expect(judge(attempt({ rule: "blank-required", outcome: "accepted-silent" })).check).toBe("blank-required-accepted");
+    expect(judge({ rule: "garbage-phone", field: phone, outcome: "accepted-silent" }).check).toBe("invalid-format-accepted");
+    // A clean value saved without confirmation stays an advisory.
+    expect(judge({ rule: "markup", field: notes, outcome: "accepted-silent", scriptRan: false }).check).toBe("silent-accept");
+  });
+
   it("a malformed phone or email that saves is a finding (F-06 class)", () => {
     expect(judge({ rule: "garbage-phone", field: phone, outcome: "accepted" }).check).toBe("invalid-format-accepted");
     expect(judge({ rule: "garbage-phone", field: phone, outcome: "rejected-inline" }).kind).toBe("ok");

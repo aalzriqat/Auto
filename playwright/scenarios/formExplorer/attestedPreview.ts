@@ -36,18 +36,20 @@ await m.assertExistingE2EPreview(process.env, { run: (args, label) => m.runConve
 `;
 
 /**
- * The Convex URL proven to be the seeded disposable preview, or undefined. An
- * environment variable saying "this was attested" is the caller's claim, not
- * evidence, so the backend itself is asked.
+ * The Convex URL proven to be the seeded disposable preview, with the seeded
+ * QA organization the backend named, or undefined. An environment variable
+ * saying "this was attested" is the caller's claim, not evidence, so the
+ * backend itself is asked.
  */
-export function attestedPreviewUrl(): string | undefined {
+export function attestedPreview(): { url: string | undefined; orgId: string | undefined } | undefined {
   if (!process.env.CONVEX_PREVIEW_NAME) return undefined;
   const res = spawnSync(process.execPath, ["--input-type=module", "-e", LOCAL_ATTESTATION], {
     env: process.env,
     encoding: "utf8",
     timeout: 180_000,
   });
-  if (res.status === 0) return process.env.NEXT_PUBLIC_CONVEX_URL;
+  // assertE2EBootstrap returns { orgId, ... } and `convex run` prints it.
+  if (res.status === 0) return { url: process.env.NEXT_PUBLIC_CONVEX_URL, orgId: /"orgId":\s*"([^"]+)"/.exec(res.stdout ?? "")?.[1] };
   const lines = (res.stderr || res.error?.message || "").split("\n").filter((l) => l.trim());
   const reason = (lines.find((l) => /Error/.test(l)) ?? lines.at(-1))?.trim() ?? `exit ${res.status}`;
   console.warn(`Preview attestation failed: ${reason}`);
@@ -80,31 +82,40 @@ export function servedDeployments(sockets: string[]): string[] {
 }
 
 /**
- * Why this run must not write, or undefined when it may. Checks, in order: a
- * local app, a non-production configured backend, an attested preview, and a
- * served app whose every Convex socket names that same preview. `sockets`
- * must already be collecting from `page` before this is called.
+ * Why this run must not write, or the seeded QA organization it may write to.
+ * Checks, in order: a local app, a non-production configured backend, an
+ * attested preview that names its QA organization, a page still on the local
+ * app after loading, and a served app whose every Convex socket names that
+ * same preview. `sockets` must already be collecting from `page`.
  */
-export async function refusalReason(page: Page, baseURL: string | undefined, sockets: string[]): Promise<string | undefined> {
-  const host = new URL(baseURL ?? "http://localhost:3000").hostname;
-  if (!["localhost", "127.0.0.1"].includes(host)) return "Form explorer runs against a local app only.";
+export async function attest(
+  page: Page,
+  baseURL: string | undefined,
+  sockets: string[],
+): Promise<{ refusal: string; orgId?: undefined } | { refusal?: undefined; orgId: string }> {
+  const app = new URL(baseURL ?? "http://localhost:3000");
+  if (!["localhost", "127.0.0.1"].includes(app.hostname)) return { refusal: "Form explorer runs against a local app only." };
   if ((process.env.NEXT_PUBLIC_CONVEX_URL ?? "").includes(PRODUCTION_DEPLOYMENT)) {
-    return "Form explorer never runs against the production backend.";
+    return { refusal: "Form explorer never runs against the production backend." };
   }
   const expected = convexDeploymentOf(process.env.NEXT_PUBLIC_CONVEX_URL);
-  if (!expected) return "Form explorer needs NEXT_PUBLIC_CONVEX_URL naming its preview deployment.";
-  if (!sameUrl(attestedPreviewUrl(), process.env.NEXT_PUBLIC_CONVEX_URL)) {
-    return "NEXT_PUBLIC_CONVEX_URL is not attested as the seeded disposable preview; not exploring.";
+  if (!expected) return { refusal: "Form explorer needs NEXT_PUBLIC_CONVEX_URL naming its preview deployment." };
+  const attested = attestedPreview();
+  if (!sameUrl(attested?.url, process.env.NEXT_PUBLIC_CONVEX_URL)) {
+    return { refusal: "NEXT_PUBLIC_CONVEX_URL is not attested as the seeded disposable preview; not exploring." };
   }
+  if (!attested?.orgId) return { refusal: "The preview attestation did not name the seeded QA organization; not exploring." };
   await page.goto("/");
+  // A local server that redirects elsewhere is not the local app (Codex F614-02).
+  if (new URL(page.url()).origin !== app.origin) return { refusal: `The local app redirected to ${new URL(page.url()).origin}; not exploring.` };
   await expect
     .poll(() => sockets.some((u) => u.includes(".convex.cloud")), { timeout: 30_000 })
     .toBe(true)
     .catch(() => undefined);
   const served = servedDeployments(sockets);
-  if (served.length === 0) return "Could not observe which backend the served app uses; not exploring.";
+  if (served.length === 0) return { refusal: "Could not observe which backend the served app uses; not exploring." };
   if (served.some((d) => d === PRODUCTION_DEPLOYMENT || d !== expected)) {
-    return `The served app talks to ${[...new Set(served)].join(", ")}, not the preview ${expected}.`;
+    return { refusal: `The served app talks to ${[...new Set(served)].join(", ")}, not the preview ${expected}.` };
   }
-  return undefined;
+  return { orgId: attested.orgId };
 }

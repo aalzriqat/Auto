@@ -16,7 +16,7 @@ import {
   type Verdict,
 } from "../../scripts/intelligence/jevFormOracle";
 import { resolveOrgId } from "../utils";
-import { refusalReason, servedDeployments, convexDeploymentOf } from "./formExplorer/attestedPreview";
+import { attest, servedDeployments, convexDeploymentOf } from "./formExplorer/attestedPreview";
 
 /**
  * The Jev form explorer (SCRUM-614). Where jev-explorer.spec.ts only clicks
@@ -29,18 +29,30 @@ import { refusalReason, servedDeployments, convexDeploymentOf } from "./formExpl
  * It WRITES, so it is opt-in (JEV_FORM_EXPLORER=1) and runs only on an
  * attested disposable preview behind the same guard as the click explorer.
  * Only the forms in FORMS can be submitted — customers, leads and tasks, none
- * of which posts money or reaches anyone outside the app — and every record it
- * creates carries "QA TEST" and a run tag.
+ * of which posts money — and every record it creates carries "QA TEST" and a
+ * run tag. Tasks are dated two years out so no alarm fires. Customer and lead
+ * creates still notify the org's managers, which can leave the app through the
+ * preview's notification channels: run it only on a preview whose recipients
+ * are QA identities (Codex F614-03).
  */
 
-const MAX_ATTEMPTS = Number(process.env.JEV_FORM_EXPLORER_ATTEMPTS ?? 30);
-const SEED = Number(process.env.JEV_FORM_EXPLORER_SEED ?? Date.now() % 100_000);
+/** A non-negative whole number from the environment, or the fallback. */
+const intEnv = (name: string, fallback: number) => {
+  const n = Number(process.env[name]);
+  return process.env[name] !== undefined && Number.isInteger(n) && n >= 0 ? n : fallback;
+};
+const MAX_ATTEMPTS = intEnv("JEV_FORM_EXPLORER_ATTEMPTS", 30);
+const SEED = intEnv("JEV_FORM_EXPLORER_SEED", Date.now() % 100_000);
 // "QA TEST F614-…" is the prefix agreed with the #430 scenario lane, which
 // shares this preview org and looks its own records up by exact name.
 /** Visible within the timeout. (locator.isVisible ignores its timeout: it never waits.) */
 const appeared = (l: Locator, timeout: number) => l.waitFor({ state: "visible", timeout }).then(() => true, () => false);
 
-const RUN = `F614-${(Date.now() % 1_000_000).toString(36).toUpperCase()}`;
+// The full clock plus a random suffix: a tag that repeats would let this run
+// mistake an older run's records for its own (Codex F614-05).
+const RUN = `F614-${Date.now().toString(36)}${Math.floor(Math.random() * 36 ** 2).toString(36).padStart(2, "0")}`.toUpperCase();
+/** Set once this run's seed customer is confirmed saved; leads may only use it. */
+let seedConfirmed = false;
 
 /** The only screens it may submit on. Each entry is reviewed by a person. */
 type FormSpec = {
@@ -70,6 +82,19 @@ const FORMS: FormSpec[] = [
     title: /^Create Task$/,
     submit: /^Create Task$/,
     success: /Task created successfully/,
+    // The form defaults the due date to now, and the 5-minute alarm cron then
+    // notifies and emails the assignee (convex/crons.ts runTriggerAlarms).
+    // Two years out, a disposable preview never reaches it (Codex F614-03).
+    prepare: async (dialog, page) => {
+      const year = new Date().getFullYear() + 2;
+      await dialog.getByRole("button", { name: /\b20\d\d\b/ }).first().click();
+      const next = page.getByRole("button", { name: /next month/i });
+      if (!(await appeared(next, 5_000))) return false;
+      for (let i = 0; i < 24; i++) await next.click();
+      await page.getByRole("gridcell", { name: "15", exact: true }).first().click();
+      await page.keyboard.press("Escape"); // closes the date popover only
+      return appeared(dialog.getByRole("button", { name: new RegExp(`\\b${year}\\b`) }), 5_000);
+    },
   },
   {
     id: "lead",
@@ -81,11 +106,14 @@ const FORMS: FormSpec[] = [
     // The customer picker is required: choose the customer this run seeded,
     // never a record another lane created.
     prepare: async (dialog, page) => {
+      if (!seedConfirmed) return false;
       await dialog.getByRole("button", { name: /Select customer/ }).click();
       await page.getByPlaceholder(/^Search/).last().fill(`QA TEST ${RUN}-SEED`);
-      const option = page.locator('[data-testid^="searchable-option-"]').first();
-      if (!(await appeared(option, 8_000))) return false;
-      await option.click();
+      const options = page.locator('[data-testid^="searchable-option-"]');
+      if (!(await appeared(options.first(), 8_000))) return false;
+      // Exactly one match, and it is this run's seed: never a look-alike.
+      if ((await options.count()) !== 1 || !(await options.first().innerText()).includes(`QA TEST ${RUN}-SEED`)) return false;
+      await options.first().click();
       return true;
     },
   },
@@ -190,15 +218,19 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
     });
     const sockets: string[] = [];
     page.on("websocket", (ws) => sockets.push(ws.url()));
-    const refusal = await refusalReason(page, baseURL, sockets);
-    test.skip(Boolean(refusal), refusal ?? "");
+    const attestation = await attest(page, baseURL, sockets);
+    test.skip(Boolean(attestation.refusal), attestation.refusal ?? "");
     const expected = convexDeploymentOf(process.env.NEXT_PUBLIC_CONVEX_URL);
+    const appOrigin = new URL(page.url()).origin;
 
     await page.route(
       (url) => WRITES_ON_VIEW.test(url.pathname),
       (route) => route.abort(),
     );
+    // Every write must land in the organization the backend attested as the
+    // seeded QA org, not whichever org the dashboard opens first (Codex F614-01).
     const orgId = await resolveOrgId(page);
+    test.skip(orgId !== attestation.orgId, `The app opened organization ${orgId}, not the attested QA organization; not exploring.`);
 
     /** Stops the run the moment any frame talks to another backend. */
     const assertBackend = () => {
@@ -259,12 +291,17 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
     async function submit(form: FormSpec, dialog: Locator): Promise<{ outcome: Outcome; toast?: string }> {
       // The last line of defence before a write: right page, right dialog, right backend.
       assertBackend();
-      expect(new URL(page.url()).pathname).toBe(`/${orgId}/${form.route}`);
+      const here = new URL(page.url());
+      expect(here.origin).toBe(appOrigin);
+      expect(here.pathname).toBe(`/${orgId}/${form.route}`);
       await expect(dialog.getByRole("heading", { name: form.title })).toBeVisible();
 
-      const toasts = page.locator("[data-sonner-toast]");
-      const before = new Set(await toasts.allInnerTexts().catch(() => []));
-      await dialog.getByRole("button", { name: form.submit }).click();
+      // Mark the toasts already on screen, so an earlier save's identical
+      // "added successfully" is never read as this one's (Codex F614-04).
+      await page.locator("[data-sonner-toast]").evaluateAll((els) => els.forEach((e) => e.setAttribute("data-qa-seen", "1")));
+      const toasts = page.locator("[data-sonner-toast]:not([data-qa-seen])");
+      const save = dialog.getByRole("button", { name: form.submit });
+      await save.click();
 
       const deadline = Date.now() + 10_000;
       let closedAt: number | undefined;
@@ -274,7 +311,7 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
         for (let i = 0; i < n; i++) {
           const t = toasts.nth(i);
           const text = (await t.innerText().catch(() => "")).trim();
-          if (!text || before.has(text)) continue;
+          if (!text) continue;
           if (form.success.test(text)) return { outcome: "accepted", toast: text };
           if ((await t.getAttribute("data-type").catch(() => null)) === "error") {
             return { outcome: classifyErrorToast(text), toast: text };
@@ -294,6 +331,8 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       if (closedAt !== undefined) return { outcome: "accepted-silent" };
       // A native constraint bubble (type=email, required) is a rejection, not silence.
       if ((await dialog.locator("input:invalid, textarea:invalid").count()) > 0) return { outcome: "rejected-inline", toast: "native validation" };
+      // A Save button still disabled is a save still running, not one ignored.
+      if (await save.isDisabled().catch(() => false)) return { outcome: "pending" };
       return { outcome: "ignored" };
     }
 
@@ -325,12 +364,17 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       // it is reported as inconclusive, never as "Save did nothing".
       const dialog = await openForm(c.form);
       if (!dialog) return { outcome: "ignored", warned: false, tag, setupFailed: "form did not open" };
-      if (c.form.prepare && !(await c.form.prepare(dialog, page))) {
+      if (c.form.prepare && !(await c.form.prepare(dialog, page).catch(() => false))) {
         await closeDialog(dialog);
-        return { outcome: "ignored", warned: false, tag, setupFailed: "required picker had no seeded option" };
+        return { outcome: "ignored", warned: false, tag, setupFailed: "could not set the form's pickers (seed customer or due date)" };
       }
       const values = new Map<string, string>();
       for (const f of fields) if (f.required) values.set(f.label, baselineValue(f.kind, tag, Date.now() + slot));
+      // Blanking the only required text (a task's title) would leave the row
+      // with no run tag: carry it in the optional text fields (Codex F614-03).
+      if (c.rule === "blank-required") {
+        for (const f of fields) if (!f.required && f.kind === "text") values.set(f.label, baselineValue(f.kind, tag, 0));
+      }
       const value = override?.value ?? hostileValue(c.rule, tag);
       values.set(override?.label ?? c.field.label, value);
       try {
@@ -388,7 +432,7 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
     // never attaches leads to another lane's records.
     const customerForm = FORMS.find((f) => f.id === "customer");
     const customerFields = fieldsByForm.get("customer");
-    if (customerForm && customerFields) {
+    if (MAX_ATTEMPTS > 0 && customerForm && customerFields) {
       const dialog = await openForm(customerForm);
       if (dialog) {
         const seedTag = `${RUN}-SEED`;
@@ -397,6 +441,8 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
         await fill(dialog, customerFields, values);
         const seeded = await submit(customerForm, dialog);
         await closeDialog(dialog);
+        // Only a confirmed save lets lead attempts use it; otherwise they are skipped.
+        seedConfirmed = seeded.outcome === "accepted";
         test.info().annotations.push({ type: "seed-customer", description: `${seedTag}: ${seeded.outcome}` });
       }
     }
@@ -458,6 +504,7 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
           outcome: a.outcome,
           verdict: { kind: "inconclusive", check: "setup", reason: `${c.field.label} (${c.rule}): ${setupFailed}` },
         });
+        saveReport();
         continue;
       }
 

@@ -18,7 +18,8 @@ export type Outcome =
   | "rejected-inline" // a field error under an input
   | "rejected-toast" // an error toast in user-facing language
   | "rejected-raw" // an error toast leaking server internals
-  | "ignored"; // nothing happened: no toast, no field error, dialog still open
+  | "ignored" // nothing happened: no toast, no field error, dialog still open
+  | "pending"; // Save was still busy when the wait ended: no evidence either way
 
 export type Rule =
   | "blank-required" // whitespace-only into a required field
@@ -87,10 +88,19 @@ export function judge(a: Attempt): Verdict {
   if (a.outcome === "ignored") {
     return { kind: "finding", check: "silent-ignore", reason: `${where}: Save did nothing — no toast, no field error.` };
   }
-  if (a.outcome === "accepted-silent") {
+  // A slow save is not a silent one: without an answer there is no verdict.
+  if (a.outcome === "pending") return inconclusive(where, "Save was still in progress when the wait ended");
+
+  const verdict = judgeRule(a, where);
+  // A closed dialog with no toast still saved the value: the rule's finding
+  // stands, and only an otherwise clean save is downgraded to the advisory.
+  if (a.outcome === "accepted-silent" && verdict.kind !== "finding") {
     return { kind: "advisory", check: "silent-accept", reason: `${where}: the dialog closed without any confirmation.` };
   }
+  return verdict;
+}
 
+function judgeRule(a: Attempt, where: string): Verdict {
   switch (a.rule) {
     case "blank-required":
       return isAccepted(a.outcome)
