@@ -225,44 +225,6 @@ describe("sales.list — native isDeleted-index pagination (D-23 Q2)", () => {
     expect(ids(await list(w, 5))).toEqual([live]);
   });
 
-  test("cursor transition (characterises convex-test only, NOT platform behaviour): a native by_org cursor presented to the new list", async () => {
-    const w = await makeWorld();
-    for (let i = 0; i < 5; i++) await addSale(w);
-    const oldPage = await w.t.run((ctx) =>
-      ctx.db
-        .query("sales")
-        .withIndex("by_org", (q) => q.eq("orgId", w.orgId))
-        .paginate({ numItems: 2, cursor: null })
-    );
-    expect(oldPage.isDone).toBe(false);
-
-    let outcome: { kind: "threw"; message: string } | { kind: "returned"; page: string[]; isDone: boolean; splitCursor?: unknown; pageStatus?: unknown };
-    try {
-      const r = await list(w, 2, oldPage.continueCursor);
-      outcome = { kind: "returned", page: ids(r), isDone: r.isDone, splitCursor: r.splitCursor, pageStatus: r.pageStatus };
-    } catch (e) {
-      outcome = { kind: "threw", message: String((e as Error)?.message ?? e) };
-    }
-    // The cursor here is a native `by_org` cursor. Production's old cursor is
-    // native `by_org` + the isDeleted filter (the convex-helpers stream form
-    // never shipped). convex-test does not fingerprint cursors, so this
-    // asserts a harness artefact (empty page, isDone), not platform behaviour.
-    // On the real platform a different index/filter changes the query
-    // fingerprint and raises InvalidCursor, which usePaginatedQuery turns into
-    // a client reset; that is accepted on platform-source + client-source
-    // evidence per D-23a.
-    // Since SCRUM-603 the list is also descending, and convex-test does not
-    // validate the cursor's direction either, so it returns SOME page here
-    // rather than the empty one it returned for an ascending query. That is a
-    // harness artefact too: only assert that it does not throw and carries no
-    // split/pageStatus.
-    expect(outcome.kind).toBe("returned");
-    if (outcome.kind === "returned") {
-      expect(outcome.splitCursor).toBeNull();
-      expect(outcome.pageStatus).toBeNull();
-    }
-  });
-
   test("endCursor pins the page end: a re-run with endCursor ignores sales added after page 1", async () => {
     const w = await makeWorld();
     for (let i = 0; i < 5; i++) await addSale(w);
