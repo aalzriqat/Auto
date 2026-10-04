@@ -144,7 +144,8 @@ describe("sales.list — soft-deleted rows never produce an empty first page", (
       if (page.isDone) break;
       cursor = page.continueCursor;
     }
-    expect(seen).toEqual(expected);
+    // Newest first (SCRUM-603).
+    expect(seen).toEqual([...expected].reverse());
     expect(new Set(seen).size).toBe(seen.length);
   });
 });
@@ -193,7 +194,8 @@ describe("sales.list — native isDeleted-index pagination (D-23 Q2)", () => {
     expect(first.page).toHaveLength(3);
 
     const { seen, sizes } = await walk(w, 3, rep);
-    expect(seen).toEqual(live);
+    // Newest first (SCRUM-603).
+    expect(seen).toEqual([...live].reverse());
     expect(new Set(seen).size).toBe(seen.length);
     expect(seen).not.toContain(deleted);
     // Every page except the last is full: no short pages caused by deleted rows.
@@ -203,19 +205,21 @@ describe("sales.list — native isDeleted-index pagination (D-23 Q2)", () => {
   test.each([
     ["org branch", false],
     ["salesperson branch", true],
-  ])("%s: an explicit isDeleted:false row is listed, after the unset rows (ordering policy)", async (_name, withRep) => {
+  ])("%s: an explicit isDeleted:false row is listed, before the unset rows (ordering policy)", async (_name, withRep) => {
     const w = await makeWorld();
     const rep = withRep ? w.userId : undefined;
     // Creation order: explicit-false FIRST, then two unset rows. The
-    // isDeleted index sorts unset (undefined) before false, so the policy is
-    // unset rows first, then false rows, regardless of creation time.
+    // isDeleted index sorts unset (undefined) before false, and the list is
+    // descending (SCRUM-603), so the policy is false rows first, then unset
+    // rows newest first, regardless of creation time. Nothing writes an
+    // explicit false in practice; this pins the index order only.
     const explicitFalse = await addSale(w, { isDeleted: false });
     const unsetA = await addSale(w);
     const unsetB = await addSale(w);
     await addSale(w, { isDeleted: true });
 
     const { seen } = await walk(w, 2, rep);
-    expect(seen).toEqual([unsetA, unsetB, explicitFalse]);
+    expect(seen).toEqual([explicitFalse, unsetB, unsetA]);
   });
 
   test("cursor transition (characterises convex-test only, NOT platform behaviour): a native by_org cursor presented to the new list", async () => {
@@ -244,25 +248,40 @@ describe("sales.list — native isDeleted-index pagination (D-23 Q2)", () => {
     // fingerprint and raises InvalidCursor, which usePaginatedQuery turns into
     // a client reset; that is accepted on platform-source + client-source
     // evidence per D-23a.
-    expect(outcome).toEqual({ kind: "returned", page: [], isDone: true, splitCursor: null, pageStatus: null });
+    // Since SCRUM-603 the list is also descending, and convex-test does not
+    // validate the cursor's direction either, so it returns SOME page here
+    // rather than the empty one it returned for an ascending query. That is a
+    // harness artefact too: only assert that it does not throw and carries no
+    // split/pageStatus.
+    expect(outcome.kind).toBe("returned");
+    if (outcome.kind === "returned") {
+      expect(outcome.splitCursor).toBeNull();
+      expect(outcome.pageStatus).toBeNull();
+    }
   });
 
   test("endCursor pins the page end: a re-run with endCursor ignores sales added after page 1", async () => {
     const w = await makeWorld();
     for (let i = 0; i < 5; i++) await addSale(w);
+    // Newest first: a sale added later lands at the TOP, so the pinned range
+    // is page 2 (the older rows), not page 1.
     const page1 = await list(w, 2);
-    expect(page1.page).toHaveLength(2);
+    const page2 = await list(w, 2, page1.continueCursor);
+    expect(page2.page).toHaveLength(2);
     await addSale(w);
 
     // numItems is larger than the pinned range, so only endCursor can bound it.
     const pinned = await w.asUser.query(api.sales.list, {
       orgId: w.orgId,
-      paginationOpts: { numItems: 10, cursor: null, endCursor: page1.continueCursor },
+      paginationOpts: { numItems: 10, cursor: page1.continueCursor, endCursor: page2.continueCursor },
     });
-    expect(ids(pinned)).toEqual(ids(page1));
+    expect(ids(pinned)).toEqual(ids(page2));
 
-    // Control: without endCursor the same call returns all 6 live sales.
-    const unpinned = await list(w, 10);
-    expect(unpinned.page).toHaveLength(6);
+    // Control: without endCursor the same call returns every remaining sale.
+    const unpinned = await w.asUser.query(api.sales.list, {
+      orgId: w.orgId,
+      paginationOpts: { numItems: 10, cursor: page1.continueCursor },
+    });
+    expect(unpinned.page).toHaveLength(3);
   });
 });
