@@ -1074,6 +1074,8 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
     const serialised = JSON.stringify(notifications);
     expect(notifications.length).toBeGreaterThan(0);
     expect(serialised).not.toContain("Honda");
+    // The label it DOES use: the fallback for a missing or foreign vehicle.
+    expect(serialised).toContain("the requested sale");
   });
 
   it("requestProfitApproval never overwrites another org's request — cross-tenant WRITE", async () => {

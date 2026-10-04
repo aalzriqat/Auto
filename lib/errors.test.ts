@@ -281,6 +281,31 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     }
   });
 
+  it("SCRUM-113 APPROVAL_VEHICLE_UNAVAILABLE resolves to its dictionary entry in ar and en", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code: "APPROVAL_VEHICLE_UNAVAILABLE", message: "server text" });
+    const arEntry = (dictionaries.ar as Record<string, string>).ServerError_APPROVAL_VEHICLE_UNAVAILABLE;
+    const enEntry = (dictionaries.en as Record<string, string>).ServerError_APPROVAL_VEHICLE_UNAVAILABLE;
+    expect(arEntry).toMatch(/[؀-ۿ]/);
+    expect(getLocalizedErrorMessage(error, ar)).toBe(arEntry);
+    expect(getLocalizedErrorMessage(error, en)).toBe(enEntry);
+    expect(getLocalizedErrorMessage(error, en)).not.toBe("server text");
+  });
+
+  it("SCRUM-113 the EN dictionary text equals the message thrown by respondToApproval", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const enEntry = (dictionaries.en as Record<string, string>).ServerError_APPROVAL_VEHICLE_UNAVAILABLE;
+    expect(enEntry).toBeTruthy();
+    const { join } = await import("node:path");
+    const source = readFileSync(join(process.cwd(), "convex", "approvals.ts"), "utf8");
+    // The server string literal sits right after the code in the throwAppError call.
+    const match = /AppErrorCode\.APPROVAL_VEHICLE_UNAVAILABLE,\s*"([^"]+)"/.exec(source);
+    expect(match?.[1]).toBe(enEntry);
+  });
+
   it("the English dictionary text equals the server's message for both codes", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     expect(dictionaries.en.ServerError_COMMISSION_BASE_UNUSABLE).toContain("{baseCurrency}");
