@@ -12,6 +12,7 @@ import {
   phonePair,
   readBackOf,
   rulesFor,
+  submissionsToReadBack,
   summarizeReadBack,
   type Attempt,
   type Field,
@@ -234,16 +235,16 @@ describe("read-back: typed → sent → persisted (SCRUM-614 acceptance 2/3)", (
 
   it("reports the persisted value only from the server's own document", () => {
     const args = { firstName: typed };
-    expect(readBackOf({ typed, args, id: "c1", doc: { _id: "c1", firstName: typed } })).toEqual({
+    expect(readBackOf({ typed, args, id: "c1", doc: { _id: "c1", firstName: typed }, expectedKey: "firstName" })).toEqual({
       source: "server-document",
       key: "firstName",
       sent: typed,
       persisted: typed,
     });
-    expect(readBackOf({ typed, args, id: "c1", doc: { _id: "c1" } }).source).toBe("field-not-returned");
-    expect(readBackOf({ typed, args, id: "c1", doc: undefined }).source).toBe("document-not-observed");
-    expect(readBackOf({ typed, args, id: undefined, doc: undefined }).source).toBe("no-id");
-    expect(readBackOf({ typed, args: { other: "x" }, id: "c1", doc: { _id: "c1", other: "x" } }).source).toBe("not-sent");
+    expect(readBackOf({ typed, args, id: "c1", doc: { _id: "c1" }, expectedKey: "firstName" }).source).toBe("field-not-returned");
+    expect(readBackOf({ typed, args, id: "c1", doc: undefined, expectedKey: "firstName" }).source).toBe("document-not-observed");
+    expect(readBackOf({ typed, args, id: undefined, doc: undefined, expectedKey: "firstName" }).source).toBe("no-id");
+    expect(readBackOf({ typed, args: { other: "x" }, id: "c1", doc: { _id: "c1", other: "x" }, expectedKey: "firstName" }).source).toBe("not-sent");
   });
 
   it("compares on full values and stores clipped ones", () => {
@@ -260,6 +261,61 @@ describe("read-back: typed → sent → persisted (SCRUM-614 acceptance 2/3)", (
     const s = summarizeReadBack("   ", { source: "server-document", key: "firstName", sent: "", persisted: "" });
     expect(s.sentEqualsTyped).toBe(false);
     expect(s.persistedEqualsSent).toBe(true);
+  });
+});
+
+describe("Codex review of ac09a2914 (F614-1..3)", () => {
+  const typed = "QA TEST عربي 🚗 F614-X02";
+  const notes = { label: "Notes", kind: "text", required: false } as const;
+
+  it("F614-1: a value sent under another field is wrong-field, never server-document", () => {
+    const args = { firstName: "QA TEST F614-X02", lastName: typed };
+    const doc = { _id: "c1", firstName: "QA TEST F614-X02", lastName: typed };
+    expect(readBackOf({ typed, args, id: "c1", doc, expectedKey: "firstName" })).toEqual({
+      source: "wrong-field",
+      key: "firstName",
+      observedKey: "lastName",
+      sent: "QA TEST F614-X02",
+    });
+  });
+
+  it("F614-1: a field with no mapped argument is unmapped, not traced by its value", () => {
+    const rb = readBackOf({ typed, args: { notes: typed }, id: "l1", doc: { _id: "l1", notes: typed }, expectedKey: undefined });
+    expect(rb).toEqual({ source: "unmapped", observedKey: "notes" });
+  });
+
+  it("F614-1: the mapped key is read even when another argument holds the same value", () => {
+    // The phone is copied into WhatsApp: value matching alone is ambiguous, the map is not.
+    const args = { firstName: "QA", lastName: "QA", phone: "0791234567", whatsapp: "0791234567" };
+    const rb = readBackOf({ typed: "0791234567", args, id: "c1", doc: { _id: "c1", ...args }, expectedKey: "phone" });
+    expect(rb).toMatchObject({ source: "server-document", key: "phone", persisted: "0791234567" });
+  });
+
+  it("F614-1: a client-transformed value is still traced at its key, and the change shows", () => {
+    const rb = readBackOf({ typed: "  x  ", args: { address: "x" }, id: "c1", doc: { _id: "c1", address: "x" }, expectedKey: "address" });
+    expect(rb).toMatchObject({ source: "server-document", key: "address", sent: "x" });
+    expect(summarizeReadBack("  x  ", rb).sentEqualsTyped).toBe(false);
+  });
+
+  it("F614-2: every saved submission is read back, not only the last", () => {
+    const subs = [
+      { role: "seed", outcome: "accepted", value: "0791234567" },
+      { role: "control", outcome: "accepted", value: "0791234567" },
+      { role: "variant", outcome: "rejected-inline", value: "+962791234567" },
+      { role: "attempt", outcome: "accepted-silent", value: undefined },
+    ] as const;
+    expect(submissionsToReadBack(subs).map((s) => s.role)).toEqual(["seed", "control"]);
+  });
+
+  it("F614-3: the server's own field must equal the typed value exactly", () => {
+    const expected = hostileValue("unicode", "T2");
+    const server = (readBack: string) => judge({ rule: "unicode", field: notes, outcome: "accepted", expected, readBack, readBackFrom: "server-document" });
+    expect(server(expected).kind).toBe("ok");
+    expect(server(`${expected} extra`).check).toBe("unicode-mangled");
+    expect(server(`prefix ${expected}`).check).toBe("unicode-mangled");
+    expect(server(expected.replace(" ", "  ")).check).toBe("unicode-mangled");
+    // The list row is a whole cell of text: containment stays its rule.
+    expect(judge({ rule: "unicode", field: notes, outcome: "accepted", expected, readBack: `Row ${expected} more`, readBackFrom: "list" }).kind).toBe("ok");
   });
 });
 
