@@ -6,6 +6,7 @@ import { v } from "convex/values";
 import webpush from "web-push";
 import { rateLimiter } from "./rateLimit";
 import { getValidatedEnv } from "./utils/env";
+import { sinkEgress } from "./utils/egressSink";
 import { renderNotification } from "../lib/notifications/render";
 
 // Push/lock-screen text is visible without unlocking the device. Most
@@ -96,6 +97,10 @@ export const sendNotificationPush = internalAction({
         `[pushSend] web push dropped by rate limit: user=${args.userId} type=${args.type} retryAfterMs=${status.retryAfter}`
       );
       return { success: false, error: "rate_limited" };
+    }
+
+    if (sinkEgress("web-push", `sendNotificationPush type=${args.type}`)) {
+      return { success: false, error: "egress_sunk" };
     }
 
     const env = getValidatedEnv();
