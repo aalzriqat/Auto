@@ -133,7 +133,8 @@ describe("alertsFor keeps the two signals apart", () => {
   test("an unclassified finding raises the skew alarm too", () => {
     const alert = alertsFor({ ...none, unclassified: [MOBILE_EXPENSE] }, false, 0, 0);
     expect(alert.productionSkew).toBe(true);
-    expect(alert.summary).toMatch(/could not be classified/);
+    expect(alert.summary).toMatch(/1 break\(s\) could not be classified/);
+    expect(alert.summary).not.toMatch(/incompatibility\(ies\)/);
   });
 
   test("both signals can be raised at once", () => {
@@ -408,6 +409,18 @@ describe("batch 9: break counts say break(s), call counts say call(s) (D-31)", (
     const standing = alertsFor({ ...none, standingDefects: [brk("A", "same"), brk("B", "same")] }, false, 0, 0).summary;
     expect(standing).toMatch(/STANDING CONTRACT DEFECT: 2 break\(s\) where the client disagrees/);
     expect(standing).not.toMatch(/path\(s\) where the client/);
+  });
+
+  test("W-1: two breaks on two paths at ONE call are '2 break(s)', never '1 call(s)', in the skew and standing lines", () => {
+    const none = { revisionSkew: [], standingDefects: [], unclassified: [] };
+    const pair = [brk("A", "x"), brk("A", "y")];
+    expect(distinctCallCount(pair)).toBe(1);
+    const skew = alertsFor({ ...none, revisionSkew: pair }, false, 0, 0).summary;
+    expect(skew).toMatch(/\b2 break\(s\) where the deployed backend is behind the current one/);
+    expect(skew).not.toMatch(/\b1 break\(s\)/);
+    const standing = alertsFor({ ...none, standingDefects: pair }, false, 0, 0).summary;
+    expect(standing).toMatch(/STANDING CONTRACT DEFECT: 2 break\(s\) where the client disagrees/);
+    expect(standing).not.toMatch(/\b1 break\(s\)/);
   });
 
   test("V-3 (pins existing behaviour, passes before the fix): a second break at a call whose first break is REJECTED_SAME is still REJECTED_OTHER, and is counted and listed", () => {

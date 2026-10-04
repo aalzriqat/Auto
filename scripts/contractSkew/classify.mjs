@@ -306,7 +306,7 @@ export function alertsFor(classification, coverageWarning, needsEvidenceCount, u
     );
   }
   if (classification.unclassified.length) {
-    parts.push(`${classification.unclassified.length} incompatibility(ies) could not be classified — treated as skew`);
+    parts.push(`${classification.unclassified.length} break(s) could not be classified — treated as skew`);
   }
   if (standingCount) {
     parts.push(`STANDING CONTRACT DEFECT: ${standingCount} break(s) where the client disagrees with a backend that is already deployed — deploying will not fix these`);

@@ -492,7 +492,7 @@ export function compareContracts(clientCalls, spec, extraUnresolved = []) {
     productionSkew: breaking.length > 0,
     coverageWarning: verdict === "UNKNOWN",
     summary: breaking.length
-      ? `PRODUCTION SKEW: ${breaking.length} client field(s) the live backend would refuse`
+      ? `PRODUCTION SKEW: ${breaking.length} break(s) the live backend would refuse`
       : verdict === "UNKNOWN"
         ? `coverage warning: compatibility not proven for ${coverage.clientCallSitesUnresolved} call site(s) and ${needsEvidence.length} path(s) — this is control health, NOT a confirmed outage`
         : `compatible: ${coverage.clientCallSitesResolved}/${coverage.clientCallSitesFound} call sites proven against the live deployment`,

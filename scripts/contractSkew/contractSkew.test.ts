@@ -211,6 +211,24 @@ describe("SCRUM-178 contract skew detector", () => {
     expect(breaking[0].detail).toMatch(/declares no such field/);
   });
 
+  test("W-3: the alert summary counts breaks as 'break(s)', not 'client field(s)'", () => {
+    const live = spec("accountingCutover.js:draftOpeningBalance", obj({ orgId: field(str) }));
+    const result = compareContracts(
+      [
+        call(
+          "accountingCutover:draftOpeningBalance",
+          sent([
+            ["orgId", "string"],
+            ["expectedCurrency", "string"],
+          ])
+        ),
+      ],
+      live
+    );
+    expect(result.alert.summary).toMatch(/^PRODUCTION SKEW: 1 break\(s\) the live backend would refuse/);
+    expect(result.alert.summary).not.toMatch(/client field/);
+  });
+
   test("FIXTURE 2 (#235 shape): a NESTED field inside an array element is BREAKING, reported at its full path", () => {
     // ⚠️ The whole reason this detector uses the TypeChecker. Both sides agree
     // on `vehicles`; the incompatibility is one level down, inside the element.
