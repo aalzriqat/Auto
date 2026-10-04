@@ -67,6 +67,15 @@ async function expectDeleted(attempt: Promise<unknown>): Promise<void> {
   await expectAppError(attempt, "VEHICLE_DELETED", VEHICLE_DELETED_MESSAGE);
 }
 
+/** The coded error's `code`, or null when the attempt resolved. */
+async function codeOf(attempt: Promise<unknown>) {
+  const error = (await attempt.then(
+    () => null,
+    (e: unknown) => e
+  )) as { data?: { code?: string } } | null;
+  return error?.data?.code ?? null;
+}
+
 let seq = 0;
 let dealerSeq = 0;
 
@@ -172,6 +181,27 @@ async function softDelete(seed: Seed, vehicleId: Id<"vehicles">) {
 }
 
 /** ABNORMAL STATE: sets the flag directly, bypassing the product door's commitment refusal. */
+/** A soft-deleted car owned by a SECOND organisation inside the same database. */
+async function foreignDeletedVehicle(seed: Seed, vin: string) {
+  return await seed.t.run(async (ctx) => {
+    const otherOrg = await ctx.db.insert("organizations", { name: "Foreign", createdAt: Date.now() });
+    return await ctx.db.insert("vehicles", {
+      orgId: otherOrg,
+      vin,
+      make: "Kia",
+      model: "Rio",
+      year: 2022,
+      color: "Red",
+      fuelType: "Gasoline",
+      transmission: "Automatic",
+      mileage: 10,
+      sellingPrice: PRICE,
+      status: "AVAILABLE" as const,
+      isDeleted: true,
+    });
+  });
+}
+
 async function forceDeleted(seed: Seed, vehicleId: Id<"vehicles">) {
   await seed.t.run((ctx) => ctx.db.patch(vehicleId, { isDeleted: true, deletedAt: Date.now() }));
 }
@@ -696,23 +726,7 @@ describe("8. precedence and idempotent replay", () => {
   test("a foreign-org vehicle is NOT_FOUND, never DELETED", async () => {
     const seed = await seedDealer();
     // A second organisation inside the SAME database, owning a deleted car.
-    const foreignInSameDb = await seed.t.run(async (ctx) => {
-      const otherOrg = await ctx.db.insert("organizations", { name: "Foreign", createdAt: Date.now() });
-      return await ctx.db.insert("vehicles", {
-        orgId: otherOrg,
-        vin: "SC641FOREIGN0001",
-        make: "Kia",
-        model: "Rio",
-        year: 2022,
-        color: "Red",
-        fuelType: "Gasoline",
-        transmission: "Automatic",
-        mileage: 10,
-        sellingPrice: PRICE,
-        status: "AVAILABLE" as const,
-        isDeleted: true,
-      });
-    });
+    const foreignInSameDb = await foreignDeletedVehicle(seed, "SC641FOREIGN0001");
     await expectAppError(
       directSale(seed, foreignInSameDb, seed.customerA),
       "VEHICLE_NOT_FOUND",
@@ -849,30 +863,7 @@ describe("10. assertAcquirable / acquireVehicle refuse a soft-deleted car themse
   test("a foreign-org car is never reported as DELETED (no existence oracle)", async () => {
     const seed = await seedDealer();
     const quoteId = (await liveVehicleWithQuote(seed)).liveQuote;
-    const foreign = await seed.t.run(async (ctx) => {
-      const otherOrg = await ctx.db.insert("organizations", { name: "Foreign", createdAt: Date.now() });
-      return await ctx.db.insert("vehicles", {
-        orgId: otherOrg,
-        vin: "SC641FOREIGN0002",
-        make: "Kia",
-        model: "Rio",
-        year: 2022,
-        color: "Red",
-        fuelType: "Gasoline",
-        transmission: "Automatic",
-        mileage: 10,
-        sellingPrice: PRICE,
-        status: "AVAILABLE" as const,
-        isDeleted: true,
-      });
-    });
-    const codeOf = async (attempt: Promise<unknown>) => {
-      const error = (await attempt.then(
-        () => null,
-        (e: unknown) => e
-      )) as { data?: { code?: string } } | null;
-      return error?.data?.code ?? null;
-    };
+    const foreign = await foreignDeletedVehicle(seed, "SC641FOREIGN0002");
     expect(await codeOf(check(seed, foreign, quoteId))).not.toBe("VEHICLE_DELETED");
     expect(await codeOf(acquire(seed, foreign, quoteId))).not.toBe("VEHICLE_DELETED");
   });
@@ -923,8 +914,8 @@ describe("11. quotes.updateQuoteStatus", () => {
     seed.asUser.mutation(api.quotes.updateQuoteStatus, { orgId: seed.orgId, quoteId, status });
   const notificationCount = async (seed: Seed) =>
     (await seed.t.run((ctx) => ctx.db.query("notifications").collect())).length;
-  const withLead = async (seed: Seed, quoteId: Id<"quotes">) => {
-    const leadId = await seed.t.run(async (ctx) => {
+  const withLead = (seed: Seed, quoteId: Id<"quotes">) =>
+    seed.t.run(async (ctx) => {
       const id = await ctx.db.insert("leads", {
         orgId: seed.orgId,
         customerId: seed.customerA,
@@ -934,8 +925,6 @@ describe("11. quotes.updateQuoteStatus", () => {
       await ctx.db.patch(quoteId, { leadId: id });
       return id;
     });
-    return leadId;
-  };
 
   test("live control: SHARED advances the lead, ACCEPTED notifies", async () => {
     const seed = await seedDealer();
@@ -976,23 +965,7 @@ describe("11. quotes.updateQuoteStatus", () => {
   test("a foreign car on the quote is VEHICLE_NOT_FOUND, never DELETED", async () => {
     const seed = await seedDealer();
     const { liveQuote } = await liveVehicleWithQuote(seed);
-    const foreign = await seed.t.run(async (ctx) => {
-      const otherOrg = await ctx.db.insert("organizations", { name: "Foreign", createdAt: Date.now() });
-      return await ctx.db.insert("vehicles", {
-        orgId: otherOrg,
-        vin: "SC641FOREIGN0003",
-        make: "Kia",
-        model: "Rio",
-        year: 2022,
-        color: "Red",
-        fuelType: "Gasoline",
-        transmission: "Automatic",
-        mileage: 10,
-        sellingPrice: PRICE,
-        status: "AVAILABLE" as const,
-        isDeleted: true,
-      });
-    });
+    const foreign = await foreignDeletedVehicle(seed, "SC641FOREIGN0003");
     await seed.t.run((ctx) => ctx.db.patch(liveQuote, { vehicleId: foreign, vehicleItems: undefined }));
     await expectAppError(move(seed, liveQuote, "SHARED"), "VEHICLE_NOT_FOUND", "Vehicle not found in this organization.");
   });

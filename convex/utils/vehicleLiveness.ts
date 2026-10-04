@@ -31,9 +31,15 @@ export const isVehicleDeleted = (v: Doc<"vehicles">): boolean => v.isDeleted ===
  * The ONE precedence ordering (SOLD, then ARCHIVED, then DELETED) for a soft-deleted car; null for a live one.
  * Every consumer reads this rather than restating the order.
  */
-export function deletedVehicleRefusal(
-  vehicle: Doc<"vehicles">
-): "VEHICLE_ALREADY_SOLD" | "VEHICLE_ARCHIVED" | "VEHICLE_DELETED" | null {
+const DELETED_VEHICLE_MESSAGES = {
+  [AppErrorCode.VEHICLE_ALREADY_SOLD]: "This vehicle has already been sold.",
+  [AppErrorCode.VEHICLE_ARCHIVED]: "Cannot sell an archived vehicle. Restore it first.",
+  [AppErrorCode.VEHICLE_DELETED]: VEHICLE_DELETED_MESSAGE,
+} as const;
+
+type DeletedVehicleRefusal = keyof typeof DELETED_VEHICLE_MESSAGES;
+
+export function deletedVehicleRefusal(vehicle: Doc<"vehicles">): DeletedVehicleRefusal | null {
   if (!isVehicleDeleted(vehicle)) return null;
   if (vehicle.status === "SOLD") return AppErrorCode.VEHICLE_ALREADY_SOLD;
   if (vehicle.status === "ARCHIVED") return AppErrorCode.VEHICLE_ARCHIVED;
@@ -43,13 +49,7 @@ export function deletedVehicleRefusal(
 /** Throws unless a vehicle the caller has already scoped to its organisation is not soft-deleted. No-op for null. */
 export function assertVehicleNotDeleted(vehicle: Doc<"vehicles"> | null | undefined): void {
   const refusal = vehicle ? deletedVehicleRefusal(vehicle) : null;
-  if (refusal === AppErrorCode.VEHICLE_ALREADY_SOLD) {
-    throwAppError(AppErrorCode.VEHICLE_ALREADY_SOLD, "This vehicle has already been sold.");
-  }
-  if (refusal === AppErrorCode.VEHICLE_ARCHIVED) {
-    throwAppError(AppErrorCode.VEHICLE_ARCHIVED, "Cannot sell an archived vehicle. Restore it first.");
-  }
-  if (refusal === AppErrorCode.VEHICLE_DELETED) throwAppError(AppErrorCode.VEHICLE_DELETED, VEHICLE_DELETED_MESSAGE);
+  if (refusal) throwAppError(refusal, DELETED_VEHICLE_MESSAGES[refusal]);
 }
 
 /**

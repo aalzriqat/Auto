@@ -2647,11 +2647,13 @@ export const createFromQuote = mutation({
     if (quoteVehicleItems.length !== 1) {
       throw new ConvexError("Finance applications currently support exactly one vehicle.");
     }
+    const lineVehicles = new Map<Id<"vehicles">, Doc<"vehicles">>();
     for (const item of quoteVehicleItems) {
       const lineVehicle = await ctx.db.get(item.vehicleId);
       if (!lineVehicle || lineVehicle.orgId !== args.orgId || lineVehicle.isDeleted) {
         throw new ConvexError("Quote vehicle not found in this organization.");
       }
+      lineVehicles.set(item.vehicleId, lineVehicle);
     }
     // Kept for the rule snapshot below rather than re-fetched: this handler
     // already validates the company here, and reading it twice per application
@@ -2884,6 +2886,7 @@ export const createFromQuote = mutation({
         orgId: args.orgId,
         vehicleId: item.vehicleId,
         lineage: { quoteId: quote._id, adoptReservationId: args.adoptReservationId },
+        vehicle: lineVehicles.get(item.vehicleId),
       });
     }
 
@@ -2931,6 +2934,7 @@ export const createFromQuote = mutation({
         createdBy: auth.user._id,
         evidence: { kind: "FINANCE", applicationId: appId },
         lineage: { quoteId: quote._id, adoptReservationId: args.adoptReservationId },
+        vehicle: lineVehicles.get(item.vehicleId),
       });
     }
 

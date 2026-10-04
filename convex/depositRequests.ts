@@ -19,7 +19,6 @@ import {
   quoteTerminalReason,
 } from "./utils/depositRequestGuards";
 import { assertAcquirable } from "./commitments";
-import { assertDepositTargetNotDeleted } from "./utils/depositHelpers";
 import { getActorName, notifyByPermission, notifyUser } from "./utils/notifications";
 
 /**
@@ -167,8 +166,7 @@ export const request = mutation({
         // makes, for every quoted car, before anything is written or sent.
         // `confirm` re-checks: a rival may still take the car in between.
         for (const item of quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }]) {
-          // SCRUM-641: asking a customer for money against a soft-deleted car is refused up front.
-          await assertDepositTargetNotDeleted(ctx, args.orgId, item.vehicleId);
+          // SCRUM-641: the authority refuses a soft-deleted car first, so asking a customer for money against one is refused up front.
           await assertAcquirable(ctx, {
             orgId: args.orgId,
             vehicleId: item.vehicleId,

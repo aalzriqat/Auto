@@ -51,8 +51,19 @@ vi.mock("@/components/ui/sonner", () => ({
 import { ProfitApprovalNotice } from "./ProfitApprovalNotice";
 import { DepositAllocationPanel } from "./wizard/components/DepositAllocationPanel";
 
-beforeEach(() => {
-  stubs.toastError.mockClear();
+function renderNotice(verdict: Record<string, unknown>) {
+  render(
+    <ProfitApprovalNotice
+      approval={{
+        verdict,
+        blocked: true,
+        request: { orgId: "org1" as Id<"organizations">, vehicleId: "veh1" as Id<"vehicles">, salePrice: 1000 },
+      } as never}
+    />
+  );
+}
+
+beforeEach(() => {  stubs.toastError.mockClear();
   stubs.mutationError = deletedError();
   vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
@@ -67,28 +78,14 @@ describe("SCRUM-641 F6: Arabic wording for a deleted-vehicle refusal", () => {
   });
 
   test("ProfitApprovalNotice: a VEHICLE_DELETED verdict renders the Arabic sentence", () => {
-    render(
-      <ProfitApprovalNotice
-        approval={{
-          verdict: { status: "VEHICLE_DELETED" },
-          blocked: true,
-          request: { orgId: "org1" as Id<"organizations">, vehicleId: "veh1" as Id<"vehicles">, salePrice: 1000 },
-        } as never}
-      />
-    );
+    renderNotice({ status: "VEHICLE_DELETED" });
+
     expect(screen.getByRole("alert").textContent).toContain(AR_DELETED);
   });
 
   test("ProfitApprovalNotice: a failed approval request toasts the Arabic sentence, not the English one", async () => {
-    render(
-      <ProfitApprovalNotice
-        approval={{
-          verdict: { status: "REQUIRED", margin: 0, minimumProfit: 100 },
-          blocked: true,
-          request: { orgId: "org1" as Id<"organizations">, vehicleId: "veh1" as Id<"vehicles">, salePrice: 1000 },
-        } as never}
-      />
-    );
+    renderNotice({ status: "REQUIRED", margin: 0, minimumProfit: 100 });
+
     fireEvent.click(screen.getByRole("button", { name: ar("ProfitApprovalRequestAction") }));
     await waitFor(() => expect(stubs.toastError).toHaveBeenCalledTimes(1));
     expect(stubs.toastError).toHaveBeenCalledWith(AR_DELETED);

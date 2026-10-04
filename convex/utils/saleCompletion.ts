@@ -672,6 +672,7 @@ async function prepareSaleCompletion(
       vehicleId: args.vehicleId,
       lineage: { quoteId: args.quoteId },
       actingCustomerId: args.customerId,
+      vehicle,
     });
 
     // SCRUM-260: the minimum-profit approval, judged here for the same reason

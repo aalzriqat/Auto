@@ -2757,6 +2757,8 @@ export async function assertSaleMayCompleteForVehicle(
     vehicleId: Id<"vehicles">;
     lineage: CommitmentLineage;
     actingCustomerId?: Id<"customers"> | null;
+    /** A car document the caller already loaded: the liveness check then reads nothing. */
+    vehicle?: Doc<"vehicles">;
   }
 ): Promise<void> {
   await assertAcquirable(ctx, {
@@ -2764,6 +2766,7 @@ export async function assertSaleMayCompleteForVehicle(
     vehicleId: args.vehicleId,
     lineage: args.lineage,
     actingCustomerId: args.actingCustomerId,
+    vehicle: args.vehicle,
     message: COMMITMENT_MESSAGES.heldByAnotherDealSale,
   });
 }

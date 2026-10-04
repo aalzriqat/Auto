@@ -760,8 +760,9 @@ describe("protected source content pins", () => {
       // SCRUM-571 S1 RENEWAL 2026-10-04 (merge of origin/main): combines SCRUM-599, SCRUM-603 and SCRUM-571 only, no new logic; previous postimage bytes 294755, sha256 917fa5a916084a51b4c0854552244f14169da09908d87bab8faa32a1a493a0c3 (main) and bytes 294570, sha256 4de2646d1eb7dcfe552f0f230f6f72ebbdaca97286b02ae37a363a73ea1aa237 (SCRUM-571 side). Recomputed from the merged file with this test's own normalization.
       // SCRUM-629 wave 2B RENEWAL 2026-10-04 (owner-proxy ruling c21924): two display-read changes in the `dealCockpit` query (and its `buildCockpitMoney` helper), no mutation, permission, schema, index, posting or idempotency change. F-07: `documentRulesApply` is `requiredDocs.length > 0` so DELIVERY_ACTIONS reads NOT_APPLICABLE on a deal that needs no document; F-23: the CUSTOMER party's `reference` passes through `displayableDepositReference`, so the machine key `Deposit <id>` (which deposits.ts matches on) is never shown as a receipt reference. Previous postimage bytes 295021, sha256 b0755122f3ffa868e2413268497fb579ce060855b11f39e8e2816e3ee52000ca. Recomputed from the file with this test's own normalization.
       // SCRUM-641 RENEWAL 2026-10-04 (updateStatus requireCommercialVehicle): `updateStatus` APPROVED refuses a soft-deleted vehicle (VEHICLE_DELETED), and a missing or foreign one (VEHICLE_NOT_FOUND), before any write, via the shared `requireCommercialVehicle` (convex/utils/vehicleLiveness.ts): an import, one vehicle read and one call; no permission, schema, index, posting or idempotency change, rejection/cancellation paths untouched. Previous postimage bytes 295120, sha256 eae8817316a377e714f4d78d72f988458fe22ad4edf6549e69848ee19912b04b. Recomputed from the file with this test's own normalization.
-      bytes: 295369,
-      sha256: "338391684e89abb93f07e5ab3a1417c4130914987a72cc4748f3c792cb71c7ca",
+      // SCRUM-641 RENEWAL 2026-10-04 (2): `createFromQuote` keeps the quote line's already-loaded vehicle documents and hands them to `assertAcquirable`/`acquireVehicle` (no added read); previous postimage bytes 295369, sha256 338391684e89abb93f07e5ab3a1417c4130914987a72cc4748f3c792cb71c7ca.
+      bytes: 295593,
+      sha256: "5b81ad968622a8593178d8d14c261f466a89f41e52acbb6500223c362434a5ae",
     },
     {
       /**
