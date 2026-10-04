@@ -5306,6 +5306,14 @@ export const confirmDisbursement = mutation({
         // Post the actual receipt of funds: DR Bank / CR Accounts Receivable —
         // Finance Companies. Without this the finance-company receivable opened
         // at finalizeDeal stays open forever even after the money arrives.
+        // The method of record — registered before finalization
+        // (registerExpectedPayment) instead of assuming bank transfer. ONE
+        // value feeds both the posting (SCRUM-599: CASH debits 1100, not
+        // 1110) and the canonical payment below, so they cannot disagree.
+        const disbursementMethod =
+          app.expectedPaymentMethod === "CASH" || app.expectedPaymentMethod === "CHEQUE"
+            ? app.expectedPaymentMethod
+            : "BANK_TRANSFER";
         await hookFinanceCashReceived(ctx, {
           orgId: args.orgId,
           applicationId: args.applicationId,
@@ -5320,6 +5328,7 @@ export const confirmDisbursement = mutation({
           actorId: user._id,
           occurredAt: now,
           disbursementVersion,
+          paymentMethod: disbursementMethod,
         });
 
         // Record the money in the canonical subledger and settle the
@@ -5327,12 +5336,6 @@ export const confirmDisbursement = mutation({
         // proven, never one created here to give the settlement something to
         // allocate against.
         const receivableDocumentId = receivable._id;
-        // Reflects whatever method was registered before finalization
-        // (registerExpectedPayment) instead of assuming bank transfer.
-        const disbursementMethod =
-          app.expectedPaymentMethod === "CASH" || app.expectedPaymentMethod === "CHEQUE"
-            ? app.expectedPaymentMethod
-            : "BANK_TRANSFER";
         const canonicalPaymentId = await createCanonicalPayment(ctx, {
           orgId: args.orgId,
           direction: "IN",
