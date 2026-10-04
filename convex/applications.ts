@@ -5166,7 +5166,7 @@ export const confirmDisbursement = mutation({
         }
         if (args.disbursedAmountMinor <= 0) throw new ConvexError("Disbursement amount must be positive.");
 
-        // This mutation books DR Bank / CR AR-Finance Companies: money that
+        // This mutation books DR bank (cash on hand for a CASH receipt, SCRUM-599) / CR AR-Finance Companies: money that
         // arrived in the dealership's own account, settling a receivable it
         // holds. On the direct route neither exists — the cheque went to the
         // supplier and no finance-company receivable was ever opened. Running it
@@ -5303,9 +5303,17 @@ export const confirmDisbursement = mutation({
           await ctx.db.patch(chequeToClear._id, { disbursementVersion });
         }
 
-        // Post the actual receipt of funds: DR Bank / CR Accounts Receivable —
+        // Post the actual receipt of funds: DR bank or cash on hand / CR Accounts Receivable —
         // Finance Companies. Without this the finance-company receivable opened
         // at finalizeDeal stays open forever even after the money arrives.
+        // The method of record — registered before finalization
+        // (registerExpectedPayment) instead of assuming bank transfer. ONE
+        // value feeds both the posting (SCRUM-599: CASH debits 1100, not
+        // 1110) and the canonical payment below, so they cannot disagree.
+        const disbursementMethod =
+          app.expectedPaymentMethod === "CASH" || app.expectedPaymentMethod === "CHEQUE"
+            ? app.expectedPaymentMethod
+            : "BANK_TRANSFER";
         await hookFinanceCashReceived(ctx, {
           orgId: args.orgId,
           applicationId: args.applicationId,
@@ -5320,6 +5328,7 @@ export const confirmDisbursement = mutation({
           actorId: user._id,
           occurredAt: now,
           disbursementVersion,
+          paymentMethod: disbursementMethod,
         });
 
         // Record the money in the canonical subledger and settle the
@@ -5327,12 +5336,6 @@ export const confirmDisbursement = mutation({
         // proven, never one created here to give the settlement something to
         // allocate against.
         const receivableDocumentId = receivable._id;
-        // Reflects whatever method was registered before finalization
-        // (registerExpectedPayment) instead of assuming bank transfer.
-        const disbursementMethod =
-          app.expectedPaymentMethod === "CASH" || app.expectedPaymentMethod === "CHEQUE"
-            ? app.expectedPaymentMethod
-            : "BANK_TRANSFER";
         const canonicalPaymentId = await createCanonicalPayment(ctx, {
           orgId: args.orgId,
           direction: "IN",
