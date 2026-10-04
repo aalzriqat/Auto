@@ -19,13 +19,17 @@ import { validateInput } from "./utils/validation";
 import { CreateVehicleSchema, UpdateVehicleSchema } from "./validations/vehicles";
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
 import { internal } from "./_generated/api";
-import { getOrgCurrency, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
+import { getOrgCurrency, isPostableNow, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
 import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
 import { PURCHASE_IMPORT_MAX_ROWS } from "./utils/importLimits";
 import { findCommandUnit, recordCommandUnit } from "./utils/idempotency";
 import { simplePayloadHash } from "./accounting/postingRules";
 import { hasNonCanonicalVinCharacters, isPlaceholderVin } from "./utils/vin";
+import { throwAppError, AppErrorCode } from "./utils/errors";
+import { SYSTEM_KEYS, type SystemKey } from "./utils/defaultChart";
+import { disbursementAccountKey } from "./accounting/postingRules";
+import { isSystemAccountMapped } from "./chartOfAccounts";
 
 /** The stock kinds `getAgingBuckets` sums over, in key order. */
 const STOCK_KINDS = [OWN_STOCK, SOURCED];
@@ -1356,8 +1360,9 @@ export const update = mutation({
       : false;
 
     if (("purchasePrice" in patch || "sourceCost" in patch) && acquisitionAlreadyExposed) {
-      throw new ConvexError(
-        "This vehicle's acquisition cost has already been posted to accounting. Use a correction journal entry instead of editing purchasePrice/sourceCost directly."
+      throwAppError(
+        AppErrorCode.VEHICLE_COST_POSTED,
+        "This vehicle's purchase cost has already been posted to accounting and can't be edited directly. Use 'Correct purchase cost' instead."
       );
     }
 
@@ -1577,6 +1582,118 @@ export const upsertLandedCosts = mutation({
   },
 });
 
+// ─── Acquisition cost correction (SCRUM-650) ─────────────────────────────────
+//
+// Invariant: once a vehicle's acquisition has posted, its recorded cost
+// (`vehicles.purchasePrice`), its Vehicle Inventory GL balance and the account
+// the acquisition credited change only together, atomically, through ONE
+// audited correction. The credited account is cash/bank, or AP-Suppliers
+// together with its `vehicleSupplierPayables` row. The correction posts now; it
+// is never queued.
+
+type AcquisitionCostCorrectionType =
+  | "PRIOR_PERIOD_RESTATEMENT"
+  | "SUPPLIER_INVOICE_ERROR"
+  | "CASH_REFUND"
+  | "VENDOR_CREDIT";
+
+const AP_CORRECTION_TYPES: readonly AcquisitionCostCorrectionType[] = [
+  "SUPPLIER_INVOICE_ERROR",
+  "VENDOR_CREDIT",
+];
+
+/**
+ * The POSTED acquisition event, payload included. STRICTER than
+ * `hasPostedVehicleAcquisition` (which counts a pending/failed/reversed event
+ * as "exposure" and whose semantics the edit lock deliberately keeps): a
+ * correction posts a delta on top of the ledger's existing balance, so the base
+ * entry must actually be settled.
+ */
+async function findPostedAcquisitionEvent(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<Doc<"accountingEvents"> | null> {
+  const events = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId.toString())
+    )
+    .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
+    .collect();
+  return events.find((event) => event.status === "POSTED") ?? null;
+}
+
+/** How the car was paid, read from the posted event's payload. `undefined` = legacy/unknown (treated as cash). */
+function originalPaymentMethodOf(event: Doc<"accountingEvents">): string | undefined {
+  const payload = event.payload as { paymentMethod?: unknown } | null | undefined;
+  return typeof payload?.paymentMethod === "string" ? payload.paymentMethod : undefined;
+}
+
+/**
+ * The acquisition-time payable of an ON_ACCOUNT purchase: the vehicle's rows
+ * with NO `saleId` (a sale-time payable belongs to the sourced-sale workflow).
+ * `row` is non-null only when there is exactly one.
+ */
+async function loadAcquisitionPayable(
+  ctx: QueryCtx | MutationCtx,
+  vehicleId: Id<"vehicles">
+): Promise<{ row: Doc<"vehicleSupplierPayables"> | null; count: number }> {
+  const rows = (
+    await ctx.db
+      .query("vehicleSupplierPayables")
+      .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId))
+      .collect()
+  ).filter((row) => row.saleId === undefined);
+  return { row: rows.length === 1 ? rows[0] : null, count: rows.length };
+}
+
+/** True when AP-type corrections may rewrite this payable: unpaid, undisputed, same currency, amount equal to the capitalized cost. */
+function isPayableAdjustable(
+  row: Doc<"vehicleSupplierPayables"> | null,
+  orgCurrency: string,
+  previousCost: number
+): row is Doc<"vehicleSupplierPayables"> {
+  if (!row) return false;
+  if (row.status !== "PENDING") return false;
+  if ((row.amountPaid ?? 0) !== 0) return false;
+  if (row.currency !== orgCurrency) return false;
+  return toMinorUnits(row.amountDue, row.currency) === toMinorUnits(previousCost, orgCurrency);
+}
+
+/** The correction-type matrix, from how the car was originally paid. */
+function allowedAcquisitionCorrectionTypes(
+  originalPaymentMethod: string | undefined,
+  payable: Doc<"vehicleSupplierPayables"> | null,
+  payableAdjustable: boolean
+): AcquisitionCostCorrectionType[] {
+  if (originalPaymentMethod === "ON_ACCOUNT") {
+    const allowed: AcquisitionCostCorrectionType[] = [];
+    if (payableAdjustable) allowed.push("SUPPLIER_INVOICE_ERROR", "VENDOR_CREDIT");
+    if (payable?.status === "PAID") allowed.push("CASH_REFUND");
+    allowed.push("PRIOR_PERIOD_RESTATEMENT");
+    return allowed;
+  }
+  return ["CASH_REFUND", "PRIOR_PERIOD_RESTATEMENT"];
+}
+
+/** The account the correction's counter-line posts to — mirrors ruleVehicleAcquisitionCostCorrected. */
+function costCorrectionCounterKey(
+  correctionType: AcquisitionCostCorrectionType,
+  paymentMethod: string | undefined
+): SystemKey {
+  switch (correctionType) {
+    case "SUPPLIER_INVOICE_ERROR":
+    case "VENDOR_CREDIT":
+      return SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS;
+    case "CASH_REFUND":
+      return disbursementAccountKey(paymentMethod);
+    case "PRIOR_PERIOD_RESTATEMENT":
+    default:
+      return SYSTEM_KEYS.RETAINED_EARNINGS;
+  }
+}
+
 /**
  * Corrects a vehicle's acquisition cost after VEHICLE_ACQUIRED has already
  * posted and purchasePrice/sourceCost is locked (see the lock in update()
@@ -1585,6 +1702,12 @@ export const upsertLandedCosts = mutation({
  * profit reports read) in sync with the GL, and preserves the original value
  * in vehicleCostCorrections for audit history. Gated on MANAGE_FINANCE (not
  * EDIT_VEHICLES) since it's a financial correction, not an inventory edit.
+ *
+ * SCRUM-650: the allowed correction type depends on how the car was paid (the
+ * matrix in `allowedAcquisitionCorrectionTypes`), an ON_ACCOUNT AP correction
+ * rewrites the supplier payable in the same transaction, and the correction
+ * must post NOW — a queued correction would leave the vehicle cost and the GL
+ * disagreeing until a period opens, so it is refused instead.
  */
 export const correctAcquisitionCost = mutation({
   args: {
@@ -1606,52 +1729,120 @@ export const correctAcquisitionCost = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
     const reason = args.reason.trim();
-    if (!reason) throw new ConvexError("A reason is required to correct a vehicle's acquisition cost.");
+    if (!reason) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_REASON_REQUIRED,
+        "A reason is required to correct a vehicle's purchase cost."
+      );
+    }
     if (!Number.isFinite(args.newCost) || args.newCost < 0) {
-      throw new ConvexError("New cost must be a non-negative number.");
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_INVALID_AMOUNT,
+        "The new purchase cost must be a valid amount, zero or more."
+      );
     }
     if (args.correctionType === "CASH_REFUND" && !args.paymentMethod) {
-      throw new ConvexError("A payment method is required for a cash-refund correction.");
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_PAYMENT_METHOD_REQUIRED,
+        "Choose the account the refund was received into."
+      );
     }
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
-      throw new ConvexError("Vehicle not found in this organization.");
+      throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
     }
     if (vehicle.sourceType === "SOURCED") {
-      throw new ConvexError(
-        "Sourced vehicles never capitalize into inventory — correct sourceCost via a supplier-payable adjustment instead."
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_SOURCED,
+        "Sourced vehicles are not capitalized into inventory. Adjust the supplier payable instead."
       );
     }
     if (vehicle.status === "SOLD") {
-      throw new ConvexError(
-        "This vehicle has already sold — its inventory cost has been relieved to COGS. A prior-period cost correction needs a manual journal entry, not this endpoint."
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_SOLD,
+        "This vehicle has already been sold, so its cost can no longer be corrected here. Ask your accountant for a manual journal entry."
       );
     }
     // Requires a *posted* acquisition, not merely pending: a correction posts
     // a delta on top of the ledger's existing balance, so the base entry
     // must already be settled — correcting against a still-pending base
     // could post before it, or interleave unpredictably with it.
-    if (!(await hasPostedVehicleAcquisition(ctx, args.orgId, args.vehicleId))) {
-      throw new ConvexError(
-        "This vehicle's acquisition cost hasn't posted to accounting yet — edit purchasePrice directly instead."
+    const acquisitionEvent = await findPostedAcquisitionEvent(ctx, args.orgId, args.vehicleId);
+    if (!acquisitionEvent) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_NOT_POSTED,
+        "This vehicle's purchase hasn't been posted to accounting yet, so its cost can't be corrected."
       );
     }
 
+    const currency = await getOrgCurrency(ctx, args.orgId);
     const previousCost = vehicle.purchasePrice ?? 0;
-    const delta = args.newCost - previousCost;
-    if (delta === 0) {
-      throw new ConvexError("New cost matches the current cost — nothing to correct.");
+    const previousMinor = toMinorUnits(previousCost, currency);
+    const newMinor = toMinorUnits(args.newCost, currency);
+    const deltaMinor = newMinor - previousMinor;
+    if (deltaMinor === 0) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_NO_CHANGE,
+        "The new purchase cost is the same as the current cost, so there is nothing to correct."
+      );
     }
 
-    const currency = await getOrgCurrency(ctx, args.orgId);
+    // ── The correction-type matrix, enforced from the ORIGINAL payment method.
+    const originalMethod = originalPaymentMethodOf(acquisitionEvent);
+    const onAccount = originalMethod === "ON_ACCOUNT";
+    let payableToAdjust: Doc<"vehicleSupplierPayables"> | null = null;
+    if (onAccount) {
+      const { row } = await loadAcquisitionPayable(ctx, args.vehicleId);
+      if (AP_CORRECTION_TYPES.includes(args.correctionType)) {
+        if (newMinor === 0) {
+          throwAppError(
+            AppErrorCode.COST_CORRECTION_INVALID_AMOUNT,
+            "The new purchase cost must be a valid amount, zero or more."
+          );
+        }
+        if (!isPayableAdjustable(row, currency, previousCost)) {
+          throwAppError(
+            AppErrorCode.COST_CORRECTION_PAYABLE_NOT_ADJUSTABLE,
+            "The supplier balance for this vehicle can't be adjusted because it has been paid, partly paid, disputed or changed. Correct it from the supplier payables screen."
+          );
+        }
+        payableToAdjust = row;
+      } else if (args.correctionType === "CASH_REFUND" && row?.status !== "PAID") {
+        throwAppError(
+          AppErrorCode.COST_CORRECTION_TYPE_NOT_ALLOWED,
+          "This correction type doesn't fit how the vehicle was paid for. Choose one of the other options."
+        );
+      }
+    } else if (AP_CORRECTION_TYPES.includes(args.correctionType)) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_TYPE_NOT_ALLOWED,
+        "This correction type doesn't fit how the vehicle was paid for. Choose one of the other options."
+      );
+    }
+
+    // ── It posts now or not at all. Both halves are checked BEFORE the first
+    // write, so a refusal leaves the vehicle, the payable and the ledger as they were.
     const now = Date.now();
+    const counterKey = costCorrectionCounterKey(args.correctionType, args.paymentMethod);
+    const accountsMapped =
+      (await isSystemAccountMapped(ctx, args.orgId, counterKey)) &&
+      (await isSystemAccountMapped(ctx, args.orgId, SYSTEM_KEYS.VEHICLE_INVENTORY));
+    if (!accountsMapped || !(await isPostableNow(ctx, args.orgId, now))) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_NOT_POSTABLE_NOW,
+        "This correction can't be posted right now because the accounting period is closed or the required account is missing. Ask your accountant to open the period or set up the account, then try again."
+      );
+    }
 
     await ctx.db.patch(args.vehicleId, {
       purchasePrice: args.newCost,
       updatedAt: now,
       updatedBy: user._id,
     });
+    if (payableToAdjust) {
+      await ctx.db.patch(payableToAdjust._id, { amountDue: args.newCost, updatedAt: now });
+    }
 
     const correctionId = await ctx.db.insert("vehicleCostCorrections", {
       orgId: args.orgId,
@@ -1670,7 +1861,7 @@ export const correctAcquisitionCost = mutation({
       // The correction record's own _id, not a timestamp — two corrections
       // landing in the same millisecond must not collide on idempotencyKey.
       correctionToken: correctionId.toString(),
-      deltaMinor: toMinorUnits(delta, currency),
+      deltaMinor,
       currency,
       correctionType: args.correctionType,
       paymentMethod: args.paymentMethod,
@@ -1688,6 +1879,93 @@ export const correctAcquisitionCost = mutation({
     );
 
     return { previousCost, newCost: args.newCost };
+  },
+});
+
+/**
+ * Read-only context for the "Correct purchase cost" dialog (SCRUM-650): whether
+ * a correction is possible at all, how the car was paid, what its supplier
+ * payable looks like, which correction types the matrix allows, and the last
+ * few corrections. It cannot ask `isPostableNow` (that needs a MutationCtx), so
+ * "the period is closed" is left to the mutation to refuse.
+ */
+export const getAcquisitionCostCorrectionContext = query({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
+      throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
+    }
+
+    const currency = await getOrgCurrency(ctx, args.orgId);
+    const currentCost = vehicle.purchasePrice ?? 0;
+    const corrections = (
+      await ctx.db
+        .query("vehicleCostCorrections")
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
+        .order("desc")
+        .take(5)
+    ).map((row) => ({
+      previousCost: row.previousCost,
+      newCost: row.newCost,
+      reason: row.reason,
+      correctionType: row.correctionType ?? null,
+      createdAt: row.createdAt,
+    }));
+
+    const event = await findPostedAcquisitionEvent(ctx, args.orgId, args.vehicleId);
+    let blockedReason: "SOLD" | "SOURCED" | "NOT_POSTED" | "PENDING_POST" | null = null;
+    if (vehicle.sourceType === "SOURCED") blockedReason = "SOURCED";
+    else if (vehicle.status === "SOLD") blockedReason = "SOLD";
+    else if (!event) {
+      const queued = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", args.orgId).eq("idempotencyKey", `vehicle_acquired_${args.vehicleId}`)
+        )
+        .collect();
+      blockedReason = queued.some((row) => row.kind === "POST" && row.status === "PENDING")
+        ? "PENDING_POST"
+        : "NOT_POSTED";
+    }
+
+    const originalPaymentMethod = event ? originalPaymentMethodOf(event) ?? null : null;
+    let payable: { status: string; amountDue: number; amountPaid: number } | null = null;
+    let allowedTypes: AcquisitionCostCorrectionType[] = [];
+    if (blockedReason === null && event) {
+      let payableRow: Doc<"vehicleSupplierPayables"> | null = null;
+      if (originalPaymentMethod === "ON_ACCOUNT") {
+        payableRow = (await loadAcquisitionPayable(ctx, args.vehicleId)).row;
+        if (payableRow) {
+          payable = {
+            status: payableRow.status,
+            amountDue: payableRow.amountDue,
+            amountPaid: payableRow.amountPaid ?? 0,
+          };
+        }
+      }
+      allowedTypes = allowedAcquisitionCorrectionTypes(
+        originalPaymentMethod ?? undefined,
+        payableRow,
+        isPayableAdjustable(payableRow, currency, currentCost)
+      );
+    }
+
+    return {
+      eligible: blockedReason === null,
+      blockedReason,
+      currentCost,
+      currency,
+      originalPaymentMethod,
+      payable,
+      allowedTypes,
+      corrections,
+    };
   },
 });
 

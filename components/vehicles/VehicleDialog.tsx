@@ -723,6 +723,9 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                       <FormControl>
                         <Input type="number" {...field} />
                       </FormControl>
+                      {vehicle && (
+                        <p className="text-xs text-muted-foreground">{t("CostCorrectionEditHint" as any)}</p>
+                      )}
                       <FormMessage />
                     </FormItem>
                   )}

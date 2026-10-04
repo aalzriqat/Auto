@@ -51,6 +51,7 @@ import { PERMISSIONS } from "@/convex/utils/permissions";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { isChosenMethod } from "@/components/payments/paymentMethod";
 import { HeldDepositActions } from "@/components/vehicles/HeldDepositActions";
+import { CorrectAcquisitionCostDialog } from "@/components/vehicles/CorrectAcquisitionCostDialog";
 import { UnconfirmedPayoutNotice } from "@/components/deposits/UnconfirmedPayoutNotice";
 import { usePendingDepositPayouts } from "@/hooks/usePendingDepositPayouts";
 import { getErrorMessage } from "@/lib/errors";
@@ -79,6 +80,8 @@ export function VehicleDetailsDialog({
   const canEditVehicles = !permissionsLoading && hasPermission(PERMISSIONS.EDIT_VEHICLES);
   const canViewCustomers = !permissionsLoading && hasPermission(PERMISSIONS.VIEW_CUSTOMERS);
   const canCreateVehicles = !permissionsLoading && hasPermission(PERMISSIONS.CREATE_VEHICLES);
+  const canCorrectCost = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
+  const [costCorrectionOpen, setCostCorrectionOpen] = useState(false);
 
   const relations = useQuery(
     api.vehicles.getRelations,
@@ -524,6 +527,17 @@ export function VehicleDetailsDialog({
                   <div className="space-y-1">
                     <span className="text-sm font-medium text-muted-foreground">{t("PurchasePrice" as any) || "Purchase Price"}</span>
                     <p className="text-sm font-medium">{vehicle.purchasePrice.toLocaleString()} JOD</p>
+                    {canCorrectCost && vehicle.status !== "SOLD" && vehicle.sourceType !== "SOURCED" && (
+                      <Button
+                        type="button"
+                        variant="link"
+                        size="sm"
+                        className="h-auto p-0 text-xs"
+                        onClick={() => setCostCorrectionOpen(true)}
+                      >
+                        {t("CostCorrectionAction" as any)}
+                      </Button>
+                    )}
                   </div>
                 )}
 
@@ -1122,6 +1136,13 @@ export function VehicleDetailsDialog({
       </DialogContent>
       {vehicle && (
         <>
+          {canCorrectCost && (
+            <CorrectAcquisitionCostDialog
+              vehicle={vehicle}
+              open={costCorrectionOpen}
+              onOpenChange={setCostCorrectionOpen}
+            />
+          )}
           <TestDriveDialog
             open={testDriveOpen}
             onOpenChange={setTestDriveOpen}

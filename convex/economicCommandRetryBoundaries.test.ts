@@ -332,7 +332,10 @@ describe("SCRUM-313 · the STATE_GUARDED commands are proved, not asserted", () 
       vehicleId,
       newCost: 19_000,
       reason: "Supplier invoice error",
-      correctionType: "SUPPLIER_INVOICE_ERROR" as const,
+      // SCRUM-650: an AP-type correction on a cash car is refused (no payable exists), so the
+      // convergent-state mechanism is proved with a refund received into the original method.
+      correctionType: "CASH_REFUND" as const,
+      paymentMethod: "CASH" as const,
     };
     await asAdmin.mutation(api.vehicles.correctAcquisitionCost, correction);
     const journals = await countJournals(t, orgId);
@@ -346,7 +349,7 @@ describe("SCRUM-313 · the STATE_GUARDED commands are proved, not asserted", () 
     // produce.
     await expect(
       asAdmin.mutation(api.vehicles.correctAcquisitionCost, correction)
-    ).rejects.toThrow(/nothing to correct/);
+    ).rejects.toThrow(/COST_CORRECTION_NO_CHANGE/);
 
     // No second correction row and no second journal — the rollback held.
     expect(await countRows(t, orgId, "vehicleCostCorrections")).toBe(corrections);
