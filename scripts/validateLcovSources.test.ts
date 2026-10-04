@@ -1,8 +1,9 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { createRequire } from "node:module";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import Module, { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const { validateLcovSources, main } = require("./validateLcovSources.cjs") as {
@@ -17,6 +18,11 @@ const touch = (rel: string) => {
   const full = path.join(root, rel);
   fs.mkdirSync(path.dirname(full), { recursive: true });
   fs.writeFileSync(full, "x");
+};
+const writeLcov = (text: string): string => {
+  const lcov = path.join(root, "lcov.info");
+  fs.writeFileSync(lcov, text);
+  return lcov;
 };
 const validate = (text: string) => validateLcovSources(text, { candidateRoot: root });
 
@@ -128,12 +134,80 @@ describe("validateLcovSources", () => {
 
 describe("main", () => {
   test("returns 0 for a valid artifact and 1 for an invalid one", () => {
-    const lcov = path.join(root, "lcov.info");
-    fs.writeFileSync(lcov, rec("convex/a.ts"));
+    const lcov = writeLcov(rec("convex/a.ts"));
     expect(main([lcov, root])).toBe(0);
-    fs.writeFileSync(lcov, rec("components/a.tsx"));
+    writeLcov(rec("components/a.tsx"));
     expect(main([lcov, root])).toBe(1);
     expect(main([])).toBe(1);
+  });
+});
+
+describe("CLI entry point", () => {
+  const script = path.resolve(process.cwd(), "scripts/validateLcovSources.cjs");
+  const run = (lcovText: string) => {
+    const lcov = writeLcov(lcovText);
+    return spawnSync(process.execPath, [script, lcov, root], { encoding: "utf8" });
+  };
+
+  test("running the script directly executes main: exit 0 and reports the record count", () => {
+    const ok = run(rec("convex/a.ts"));
+    expect(ok.status).toBe(0);
+    expect(ok.stdout).toContain("Validated 1 LCOV source records.");
+  });
+
+  test("running the script directly exits non-zero for an out-of-scope source", () => {
+    const bad = run(rec("components/a.tsx"));
+    expect(bad.status).toBe(1);
+    expect(bad.stderr).toMatch(/refuses/);
+  });
+});
+
+describe("CLI entry point, in-process", () => {
+  // The spawnSync tests above prove the real CLI but run in a child process that v8 coverage does not
+  // collect. This runs the real file as the main module inside the test process so the guard's true
+  // branch and the process.exit line are counted as new-code coverage (SCRUM-662).
+  const script = path.resolve(process.cwd(), "scripts/validateLcovSources.cjs");
+  type MainModule = NodeJS.Module & { filename: string; paths: string[]; load: (filename: string) => void };
+  const ModuleCtor = Module as unknown as {
+    new (id: string, parent: null): MainModule;
+    _nodeModulePaths: (dir: string) => string[];
+  };
+
+  const runAsMain = (lcovText: string): ReturnType<typeof vi.fn> => {
+    const lcov = writeLcov(lcovText);
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    const savedArgv = process.argv;
+    const savedMain = process.mainModule;
+    const quiet = [vi.spyOn(console, "log").mockImplementation(() => undefined), vi.spyOn(console, "error").mockImplementation(() => undefined)];
+    try {
+      const mod = new ModuleCtor(script, null);
+      mod.filename = script;
+      mod.paths = ModuleCtor._nodeModulePaths(path.dirname(script));
+      process.mainModule = mod;
+      process.argv = [process.execPath, script, lcov, root];
+      mod.load(script);
+      return exit as unknown as ReturnType<typeof vi.fn>;
+    } finally {
+      process.argv = savedArgv;
+      process.mainModule = savedMain;
+      for (const spy of quiet) spy.mockRestore();
+    }
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test("loaded as the main module it exits 0 for a valid artifact", () => {
+    const exit = runAsMain(rec("convex/a.ts"));
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  test("loaded as the main module it exits 1 for an out-of-scope source", () => {
+    const exit = runAsMain(rec("components/a.tsx"));
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(1);
   });
 });
 
