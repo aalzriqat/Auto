@@ -323,6 +323,33 @@ describe("SCRUM-413 PR-B D-b - the entry gate and replay across actors (non-CLOS
  * then issues a fresh cancel as the same actor; the two must agree, and a
  * refusal must write nothing.
  */
+describe("SCRUM-413 PR-B S413B-4 - a template sync never turns a fake OWNER row into a cancelling role", () => {
+  test("a member on a fake OWNER row is refused at the CANCEL_CLOSED_DEAL door before and after the sync", async () => {
+    const { s, applicationId } = await finalizedDeal("s4fake");
+    const clerkId = "s4fake_fakeowner";
+    const fakeRoleId = await s.t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId, email: `${clerkId}@example.com`, name: "fake" });
+      const roleId = await ctx.db.insert("roles", {
+        orgId: s.orgId, name: "OWNER", permissions: [CREATE, CONFIRM, ...DOOR_BASE],
+      });
+      await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+      return roleId;
+    });
+    const fake = s.t.withIdentity({ subject: clerkId, clerkId });
+    const attempt = () =>
+      fake.mutation(api.applications.cancelApplication, {
+        orgId: s.orgId, applicationId, reason: "Customer withdrew.", idempotencyKey: crypto.randomUUID(),
+      });
+    expect(await refusalOf(attempt())).not.toBeNull();
+
+    await s.actors.OWNER.as.mutation(api.memberships.syncRolePermissionsToTemplate, { orgId: s.orgId });
+
+    expect((await s.t.run((ctx) => ctx.db.get(fakeRoleId)))?.permissions).toEqual([CREATE, CONFIRM, ...DOOR_BASE]);
+    expect(await refusalOf(attempt())).not.toBeNull();
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
+  });
+});
+
 describe("SCRUM-413 PR-B D-37 - the cockpit's cancel offer equals what a fresh cancel does, forward gate included", () => {
   const FORWARD = H + C;
   const record = (s: Seeded, applicationId: Id<"financeApplications">) =>

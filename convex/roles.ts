@@ -8,6 +8,7 @@ import {
   getInvalidPermissions,
   isReservedRoleName,
   isSystemOwnerRole,
+  isUnqualifiedOwnerNamed,
   newlyAddedLegacyPermissions,
   normalizeRoleName,
 } from "./utils/permissions";
@@ -18,6 +19,10 @@ import { AppErrorCode, throwAppError } from "./utils/errors";
 // Translated under ServerError_PERMISSION_RETIRED; the EN dictionary text equals this string.
 const RETIRED_PERMISSION_MESSAGE =
   'The "Finalize financed deal" permission is no longer used. Grant "Record the supplier payment route" or "Cancel a closed financed deal" instead.';
+
+// Translated under ServerError_OWNER_NAMED_ROLE_LOCKED; the EN dictionary text equals this string.
+const OWNER_NAMED_ROLE_LOCKED_MESSAGE =
+  "This role is named OWNER but is not the system owner role, so its permissions cannot be edited. Rename it to a different name first.";
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -151,6 +156,12 @@ export const update = mutation({
     }
     if (roleIsOwner && args.permissions !== undefined) {
       throw new ConvexError("The OWNER role permissions cannot be customized.");
+    }
+
+    // SCRUM-413 S413B-4/L-2: an OWNER-named row that does not qualify must not gain owner-scale
+    // authority from an edit (crossing the frozen fallback); see isUnqualifiedOwnerNamed.
+    if (args.permissions !== undefined && isUnqualifiedOwnerNamed(role)) {
+      throwAppError(AppErrorCode.OWNER_NAMED_ROLE_LOCKED, OWNER_NAMED_ROLE_LOCKED_MESSAGE);
     }
 
     const patch: Record<string, unknown> = {};

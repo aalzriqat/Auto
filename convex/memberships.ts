@@ -10,6 +10,7 @@ import {
   ALL_PERMISSIONS,
   DEFAULT_ROLE_TEMPLATES,
   isSystemOwnerRole,
+  isUnqualifiedOwnerNamed,
   needsOwnerFlagStamp,
 } from "./utils/permissions";
 import { writeAuditLog } from "./utils/auditLog";
@@ -1426,6 +1427,8 @@ export const syncRolePermissionsToTemplate = mutation({
     for (const role of roles) {
       const template = DEFAULT_ROLE_TEMPLATES.find(t => t.name === role.name);
       if (!template) continue;
+      // SCRUM-413 S413B-4: an OWNER-named row that does not qualify gains nothing from the template.
+      if (isUnqualifiedOwnerNamed(role)) continue;
       const synced: string[] = [...template.permissions];
       const before = new Set(role.permissions);
       const after = new Set(synced);

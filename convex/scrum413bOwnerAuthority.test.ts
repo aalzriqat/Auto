@@ -1,4 +1,5 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { ConvexError } from "convex/values";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -110,6 +111,9 @@ describe("SCRUM-413 PR-B S413B-1 - template sync never de-owns the owner", () =>
     const after = await roleOf(s, fake);
     expect(after.isSystemOwnerRole).toBeUndefined();
     expect(isSystemOwnerRole(after)).toBe(false);
+    // S413B-4: the template is not applied to it at all - no owner-scale permissions, no audit row.
+    expect(after.permissions).toEqual([CREATE_APP]);
+    expect((await syncAudits(s)).some((a) => a.targetId === fake)).toBe(false);
   });
 
   test("an explicit-false OWNER is never stamped and stays false", async () => {
@@ -119,6 +123,22 @@ describe("SCRUM-413 PR-B S413B-1 - template sync never de-owns the owner", () =>
     const after = await roleOf(s, demoted);
     expect(after.isSystemOwnerRole).toBe(false);
     expect(isSystemOwnerRole(after)).toBe(false);
+    // S413B-4: permissions are unchanged too, and nothing is audited for it.
+    expect(after.permissions).toEqual(FROZEN);
+    expect((await syncAudits(s)).some((a) => a.targetId === demoted)).toBe(false);
+  });
+
+  test("S413B-4 controls: a qualifying unflagged OWNER is still stamped and synced; MANAGER and SALES still sync", async () => {
+    const s = await seedOrg("sync_controls");
+    const manager = await insertRole(s, "MANAGER", [CREATE_APP]);
+    const sales = await insertRole(s, "SALES", [FINALIZE]);
+    const { changes } = await s.asOwner.mutation(api.memberships.syncRolePermissionsToTemplate, { orgId: s.orgId });
+    const owner = await roleOf(s, s.ownerRoleId);
+    expect(owner.isSystemOwnerRole).toBe(true);
+    expect(owner.permissions).not.toContain(FINALIZE);
+    expect((await roleOf(s, manager)).permissions).toContain(PERMISSIONS.MANAGE_USERS);
+    expect((await roleOf(s, sales)).permissions).not.toContain(FINALIZE);
+    expect(changes.map((c: { roleId: Id<"roles"> }) => c.roleId).sort()).toEqual([s.ownerRoleId, manager, sales].sort());
   });
 });
 
@@ -228,5 +248,50 @@ describe("SCRUM-413 PR-B S413B-2 - prepareSplitDealAuthorities readiness covers 
       ownerFlagSkipped: true, stampOwnerFlag: false, ownerQualified: false,
     });
     expect((await roleOf(s, falseId)).isSystemOwnerRole).toBe(false);
+  });
+});
+
+async function codeOf(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof ConvexError) return (error.data as { code?: unknown })?.code;
+    throw error;
+  }
+  return undefined;
+}
+
+describe("SCRUM-413 PR-B L-2 - roles.update never lifts an unqualified OWNER-named row to the frozen set", () => {
+  test("editing a fake OWNER (finalize + near-miss) to the full frozen set is refused and the row stays non-owner", async () => {
+    const s = await seedOrg("l2_fake");
+    const dropped = FROZEN.find((p) => p !== FINALIZE);
+    const fake = await insertRole(s, "OWNER", FROZEN.filter((p) => p !== dropped)); // finalize + all but one
+    expect(fake).toBeDefined();
+    expect(isSystemOwnerRole(await roleOf(s, fake))).toBe(false);
+
+    expect(
+      await codeOf(s.asOwner.mutation(api.roles.update, { orgId: s.orgId, roleId: fake, permissions: FROZEN }))
+    ).toBe("OWNER_NAMED_ROLE_LOCKED");
+    const after = await roleOf(s, fake);
+    expect(isSystemOwnerRole(after)).toBe(false);
+    expect(after.permissions).not.toEqual(expect.arrayContaining(FROZEN));
+  });
+
+  test("an explicit-false OWNER is refused the same way", async () => {
+    const s = await seedOrg("l2_false");
+    const demoted = await insertRole(s, "OWNER", [CREATE_APP], false);
+    expect(
+      await codeOf(s.asOwner.mutation(api.roles.update, { orgId: s.orgId, roleId: demoted, permissions: FROZEN }))
+    ).toBe("OWNER_NAMED_ROLE_LOCKED");
+    expect((await roleOf(s, demoted)).permissions).toEqual([CREATE_APP]);
+  });
+
+  test("control: editing a normal custom role still works", async () => {
+    const s = await seedOrg("l2_control");
+    const custom = await insertRole(s, "Closer", [CREATE_APP]);
+    await s.asOwner.mutation(api.roles.update, {
+      orgId: s.orgId, roleId: custom, permissions: [CREATE_APP, PERMISSIONS.VIEW_USERS],
+    });
+    expect((await roleOf(s, custom)).permissions).toEqual([CREATE_APP, PERMISSIONS.VIEW_USERS]);
   });
 });

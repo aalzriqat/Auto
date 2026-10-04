@@ -324,6 +324,23 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(enEntry).toContain((dictionaries.en as Record<string, string>).CancelClosedDeal);
   });
 
+  it("SCRUM-413 OWNER_NAMED_ROLE_LOCKED resolves to its dictionary entry in ar and en, and EN equals the roles.ts message", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code: "OWNER_NAMED_ROLE_LOCKED", message: "server text" });
+    const arEntry = (dictionaries.ar as Record<string, string>).ServerError_OWNER_NAMED_ROLE_LOCKED;
+    const enEntry = (dictionaries.en as Record<string, string>).ServerError_OWNER_NAMED_ROLE_LOCKED;
+    expect(arEntry).toMatch(/[؀-ۿ]/);
+    expect(getLocalizedErrorMessage(error, ar)).toBe(arEntry);
+    expect(getLocalizedErrorMessage(error, en)).toBe(enEntry);
+    const source = readFileSync(join(process.cwd(), "convex", "roles.ts"), "utf8");
+    const match = /const OWNER_NAMED_ROLE_LOCKED_MESSAGE =\s*"([^"]+)"/.exec(source);
+    expect(match?.[1]).toBe(enEntry);
+  });
+
   it("SCRUM-413 the EN dictionary text equals the message thrown by roles.create and roles.update", async () => {
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
