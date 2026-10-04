@@ -1687,10 +1687,6 @@ const serverErrorMessages = defineBilingualMessages({
     "The quotation's pricing no longer matches the pricing frozen on this finance application, so the deal cannot be finalized. Cancel the finance application and start again from a new quotation.",
     "لم يعد تسعير عرض السعر مطابقاً للتسعير المثبت في طلب التمويل، لذلك لا يمكن إتمام الصفقة. ألغِ طلب التمويل وابدأ من عرض سعر جديد.",
   ],
-  ServerError_APPROVAL_VEHICLE_UNAVAILABLE: [
-    "This vehicle was deleted, so the request can't be approved. Reject it instead.",
-    "تم حذف هذه المركبة، لذا لا يمكن الموافقة على الطلب. يُرجى رفضه بدلاً من ذلك.",
-  ],
   ServerError_COMMISSION_BASE_UNUSABLE_RECALC: [
     "This sale's recorded commissionable margin is in a different currency from the organization's or holds an unusable amount, so a commission cannot be worked out. Have the deal's figures corrected before recalculating; the existing commission has been left untouched.",
     "هامش المركبة الخاضع للعمولة المسجل لعملية البيع هذه بعملة مختلفة عن عملة المؤسسة أو يحتوي على مبلغ غير صالح، لذا لا يمكن احتساب العمولة. يرجى تصحيح أرقام الصفقة قبل إعادة الاحتساب؛ لم يتم تغيير العمولة الحالية.",

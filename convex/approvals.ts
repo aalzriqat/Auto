@@ -277,7 +277,7 @@ export const respondToApproval = mutation({
     if (args.status === "APPROVED" && (!vehicleInOrg || vehicleInOrg.isDeleted)) {
       throwAppError(
         AppErrorCode.APPROVAL_VEHICLE_UNAVAILABLE,
-        "This vehicle was deleted, so the request can't be approved. Reject it instead."
+        "This vehicle is no longer available in this dealership, so the request can't be approved. Reject it instead."
       );
     }
 
