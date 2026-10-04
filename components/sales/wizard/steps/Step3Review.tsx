@@ -18,7 +18,7 @@ import { ArrowLeft, CheckCircle2, Car, User, TrendingUp, FileText } from "lucide
 import  ReviewVehicleCard  from "../components/ReviewVehicleCard";
 import  ReviewVehicleListCard  from "../components/ReviewVehicleListCard";
 import  ReviewCustomerCard  from "../components/ReviewCustomerCard";
-import  ReviewFinanceSummary  from "../components/ReviewFinanceSummary";
+import  ReviewFinanceSummary, { documentDisplayName }  from "../components/ReviewFinanceSummary";
 import { buildWizardQuotePayload } from "../quotePayload";
 
 export function Step3Review({
@@ -41,7 +41,7 @@ export function Step3Review({
   }) => void;
 }) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, isRtl } = useLanguage();
   const saveQuote = useMutation(api.quotes.saveQuote);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -142,7 +142,8 @@ export function Step3Review({
         monthlyInstallment: result.monthlyInstallment,
         totalProfit: result.totalProfit,
         takafulAmount: result.takafulAmount,
-        companyDocs: [] as any[],
+        // A manual financier has no rules of its own, but org-wide ones (e.g. ID) still apply.
+        companyDocs: documentRules?.filter((r: Doc<"companyDocumentRules">) => !r.companyId) ?? [],
       };
     }
 
@@ -286,6 +287,8 @@ export function Step3Review({
             salePrice={effectivePrice}
             downPayment={wizardData.downPayment || 0}
             termMonths={wizardData.termMonths}
+            // The documents box below is the one list, with its loading and empty states.
+            companyDocs={[]}
           />
         )
       )}
@@ -298,21 +301,30 @@ export function Step3Review({
             {t("RequiredDocuments")}
           </p>
 
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
-            {selectedResult.companyDocs?.map((doc: any) => (
-              <div key={doc._id} className="flex items-center gap-2">
-                <span
-                  className={cn(
-                    "w-1.5 h-1.5 rounded-full",
-                    doc.isRequired ? "bg-amber-400" : "bg-muted-foreground"
-                  )}
-                />
-                <span className="text-muted-foreground">
-                  {doc.documentName}
-                </span>
-              </div>
-            ))}
-          </div>
+          {documentRules === undefined ? (
+            <p className="text-sm text-muted-foreground" aria-busy="true">{t("Loading" as any)}</p>
+          ) : (selectedResult.companyDocs?.length ?? 0) === 0 ? (
+            <p className="text-sm text-muted-foreground">{t("NoRequiredDocuments" as any)}</p>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
+              {selectedResult.companyDocs?.map((doc: any) => (
+                <div key={doc._id} className="flex items-center gap-2">
+                  <span
+                    className={cn(
+                      "w-1.5 h-1.5 rounded-full",
+                      doc.isRequired ? "bg-amber-400" : "bg-muted-foreground"
+                    )}
+                  />
+                  <span className={doc.isRequired ? "text-foreground/80" : "text-muted-foreground"}>
+                    {documentDisplayName(doc.documentName, isRtl)}
+                    {doc.isRequired && (
+                      <span className="text-amber-400 ms-1" data-testid="doc-required-marker">*</span>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -33,13 +33,54 @@ import { Textarea } from "@/components/ui/textarea";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { getErrorMessage } from "@/lib/errors";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
+import { useCurrency } from "@/hooks/useCurrency";
+import { supportedCurrencyScale } from "@/convex/utils/money";
+import { formatMinorAsMajor, parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
 
-const depositSchema = z.object({
-  amount: z.coerce.number().positive("Amount must be greater than 0"),
-  notes: z.string().optional(),
-});
+type Translate = (key: string) => string;
 
-type DepositFormValues = z.infer<typeof depositSchema>;
+/**
+ * The major-unit number the mutations take, or null when that number cannot
+ * carry exactly the minor units typed. Above about 9 trillion JOD a float has
+ * no room for the fils, so "9007198254740.001" would leave as ...002; refusing
+ * it here keeps a typed amount from ever reaching the server as another one.
+ */
+function exactMajorAmount(minor: number, scale: number): number | null {
+  if (!Number.isSafeInteger(minor)) return null;
+  // Back to major units through the exact decimal text, never by float division.
+  const amount = Number(formatMinorAsMajor(minor, scale));
+  // Compare the text the number is sent as, not float arithmetic on it:
+  // "8800000000000.029" is the same number as "...03", yet ×1000 rounds back to ...029.
+  const sent = parseMajorToMinor(String(amount), scale);
+  return sent.ok && sent.minor === minor ? amount : null;
+}
+
+/**
+ * The amount is text parsed exactly as money is parsed elsewhere (SCRUM-628
+ * F-05): a `type=number` field let "60E-" and "-5" through to an English
+ * message. No sign, no exponent, no more decimals than the currency carries;
+ * Arabic-Indic digits are understood. The server still validates the figure.
+ */
+function buildDepositSchema(t: Translate, scale: number) {
+  return z.object({
+    amount: z.string().superRefine((raw, ctx) => {
+      const parsed = parseMajorToMinor(raw, scale);
+      if (!parsed.ok) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: t(parsed.problem === "EMPTY" ? "DepositAmountPositive" : "DepositAmountInvalid"),
+        });
+      } else if (parsed.minor <= 0) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: t("DepositAmountPositive") });
+      } else if (exactMajorAmount(parsed.minor, scale) === null) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: t("DepositAmountInvalid") });
+      }
+    }),
+    notes: z.string().optional(),
+  });
+}
+
+type DepositFormValues = z.infer<ReturnType<typeof buildDepositSchema>>;
 
 interface RecordDepositDialogProps {
   open: boolean;
@@ -71,6 +112,9 @@ export function RecordDepositDialog({
 }: RecordDepositDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const currency = useCurrency();
+  const scale = supportedCurrencyScale(currency.code) ?? 3;
+  const depositSchema = useMemo(() => buildDepositSchema(t as Translate, scale), [t, scale]);
   const { hasPermission } = usePermissions();
   const canRecord = hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
   const createDeposit = useMutation(api.deposits.create);
@@ -85,7 +129,7 @@ export function RecordDepositDialog({
 
   const form = useForm<DepositFormValues>({
     resolver: zodResolver(depositSchema as any),
-    defaultValues: { amount: undefined, notes: "" },
+    defaultValues: { amount: "", notes: "" },
   });
 
   const onSubmit = async (values: DepositFormValues) => {
@@ -94,14 +138,18 @@ export function RecordDepositDialog({
       setMethodMissing(true);
       return;
     }
+    const parsed = parseMajorToMinor(values.amount, scale);
+    if (!parsed.ok || parsed.minor <= 0) return;
+    const amount = exactMajorAmount(parsed.minor, scale);
+    if (amount === null) return;
     setIsSubmitting(true);
     try {
       if (canRecord && method) {
-        const intent = `record-deposit:${quoteId}:${values.amount}:${method}:${values.notes ?? ""}`;
+        const intent = `record-deposit:${quoteId}:${amount}:${method}:${values.notes ?? ""}`;
         const depositId = await createDeposit({
           orgId: activeOrgId,
           quoteId,
-          amount: values.amount,
+          amount,
           method,
           notes: values.notes || undefined,
           idempotencyKey: commandId.for(intent),
@@ -111,11 +159,11 @@ export function RecordDepositDialog({
         onOpenChange(false);
         onRecorded(depositId);
       } else {
-        const intent = `request-deposit:${quoteId}:${values.amount}:${values.notes ?? ""}`;
+        const intent = `request-deposit:${quoteId}:${amount}:${values.notes ?? ""}`;
         const requestId = await requestDeposit({
           orgId: activeOrgId,
           quoteId,
-          amount: values.amount,
+          amount,
           note: values.notes || undefined,
           idempotencyKey: commandId.for(intent),
         });
@@ -156,7 +204,7 @@ export function RecordDepositDialog({
                 <FormItem>
                   <FormLabel>{t("DepositAmount" as any) ?? "Deposit Amount (JOD)"}</FormLabel>
                   <FormControl>
-                    <Input type="number" step="0.01" min="0" {...field} />
+                    <Input type="text" inputMode="decimal" dir="ltr" autoComplete="off" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

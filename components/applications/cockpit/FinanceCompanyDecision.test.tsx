@@ -675,6 +675,15 @@ describe("the derived figures", () => {
     // Derived, therefore not editable: the card has no inputs at all.
     expect(document.querySelectorAll("input").length).toBe(0);
   });
+
+  test("the applied LTV is not shown before there is a funded portion to apply it to (SCRUM-628 F-17)", () => {
+    // The rate is configured before any valuation or approved amount exists;
+    // on its own it reads as a figure the deal has not produced yet.
+    renderCockpit(wiring({ facts: { appliedLtvPercent: 90, financeCompanyFundedPortionMinor: null } }));
+
+    expect(screen.queryByText("DerivedAppliedLtv")).toBeNull();
+    expect(screen.queryByText("90%")).toBeNull();
+  });
 });
 
 describe("recording the submitted quotation", () => {
