@@ -78,6 +78,7 @@ function main(argv) {
 
 module.exports = { validateLcovSources, main };
 
-if (require.main === module) {
+// CommonJS entry-point guard. Object.is keeps identity semantics; do not revert to === (Sonar S3403 false positive fails main's reliability gate, SCRUM-662).
+if (Object.is(require.main, module)) {
   process.exit(main(process.argv.slice(2)));
 }
