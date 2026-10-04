@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  argKeyFor,
   baselineValue,
   classifyErrorToast,
+  clip,
+  findDocument,
   hostileValue,
   judge,
   kindOf,
   markupScriptRan,
   phonePair,
+  readBackOf,
   rulesFor,
+  summarizeReadBack,
   type Attempt,
   type Field,
 } from "./jevFormOracle";
@@ -201,5 +206,67 @@ describe("hostile and baseline values", () => {
     expect(baselineValue("phone", "T1", 7)).not.toBe(baselineValue("phone", "T1", 8));
     expect(baselineValue("email", "T1", 1)).toMatch(/^qa\.t1@example\.test$/);
     expect(Number(baselineValue("number", "T1", 1))).toBeGreaterThan(0);
+  });
+});
+
+describe("read-back: typed → sent → persisted (SCRUM-614 acceptance 2/3)", () => {
+  const typed = "QA TEST عربي 🚗 F614-X01";
+
+  it("finds the one argument that carried the typed value, exactly or trimmed", () => {
+    expect(argKeyFor({ firstName: typed, lastName: "QA TEST F614-X01" }, typed)).toBe("firstName");
+    expect(argKeyFor({ firstName: "", lastName: "QA" }, "   ")).toBe("firstName");
+  });
+
+  it("never guesses: two matching arguments, or none, is no key", () => {
+    expect(argKeyFor({ a: typed, b: typed }, typed)).toBeUndefined();
+    expect(argKeyFor({ a: "x" }, typed)).toBeUndefined();
+    expect(argKeyFor(undefined, typed)).toBeUndefined();
+    // Two blanks after trimming are as ambiguous as two exact matches.
+    expect(argKeyFor({ a: "", b: "" }, "  ")).toBeUndefined();
+  });
+
+  it("finds a document by _id inside a paginated query result", () => {
+    const page = { page: [{ _id: "c1", firstName: "A" }, { _id: "c2", firstName: "B" }], isDone: true };
+    expect(findDocument(page, "c2")).toEqual({ _id: "c2", firstName: "B" });
+    expect(findDocument(page, "c3")).toBeUndefined();
+    expect(findDocument(null, "c1")).toBeUndefined();
+  });
+
+  it("reports the persisted value only from the server's own document", () => {
+    const args = { firstName: typed };
+    expect(readBackOf({ typed, args, id: "c1", doc: { _id: "c1", firstName: typed } })).toEqual({
+      source: "server-document",
+      key: "firstName",
+      sent: typed,
+      persisted: typed,
+    });
+    expect(readBackOf({ typed, args, id: "c1", doc: { _id: "c1" } }).source).toBe("field-not-returned");
+    expect(readBackOf({ typed, args, id: "c1", doc: undefined }).source).toBe("document-not-observed");
+    expect(readBackOf({ typed, args, id: undefined, doc: undefined }).source).toBe("no-id");
+    expect(readBackOf({ typed, args: { other: "x" }, id: "c1", doc: { _id: "c1", other: "x" } }).source).toBe("not-sent");
+  });
+
+  it("compares on full values and stores clipped ones", () => {
+    const long = "x".repeat(2000);
+    const s = summarizeReadBack(long, { source: "server-document", key: "address", sent: long, persisted: long.slice(0, 500) });
+    expect(s.sentEqualsTyped).toBe(true);
+    expect(s.persistedEqualsSent).toBe(false); // truncated on the server: visible, though both are clipped
+    expect(s.persisted).toBe(`${"x".repeat(60)}… (500 chars)`);
+    expect(clip("short")).toBe("short");
+    expect(clip(42)).toBe(42);
+  });
+
+  it("a trimmed save is visible as typed ≠ sent", () => {
+    const s = summarizeReadBack("   ", { source: "server-document", key: "firstName", sent: "", persisted: "" });
+    expect(s.sentEqualsTyped).toBe(false);
+    expect(s.persistedEqualsSent).toBe(true);
+  });
+});
+
+describe("calibration run 5, #14: markup saved into a field the list never shows", () => {
+  it("is inconclusive, not ok", () => {
+    const description = { label: "Description / Notes", kind: "text", required: false } as const;
+    const scriptRan = markupScriptRan({ ranBefore: false, ranAfter: false, saved: true, rendered: false });
+    expect(judge({ rule: "markup", field: description, outcome: "accepted", scriptRan }).kind).toBe("inconclusive");
   });
 });

@@ -71,6 +71,78 @@ export function classifyErrorToast(text: string): Outcome {
   return RAW_ERROR.test(text) ? "rejected-raw" : "rejected-toast";
 }
 
+/**
+ * What the explorer can prove about one saved value, stage by stage: typed
+ * into the field, sent in the create mutation, and returned by the server for
+ * the created document (SCRUM-614 acceptance 2/3). `source` says how far the
+ * chain was observed; only "server-document" carries a persisted value.
+ */
+export type ReadBack = {
+  source: "server-document" | "field-not-returned" | "document-not-observed" | "no-id" | "not-sent";
+  /** The mutation argument that carried the typed value. */
+  key?: string;
+  sent?: unknown;
+  persisted?: unknown;
+};
+
+/**
+ * The one top-level mutation argument holding the typed value, exactly or as
+ * the client trimmed it. Two candidates, or none, is no answer: the value's
+ * path must be proven, never guessed.
+ */
+export function argKeyFor(args: Record<string, unknown> | undefined, typed: string): string | undefined {
+  if (!args) return undefined;
+  for (const want of [typed, typed.trim()]) {
+    const keys = Object.keys(args).filter((k) => args[k] === want);
+    if (keys.length === 1) return keys[0];
+    if (keys.length > 1) return undefined;
+  }
+  return undefined;
+}
+
+/** The object with this `_id` anywhere inside a query result, or undefined. */
+export function findDocument(value: unknown, id: string, depth = 0): Record<string, unknown> | undefined {
+  if (depth > 8 || value === null || typeof value !== "object") return undefined;
+  if (!Array.isArray(value) && (value as Record<string, unknown>)._id === id) return value as Record<string, unknown>;
+  for (const child of Array.isArray(value) ? value : Object.values(value)) {
+    const found = findDocument(child, id, depth + 1);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/** Typed → sent → persisted, from the create mutation and the server's own document. */
+export function readBackOf(o: {
+  typed: string;
+  args: Record<string, unknown> | undefined;
+  id: unknown;
+  doc: Record<string, unknown> | undefined;
+}): ReadBack {
+  const key = argKeyFor(o.args, o.typed);
+  if (key === undefined) return { source: "not-sent" };
+  const sent = o.args?.[key];
+  if (typeof o.id !== "string") return { source: "no-id", key, sent };
+  if (!o.doc) return { source: "document-not-observed", key, sent };
+  if (!(key in o.doc)) return { source: "field-not-returned", key, sent };
+  return { source: "server-document", key, sent, persisted: o.doc[key] };
+}
+
+/** A value short enough for the report: long strings keep a prefix and their length. */
+export function clip(v: unknown, max = 120): unknown {
+  return typeof v === "string" && v.length > max ? `${v.slice(0, 60)}… (${v.length} chars)` : v;
+}
+
+/** The read-back as the report stores it: clipped values, comparisons made on the full ones. */
+export function summarizeReadBack(typed: string, rb: ReadBack) {
+  return {
+    ...rb,
+    sent: clip(rb.sent),
+    persisted: clip(rb.persisted),
+    sentEqualsTyped: rb.key === undefined ? undefined : rb.sent === typed,
+    persistedEqualsSent: rb.source === "server-document" ? rb.persisted === rb.sent : undefined,
+  };
+}
+
 /** Collapse whitespace the way a rendered table cell does. */
 function squash(s: string): string {
   return s.replace(/\s+/g, " ").trim();
