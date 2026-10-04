@@ -342,7 +342,17 @@ describe("cancel — applications.cancelApplication, from the header", () => {
   test("CLOSED needs cancel:closed_deal (not create), and the dialog carries the reversal warning", () => {
     permissions.add(PERMISSIONS.CANCEL_CLOSED_DEAL);
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
-    queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED" }));
+    // SCRUM-413 D-37: Cancel on a CLOSED deal needs the server's answer (`mayCancelFinalized`).
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        forward: {
+          planV2: false, applies: false, state: "NOT_DUE", returnedExceptionOpen: false,
+          onBooksForwardId: null, transferConfirmed: false, mayRecord: false, mayCancelFinalized: true,
+        },
+      })
+    );
     queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
     renderCockpit();
     fireEvent.click(screen.getByTestId("deal-cancel-application"));
@@ -1000,6 +1010,48 @@ describe("disbursement - the payment to the finance company comes first", () => 
     renderCockpit();
     expect(screen.queryByTestId("deal-cancel-application")).toBeNull();
     expect(screen.getByTestId("deal-cancel-manager-hint").textContent).toBe("ManagerCancelsFinalizedDeal");
+  });
+
+  // SCRUM-413 D-37: the server's answer is the only thing that offers Cancel on a CLOSED deal.
+  test("a CLOSED deal with no server answer yet (forward absent) offers no Cancel and no hint", () => {
+    permissions.add(PERMISSIONS.CANCEL_CLOSED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: forwardStages("AwaitingForwardToFinanceCompany"), forward: undefined }));
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(screen.queryByTestId("deal-cancel-application")).toBeNull();
+    expect(screen.queryByTestId("deal-cancel-manager-hint")).toBeNull();
+  });
+
+  test("a full canceller blocked ONLY by the forward gate is not told it lacks permission", () => {
+    permissions.add(PERMISSIONS.CANCEL_CLOSED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("AwaitingForwardToFinanceCompany"),
+        forward: forward({ state: "SETTLED", mayCancelFinalized: false }),
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(screen.queryByTestId("deal-cancel-application")).toBeNull();
+    const hint = screen.getByTestId("deal-cancel-manager-hint").textContent;
+    expect(hint).toBe("CancelWaitsForForward");
+    expect(hint).not.toBe("ManagerCancelsFinalizedDeal");
+  });
+
+  test("the server's yes still offers Cancel", () => {
+    permissions.add(PERMISSIONS.CANCEL_CLOSED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ status: "CLOSED", stages: forwardStages("AwaitingForwardToFinanceCompany"), forward: forward({ mayCancelFinalized: true }) })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(screen.getByTestId("deal-cancel-application")).toBeTruthy();
   });
 });
 describe("held deposit on a stopped deal — deposits.release", () => {

@@ -1737,13 +1737,14 @@ export function DealCockpit({
   // Mirror the backend permission tiers exactly.
   // SCRUM-413: a CLOSED deal is reversed with CANCEL_CLOSED_DEAL alone (no
   // create-application authority); every other status keeps create (+ approve
-  // once APPROVED). Where the server's own answer (`mayCancelFinalized`, the
-  // same status-sensitive rule) is present it is the only thing offered.
+  // once APPROVED). A CLOSED deal is cancelled only on the server's own answer
+  // (`mayCancelFinalized`: the same permission tiers AND the forward gate); no
+  // answer yet means no Cancel, never a permission-only guess.
   const canCancel =
     app != null &&
     app.status !== "CANCELLED" &&
     (app.status === "CLOSED"
-      ? canCancelClosedDeal && (deal?.forward ? deal.forward.mayCancelFinalized === true : true)
+      ? canCancelClosedDeal && deal?.forward?.mayCancelFinalized === true
       : canCreateApplication && (app.status === "APPROVED" ? canApproveApplication : true));
   const forwardBlocksTransfer =
     deal?.forward?.applies === true && deal.forward.state !== "SETTLED" && deal.forward.state !== "NOT_DUE";
@@ -2921,6 +2922,13 @@ export function DealCockpit({
         deal?.forward?.planV2 === true &&
         deal.forward.mayCancelFinalized !== true &&
         canCancelClosedDeal
+          ? // This caller holds the cancel authority. Without the disbursement
+            // authority too, the missing piece is a manager; with it, the only
+            // thing left that refuses is the forward gate, which is not a permission.
+            canConfirmFinanceDisbursement
+            ? "FORWARD"
+            : "MANAGER"
+          : undefined
       }
       settlementRoute={
         canChooseSettlementRoute && app
@@ -4566,8 +4574,10 @@ export function DealCockpitView({
    * SCRUM-435: shown where the cancel action would be when this caller may open
    * a deal's cancellation in principle but a finalized v2 deal is cancelled by a
    * manager. Names who acts instead of leaving the deal without an answer.
+   * `FORWARD`: the caller holds every cancel authority, so the payment to the
+   * finance company is what blocks it (SCRUM-413 D-37) - never blame permissions.
    */
-  cancelHint?: boolean;
+  cancelHint?: "MANAGER" | "FORWARD";
   /**
    * SCRUM-435: void or report-returned for the payment on the books. Present only
    * for a caller the server would let do it, and only while a payment is on the
@@ -6511,7 +6521,7 @@ export function DealCockpitView({
         )}
         {!cancel && cancelHint && (
           <span className="ms-auto text-xs text-muted-foreground" data-testid="deal-cancel-manager-hint">
-            {t("ManagerCancelsFinalizedDeal")}
+            {t(cancelHint === "FORWARD" ? "CancelWaitsForForward" : "ManagerCancelsFinalizedDeal")}
           </span>
         )}
       </div>

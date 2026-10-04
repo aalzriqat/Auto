@@ -1430,15 +1430,27 @@ export const syncRolePermissionsToTemplate = mutation({
       const after = new Set(synced);
       const added = synced.filter((p) => !before.has(p));
       const removed = role.permissions.filter((p) => !after.has(p));
-      if (added.length === 0 && removed.length === 0) continue;
-      await ctx.db.patch(role._id, { permissions: synced });
+      // SCRUM-413 S413B-1: the OWNER template no longer holds the retired
+      // finalize:financed_deal, and an UNFLAGGED owner is recognised only by
+      // holding the frozen set that includes it. Overwriting the permissions
+      // would silently de-own a qualifying owner, so the flag is stamped from
+      // the row as it is BEFORE the write. Only ever from that: an unflagged
+      // row that did not qualify, a name alone, and an explicit `false` (a
+      // deliberate demotion) are never promoted.
+      const stampOwnerFlag = isSystemOwnerRole(role) && role.isSystemOwnerRole === undefined;
+      if (added.length === 0 && removed.length === 0 && !stampOwnerFlag) continue;
+      await ctx.db.patch(role._id, {
+        permissions: synced,
+        ...(stampOwnerFlag ? { isSystemOwnerRole: true } : {}),
+      });
       await writeAuditLog(ctx, user, {
         action: "role.template_sync",
         targetTable: "roles",
         targetId: role._id,
         orgId: args.orgId,
-        before: { permissions: role.permissions },
-        after: { permissions: synced },
+        // `null` is "unset": convex values cannot carry `undefined`.
+        before: { permissions: role.permissions, ...(stampOwnerFlag ? { isSystemOwnerRole: null } : {}) },
+        after: { permissions: synced, ...(stampOwnerFlag ? { isSystemOwnerRole: true } : {}) },
       });
       changes.push({ roleId: role._id, name: role.name, added, removed });
     }

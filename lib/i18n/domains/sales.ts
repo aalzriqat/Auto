@@ -257,6 +257,10 @@ const dealRailMessages = defineBilingualMessages({
     "A manager cancels a finalized deal.",
     "يلغي المدير الصفقة المُنهاة.",
   ],
+  CancelWaitsForForward: [
+    "This deal can be cancelled once the payment to the finance company is resolved.",
+    "يمكن إلغاء هذه الصفقة بعد معالجة الدفع لشركة التمويل.",
+  ],
   RecordForwardTitle: [
     "Record payment to the finance company",
     "تسجيل الدفع لشركة التمويل",

@@ -14,7 +14,7 @@
  * runtime and not production data.
  */
 import {
-  approved, downgradeToV1, finalizeAsOwner, readyDeal, refusalMessageOf, seedFinancedDealership, underReview,
+  C, H, approved, downgradeToV1, finalizeAsOwner, readyDeal, refusalMessageOf, seedFinancedDealership, underReview,
 } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
@@ -314,4 +314,135 @@ describe("SCRUM-413 PR-B D-b - the entry gate and replay across actors (non-CLOS
     expect(await snapshot(s, applicationId)).toBe(before);
     expect(JSON.parse(before).application.status).toBe("UNDER_REVIEW");
   });
+});
+
+/**
+ * SCRUM-413 PR-B D-37 (Codex F-01): the cockpit offers Cancel on a CLOSED deal
+ * only when `cancelApplication` would accept a fresh command on the SAME
+ * snapshot - the forward gate included. Each scenario reads the projection,
+ * then issues a fresh cancel as the same actor; the two must agree, and a
+ * refusal must write nothing.
+ */
+describe("SCRUM-413 PR-B D-37 - the cockpit's cancel offer equals what a fresh cancel does, forward gate included", () => {
+  const FORWARD = H + C;
+  const record = (s: Seeded, applicationId: Id<"financeApplications">) =>
+    s.actors.OWNER.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
+      expectedAmountMinor: FORWARD, idempotencyKey: crypto.randomUUID(),
+    });
+  const reverse = (s: Seeded, applicationId: Id<"financeApplications">, forwardId: Id<"financeCompanyForwards">) =>
+    s.actors.OWNER.as.mutation(api.financeCompanyForward.reverseFinanceCompanyForward, {
+      orgId: s.orgId, applicationId, forwardId, reason: "Recorded in error.", idempotencyKey: crypto.randomUUID(),
+    });
+  const reportReturned = (s: Seeded, applicationId: Id<"financeApplications">, forwardId: Id<"financeCompanyForwards">) =>
+    s.actors.OWNER.as.mutation(api.financeCompanyForward.reportFinanceCompanyForwardReturned, {
+      orgId: s.orgId, applicationId, forwardId, reason: "The company sent it back.", idempotencyKey: crypto.randomUUID(),
+    });
+  const patchOriginalEvent = (s: Seeded, patch: Record<string, unknown>) =>
+    s.t.run(async (ctx) => {
+      const original = (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect()).find(
+        (e) => e.eventType === "FINANCE_COMPANY_FORWARD_PAID"
+      )!;
+      await ctx.db.patch(original._id, patch as never);
+    });
+
+  /** Rows a cancel could touch, as comparable JSON. */
+  const snapshot = (s: Seeded, applicationId: Id<"financeApplications">) =>
+    s.t.run(async (ctx) =>
+      JSON.stringify({
+        application: await ctx.db.get(applicationId),
+        forwards: await ctx.db.query("financeCompanyForwards").collect(),
+        events: await ctx.db.query("accountingEvents").collect(),
+        pending: await ctx.db.query("pendingAccountingEvents").collect(),
+        journalEntries: await ctx.db.query("journalEntries").collect(),
+        sales: await ctx.db.query("sales").collect(),
+        vehicle: await ctx.db.get(s.vehicleId),
+      })
+    );
+
+  const SCENARIOS: Array<{
+    name: string; expected: boolean; version?: 1 | 2;
+    arrange: (s: Seeded, applicationId: Id<"financeApplications">) => Promise<void>;
+  }> = [
+    { name: "DUE (nothing paid yet)", expected: true, arrange: async () => {} },
+    { name: "v1 deal (the forward gate does not apply)", expected: true, version: 1, arrange: async () => {} },
+    { name: "ON_BOOKS", expected: false, arrange: async (s, a) => { await record(s, a); } },
+    {
+      name: "POSTING_PENDING", expected: false,
+      arrange: async (s, a) => { await record(s, a); await patchOriginalEvent(s, { status: "PENDING" }); },
+    },
+    {
+      name: "POSTING_FAILED", expected: false,
+      arrange: async (s, a) => { await record(s, a); await patchOriginalEvent(s, { status: "FAILED" }); },
+    },
+    {
+      name: "REVERSAL_PENDING", expected: false,
+      arrange: async (s, a) => {
+        const forwardId = await record(s, a);
+        await s.t.run(async (ctx) => {
+          const row = (await ctx.db.get(forwardId))!;
+          const key = `finance_company_forward_reversal_${row.applicationId}_v${row.version}`;
+          await ctx.db.patch(forwardId, {
+            reversalRequestedAt: Date.now(), reversalKind: "VOID", reverseReason: "x", reversalIdempotencyKey: key,
+          });
+          await ctx.db.insert("pendingAccountingEvents", {
+            orgId: s.orgId, kind: "REVERSE", status: "PENDING", idempotencyKey: key, accountingDate: Date.now(),
+            actorId: row.actorId, attempts: 0, createdAt: Date.now(), sourceType: "FINANCE_COMPANY_FORWARD", sourceId: String(row._id),
+          } as never);
+        });
+      },
+    },
+    {
+      name: "completed RETURNED (reported, reversal posted)", expected: true,
+      arrange: async (s, a) => { await reportReturned(s, a, await record(s, a)); },
+    },
+    {
+      name: "completed REVERSED (voided before the transfer)", expected: true,
+      arrange: async (s, a) => { await reverse(s, a, await record(s, a)); },
+    },
+    {
+      name: "NEEDS_REPAIR (reversed but the reversal link is missing)", expected: false,
+      arrange: async (s, a) => {
+        await reverse(s, a, await record(s, a));
+        await patchOriginalEvent(s, { reversedByEventId: undefined });
+      },
+    },
+    {
+      name: "over-limit (more versions than the proof reads) fails CLOSED", expected: false,
+      arrange: async (s, a) => {
+        const forwardId = await record(s, a);
+        await s.t.run(async (ctx) => {
+          const { _id, _creationTime, ...row } = (await ctx.db.get(forwardId))!;
+          void _id; void _creationTime;
+          for (let version = row.version + 1; version <= row.version + 10; version += 1) {
+            await ctx.db.insert("financeCompanyForwards", { ...row, version });
+          }
+        });
+      },
+    },
+  ];
+
+  for (const scenario of SCENARIOS) {
+    test(`${scenario.name}: the offer equals a fresh cancel, and a refusal writes nothing`, async () => {
+      const s = await seed(`par_${scenario.name.replace(/[^a-z0-9]/gi, "").slice(0, 12)}`);
+      const { applicationId } = await readyDeal(s);
+      await finalizeAsOwner(s, applicationId);
+      if (scenario.version === 1) await downgradeToV1(s, applicationId);
+      await scenario.arrange(s, applicationId);
+
+      for (const role of ["MANAGER", "OWNER"] as RoleKey[]) {
+        const cockpit = await s.actors[role].as.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+        const offered = cockpit?.forward.mayCancelFinalized;
+        const before = await snapshot(s, applicationId);
+        const refusal = await refusalOf(cancelAs(s, applicationId, role));
+        expect(offered, `${role}: offered=${offered}, refusal=${refusal}`).toBe(refusal === null);
+        expect(offered, role).toBe(scenario.expected);
+        if (refusal !== null) {
+          expect(await snapshot(s, applicationId), `${role}: a refusal must write nothing`).toBe(before);
+        } else {
+          break; // the deal is cancelled; the second actor has nothing left to compare
+        }
+      }
+    });
+  }
 });

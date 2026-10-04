@@ -239,6 +239,9 @@ export async function deriveForwardState(ctx: QueryCtx, app: ForwardApp): Promis
   };
 }
 
+const FORWARD_MISMATCH_CANCEL_REFUSAL =
+  "The record of the payment to the finance company does not match the books. An accountant reviews it before this deal can be cancelled.";
+
 /**
  * The CLOSED-cancellation gate. Cancelling reverses the sale, which would leave
  * a posted payment to the finance company with nothing to clear. So a forward
@@ -247,7 +250,10 @@ export async function deriveForwardState(ctx: QueryCtx, app: ForwardApp): Promis
  */
 export function forwardCancelRefusal(proof: ForwardProof): string | null {
   const blocking = proof.versions.find((version) => FORWARD_BLOCKS_CANCEL.has(version.state));
-  if (blocking === undefined) return null;
+  // Fails CLOSED: a proof that could not be read (over the version limit,
+  // `deriveForwardState` returns NEEDS_REPAIR with NO versions) is not "nothing
+  // blocks", it is "cannot tell", and cancelling reverses the sale.
+  if (blocking === undefined) return proof.state === "NEEDS_REPAIR" ? FORWARD_MISMATCH_CANCEL_REFUSAL : null;
   switch (blocking.state) {
     case "ON_BOOKS":
       return "The deposit and the dealership's contribution have already been paid to the finance company. A manager reports the payment as returned by the company, or an accountant records the correction, before this deal can be cancelled.";
@@ -257,7 +263,7 @@ export function forwardCancelRefusal(proof: ForwardProof): string | null {
     case "REVERSAL_PENDING":
       return "The reversal of the payment to the finance company is not yet posted. An accountant posts it before this deal can be cancelled.";
     default:
-      return "The record of the payment to the finance company does not match the books. An accountant reviews it before this deal can be cancelled.";
+      return FORWARD_MISMATCH_CANCEL_REFUSAL;
   }
 }
 

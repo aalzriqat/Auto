@@ -19,6 +19,10 @@ export const fixExistingRoles = internalMutation({
     for (const role of roles) {
       // Find the corresponding template
       const template = DEFAULT_ROLE_TEMPLATES.find((t) => normalizeRoleName(t.name) === normalizeRoleName(role.name));
+      // SCRUM-413 S413B-3: an OWNER-named row that does not qualify is never
+      // written here - adding view:users could push a near-miss row over the
+      // frozen owner fallback and promote it.
+      if (normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME && !isSystemOwnerRole(role)) continue;
       if (template) {
         // We only want to ensure VIEW_USERS is present for these specific roles
         // Or we can just sync the permissions entirely if they haven't been customized,
@@ -39,8 +43,10 @@ export const fixExistingRoles = internalMutation({
 
 /**
  * Shared by the capability-matching backfills below: patches a role with
- * whichever permissions from `toAdd` it's missing, and — for any OWNER-named
- * row — explicitly sets `isSystemOwnerRole: true` if unset. That flag matters
+ * whichever permissions from `toAdd` it's missing, and — for an OWNER-named row
+ * that ALREADY qualifies as the system owner (`isSystemOwnerRole`, evaluated
+ * before the write) — explicitly sets `isSystemOwnerRole: true`. An OWNER-named
+ * row that does not qualify is not written at all (SCRUM-413 S413B-3). That flag matters
  * beyond just the permissions array: `isSystemOwnerRole()`'s fallback check
  * (see utils/permissions.ts) requires the stored `permissions` array to
  * contain the frozen pre-SCRUM-413 owner set, so a row missing the explicit
@@ -53,13 +59,21 @@ async function patchRoleIfNeeded(
   toAdd: Set<string>,
   updates: string[]
 ): Promise<boolean> {
+  // SCRUM-413 S413B-3: an OWNER-NAMED row that does not qualify (an explicit
+  // `false`, or unflagged and short of the frozen set) is never written at all:
+  // stamping it would promote it, and so would adding permissions, which can
+  // push a near-miss row over the frozen fallback. Qualification is read from
+  // the row as it is BEFORE the write.
+  const ownerNamed = normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME;
+  if (ownerNamed && !isSystemOwnerRole(role)) return false;
+
   const missing = [...toAdd].filter((p) => !role.permissions.includes(p));
-  const isStaleOwnerRow = normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME && !role.isSystemOwnerRole;
+  const isStaleOwnerRow = ownerNamed && role.isSystemOwnerRole !== true;
   if (missing.length === 0 && !isStaleOwnerRow) return false;
 
   await ctx.db.patch(role._id, {
     permissions: [...role.permissions, ...missing],
-    ...(normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME ? { isSystemOwnerRole: true } : {}),
+    ...(ownerNamed ? { isSystemOwnerRole: true } : {}),
   });
   updates.push(`${role.name} (${role.orgId}): +${missing.join(", ")}`);
   return true;
@@ -397,7 +411,11 @@ interface SplitDealAuthorityRecord {
   name: string;
   /** Recognised as the owner by `isSystemOwnerRole` (flag, or the frozen fallback). */
   ownerQualified: boolean;
-  /** An unflagged row that would qualify for the flag; reported only, never stamped. */
+  /**
+   * An unflagged row that qualifies as the owner only through the frozen name
+   * fallback: it still needs the explicit flag (the template sync, or any
+   * backfill, stamps it). Reported only here.
+   */
   stampOwnerFlag: boolean;
   /** Named like the owner, unflagged, and NOT qualified: reported, never stamped. */
   ownerFlagSkipped: boolean;
@@ -420,8 +438,13 @@ interface SplitDealAuthorityRecord {
  * roles still carry the inert retired string, which hold each new authority,
  * and which OWNER-named rows are unflagged and fail the frozen fallback.
  *
- * `ready` means no stored role carries a retired permission string. A retired
- * string is harmless (no door reads it) so this is hygiene, not a safety gate.
+ * `ready` means ALL of: no stored role carries a retired permission string
+ * (`retiredCarriers`), no qualifying owner is still unflagged
+ * (`unstampedOwners`), and no unflagged OWNER-named row fails the frozen
+ * fallback (`unqualifiedOwnerNamed`). The retired string itself is inert (no
+ * door reads it), so that part is hygiene; the owner counts are about identity.
+ * Stamp-only rows are reported even when they carry no retired string. An
+ * explicit `isSystemOwnerRole: false` is a deliberate demotion and is not counted.
  */
 export const prepareSplitDealAuthorities = internalQuery({
   args: {},
@@ -441,7 +464,9 @@ export const prepareSplitDealAuthorities = internalQuery({
       const holdsRoute = held.has(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
       const holdsCancelClosed = held.has(PERMISSIONS.CANCEL_CLOSED_DEAL);
 
-      if (!carriesRetiredPermission && !ownerFlagSkipped && !holdsRoute && !holdsCancelClosed) continue;
+      if (!carriesRetiredPermission && !stampOwnerFlag && !ownerFlagSkipped && !holdsRoute && !holdsCancelClosed) {
+        continue;
+      }
 
       records.push({
         roleId: role._id,
@@ -457,6 +482,14 @@ export const prepareSplitDealAuthorities = internalQuery({
     }
 
     const carriers = records.filter((record) => record.carriesRetiredPermission).length;
-    return { ready: carriers === 0, retiredCarriers: carriers, records };
+    const unstampedOwners = records.filter((record) => record.stampOwnerFlag).length;
+    const unqualifiedOwnerNamed = records.filter((record) => record.ownerFlagSkipped).length;
+    return {
+      ready: carriers === 0 && unstampedOwners === 0 && unqualifiedOwnerNamed === 0,
+      retiredCarriers: carriers,
+      unstampedOwners,
+      unqualifiedOwnerNamed,
+      records,
+    };
   },
 });
