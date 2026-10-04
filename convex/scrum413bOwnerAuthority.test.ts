@@ -28,6 +28,8 @@ const MODULES = import.meta.glob("./**/*.*s");
 const FINALIZE = "finalize:financed_deal";
 const CREATE_APP = PERMISSIONS.CREATE_FINANCE_APPLICATION;
 const FROZEN = [...PRE_413_OWNER_FALLBACK_PERMISSIONS];
+/** The frozen set minus one non-finalize permission: carries finalize, still not the owner set. */
+const NEAR_MISS = FROZEN.filter((p) => p !== FROZEN.find((q) => q !== FINALIZE));
 
 type Roles = Awaited<ReturnType<typeof seedOrg>>;
 
@@ -69,6 +71,9 @@ const syncAudits = (s: Roles) =>
       (a: any) => a.action === "role.template_sync"
     )
   ) as Promise<any[]>;
+
+/** Whether the template sync wrote an audit row for this role. */
+const audited = async (s: Roles, roleId: Id<"roles">) => (await syncAudits(s)).some((a) => a.targetId === roleId);
 
 describe("SCRUM-413 PR-B S413B-1 - template sync never de-owns the owner", () => {
   test("an unflagged qualifying OWNER is stamped by the sync and every owner check still recognises it", async () => {
@@ -113,7 +118,7 @@ describe("SCRUM-413 PR-B S413B-1 - template sync never de-owns the owner", () =>
     expect(isSystemOwnerRole(after)).toBe(false);
     // S413B-4: the template is not applied to it at all - no owner-scale permissions, no audit row.
     expect(after.permissions).toEqual([CREATE_APP]);
-    expect((await syncAudits(s)).some((a) => a.targetId === fake)).toBe(false);
+    expect(await audited(s, fake)).toBe(false);
   });
 
   test("an explicit-false OWNER is never stamped and stays false", async () => {
@@ -125,7 +130,7 @@ describe("SCRUM-413 PR-B S413B-1 - template sync never de-owns the owner", () =>
     expect(isSystemOwnerRole(after)).toBe(false);
     // S413B-4: permissions are unchanged too, and nothing is audited for it.
     expect(after.permissions).toEqual(FROZEN);
-    expect((await syncAudits(s)).some((a) => a.targetId === demoted)).toBe(false);
+    expect(await audited(s, demoted)).toBe(false);
   });
 
   test("S413B-4 controls: a qualifying unflagged OWNER is still stamped and synced; MANAGER and SALES still sync", async () => {
@@ -264,8 +269,7 @@ async function codeOf(promise: Promise<unknown>): Promise<unknown> {
 describe("SCRUM-413 PR-B L-2 - roles.update never lifts an unqualified OWNER-named row to the frozen set", () => {
   test("editing a fake OWNER (finalize + near-miss) to the full frozen set is refused and the row stays non-owner", async () => {
     const s = await seedOrg("l2_fake");
-    const dropped = FROZEN.find((p) => p !== FINALIZE);
-    const fake = await insertRole(s, "OWNER", FROZEN.filter((p) => p !== dropped)); // finalize + all but one
+    const fake = await insertRole(s, "OWNER", NEAR_MISS);
     expect(fake).toBeDefined();
     expect(isSystemOwnerRole(await roleOf(s, fake))).toBe(false);
 

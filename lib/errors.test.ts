@@ -306,16 +306,31 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(match?.[1]).toBe(enEntry);
   });
 
-  it("SCRUM-413 PERMISSION_RETIRED resolves to its dictionary entry in ar and en", async () => {
+  /** Asserts a coded error resolves to its Arabic and English dictionary entries; returns them. */
+  async function expectCodedEntry(code: string) {
     const { dictionaries } = await import("./i18n/dictionaries");
     const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
     const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
-    const error = new ConvexError({ code: "PERMISSION_RETIRED", message: "server text" });
-    const arEntry = (dictionaries.ar as Record<string, string>).ServerError_PERMISSION_RETIRED;
-    const enEntry = (dictionaries.en as Record<string, string>).ServerError_PERMISSION_RETIRED;
+    const error = new ConvexError({ code, message: "server text" });
+    const arEntry = (dictionaries.ar as Record<string, string>)[`ServerError_${code}`];
+    const enEntry = (dictionaries.en as Record<string, string>)[`ServerError_${code}`];
     expect(arEntry).toMatch(/[؀-ۿ]/);
     expect(getLocalizedErrorMessage(error, ar)).toBe(arEntry);
     expect(getLocalizedErrorMessage(error, en)).toBe(enEntry);
+    return { dictionaries, error, en, arEntry, enEntry };
+  }
+
+  /** The string literal convex/roles.ts assigns to a top-level message constant. */
+  async function roleMessageConst(name: string) {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const source = readFileSync(join(process.cwd(), "convex", "roles.ts"), "utf8");
+    const match = new RegExp(`const ${name} =\\s*(['"])((?:(?!\\1).)+)\\1`).exec(source);
+    return { source, message: match?.[2] };
+  }
+
+  it("SCRUM-413 PERMISSION_RETIRED resolves to its dictionary entry in ar and en", async () => {
+    const { dictionaries, error, en, arEntry, enEntry } = await expectCodedEntry("PERMISSION_RETIRED");
     expect(getLocalizedErrorMessage(error, en)).not.toBe("server text");
     // The AR names the same two authorities the role editor labels (settings.ts).
     expect(arEntry).toContain((dictionaries.ar as Record<string, string>).RecordSupplierRoute);
@@ -325,31 +340,16 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
   });
 
   it("SCRUM-413 OWNER_NAMED_ROLE_LOCKED resolves to its dictionary entry in ar and en, and EN equals the roles.ts message", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
-    const { dictionaries } = await import("./i18n/dictionaries");
-    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
-    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
-    const error = new ConvexError({ code: "OWNER_NAMED_ROLE_LOCKED", message: "server text" });
-    const arEntry = (dictionaries.ar as Record<string, string>).ServerError_OWNER_NAMED_ROLE_LOCKED;
-    const enEntry = (dictionaries.en as Record<string, string>).ServerError_OWNER_NAMED_ROLE_LOCKED;
-    expect(arEntry).toMatch(/[؀-ۿ]/);
-    expect(getLocalizedErrorMessage(error, ar)).toBe(arEntry);
-    expect(getLocalizedErrorMessage(error, en)).toBe(enEntry);
-    const source = readFileSync(join(process.cwd(), "convex", "roles.ts"), "utf8");
-    const match = /const OWNER_NAMED_ROLE_LOCKED_MESSAGE =\s*"([^"]+)"/.exec(source);
-    expect(match?.[1]).toBe(enEntry);
+    const { enEntry } = await expectCodedEntry("OWNER_NAMED_ROLE_LOCKED");
+    expect((await roleMessageConst("OWNER_NAMED_ROLE_LOCKED_MESSAGE")).message).toBe(enEntry);
   });
 
   it("SCRUM-413 the EN dictionary text equals the message thrown by roles.create and roles.update", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
     const { dictionaries } = await import("./i18n/dictionaries");
     const enEntry = (dictionaries.en as Record<string, string>).ServerError_PERMISSION_RETIRED;
     expect(enEntry).toBeTruthy();
-    const source = readFileSync(join(process.cwd(), "convex", "roles.ts"), "utf8");
-    const match = /const RETIRED_PERMISSION_MESSAGE =\s*'([^']+)'/.exec(source);
-    expect(match?.[1]).toBe(enEntry);
+    const { source, message } = await roleMessageConst("RETIRED_PERMISSION_MESSAGE");
+    expect(message).toBe(enEntry);
     // Both throws use the code, not a bare ConvexError string.
     expect(source.match(/throwAppError\(AppErrorCode\.PERMISSION_RETIRED, RETIRED_PERMISSION_MESSAGE\)/g)).toHaveLength(2);
   });

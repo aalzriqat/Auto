@@ -172,9 +172,7 @@ export const AppErrorCode = {
   FORWARD_CANCEL_POSTING_UNSETTLED: "FORWARD_CANCEL_POSTING_UNSETTLED",
   FORWARD_CANCEL_REVERSAL_PENDING: "FORWARD_CANCEL_REVERSAL_PENDING",
   FORWARD_CANCEL_NEEDS_REPAIR: "FORWARD_CANCEL_NEEDS_REPAIR",
-  // SCRUM-413 S413B-4/L-2. `roles.update` refuses a permissions edit on a role that is named OWNER
-  // but does not qualify as the system owner (isUnqualifiedOwnerNamed). Translated under
-  // ServerError_<code>.
+  // SCRUM-413 S413B-4/L-2
   OWNER_NAMED_ROLE_LOCKED: "OWNER_NAMED_ROLE_LOCKED",
 } as const;
 

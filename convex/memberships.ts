@@ -1427,7 +1427,7 @@ export const syncRolePermissionsToTemplate = mutation({
     for (const role of roles) {
       const template = DEFAULT_ROLE_TEMPLATES.find(t => t.name === role.name);
       if (!template) continue;
-      // SCRUM-413 S413B-4: an OWNER-named row that does not qualify gains nothing from the template.
+      // S413B-4: see isUnqualifiedOwnerNamed
       if (isUnqualifiedOwnerNamed(role)) continue;
       const synced: string[] = [...template.permissions];
       const before = new Set(role.permissions);

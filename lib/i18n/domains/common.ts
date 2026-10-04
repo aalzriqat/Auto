@@ -320,8 +320,7 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "The record of the payment to the finance company does not match the books. An accountant reviews it before this deal can be cancelled.",
     "سجل الدفعة المسدَّدة لشركة التمويل لا يطابق الدفاتر. يراجعه المحاسب قبل أن يمكن إلغاء هذه الصفقة.",
   ],
-  // SCRUM-413 S413B-4/L-2. `roles.update` refuses a permissions edit on a role named OWNER that is
-  // not the system owner role. The EN text equals the server message.
+  // SCRUM-413 S413B-4/L-2
   ServerError_OWNER_NAMED_ROLE_LOCKED: [
     "This role is named OWNER but is not the system owner role, so its permissions cannot be edited. Rename it to a different name first.",
     "هذا الدور يحمل الاسم المحجوز OWNER لكنه ليس دور المالك الأساسي في النظام، لذا لا يمكن تعديل صلاحياته. غيّر اسمه إلى اسم آخر أولاً.",

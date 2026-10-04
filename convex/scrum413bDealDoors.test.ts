@@ -316,13 +316,6 @@ describe("SCRUM-413 PR-B D-b - the entry gate and replay across actors (non-CLOS
   });
 });
 
-/**
- * SCRUM-413 PR-B D-37 (Codex F-01): the cockpit offers Cancel on a CLOSED deal
- * only when `cancelApplication` would accept a fresh command on the SAME
- * snapshot - the forward gate included. Each scenario reads the projection,
- * then issues a fresh cancel as the same actor; the two must agree, and a
- * refusal must write nothing.
- */
 describe("SCRUM-413 PR-B S413B-4 - a template sync never turns a fake OWNER row into a cancelling role", () => {
   test("a member on a fake OWNER row is refused at the CANCEL_CLOSED_DEAL door before and after the sync", async () => {
     const { s, applicationId } = await finalizedDeal("s4fake");
@@ -350,6 +343,13 @@ describe("SCRUM-413 PR-B S413B-4 - a template sync never turns a fake OWNER row 
   });
 });
 
+/**
+ * SCRUM-413 PR-B D-37 (Codex F-01): the cockpit offers Cancel on a CLOSED deal
+ * only when `cancelApplication` would accept a fresh command on the SAME
+ * snapshot - the forward gate included. Each scenario reads the projection,
+ * then issues a fresh cancel as the same actor; the two must agree, and a
+ * refusal must write nothing.
+ */
 describe("SCRUM-413 PR-B D-37 - the cockpit's cancel offer equals what a fresh cancel does, forward gate included", () => {
   const FORWARD = H + C;
   const record = (s: Seeded, applicationId: Id<"financeApplications">) =>
