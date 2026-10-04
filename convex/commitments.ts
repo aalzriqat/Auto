@@ -65,6 +65,7 @@ import {
   stampAcquisitionPointer,
 } from "./utils/commitmentSources";
 import { IN_FLIGHT_FINANCE_STATUSES as FINANCE_IN_FLIGHT } from "./utils/financeStatuses";
+import { assertVehicleNotDeleted } from "./utils/vehicleLiveness";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 
@@ -329,6 +330,12 @@ export async function resolveActingRoot(
     actingCustomerId?: Id<"customers"> | null;
     /** Overrides the generic refusal wording at doors that need their own. */
     refusalMessage?: string;
+    /**
+     * SCRUM-641: set ONLY by a caller that has already refused a soft-deleted car for this vehicle
+     * earlier in the SAME transaction, so a bulk door (a 100-car deposit) does not pay a second
+     * document read per car against the platform's per-function read budget.
+     */
+    livenessAlreadyChecked?: boolean;
   }
 ): Promise<ActingRoot> {
   // ⚠️ ONE CLOCK READING FOR THE WHOLE DECISION, taken before anything is
@@ -343,6 +350,16 @@ export async function resolveActingRoot(
   // `vehicles.createReservation`), where there is no cache to bound; the query
   // context exists for tests and read-only callers.
   const decisionNow = Date.now();
+
+  // SCRUM-641 (D-35): a soft-deleted car never takes new commercial authority. This is the one
+  // acquisition decision behind `assertAcquirable` / `acquireVehicle`, so every door that reaches it
+  // (deposit, reservation, application, sale) inherits the refusal. A missing or foreign car is
+  // left to the caller's own not-found; SOLD / ARCHIVED keep precedence inside the helper.
+  if (args.livenessAlreadyChecked !== true) {
+    const targetVehicle = await ctx.db.get(args.vehicleId);
+    if (targetVehicle && targetVehicle.orgId === args.orgId) assertVehicleNotDeleted(targetVehicle);
+  }
+
   const ownership = await resolveOwnership(ctx, args.orgId, args.vehicleId);
 
   if (ownership.kind === "AMBIGUOUS") {
@@ -1155,6 +1172,8 @@ export async function acquireVehicle(
     lineage: CommitmentLineage;
     refusalMessage?: string;
     predecessor?: Doc<"vehicleCommitmentClaims">;
+    /** See `resolveActingRoot.livenessAlreadyChecked`. */
+    livenessAlreadyChecked?: boolean;
   }
 ): Promise<{ rootId: Id<"commitmentRoots">; claimId: Id<"vehicleCommitmentClaims"> }> {
   const acting = await resolveActingRoot(ctx, {
@@ -1165,6 +1184,7 @@ export async function acquireVehicle(
     // same value the new root would be opened under.
     actingCustomerId: args.customerId,
     refusalMessage: args.refusalMessage,
+    livenessAlreadyChecked: args.livenessAlreadyChecked,
   });
   if (acting.decision === "REFUSE") throwRefusal(acting);
 
@@ -1802,6 +1822,8 @@ export async function assertAcquirable(
     lineage: CommitmentLineage;
     actingCustomerId?: Id<"customers"> | null;
     message?: string;
+    /** See `resolveActingRoot.livenessAlreadyChecked`. */
+    livenessAlreadyChecked?: boolean;
   }
 ): Promise<void> {
   const acting = await resolveActingRoot(ctx, {
@@ -1810,6 +1832,7 @@ export async function assertAcquirable(
     lineage: args.lineage,
     actingCustomerId: args.actingCustomerId,
     refusalMessage: args.message,
+    livenessAlreadyChecked: args.livenessAlreadyChecked,
   });
   if (acting.decision === "REFUSE") throwRefusal(acting);
 }

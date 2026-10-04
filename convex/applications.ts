@@ -37,6 +37,7 @@ import {
 import { assertOperatedDealMode } from "./utils/dealModes";
 import { assertQuoteEconomicsMatchFrozen } from "./utils/quoteEconomicsAnchor";
 import { completeSale } from "./utils/saleCompletion";
+import { assertVehicleNotDeleted } from "./utils/vehicleLiveness";
 import { planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal, forwardGateRefusal } from "./utils/financeCompanyForward";
 import {
@@ -3259,6 +3260,10 @@ export const updateStatus = mutation({
       if (!quote || quote.orgId !== args.orgId) {
         throw new ConvexError("Application quote not found.");
       }
+      // SCRUM-641 (D-35): finance approval is new authority over the car. Refused for a deleted
+      // car; rejection and cancellation (other branches) stay available. Lenient on a missing car.
+      const approvalVehicle = await ctx.db.get(app.vehicleId);
+      if (approvalVehicle && approvalVehicle.orgId === args.orgId) assertVehicleNotDeleted(approvalVehicle);
       await assertRequiredApplicationDocumentsComplete(ctx, app, quote);
       approvedBy = auth.user._id;
       approvedAt = Date.now();

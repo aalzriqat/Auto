@@ -9,6 +9,7 @@ import { notifyManagers, notifyUser, getActorName } from "./utils/notifications"
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { fromMinorUnits } from "./utils/money";
 import { profitDecision, requestMatchesTerms, requestsForTerms } from "./utils/profitApproval";
+import { assertVehicleNotDeleted } from "./utils/vehicleLiveness";
 
 // Exported so requestProfitApprovalArgs.test.ts can assert it still matches
 // `profitApprovalRequests.wizardSnapshot` in convex/schema.ts. Accepting a field
@@ -74,6 +75,8 @@ export const requestProfitApproval = mutation({
     if (!vehicle || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
+    // SCRUM-641 (D-35): no new approval authority for a deleted car.
+    assertVehicleNotDeleted(vehicle);
 
     const currency = await getOrgCurrency(ctx, args.orgId);
     const decision = profitDecision(vehicle, requestedSalePrice(args, vehicle.sellingPrice), currency);
@@ -215,6 +218,8 @@ export const profitApprovalStatus = query({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.orgId !== args.orgId) return null;
+    // SCRUM-641 (D-35): a deleted car reads like a missing one — never APPROVED, whatever rows exist.
+    if (vehicle.isDeleted === true) return null;
 
     const currency = await getOrgCurrency(ctx, args.orgId);
     let decision;

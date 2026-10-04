@@ -2,6 +2,7 @@ import { ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { Doc, Id } from "../_generated/dataModel";
 import { throwAppError, AppErrorCode } from "./errors";
+import { assertVehicleNotDeleted } from "./vehicleLiveness";
 import { requireActorPermission } from "./tenancy";
 import { PERMISSIONS } from "./permissions";
 import { assertDifferentActors } from "./financialGuards";
@@ -116,6 +117,19 @@ export function resolveHoldTargetStatus(
 }
 
 /**
+ * SCRUM-641 (D-35): refuses to commit deposit money ONTO a soft-deleted car. A missing or foreign
+ * car is left to the caller's own not-found. Money moving OFF a deleted car never calls this.
+ */
+export async function assertDepositTargetNotDeleted(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<void> {
+  const target = await ctx.db.get(vehicleId);
+  if (target && target.orgId === orgId) assertVehicleNotDeleted(target);
+}
+
+/**
  * Puts a soft hold on a vehicle when a deposit is recorded. Reserving an
  * already-RESERVED vehicle is a no-op — multiple parallel deposits/quotes on
  * the same vehicle record are allowed (the same car can be sourced again from
@@ -133,6 +147,9 @@ export async function holdVehicleForDeposit(
   if (vehicle.status === "ARCHIVED") {
     throwAppError(AppErrorCode.VEHICLE_ARCHIVED, "Cannot place a deposit on an archived vehicle.");
   }
+  // SCRUM-641 (D-35): the deposit door's liveness guard. `postQuoteDeposit` skips the commitments
+  // liveness read (`livenessAlreadyChecked`) because this read already covers every quote line.
+  assertVehicleNotDeleted(vehicle);
   if (isHoldableStatus(vehicle.status)) {
     await ctx.db.patch(vehicleId, {
       status: "RESERVED" as const,

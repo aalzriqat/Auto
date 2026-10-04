@@ -295,6 +295,12 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This vehicle is no longer available in this dealership, so the request can't be approved. Reject it instead.",
     "لم تعد هذه المركبة متاحة في هذا المعرض، لذا لا يمكن الموافقة على الطلب. يُرجى رفضه بدلاً من ذلك.",
   ],
+  // SCRUM-641 (D-35). Every door that would quote, reserve, sell, hold or take a deposit on a
+  // soft-deleted vehicle refuses with this code; refunds, rejections and cancellations stay open.
+  ServerError_VEHICLE_DELETED: [
+    "This vehicle has been deleted and can no longer be quoted, reserved, sold or take a deposit.",
+    "تم حذف هذه السيارة ولم يعد بالإمكان تسعيرها أو حجزها أو بيعها أو استلام عربون عليها.",
+  ],
   FinanceCompanyReceivables: ["Finance-company receivables", "ذمم شركات التمويل"],
   FinanceCompanyReceivablesDesc: ["Amounts due from finance companies. Open the originating deal to review or settle them.", "المبالغ المستحقة من شركات التمويل. افتح الصفقة الأصلية للمراجعة أو التسوية."],
   DocumentNumber: ["Document number", "رقم المستند"],
