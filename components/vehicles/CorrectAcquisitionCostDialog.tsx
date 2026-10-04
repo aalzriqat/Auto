@@ -172,7 +172,7 @@ function CorrectionForm({
             ) : (
               <>
                 <div className="space-y-1.5">
-                  <Label htmlFor="cost-correction-new">{tx("CostCorrectionNewCost")}</Label>
+                  <Label htmlFor="cost-correction-new">{tx("CostCorrectionNewCost").replace("{currency}", context.currency)}</Label>
                   <Input
                     id="cost-correction-new"
                     type="number"
@@ -204,6 +204,12 @@ function CorrectionForm({
                     </SelectContent>
                   </Select>
                 </div>
+
+                {needsMethod && context.originalPaymentMethod === "ON_ACCOUNT" && (
+                  <p role="note" className="rounded-md border p-2 text-xs text-muted-foreground">
+                    {tx("CostCorrectionOnAccountRefundNote")}
+                  </p>
+                )}
 
                 {needsMethod && (
                   <div className="space-y-1.5">

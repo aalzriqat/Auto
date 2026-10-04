@@ -1689,14 +1689,14 @@ function originalPaymentMethodOf(event: Doc<"accountingEvents">): string | undef
  */
 async function loadAcquisitionPayable(
   ctx: QueryCtx | MutationCtx,
-  vehicleId: Id<"vehicles">
+  vehicle: Pick<Doc<"vehicles">, "_id" | "orgId">
 ): Promise<{ row: Doc<"vehicleSupplierPayables"> | null; count: number }> {
   const rows = (
     await ctx.db
       .query("vehicleSupplierPayables")
-      .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId))
+      .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicle._id))
       .collect()
-  ).filter((row) => row.saleId === undefined);
+  ).filter((row) => row.saleId === undefined && row.orgId === vehicle.orgId);
   return { row: rows.length === 1 ? rows[0] : null, count: rows.length };
 }
 
@@ -1877,7 +1877,7 @@ export const correctAcquisitionCost = mutation({
     }
 
     // ── The correction-type matrix, enforced from the ORIGINAL payment method.
-    const { row, count: payableCount } = await loadAcquisitionPayable(ctx, args.vehicleId);
+    const { row, count: payableCount } = await loadAcquisitionPayable(ctx, vehicle);
     const originalMethod = resolveOriginalPaymentMethod(acquisitionEvent, payableCount);
     const rewritesPayable = originalMethod === "ON_ACCOUNT" && AP_CORRECTION_TYPES.includes(args.correctionType);
     const payableAdjustable = isPayableAdjustable(row, currency, previousCost);
@@ -1946,7 +1946,11 @@ export const correctAcquisitionCost = mutation({
     // A cash/bank correction moved real money, so the cashbook gets a row for it. The ORIGINAL
     // purchase row is never edited: the correction is its own dated entry, linked back by its
     // idempotency key. AP and restatement corrections move no cash and write nothing here.
-    if (args.correctionType === "CASH_REFUND") {
+    //
+    // An ON_ACCOUNT-origin car gets NO row: neither its acquisition nor its supplier payments
+    // (sourcingPayables markPaid / recordPartialPayment) are ever projected into the cashbook, so
+    // a lone refund IN row would drive P&L cost of goods negative. The GL still posts in full.
+    if (args.correctionType === "CASH_REFUND" && originalMethod !== "ON_ACCOUNT") {
       await ctx.db.insert("transactions", {
         orgId: args.orgId,
         // Money back from the supplier is cash IN; an underpayment settled now is cash OUT.
@@ -1954,7 +1958,7 @@ export const correctAcquisitionCost = mutation({
         amount: fromMinorUnits(Math.abs(deltaMinor), currency),
         date: now,
         category: "VEHICLE_PURCHASE",
-        description: `Purchase cost correction (${args.paymentMethod ?? "CASH"}) for vehicle ${vehicle.year} ${vehicle.make} ${vehicle.model} (VIN: ${vehicle.vin}): ${previousCost} → ${args.newCost}`,
+        description: `Purchase cost correction (${args.paymentMethod ?? "CASH"}) for vehicle ${vehicle.year} ${vehicle.make} ${vehicle.model} (VIN: ${vehicle.vin})`,
         idempotencyKey: `vehicle_cost_correction_${correctionId}`,
         vehicleId: args.vehicleId,
       });
@@ -2062,7 +2066,7 @@ export const getAcquisitionCostCorrectionContext = query({
       return blocked("NOT_POSTED");
     }
 
-    const { row, count } = await loadAcquisitionPayable(ctx, args.vehicleId);
+    const { row, count } = await loadAcquisitionPayable(ctx, vehicle);
     const originalPaymentMethod = resolveOriginalPaymentMethod(event, count);
     const payableRow = originalPaymentMethod === "ON_ACCOUNT" ? row : null;
 

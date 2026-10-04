@@ -650,6 +650,41 @@ describe("SCRUM-650 batch 2 A4: the cashbook projection of a cash correction", (
     expect(pnl.costOfGoodsSold).toBe(13000);
   });
 
+  test("batch 3 C1: a refund on a PAID on-account car posts the GL but no cashbook row, and P&L cost is never negative", async () => {
+    const d = await seedDealer("b3c1");
+    const vehicleId = await createOnAccountVehicle(d, 12500);
+    const payable = await payableOf(d.t, vehicleId);
+    await d.asOwner.mutation(api.sourcingPayables.markPaid, {
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, payableId: payable!._id, paymentMethod: "BANK_TRANSFER",
+    });
+    const rowsBefore = (await listAll(d)).page;
+    const inventoryBefore = await balanceMinor(d.t, d.orgId, "VEHICLE_INVENTORY");
+    await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId, newCost: 9800, reason: "Supplier refunded", correctionType: "CASH_REFUND", paymentMethod: "BANK_TRANSFER",
+    });
+    // GL posted in full, vehicle cost moved.
+    expect(await balanceMinor(d.t, d.orgId, "VEHICLE_INVENTORY")).toBe(inventoryBefore - 2700 * 1000);
+    expect((await d.t.run((ctx) => ctx.db.get(vehicleId)))?.purchasePrice).toBe(9800);
+    // The cashbook never projected this car's acquisition or its payment, so it gains no row now.
+    const rowsAfter = (await listAll(d)).page;
+    expect(rowsAfter.map((r) => r._id).sort()).toEqual(rowsBefore.map((r) => r._id).sort());
+    expect(rowsAfter.filter((r) => r.category === "VEHICLE_PURCHASE" && r.type === "IN")).toHaveLength(0);
+    const pnl = await d.asOwner.query(api.reports.getProfitAndLoss, { orgId: d.orgId, ...ALL_TIME });
+    expect(pnl.costOfGoodsSold).toBeGreaterThanOrEqual(0);
+  });
+
+  test("batch 3 C2: the cashbook description carries the method, vehicle and VIN but neither cost amount", async () => {
+    const d = await seedDealer("b3c2");
+    const vehicleId = await createCashVehicle(d, 12500, "CASH");
+    await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId, newCost: 9800, reason: "Supplier refunded", correctionType: "CASH_REFUND", paymentMethod: "CASH",
+    });
+    const refund = (await listAll(d)).page.find((r) => r.category === "VEHICLE_PURCHASE" && r.type === "IN");
+    expect(refund?.description).toMatch(/^Purchase cost correction \(CASH\) for vehicle 2020 Honda Accord \(VIN: 1HGCM82633A000001\)$/);
+    expect(refund?.description).not.toContain("12500");
+    expect(refund?.description).not.toContain("9800");
+  });
+
   test("AP and restatement corrections add no cashbook row", async () => {
     const d = await seedDealer("b4c");
     const onAccountId = await createOnAccountVehicle(d, 12500);
