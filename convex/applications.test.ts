@@ -3149,3 +3149,168 @@ describe("applications required document enforcement", () => {
     });
   });
 });
+
+/**
+ * The Deals page loads one page from each list and sorts only what it loaded,
+ * so the server must hand back the newest records first. Oldest-first paging
+ * hid every new deal behind "Load more" once an org passed one page
+ * (SCRUM-603).
+ */
+describe("deal lists page newest first (SCRUM-603)", () => {
+  test("applications.list returns the newest application on the first page", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+    });
+    const oldestId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    // Two later rows with the same references, so each one enriches like a real deal.
+    const newestId = await t.run(async (ctx) => {
+      const { _id, _creationTime, ...row } = (await ctx.db.get(oldestId))!;
+      await ctx.db.insert("financeApplications", row);
+      return await ctx.db.insert("financeApplications", row);
+    });
+
+    const page = await asUser.query(api.applications.list, {
+      orgId,
+      paginationOpts: { numItems: 1, cursor: null },
+    });
+
+    expect(page.page.map((a) => a._id)).toEqual([newestId]);
+  });
+
+  test("sales.list returns the newest sale on the first page", async () => {
+    const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
+    const [, , newestId] = await t.run(async (ctx) => {
+      const ids: Array<Id<"sales">> = [];
+      for (let i = 0; i < 3; i++) {
+        ids.push(
+          await ctx.db.insert("sales", {
+            orgId,
+            vehicleId,
+            customerId,
+            salespersonId: userId,
+            salePrice: 20_000,
+            saleDate: Date.now(),
+            status: "COMPLETED",
+          })
+        );
+      }
+      return ids;
+    });
+
+    const page = await asUser.query(api.sales.list, {
+      orgId,
+      paginationOpts: { numItems: 1, cursor: null },
+    });
+
+    expect(page.page.map((s) => s._id)).toEqual([newestId]);
+  });
+
+  // The filtered branches read a different index, so each needs its own order.
+  test("applications.list filtered by status returns the newest matching application first", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+    });
+    const oldestId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    const { status, newestId } = await t.run(async (ctx) => {
+      const { _id, _creationTime, ...row } = (await ctx.db.get(oldestId))!;
+      await ctx.db.insert("financeApplications", row);
+      return { status: row.status, newestId: await ctx.db.insert("financeApplications", row) };
+    });
+
+    const page = await asUser.query(api.applications.list, {
+      orgId,
+      status,
+      paginationOpts: { numItems: 1, cursor: null },
+    });
+
+    expect(page.page.map((a) => a._id)).toEqual([newestId]);
+  });
+
+  test("sales.list filtered by salesperson returns the newest matching sale first", async () => {
+    const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
+    const newestId = await t.run(async (ctx) => {
+      let last: Id<"sales"> | undefined;
+      for (let i = 0; i < 3; i++) {
+        last = await ctx.db.insert("sales", {
+          orgId,
+          vehicleId,
+          customerId,
+          salespersonId: userId,
+          salePrice: 20_000,
+          saleDate: Date.now(),
+          status: "COMPLETED",
+        });
+      }
+      return last!;
+    });
+
+    const page = await asUser.query(api.sales.list, {
+      orgId,
+      salespersonId: userId,
+      paginationOpts: { numItems: 1, cursor: null },
+    });
+
+    expect(page.page.map((s) => s._id)).toEqual([newestId]);
+  });
+  // Codex SCRUM-603-1: newest-first sales and applications page independently,
+  // so a recently finalized deal can arrive as a sale whose (older) application
+  // is not loaded. Without the application's queue facts that row read
+  // "nothing to wait for" while the financier still owed the dealership.
+  test("a finalized deal's sale row carries its application's queue facts", async () => {
+    const { orgId, companyId, applicationId, asUser } = await setupFinalizedFinancedDeal();
+
+    const page = await asUser.query(api.sales.list, {
+      orgId,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    const finalized = page.page.find((s) => s.applicationId === applicationId);
+
+    expect(finalized?.linkedApplication).toEqual({
+      status: "CLOSED",
+      companyId,
+      disbursedAt: undefined,
+      supplierSettlementRoute: undefined,
+      hasPendingDepositResolution: false,
+    });
+  });
+
+  test("a sale linked to another organization's application carries no queue facts", async () => {
+    const { t, orgId, userId, customerId, vehicleId, asUser, applicationId } = await setupFinalizedFinancedDeal();
+    const other = await t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Other", createdAt: Date.now() });
+      const { _id, _creationTime, ...row } = (await ctx.db.get(applicationId))!;
+      return await ctx.db.insert("financeApplications", { ...row, orgId: otherOrgId });
+    });
+    const saleId = await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice: 20_000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        applicationId: other,
+      })
+    );
+
+    const page = await asUser.query(api.sales.list, {
+      orgId,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+
+    expect(page.page.find((s) => s._id === saleId)?.linkedApplication).toBeUndefined();
+  });
+});
