@@ -182,6 +182,12 @@ export default function Step1QuoteSetup({
   // asks the backend about that price. `blocked` holds Next disabled while the
   // verdict loads, so it never flickers enabled on a below-minimum deal.
   const quotedPrice = (Number(watchedPrice) || 0) + (Number(watchedProfit) || 0);
+  // SCRUM-609 F-25: a financed quote needs something left to finance; the
+  // server refuses this case, so stop here instead of at Generate.
+  const downPaymentCoversPrice =
+    paymentType === "INSTALLMENT" &&
+    quotedPrice > 0 &&
+    !((Number(watchedDown) || 0) < quotedPrice);
   const profitApproval = useProfitApproval({
     orgId: activeOrgId,
     vehicleId: watchedVehicleId as Id<"vehicles"> | undefined,
@@ -234,6 +240,11 @@ export default function Step1QuoteSetup({
 
   const onSubmit = (values: Step1Values) => {
     if (paymentType === "INSTALLMENT") {
+      if (downPaymentCoversPrice) {
+        form.setFocus("downPayment");
+        return;
+      }
+
       if (!selectedCompanyId) {
         form.setError("vehicleId", {
           message: "Please select a financing company",
@@ -514,8 +525,18 @@ export default function Step1QuoteSetup({
                   <FormItem>
                     <FormLabel>{t("DownPayment" as any)}</FormLabel>
                     <FormControl>
-                      <Input type="number" {...field} />
+                      <Input
+                        type="number"
+                        aria-invalid={downPaymentCoversPrice || undefined}
+                        {...field}
+                      />
                     </FormControl>
+                    {downPaymentCoversPrice && (
+                      <p role="alert" className="text-sm font-medium text-destructive">
+                        {t("DownPaymentMustBeBelowPrice" as any)}
+                      </p>
+                    )}
+                    <FormMessage />
                   </FormItem>
                 )}
               />
@@ -579,7 +600,15 @@ export default function Step1QuoteSetup({
         )}
 
         {/* Finance panel */}
-        {!isCash && (
+        {!isCash && downPaymentCoversPrice && (
+          <p
+            data-testid="finance-panel-blocked"
+            className="rounded-xl border border-dashed px-4 py-6 text-center text-sm text-muted-foreground"
+          >
+            {t("DownPaymentMustBeBelowPrice" as any)}
+          </p>
+        )}
+        {!isCash && !downPaymentCoversPrice && (
           <FinancePanel
             vehicleId={watchedVehicleId}
             vehiclePrice={Number(watchedPrice) || 0}

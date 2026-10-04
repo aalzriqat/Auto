@@ -92,6 +92,12 @@ export function Step3Review({
   const effectivePrice =
     wizardData.vehiclePrice + (wizardData.desiredProfit || 0);
 
+  // SCRUM-609 F-25: a financed quote needs something left to finance. The
+  // server refuses the same case (assertFinancedQuoteContributionValid); this
+  // stops the review from showing negative figures behind an enabled button.
+  const downPaymentCoversPrice =
+    paymentType === "INSTALLMENT" && !((wizardData.downPayment || 0) < effectivePrice);
+
   const selectedResult = useMemo(() => {
     if (paymentType === "CASH") {
       return {
@@ -192,7 +198,7 @@ export function Step3Review({
   const [recipientName, setRecipientName] = useState("");
 
   const handleGenerate = async () => {
-    if (!activeOrgId || !selectedResult) return;
+    if (!activeOrgId || !selectedResult || downPaymentCoversPrice) return;
 
     setIsSubmitting(true);
 
@@ -265,15 +271,27 @@ export function Step3Review({
       </div>
 
       {/* FINANCE SUMMARY */}
-      {selectedResult && (
-        <ReviewFinanceSummary
-          {...selectedResult}
-          desiredProfit={wizardData.desiredProfit}
-        />
+      {downPaymentCoversPrice ? (
+        <div
+          role="alert"
+          className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        >
+          {t("DownPaymentMustBeBelowPrice" as any)}
+        </div>
+      ) : (
+        selectedResult && (
+          <ReviewFinanceSummary
+            {...selectedResult}
+            desiredProfit={wizardData.desiredProfit}
+            salePrice={effectivePrice}
+            downPayment={wizardData.downPayment || 0}
+            termMonths={wizardData.termMonths}
+          />
+        )
       )}
 
       {/* DOCUMENTS */}
-      {selectedResult && !selectedResult.isCash && (
+      {selectedResult && !selectedResult.isCash && !downPaymentCoversPrice && (
         <div className={cn("border rounded-xl p-4", accentClass)}>
           <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 flex items-center gap-1">
             <FileText className="w-3.5 h-3.5" />
@@ -321,7 +339,7 @@ export function Step3Review({
 
         <Button
           onClick={handleGenerate}
-          disabled={isSubmitting || !selectedResult}
+          disabled={isSubmitting || !selectedResult || downPaymentCoversPrice}
           className={cn(
             "w-full sm:w-auto",
             paymentType === "CASH"
