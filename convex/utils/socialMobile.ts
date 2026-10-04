@@ -100,23 +100,78 @@ function isAllowedLocalNumber(localNumber: string): boolean {
   return /^(?:07[789]\d{7}|06\d{7})$/.test(localNumber);
 }
 
-function localNumberFromCandidate(candidate: string): string | null {
+type ParsedNumber = { localNumber: string; international: boolean };
+
+function parseCandidate(candidate: string): ParsedNumber | null {
   const trimmed = candidate.trim();
   const digits = trimmed.replace(/\D/g, "");
+  const local = (localNumber: string, international: boolean): ParsedNumber | null =>
+    isAllowedLocalNumber(localNumber) ? { localNumber, international } : null;
 
   if (trimmed.startsWith("+") && digits.startsWith(JORDAN_COUNTRY_CODE)) {
     const nationalNumber = digits.slice(JORDAN_COUNTRY_CODE.length);
-    const localNumber = nationalNumber.startsWith("0") ? nationalNumber : `0${nationalNumber}`;
-    return isAllowedLocalNumber(localNumber) ? localNumber : null;
+    return local(nationalNumber.startsWith("0") ? nationalNumber : `0${nationalNumber}`, true);
   }
 
   if (digits.startsWith(INTERNATIONAL_PREFIX)) {
     const nationalNumber = digits.slice(INTERNATIONAL_PREFIX.length);
-    const localNumber = nationalNumber.startsWith("0") ? nationalNumber : `0${nationalNumber}`;
-    return isAllowedLocalNumber(localNumber) ? localNumber : null;
+    return local(nationalNumber.startsWith("0") ? nationalNumber : `0${nationalNumber}`, true);
   }
 
-  return isAllowedLocalNumber(digits) ? digits : null;
+  // The country code typed without + or 00 ("962791234567"), and a mobile
+  // typed without its trunk zero ("791234567"). Both are exact-length shapes,
+  // so a price or year cannot reach them.
+  if (/^962(?:7[789]\d{7}|6\d{7})$/.test(digits)) return local(`0${digits.slice(3)}`, true);
+  if (/^7[789]\d{7}$/.test(digits)) return local(`0${digits}`, false);
+
+  return local(digits, false);
+}
+
+function localNumberFromCandidate(candidate: string): string | null {
+  return parseCandidate(candidate)?.localNumber ?? null;
+}
+
+const DIGIT_GROUP_RE = /\d+/g;
+/** Longer than any accepted shape (00962 + 9 digits), so growing stops. */
+const MAX_PHONE_DIGITS = 14;
+
+/**
+ * Every accepted number inside one candidate run, left to right.
+ *
+ * The separators a number may be written with (spaces, dashes, slashes,
+ * commas) are the same ones customers put *between* numbers, so one run can
+ * hold a year or a price and then the mobile — "Elantra 2020 0791234567" —
+ * or two mobiles. Taken whole, such a run is no number at all. Instead the
+ * run's digit groups are joined from each starting group until they first
+ * form an accepted number; the groups that formed it are consumed.
+ */
+function* numbersInCandidate(candidate: string): Generator<ParsedNumber> {
+  const groups = [...candidate.matchAll(DIGIT_GROUP_RE)].map((m) => ({
+    start: m.index ?? 0,
+    end: (m.index ?? 0) + m[0].length,
+  }));
+
+  let first = 0;
+  while (first < groups.length) {
+    // Only the run's first group may carry the leading "+".
+    const from = first === 0 ? 0 : groups[first].start;
+    let found: { parsed: ParsedNumber; last: number } | null = null;
+    for (let last = first; last < groups.length; last++) {
+      const text = candidate.slice(from, groups[last].end);
+      if (text.replace(/\D/g, "").length > MAX_PHONE_DIGITS) break;
+      const parsed = parseCandidate(text);
+      if (parsed) {
+        found = { parsed, last };
+        break;
+      }
+    }
+    if (found) {
+      yield found.parsed;
+      first = found.last + 1;
+    } else {
+      first++;
+    }
+  }
 }
 
 function variantsFromLocalNumber(localNumber: string): string[] {
@@ -150,14 +205,10 @@ export function ownNumberExclusions(
     const normalized = normalizePhoneText(value).trim();
     // These settings are stored exactly as typed — `dealershipPhone` is not
     // even trimmed on write — so the same number turns up as "0799103353",
-    // "+962799103353", "00962799103353" or a bare "962799103353". Only the
-    // first three parse on their own; without the prefixed retries a dealer
-    // who wrote their number the fourth way got an empty exclusion set and
-    // the original bug back, silently.
-    const localNumber =
-      localNumberFromCandidate(normalized) ??
-      localNumberFromCandidate(`+${normalized}`) ??
-      localNumberFromCandidate(`00${normalized}`);
+    // "+962799103353", "00962799103353" or a bare "962799103353". The parser
+    // accepts all four; a dealer whose format it missed would get an empty
+    // exclusion set and the original bug back, silently.
+    const localNumber = localNumberFromCandidate(normalized);
     if (!localNumber) continue;
     for (const variant of variantsFromLocalNumber(localNumber)) excluded.add(variant);
   }
@@ -181,17 +232,12 @@ export function extractSharedMobileNumber(
 
   const candidates = normalizePhoneText(text).match(PHONE_CANDIDATE_RE) ?? [];
   for (const candidate of candidates) {
-    const localNumber = localNumberFromCandidate(candidate);
-    if (!localNumber) continue;
-    if (excluded?.has(localNumber)) continue;
+    for (const { localNumber, international } of numbersInCandidate(candidate)) {
+      if (excluded?.has(localNumber)) continue;
 
-    const variants = variantsFromLocalNumber(localNumber);
-    const trimmedCandidate = candidate.trim();
-    const candidateDigits = trimmedCandidate.replace(/\D/g, "");
-    const usesInternationalPrefix =
-      trimmedCandidate.startsWith("+") || candidateDigits.startsWith(INTERNATIONAL_PREFIX);
-    const normalized = usesInternationalPrefix ? variants[1] : localNumber;
-    return { normalized, variants };
+      const variants = variantsFromLocalNumber(localNumber);
+      return { normalized: international ? variants[1] : localNumber, variants };
+    }
   }
 
   return null;

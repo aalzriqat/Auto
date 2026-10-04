@@ -29,6 +29,37 @@ describe("extractSharedMobileNumber", () => {
     expect(extractSharedMobileNumber("The price is 25000 and the model is 2025")).toBeNull();
     expect(extractSharedMobileNumber("My number is 0751234567")).toBeNull();
   });
+
+  // SCRUM-624: separators inside a number also sit between two numbers, so a
+  // year or price written next to the mobile was glued onto it and the whole
+  // run rejected — no mobile, so no lead under requires-mobile.
+  test.each([
+    ["Elantra 2020 0791234567", "0791234567"],
+    ["15000, 0791234567", "0791234567"],
+    ["السعر 15000 0791234567", "0791234567"],
+    ["2020 079 123 4567", "0791234567"],
+    ["0791234567 / 0781234567", "0791234567"],
+    ["0791234567 0781234567", "0791234567"],
+    ["15000 +962 79 123 4567", "+962791234567"],
+    ["962791234567", "+962791234567"],
+    ["962 79 123 4567", "+962791234567"],
+    ["791234567", "0791234567"],
+    ["79 123 4567", "0791234567"],
+  ])("finds the mobile beside other digits: %s", (text, expected) => {
+    expect(extractSharedMobileNumber(text)?.normalized).toBe(expected);
+  });
+
+  test("a year, price or mileage on its own is still not a mobile", () => {
+    for (const text of ["2020 2021", "15000, 20000", "150000 km", "12345678", "1234567890", "751234567", "Elantra 2020 15000"]) {
+      expect(extractSharedMobileNumber(text)).toBeNull();
+    }
+  });
+
+  test("the dealer's number glued to the sender's still yields the sender's", () => {
+    const excluded = ownNumberExclusions({ dealershipPhone: "0799103353" });
+    expect(extractSharedMobileNumber("0799103353 / 0781234567", excluded)?.normalized).toBe("0781234567");
+    expect(extractSharedMobileNumber("0799103353 0781234567", excluded)?.normalized).toBe("0781234567");
+  });
 });
 
 describe("ownNumberExclusions", () => {

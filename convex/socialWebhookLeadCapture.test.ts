@@ -338,6 +338,15 @@ describe("Facebook DM → lead (production configuration)", () => {
     expect(s.fbEvents).toHaveLength(0);
   });
 
+  test("SCRUM-624: a DM with the model year beside the mobile still becomes a lead", async () => {
+    const t = newT();
+    const orgId = await seedOrg(t, PROD_LIKE_FB);
+    await post(t, "/facebook-webhook", fbDm("psid_year", "Elantra 2020 0791234567"));
+    const s = await snapshot(t, orgId);
+    expect(s.customers[0]?.phone).toBe("0791234567");
+    expect(s.leads).toHaveLength(1);
+  });
+
   test("a DM quoting only the dealer's own number is not a lead", async () => {
     const t = newT();
     const orgId = await seedOrg(t, { ...PROD_LIKE_FB, dealershipPhone: "0799103353" });
@@ -543,7 +552,7 @@ describe("cross-cutting", () => {
 });
 
 describe("Jordanian mobile extraction", () => {
-  const recognised: Array<[string, string]> = [
+  const cases: Array<[string, string]> = [
     ["0791234567", "0791234567"],
     ["+962 79 123 4567", "0791234567"],
     ["00962791234567", "0791234567"],
@@ -553,16 +562,7 @@ describe("Jordanian mobile extraction", () => {
     ["2 cars 0791234567", "0791234567"],
     ["موديل 2019 رقمي 0791234567", "0791234567"],
     ["call me 0791234567 thanks 2", "0791234567"],
-  ];
-  for (const [input, expected] of recognised) {
-    test(JSON.stringify(input), () => {
-      expect(extractSharedMobileNumber(input)?.variants[0] ?? null).toBe(expected);
-    });
-  }
-
-  // Known defect SCRUM-624: a number next to another number is glued into one
-  // candidate and lost. Flip each to `test` as the extractor is fixed.
-  const missed: Array<[string, string]> = [
+    // SCRUM-624: a number beside another number used to be lost.
     ["Elantra 2020 0791234567", "0791234567"],
     ["15000, 0791234567", "0791234567"],
     ["السعر 15000 0791234567", "0791234567"],
@@ -570,8 +570,8 @@ describe("Jordanian mobile extraction", () => {
     ["962791234567", "0791234567"],
     ["791234567", "0791234567"],
   ];
-  for (const [input, expected] of missed) {
-    test.fails(`SCRUM-624: ${JSON.stringify(input)}`, () => {
+  for (const [input, expected] of cases) {
+    test(JSON.stringify(input), () => {
       expect(extractSharedMobileNumber(input)?.variants[0] ?? null).toBe(expected);
     });
   }
