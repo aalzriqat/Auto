@@ -723,7 +723,7 @@ function reportStandingDefects(prefix) {
     );
   }
   console.error(
-    `::${level}::${prefix}STANDING CONTRACT DEFECT — ${classification.standingDefects.length} path(s). ` +
+    `::${level}::${prefix}STANDING CONTRACT DEFECT — ${classification.standingDefects.length} break(s).` +
       `The current backend still refuses the same call the live backend refuses, so DEPLOYING WILL NOT FIX THIS` +
       (mode === "release" ? ", and this candidate does not introduce it. " : ". ") +
       `Basis: ${classification.basis}`

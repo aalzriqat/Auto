@@ -385,3 +385,53 @@ describe("distinctCallCount: every operator-facing call count is distinct call s
     expect(alertsFor(surfaces, false, 0, 0).summary).toMatch(/\b2 call\(s\) the deployed backend refuses/);
   });
 });
+
+describe("batch 9: break counts say break(s), call counts say call(s) (D-31)", () => {
+  type Site = { siteId: string };
+  const brk = (siteId: string, path: string) => ({
+    surface: "web",
+    file: `${siteId}.tsx`,
+    line: 1,
+    identifier: `w:${siteId}`,
+    siteId,
+    path,
+    dimension: "FIELD",
+    severity: "BREAKING",
+    detail: "d",
+  });
+
+  test("V-1: two breaks at two sites but the SAME path are '2 break(s)', never '2 path(s)', in the skew and standing lines", () => {
+    const none = { revisionSkew: [], standingDefects: [], unclassified: [] };
+    const skew = alertsFor({ ...none, revisionSkew: [brk("A", "same"), brk("B", "same")] }, false, 0, 0).summary;
+    expect(skew).toMatch(/\b2 break\(s\) where the deployed backend is behind the current one/);
+    expect(skew).not.toMatch(/path\(s\) where the deployed/);
+    const standing = alertsFor({ ...none, standingDefects: [brk("A", "same"), brk("B", "same")] }, false, 0, 0).summary;
+    expect(standing).toMatch(/STANDING CONTRACT DEFECT: 2 break\(s\) where the client disagrees/);
+    expect(standing).not.toMatch(/path\(s\) where the client/);
+  });
+
+  test("V-3 (pins existing behaviour, passes before the fix): a second break at a call whose first break is REJECTED_SAME is still REJECTED_OTHER, and is counted and listed", () => {
+    const result = classifyBreaking([brk("A", "q"), brk("B", "x"), brk("B", "y")], {
+      currentResult: { breaking: [brk("A", "z"), brk("B", "x")] },
+    });
+    const by = (site: string, path: string) =>
+      result.classified.find((f) => (f as unknown as Site).siteId === site && f.path === path)?.classification;
+    expect(by("B", "x")).toBe(CLASSIFICATION.STANDING_DEFECT);
+    expect(by("A", "q")).toBe(CLASSIFICATION.REVISION_SKEW);
+    expect(by("B", "y")).toBe(CLASSIFICATION.REVISION_SKEW);
+    expect(result.callOutcomes).toEqual({ fixed: 0, stillFails: 2, unproven: 0 });
+    expect(result.rejectedElsewhere.map((f) => `${(f as unknown as Site).siteId}/${f.path}`).sort()).toEqual(["A/q", "B/y"]);
+    const text = skewSummary({
+      rung: "ENV_KEY",
+      specSource: "",
+      proven: result.revisionSkew.length,
+      unclassified: result.unclassified.length,
+      basis: "b",
+      rejectedElsewhere: result.rejectedElsewhere,
+      callOutcomes: result.callOutcomes,
+    });
+    expect(text).toMatch(/will not make 2 of these call\(s\) succeed/);
+    expect(text).toContain("w:A q at A.tsx:1");
+    expect(text).toContain("w:B y at B.tsx:1");
+  });
+});

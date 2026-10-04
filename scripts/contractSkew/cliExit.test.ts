@@ -1118,6 +1118,14 @@ describe("SCRUM-178 v2 batch 5 (D-30): acceptance is per call, absence is not ac
       expect(r.stderr).not.toMatch(/UNKNOWN: 0 reviewed paths remain unverified/);
     }, 300_000);
 
+    test("V-1: the STANDING CONTRACT DEFECT line counts 'break(s)', not 'path(s)'", () => {
+      const dir = scaffold({ client: SENDS_NOPE, spec: sameSpec(), candidate: sameSpec() });
+      const r = run(dir, releaseArgsJ);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr).toMatch(/STANDING CONTRACT DEFECT — 1 break\(s\)\./);
+      expect(r.stderr).not.toMatch(/STANDING CONTRACT DEFECT — \d+ path\(s\)/);
+    }, 300_000);
+
     test("a standing break AND baselined unknown debt keeps both facts", () => {
       const client = CLIENT("v: unknown", '{ orgId: v, nope: "x" }');
       const dir = scaffold({ client, spec: sameSpec(), candidate: sameSpec() });

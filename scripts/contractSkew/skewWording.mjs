@@ -28,7 +28,7 @@
  *                 deploying alone will not make it succeed, and those are listed.
  *                 If other calls ARE fully accepted, the summary says a deploy
  *                 fixes those K and M call(s) will still fail; unproven calls are
- *                 named too (never a silent blanket withhold).
+ *                 counted too (never a silent blanket withhold).
  */
 
 /** The rung `fetchSpec` reports for a spec file supplied by the caller. */

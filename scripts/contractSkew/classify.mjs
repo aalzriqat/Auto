@@ -298,7 +298,7 @@ export function alertsFor(classification, coverageWarning, needsEvidenceCount, u
   const rejectedElsewhere = distinctCallCount(/** @type {any[]} */ (classification.rejectedElsewhere ?? []));
   const fixableSkew = classification.revisionSkew.length - rejectedElsewhereBreaks;
   if (fixableSkew > 0) {
-    parts.push(`${skewLabel}: ${fixableSkew} path(s) where the deployed backend is behind the current one`);
+    parts.push(`${skewLabel}: ${fixableSkew} break(s) where the deployed backend is behind the current one`);
   }
   if (rejectedElsewhere > 0) {
     parts.push(
@@ -309,7 +309,7 @@ export function alertsFor(classification, coverageWarning, needsEvidenceCount, u
     parts.push(`${classification.unclassified.length} incompatibility(ies) could not be classified — treated as skew`);
   }
   if (standingCount) {
-    parts.push(`STANDING CONTRACT DEFECT: ${standingCount} path(s) where the client disagrees with a backend that is already deployed — deploying will not fix these`);
+    parts.push(`STANDING CONTRACT DEFECT: ${standingCount} break(s) where the client disagrees with a backend that is already deployed — deploying will not fix these`);
   }
   const uncertainCount = classification.uncertain?.length ?? 0;
   if (uncertainCount) {
