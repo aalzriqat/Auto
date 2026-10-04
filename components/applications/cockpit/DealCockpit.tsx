@@ -2339,8 +2339,9 @@ export function DealCockpit({
     } catch (error) {
       // "You cannot approve your own application", an illegal transition —
       // each names what to change. Kept in the dialog so it belongs to the
-      // attempt that earned it.
-      const message = getErrorMessage(error);
+      // attempt that earned it. Localised so a coded refusal (e.g. VEHICLE_DELETED) reads in the
+      // user's language.
+      const message = getLocalizedErrorMessage(error, t);
       setCreditError(message);
       toast.error(message);
     } finally {
