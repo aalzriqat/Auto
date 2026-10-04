@@ -698,16 +698,37 @@ describe("7. profit-approval authority", () => {
     expect(await statusOf(seed, requestId), "the approval row itself is never rewritten").toBe("APPROVED");
   });
 
-  test("a deleted AND sold car reads SOLD, the same precedence as the throwing guard", async () => {
+  const profitStatus = (seed: Seed, vehicleId: Id<"vehicles">) =>
+    seed.asUser.query(api.approvals.profitApprovalStatus, { orgId: seed.orgId, vehicleId, salePrice: PRICE });
+
+  test("R2-F1: every soft-deleted car reads a blocking VEHICLE_DELETED verdict, whatever its status", async () => {
+    // Real lifecycle: archive through the product door, then soft-delete (softDelete allows ARCHIVED).
     const { seed, v } = await profitSeed();
-    await directSale(seed, v, seed.customerA);
-    await seed.t.run((ctx) => ctx.db.patch(v, { isDeleted: true })); // ABNORMAL: a SOLD car is flagged deleted.
-    const status = await seed.asUser.query(api.approvals.profitApprovalStatus, {
+    expect(await profitStatus(seed, v), "control: a live car gets an ordinary verdict").not.toEqual({
+      status: "VEHICLE_DELETED",
+    });
+    await seed.asUser.mutation(api.vehicles.update, {
       orgId: seed.orgId,
       vehicleId: v,
-      salePrice: PRICE,
+      status: "ARCHIVED",
     });
-    expect(status).not.toEqual({ status: "VEHICLE_DELETED" });
+    expect((await get(seed, v))?.status, "precondition: archived").toBe("ARCHIVED");
+    await softDelete(seed, v);
+    expect((await get(seed, v))?.status, "precondition: still ARCHIVED").toBe("ARCHIVED");
+    expect(await profitStatus(seed, v)).toEqual({ status: "VEHICLE_DELETED" });
+
+    // Sold-then-deleted is unreachable through the doors, so it is force-patched. The server GUARD keeps
+    // SOLD > ARCHIVED > DELETED (SCRUM-653); the profit VERDICT must still block.
+    const sold = await vehicle(seed, { minimumProfit: 1_000 });
+    await directSale(seed, sold, seed.customerA);
+    await seed.t.run((ctx) => ctx.db.patch(sold, { isDeleted: true }));
+    expect(await profitStatus(seed, sold)).toEqual({ status: "VEHICLE_DELETED" });
+  });
+
+  test("R2-F1 control: a foreign-org car is still null (never reported deleted)", async () => {
+    const seed = await seedDealer();
+    const foreign = await foreignDeletedVehicle(seed, "SC641FOREIGN0004");
+    expect(await profitStatus(seed, foreign)).toBeNull();
   });
 
   test("a manager can still REJECT a pending request on a deleted car", async () => {
