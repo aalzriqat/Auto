@@ -152,12 +152,14 @@ test.describe("sales wizard guards (SCRUM-609)", () => {
     const trigger = page.locator("#topnav-messenger-btn");
     const list = page.getByPlaceholder("Search conversations…");
     await trigger.click();
-    await expect(trigger).toHaveAttribute("aria-expanded", "true");
     await expect(list).toBeVisible();
     // The trigger must close the list, not close-then-reopen it.
     await trigger.click();
-    await expect(trigger).toHaveAttribute("aria-expanded", "false");
     await expect(list).toHaveCount(0);
+    // The expanded state is announced.
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await trigger.click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
   });
 
   test("SCRUM-612: on a phone, feedback opens from the menu drawer", async ({ page }) => {
