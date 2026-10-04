@@ -242,6 +242,7 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
   it("finds the known creators", () => {
     expect(creators.map((w) => w.file).sort()).toEqual([
       "browser-attack-swarm.yml",
+      "deal-scenarios-e2e.yml",
       "trusted-accounting-rehearsal.yml",
       "trusted-main-e2e.yml",
     ]);

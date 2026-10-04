@@ -46,6 +46,8 @@ export type FinancedScenario = {
   expectedPayment: ExpectedPaymentMethod;
   legalInvoice: number;
   forwardMethod?: ForwardMethod;
+  /** How an approval below the quotation is settled; absent = the dealership absorbs it. */
+  gap?: GapAgreement;
 };
 
 /** A finance company of a given purchase LTV, created once per deployment and reused. */
@@ -228,6 +230,65 @@ export async function recordApproved(managerPage: Page, dealUrl: string, amount:
   await expect(dialog).not.toBeVisible();
 }
 
+/**
+ * Who covers an appraisal gap, in major units. The customer's part is placed
+ * on three destinations that must add up to it (ResolveGapDialog): cash to the
+ * dealership, instalments to the dealership, or paid to the finance company.
+ * Only the dealership-bound part becomes a customer receivable (1200) at close
+ * and is billed on the legal invoice (financedSalePostingPlan v2: legal invoice
+ * = approved + customer's dealership-bound part).
+ */
+export type GapAgreement =
+  | { mode: "DEALER_ABSORBS" }
+  | {
+      mode: "CUSTOMER_ABSORBS" | "SPLIT";
+      /** SPLIT only: the customer's part; the dealership's is derived. */
+      customerShare?: number;
+      cash: number;
+      installments: number;
+      toFinanceCompany: number;
+    };
+
+const GAP_MODE_LABEL = {
+  CUSTOMER_ABSORBS: /The customer covers it/,
+  SPLIT: /Customer and dealership split it/,
+  DEALER_ABSORBS: /The dealership covers it/,
+} as const;
+
+/**
+ * An approved amount below the submitted quotation opens an appraisal gap
+ * that blocks handover until someone decides who covers it. Manager only: the
+ * salesperson may not resolve the gap on their own deal.
+ */
+export async function resolveAppraisalGap(
+  managerPage: Page,
+  dealUrl: string,
+  agreement: GapAgreement,
+): Promise<void> {
+  await managerPage.goto(dealUrl);
+  await dismissOverlays(managerPage);
+  await hideFloatingButtons(managerPage);
+  await managerPage.getByRole("button", { name: "Resolve appraisal gap" }).first().click();
+  const dialog = managerPage.getByRole("dialog");
+  await expect(dialog.getByText("Resolve the appraisal gap")).toBeVisible();
+  await dialog.getByRole("radio", { name: GAP_MODE_LABEL[agreement.mode] }).click();
+  if (agreement.mode !== "DEALER_ABSORBS") {
+    if (agreement.mode === "SPLIT") {
+      await dialog.locator("#gap-customer-share").fill(String(agreement.customerShare ?? 0));
+    }
+    await dialog.locator("#gap-cash").fill(String(agreement.cash));
+    await dialog.locator("#gap-installments").fill(String(agreement.installments));
+    await dialog.locator("#gap-financier").fill(String(agreement.toFinanceCompany));
+  }
+  await dialog.locator("#gap-notes").fill(`QA TEST: appraisal gap settled as ${agreement.mode}.`);
+  await dialog.getByRole("button", { name: "Resolve appraisal gap" }).click();
+  await expect(dialog).not.toBeVisible();
+}
+
+export async function resolveAppraisalGapDealerAbsorbs(managerPage: Page, dealUrl: string): Promise<void> {
+  await resolveAppraisalGap(managerPage, dealUrl, { mode: "DEALER_ABSORBS" });
+}
+
 export { approveCreditDecision };
 
 /**
@@ -341,6 +402,46 @@ export async function cancelDeal(managerPage: Page, reason: string): Promise<voi
 }
 
 /** The finance company's money arriving: the receivable from it is settled. */
+export type DepositTreatment = "RETURN" | "REFUND" | "FORFEIT";
+
+/**
+ * A stopped (cancelled) deal still holding the customer's deposit shows it on
+ * the deal cockpit (components/applications/cockpit/StoppedDealDepositsPanel):
+ * Refund — with the method the cash leaves by, chosen in the confirmation — or
+ * Forfeit. RETURN is "decide nothing": the deposit stays HELD on the quote for a
+ * later deal, so the step asserts it is still held and moves no money.
+ * Runs on the cockpit `cancelDeal` leaves the manager on.
+ */
+export async function decideDeposit(
+  managerPage: Page,
+  _customer: string,
+  decision: { treatment: DepositTreatment; refundMethod?: "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD" },
+): Promise<void> {
+  const panel = managerPage.getByTestId("deal-deposits");
+  await expect(panel).toBeVisible({ timeout: 60_000 });
+  const heldRow = panel.locator('[data-testid^="deal-deposit-"]').filter({ hasText: "Held" }).first();
+  await expect(heldRow).toBeVisible();
+  if (decision.treatment === "RETURN") return;
+
+  await heldRow.getByRole("button", { name: decision.treatment === "REFUND" ? "Refund" : "Forfeit", exact: true }).click();
+  const confirm = managerPage.getByRole("dialog").filter({ hasText: "Resolve this deposit?" });
+  await expect(confirm).toBeVisible();
+  if (decision.treatment === "REFUND") {
+    const method = { CASH: "Cash", BANK_TRANSFER: "Bank Transfer", CHEQUE: "Cheque", CARD: "Card" }[
+      decision.refundMethod ?? "CASH"
+    ];
+    await confirm.getByRole("combobox").click();
+    await managerPage.getByRole("option", { name: method, exact: true }).click();
+  }
+  await confirm
+    .getByRole("button", { name: decision.treatment === "REFUND" ? "Confirm Refund" : "Confirm Forfeit" })
+    .click();
+  await expect(confirm).not.toBeVisible({ timeout: 60_000 });
+  await expect(
+    panel.getByText(decision.treatment === "REFUND" ? "Refunded" : "Forfeited", { exact: true }).first(),
+  ).toBeVisible({ timeout: 60_000 });
+}
+
 export async function confirmDisbursement(managerPage: Page): Promise<void> {
   const action = managerPage
     .getByTestId("deal-next-step")
