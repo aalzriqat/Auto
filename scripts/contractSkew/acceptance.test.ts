@@ -254,6 +254,20 @@ describe("classifyRelease: only ACCEPTED is fixed; UNPROVEN is indeterminate", (
   });
 });
 
+describe("L-2 (batch 6): a <root> unknown is relevant to a <function> break", () => {
+  const fnBreak = at(SITE_A, "<function>");
+
+  test("a <root> unknown at the SAME site makes a <function> break UNPROVEN", () => {
+    const got = acceptanceAt(fnBreak, { needsEvidence: [unknownAt(SITE_A, "<root>")] });
+    expect(got.disposition).toBe(ACCEPTANCE.UNPROVEN);
+  });
+
+  test("control: a <root> unknown at ANOTHER site leaves it ACCEPTED", () => {
+    const got = acceptanceAt(fnBreak, { needsEvidence: [unknownAt(SITE_B, "<root>")] });
+    expect(got.disposition).toBe(ACCEPTANCE.ACCEPTED);
+  });
+});
+
 describe("Q4: the exit-7 deploy instruction is conditional on the per-site disposition", () => {
   const base = { rung: "ENV_KEY", specSource: "", proven: 2, unclassified: 0, basis: "b" };
 
@@ -266,7 +280,8 @@ describe("Q4: the exit-7 deploy instruction is conditional on the per-site dispo
     const rejected = [
       { ...at(SITE_A, "tag"), currentRejects: [at(SITE_A, "other", { detail: "current still says no" })] },
     ];
-    const text = skewSummary({ ...base, rejectedElsewhere: rejected });
+    // `rejectedElsewhere` is a subset of the proven skew, so the only proven call is the rejected one.
+    const text = skewSummary({ ...base, proven: 1, rejectedElsewhere: rejected });
     expect(text).not.toMatch(/Deploy the Convex backend/);
     expect(text).toMatch(/will not (make|fix)/i);
     expect(text).toContain("w:save");
@@ -303,5 +318,12 @@ describe("Q4: the exit-7 deploy instruction is conditional on the per-site dispo
     expect(body).not.toMatch(/proven production skew \(deploy the backend\)/);
     expect(body).not.toMatch(/Only 7 carries a deploy instruction/);
     expect(body).toMatch(/CLI summary/);
+    // M-1 (batch 6): the CLI also words an UNCLASSIFIED skew as a likely remedy, so
+    // neither text may claim deploy advice is always proven.
+    for (const line of [exit7, body]) {
+      expect(line).not.toMatch(/only when that is proven for every call/i);
+      expect(line).not.toMatch(/Only 7 can carry a deploy instruction/);
+      expect(line).toMatch(/likely/i);
+    }
   });
 });

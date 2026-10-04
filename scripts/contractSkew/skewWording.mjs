@@ -8,12 +8,20 @@
  * whatever deployment it was exported from: calling it production, and
  * instructing a production deploy, would aim a person at the wrong backend.
  *
- * ⚠️ AND THE DEPLOY INSTRUCTION IS CONDITIONAL ON THE PER-CALL DISPOSITION
- * (SCRUM-178 v2 batch 5, D-30). It is given only when deploying is proven to fix
- * EVERY exit-7 break: either no current spec is in use (the SHA / tree rungs), or
- * each break is accepted by the current spec at that call. If the current spec
- * ALSO refuses any call (`rejectedElsewhere`), deploying alone will not make that
- * call succeed, so the instruction is withheld and those calls are listed.
+ * ⚠️ AND THE DEPLOY ADVICE IS CONDITIONAL ON WHAT IS PROVEN (SCRUM-178 v2
+ * batches 5 and 6, D-30: advice is given only when deploying is proven to fix the
+ * call). Exactly three cases, all still exit 7:
+ *
+ *   PROVEN        `proven > 0`, `unclassified === 0`, nothing rejected elsewhere:
+ *                 the plain "Deploy the Convex backend at this commit."
+ *   LIKELY ONLY   `unclassified > 0` (and nothing rejected elsewhere): the SHA /
+ *                 tree / no-evidence rungs could not classify some breaks, so a
+ *                 deploy is the likely remedy and is worded as NOT proven.
+ *   WITHHELD      the current spec ALSO refuses a call (`rejectedElsewhere`), so
+ *                 deploying alone will not make it succeed: those calls are
+ *                 listed. If other calls ARE accepted by the current spec, the
+ *                 summary says a deploy fixes those K and the M listed will still
+ *                 fail (never a silent blanket withhold).
  */
 
 /** The rung `fetchSpec` reports for a spec file supplied by the caller. */
@@ -41,10 +49,12 @@ function describeRejected(f) {
  */
 export function skewSummary({ rung, specSource, proven, unclassified, basis, rejectedElsewhere = [] }) {
   const counts = `${proven} proven, ${unclassified} unclassified`;
+  const listed = rejectedElsewhere.map(describeRejected).join("; ");
+  // `rejectedElsewhere` is a subset of the proven skew: the rest are accepted by
+  // the current spec, so a deploy does fix them (L-1).
+  const fixable = proven - rejectedElsewhere.length;
   const notFixed = rejectedElsewhere.length
-    ? `Deploying the backend alone will not make ${rejectedElsewhere.length} of these call(s) succeed — the current spec still refuses them: ${rejectedElsewhere
-        .map(describeRejected)
-        .join("; ")}. `
+    ? `Deploying the backend alone will not make ${rejectedElsewhere.length} of these call(s) succeed — the current spec still refuses them: ${listed}. `
     : "";
   if (rung === SUPPLIED_FILE_RUNG) {
     return (
@@ -55,7 +65,19 @@ export function skewSummary({ rung, specSource, proven, unclassified, basis, rej
     );
   }
   if (rejectedElsewhere.length) {
-    return `PRODUCTION SKEW — ${counts}. ${notFixed}Basis: ${basis}`;
+    const mixed =
+      fixable > 0
+        ? `Deploying the Convex backend at this commit fixes ${fixable} call(s), but ${rejectedElsewhere.length} call(s) will still fail because the current spec also refuses them: ${listed}. `
+        : notFixed;
+    const unproven = unclassified > 0 ? `${unclassified} more break(s) are unclassified, so a deploy is not proven to fix those. ` : "";
+    return `PRODUCTION SKEW — ${counts}. ${mixed}${unproven}Basis: ${basis}`;
+  }
+  if (unclassified > 0) {
+    return (
+      `PRODUCTION SKEW — ${counts}. Deploying the Convex backend at this commit is the likely remedy, ` +
+      `but ${unclassified} break(s) are unclassified, so this is not proven. ` +
+      `Basis: ${basis}`
+    );
   }
   return (
     `PRODUCTION SKEW — ${counts}. Deploy the Convex backend at this commit. ` +

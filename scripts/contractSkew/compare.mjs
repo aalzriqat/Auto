@@ -197,8 +197,9 @@ const BREAK_KEY_FIELDS = ["surface", "file", "line", "identifier", "siteId", "pa
  * ⚠️ The cited path decides which unknowns count. An unknown at an unrelated
  * SIBLING path says nothing about whether the cited path is accepted, so it does
  * not make the break UNPROVEN. A break at `<function>` is judged at `<function>`
- * only: a field-level unknown beneath it is not what that break was about (a field
- * the other spec REJECTS is REJECTED_OTHER, which outranks it).
+ * and `<root>` (an unknown about the whole argument value may hide this very
+ * break): a field-level unknown beneath it is not what that break was about (a
+ * field the other spec REJECTS is REJECTED_OTHER, which outranks it).
  */
 export const ACCEPTANCE = {
   ACCEPTED: "ACCEPTED",
@@ -230,7 +231,9 @@ export function acceptanceAt(finding, otherResult) {
   if (rejectedAt.length) return { disposition: ACCEPTANCE.REJECTED_OTHER, rejectedAt, unprovenAt: [] };
 
   const relevant = (/** @type {string} */ path) =>
-    finding.path === "<function>" ? path === "<function>" : path === "<function>" || pathsOverlap(path, finding.path);
+    finding.path === "<function>"
+      ? path === "<function>" || path === "<root>"
+      : path === "<function>" || pathsOverlap(path, finding.path);
   const unprovenAt = [
     ...unsure.filter((u) => siteKey(u) === mine && relevant(u.path)),
     // Cannot be placed at any site, so it may be this one's.

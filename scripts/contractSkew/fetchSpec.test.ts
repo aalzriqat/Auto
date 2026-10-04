@@ -194,10 +194,13 @@ describe("the deploy instruction belongs to ONE exit code, and never to Node's d
   test("ONLY the dedicated production-skew code carries a deploy instruction", () => {
     const deploying = arms()
       // D-30: arm 7 no longer says "Deploy the Convex backend" outright; it defers
-      // to the CLI summary, which advises a deploy only when it is proven for every call.
-      .filter(([, message]) => /Deploy the Convex backend|says to deploy only when/i.test(message))
+      // to the CLI summary, which states whether a deploy is proven, likely or withheld.
+      .filter(([, message]) => /Deploy the Convex backend|whether a deploy is proven/i.test(message))
       .map(([code]) => code);
     expect(deploying, "exactly one arm may tell an operator to deploy").toEqual(["7"]);
+    // Control: the matcher actually sees arm 7's text (a non-matching regex would
+    // make the line above fail, but this pins that it is the new phrase doing it).
+    expect(arms().find(([code]) => code === "7")![1]).toMatch(/whether a deploy is proven/i);
   });
 
   test("raw exit 1 is answered with DO NOT DEPLOY, not with a verdict", () => {

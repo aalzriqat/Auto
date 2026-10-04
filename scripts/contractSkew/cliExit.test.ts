@@ -907,6 +907,9 @@ describe("SCRUM-178 v2 batch 5 (D-30): acceptance is per call, absence is not ac
       const causes = reportOf(dir).causes;
       expect(causes.provenBreaks).toBe(1);
       expect(causes.standingDefects).toBe(0);
+      // Q3-3: current accepts A and rejects B, but B is not a deployed break, so
+      // nothing here is "refused by current as well".
+      expect(reportOf(dir).classification.rejectedByCurrent).toBe(0);
     }, 300_000);
 
     test("two same-line gaps stay two: distinct in stderr and in the JSON report", () => {
@@ -984,6 +987,58 @@ describe("SCRUM-178 v2 batch 5 (D-30): acceptance is per call, absence is not ac
     }, 300_000);
   });
 
+  describe("Q3 (batch 6): CLI wiring of the per-call identity", () => {
+    test("release, two calls on one line: deployed rejects A, candidate rejects B -> 8, releaseFixed 1, releaseBreaks 1", () => {
+      const dir = scaffold({
+        client: sameLine("", '{ orgId: "o", tag: 1 }', '{ orgId: "o", tag: "s" }'),
+        spec: specOf(upd({ ...ORG, tag: required(str) })),
+        candidate: specOf(upd({ ...ORG, tag: required({ type: "number" }) })),
+      });
+      const r = run(dir, releaseArgsJ);
+      expect(r.code, r.stderr).toBe(8);
+      const causes = reportOf(dir).causes;
+      expect(causes.releaseFixed).toBe(1);
+      expect(causes.releaseBreaks).toBe(1);
+    }, 300_000);
+
+    test("production --current: a current UNKNOWN at site A on the cited path -> 9, not 7", () => {
+      const dir = scaffold({
+        client: CLIENT("v: unknown", "{ orgId: \"o\", tag: v }"),
+        spec: specOf(upd(ORG)),
+        current: specOf(upd({ ...ORG, tag: required(str) })),
+      });
+      const r = current(dir);
+      expect(r.code, r.stderr).toBe(9);
+      expect(r.stderr).not.toMatch(/Deploy the Convex backend/);
+      expect(reportOf(dir).causes.provenBreaks).toBe(0);
+    }, 300_000);
+  });
+
+  describe("M-1 (batch 6): an UNCLASSIFIED skew is not worded as a proven deploy fix", () => {
+    // ⚠️ `--spec` is the SUPPLIED_FILE rung, which never gives deploy advice at
+    // all, and the credential-ladder rungs cannot run offline. So the CLI tests pin
+    // the exit and the unclassified breaks, and that no PROVEN-fix instruction
+    // leaks out; the "likely remedy, not proven" wording on the production rung is
+    // pinned at the skewSummary level (skewWording.test.ts).
+    test("no evidence at all: still exit 7 with UNCLASSIFIED breaks and no proven-deploy instruction", () => {
+      const dir = scaffold({ client: SENDS_NOPE, spec: specOf(upd(ORG)) });
+      const r = production(dir);
+      expect(r.code, r.stderr).toBe(7);
+      expect(reportOf(dir).classification.unclassified).toBeGreaterThan(0);
+      expect(r.stderr).toMatch(/\[UNCLASSIFIED\]/);
+      expect(r.stderr).toMatch(/0 proven, 1 unclassified/);
+      expect(r.stderr).not.toMatch(/Deploy the Convex backend at this commit\./);
+    }, 300_000);
+
+    test("--deployed-sha that cannot be resolved: same - exit 7, UNCLASSIFIED, no proven-deploy instruction", () => {
+      const dir = scaffold({ client: SENDS_NOPE, spec: specOf(upd(ORG)) });
+      const r = production(dir, ["--deployed-sha", "0000000000000000000000000000000000000000"]);
+      expect(r.code, r.stderr).toBe(7);
+      expect(r.stderr).toMatch(/0 proven, 1 unclassified/);
+      expect(r.stderr).not.toMatch(/Deploy the Convex backend at this commit\./);
+    }, 300_000);
+  });
+
   describe("N-3: a release with only a standing break says so", () => {
     const sameSpec = () => specOf(upd(ORG));
 
@@ -1017,6 +1072,17 @@ describe("SCRUM-178 v2 batch 5 (D-30): acceptance is per call, absence is not ac
       expect(gaps.map((g) => g.spec).sort()).toEqual(["current", "deployed"]);
       expect(r.stderr).toMatch(/\[coverage gap\].*\[spec: deployed\]/);
       expect(r.stderr).toMatch(/\[coverage gap\].*\[spec: current\]/);
+    }, 300_000);
+
+    test("L-4: the coverage line counts distinct CALLS: one args:null call seen through two specs is '1 call(s)'", () => {
+      const dir = scaffold({ client: PROVEN, spec: specOf(nullArgs), current: specOf(nullArgs) });
+      const r = current(dir);
+      expect(r.code).toBe(9);
+      // The per-spec rows stay listed, each with its tag...
+      expect((reportOf(dir).gaps as unknown[]).length).toBe(2);
+      // ...but it is ONE call.
+      const line = (reportOf(dir).causes.coverageIncomplete as string[]).join(" ");
+      expect(line).toMatch(/\b1 call\(s\) into a validator this control cannot compare/);
     }, 300_000);
 
     test("a candidate's gap is attributed to the candidate", () => {

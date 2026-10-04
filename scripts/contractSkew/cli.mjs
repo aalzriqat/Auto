@@ -442,7 +442,11 @@ const validatorGaps = dedupeFindings(
   ["surface", "file", "line", "identifier", "siteId", "path", "detail", "spec"]
 );
 if (validatorGaps.length) {
-  coverageProblems.push(`${validatorGaps.length} call(s) into a validator this control cannot compare (no argument validator, v.record(), empty v.union())`);
+  // The rows are per spec (deployed / candidate / current, each tagged), but the
+  // sentence counts CALLS: one call seen through two specs is one call (L-4).
+  // A row with no siteId cannot be placed, so it is identified by its line.
+  const gapCalls = new Set(validatorGaps.map((g) => (g.siteId ? JSON.stringify([g.surface ?? "", g.siteId]) : JSON.stringify([g.surface ?? "", g.file, g.line, g.identifier]))));
+  coverageProblems.push(`${gapCalls.size} call(s) into a validator this control cannot compare (no argument validator, v.record(), empty v.union())`);
 }
 if (censusGaps.length) {
   coverageProblems.push(`${censusGaps.length} census candidate(s) unresolved or unaccounted for`);
