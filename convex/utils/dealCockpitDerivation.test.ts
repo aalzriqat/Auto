@@ -623,7 +623,10 @@ describe("the rail is always the same eight stages, in the same order", () => {
     expect(rail.find((s) => s.key === "DELIVERY_ACTIONS")?.blocker).toBe("DocumentsIncomplete");
   });
 
-  test("no document rules: the paperwork stage is complete, not absent, and the tail is reachable", () => {
+  // SCRUM-629 F-07 (ruling c21924): with no required document the paperwork
+  // stage is not needed — never shown as an action completed, which put step 5
+  // "done" ahead of a credit decision nobody had taken yet.
+  test("no document rules: the paperwork stage is not applicable, not absent, and the tail is reachable", () => {
     const rail = deriveDealStages({
       status: "APPROVED",
       creditDecision: "APPROVED",
@@ -633,8 +636,48 @@ describe("the rail is always the same eight stages, in the same order", () => {
       requiredDocumentsComplete: true,
     });
     expect(rail.map((s) => s.key)).toEqual(EIGHT);
-    expect(rail.find((s) => s.key === "DELIVERY_ACTIONS")?.state).toBe("COMPLETE");
+    expect(rail.find((s) => s.key === "DELIVERY_ACTIONS")?.state).toBe("NOT_APPLICABLE");
     expect(rail.find((s) => s.key === "HANDOVER")?.state).toBe("CURRENT");
+  });
+
+  test("no document rules before the credit decision: nothing after it reads as done", () => {
+    const rail = deriveDealStages({
+      status: "PENDING_DOCS",
+      documentRulesApply: false,
+      requiredDocumentsComplete: true,
+    });
+    expect(rail.find((s) => s.key === "CREDIT_DECISION")?.blocker).toBe("AwaitingCreditDecision");
+    expect(rail.find((s) => s.key === "DELIVERY_ACTIONS")?.state).toBe("NOT_APPLICABLE");
+    expect(rail.filter((s) => s.state === "COMPLETE").map((s) => s.key)).toEqual(["APPLICATION"]);
+  });
+
+  test("no document rules on a stopped deal: stopped, not 'not needed'", () => {
+    const rail = deriveDealStages({
+      status: "REJECTED",
+      creditDecision: "REJECTED",
+      documentRulesApply: false,
+      requiredDocumentsComplete: true,
+    });
+    expect(rail.find((s) => s.key === "DELIVERY_ACTIONS")?.state).toBe("STOPPED");
+  });
+
+  test("required documents all verified: the paperwork stage is complete", () => {
+    const rail = deriveDealStages({
+      status: "APPROVED",
+      creditDecision: "APPROVED",
+      documentRulesApply: true,
+      requiredDocumentsComplete: true,
+    });
+    expect(rail.find((s) => s.key === "DELIVERY_ACTIONS")?.state).toBe("COMPLETE");
+  });
+
+  test("a caller that does not say whether rules apply keeps the old reading", () => {
+    const rail = deriveDealStages({
+      status: "APPROVED",
+      creditDecision: "APPROVED",
+      requiredDocumentsComplete: true,
+    });
+    expect(rail.find((s) => s.key === "DELIVERY_ACTIONS")?.state).toBe("COMPLETE");
   });
 
   test("a stopped deal keeps all eight, every unfinished one STOPPED", () => {

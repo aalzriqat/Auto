@@ -262,6 +262,49 @@ describe("controls: real stages still show their owner", () => {
   });
 });
 
+/**
+ * SCRUM-629 F-07 self-attack: a deal with no required document gets a
+ * NOT_APPLICABLE documents stage. Read as "documents incomplete", it would send
+ * every such deal's approver to a documents step that does not exist instead of
+ * the credit decision — a dead end on exactly the deals F-07 is for.
+ */
+describe("an UNDER_REVIEW deal whose documents stage is NOT_APPLICABLE", () => {
+  const underReview = (deliveryState: string) => {
+    permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "UNDER_REVIEW",
+        stages: [
+          { key: "APPLICATION", state: "COMPLETE", authority: "DEALER" },
+          { key: "CREDIT_DECISION", state: "CURRENT", authority: "MIRROR" },
+          { key: "APPROVED_PURCHASE", state: "PENDING", authority: "MIRROR" },
+          { key: "DELIVERY_ACTIONS", state: deliveryState, authority: "DEALER" },
+          { key: "DISBURSEMENT", state: "PENDING", authority: "MIRROR" },
+          { key: "HANDOVER", state: "PENDING", authority: "DEALER" },
+          { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
+        ],
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "UNDER_REVIEW" }));
+  };
+
+  test("the approver is offered the credit decision, not a documents step", () => {
+    underReview("NOT_APPLICABLE");
+    const { container } = renderCockpit();
+    expect(screen.getByTestId("deal-next-step-action").textContent).toBe("RecordCreditDecisionAction");
+    expect(container.textContent).not.toContain("CompleteDocumentsFirstAction");
+    expect(container.textContent).not.toContain("CreditApprovalNeedsDocuments");
+  });
+
+  test("control: an outstanding documents stage still sends the approver to the documents first", () => {
+    underReview("BLOCKED");
+    const { container } = renderCockpit();
+    expect(container.textContent).toContain("CreditApprovalNeedsDocuments");
+    expect(screen.queryByTestId("deal-next-step-action")?.textContent).not.toBe("RecordCreditDecisionAction");
+  });
+});
+
 describe("live-stage selection skips a NOT_APPLICABLE stage", () => {
   test("the stage after it is the live one, with its own card, and the payment stage is not", () => {
     arrange(
