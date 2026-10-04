@@ -314,7 +314,7 @@ describe("Codex review of ac09a2914 (F614-1..3)", () => {
       // Control: the same UI outcome with no confirmed create stays out.
       { role: "seed", outcome: "rejected-toast", value: "QA", created: { args: {}, id: undefined } },
       { role: "control", outcome: "rejected-inline", value: "QA" },
-      // UI-accepted without a confirmed id stays in, so it shows as unverified (no-id).
+      // UI-accepted without a confirmed id stays in, so it is reported unverified (readBackOf: no-id or not-sent).
       { role: "variant", outcome: "accepted", value: "QA", created: undefined },
     ] as const;
     expect(submissionsToReadBack(subs).map((s) => s.role)).toEqual(["attempt", "variant"]);
