@@ -605,7 +605,7 @@ export default function Step1QuoteSetup({
             data-testid="finance-panel-blocked"
             className="rounded-xl border border-dashed px-4 py-6 text-center text-sm text-muted-foreground"
           >
-            {t("DownPaymentMustBeBelowPrice" as any)}
+            {t("FinanceOptionsAwaitValidDownPayment" as any)}
           </p>
         )}
         {!isCash && !downPaymentCoversPrice && (
