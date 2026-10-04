@@ -48,11 +48,29 @@ const LITERAL = {
   expireTitle: { en: "Expire this payment link?", ar: "هل تريد إنهاء صلاحية رابط الدفع هذا؟" },
   rawMinor: { en: "987654 XYZ (smallest unit)", ar: "987654 XYZ (أصغر وحدة)" },
   reasonUnknown: { en: "Unknown payment reference", ar: "مرجع دفع غير معروف" },
+  // D-22: the payment-link status for a held capture, and the Expire attestation.
+  captureHeld: { en: "Capture held for review", ar: "دفعة مؤكدة محتجزة للمراجعة" },
+  attestation: {
+    en: "I checked this link in the payment provider's dashboard and it shows no payment.",
+    ar: "تحققت من هذا الرابط في لوحة مزوّد الدفع ولا يظهر أي دفعة.",
+  },
 } as const;
 
 type Literal = keyof typeof LITERAL;
 
-const STATES: ReadonlyArray<{ name: string; shows: readonly Literal[]; absent?: readonly Literal[] }> = [
+/** The dialog's Expire button label (common.ts `ExpirePaymentLink`). */
+const EXPIRE_BUTTON = { en: "Expire link", ar: "إنهاء صلاحية الرابط" } as const;
+
+const STATES: ReadonlyArray<{
+  name: string;
+  shows: readonly Literal[];
+  absent?: readonly Literal[];
+  /** The attestation checkbox and the dialog's Expire button must agree. */
+  attest?: "unchecked" | "checked";
+}> = [
+  { name: "capture-held-row", shows: ["captureHeld", "title"] },
+  { name: "expire-dialog-attest", shows: ["expireTitle", "attestation"], attest: "unchecked" },
+  { name: "expire-dialog-attest-checked", shows: ["expireTitle", "attestation"], attest: "checked" },
   { name: "held-rows", shows: ["title", "rawMinor", "reasonUnknown"], absent: ["empty", "error"] },
   { name: "held-empty", shows: ["title", "empty"], absent: ["error"] },
   { name: "held-error", shows: ["title", "error"], absent: ["empty"] },
@@ -117,6 +135,19 @@ for (const locale of LOCALES) {
           }
           for (const key of state.absent ?? []) {
             await expect(page.getByText(LITERAL[key][locale], { exact: true }), `${key} is absent`).toHaveCount(0);
+          }
+          if (state.attest) {
+            const dialog = page.getByRole("dialog");
+            const box = dialog.getByRole("checkbox");
+            const expire = dialog.getByRole("button", { name: EXPIRE_BUTTON[locale], exact: true });
+            await expect(box, "attestation checkbox is visible").toBeVisible();
+            if (state.attest === "checked") {
+              await expect(box).toBeChecked();
+              await expect(expire, "Expire enabled once attested").toBeEnabled();
+            } else {
+              await expect(box).not.toBeChecked();
+              await expect(expire, "Expire disabled until attested").toBeDisabled();
+            }
           }
           // Let the dialog's enter animation finish before measuring or shooting.
           await page.waitForTimeout(500);

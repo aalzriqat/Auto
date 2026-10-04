@@ -224,6 +224,7 @@ import type * as utils_quoteDepositPosting from "../utils/quoteDepositPosting.js
 import type * as utils_quoteEconomicsAnchor from "../utils/quoteEconomicsAnchor.js";
 import type * as utils_saleCancellation from "../utils/saleCancellation.js";
 import type * as utils_saleCompletion from "../utils/saleCompletion.js";
+import type * as utils_saleDebtContainment from "../utils/saleDebtContainment.js";
 import type * as utils_saleHelpers from "../utils/saleHelpers.js";
 import type * as utils_settlementDeductions from "../utils/settlementDeductions.js";
 import type * as utils_smartReplyBuilder from "../utils/smartReplyBuilder.js";
@@ -483,6 +484,7 @@ declare const fullApi: ApiFromModules<{
   "utils/quoteEconomicsAnchor": typeof utils_quoteEconomicsAnchor;
   "utils/saleCancellation": typeof utils_saleCancellation;
   "utils/saleCompletion": typeof utils_saleCompletion;
+  "utils/saleDebtContainment": typeof utils_saleDebtContainment;
   "utils/saleHelpers": typeof utils_saleHelpers;
   "utils/settlementDeductions": typeof utils_settlementDeductions;
   "utils/smartReplyBuilder": typeof utils_smartReplyBuilder;

@@ -18,6 +18,7 @@ import {
 import type { DepositMethod } from "./depositRecording";
 import { throwAppError, AppErrorCode } from "./errors";
 import { requireOrgMember } from "./tenancy";
+import { assertNoSaleLinkedLegacyReceivable } from "./saleDebtContainment";
 import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
 import { assertNoPendingDepositRequest } from "./depositRequestGuards";
 import { assertFinancedSaleHasDeal, assertOperatedDealMode } from "./dealModes";
@@ -2216,6 +2217,11 @@ export async function completeExistingSale(
   if (sale.status === "CANCELLED") {
     throwAppError(AppErrorCode.VALIDATION_FAILED, "Cancelled sales cannot be completed.");
   }
+  // SCRUM-571 S1 (D-20) T1: the only way an EXISTING sale becomes COMPLETED
+  // (`completeSale` inserts a brand-new row, which cannot have a legacy
+  // receivable yet). Refuses before `prepareSaleCompletion` and before the
+  // status patch, so a refusal writes nothing.
+  await assertNoSaleLinkedLegacyReceivable(ctx, args.orgId, args.saleId);
 
   const completionArgs: SaleCompletionArgs = {
     orgId: sale.orgId,

@@ -57,6 +57,7 @@ import {
 } from "../lib/closingReadinessReasonCodes";
 import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
+import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment";
 import { MAX_IDEMPOTENCY_KEY_LENGTH, runWithIdempotency } from "./utils/idempotency";
 import { registerChequeCore, markChequeClearedCore, assertNoActiveAllocations } from "./collections";
 import {
@@ -3620,6 +3621,8 @@ export const cancelApplication = mutation({
                 // the deal, so the sale goes with it — but `createDraft` performs
                 // no inventory, deposit, CRM or accounting side effects, so there
                 // is nothing to reverse and nothing to hand back.
+                // SCRUM-571 T2: a sale exit refuses while a sale-linked legacy receivable exists.
+                await assertNoSaleLinkedLegacyReceivable(ctx, args.orgId, sale._id);
                 await ctx.db.patch(sale._id, { status: "CANCELLED" });
               }
             }
