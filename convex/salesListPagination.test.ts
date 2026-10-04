@@ -202,24 +202,27 @@ describe("sales.list — native isDeleted-index pagination (D-23 Q2)", () => {
     expect(sizes.slice(0, -1).every((n) => n === 3)).toBe(true);
   });
 
-  test.each([
-    ["org branch", false],
-    ["salesperson branch", true],
-  ])("%s: an explicit isDeleted:false row is listed, before the unset rows (ordering policy)", async (_name, withRep) => {
+  // SCRUM-571-S1-ORDER-1 / D-28: the schema makes `isDeleted: false`
+  // unrepresentable (`v.optional(v.literal(true))`), so the isDeleted index can
+  // only hold unset (live) and true (soft-deleted) and descending index order is
+  // creation order. The fixtures cast `as never`, so these assert the RUNTIME
+  // schema rejection, not just the type.
+  test("schema rejects inserting a sale with isDeleted:false", async () => {
     const w = await makeWorld();
-    const rep = withRep ? w.userId : undefined;
-    // Creation order: explicit-false FIRST, then two unset rows. The
-    // isDeleted index sorts unset (undefined) before false, and the list is
-    // descending (SCRUM-603), so the policy is false rows first, then unset
-    // rows newest first, regardless of creation time. Nothing writes an
-    // explicit false in practice; this pins the index order only.
-    const explicitFalse = await addSale(w, { isDeleted: false });
-    const unsetA = await addSale(w);
-    const unsetB = await addSale(w);
-    await addSale(w, { isDeleted: true });
+    await expect(addSale(w, { isDeleted: false })).rejects.toThrow();
+    // Control: unset and true are still accepted.
+    await expect(addSale(w)).resolves.toBeTruthy();
+    await expect(addSale(w, { isDeleted: true })).resolves.toBeTruthy();
+  });
 
-    const { seen } = await walk(w, 2, rep);
-    expect(seen).toEqual([explicitFalse, unsetB, unsetA]);
+  test("schema rejects patching a live sale to isDeleted:false", async () => {
+    const w = await makeWorld();
+    const live = await addSale(w);
+    await expect(w.t.run((ctx) => ctx.db.patch(live, { isDeleted: false } as never))).rejects.toThrow();
+    // The row is untouched: still listed, still unset.
+    const row = await w.t.run((ctx) => ctx.db.get(live));
+    expect(row?.isDeleted).toBeUndefined();
+    expect(ids(await list(w, 5))).toEqual([live]);
   });
 
   test("cursor transition (characterises convex-test only, NOT platform behaviour): a native by_org cursor presented to the new list", async () => {

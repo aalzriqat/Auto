@@ -116,9 +116,8 @@ export const list = query({
     const salespersonId = args.salespersonId;
     // Native paginate over the isDeleted index keeps reactive page ends pinned.
     // Newest first, like the Deals page that reads it (SCRUM-603). Inside the
-    // `.lt("isDeleted", true)` range isDeleted is always undefined for live
-    // sales: soft-delete is the only writer, and admin restore cannot write to
-    // sales because they are a FINANCIAL_TABLE. So descending index order is
+    // `.lt("isDeleted", true)` range isDeleted is unset for every live sale
+    // because the schema forbids `false` (D-28). So descending index order is
     // creation order.
     const pageResult = await (salespersonId
       ? ctx.db

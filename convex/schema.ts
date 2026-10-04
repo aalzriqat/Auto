@@ -2067,14 +2067,17 @@ export default defineSchema({
     commissionPaidBy: v.optional(v.id("users")),
     commissionPaymentMethod: v.optional(paymentMethodValidator),
     commissionPaymentIdempotencyKey: v.optional(v.string()),
-    isDeleted: v.optional(v.boolean()),
+    // A sale is either live (unset) or soft-deleted (true); `false` is
+    // unrepresentable, so the by_org_deleted / by_org_salesperson_deleted index
+    // orders live sales by creation time (SCRUM-571 S1, D-28).
+    isDeleted: v.optional(v.literal(true)),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
     .index("by_org_salesperson", ["orgId", "salespersonId"])
-    // sales.list pages these natively: `.lt("isDeleted", true)` keeps unset and
-    // false rows and skips soft-deleted ones inside the index range.
+    // sales.list pages these natively: `.lt("isDeleted", true)` keeps the unset
+    // (live) rows and skips soft-deleted ones inside the index range.
     .index("by_org_deleted", ["orgId", "isDeleted"])
     .index("by_org_salesperson_deleted", ["orgId", "salespersonId", "isDeleted"])
     // Same ordering guarantee as by_org_saleDate, but scoped to one
