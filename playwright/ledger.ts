@@ -84,7 +84,14 @@ export async function snapshotLedger(
 export type LedgerDelta = {
   /** Gross debit and credit movement per account code since the snapshot. */
   byCode: Record<string, Side>;
-  newEntries: Array<{ id: string; memo: string; debit: number; credit: number }>;
+  /** Each new journal entry with its own lines, summed per account code. */
+  newEntries: Array<{
+    id: string;
+    memo: string;
+    debit: number;
+    credit: number;
+    byCode: Record<string, Side>;
+  }>;
   /** New events that did not post: queued, failed or skipped. */
   unposted: Array<{ id: string; status: string; eventType: string }>;
 };
@@ -103,6 +110,11 @@ export async function ledgerDelta(
   }
 
   const newEntries: LedgerDelta["newEntries"] = [];
+  const accounts = (await client.query(api.chartOfAccounts.list, { orgId })) as Array<{
+    _id: string;
+    code: string;
+  }>;
+  const codeOf = new Map(accounts.map((a) => [a._id, a.code]));
   for (const id of after.entryIds) {
     if (before.entryIds.has(id)) continue;
     const detail = await client.query(api.accountingLedger.getJournalEntry, {
@@ -110,11 +122,20 @@ export async function ledgerDelta(
       journalEntryId: id as Id<"journalEntries">,
     });
     if (!detail) continue;
+    const entryByCode: Record<string, Side> = {};
+    for (const l of detail.lines) {
+      const code = codeOf.get(l.accountId) ?? `unknown:${l.accountId}`;
+      const side = entryByCode[code] ?? { dr: 0, cr: 0 };
+      side.dr += l.debitMinor;
+      side.cr += l.creditMinor;
+      entryByCode[code] = side;
+    }
     newEntries.push({
       id,
       memo: (detail.entry as { memo?: string }).memo ?? "",
       debit: detail.lines.reduce((sum, l) => sum + l.debitMinor, 0),
       credit: detail.lines.reduce((sum, l) => sum + l.creditMinor, 0),
+      byCode: entryByCode,
     });
   }
 
@@ -127,23 +148,87 @@ export async function ledgerDelta(
   return { byCode, newEntries, unposted };
 }
 
+function normalize(expected: ExpectedLedgerDelta): Record<string, Side> {
+  const out: Record<string, Side> = {};
+  for (const [code, side] of Object.entries(expected)) {
+    const dr = side.dr ?? 0;
+    const cr = side.cr ?? 0;
+    if (dr !== 0 || cr !== 0) out[code] = { dr, cr };
+  }
+  return out;
+}
+
+/** Order-independent text form of one journal's lines, for comparing sets of journals. */
+function journalKey(byCode: Record<string, Side>): string {
+  return JSON.stringify(
+    Object.keys(byCode)
+      .filter((code) => byCode[code].dr !== 0 || byCode[code].cr !== 0)
+      .sort()
+      .map((code) => [code, byCode[code].dr, byCode[code].cr]),
+  );
+}
+
 /**
- * The ledger moved by exactly `expected` — no account more, none less — every
- * new journal entry balances, and nothing was left queued or failed.
+ * The ledger moved by exactly `expected`, journal by journal: each new entry
+ * carries exactly the lines of one expected journal (no line moved to a
+ * sibling entry, no extra entry, none missing), every entry balances, the
+ * org-wide account totals agree, and nothing was left queued or failed.
+ *
+ * A single `ExpectedLedgerDelta` means the step posts exactly one journal; an
+ * array names every journal it posts. Checking account totals alone would
+ * accept two balanced entries that split the right totals across the wrong
+ * journals (Codex AF-430-05).
  */
-export function expectLedgerDelta(delta: LedgerDelta, expected: ExpectedLedgerDelta): void {
+export function expectLedgerDelta(
+  delta: LedgerDelta,
+  expected: ExpectedLedgerDelta | ExpectedLedgerDelta[],
+): void {
   for (const entry of delta.newEntries) {
     expect(entry.debit, `journal entry ${entry.id} (${entry.memo}) must balance`).toBe(entry.credit);
   }
   expect(delta.unposted, "every accounting event the deal raised must have posted").toEqual([]);
 
-  const normalized: Record<string, Side> = {};
-  for (const [code, side] of Object.entries(expected)) {
-    const dr = side.dr ?? 0;
-    const cr = side.cr ?? 0;
-    if (dr !== 0 || cr !== 0) normalized[code] = { dr, cr };
+  const journals = (Array.isArray(expected) ? expected : [expected])
+    .map(normalize)
+    .filter((j) => Object.keys(j).length > 0);
+  const total: Record<string, Side> = {};
+  for (const j of journals) {
+    for (const [code, side] of Object.entries(j)) {
+      const t = total[code] ?? { dr: 0, cr: 0 };
+      t.dr += side.dr;
+      t.cr += side.cr;
+      total[code] = t;
+    }
   }
-  expect(delta.byCode).toEqual(normalized);
+  expect(delta.byCode, "org-wide account movement").toEqual(total);
+  expect(
+    delta.newEntries.map((e) => journalKey(e.byCode)).sort(),
+    `each new journal entry's own lines (${delta.newEntries.map((e) => e.memo).join(" | ")})`,
+  ).toEqual(journals.map(journalKey).sort());
+}
+
+/**
+ * A step relaxed for one open defect: it must post exactly the recorded wrong
+ * lines. It fails if it posts as ruled (the defect is fixed, so the relaxation
+ * must go) and fails on any other posting, so the relaxation never excuses a
+ * different regression (Codex AF-430-02).
+ */
+export function expectOnlyKnownDefect(
+  delta: LedgerDelta,
+  ruled: ExpectedLedgerDelta | ExpectedLedgerDelta[],
+  defect: { key: string; posts: ExpectedLedgerDelta | ExpectedLedgerDelta[] },
+): void {
+  let postsAsRuled = true;
+  try {
+    expectLedgerDelta(delta, ruled);
+  } catch {
+    postsAsRuled = false;
+  }
+  expect(
+    postsAsRuled,
+    `${defect.key} looks fixed: the step now posts as ruled. Delete its knownDefect entry so it is checked strictly.`,
+  ).toBe(false);
+  expectLedgerDelta(delta, defect.posts);
 }
 
 /**

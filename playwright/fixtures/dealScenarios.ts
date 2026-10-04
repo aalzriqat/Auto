@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import type { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -184,8 +184,24 @@ export async function startApplication(page: Page, customer: string): Promise<st
 
   await gotoOrgRoute(page, "deals");
   await dismissOverlays(page);
+  await page.getByRole("tab", { name: /All deals/ }).click();
+  await page.getByRole("textbox", { name: "Search deals by customer, vehicle, financier or owner" }).fill(customer);
   const row = page.getByRole("row").filter({ hasText: customer }).first();
-  await expect(row).toBeVisible();
+  // The list pages oldest first (SCRUM-603): past 100 deals a new one only
+  // appears after "Load more". Reach it the way a user would, and record that
+  // it was needed, so the defect stays visible instead of being absorbed.
+  const loadMore = page.getByRole("button", { name: /^Load more$/i });
+  for (let pages = 0; pages < 20; pages++) {
+    // The list renders in stages; wait until it shows either the deal or the
+    // way to the next page. Neither, once everything is loaded, is a failure.
+    await expect(row.or(loadMore).first()).toBeVisible({ timeout: 30_000 });
+    if (await row.isVisible()) break;
+    await loadMore.click(); // waits while the previous page is still loading
+    test.info().annotations.push({
+      type: "known-defect",
+      description: `SCRUM-603: ${customer} needed "Load more" (page ${pages + 2}) to appear on the Deals page`,
+    });
+  }  await expect(row).toBeVisible();
   await row.locator('a[href$="/deal"]').first().click();
   await page.waitForURL(/\/applications\/[^/]+\/deal$/, { timeout: 60_000 });
   return page.url();
@@ -203,7 +219,16 @@ export async function recordQuotationAmount(page: Page, dealUrl: string, amount:
   await hideFloatingButtons(page);
   await page.getByRole("button", { name: "Record quotation" }).click();
   const dialog = page.getByRole("dialog");
-  await dialog.locator("#submitted-quotation-amount").fill(String(amount));
+  const input = dialog.locator("#submitted-quotation-amount");
+  // The calculation can land while `fill` runs (between its select-all and its
+  // insert): the one-shot prefill then writes the still-untouched field and the
+  // typed figure is APPENDED to it — F21 recorded "21428.57213000". Refill until
+  // the field holds exactly what was typed; once it does, the operator-touched
+  // guard keeps any later prefill out.
+  await expect(async () => {
+    await input.fill(String(amount));
+    await expect(input).toHaveValue(String(amount), { timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
   const reason = dialog.locator("#submitted-quotation-reason");
   // Rendered once the typed figure departs from the calculated one, a beat
   // after the fill — `isVisible()` asks too early.

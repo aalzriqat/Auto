@@ -1,4 +1,4 @@
-import { test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { callJev } from "../../scripts/intelligence/jevImpact.mjs";
 import { resolveOrgId } from "../utils";
 
@@ -23,7 +23,14 @@ const SEED = Number(process.env.JEV_EXPLORER_SEED ?? Date.now() % 100_000);
 
 const COMMIT_WORDS =
   /delete|remove|cancel|void|revers|refund|forfeit|post|close|approve|reject|confirm|submit|save|send|sign ?out|log ?out|archive|pay|transfer|disburse|finali[sz]e|record|import|upload|invite|حذف|إلغاء|تأكيد|حفظ|إرسال|خروج|اعتماد|رفض|ترحيل|دفع|تسجيل/i;
-const BROKEN_TEXT = /\bNaN\b|\bundefined\b|\[object Object\]/;
+/**
+ * Screens that write just by being looked at: opening a conversation marks it
+ * read (ChatThread / FloatingChatWindow → directMessages.markRead), and a
+ * notification link marks the notification read on click. Neither is reached,
+ * whatever its name (Codex AF-430-04).
+ */
+const WRITES_ON_VIEW = /\/(messages|notifications)(\/|$|\?)/;
+const BROKEN_TEXT =/\bNaN\b|\bundefined\b|\[object Object\]/;
 const ERROR_BOUNDARY = /Something went wrong|Application error|حدث خطأ ما/i;
 
 type Finding = { step: number; url: string; check: string; detail: string };
@@ -52,6 +59,8 @@ async function candidates(page: Page): Promise<Array<{ el: Locator; name: string
       .trim()
       .slice(0, 80);
     if (!name || COMMIT_WORDS.test(name)) continue;
+    const href = await el.getAttribute("href").catch(() => null);
+    if (href && WRITES_ON_VIEW.test(href)) continue;
     out.push({ el, name });
   }
   return out;
@@ -132,6 +141,42 @@ test.describe("Jev explorer (advisory)", () => {
       "Explorer never runs against the production backend.",
     );
 
+    // The guard above reads THIS process's environment, which need not be what
+    // the served app was built against (PLAYWRIGHT_SKIP_WEBSERVER, a stale
+    // build). Before any screen text can reach Jev, prove the backend the
+    // browser actually talks to: its Convex websocket must belong to the
+    // deployment named here, and that deployment must not be production
+    // (Codex AF-430-03). Unverifiable means no run.
+    const expectedDeployment = /https:\/\/([a-z0-9-]+)\.convex\.cloud/.exec(
+      process.env.NEXT_PUBLIC_CONVEX_URL ?? "",
+    )?.[1];
+    test.skip(!expectedDeployment, "Explorer needs NEXT_PUBLIC_CONVEX_URL naming its preview deployment.");
+    const sockets: string[] = [];
+    page.on("websocket", (ws) => sockets.push(ws.url()));
+    await page.goto("/");
+    await expect
+      .poll(() => sockets.some((u) => u.includes(".convex.cloud")), {
+        timeout: 30_000,
+        message: "the app must open its Convex connection",
+      })
+      .toBe(true)
+      .catch(() => undefined);
+    const served = sockets
+      .map((u) => /wss:\/\/([a-z0-9-]+)\.convex\.cloud/.exec(u)?.[1])
+      .filter((d): d is string => Boolean(d));
+    test.skip(served.length === 0, "Could not observe which backend the served app uses; not exploring.");
+    test.skip(
+      served.some((d) => d === PRODUCTION_DEPLOYMENT || d !== expectedDeployment),
+      `The served app talks to ${[...new Set(served)].join(", ")}, not the preview ${expectedDeployment}.`,
+    );
+
+    // A button can navigate as well as a link can; refusing the page itself
+    // (document and RSC payload) stops either from mounting a write-on-view screen.
+    await page.route(
+      (url) => WRITES_ON_VIEW.test(url.pathname),
+      (route) => route.abort(),
+    );
+
     const random = rng(SEED);
     const findings: Finding[] = [];
     const orgId = await resolveOrgId(page);
@@ -142,6 +187,15 @@ test.describe("Jev explorer (advisory)", () => {
     for (step = 0; step < STEPS; step++) {
       if (!page.url().includes(`/${orgId}/`)) await page.goto(`/${orgId}/dashboard`);
       await page.waitForTimeout(1_200);
+      // Also every frame of the app talks only to the verified backend.
+      const stray = sockets
+        .map((u) => /wss:\/\/([a-z0-9-]+)\.convex\.cloud/.exec(u)?.[1])
+        .find((d) => d && d !== expectedDeployment);
+      if (stray) throw new Error(`The app opened a connection to ${stray}; stopping before Jev sees it.`);
+      if (WRITES_ON_VIEW.test(new URL(page.url()).pathname)) {
+        await page.goto(`/${orgId}/dashboard`);
+        continue;
+      }
 
       visited.add(new URL(page.url()).pathname.replace(`/${orgId}`, ""));
       const screen = await page.locator("body").innerText().catch(() => "");

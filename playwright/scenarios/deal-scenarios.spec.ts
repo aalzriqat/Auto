@@ -26,6 +26,7 @@ import {
   drainOutbox,
   ensureLedgerMonthOpen,
   expectLedgerDelta,
+  expectOnlyKnownDefect,
   jod,
   ledgerDelta,
   snapshotLedger,
@@ -85,11 +86,14 @@ const COST_OF_SALE: ExpectedLedgerDelta = { "5100": { dr: jod(10_000) }, "1400":
 
 type Expectation = {
   /**
-   * A Jira key whose open defect makes this scenario fail today. The test is
-   * marked expected-to-fail, so it turns red ("unexpectedly passed") the moment
-   * the defect is fixed and the literal here must be re-checked.
+   * An open defect that makes ONE step post wrong lines today. Only that step
+   * is relaxed, and only to the exact wrong lines recorded here; every other
+   * step, and any other wrong posting in this one, still fails normally. The
+   * step fails the moment it posts as ruled, so the entry is removed and the
+   * ruled literal takes over (Codex AF-430-02: a whole-test `test.fail` would
+   * excuse any failure in the scenario).
    */
-  knownDefect?: string;
+  knownDefect?: { key: string; step: "disbursement"; posts: ExpectedLedgerDelta };
   deposit?: ExpectedLedgerDelta;
   close: ExpectedLedgerDelta;
   /** Absent: the deal owes the company nothing and no forward is offered. */
@@ -237,7 +241,12 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
     expectedPayment: "CASH",
     forwardMethod: "CASH",
     expect: {
-      knownDefect: "SCRUM-599", // the receipt is posted to 1110, not 1100
+      // The company's cash is posted to the bank (1110), not cash on hand (1100).
+      knownDefect: {
+        key: "SCRUM-599",
+        step: "disbursement",
+        posts: { "1110": { dr: jod(13_000) }, "1210": { cr: jod(13_000) } },
+      },
       close: {
         "1210": { dr: jod(13_000) },
         "4100": { cr: jod(13_000) },
@@ -365,7 +374,11 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
     expectedPayment: "CASH",
     // As F01: contribution 0, nothing to forward.
     expect: {
-      knownDefect: "SCRUM-599", // until the preview carries the fix
+      knownDefect: {
+        key: "SCRUM-599",
+        step: "disbursement",
+        posts: { "1110": { dr: jod(13_000) }, "1210": { cr: jod(13_000) } },
+      },
       close: { "1210": { dr: jod(13_000) }, "4100": { cr: jod(13_000) }, ...COST_OF_SALE },
       disbursement: { "1100": { dr: jod(13_000) }, "1210": { cr: jod(13_000) } },
     },
@@ -425,7 +438,11 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
     forwardMethod: "CARD",
     // contribution 900; forward = 900 + 900 = 1,800.
     expect: {
-      knownDefect: "SCRUM-599",
+      knownDefect: {
+        key: "SCRUM-599",
+        step: "disbursement",
+        posts: { "1110": { dr: jod(13_000) }, "1210": { cr: jod(13_000) } },
+      },
       deposit: { "1110": { dr: jod(900) }, "2100": { cr: jod(900) } },
       close: {
         "1210": { dr: jod(13_000) },
@@ -638,8 +655,9 @@ async function step(
   label: string,
   page: Page,
   orgId: Id<"organizations">,
-  expected: ExpectedLedgerDelta,
+  expected: ExpectedLedgerDelta | ExpectedLedgerDelta[],
   action: () => Promise<void>,
+  knownDefect?: { key: string; posts: ExpectedLedgerDelta },
 ): Promise<void> {
   const client = await authenticatedConvexClient(page);
   const before = await snapshotLedger(client, orgId);
@@ -653,8 +671,19 @@ async function step(
     .toBe(true);
   const delta = await ledgerDelta(client, orgId, before);
   console.log(`LEDGER ${label}`, JSON.stringify(delta.byCode));
-  await test.step(`${label}: ledger moved exactly as ruled`, async () => {
-    expectLedgerDelta(delta, expected);
+  for (const e of delta.newEntries) console.log(`  JOURNAL ${e.memo}`, JSON.stringify(e.byCode));
+  if (!knownDefect) {
+    await test.step(`${label}: ledger moved exactly as ruled`, async () => {
+      expectLedgerDelta(delta, expected);
+    });
+    return;
+  }
+  await test.step(`${label}: ledger still shows only known defect ${knownDefect.key}`, async () => {
+    test.info().annotations.push({
+      type: "known-defect",
+      description: `${knownDefect.key}: ${label} posts the recorded wrong lines`,
+    });
+    expectOnlyKnownDefect(delta, expected, knownDefect);
   });
 }
 
@@ -683,7 +712,6 @@ test.describe("financed deals, start to finish, checked through the ledger", () 
 
   for (const s of SCENARIOS) {
     test(`${s.id}: ${s.title}`, async ({ page, browser }) => {
-      test.fail(s.expect.knownDefect !== undefined, `Known defect ${s.expect.knownDefect}`);
       const orgId = (await resolveOrgId(page)) as Id<"organizations">;
       const client = await authenticatedConvexClient(page);
       const model = `QA-${s.id}-${testDataSuffix()}`;
@@ -724,8 +752,13 @@ test.describe("financed deals, start to finish, checked through the ledger", () 
           ).toHaveCount(0);
         }
 
-        await step(`${s.id} disbursement`, page, orgId, s.expect.disbursement, () =>
-          confirmDisbursement(managerPage),
+        await step(
+          `${s.id} disbursement`,
+          page,
+          orgId,
+          s.expect.disbursement,
+          () => confirmDisbursement(managerPage),
+          s.expect.knownDefect?.step === "disbursement" ? s.expect.knownDefect : undefined,
         );
         await managerPage.screenshot({
           path: test.info().outputPath(`${s.id}-final.png`),
