@@ -383,6 +383,10 @@ const result = compareContracts(calls, deployed.spec, unresolvedBinders);
 // ⚠️ R1: in release mode the SAME calls are compared against the candidate too.
 // What a release introduces is what the candidate breaks, not what is live.
 const candidateResult = candidateSpec ? compareContracts(calls, candidateSpec) : undefined;
+// ⚠️ F-2 (batch 4): in the monitor, a supplied and validated current spec is
+// compared against the SAME calls too, so each deployed break is classified by its
+// identity against it (classify.mjs), and the current spec's own gaps count.
+const currentResult = mode !== "release" && currentSpec ? compareContracts(calls, currentSpec) : undefined;
 const unproven = unprovenFrom(result.needsEvidence, deployed.spec);
 
 // ⚠️ THE MONITOR READS THIS FILE AND NEVER WRITES IT. See baseline.mjs.
@@ -418,7 +422,7 @@ const dedupeFindings = (list, fields) => {
   });
 };
 const validatorGaps = dedupeFindings(
-  [...result.gaps, ...(candidateResult?.gaps ?? [])],
+  [...result.gaps, ...(candidateResult?.gaps ?? []), ...(currentResult?.gaps ?? [])],
   ["surface", "file", "line", "identifier", "path", "detail"]
 );
 if (validatorGaps.length) {
@@ -435,14 +439,17 @@ if (blindSurfaces.length) {
     `the independent census resolved no symbol into the installed convex package on: ${blindSurfaces.join(", ")} (is convex installed?)`
   );
 }
-const coverageIncomplete = coverageProblems.length > 0;
-
 function reportCoverageIncomplete(prefix) {
   for (const s of result.coverage.unresolvedSites) {
     console.error(`::error file=${s.file},line=${s.line}::${s.identifier} - ${s.reason}`);
   }
   for (const g of validatorGaps) {
     console.error(`::error file=${g.file},line=${g.line}::[coverage gap] ${g.identifier} ${g.path} — ${g.detail}`);
+  }
+  for (const f of classification.uncertain) {
+    console.error(
+      `::error file=${f.file},line=${f.line}::[unclassifiable] ${f.identifier} ${f.path} — ${f.detail} [${f.dimension}]; the current spec cannot be compared here, so no deploy is claimed to fix it`
+    );
   }
   for (const g of censusGaps) {
     console.error(`::error file=${g.file},line=${g.line}::[census ${g.disposition}] ${g.reason}`);
@@ -498,7 +505,9 @@ function exitOnFirstCause(ordered, prefix = "") {
   const present = ordered.filter((cause) => cause.present);
   const primary = present.find((cause) => cause.exit[modeKey] !== undefined);
   primary?.report(prefix);
-  for (const cause of present.filter((c) => c !== primary)) cause.report("ALSO PRESENT: ");
+  // L-4: "ALSO PRESENT" only qualifies something when there is a primary to be
+  // "also" beside; a sole exit-less cause is printed plain.
+  for (const cause of present.filter((c) => c !== primary)) cause.report(primary ? "ALSO PRESENT: " : "");
   if (primary) process.exit(primary.exit[modeKey]);
 }
 
@@ -515,14 +524,6 @@ function exitOnFirstCause(ordered, prefix = "") {
 // app" arriving as a green tick.
 const unscanned = unscannedConvexClients(root, scannedFiles);
 const unscannedFiles = unscanned.length;
-// PASS is only the gap-free, empty-baseline case, and only about Convex argument
-// contracts: anything less than complete accounting is UNKNOWN.
-const verdict =
-  result.verdict === "PASS" && (unscannedFiles > 0 || coverageIncomplete || baselineState.matched > 0)
-    ? "UNKNOWN"
-    : result.verdict;
-const coverageWarning = result.alert.coverageWarning || verdict !== result.verdict;
-
 // ── 2b. Is an incompatibility a MISSING DEPLOY, or a client that is simply
 //        wrong? Same symptom, opposite response. See classify.mjs.
 const deployedSha = strArg("deployed-sha");
@@ -558,15 +559,6 @@ if (currentSpec) {
   backendEvidence.backendIdenticalToDeployed = backendUnchangedSince(String(deployedSha));
 }
 
-const classification = classifyBreaking(result.breaking, backendEvidence);
-const alert = alertsFor(
-  classification,
-  coverageWarning,
-  result.needsEvidence?.length ?? 0,
-  result.coverage.clientCallSitesUnresolved,
-  deployed.rung === SUPPLIED_FILE_RUNG ? "CONTRACT SKEW" : "PRODUCTION SKEW"
-);
-
 // ── 2c. Release state (R1). Same calls, both specs; undefined in the monitor.
 // An unproven path or a coverage gap blocks only where the candidate changes
 // something. The unknowns are the UNION of what each spec leaves unproven.
@@ -591,17 +583,67 @@ function releaseStateOf() {
   };
 }
 const release = releaseStateOf();
+const releaseFixed = release?.facts.fixedByCandidate.length ?? 0;
+
+// ⚠️ L-2 (batch 4): a deployed break the CANDIDATE fixes is not a proven break of
+// this release. It is counted on its own (`releaseFixed`) and taken out of the
+// breaks that are classified, so `provenBreaks` agrees with the actionable result.
+const deployedBreaks = release
+  ? result.breaking.filter((f) => !release.facts.fixedByCandidate.includes(f))
+  : result.breaking;
+if (currentResult) backendEvidence.currentResult = currentResult;
+const classification = classifyBreaking(deployedBreaks, backendEvidence);
 const skewCount = classification.revisionSkew.length + classification.unclassified.length;
+
+// A deployed break whose classification the current spec cannot support: absence
+// of a break there proves nothing (F-2), so it is a coverage problem, not skew.
+if (classification.uncertain.length > 0) {
+  coverageProblems.push(
+    `${classification.uncertain.length} deployed break(s) cannot be classified because the supplied current spec cannot be compared at that call`
+  );
+}
+const coverageIncomplete = coverageProblems.length > 0;
+
+// PASS is only the gap-free, empty-baseline case, and only about Convex argument
+// contracts: anything less than complete accounting is UNKNOWN.
+//
+// In a release the verdict is about what the RELEASE does (L-2): FAIL only for a
+// release break. A break the deployed backend has and the candidate fixes, or one
+// both have on a path the release leaves alone, is reported but is not a FAIL
+// that exits 0.
+const baseVerdict = release
+  ? release.facts.releaseBreaks.length > 0
+    ? "FAIL"
+    : release.facts.standingAgainstBoth.length > 0 ||
+        classification.standingDefects.length > 0 ||
+        result.needsEvidence.length > 0 ||
+        (candidateResult?.needsEvidence.length ?? 0) > 0 ||
+        result.gaps.length > 0 ||
+        result.coverage.clientCallSitesUnresolved > 0
+      ? "UNKNOWN"
+      : "PASS"
+  : result.verdict;
+const verdict =
+  baseVerdict === "PASS" && (unscannedFiles > 0 || coverageIncomplete || baselineState.matched > 0)
+    ? "UNKNOWN"
+    : baseVerdict;
+const coverageWarning = result.alert.coverageWarning || verdict !== baseVerdict;
+const alert = alertsFor(
+  classification,
+  coverageWarning,
+  result.needsEvidence?.length ?? 0,
+  result.coverage.clientCallSitesUnresolved,
+  deployed.rung === SUPPLIED_FILE_RUNG ? "CONTRACT SKEW" : "PRODUCTION SKEW"
+);
 
 /** @param {string} prefix */
 function reportProvenBreaks(prefix) {
   if (mode === "release") {
-    // The deployed backend currently refuses these calls. That is information
-    // for a RELEASE, not a verdict on it: a candidate that fixes one is good news
-    // and one it still breaks is reported as a RELEASE BREAK.
+    // Breaks the candidate FIXES were already taken out of `skewCount` (L-2); what
+    // is left is refused by the deployed backend and NOT fixed by the candidate.
     console.error(
-      `::notice::${prefix}DEPLOYED BACKEND CURRENTLY REFUSES ${skewCount} call path(s) the candidate changes; ` +
-        `${release?.facts.fixedByCandidate.length ?? 0} of them are FIXED BY THIS CANDIDATE and are not release breaks.`
+      `::notice::${prefix}DEPLOYED BACKEND CURRENTLY REFUSES ${skewCount} call path(s) this candidate does not fix; ` +
+        `any it still breaks are reported as a RELEASE BREAK.`
     );
     return;
   }
@@ -635,7 +677,7 @@ function reportStandingDefects(prefix) {
   }
   console.error(
     `::${level}::${prefix}STANDING CONTRACT DEFECT — ${classification.standingDefects.length} path(s). ` +
-      `The current backend and the live backend already agree, so DEPLOYING WILL NOT FIX THIS` +
+      `The current backend still refuses the same call the live backend refuses, so DEPLOYING WILL NOT FIX THIS` +
       (mode === "release" ? ", and this candidate does not introduce it. " : ". ") +
       `Basis: ${classification.basis}`
   );
@@ -653,6 +695,11 @@ function reportReleaseBreaks(prefix) {
     `::error::${prefix}RELEASE BREAK - ${breaks.length} call(s) this candidate would introduce or leave broken on a path it changes. ` +
       `Deploying the backend is not the remedy; change the candidate or the client.`
   );
+}
+
+/** @param {string} prefix */
+function reportReleaseFixed(prefix) {
+  console.error(`::notice::${prefix}RELEASE: ${releaseFixed} deployed break(s) FIXED BY THIS CANDIDATE, not counted as proven breaks.`);
 }
 
 /** @param {string} prefix */
@@ -692,6 +739,8 @@ const causes = [
   // Release-only causes: what THIS candidate would introduce or leave broken
   // (R1), then what it changes that cannot be proven. Never present in the monitor.
   { id: "releaseBreak", key: "releaseBreaks", value: release?.facts.releaseBreaks.length ?? 0, present: (release?.facts.releaseBreaks.length ?? 0) > 0, exit: { release: EXIT.RELEASE_BREAK }, report: reportReleaseBreaks },
+  // L-2: informational, never an exit. Breaks the deployed backend has and this candidate fixes.
+  { id: "releaseFixed", key: "releaseFixed", value: releaseFixed, present: releaseFixed > 0, exit: {}, report: reportReleaseFixed },
   { id: "releaseBlocker", key: "releaseBlockers", value: release?.blockingCount ?? 0, present: Boolean(release?.blockers.blocked), exit: { release: EXIT.BLOCKED }, report: reportReleaseBlockers },
   // ⚠️ A client FILE that was never scanned is not the same as an unproven path
   // inside a file that was. For an unproven path the control saw the call and
@@ -721,6 +770,7 @@ const report = {
     revisionSkew: classification.revisionSkew.length,
     standingDefects: classification.standingDefects.length,
     unclassified: classification.unclassified.length,
+    coverageIncomplete: classification.uncertain.length,
   },
   unproven,
   baseline: { path: baselinePath, matched: baselineState.matched, drift: baselineState.problems },

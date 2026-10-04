@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { breakKey } from "./compare.mjs";
 
 /**
  * SCRUM-178 v2, D-24 CS-2: the exit policy, one subprocess test per table row.
@@ -354,6 +355,20 @@ describe("SCRUM-178 v2 batch 3 R2 + SPEC-1: every spec role is validated, recurs
     "unknown visibility": fnWith({ visibility: { kind: "private" } }),
     "record with an invalid value validator": fnWith({
       args: { type: "object", value: { orgId: required({ type: "record", keys: { type: "string" }, values: {} }) } },
+    }),
+    // SCRUM-178 v2 batch 4 (F-1): ValidatorJSON has no `int64` and no `float64`;
+    // v.int64() renders `bigint` and v.float64() renders `number`.
+    "the fictional int64 validator type": fnWith({ args: { type: "object", value: { orgId: required({ type: "int64" }) } } }),
+    "the fictional float64 validator type": fnWith({ args: { type: "object", value: { orgId: required({ type: "float64" }) } } }),
+    // SCRUM-178 v2 batch 4 (L-1): `optional` must be a real boolean, at any depth.
+    'a top-level `optional: "false"`': fnWith({ args: { type: "object", value: { orgId: { fieldType: str, optional: "false" } } } }),
+    'a nested `optional: "false"`': fnWith({
+      args: {
+        type: "object",
+        value: {
+          orgId: required({ type: "object", value: { inner: { fieldType: str, optional: "false" } } }),
+        },
+      },
     }),
   };
 
@@ -742,6 +757,123 @@ describe("CS2-2: the spec is validated before it is trusted", () => {
     expect(r.code).toBe(7);
     expect(r.all).toMatch(/calls a Query/);
   }, 300_000);
+});
+
+describe("SCRUM-178 v2 batch 4", () => {
+  const upd = (fields: Record<string, unknown>) => mutation("vehicles.js:update", fields);
+  const other = mutation("vehicles.js:other", {});
+  const ORG = { orgId: required(str) };
+  const DEPLOY_ADVICE = /Deploy the Convex backend|PRODUCTION SKEW|CONTRACT SKEW/;
+  const withTag = CLIENT("", '{ orgId: "o", tag: "x" }');
+  const current = (dir: string) => production(dir, ["--current", "current.json"]);
+
+  describe("F-2: --current classifies each deployed break by break identity", () => {
+    test("current ADDS the called function -> 7 (REVISION_SKEW)", () => {
+      const dir = scaffold({ client: PROVEN, spec: specOf(other), current: specOf(upd(ORG), other) });
+      const r = current(dir);
+      expect(r.code).toBe(7);
+      const causes = reportOf(dir).causes;
+      expect(causes.provenBreaks).toBeGreaterThan(0);
+      expect(causes.standingDefects).toBe(0);
+    }, 300_000);
+
+    test("internal -> public in current -> 7", () => {
+      const internal = { ...upd(ORG), visibility: { kind: "internal" } };
+      const dir = scaffold({ client: PROVEN, spec: specOf(internal), current: specOf(upd(ORG)) });
+      const r = current(dir);
+      expect(r.code).toBe(7);
+      expect(reportOf(dir).causes.provenBreaks).toBeGreaterThan(0);
+    }, 300_000);
+
+    test("the same break on both -> 5, never skew", () => {
+      const spec = specOf(upd(ORG));
+      const dir = scaffold({ client: SENDS_NOPE, spec, current: spec });
+      const r = current(dir);
+      expect(r.code).toBe(5);
+      const causes = reportOf(dir).causes;
+      expect(causes.standingDefects).toBeGreaterThan(0);
+      expect(causes.provenBreaks).toBe(0);
+    }, 300_000);
+
+    test("the path CHANGED but the client still breaks on both -> 5 with 'will not fix' wording", () => {
+      const dir = scaffold({
+        client: withTag,
+        spec: specOf(upd({ ...ORG, tag: required({ type: "number" }) })),
+        current: specOf(upd({ ...ORG, tag: required({ type: "boolean" }) })),
+      });
+      const r = current(dir);
+      expect(r.code).toBe(5);
+      expect(r.stderr).toMatch(/will not fix/i);
+      expect(r.stderr).not.toMatch(DEPLOY_ADVICE);
+      const causes = reportOf(dir).causes;
+      expect(causes.standingDefects).toBeGreaterThan(0);
+      expect(causes.provenBreaks).toBe(0);
+    }, 300_000);
+
+    test("current `args: null` on the called function -> 9 with no deploy advice (no deployed break)", () => {
+      const nullArgs = { identifier: "vehicles.js:update", functionType: "Mutation", visibility: { kind: "public" }, args: null };
+      const dir = scaffold({ client: PROVEN, spec: specOf(upd(ORG)), current: specOf(nullArgs) });
+      const r = current(dir);
+      expect(r.code).toBe(9);
+      expect(r.stderr).toMatch(/COVERAGE INCOMPLETE/);
+      expect(r.stderr).not.toMatch(DEPLOY_ADVICE);
+    }, 300_000);
+
+    test("a deployed break whose path current cannot compare is 9, not 7, and offers no deploy advice", () => {
+      const nullArgs = { identifier: "vehicles.js:update", functionType: "Mutation", visibility: { kind: "public" }, args: null };
+      const dir = scaffold({ client: SENDS_NOPE, spec: specOf(upd(ORG)), current: specOf(nullArgs) });
+      const r = current(dir);
+      expect(r.code).toBe(9);
+      expect(r.stderr).not.toMatch(DEPLOY_ADVICE);
+      const rep = reportOf(dir);
+      expect(rep.causes.provenBreaks).toBe(0);
+      expect(rep.causes.coverageIncomplete.length).toBeGreaterThan(0);
+    }, 300_000);
+  });
+
+  describe("F-3: a candidate that changes the path of an existing break is a RELEASE BREAK", () => {
+    test("deployed number, candidate boolean, client string: the SAME breakKey, exit 8", () => {
+      const dir = scaffold({
+        client: PROVEN,
+        spec: specOf(upd({ orgId: required({ type: "number" }) })),
+        candidate: specOf(upd({ orgId: required({ type: "boolean" }) })),
+      });
+      const r = run(dir, releaseArgsJ);
+      expect(r.code).toBe(8);
+      const m = r.stderr.match(/::error file=([^,]+),line=(\d+)::\[RELEASE BREAK\] (\S+) (\S+) — .* \[(\w+)\]/);
+      expect(m, r.stderr).not.toBeNull();
+      const deployedBreak = (reportOf(dir).breaking as Array<Record<string, unknown>>).find((b) => b.identifier === m![3]);
+      expect(deployedBreak, "the deployed comparison must hold the same break").toBeDefined();
+      const candidateBreak = { ...deployedBreak, file: m![1], line: Number(m![2]), identifier: m![3], path: m![4], dimension: m![5] };
+      expect(breakKey(candidateBreak)).toBe(breakKey(deployedBreak));
+      expect(reportOf(dir).causes.releaseBreaks).toBe(1);
+    }, 300_000);
+  });
+
+  describe("L-2: a break the candidate fixes is counted separately and is not a proven break", () => {
+    test("the candidate fixes the sole deployed break -> exit 0, releaseFixed 1, no FAIL", () => {
+      const dir = scaffold({ client: SENDS_NOPE, spec: specOf(upd(ORG)), candidate: specOf(upd({ ...ORG, nope: required(str) })) });
+      const r = run(dir, releaseArgsJ);
+      expect(r.code).toBe(0);
+      const rep = reportOf(dir);
+      expect(rep.causes.releaseFixed).toBe(1);
+      expect(rep.causes.releaseBreaks).toBe(0);
+      expect(rep.causes.provenBreaks).toBe(0);
+      expect(rep.verdict).not.toBe("FAIL");
+      expect(r.stderr).toMatch(/1 deployed break\(s\) FIXED BY THIS CANDIDATE/);
+    }, 300_000);
+  });
+
+  describe("L-4: ALSO PRESENT only when there is a primary cause", () => {
+    test("a sole non-exit cause (a standing defect in a release) is printed without the prefix", () => {
+      const spec = specOf(upd(ORG));
+      const dir = scaffold({ client: SENDS_NOPE, spec, candidate: spec });
+      const r = run(dir, releaseArgsJ);
+      expect(r.code).toBe(0);
+      expect(r.stderr).toMatch(/STANDING CONTRACT DEFECT/);
+      expect(r.stderr).not.toMatch(/ALSO PRESENT/);
+    }, 300_000);
+  });
 });
 
 describe("wording", () => {

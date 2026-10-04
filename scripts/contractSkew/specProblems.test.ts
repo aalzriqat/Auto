@@ -1,4 +1,6 @@
 import { describe, expect, test } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import { indexSpec, specProblems } from "./specIndex.mjs";
 import { validatorProblems, validatorTree } from "./contractTree.mjs";
 
@@ -40,6 +42,34 @@ describe("specProblems: SPEC-1 (batch 3)", () => {
   });
   test("an empty union is a legitimate (unsatisfiable) validator, not a spec problem", () => {
     expect(specProblems(withArgs({ type: "object", value: { x: { fieldType: { type: "union", value: [] }, optional: false } } }))).toEqual([]);
+  });
+});
+
+describe("L-1 (batch 4): `optional` must be a real boolean at every nesting level", () => {
+  const field = (optional: unknown) => ({ fieldType: { type: "string" }, optional });
+  const top = (optional: unknown) => ({ type: "object", value: { x: field(optional) } });
+  const nested = (optional: unknown) => ({
+    type: "object",
+    value: { outer: { fieldType: { type: "array", value: { type: "object", value: { x: field(optional) } } }, optional: false } },
+  });
+
+  test.each(["false", "true", 0, 1, null, undefined, {}])("a top-level `optional: %j` is a spec problem", (optional) => {
+    expect(validatorProblems(top(optional), "w")).not.toEqual([]);
+  });
+  test.each(["false", "true", 0, 1, null, undefined, {}])("a NESTED `optional: %j` is a spec problem", (optional) => {
+    expect(validatorProblems(nested(optional), "w")).not.toEqual([]);
+  });
+  test("a real boolean is accepted at both levels (control)", () => {
+    for (const b of [true, false]) {
+      expect(validatorProblems(top(b), "w")).toEqual([]);
+      expect(validatorProblems(nested(b), "w")).toEqual([]);
+    }
+  });
+  test("validatorTree does not COERCE it: the string \"false\" must not become optional", () => {
+    // Boolean("false") === true would silently turn a REQUIRED field optional, so
+    // an omitted required field would stop being reported (a false PASS).
+    const tree = validatorTree(top("false")) as { fields: Map<string, { optional: boolean }> };
+    expect(tree.fields.get("x")?.optional).toBe(false);
   });
 });
 
@@ -103,17 +133,18 @@ describe("specProblems", () => {
 });
 
 describe("validatorProblems accepts every validator kind the comparator handles (drift guard)", () => {
-  // One node per kind `convex function-spec` renders (validator.d.ts: null number
-  // bigint boolean string bytes any literal id array record union object, plus
-  // the `float64` / `int64` names the number validators are emitted as). A kind
-  // `validatorTree` / `compareNode` learns to handle that `validatorProblems` does
-  // not know would turn every real spec into exit 3.
+  // One node per kind `convex function-spec` renders: EXACTLY the `type` strings of
+  // the pinned SDK's `ValidatorJSON` union (validators.ts), read from the installed
+  // package below so a kind Convex adds cannot go uncovered. `v.int64()` is
+  // rendered `bigint` and `v.float64()` is rendered `number` (VInt64.json /
+  // VFloat64.json); there is no `int64` and no `float64` spec type, so those two
+  // names are NOT fixtures here and are refused as unknown below (SCRUM-178 v2
+  // batch 4, F-1). A kind `validatorTree` / `compareNode` learns to handle that
+  // `validatorProblems` does not know would turn every real spec into exit 3.
   const str = { type: "string" };
   const KINDS: Record<string, unknown> = {
     null: { type: "null" },
     number: { type: "number" },
-    float64: { type: "float64" },
-    int64: { type: "int64" },
     bigint: { type: "bigint" },
     boolean: { type: "boolean" },
     string: str,
@@ -145,5 +176,21 @@ describe("validatorProblems accepts every validator kind the comparator handles 
 
   test("a type outside the set is still refused", () => {
     expect(validatorProblems({ type: "decimal128" }, "x")).toEqual(['x: unknown validator type "decimal128"']);
+  });
+
+  test("the fixtures cover EVERY ValidatorJSON kind of the pinned convex SDK, no more and no fewer", () => {
+    const source = fs.readFileSync(path.resolve("node_modules/convex/src/values/validators.ts"), "utf8");
+    const start = source.indexOf("export type ValidatorJSON");
+    const end = source.indexOf("export type RecordKeyValidatorJSON");
+    expect(start, "ValidatorJSON not found in the pinned SDK").toBeGreaterThan(-1);
+    expect(end, "RecordKeyValidatorJSON not found in the pinned SDK").toBeGreaterThan(start);
+    const emitted = [...new Set([...source.slice(start, end).matchAll(/type: "([A-Za-z0-9]+)"/g)].map((m) => m[1]))].sort();
+    expect(emitted.length).toBeGreaterThan(10);
+    expect(Object.keys(KINDS).sort()).toEqual(emitted);
+  });
+
+  test.each(["int64", "float64"])("`%s` is not a ValidatorJSON type, so a spec carrying it is a spec problem", (type) => {
+    expect(validatorProblems({ type }, "x")).toEqual([`x: unknown validator type "${type}"`]);
+    expect(specProblems({ functions: [{ ...callable("a.js:b"), args: { type: "object", value: { n: { fieldType: { type }, optional: false } } } }] })).not.toEqual([]);
   });
 });

@@ -19,13 +19,62 @@
  * as its own contract-health failure — visible, un-suppressed, and not
  * downgraded to UNKNOWN, because it is not uncertainty. It is a known bug.
  */
-import { pathsOverlap } from "./compare.mjs";
+import { breakKey, pathsOverlap } from "./compare.mjs";
 
 export const CLASSIFICATION = {
   REVISION_SKEW: "REVISION_SKEW",
   STANDING_DEFECT: "STANDING_DEFECT",
   UNCLASSIFIED: "UNCLASSIFIED",
+  /** The supplied current spec cannot be compared at this call (SCRUM-178 v2 batch 4, F-2). */
+  COVERAGE_INCOMPLETE: "COVERAGE_INCOMPLETE",
 };
+
+const WHOLE_FUNCTION = "<function>";
+const siteOf = (/** @type {any} */ f) => JSON.stringify([f.surface ?? "", f.file, f.line, f.identifier]);
+
+/**
+ * SCRUM-178 v2 batch 4 (F-2). WHEN A VALIDATED CURRENT SPEC IS SUPPLIED, THE
+ * SAME CALLS ARE COMPARED AGAINST IT AND EACH DEPLOYED BREAK IS CLASSIFIED BY ITS
+ * IDENTITY (`breakKey`), never by whether a path "changed".
+ *
+ *   present against current too                 STANDING_DEFECT: current refuses
+ *       the same call, so deploying it fixes nothing — even if the path moved.
+ *   absent against current, and current is fully comparable at that call
+ *       (no gap and no unknown on an overlapping path)    REVISION_SKEW.
+ *   current has a gap or an unknown at that call      COVERAGE_INCOMPLETE: absence
+ *       of a break there proves nothing, so no deploy advice is given.
+ *
+ * @param {any[]} breaking        the deployed breaks
+ * @param {{ breaking: any[], gaps?: any[], needsEvidence?: any[] }} currentResult
+ */
+export function classifyAgainstCurrent(breaking, currentResult) {
+  const currentBreaks = new Set(currentResult.breaking.map(breakKey));
+  const unsure = [...(currentResult.gaps ?? []), ...(currentResult.needsEvidence ?? [])];
+  /** @param {any} f */
+  const uncertainAt = (f) =>
+    unsure.some(
+      (u) =>
+        siteOf(u) === siteOf(f) &&
+        (f.path === WHOLE_FUNCTION ? u.path === WHOLE_FUNCTION : u.path === WHOLE_FUNCTION || pathsOverlap(u.path, f.path))
+    );
+  const classified = breaking.map((finding) => ({
+    ...finding,
+    classification: currentBreaks.has(breakKey(finding))
+      ? CLASSIFICATION.STANDING_DEFECT
+      : uncertainAt(finding)
+        ? CLASSIFICATION.COVERAGE_INCOMPLETE
+        : CLASSIFICATION.REVISION_SKEW,
+  }));
+  const only = (/** @type {string} */ kind) => classified.filter((f) => f.classification === kind);
+  return {
+    classified,
+    revisionSkew: only(CLASSIFICATION.REVISION_SKEW),
+    standingDefects: only(CLASSIFICATION.STANDING_DEFECT),
+    unclassified: /** @type {any[]} */ ([]),
+    uncertain: only(CLASSIFICATION.COVERAGE_INCOMPLETE),
+    basis: `the same client calls compared against the supplied current spec (${currentResult.breaking.length} break(s) there)`,
+  };
+}
 
 /**
  * Evidence that the current backend contract agrees with the live one, in
@@ -58,6 +107,7 @@ export const CLASSIFICATION = {
  * @typedef {{ changedPaths?: {identifier: string, path: string, change?: string,
  *                            deployed?: string|null, candidate?: string|null}[],
  *             backendIdenticalToDeployed?: boolean,
+ *             currentResult?: { breaking: any[], gaps?: any[], needsEvidence?: any[] },
  *             deployedSha?: string,
  *             basis?: string }} BackendEvidence
  */
@@ -72,10 +122,13 @@ export const CLASSIFICATION = {
  * @param {BreakingFinding[]} breaking
  * @param {BackendEvidence} evidence
  * @returns {{ classified: ClassifiedFinding[], revisionSkew: ClassifiedFinding[],
- *             standingDefects: ClassifiedFinding[], unclassified: ClassifiedFinding[], basis: string }}
+ *             standingDefects: ClassifiedFinding[], unclassified: ClassifiedFinding[],
+ *             uncertain: ClassifiedFinding[], basis: string }}
  */
 export function classifyBreaking(breaking, evidence = {}) {
-  const { changedPaths, backendIdenticalToDeployed, deployedSha } = evidence;
+  const { changedPaths, backendIdenticalToDeployed, deployedSha, currentResult } = evidence;
+  // F-2: a compared current spec is the strongest evidence there is.
+  if (currentResult) return classifyAgainstCurrent(breaking, currentResult);
 
   let basis;
   let classifyOne;
@@ -132,6 +185,7 @@ export function classifyBreaking(breaking, evidence = {}) {
     revisionSkew: classified.filter((f) => f.classification === CLASSIFICATION.REVISION_SKEW),
     standingDefects: classified.filter((f) => f.classification === CLASSIFICATION.STANDING_DEFECT),
     unclassified: classified.filter((f) => f.classification === CLASSIFICATION.UNCLASSIFIED),
+    uncertain: /** @type {any[]} */ ([]),
     basis,
   };
 }
@@ -145,8 +199,8 @@ export function classifyBreaking(breaking, evidence = {}) {
  * degrades to unclassified. Failing closed there is the whole point.
  */
 /**
- * @param {{ revisionSkew: unknown[], standingDefects: unknown[], unclassified: unknown[] }} classification
- *   Only the three lengths are read; the findings themselves are not inspected here.
+ * @param {{ revisionSkew: unknown[], standingDefects: unknown[], unclassified: unknown[], uncertain?: unknown[] }} classification
+ *   Only the lengths are read; the findings themselves are not inspected here.
  * @param {boolean} coverageWarning
  * @param {number} needsEvidenceCount
  * @param {number} unresolvedCount
@@ -166,6 +220,12 @@ export function alertsFor(classification, coverageWarning, needsEvidenceCount, u
   }
   if (standingCount) {
     parts.push(`STANDING CONTRACT DEFECT: ${standingCount} path(s) where the client disagrees with a backend that is already deployed — deploying will not fix these`);
+  }
+  const uncertainCount = classification.uncertain?.length ?? 0;
+  if (uncertainCount) {
+    parts.push(
+      `${uncertainCount} deployed break(s) cannot be classified because the supplied current spec cannot be compared at that call — NOT claimed fixable by a deploy`
+    );
   }
   if (!parts.length && coverageWarning) {
     parts.push(

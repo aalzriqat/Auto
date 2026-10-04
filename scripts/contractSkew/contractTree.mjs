@@ -110,7 +110,10 @@ export function validatorTree(node) {
     for (const [name, entry] of Object.entries(raw)) {
       fields.set(name, {
         node: validatorTree(entry?.fieldType),
-        optional: Boolean(entry && entry.optional),
+        // ⚠️ L-1: never coerce. Boolean("false") === true would silently turn a
+        // REQUIRED field optional (a false PASS). `validatorProblems` refuses a
+        // non-boolean first; this fails closed (required) if one ever gets here.
+        optional: entry?.optional === true,
       });
     }
     return { kind: "object", fields };
@@ -136,9 +139,10 @@ export function validatorTree(node) {
  * Every validator `type` the comparator can interpret, DERIVED from what
  * `validatorTree` / `compareNode` handle rather than listed independently:
  * the structural kinds above, plus every scalar `compareNode` can compare
- * (`SCALAR_OK`) and `bytes` / `bigint`, which it handles explicitly. A type in
- * neither set falls to the unmodelled-scalar fallback and can only ever be
- * reported TYPE_UNKNOWN, which is not the same as the spec being understood.
+ * (`SCALAR_OK`, which includes `bigint`) and `bytes`, which it handles
+ * explicitly. A type in neither set falls to the unmodelled-scalar fallback and
+ * is reported as an unwaivable COVERAGE_GAP (exit 9), which is not the same as
+ * the spec being understood.
  * (`KNOWN_TYPES`, below `SCALAR_OK`.)
  */
 const STRUCTURAL_TYPES = ["any", "null", "literal", "object", "array", "union", "id", "record"];
@@ -156,7 +160,9 @@ const STRUCTURAL_TYPES = ["any", "null", "literal", "object", "array", "union", 
 function fieldProblems(entry, where, missing = "field has no `fieldType`") {
   const e = /** @type {Record<string, any> | null | undefined} */ (entry);
   if (!e || typeof e !== "object" || !("fieldType" in e)) return [`${where}: ${missing}`];
-  return validatorProblems(e.fieldType, where);
+  // L-1: `optional` is a boolean in every ValidatorJSON field/record-value entry.
+  const optionalProblem = typeof e.optional === "boolean" ? [] : [`${where}: \`optional\` must be a boolean`];
+  return [...optionalProblem, ...validatorProblems(e.fieldType, where)];
 }
 
 /**
@@ -563,13 +569,13 @@ export const SEVERITY = {
 const SCALAR_OK = {
   string: new Set(["string"]),
   number: new Set(["number"]),
-  float64: new Set(["number"]),
-  // ⚠️ `v.int64()` ACCEPTS ONLY bigint. Convex models a 64-bit integer as a
-  // JavaScript BigInt, and passing a `number` is refused at runtime — `number`
-  // and `bigint` are distinct primitives. Accepting `number` here reported a
-  // payload as compatible that the backend rejects: a false PASS, which is the
-  // one verdict this control must never produce.
-  int64: new Set(["bigint"]),
+  // ⚠️ `v.int64()` IS RENDERED `{type:"bigint"}` and ACCEPTS ONLY bigint
+  // (VInt64.json, convex validators.ts). A 64-bit integer is a JavaScript BigInt
+  // and passing a `number` is refused at runtime. `v.float64()` is rendered
+  // `{type:"number"}` (VFloat64.json), so it needs no entry of its own. There is
+  // NO `int64` and NO `float64` spec type: keying them here made the real
+  // `bigint` fall to the fallback, and kept two names alive that no spec carries.
+  bigint: new Set(["bigint"]),
   boolean: new Set(["boolean"]),
   // ⚠️ NO `bytes` ENTRY. `v.bytes()` accepts an ArrayBuffer, and an ArrayBuffer
   // is a TypeScript OBJECT type — so the extractor emits an object NODE for it,
@@ -581,7 +587,7 @@ const SCALAR_OK = {
 };
 
 /** Every validator `type` the comparator can interpret (see `STRUCTURAL_TYPES`). */
-const KNOWN_TYPES = new Set([...STRUCTURAL_TYPES, ...Object.keys(SCALAR_OK), "bytes", "bigint"]);
+const KNOWN_TYPES = new Set([...STRUCTURAL_TYPES, ...Object.keys(SCALAR_OK), "bytes"]);
 
 const joinPath = (path, segment) => (path ? `${path}${segment}` : segment.replace(/^\./, ""));
 
@@ -986,10 +992,14 @@ export function compareNode(client, validator, path, ctx) {
     return { findings, compatible: false };
   }
 
+  // ⚠️ SCRUM-178 v2 batch 4 (F-1): an UNWAIVABLE COVERAGE_GAP, never TYPE_UNKNOWN.
+  // TYPE_UNKNOWN is baselinable, so an owner could have signed away a hole in what
+  // this control understands of the spec. A validator type it does not model is
+  // not a value it could not prove; it is a part of the contract it cannot read.
   if (!SCALAR_OK[validator.type]) {
     add(
-      SEVERITY.TYPE_UNKNOWN,
-      "VALUE",
+      SEVERITY.COVERAGE_GAP,
+      "SHAPE",
       `the backend declares ${JSON.stringify(validator.type)}, which this control does not model, so the value is NOT verified against it`
     );
     return { findings, compatible: true };

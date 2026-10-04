@@ -9,6 +9,7 @@ import {
   SEVERITY,
   validatorProblems,
 } from "./contractTree.mjs";
+import { compareContracts } from "./compare.mjs";
 
 /**
  * The tree model has to re-establish, from scratch, every case the flat model
@@ -440,10 +441,13 @@ describe("a validator this control cannot model is an UNKNOWN, never a verdict",
   test.each([
     ["a spec node with NO type", clientNode.scalar("string"), { value: undefined }],
     ["an unmodelled validator type", clientNode.scalar("boolean"), { type: "decimal128" }],
-  ])("%s is UNKNOWN — never silently clean, never a fabricated BREAKING", (_label, client, node) => {
+  ])("%s is a COVERAGE_GAP — never silently clean, never a fabricated BREAKING, never a waivable unknown", (_label, client, node) => {
     const r = compare(client, node);
     expect(r.findings).toHaveLength(1);
-    expect(r.findings[0].severity).toBe(SEVERITY.TYPE_UNKNOWN);
+    // SCRUM-178 v2 batch 4 (F-1): this was TYPE_UNKNOWN, which the baseline can
+    // waive. A validator type the comparator does not model is a hole in what was
+    // PROVEN, not an unproven value: unwaivable.
+    expect(r.findings[0].severity).toBe(SEVERITY.COVERAGE_GAP);
     // Denying PASS is correct; inventing a defect we cannot substantiate is not.
     // An UNKNOWN blocks a release through the coverage path without claiming
     // something false, so `compatible` must stay true.
@@ -500,14 +504,59 @@ describe("Convex scalar semantics, not approximations of them", () => {
    * refuses — a false PASS, which is the one verdict this control must never
    * produce.
    */
-  test("v.int64() accepts ONLY bigint, so a client number is BREAKING", () => {
+  // ⚠️ SCRUM-178 v2 batch 4 (F-1, D-29). `v.int64()` is rendered by the pinned
+  // Convex SDK as `{type: "bigint"}` (validators.ts VInt64.json) and `v.float64()`
+  // as `{type: "number"}`; ValidatorJSON has NO `int64` and NO `float64` member.
+  // These tests used the fictional `int64` spelling, so they pinned a path no real
+  // spec can reach while the real `bigint` fell to the unmodelled-type fallback.
+  test("v.int64() (rendered {type:'bigint'}) accepts ONLY bigint, so a client number is BREAKING", () => {
     // Convex models a 64-bit integer as a JavaScript BigInt. `number` and
     // `bigint` are distinct primitives and the validator refuses the former.
-    expect(breaking(run(cObj({ n: clientNode.scalar("number") }), vObj({ n: [{ type: "int64" }] })))).toHaveLength(1);
+    expect(breaking(run(cObj({ n: clientNode.scalar("number") }), vObj({ n: [{ type: "bigint" }] })))).toHaveLength(1);
   });
 
-  test("and a client bigint is accepted", () => {
-    expect(run(cObj({ n: clientNode.scalar("bigint") }), vObj({ n: [{ type: "int64" }] })).findings).toHaveLength(0);
+  test("and a client bigint (scalar or literal) is accepted, with no finding at all", () => {
+    expect(run(cObj({ n: clientNode.scalar("bigint") }), vObj({ n: [{ type: "bigint" }] })).findings).toHaveLength(0);
+    expect(run(cObj({ n: cLit(BigInt(10)) }), vObj({ n: [{ type: "bigint" }] })).findings).toHaveLength(0);
+  });
+
+  test("a client literal number against bigint is BREAKING", () => {
+    expect(breaking(run(cObj({ n: cLit(10) }), vObj({ n: [{ type: "bigint" }] })))).toHaveLength(1);
+  });
+
+  test("v.float64() (rendered {type:'number'}) still accepts a client number and refuses a bigint", () => {
+    expect(run(cObj({ n: clientNode.scalar("number") }), vObj({ n: [vNum] })).findings).toHaveLength(0);
+    expect(breaking(run(cObj({ n: clientNode.scalar("bigint") }), vObj({ n: [vNum] })))).toHaveLength(1);
+  });
+
+  test("the unmodelled-scalar fallback is an UNWAIVABLE COVERAGE_GAP, never TYPE_UNKNOWN", () => {
+    // Unreachable for a valid spec (validatorProblems refuses an unknown type
+    // first), so it is driven directly: a scalar node whose type has no entry.
+    const r = compareNode(
+      clientNode.scalar("string") as never,
+      { kind: "scalar", type: "decimal128" } as never,
+      "n",
+      ctx as never
+    );
+    expect(r.findings.map((f) => f.severity)).toEqual([SEVERITY.COVERAGE_GAP]);
+    expect(r.compatible).toBe(true);
+  });
+
+  test("...and through compareContracts it lands in `gaps`, never in `needsEvidence` (the only list a baseline can waive)", () => {
+    const calls = [{ identifier: "vehicles:update", file: "app/Uses.tsx", line: 7, siteId: "s1", surface: "web", payload: cObj({ n: cStr }) }];
+    const result = compareContracts(calls, {
+      functions: [
+        {
+          identifier: "vehicles.js:update",
+          functionType: "Mutation",
+          visibility: { kind: "public" },
+          args: vObj({ n: [{ type: "decimal128" }] }),
+        },
+      ],
+    });
+    expect(result.gaps.map((g: { severity: string }) => g.severity)).toEqual([SEVERITY.COVERAGE_GAP]);
+    expect(result.needsEvidence).toEqual([]);
+    expect(result.verdict).toBe("UNKNOWN");
   });
 
   test("v.bytes() is NOT a wildcard — a string is refused", () => {
