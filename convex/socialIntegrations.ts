@@ -773,6 +773,7 @@ export const refreshInstagramToken = internalAction({
 
     await ctx.runMutation(internal.socialIntegrations.patchInstagramToken, {
       orgId: args.orgId,
+      expectedAccessToken: token,
       instagramAccessToken: newToken,
       instagramTokenExpiresAt: newExpiresAt,
     });
@@ -782,6 +783,7 @@ export const refreshInstagramToken = internalAction({
 export const patchInstagramToken = internalMutation({
   args: {
     orgId: v.id("organizations"),
+    expectedAccessToken: v.string(),
     instagramAccessToken: v.string(),
     instagramTokenExpiresAt: v.optional(v.number()),
   },
@@ -790,7 +792,18 @@ export const patchInstagramToken = internalMutation({
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
-    if (!row) return;
+    // SCRUM-623-04: the refresh waited on Meta between reading and writing. If
+    // Disconnect or a reconnect landed in that wait, this token belongs to a
+    // connection that no longer exists: writing it would resurrect a token-only
+    // row, or overwrite the new connection's token.
+    if (
+      !row ||
+      row.instagramAccessToken !== args.expectedAccessToken ||
+      !row.instagramBusinessAccountId?.trim() ||
+      !row.instagramWebhookAccountId?.trim()
+    ) {
+      return;
+    }
     await ctx.db.patch(row._id, {
       instagramAccessToken: args.instagramAccessToken,
       instagramTokenExpiresAt: args.instagramTokenExpiresAt,

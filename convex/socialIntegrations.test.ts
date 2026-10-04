@@ -230,6 +230,114 @@ describe("socialIntegrations.getConnectionStatus / disconnect", () => {
   });
 });
 
+// SCRUM-623-04: the refresh reads the token, waits on Meta, then writes. A
+// Disconnect or reconnect landing in that wait must not be undone by the write.
+describe("socialIntegrations.refreshInstagramToken", () => {
+  async function seedConnected(t: ReturnType<typeof convexTestWithComponents>) {
+    const owner = await seedOwner(t);
+    await t.run((ctx) =>
+      ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
+        orgId: owner.orgId,
+        instagramBusinessAccountId: "ig_123",
+        instagramWebhookAccountId: "ig_hook_123",
+        instagramAccessToken: "token_old",
+      }),
+    );
+    return owner;
+  }
+
+  function stubRefresh(during: () => Promise<unknown>) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        await during();
+        return jsonResponse({ access_token: "token_refreshed", expires_in: 5184000 });
+      }),
+    );
+  }
+
+  const makeT = () => convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+  const readRow = (t: ReturnType<typeof makeT>, orgId: Id<"organizations">) =>
+    t.run((ctx) =>
+      ctx.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .unique(),
+    );
+
+  test("refreshes the token of the connection it read", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedConnected(t);
+    stubRefresh(async () => {});
+
+    await t.action(internal.socialIntegrations.refreshInstagramToken, { orgId });
+
+    const row = await readRow(t, orgId);
+    expect(row?.instagramAccessToken).toBe("token_refreshed");
+    expect(row?.instagramTokenExpiresAt).toBeGreaterThan(Date.now());
+    vi.unstubAllGlobals();
+  });
+
+  test("a refresh finishing after Disconnect does not restore the token", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedConnected(t);
+    stubRefresh(() => asOwner.mutation(api.socialIntegrations.disconnect, { orgId }));
+
+    await t.action(internal.socialIntegrations.refreshInstagramToken, { orgId });
+
+    const row = await readRow(t, orgId);
+    expect(row?.instagramAccessToken).toBeUndefined();
+    expect(row?.instagramTokenExpiresAt).toBeUndefined();
+    const status = await asOwner.query(api.socialIntegrations.getConnectionStatus, { orgId });
+    expect(status.instagramConnected).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  test("a refresh finishing after a reconnect does not overwrite the new connection's token", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedConnected(t);
+    stubRefresh(async () => {
+      await asOwner.mutation(api.socialIntegrations.disconnect, { orgId });
+      await t.run((ctx) =>
+        ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
+          orgId,
+          instagramBusinessAccountId: "ig_456",
+          instagramWebhookAccountId: "ig_hook_456",
+          instagramAccessToken: "token_new_connection",
+        }),
+      );
+    });
+
+    await t.action(internal.socialIntegrations.refreshInstagramToken, { orgId });
+
+    const row = await readRow(t, orgId);
+    expect(row?.instagramAccessToken).toBe("token_new_connection");
+    expect(row?.instagramBusinessAccountId).toBe("ig_456");
+    vi.unstubAllGlobals();
+  });
+
+  test.each(["instagramWebhookAccountId", "instagramBusinessAccountId"] as const)(
+    "does not keep a legacy connection without %s alive",
+    async (missing) => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const { orgId } = await seedConnected(t);
+      await t.run(async (ctx) => {
+        const row = await ctx.db
+          .query("orgSettings")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .unique();
+        await ctx.db.patch(row!._id, { [missing]: undefined });
+      });
+      stubRefresh(async () => {});
+
+      await t.action(internal.socialIntegrations.refreshInstagramToken, { orgId });
+
+      expect((await readRow(t, orgId))?.instagramAccessToken).toBe("token_old");
+      vi.unstubAllGlobals();
+    },
+  );
+});
+
 describe("socialIntegrations.setAutoPostEnabled", () => {
   test("rejects enabling auto-post when Instagram isn't connected", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
