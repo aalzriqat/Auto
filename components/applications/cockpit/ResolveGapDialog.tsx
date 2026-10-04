@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioCardGroup } from "./RadioCardGroup";
 import { validateGapShares } from "@/lib/financingEconomics";
+import { parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
 import {
   Dialog,
   DialogContent,
@@ -80,12 +81,10 @@ const EMPTY: Draft = {
  * not a decision.
  */
 function toMinor(value: string, factor: number): number | null {
-  const trimmed = value.trim();
-  if (trimmed === "") return null;
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed) || parsed < 0) return null;
-  const minor = Math.round(parsed * factor);
-  return Number.isSafeInteger(minor) ? minor : null;
+  // Exact, never rounded (SCRUM-605): a figure with more decimals than the
+  // currency holds is not a decision either. Negatives fail the parse.
+  const parsed = parseMajorToMinor(value, Math.round(Math.log10(factor)));
+  return parsed.ok ? parsed.minor : null;
 }
 
 /**

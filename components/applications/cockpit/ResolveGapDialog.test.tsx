@@ -132,6 +132,19 @@ describe("the dialog never invents a destination the operator left blank", () =>
     });
   });
 
+  test("a destination with more decimals than the currency holds is not a decision — never rounded into a reconciling figure (SCRUM-605)", () => {
+    const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
+    renderDialog({ onSubmit });
+    // Rounded to fils this is exactly the gap, and used to submit as such.
+    fireEvent.change(input("GapCashToDealer"), { target: { value: `${GAP_MAJOR}.0004` } });
+    fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
+    fireEvent.change(input("GapToFinanceCompany"), { target: { value: "0" } });
+    expect(confirmButton().disabled).toBe(true);
+    expect(readiness()).toBe("GapDestinationsIncomplete");
+    fireEvent.click(confirmButton());
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   test("destinations that do not add up to the customer's part are named, not silently blocked", () => {
     renderDialog();
     fireEvent.change(input("GapCashToDealer"), { target: { value: "600" } });

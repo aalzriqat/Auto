@@ -2821,6 +2821,7 @@ export const salesEn = {
   QuotationOverrideReasonPlaceholder: "e.g. agreed by phone with the branch manager",
   QuotationOverrideReasonRequired: "Say why the amount sent differs from the calculated figure.",
   QuotationAmountInvalid: "Enter an amount greater than zero.",
+  AmountTooPrecise: "This currency does not have that many decimal places — check the amount.",
   QuotationRecorded: "Quotation recorded",
 
   TheirAppraisalLabel: "Recorded appraisal of the vehicle",
@@ -3796,6 +3797,7 @@ export const salesAr = {
   QuotationOverrideReasonPlaceholder: "مثال: اتُّفق عليه هاتفياً مع مدير الفرع",
   QuotationOverrideReasonRequired: "وضِّح سبب اختلاف المبلغ المُرسَل عن الرقم المحتسَب.",
   QuotationAmountInvalid: "أدخل مبلغاً أكبر من صفر.",
+  AmountTooPrecise: "هذه العملة لا تحتمل هذا العدد من الخانات العشرية — راجع المبلغ.",
   QuotationRecorded: "تم تسجيل عرض السعر",
 
   TheirAppraisalLabel: "التخمين المسجَّل للمركبة",
