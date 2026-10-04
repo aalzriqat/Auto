@@ -254,16 +254,16 @@ describe("SCRUM-377 preview deployment lifecycle", () => {
     });
 
     it.each([
-      ["kind absent", { kind: undefined }],
-      ["isDefault absent", { isDefault: undefined }],
-      ["isDefault null", { isDefault: null }],
-      ["isDefault the string false", { isDefault: "false" }],
-    ])("refuses when %s: no PATCH, no delete POST", async (_label, overrides) => {
+      ["kind absent", { kind: undefined }, /observed kind: undefined/],
+      ["isDefault absent", { isDefault: undefined }, /observed isDefault: undefined/],
+      ["isDefault null", { isDefault: null }, /observed isDefault: null/],
+      ["isDefault the string false", { isDefault: "false" }, /observed isDefault: string/],
+    ])("refuses when %s: no PATCH, no delete POST", async (_label, overrides, message) => {
       const pinned = api(preview(overrides));
-      await expect(pinPreview({ env: env(), fetchImpl: pinned.fetchImpl, now: () => NOW })).rejects.toThrow();
+      await expect(pinPreview({ env: env(), fetchImpl: pinned.fetchImpl, now: () => NOW })).rejects.toThrow(message);
       expect(pinned.calls.map((c) => c.method)).toEqual(["GET"]);
       const deleted = api(preview(overrides));
-      await expect(deletePreview({ env: env(), fetchImpl: deleted.fetchImpl })).rejects.toThrow();
+      await expect(deletePreview({ env: env(), fetchImpl: deleted.fetchImpl })).rejects.toThrow(message);
       expect(deleted.calls.map((c) => c.method)).toEqual(["GET"]);
     });
 
@@ -281,7 +281,7 @@ describe("SCRUM-377 preview deployment lifecycle", () => {
       expect(carriesPreviewIdentity({ reference: 42, previewIdentifier: PREVIEW_NAME }, PREVIEW_NAME)).toBe(false);
       for (const overrides of [{ previewIdentifier: 42 }, { reference: 42, previewIdentifier: PREVIEW_NAME }]) {
         const { calls, fetchImpl } = api(preview(overrides));
-        await expect(deletePreview({ env: env(), fetchImpl })).rejects.toThrow();
+        await expect(deletePreview({ env: env(), fetchImpl })).rejects.toThrow(/preview identifier/);
         expect(calls.map((c) => c.method)).toEqual(["GET"]);
       }
     });

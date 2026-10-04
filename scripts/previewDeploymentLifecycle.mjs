@@ -169,8 +169,11 @@ export async function readOwnPreview({ deployKey, previewName, deploymentName, f
   if (!d || typeof d !== "object" || Array.isArray(d)) refuse("Convex Management API returned a non-object.");
   if (d.name !== deploymentName) refuse("Deployment name does not match the requested deployment.");
   if (d.deploymentType !== "preview") refuse("Deployment " + deploymentName + " is not a preview deployment.");
-  if (d.kind !== "cloud") refuse("Deployment " + deploymentName + " is not a cloud deployment.");
-  if (d.isDefault !== false) refuse("Deployment " + deploymentName + " is a default deployment.");
+  if (d.kind !== "cloud") refuse("Deployment " + deploymentName + " is not a cloud deployment (observed kind: " + describeObserved(d.kind) + ").");
+  if (d.isDefault !== false) refuse(
+      "Deployment " + deploymentName + " is not confirmed non-default (observed isDefault: " +
+        (typeof d.isDefault === "boolean" ? String(d.isDefault) : d.isDefault === null ? "null" : typeof d.isDefault) + ").",
+    );
   if (!carriesPreviewIdentity(d, previewName)) {
     refuse(
       "Deployment " + deploymentName + " does not carry this run's preview identifier (observed reference: " +
