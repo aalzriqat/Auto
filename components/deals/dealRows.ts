@@ -116,6 +116,19 @@ export function applicationRow(
   };
 }
 
+// A sale still to be completed is the dealership's move. Past that, a
+// financed deal's queue state is its application's — an unpaid financier
+// receipt or a held deposit — read through the one rule, never re-derived.
+function saleQueue(
+  sale: SaleListRow,
+  externallyFinanced: boolean
+): { reason: DealReason | null; waitingOn: DealWaitingOn } {
+  if (sale.status === "PENDING") {
+    return { reason: externallyFinanced ? "SALE_PENDING" : "CASH_PENDING", waitingOn: "DEALERSHIP" };
+  }
+  return sale.linkedApplication ? applicationReason(sale.linkedApplication) : { reason: null, waitingOn: "NONE" };
+}
+
 export function saleRow(
   sale: SaleListRow,
   orgId: string,
@@ -128,16 +141,7 @@ export function saleRow(
   // absence would label those "Cash" and queue them as a cash sale to complete.
   const externallyFinanced =
     sale.applicationId !== undefined || sale.financingType === "FINANCED" || sale.financingType === "LEASE";
-  // A sale still to be completed is the dealership's move. Past that, a
-  // financed deal's queue state is its application's — an unpaid financier
-  // receipt or a held deposit — read through the one rule, never re-derived.
-  const queue: { reason: DealReason | null; waitingOn: DealWaitingOn } =
-    sale.status !== "PENDING" && sale.linkedApplication
-      ? applicationReason(sale.linkedApplication)
-      : {
-          reason: sale.status === "PENDING" ? (externallyFinanced ? "SALE_PENDING" : "CASH_PENDING") : null,
-          waitingOn: sale.status === "PENDING" ? "DEALERSHIP" : "NONE",
-        };
+  const queue = saleQueue(sale, externallyFinanced);
   return {
     key: `sale_${sale._id}`,
     href: `/${orgId}/sales/${sale._id}/deal`,
