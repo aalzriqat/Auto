@@ -243,6 +243,24 @@ export function isSystemOwnerRole(role: RoleLike | null | undefined): boolean {
 }
 
 /**
+ * SCRUM-413 S413B-3: a row NAMED like the owner that does not qualify as one
+ * (explicit `false`, or unflagged and short of the frozen set). Never promoted,
+ * never written by a backfill; an owner-review item in the diagnostic.
+ */
+export function isUnqualifiedOwnerNamed(role: RoleLike): boolean {
+  return isReservedRoleName(role.name) && !isSystemOwnerRole(role);
+}
+
+/**
+ * SCRUM-413 S413B-1: an unflagged row that qualifies as the owner only through
+ * the frozen fallback, so it needs the explicit flag. Evaluate on the PRE-write
+ * row: a write can change what qualifies.
+ */
+export function needsOwnerFlagStamp(role: RoleLike): boolean {
+  return role.isSystemOwnerRole === undefined && isSystemOwnerRole(role);
+}
+
+/**
  * SCRUM-413 D-b: the ordered authority tiers needed to cancel a finance
  * application in `status`. The single source for both `cancelApplication` (which
  * enforces each tier at its own point in the body) and the cockpit's

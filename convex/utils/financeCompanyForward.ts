@@ -246,10 +246,32 @@ export async function deriveForwardState(ctx: QueryCtx, app: ForwardApp): Promis
  */
 export type ForwardCancelRefusal = { code: AppErrorCode; message: string };
 
+const CANCEL_REFUSAL_ON_BOOKS: ForwardCancelRefusal = {
+  code: AppErrorCode.FORWARD_CANCEL_ON_BOOKS,
+  message:
+    "The deposit and the dealership's contribution have already been paid to the finance company. A manager reports the payment as returned by the company, or an accountant records the correction, before this deal can be cancelled.",
+};
+const CANCEL_REFUSAL_POSTING_UNSETTLED: ForwardCancelRefusal = {
+  code: AppErrorCode.FORWARD_CANCEL_POSTING_UNSETTLED,
+  message:
+    "The payment to the finance company is not yet settled on the books. An accountant resolves it before this deal can be cancelled.",
+};
+const CANCEL_REFUSAL_REVERSAL_PENDING: ForwardCancelRefusal = {
+  code: AppErrorCode.FORWARD_CANCEL_REVERSAL_PENDING,
+  message:
+    "The reversal of the payment to the finance company is not yet posted. An accountant posts it before this deal can be cancelled.",
+};
 const FORWARD_MISMATCH_CANCEL_REFUSAL: ForwardCancelRefusal = {
   code: AppErrorCode.FORWARD_CANCEL_NEEDS_REPAIR,
   message:
     "The record of the payment to the finance company does not match the books. An accountant reviews it before this deal can be cancelled.",
+};
+/** Blocking forward state -> refusal. Any state not listed (NEEDS_REPAIR) is the mismatch refusal. */
+const CANCEL_REFUSAL_BY_STATE: Readonly<Record<string, ForwardCancelRefusal>> = {
+  ON_BOOKS: CANCEL_REFUSAL_ON_BOOKS,
+  POSTING_PENDING: CANCEL_REFUSAL_POSTING_UNSETTLED,
+  POSTING_FAILED: CANCEL_REFUSAL_POSTING_UNSETTLED,
+  REVERSAL_PENDING: CANCEL_REFUSAL_REVERSAL_PENDING,
 };
 
 /**
@@ -264,29 +286,7 @@ export function forwardCancelRefusal(proof: ForwardProof): ForwardCancelRefusal 
   // `deriveForwardState` returns NEEDS_REPAIR with NO versions) is not "nothing
   // blocks", it is "cannot tell", and cancelling reverses the sale.
   if (blocking === undefined) return proof.state === "NEEDS_REPAIR" ? FORWARD_MISMATCH_CANCEL_REFUSAL : null;
-  switch (blocking.state) {
-    case "ON_BOOKS":
-      return {
-        code: AppErrorCode.FORWARD_CANCEL_ON_BOOKS,
-        message:
-          "The deposit and the dealership's contribution have already been paid to the finance company. A manager reports the payment as returned by the company, or an accountant records the correction, before this deal can be cancelled.",
-      };
-    case "POSTING_PENDING":
-    case "POSTING_FAILED":
-      return {
-        code: AppErrorCode.FORWARD_CANCEL_POSTING_UNSETTLED,
-        message:
-          "The payment to the finance company is not yet settled on the books. An accountant resolves it before this deal can be cancelled.",
-      };
-    case "REVERSAL_PENDING":
-      return {
-        code: AppErrorCode.FORWARD_CANCEL_REVERSAL_PENDING,
-        message:
-          "The reversal of the payment to the finance company is not yet posted. An accountant posts it before this deal can be cancelled.",
-      };
-    default:
-      return FORWARD_MISMATCH_CANCEL_REFUSAL;
-  }
+  return CANCEL_REFUSAL_BY_STATE[blocking.state] ?? FORWARD_MISMATCH_CANCEL_REFUSAL;
 }
 
 /** A refusal message for a gate that must not echo H or C (finance tier). */

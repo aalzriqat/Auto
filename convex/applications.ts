@@ -2165,6 +2165,14 @@ export const dealCockpit = query({
     // SCRUM-435: the ONE forward proof feeds the rail, the cockpit view and the
     // gates; nothing here derives it a second time.
     const forwardProof = await deriveForwardState(ctx, app);
+    const planVersion = planVersionOf(app);
+    const cancelPermitted =
+      isSystemOwnerRole(role) ||
+      cancelAuthorityFor(app.status, planVersion).every((tier) =>
+        tier.every((permission) => role.permissions.includes(permission))
+      );
+    const cancelForwardOk =
+      app.status !== "CLOSED" || planVersion !== 2 || forwardCancelRefusal(forwardProof) === null;
     const disbursementCheque = clearedDisbursementCheque(linkedCheques, app);
     const stages = deriveDealStages({
       forwardState: forwardProof.state,
@@ -2472,7 +2480,7 @@ export const dealCockpit = query({
        */
       forward: {
         /** v2 deal (the manager-cancels rule applies, whether or not anything is due). */
-        planV2: planVersionOf(app) === 2,
+        planV2: planVersion === 2,
         applies: forwardProof.applies,
         state: forwardProof.state,
         returnedExceptionOpen: forwardProof.returnedExceptionOpen,
@@ -2489,23 +2497,13 @@ export const dealCockpit = query({
           (role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT) &&
             role.permissions.includes(PERMISSIONS.VIEW_FINANCE)),
         /**
-         * Whether this caller may cancel the application in its current status,
-         * mirroring the permission and forward gates of `cancelApplication`
-         * (SCRUM-413 D-b, D-37): a CLOSED deal needs CANCEL_CLOSED_DEAL (and,
-         * on a v2 deal, the disbursement authority) and NOT CREATE; every other
-         * status needs CREATE, plus the approval authority once APPROVED. A
-         * CLOSED v2 deal ALSO needs the forward proof to allow it
-         * (`forwardCancelRefusal`, reusing the proof derived above). False for
-         * a caller or a state the server would refuse, so the screen offers
-         * only what is accepted. The other CLOSED refusals (disbursement
-         * already confirmed, supplier already paid, ...) are not mirrored here.
+         * Whether this caller may cancel in the current status: the permission
+         * tiers and, on a CLOSED v2 deal, the forward proof, exactly as
+         * `cancelApplication` applies them (SCRUM-413 D-b, D-37). The other
+         * CLOSED refusals (disbursement already confirmed, supplier already
+         * paid, ...) are NOT mirrored here.
          */
-        mayCancelFinalized:
-          (isSystemOwnerRole(role) ||
-            cancelAuthorityFor(app.status, planVersionOf(app)).every((tier) =>
-              tier.every((permission) => role.permissions.includes(permission))
-            )) &&
-          (app.status !== "CLOSED" || planVersionOf(app) !== 2 || forwardCancelRefusal(forwardProof) === null),
+        mayCancelFinalized: cancelPermitted && cancelForwardOk,
       },
       /**
        * SCRUM-239: the bank returned the finance company's cheque AFTER it

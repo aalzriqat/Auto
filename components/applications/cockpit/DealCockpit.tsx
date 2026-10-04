@@ -1746,6 +1746,18 @@ export function DealCockpit({
     (app.status === "CLOSED"
       ? canCancelClosedDeal && deal?.forward?.mayCancelFinalized === true
       : canCreateApplication && (app.status === "APPROVED" ? canApproveApplication : true));
+  // The caller holds the cancel authority but the server still refuses: with no
+  // disbursement authority the missing piece is a manager; with it, only the
+  // forward gate is left, which is not a permission.
+  const cancelHint: "MANAGER" | "FORWARD" | undefined =
+    app?.status === "CLOSED" &&
+    deal?.forward?.planV2 === true &&
+    deal.forward.mayCancelFinalized !== true &&
+    canCancelClosedDeal
+      ? canConfirmFinanceDisbursement
+        ? "FORWARD"
+        : "MANAGER"
+      : undefined;
   const forwardBlocksTransfer =
     deal?.forward?.applies === true && deal.forward.state !== "SETTLED" && deal.forward.state !== "NOT_DUE";
   const applicationDeposits: DealDeposit[] = (app?.deposits ?? []).map((deposit) => ({
@@ -2917,19 +2929,7 @@ export function DealCockpit({
             }
           : undefined
       }
-      cancelHint={
-        app?.status === "CLOSED" &&
-        deal?.forward?.planV2 === true &&
-        deal.forward.mayCancelFinalized !== true &&
-        canCancelClosedDeal
-          ? // This caller holds the cancel authority. Without the disbursement
-            // authority too, the missing piece is a manager; with it, the only
-            // thing left that refuses is the forward gate, which is not a permission.
-            canConfirmFinanceDisbursement
-            ? "FORWARD"
-            : "MANAGER"
-          : undefined
-      }
+      cancelHint={cancelHint}
       settlementRoute={
         canChooseSettlementRoute && app
           ? {

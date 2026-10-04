@@ -10,6 +10,7 @@ import {
   ALL_PERMISSIONS,
   DEFAULT_ROLE_TEMPLATES,
   isSystemOwnerRole,
+  needsOwnerFlagStamp,
 } from "./utils/permissions";
 import { writeAuditLog } from "./utils/auditLog";
 import { notifyUser, notifyManagers } from "./utils/notifications";
@@ -1430,14 +1431,8 @@ export const syncRolePermissionsToTemplate = mutation({
       const after = new Set(synced);
       const added = synced.filter((p) => !before.has(p));
       const removed = role.permissions.filter((p) => !after.has(p));
-      // SCRUM-413 S413B-1: the OWNER template no longer holds the retired
-      // finalize:financed_deal, and an UNFLAGGED owner is recognised only by
-      // holding the frozen set that includes it. Overwriting the permissions
-      // would silently de-own a qualifying owner, so the flag is stamped from
-      // the row as it is BEFORE the write. Only ever from that: an unflagged
-      // row that did not qualify, a name alone, and an explicit `false` (a
-      // deliberate demotion) are never promoted.
-      const stampOwnerFlag = isSystemOwnerRole(role) && role.isSystemOwnerRole === undefined;
+      // SCRUM-413 S413B-1: overwriting the permissions would de-own an unflagged owner; see needsOwnerFlagStamp.
+      const stampOwnerFlag = needsOwnerFlagStamp(role);
       if (added.length === 0 && removed.length === 0 && !stampOwnerFlag) continue;
       await ctx.db.patch(role._id, {
         permissions: synced,

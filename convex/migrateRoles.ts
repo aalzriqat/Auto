@@ -6,7 +6,10 @@ import {
   LEGACY_PERMISSIONS,
   PERMISSIONS,
   SYSTEM_OWNER_ROLE_NAME,
+  isReservedRoleName,
   isSystemOwnerRole,
+  isUnqualifiedOwnerNamed,
+  needsOwnerFlagStamp,
   normalizeRoleName,
 } from "./utils/permissions";
 
@@ -19,10 +22,8 @@ export const fixExistingRoles = internalMutation({
     for (const role of roles) {
       // Find the corresponding template
       const template = DEFAULT_ROLE_TEMPLATES.find((t) => normalizeRoleName(t.name) === normalizeRoleName(role.name));
-      // SCRUM-413 S413B-3: an OWNER-named row that does not qualify is never
-      // written here - adding view:users could push a near-miss row over the
-      // frozen owner fallback and promote it.
-      if (normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME && !isSystemOwnerRole(role)) continue;
+      // SCRUM-413 S413B-3: never write an unqualified OWNER-named row (see isUnqualifiedOwnerNamed).
+      if (isUnqualifiedOwnerNamed(role)) continue;
       if (template) {
         // We only want to ensure VIEW_USERS is present for these specific roles
         // Or we can just sync the permissions entirely if they haven't been customized,
@@ -59,13 +60,9 @@ async function patchRoleIfNeeded(
   toAdd: Set<string>,
   updates: string[]
 ): Promise<boolean> {
-  // SCRUM-413 S413B-3: an OWNER-NAMED row that does not qualify (an explicit
-  // `false`, or unflagged and short of the frozen set) is never written at all:
-  // stamping it would promote it, and so would adding permissions, which can
-  // push a near-miss row over the frozen fallback. Qualification is read from
-  // the row as it is BEFORE the write.
-  const ownerNamed = normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME;
-  if (ownerNamed && !isSystemOwnerRole(role)) return false;
+  // SCRUM-413 S413B-3: never write an unqualified OWNER-named row (see isUnqualifiedOwnerNamed).
+  if (isUnqualifiedOwnerNamed(role)) return false;
+  const ownerNamed = isReservedRoleName(role.name);
 
   const missing = [...toAdd].filter((p) => !role.permissions.includes(p));
   const isStaleOwnerRow = ownerNamed && role.isSystemOwnerRole !== true;
@@ -453,19 +450,22 @@ export const prepareSplitDealAuthorities = internalQuery({
   handler: async (ctx) => {
     const roles = await ctx.db.query("roles").collect();
     const records: SplitDealAuthorityRecord[] = [];
+    let carriers = 0;
+    let unstampedOwners = 0;
+    let unqualifiedOwnerNamed = 0;
 
     for (const role of roles) {
       if (role.isDeleted) continue;
       const held = new Set(role.permissions);
       const ownerQualified = isSystemOwnerRole(role);
-      const unflagged = role.isSystemOwnerRole === undefined;
-      const stampOwnerFlag = unflagged && ownerQualified;
-      // Unflagged OR explicit `false`: an OWNER-named row that does not qualify is
-      // an owner-review item either way. It is never stamped.
-      const ownerFlagSkipped = !ownerQualified && normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME;
+      const stampOwnerFlag = needsOwnerFlagStamp(role);
+      const ownerFlagSkipped = isUnqualifiedOwnerNamed(role);
       const carriesRetiredPermission = LEGACY_PERMISSIONS.some((permission) => held.has(permission));
       const holdsRoute = held.has(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
       const holdsCancelClosed = held.has(PERMISSIONS.CANCEL_CLOSED_DEAL);
+      if (carriesRetiredPermission) carriers += 1;
+      if (stampOwnerFlag) unstampedOwners += 1;
+      if (ownerFlagSkipped) unqualifiedOwnerNamed += 1;
 
       if (!carriesRetiredPermission && !stampOwnerFlag && !ownerFlagSkipped && !holdsRoute && !holdsCancelClosed) {
         continue;
@@ -484,9 +484,6 @@ export const prepareSplitDealAuthorities = internalQuery({
       });
     }
 
-    const carriers = records.filter((record) => record.carriesRetiredPermission).length;
-    const unstampedOwners = records.filter((record) => record.stampOwnerFlag).length;
-    const unqualifiedOwnerNamed = records.filter((record) => record.ownerFlagSkipped).length;
     return {
       ready: carriers === 0 && unstampedOwners === 0 && unqualifiedOwnerNamed === 0,
       retiredCarriers: carriers,
