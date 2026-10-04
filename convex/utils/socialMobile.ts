@@ -130,8 +130,8 @@ function parseCandidate(candidate: string): ParsedNumber | null {
 }
 
 const DIGIT_GROUP_RE = /\d+/g;
-/** Longer than any accepted shape (00962 + 9 digits), so growing stops. */
-const MAX_PHONE_DIGITS = 14;
+/** The longest accepted shape is 00962 + trunk 0 + 9 digits; growing stops past it. */
+const MAX_PHONE_DIGITS = 15;
 
 /**
  * Every accepted number inside one candidate run, left to right.

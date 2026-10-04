@@ -45,6 +45,8 @@ describe("extractSharedMobileNumber", () => {
     ["962 79 123 4567", "+962791234567"],
     ["791234567", "0791234567"],
     ["962 0791234567", "+962791234567"],
+    ["00962 0791234567", "+962791234567"],
+    ["+962 0791234567", "+962791234567"],
   ])("finds the mobile beside other digits: %s", (text, expected) => {
     expect(extractSharedMobileNumber(text)?.normalized).toBe(expected);
   });
