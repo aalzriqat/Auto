@@ -78,15 +78,19 @@ function FloatingMessengerInner({ orgId }: Props) {
   // Close list panel on a press outside it, or on Escape. The top-bar button
   // toggles the list itself, so it is not "outside" — otherwise its click would
   // close and reopen.
+  // Paused while the new-conversation dialog (a separate portal) is open, so
+  // pressing inside it or escaping it leaves the list behind it intact. The
+  // dialog's own Escape closes it and re-renders before this listener runs, so
+  // an Escape the dialog already handled (defaultPrevented) is ignored too.
   useEffect(() => {
-    if (!isListOpen) return;
+    if (!isListOpen || dialogMode) return;
     function handlePointerDown(e: PointerEvent) {
       const target = e.target as Element;
       if (target.closest?.(`#${MESSENGER_TRIGGER_ID}`)) return;
       if (panelEl && !panelEl.contains(target)) closeList();
     }
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") closeList();
+      if (e.key === "Escape" && !e.defaultPrevented) closeList();
     }
     document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown);
@@ -94,7 +98,7 @@ function FloatingMessengerInner({ orgId }: Props) {
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isListOpen, closeList, panelEl]);
+  }, [isListOpen, closeList, panelEl, dialogMode]);
 
   // Keep the list just below the top bar. Banners (update, support access,
   // impersonation) render above the bar and can appear or be dismissed while
@@ -161,7 +165,9 @@ function FloatingMessengerInner({ orgId }: Props) {
           ref={setPanelEl}
           className={cn(
             // top / max-height are set from the top bar's position above.
-            "fixed top-16 md:top-[4.5rem] end-2 md:end-6 z-50",
+            // z-[55]: above the chat windows (z-50) that stack along the same
+            // end edge, below the messenger onboarding (z-60/61).
+            "fixed top-16 md:top-[4.5rem] end-2 md:end-6 z-[55]",
             "w-[min(320px,calc(100vw-1rem))] bg-white rounded-2xl shadow-2xl border border-slate-200/50 overflow-hidden flex flex-col",
             "max-h-[min(480px,calc(100dvh-5rem))]"
           )}

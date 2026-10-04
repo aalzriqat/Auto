@@ -160,7 +160,29 @@ test.describe("sales wizard guards (SCRUM-609)", () => {
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
     await trigger.click();
     await expect(trigger).toHaveAttribute("aria-expanded", "true");
-    // Escape closes it too.
+    // Desktop chat windows (fixed, z-50) stack along the same end edge; the
+    // list must stay on top of them. A stand-in window is placed there.
+    const listOnTop = await list.evaluate((input) => {
+      const panel = input.closest(".fixed")!;
+      const win = document.createElement("div");
+      win.className = "fixed bottom-0 z-50";
+      Object.assign(win.style, { right: "24px", left: "24px", height: "90vh" });
+      document.body.appendChild(win);
+      const r = panel.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.x + r.width / 2, r.bottom - 12);
+      win.remove();
+      return !!hit && panel.contains(hit);
+    });
+    expect(listOnTop).toBe(true);
+
+    // Escaping the new-conversation dialog closes the dialog, not the list.
+    await page.getByTitle("New message").click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(list).toBeVisible();
+
+    // Escape closes the list itself.
     await page.keyboard.press("Escape");
     await expect(list).toHaveCount(0);
   });
