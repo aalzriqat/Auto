@@ -594,10 +594,27 @@ export async function evaluateClosingReadiness(
 
   // An unknown first payment is not zero (SCRUM-373): a quoted, approved deal
   // without one has no funding split to post from.
-  planOnly("FIRST_PAYMENT_RECORDED", () =>
-    app.submittedQuotationMinor !== undefined &&
-    app.approvedDealerPurchaseAmountMinor !== undefined &&
-    app.customerFirstPaymentMinor === undefined
+  //
+  // READY asserts only that the AGREED first payment is known — a plan input,
+  // never proof the money was received (SCRUM-629 F-22, ruling c21924; the
+  // receipt gate is SCRUM-635). Without the approval there is nothing to judge
+  // it against yet, which is not ready either — and adds no refusal of its own:
+  // REMITTANCE_KNOWN already refuses a deal with no approval. A deal with no
+  // QUOTATION keeps the old answer: a manual-finance deal has none by design and
+  // is gated on its letter (`assertDealerEconomicsReady`), so requiring one here
+  // would leave it unable ever to finalize.
+  planOnly("FIRST_PAYMENT_RECORDED", () => {
+    if (app.approvedDealerPurchaseAmountMinor === undefined) {
+      return [
+        "UNAVAILABLE",
+        reasonOf(
+          "FIRST_PAYMENT_INPUTS_PENDING",
+          "The finance company's approval must be recorded before the agreed first payment can be checked."
+        ),
+      ];
+    }
+    if (app.submittedQuotationMinor === undefined) return ["READY", null];
+    return app.customerFirstPaymentMinor === undefined
       ? [
           "BLOCKED",
           reasonOf(
@@ -605,8 +622,8 @@ export async function evaluateClosingReadiness(
             "The customer's first payment is not recorded on this deal, so its funding split cannot be established. Record it before finalizing."
           ),
         ]
-      : ["READY", null]
-  );
+      : ["READY", null];
+  });
 
   // Required while the v1 posting plan is in force: it posts revenue from the
   // legal invoice. Replacing that revenue source is SCRUM-411; until then the

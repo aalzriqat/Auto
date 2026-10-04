@@ -463,6 +463,30 @@ describe("depositRequests.confirm", () => {
     expect(await moneyFootprint(s)).toEqual(before);
     expect((await s.t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("PENDING");
   });
+
+  // SCRUM-629 F-27 (ruling c21924): the same commitment decision `confirm`
+  // makes, taken before the customer is asked for money.
+  test("a car another deal already holds: the request is refused, nothing is written or sent", async () => {
+    const s = await setup();
+    const rivalCustomer = await s.t.run((ctx) =>
+      ctx.db.insert("customers", { orgId: s.orgId, firstName: "Omar", lastName: "Saleh" })
+    );
+    const rivalQuote = await makeQuote(s, { customerId: rivalCustomer });
+    await s.manager.as.mutation(api.deposits.create, {
+      orgId: s.orgId,
+      quoteId: rivalQuote,
+      amount: 1000,
+      method: "CASH",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const quoteId = await makeQuote(s);
+    const notificationsBefore = (await s.t.run((ctx) => ctx.db.query("notifications").collect())).length;
+
+    await expect(requestDeposit(s, quoteId)).rejects.toThrow(/already committed/i);
+
+    expect(await s.t.run((ctx) => ctx.db.query("depositRequests").collect())).toHaveLength(0);
+    expect((await s.t.run((ctx) => ctx.db.query("notifications").collect())).length).toBe(notificationsBefore);
+  });
 });
 
 describe("depositRequests.reject and withdraw", () => {

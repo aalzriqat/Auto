@@ -70,6 +70,17 @@ export const get = query({
   },
 });
 
+/**
+ * A deleted, sold or archived car cannot be offered to a customer (SCRUM-629
+ * F-09). Reserved cars stay quotable: a quote is a draft, and the commitment
+ * boundary decides at deposit and application time.
+ */
+function assertQuotableVehicle(vehicle: Doc<"vehicles">): void {
+  if (vehicle.isDeleted === true || vehicle.status === "SOLD" || vehicle.status === "ARCHIVED") {
+    throw new ConvexError("This vehicle is no longer available to quote.");
+  }
+}
+
 export const saveQuote = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -188,6 +199,7 @@ export const saveQuote = mutation({
         if (!lineVehicle || lineVehicle.orgId !== args.orgId) {
           throw new ConvexError("Vehicle not found in this organization.");
         }
+        assertQuotableVehicle(lineVehicle);
         pricedLines.push({ vehicle: lineVehicle, price: item.unitPrice });
       }
       vehicleId = args.vehicleItems[0].vehicleId;
@@ -197,6 +209,7 @@ export const saveQuote = mutation({
       if (!vehicle || vehicle.orgId !== args.orgId) {
         throw new ConvexError("Vehicle not found in this organization.");
       }
+      assertQuotableVehicle(vehicle);
       pricedLines.push({ vehicle, price: vehiclePrice });
     }
 

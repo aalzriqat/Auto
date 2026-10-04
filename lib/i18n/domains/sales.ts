@@ -89,6 +89,10 @@ const dealStepMessages = defineBilingualMessages({
     "No finance company pays the dealership on this deal.",
     "لا توجد شركة تمويل تدفع للمعرض في هذه الصفقة.",
   ],
+  StageNotApplicableReasonDeliveryActions: [
+    "No documents are required on this deal.",
+    "لا توجد مستندات مطلوبة في هذه الصفقة.",
+  ],
   StageViewAnnounceShowing: ["Showing step", "عرض الخطوة"],
   StageViewAnnounceBack: ["Back to the current step", "العودة إلى الخطوة الحالية"],
   // ROUND 2 (SCRUM-417 UX4): the deal is closed and this step waits on the finance company.
@@ -1320,7 +1324,8 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingCheck_CUSTODY_SETTLED: ["Employee custody is settled", "عهدة الموظفين مسوّاة"],
   ClosingCheck_COSTS_CLOSABLE: ["Deal costs are recorded and reconciled", "مصاريف الصفقة مسجَّلة ومسوّاة"],
   ClosingCheck_HANDOVER_COSTS_PAID: ["Handover costs are paid", "مصاريف التسليم مدفوعة"],
-  ClosingCheck_FIRST_PAYMENT_RECORDED: ["The customer's first payment is recorded", "الدفعة الأولى للعميل مسجَّلة"],
+  // SCRUM-629 F-22: the AGREED amount is known — not that the money was received (SCRUM-635).
+  ClosingCheck_FIRST_PAYMENT_RECORDED: ["The agreed first payment is known", "الدفعة الأولى المتفق عليها معروفة"],
   ClosingCheck_LEGAL_INVOICE_RECORDED: ["The legal invoice is recorded", "الفاتورة القانونية مسجَّلة"],
   // SCRUM-420 — generic fallback for a check this bundle has no copy for (S420-01).
   ClosingCheck_UNKNOWN: ["Another closing check", "شرط إغلاق آخر"],
@@ -1445,6 +1450,13 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingReason_FIRST_PAYMENT_MISSING: [
     "The customer's first payment is not recorded, so the funding split cannot be established. Record it before closing.",
     "لم تُسجَّل الدفعة الأولى للعميل، لذلك لا يمكن تحديد توزيع التمويل. سجّلها قبل الإغلاق.",
+  ],
+  // SCRUM-629 F-08: a PENDING_DOCS application on a deal that needs no document.
+  AppStatusSubmitted: ["Submitted", "مُقدَّم"],
+  // SCRUM-629 F-22
+  ClosingReason_FIRST_PAYMENT_INPUTS_PENDING: [
+    "The finance company's approval must be recorded before the agreed first payment can be checked.",
+    "يجب تسجيل موافقة شركة التمويل قبل التحقق من الدفعة الأولى المتفق عليها.",
   ],
   ClosingReason_LEGAL_INVOICE_MISSING: [
     "No legal invoice is recorded. Revenue is posted from its amount, so record it before closing.",
@@ -2479,6 +2491,8 @@ export const salesEn = {
   SearchVehiclePicker: "Search by make, model, year, VIN…",
   NoVehiclesMatchSearch: "No vehicles match your search",
   ReservedPendingDeal: "Reserved — pending deal",
+  ReservedQuoteWarning:
+    "Another deal is holding this car. You can quote it, but a deposit or finance application will be refused unless it belongs to that deal.",
   Sourced: "Sourced",
   VINPendingLabel: "VIN pending",
   SourceVehicleForCustomer: "Source a vehicle for this customer",
@@ -3563,6 +3577,8 @@ export const salesAr = {
   SearchVehiclePicker: "ابحث بالشركة، الموديل، السنة، رقم الهيكل…",
   NoVehiclesMatchSearch: "لا توجد مركبات تطابق بحثك",
   ReservedPendingDeal: "محجوزة — صفقة قيد الإنجاز",
+  ReservedQuoteWarning:
+    "هذه السيارة محجوزة لصفقة أخرى. يمكنك إعداد عرض سعر لها، لكن سيُرفض العربون أو طلب التمويل ما لم يكن ضمن تلك الصفقة.",
   Sourced: "مورَّدة",
   VINPendingLabel: "رقم الهيكل قيد الانتظار",
   SourceVehicleForCustomer: "توريد مركبة لهذا العميل",
