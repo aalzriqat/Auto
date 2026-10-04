@@ -13,7 +13,7 @@ import { Loader2, CheckCircle2, XCircle, AlertCircle, Search } from "lucide-reac
 import { toast } from "@/components/ui/sonner";
 import { Id, Doc } from "@/convex/_generated/dataModel";
 import { useTableControls } from "@/hooks/useTableControls";
-import { getErrorMessage } from "@/lib/errors";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 import { PendingDepositRequestsQueue } from "@/components/deposits/DepositRequests";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
@@ -68,7 +68,7 @@ export default function ApprovalsPage() {
       });
       toast.success(status === "APPROVED" ? t("ApprovalApprovedMsg") : t("ApprovalRejectedMsg"));
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     }
   };
 

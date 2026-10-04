@@ -1058,11 +1058,14 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
       await ctx.db.patch(role._id, { permissions: ["view:vehicles", "approve:requests"] });
     });
 
+    // REJECTED, not APPROVED: SCRUM-113 refuses to approve a request whose
+    // vehicle is foreign, but a rejection is still allowed and still notifies,
+    // so the notification-label guard stays reachable and under test.
     const asManager = t.withIdentity({ subject: "multi_org_sales" });
     await asManager.mutation(api.approvals.respondToApproval, {
       orgId: orgA,
       requestId,
-      status: "APPROVED",
+      status: "REJECTED",
     });
 
     const notifications = await t.run(async (ctx: any) =>
@@ -1071,6 +1074,8 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
     const serialised = JSON.stringify(notifications);
     expect(notifications.length).toBeGreaterThan(0);
     expect(serialised).not.toContain("Honda");
+    // The label it DOES use: the fallback for a missing or foreign vehicle.
+    expect(serialised).toContain("the requested sale");
   });
 
   it("requestProfitApproval never overwrites another org's request — cross-tenant WRITE", async () => {
@@ -1252,5 +1257,145 @@ describe("SCRUM-100: listMyPendingApprovals tenancy and bounds", () => {
     const creationTimes = rows.map((r: any) => r._creationTime);
     expect(creationTimes).toEqual([...creationTimes].sort((a: number, b: number) => a - b));
     expect(creationTimes.length).toBeGreaterThan(1); // ordering over <2 rows is vacuous
+  });
+});
+
+// SCRUM-113 finding 1. Invariant: a request becomes APPROVED only while its
+// vehicle exists in the request's org and is not soft-deleted. REJECTED stays
+// possible in every one of those states - it is the recovery path.
+describe("SCRUM-113: APPROVED requires a live, in-org vehicle", () => {
+  async function setup() {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Vehicle Gate Org", createdAt: Date.now() })
+    );
+    const salespersonId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "sales_vg", email: "sales-vg@test.com", name: "Sales VG" })
+    );
+    const managerId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "mgr_vg", email: "mgr-vg@test.com", name: "Manager VG" })
+    );
+    const managerRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", {
+        orgId,
+        name: "MANAGER",
+        permissions: ["view:vehicles", "approve:requests"],
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("memberships", { orgId, userId: managerId, roleId: managerRoleId })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        make: "Toyota",
+        model: "Corolla",
+        status: "AVAILABLE",
+        vin: "VGATEVIN0001",
+        year: 2023,
+        mileage: 1200,
+        color: "Silver",
+        fuelType: "Petrol",
+        transmission: "Automatic",
+        sellingPrice: 25000,
+      })
+    );
+    const requestId = await t.run((ctx) =>
+      ctx.db.insert("profitApprovalRequests", {
+        orgId,
+        vehicleId,
+        requestedProfit: 200,
+        minimumProfit: 1000,
+        salespersonId,
+        status: "PENDING",
+        createdAt: Date.now(),
+      })
+    );
+    return { t, orgId, vehicleId, requestId, managerId, asManager: t.withIdentity({ subject: "mgr_vg" }) };
+  }
+
+  async function refusalOf(promise: Promise<unknown>): Promise<unknown> {
+    try {
+      await promise;
+    } catch (error) {
+      if (error instanceof ConvexError) return error.data;
+      throw error;
+    }
+    return undefined;
+  }
+
+  it("(a) a soft-deleted vehicle refuses APPROVED and the request stays PENDING", async () => {
+    const { t, orgId, vehicleId, requestId, asManager } = await setup();
+    await t.run((ctx) => ctx.db.patch(vehicleId, { isDeleted: true, deletedAt: Date.now() }));
+
+    const data = await refusalOf(
+      asManager.mutation(api.approvals.respondToApproval, { orgId, requestId, status: "APPROVED" })
+    );
+
+    expect(data).toMatchObject({ code: "APPROVAL_VEHICLE_UNAVAILABLE" });
+    const request = await t.run((ctx) => ctx.db.get(requestId));
+    expect(request?.status).toBe("PENDING");
+    expect(request?.approvedBy).toBeUndefined();
+  });
+
+  it("(b) a soft-deleted vehicle still accepts REJECTED", async () => {
+    const { t, orgId, vehicleId, requestId, managerId, asManager } = await setup();
+    await t.run((ctx) => ctx.db.patch(vehicleId, { isDeleted: true, deletedAt: Date.now() }));
+
+    await asManager.mutation(api.approvals.respondToApproval, { orgId, requestId, status: "REJECTED" });
+
+    const request = await t.run((ctx) => ctx.db.get(requestId));
+    expect(request?.status).toBe("REJECTED");
+    expect(request?.approvedBy).toBe(managerId);
+  });
+
+  it("(c) a hard-missing vehicle refuses APPROVED but accepts REJECTED", async () => {
+    const { t, orgId, vehicleId, requestId, asManager } = await setup();
+    await t.run((ctx) => ctx.db.delete(vehicleId));
+
+    const data = await refusalOf(
+      asManager.mutation(api.approvals.respondToApproval, { orgId, requestId, status: "APPROVED" })
+    );
+    expect(data).toMatchObject({ code: "APPROVAL_VEHICLE_UNAVAILABLE" });
+    expect((await t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("PENDING");
+
+    await asManager.mutation(api.approvals.respondToApproval, { orgId, requestId, status: "REJECTED" });
+    expect((await t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("REJECTED");
+  });
+
+  it("(d) a foreign-org vehicle refuses APPROVED and the request stays PENDING", async () => {
+    const { t, orgId, requestId, asManager } = await setup();
+    await t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Foreign Org", createdAt: Date.now() });
+      const foreignVehicleId = await ctx.db.insert("vehicles", {
+        orgId: otherOrgId,
+        make: "Honda",
+        model: "Civic",
+        status: "AVAILABLE",
+        vin: "VGATEFOREIGN1",
+        year: 2021,
+        mileage: 5000,
+        color: "White",
+        fuelType: "Petrol",
+        transmission: "Automatic",
+        sellingPrice: 22000,
+      });
+      await ctx.db.patch(requestId, { vehicleId: foreignVehicleId });
+    });
+
+    const data = await refusalOf(
+      asManager.mutation(api.approvals.respondToApproval, { orgId, requestId, status: "APPROVED" })
+    );
+
+    expect(data).toMatchObject({ code: "APPROVAL_VEHICLE_UNAVAILABLE" });
+    expect((await t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("PENDING");
+  });
+
+  it("(e) control: a live in-org vehicle still accepts APPROVED", async () => {
+    const { t, orgId, requestId, asManager } = await setup();
+
+    await asManager.mutation(api.approvals.respondToApproval, { orgId, requestId, status: "APPROVED" });
+
+    expect((await t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("APPROVED");
   });
 });
