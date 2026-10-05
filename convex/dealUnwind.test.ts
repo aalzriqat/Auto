@@ -63,9 +63,9 @@ const MANUAL_CORRECTION = /manual accounting correction/;
 async function seed(tag: string, sourced = false) {
   const s = await seedFinancedDealership(tag, {
     modules: MODULES, ownerPerms: ALL_PERMS, label: "S693", vinPrefix: "VIN693", sourced,
-    actors: { sales: SALES_PERMS, cashier: CASHIER_PERMS, manager: ["manage:users"], templateManager: TEMPLATE_MANAGER_PERMS },
+    actors: { sales: SALES_PERMS, cashier: CASHIER_PERMS, manager: ["manage:users"], templateManager: TEMPLATE_MANAGER_PERMS, confirmOnly: ["view:sales", "view:finance_applications", "confirm:finance_disbursement"], cancelOnly: ["view:sales", "view:finance_applications", "cancel:closed_deal"] },
   });
-  return { ...s, sales: s.actors.sales, cashier: s.actors.cashier, manager: s.actors.manager, templateManager: s.actors.templateManager };
+  return { ...s, sales: s.actors.sales, cashier: s.actors.cashier, manager: s.actors.manager, templateManager: s.actors.templateManager, confirmOnly: s.actors.confirmOnly, cancelOnly: s.actors.cancelOnly };
 }
 type Seeded = Awaited<ReturnType<typeof seed>>;
 
@@ -985,6 +985,30 @@ describe("SCRUM-713 - the default MANAGER role can unwind a paid deal without re
     expect(await status(s, applicationId)).toMatchObject({ evidence: { forwardDueMinor: FORWARD, reason: "Customer returned the car." } });
     // The finance-economics tier stays closed to this role: the unwind did not need it.
     expect(mayReadFinanceEconomics({ permissions: TEMPLATE_MANAGER_PERMS } as never)).toBe(false);
+  });
+  test("a role holding only ONE of the two authorities gains no unwind power (Codex partial-role matrix)", async () => {
+    const { s, applicationId } = await paidDeal("m713_partial");
+    const unwindId = await start(s, applicationId);
+    const before = await s.t.run((ctx) => ctx.db.get(unwindId));
+    for (const role of [s.confirmOnly, s.cancelOnly]) {
+      expect(await status(s, applicationId, role.as)).toMatchObject({
+        eligibility: { canStart: false, canForwardReturn: false, canFinish: false },
+      });
+      await expect(
+        role.as.mutation(api.dealUnwind.recordDealUnwindForwardReturn, {
+          orgId: s.orgId, unwindId, returnedAt: Date.now(), reference: "X-1", idempotencyKey: crypto.randomUUID(),
+        })
+      ).rejects.toThrow();
+      await expect(finish(s, unwindId, "BANK_TRANSFER", role.as)).rejects.toThrow();
+    }
+    await expect(start(s, applicationId, crypto.randomUUID(), s.confirmOnly.as)).rejects.toThrow();
+    expect(await s.t.run((ctx) => ctx.db.get(unwindId))).toEqual(before);
+  });
+
+  test("the permission refusal has an Arabic and an English translation key", async () => {
+    const { salesEn, salesAr } = await import("../lib/i18n/domains/sales");
+    expect((salesEn as Record<string, string>).ServerError_DEAL_UNWIND_PERMISSION).toBeTruthy();
+    expect((salesAr as Record<string, string>).ServerError_DEAL_UNWIND_PERMISSION).toBeTruthy();
   });
   test("a role without CANCEL_CLOSED_DEAL is told WHY it cannot start, not given silence", async () => {
     const { s, applicationId } = await paidDeal("m713_reason");

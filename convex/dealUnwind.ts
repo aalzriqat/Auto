@@ -63,12 +63,27 @@ const CLOCK_SKEW_MS = 5 * 60 * 1000;
  */
 const START_PERMS = [PERMISSIONS.CANCEL_CLOSED_DEAL, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT];
 const MONEY_STEP_PERMS = [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT];
+/**
+ * The forward-return step is delegable to a finance handler (CONFIRM + VIEW_FINANCE, as before) or to a
+ * deal canceller (CONFIRM + CANCEL_CLOSED_DEAL, the default MANAGER). CONFIRM alone is not enough: dropping
+ * VIEW_FINANCE from the list must not turn a confirm-only custom role into an unwind actor (Codex, SCRUM-713).
+ */
+function mayRecordForwardReturn(role: Doc<"roles">): boolean {
+  return (
+    holds(role, MONEY_STEP_PERMS) &&
+      (isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_FINANCE) || role.permissions.includes(PERMISSIONS.CANCEL_CLOSED_DEAL))
+  );
+}
 /** Refunding the remittance (MONEY_STEP_PERMS) and cancelling the deal, together. */
 const FINISH_PERMS = [PERMISSIONS.CANCEL_CLOSED_DEAL, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT];
 const ABANDON_PERMS = [PERMISSIONS.CANCEL_CLOSED_DEAL];
 
 const UNWIND_PERMISSION_MESSAGE =
   "Reversing a paid deal needs both the cancel-closed-deal and the confirm-finance-disbursement permissions. Ask an administrator.";
+
+function refuseUnwindPermission(): never {
+  throwAppError(AppErrorCode.FORBIDDEN, UNWIND_PERMISSION_MESSAGE);
+}
 
 function refuse(code: DealUnwindRefusalCode): never {
   throwAppError(AppErrorCode[code], DEAL_UNWIND_MESSAGES[code]);
@@ -310,7 +325,8 @@ export const recordDealUnwindForwardReturn = mutation({
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, MONEY_STEP_PERMS);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, MONEY_STEP_PERMS);
+    if (!mayRecordForwardReturn(role)) refuseUnwindPermission();
     const reference = requiredText(args.reference, MAX_DIRECT_PAYMENT_REFERENCE_CHARS, "DEAL_UNWIND_EVIDENCE_REQUIRED");
     return await runWithIdempotency(
       ctx,
@@ -889,7 +905,7 @@ export const unwindStatus = query({
       const forward = await deriveForwardState(ctx, app);
       const forwardPending = forward.applies && unwind.forwardReturn === undefined;
       step = forwardPending ? "AWAITING_FORWARD_RETURN" : "AWAITING_FINISH";
-      if (forwardPending && holds(role, MONEY_STEP_PERMS)) {
+      if (forwardPending && mayRecordForwardReturn(role)) {
         const refusal = await refusalOf(() => assertForwardReturnable(ctx, args.orgId, app, now));
         if (refusal) refusals.forwardReturn = refusal;
         canForwardReturn = refusal === null;
@@ -917,7 +933,7 @@ export const unwindStatus = query({
     // NOT `forwardDueMinor` (deposit + dealer contribution: a visible deposit
     // would reveal the protected contribution) nor any free text.
     const financeReader = mayReadFinanceEconomics(role);
-    const unwindActor = holds(role, START_PERMS) || holds(role, MONEY_STEP_PERMS);
+    const unwindActor = holds(role, START_PERMS) || mayRecordForwardReturn(role);
     const evidence =
       unwind !== null && (financeReader || unwindActor)
         ? {
