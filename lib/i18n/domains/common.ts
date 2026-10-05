@@ -295,6 +295,20 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This vehicle is no longer available in this dealership, so the request can't be approved. Reject it instead.",
     "لم تعد هذه المركبة متاحة في هذا المعرض، لذا لا يمكن الموافقة على الطلب. يُرجى رفضه بدلاً من ذلك.",
   ],
+  // SCRUM-641 (D-35): see convex/utils/vehicleLiveness.ts.
+  ServerError_VEHICLE_DELETED: [
+    "This vehicle has been deleted and can no longer be quoted, reserved, sold or take a deposit.",
+    "تم حذف هذه السيارة ولم يعد بالإمكان تسعيرها أو حجزها أو بيعها أو استلام عربون عليها.",
+  ],
+  // SCRUM-693 PR-B F1: see convex/utils/vehicleLiveness.ts.
+  ServerError_VEHICLE_NOT_READY_FOR_SALE: [
+    "This vehicle is in inspection or repair and cannot be sold until it is cleared for sale.",
+    "هذه السيارة قيد الفحص أو الصيانة ولا يمكن بيعها حتى يتم اعتمادها للبيع.",
+  ],
+  ServerError_VEHICLE_DELETED_FLAG_LOCKED: [
+    "A vehicle's deleted status cannot be changed by direct edit. Use the vehicle delete or restore workflow instead.",
+    "لا يمكن تغيير حالة حذف السيارة عبر التعديل المباشر. استخدم إجراء حذف السيارة أو استعادتها بدلاً من ذلك.",
+  ],
   // SCRUM-650. `vehicles.correctAcquisitionCost` and the purchase-cost lock. The English text
   // equals the server message.
   ServerError_VEHICLE_NOT_FOUND: [

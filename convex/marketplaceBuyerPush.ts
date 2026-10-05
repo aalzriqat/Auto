@@ -2,6 +2,7 @@ import { ConvexError, v } from "convex/values";
 import { internalAction, internalQuery } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
 import { internal } from "./_generated/api";
+import { sinkEgress } from "./utils/egressSink";
 
 /**
  * Push notifications for anonymous marketplace buyers. Unlike mobilePushTokens
@@ -90,6 +91,8 @@ const NEW_OFFER_BODY = "وصلك عرض جديد على طلبك — افتح أ
 export const sendBuyerOfferPush = internalAction({
   args: { publicId: v.string() },
   handler: async (ctx, args): Promise<{ success: boolean; sent?: number; failed?: number; error?: string }> => {
+    if (sinkEgress("expo-push", "sendBuyerOfferPush")) return { success: false, error: "egress_sunk" };
+
     const tokens = await ctx.runQuery(internal.marketplaceBuyerPush.listBuyerTokens, { publicId: args.publicId });
     if (tokens.length === 0) return { success: true, sent: 0 };
 

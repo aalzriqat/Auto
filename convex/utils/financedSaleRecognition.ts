@@ -11,6 +11,7 @@ import {
   type FinancedSalePostingPlanV2,
   type SettlementComponentInput,
 } from "./financedSalePostingPlan";
+import { executionFeePosition, executionFeeRefusal } from "./executionFeePosition";
 import {
   configuredFeesRefusal,
   custodyReadabilityRefusal,
@@ -537,8 +538,12 @@ export async function evaluateClosingReadiness(
   // Every fee the finance company's FROZEN policy configures must have an
   // actual on the record — on EVERY route. A deal whose snapshot configures
   // nothing passes through untouched.
+  // The finance company's execution fee (`adminFees`) is the same kind of
+  // position: an actual — zero included — must be LINKED to it (SCRUM-690
+  // F-PNTR-1); an unrelated cost never stands in for it.
   await onRows("CONFIGURED_FEES_RECORDED", { onThrow: "BLOCKED" }, ({ fees }) =>
-    configuredFeesRefusal(app.companyRuleSnapshot, fees, "finalizing")
+    configuredFeesRefusal(app.companyRuleSnapshot, fees, "finalizing") ??
+    executionFeeRefusal(executionFeePosition(app, fees, opts.currency), "finalizing")
   );
 
   // Every custody record and custody-paid line must be on the books as a

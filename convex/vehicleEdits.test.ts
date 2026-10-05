@@ -146,6 +146,34 @@ describe("vehicleEdits.resolve", () => {
     expect(request?.resolvedAt).toEqual(expect.any(Number));
   });
 
+  it("approving a status change to AVAILABLE keeps a held vehicle RESERVED (SCRUM-700 N1)", async () => {
+    const { t, orgId, vehicleId, managerId, asSalesperson, asManager } = await setup();
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Held", lastName: "Customer" })
+    );
+    await t.run(async (ctx) => {
+      await ctx.db.insert("vehicleReservations", {
+        orgId,
+        vehicleId,
+        customerId,
+        status: "ACTIVE",
+        reservedBy: managerId,
+        reservedAt: Date.now(),
+      } as any);
+      await ctx.db.patch(vehicleId, { status: "IN_INSPECTION" });
+    });
+
+    const requestId = await asSalesperson.mutation(api.vehicleEdits.requestUpdate, {
+      orgId,
+      vehicleId,
+      payload: { status: "AVAILABLE" },
+    });
+    await asManager.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" });
+
+    const vehicle = await t.run((ctx) => ctx.db.get(vehicleId));
+    expect(vehicle?.status).toBe("RESERVED");
+  });
+
   it("rejecting an UPDATE leaves the vehicle untouched", async () => {
     const { t, orgId, vehicleId, asSalesperson, asManager } = await setup();
 

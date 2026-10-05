@@ -2,6 +2,7 @@ import { ConvexError } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
 import { QueryCtx, MutationCtx } from "../_generated/server";
 import { assertMajorAmountRepresentable, toMinorUnits } from "./money";
+import { assertVehicleNotDeleted } from "./vehicleLiveness";
 
 /**
  * Below-minimum-profit approval — the third of the three approval workflows
@@ -152,6 +153,8 @@ export async function assertProfitApproved(
   if (args.vehicle.orgId !== args.orgId) {
     throw new ConvexError("Vehicle not found in this organization.");
   }
+  // SCRUM-641 (D-35): a stale APPROVED row never carries authority for a deleted car.
+  assertVehicleNotDeleted(args.vehicle);
   const decision = profitDecision(args.vehicle, args.salePrice, args.currency);
   if (!decision.required) return;
 

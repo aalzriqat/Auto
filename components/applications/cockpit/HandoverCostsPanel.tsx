@@ -339,6 +339,26 @@ export type HandoverCostsData = {
   summaryUnavailable: HandoverCostsSummaryUnavailable | null;
   /** The policy checklist. Absent on a payload that predates it; the section then renders lines only. */
   expected?: HandoverExpectedCosts | null;
+  /** The finance company's execution fee (SCRUM-690). Null when the deal expects none; absent on older payloads. */
+  executionFee?: HandoverExecutionFee | null;
+};
+
+/**
+ * The deal's single execution-fee position, as `listDealCosts` serves it — the
+ * same verdict the finalization gate and the profit headlines read. The fee's
+ * actual is one cost line, LINKED explicitly by id; nothing is matched by type.
+ */
+export type HandoverExecutionFee = {
+  /** The frozen expectation; null when the stored figure is not readable. */
+  expectedMinor: number | null;
+  /** The linked line, or null while the fee has no actual. */
+  boundFeeId: string | null;
+  /** No actual linked yet: the deal cannot finalize until one is (0 when not charged). */
+  unrecorded: boolean;
+  /** The estimate is withheld (ambiguous link, or the frozen total disagrees with the fee). */
+  withheld: boolean;
+  /** Live lines the server would accept as the fee's actual. */
+  eligibleFeeIds: ReadonlyArray<string>;
 };
 
 /**
@@ -475,6 +495,10 @@ export function HandoverCostsPanel({
   handoverCostsCheck,
   custodyLedgerCheck,
   dealStopped = null,
+  onRecordExecutionFee,
+  onAbandonExecutionFee,
+  onLinkExecutionFee,
+  onUnlinkExecutionFee,
 }: Readonly<{
   /** `undefined` while loading or when this caller may not read the cost rows. */
   costs: HandoverCostsData | undefined;
@@ -574,6 +598,17 @@ export function HandoverCostsPanel({
    * (A stop never reverses a direct payment: the money left.)
    */
   dealStopped?: DealStopped;
+  /**
+   * SCRUM-690: records the execution fee's actual as a new line, linked in the
+   * same write (`recordExecutionFeeActual`). Rejects with `HandoverCostAttemptError`.
+   */
+  onRecordExecutionFee?: (values: ActualHandoverCost) => Promise<void>;
+  /** The record form closed after an attempt whose result never arrived. */
+  onAbandonExecutionFee?: () => void;
+  /** Links an existing line as the execution fee's actual (`bindExecutionFeeLine`). */
+  onLinkExecutionFee?: (feeId: string) => Promise<void>;
+  /** Unlinks it, with a reason (`unbindExecutionFeeLine`). */
+  onUnlinkExecutionFee?: (feeId: string, reason: string) => Promise<void>;
 }>) {
   /** A direct-payment attempt is in flight or its outcome is UNKNOWN (lifted from the form). */
   const [paymentPending, setPaymentPending] = useState(false);
@@ -926,6 +961,22 @@ export function HandoverCostsPanel({
             </dl>
             )}
             <Separator />
+
+            {costs.executionFee && (
+              <ExecutionFeeSection
+                fee={costs.executionFee}
+                lines={costs.lines}
+                currency={denomination.code}
+                scale={scaleOf(denomination.code)}
+                money={money}
+                canManage={canManage && !dealClosed}
+                t={t}
+                onRecord={onRecordExecutionFee}
+                onAbandonRecord={onAbandonExecutionFee}
+                onLink={onLinkExecutionFee}
+                onUnlink={onUnlinkExecutionFee}
+              />
+            )}
 
             {/* The finance company's policy, as the deal froze it: one row per
                 configured fee — what it says, what was actually paid, and the
@@ -1741,6 +1792,202 @@ function AddForm({
  * company's and is shown, not typed; every other field of the resulting line
  * is copied server-side from the deal's frozen snapshot.
  */
+/**
+ * The finance company's execution fee (SCRUM-690 F-PNTR-1). It has ONE
+ * expectation and ONE actual, and the actual is a cost line LINKED to it by id
+ * — recorded here (zero when the company did not charge it), or an existing
+ * finance-company fee line chosen from the server's eligible list. Until one is
+ * linked the deal cannot finalize, and the profit estimate counts the expected
+ * fee on top of what is recorded. The linked line itself is listed with the
+ * other costs below, where its payment is recorded.
+ */
+function ExecutionFeeSection({
+  fee,
+  lines,
+  currency,
+  scale,
+  money,
+  canManage,
+  t,
+  onRecord,
+  onAbandonRecord,
+  onLink,
+  onUnlink,
+}: Readonly<{
+  fee: HandoverExecutionFee;
+  lines: ReadonlyArray<HandoverCostLine>;
+  currency: string;
+  scale: number;
+  money: (minor: number, currency: string) => string;
+  canManage: boolean;
+  t: (key: string) => string;
+  onRecord?: (values: ActualHandoverCost) => Promise<void>;
+  onAbandonRecord?: () => void;
+  onLink?: (feeId: string) => Promise<void>;
+  onUnlink?: (feeId: string, reason: string) => Promise<void>;
+}>) {
+  const [mode, setMode] = useState<"IDLE" | "RECORD" | "UNLINK">("IDLE");
+  const [linkId, setLinkId] = useState("");
+  const [linking, setLinking] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const bound = fee.boundFeeId === null ? undefined : lines.find((line) => line._id === fee.boundFeeId);
+  const eligible = lines.filter((line) => fee.eligibleFeeIds.includes(line._id));
+  const describe = (line: HandoverCostLine) =>
+    `${line.description || t(FEE_TYPE_LABEL[line.feeType] ?? line.feeType)} · ${
+      line.actualAmountMinor === undefined ? t("FactUnavailable") : money(line.actualAmountMinor, line.currency)
+    }`;
+  const row: ExpectedHandoverRow = {
+    templateIndex: -1,
+    feeType: "FINANCE_COMPANY_FEE",
+    description: t("ExecutionFeeLabel"),
+    expectedAmountMinor: fee.expectedMinor,
+    expectedAmountReason: fee.expectedMinor === null ? "UNSAFE_AMOUNT" : null,
+    duplicateIdentity: false,
+    actual: null,
+  };
+
+  return (
+    <section className="space-y-2 rounded-md border p-3 text-sm" data-testid="deal-execution-fee">
+      {mode === "RECORD" && onRecord ? (
+        <TemplateActualForm
+          row={row}
+          scale={scale}
+          currency={currency}
+          t={t}
+          onCancel={(afterUnknown) => {
+            if (afterUnknown) onAbandonRecord?.();
+            setMode("IDLE");
+          }}
+          onSubmit={async (values) => {
+            await onRecord(values);
+            setMode("IDLE");
+          }}
+        />
+      ) : mode === "UNLINK" && bound && onUnlink ? (
+        <VoidForm
+          t={t}
+          copy={{ title: "ExecutionFeeUnlink", note: "ExecutionFeeUnlinkNote", confirm: "ExecutionFeeUnlink" }}
+          onCancel={() => setMode("IDLE")}
+          onSubmit={async (reason) => {
+            await onUnlink(bound._id, reason);
+            setMode("IDLE");
+          }}
+        />
+      ) : (
+        <>
+          <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+            <div className="min-w-0 space-y-1">
+              <p className="font-medium">{t("ExecutionFeeLabel")}</p>
+              <p className="text-xs text-muted-foreground">{t("ExecutionFeeNote")}</p>
+            </div>
+            <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs">
+              <dt className="text-muted-foreground">{t("CostExpected")}</dt>
+              <dd className="tabular-nums">
+                {fee.expectedMinor === null ? (
+                  <span className="text-amber-700 dark:text-amber-400">{t("CostExpectedUnreadable")}</span>
+                ) : (
+                  <bdi dir="ltr">{money(fee.expectedMinor, currency)}</bdi>
+                )}
+              </dd>
+              <dt className="text-muted-foreground">{t("CostActual")}</dt>
+              <dd className="font-semibold tabular-nums text-money-out" data-testid="deal-execution-fee-actual">
+                {bound?.actualAmountMinor === undefined ? (
+                  <span className="font-normal text-muted-foreground">{t("CostNotRecorded")}</span>
+                ) : (
+                  <bdi dir="ltr">{money(bound.actualAmountMinor, bound.currency)}</bdi>
+                )}
+              </dd>
+            </dl>
+          </div>
+          {fee.withheld && (
+            <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="deal-execution-fee-withheld">
+              {t("ProfitExecutionFeeUnclassified")}
+            </p>
+          )}
+          {fee.unrecorded && (
+            <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="deal-execution-fee-unrecorded">
+              {t("ExecutionFeeUnrecorded")}
+            </p>
+          )}
+          {canManage && fee.unrecorded && eligible.length === 0 && lines.length > 0 && (
+            <p className="text-xs text-muted-foreground" data-testid="deal-execution-fee-recorded-elsewhere">
+              {t("ExecutionFeeRecordedElsewhere")}
+            </p>
+          )}
+          {bound && (
+            <p className="text-xs text-muted-foreground" data-testid="deal-execution-fee-linked">
+              {t("ExecutionFeeLinkedTo")}: <bdi>{describe(bound)}</bdi>
+            </p>
+          )}
+          {canManage && fee.unrecorded && (
+            <div className="flex flex-wrap items-end justify-end gap-2">
+              {onLink && eligible.length > 0 && (
+                <>
+                  <div className="min-w-48 flex-1 space-y-1.5">
+                    <Label htmlFor="deal-execution-fee-link">{t("ExecutionFeeLinkLabel")}</Label>
+                    <select
+                      id="deal-execution-fee-link"
+                      className={selectClass}
+                      value={linkId}
+                      disabled={linking}
+                      onChange={(event) => setLinkId(event.target.value)}
+                    >
+                      <option value="">{t("ExecutionFeeLinkPlaceholder")}</option>
+                      {eligible.map((line) => (
+                        <option key={line._id} value={line._id}>
+                          {describe(line)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={linking || linkId === ""}
+                    onClick={async () => {
+                      setLinking(true);
+                      setLinkError(null);
+                      try {
+                        await onLink(linkId);
+                        setLinkId("");
+                      } catch (caught) {
+                        setLinkError(caught instanceof Error ? caught.message : t("UnexpectedError"));
+                      } finally {
+                        setLinking(false);
+                      }
+                    }}
+                  >
+                    {linking && <Loader2 className="h-4 w-4 me-1.5 animate-spin" />}
+                    {t("ExecutionFeeLink")}
+                  </Button>
+                </>
+              )}
+              {onRecord && (
+                <Button type="button" size="sm" disabled={linking} onClick={() => setMode("RECORD")}>
+                  {t("ExecutionFeeRecord")}
+                </Button>
+              )}
+            </div>
+          )}
+          {linkError && (
+            <p role="alert" className="text-xs font-medium text-destructive">
+              {linkError}
+            </p>
+          )}
+          {canManage && bound && onUnlink && bound.directPayment === undefined && bound.handoverPayment !== "PAID_CUSTODY" && (
+            <div className="flex justify-end">
+              <Button type="button" size="sm" variant="ghost" onClick={() => setMode("UNLINK")}>
+                {t("ExecutionFeeUnlink")}
+              </Button>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function TemplateActualForm({
   row,
   scale,
@@ -2013,10 +2260,13 @@ function VoidForm({
   t,
   onCancel,
   onSubmit,
+  copy = { title: "RemoveHandoverCost", note: "VoidCostNote", confirm: "ConfirmRemoveCost" },
 }: Readonly<{
   t: (key: string) => string;
   onCancel: () => void;
   onSubmit: (reason: string) => Promise<void>;
+  /** Translation keys, for a reasoned action that is not removing the cost. */
+  copy?: { title: string; note: string; confirm: string };
 }>) {
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -2041,8 +2291,8 @@ function VoidForm({
         }
       }}
     >
-      <p className="font-medium text-destructive">{t("RemoveHandoverCost")}</p>
-      <p className="text-xs text-muted-foreground">{t("VoidCostNote")}</p>
+      <p className="font-medium text-destructive">{t(copy.title)}</p>
+      <p className="text-xs text-muted-foreground">{t(copy.note)}</p>
       <div className="space-y-1.5">
         <Label htmlFor="void-reason">{t("VoidReasonLabel")}</Label>
         <Input
@@ -2063,7 +2313,7 @@ function VoidForm({
         </Button>
         <Button type="submit" size="sm" variant="destructive" disabled={submitting || !reason.trim()}>
           {submitting && <Loader2 className="h-4 w-4 me-1.5 animate-spin" />}
-          {t("ConfirmRemoveCost")}
+          {t(copy.confirm)}
         </Button>
       </div>
     </form>

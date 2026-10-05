@@ -8,7 +8,7 @@ import { v, ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx, query } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
-import { paginationOptsValidator } from "convex/server";
+import { paginationOptsValidator, type WithoutSystemFields } from "convex/server";
 import {
   requireTenantAuth,
   requireOwnedRow,
@@ -23,6 +23,9 @@ import {
 } from "./utils/financeApplicationProjection";
 import { PERMISSIONS, cancelAuthorityFor, isSystemOwnerRole, type Permission } from "./utils/permissions";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { assertNoActiveDealUnwind, paidDealReversalRoute } from "./utils/dealUnwindGuard";
+import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
+import { executionFeeHeadline, executionFeePosition, executionFeeUnrecorded } from "./utils/executionFeePosition";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
 import {
@@ -37,6 +40,7 @@ import {
 import { assertOperatedDealMode } from "./utils/dealModes";
 import { assertQuoteEconomicsMatchFrozen } from "./utils/quoteEconomicsAnchor";
 import { completeSale } from "./utils/saleCompletion";
+import { requireCommercialVehicle } from "./utils/vehicleLiveness";
 import { planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal, forwardGateRefusal } from "./utils/financeCompanyForward";
 import {
@@ -161,7 +165,7 @@ import {
 import { isManualFinanceApplication, isManualLetterUnitIntact, MANUAL_GAP_TO_FINANCIER_REFUSAL, manualPayerLabel, manualPayerOf } from "./utils/manualFinancePayer";
 
 /** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
-const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
+export const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
 
 /**
  * Opens (or finds) the canonical receivable owed BY the finance company for a
@@ -1231,9 +1235,13 @@ async function summarizeCockpitExpenses(
   const sameCurrencyFees = liveFees.filter((fee) => fee.currency === currency);
   const sameCurrencySummary = summarizeFees(sameCurrencyFees);
   const otherCurrencyFees = liveFees.length - sameCurrencyFees.length;
+  // SCRUM-690 F-PNTR-1: the finance company's execution fee as ONE position —
+  // the overview reads the same helper, so the two headlines cannot disagree.
+  const executionFee = executionFeePosition(app, liveFees, currency);
 
   return {
     feeLines,
+    executionFee: executionFeeHeadline(executionFee),
     actualExpensesMinor: sameCurrencySummary.dealerBorneActualMinor,
     feesAwaitingActuals: sameCurrencySummary.linesAwaitingActual + otherCurrencyFees,
     // RECORDED and RECONCILED are different claims: an amount somebody typed and
@@ -1242,7 +1250,10 @@ async function summarizeCockpitExpenses(
     expensesFullyReconciled:
       otherCurrencyFees === 0 &&
       sameCurrencySummary.linesAwaitingActual === 0 &&
-      sameCurrencySummary.linesAwaitingReconciliation === 0,
+      sameCurrencySummary.linesAwaitingReconciliation === 0 &&
+      // A fee the finance company charged and nobody has recorded is not a
+      // finished cost, however reconciled the other lines are.
+      !executionFeeUnrecorded(executionFee),
   };
 }
 
@@ -1350,7 +1361,7 @@ async function buildCockpitMoney(
   const supplierName = vehicle?.sourcedFromName ?? "";
 
   const expenses = await summarizeCockpitExpenses(ctx, app, currency);
-  const { feeLines, actualExpensesMinor, feesAwaitingActuals, expensesFullyReconciled } = expenses;
+  const { feeLines, actualExpensesMinor, feesAwaitingActuals, expensesFullyReconciled, executionFee } = expenses;
 
   // --- the supplier's position -----------------------------------------
   const payables = app.finalizedSaleId
@@ -1546,6 +1557,7 @@ async function buildCockpitMoney(
       customerDirectToDealerMinor: customerGapToDealer.amountMinor,
       actualExpensesMinor,
       expectedExpensesMinor: app.estimatedDealerBorneExpensesMinor,
+      executionFee,
       currency,
       fullySettled,
     });
@@ -2653,11 +2665,13 @@ export const createFromQuote = mutation({
     if (quoteVehicleItems.length !== 1) {
       throw new ConvexError("Finance applications currently support exactly one vehicle.");
     }
+    const lineVehicles = new Map<Id<"vehicles">, Doc<"vehicles">>();
     for (const item of quoteVehicleItems) {
       const lineVehicle = await ctx.db.get(item.vehicleId);
       if (!lineVehicle || lineVehicle.orgId !== args.orgId || lineVehicle.isDeleted) {
         throw new ConvexError("Quote vehicle not found in this organization.");
       }
+      lineVehicles.set(item.vehicleId, lineVehicle);
     }
     // Kept for the rule snapshot below rather than re-fetched: this handler
     // already validates the company here, and reading it twice per application
@@ -2890,6 +2904,7 @@ export const createFromQuote = mutation({
         orgId: args.orgId,
         vehicleId: item.vehicleId,
         lineage: { quoteId: quote._id, adoptReservationId: args.adoptReservationId },
+        vehicle: lineVehicles.get(item.vehicleId),
       });
     }
 
@@ -2937,6 +2952,7 @@ export const createFromQuote = mutation({
         createdBy: auth.user._id,
         evidence: { kind: "FINANCE", applicationId: appId },
         lineage: { quoteId: quote._id, adoptReservationId: args.adoptReservationId },
+        vehicle: lineVehicles.get(item.vehicleId),
       });
     }
 
@@ -3266,6 +3282,8 @@ export const updateStatus = mutation({
       if (!quote || quote.orgId !== args.orgId) {
         throw new ConvexError("Application quote not found.");
       }
+      // SCRUM-641 (D-35): approval is new authority over the car; see convex/utils/vehicleLiveness.ts.
+      requireCommercialVehicle(await ctx.db.get(app.vehicleId), args.orgId);
       await assertRequiredApplicationDocumentsComplete(ctx, app, quote);
       approvedBy = auth.user._id;
       approvedAt = Date.now();
@@ -3322,7 +3340,7 @@ export const updateStatus = mutation({
  * throws before any cheque is written; a thrown error rolls the whole mutation
  * back.
  */
-async function resolveLinkedChequesForCancellation(
+export async function resolveLinkedChequesForCancellation(
   ctx: MutationCtx,
   app: Doc<"financeApplications">,
   actorId: Id<"users">,
@@ -3357,6 +3375,275 @@ async function resolveLinkedChequesForCancellation(
  * no disbursement has been confirmed, because that branch unwinds the sale,
  * vehicle, deposits, and posted accounting records.
  */
+/**
+ * The teardown of a CLOSED deal: refuses while the finance-company receivable
+ * holds live allocations, reverses a COMPLETED sale (journal, commission,
+ * operational records), reverses the finance disbursement and cancels the
+ * finance-company receivable. Extracted unchanged from `cancelApplication` so
+ * the unwind of a paid deal (SCRUM-693, `finishDealUnwind`) runs the exact
+ * same teardown; each caller keeps its own refusals in front of it.
+ */
+export async function cancelClosedApplicationTeardown(
+  ctx: MutationCtx,
+  args: {
+    app: Doc<"financeApplications">;
+    actorId: Id<"users">;
+    reason: string;
+    cancellationReason: string;
+    now: number;
+  }
+): Promise<void> {
+  const { app, actorId, reason, cancellationReason, now } = args;
+  const orgId = app.orgId;
+  const applicationId = app._id;
+  // SCRUM-121A-PRE §5.1 — resolved and gated HERE, above every write
+  // in this branch, so a refusal leaves the deal exactly as it was.
+  //
+  // `app.disbursedAt` was the only thing standing in for this, and it
+  // is not sufficient: `subledger.allocate` allocates against the
+  // finance-company document without touching the application at all,
+  // so `disbursedAt` stays unset and the guard above sees a clean deal
+  // while the subledger holds live money. The document itself is the
+  // only thing that knows.
+  //
+  // Scope note: this reads the canonical receivable and refuses. It
+  // deliberately changes nothing about `confirmDisbursement`, the
+  // remittance economics, the settlement route, or the deal teardown
+  // below.
+  // SCRUM-27 (D5): found by SOURCE for a manual company too. Gating on
+  // `companyId` alone would skip both the allocation guard and the void.
+  const financeReceivable = app.companyId || manualPayerOf(app)
+    ? await ctx.db
+        .query("receivableDocuments")
+        .withIndex("by_org_source", (q) =>
+          q
+            .eq("orgId", orgId)
+            .eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE)
+            .eq("sourceId", applicationId)
+        )
+        .unique()
+    : null;
+  if (financeReceivable && financeReceivable.status !== "CANCELLED") {
+    await assertNoActiveAllocations(ctx, financeReceivable._id);
+  }
+
+  if (app.finalizedSaleId) {
+    const sale = await ctx.db.get(app.finalizedSaleId);
+    if (sale && sale.orgId === orgId) {
+      // ⚠️ THE PARENT REVERSAL RUNS FIRST, AND ITS OUTCOME IS A GATE.
+      //
+      // Operational reinstatement used to run first and hand the deposit
+      // back before anyone knew whether the sale's journal had actually
+      // reversed. For a FINANCED_SALE_CONSIDERATION deposit that is the
+      // whole question: its release lives inside the sale entry, so a
+      // DEFERRED parent leaves the release standing while the deposit
+      // reads as available again.
+      //
+      // Safe in both directions, verified rather than assumed: nothing in
+      // `cancelCompletedSaleOperationalRecords` reads `accountingEvents`,
+      // and `reverseAccountingEvent` reads only the ORIGINAL event's own
+      // stored journal — never current sale or deposit state. So neither
+      // half depends on the other having run.
+      //
+      // The refusal below is a real rollback boundary: these mutations are
+      // not wrapped in try/catch, so an uncaught throw discards the queued
+      // reversal and every other write in the transaction.
+      // ⚠️ THE EXACT TRANSITION, NOT MERELY 'NOT CANCELLED' — SCRUM-212-R1.
+      //
+      // This asked `sale.status !== "CANCELLED"`, which is a different
+      // question from the one the invariant is about. Every other status
+      // answered yes — PENDING included, and a CANCELLED sale could be
+      // reopened to PENDING through `sales.update`. A sale that never
+      // completed would then run the full completed-sale teardown.
+      //
+      // Only a COMPLETED sale has a projection, a journal, an accrual and
+      // a cashflow row to reverse, so only a COMPLETED sale may be torn
+      // down. Reopening is now also refused at that door; this guard does
+      // not depend on that one holding.
+      if (sale.status === "COMPLETED") {
+        await ctx.db.patch(sale._id, { status: "CANCELLED" });
+        await hookSaleCancelled(ctx, {
+          orgId: orgId,
+          saleId: sale._id,
+          reason,
+          actorId: actorId,
+          reversalDate: now,
+        });
+        await assertFinancedDepositsSurviveParentReversal(ctx, {
+          orgId: orgId,
+          saleId: sale._id,
+        });
+        // Accrual plus every correction posted against it, called
+        // unconditionally for the same reason sales.update's
+        // cancellation does — it is the same entry point, so the two
+        // void paths cannot drift apart.
+        await reverseCommissionForSale(ctx, {
+          orgId: orgId,
+          saleId: sale._id,
+          adjustmentSeq: sale.commissionAdjustmentSeq ?? 0,
+          reason,
+          actorId: actorId,
+          reversalDate: now,
+        });
+
+        // ⚠️ INSIDE THE TRANSITION THAT OWNS IT — SCRUM-212.
+        //
+        // This sat outside the status block, so re-entering on a sale
+        // that was already CANCELLED skipped the reversal, the commission
+        // void and the deposit gate — and still ran the destructive
+        // teardown. By then the car could belong to a LATER sale, and the
+        // teardown would restore it out from under one that is still
+        // COMPLETED, voiding that sale's cashflow row on the way past.
+        //
+        // Destructive teardown belongs to the one transaction that
+        // performs COMPLETED -> CANCELLED for this exact sale, so it now
+        // lives inside the block that performs it and runs at most once.
+        // Everything below stays outside: cancelling the application's
+        // own receivable, disbursement and root state IS idempotent on
+        // re-entry, and re-entry still needs to reach it.
+        //
+        // The deposit gate above still precedes it, and now does so on
+        // the only path that reaches it — so the duplicate call this
+        // block used to need is gone with the hole it was covering.
+        await cancelCompletedSaleOperationalRecords(ctx, {
+          orgId: orgId,
+          sale,
+          actorId: actorId,
+          reason,
+          reversalDate: now,
+        });
+      } else if (sale.status !== "CANCELLED") {
+        // A draft that never completed. Cancelling the application ends
+        // the deal, so the sale goes with it — but `createDraft` performs
+        // no inventory, deposit, CRM or accounting side effects, so there
+        // is nothing to reverse and nothing to hand back.
+        // SCRUM-571 T2: a sale exit refuses while a sale-linked legacy receivable exists.
+        await assertNoSaleLinkedLegacyReceivable(ctx, orgId, sale._id);
+        await ctx.db.patch(sale._id, { status: "CANCELLED" });
+      }
+    }
+  }
+
+  const quote = await ctx.db.get(app.quoteId);
+  // Deliberately NOT gated on the settlement route.
+  //
+  // It looks like it should be: on the direct route `finalizeDeal`
+  // posted no FINANCE_DISBURSED event and opened no finance-company
+  // receivable, so there is nothing to reverse. But the block is already
+  // a no-op in that case — `reverseEventIfPosted` returns NOT_POSTED
+  // when nothing was posted, `cancelPendingPostByKey` finds no queued
+  // row, and `financeReceivable` is null so the patch is skipped. The
+  // guard bought nothing.
+  //
+  // What it DID buy was a hole. It re-derived the route from the LIVE
+  // vehicle, while finalization acted on the state as it was months
+  // earlier. A vehicle converted SOURCED -> STOCK before finalization
+  // (allowed: `retroactiveOwnershipChangeRefusal` only refuses once the
+  // vehicle is SOLD) posts the ordinary finance receivable, and being
+  // converted back to SOURCED afterwards made this branch skip the
+  // reversal that `origin/main` performs — leaving AR-Finance-Companies
+  // debited and an OPEN receivable on a voided deal, permanently.
+  //
+  // Same reasoning as `sales.ts`: "reverseEventIfPosted no-ops when
+  // there is nothing on the books and cancels anything still queued, so
+  // gating on the live amount only created holes."
+  if (
+    (app.companyId || manualPayerOf(app)) &&
+    ((quote?.totalFinancedAmount ?? 0) > 0 || financeReceivable)
+  ) {
+    await hookFinanceDisbursementCancelled(ctx, {
+      orgId: orgId,
+      applicationId: applicationId,
+      reason,
+      actorId: actorId,
+      reversalDate: now,
+    });
+
+    // The canonical finance-company receivable opened at finalizeDeal
+    // is no longer owed once the deal is voided (this branch already
+    // rejects deals whose disbursement was received).
+    if (financeReceivable && financeReceivable.status !== "CANCELLED") {
+      // SCRUM-121A-PRE §5.2 — the same metadata the other two writers
+      // now carry. Without `cancelledAt`, `getReceivablesAsOf` keeps
+      // this document in every historical AR report forever, while this
+      // very branch reverses its GL.
+      //
+      // `cancellationReason` (not `reason`) is the trimmed fallback, so
+      // this is never stored blank. They are separate constants on
+      // purpose: `reason` still feeds the sale reversal, the commission
+      // void and the teardown, which are outside this stage's slice.
+      await ctx.db.patch(financeReceivable._id, {
+        status: "CANCELLED",
+        cancelledAt: now,
+        cancelledBy: actorId,
+        cancellationReason,
+      });
+    }
+  }
+}
+
+/**
+ * The application side of a cancellation: the CANCELLED patch, the release of
+ * the quote's roots and the status-log row. Shared by `cancelApplication` and
+ * `finishDealUnwind` (SCRUM-693).
+ */
+export async function closeOutCancelledApplication(
+  ctx: MutationCtx,
+  args: {
+    app: Doc<"financeApplications">;
+    actorId: Id<"users">;
+    now: number;
+    cancellationReason: string;
+    note: string | undefined;
+    failurePatch?: Partial<WithoutSystemFields<Doc<"financeApplications">>>;
+  }
+): Promise<void> {
+  const { app, actorId, now, cancellationReason } = args;
+  await ctx.db.patch(app._id, {
+    status: "CANCELLED",
+    updatedAt: now,
+    cancelledBy: actorId,
+    cancelledAt: now,
+    cancellationReason,
+    creditDecision: "CANCELLED",
+    // This branch has already reversed the sale and voided the
+    // finance-company receivable, so nothing is expected any more. The
+    // handover timestamp is deliberately left alone — the vehicle
+    // physically went to the customer and later came back, and erasing
+    // that is not the same as reversing it — but a cancelled deal that
+    // was never handed over must not keep claiming it is READY to be.
+    settlementStatus: "NOT_READY",
+    handoverStatus: handoverStatusForFacts({ ...app, status: "CANCELLED" }),
+    // A gap nobody will now negotiate. FAILED is the terminal value the
+    // validator already carries for exactly this.
+    ...(app.gapResolution === "PENDING_NEGOTIATION"
+      ? { gapResolution: "FAILED" as const }
+      : {}),
+    ...(args.failurePatch ?? {}),
+  });
+
+  // SCRUM-195 M3. AFTER the application row itself is CANCELLED, so the
+  // FINANCE basis is genuinely gone when the predicate runs. Before this
+  // patch the application is still in the in-flight set and the root
+  // would correctly refuse to release.
+  await releaseRootsForApplicationQuote(ctx, {
+    orgId: app.orgId,
+    quoteId: app.quoteId,
+    decisionNow: now,
+    reason: "finance application cancelled",
+  });
+
+  await ctx.db.insert("applicationStatusLog", {
+    orgId: app.orgId,
+    applicationId: app._id,
+    fromStatus: app.status,
+    toStatus: "CANCELLED",
+    changedBy: actorId,
+    changedAt: now,
+    note: args.note,
+  });
+}
+
 export const cancelApplication = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -3442,6 +3729,11 @@ export const cancelApplication = mutation({
           return;
         }
 
+        // SCRUM-693: an unwind in progress owns the deal's ending; finish or
+        // abandon it first. After the replay above, so a finished unwind's
+        // CANCELLED deal still answers a retried cancel.
+        await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
+
         // SCRUM-444 DA-03: cancelling ends the deal, and a deposit request still
         // waiting on it would be orphaned. After the already-cancelled replay
         // above, so a retry of a cancellation that succeeded is not refused.
@@ -3507,15 +3799,27 @@ export const cancelApplication = mutation({
             } catch {
               throw new ConvexError("A manager cancels a finalized deal.");
             }
-            const forwardBlock = forwardCancelRefusal(await deriveForwardState(ctx, app));
-            if (forwardBlock !== null) throwAppError(forwardBlock.code, forwardBlock.message);
           }
 
+          // SCRUM-693: a paid deal is reversed through Unwind deal on the deal
+          // page (dealUnwind.ts), never by a bare cancel. Ahead of the forward
+          // refusal: the unwind returns the forward itself, so it is the one
+          // instruction that leads somewhere.
+          // A v1 deal cannot be unwound, so it keeps the manual-correction
+          // refusal; so does a cheque deal or one whose receipt records
+          // disagree (F2), which the unwind would refuse anyway.
           if (app.disbursedAt) {
+            if (planVersionOf(app) === 2 && (await paidDealReversalRoute(ctx, app)).route === "UNWIND") {
+              throwAppError(AppErrorCode.DEAL_CANCEL_USE_UNWIND, DEAL_UNWIND_MESSAGES.DEAL_CANCEL_USE_UNWIND);
+            }
             throw new ConvexError(
               "Disbursement has already been confirmed for this deal — funds have been received from the finance company. " +
               "This can't be auto-reversed from here; void it through a manual accounting correction instead."
             );
+          }
+          if (planVersionOf(app) === 2) {
+            const forwardBlock = forwardCancelRefusal(await deriveForwardState(ctx, app));
+            if (forwardBlock !== null) throwAppError(forwardBlock.code, forwardBlock.message);
           }
 
           // The direct route's mirror of the refusal above, and NOT the same
@@ -3546,215 +3850,24 @@ export const cancelApplication = mutation({
             );
           }
 
-          // SCRUM-121A-PRE §5.1 — resolved and gated HERE, above every write
-          // in this branch, so a refusal leaves the deal exactly as it was.
-          //
-          // `app.disbursedAt` was the only thing standing in for this, and it
-          // is not sufficient: `subledger.allocate` allocates against the
-          // finance-company document without touching the application at all,
-          // so `disbursedAt` stays unset and the guard above sees a clean deal
-          // while the subledger holds live money. The document itself is the
-          // only thing that knows.
-          //
-          // Scope note: this reads the canonical receivable and refuses. It
-          // deliberately changes nothing about `confirmDisbursement`, the
-          // remittance economics, the settlement route, or the deal teardown
-          // below.
-          // SCRUM-27 (D5): found by SOURCE for a manual company too. Gating on
-          // `companyId` alone would skip both the allocation guard and the void.
-          const financeReceivable = app.companyId || manualPayerOf(app)
-            ? await ctx.db
-                .query("receivableDocuments")
-                .withIndex("by_org_source", (q) =>
-                  q
-                    .eq("orgId", args.orgId)
-                    .eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE)
-                    .eq("sourceId", args.applicationId)
-                )
-                .unique()
-            : null;
-          if (financeReceivable && financeReceivable.status !== "CANCELLED") {
-            await assertNoActiveAllocations(ctx, financeReceivable._id);
-          }
-
-          if (app.finalizedSaleId) {
-            const sale = await ctx.db.get(app.finalizedSaleId);
-            if (sale && sale.orgId === args.orgId) {
-              // ⚠️ THE PARENT REVERSAL RUNS FIRST, AND ITS OUTCOME IS A GATE.
-              //
-              // Operational reinstatement used to run first and hand the deposit
-              // back before anyone knew whether the sale's journal had actually
-              // reversed. For a FINANCED_SALE_CONSIDERATION deposit that is the
-              // whole question: its release lives inside the sale entry, so a
-              // DEFERRED parent leaves the release standing while the deposit
-              // reads as available again.
-              //
-              // Safe in both directions, verified rather than assumed: nothing in
-              // `cancelCompletedSaleOperationalRecords` reads `accountingEvents`,
-              // and `reverseAccountingEvent` reads only the ORIGINAL event's own
-              // stored journal — never current sale or deposit state. So neither
-              // half depends on the other having run.
-              //
-              // The refusal below is a real rollback boundary: these mutations are
-              // not wrapped in try/catch, so an uncaught throw discards the queued
-              // reversal and every other write in the transaction.
-              // ⚠️ THE EXACT TRANSITION, NOT MERELY 'NOT CANCELLED' — SCRUM-212-R1.
-              //
-              // This asked `sale.status !== "CANCELLED"`, which is a different
-              // question from the one the invariant is about. Every other status
-              // answered yes — PENDING included, and a CANCELLED sale could be
-              // reopened to PENDING through `sales.update`. A sale that never
-              // completed would then run the full completed-sale teardown.
-              //
-              // Only a COMPLETED sale has a projection, a journal, an accrual and
-              // a cashflow row to reverse, so only a COMPLETED sale may be torn
-              // down. Reopening is now also refused at that door; this guard does
-              // not depend on that one holding.
-              if (sale.status === "COMPLETED") {
-                await ctx.db.patch(sale._id, { status: "CANCELLED" });
-                await hookSaleCancelled(ctx, {
-                  orgId: args.orgId,
-                  saleId: sale._id,
-                  reason,
-                  actorId: auth.user._id,
-                  reversalDate: now,
-                });
-                await assertFinancedDepositsSurviveParentReversal(ctx, {
-                  orgId: args.orgId,
-                  saleId: sale._id,
-                });
-                // Accrual plus every correction posted against it, called
-                // unconditionally for the same reason sales.update's
-                // cancellation does — it is the same entry point, so the two
-                // void paths cannot drift apart.
-                await reverseCommissionForSale(ctx, {
-                  orgId: args.orgId,
-                  saleId: sale._id,
-                  adjustmentSeq: sale.commissionAdjustmentSeq ?? 0,
-                  reason,
-                  actorId: auth.user._id,
-                  reversalDate: now,
-                });
-
-                // ⚠️ INSIDE THE TRANSITION THAT OWNS IT — SCRUM-212.
-                //
-                // This sat outside the status block, so re-entering on a sale
-                // that was already CANCELLED skipped the reversal, the commission
-                // void and the deposit gate — and still ran the destructive
-                // teardown. By then the car could belong to a LATER sale, and the
-                // teardown would restore it out from under one that is still
-                // COMPLETED, voiding that sale's cashflow row on the way past.
-                //
-                // Destructive teardown belongs to the one transaction that
-                // performs COMPLETED -> CANCELLED for this exact sale, so it now
-                // lives inside the block that performs it and runs at most once.
-                // Everything below stays outside: cancelling the application's
-                // own receivable, disbursement and root state IS idempotent on
-                // re-entry, and re-entry still needs to reach it.
-                //
-                // The deposit gate above still precedes it, and now does so on
-                // the only path that reaches it — so the duplicate call this
-                // block used to need is gone with the hole it was covering.
-                await cancelCompletedSaleOperationalRecords(ctx, {
-                  orgId: args.orgId,
-                  sale,
-                  actorId: auth.user._id,
-                  reason,
-                  reversalDate: now,
-                });
-              } else if (sale.status !== "CANCELLED") {
-                // A draft that never completed. Cancelling the application ends
-                // the deal, so the sale goes with it — but `createDraft` performs
-                // no inventory, deposit, CRM or accounting side effects, so there
-                // is nothing to reverse and nothing to hand back.
-                // SCRUM-571 T2: a sale exit refuses while a sale-linked legacy receivable exists.
-                await assertNoSaleLinkedLegacyReceivable(ctx, args.orgId, sale._id);
-                await ctx.db.patch(sale._id, { status: "CANCELLED" });
-              }
-            }
-          }
-
-          const quote = await ctx.db.get(app.quoteId);
-          // Deliberately NOT gated on the settlement route.
-          //
-          // It looks like it should be: on the direct route `finalizeDeal`
-          // posted no FINANCE_DISBURSED event and opened no finance-company
-          // receivable, so there is nothing to reverse. But the block is already
-          // a no-op in that case — `reverseEventIfPosted` returns NOT_POSTED
-          // when nothing was posted, `cancelPendingPostByKey` finds no queued
-          // row, and `financeReceivable` is null so the patch is skipped. The
-          // guard bought nothing.
-          //
-          // What it DID buy was a hole. It re-derived the route from the LIVE
-          // vehicle, while finalization acted on the state as it was months
-          // earlier. A vehicle converted SOURCED -> STOCK before finalization
-          // (allowed: `retroactiveOwnershipChangeRefusal` only refuses once the
-          // vehicle is SOLD) posts the ordinary finance receivable, and being
-          // converted back to SOURCED afterwards made this branch skip the
-          // reversal that `origin/main` performs — leaving AR-Finance-Companies
-          // debited and an OPEN receivable on a voided deal, permanently.
-          //
-          // Same reasoning as `sales.ts`: "reverseEventIfPosted no-ops when
-          // there is nothing on the books and cancels anything still queued, so
-          // gating on the live amount only created holes."
-          if (
-            (app.companyId || manualPayerOf(app)) &&
-            ((quote?.totalFinancedAmount ?? 0) > 0 || financeReceivable)
-          ) {
-            await hookFinanceDisbursementCancelled(ctx, {
-              orgId: args.orgId,
-              applicationId: args.applicationId,
-              reason,
-              actorId: auth.user._id,
-              reversalDate: now,
-            });
-
-            // The canonical finance-company receivable opened at finalizeDeal
-            // is no longer owed once the deal is voided (this branch already
-            // rejects deals whose disbursement was received).
-            if (financeReceivable && financeReceivable.status !== "CANCELLED") {
-              // SCRUM-121A-PRE §5.2 — the same metadata the other two writers
-              // now carry. Without `cancelledAt`, `getReceivablesAsOf` keeps
-              // this document in every historical AR report forever, while this
-              // very branch reverses its GL.
-              //
-              // `cancellationReason` (not `reason`) is the trimmed fallback, so
-              // this is never stored blank. They are separate constants on
-              // purpose: `reason` still feeds the sale reversal, the commission
-              // void and the teardown, which are outside this stage's slice.
-              await ctx.db.patch(financeReceivable._id, {
-                status: "CANCELLED",
-                cancelledAt: now,
-                cancelledBy: auth.user._id,
-                cancellationReason,
-              });
-            }
-          }
+          await cancelClosedApplicationTeardown(ctx, {
+            app,
+            actorId: auth.user._id,
+            reason,
+            cancellationReason,
+            now,
+          });
         } else {
           await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
         }
 
-        await ctx.db.patch(args.applicationId, {
-          status: "CANCELLED",
-          updatedAt: now,
-          cancelledBy: auth.user._id,
-          cancelledAt: now,
+        await closeOutCancelledApplication(ctx, {
+          app,
+          actorId: auth.user._id,
+          now,
           cancellationReason,
-          creditDecision: "CANCELLED",
-          // This branch has already reversed the sale and voided the
-          // finance-company receivable, so nothing is expected any more. The
-          // handover timestamp is deliberately left alone — the vehicle
-          // physically went to the customer and later came back, and erasing
-          // that is not the same as reversing it — but a cancelled deal that
-          // was never handed over must not keep claiming it is READY to be.
-          settlementStatus: "NOT_READY",
-          handoverStatus: handoverStatusForFacts({ ...app, status: "CANCELLED" }),
-          // A gap nobody will now negotiate. FAILED is the terminal value the
-          // validator already carries for exactly this.
-          ...(app.gapResolution === "PENDING_NEGOTIATION"
-            ? { gapResolution: "FAILED" as const }
-            : {}),
-          ...(args.failureReason
+          note: args.reason,
+          failurePatch: args.failureReason
             ? {
                 failureReason: args.failureReason,
                 failureNotes: args.failureNotes ?? cancellationReason,
@@ -3765,28 +3878,7 @@ export const cancelApplication = mutation({
                   defaultAppraisalFeeResponsibility(args.failureReason),
                 appraisalFeeResponsibilityReason: args.appraisalFeeResponsibilityReason,
               }
-            : {}),
-        });
-
-        // SCRUM-195 M3. AFTER the application row itself is CANCELLED, so the
-        // FINANCE basis is genuinely gone when the predicate runs. Before this
-        // patch the application is still in the in-flight set and the root
-        // would correctly refuse to release.
-        await releaseRootsForApplicationQuote(ctx, {
-          orgId: args.orgId,
-          quoteId: app.quoteId,
-          decisionNow: now,
-          reason: "finance application cancelled",
-        });
-
-        await ctx.db.insert("applicationStatusLog", {
-          orgId: args.orgId,
-          applicationId: args.applicationId,
-          fromStatus: app.status,
-          toStatus: "CANCELLED",
-          changedBy: auth.user._id,
-          changedAt: now,
-          note: args.reason,
+            : {},
         });
 
         const actorName = await getActorName(ctx);
@@ -4004,6 +4096,7 @@ export const registerExpectedPayment = mutation({
       args.applicationId,
       "Application not found"
     );
+    await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
     // SCRUM-447 D3: APPROVED, or CLOSED but not yet disbursed (re-registration
     // after correctExpectedPayment). A cancelled or disbursed deal never.
     const closedUndisbursed = app.status === "CLOSED" && !app.disbursedAt;
@@ -4137,6 +4230,7 @@ export const correctExpectedPayment = mutation({
       "Application not found"
     );
     if (app.status === "CANCELLED") throw new ConvexError("This application was cancelled.");
+    await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
     if (app.disbursedAt) {
       throw new ConvexError(
         "Disbursement has already been confirmed for this deal, so its expected payment can no longer be corrected."
@@ -5200,6 +5294,8 @@ export const confirmDisbursement = mutation({
       async () => {
         const app = await ctx.db.get(args.applicationId);
         if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found.");
+        // SCRUM-693: no new disbursement while the deal is being unwound.
+        await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
         if (app.status !== "CLOSED") throw new ConvexError("Disbursement can only be confirmed on a closed application.");
         if (app.disbursedAt) refuseFinanceReturn("FINANCE_CONFIRM_ALREADY_CONFIRMED");
         if (!app.companyId && manualPayerOf(app) === null) {
@@ -5492,6 +5588,7 @@ export const returnFinanceDisbursementCheque = mutation({
         // refusal never discloses that a foreign row exists.
         const app = await ctx.db.get(args.applicationId);
         if (!app || app.orgId !== args.orgId) refuseFinanceReturn("FINANCE_RETURN_NOT_FOUND");
+        await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
         if (app.disbursedAt === undefined || app.disbursedAmountMinor === undefined) {
           refuseFinanceReturn("FINANCE_RETURN_NOT_DISBURSED");
         }

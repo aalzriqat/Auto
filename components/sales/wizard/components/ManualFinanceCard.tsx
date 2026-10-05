@@ -4,6 +4,7 @@ import { Check, PenLine } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { calculateUnifiedMurabaha, isRequestedFinancingTermValid } from "@/lib/financing";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 
 interface ManualFinanceCardProps {
   vehiclePrice: number;
@@ -41,6 +42,7 @@ export function ManualFinanceCard({
   onSelect,
 }: ManualFinanceCardProps) {
   const { t, locale } = useLanguage();
+  const money = useMoneyDisplay();
 
   const feesConfigured = executionFees !== undefined;
   const termValid = isRequestedFinancingTermValid({
@@ -212,8 +214,8 @@ export function ManualFinanceCard({
             </span>
           ) : result ? (
             <>
-              {result.monthlyInstallment.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-              <span className="text-sm font-normal text-muted-foreground ms-1">{t("JOD" as any)}</span>
+              {money.amount(result.monthlyInstallment)}
+              <span className="text-sm font-normal text-muted-foreground ms-1">{money.label}</span>
             </>
           ) : (
             <span className="text-base font-medium text-amber-500">
@@ -234,14 +236,14 @@ export function ManualFinanceCard({
             <div className="flex justify-between text-muted-foreground">
               <span>{t("FinancedAmount" as any)}</span>
               <span className="font-medium text-foreground">
-                {result.financedAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                {money.format(result.financedAmount)}
               </span>
             </div>
 
             <div className="flex justify-between text-muted-foreground">
               <span>{t("TotalProfit" as any) || "Total Profit"}</span>
               <span className="font-medium text-foreground">
-                {result.totalProfit.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                {money.format(result.totalProfit)}
               </span>
             </div>
 
@@ -249,7 +251,7 @@ export function ManualFinanceCard({
               <div className="flex justify-between text-muted-foreground">
                 <span>{t("Takaful" as any)}</span>
                 <span className="font-medium text-foreground">
-                  {result.takafulAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  {money.format(result.takafulAmount)}
                 </span>
               </div>
             )}

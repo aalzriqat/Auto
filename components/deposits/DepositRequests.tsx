@@ -12,7 +12,7 @@ import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/P
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
-import { getErrorMessage } from "@/lib/errors";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 
 /**
  * SCRUM-444. A deposit REQUEST is a salesperson saying "the customer is handing
@@ -39,7 +39,7 @@ function useDecisionActions(orgId: Id<"organizations">) {
       await work();
       toast.success(success);
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setBusyId(null);
     }

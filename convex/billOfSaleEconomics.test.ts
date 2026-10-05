@@ -597,9 +597,21 @@ describe("getBillOfSaleEconomics - FINANCED (through the Deal)", () => {
     "a real Deal with a down payment, execution fees and commission itemises exactly (includesCommissionInDebt=$includes)",
     async ({ includes, capitalisedCommission, amountFinanced }) => {
       const s = await seedDealership(`finitem${includes ? "T" : "F"}`);
-      const { saleId } = await financedSaleThroughDeal(s, {
+      const { applicationId } = await readyFinancedDeal(s, {
         downPayment: 2_000, manualAdminFees: 100, manualCommission: 300, manualIncludesCommissionInDebt: includes,
       });
+      // SCRUM-690: the expected execution fee needs its actual (and, being a
+      // dealer-borne handover cost, its payment) before the deal can finalize.
+      const feeId = await s.as.mutation(api.financeDealCosts.recordExecutionFeeActual, {
+        orgId: s.orgId, applicationId, actualAmountMinor: 100 * SCALE, expectedCurrency: "JOD",
+        paidBy: "DEALER", idempotencyKey: crypto.randomUUID(),
+      });
+      await s.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Execution fee reconciled." });
+      await s.as.mutation(api.financeDealCosts.recordDirectFeePayment, {
+        orgId: s.orgId, feeId, method: "BANK_TRANSFER", paidAt: Date.now(), expectedAmountMinor: 100 * SCALE,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      const saleId = (await finalize(s, applicationId)) as Id<"sales">;
       expect(await query(s, saleId)).toEqual({
         kind: "FINANCED", currency: "JOD", vehiclePrice: 12_000, downPayment: 2_000, executionFees: 100,
         capitalisedCommission, amountFinanced, termMonths: 48, flatAnnualProfitRatePercent: 5,

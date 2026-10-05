@@ -158,6 +158,37 @@ describe("deriveDealFinancialSummary", () => {
     });
   });
 
+  describe("what the finance company actually remitted (SCRUM-690)", () => {
+    // #pntr in production: approved 10,850, funded slice 9,222.5, confirmed
+    // remittance 10,850. The remittance is the FULL approved amount (c21888);
+    // the funded slice is a breakdown of it, never the receipt.
+    const pntr = {
+      approvedDealerPurchaseAmountMinor: 10_850_000,
+      financeCompanyFundedPortionMinor: 9_222_500,
+      dealerContributionMinor: 1_077_500,
+      customerFirstPaymentMinor: 550_000,
+    };
+    test("serves the confirmed remittance, not the funded slice", () => {
+      const s = deriveDealFinancialSummary(
+        inputs({
+          parties: [party("FINANCIER", "SETTLED", 0)],
+          app: { ...pntr, disbursedAmountMinor: 10_850_000 },
+        })
+      );
+      expect(s.financier.receivedMinor).toBe(10_850_000);
+      expect(s.financier.fundedPortionMinor).toBe(9_222_500);
+    });
+    test("null — not the funded slice, not zero — before any remittance is confirmed", () => {
+      const s = deriveDealFinancialSummary(inputs({ app: pntr }));
+      expect(s.financier.receivedMinor).toBeNull();
+    });
+    test("an unreadable stored remittance is withheld and named", () => {
+      const s = deriveDealFinancialSummary(inputs({ app: { ...pntr, disbursedAmountMinor: Number.NaN } }));
+      expect(s.financier.receivedMinor).toBeNull();
+      expect(s.unreadable).toContainEqual({ field: "financierReceived", reason: "UNSAFE_AMOUNT" });
+    });
+  });
+
   describe("the financier's remaining balance: estimated before a receivable, actual after", () => {
     test("OUTSTANDING from the receivable once one exists, on the through-dealership route", () => {
       expect(deriveDealFinancialSummary(inputs()).financier.outstanding).toEqual({
@@ -493,6 +524,7 @@ describe("deriveDealFinancialSummary", () => {
     expect(s.approvedPurchaseAmountMinor).toBeNull();
     expect(s.customerPaidToDealer).toBeNull();
     expect(s.financier).toEqual({
+      receivedMinor: null,
       fundedPortionMinor: null,
       outstanding: { state: "NOT_YET_RECEIVABLE", amountMinor: null, basis: null },
     });

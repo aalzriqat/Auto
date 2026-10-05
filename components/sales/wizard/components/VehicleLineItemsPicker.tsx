@@ -3,7 +3,7 @@
 import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useCurrency } from "@/hooks/useCurrency";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import VehiclePicker, { type SourceVehicleData } from "./VehiclePicker";
 import type { VehicleLineItem } from "../types";
 
@@ -30,7 +30,7 @@ export function VehicleLineItemsPicker({
   onSourceVehicle,
 }: VehicleLineItemsPickerProps) {
   const { t } = useLanguage();
-  const currency = useCurrency();
+  const currency = useMoneyDisplay();
 
   const selectedIds = new Set(items.map((item) => item.vehicleId).filter(Boolean));
 

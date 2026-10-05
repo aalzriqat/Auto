@@ -4,6 +4,7 @@ import { Doc } from "@/convex/_generated/dataModel";
 import { Car } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 
 interface ReviewVehicleListCardProps {
   vehicles: Array<{ vehicle: Doc<"vehicles">; unitPrice: number }>;
@@ -13,6 +14,7 @@ interface ReviewVehicleListCardProps {
 /** Multi-vehicle counterpart to ReviewVehicleCard — used when a CASH quote covers 2+ vehicles. */
 export default function ReviewVehicleListCard({ vehicles, className }: ReviewVehicleListCardProps) {
   const { t } = useLanguage();
+  const money = useMoneyDisplay();
   const total = vehicles.reduce((sum, { unitPrice }) => sum + unitPrice, 0);
 
   return (
@@ -33,7 +35,7 @@ export default function ReviewVehicleListCard({ vehicles, className }: ReviewVeh
               <p className="text-xs text-muted-foreground">{vehicle.vin}</p>
             </div>
             <span className="font-semibold shrink-0">
-              {unitPrice.toLocaleString(undefined, { minimumFractionDigits: 2 })} {t("JOD" as any)}
+              {money.format(unitPrice)}
             </span>
           </div>
         ))}
@@ -42,7 +44,7 @@ export default function ReviewVehicleListCard({ vehicles, className }: ReviewVeh
       <div className="flex items-baseline justify-between gap-2 border-t pt-2">
         <span className="text-xs text-muted-foreground">{t("TotalVehiclesCount" as any) ?? "Total"}</span>
         <span className="text-lg font-bold">
-          {total.toLocaleString(undefined, { minimumFractionDigits: 2 })} {t("JOD" as any)}
+          {money.format(total)}
         </span>
       </div>
     </div>

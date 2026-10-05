@@ -1,16 +1,15 @@
 "use client";
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 
 /**
- * SCRUM-609 F-01 — the floating feedback trigger sits over the bottom-end
- * corner, which is where full-screen flows (the sales wizard) put their
- * primary actions. Such a flow suppresses the floating trigger while it is
- * mounted and offers its own entry point that opens the same panel.
+ * Open state of the feedback panel. The panel has no floating trigger — a
+ * floating button covered page actions (SCRUM-609 F-01, SCRUM-612) — so it is
+ * opened from the top bar (desktop) or the menu drawer (mobile).
  */
-type FeedbackWidgetState = { suppressors: number; open: boolean };
+type FeedbackWidgetState = { open: boolean };
 
-let state: FeedbackWidgetState = { suppressors: 0, open: false };
+let state: FeedbackWidgetState = { open: false };
 const listeners = new Set<() => void>();
 
 function setState(next: FeedbackWidgetState) {
@@ -37,15 +36,4 @@ export function openFeedbackPanel() {
 
 export function closeFeedbackPanel() {
   setState({ ...state, open: false });
-}
-
-/** Hides the floating trigger while `active` and the calling component is mounted. */
-export function useSuppressFeedbackTrigger(active = true) {
-  useEffect(() => {
-    if (!active) return;
-    setState({ ...state, suppressors: state.suppressors + 1 });
-    return () => {
-      setState({ ...state, suppressors: Math.max(0, state.suppressors - 1) });
-    };
-  }, [active]);
 }

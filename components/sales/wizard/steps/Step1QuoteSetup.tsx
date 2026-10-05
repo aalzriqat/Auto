@@ -29,7 +29,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useCurrency } from "@/hooks/useCurrency";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { VehicleCostBar } from "../components/VehicleCostBar";
 import { useProfitApproval } from "@/components/sales/ProfitApprovalNotice";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
@@ -64,7 +64,7 @@ export default function Step1QuoteSetup({
 }: Step1QuoteSetupProps) {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
-  const currency = useCurrency();
+  const currency = useMoneyDisplay();
 
   const isCash = paymentType === "CASH";
 
@@ -674,17 +674,29 @@ export default function Step1QuoteSetup({
           />
         )}
 
+        {/* SCRUM-641: Next is held disabled for a deleted car; say why, in the verified server wording. */}
+        {profitVerdict?.status === "VEHICLE_DELETED" && (
+          <Alert variant="destructive" className="bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400">
+            <ShieldAlert className="h-4 w-4" />
+            <AlertDescription>{t("ServerError_VEHICLE_DELETED" as any)}</AlertDescription>
+          </Alert>
+        )}
+
         {/* Approval Alert */}
         {profitVerdict && (profitVerdict.status === "REQUIRED" || profitVerdict.status === "PENDING" || profitVerdict.status === "REJECTED") && (
           <Alert variant="destructive" className="bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400">
             <ShieldAlert className="h-4 w-4" />
-            <AlertTitle>Approval Required</AlertTitle>
+            <AlertTitle>{t("WizardProfitApprovalRequiredTitle")}</AlertTitle>
             <AlertDescription className="mt-2 flex flex-col gap-3 items-start">
-              <p>At this price the profit over the list price ({currency.format(profitVerdict.margin)}) is below the minimum required profit for this vehicle ({currency.format(profitVerdict.minimumProfit)}).</p>
+              <p>
+                {t("WizardProfitApprovalRequiredBody")
+                  .replace("{margin}", currency.format(profitVerdict.margin))
+                  .replace("{minimum}", currency.format(profitVerdict.minimumProfit))}
+              </p>
 
               {profitVerdict.status === "PENDING" ? (
                 <div className="flex items-center gap-2 text-yellow-600 dark:text-yellow-400 bg-yellow-500/10 px-3 py-1.5 rounded-md text-sm font-medium">
-                  Approval request is currently pending. Please wait for a manager.
+                  {t("WizardProfitApprovalPending")}
                 </div>
               ) : (
                 <>
@@ -692,7 +704,7 @@ export default function Step1QuoteSetup({
                       salesperson may change the price or ask again. */}
                   {profitVerdict.status === "REJECTED" ? (
                     <div className="flex items-center gap-2 text-red-600 dark:text-red-400 bg-red-500/10 px-3 py-1.5 rounded-md text-sm font-medium">
-                      Your request for this profit amount was rejected. Please increase the profit or request again.
+                      {t("WizardProfitApprovalRejected")}
                     </div>
                   ) : null}
                   <Button
@@ -702,7 +714,9 @@ export default function Step1QuoteSetup({
                     onClick={handleRequestApproval}
                     disabled={isRequesting}
                   >
-                    {isRequesting ? "Requesting..." : "Request Profit Approval"}
+                    {isRequesting
+                      ? t("WizardProfitApprovalRequesting")
+                      : t("WizardProfitApprovalRequestAction")}
                   </Button>
                 </>
               )}
@@ -712,9 +726,9 @@ export default function Step1QuoteSetup({
         {profitVerdict?.status === "APPROVED" && (
           <Alert className="bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400">
             <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-            <AlertTitle>Profit Approved</AlertTitle>
+            <AlertTitle>{t("WizardProfitApprovedTitle")}</AlertTitle>
             <AlertDescription>
-              Management approved this sale price (profit over the list price: {currency.format(profitVerdict.margin)}). You may proceed.
+              {t("WizardProfitApprovedBody").replace("{margin}", currency.format(profitVerdict.margin))}
             </AlertDescription>
           </Alert>
         )}
@@ -723,7 +737,7 @@ export default function Step1QuoteSetup({
         <div className="flex justify-end pt-4 border-t">
           <Button type="submit" disabled={isBlockedByProfit} className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white shadow-md hover:shadow-lg transition-all rounded-full px-8 h-12">
             {t("Next" as any)}
-            <ArrowRight className="w-4 h-4 ms-2" />
+            <ArrowRight className="w-4 h-4 ms-2 rtl:-scale-x-100" />
           </Button>
         </div>
       </form>

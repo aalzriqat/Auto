@@ -20,6 +20,7 @@ import {
   forwardReversalKey,
   type ForwardProof,
 } from "./utils/financeCompanyForward";
+import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
 
 /**
  * SCRUM-435 - the three commands that move the customer's deposit and the
@@ -134,6 +135,8 @@ export const recordFinanceCompanyForward = mutation({
       async () => {
         // Judged inside the section: a replay returns the first result even if
         // the deal has moved on since.
+        // SCRUM-693: no payment to the finance company while the deal is being unwound.
+        await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
         if (app.status !== "CLOSED") {
           throw new ConvexError("The deal must be finalized before the payment to the finance company is recorded. A manager finalizes the deal first.");
         }
@@ -208,7 +211,8 @@ export const recordFinanceCompanyForward = mutation({
   },
 });
 
-async function reverseForward(
+/** Also the forward-return step of a deal unwind (SCRUM-693, `dealUnwind.ts`). */
+export async function reverseForward(
   ctx: MutationCtx,
   args: {
     orgId: Id<"organizations">;
@@ -286,6 +290,7 @@ export const reverseFinanceCompanyForward = mutation({
         fingerprint: JSON.stringify({ applicationId: args.applicationId, forwardId: args.forwardId, reason }),
       },
       async () => {
+        await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
         if (app.disbursedAt !== undefined) {
           throw new ConvexError("The finance company's transfer is already confirmed. If the finance company returned the money, report it as returned instead.");
         }
@@ -326,12 +331,15 @@ export const reportFinanceCompanyForwardReturned = mutation({
         actorId: auth.user._id,
         fingerprint: JSON.stringify({ applicationId: args.applicationId, forwardId: args.forwardId, reason }),
       },
-      async () =>
-        await reverseForward(
+      async () => {
+        // SCRUM-693: an unwind records the return through its own step.
+        await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
+        return await reverseForward(
           ctx,
           { orgId: args.orgId, applicationId: args.applicationId, forwardId: args.forwardId, reason, kind: "RETURNED", actorId: auth.user._id },
           app
-        )
+        );
+      }
     );
   },
 });

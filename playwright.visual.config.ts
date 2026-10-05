@@ -19,5 +19,10 @@ export default defineConfig({
   reporter: "list",
   timeout: 120_000,
   outputDir: "test-results/deal-cockpit-visual/artifacts",
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    // The deals list's whole-row link rests on a `relative` <tr>, which WebKit
+    // historically ignored; prove the hit target there too (SCRUM-694 review M3).
+    { name: "webkit", testMatch: /deals-list\.visual\.spec\.ts/, use: { ...devices["Desktop Safari"] } },
+  ],
 });

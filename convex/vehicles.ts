@@ -1432,6 +1432,12 @@ export const update = mutation({
       patch.updatedAt = Date.now();
       await ctx.db.patch(args.vehicleId, patch);
 
+      // SCRUM-700 N1: a status written here must still honour a live
+      // reservation or deposit hold, or a held car is advertised AVAILABLE.
+      if (patch.status !== undefined) {
+        await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
+      }
+
       if (needsAcquisitionPosting) {
         await postVehicleAcquisitionIfOwned(ctx, {
           orgId: args.orgId,
@@ -1455,8 +1461,9 @@ export const update = mutation({
         { link: `/${args.orgId}/vehicles?highlightId=${args.vehicleId}` }
       );
 
-      if (patch.status === "AVAILABLE" && vehicle.status !== "AVAILABLE") {
-        const updatedVehicle = { ...vehicle, ...patch } as typeof vehicle;
+      const finalVehicle = patch.status === "AVAILABLE" ? await ctx.db.get(args.vehicleId) : null;
+      if (finalVehicle?.status === "AVAILABLE" && vehicle.status !== "AVAILABLE") {
+        const updatedVehicle = finalVehicle;
         await maybeAutoPostToInstagram(ctx, {
           orgId: args.orgId,
           vehicle: updatedVehicle,
@@ -2299,6 +2306,7 @@ export const createReservation = mutation({
       // customer being reserved for is the operation's own participant — it
       // proves nothing by itself, and is used only to refuse.
       actingCustomerId: args.customerId,
+      vehicle: currentVehicle,
     });
 
     const reservationId = await ctx.db.insert("vehicleReservations", {
@@ -2365,6 +2373,7 @@ export const createReservation = mutation({
         quoteId: args.dealQuoteId,
         depositId: args.dealDepositId,
       },
+      vehicle: currentVehicle,
     });
 
     await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);

@@ -475,6 +475,36 @@ export const setDisputed = mutation({
 });
 
 /**
+ * The read-only refusal half of `cancelSupplierReceivablesForSale`, shared with the unwind status
+ * preview (SCRUM-693 PR-B F2) so both ask one question. Returns the sale's claims for the caller.
+ *
+ * Keyed on receipts actually recorded, not on `amountReceived`. A claim can
+ * open with part of it already received because the customer's reservation
+ * deposit was applied to the settlement — that is the dealership holding its
+ * own margin in customer cash, not the supplier having paid, and cancelling
+ * reverses that deposit application anyway. Refusing on it would have made
+ * any direct-settled sale with a settlement-applied deposit permanently
+ * uncancellable.
+ */
+export async function assertNoSupplierReceiptsForSale(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  saleId: Id<"sales">
+): Promise<Doc<"vehicleSupplierReceivables">[]> {
+  const rows = await ctx.db
+    .query("vehicleSupplierReceivables")
+    .withIndex("by_sale", (q) => q.eq("saleId", saleId))
+    .collect();
+  const owned = rows.filter((row) => row.orgId === orgId);
+  if (owned.some((row) => (row.receiptSeq ?? 0) > 0)) {
+    throw new ConvexError(
+      "Cannot automatically cancel a sale after the supplier has paid against its commission claim. Use a manual accounting correction."
+    );
+  }
+  return owned;
+}
+
+/**
  * Cancels the claims belonging to a sale being cancelled.
  *
  * Refuses when money has already arrived, for the same reason the payable side
@@ -490,24 +520,7 @@ export async function cancelSupplierReceivablesForSale(
     now: number;
   }
 ): Promise<void> {
-  const rows = await ctx.db
-    .query("vehicleSupplierReceivables")
-    .withIndex("by_sale", (q) => q.eq("saleId", args.saleId))
-    .collect();
-  const owned = rows.filter((row) => row.orgId === args.orgId);
-
-  // Keyed on receipts actually recorded, not on `amountReceived`. A claim can
-  // open with part of it already received because the customer's reservation
-  // deposit was applied to the settlement — that is the dealership holding its
-  // own margin in customer cash, not the supplier having paid, and cancelling
-  // reverses that deposit application anyway. Refusing on it would have made
-  // any direct-settled sale with a settlement-applied deposit permanently
-  // uncancellable.
-  if (owned.some((row) => (row.receiptSeq ?? 0) > 0)) {
-    throw new ConvexError(
-      "Cannot automatically cancel a sale after the supplier has paid against its commission claim. Use a manual accounting correction."
-    );
-  }
+  const owned = await assertNoSupplierReceiptsForSale(ctx, args.orgId, args.saleId);
 
   for (const row of owned) {
     if (row.status === "CANCELLED") continue;

@@ -2,6 +2,7 @@ import { ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { Doc, Id } from "../_generated/dataModel";
 import { throwAppError, AppErrorCode } from "./errors";
+import { assertVehicleNotDeleted } from "./vehicleLiveness";
 import { requireActorPermission } from "./tenancy";
 import { PERMISSIONS } from "./permissions";
 import { assertDifferentActors } from "./financialGuards";
@@ -116,6 +117,19 @@ export function resolveHoldTargetStatus(
 }
 
 /**
+ * SCRUM-641 (D-35): refuses to commit deposit money ONTO a soft-deleted car. A missing or foreign
+ * car is left to the caller's own not-found. Money moving OFF a deleted car never calls this.
+ */
+export async function assertDepositTargetNotDeleted(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<void> {
+  const target = await ctx.db.get(vehicleId);
+  if (target && target.orgId === orgId) assertVehicleNotDeleted(target);
+}
+
+/**
  * Puts a soft hold on a vehicle when a deposit is recorded. Reserving an
  * already-RESERVED vehicle is a no-op — multiple parallel deposits/quotes on
  * the same vehicle record are allowed (the same car can be sourced again from
@@ -123,9 +137,11 @@ export function resolveHoldTargetStatus(
  */
 export async function holdVehicleForDeposit(
   ctx: MutationCtx,
-  vehicleId: Id<"vehicles">
+  vehicleId: Id<"vehicles">,
+  /** The car document the caller already loaded in this transaction; read here only when absent. */
+  loaded?: Doc<"vehicles">
 ): Promise<void> {
-  const vehicle = await ctx.db.get(vehicleId);
+  const vehicle = loaded ?? (await ctx.db.get(vehicleId));
   if (!vehicle) return;
   if (vehicle.status === "SOLD") {
     throwAppError(AppErrorCode.VEHICLE_ALREADY_SOLD, "This vehicle has already been sold.");
@@ -133,6 +149,8 @@ export async function holdVehicleForDeposit(
   if (vehicle.status === "ARCHIVED") {
     throwAppError(AppErrorCode.VEHICLE_ARCHIVED, "Cannot place a deposit on an archived vehicle.");
   }
+  // SCRUM-641 (D-35): zero-read liveness guard on the doc already loaded; see vehicleLiveness.ts.
+  assertVehicleNotDeleted(vehicle);
   if (isHoldableStatus(vehicle.status)) {
     await ctx.db.patch(vehicleId, {
       status: "RESERVED" as const,
@@ -199,7 +217,7 @@ export async function getActiveDepositHolds(
 
 /** Exported for saleCancellation.ts's trade-in-reversal safety guard, in addition to internal use by syncVehicleHoldStatus below. */
 export async function hasActiveDepositHold(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   vehicleId: Id<"vehicles">
 ): Promise<boolean> {
   // One definition of "who is holding this car", shared with
@@ -215,7 +233,7 @@ export async function hasActiveDepositHold(
 
 /** Exported for saleCancellation.ts's trade-in-reversal safety guard, in addition to internal use by syncVehicleHoldStatus below. */
 export async function hasActiveReservationHold(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   args: { orgId: Id<"organizations">; vehicleId: Id<"vehicles"> }
 ): Promise<boolean> {
   const now = Date.now();

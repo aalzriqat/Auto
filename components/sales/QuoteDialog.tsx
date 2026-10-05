@@ -38,7 +38,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckCircle2 } from "lucide-react";
 
 import { quoteSchema, QuoteFormValues, QuoteDialogProps } from "./quote.schema";
-import { getErrorMessage } from "@/lib/errors";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
 
 
@@ -259,7 +259,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
       toast.success(t("QuoteSavedSuccess" as any));
       onOpenChange(false);
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setIsSubmitting(false);
     }
