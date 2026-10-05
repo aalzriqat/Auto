@@ -143,6 +143,7 @@ import type { PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 // layer and the view stays renderable against fixtures.
 import { CreditDecisionDialog, type CreditDecision } from "./CreditDecisionDialog";
 import { CancelApplicationDialog, type CancelApplicationValues } from "./CancelApplicationDialog";
+import { UnwindDealDialog, type UnwindFinishValues, type UnwindStatusView } from "./UnwindDealDialog";
 import {
   SettlementRouteControl,
   type DirectRouteRefusal,
@@ -1060,6 +1061,10 @@ export function DealCockpit({
   const reopenDealCustody = useMutation(api.financeDealCosts.reopenDealCustody);
   const updateStatus = useMutation(api.applications.updateStatus);
   const cancelApplication = useMutation(api.applications.cancelApplication);
+  const startDealUnwind = useMutation(api.dealUnwind.startDealUnwind);
+  const recordDealUnwindForwardReturn = useMutation(api.dealUnwind.recordDealUnwindForwardReturn);
+  const finishDealUnwind = useMutation(api.dealUnwind.finishDealUnwind);
+  const abandonDealUnwind = useMutation(api.dealUnwind.abandonDealUnwind);
   const confirmDisbursement = useMutation(api.applications.confirmDisbursement);
   const recordFinanceCompanyForward = useMutation(api.financeCompanyForward.recordFinanceCompanyForward);
   const reverseFinanceCompanyForward = useMutation(api.financeCompanyForward.reverseFinanceCompanyForward);
@@ -1114,7 +1119,51 @@ export function DealCockpit({
   const [cancelling, setCancelling] = useState(false);
   const [cancelSubmitting, setCancelSubmitting] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
-  const [confirmingDisbursement, setConfirmingDisbursement] = useState(false);
+  const unwindStatus = useQuery(
+    api.dealUnwind.unwindStatus,
+    app?.status === "CLOSED" ? { orgId, applicationId } : "skip"
+  );
+  // A closed deal's controls that an active unwind bars stay off until its status has been read.
+  const unwindBars = app?.status === "CLOSED" && (unwindStatus === undefined || unwindStatus.status === "ACTIVE");
+  const [unwindOpen, setUnwindOpen] = useState(false);
+  const [unwindSubmitting, setUnwindSubmitting] = useState(false);
+  const [unwindError, setUnwindError] = useState<string | null>(null);
+  const unwindKeyRef = useRef<string | null>(null);
+  // The server's answer: a live unwind, or a paid deal whose start it would accept. Otherwise the
+  // refusal is shown as a hint, so a paid deal is never left without an explanation.
+  const unwindOffered =
+    unwindStatus != null &&
+    app?.status === "CLOSED" &&
+    (unwindStatus.status === "ACTIVE" || (!!app.disbursedAt && unwindStatus.eligibility.canStart)) &&
+    // A viewer who may do none of it gets no button rather than a dialog of dead controls.
+    Object.values(unwindStatus.eligibility).some(Boolean);
+  const unwindHint =
+    unwindStatus != null && !unwindOffered && app?.status === "CLOSED" && !!app.disbursedAt
+      ? unwindStatus.refusals.start
+      : undefined;  const runUnwind = async (
+    step: string,
+    success: string,
+    call: (idempotencyKey: string) => Promise<unknown>
+  ): Promise<boolean> => {
+    setUnwindSubmitting(true);
+    setUnwindError(null);
+    try {
+      unwindKeyRef.current ??= `unwind-${step}:${applicationId}:${crypto.randomUUID()}`;
+      await call(unwindKeyRef.current);
+      unwindKeyRef.current = null;
+      toast.success(t(success));
+    } catch (error) {
+      // A refusal is final for this attempt; a lost response keeps the key so a retry replays.
+      if (isConvexError(error)) unwindKeyRef.current = null;
+      const message = getLocalizedErrorMessage(error, t);
+      setUnwindError(message);
+      toast.error(message);
+      return false;
+    } finally {
+      setUnwindSubmitting(false);
+    }
+    return true;
+  };  const [confirmingDisbursement, setConfirmingDisbursement] = useState(false);
   const [recordingForward, setRecordingForward] = useState(false);
   const [forwardSubmitting, setForwardSubmitting] = useState(false);
   const [forwardCorrection, setForwardCorrection] = useState<ForwardCorrectionKind | null>(null);
@@ -1812,7 +1861,8 @@ export function DealCockpit({
     app != null &&
     app.status !== "CANCELLED" &&
     (app.status === "CLOSED"
-      ? canCancelClosedDeal && deal?.forward?.mayCancelFinalized === true
+      ? // A recorded supplier payment bars bare cancellation just as the company's own payment does.
+        canCancelClosedDeal && deal?.forward?.mayCancelFinalized === true && !app.disbursedAt && !app.supplierDisbursementStatus
       : canCreateApplication && (app.status === "APPROVED" ? canApproveApplication : true));
   // The caller holds the cancel authority but the server still refuses: with no
   // disbursement authority the missing piece is a manager; with it, only the
@@ -1821,6 +1871,8 @@ export function DealCockpit({
     app?.status === "CLOSED" &&
     deal?.forward?.planV2 === true &&
     deal.forward.mayCancelFinalized !== true &&
+    !app.disbursedAt &&
+    !app.supplierDisbursementStatus &&
     canCancelClosedDeal
       ? canConfirmFinanceDisbursement
         ? "FORWARD"
@@ -2757,6 +2809,7 @@ export function DealCockpit({
           plannedCustodyWithheld: dealCosts?.plannedCustodyWithheld ?? false,
           recommended: dealCosts?.recommendedCustody ?? null,
           openPeriodToday: dealCosts?.custodyPostsNow,
+          reopenLocked: unwindBars,
           dealStopped:
             // The issuing commands' own predicate, when the read has it;
             // the local status check stays as the fallback while it loads.
@@ -2852,7 +2905,7 @@ export function DealCockpit({
                 } catch (error) {
                   // "Disbursement funds already confirmed received" is the one
                   // refusal an operator can do nothing about here; it says so.
-                  const message = getErrorMessage(error);
+                  const message = getLocalizedErrorMessage(error, t);
                   setCancelError(message);
                   toast.error(message);
                 } finally {
@@ -2862,8 +2915,60 @@ export function DealCockpit({
             }
           : undefined
       }
+      unwind={
+        app?.status === "CLOSED" && unwindStatus
+          ? {
+                status: unwindStatus as UnwindStatusView,
+                offered: unwindOffered,
+                hint: unwindHint ? { code: unwindHint.code, message: unwindHint.message } : undefined,
+                open: unwindOpen,
+                submitting: unwindSubmitting,
+                error: unwindError,
+                formatMinor: (minor: number) => custodyMoney(minor, economicsCurrencyCode),
+                notBefore: app.disbursedAt,
+                onOpenChange: (next: boolean) => {
+                  setUnwindOpen(next);
+                  if (next) setUnwindError(null);
+                  // A closed dialog ends its attempt: its key is retired so a later one starts clean.
+                  else unwindKeyRef.current = null;
+                },
+                onStart: async (reason: string) => {
+                  await runUnwind("start", "UnwindStartedSuccess", (idempotencyKey) =>
+                    startDealUnwind({ orgId, applicationId, reason, idempotencyKey })
+                  );
+                },
+                onForwardReturn: async (values: { returnedAt: number; reference: string }) => {
+                  await runUnwind("forward", "UnwindForwardRecordedSuccess", (idempotencyKey) =>
+                    recordDealUnwindForwardReturn({
+                      orgId,
+                      unwindId: unwindStatus.unwindId!,
+                      returnedAt: values.returnedAt,
+                      reference: values.reference,
+                      idempotencyKey,
+                    })
+                  );
+                },
+                onFinish: async (values: UnwindFinishValues) => {
+                  const done = await runUnwind("finish", "UnwindFinishedSuccess", (idempotencyKey) =>
+                    finishDealUnwind({ orgId, unwindId: unwindStatus.unwindId!, ...values, idempotencyKey })
+                  );
+                  if (done) setUnwindOpen(false);
+                },
+                onAbandon: async (reason: string) => {
+                  const done = await runUnwind("abandon", "UnwindAbandonedSuccess", (idempotencyKey) =>
+                    abandonDealUnwind({ orgId, unwindId: unwindStatus.unwindId!, reason, idempotencyKey })
+                  );
+                  if (done) setUnwindOpen(false);
+                },
+              }
+          : undefined
+      }
       forwardCorrection={
-        deal?.forward?.planV2 === true && deal.forward.mayRecord === true && deal.forward.onBooksForwardId
+        deal?.forward?.planV2 === true &&
+        deal.forward.mayRecord === true &&
+        deal.forward.onBooksForwardId &&
+        // A live unwind owns the forward payment: the server refuses either correction meanwhile.
+        !unwindBars
           ? {
               canVoid: deal.forward.transferConfirmed !== true,
               open: forwardCorrection,
@@ -4581,6 +4686,7 @@ export function DealCockpitView({
   creditDecision,
   cancel,
   cancelHint,
+  unwind,
   forwardCorrection,
   chequeReturn,
   settlementRoute,
@@ -4648,6 +4754,26 @@ export function DealCockpitView({
    * finance company is what blocks it (SCRUM-413 D-37) - never blame permissions.
    */
   cancelHint?: "MANAGER" | "FORWARD";
+  /**
+   * SCRUM-693 / SCRUM-691: the paid-deal reversal. `offered` is the server's answer (a live
+   * unwind, or a paid deal whose start the server would accept). Otherwise `hint` carries the
+   * server's refusal so a paid deal is never left without an explanation.
+   */
+  unwind?: {
+    status: UnwindStatusView;
+    offered: boolean;
+    hint?: { code: string; message: string };
+    open: boolean;
+    submitting: boolean;
+    error: string | null;
+    formatMinor: (minor: number) => string;
+    notBefore?: number;
+    onOpenChange: (open: boolean) => void;
+    onStart: (reason: string) => void | Promise<void>;
+    onForwardReturn: (values: { returnedAt: number; reference: string }) => void | Promise<void>;
+    onFinish: (values: UnwindFinishValues) => void | Promise<void>;
+    onAbandon: (reason: string) => void | Promise<void>;
+  };
   /**
    * SCRUM-435: void or report-returned for the payment on the books. Present only
    * for a caller the server would let do it, and only while a payment is on the
@@ -6590,12 +6716,53 @@ export function DealCockpitView({
             {t("CancelApplication")}
           </Button>
         )}
+        {unwind?.offered && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn("h-9 text-destructive hover:text-destructive", !(forwardCorrection || chequeReturn) && "ms-auto")}
+            data-testid="deal-unwind-deal"
+            onClick={() => unwind.onOpenChange(true)}
+          >
+            <Ban className="h-4 w-4" aria-hidden />
+            {t(unwind.status.status === "ACTIVE" ? "UnwindDealResume" : "UnwindDealAction")}
+          </Button>
+        )}
         {!cancel && cancelHint && (
           <span className="ms-auto text-xs text-muted-foreground" data-testid="deal-cancel-manager-hint">
             {t(cancelHint === "FORWARD" ? "CancelWaitsForForward" : "ManagerCancelsFinalizedDeal")}
           </span>
         )}
       </div>
+
+      {unwind?.offered && (
+        <p
+          className="rounded-md border border-amber-500/40 border-s-4 border-s-amber-500 bg-amber-500/5 p-3 text-sm"
+          role="status"
+          data-testid="deal-unwind-banner"
+        >
+          {t(unwind.status.status === "ACTIVE" ? "UnwindInProgressBadge" : "UnwindPaidDealBanner")}
+        </p>
+      )}
+      {unwind && !unwind.offered && unwind.status.status === "ACTIVE" && (
+        // A viewer who may act on none of it still sees that the deal is being unwound.
+        <p
+          className="rounded-md border border-amber-500/40 border-s-4 border-s-amber-500 bg-amber-500/5 p-3 text-sm"
+          role="status"
+          data-testid="deal-unwind-banner"
+        >
+          {t("UnwindInProgressBadge")}
+        </p>
+      )}
+      {unwind && !unwind.offered && unwind.hint && (
+        <p className="text-sm text-muted-foreground" data-testid="deal-unwind-hint">
+          {(() => {
+            const key = `ServerError_${unwind.hint.code}`;
+            const text = t(key);
+            return text === key ? unwind.hint.message : text;
+          })()}
+        </p>
+      )}
 
       {identityStrip("desktop")}
 
@@ -7113,6 +7280,22 @@ export function DealCockpitView({
             if (!next) chequeReturn.onClose();
           }}
           onConfirm={chequeReturn.onConfirm}
+        />
+      )}
+      {unwind?.offered && (
+        <UnwindDealDialog
+          open={unwind.open}
+          status={unwind.status}
+          submitting={unwind.submitting}
+          error={unwind.error}
+          formatMinor={unwind.formatMinor}
+          notBefore={unwind.notBefore}
+          t={t}
+          onOpenChange={unwind.onOpenChange}
+          onStart={unwind.onStart}
+          onForwardReturn={unwind.onForwardReturn}
+          onFinish={unwind.onFinish}
+          onAbandon={unwind.onAbandon}
         />
       )}
       {cancel && (
