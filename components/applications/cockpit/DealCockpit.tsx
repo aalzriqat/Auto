@@ -427,6 +427,8 @@ const PROFIT_BLOCKED_REASON: Record<
   | "ExpensesMixedDenomination"
   /** A cost line's amount is not a safe non-negative integer, or the lines overflow: the cost operand is not a figure. */
   | "ExpensesUnreadable"
+  /** F-PNTR-1: which recorded cost is the finance company's execution fee is unclear, or the frozen total disagrees with it. */
+  | "ExecutionFeeUnclassified"
   | "CorruptInput"
   | "DealCancelled"
   /** CASH only: `dealershipMargin === null`, which is UNKNOWN and never zero. */
@@ -444,6 +446,7 @@ const PROFIT_BLOCKED_REASON: Record<
   PreparationExpensesUnreadable: "ProfitPreparationUnreadable",
   ExpensesMixedDenomination: "ProfitExpensesMixedDenomination",
   ExpensesUnreadable: "ProfitExpensesUnreadable",
+  ExecutionFeeUnclassified: "ProfitExecutionFeeUnclassified",
   CorruptInput: "ProfitInputCorrupt",
   DealCancelled: "ProfitDealCancelled",
   UnknownMargin: "ProfitUnknownMargin",
@@ -1019,6 +1022,9 @@ export function DealCockpit({
   const overview = useQuery(api.dealOverview.financedDealOverview, deal ? { orgId, applicationId } : "skip");
   const recordDealFee = useMutation(api.financeDealCosts.recordDealFee);
   const recordTemplateFeeActual = useMutation(api.financeDealCosts.recordTemplateFeeActual);
+  const recordExecutionFeeActual = useMutation(api.financeDealCosts.recordExecutionFeeActual);
+  const bindExecutionFeeLine = useMutation(api.financeDealCosts.bindExecutionFeeLine);
+  const unbindExecutionFeeLine = useMutation(api.financeDealCosts.unbindExecutionFeeLine);
   const recordActualFeeAmount = useMutation(api.financeDealCosts.recordActualFeeAmount);
   const recordDirectFeePayment = useMutation(api.financeDealCosts.recordDirectFeePayment);
   const voidDealFee = useMutation(api.financeDealCosts.voidDealFee);
@@ -1399,6 +1405,17 @@ export function DealCockpit({
                       adoption: dealCosts.expected.adoption,
                     }
                   : null,
+                // SCRUM-690: the finance company's execution fee as one
+                // position — the server's verdict, passed through.
+                executionFee: dealCosts.executionFee
+                  ? {
+                      expectedMinor: dealCosts.executionFee.expectedMinor,
+                      boundFeeId: dealCosts.executionFee.boundFeeId,
+                      unrecorded: dealCosts.executionFee.unrecorded,
+                      withheld: dealCosts.executionFee.withheld,
+                      eligibleFeeIds: dealCosts.executionFee.eligibleFeeIds,
+                    }
+                  : null,
               } satisfies HandoverCostsData)
             : undefined,
           // The currency a new line is recorded in, as the SERVER resolves it
@@ -1529,6 +1546,56 @@ export function DealCockpit({
           },
           onAbandonTemplateActual: (row: ExpectedHandoverRow) => {
             commandId.retire(`record-template-fee:${applicationId}:${row.templateIndex}`);
+          },
+          /**
+           * SCRUM-690: record the execution fee's actual and link it in one
+           * command. The same outcome discipline as the template actual; the
+           * server keeps at most one linked line per deal, so a replay, or a
+           * second attempt after a lost response, lands at most one.
+           */
+          onRecordExecutionFee: async (values: ActualHandoverCost) => {
+            const intent = `record-execution-fee:${applicationId}`;
+            try {
+              await recordExecutionFeeActual({
+                orgId,
+                applicationId,
+                actualAmountMinor: values.actualAmountMinor,
+                expectedCurrency: values.currency,
+                // Out of custody cash, like every handover cost the UI records
+                // (owner ruling 2026-09-28, SCRUM-439).
+                paidBy: "EMPLOYEE",
+                paidAt: values.paidAt,
+                receiptReference: values.receiptReference,
+                idempotencyKey: commandId.for(intent),
+              });
+              commandId.retire(intent);
+              toast.success(t("ExecutionFeeRecorded"));
+            } catch (error) {
+              const outcome = isConvexError(error) ? "REFUSED" : "UNKNOWN";
+              if (outcome === "REFUSED") commandId.retire(intent);
+              throw new HandoverCostAttemptError(getErrorMessage(error), outcome);
+            }
+          },
+          onAbandonExecutionFee: () => {
+            commandId.retire(`record-execution-fee:${applicationId}`);
+          },
+          // Linking and unlinking set a marker on one named line: a replay
+          // converges, so neither carries an idempotency key.
+          onLinkExecutionFee: async (feeId: string) => {
+            try {
+              await bindExecutionFeeLine({ orgId, feeId: feeId as Id<"financeDealFees"> });
+              toast.success(t("ExecutionFeeLinked"));
+            } catch (error) {
+              throw new Error(getErrorMessage(error));
+            }
+          },
+          onUnlinkExecutionFee: async (feeId: string, reason: string) => {
+            try {
+              await unbindExecutionFeeLine({ orgId, feeId: feeId as Id<"financeDealFees">, reason });
+              toast.success(t("ExecutionFeeUnlinked"));
+            } catch (error) {
+              throw new Error(getErrorMessage(error));
+            }
           },
           // SCRUM-443: the dealership's own payment of a handover cost. Only a
           // caller who may confirm a finance disbursement is offered it (R1);

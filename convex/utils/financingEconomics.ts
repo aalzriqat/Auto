@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
+import type { ExecutionFeeHeadline } from "./executionFeePosition";
 import { toMinorSameCurrencyOrUndefined, assertFiniteNumber, assertMajorAmountRepresentable } from "./money";
 import {
   isRequestedFinancingTermValid,
@@ -2107,9 +2108,50 @@ export type ManagementProfit =
         | "ExpensesMixedDenomination"
         /** A live cost line carries an amount that is not a safe non-negative integer, or the lines overflow: the expense operand is not a figure. */
         | "ExpensesUnreadable"
+        /**
+         * F-PNTR-1: the deal expects a finance-company execution fee, but which
+         * recorded cost IS that fee is ambiguous, or the expected aggregate
+         * disagrees with the fee. Any expense basis would be a guess.
+         */
+        | "ExecutionFeeUnclassified"
         | "CorruptInput"
         | "DealCancelled";
     };
+
+/**
+ * The expense operand of an unsettled financed deal's management profit.
+ *
+ * Legacy (no execution-fee position): the larger of expected and recorded, as
+ * before. With a position (F-PNTR-1, SCRUM-690 c22119 Q5): recorded actuals
+ * PLUS the execution fee not yet recorded — `max()` hid a recorded 550 of other
+ * costs behind an expected 700 fee, understating the estimate by 550. A bound
+ * actual (including an explicit 0) retires the expectation, so it adds nothing.
+ */
+function managementExpenseBasis(args: {
+  actualExpensesMinor: number;
+  expectedExpensesMinor?: number;
+  fullySettled: boolean;
+  executionFee?: ExecutionFeeHeadline | null;
+}): { basisMinor: number; forecast: boolean } | { reason: "ExecutionFeeUnclassified" | "CorruptInput" } {
+  if (args.expectedExpensesMinor !== undefined && !isMinorAmount(args.expectedExpensesMinor)) {
+    return { reason: "CorruptInput" };
+  }
+  if (args.fullySettled) return { basisMinor: args.actualExpensesMinor, forecast: false };
+  const fee = args.executionFee;
+  if (fee) {
+    if ("withheld" in fee) return { reason: "ExecutionFeeUnclassified" };
+    if (!isMinorAmount(fee.unrecordedMinor)) return { reason: "CorruptInput" };
+    return {
+      basisMinor: args.actualExpensesMinor + fee.unrecordedMinor,
+      forecast: fee.unrecordedMinor > 0,
+    };
+  }
+  const expected = args.expectedExpensesMinor ?? 0;
+  return {
+    basisMinor: Math.max(expected, args.actualExpensesMinor),
+    forecast: expected > args.actualExpensesMinor,
+  };
+}
 
 /**
  * The lines behind a CASH deal's profit.
@@ -2256,6 +2298,8 @@ export function deriveManagementProfit(args: {
   customerDirectToDealerMinor?: number;
   actualExpensesMinor: number;
   expectedExpensesMinor?: number;
+  /** F-PNTR-1: the execution-fee position, when the deal expects one. See `managementExpenseBasis`. */
+  executionFee?: ExecutionFeeHeadline | null;
   currency: string;
   fullySettled: boolean;
 }): ManagementProfit {
@@ -2276,12 +2320,9 @@ export function deriveManagementProfit(args: {
   // the row in hand, and the failure mode of assuming it is an overstated profit.
   if (args.dealerContributionMinor === undefined)
     return { available: false, reason: "NoDealerContribution" };
-  if (args.expectedExpensesMinor !== undefined && !isMinorAmount(args.expectedExpensesMinor)) {
-    return { available: false, reason: "CorruptInput" };
-  }
-  const expenseBasisMinor = !args.fullySettled
-    ? Math.max(args.expectedExpensesMinor ?? 0, args.actualExpensesMinor)
-    : args.actualExpensesMinor;
+  const basis = managementExpenseBasis(args);
+  if ("reason" in basis) return { available: false, reason: basis.reason };
+  const expenseBasisMinor = basis.basisMinor;
   // FAIL CLOSED on EVERY operand, the same rule as the STOCK sibling below.
   // `computeDealerProceeds` asserts each input; this once checked only for
   // negatives, so NaN, Infinity, a fraction or an unsafe integer written
@@ -2311,10 +2352,7 @@ export function deriveManagementProfit(args: {
     { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: args.supplierSettlementMinor },
     { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
     {
-      key:
-        !args.fullySettled && (args.expectedExpensesMinor ?? 0) > args.actualExpensesMinor
-          ? "FORECAST_EXPENSES"
-          : "ACTUAL_EXPENSES",
+      key: basis.forecast ? "FORECAST_EXPENSES" : "ACTUAL_EXPENSES",
       sign: -1,
       amountMinor: expenseBasisMinor,
     },
@@ -2364,6 +2402,8 @@ export function deriveStockManagementProfit(args: {
   customerDirectToDealerMinor?: number;
   actualExpensesMinor: number;
   expectedExpensesMinor?: number;
+  /** F-PNTR-1 — see `deriveManagementProfit`. */
+  executionFee?: ExecutionFeeHeadline | null;
   currency: string;
   fullySettled: boolean;
 }): ManagementProfit {
@@ -2373,12 +2413,9 @@ export function deriveStockManagementProfit(args: {
   if (args.vehicleCostMinor === undefined) return { available: false, reason: "NoVehicleCost" };
   if (args.dealerContributionMinor === undefined)
     return { available: false, reason: "NoDealerContribution" };
-  if (args.expectedExpensesMinor !== undefined && !isMinorAmount(args.expectedExpensesMinor)) {
-    return { available: false, reason: "CorruptInput" };
-  }
-  const expenseBasisMinor = !args.fullySettled
-    ? Math.max(args.expectedExpensesMinor ?? 0, args.actualExpensesMinor)
-    : args.actualExpensesMinor;
+  const basis = managementExpenseBasis(args);
+  if ("reason" in basis) return { available: false, reason: basis.reason };
+  const expenseBasisMinor = basis.basisMinor;
   // FAIL CLOSED on every operand, the approved amount included. `v.number()`
   // admits NaN, Infinity, fractions and unsafe integers, and a negative minor
   // amount is not a smaller cost — it is a corrupt row. None of them may reach
@@ -2399,10 +2436,7 @@ export function deriveStockManagementProfit(args: {
     { key: "VEHICLE_COST", sign: -1, amountMinor: args.vehicleCostMinor },
     { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
     {
-      key:
-        !args.fullySettled && (args.expectedExpensesMinor ?? 0) > args.actualExpensesMinor
-          ? "FORECAST_EXPENSES"
-          : "ACTUAL_EXPENSES",
+      key: basis.forecast ? "FORECAST_EXPENSES" : "ACTUAL_EXPENSES",
       sign: -1,
       amountMinor: expenseBasisMinor,
     },

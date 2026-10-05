@@ -3322,6 +3322,20 @@ export default defineSchema({
      * history; it never satisfies a configured template row.
      */
     templateIndex: v.optional(v.number()),
+    /**
+     * SCRUM-690 F-PNTR-1. Set when this line IS the actual of the deal's
+     * finance-company execution fee (`adminFees` on the frozen snapshot) — an
+     * explicit, audited link by line, never inferred from fee type and payer.
+     * At most one live line per deal carries it (proven by the binding
+     * mutations over the deal's live lines); voiding or unbinding the line
+     * makes the fee unrecorded again. See `utils/executionFeePosition.ts`.
+     */
+    executionFeeBinding: v.optional(
+      v.object({
+        boundAt: v.number(),
+        boundBy: v.id("users"),
+      })
+    ),
 
     /**
      * Set only when a person has confirmed the actual against its evidence.

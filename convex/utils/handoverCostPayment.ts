@@ -87,7 +87,22 @@ export type HandoverPaymentLine = Pick<
   | "custodyId"
   | "custodyPosted"
   | "directPayment"
+  | "executionFeeBinding"
 >;
+
+/**
+ * Whether the line's type puts it under this invariant: a handover fee type,
+ * or the finance company's execution fee once a line is BOUND as its actual
+ * (SCRUM-690 F-PNTR-1, c22119 Q1) — a separate dealership payment to the
+ * finance company, paid from custody or directly like any handover cost. An
+ * unbound finance-company fee keeps its old standing.
+ */
+function isHandoverFeeType(line: HandoverPaymentLine): boolean {
+  return (
+    HANDOVER_LINE_FEE_TYPES.has(line.feeType) ||
+    (line.feeType === "FINANCE_COMPANY_FEE" && line.executionFeeBinding !== undefined)
+  );
+}
 
 /**
  * Whether the line is a handover cost the dealership bears and this invariant
@@ -101,7 +116,7 @@ export type HandoverPaymentLine = Pick<
 export function isHandoverLine(line: HandoverPaymentLine): boolean {
   return (
     line.voidedAt === undefined &&
-    HANDOVER_LINE_FEE_TYPES.has(line.feeType) &&
+    isHandoverFeeType(line) &&
     (line.paidBy === "DEALER" || line.paidBy === "EMPLOYEE") &&
     line.deductedFromSettlement !== true &&
     CUSTODY_POSTABLE_TREATMENTS.has(line.accountingTreatment)
@@ -132,7 +147,7 @@ const PLAN_SCOPE: HandoverScope = { planRecognisesDeductions: true };
  */
 function unsupportedSourceState(line: HandoverPaymentLine, scope: HandoverScope): "UNSUPPORTED_TREATMENT" | "DEDUCTION_NOT_RECOGNISED" | null {
   if (line.voidedAt !== undefined) return null;
-  if (!HANDOVER_LINE_FEE_TYPES.has(line.feeType)) return null;
+  if (!isHandoverFeeType(line)) return null;
   if (line.paidBy !== "DEALER" && line.paidBy !== "EMPLOYEE") return null;
   const actual = line.actualAmountMinor;
   if (actual === undefined || !isMinorAmount(actual) || actual <= 0) return null;

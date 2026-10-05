@@ -556,6 +556,7 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
     "migrateLegacyCustodyToLedger",
     "reconcileDealCustody",
     "recordDirectFeePayment",
+    "recordExecutionFeeActual",
   ],
   "./paymentIntents": ["create", "markSettled"],
   "./payroll": ["recordAdvance", "recoverAdvance"],
@@ -639,8 +640,8 @@ describe("SCRUM-57 — classification ratchet", () => {
     // economic: true, method/date/reference/actual in its fingerprint.
     // 45 -> 48 by SCRUM-435: the three finance-company forward commands.
     // 48 -> 49 by SCRUM-239: `applications.returnFinanceDisbursementCheque`.
-    // 49 -> 53 by SCRUM-693: the four `dealUnwind` steps (ruling B folded the refund into finish).
-    expect(checked).toBe(53);
+    // 49 -> 54: SCRUM-693's four `dealUnwind` steps (ruling B folded the refund into finish) + SCRUM-690's `financeDealCosts.recordExecutionFeeActual`.
+    expect(checked).toBe(54);
   });
 
   /**
@@ -705,10 +706,10 @@ describe("SCRUM-57 — classification ratchet", () => {
     // 42 -> 44 / 43 -> 45: SCRUM-444's `depositRequests.request` and `.confirm`.
     // 44 -> 45 / 45 -> 46: SCRUM-443's `financeDealCosts.recordDirectFeePayment`.
     // 48 -> 49 by SCRUM-239: `applications.returnFinanceDisbursementCheque`.
-    // 49 -> 53 by SCRUM-693: the four `dealUnwind` steps (ruling B folded the refund into finish).
-    expect(economicInSource.size).toBe(53);
+    // 49 -> 54: SCRUM-693's four `dealUnwind` steps (ruling B folded the refund into finish) + SCRUM-690's `financeDealCosts.recordExecutionFeeActual`.
+    expect(economicInSource.size).toBe(54);
     expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(54);
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(55);
   });
 
   /**
