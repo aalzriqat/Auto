@@ -28,9 +28,11 @@ import {
   positionForObligation,
   supplierReceiptActionability,
   pricingSnapshotsEqual,
+  settlementIsComplete,
   type ObligationState,
   type SupplierClaimStatus,
 } from "./utils/financingEconomics";
+import { resolveCustomerInvoiceObligation } from "./utils/customerInvoiceObligation";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
 import { classifySaleTimeCredits, customerBilledLinesMinor, sumBilledLinesMinor, completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
@@ -2763,8 +2765,15 @@ export const dealCockpit = query({
 
     // A cancelled sale's obligations were cancelled with it, so the rail must not
     // sit blocked on a settlement that will never happen.
+    // D-43: a completed sale is not settled while the customer's invoice has a balance,
+    // judged by the same predicate the financed cockpit uses. A draft has no invoice yet.
+    const customerObligation: ObligationState =
+      sale.status === "COMPLETED"
+        ? await resolveCustomerInvoiceObligation(ctx, sale, { orgId: args.orgId, currency })
+        : "NONE";
     const settlementComplete =
-      dealCancelled || supplierObligation === "CLOSED" || supplierObligation === "NONE";
+      dealCancelled ||
+      settlementIsComplete({ financier: "NONE", supplier: supplierObligation, customer: customerObligation });
 
     const stages = deriveCashDealStages({
       saleStatus: sale.status,
