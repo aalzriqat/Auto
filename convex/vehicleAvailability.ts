@@ -113,6 +113,12 @@ async function hasLiveOrUnreadableFinance(
  * either. The rows are read raw and one each: a stale-but-unswept row reads
  * UNCERTAIN, which only asks the salesperson to check, whereas resolving
  * liveness here (expiry, slice ownership) would need unbounded reads.
+ *
+ * The deposit and slice probes are deliberately NOT org-scoped. Every writer
+ * checks the car belongs to the depositing org, so a foreign-org row naming
+ * this car is corruption — and corruption reads UNCERTAIN here, like every
+ * other disagreement. Scoping would ignore it instead. Nothing leaks: the
+ * caller already owns the car and learns only "check availability".
  */
 async function hasAnyHoldRow(
   ctx: QueryCtx,

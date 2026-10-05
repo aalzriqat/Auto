@@ -418,6 +418,22 @@ describe("pickerAvailability (SCRUM-636)", () => {
       expect(await badge(a, v)).toBe("FREE");
     });
 
+    test("a foreign-org hold row naming an owned car is corruption: UNCERTAIN, never ignored", async () => {
+      const t = setup();
+      const a = await seedTenant(t, "a");
+      const b = await seedTenant(t, "bb");
+      const v = await car(t, a);
+      const foreignDepositId = await t.run((ctx) =>
+        ctx.db.insert("deposits", {
+          orgId: b.orgId, vehicleId: v, customerId: b.customerId, amount: 500, status: "HELD",
+          holdActive: true, createdBy: b.userId, createdAt: Date.now(),
+        } as never)
+      );
+      expect(await badge(a, v)).toBe("UNCERTAIN");
+      await t.run((ctx) => ctx.db.patch(foreignDepositId, { holdActive: false }));
+      expect(await badge(a, v)).toBe("FREE");
+    });
+
     test("an OPEN root still reads HELD when a deposit holds the car too", async () => {
       const t = setup();
       const a = await seedTenant(t, "a");
