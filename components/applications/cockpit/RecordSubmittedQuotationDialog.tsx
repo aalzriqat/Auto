@@ -190,7 +190,8 @@ export function RecordSubmittedQuotationDialog({
     if (calculation.state !== "AVAILABLE") return;
     // SCRUM-607: an operator already in the field is about to type their own
     // figure; a prefill landing now would put the caret after it and the first
-    // keystrokes would be appended to the calculated number.
+    // keystrokes would be appended to the calculated number. The offer is
+    // not lost: onBlur below makes it if the operator leaves the field empty.
     if (amountInputRef.current && document.activeElement === amountInputRef.current) return;
     prefilledRef.current = true;
     // This is the deliberate handoff from an asynchronously arriving server
@@ -261,6 +262,12 @@ export function RecordSubmittedQuotationDialog({
             <Input
               id="submitted-quotation-amount"
               ref={amountInputRef}
+              onBlur={() => {
+                if (prefilledRef.current || touchedRef.current || amount !== "") return;
+                if (calculation.state !== "AVAILABLE") return;
+                prefilledRef.current = true;
+                setAmount(String(calculation.minor / factor));
+              }}
               inputMode="decimal"
               value={amount}
               aria-invalid={amountInvalid}

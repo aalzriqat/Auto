@@ -139,6 +139,24 @@ describe("SCRUM-607: a late calculation never lands in a field the operator is i
     expect(field().value).toBe("");
   });
 
+  test("leaving the focused field untouched then offers the calculated figure", () => {
+    const view = render(<RecordSubmittedQuotationDialog {...props({ state: "LOADING" })} />);
+    field().focus();
+    view.rerender(<RecordSubmittedQuotationDialog {...props({ state: "AVAILABLE", minor: 21_428_572 })} />);
+    expect(field().value).toBe("");
+    fireEvent.blur(field());
+    expect(field().value).toBe("21428.572");
+  });
+
+  test("typing then blurring never replaces the operator's figure", () => {
+    const view = render(<RecordSubmittedQuotationDialog {...props({ state: "LOADING" })} />);
+    field().focus();
+    fireEvent.change(field(), { target: { value: "20000" } });
+    view.rerender(<RecordSubmittedQuotationDialog {...props({ state: "AVAILABLE", minor: 21_428_572 })} />);
+    fireEvent.blur(field());
+    expect(field().value).toBe("20000");
+  });
+
   test("control: calculation resolving while the field is not focused still prefills", () => {
     const view = render(<RecordSubmittedQuotationDialog {...props({ state: "LOADING" })} />);
     field().blur();

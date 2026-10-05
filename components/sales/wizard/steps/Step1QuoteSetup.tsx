@@ -255,8 +255,9 @@ export default function Step1QuoteSetup({
       // indication the request had not been sent. Three E2E specs failed on
       // exactly that and could not report why.
       console.error("requestProfitApproval failed", error);
-      // SCRUM-682: localized, never the raw server string; the generic
-      // English fallback is replaced by a translated, request-specific one.
+      // SCRUM-682: coded refusals are translated and transport/validation noise
+      // collapses to a translated, request-specific fallback. A plain-string
+      // server refusal is still shown as the server wrote it (follow-up: code it).
       const message = getLocalizedErrorMessage(error, t);
       toast.error(message === GENERIC_ERROR_MESSAGE ? t("WizardProfitApprovalRequestFailed") : message);
     } finally {
