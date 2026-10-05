@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { mainNavigation, settingsNavigation, navItemPermitted, type NavItem } from "@/lib/navigation";
 
 // Flat list (main + settings) used only to resolve the current page title —
@@ -35,6 +36,9 @@ export function TopNav() {
 
   const currentNavItem = navigation.find(item => pathname.startsWith(`/${activeOrgId}${item.href}`));
   const pageTitle = currentNavItem ? t(currentNavItem.name as any) : "AutoFlow";
+  // SCRUM-631: the tab says which section this is, in the user's language. Off-nav
+  // routes (e.g. the finance-deal cockpit) keep their own metadata title.
+  useDocumentTitle(currentNavItem ? `${pageTitle} | AutoFlow` : null);
 
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const permissions = myMembership?.permissions || [];
