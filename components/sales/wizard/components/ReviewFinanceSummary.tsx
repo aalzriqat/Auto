@@ -3,7 +3,7 @@
 import { cn } from "@/lib/utils";
 import { FileText } from "lucide-react";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useCurrency } from "@/hooks/useCurrency";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 
 const DOC_TRANSLATIONS: Record<string, string> = {
   "هوية": "ID Card",
@@ -48,9 +48,6 @@ interface ReviewFinanceSummaryProps {
   className?: string;
 }
 
-const formatAmount = (value: number) =>
-  (value || 0).toLocaleString(undefined, { minimumFractionDigits: 2 });
-
 export default function ReviewFinanceSummary({
   isCash,
   companyName,
@@ -67,7 +64,7 @@ export default function ReviewFinanceSummary({
   className,
 }: ReviewFinanceSummaryProps) {
   const { isRtl, t } = useLanguage();
-  const currency = useCurrency();
+  const money = useMoneyDisplay();
   const showDealTerms = !isCash && salePrice !== undefined;
 
   return (
@@ -92,13 +89,13 @@ export default function ReviewFinanceSummary({
           <div>
             <dt className="text-xs text-muted-foreground">{t("SalePrice" as any)}</dt>
             <dd className="font-semibold tabular-nums">
-              {formatAmount(salePrice ?? 0)} {currency.displayLabel}
+              {money.format(salePrice || 0)}
             </dd>
           </div>
           <div>
             <dt className="text-xs text-muted-foreground">{t("DownPayment" as any)}</dt>
             <dd className="font-semibold tabular-nums">
-              {formatAmount(downPayment ?? 0)} {currency.displayLabel}
+              {money.format(downPayment || 0)}
             </dd>
           </div>
           {termMonths !== undefined && (
@@ -118,44 +115,27 @@ export default function ReviewFinanceSummary({
             <div className="text-center">
               <p className="text-xs text-muted-foreground mb-1">{t("Monthly" as any) || "Monthly"}</p>
               <p className="text-xl font-bold text-indigo-400">
-                {(monthlyInstallment || 0).toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                })}
-                <span className="text-xs text-muted-foreground ms-1">{currency.displayLabel}</span>
+                {money.amount(monthlyInstallment || 0)}
+                <span className="text-xs text-muted-foreground ms-1">{money.label}</span>
               </p>
             </div>
 
             {/* Financed */}
             <div className="text-center">
               <p className="text-xs text-muted-foreground mb-1">{t("FinancedAmount" as any)}</p>
-              <p className="text-sm font-semibold">
-                {(totalFinancedAmount || 0).toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                })}{" "}
-                {currency.displayLabel}
-              </p>
+              <p className="text-sm font-semibold">{money.format(totalFinancedAmount || 0)}</p>
             </div>
 
             {/* Profit */}
             <div className="text-center">
               <p className="text-xs text-muted-foreground mb-1">{t("FinanceCompanyProfit" as any)}</p>
-              <p className="text-sm font-semibold">
-                {(totalProfit || 0).toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                })}{" "}
-                {currency.displayLabel}
-              </p>
+              <p className="text-sm font-semibold">{money.format(totalProfit || 0)}</p>
             </div>
 
             {/* Your profit */}
             <div className="text-center">
               <p className="text-xs text-muted-foreground mb-1">{t("YourProfit" as any)}</p>
-              <p className="text-sm font-semibold text-emerald-400">
-                {(desiredProfit || 0).toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                })}{" "}
-                {currency.displayLabel}
-              </p>
+              <p className="text-sm font-semibold text-emerald-400">{money.format(desiredProfit || 0)}</p>
             </div>
           </>
         ) : (
@@ -163,12 +143,7 @@ export default function ReviewFinanceSummary({
             <p className="text-xs text-muted-foreground mb-1">
               {t("TotalToCollect" as any)}
             </p>
-            <p className="text-2xl font-bold">
-              {(totalFinancedAmount || 0).toLocaleString(undefined, {
-                minimumFractionDigits: 2,
-              })}{" "}
-              {currency.displayLabel}
-            </p>
+            <p className="text-2xl font-bold">{money.format(totalFinancedAmount || 0)}</p>
           </div>
         )}
       </div>

@@ -36,7 +36,7 @@ import {
 import { computeResoldProductMargin, type FinancedSalePlanPayload } from "../accounting/postingRules";
 import { toMinorUnits, fromMinorUnits, denominationOf, isValidMinorAmount, addMinor } from "./money";
 import { assertProfitApproved, saleRequiresMinimumProfit } from "./profitApproval";
-import { assertVehicleNotDeleted } from "./vehicleLiveness";
+import { assertVehicleNotDeleted, assertVehicleReadyForSale } from "./vehicleLiveness";
 import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
 import { computeConsignedSupplierPosition } from "../../lib/financingEconomics";
 import { openSupplierReceivable } from "../supplierReceivables";
@@ -474,6 +474,9 @@ async function prepareSaleCompletion(
   // reaches here: `runWithIdempotency` answers it before the body, and `finalizeDeal` returns an
   // already-closed sale early.
   assertVehicleNotDeleted(vehicle);
+  // SCRUM-693 PR-B F1: a car parked in inspection or repair (an unwound deal's returned car) is
+  // not sold or drafted until an authorized edit clears it. AFTER the deleted check, both intents.
+  assertVehicleReadyForSale(vehicle);
 
   const customer = await ctx.db.get(args.customerId);
   if (customer?.orgId !== args.orgId) {

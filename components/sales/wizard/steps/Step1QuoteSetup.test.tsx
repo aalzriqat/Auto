@@ -105,24 +105,24 @@ describe("SCRUM-656: profit-approval alerts follow the language", () => {
     en: {
       requiredTitle: "Approval Required",
       requiredBody:
-        "At this price the profit over the list price (100) is below the minimum required profit for this vehicle (5000).",
+        "At this price the profit over the list price (100 JOD) is below the minimum required profit for this vehicle (5,000 JOD).",
       pending: "Approval request is currently pending. Please wait for a manager.",
       rejected: "Your request for this profit amount was rejected. Please increase the profit or request again.",
       request: "Request Profit Approval",
       requesting: "Requesting...",
       approvedTitle: "Profit Approved",
-      approvedBody: "Management approved this sale price (profit over the list price: 100). You may proceed.",
+      approvedBody: "Management approved this sale price (profit over the list price: 100 JOD). You may proceed.",
     },
     ar: {
       requiredTitle: "مطلوب اعتماد",
       requiredBody:
-        "عند هذا السعر، الربح فوق سعر القائمة (100) أقل من الحد الأدنى المطلوب لربح هذه المركبة (5000).",
+        "عند هذا السعر، الربح فوق سعر القائمة (100 د.أ) أقل من الحد الأدنى المطلوب لربح هذه المركبة (5,000 د.أ).",
       pending: "طلب الاعتماد قيد الانتظار. يرجى انتظار قرار المدير.",
       rejected: "رُفض طلبك لمبلغ الربح هذا. يرجى زيادة الربح أو إعادة الطلب.",
       request: "طلب اعتماد الربح",
       requesting: "جارٍ الإرسال…",
       approvedTitle: "تم اعتماد الربح",
-      approvedBody: "اعتمدت الإدارة سعر البيع هذا (الربح فوق سعر القائمة: 100). يمكنك المتابعة.",
+      approvedBody: "اعتمدت الإدارة سعر البيع هذا (الربح فوق سعر القائمة: 100 د.أ). يمكنك المتابعة.",
     },
   } as const;
   const verdict = (status: string) => ({ status, margin: 100, minimumProfit: 5000 });

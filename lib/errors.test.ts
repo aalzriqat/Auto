@@ -301,6 +301,25 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     }
   });
 
+  it("SCRUM-693 deal-unwind refusals resolve to Arabic in ar and to the server's own text in en", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { DEAL_UNWIND_MESSAGES } = await import("../convex/utils/dealUnwindMessages");
+    const { AppErrorCode } = await import("../convex/utils/errors");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    // Derived from the server table so a new unwind refusal cannot ship untranslated.
+    const codes = Object.keys(DEAL_UNWIND_MESSAGES) as Array<keyof typeof DEAL_UNWIND_MESSAGES>;
+    expect(codes.length).toBe(27);
+    for (const code of codes) {
+      expect(Object.values(AppErrorCode)).toContain(code);
+      const error = new ConvexError({ code, message: DEAL_UNWIND_MESSAGES[code] });
+      const arText = getLocalizedErrorMessage(error, ar);
+      expect(arText).toMatch(/[؀-ۿ]/);
+      expect(arText).not.toBe(DEAL_UNWIND_MESSAGES[code]);
+      expect(getLocalizedErrorMessage(error, en)).toBe(DEAL_UNWIND_MESSAGES[code]);
+    }
+  });
+
   it("SCRUM-113 APPROVAL_VEHICLE_UNAVAILABLE resolves to its dictionary entry in ar and en", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
@@ -338,6 +357,20 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(getLocalizedErrorMessage(error, ar)).toBe(arEntry);
     expect(getLocalizedErrorMessage(error, en)).toBe(enEntry);
     expect(enEntry).toBe(VEHICLE_DELETED_MESSAGE);
+  });
+
+  it("SCRUM-693 VEHICLE_NOT_READY_FOR_SALE resolves to its dictionary entry in ar and en, and EN equals the server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { VEHICLE_NOT_READY_FOR_SALE_MESSAGE } = await import("../convex/utils/vehicleLiveness");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code: "VEHICLE_NOT_READY_FOR_SALE", message: "server text" });
+    const arEntry = (dictionaries.ar as Record<string, string>).ServerError_VEHICLE_NOT_READY_FOR_SALE;
+    const enEntry = (dictionaries.en as Record<string, string>).ServerError_VEHICLE_NOT_READY_FOR_SALE;
+    expect(arEntry).toMatch(/[؀-ۿ]/);
+    expect(getLocalizedErrorMessage(error, ar)).toBe(arEntry);
+    expect(getLocalizedErrorMessage(error, en)).toBe(enEntry);
+    expect(enEntry).toBe(VEHICLE_NOT_READY_FOR_SALE_MESSAGE);
   });
 
   it("SCRUM-641 VEHICLE_DELETED_FLAG_LOCKED has ar+en entries and EN equals the adminData server message", async () => {

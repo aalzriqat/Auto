@@ -30,6 +30,12 @@ import {
   type VehicleCostBasis,
 } from "./utils/vehicleCostBasis";
 import { toMinorUnits } from "./utils/money";
+import {
+  executionFeeHeadline,
+  executionFeePosition,
+  executionFeeUnrecorded,
+  type ExecutionFeeHeadline,
+} from "./utils/executionFeePosition";
 
 function frozenMajorAmountToMinorOrUnreadable(amount: number, currency: string): number {
   try {
@@ -293,6 +299,8 @@ function routeSpecificProfit(args: {
   /** SOURCED: the dealership's pre-deal preparation spend, subtracted once. */
   preparation: DealerPreparationExpenses | null;
   expectedExpensesMinor?: number;
+  /** F-PNTR-1: the execution-fee operand, the same one the cockpit's SOURCED figure uses. */
+  executionFee: ExecutionFeeHeadline | null;
   /**
    * The cockpit's own "fully settled" — money settled AND every cost line
    * carrying a CHECKED actual — as `buildCockpitMoney` classifies a
@@ -353,6 +361,7 @@ function routeSpecificProfit(args: {
     customerDirectToDealerMinor: customerGapToDealer.amountMinor,
     actualExpensesMinor: money.expenses.actualTotalMinor,
     expectedExpensesMinor: args.expectedExpensesMinor,
+    executionFee: args.executionFee,
     currency: money.currency,
     fullySettled: args.fullySettled,
   });
@@ -464,10 +473,14 @@ export const financedDealOverview = query({
         cockpit.stages.find((stage) => stage.key === "SETTLEMENT")?.state === "COMPLETE";
       const sameCurrencyFees = fees.filter((fee) => fee.currency === cockpit.money.currency);
       const feeSummary = summarizeFees(sameCurrencyFees);
+      // F-PNTR-1: the single execution-fee position, bound by line id — the
+      // same verdict the cockpit and the finalization gate read.
+      const executionFee = executionFeePosition(app, fees, cockpit.money.currency);
       const expensesFullyReconciled =
         sameCurrencyFees.length === fees.length &&
         feeSummary.fullyReconciled &&
-        unrecordedConfiguredFeePositions(app.companyRuleSnapshot, fees).length === 0;
+        unrecordedConfiguredFeePositions(app.companyRuleSnapshot, fees).length === 0 &&
+        !executionFeeUnrecorded(executionFee);
       const fullySettled = moneySettled && expensesFullyReconciled;
       // Every live line, template or unplanned: a dealer-borne one in another
       // currency withholds the recorded, committed and expected outlay and the
@@ -497,13 +510,30 @@ export const financedDealOverview = query({
               cockpit.money.currency
             )
           : undefined);
-      const expectedDealerBorne = dealerBorneExpected(
+      const feeHeadline = executionFeeHeadline(executionFee);
+      // Codex F2: when the frozen aggregate disagrees with the fee, or which
+      // cost is the fee is ambiguous, the outlay built on that aggregate is
+      // withheld with the estimate — neither the whole aggregate as remaining
+      // nor 0 once the fee is linked while the difference is still
+      // unclassified. Otherwise a readable frozen aggregate states the outlay
+      // even when an individual fee amount is unreadable.
+      const expectedDealerBorne: DealFinancialSummaryInputs["expectedDealerBorne"] =
+        executionFee.applies && (executionFee.aggregateConflict || executionFee.ambiguous)
+        ? { totalMinor: null, remainingMinor: null, reason: "EXECUTION_FEE_UNCLASSIFIED" }
+        : dealerBorneExpected(
         expected.source,
         expected.rows,
         cockpit.money.currency,
         expensesMixed,
         frozenEstimatedFees,
-        frozenExecutionFeeActualMinor(fees, cockpit.money.currency)
+        // With a position, only the BOUND line retires the expectation (an
+        // explicit 0 included); an unbound finance-company fee no longer
+        // consumes it by type and payer (c22119 Q2/Q4).
+        executionFee.applies
+          ? executionFee.bound !== null
+            ? (frozenEstimatedFees ?? 0)
+            : 0
+          : frozenExecutionFeeActualMinor(fees, cockpit.money.currency)
       );
       financialSummary = deriveDealFinancialSummary({
         currency: cockpit.money.currency,
@@ -521,6 +551,7 @@ export const financedDealOverview = query({
           fullCostBasis: costBasisFor(null),
           preparation,
           expectedExpensesMinor: expectedDealerBorne.totalMinor ?? undefined,
+          executionFee: feeHeadline,
           fullySettled,
           expensesMixed,
           expensesUnreadable:

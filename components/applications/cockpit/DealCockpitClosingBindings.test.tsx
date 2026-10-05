@@ -345,4 +345,38 @@ describe("DealCockpit closing bindings (TASK-DEAL-04)", () => {
     expect(within(card).queryByRole("button", { name: /RecordLegalInvoice/i })).toBeNull();
     expect(within(card).queryByTestId("deal-legal-invoice")).toBeNull();
   });
+
+  // SCRUM-691 F-PNTR-5: production #pntr (CLOSED) still offered "Record legal
+  // invoice" beside "no longer open to be closed"; `recordLegalInvoice`
+  // refuses once `economicsFrozen` holds. The recorded invoice stays visible.
+  test("a finalized deal shows its recorded invoice but no longer offers to record one", async () => {
+    setupDeal();
+    const costs = queryResults.get("financeDealCosts:listDealCosts") as Record<string, unknown>;
+    queryResults.set("financeDealCosts:listDealCosts", {
+      ...costs,
+      economicsFrozen: { frozen: true, reason: "APPLICATION_CLOSED" },
+      legalInvoiceAmountMinor: 10_850_000,
+      legalInvoiceNumber: "INV-77",
+      legalInvoiceDate: Date.UTC(2026, 9, 1),
+      legalInvoiceIssuedTo: "FINANCE_COMPANY",
+    });
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+
+    const card = await screen.findByTestId("deal-closing-checklist");
+    expect(within(card).getByTestId("deal-legal-invoice")).toBeTruthy();
+    expect(within(card).queryByRole("button", { name: /RecordLegalInvoice/i })).toBeNull();
+  });
+
+  test("a CLOSED deal from a backend that predates economicsFrozen is not offered the invoice either", async () => {
+    setupDeal();
+    const costs = { ...(queryResults.get("financeDealCosts:listDealCosts") as Record<string, unknown>) };
+    delete costs.economicsFrozen;
+    queryResults.set("financeDealCosts:listDealCosts", costs);
+    const app = queryResults.get("applications:get") as Record<string, unknown>;
+    queryResults.set("applications:get", { ...app, status: "CLOSED" });
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+
+    const card = await screen.findByTestId("deal-closing-checklist");
+    expect(within(card).queryByRole("button", { name: /RecordLegalInvoice/i })).toBeNull();
+  });
 });

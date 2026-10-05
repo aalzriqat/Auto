@@ -161,6 +161,8 @@ export type DealCustodyWiring = Readonly<{
   openPeriodToday?: boolean;
   /** The deal is finalized, closed or stopped: nothing NEW is planned or issued on it; existing custody still settles. */
   dealStopped?: boolean;
+  /** A live deal unwind owns the custody record: the server refuses to reopen it meanwhile. */
+  reopenLocked?: boolean;
   actions?: DealCustodyActions;
 }>;
 
@@ -275,6 +277,7 @@ function CustodyRecord({
   canAct,
   canStart,
   blocked,
+  reopenLocked,
   hasEligibleFees,
   openDialog,
   t,
@@ -288,6 +291,8 @@ function CustodyRecord({
   canStart: boolean;
   /** The ledger cannot take a posting right now — actions render disabled. */
   blocked: boolean;
+  /** Reopening is locked by a live unwind. */
+  reopenLocked: boolean;
   hasEligibleFees: boolean;
   openDialog: (request: DialogRequest) => void;
   t: T;
@@ -394,7 +399,7 @@ function CustodyRecord({
               </Button>
             </>
           ) : (
-            <Button type="button" size="sm" variant="outline" disabled={!act} onClick={() => openDialog({ kind: "REOPEN", custodyId: id })}>
+            <Button type="button" size="sm" variant="outline" disabled={!act || reopenLocked} onClick={() => openDialog({ kind: "REOPEN", custodyId: id })}>
               {t("CustodyReopen")}
             </Button>
           )}
@@ -662,6 +667,7 @@ export function DealCustodyPanel({
                   canAct={canAct}
                   canStart={canStart}
                   blocked={blocked}
+                  reopenLocked={wiring.reopenLocked === true}
                   hasEligibleFees={(actions?.eligibleFees.length ?? 0) > 0}
                   openDialog={openDialog}
                   t={t}

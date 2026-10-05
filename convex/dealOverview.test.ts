@@ -169,6 +169,18 @@ describe("dealOverview.financedDealOverview", () => {
     expect(basis.cutoffCreationTime).toBe(app!._creationTime);
   });
 
+  test("SCRUM-690: the confirmed remittance is served from the application row, beside — not instead of — the funded slice", async () => {
+    const s = await seed();
+    const applicationId = await insertApplication(s);
+    const before = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+    expect(before!.financialSummary!.financier.receivedMinor).toBeNull();
+
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { disbursedAmountMinor: 11_000_000 }));
+    const after = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+    expect(after!.financialSummary!.financier.receivedMinor).toBe(11_000_000);
+    expect(after!.financialSummary!.financier.fundedPortionMinor).toBe(9_350_000);
+  });
+
   test("STOCK: the profit is measured against the vehicle's whole book value, never through a supplier settlement", async () => {
     const s = await seed("11");
     await insertExpense(s, {}); // pre-deal, capitalized 100
@@ -748,6 +760,163 @@ describe("dealOverview.financedDealOverview", () => {
       totalExpectedMinor: null,
     });
     expect(view!.financialSummary!.profit).toEqual({ available: false, reason: "ExpensesUnreadable" });
+  });
+
+  describe("SCRUM-690 F-PNTR-1: the execution fee is one explicitly linked position", () => {
+    async function pntrShaped(suffix: string) {
+      const s = await seed(`pntr-${suffix}`);
+      const applicationId = await insertApplication(s);
+      await s.t.run((ctx) =>
+        ctx.db.patch(applicationId, {
+          companyRuleSnapshot: { ruleVersion: 1, companyName: "Finance Co", adminFees: 700, feeTemplates: [] },
+        })
+      );
+      // The only recorded cost: an unrelated 550 the dealership paid.
+      const unrelatedId = await insertFee(s, applicationId, { paidBy: "DEALER", currency: "JOD", actualAmountMinor: 550_000 });
+      return { s, applicationId, unrelatedId };
+    }
+    const expensesLine = (profit: { available: boolean; lines?: Array<{ key: string; amountMinor: number }> }) =>
+      profit.lines?.find((line) => line.key === "FORECAST_EXPENSES" || line.key === "ACTUAL_EXPENSES");
+
+    test("an unrelated dealership cost does not consume the fee: 550 recorded + 700 unrecorded = 1,250 forecast", async () => {
+      const { s, applicationId } = await pntrShaped("a");
+      const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      expect(expensesLine(view!.financialSummary!.profit as never)).toMatchObject({ key: "FORECAST_EXPENSES", amountMinor: 1_250_000 });
+      expect(view!.financialSummary!.dealerOutlay.expectedCostsRemainingMinor).toBe(700_000);
+      const costs = await s.asOwner.query(api.financeDealCosts.listDealCosts, { orgId: s.orgId, applicationId });
+      expect(costs.executionFee).toEqual({
+        expectedMinor: 700_000,
+        boundFeeId: null,
+        unrecorded: true,
+        withheld: false,
+        eligibleFeeIds: [],
+      });
+    });
+
+    test("record (explicit 0) retires it; a second record is refused; unlink makes it unrecorded; link restores it", async () => {
+      const { s, applicationId, unrelatedId } = await pntrShaped("b");
+      const feeId = await s.asOwner.mutation(api.financeDealCosts.recordExecutionFeeActual, {
+        orgId: s.orgId,
+        applicationId,
+        actualAmountMinor: 0,
+        expectedCurrency: "JOD",
+        paidBy: "DEALER",
+        idempotencyKey: "exec-fee-b-1",
+      });
+      let costs = await s.asOwner.query(api.financeDealCosts.listDealCosts, { orgId: s.orgId, applicationId });
+      expect(costs.executionFee).toMatchObject({ boundFeeId: feeId, unrecorded: false, withheld: false });
+      let view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      expect(expensesLine(view!.financialSummary!.profit as never)).toMatchObject({ key: "ACTUAL_EXPENSES", amountMinor: 550_000 });
+      expect(view!.financialSummary!.dealerOutlay.expectedCostsRemainingMinor).toBe(0);
+
+      // At most one linked line per deal — a fresh command is refused.
+      await expect(
+        s.asOwner.mutation(api.financeDealCosts.recordExecutionFeeActual, {
+          orgId: s.orgId,
+          applicationId,
+          actualAmountMinor: 700_000,
+          expectedCurrency: "JOD",
+          paidBy: "DEALER",
+          idempotencyKey: "exec-fee-b-2",
+        })
+      ).rejects.toThrow();
+      // A replay of the first command converges on the same line.
+      const replay = await s.asOwner.mutation(api.financeDealCosts.recordExecutionFeeActual, {
+        orgId: s.orgId,
+        applicationId,
+        actualAmountMinor: 0,
+        expectedCurrency: "JOD",
+        paidBy: "DEALER",
+        idempotencyKey: "exec-fee-b-1",
+      });
+      expect(replay).toBe(feeId);
+
+      await expect(
+        s.asOwner.mutation(api.financeDealCosts.unbindExecutionFeeLine, { orgId: s.orgId, feeId, reason: "  " })
+      ).rejects.toThrow(/Say why/);
+      await s.asOwner.mutation(api.financeDealCosts.unbindExecutionFeeLine, { orgId: s.orgId, feeId, reason: "Wrong line" });
+      costs = await s.asOwner.query(api.financeDealCosts.listDealCosts, { orgId: s.orgId, applicationId });
+      expect(costs.executionFee).toMatchObject({ boundFeeId: null, unrecorded: true, eligibleFeeIds: [feeId] });
+      view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      expect(expensesLine(view!.financialSummary!.profit as never)).toMatchObject({ amountMinor: 1_250_000 });
+
+      // An unrelated cost cannot be linked as the fee.
+      await expect(
+        s.asOwner.mutation(api.financeDealCosts.bindExecutionFeeLine, { orgId: s.orgId, feeId: unrelatedId })
+      ).rejects.toThrow(/Only a finance-company fee/);
+      await s.asOwner.mutation(api.financeDealCosts.bindExecutionFeeLine, { orgId: s.orgId, feeId });
+      costs = await s.asOwner.query(api.financeDealCosts.listDealCosts, { orgId: s.orgId, applicationId });
+      expect(costs.executionFee).toMatchObject({ boundFeeId: feeId, unrecorded: false, eligibleFeeIds: [] });
+    });
+
+    test("a frozen dealer-borne total that disagrees with the fee withholds the estimate", async () => {
+      const { s, applicationId } = await pntrShaped("c");
+      await s.t.run((ctx) => ctx.db.patch(applicationId, { estimatedDealerBorneExpensesMinor: 1_250_000 }));
+      const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      expect(view!.financialSummary!.profit).toEqual({ available: false, reason: "ExecutionFeeUnclassified" });
+      const costs = await s.asOwner.query(api.financeDealCosts.listDealCosts, { orgId: s.orgId, applicationId });
+      expect(costs.executionFee).toMatchObject({ unrecorded: true, withheld: true });
+    });
+
+    // Codex F2: the same conflict must not state the outlay either — neither
+    // the whole 1,250 as "remaining" while unbound, nor 0 once a 700 fee is
+    // linked while the other 550 is still unclassified.
+    test("the conflict withholds the expected outlay too, before and after the fee is linked", async () => {
+      const { s, applicationId } = await pntrShaped("d");
+      await s.t.run((ctx) => ctx.db.patch(applicationId, { estimatedDealerBorneExpensesMinor: 1_250_000 }));
+      const withheld = {
+        expectedCostsRemainingMinor: null,
+        expectedCostsReason: "EXECUTION_FEE_UNCLASSIFIED",
+        totalExpectedMinor: null,
+      };
+      let view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      expect(view!.financialSummary!.dealerOutlay).toMatchObject(withheld);
+      await s.asOwner.mutation(api.financeDealCosts.recordExecutionFeeActual, {
+        orgId: s.orgId,
+        applicationId,
+        actualAmountMinor: 700_000,
+        expectedCurrency: "JOD",
+        paidBy: "DEALER",
+        idempotencyKey: "exec-fee-d-1",
+      });
+      view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      expect(view!.financialSummary!.dealerOutlay).toMatchObject(withheld);
+      expect(view!.financialSummary!.profit).toEqual({ available: false, reason: "ExecutionFeeUnclassified" });
+    });
+
+    // Opus L1: an AMBIGUOUS binding (a linked line that is no longer a
+    // compatible fee) withholds the outlay exactly like an aggregate conflict.
+    test("an ambiguous binding withholds the expected outlay", async () => {
+      const { s, applicationId } = await pntrShaped("amb");
+      await s.t.run((ctx) => ctx.db.patch(applicationId, { estimatedDealerBorneExpensesMinor: 700_000 }));
+      const feeId = await s.asOwner.mutation(api.financeDealCosts.recordExecutionFeeActual, {
+        orgId: s.orgId,
+        applicationId,
+        actualAmountMinor: 700_000,
+        expectedCurrency: "JOD",
+        paidBy: "DEALER",
+        idempotencyKey: "exec-fee-amb-1",
+      });
+      await s.t.run((ctx) => ctx.db.patch(feeId, { deductedFromSettlement: true }));
+      const costs = await s.asOwner.query(api.financeDealCosts.listDealCosts, { orgId: s.orgId, applicationId });
+      expect(costs.executionFee).toMatchObject({ boundFeeId: null, withheld: true });
+      const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      expect(view!.financialSummary!.dealerOutlay).toMatchObject({
+        expectedCostsRemainingMinor: null,
+        expectedCostsReason: "EXECUTION_FEE_UNCLASSIFIED",
+        totalExpectedMinor: null,
+      });
+    });
+
+    test("control: an aggregate equal to the fee still states the outlay", async () => {
+      const { s, applicationId } = await pntrShaped("e");
+      await s.t.run((ctx) => ctx.db.patch(applicationId, { estimatedDealerBorneExpensesMinor: 700_000 }));
+      const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      expect(view!.financialSummary!.dealerOutlay).toMatchObject({
+        expectedCostsRemainingMinor: 700_000,
+        expectedCostsReason: null,
+      });
+    });
   });
 
   test("two safe same-currency actuals that overflow between them are withheld as UNSAFE_AMOUNT, never summed", async () => {

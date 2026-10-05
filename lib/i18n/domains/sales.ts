@@ -756,7 +756,33 @@ const dealRailMessages = defineBilingualMessages({
   ],
   CostExpected: ["Expected", "المتوقّع"],
   CostNotRecorded: ["Not recorded", "غير مسجّل"],
-  CostsDifference: ["Expected − actual", "المتوقّع − الفعلي"],
+  ExecutionFeeLabel: ["Finance company execution fee", "رسوم تنفيذ شركة التمويل"],
+  ExecutionFeeNote: [
+    "Paid by the dealership separately — the finance company remits the full approved amount.",
+    "تدفعها الوكالة بشكل منفصل — تحوّل شركة التمويل كامل المبلغ الموافق عليه.",
+  ],
+  ExecutionFeeUnrecorded: [
+    "Record what the dealership actually paid for this fee (zero if it was not charged), or link the cost already recorded for it. The deal cannot be finalized until then.",
+    "سجِّل ما دفعته الوكالة فعليًا لهذه الرسوم (صفر إن لم تُستوفَ)، أو اربط المصروف المسجَّل لها. لا يمكن إتمام الصفقة قبل ذلك.",
+  ],
+  ExecutionFeeRecordedElsewhere: [
+    "If this fee is already recorded above under another cost type, remove that cost first and then record the fee here — recording it twice counts and pays it twice.",
+    "إن كانت هذه الرسوم مسجَّلة أعلاه بنوع مصروف آخر، فاحذف ذلك المصروف أولًا ثم سجِّل الرسوم هنا — تسجيلها مرتين يحتسبها ويدفعها مرتين.",
+  ],
+  ExecutionFeeLinkedTo: ["Linked to", "مرتبطة بـ"],
+  ExecutionFeeLinkLabel: ["Already recorded as a cost?", "مسجَّلة مسبقًا كمصروف؟"],
+  ExecutionFeeLinkPlaceholder: ["Choose the cost…", "اختر المصروف…"],
+  ExecutionFeeLink: ["Link", "ربط"],
+  ExecutionFeeRecord: ["Record execution fee", "تسجيل رسوم التنفيذ"],
+  ExecutionFeeUnlink: ["Unlink from execution fee", "فكّ الربط برسوم التنفيذ"],
+  ExecutionFeeUnlinkNote: [
+    "The cost stays on the deal as an ordinary cost, and the execution fee becomes unrecorded again.",
+    "يبقى المصروف على الصفقة كمصروف عادي، وتعود رسوم التنفيذ غير مسجَّلة.",
+  ],
+  ExecutionFeeRecorded: ["Execution fee recorded", "سُجِّلت رسوم التنفيذ"],
+  ExecutionFeeLinked: ["Execution fee linked", "رُبطت رسوم التنفيذ"],
+  ExecutionFeeUnlinked: ["Execution fee unlinked", "فُكّ ربط رسوم التنفيذ"],
+  CostsDifference:["Expected − actual", "المتوقّع − الفعلي"],
   CostsDifferenceNote: [
     "A comparison only — not an amount still owed.",
     "للمقارنة فقط — وليس مبلغًا لا يزال مستحقًا.",
@@ -1121,7 +1147,10 @@ const dealOverviewMessages = defineBilingualMessages({
   OverviewGapCashPlannedNote: ["allocated, not received — no receipt yet", "مخصَّص وليس مقبوضًا — لا إيصال بعد"],
   OverviewCustomerPaidUnknown: ["cannot be totalled — a deposit could not be read", "تعذّر الجمع — عربون غير قابل للقراءة"],
   OverviewCustomerFirstPayment: ["Customer first payment", "الدفعة الأولى من العميل"],
-  OverviewFinancierFunds: ["Finance company funds", "تمويل شركة التمويل"],
+  OverviewFinancierFunds: ["Finance company funded portion", "حصة تمويل شركة التمويل"],
+  OverviewFinancierFundedNote: ["the financed share of the approved amount — not what was received", "الحصة المموَّلة من المبلغ المعتمد — وليست المبلغ المستلَم"],
+  OverviewFinancierReceived: ["Received from the finance company", "المستلَم من شركة التمويل"],
+  OverviewFinancierReceivedNote: ["confirmed remittance", "تحويل مؤكَّد"],
   OverviewFinancierExpectedRemittance: ["Expected remittance from finance company", "التحويل المتوقع من شركة التمويل"],
   OverviewFinancierPaidSeparatelyNote: ["includes dealer contribution paid separately", "يشمل مساهمة المعرض المدفوعة على حدة"],
   OverviewFinancierNettedNote: ["net of dealer contribution", "مخصوم منه مساهمة المعرض"],
@@ -1150,6 +1179,7 @@ const dealOverviewMessages = defineBilingualMessages({
   OverviewNoPolicy: ["no fee policy configured — unknown, not zero", "لا سياسة رسوم مضبوطة — غير معلوم وليس صفرًا"],
   OverviewExpectedMixedDenomination: ["a recorded actual is in another currency — withheld, not zero", "مبلغ فعلي مسجَّل بعملة أخرى — محجوب وليس صفرًا"],
   OverviewExpectedUnreadable: ["a configured or recorded amount could not be read — withheld, not zero", "تعذّرت قراءة مبلغ مضبوط أو مسجَّل — محجوب وليس صفرًا"],
+  OverviewExpectedFeeUnclassified: ["the deal's expected costs disagree with the finance company's execution fee — withheld, not zero", "تخالف المصاريف المتوقعة للصفقة رسومَ تنفيذ شركة التمويل — محجوبة وليست صفرًا"],
   OverviewDealerPaidTotal: ["Total expected dealership outlay", "إجمالي ما يُتوقَّع أن يتحمّله المعرض"],
   OverviewDealerPaidNote: ["known outlay + expected costs still to record", "الالتزام المعلوم + المصاريف المتوقّعة"],
   OverviewDealerPaidUnknown: ["contribution not on record yet", "المساهمة غير مسجَّلة بعد"],
@@ -1823,6 +1853,284 @@ const serverErrorMessages = defineBilingualMessages({
     "This same request was already sent with a different cheque, reason or bank fee. Nothing has been changed. Close and reopen the dialog to try again.",
     "سبق إرسال هذا الطلب نفسه مع شيك أو سبب أو رسوم بنكية مختلفة. لم يتم تغيير أي شيء. أغلق النافذة وأعد فتحها للمحاولة مرة أخرى.",
   ],
+  // SCRUM-693: unwinding a paid finance deal (convex/utils/dealUnwindMessages.ts).
+  ServerError_DEAL_CANCEL_USE_UNWIND: [
+    "This deal has a recorded finance-company payment. Open Unwind deal on this page to reverse it before cancelling.",
+    "سُجّل استلام دفعة من شركة التمويل لهذه الصفقة. افتح التراجع عن الصفقة من هذه الصفحة لعكسها قبل الإلغاء.",
+  ],
+  ServerError_DEAL_UNWIND_ACTIVE: [
+    "This deal is being unwound. Finish or abandon the unwind on the deal page first. Nothing has been changed.",
+    "يجري التراجع عن هذه الصفقة. أكمل التراجع أو تخلَّ عنه من صفحة الصفقة أولاً. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_NOT_FOUND: [
+    "The deal or its unwind could not be found. Nothing has been changed.",
+    "تعذّر العثور على الصفقة أو على عملية التراجع عنها. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_NOT_ELIGIBLE: [
+    "Only a finalized deal whose finance-company payment was received by bank transfer or cash can be unwound here. Nothing has been changed.",
+    "لا يمكن التراجع من هنا إلا عن صفقة مكتملة استُلمت دفعة شركة التمويل فيها بتحويل بنكي أو نقداً. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_CHEQUE_DEAL: [
+    "This deal was paid by cheque. Record the returned cheque from the deal page instead. Nothing has been changed.",
+    "دُفعت هذه الصفقة بشيك. سجّل الشيك المرتجع من صفحة الصفقة بدلاً من ذلك. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_DIRECT_ROUTE: [
+    "The finance company paid the supplier directly on this deal, so it cannot be unwound here. An accountant reviews the deal. Nothing has been changed.",
+    "دفعت شركة التمويل للمورّد مباشرة في هذه الصفقة، لذلك لا يمكن التراجع عنها من هنا. يراجع المحاسب الصفقة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_SALE_NOT_COMPLETED: [
+    "This deal's sale is not completed, so there is nothing to unwind. An accountant reviews the deal. Nothing has been changed.",
+    "عملية البيع في هذه الصفقة غير مكتملة، لذلك لا يوجد ما يمكن التراجع عنه. يراجع المحاسب الصفقة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_COMMISSION_PAID: [
+    "The salesperson's commission on this deal has already been paid. Recovering it is not supported yet; an accountant reviews the deal. Nothing has been changed.",
+    "صُرفت عمولة مندوب المبيعات على هذه الصفقة. استرداد العمولة غير مدعوم بعد؛ يراجع المحاسب الصفقة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_OPEN_CUSTODY: [
+    "An employee still holds cash custody on this deal. Settle that custody record before unwinding the deal. Nothing has been changed.",
+    "لا يزال أحد الموظفين يحتفظ بعهدة نقدية على هذه الصفقة. سوِّ سجل العهدة قبل التراجع عن الصفقة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_ALREADY_ACTIVE: [
+    "An unwind of this deal is already in progress. Continue it on the deal page. Nothing has been changed.",
+    "توجد عملية تراجع عن هذه الصفقة قيد التنفيذ. تابعها من صفحة الصفقة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_REASON_REQUIRED: [
+    "Give the reason for this step. Nothing has been changed.",
+    "اذكر سبب هذه الخطوة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_TEXT_TOO_LONG: [
+    "One of the entered texts is too long. Shorten it and try again. Nothing has been changed.",
+    "أحد النصوص المدخلة طويل جداً. اختصره وحاول مرة أخرى. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_NOT_ACTIVE: [
+    "This unwind is already finished or abandoned. Nothing has been changed.",
+    "عملية التراجع هذه مكتملة أو متروكة بالفعل. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_STEP_DONE: [
+    "This step of the unwind is already recorded. Nothing has been changed.",
+    "هذه الخطوة من التراجع مسجّلة بالفعل. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_FORWARD_NOT_APPLICABLE: [
+    "Nothing was paid to the finance company on this deal, so there is no return to record. Continue with the refund. Nothing has been changed.",
+    "لم يُدفع أي مبلغ لشركة التمويل في هذه الصفقة، لذلك لا يوجد استرداد لتسجيله. تابع إلى ردّ المبلغ. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_FORWARD_UNSETTLED: [
+    "The payment to the finance company is not settled on the books. An accountant resolves it before the unwind can continue. Nothing has been changed.",
+    "المبلغ المدفوع لشركة التمويل غير مُسوّى في الدفاتر. يعالجه المحاسب قبل متابعة التراجع. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_FORWARD_REVERSAL_UNPROVEN: [
+    "The return of the payment to the finance company could not be confirmed as posted on the books, so it was not recorded. Nothing has been changed. An accountant reviews the deal.",
+    "تعذّر التأكد من ترحيل استرداد المبلغ المدفوع لشركة التمويل في الدفاتر، لذلك لم يُسجَّل. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_DEAL_UNWIND_PERIOD_NOT_OPEN: [
+    "Today's accounting period is not open, so the reversal cannot be posted now. An accountant opens the period first. Nothing has been changed.",
+    "الفترة المحاسبية لتاريخ اليوم غير مفتوحة، لذلك لا يمكن ترحيل العكس الآن. يفتح المحاسب الفترة أولاً. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_FORWARD_FIRST: [
+    "Record and settle the finance company's return of the forwarded payment before continuing.",
+    "سجّل استرداد المبلغ المدفوع لشركة التمويل وسوِّ قيده قبل المتابعة.",
+  ],
+  ServerError_DEAL_UNWIND_EVIDENCE_REQUIRED: [
+    "Enter the required reference: the bank reference for a transfer, or the voucher number and the recipient's acknowledgement for cash. Nothing has been changed.",
+    "أدخل المرجع المطلوب: المرجع البنكي للتحويل، أو رقم السند وإقرار المستلم للدفع النقدي. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_INVALID_DATE: [
+    "The date must be a real date and cannot be in the future. Nothing has been changed.",
+    "يجب أن يكون التاريخ صحيحاً وألا يكون في المستقبل. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_REFUND_METHOD_MISMATCH: [
+    "The refund must go back the same way the finance company's payment was received (bank transfer or cash). Nothing has been changed.",
+    "يجب ردّ المبلغ بالطريقة نفسها التي استُلمت بها دفعة شركة التمويل (تحويل بنكي أو نقداً). لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_STALE: [
+    "The deal's recorded payment changed since this unwind started. Abandon this unwind and start again. Nothing has been changed.",
+    "تغيّرت الدفعة المسجّلة على الصفقة منذ بدء هذا التراجع. تخلَّ عن هذا التراجع وابدأ من جديد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_DEAL_UNWIND_CHAIN_MISMATCH: [
+    "The finance company's payment does not match the deal's recorded receipt (amount, date, currency or payer). Nothing has been changed. An accountant reviews the deal.",
+    "دفعة شركة التمويل لا تطابق الاستلام المسجَّل على الصفقة (المبلغ أو التاريخ أو العملة أو الدافع). لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_DEAL_UNWIND_ALLOCATION_SHAPE: [
+    "The finance company's payment is not allocated exactly to this deal's receivable, so it cannot be reversed safely. Nothing has been changed. An accountant reviews the deal.",
+    "دفعة شركة التمويل غير موزَّعة بالكامل على ذمة هذه الصفقة، لذلك لا يمكن عكسها بأمان. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_DEAL_UNWIND_REVERSAL_UNPROVEN: [
+    "The finance company's receipt could not be confirmed as reversed on the books, so the refund was not recorded. Nothing has been changed. An accountant reviews the deal.",
+    "تعذّر التأكد من عكس قيد استلام مبلغ شركة التمويل في الدفاتر، لذلك لم يُسجَّل الردّ. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
+  ],
+  ServerError_DEAL_UNWIND_DISPOSITION_REQUIRED: [
+    "Choose what happens to the customer's payment (refund or keep as credit) and fill in the credit note and the vehicle return. Nothing has been changed.",
+    "اختر ما يحدث لدفعة العميل (ردّها أو الاحتفاظ بها كرصيد دائن) وأكمل إشعار الدائن وإرجاع المركبة. لم يتم تغيير أي شيء.",
+  ],
+  // SCRUM-693 / SCRUM-691: the Unwind deal dialog and its entry point.
+  UnwindDealAction: [
+    "Unwind deal",
+    "التراجع عن الصفقة",
+  ],
+  UnwindDealResume: [
+    "Continue unwind",
+    "متابعة التراجع",
+  ],
+  UnwindDealTitle: [
+    "Unwind this deal",
+    "التراجع عن هذه الصفقة",
+  ],
+  UnwindDealDesc: [
+    "Reverse a deal the finance company has already paid, step by step. Each step is recorded and can be continued later.",
+    "عكس صفقة دفعت شركة التمويل قيمتها، خطوة بخطوة. تُسجَّل كل خطوة ويمكن متابعتها لاحقًا.",
+  ],
+  UnwindStepsLabel: [
+    "Unwind steps",
+    "خطوات التراجع",
+  ],
+  UnwindStepStart: [
+    "Reason",
+    "السبب",
+  ],
+  UnwindStepForward: [
+    "Finance-company return",
+    "استرداد شركة التمويل",
+  ],
+  UnwindStepFinish: [
+    "Refund and vehicle",
+    "الردّ والمركبة",
+  ],
+  UnwindStartExplain: [
+    "Record why this deal is being reversed. Nothing is posted yet.",
+    "سجّل سبب التراجع عن هذه الصفقة. لا يُرحَّل أي قيد بعد.",
+  ],
+  UnwindReasonLabel: [
+    "Reason",
+    "السبب",
+  ],
+  UnwindStartAction: [
+    "Start unwind",
+    "بدء التراجع",
+  ],
+  UnwindForwardExplain: [
+    "Record the finance company's return of the payment the dealership forwarded to it. The return must be settled before the refund.",
+    "سجّل استرداد المبلغ الذي دفعته المنشأة لشركة التمويل. يجب تسوية الاسترداد قبل الردّ.",
+  ],
+  UnwindForwardDueLabel: [
+    "Amount to be returned",
+    "المبلغ المطلوب استرداده",
+  ],
+  UnwindForwardDateLabel: [
+    "Date returned",
+    "تاريخ الاسترداد",
+  ],
+  UnwindForwardReferenceLabel: [
+    "Reference of the return",
+    "مرجع الاسترداد",
+  ],
+  UnwindForwardAction: [
+    "Record return",
+    "تسجيل الاسترداد",
+  ],
+  UnwindFinishExplain: [
+    "Refund the full amount the finance company paid, issue the credit note and take the vehicle back. The vehicle goes to inspection before it can be sold again.",
+    "ردّ كامل المبلغ الذي دفعته شركة التمويل، وأصدر إشعار الدائن، واستلم المركبة. تدخل المركبة الفحص قبل أن يمكن بيعها مجددًا.",
+  ],
+  UnwindRefundAmountLabel: [
+    "Refund to the finance company",
+    "المبلغ المردود لشركة التمويل",
+  ],
+  UnwindMethodBank: [
+    "bank transfer",
+    "تحويل بنكي",
+  ],
+  UnwindMethodCash: [
+    "cash",
+    "نقدًا",
+  ],
+  UnwindRefundDateLabel: [
+    "Date refunded",
+    "تاريخ الردّ",
+  ],
+  UnwindBankReferenceLabel: [
+    "Bank reference",
+    "المرجع البنكي",
+  ],
+  UnwindVoucherLabel: [
+    "Voucher number",
+    "رقم السند",
+  ],
+  UnwindAcknowledgedLabel: [
+    "The recipient acknowledged receiving the cash",
+    "أقرّ المستلم باستلام المبلغ نقدًا",
+  ],
+  UnwindCreditNoteLabel: [
+    "Credit note reference",
+    "مرجع إشعار الدائن",
+  ],
+  UnwindVehicleDateLabel: [
+    "Date the vehicle was returned",
+    "تاريخ إرجاع المركبة",
+  ],
+  UnwindVehicleNoteLabel: [
+    "Vehicle condition on return",
+    "حالة المركبة عند الإرجاع",
+  ],
+  UnwindVehicleInspectionNote: [
+    "The vehicle is held for inspection. It returns to sale only after an authorized user clears it.",
+    "تبقى المركبة قيد الفحص. لا تعود للبيع إلا بعد أن يُجيزها مستخدم مخوَّل.",
+  ],
+  UnwindDispositionLabel: [
+    "The customer's own payment",
+    "دفعة العميل نفسه",
+  ],
+  UnwindDispositionPlaceholder: [
+    "Choose what happens to it",
+    "اختر ما يحدث لها",
+  ],
+  UnwindDispositionRefund: [
+    "Mark it to be refunded to the customer (paid out separately)",
+    "تحديدها للردّ للعميل (يُصرف الردّ بشكل منفصل)",
+  ],
+  UnwindDispositionCredit: [
+    "Keep it as customer credit",
+    "الاحتفاظ بها كرصيد دائن للعميل",
+  ],
+  UnwindFinishAction: [
+    "Refund and reverse the sale",
+    "ردّ المبلغ وعكس البيع",
+  ],
+  UnwindAbandonAction: [
+    "Abandon this unwind",
+    "التخلي عن هذا التراجع",
+  ],
+  UnwindAbandonExplain: [
+    "Stop this unwind and leave the deal as it is. Anything already recorded stays recorded.",
+    "أوقف هذا التراجع واترك الصفقة كما هي. ما سُجِّل مسبقًا يبقى مسجّلًا.",
+  ],
+  UnwindAbandonConfirm: [
+    "Abandon unwind",
+    "تأكيد التخلي",
+  ],
+  UnwindPaidDealBanner: [
+    "This deal has been paid by the finance company. Use Unwind deal to record the returned forward, refund the full remittance, and reverse the sale.",
+    "دفعت شركة التمويل قيمة هذه الصفقة. استخدم التراجع عن الصفقة لتسجيل استرداد المبلغ المحوّل للشركة، وردّ كامل المبلغ المستلم منها، ثم عكس البيع.",
+  ],
+  UnwindInProgressBadge: [
+    "Unwinding",
+    "قيد التراجع",
+  ],
+  UnwindStartedSuccess: [
+    "Unwind started.",
+    "بدأ التراجع عن الصفقة.",
+  ],
+  UnwindForwardRecordedSuccess: [
+    "The finance company's return was recorded.",
+    "سُجّل استرداد شركة التمويل.",
+  ],
+  UnwindFinishedSuccess: [
+    "The deal was unwound: the refund and the vehicle return are recorded.",
+    "تم التراجع عن الصفقة: سُجّل الردّ وإرجاع المركبة.",
+  ],
+  UnwindAbandonedSuccess: [
+    "The unwind was abandoned.",
+    "تم التخلي عن التراجع.",
+  ],
 });
 
 /**
@@ -1879,8 +2187,28 @@ const quoteWizardQaMessages = defineBilingualMessages({
     "اعتمدت الإدارة سعر البيع هذا (الربح فوق سعر القائمة: {margin}). يمكنك المتابعة.",
   ],
 });
+/**
+ * SCRUM-681: why the record-quotation dialog has no calculated figure, for the
+ * reasons the operator can act on. The rule is the one applied to the deal — its
+ * snapshot, which may have been frozen on the quote — so the copy names no moment.
+ */
+const quotationUnavailableMessages = defineBilingualMessages({
+  QuotationUnavailableOffsetRuleUnknown: [
+    "The finance company's first-payment rule that applies to this deal isn't confirmed, so AutoFlow can't calculate a figure. Record the amount that was actually sent.",
+    "قاعدة الدفعة الأولى لشركة التمويل المطبَّقة على هذه الصفقة غير مؤكَّدة، لذلك لا يستطيع أوتوفلو احتساب رقم. سجِّل المبلغ الذي أُرسل فعلياً.",
+  ],
+  QuotationUnavailableOffsetRuleDoesNotApply: [
+    "Under this finance company's rules the customer's first payment doesn't offset the unfinanced share, so AutoFlow's calculation doesn't apply to this deal. Record the amount that was actually sent.",
+    "وفق قواعد شركة التمويل هذه لا تُخصم الدفعة الأولى للعميل من الجزء غير المموَّل، لذلك لا ينطبق احتساب أوتوفلو على هذه الصفقة. سجِّل المبلغ الذي أُرسل فعلياً.",
+  ],
+  QuotationUnavailableNoTarget: [
+    "AutoFlow has no target selling amount to calculate from for this deal. Record the amount that was actually sent.",
+    "لا يتوفّر لأوتوفلو مبلغ بيع مستهدف ليحتسب منه لهذه الصفقة. سجِّل المبلغ الذي أُرسل فعلياً.",
+  ],
+});
 export const salesEn = {
   ...quoteWizardQaMessages.en,
+  ...quotationUnavailableMessages.en,
   ...serverErrorMessages.en,
   ...dealRailMessages.en,
   ...dealStepMessages.en,
@@ -2305,7 +2633,7 @@ export const salesEn = {
   CancelApplication: "Cancel Application",
   ConfirmCancelApplication: "Cancel this application?",
   CancelApplicationWarning: "This permanently voids the application — e.g. because it was submitted against the wrong car. Any vehicle hold from a deposit will be released. To redo the deal, create a new quote and application.",
-  CancelClosedApplicationWarning: "This deal has already been finalized. Cancelling will void the sale, restore the vehicle to Available, reverse the posted accounting entries (revenue, commission, finance receivable, applied deposits), and reinstate any deposit as an active hold. This is blocked once disbursement funds have been confirmed received — that requires a manual accounting correction instead.",
+  CancelClosedApplicationWarning: "This deal has already been finalized. Cancelling will void the sale, restore the vehicle to Available, reverse the posted accounting entries (revenue, commission, finance receivable, applied deposits), and reinstate any deposit as an active hold. Once the finance company's payment has been received, use Unwind deal instead.",
   CancellationReasonLabel: "Reason (optional)",
   CancellationReasonPlaceholder: "e.g. Wrong vehicle selected",
   KeepApplication: "Keep Application",
@@ -2583,6 +2911,7 @@ export const salesEn = {
   ProfitPreparationUnreadable: "What the dealership spent preparing the supplier's car cannot be stated, so the figure is withheld rather than overstated.",
   ProfitExpensesMixedDenomination: "A cost the dealership bore is recorded in another currency, so the figure is withheld rather than computed over a partial total.",
   ProfitExpensesUnreadable: "A recorded cost amount on this deal could not be read, so the figure is withheld rather than computed over a corrupt total.",
+  ProfitExecutionFeeUnclassified: "It is not clear which recorded cost is the finance company's execution fee, or the deal's frozen fee total disagrees with it, so the estimate is withheld until an accountant reconciles the deal's costs.",
   LinePreparationExpenses: "Dealership preparation expenses on the supplier's car",
   ProfitInputCorrupt: "One of the recorded amounts is not valid, so the figure cannot be trusted.",
   ProfitDealCancelled: "This deal was cancelled, so it has no profit to report.",
@@ -2979,6 +3308,7 @@ export const salesEn = {
 
 export const salesAr = {
   ...quoteWizardQaMessages.ar,
+  ...quotationUnavailableMessages.ar,
   ...serverErrorMessages.ar,
   ...dealRailMessages.ar,
   ...dealStepMessages.ar,
@@ -3391,7 +3721,7 @@ export const salesAr = {
   CancelApplication: "إلغاء الطلب",
   ConfirmCancelApplication: "هل تريد إلغاء هذا الطلب؟",
   CancelApplicationWarning: "سيؤدي هذا إلى إلغاء الطلب نهائيًا — مثلاً إذا تم تقديمه بسيارة خاطئة. سيتم تحرير أي حجز للمركبة ناتج عن دفعة مقدمة. لإعادة الصفقة، أنشئ عرض سعر وطلبًا جديدين.",
-  CancelClosedApplicationWarning: "تم إنهاء هذه الصفقة بالفعل. سيؤدي الإلغاء إلى إبطال عملية البيع، وإعادة المركبة إلى متاحة، وعكس القيود المحاسبية المرحّلة (الإيراد، العمولة، ذمم التمويل، الدفعات المطبّقة)، وإعادة أي دفعة مقدمة كحجز نشط. هذا الإجراء محظور بعد تأكيد استلام مبلغ الصرف — في تلك الحالة يلزم تصحيح محاسبي يدوي بدلاً من ذلك.",
+  CancelClosedApplicationWarning: "تم إنهاء هذه الصفقة بالفعل. سيؤدي الإلغاء إلى إبطال عملية البيع، وإعادة المركبة إلى متاحة، وعكس القيود المحاسبية المرحّلة (الإيراد، العمولة، ذمم التمويل، الدفعات المطبّقة)، وإعادة أي دفعة مقدمة كحجز نشط. بعد استلام دفعة شركة التمويل، استخدم التراجع عن الصفقة بدلاً من ذلك.",
   CancellationReasonLabel: "السبب (اختياري)",
   CancellationReasonPlaceholder: "مثال: تم اختيار مركبة خاطئة",
   KeepApplication: "الإبقاء على الطلب",
@@ -3672,6 +4002,7 @@ export const salesAr = {
   ProfitPreparationUnreadable: "تعذّر تحديد ما أنفقه المعرض لتجهيز سيارة المورد، فحُجب الرقم بدل المبالغة فيه.",
   ProfitExpensesMixedDenomination: "أحد المصاريف التي تحمّلها المعرض مسجَّل بعملة أخرى، فحُجب الرقم بدل احتسابه على مجموع ناقص.",
   ProfitExpensesUnreadable: "تعذّرت قراءة أحد مبالغ المصاريف المسجَّلة على هذه الصفقة، فحُجب الرقم بدل احتسابه على مجموع تالف.",
+  ProfitExecutionFeeUnclassified: "لا يتضح أيّ المصاريف المسجَّلة هو رسوم تنفيذ شركة التمويل، أو أن مجموع الرسوم المجمَّد للصفقة يخالفها، فحُجب التقدير إلى أن يطابق المحاسب مصاريف الصفقة.",
   LinePreparationExpenses: "مصاريف تجهيز المعرض لسيارة المورد",
   ProfitInputCorrupt: "أحد المبالغ المُسجَّلة غير صالح، لذا لا يمكن الاعتماد على الرقم.",
   ProfitDealCancelled: "أُلغيت هذه الصفقة، فلا يوجد ربح لعرضه.",

@@ -278,6 +278,7 @@ function financedOverview(): FinancedDealOverviewData {
       customerGapCashPlannedMinor: 200 * SCALE,
       customerFirstPaymentMinor: 1_200 * SCALE,
       financier: {
+        receivedMinor: null,
         fundedPortionMinor: 12_000 * SCALE,
         // Pre-finalization: no receivable yet, so the expected remittance, as an estimate.
         outstanding: { state: "ESTIMATED_PRE_RECEIVABLE", amountMinor: 11_500 * SCALE, basis: "EXPECTED_DEALER_REMITTANCE" },

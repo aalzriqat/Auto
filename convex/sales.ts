@@ -41,6 +41,8 @@ import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompany
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { saleHasActiveDealUnwind } from "./utils/dealUnwindGuard";
+import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
 import { assertFinancedSaleHasDeal, assertOperatedDealMode } from "./utils/dealModes";
 import { getOrgCurrency, hookCommissionAccrued, hookCommissionAdjusted, hookCommissionPaid, hookSaleCancelled, isPostableNow, reverseCommissionForSale, commissionAccountingDate, commissionAccrualStrandedReason, commissionEntriesOutstandingStatus, hasCommissionAccrual, recognizedCommissionMinor, safeAdjustmentSeq, MAX_COMMISSION_ADJUSTMENTS } from "./accounting/workflowHooks";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
@@ -1780,6 +1782,10 @@ export const markCommissionPaid = mutation({
         }
         if (sale.status !== "COMPLETED") {
           throwAppError(AppErrorCode.VALIDATION_FAILED, "Only completed sale commissions can be paid.");
+        }
+        // SCRUM-693 D1: a deal being unwound is about to reverse this commission.
+        if (await saleHasActiveDealUnwind(ctx, args.orgId, sale._id)) {
+          throwAppError(AppErrorCode.DEAL_UNWIND_ACTIVE, DEAL_UNWIND_MESSAGES.DEAL_UNWIND_ACTIVE);
         }
         if (sale.commissionAmount == null || sale.commissionAmount <= 0) {
           throwAppError(AppErrorCode.VALIDATION_FAILED, "This sale has no commission amount to pay.");

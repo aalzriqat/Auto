@@ -26,7 +26,7 @@ const summary: FinancialSummaryData = {
   // Agreed under the gap resolution, not received: served beside "paid", never inside it.
   customerGapCashPlannedMinor: 200_000,
   customerFirstPaymentMinor: 1_000_000,
-  financier: { fundedPortionMinor: 9_350_000, outstanding: { state: "OUTSTANDING", amountMinor: 4_000_000, basis: "RECEIVABLE" } },
+  financier: { receivedMinor: null, fundedPortionMinor: 9_350_000, outstanding: { state: "OUTSTANDING", amountMinor: 4_000_000, basis: "RECEIVABLE" } },
   dealerOutlay: {
     plannedContributionMinor: 1_650_000,
     recordedCostsMinor: 150_000,
@@ -83,6 +83,7 @@ describe("DealFinancialOverview", () => {
         summary={{
           ...summary,
           financier: {
+            receivedMinor: null,
             fundedPortionMinor: 9_350_000,
             outstanding: { state: "ESTIMATED_PRE_RECEIVABLE", amountMinor: 9_200_000, basis: "EXPECTED_DEALER_REMITTANCE" },
           },
@@ -106,7 +107,7 @@ describe("DealFinancialOverview", () => {
       <DealFinancialOverview
         summary={{
           ...summary,
-          financier: { fundedPortionMinor: 9_350_000, outstanding: { state: "ESTIMATE_WITHHELD", amountMinor: null, basis: null, reason } },
+          financier: { receivedMinor: null, fundedPortionMinor: 9_350_000, outstanding: { state: "ESTIMATE_WITHHELD", amountMinor: null, basis: null, reason } },
         }}
         money={money}
         t={t}
@@ -126,6 +127,7 @@ describe("DealFinancialOverview", () => {
         summary={{
           ...summary,
           financier: {
+            receivedMinor: null,
             fundedPortionMinor: null,
             outstanding: { state: "OUTSTANDING", amountMinor: 4_000_000, basis: "RECEIVABLE" },
           },
@@ -141,13 +143,85 @@ describe("DealFinancialOverview", () => {
       <DealFinancialOverview
         summary={{
           ...summary,
-          financier: { fundedPortionMinor: null, outstanding: { state: "COLLECTED", amountMinor: 0, basis: "RECEIVABLE" } },
+          financier: { receivedMinor: null, fundedPortionMinor: null, outstanding: { state: "COLLECTED", amountMinor: 0, basis: "RECEIVABLE" } },
         }}
         money={money}
         t={tEn}
       />
     );
     expect(within(screen.getByTestId("overview-financier-balance")).getByText(salesEn.OverviewFinancierCollected)).toBeTruthy();
+  });
+
+  describe("SCRUM-690: what the finance company remitted is shown as received — the funded slice is not", () => {
+    // #pntr in production: approved 10,850, confirmed remittance 10,850,
+    // funded slice 9,222.5. The panel used to show only the 9,222.5.
+    const pntr: FinancialSummaryData = {
+      ...summary,
+      approvedPurchaseAmountMinor: 10_850_000,
+      financier: {
+        receivedMinor: 10_850_000,
+        fundedPortionMinor: 9_222_500,
+        outstanding: { state: "COLLECTED", amountMinor: 0, basis: "RECEIVABLE" },
+      },
+    };
+    test.each([
+      ["en", tEn, salesEn],
+      ["ar", tAr, salesAr],
+    ] as const)("%s: the confirmed 10,850 is a received fact; 9,222.5 is labelled as the financed slice", (_l, t, dictionary) => {
+      render(<DealFinancialOverview summary={pntr} money={money} t={t} />);
+      const received = within(screen.getByTestId("overview-financier-received"));
+      expect(received.getByText(dictionary.OverviewFinancierReceived)).toBeTruthy();
+      expect(received.getByText("10,850 JOD")).toBeTruthy();
+      expect(received.getByText(dictionary.OverviewFinancierReceivedNote)).toBeTruthy();
+      const funded = within(screen.getByTestId("overview-financier"));
+      expect(funded.getByText("9,222.5 JOD")).toBeTruthy();
+      expect(funded.getByText(dictionary.OverviewFinancierFundedNote)).toBeTruthy();
+    });
+    test("the received fact reads as money in, and precedes the funded slice", () => {
+      render(<DealFinancialOverview summary={pntr} money={money} t={tEn} />);
+      const received = screen.getByTestId("overview-financier-received");
+      const funded = screen.getByTestId("overview-financier");
+      expect(received.compareDocumentPosition(funded) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(received.querySelector("[data-tone]")?.getAttribute("data-tone")).toBe("in");
+    });
+    test("no row before a remittance is confirmed — the funded slice is never promoted into its place", () => {
+      render(
+        <DealFinancialOverview
+          summary={{ ...pntr, financier: { ...pntr.financier, receivedMinor: null } }}
+          money={money}
+          t={tEn}
+        />
+      );
+      expect(screen.queryByTestId("overview-financier-received")).toBeNull();
+    });
+    test("a payload from a backend that predates the field claims no remittance (frontend deploys before Convex)", () => {
+      const { receivedMinor: _omitted, ...olderFinancier } = pntr.financier;
+      render(
+        <DealFinancialOverview
+          summary={{ ...pntr, financier: olderFinancier as typeof pntr.financier }}
+          money={money}
+          t={tEn}
+        />
+      );
+      expect(screen.queryByTestId("overview-financier-received")).toBeNull();
+      expect(screen.queryByText(/NaN/)).toBeNull();
+    });
+    test("an unreadable stored remittance is shown as unreadable, not hidden", () => {
+      render(
+        <DealFinancialOverview
+          summary={{
+            ...pntr,
+            financier: { ...pntr.financier, receivedMinor: null },
+            unreadable: [{ field: "financierReceived", reason: "UNSAFE_AMOUNT" }],
+          }}
+          money={money}
+          t={tEn}
+        />
+      );
+      const received = within(screen.getByTestId("overview-financier-received"));
+      expect(received.getByText("—")).toBeTruthy();
+      expect(received.getByText(salesEn.OverviewAmountUnreadable)).toBeTruthy();
+    });
   });
 
   test("no fee policy: the expected side and the total read as unknown, never zero", () => {
@@ -186,7 +260,7 @@ describe("DealFinancialOverview", () => {
       approvedPurchaseAmountMinor: null,
       customerPaidToDealer: null,
       customerFirstPaymentMinor: null,
-      financier: { fundedPortionMinor: null, outstanding: { state: "NOT_YET_RECEIVABLE", amountMinor: null, basis: null } },
+      financier: { receivedMinor: null, fundedPortionMinor: null, outstanding: { state: "NOT_YET_RECEIVABLE", amountMinor: null, basis: null } },
       dealerOutlay: {
         plannedContributionMinor: null,
         recordedCostsMinor: 0,
@@ -340,7 +414,7 @@ describe("DealFinancialOverview", () => {
           customerPaidToDealer: null,
           customerGapCashPlannedMinor: null,
           customerFirstPaymentMinor: null,
-          financier: { fundedPortionMinor: null, outstanding: { state: "UNKNOWN", amountMinor: null, basis: null } },
+          financier: { receivedMinor: null, fundedPortionMinor: null, outstanding: { state: "UNKNOWN", amountMinor: null, basis: null } },
           dealerOutlay: { ...summary.dealerOutlay, plannedContributionMinor: null, knownCommittedMinor: null, totalExpectedMinor: null },
           supplier: { ...summary.supplier, amountMinor: null },
           unreadable: [
@@ -392,7 +466,7 @@ describe("DealFinancialOverview", () => {
       <DealFinancialOverview
         summary={{
           ...summary,
-          financier: { fundedPortionMinor: 9_350_000, outstanding: { state: "NONE_DIRECT_ROUTE", amountMinor: null, basis: null } },
+          financier: { receivedMinor: null, fundedPortionMinor: 9_350_000, outstanding: { state: "NONE_DIRECT_ROUTE", amountMinor: null, basis: null } },
           supplier: { consigned: false, direction: "NOT_INVOLVED", amountMinor: 0, route: "THROUGH_DEALERSHIP" },
         }}
         money={money}
@@ -492,7 +566,7 @@ describe("DealFinancialOverview colour semantics (SCRUM-372)", () => {
       <DealFinancialOverview
         summary={{
           ...summary,
-          financier: { fundedPortionMinor: 9_350_000, outstanding: { state: "COLLECTED", amountMinor: 0, basis: "RECEIVABLE" } },
+          financier: { receivedMinor: null, fundedPortionMinor: 9_350_000, outstanding: { state: "COLLECTED", amountMinor: 0, basis: "RECEIVABLE" } },
         }}
         money={money}
         t={tEn}

@@ -17,8 +17,8 @@ const ar = dictionaries.ar as Record<string, string>;
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => en[key] ?? key, language: "en", dir: "ltr" }),
 }));
-vi.mock("@/hooks/useCurrency", () => ({
-  useCurrency: () => ({ currency: "JOD", format: (n: number) => `${n} JOD`, formatCurrency: (n: number) => `${n} JOD` }),
+vi.mock("@/hooks/useOrgSettings", () => ({
+  useOrgSettings: () => ({ currency: "JOD" }),
 }));
 
 afterEach(cleanup);

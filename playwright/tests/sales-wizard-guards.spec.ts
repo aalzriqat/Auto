@@ -102,9 +102,11 @@ test.describe("sales wizard guards (SCRUM-609)", () => {
     const terms = page.getByTestId("review-deal-terms");
     await expect(terms).toBeVisible();
     await expect(terms).toContainText("Sale Price");
-    await expect(terms).toContainText("11,100.00");
+    // SCRUM-684: whole amounts drop the decimals and carry the org's currency.
+    await expect(terms).toContainText(/11,100\sJOD/);
+    await expect(terms).not.toContainText("11,100.00");
     await expect(terms).toContainText("Down Payment");
-    await expect(terms).toContainText("3,000.00");
+    await expect(terms).toContainText(/3,000\sJOD/);
     await page.getByRole("button", { name: "Generate Quote", exact: true }).click({ trial: true });
   });
 

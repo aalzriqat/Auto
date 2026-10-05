@@ -30,7 +30,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useCurrency } from "@/hooks/useCurrency";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { VehicleCostBar } from "../components/VehicleCostBar";
 import { useProfitApproval } from "@/components/sales/ProfitApprovalNotice";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
@@ -65,7 +65,7 @@ export default function Step1QuoteSetup({
 }: Step1QuoteSetupProps) {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
-  const currency = useCurrency();
+  const currency = useMoneyDisplay();
 
   const isCash = paymentType === "CASH";
 
@@ -743,7 +743,7 @@ export default function Step1QuoteSetup({
         <div className="flex justify-end pt-4 border-t">
           <Button type="submit" disabled={isBlockedByProfit} className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white shadow-md hover:shadow-lg transition-all rounded-full px-8 h-12">
             {t("Next" as any)}
-            <ArrowRight className="w-4 h-4 ms-2" />
+            <ArrowRight className="w-4 h-4 ms-2 rtl:-scale-x-100" />
           </Button>
         </div>
       </form>

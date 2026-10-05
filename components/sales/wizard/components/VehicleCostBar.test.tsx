@@ -20,8 +20,8 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
 vi.mock("@/components/providers/OrgProvider", () => ({
   useOrg: () => ({ activeOrgId: stubs.orgId }),
 }));
-vi.mock("@/hooks/useCurrencyFormatter", () => ({
-  useCurrencyFormatter: () => (n: number) => `${n} JOD`,
+vi.mock("@/hooks/useOrgSettings", () => ({
+  useOrgSettings: () => ({ currency: "JOD" }),
 }));
 vi.mock("@/hooks/use-permissions", () => ({
   usePermissions: () => ({

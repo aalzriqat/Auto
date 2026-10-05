@@ -23,6 +23,23 @@ import { AppErrorCode, throwAppError } from "./errors";
 export const VEHICLE_DELETED_MESSAGE =
   "This vehicle has been deleted and can no longer be quoted, reserved, sold or take a deposit.";
 
+export const VEHICLE_NOT_READY_FOR_SALE_MESSAGE =
+  "This vehicle is in inspection or repair and cannot be sold until it is cleared for sale.";
+
+/**
+ * SCRUM-693 PR-B F1: a car in inspection or repair (the status an unwound deal parks its returned
+ * car in) is not sold until an authorized edit returns it to AVAILABLE.
+ */
+export const isVehicleHeldOutOfSale = (v: Doc<"vehicles">): boolean =>
+  v.status === "IN_INSPECTION" || v.status === "IN_REPAIR";
+
+/** Throws unless a vehicle the caller has already scoped to its organisation may be sold. No-op for null. */
+export function assertVehicleReadyForSale(vehicle: Doc<"vehicles"> | null | undefined): void {
+  if (vehicle && isVehicleHeldOutOfSale(vehicle)) {
+    throwAppError(AppErrorCode.VEHICLE_NOT_READY_FOR_SALE, VEHICLE_NOT_READY_FOR_SALE_MESSAGE);
+  }
+}
+
 /** True when the vehicle is soft-deleted. */
 export const isVehicleDeleted = (v: Doc<"vehicles">): boolean => v.isDeleted === true;
 

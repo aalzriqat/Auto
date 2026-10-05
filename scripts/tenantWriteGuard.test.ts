@@ -661,10 +661,14 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // SCRUM-413 PR-B /simplify: `migrateRoles.prepareSplitDealAuthorities` is now an internalQuery (it only
   // reads) - 513 -> 512 total, 341 -> 340 analysed. Re-measured FROM THE ANALYSER on this tree.
   // Skipped counts unchanged.
+  // SCRUM-693: + dealUnwind.startDealUnwind/recordDealUnwindForwardReturn/finishDealUnwind/abandonDealUnwind (+4);
+  // SCRUM-690: + financeDealCosts.recordExecutionFeeActual / bindExecutionFeeLine / unbindExecutionFeeLine (+3).
+  // 512 -> 519 total, 340 -> 347 analysed. Each takes `orgId` and reads through an org-checked load after
+  // `requireTenantAuth` before any write; the unguarded-write audit stays empty. Skipped counts unchanged.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 512,
-      analysed: 340,
+      totalMutations: 519,
+      analysed: 347,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

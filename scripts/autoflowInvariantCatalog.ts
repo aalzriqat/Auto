@@ -1056,6 +1056,9 @@ type ActiveTestRegistration = {
   kind: "test" | "it" | "describe";
   title: string;
   callback?: ts.ArrowFunction | ts.FunctionExpression;
+  // `.each` on this call or on any enclosing describe: the title is registered
+  // once but runs once per table row, so an empty table runs nothing.
+  parameterized: boolean;
 };
 
 const DISALLOWED_EVIDENCE_MODIFIERS = new Set([
@@ -1139,6 +1142,7 @@ function registrationFromCall(
     kind: signature.root as ActiveTestRegistration["kind"],
     title: first.text,
     callback,
+    parameterized: signature.modifiers.includes("each"),
   };
 }
 
@@ -1155,7 +1159,10 @@ function collectActiveTestRegistrations(
   );
   const registrations: ActiveTestRegistration[] = [];
 
-  const scanStatements = (statements: readonly ts.Statement[]): void => {
+  const scanStatements = (
+    statements: readonly ts.Statement[],
+    insideParameterized: boolean
+  ): void => {
     for (const statement of statements) {
       if (
         !ts.isExpressionStatement(statement) ||
@@ -1164,10 +1171,14 @@ function collectActiveTestRegistrations(
         continue;
       }
 
-      const registration = registrationFromCall(statement.expression);
-      if (!registration) {
+      const found = registrationFromCall(statement.expression);
+      if (!found) {
         continue;
       }
+      const registration = {
+        ...found,
+        parameterized: found.parameterized || insideParameterized,
+      };
 
       registrations.push(registration);
 
@@ -1176,12 +1187,15 @@ function collectActiveTestRegistrations(
         registration.callback &&
         ts.isBlock(registration.callback.body)
       ) {
-        scanStatements(registration.callback.body.statements);
+        scanStatements(
+          registration.callback.body.statements,
+          registration.parameterized
+        );
       }
     }
   };
 
-  scanStatements(file.statements);
+  scanStatements(file.statements, false);
   return registrations;
 }
 
@@ -1202,6 +1216,20 @@ function registrationIdentifiers(
 
   visit(registration.callback.body);
   return identifiers;
+}
+
+/**
+ * Active `it`/`test` registrations in a test source, for the review-evidence
+ * validator (scripts/intelligence/reviewEvidence.mjs). Same parser and same
+ * skip/todo/only rules as the proof markers; `describe` blocks are omitted.
+ */
+export function listActiveTestRegistrations(
+  source: string,
+  scriptKind: ts.ScriptKind = ts.ScriptKind.TS
+): readonly { title: string; parameterized: boolean }[] {
+  return collectActiveTestRegistrations(source, scriptKind)
+    .filter((registration) => registration.kind !== "describe")
+    .map(({ title, parameterized }) => ({ title, parameterized }));
 }
 
 export function sourceHasActiveTestMarker(

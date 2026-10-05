@@ -74,7 +74,13 @@ type AuditActionType =
   // cleared. One command undoes that disbursement (application receipt fields,
   // allocations, payment, its cash-received posting); the trail records who
   // asserted it and what was undone, because the ledger shows only the reversal.
-  | "RETURN_FINANCE_DISBURSEMENT_CHEQUE";
+  | "RETURN_FINANCE_DISBURSEMENT_CHEQUE"
+  // SCRUM-693: the steps of unwinding a paid finance deal from the deal page.
+  | "DEAL_UNWIND_STARTED"
+  | "DEAL_UNWIND_FORWARD_RETURNED"
+  | "DEAL_UNWIND_REMITTANCE_REFUNDED"
+  | "DEAL_UNWIND_COMPLETED"
+  | "DEAL_UNWIND_ABANDONED";
 
 // ─── Internal: write audit entry ─────────────────────────────────────────────
 

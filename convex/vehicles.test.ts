@@ -881,6 +881,24 @@ describe("inventory intelligence", () => {
     });
   });
 
+  test("update to AVAILABLE keeps a vehicle with a live reservation RESERVED (SCRUM-700 N1)", async () => {
+    const { t, orgId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Held", lastName: "Customer" })
+    );
+    await asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(), orgId, vehicleId, customerId });
+    // A held car was moved to inspection; the reservation is still live.
+    await t.run((ctx) => ctx.db.patch(vehicleId, { status: "IN_INSPECTION", preHoldStatus: undefined }));
+
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, status: "AVAILABLE" });
+
+    const vehicle = await t.run((ctx) => ctx.db.get(vehicleId));
+    expect(vehicle?.status).toBe("RESERVED");
+  });
+
   test("releaseReservation keeps vehicle reserved when another active deposit hold exists", async () => {
     const { t, orgId, userId, asUser } = await setup();
     const vehicleId = await asUser.mutation(api.vehicles.create, {

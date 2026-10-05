@@ -39,7 +39,9 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Install Playwright browsers
-        run: pnpm exec playwright install --with-deps chromium
+        # webkit: the static visual gate proves the deals list's whole-row hit
+        # target in WebKit too (playwright.visual.config.ts, SCRUM-694 M3).
+        run: pnpm exec playwright install --with-deps chromium webkit
 
       - name: Deal cockpit visual gate
         run: |

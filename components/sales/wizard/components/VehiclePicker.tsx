@@ -4,7 +4,7 @@ import { useMemo, useRef, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { ChevronDown, Search, Check, Truck, Loader2 } from "lucide-react";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useCurrency } from "@/hooks/useCurrency";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { availabilityOf, type PickerAvailability } from "../hooks/usePickerAvailability";
 
 export type SourceVehicleData = {
@@ -109,7 +109,7 @@ export default function VehiclePicker({
   );
   const containerRef = useRef<HTMLDivElement>(null);
   const { t, isRtl } = useLanguage();
-  const currency = useCurrency();
+  const currency = useMoneyDisplay();
 
   // Jump straight into the pre-filled source form on mount rather than making
   // the user open the dropdown and click "source a vehicle" themselves.
@@ -409,11 +409,11 @@ export default function VehiclePicker({
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <p className={labelCls}>{t("SupplierCostLabel" as any)} ({currency.displayLabel}) *</p>
+                    <p className={labelCls}>{t("SupplierCostLabel" as any)} ({currency.label}) *</p>
                     <input className={inputCls} type="number" min="0" step="0.01" value={sourceData.sourceCost || ""} onChange={(e) => setSourceData((d) => ({ ...d, sourceCost: parseFloat(e.target.value) || 0 }))} placeholder="0.000" />
                   </div>
                   <div>
-                    <p className={labelCls}>{t("SellingPriceLabel" as any)} ({currency.displayLabel}) *</p>
+                    <p className={labelCls}>{t("SellingPriceLabel" as any)} ({currency.label}) *</p>
                     <input className={inputCls} type="number" min="0" step="0.01" value={sourceData.sellingPrice || ""} onChange={(e) => setSourceData((d) => ({ ...d, sellingPrice: parseFloat(e.target.value) || 0 }))} placeholder="0.000" />
                   </div>
                 </div>

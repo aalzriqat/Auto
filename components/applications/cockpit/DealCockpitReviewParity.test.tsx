@@ -206,6 +206,20 @@ function application(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// A closed deal's unwind status, once read: nothing active, nothing offered. The controls an active unwind
+// bars stay off until it resolves, so a closed deal needs one to be seen as the settled deal these tests mean.
+beforeEach(() => {
+  queryResults.set("dealUnwind:unwindStatus", {
+    unwindId: null,
+    status: null,
+    step: null,
+    startedAt: null,
+    eligibility: { canStart: false, canForwardReturn: false, canFinish: false, canAbandon: false },
+    refusals: {},
+    evidence: null,
+  });
+});
+
 afterEach(() => {
   cleanup();
   queryResults.clear();
@@ -695,6 +709,18 @@ describe("disbursement - the payment to the finance company comes first", () => 
     { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
     { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
   ];
+
+  test("a closed deal's forward correction waits for the unwind status, which may bar it", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ status: "CLOSED", stages: settledStages, forward: forward({ state: "SETTLED", onBooksForwardId: "fwd_1" }), money: forwardMoney })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    queryResults.delete("dealUnwind:unwindStatus");
+    renderCockpit();
+    expect(screen.queryByTestId("deal-forward-void")).toBeNull();
+  });
 
   test("ON_BOOKS before the transfer: the manager can void or report it returned, each with a reason", async () => {
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);

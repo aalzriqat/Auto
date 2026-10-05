@@ -4,6 +4,7 @@ import { Doc } from "@/convex/_generated/dataModel";
 import { Car, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { VehicleCostBar } from "./VehicleCostBar";
 
 interface ReviewVehicleCardProps {
@@ -20,6 +21,7 @@ export default function ReviewVehicleCard({
   className,
 }: ReviewVehicleCardProps) {
   const { t } = useLanguage();
+  const money = useMoneyDisplay();
   const effectivePrice = basePrice + desiredProfit;
 
   return (
@@ -43,10 +45,7 @@ export default function ReviewVehicleCard({
       <div className="space-y-1">
         <div className="flex items-baseline gap-2">
           <span className="text-lg font-bold">
-            {basePrice?.toLocaleString(undefined, {
-              minimumFractionDigits: 2,
-            })}{" "}
-            {t("JOD" as any)}
+            {money.format(basePrice ?? 0)}
           </span>
           <span className="text-xs text-muted-foreground">{t("BasePrice" as any)}</span>
         </div>
@@ -55,13 +54,8 @@ export default function ReviewVehicleCard({
           <div className="flex items-center gap-2 text-sm">
             <TrendingUp className="w-3.5 h-3.5 text-indigo-400" />
             <span className="text-indigo-300">
-              + {desiredProfit.toLocaleString()} {t("JOD" as any)} {t("DealerProfit" as any)} →{" "}
-              <strong>
-                {effectivePrice.toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                })}{" "}
-                {t("JOD" as any)}
-              </strong>
+              + {money.format(desiredProfit)} {t("DealerProfit" as any)} →{" "}
+              <strong>{money.format(effectivePrice)}</strong>
             </span>
           </div>
         )}
