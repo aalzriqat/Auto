@@ -106,9 +106,9 @@ describe("Step3Review — committed deal terms (SCRUM-609 F-03)", () => {
 
     const terms = screen.getByTestId("review-deal-terms");
     expect(within(terms).getByText("SalePrice")).toBeTruthy();
-    expect(within(terms).getByText(/11,600\.00/)).toBeTruthy();
+    expect(within(terms).getByText(/^11,600\sJOD$/)).toBeTruthy();
     expect(within(terms).getByText("DownPayment")).toBeTruthy();
-    expect(within(terms).getByText(/3,000\.00/)).toBeTruthy();
+    expect(within(terms).getByText(/^3,000\sJOD$/)).toBeTruthy();
   });
 
   test("labels every amount with the organization's currency, not a hard-coded JOD", () => {

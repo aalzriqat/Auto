@@ -57,9 +57,6 @@ vi.mock("convex/react", async () => {
   };
 });
 vi.mock("@/hooks/useOrgSettings", () => ({ useOrgSettings: () => null }));
-vi.mock("@/hooks/useCurrencyFormatter", () => ({
-  useCurrencyFormatterInCurrency: () => (n: number) => String(n),
-}));
 vi.mock("@/lib/htmlToPdf", () => ({ downloadElementAsPdf: vi.fn(async () => true) }));
 vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: stubs.toastError } }));
 vi.mock("@/components/deposits/QuoteDepositManager", () => ({ QuoteDepositManager: () => null }));

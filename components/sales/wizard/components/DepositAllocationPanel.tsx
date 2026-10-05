@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
@@ -48,7 +49,8 @@ export function DepositAllocationPanel({
   orgId: Id<"organizations">;
   quoteId: Id<"quotes">;
 }) {
-  const { t, isRtl } = useLanguage();
+  const { t } = useLanguage();
+  const display = useMoneyDisplay();
   const allocation = useQuery(api.deposits.quoteAllocation, { orgId, quoteId });
   const allocate = useMutation(api.deposits.allocateToVehicles);
   // Splitting held money across cars is the same authority as recording the
@@ -104,8 +106,9 @@ export function DepositAllocationPanel({
   const available = allocation.availableForAllocationMinor;
   const remainingMinor = available - draftTotalMinor;
   const overAllocated = remainingMinor < 0;
-  const money = (minor: number) =>
-    (minor / scale).toLocaleString(isRtl ? "ar-JO" : "en-JO", { maximumFractionDigits: 2 });
+  // The quote's own currency and the server's scale: capping at two decimals
+  // here used to hide the third fils digit of a JOD deposit.
+  const money = (minor: number) => display.format(minor / scale, allocation.currency, allocation.scale);
 
   const suggest = () => {
     // The obvious split: fill each car up to its own price, in the order they
@@ -180,7 +183,7 @@ export function DepositAllocationPanel({
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium">{v.label}</p>
               <p className="text-xs text-muted-foreground">
-                {t("QuotedAt" as any)} {v.unitPrice.toLocaleString()}
+                {t("QuotedAt" as any)} {display.format(v.unitPrice, allocation.currency, allocation.scale)}
               </p>
             </div>
             {v.status !== undefined && v.status !== "ALLOCATED" ? (

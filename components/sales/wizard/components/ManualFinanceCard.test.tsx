@@ -8,6 +8,8 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
   }),
 }));
 
+vi.mock("@/hooks/useOrgSettings", () => ({ useOrgSettings: () => ({ currency: "JOD" }) }));
+
 import { ManualFinanceCard } from "./ManualFinanceCard";
 
 afterEach(cleanup);

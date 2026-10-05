@@ -4,6 +4,7 @@ import { Check, AlertTriangle, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FinanceComparisonResult } from "../hooks/useFinanceComparison";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 
 const DOC_TRANSLATIONS: Record<string, string> = {
   "هوية": "ID Card",
@@ -40,6 +41,7 @@ export function FinanceCompanyCard({
   onSelect,
 }: FinanceCompanyCardProps) {
   const { isRtl, t } = useLanguage();
+  const money = useMoneyDisplay();
 
   return (
     <button
@@ -116,14 +118,9 @@ export function FinanceCompanyCard({
         >
           {result.feesConfigured && result.monthlyInstallment !== undefined ? (
             <>
-              {result.monthlyInstallment.toLocaleString(
-                undefined,
-                {
-                  minimumFractionDigits: 2,
-                }
-              )}
+              {money.amount(result.monthlyInstallment)}
               <span className="text-sm font-normal text-muted-foreground ms-1">
-                {t("JOD" as any)}
+                {money.label}
               </span>
             </>
           ) : (
@@ -140,12 +137,7 @@ export function FinanceCompanyCard({
               <span>{t("FinancedAmount" as any)}</span>
 
               <span className="font-medium text-foreground">
-                {result.totalFinancedAmount.toLocaleString(
-                  undefined,
-                  {
-                    minimumFractionDigits: 2,
-                  }
-                )}
+                {money.format(result.totalFinancedAmount)}
               </span>
             </div>
 
@@ -153,12 +145,7 @@ export function FinanceCompanyCard({
               <span>{t("TotalProfit" as any) || "Total Profit"}</span>
 
               <span className="font-medium text-foreground">
-                {(result.totalProfit ?? 0).toLocaleString(
-                  undefined,
-                  {
-                    minimumFractionDigits: 2,
-                  }
-                )}
+                {money.format(result.totalProfit ?? 0)}
               </span>
             </div>
 
@@ -167,12 +154,7 @@ export function FinanceCompanyCard({
                 <span>{t("Takaful" as any)}</span>
 
                 <span className="font-medium text-foreground">
-                  {result.takafulAmount.toLocaleString(
-                    undefined,
-                    {
-                      minimumFractionDigits: 2,
-                    }
-                  )}
+                  {money.format(result.takafulAmount)}
                 </span>
               </div>
             )}
@@ -192,18 +174,12 @@ export function FinanceCompanyCard({
 
             <p className="text-rose-700 dark:text-rose-300">
               {t("ExceedingBy" as any) || "Exceeding by"}:{" "}
-              {(result.totalFinancedAmount - result.maxFinancingAllowed).toLocaleString(undefined, { minimumFractionDigits: 2 })} {t("JOD" as any)}
+              {money.format(result.totalFinancedAmount - result.maxFinancingAllowed)}
             </p>
 
             <p className="text-rose-700 dark:text-rose-300">
               {t("MinDownPayment" as any)}:{" "}
-              {result.minimumDownPayment.toLocaleString(
-                undefined,
-                {
-                  minimumFractionDigits: 2,
-                }
-              )}{" "}
-              {t("JOD" as any)}
+              {money.format(result.minimumDownPayment)}
             </p>
           </div>
         )}
