@@ -90,3 +90,85 @@ describe("SCRUM-641 R2-F1: the wizard explains a deleted-vehicle block", () => {
     expect(screen.getByRole("button", { name: dictionaries.en.Next as string }).hasAttribute("disabled")).toBe(false);
   });
 });
+
+/**
+ * SCRUM-656: the wizard's profit-approval alerts were hard-coded English. The
+ * expected wording is written out literally (not read from the dictionary) so a
+ * missing key or an English fallback under Arabic fails here. The English half
+ * is the wording playwright/tests/profit-approval.spec.ts binds to.
+ */
+describe("SCRUM-656: profit-approval alerts follow the language", () => {
+  const COPY = {
+    en: {
+      requiredTitle: "Approval Required",
+      requiredBody:
+        "At this price the profit over the list price (100) is below the minimum required profit for this vehicle (5000).",
+      pending: "Approval request is currently pending. Please wait for a manager.",
+      rejected: "Your request for this profit amount was rejected. Please increase the profit or request again.",
+      request: "Request Profit Approval",
+      approvedTitle: "Profit Approved",
+      approvedBody: "Management approved this sale price (profit over the list price: 100). You may proceed.",
+    },
+    ar: {
+      requiredTitle: "مطلوب اعتماد",
+      requiredBody:
+        "عند هذا السعر، الربح فوق سعر القائمة (100) أقل من الحد الأدنى المطلوب لربح هذه المركبة (5000).",
+      pending: "طلب الاعتماد قيد الانتظار. يرجى انتظار قرار المدير.",
+      rejected: "رُفض طلبك لمبلغ الربح هذا. يرجى زيادة الربح أو إعادة الطلب.",
+      request: "طلب اعتماد الربح",
+      approvedTitle: "تم اعتماد الربح",
+      approvedBody: "اعتمدت الإدارة سعر البيع هذا (الربح فوق سعر القائمة: 100). يمكنك المتابعة.",
+    },
+  } as const;
+  const verdict = (status: string) => ({ status, margin: 100, minimumProfit: 5000 });
+
+  test.each(["en", "ar"] as const)("%s: REQUIRED shows the title, body and request action", (locale) => {
+    stubs.locale = locale;
+    stubs.verdict = verdict("REQUIRED");
+    renderStep();
+    const copy = COPY[locale];
+    expect(screen.getByText(copy.requiredTitle)).toBeTruthy();
+    expect(screen.getByText(copy.requiredBody)).toBeTruthy();
+    expect(screen.getByRole("button", { name: copy.request })).toBeTruthy();
+    expect(screen.getByRole("button", { name: dictionaries[locale].Next as string }).hasAttribute("disabled")).toBe(true);
+  });
+
+  test.each(["en", "ar"] as const)("%s: PENDING shows the waiting notice and no request action", (locale) => {
+    stubs.locale = locale;
+    stubs.verdict = verdict("PENDING");
+    renderStep();
+    const copy = COPY[locale];
+    expect(screen.getByText(copy.requiredTitle)).toBeTruthy();
+    expect(screen.getByText(copy.pending)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: copy.request })).toBeNull();
+  });
+
+  test.each(["en", "ar"] as const)("%s: REJECTED shows the rejection and offers to ask again", (locale) => {
+    stubs.locale = locale;
+    stubs.verdict = verdict("REJECTED");
+    renderStep();
+    const copy = COPY[locale];
+    expect(screen.getByText(copy.rejected)).toBeTruthy();
+    expect(screen.getByRole("button", { name: copy.request })).toBeTruthy();
+  });
+
+  test.each(["en", "ar"] as const)("%s: APPROVED shows the approval with the margin", (locale) => {
+    stubs.locale = locale;
+    stubs.verdict = verdict("APPROVED");
+    renderStep();
+    const copy = COPY[locale];
+    expect(screen.getByText(copy.approvedTitle)).toBeTruthy();
+    expect(screen.getByText(copy.approvedBody)).toBeTruthy();
+    expect(screen.queryByText(copy.requiredTitle)).toBeNull();
+  });
+
+  test("ar: no English approval wording leaks into the Arabic UI", () => {
+    stubs.locale = "ar";
+    for (const status of ["REQUIRED", "PENDING", "REJECTED", "APPROVED"]) {
+      stubs.verdict = verdict(status);
+      const { container } = renderStep();
+      expect(container.textContent).not.toMatch(/Approval|Approved|Requesting|Management|pending|rejected/);
+      cleanup();
+    }
+  });
+});
