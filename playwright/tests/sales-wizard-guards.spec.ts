@@ -161,23 +161,34 @@ test.describe("sales wizard guards (SCRUM-609)", () => {
     await trigger.click();
     await expect(trigger).toHaveAttribute("aria-expanded", "true");
     // Desktop chat windows (fixed, z-50) stack along the same end edge; the
-    // list must stay on top of them. A stand-in window is placed there.
-    const listOnTop = await list.evaluate((input) => {
-      const panel = input.closest(".fixed")!;
+    // list must stay on top of them. A stand-in window is placed where they
+    // render.
+    const listHit = () =>
+      page.getByTestId("messenger-list").evaluate((panel: HTMLElement) => {
+        // A modal sets pointer-events: none on the page behind it, which hides
+        // the list from hit-testing however it paints; force it back on so the
+        // hit test reflects paint order.
+        const previous = panel.style.pointerEvents;
+        panel.style.pointerEvents = "auto";
+        const r = panel.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.x + r.width / 2, r.bottom - 12);
+        panel.style.pointerEvents = previous;
+        return !!hit && panel.contains(hit);
+      });
+    await page.evaluate(() => {
       const win = document.createElement("div");
+      win.id = "e2e-stand-in-chat";
       win.className = "fixed bottom-0 z-50";
       Object.assign(win.style, { right: "24px", left: "24px", height: "90vh" });
-      document.body.appendChild(win);
-      const r = panel.getBoundingClientRect();
-      const hit = document.elementFromPoint(r.x + r.width / 2, r.bottom - 12);
-      win.remove();
-      return !!hit && panel.contains(hit);
+      document.querySelector('[data-testid="messenger-chat-windows"]')!.appendChild(win);
     });
-    expect(listOnTop).toBe(true);
+    expect(await listHit()).toBe(true);
+    await page.evaluate(() => document.getElementById("e2e-stand-in-chat")!.remove());
 
-    // Escaping the new-conversation dialog closes the dialog, not the list.
+    // A modal opened over the list covers it (its backdrop is z-50 too).
     await page.getByTitle("New message").click();
     await expect(page.getByRole("dialog")).toBeVisible();
+    expect(await listHit()).toBe(false);
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(list).toBeVisible();

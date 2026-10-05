@@ -158,16 +158,31 @@ function FloatingMessengerInner({ orgId }: Props) {
 
   return (
     <>
+      {/* ── Desktop floating chat windows ────────────────────────────────────── */}
+      {/* Rendered before the list so the list paints over them (same z-50). */}
+      <div className="hidden md:block" data-testid="messenger-chat-windows">
+        {openChats.map((id, i) => (
+          <FloatingChatWindow
+            key={id}
+            conversationId={id}
+            currentUserId={me._id}
+            index={i}
+          />
+        ))}
+      </div>
+
       {/* ── Conversation list panel — opened from the top-bar Messages button.
           There is no floating trigger: it covered page actions (SCRUM-612). ── */}
       {isListOpen && (
         <div
           ref={setPanelEl}
+          data-testid="messenger-list"
           className={cn(
             // top / max-height are set from the top bar's position above.
-            // z-[55]: above the chat windows (z-50) that stack along the same
-            // end edge, below the messenger onboarding (z-60/61).
-            "fixed top-16 md:top-[4.5rem] end-2 md:end-6 z-[55]",
+            // z-50, like the chat windows that stack along the same end edge:
+            // it renders after them, so it paints over them, while dialogs
+            // (z-50, portaled later) still cover it.
+            "fixed top-16 md:top-[4.5rem] end-2 md:end-6 z-50",
             "w-[min(320px,calc(100vw-1rem))] bg-white rounded-2xl shadow-2xl border border-slate-200/50 overflow-hidden flex flex-col",
             "max-h-[min(480px,calc(100dvh-5rem))]"
           )}
@@ -287,18 +302,6 @@ function FloatingMessengerInner({ orgId }: Props) {
           </div>
         </div>
       )}
-
-      {/* ── Desktop floating chat windows ────────────────────────────────────── */}
-      <div className="hidden md:block">
-        {openChats.map((id, i) => (
-          <FloatingChatWindow
-            key={id}
-            conversationId={id}
-            currentUserId={me._id}
-            index={i}
-          />
-        ))}
-      </div>
 
       {/* ── Mobile: full-screen chat sheet ───────────────────────────────────── */}
       <Sheet open={mobileOpenId !== null} onOpenChange={(v) => !v && setMobileOpenId(null)}>
