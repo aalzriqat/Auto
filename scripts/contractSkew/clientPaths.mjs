@@ -911,11 +911,13 @@ function collectFromExpression(expr, context) {
       checker,
       node.condition,
       refinements,
+      evidence,
     );
     const whenFalseRefinements = falsyRefinementsForCondition(
       checker,
       node.condition,
       refinements,
+      evidence,
     );
     return mergeClientNodes(
       collectFromExpression(node.whenTrue, nested(prefix, whenTrueRefinements)),
@@ -933,6 +935,16 @@ function collectFromExpression(expr, context) {
   // Not a literal — fall back to the assertion-free type of the expression.
   const type = checker.getTypeAtLocation(node);
   const collected = collectPaths(checker, type, prefix, acc, depth, seen, "LITERAL");
+  // SCRUM-686: TypeScript narrows `a.b` only for a DIRECT condition (or a
+  // readonly property through an aliased one), so a proven `!!a.b` carried by a
+  // const alias is lost here. The use-site refinement recorded from the branch
+  // condition is applied instead — but never for a receiver that is written
+  // anywhere, because then the fact may have been invalidated before this read.
+  const access = routeParamAccess(node);
+  const receiverSymbol = access ? resolveSymbol(checker, access.receiver) : null;
+  if (access && receiverSymbol && !evidence.isWrittenSymbol(receiverSymbol)) {
+    return applyUseSiteRefinement(collected, refinementForExpression(checker, node, refinements));
+  }
   return collected;
 }
 
@@ -1059,73 +1071,155 @@ function refinementForExpression(checker, expression, refinements, knownSymbol =
  * both false. The opposite branches do not prove which operand decided the
  * result and therefore contribute no fabricated narrowing evidence.
  */
-function truthyRefinementsForCondition(checker, condition, currentRefinements) {
+/**
+ * @typedef {{ isWrittenSymbol: (symbol: import("typescript").Symbol | undefined | null) => boolean }} WriteEvidence
+ * @typedef {Set<import("typescript").Symbol> | null} AliasTrail
+ */
+/** @param {WriteEvidence | null} [evidence] */
+function truthyRefinementsForCondition(checker, condition, currentRefinements, evidence = null) {
   const branchRefinements = cloneFlowRefinements(currentRefinements);
-  recordTruthyCondition(checker, condition, branchRefinements);
+  recordTruthyCondition(checker, condition, branchRefinements, evidence);
   return branchRefinements;
 }
 
-function falsyRefinementsForCondition(checker, condition, currentRefinements) {
+/** @param {WriteEvidence | null} [evidence] */
+function falsyRefinementsForCondition(checker, condition, currentRefinements, evidence = null) {
   const branchRefinements = cloneFlowRefinements(currentRefinements);
-  recordFalsyCondition(checker, condition, branchRefinements);
+  recordFalsyCondition(checker, condition, branchRefinements, evidence);
   return branchRefinements;
 }
 
-function recordTruthyCondition(checker, condition, refinements) {
+/**
+ * SCRUM-686. The initializer of a boolean alias such as
+ * `const active = enabled && !!a.id && !!b.id`, but ONLY for a binding that is a
+ * `const`, declared exactly once with an initializer, and never written (a
+ * `let`, a reassigned binding, a destructured or parameter binding is not
+ * evidence). The caller then reads the initializer as if it were written
+ * inline in the condition, which is what `active` means on its true branch.
+ */
+function constAliasInitializer(checker, identifier, evidence) {
+  const symbol = resolveSymbol(checker, identifier);
+  if (!symbol || evidence.isWrittenSymbol(symbol)) return null;
+  const declarations = symbol.declarations ?? [];
+  if (declarations.length !== 1) return null;
+  const [declaration] = declarations;
+  if (!ts.isVariableDeclaration(declaration) || !ts.isIdentifier(declaration.name)) return null;
+  if (!declaration.initializer) return null;
+  const list = declaration.parent;
+  if (!ts.isVariableDeclarationList(list) || !(list.flags & ts.NodeFlags.Const)) return null;
+  return { symbol, initializer: declaration.initializer };
+}
+
+/**
+ * @param {WriteEvidence | null} [evidence]
+ * @param {AliasTrail} [viaAlias] symbols of the const
+ *   aliases being expanded. Non-null means every fact recorded below was reached
+ *   THROUGH an alias, so it is dropped when its subject is written anywhere: the
+ *   alias may have been computed long before the read it is now guarding.
+ */
+function recordTruthyCondition(checker, condition, refinements, evidence = null, viaAlias = null) {
   if (ts.isParenthesizedExpression(condition)) {
-    recordTruthyCondition(checker, condition.expression, refinements);
+    recordTruthyCondition(checker, condition.expression, refinements, evidence, viaAlias);
     return;
   }
   if (ts.isPrefixUnaryExpression(condition) && condition.operator === ts.SyntaxKind.ExclamationToken) {
-    recordFalsyCondition(checker, condition.operand, refinements);
+    recordFalsyCondition(checker, condition.operand, refinements, evidence, viaAlias);
     return;
   }
   if (
     ts.isBinaryExpression(condition) &&
     condition.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
   ) {
-    recordTruthyCondition(checker, condition.left, refinements);
-    recordTruthyCondition(checker, condition.right, refinements);
+    recordTruthyCondition(checker, condition.left, refinements, evidence, viaAlias);
+    recordTruthyCondition(checker, condition.right, refinements, evidence, viaAlias);
     return;
   }
-  recordExpressionRefinement(checker, condition, refinements, "truthy");
+  const nullTest = nullComparisonRefinement(condition);
+  if (nullTest) {
+    recordExpressionRefinement(checker, nullTest.subject, refinements, nullTest.refinement, evidence, viaAlias);
+    return;
+  }
+  if (ts.isIdentifier(condition) && evidence) {
+    const alias = constAliasInitializer(checker, condition, evidence);
+    if (alias && !(viaAlias ?? new Set()).has(alias.symbol)) {
+      recordTruthyCondition(
+        checker,
+        alias.initializer,
+        refinements,
+        evidence,
+        new Set([...(viaAlias ?? []), alias.symbol]),
+      );
+    }
+  }
+  recordExpressionRefinement(checker, condition, refinements, "truthy", evidence, viaAlias);
 }
 
-function recordFalsyCondition(checker, condition, refinements) {
+/**
+ * @param {WriteEvidence | null} [evidence]
+ * @param {AliasTrail} [viaAlias]
+ */
+function recordFalsyCondition(checker, condition, refinements, evidence = null, viaAlias = null) {
   if (ts.isParenthesizedExpression(condition)) {
-    recordFalsyCondition(checker, condition.expression, refinements);
+    recordFalsyCondition(checker, condition.expression, refinements, evidence, viaAlias);
     return;
   }
   if (ts.isPrefixUnaryExpression(condition) && condition.operator === ts.SyntaxKind.ExclamationToken) {
-    recordTruthyCondition(checker, condition.operand, refinements);
+    recordTruthyCondition(checker, condition.operand, refinements, evidence, viaAlias);
     return;
   }
   if (
     ts.isBinaryExpression(condition) &&
     condition.operatorToken.kind === ts.SyntaxKind.BarBarToken
   ) {
-    recordFalsyCondition(checker, condition.left, refinements);
-    recordFalsyCondition(checker, condition.right, refinements);
+    recordFalsyCondition(checker, condition.left, refinements, evidence, viaAlias);
+    recordFalsyCondition(checker, condition.right, refinements, evidence, viaAlias);
     return;
   }
-  recordExpressionRefinement(checker, condition, refinements, "falsy");
+  recordExpressionRefinement(checker, condition, refinements, "falsy", evidence, viaAlias);
 }
 
-function recordExpressionRefinement(checker, condition, refinements, refinement) {
+/**
+ * `x != null`, `x !== null`, `x != undefined`, `x !== undefined` (either side).
+ * Each proves ONLY what the operator proves: `!== null` leaves `undefined`
+ * possible and `!= null` does not exclude `0` or `""`, so none of them is read
+ * as truthiness.
+ */
+function nullComparisonRefinement(condition) {
+  if (!ts.isBinaryExpression(condition)) return null;
+  const operator = condition.operatorToken.kind;
+  const strict = operator === ts.SyntaxKind.ExclamationEqualsEqualsToken;
+  if (!strict && operator !== ts.SyntaxKind.ExclamationEqualsToken) return null;
+  const isNull = (n) => n.kind === ts.SyntaxKind.NullKeyword;
+  const isNullish = (n) => isNull(n) || isUndefinedExpression(n);
+  const left = condition.left;
+  const right = condition.right;
+  const [subject, literal] = isNullish(right) ? [left, right] : [right, left];
+  if (!isNullish(literal)) return null;
+  if (!strict) return { subject, refinement: "nonNullish" };
+  return { subject, refinement: isNull(literal) ? "nonNull" : "nonUndefined" };
+}
+
+/**
+ * @param {WriteEvidence | null} [evidence]
+ * @param {AliasTrail} [viaAlias]
+ */
+function recordExpressionRefinement(checker, condition, refinements, refinement, evidence = null, viaAlias = null) {
   if (ts.isIdentifier(condition)) {
     const symbol = resolveSymbol(checker, condition);
-    if (symbol) refinements.identifiers.set(symbol, refinement);
+    if (symbol && !(viaAlias && evidence?.isWrittenSymbol(symbol))) {
+      refinements.identifiers.set(symbol, refinement);
+    }
     return;
   }
   const access = routeParamAccess(condition);
   if (!access) return;
   const receiverSymbol = resolveSymbol(checker, access.receiver);
   if (!receiverSymbol) return;
+  if (viaAlias && evidence?.isWrittenSymbol(receiverSymbol)) return;
   const properties = refinements.properties.get(receiverSymbol) ?? new Map();
   properties.set(access.name, refinement);
   refinements.properties.set(receiverSymbol, properties);
 }
-
 /**
  * Restrict reconstructed runtime evidence to alternatives reachable at the
  * call site. This filters only enumerable falsy values and structurally truthy
@@ -1134,11 +1228,40 @@ function recordExpressionRefinement(checker, condition, refinements, refinement)
  */
 function applyUseSiteRefinement(node, refinement) {
   if (!refinement) return node;
-  const refined = refinement === "truthy" ? truthyNode(node) : falsyNode(node);
+  const refined =
+    refinement === "truthy"
+      ? truthyNode(node)
+      : refinement === "falsy"
+        ? falsyNode(node)
+        : keepValuesNode(node, NULL_TEST_KEEP[refinement]);
   // A contradictory branch is unreachable. `unresolved` is the conservative
   // fallback if TypeScript and the syntax evidence ever disagree; it denies a
   // clean PASS without fabricating a concrete BREAKING value.
   return refined ?? clientNode.unresolved();
+}
+
+/** Which literal values survive each null comparison (`!= null`, `!== null`, ...). */
+const NULL_TEST_KEEP = {
+  nonNullish: (value) => value !== null && value !== undefined,
+  nonNull: (value) => value !== null,
+  nonUndefined: (value) => value !== undefined,
+};
+
+function keepValuesNode(node, keep) {
+  if (!keep) return node;
+  if (node.kind === "literal") {
+    const values = new Set([...node.values].filter(keep));
+    return values.size ? clientNode.literal(values) : null;
+  }
+  if (node.kind === "variants") {
+    const nodes = node.nodes.map((n) => keepValuesNode(n, keep)).filter(Boolean);
+    return nodes.length ? clientNode.variants(nodes) : null;
+  }
+  if (node.kind === "assertion") {
+    const inner = keepValuesNode(node.node, keep);
+    return inner ? clientNode.assertion(node.effect, inner) : null;
+  }
+  return node;
 }
 
 function truthyNode(node) {
