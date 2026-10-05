@@ -112,6 +112,7 @@ import { ResolveReconciliationDialog } from "./ResolveReconciliationDialog";
 import { ResolveGapDialog } from "./ResolveGapDialog";
 import {
   RecordSubmittedQuotationDialog,
+  toQuotationCalculation,
   type QuotationCalculation,
 } from "./RecordSubmittedQuotationDialog";
 import {
@@ -2477,13 +2478,7 @@ export function DealCockpit({
           // calculation exists" would let the dialog label a figure
           // MANUAL_ENTRY — a claim about provenance — during the window before
           // the suggestion arrives.
-          calculation: ((): QuotationCalculation => {
-            if (!canOfferQuotation) return { state: "UNAVAILABLE" };
-            if (suggestion === undefined) return { state: "LOADING" };
-            return suggestion.available === true
-              ? { state: "AVAILABLE", minor: suggestion.submittedQuotationMinor }
-              : { state: "UNAVAILABLE" };
-          })(),
+          calculation: toQuotationCalculation(canOfferQuotation, suggestion),
           appraisal: usableAppraisal
             ? { id: usableAppraisal._id as string, amountMinor: usableAppraisal.appraisalAmountMinor }
             : null,
