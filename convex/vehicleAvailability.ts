@@ -5,7 +5,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { resolveOwnership } from "./commitments";
 import { IN_FLIGHT_FINANCE_STATUSES } from "./utils/financeStatuses";
-import { isVehicleDeleted } from "./utils/vehicleLiveness";
+import { isVehicleDeleted, isVehicleHeldOutOfSale } from "./utils/vehicleLiveness";
 
 /**
  * SCRUM-636 — the picker's advisory hold badge (ruling c22077, Sol 6).
@@ -61,7 +61,12 @@ const availabilityValidator = v.union(v.literal("FREE"), v.literal("HELD"), v.li
 
 /** Completion refuses these outright, so they are never FREE. */
 function isTerminalForSale(vehicle: Doc<"vehicles">): boolean {
-  return vehicle.status === "SOLD" || vehicle.status === "ARCHIVED" || isVehicleDeleted(vehicle);
+  return (
+    vehicle.status === "SOLD" ||
+    vehicle.status === "ARCHIVED" ||
+    isVehicleDeleted(vehicle) ||
+    isVehicleHeldOutOfSale(vehicle)
+  );
 }
 
 /**

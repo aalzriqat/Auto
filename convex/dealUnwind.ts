@@ -34,6 +34,7 @@ import { reverseForward } from "./financeCompanyForward";
 import { disbursementVersionOf, financeDisbursementKeys } from "./utils/financeDisbursementKeys";
 import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { assertNoPendingDepositRequest } from "./utils/depositRequestGuards";
+import { assertSaleTeardownPreflight } from "./utils/saleCancellation";
 import { manualPayerOf } from "./utils/manualFinancePayer";
 import { MAX_DIRECT_PAYMENT_REFERENCE_CHARS } from "./utils/feeDocLimits";
 import { getOpenPeriodForDate } from "./accountingPeriods";
@@ -459,6 +460,9 @@ async function assertFinishable(
     refuse("DEAL_UNWIND_ALLOCATION_SHAPE");
   }
   await assertPeriodOpen(ctx, orgId, now);
+  // PRB-F2: the teardown's read-only refusals, so the status query and the closing step ask one
+  // question. The mutation still refuses anything left atomically (ruling B).
+  await assertSaleTeardownPreflight(ctx, { orgId, sale });
   return { sale, version, refundedAt, keys, payment, activeAllocations };
 }
 

@@ -348,10 +348,17 @@ describe("SCRUM-693 ruling B - a refusal in the closing step leaves every row as
     const saleId = (await s.t.run((ctx) => ctx.db.get(applicationId)))!.finalizedSaleId!;
     const clear = await blocker.apply(s, saleId);
 
+    // PRB-F2: the status query never promises a close the closing step refuses.
+    const statusOf = () => s.owner.as.query(api.dealUnwind.unwindStatus, { orgId: s.orgId, applicationId });
+    const blocked = await statusOf();
+    expect(blocked.eligibility.canFinish).toBe(false);
+    expect(blocked.refusals.finish?.message).toMatch(blocker.message);
+
     const before = await moneyState(s, applicationId, unwindId);
     const refusal = await refusalMessageOf(finish(s, unwindId));
     expect(refusal).not.toBeNull();
     expect(refusal).toMatch(blocker.message);
+    expect(blocked.refusals.finish?.message).toBe(refusal);
     expect(Object.values(DEAL_UNWIND_MESSAGES)).not.toContain(refusal);
     expect(await moneyState(s, applicationId, unwindId)).toEqual(before);
     expect(before.app.disbursedAt).toBeDefined();
@@ -360,6 +367,7 @@ describe("SCRUM-693 ruling B - a refusal in the closing step leaves every row as
 
     // Control: the same call succeeds once the blocker is gone.
     await clear();
+    expect((await statusOf()).eligibility.canFinish).toBe(true);
     await finish(s, unwindId);
     expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
   });

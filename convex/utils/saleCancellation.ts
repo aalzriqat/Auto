@@ -1,6 +1,6 @@
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
-import type { MutationCtx } from "../_generated/server";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
 import {
   hookDepositApplicationReversed,
   hookDepositSettlementApplicationReversed,
@@ -8,7 +8,7 @@ import {
   hookFiCommissionRecognitionsReversed,
 } from "../accounting/workflowHooks";
 import { reverseAllocation, voidCanonicalPayment } from "../subledger";
-import { cancelSupplierReceivablesForSale } from "../supplierReceivables";
+import { assertNoSupplierReceiptsForSale, cancelSupplierReceivablesForSale } from "../supplierReceivables";
 import { restoreVehicleFromSale } from "./saleHelpers";
 import {
   reactivateAllVehiclesForDeposit,
@@ -28,7 +28,7 @@ import { assertNoSaleLinkedLegacyReceivable } from "./saleDebtContainment";
 import { auditLog } from "../financialAudit";
 
 async function getActiveReceivableAllocations(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   receivableDocumentId: Id<"receivableDocuments">
 ) {
   // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
@@ -46,7 +46,7 @@ async function getActiveReceivableAllocations(
  * which still blocks automatic cancellation.
  */
 async function getSafelyReversiblePaymentKeys(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   sale: Doc<"sales">
 ) {
   const keys = new Set<string>();
@@ -73,6 +73,26 @@ async function getSafelyReversiblePaymentKeys(
   return keys;
 }
 
+/** The read-only refusal half of `cancelSaleReceivableIfSafe`; returns the receivable's active allocations. */
+async function assertOnlySafelyReversiblePaymentsApplied(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  sale: Doc<"sales">,
+  receivable: Doc<"receivableDocuments">
+) {
+  const activeAllocations = await getActiveReceivableAllocations(ctx, receivable._id);
+  const safeKeys = await getSafelyReversiblePaymentKeys(ctx, sale);
+  for (const allocation of activeAllocations) {
+    const payment = await ctx.db.get(allocation.paymentId);
+    if (!payment || payment.orgId !== orgId || !safeKeys.has(payment.idempotencyKey)) {
+      throw new ConvexError(
+        "Cannot automatically cancel a sale with customer payments already applied. Refund or reverse those payments first."
+      );
+    }
+  }
+  return activeAllocations;
+}
+
 async function cancelSaleReceivableIfSafe(
   ctx: MutationCtx,
   args: {
@@ -87,17 +107,7 @@ async function cancelSaleReceivableIfSafe(
   const receivable = await ctx.db.get(args.sale.canonicalReceivableDocumentId);
   if (!receivable || receivable.orgId !== args.orgId || receivable.status === "CANCELLED") return;
 
-  const activeAllocations = await getActiveReceivableAllocations(ctx, receivable._id);
-  const safeKeys = await getSafelyReversiblePaymentKeys(ctx, args.sale);
-
-  for (const allocation of activeAllocations) {
-    const payment = await ctx.db.get(allocation.paymentId);
-    if (!payment || payment.orgId !== args.orgId || !safeKeys.has(payment.idempotencyKey)) {
-      throw new ConvexError(
-        "Cannot automatically cancel a sale with customer payments already applied. Refund or reverse those payments first."
-      );
-    }
-  }
+  const activeAllocations = await assertOnlySafelyReversiblePaymentsApplied(ctx, args.orgId, args.sale, receivable);
 
   for (const allocation of activeAllocations) {
     await reverseAllocation(ctx, {
@@ -131,7 +141,7 @@ async function cancelSaleReceivableIfSafe(
  * available, zero-cost-basis inventory that could be sold with wrong COGS).
  */
 async function assertTradeInVehicleSafeToReverse(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   args: {
     orgId: Id<"organizations">;
     tradeInVehicleId: Id<"vehicles">;
@@ -285,6 +295,25 @@ async function cancelProductDeferrals(
   }
 }
 
+/** The read-only refusal half of `cancelPendingSupplierPayables`; returns the sale's payables. */
+async function assertNoPaidSupplierPayable(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  saleId: Id<"sales">
+) {
+  const payables = await ctx.db
+    .query("vehicleSupplierPayables")
+    .withIndex("by_sale", (q) => q.eq("saleId", saleId))
+    .collect();
+  const orgPayables = payables.filter((payable) => payable.orgId === orgId);
+  if (orgPayables.some((payable) => payable.status === "PAID")) {
+    throw new ConvexError(
+      "Cannot automatically cancel a sale after the supplier payable has been paid. Use a manual accounting correction."
+    );
+  }
+  return orgPayables;
+}
+
 async function cancelPendingSupplierPayables(
   ctx: MutationCtx,
   args: {
@@ -304,17 +333,7 @@ async function cancelPendingSupplierPayables(
     now: args.now,
   });
 
-  const payables = await ctx.db
-    .query("vehicleSupplierPayables")
-    .withIndex("by_sale", (q) => q.eq("saleId", args.saleId))
-    .collect();
-
-  const orgPayables = payables.filter((payable) => payable.orgId === args.orgId);
-  if (orgPayables.some((payable) => payable.status === "PAID")) {
-    throw new ConvexError(
-      "Cannot automatically cancel a sale after the supplier payable has been paid. Use a manual accounting correction."
-    );
-  }
+  const orgPayables = await assertNoPaidSupplierPayable(ctx, args.orgId, args.saleId);
 
   for (const payable of orgPayables) {
     if (payable.status === "PENDING") {
@@ -803,6 +822,48 @@ async function voidSaleCashflowTransaction(
   }
 }
 
+function assertCommissionNotPaid(sale: Doc<"sales">) {
+  if (sale.commissionPaidAt != null) {
+    throw new ConvexError(
+      "Cannot automatically cancel a sale after commission has been paid. Use a manual accounting correction."
+    );
+  }
+}
+
+/**
+ * SCRUM-693 PR-B F2: the read-only refusals of the completed-sale teardown, run by `unwindStatus`
+ * as a dry run so `canFinish` does not promise a close the closing step would refuse. Each is
+ * the SAME helper the writing path calls, not a copy.
+ *
+ * ⚠️ NOT EXHAUSTIVE BY CONSTRUCTION: refusals raised inside the accounting hooks (journal
+ * reversal, deposit/commission reversal) depend on posted state this preview does not replay. The
+ * closing step still refuses them atomically (ruling B), so the preview can only be optimistic
+ * about those, never wrong about the ones listed here.
+ */
+export async function assertSaleTeardownPreflight(
+  ctx: QueryCtx | MutationCtx,
+  args: { orgId: Id<"organizations">; sale: Doc<"sales"> }
+) {
+  const { orgId, sale } = args;
+  await assertNoSaleLinkedLegacyReceivable(ctx, orgId, sale._id);
+  assertCommissionNotPaid(sale);
+  await assertNoSupplierReceiptsForSale(ctx, orgId, sale._id);
+  await assertNoPaidSupplierPayable(ctx, orgId, sale._id);
+  if (sale.canonicalReceivableDocumentId) {
+    const receivable = await ctx.db.get(sale.canonicalReceivableDocumentId);
+    if (receivable && receivable.orgId === orgId && receivable.status !== "CANCELLED") {
+      await assertOnlySafelyReversiblePaymentsApplied(ctx, orgId, sale, receivable);
+    }
+  }
+  const tradeInVehicleId = sale.tradeInVehicleId;
+  if (tradeInVehicleId && sale.tradeInValue && sale.tradeInValue > 0) {
+    const tradeInVehicle = await ctx.db.get(tradeInVehicleId);
+    if (tradeInVehicle && tradeInVehicle.orgId === orgId) {
+      await assertTradeInVehicleSafeToReverse(ctx, { orgId, tradeInVehicleId, tradeInVehicle });
+    }
+  }
+}
+
 export async function cancelCompletedSaleOperationalRecords(
   ctx: MutationCtx,
   args: {
@@ -819,11 +880,7 @@ export async function cancelCompletedSaleOperationalRecords(
   // mutation are rolled back by the uncaught throw.
   await assertNoSaleLinkedLegacyReceivable(ctx, args.orgId, args.sale._id);
 
-  if (args.sale.commissionPaidAt != null) {
-    throw new ConvexError(
-      "Cannot automatically cancel a sale after commission has been paid. Use a manual accounting correction."
-    );
-  }
+  assertCommissionNotPaid(args.sale);
 
   await cancelPendingSupplierPayables(ctx, {
     orgId: args.orgId,
