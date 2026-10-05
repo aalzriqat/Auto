@@ -128,6 +128,14 @@ describe("SCRUM-686 Codex findings (fail closed)", () => {
   test("CS-686-2 closure control: a lone parameter with no property writes stays clean", () => {
     expect(notProvenClean(field("singleParamNoWriteClean", "id"))).toBe(false);
   });
+  test("CS-686-2-R a write wrapped in `!` or `as` still denies the fact", () => {
+    for (const fn of ["nonNullWrappedWrite", "asWrappedWrite", "elementNonNullWrappedWrite"]) {
+      expect(notProvenClean(field(fn, "id")), fn).toBe(true);
+    }
+  });
+  test("CS-686-2-R control: a wrapped read is not a write", () => {
+    expect(notProvenClean(field("wrappedReadClean", "id"))).toBe(false);
+  });
   test("CS-686-3 a local binding named `undefined` is not proof", () => {
     for (const fn of ["shadowedUndefinedParam", "shadowedUndefinedLocal"]) {
       expect(notProvenClean(field(fn, "id")), fn).toBe(true);

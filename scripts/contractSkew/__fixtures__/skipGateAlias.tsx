@@ -221,6 +221,41 @@ export function singleParamOuterWrite(box: Box) {
     active ? { id: box.id as Id<"vehicles"> } : "skip",
   );
 }
+/** CS-686-2-R (Codex): a write wrapped in a TypeScript assertion is still a write. */
+export function nonNullWrappedWrite(box: Box) {
+  const active = box.id != null;
+  sharedBox.id! = null as unknown as Id<"vehicles">;
+  return useQuery(
+    api.skipGate.nonNullWrappedWrite,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+export function asWrappedWrite(box: Box) {
+  const active = box.id != null;
+  (sharedBox.id as Id<"vehicles"> | null) = null;
+  return useQuery(
+    api.skipGate.asWrappedWrite,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+export function elementNonNullWrappedWrite(box: Box) {
+  const active = box.id != null;
+  sharedBox["id"]! = null as unknown as Id<"vehicles">;
+  return useQuery(
+    api.skipGate.elementNonNullWrappedWrite,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+/** Control: a wrapped READ is not a write, so the fact stands. */
+export function wrappedReadClean(box: Box) {
+  const active = box.id != null;
+  const seen = sharedBox.id! as Id<"vehicles">;
+  void seen;
+  return useQuery(
+    api.skipGate.wrappedReadClean,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
 /** Control: a single parameter, no property writes, stays clean. */
 export function singleParamNoWriteClean(box: Box) {
   const active = box.id != null;

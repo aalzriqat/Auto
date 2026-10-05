@@ -1297,10 +1297,12 @@ function enclosingFunctionLike(node) {
 function isWriteOrCallTarget(access) {
   let child = access;
   let parent = access.parent;
-  // Climb destructuring-assignment targets: `[a.x] = ...`, `({ k: a.x } = ...)`, `[...a.x] = ...`.
+  // Climb destructuring-assignment targets: `[a.x] = ...`, `({ k: a.x } = ...)`, `[...a.x] = ...`,
+  // and type-only wrappers that emit nothing: `a.x! = ...`, `(a.x as T) = ...` (CS-686-2-R).
   while (
     parent &&
     (ts.isParenthesizedExpression(parent) ||
+      isTypeOnlyWrapper(parent) ||
       ts.isArrayLiteralExpression(parent) ||
       ts.isSpreadElement(parent) ||
       ts.isSpreadAssignment(parent) ||
@@ -1421,11 +1423,25 @@ function writesAnyProperty(fn) {
   return writes;
 }
 
+/** `a!`, `a as T`, `<T>a`, `a satisfies T` — erased at emit, so they never change what is written. */
+function isTypeOnlyWrapper(node) {
+  return (
+    ts.isNonNullExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isTypeAssertionExpression(node) ||
+    (typeof ts.isSatisfiesExpression === "function" && ts.isSatisfiesExpression(node))
+  );
+}
+
 /** Like isWriteOrCallTarget, but a method call is not a write. */
 function isPropertyWrite(access) {
-  const parent = access.parent;
-  if (parent && (ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.expression === access) return false;
-  if (parent && ts.isTaggedTemplateExpression(parent) && parent.tag === access) return false;
+  let callee = access;
+  while (callee.parent && (ts.isParenthesizedExpression(callee.parent) || isTypeOnlyWrapper(callee.parent))) {
+    callee = callee.parent;
+  }
+  const parent = callee.parent;
+  if (parent && (ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.expression === callee) return false;
+  if (parent && ts.isTaggedTemplateExpression(parent) && parent.tag === callee) return false;
   return isWriteOrCallTarget(access);
 }
 
