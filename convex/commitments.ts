@@ -40,6 +40,7 @@
  */
 
 import { ConvexError } from "convex/values";
+import { assertAcquisitionTargetLive } from "./utils/vehicleLiveness";
 import {
   hasActiveDepositHold,
   resolveHoldTargetStatus,
@@ -1155,8 +1156,12 @@ export async function acquireVehicle(
     lineage: CommitmentLineage;
     refusalMessage?: string;
     predecessor?: Doc<"vehicleCommitmentClaims">;
+    /** A car document the caller already loaded: the liveness check then reads nothing. */
+    vehicle?: Doc<"vehicles">;
   }
 ): Promise<{ rootId: Id<"commitmentRoots">; claimId: Id<"vehicleCommitmentClaims"> }> {
+  // SCRUM-641 (D-35): no authority opens on a soft-deleted car, whichever door called; see vehicleLiveness.ts.
+  await assertAcquisitionTargetLive(ctx, args);
   const acting = await resolveActingRoot(ctx, {
     orgId: args.orgId,
     vehicleId: args.vehicleId,
@@ -1802,8 +1807,12 @@ export async function assertAcquirable(
     lineage: CommitmentLineage;
     actingCustomerId?: Id<"customers"> | null;
     message?: string;
+    /** A car document the caller already loaded: the liveness check then reads nothing. */
+    vehicle?: Doc<"vehicles">;
   }
 ): Promise<void> {
+  // SCRUM-641 (D-35): see `acquireVehicle`.
+  await assertAcquisitionTargetLive(ctx, args);
   const acting = await resolveActingRoot(ctx, {
     orgId: args.orgId,
     vehicleId: args.vehicleId,
@@ -2748,6 +2757,8 @@ export async function assertSaleMayCompleteForVehicle(
     vehicleId: Id<"vehicles">;
     lineage: CommitmentLineage;
     actingCustomerId?: Id<"customers"> | null;
+    /** A car document the caller already loaded: the liveness check then reads nothing. */
+    vehicle?: Doc<"vehicles">;
   }
 ): Promise<void> {
   await assertAcquirable(ctx, {
@@ -2755,6 +2766,7 @@ export async function assertSaleMayCompleteForVehicle(
     vehicleId: args.vehicleId,
     lineage: args.lineage,
     actingCustomerId: args.actingCustomerId,
+    vehicle: args.vehicle,
     message: COMMITMENT_MESSAGES.heldByAnotherDealSale,
   });
 }

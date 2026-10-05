@@ -148,6 +148,16 @@ function assertPatchDoesNotForgeVehicleLifecycle(
       `A vehicle's ${field} records which sale owns the car and is set by the sale workflow, not by direct edit. Changing it here would let a cancellation restore a car that belongs to another sale, strand this one, or release a car whose owner is merely unrecorded so that it can be sold twice. Use the sale or vehicle-request workflow instead.`
     );
   }
+
+  // SCRUM-641 (D-35): `isDeleted` is lifecycle too. Flipping it here would delete a car that a
+  // commitment holds (bypassing `vehicles.softDelete`'s refusal) or silently revive one. Only a
+  // CHANGE is refused, so a round-tripped record that re-sends the current value still saves.
+  if ("isDeleted" in next && Boolean(next.isDeleted) !== Boolean(before.isDeleted)) {
+    throwAppError(
+      AppErrorCode.VEHICLE_DELETED_FLAG_LOCKED,
+      "A vehicle's deleted status cannot be changed by direct edit. Use the vehicle delete or restore workflow instead."
+    );
+  }
 }
 
 export const listAdminTables = query({

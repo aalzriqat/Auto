@@ -674,6 +674,14 @@ export default function Step1QuoteSetup({
           />
         )}
 
+        {/* SCRUM-641: Next is held disabled for a deleted car; say why, in the verified server wording. */}
+        {profitVerdict?.status === "VEHICLE_DELETED" && (
+          <Alert variant="destructive" className="bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400">
+            <ShieldAlert className="h-4 w-4" />
+            <AlertDescription>{t("ServerError_VEHICLE_DELETED" as any)}</AlertDescription>
+          </Alert>
+        )}
+
         {/* Approval Alert */}
         {profitVerdict && (profitVerdict.status === "REQUIRED" || profitVerdict.status === "PENDING" || profitVerdict.status === "REJECTED") && (
           <Alert variant="destructive" className="bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400">

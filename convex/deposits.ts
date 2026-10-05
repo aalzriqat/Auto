@@ -18,6 +18,7 @@ import {
   maybeReleaseVehicleHold,
   payOutDepositSlice,
   syncVehicleHoldStatus,
+  assertDepositTargetNotDeleted,
 } from "./utils/depositHelpers";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -529,6 +530,11 @@ export const allocateToVehicles = mutation({
         );
       }
       assertFiniteNumber(allocation.amount, "allocation amount");
+      // SCRUM-641 (D-35): money may not be committed ONTO a deleted car. A zero allocation stays
+      // allowed — it is how money is moved OFF such a car.
+      if (allocation.amount > 0) {
+        await assertDepositTargetNotDeleted(ctx, args.orgId, allocation.vehicleId);
+      }
       if (seen.has(allocation.vehicleId.toString())) {
         throw new ConvexError("The same vehicle appears twice in the allocation.");
       }
@@ -786,6 +792,11 @@ export const resolveReleasedAllocation = mutation({
       depositId: hold.depositId,
     };
 
+    // SCRUM-641 (D-35): re-holding a soft-deleted car is a fresh acquisition; refuse before any write.
+    if (args.treatment === "RETURN_TO_UNALLOCATED") {
+      await assertDepositTargetNotDeleted(ctx, args.orgId, hold.vehicleId);
+    }
+
     if (args.treatment === "REALLOCATE_TO_VEHICLE") {
       if (!args.toVehicleId) {
         throw new ConvexError("Name the vehicle that is to receive the released amount.");
@@ -806,6 +817,8 @@ export const resolveReleasedAllocation = mutation({
           "That vehicle is not a line on this deposit's quote, so it cannot receive the released amount."
         );
       }
+      // SCRUM-641 (D-35): money may move OFF a deleted car, never ONTO one.
+      await assertDepositTargetNotDeleted(ctx, args.orgId, args.toVehicleId);
       const targetHolds = await ctx.db
         .query("depositVehicleHolds")
         .withIndex("by_deposit_vehicle", (q) =>

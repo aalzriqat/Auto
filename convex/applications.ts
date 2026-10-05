@@ -37,6 +37,7 @@ import {
 import { assertOperatedDealMode } from "./utils/dealModes";
 import { assertQuoteEconomicsMatchFrozen } from "./utils/quoteEconomicsAnchor";
 import { completeSale } from "./utils/saleCompletion";
+import { requireCommercialVehicle } from "./utils/vehicleLiveness";
 import { planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal, forwardGateRefusal } from "./utils/financeCompanyForward";
 import {
@@ -2653,11 +2654,13 @@ export const createFromQuote = mutation({
     if (quoteVehicleItems.length !== 1) {
       throw new ConvexError("Finance applications currently support exactly one vehicle.");
     }
+    const lineVehicles = new Map<Id<"vehicles">, Doc<"vehicles">>();
     for (const item of quoteVehicleItems) {
       const lineVehicle = await ctx.db.get(item.vehicleId);
       if (!lineVehicle || lineVehicle.orgId !== args.orgId || lineVehicle.isDeleted) {
         throw new ConvexError("Quote vehicle not found in this organization.");
       }
+      lineVehicles.set(item.vehicleId, lineVehicle);
     }
     // Kept for the rule snapshot below rather than re-fetched: this handler
     // already validates the company here, and reading it twice per application
@@ -2890,6 +2893,7 @@ export const createFromQuote = mutation({
         orgId: args.orgId,
         vehicleId: item.vehicleId,
         lineage: { quoteId: quote._id, adoptReservationId: args.adoptReservationId },
+        vehicle: lineVehicles.get(item.vehicleId),
       });
     }
 
@@ -2937,6 +2941,7 @@ export const createFromQuote = mutation({
         createdBy: auth.user._id,
         evidence: { kind: "FINANCE", applicationId: appId },
         lineage: { quoteId: quote._id, adoptReservationId: args.adoptReservationId },
+        vehicle: lineVehicles.get(item.vehicleId),
       });
     }
 
@@ -3266,6 +3271,8 @@ export const updateStatus = mutation({
       if (!quote || quote.orgId !== args.orgId) {
         throw new ConvexError("Application quote not found.");
       }
+      // SCRUM-641 (D-35): approval is new authority over the car; see convex/utils/vehicleLiveness.ts.
+      requireCommercialVehicle(await ctx.db.get(app.vehicleId), args.orgId);
       await assertRequiredApplicationDocumentsComplete(ctx, app, quote);
       approvedBy = auth.user._id;
       approvedAt = Date.now();

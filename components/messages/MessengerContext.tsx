@@ -16,6 +16,9 @@ interface MessengerState {
 
 const MessengerContext = createContext<MessengerState | null>(null);
 
+/** id of the top-bar button that toggles the conversation list (TopNav). */
+export const MESSENGER_TRIGGER_ID = "topnav-messenger-btn";
+
 const MAX_OPEN_WINDOWS = 3;
 
 export function MessengerProvider({ children }: { children: React.ReactNode }) {
