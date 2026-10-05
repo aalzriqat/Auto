@@ -23,7 +23,7 @@ const PAGE = 100;
  */
 export function DealsListClient() {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const { hasPermission } = usePermissions();
   const currency = useCurrency();
 
@@ -59,6 +59,7 @@ export function DealsListClient() {
       }}
       newDealHref={activeOrgId && hasPermission(PERMISSIONS.CREATE_SALES) ? `/${activeOrgId}/sales` : null}
       t={t}
+      locale={locale}
     />
   );
 }
