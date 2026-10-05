@@ -33,7 +33,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import { getLocalizedErrorMessage } from "@/lib/errors";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
-import { useCurrency } from "@/hooks/useCurrency";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { supportedCurrencyScale } from "@/convex/utils/money";
 import { formatMinorAsMajor, parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
 
@@ -112,7 +112,7 @@ export function RecordDepositDialog({
 }: RecordDepositDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const currency = useCurrency();
+  const currency = useMoneyDisplay();
   const scale = supportedCurrencyScale(currency.code) ?? 3;
   const depositSchema = useMemo(() => buildDepositSchema(t as Translate, scale), [t, scale]);
   const { hasPermission } = usePermissions();

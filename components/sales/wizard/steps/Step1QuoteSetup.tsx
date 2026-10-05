@@ -29,7 +29,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useCurrency } from "@/hooks/useCurrency";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { VehicleCostBar } from "../components/VehicleCostBar";
 import { useProfitApproval } from "@/components/sales/ProfitApprovalNotice";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
@@ -64,7 +64,7 @@ export default function Step1QuoteSetup({
 }: Step1QuoteSetupProps) {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
-  const currency = useCurrency();
+  const currency = useMoneyDisplay();
 
   const isCash = paymentType === "CASH";
 

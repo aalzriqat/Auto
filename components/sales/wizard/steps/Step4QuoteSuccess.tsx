@@ -24,7 +24,7 @@ import { downloadElementAsPdf } from "@/lib/htmlToPdf";
 import { getErrorMessage, getLocalizedErrorMessage } from "@/lib/errors";
 import { decideDepositSubmission } from "@/lib/depositSettlementSubmission";
 import { supportedCurrencyScale } from "@/convex/utils/money";
-import { useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { creationQuotationNoteKey } from "./creationQuotationNote";
 
 interface Step4QuoteSuccessProps {
@@ -88,13 +88,13 @@ export function Step4QuoteSuccess({
   );
   const creationQuotationLoading = wantsCreationQuotation && creationQuotation === undefined;
   const confirmedQuotation = creationQuotation?.available === true ? creationQuotation : null;
-  const formatInCurrency = useCurrencyFormatterInCurrency();
+  const money = useMoneyDisplay();
   const confirmedQuotationScale = confirmedQuotation
     ? supportedCurrencyScale(confirmedQuotation.currency)
     : null;
   const confirmedQuotationDisplay =
     confirmedQuotation && confirmedQuotationScale !== null
-      ? formatInCurrency(
+      ? money.format(
           confirmedQuotation.submittedQuotationMinor / 10 ** confirmedQuotationScale,
           confirmedQuotation.currency,
           confirmedQuotationScale
