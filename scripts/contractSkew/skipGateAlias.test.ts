@@ -138,6 +138,11 @@ describe("SCRUM-686 Codex findings (fail closed)", () => {
       expect(notProvenClean(field(fn, "id")), fn).toBe(true);
     }
   });
+  test("CS-686-4 a conditional, logical or comma initializer may alias an existing object", () => {
+    for (const fn of ["conditionalAliasEscapes", "logicalAliasEscapes", "commaAliasEscapes"]) {
+      expect(notProvenClean(field(fn, "id")), fn).toBe(true);
+    }
+  });
   test("F1 control: a const receiver built from a fresh literal stays clean", () => {
     expect(notProvenClean(field("constFreshObjectClean", "id"))).toBe(false);
   });

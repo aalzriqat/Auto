@@ -1365,9 +1365,10 @@ function confinementScope(checker, symbol) {
       declaration.initializer &&
       ts.isVariableDeclarationList(declaration.parent) &&
       declaration.parent.flags & ts.NodeFlags.Const &&
-      // `const box = a` / `= holder.box` / `= this` names an object that already has
-      // another name, which can escape or be mutated unseen (Opus seat F1).
-      !isExistingReference(unwrapAliasExpression(declaration.initializer))
+      // Only a provably FRESH object has no other name. `const box = a`, `= holder.box`,
+      // `= c ? a : {...}`, `= a || {...}`, `= (0, a)` and call results may all alias an
+      // object that escapes or is mutated unseen (Opus seat F1, Codex CS-686-4).
+      isFreshObject(unwrapAliasExpression(declaration.initializer), checker)
     ) {
       scope = enclosingFunctionLike(declaration);
     }
@@ -1428,13 +1429,21 @@ function writesAnyProperty(fn) {
   return writes;
 }
 
-/** An identifier, `this`, or a property/element chain — an object that may already have another name. */
-function isExistingReference(node) {
+/**
+ * An object no other client binding can name: an object literal with no accessors
+ * (its reads run no code), or a direct Next `useParams()` result — framework-owned,
+ * read-only route params that client code reaches only through this binding.
+ */
+function isFreshObject(node, checker) {
+  if (ts.isObjectLiteralExpression(node)) {
+    return node.properties.every(
+      (property) => !ts.isGetAccessorDeclaration(property) && !ts.isSetAccessorDeclaration(property),
+    );
+  }
   return (
-    ts.isIdentifier(node) ||
-    node.kind === ts.SyntaxKind.ThisKeyword ||
-    ts.isPropertyAccessExpression(node) ||
-    ts.isElementAccessExpression(node)
+    ts.isCallExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    isNamedImport(node.expression, checker, "useParams", "next/navigation")
   );
 }
 

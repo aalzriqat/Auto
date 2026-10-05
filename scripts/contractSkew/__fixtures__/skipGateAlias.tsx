@@ -284,6 +284,36 @@ export function constAliasOfHolderEscapes(holder: { box: Box }) {
     active ? { id: box.id as Id<"vehicles"> } : "skip",
   );
 }
+/** CS-686-4 (Codex): a conditional, logical or comma initializer can still alias an existing object. */
+declare const choose: boolean;
+export function conditionalAliasEscapes(a: Box) {
+  const box = choose ? a : { id: null };
+  const active = box.id != null;
+  opaqueMutator(a);
+  return useQuery(
+    api.skipGate.conditionalAliasEscapes,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+export function logicalAliasEscapes(a: Box | null) {
+  const box = a || { id: null };
+  const active = box.id != null;
+  opaqueMutator(a);
+  return useQuery(
+    api.skipGate.logicalAliasEscapes,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+export function commaAliasEscapes(a: Box) {
+  // eslint-disable-next-line no-sequences
+  const box = (0, a);
+  const active = box.id != null;
+  opaqueMutator(a);
+  return useQuery(
+    api.skipGate.commaAliasEscapes,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
 /** F2 (Opus seat): a non-arrow function's parameter also escapes through `arguments`. */
 export function argumentsEscape(box: Box) {
   const active = box.id != null;
