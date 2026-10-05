@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { rateLimiter } from "./rateLimit";
 import { renderNotification } from "../lib/notifications/render";
+import { sinkEgress } from "./utils/egressSink";
 
 const WHATSAPP_GRAPH_VERSION = "v22.0";
 
@@ -71,6 +72,10 @@ export const sendNotificationWhatsapp = internalAction({
           `type=${args.type} retryAfterMs=${Math.ceil(status.retryAfter)}`
       );
       return { success: false, error: "rate_limited" };
+    }
+
+    if (sinkEgress("whatsapp", `sendNotificationWhatsapp type=${args.type}`)) {
+      return { success: false, error: "egress_sunk" };
     }
 
     const orgSettings = await ctx.runQuery(internal.whatsapp.getSettingsByOrg, {
