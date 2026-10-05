@@ -47,6 +47,7 @@ vi.mock("convex/react", async () => {
       if (name === "vehicles:listAll") return [];
       return null;
     },
+    useQueries: () => ({}),
     useMutation: () => (...args: unknown[]) => stubs.mutation(...args),
   };
 });
