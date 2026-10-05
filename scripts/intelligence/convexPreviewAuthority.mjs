@@ -240,6 +240,11 @@ export async function requestPreviewClaim({
     throw new Error("Trusted Convex preview name is malformed.");
   }
   const { teamSlug, projectSlug } = parsePreviewDeployKey(deployKey);
+  // A byte that is invalid in a header value makes the runtime throw an error
+  // that quotes the whole header, before any ::add-mask:: could cover it.
+  if (!/^[\x21-\x7e]+$/.test(deployKey)) {
+    throw new Error("Convex preview deploy key contains characters that cannot be sent.");
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -269,10 +274,8 @@ export async function requestPreviewClaim({
     if (controller.signal.aborted) {
       throw new Error("Convex preview authority request timed out.");
     }
-    throw new Error(
-      "Convex preview authority request failed: " +
-        (error instanceof Error ? error.message : String(error)),
-    );
+    // A runtime error can quote the request headers, which carry the key.
+    throw new Error("Convex preview authority request failed.");
   } finally {
     clearTimeout(timeout);
   }

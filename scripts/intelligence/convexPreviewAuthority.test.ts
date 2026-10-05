@@ -3,6 +3,7 @@ import {
   assertConvexCloudOrigin,
   classifyPreviewClaimAdminKey,
   parsePreviewDeployKey,
+  requestPreviewClaim,
   resolveConvexPreviewAuthority,
   resolveConvexPreviewCredentials,
   validateConvexPreviewAuthority,
@@ -312,6 +313,31 @@ describe("trusted Convex preview authority", () => {
         fetchImpl: claimResponse({}) as typeof fetch,
       }),
     ).rejects.toThrow(/other than the one this run created/);
+  });
+
+  // Codex CR-341-04: the repository is public, so a key quoted in an error is
+  // key material in a public log.
+  it("never puts key bytes in an error: a header-invalid key and a failing request both refuse with fixed text", async () => {
+    const badKey = DEPLOY_KEY + "\nSYNTHETIC_TAIL_MARKER";
+    const fetchSpy = vi.fn();
+    const refused = await requestPreviewClaim({
+      deployKey: badKey,
+      previewName: PREVIEW_NAME,
+      fetchImpl: fetchSpy as unknown as typeof fetch,
+    }).catch((error: Error) => error);
+    expect(refused).toBeInstanceOf(Error);
+    expect(String((refused as Error).message)).not.toContain("SYNTHETIC_TAIL_MARKER");
+    expect(String((refused as Error).message)).not.toContain(DEPLOY_KEY.split("|")[1]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const quoting = await requestPreviewClaim({
+      deployKey: DEPLOY_KEY,
+      previewName: PREVIEW_NAME,
+      fetchImpl: (async () => {
+        throw new Error("boom authorization: Bearer " + DEPLOY_KEY);
+      }) as unknown as typeof fetch,
+    }).catch((error: Error) => error);
+    expect(String((quoting as Error).message)).toBe("Convex preview authority request failed.");
   });
 
   it("accepts the deployment this run created, compared as a canonical origin", async () => {
