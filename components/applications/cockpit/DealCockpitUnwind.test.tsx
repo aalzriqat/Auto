@@ -344,6 +344,22 @@ describe("SCRUM-691 / 693 -- Unwind deal replaces Cancel on a paid deal", () => 
     expect(call.refundedAt).toBe(paidAt);
   });
 
+  test("a refund date before the finance company paid is not offered and cannot be submitted (server refuses it)", async () => {
+    render_(ACTIVE("AWAITING_FINISH", "BANK_TRANSFER"), { disbursedAt: Date.UTC(2026, 9, 3, 14, 0, 0) });
+    fireEvent.click(screen.getByTestId("deal-unwind-deal"));
+    const date = screen.getByLabelText("UnwindRefundDateLabel") as HTMLInputElement;
+    expect(date.min).toBe("2026-10-03");
+    fireEvent.change(date, { target: { value: "2026-10-02" } });
+    fireEvent.change(screen.getByLabelText("UnwindBankReferenceLabel"), { target: { value: "TRX-1" } });
+    fireEvent.change(screen.getByLabelText("UnwindCreditNoteLabel"), { target: { value: "CN-7" } });
+    fireEvent.change(screen.getByLabelText("UnwindVehicleNoteLabel"), { target: { value: "ok" } });
+    fireEvent.click(await screen.findByRole("option", { name: "UnwindDispositionRefund" }));
+    const finish = screen.getByTestId("deal-unwind-finish-submit") as HTMLButtonElement;
+    expect(finish.disabled).toBe(true);
+    fireEvent.submit(document.getElementById("deal-unwind-finish-form")!);
+    expect(mutationCalls.get("dealUnwind:finishDealUnwind") ?? []).toHaveLength(0);
+  });
+
   test("a deal the finance company paid the supplier on is not offered Cancel, which the server refuses", () => {
     render_(
       { ...NO_UNWIND, eligibility: { ...NO_UNWIND.eligibility, canStart: false }, refusals: { start: { code: "DEAL_UNWIND_NOT_ELIGIBLE", message: "x" } } },

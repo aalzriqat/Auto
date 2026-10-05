@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { economicDateInputToMs, economicTodayDateInput } from "@/lib/dateInput";
+import { economicDateInputToMs, economicTodayDateInput, msToDateInput } from "@/lib/dateInput";
 import { cn } from "@/lib/utils";
 import {
   Dialog,
@@ -77,7 +77,7 @@ const DAY_MS = 86_400_000;
  * lost response carries the same payload as the first attempt.
  */
 function refundInstant(dateInput: string, frozenNow: number, notBefore: number | undefined): number {
-  if (dateInput === economicTodayDateInput()) return Math.max(frozenNow, notBefore ?? 0);
+  if (dateInput === msToDateInput(frozenNow)) return Math.max(frozenNow, notBefore ?? 0);
   const midnight = economicDateInputToMs(dateInput);
   return notBefore !== undefined && notBefore >= midnight && notBefore < midnight + DAY_MS ? notBefore : midnight;
 }
@@ -360,6 +360,8 @@ function FinishStep({
   const method = status.evidence?.remittanceMethod;
   const [refundedDate, setRefundedDate] = useState(economicTodayDateInput());
   const [frozenNow] = useState(() => Date.now());
+  // The server refuses a refund dated before the finance company paid; offer only days it accepts.
+  const minRefundDate = notBefore === undefined ? "" : msToDateInput(notBefore);
   const [bankReference, setBankReference] = useState("");
   const [voucherNumber, setVoucherNumber] = useState("");
   const [acknowledged, setAcknowledged] = useState(false);
@@ -373,6 +375,7 @@ function FinishStep({
   const complete =
     evidenceOk &&
     refundedDate !== "" &&
+    refundedDate >= minRefundDate &&
     vehicleDate !== "" &&
     creditNote.trim() !== "" &&
     vehicleNote.trim() !== "" &&
@@ -415,6 +418,7 @@ function FinishStep({
             type="date"
             required
             value={refundedDate}
+            min={minRefundDate || undefined}
             max={economicTodayDateInput()}
             disabled={submitting}
             onChange={(event) => setRefundedDate(event.target.value)}
