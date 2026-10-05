@@ -38,6 +38,17 @@ describe("the sales wizard's money display policy (SCRUM-684)", () => {
     expect(formatMoneyAmount(11_099.9999, "JOD")).toBe("11,100");
   });
 
+  test("a half-fils result is not pre-rounded down by binary multiplication (Codex MD-2)", () => {
+    // 7,680.030 JOD over 60 months: 128.0005, and 128.0005 * 1000 is
+    // 128000.49999999999 in binary — rounding that showed "128", a whole
+    // figure one fils below the real installment.
+    expect(formatMoneyAmount(7680.03 / 60, "JOD")).toBe("128.001");
+  });
+
+  test("a value that rounds to zero carries no minus sign", () => {
+    expect(formatMoneyAmount(-0.0001, "JOD")).toBe("0");
+  });
+
   test("a server-supplied scale overrides the currency's own", () => {
     expect(formatMoneyAmount(1.5, "JOD", 2)).toBe("1.50");
   });

@@ -41,14 +41,17 @@ export function moneyDisplayLabel(currency: string, locale: MoneyLocale): string
 /** The number alone, under the same digit and decimal rules (for inputs' hints and inline arithmetic). */
 export function formatMoneyAmount(amount: number, currency: string, scale = moneyDisplayScale(currency)): string {
   if (!Number.isFinite(amount)) return "—";
-  const factor = 10 ** scale;
-  const rounded = Math.round(amount * factor) / factor;
-  const digits = Number.isInteger(rounded) ? 0 : scale;
-  return new Intl.NumberFormat("en-US", {
+  // Rounded once, by Intl's decimal rounding. Multiplying by 10^scale first is
+  // a second, binary rounding: 128.0005 * 1000 is 128000.4999…, which showed a
+  // whole "128" one fils below the real figure (Codex MD-2 on #458).
+  const full = new Intl.NumberFormat("en-US", {
     numberingSystem: "latn",
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  }).format(rounded);
+    minimumFractionDigits: scale,
+    maximumFractionDigits: scale,
+    signDisplay: "negative",
+  }).format(amount);
+  // A figure that is whole at the currency's scale drops its zero decimals.
+  return scale > 0 && /\.0+$/.test(full) ? full.replace(/\.0+$/, "") : full;
 }
 
 /** "11,100 JOD" / "316.854 د.أ". `scale` overrides the currency's own when the server supplies it. */
