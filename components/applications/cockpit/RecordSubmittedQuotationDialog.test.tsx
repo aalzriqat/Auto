@@ -83,6 +83,21 @@ describe("SCRUM-681: the unavailable calculation names its reason", () => {
     expect(salesAr[key]).toMatch(/[؀-ۿ]/);
     expect(salesAr[key]).not.toMatch(/[A-Za-z]{3,}/);
   });
+
+  // Codex review of 5c6502b3b: the rule may have been frozen on the QUOTE, and
+  // legacy deals read the live company, so the copy must not name a moment.
+  test("the unconfirmed-rule note does not claim when the rule was unconfirmed", () => {
+    expect(salesEn.QuotationUnavailableOffsetRuleUnknown).not.toMatch(/created|when /i);
+    expect(salesAr.QuotationUnavailableOffsetRuleUnknown).not.toMatch(/عند إنشاء/);
+  });
+
+  // The rule is whether the payment is OFFSET against the unfinanced share,
+  // not whether it is large enough to cover it.
+  test("the does-not-apply note describes an offset, not coverage", () => {
+    expect(salesEn.QuotationUnavailableOffsetRuleDoesNotApply).toMatch(/offset/);
+    expect(salesAr.QuotationUnavailableOffsetRuleDoesNotApply).toMatch(/تُخصم/);
+    expect(salesAr.QuotationUnavailableOffsetRuleDoesNotApply).not.toMatch(/تُغطّي/);
+  });
 });
 
 describe("SCRUM-681: the cockpit carries the server's reason into the dialog", () => {

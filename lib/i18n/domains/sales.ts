@@ -1859,21 +1859,21 @@ const quoteWizardQaMessages = defineBilingualMessages({
 });
 /**
  * SCRUM-681: why the record-quotation dialog has no calculated figure, for the
- * reasons the operator can act on. The rule is read from the deal's own snapshot,
- * frozen when the deal was created, so the copy says "when this deal was created".
+ * reasons the operator can act on. The rule is the one applied to the deal — its
+ * snapshot, which may have been frozen on the quote — so the copy names no moment.
  */
 const quotationUnavailableMessages = defineBilingualMessages({
   QuotationUnavailableOffsetRuleUnknown: [
-    "This finance company's first-payment rule wasn't confirmed in Finance Settings when this deal was created, so AutoFlow can't calculate a figure. Record the amount that was actually sent.",
-    "لم تكن قاعدة الدفعة الأولى لشركة التمويل هذه مؤكَّدة في إعدادات التمويل عند إنشاء هذه الصفقة، لذلك لا يستطيع أوتوفلو احتساب رقم. سجِّل المبلغ الذي أُرسل فعلياً.",
+    "The finance company's first-payment rule that applies to this deal isn't confirmed, so AutoFlow can't calculate a figure. Record the amount that was actually sent.",
+    "قاعدة الدفعة الأولى لشركة التمويل المطبَّقة على هذه الصفقة غير مؤكَّدة، لذلك لا يستطيع أوتوفلو احتساب رقم. سجِّل المبلغ الذي أُرسل فعلياً.",
   ],
   QuotationUnavailableOffsetRuleDoesNotApply: [
     "Under this finance company's rules the customer's first payment doesn't offset the unfinanced share, so AutoFlow's calculation doesn't apply to this deal. Record the amount that was actually sent.",
-    "وفق قواعد شركة التمويل هذه لا تُغطّي الدفعة الأولى للعميل الجزء غير المموَّل، لذلك لا ينطبق احتساب أوتوفلو على هذه الصفقة. سجِّل المبلغ الذي أُرسل فعلياً.",
+    "وفق قواعد شركة التمويل هذه لا تُخصم الدفعة الأولى للعميل من الجزء غير المموَّل، لذلك لا ينطبق احتساب أوتوفلو على هذه الصفقة. سجِّل المبلغ الذي أُرسل فعلياً.",
   ],
   QuotationUnavailableNoTarget: [
-    "No target selling amount is recorded for this deal, so AutoFlow has nothing to calculate from. Record the amount that was actually sent.",
-    "لا يوجد مبلغ بيع مستهدف مسجَّل لهذه الصفقة، لذلك لا يملك أوتوفلو ما يحتسب منه. سجِّل المبلغ الذي أُرسل فعلياً.",
+    "AutoFlow has no target selling amount to calculate from for this deal. Record the amount that was actually sent.",
+    "لا يتوفّر لأوتوفلو مبلغ بيع مستهدف ليحتسب منه لهذه الصفقة. سجِّل المبلغ الذي أُرسل فعلياً.",
   ],
 });
 export const salesEn = {
