@@ -108,7 +108,7 @@ export default function Step2Customer({
       {/* FOOTER */}
       <div className="flex flex-col-reverse sm:flex-row justify-between gap-3 pt-4 border-t">
         <Button variant="outline" onClick={onBack} className="w-full sm:w-auto">
-          <ArrowLeft className="w-4 h-4 me-2" />
+          <ArrowLeft className="w-4 h-4 me-2 rtl:-scale-x-100" />
           {t("Back")}
         </Button>
 
@@ -118,7 +118,7 @@ export default function Step2Customer({
           className={cn(nextBtnClass, "w-full sm:w-auto")}
         >
           {t("Next")}
-          <ArrowRight className="w-4 h-4 ms-2" />
+          <ArrowRight className="w-4 h-4 ms-2 rtl:-scale-x-100" />
         </Button>
       </div>
     </div>
