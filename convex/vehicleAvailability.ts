@@ -28,15 +28,30 @@ import { isVehicleDeleted } from "./utils/vehicleLiveness";
  * learn which deal a car belongs to (design attack DA-1).
  */
 
-export const PICKER_AVAILABILITY_MAX_IDS = 200;
+/**
+ * ⚠️ READ BUDGET BY CONSTRUCTION. One query is one transaction, and Convex
+ * caps a transaction's index reads (4,096 db calls), documents and bytes. A
+ * per-car try/catch cannot reserve that budget for the other cars, so the
+ * bound is structural instead (SCRUM-636-R1):
+ *
+ *   per car  = 1 vehicle get + 1 OPEN-root scan + 1 claim range + 1 application range
+ *            = PICKER_DB_CALLS_PER_CAR index reads, at most
+ *              1 + 2 + (FINANCE_READ_LIMIT + 1) × 2 documents
+ *   per call = PICKER_AVAILABILITY_MAX_IDS cars
+ *
+ * Claimed applications are never fetched one by one: a claim is matched
+ * against the car's own application range, which also proves the claim
+ * belongs to this car (SCRUM-636-R2). The client sends chunks of at most
+ * PICKER_AVAILABILITY_MAX_IDS (ruling c22077: ≤ 200).
+ */
+export const PICKER_AVAILABILITY_MAX_IDS = 50;
+export const PICKER_DB_CALLS_PER_CAR = 4;
 
 /**
- * Per-car read bounds. Small on purpose: the query answers up to 200 cars in
- * one transaction, and a car with more finance history than this is rare
- * enough that "check availability" is the honest answer for it.
+ * Per-car finance read bound. A car with more finance history than this is
+ * rare enough that "check availability" is the honest answer for it.
  */
-const FINANCE_CLAIM_READ_LIMIT = 16;
-const FINANCE_APPLICATION_READ_LIMIT = 16;
+export const FINANCE_READ_LIMIT = 8;
 
 export type PickerAvailability = "FREE" | "HELD" | "UNCERTAIN";
 
@@ -48,38 +63,41 @@ function isTerminalForSale(vehicle: Doc<"vehicles">): boolean {
 }
 
 /**
- * True when a finance claim or application on the car is live, unreadable or
- * beyond the bound — the same evidence `assertFinanceHeldVehicleCompletesThroughDeal`
+ * True when a finance claim or application on the car is live, unprovable or
+ * beyond the bound — the evidence `assertFinanceHeldVehicleCompletesThroughDeal`
  * (utils/saleCompletion.ts) refuses on, plus in-flight applications that carry
  * no claim (pre-claim legacy finance, design attack DA-3).
+ *
+ * A claim is shown dead only by a terminal application found in THIS car's own
+ * application range. A claim whose application is missing, in another org, or
+ * filed against another car cannot be proven dead here (SCRUM-636-R2), and a
+ * legacy multi-car application's second car lands here too — UNCERTAIN, never
+ * FREE.
  */
 async function hasLiveOrUnreadableFinance(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   vehicleId: Id<"vehicles">
 ): Promise<boolean> {
-  const claims = await ctx.db
-    .query("vehicleCommitmentClaims")
-    .withIndex("by_org_vehicle_kind_status", (q) =>
-      q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("evidenceKind", "FINANCE").eq("status", "ACTIVE")
-    )
-    .take(FINANCE_CLAIM_READ_LIMIT + 1);
-  if (claims.length > FINANCE_CLAIM_READ_LIMIT) return true;
-  if (claims.some((claim) => !claim.applicationId)) return true;
-  const claimed = await Promise.all(
-    [...new Set(claims.map((claim) => claim.applicationId!))].map((id) => ctx.db.get(id))
-  );
-  for (const application of claimed) {
-    if (!application || application.orgId !== orgId) return true;
-    if (IN_FLIGHT_FINANCE_STATUSES.includes(application.status)) return true;
-  }
+  const [claims, applications] = await Promise.all([
+    ctx.db
+      .query("vehicleCommitmentClaims")
+      .withIndex("by_org_vehicle_kind_status", (q) =>
+        q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("evidenceKind", "FINANCE").eq("status", "ACTIVE")
+      )
+      .take(FINANCE_READ_LIMIT + 1),
+    ctx.db
+      .query("financeApplications")
+      .withIndex("by_org_vehicle", (q) => q.eq("orgId", orgId).eq("vehicleId", vehicleId))
+      .take(FINANCE_READ_LIMIT + 1),
+  ]);
+  if (claims.length > FINANCE_READ_LIMIT || applications.length > FINANCE_READ_LIMIT) return true;
+  if (applications.some((application) => IN_FLIGHT_FINANCE_STATUSES.includes(application.status))) return true;
 
-  const applications = await ctx.db
-    .query("financeApplications")
-    .withIndex("by_org_vehicle", (q) => q.eq("orgId", orgId).eq("vehicleId", vehicleId))
-    .take(FINANCE_APPLICATION_READ_LIMIT + 1);
-  if (applications.length > FINANCE_APPLICATION_READ_LIMIT) return true;
-  return applications.some((application) => IN_FLIGHT_FINANCE_STATUSES.includes(application.status));
+  // Every application left in range is terminal, so a claim is dead exactly
+  // when it names one of them.
+  const ownTerminal = new Set<Id<"financeApplications">>(applications.map((application) => application._id));
+  return claims.some((claim) => !claim.applicationId || !ownTerminal.has(claim.applicationId));
 }
 
 /** The verdict for one car the caller's org has asked about. */
@@ -105,9 +123,9 @@ export async function pickerAvailabilityFor(
 
 /**
  * The picker's badge for each requested car. Ids are deduplicated; ids beyond
- * the first 200 distinct ones come back UNCERTAIN rather than being dropped, so
- * a caller can never mistake "not answered" for FREE (DA-5). The client sends
- * chunks of at most 200.
+ * the first PICKER_AVAILABILITY_MAX_IDS distinct ones come back UNCERTAIN
+ * rather than being dropped, so a caller can never mistake "not answered" for
+ * FREE (DA-5). The client sends chunks of at most PICKER_AVAILABILITY_MAX_IDS.
  */
 export const pickerAvailability = query({
   args: {
@@ -128,7 +146,8 @@ export const pickerAvailability = query({
           return { vehicleId, availability: await pickerAvailabilityFor(ctx, args.orgId, vehicleId) };
         } catch (error) {
           // A read that fails for one car must not take the badge for every
-          // other car down with it, and must never read as FREE.
+          // other car down with it, and must never read as FREE. This is not
+          // the budget mechanism — the bounds above are (SCRUM-636-R1).
           console.error("pickerAvailability: verdict failed", vehicleId, error);
           return { vehicleId, availability: "UNCERTAIN" as const };
         }

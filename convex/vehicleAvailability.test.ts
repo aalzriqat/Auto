@@ -15,12 +15,29 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { PICKER_AVAILABILITY_MAX_IDS } from "./vehicleAvailability";
+import {
+  FINANCE_READ_LIMIT,
+  PICKER_AVAILABILITY_MAX_IDS,
+  PICKER_DB_CALLS_PER_CAR,
+} from "./vehicleAvailability";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
+
+// Cars whose ownership read is made to throw, to drive the per-car catch.
+const failingReads = vi.hoisted(() => new Set<string>());
+vi.mock("./commitments", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./commitments")>();
+  return {
+    ...actual,
+    resolveOwnership: (async (ctx, orgId, vehicleId) => {
+      if (failingReads.has(vehicleId)) throw new Error("injected read failure");
+      return actual.resolveOwnership(ctx, orgId, vehicleId);
+    }) as typeof actual.resolveOwnership,
+  };
+});
 
 type T = ReturnType<typeof convexTestWithComponents>;
 
@@ -267,6 +284,87 @@ describe("pickerAvailability (SCRUM-636)", () => {
     await root(t, a, v);
     const rows = await a.asUser.query(api.vehicleAvailability.pickerAvailability, { orgId: a.orgId, vehicleIds: [v] });
     expect(rows).toEqual([{ vehicleId: v, availability: "HELD" }]);
+  });
+
+  test("a claim naming a terminal application filed for ANOTHER car cannot be shown dead (SCRUM-636-R2)", async () => {
+    const t = setup();
+    const a = await seedTenant(t, "a");
+    const v = await car(t, a);
+    const other = await car(t, a);
+    const otherApp = await financeApplication(t, a, other, "REJECTED");
+    await financeClaim(t, a, v, otherApp);
+    expect(await badge(a, v)).toBe("UNCERTAIN");
+  });
+
+  test("a claim naming another org's application is UNCERTAIN", async () => {
+    const t = setup();
+    const a = await seedTenant(t, "a");
+    const b = await seedTenant(t, "b");
+    const v = await car(t, a);
+    const foreignApp = await financeApplication(t, b, await car(t, b), "REJECTED");
+    await financeClaim(t, a, v, foreignApp);
+    expect(await badge(a, v)).toBe("UNCERTAIN");
+  });
+
+  test("more finance claims than the bound is UNCERTAIN even when every one is dead", async () => {
+    const t = setup();
+    const a = await seedTenant(t, "a");
+    const v = await car(t, a);
+    const app = await financeApplication(t, a, v, "CANCELLED");
+    for (let i = 0; i <= FINANCE_READ_LIMIT; i += 1) await financeClaim(t, a, v, app);
+    expect(await badge(a, v)).toBe("UNCERTAIN");
+  });
+
+  test("more applications than the bound is UNCERTAIN even when every one is terminal", async () => {
+    const t = setup();
+    const a = await seedTenant(t, "a");
+    const v = await car(t, a);
+    for (let i = 0; i <= FINANCE_READ_LIMIT; i += 1) await financeApplication(t, a, v, "REJECTED");
+    expect(await badge(a, v)).toBe("UNCERTAIN");
+  });
+
+  test("exactly the bound of dead history is still read, and still FREE", async () => {
+    const t = setup();
+    const a = await seedTenant(t, "a");
+    const v = await car(t, a);
+    for (let i = 0; i < FINANCE_READ_LIMIT; i += 1) {
+      await financeClaim(t, a, v, await financeApplication(t, a, v, "CLOSED"));
+    }
+    expect(await badge(a, v)).toBe("FREE");
+  });
+
+  test("a read that fails for one car makes that car UNCERTAIN and leaves the others answered", async () => {
+    const t = setup();
+    const a = await seedTenant(t, "a");
+    const broken = await car(t, a);
+    const fine = await car(t, a);
+    const held = await car(t, a);
+    await root(t, a, held);
+    failingReads.add(broken);
+    try {
+      const rows = await a.asUser.query(api.vehicleAvailability.pickerAvailability, {
+        orgId: a.orgId,
+        vehicleIds: [broken, fine, held],
+      });
+      expect(rows).toEqual([
+        { vehicleId: broken, availability: "UNCERTAIN" },
+        { vehicleId: fine, availability: "FREE" },
+        { vehicleId: held, availability: "HELD" },
+      ]);
+    } finally {
+      failingReads.delete(broken);
+    }
+  });
+
+  test("the batch fits the transaction budget by construction (SCRUM-636-R1)", () => {
+    // convex-test does not enforce Convex's limits, so the arithmetic is pinned
+    // here: index reads well under 4,096 db calls and 1,000 concurrent I/O, and
+    // a bounded document count. Raising a bound must be a deliberate edit here.
+    const calls = PICKER_AVAILABILITY_MAX_IDS * PICKER_DB_CALLS_PER_CAR;
+    const documents = PICKER_AVAILABILITY_MAX_IDS * (1 + 2 + 2 * (FINANCE_READ_LIMIT + 1));
+    expect(PICKER_AVAILABILITY_MAX_IDS).toBeLessThanOrEqual(200); // ruling c22077
+    expect(calls).toBeLessThanOrEqual(256);
+    expect(documents).toBeLessThanOrEqual(1_200);
   });
 
   test("ids are deduplicated, and ids beyond the cap come back UNCERTAIN rather than missing", async () => {
