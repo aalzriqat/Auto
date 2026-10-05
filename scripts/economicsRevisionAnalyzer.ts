@@ -52,19 +52,24 @@ const WRITE_PRIMITIVES = ["ctx.db.patch(", "ctx.db.replace("];
  * regex-terminated: payloads contain nested objects and spreads, and a pattern
  * that stopped at the first `}` would read half a patch.
  */
-export function patchPayloads(source: string): string[] {
+export function patchPayloads(rawSource: string): string[] {
+  // A commented-out call, or a commented-out bump, is not code: reading it as
+  // one lets text stand in for a revision advance.
+  const source = stripComments(rawSource);
   const payloads: string[] = [];
-  for (const marker of WRITE_PRIMITIVES) {
-    let cursor = source.indexOf(marker);
-    while (cursor !== -1) {
-      const open = source.indexOf("{", cursor);
-      if (open === -1) break;
-      const payload = objectLiteralFrom(source, open);
-      payloads.push(payload);
-      cursor = source.indexOf(marker, open + payload.length);
-    }
+  for (const call of source.matchAll(WRITE_CALL)) {
+    const open = source.indexOf("{", call.index);
+    if (open === -1) continue;
+    payloads.push(objectLiteralFrom(source, open));
   }
   return payloads;
+}
+
+/** `ctx . db . patch (` in any spacing; the substring search missed those. */
+const WRITE_CALL = /ctx\s*\.\s*db\s*\.\s*(?:patch|replace)\s*\(/g;
+
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
 }
 
 function objectLiteralFrom(source: string, open: number): string {
@@ -125,7 +130,8 @@ function spreadsLocalEconomicsLiteral(payload: string, source: string): boolean 
  * comparing equal, and `economicsRevision: 0` rewinds it onto an old stamp.
  */
 export function bumpsRevision(payload: string): boolean {
-  return /economicsRevision\s*:\s*\(?[^,}]*\beconomicsRevision\b[^,}]*\+\s*1\b/.test(payload);
+  // The `+ 1` must END the expression: `x + 1 - 1` is a no-op, not an advance.
+  return /economicsRevision\s*:\s*\(?[^,}]*\beconomicsRevision\b[^,}]*\+\s*1\s*(?=,|\}|\r?\n|$)/.test(payload);
 }
 
 export function findUnbumpedEconomicsWrites(source: string, file: string, snippetLength = 160): Offence[] {
@@ -158,15 +164,24 @@ export const REVIEWED_EXCEPTIONS: ReadonlyArray<{ file: string; contains: string
 
 type Exceptions = ReadonlyArray<{ file: string; contains: string }>;
 
-const isReviewed = (o: Offence, exceptions: Exceptions) =>
-  exceptions.some((e) => o.file === e.file && o.snippet.includes(e.contains));
-
-/** Scan every handwritten backend file; paths are relative to `convex/`. */
+/**
+ * Scan every handwritten backend file; paths are relative to `convex/`.
+ *
+ * An exception excuses exactly ONE payload. It is a decision about a specific
+ * write, so a second payload matching the same fragment is a new, unreviewed
+ * write and is reported.
+ */
 export function scanBackendForUnbumpedEconomicsWrites(
   root = CONVEX_ROOT,
   exceptions: Exceptions = REVIEWED_EXCEPTIONS
 ): Offence[] {
-  return scanAll(root).filter((o) => !isReviewed(o, exceptions));
+  const spent = new Set<Exceptions[number]>();
+  return scanAll(root).filter((o) => {
+    const excuse = exceptions.find((e) => !spent.has(e) && o.file === e.file && o.snippet.includes(e.contains));
+    if (excuse === undefined) return true;
+    spent.add(excuse);
+    return false;
+  });
 }
 
 /** Exceptions that excuse nothing any more. Must be empty. */

@@ -132,6 +132,45 @@ describe("forms that evaded the first analyzer (SCRUM-703)", () => {
   });
 });
 
+describe("Codex gpt-6-sol findings on f4e274bb (SCRUM-703)", () => {
+  test("a bump that exists only in a comment is not a bump", () => {
+    const commented = `
+    await ctx.db.patch(id, {
+      // economicsRevision: app.economicsRevision + 1,
+      approvedDealerPurchaseAmountMinor: a,
+    });`;
+    expect(flagged(commented)).toHaveLength(1);
+  });
+
+  test("a commented-out write is not a write", () => {
+    expect(flagged("// await ctx.db.patch(id, { approvedDealerPurchaseAmountMinor: a });")).toHaveLength(0);
+  });
+
+  test("an increment that is cancelled out is not an advance", () => {
+    const noop = `
+    await ctx.db.patch(id, {
+      economicsRevision: app.economicsRevision + 1 - 1,
+      approvedDealerPurchaseAmountMinor: a,
+    });`;
+    expect(flagged(noop)).toHaveLength(1);
+  });
+
+  test("a call written with unusual spacing is still scanned", () => {
+    expect(flagged(UNBUMPED.replace("ctx.db.patch(", "ctx.db .patch ("))).toHaveLength(1);
+  });
+
+  test("one exception excuses one payload, not every payload sharing its fragment", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "econ-two-"));
+    try {
+      fs.writeFileSync(path.join(root, "a.ts"), UNBUMPED + UNBUMPED);
+      const one = { file: "a.ts", contains: "args.approvedAmountMinor" };
+      expect(scanBackendForUnbumpedEconomicsWrites(root, [one])).toHaveLength(1);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("the reviewed-exception mechanism (SCRUM-703)", () => {
   const withRoot = <T>(files: Record<string, string>, fn: (root: string) => T): T => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "econ-exc-"));
