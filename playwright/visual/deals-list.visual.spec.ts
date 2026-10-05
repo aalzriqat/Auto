@@ -47,8 +47,8 @@ const VIEWPORTS = [
 
 /** Two text lines + padding, or the 40px vehicle mark + padding — whichever is taller, with slack. */
 const MAX_ROW_HEIGHT = 96;
-/** A phone card: name, vehicle, reason, owner/date — four lines and padding. */
-const MAX_CARD_HEIGHT = 136;
+/** A phone card: name, vehicle, kind/financier, reason, owner/date — five lines and padding. */
+const MAX_CARD_HEIGHT = 156;
 const LATIN_MONTH = /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b/;
 
 let css = "";
@@ -188,6 +188,48 @@ for (const view of VIEWS) {
               const tableBox = document.querySelector<HTMLElement>("table")?.parentElement;
               const tableScroll =
                 tableBox && isShown(tableBox) ? tableBox.scrollWidth - tableBox.clientWidth : 0;
+              // Every painted deal must SHOW its facts at every width (SCRUM-694
+              // review M1/M2/M4): kind, owner and date always; a financier on a
+              // financed deal. Kind and date never truncate — they must sit
+              // wholly inside the box that clips them.
+              const clipBox = (el: HTMLElement) => {
+                for (let p = el.parentElement; p; p = p.parentElement) {
+                  if (getComputedStyle(p).overflowX !== "visible") return p.getBoundingClientRect();
+                }
+                return null;
+              };
+              const cut = (el: HTMLElement) => {
+                const box = clipBox(el);
+                const r = el.getBoundingClientRect();
+                return box !== null && (r.left < box.left - 1 || r.right > box.right + 1);
+              };
+              const missingFacts: string[] = [];
+              for (const entry of [...rowsShown, ...cardsShown]) {
+                const shown = (fact: string) =>
+                  Array.from(entry.querySelectorAll<HTMLElement>(`[data-fact="${fact}"]`)).filter(isShown);
+                const label = entry.getAttribute("data-testid") ?? entry.textContent?.slice(0, 24) ?? "?";
+                for (const fact of ["kind", "owner", "date"]) {
+                  if (shown(fact).length === 0) missingFacts.push(`${label}: no ${fact}`);
+                }
+                for (const fact of ["kind", "date"]) {
+                  if (shown(fact).some(cut)) missingFacts.push(`${label}: ${fact} clipped`);
+                }
+                const financed = shown("kind").some((el) => el.dataset.kind === "FINANCED");
+                if (financed && shown("financier").length === 0) missingFacts.push(`${label}: no financier`);
+              }
+              // The whole-row link (an ::after overlay on a `relative` <tr>) must
+              // hit THIS row's link at the row's centre — in WebKit too (review M3).
+              const wrongTarget = rowsShown
+                .map((row) => {
+                  const r = row.getBoundingClientRect();
+                  const own = row.querySelector("a")?.getAttribute("href");
+                  const hit = document
+                    .elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+                    ?.closest("a")
+                    ?.getAttribute("href");
+                  return hit === own ? null : `${row.getAttribute("data-testid")}: hit ${hit ?? "nothing"}`;
+                })
+                .filter((x): x is string => x !== null);
               return {
                 mainScroll: main.scrollWidth - main.clientWidth,
                 tableScroll,
@@ -196,6 +238,8 @@ for (const view of VIEWS) {
                 tallestRow: tallest(rowsShown),
                 tallestCard: tallest(cardsShown),
                 wrapped,
+                missingFacts,
+                wrongTarget,
                 text: main.innerText,
               };
             });
@@ -209,6 +253,8 @@ for (const view of VIEWS) {
             expect(metrics.tallestRow, "a deal row wrapped").toBeLessThanOrEqual(MAX_ROW_HEIGHT);
             expect(metrics.tallestCard, "a deal card grew past its four lines").toBeLessThanOrEqual(MAX_CARD_HEIGHT);
             expect(metrics.wrapped, "a one-line run wrapped").toEqual([]);
+            expect(metrics.missingFacts, "a deal lost a fact at this width").toEqual([]);
+            expect(metrics.wrongTarget, "a row's centre opens another deal").toEqual([]);
             if (locale === "ar") expect(metrics.text).not.toMatch(LATIN_MONTH);
 
             const height = await page.evaluate(

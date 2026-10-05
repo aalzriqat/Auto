@@ -139,6 +139,43 @@ function ReasonLine({ reason, t }: Readonly<{ reason: DealReason; t: (key: strin
   );
 }
 
+/**
+ * The deal's kind, written (the vehicle mark is decorative), and its financier.
+ * The kind never truncates; a long financier does, with its full name on hover.
+ */
+function KindLine({ row, t }: Readonly<{ row: DealRow; t: (key: string) => string }>) {
+  return (
+    <p className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+      <span data-fact="kind" data-kind={row.kind} className="shrink-0 whitespace-nowrap">
+        {t(row.kind === "CASH" ? "DealKindCash" : "DealKindFinanced")}
+      </span>
+      {row.financierLabel && (
+        <>
+          <span aria-hidden>·</span>
+          <span data-fact="financier" className="min-w-0 truncate" title={row.financierLabel}>
+            <bdi>{row.financierLabel}</bdi>
+          </span>
+        </>
+      )}
+    </p>
+  );
+}
+
+/** Owner and date on one line: a long owner name truncates, the date never does. */
+function OwnerDate({ row, locale }: Readonly<{ row: DealRow; locale?: string }>) {
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      <span data-fact="owner" dir="auto" className="min-w-0 truncate" title={row.salespersonName}>
+        <bdi>{row.salespersonName}</bdi>
+      </span>
+      <span aria-hidden>·</span>
+      <span data-fact="date" className="shrink-0 whitespace-nowrap">
+        <bdi>{formatLocalized(row.since, "d MMM yyyy", locale)}</bdi>
+      </span>
+    </span>
+  );
+}
+
 export function DealsListView({
   rows,
   loading,
@@ -361,16 +398,17 @@ export function DealsListView({
                           {row.statusLabel}
                         </Badge>
                       </div>
-                      <p dir="auto" className="truncate text-sm text-muted-foreground rtl:text-right">
+                      <p
+                        dir="auto"
+                        className="truncate text-sm text-muted-foreground rtl:text-right"
+                        title={row.vehicleDesc}
+                      >
                         <bdi>{row.vehicleDesc}</bdi>
                       </p>
+                      <KindLine row={row} t={t} />
                       {row.reason && <ReasonLine reason={row.reason} t={t} />}
                       <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                        <span className="min-w-0 truncate">
-                          <bdi>{row.salespersonName}</bdi>
-                          {" · "}
-                          <bdi>{formatLocalized(row.since, "d MMM yyyy", locale)}</bdi>
-                        </span>
+                        <OwnerDate row={row} locale={locale} />
                         {row.amountLabel && (
                           <span className="shrink-0 font-medium tabular-nums text-foreground">
                             <bdi dir="ltr">{row.amountLabel}</bdi>
@@ -414,26 +452,18 @@ export function DealsListView({
                       <TableCell className="py-3">
                         <div className="flex items-center gap-3">
                           <VehicleMark kind={row.kind} />
-                          <div className="min-w-0 max-w-[14rem] @4xl:max-w-[16rem] @6xl:max-w-[22rem]">
-                            <p dir="auto" className="truncate font-medium rtl:text-right">
+                          <div className="min-w-0 max-w-[18rem] @6xl:max-w-[24rem]">
+                            <p dir="auto" className="truncate font-medium rtl:text-right" title={row.customerName}>
                               <bdi>{row.customerName}</bdi>
                             </p>
-                            <p className="truncate text-xs text-muted-foreground">
+                            <p
+                              dir="auto"
+                              className="truncate text-xs text-muted-foreground rtl:text-right"
+                              title={row.vehicleDesc}
+                            >
                               <bdi>{row.vehicleDesc}</bdi>
-                              {" · "}
-                              {t(row.kind === "CASH" ? "DealKindCash" : "DealKindFinanced")}
-                              {row.financierLabel && (
-                                <>
-                                  {" · "}
-                                  <bdi>{row.financierLabel}</bdi>
-                                </>
-                              )}
                             </p>
-                            {row.reason && (
-                              <div className="mt-1 @4xl:hidden">
-                                <ReasonLine reason={row.reason} t={t} />
-                              </div>
-                            )}
+                            <KindLine row={row} t={t} />
                           </div>
                         </div>
                       </TableCell>
@@ -445,15 +475,26 @@ export function DealsListView({
                         )}
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline" className={cn("whitespace-nowrap", statusClass(row.statusTone))}>
-                          {row.statusLabel}
-                        </Badge>
+                        {/* Below the wide columns, the reason and owner · date fold under the status. */}
+                        <div className="max-w-[14rem] space-y-1">
+                          <Badge variant="outline" className={cn("whitespace-nowrap", statusClass(row.statusTone))}>
+                            {row.statusLabel}
+                          </Badge>
+                          {row.reason && (
+                            <div className="@4xl:hidden">
+                              <ReasonLine reason={row.reason} t={t} />
+                            </div>
+                          )}
+                          <div className="text-xs text-muted-foreground @5xl:hidden">
+                            <OwnerDate row={row} locale={locale} />
+                          </div>
+                        </div>
                       </TableCell>
                       <TableCell className="hidden text-sm @5xl:table-cell">
-                        <p dir="auto" className="truncate rtl:text-right">
+                        <p data-fact="owner" dir="auto" className="truncate rtl:text-right" title={row.salespersonName}>
                           <bdi>{row.salespersonName}</bdi>
                         </p>
-                        <p className="whitespace-nowrap text-xs text-muted-foreground">
+                        <p data-fact="date" className="whitespace-nowrap text-xs text-muted-foreground">
                           <bdi>{formatLocalized(row.since, "d MMM yyyy", locale)}</bdi>
                         </p>
                       </TableCell>
