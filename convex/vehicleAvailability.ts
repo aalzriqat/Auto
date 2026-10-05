@@ -11,7 +11,8 @@ import { isVehicleDeleted } from "./utils/vehicleLiveness";
  * SCRUM-636 — the picker's advisory hold badge (ruling c22077, Sol 6).
  *
  * INVARIANT: a car's badge is FREE only when no OPEN commitment root, no
- * RESERVED projection and no live or unreadable finance claim exists for it;
+ * RESERVED projection, no live or unreadable finance claim and no deposit or
+ * reservation hold row exists for it;
  * HELD when exactly one OPEN root holds it; UNCERTAIN for every other or
  * unknown state. It never says WHICH deal, customer or quote holds the car,
  * and it never blocks selection — quoting stays allowed (F.39) and the real
@@ -35,8 +36,9 @@ import { isVehicleDeleted } from "./utils/vehicleLiveness";
  * bound is structural instead (SCRUM-636-R1):
  *
  *   per car  = 1 vehicle get + 1 OPEN-root scan + 1 claim range + 1 application range
+ *              + 3 hold probes (deposit, slice, reservation; one row each, SCRUM-688)
  *            = PICKER_DB_CALLS_PER_CAR index reads, at most
- *              1 + 2 + (FINANCE_READ_LIMIT + 1) × 2 documents
+ *              1 + 2 + (FINANCE_READ_LIMIT + 1) × 2 + 3 documents
  *   per call = PICKER_AVAILABILITY_MAX_IDS cars
  *
  * Claimed applications are never fetched one by one: a claim is matched
@@ -45,7 +47,7 @@ import { isVehicleDeleted } from "./utils/vehicleLiveness";
  * PICKER_AVAILABILITY_MAX_IDS (ruling c22077: ≤ 200).
  */
 export const PICKER_AVAILABILITY_MAX_IDS = 50;
-export const PICKER_DB_CALLS_PER_CAR = 4;
+export const PICKER_DB_CALLS_PER_CAR = 7;
 
 /**
  * Per-car finance read bound. A car with more finance history than this is
@@ -100,6 +102,42 @@ async function hasLiveOrUnreadableFinance(
   return claims.some((claim) => !claim.applicationId || !ownTerminal.has(claim.applicationId));
 }
 
+/**
+ * True when ANY deposit or reservation hold row names the car — a deposit
+ * with `holdActive`, an active multi-car slice, or an ACTIVE reservation —
+ * without deciding whether it is still live (SCRUM-688, Sol ruling c22095).
+ *
+ * A hold can outlive its root: a hold on an IN_INSPECTION / IN_REPAIR car
+ * leaves the status alone, and legacy restoration can return a car without
+ * one. Such a car is not HELD (no OPEN root), but it is not provably FREE
+ * either. The rows are read raw and one each: a stale-but-unswept row reads
+ * UNCERTAIN, which only asks the salesperson to check, whereas resolving
+ * liveness here (expiry, slice ownership) would need unbounded reads.
+ */
+async function hasAnyHoldRow(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<boolean> {
+  const [deposit, slice, reservation] = await Promise.all([
+    ctx.db
+      .query("deposits")
+      .withIndex("by_vehicle_hold", (q) => q.eq("vehicleId", vehicleId).eq("holdActive", true))
+      .first(),
+    ctx.db
+      .query("depositVehicleHolds")
+      .withIndex("by_vehicle_active", (q) => q.eq("vehicleId", vehicleId).eq("active", true))
+      .first(),
+    ctx.db
+      .query("vehicleReservations")
+      .withIndex("by_org_vehicle_status", (q) =>
+        q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("status", "ACTIVE")
+      )
+      .first(),
+  ]);
+  return deposit !== null || slice !== null || reservation !== null;
+}
+
 /** The verdict for one car the caller's org has asked about. */
 export async function pickerAvailabilityFor(
   ctx: QueryCtx,
@@ -118,6 +156,7 @@ export async function pickerAvailabilityFor(
   // badge cannot say whether the car is held, so it does not guess (DA-3).
   if (vehicle.status === "RESERVED") return "UNCERTAIN";
   if (await hasLiveOrUnreadableFinance(ctx, orgId, vehicleId)) return "UNCERTAIN";
+  if (await hasAnyHoldRow(ctx, orgId, vehicleId)) return "UNCERTAIN";
   return "FREE";
 }
 

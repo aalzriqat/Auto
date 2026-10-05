@@ -148,7 +148,7 @@ describe("pickerAvailability (SCRUM-636)", () => {
     expect(await badge(a, await car(t, a))).toBe("FREE");
   });
 
-  test("a finance-only hold on an AVAILABLE car is HELD — the status badge missed it", async () => {
+  test("an OPEN root on an AVAILABLE car is HELD — the status badge missed it", async () => {
     const t = setup();
     const a = await seedTenant(t, "a");
     const v = await car(t, a, { status: "AVAILABLE" });
@@ -356,14 +356,86 @@ describe("pickerAvailability (SCRUM-636)", () => {
     }
   });
 
+  describe("deposit and reservation holds with no OPEN root (SCRUM-688)", () => {
+    async function deposit(t: T, tenant: Tenant, vehicleId: Id<"vehicles">, holdActive: boolean) {
+      return t.run((ctx) =>
+        ctx.db.insert("deposits", {
+          orgId: tenant.orgId, vehicleId, customerId: tenant.customerId, amount: 500, status: "HELD",
+          holdActive, createdBy: tenant.userId, createdAt: Date.now(),
+        } as never)
+      ) as Promise<Id<"deposits">>;
+    }
+
+    test("a holdActive deposit on a car with no root is UNCERTAIN, not FREE", async () => {
+      const t = setup();
+      const a = await seedTenant(t, "a");
+      const v = await car(t, a, { status: "IN_INSPECTION" });
+      await deposit(t, a, v, true);
+      expect(await badge(a, v)).toBe("UNCERTAIN");
+    });
+
+    test("an active multi-car slice on a SECONDARY car is UNCERTAIN", async () => {
+      const t = setup();
+      const a = await seedTenant(t, "a");
+      const primary = await car(t, a);
+      const secondary = await car(t, a);
+      const depositId = await deposit(t, a, primary, false);
+      await t.run((ctx) =>
+        ctx.db.insert("depositVehicleHolds", {
+          orgId: a.orgId, depositId, vehicleId: secondary, active: true, createdAt: Date.now(),
+        } as never)
+      );
+      expect(await badge(a, secondary)).toBe("UNCERTAIN");
+    });
+
+    test("an ACTIVE reservation on a car with no root is UNCERTAIN", async () => {
+      const t = setup();
+      const a = await seedTenant(t, "a");
+      const v = await car(t, a);
+      await t.run((ctx) =>
+        ctx.db.insert("vehicleReservations", {
+          vehicleId: v, orgId: a.orgId, customerId: a.customerId, status: "ACTIVE",
+          reservedBy: a.userId, reservedAt: Date.now(),
+        } as never)
+      );
+      expect(await badge(a, v)).toBe("UNCERTAIN");
+    });
+
+    test("released holds of every kind leave the car FREE", async () => {
+      const t = setup();
+      const a = await seedTenant(t, "a");
+      const v = await car(t, a);
+      const depositId = await deposit(t, a, v, false);
+      await t.run(async (ctx) => {
+        await ctx.db.insert("depositVehicleHolds", {
+          orgId: a.orgId, depositId, vehicleId: v, active: false, createdAt: Date.now(),
+        } as never);
+        await ctx.db.insert("vehicleReservations", {
+          vehicleId: v, orgId: a.orgId, customerId: a.customerId, status: "RELEASED",
+          reservedBy: a.userId, reservedAt: Date.now(),
+        } as never);
+      });
+      expect(await badge(a, v)).toBe("FREE");
+    });
+
+    test("an OPEN root still reads HELD when a deposit holds the car too", async () => {
+      const t = setup();
+      const a = await seedTenant(t, "a");
+      const v = await car(t, a, { status: "RESERVED" });
+      await root(t, a, v);
+      await deposit(t, a, v, true);
+      expect(await badge(a, v)).toBe("HELD");
+    });
+  });
+
   test("the batch fits the transaction budget by construction (SCRUM-636-R1)", () => {
     // convex-test does not enforce Convex's limits, so the arithmetic is pinned
     // here: index reads well under 4,096 db calls and 1,000 concurrent I/O, and
     // a bounded document count. Raising a bound must be a deliberate edit here.
     const calls = PICKER_AVAILABILITY_MAX_IDS * PICKER_DB_CALLS_PER_CAR;
-    const documents = PICKER_AVAILABILITY_MAX_IDS * (1 + 2 + 2 * (FINANCE_READ_LIMIT + 1));
+    const documents = PICKER_AVAILABILITY_MAX_IDS * (1 + 2 + 2 * (FINANCE_READ_LIMIT + 1) + 3);
     expect(PICKER_AVAILABILITY_MAX_IDS).toBeLessThanOrEqual(200); // ruling c22077
-    expect(calls).toBeLessThanOrEqual(256);
+    expect(calls).toBeLessThanOrEqual(400); // SCRUM-688 added 3 hold probes per car
     expect(documents).toBeLessThanOrEqual(1_200);
   });
 
