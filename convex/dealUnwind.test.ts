@@ -333,4 +333,50 @@ describe("SCRUM-693 - nothing else moves the deal's money around an active unwin
       )
     ).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_ACTIVE);
   });
+
+  // SCRUM-693-R1 (Codex): the refund clears `disbursedAt`, so an abandoned
+  // refunded unwind would leave nothing between a bare cancel and a CANCELLED
+  // deal without the credit note, vehicle return or customer disposition.
+  test.each(["BANK_TRANSFER", "CASH"] as const)(
+    "%s: once the remittance is refunded the unwind cannot be abandoned, so a bare cancel cannot skip its evidence",
+    async (method) => {
+      const { s, applicationId } = await paidDeal(`r1_${method}`, method);
+      const unwindId = await start(s, applicationId);
+      await forwardReturn(s, unwindId);
+      await refund(s, unwindId, method);
+      const abandonRefusal = await refusalMessageOf(
+        s.owner.as.mutation(api.dealUnwind.abandonDealUnwind, {
+          orgId: s.orgId, unwindId, reason: "Changed our mind.", idempotencyKey: crypto.randomUUID(),
+        })
+      );
+      const cancelRefusal = await refusalMessageOf(
+        s.owner.as.mutation(api.applications.cancelApplication, {
+          orgId: s.orgId, applicationId, reason: "x", idempotencyKey: crypto.randomUUID(),
+        })
+      );
+      expect({ abandonRefusal, cancelRefusal }).toEqual({
+        abandonRefusal: DEAL_UNWIND_MESSAGES.DEAL_UNWIND_ABANDON_AFTER_REFUND,
+        cancelRefusal: DEAL_UNWIND_MESSAGES.DEAL_UNWIND_ACTIVE,
+      });
+      expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
+      expect((await s.t.run((ctx) => ctx.db.get(unwindId)))?.status).toBe("ACTIVE");
+    }
+  );
+
+  test("control: abandoning after only the forward return is allowed, and the still-paid deal keeps pointing at the unwind", async () => {
+    const { s, applicationId } = await paidDeal("r1_control");
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    await s.owner.as.mutation(api.dealUnwind.abandonDealUnwind, {
+      orgId: s.orgId, unwindId, reason: "Customer kept the car.", idempotencyKey: crypto.randomUUID(),
+    });
+    expect((await s.t.run((ctx) => ctx.db.get(unwindId)))?.status).toBe("ABANDONED");
+    expect(
+      await refusalMessageOf(
+        s.owner.as.mutation(api.applications.cancelApplication, {
+          orgId: s.orgId, applicationId, reason: "x", idempotencyKey: crypto.randomUUID(),
+        })
+      )
+    ).toBe(DEAL_UNWIND_MESSAGES.DEAL_CANCEL_USE_UNWIND);
+  });
 });

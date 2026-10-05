@@ -661,9 +661,13 @@ export const abandonDealUnwind = mutation({
       },
       async () => {
         const { unwind, app } = await loadActiveUnwind(ctx, args.orgId, args.unwindId);
+        // SCRUM-693-R1: the refund clears `disbursedAt`, the only thing that
+        // stops a bare cancel of a paid deal. Once refunded, the unwind stays
+        // ACTIVE (and keeps cancel locked) until it finishes with its evidence.
+        if (unwind.remittanceRefund) refuse("DEAL_UNWIND_ABANDON_AFTER_REFUND");
         const now = Date.now();
-        // Nothing is undone: a returned forward or a refunded remittance stays
-        // recorded, and the deal is left CLOSED in the state that step produced.
+        // Nothing is undone: a returned forward stays recorded, and the deal is
+        // left CLOSED and still paid, so a bare cancel keeps pointing here.
         await ctx.db.patch(unwind._id, {
           status: "ABANDONED",
           abandonment: { reason, abandonedBy: user._id, abandonedAt: now },
@@ -688,4 +692,4 @@ export const abandonDealUnwind = mutation({
     );
   },
 });
-
+

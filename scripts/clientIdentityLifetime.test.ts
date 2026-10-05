@@ -203,9 +203,16 @@ describe("SCRUM-313 client identity lifetime", () => {
     // above, not listed here. `supplierCostRecoveries.reverseReceipt`
     // (SCRUM-389 phase 1) is the correction door for a recovery receipt and
     // shipped without a screen; it joins the list until the reverse action
-    // lands in the sourcing recoveries section (SCRUM-406).
+    // lands in the sourcing recoveries section (SCRUM-406). The four
+    // identity-guarded `dealUnwind` steps (SCRUM-693 PR A) ship backend-first;
+    // they leave this list when the deal page's unwind panel lands (PR C,
+    // SCRUM-691).
     expect(commandsWithNoClientCaller.sort((a, b) => a.localeCompare(b))).toEqual([
       "collections.applyRetainedCredit",
+      "dealUnwind.abandonDealUnwind",
+      "dealUnwind.finishDealUnwind",
+      "dealUnwind.recordDealUnwindForwardReturn",
+      "dealUnwind.recordDealUnwindRemittanceRefund",
       "financeDealCosts.migrateLegacyCustodyToLedger",
       "sourcingPayables.recordPartialPayment",
       "supplierCostRecoveries.reverseReceipt",

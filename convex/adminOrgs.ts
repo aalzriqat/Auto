@@ -212,6 +212,10 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // SCRUM-571 D-8: held provider payments. Appended last (the order is pinned).
   // Rows with no orgId (UNKNOWN_REFERENCE) belong to no tenant and survive.
   { kind: "orgRows", table: "unmatchedProviderFunds", index: "by_org_review" },
+  // SCRUM-693: deal unwinds (they reference an application, a sale, a payment
+  // and its allocations). Appended last because the order is pinned; the index
+  // leads with orgId, so the org-scoped read is a prefix scan.
+  { kind: "orgRows", table: "dealUnwinds", index: "by_org_application_status" },
 ];
 
 async function findActiveDeletionRequest(ctx: MutationCtx, orgId: Id<"organizations">) {

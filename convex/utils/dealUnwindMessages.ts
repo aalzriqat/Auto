@@ -33,6 +33,8 @@ export const DEAL_UNWIND_MESSAGES = {
     "One of the entered texts is too long. Shorten it and try again. Nothing has been changed.",
   DEAL_UNWIND_NOT_ACTIVE:
     "This unwind is already finished or abandoned. Nothing has been changed.",
+  DEAL_UNWIND_ABANDON_AFTER_REFUND:
+    "The finance company's payment has already been refunded, so this unwind can no longer be abandoned. Finish it with the credit note and the vehicle return. Nothing has been changed.",
   DEAL_UNWIND_STEP_DONE:
     "This step of the unwind is already recorded. Nothing has been changed.",
   DEAL_UNWIND_FORWARD_NOT_APPLICABLE:
