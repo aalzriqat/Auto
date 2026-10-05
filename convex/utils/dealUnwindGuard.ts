@@ -1,5 +1,6 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
+import { financeReceiptAccountKey } from "../accounting/postingRules";
 import { AppErrorCode, throwAppError } from "./errors";
 import { DEAL_UNWIND_MESSAGES } from "./dealUnwindMessages";
 import { chequesForApplication, isFcLineage } from "./fcCheque";
@@ -77,7 +78,40 @@ export async function paidDealReversalRoute(
   if (!payment || payment.status !== "SETTLED") return { route: "CHAIN_MISMATCH" };
   if (payment.method === "CHEQUE") return { route: "CHEQUE" };
   if (payment.method !== "BANK_TRANSFER" && payment.method !== "CASH") return { route: "INELIGIBLE" };
+  // R1: the reversal credits the account the receipt journal debited, and the
+  // refund leaves by the payment's rail. A receipt posted before SCRUM-599
+  // carries no method and debited the bank even for a cash payment; unwinding
+  // it would credit the bank while the cash leaves the till.
+  if (!(await receiptPostedToPaymentAccount(ctx, app, payment.method))) return { route: "CHAIN_MISMATCH" };
   return { route: "UNWIND", method: payment.method };
+}
+
+/** Every posted FINANCE_CASH_RECEIVED at this version debited `method`'s account. */
+export async function receiptPostedToPaymentAccount(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+  method: "BANK_TRANSFER" | "CASH"
+): Promise<boolean> {
+  const keys = financeDisbursementKeys(app._id, disbursementVersionOf(app));
+  const events = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_event_source_version", (q) =>
+      q
+        .eq("orgId", app.orgId)
+        .eq("eventType", "FINANCE_CASH_RECEIVED")
+        .eq("sourceType", "financeApplications")
+        .eq("sourceId", keys.sourceId)
+        .eq("eventVersion", keys.eventVersion)
+    )
+    .take(10);
+  const expected = financeReceiptAccountKey(method);
+  return events.every((event) => {
+    try {
+      return financeReceiptAccountKey((event.payload as { paymentMethod?: unknown } | undefined)?.paymentMethod) === expected;
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** D1: commission collection and payment skip a sale that is being unwound. */

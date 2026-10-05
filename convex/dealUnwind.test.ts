@@ -116,6 +116,16 @@ const receiptEvents = (s: Seeded) =>
       (e) => e.eventType === "FINANCE_CASH_RECEIVED"
     )
   );
+/** Rewrites the receipt event to the shape it had when posted with `method` (undefined = before SCRUM-599). */
+const setReceiptPostedMethod = (s: Seeded, method: "CASH" | undefined) =>
+  s.t.run(async (ctx) => {
+    const events = (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect()).filter(
+      (e) => e.eventType === "FINANCE_CASH_RECEIVED"
+    );
+    expect(events).toHaveLength(1);
+    const { paymentMethod: _dropped, ...rest } = events[0].payload as Record<string, unknown>;
+    await ctx.db.patch(events[0]._id, { payload: method === undefined ? rest : { ...rest, paymentMethod: method } });
+  });
 
 /**
  * Every row the combined step writes, reduced to what a partial commit would
@@ -503,7 +513,12 @@ describe("SCRUM-693-F2 - a bare cancel points only where the deal can actually g
   });
 
   // Each record start refuses must not be told to use the unwind.
-  const NOT_UNWINDABLE = [
+  const NOT_UNWINDABLE: Array<{
+    name: string;
+    method?: "BANK_TRANSFER" | "CASH";
+    startRefusal: string;
+    apply: (s: Seeded, applicationId: Id<"financeApplications">) => Promise<unknown>;
+  }> = [
     {
       name: "the deal expects a cheque",
       startRefusal: DEAL_UNWIND_MESSAGES.DEAL_UNWIND_CHEQUE_DEAL,
@@ -530,16 +545,48 @@ describe("SCRUM-693-F2 - a bare cancel points only where the deal can actually g
           await ctx.db.patch(payment._id, { status: "VOIDED" });
         }),
     },
+    {
+      // R1: a receipt emitted before SCRUM-599 carries no method and debited the bank.
+      name: "a cash receipt whose journal debited the bank",
+      method: "CASH",
+      startRefusal: DEAL_UNWIND_MESSAGES.DEAL_UNWIND_CHAIN_MISMATCH,
+      apply: (s: Seeded) => setReceiptPostedMethod(s, undefined),
+    },
+    {
+      name: "a bank receipt whose journal debited cash",
+      startRefusal: DEAL_UNWIND_MESSAGES.DEAL_UNWIND_CHAIN_MISMATCH,
+      apply: (s: Seeded) => setReceiptPostedMethod(s, "CASH"),
+    },
   ];
 
   test.each(NOT_UNWINDABLE)("$name: cancel keeps the manual-correction refusal, and start agrees", async (row) => {
-    const { s, applicationId } = await paidDeal(`f2_${row.name.length}`);
+    const { s, applicationId } = await paidDeal(`f2_${NOT_UNWINDABLE.indexOf(row)}`, row.method);
     await row.apply(s, applicationId);
     const cancelRefusal = await refusalMessageOf(bareCancel(s, applicationId));
     expect(cancelRefusal).toMatch(MANUAL_CORRECTION);
     expect(cancelRefusal).not.toBe(DEAL_UNWIND_MESSAGES.DEAL_CANCEL_USE_UNWIND);
     expect(await refusalMessageOf(start(s, applicationId))).toBe(row.startRefusal);
     expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
+  });
+
+  test("R1 control: a bank receipt posted before SCRUM-599 (no method) still unwinds", async () => {
+    const { s, applicationId } = await paidDeal("r1_bank_legacy");
+    await setReceiptPostedMethod(s, undefined);
+    expect(await refusalMessageOf(bareCancel(s, applicationId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_CANCEL_USE_UNWIND);
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    await finish(s, unwindId);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+  });
+
+  test("R1: finish re-checks the account the receipt debited, and moves nothing", async () => {
+    const { s, applicationId } = await paidDeal("r1_finish", "CASH");
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    await setReceiptPostedMethod(s, undefined);
+    const before = await moneyState(s, applicationId, unwindId);
+    expect(await refusalMessageOf(finish(s, unwindId, "CASH"))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_CHAIN_MISMATCH);
+    expect(await moneyState(s, applicationId, unwindId)).toEqual(before);
   });
 });
 

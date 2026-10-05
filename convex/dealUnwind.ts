@@ -24,7 +24,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { AppErrorCode, throwAppError } from "./utils/errors";
 import { DEAL_UNWIND_MESSAGES, type DealUnwindRefusalCode } from "./utils/dealUnwindMessages";
-import { activeDealUnwindFor, paidDealReversalRoute } from "./utils/dealUnwindGuard";
+import { activeDealUnwindFor, paidDealReversalRoute, receiptPostedToPaymentAccount } from "./utils/dealUnwindGuard";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
 import { planVersionOf } from "./utils/financedSalePostingPlan";
@@ -457,6 +457,7 @@ export const finishDealUnwind = mutation({
           refuse("DEAL_UNWIND_CHAIN_MISMATCH");
         }
         if (payment.method !== unwind.remittanceMethod) refuse("DEAL_UNWIND_REFUND_METHOD_MISMATCH");
+        if (!(await receiptPostedToPaymentAccount(ctx, app, unwind.remittanceMethod))) refuse("DEAL_UNWIND_CHAIN_MISMATCH");
 
         const receivable = await ctx.db
           .query("receivableDocuments")
