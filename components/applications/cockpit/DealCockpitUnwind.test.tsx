@@ -297,9 +297,13 @@ describe("SCRUM-691 / 693 -- Unwind deal replaces Cancel on a paid deal", () => 
   });
 
   test("the refund step takes a bank reference for a transfer and finishes with every field", async () => {
+    const startedAt = Date.now();
     render_(ACTIVE("AWAITING_FINISH", "BANK_TRANSFER"));
     fireEvent.click(screen.getByTestId("deal-unwind-deal"));
     expect(screen.queryByLabelText("UnwindVoucherLabel")).toBeNull();
+    // The server caps references at 200 characters; the form must not accept more.
+    expect((screen.getByLabelText("UnwindBankReferenceLabel") as HTMLInputElement).maxLength).toBe(200);
+    expect((screen.getByLabelText("UnwindCreditNoteLabel") as HTMLInputElement).maxLength).toBe(200);
     const finish = screen.getByTestId("deal-unwind-finish-submit") as HTMLButtonElement;
     expect(finish.disabled).toBe(true);
     fireEvent.change(screen.getByLabelText("UnwindBankReferenceLabel"), { target: { value: "TRX-1" } });
@@ -320,6 +324,8 @@ describe("SCRUM-691 / 693 -- Unwind deal replaces Cancel on a paid deal", () => 
       customerPaymentDisposition: "REFUND",
     });
     expect(call).not.toHaveProperty("voucherNumber");
+    // Same-day refund: dated "now", never midnight, which predates the payment confirmed earlier today and is refused.
+    expect(call.refundedAt as number).toBeGreaterThanOrEqual(startedAt);
   });
 
   test("a cash remittance is refunded as cash: voucher and acknowledgement, no bank reference", () => {

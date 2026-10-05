@@ -65,6 +65,16 @@ export type UnwindFinishValues = Readonly<{
 }>;
 
 const MAX_TEXT_CHARS = 500;
+/** The server's cap on reference / voucher / credit-note fields (MAX_DIRECT_PAYMENT_REFERENCE_CHARS). */
+const MAX_REFERENCE_CHARS = 200;
+
+/**
+ * A picked calendar day as an instant. Today is sent as "now": midnight of today is earlier than the
+ * moment the finance company's payment was confirmed, and the server refuses a refund dated before it.
+ */
+function refundInstant(dateInput: string): number {
+  return dateInput === economicTodayDateInput() ? Date.now() : economicDateInputToMs(dateInput);
+}
 
 export function UnwindDealDialog({
   open,
@@ -299,7 +309,7 @@ function ForwardStep({
           <Input
             id="deal-unwind-forward-ref"
             required
-            maxLength={MAX_TEXT_CHARS}
+            maxLength={MAX_REFERENCE_CHARS}
             value={reference}
             disabled={submitting}
             onChange={(event) => setReference(event.target.value)}
@@ -366,7 +376,7 @@ function FinishStep({
           if (!complete || !method) return;
           void onSubmit({
             method,
-            refundedAt: economicDateInputToMs(refundedDate),
+            refundedAt: refundInstant(refundedDate),
             ...(method === "BANK_TRANSFER"
               ? { bankReference: bankReference.trim() }
               : { voucherNumber: voucherNumber.trim(), recipientAcknowledged: acknowledged }),
@@ -404,7 +414,7 @@ function FinishStep({
             <Input
               id="deal-unwind-bank-ref"
               required
-              maxLength={MAX_TEXT_CHARS}
+              maxLength={MAX_REFERENCE_CHARS}
               value={bankReference}
               disabled={submitting}
               onChange={(event) => setBankReference(event.target.value)}
@@ -418,7 +428,7 @@ function FinishStep({
               <Input
                 id="deal-unwind-voucher"
                 required
-                maxLength={MAX_TEXT_CHARS}
+                maxLength={MAX_REFERENCE_CHARS}
                 value={voucherNumber}
                 disabled={submitting}
                 onChange={(event) => setVoucherNumber(event.target.value)}
@@ -440,7 +450,7 @@ function FinishStep({
           <Input
             id="deal-unwind-credit-note"
             required
-            maxLength={MAX_TEXT_CHARS}
+            maxLength={MAX_REFERENCE_CHARS}
             value={creditNote}
             disabled={submitting}
             onChange={(event) => setCreditNote(event.target.value)}

@@ -1132,7 +1132,9 @@ export function DealCockpit({
   const unwindOffered =
     unwindStatus != null &&
     app?.status === "CLOSED" &&
-    (unwindStatus.status === "ACTIVE" || (!!app.disbursedAt && unwindStatus.eligibility.canStart));
+    (unwindStatus.status === "ACTIVE" || (!!app.disbursedAt && unwindStatus.eligibility.canStart)) &&
+    // A viewer who may do none of it gets no button rather than a dialog of dead controls.
+    Object.values(unwindStatus.eligibility).some(Boolean);
   const unwindHint =
     unwindStatus != null && !unwindOffered && app?.status === "CLOSED" && !!app.disbursedAt
       ? unwindStatus.refusals.start
