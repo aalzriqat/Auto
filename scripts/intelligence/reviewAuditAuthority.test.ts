@@ -215,6 +215,10 @@ describe("SCRUM-644 S3b audit binding reader", () => {
         rejections: [],
       });
     }
+    // A disagreeing tie behind two identical ones is still found.
+    for (const order of [[first, genuine(), second], [genuine(), first, second]]) {
+      expect(readAll(order).reason).toBe(UNAVAILABLE_REASON.AMBIGUOUS_BINDING);
+    }
     // The same binding reached twice is not a disagreement.
     expect(readAll([first, genuine()])).toEqual({ status: BINDING_STATUS.BOUND, payload: first.payload });
   });

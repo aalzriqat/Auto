@@ -167,9 +167,10 @@ export function readAuditBinding({ candidates, repositoryId, currentMainTip, prN
   const forThisPr = current.filter((candidate) => isId(prNumber) && candidate.payload.N === prNumber);
   if (forThisPr.length === 0) return unavailable(UNAVAILABLE_REASON.NO_CURRENT_BINDING);
 
-  const [newest, next] = forThisPr.sort(newerFirst);
+  const [newest] = forThisPr.sort(newerFirst);
   // A tie on (run, attempt) would otherwise be settled by the caller's order.
-  if (next && newerFirst(newest, next) === 0 && JSON.stringify(next.payload) !== JSON.stringify(newest.payload)) {
+  const tied = forThisPr.filter((candidate) => newerFirst(newest, candidate) === 0);
+  if (tied.some((candidate) => JSON.stringify(candidate.payload) !== JSON.stringify(newest.payload))) {
     return unavailable(UNAVAILABLE_REASON.AMBIGUOUS_BINDING);
   }
   if (!isCommitSha(headSha) || newest.payload.H !== headSha) return unavailable(UNAVAILABLE_REASON.HEAD_MOVED);
