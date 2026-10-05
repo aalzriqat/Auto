@@ -1856,6 +1856,28 @@ const quoteWizardQaMessages = defineBilingualMessages({
     "This finance company has no required documents set up.",
     "لا توجد مستندات مطلوبة معرّفة لدى شركة التمويل هذه.",
   ],
+  // SCRUM-656: the wizard's own profit-approval alerts. The English wording is
+  // bound by playwright/tests/profit-approval.spec.ts — keep it.
+  WizardProfitApprovalRequiredTitle: ["Approval Required", "مطلوب اعتماد"],
+  WizardProfitApprovalRequiredBody: [
+    "At this price the profit over the list price ({margin}) is below the minimum required profit for this vehicle ({minimum}).",
+    "عند هذا السعر، الربح فوق سعر القائمة ({margin}) أقل من الحد الأدنى المطلوب لربح هذه المركبة ({minimum}).",
+  ],
+  WizardProfitApprovalPending: [
+    "Approval request is currently pending. Please wait for a manager.",
+    "طلب الاعتماد قيد الانتظار. يرجى انتظار قرار المدير.",
+  ],
+  WizardProfitApprovalRejected: [
+    "Your request for this profit amount was rejected. Please increase the profit or request again.",
+    "رُفض طلبك لمبلغ الربح هذا. يرجى زيادة الربح أو إعادة الطلب.",
+  ],
+  WizardProfitApprovalRequestAction: ["Request Profit Approval", "طلب اعتماد الربح"],
+  WizardProfitApprovalRequesting: ["Requesting...", "جارٍ الإرسال…"],
+  WizardProfitApprovedTitle: ["Profit Approved", "تم اعتماد الربح"],
+  WizardProfitApprovedBody: [
+    "Management approved this sale price (profit over the list price: {margin}). You may proceed.",
+    "اعتمدت الإدارة سعر البيع هذا (الربح فوق سعر القائمة: {margin}). يمكنك المتابعة.",
+  ],
 });
 /**
  * SCRUM-681: why the record-quotation dialog has no calculated figure, for the
