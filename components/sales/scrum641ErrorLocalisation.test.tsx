@@ -36,8 +36,8 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => ar(key), isRtl: true, locale: "ar" }),
 }));
 
-vi.mock("@/hooks/useCurrency", () => ({
-  useCurrency: () => ({ code: "USD", symbol: "$", displayLabel: "USD", format: (n: number) => `${n}`, formatCompact: (n: number) => `${n}` }),
+vi.mock("@/hooks/useOrgSettings", () => ({
+  useOrgSettings: () => ({ currency: "USD" }),
 }));
 
 vi.mock("@/hooks/use-permissions", () => ({

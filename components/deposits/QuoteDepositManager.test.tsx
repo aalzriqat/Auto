@@ -83,6 +83,9 @@ vi.mock("convex/react", async () => {
 const { queryResults, mutationCalls } = stubs;
 
 let permissions: string[] = [];
+// DepositAllocationPanel formats through useMoneyDisplay (SCRUM-684), which
+// reads the org's settings; every mount in the app sits under OrgProvider.
+vi.mock("@/hooks/useOrgSettings", () => ({ useOrgSettings: () => ({ currency: "JOD" }) }));
 vi.mock("@/hooks/use-permissions", () => ({
   usePermissions: () => ({
     permissions,
