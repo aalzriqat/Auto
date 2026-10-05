@@ -1364,10 +1364,15 @@ function confinementScope(checker, symbol) {
       ts.isIdentifier(declaration.name) &&
       declaration.initializer &&
       ts.isVariableDeclarationList(declaration.parent) &&
-      declaration.parent.flags & ts.NodeFlags.Const
+      declaration.parent.flags & ts.NodeFlags.Const &&
+      // `const box = a` / `= holder.box` / `= this` names an object that already has
+      // another name, which can escape or be mutated unseen (Opus seat F1).
+      !isExistingReference(unwrapAliasExpression(declaration.initializer))
     ) {
       scope = enclosingFunctionLike(declaration);
     }
+    // A non-arrow function's parameters also escape through `arguments` (Opus seat F2).
+    if (scope && !ts.isArrowFunction(scope) && referencesArguments(scope)) scope = null;
     if (scope) {
       const declarationName = declaration.name;
       let confined = true;
@@ -1421,6 +1426,32 @@ function writesAnyProperty(fn) {
   };
   if (fn.body) visit(fn.body);
   return writes;
+}
+
+/** An identifier, `this`, or a property/element chain — an object that may already have another name. */
+function isExistingReference(node) {
+  return (
+    ts.isIdentifier(node) ||
+    node.kind === ts.SyntaxKind.ThisKeyword ||
+    ts.isPropertyAccessExpression(node) ||
+    ts.isElementAccessExpression(node)
+  );
+}
+
+/** True when `fn`'s own body (not a nested non-arrow function's) mentions `arguments`. */
+function referencesArguments(fn) {
+  let found = false;
+  const visit = (node) => {
+    if (found) return;
+    if (ts.isIdentifier(node) && node.text === "arguments") {
+      found = true;
+      return;
+    }
+    if (node !== fn && ts.isFunctionLike(node) && !ts.isArrowFunction(node)) return;
+    ts.forEachChild(node, visit);
+  };
+  if (fn.body) visit(fn.body);
+  return found;
 }
 
 /** `a!`, `a as T`, `<T>a`, `a satisfies T` — erased at emit, so they never change what is written. */

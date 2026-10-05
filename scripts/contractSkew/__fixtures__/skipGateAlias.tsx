@@ -256,6 +256,82 @@ export function wrappedReadClean(box: Box) {
     active ? { id: box.id as Id<"vehicles"> } : "skip",
   );
 }
+/** F1 (Opus seat): a const ALIAS of another reference lets the object escape under its source name. */
+export function constAliasOfParamEscapes(a: Box) {
+  const box = a;
+  const active = box.id != null;
+  opaqueMutator(a);
+  return useQuery(
+    api.skipGate.constAliasOfParamEscapes,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+export function constAliasOfSecondParam(a: Box, b: Box) {
+  const box = a;
+  const active = box.id != null;
+  opaqueMutator(b);
+  return useQuery(
+    api.skipGate.constAliasOfSecondParam,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+export function constAliasOfHolderEscapes(holder: { box: Box }) {
+  const box = holder.box;
+  const active = box.id != null;
+  opaqueMutator(holder);
+  return useQuery(
+    api.skipGate.constAliasOfHolderEscapes,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+/** F2 (Opus seat): a non-arrow function's parameter also escapes through `arguments`. */
+export function argumentsEscape(box: Box) {
+  const active = box.id != null;
+  // eslint-disable-next-line prefer-rest-params
+  opaqueMutator(arguments);
+  return useQuery(
+    api.skipGate.argumentsEscape,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+/** Control: a const receiver built fresh from a literal has no other name. */
+declare const maybeId: Id<"vehicles"> | null;
+export function constFreshObjectClean() {
+  const box: Box = { id: maybeId };
+  const active = box.id != null;
+  return useQuery(
+    api.skipGate.constFreshObjectClean,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+/** F3 (Opus seat): further write forms that must deny the fact. */
+export function nullishAssignWrite(box: Box) {
+  const active = box.id != null;
+  sharedBox.id ??= null;
+  return useQuery(
+    api.skipGate.nullishAssignWrite,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+export function destructuringWrite(box: Box) {
+  const active = box.id != null;
+  [sharedBox.id] = [null];
+  return useQuery(
+    api.skipGate.destructuringWrite,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+export function nestedClosureWrite(box: Box) {
+  const active = box.id != null;
+  const reset = () => {
+    sharedBox.id = null;
+  };
+  reset();
+  return useQuery(
+    api.skipGate.nestedClosureWrite,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
 /** Control: a single parameter, no property writes, stays clean. */
 export function singleParamNoWriteClean(box: Box) {
   const active = box.id != null;

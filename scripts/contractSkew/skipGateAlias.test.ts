@@ -133,6 +133,19 @@ describe("SCRUM-686 Codex findings (fail closed)", () => {
       expect(notProvenClean(field(fn, "id")), fn).toBe(true);
     }
   });
+  test("F1/F2 a const alias of another reference, or `arguments`, lets the receiver escape", () => {
+    for (const fn of ["constAliasOfParamEscapes", "constAliasOfSecondParam", "constAliasOfHolderEscapes", "argumentsEscape"]) {
+      expect(notProvenClean(field(fn, "id")), fn).toBe(true);
+    }
+  });
+  test("F1 control: a const receiver built from a fresh literal stays clean", () => {
+    expect(notProvenClean(field("constFreshObjectClean", "id"))).toBe(false);
+  });
+  test("F3 `??=`, destructuring and nested-closure writes deny the fact", () => {
+    for (const fn of ["nullishAssignWrite", "destructuringWrite", "nestedClosureWrite"]) {
+      expect(notProvenClean(field(fn, "id")), fn).toBe(true);
+    }
+  });
   test("CS-686-2-R control: a wrapped read is not a write", () => {
     expect(notProvenClean(field("wrappedReadClean", "id"))).toBe(false);
   });
