@@ -3,6 +3,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { rateLimiter } from "./rateLimit";
 import { renderNotification } from "../lib/notifications/render";
+import { sinkEgress } from "./utils/egressSink";
 
 const EXPO_PUSH_ENDPOINT = "https://exp.host/--/api/v2/push/send";
 const EXPO_RECEIPTS_ENDPOINT = "https://exp.host/--/api/v2/push/getReceipts";
@@ -127,6 +128,10 @@ export const sendMobilePush = internalAction({
       return { success: false, error: "rate_limited" };
     }
 
+    if (sinkEgress("expo-push", `sendMobilePush type=${args.type}`)) {
+      return { success: false, error: "egress_sunk" };
+    }
+
     const tokens = await ctx.runQuery(internal.mobilePushTokens.listForUser, { userId: args.userId });
     if (tokens.length === 0) return { success: true, sent: 0 };
 
@@ -234,6 +239,12 @@ export const checkPushReceipts = internalAction({
     receipts: v.array(v.object({ id: v.string(), token: v.string() })),
   },
   handler: async (ctx, args): Promise<{ success: boolean; error?: string; pruned?: number }> => {
+    // A receipt check only follows a real send, so on a sunk preview this is
+    // unreachable; held all the same so no Expo call can leave one.
+    if (sinkEgress("expo-push", `checkPushReceipts type=${args.type}`)) {
+      return { success: false, error: "egress_sunk" };
+    }
+
     const byId = new Map(args.receipts.map((r) => [r.id, r.token]));
     const ids = [...byId.keys()];
     let pruned = 0;
