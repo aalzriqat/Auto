@@ -11,7 +11,12 @@ import { describe, expect, test } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { backendSourceFiles, findUnbumpedEconomicsWrites } from "./economicsRevisionAnalyzer";
+import {
+  backendSourceFiles,
+  findUnbumpedEconomicsWrites,
+  scanBackendForUnbumpedEconomicsWrites,
+  staleExceptions,
+} from "./economicsRevisionAnalyzer";
 
 const BUMPED = `
     await ctx.db.patch(args.applicationId, {
@@ -124,5 +129,45 @@ describe("forms that evaded the first analyzer (SCRUM-703)", () => {
     // Pinned so the limit is a decision rather than an accident. Anything the
     // analyser cannot see is covered by the behavioural stale-stamp tests.
     expect(flagged("await ctx.db.patch(id, { ...fromElsewhere });")).toHaveLength(0);
+  });
+});
+
+describe("the reviewed-exception mechanism (SCRUM-703)", () => {
+  const withRoot = <T>(files: Record<string, string>, fn: (root: string) => T): T => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "econ-exc-"));
+    try {
+      for (const [name, body] of Object.entries(files)) fs.writeFileSync(path.join(root, name), body);
+      return fn(root);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  };
+  const exception = { file: "a.ts", contains: "args.approvedAmountMinor" };
+
+  test("an unexcused offence is reported", () => {
+    withRoot({ "a.ts": UNBUMPED }, (root) => {
+      expect(scanBackendForUnbumpedEconomicsWrites(root, [])).toHaveLength(1);
+    });
+  });
+
+  test("a matching exception suppresses it and is not stale", () => {
+    withRoot({ "a.ts": UNBUMPED }, (root) => {
+      expect(scanBackendForUnbumpedEconomicsWrites(root, [exception])).toHaveLength(0);
+      expect(staleExceptions(root, [exception])).toEqual([]);
+    });
+  });
+
+  test("an exception for another file excuses nothing and is reported stale", () => {
+    withRoot({ "a.ts": UNBUMPED, "b.ts": "export const x = 1;" }, (root) => {
+      const other = { file: "b.ts", contains: "args.approvedAmountMinor" };
+      expect(scanBackendForUnbumpedEconomicsWrites(root, [other])).toHaveLength(1);
+      expect(staleExceptions(root, [other])).toEqual(["b.ts: args.approvedAmountMinor"]);
+    });
+  });
+
+  test("an exception whose code was fixed is reported stale", () => {
+    withRoot({ "a.ts": BUMPED }, (root) => {
+      expect(staleExceptions(root, [exception])).toEqual(["a.ts: args.approvedAmountMinor"]);
+    });
   });
 });

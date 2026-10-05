@@ -1340,27 +1340,31 @@ describe("reopening an approval", () => {
     const { seed, applicationId } = await seedApproved();
     const before = await readApp(seed, applicationId);
 
-    const outcome = await seed.asUser
-      .mutation(api.financingEconomics.recordSubmittedQuotation, {
+    // The control that keeps this write from moving a held confirmation is the
+    // approved-refusal precondition, so the test asserts THAT refusal by message:
+    // an unrelated throw (auth, args, a typo) must not pass it. If the
+    // precondition is ever relaxed this fails, and the write must then advance
+    // the revision on its own.
+    let refusal: unknown;
+    try {
+      await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
         orgId: seed.orgId,
         applicationId,
         submittedQuotationMinor: jod(DEAL.quotation + 100),
         source: "MANUAL_ENTRY",
         customerFirstPaymentMinor: jod(DEAL.customerFirstPayment + 50),
-      })
-      .then(
-        () => "recorded" as const,
-        () => "refused" as const
-      );
-
-    const after = await readApp(seed, applicationId);
-    if (outcome === "recorded") {
-      expect(after.economicsRevision ?? 0).toBeGreaterThan(before.economicsRevision ?? 0);
-    } else {
-      expect(after.economicsRevision).toBe(before.economicsRevision);
-      expect(after.customerFirstPaymentMinor).toBe(before.customerFirstPaymentMinor);
-      expect(after.submittedQuotationMinor).toBe(before.submittedQuotationMinor);
+      });
+    } catch (error) {
+      refusal = error;
     }
+
+    expect(String((refusal as Error | undefined)?.message ?? refusal)).toContain(
+      "The finance company has already approved a purchase amount"
+    );
+    const after = await readApp(seed, applicationId);
+    expect(after.economicsRevision).toBe(before.economicsRevision);
+    expect(after.customerFirstPaymentMinor).toBe(before.customerFirstPaymentMinor);
+    expect(after.submittedQuotationMinor).toBe(before.submittedQuotationMinor);
   });
 
   test("withdraws the approval so the quotation can change, without faking an appraisal", async () => {

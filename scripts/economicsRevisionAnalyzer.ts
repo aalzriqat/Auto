@@ -146,7 +146,7 @@ export const REVIEWED_EXCEPTIONS: ReadonlyArray<{ file: string; contains: string
     file: "financingEconomics.ts",
     contains: 'resolveDealCurrency(ctx, app, "recording this quotation")',
     reason:
-      "recordSubmittedQuotation delegates the bump: it calls recomputeAndPatchEconomics in the same transaction, and that recompute advances economicsRevision on BOTH of its branches. Pinned behaviourally in financingEconomics.test.ts (SCRUM-703).",
+      "recordSubmittedQuotation cannot move a held confirmation: applySubmittedQuotation refuses once an approved purchase amount exists (pinned by message in financingEconomics.test.ts, SCRUM-703), and before approval there is no funding split to confirm. Where it does reach recomputeAndPatchEconomics, both of that function's patch branches advance economicsRevision. NOT covered: the recompute's no-write exits (manual finance, missing approval/quotation/LTV) — relaxing the approved-refusal for those needs its own bump.",
   },
   {
     file: "applications.ts",
@@ -156,20 +156,25 @@ export const REVIEWED_EXCEPTIONS: ReadonlyArray<{ file: string; contains: string
   },
 ];
 
-const isReviewed = (o: Offence) =>
-  REVIEWED_EXCEPTIONS.some((e) => o.file === e.file && o.snippet.includes(e.contains));
+type Exceptions = ReadonlyArray<{ file: string; contains: string }>;
+
+const isReviewed = (o: Offence, exceptions: Exceptions) =>
+  exceptions.some((e) => o.file === e.file && o.snippet.includes(e.contains));
 
 /** Scan every handwritten backend file; paths are relative to `convex/`. */
-export function scanBackendForUnbumpedEconomicsWrites(root = CONVEX_ROOT): Offence[] {
-  return scanAll(root).filter((o) => !isReviewed(o));
+export function scanBackendForUnbumpedEconomicsWrites(
+  root = CONVEX_ROOT,
+  exceptions: Exceptions = REVIEWED_EXCEPTIONS
+): Offence[] {
+  return scanAll(root).filter((o) => !isReviewed(o, exceptions));
 }
 
 /** Exceptions that excuse nothing any more. Must be empty. */
-export function staleExceptions(root = CONVEX_ROOT): string[] {
+export function staleExceptions(root = CONVEX_ROOT, exceptions: Exceptions = REVIEWED_EXCEPTIONS): string[] {
   const all = scanAll(root);
-  return REVIEWED_EXCEPTIONS.filter((e) => !all.some((o) => o.file === e.file && o.snippet.includes(e.contains))).map(
-    (e) => `${e.file}: ${e.contains}`
-  );
+  return exceptions
+    .filter((e) => !all.some((o) => o.file === e.file && o.snippet.includes(e.contains)))
+    .map((e) => `${e.file}: ${e.contains}`);
 }
 
 function scanAll(root: string): Offence[] {
