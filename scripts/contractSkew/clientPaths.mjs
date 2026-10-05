@@ -1348,7 +1348,14 @@ function confinementScope(checker, symbol) {
   const declarations = symbol.declarations ?? [];
   if (declarations.length === 1) {
     const [declaration] = declarations;
-    if (ts.isParameter(declaration) && ts.isIdentifier(declaration.name) && ts.isFunctionLike(declaration.parent)) {
+    if (
+      ts.isParameter(declaration) &&
+      ts.isIdentifier(declaration.name) &&
+      ts.isFunctionLike(declaration.parent) &&
+      // A second parameter may be the SAME object at runtime — `f(shared, shared)` —
+      // and mutate it under another name (Codex CS-686-2 closure round).
+      declaration.parent.parameters.length === 1
+    ) {
       scope = declaration.parent;
     } else if (
       ts.isVariableDeclaration(declaration) &&
@@ -1381,11 +1388,45 @@ function confinementScope(checker, symbol) {
         ts.forEachChild(node, visit);
       };
       visit(declaration.getSourceFile());
-      if (!confined) scope = null;
+      if (!confined || writesAnyProperty(scope)) scope = null;
     }
   }
   confinementScopes.set(symbol, scope);
   return scope;
+}
+
+/**
+ * True when `fn` (including nested closures) writes, increments or deletes ANY
+ * property. Object identity is not tracked, so any property write in the
+ * receiver's function may be a write to the receiver through another reference
+ * (`other.id = null` where `other === box`).
+ *
+ * ⚠️ Known limit: a mutation inside an opaque CALL (a helper closing over the
+ * same object) is not seen. Proving effects across calls is out of scope here.
+ */
+function writesAnyProperty(fn) {
+  let writes = false;
+  const visit = (node) => {
+    if (writes) return;
+    if (
+      (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
+      isPropertyWrite(node)
+    ) {
+      writes = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  if (fn.body) visit(fn.body);
+  return writes;
+}
+
+/** Like isWriteOrCallTarget, but a method call is not a write. */
+function isPropertyWrite(access) {
+  const parent = access.parent;
+  if (parent && (ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.expression === access) return false;
+  if (parent && ts.isTaggedTemplateExpression(parent) && parent.tag === access) return false;
+  return isWriteOrCallTarget(access);
 }
 
 function receiverIsConfinedAt(checker, receiverSymbol, conditionNode) {

@@ -201,3 +201,31 @@ export function voidZeroClean(args: { id: Id<"vehicles"> | undefined }) {
     active ? { id: args.id as Id<"vehicles"> } : "skip",
   );
 }
+
+/** CS-686-2 closure round (Codex): a SECOND parameter may be the same object — `f(shared, shared)`. */
+export function sameObjectTwoParams(box: Box, other: Box) {
+  const active = box.id != null;
+  other.id = null;
+  return useQuery(
+    api.skipGate.sameObjectTwoParams,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+/** A property write anywhere in the receiver's function denies the fact, even on a single parameter. */
+declare const sharedBox: Box;
+export function singleParamOuterWrite(box: Box) {
+  const active = box.id != null;
+  sharedBox.id = null;
+  return useQuery(
+    api.skipGate.singleParamOuterWrite,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+/** Control: a single parameter, no property writes, stays clean. */
+export function singleParamNoWriteClean(box: Box) {
+  const active = box.id != null;
+  return useQuery(
+    api.skipGate.singleParamNoWriteClean,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
