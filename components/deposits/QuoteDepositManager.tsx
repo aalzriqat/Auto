@@ -22,7 +22,7 @@ import { toast } from "@/components/ui/sonner";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { isChosenMethod } from "@/components/payments/paymentMethod";
-import { getErrorMessage } from "@/lib/errors";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { DepositAllocationPanel } from "@/components/sales/wizard/components/DepositAllocationPanel";
 import { DepositSettlementDecision } from "@/components/deposits/DepositSettlementDecision";
@@ -158,7 +158,7 @@ export function QuoteDepositManager({
       await releaseVehicle({ orgId, quoteId, vehicleId });
       toast.success(t("DepositShareReleased" as any));
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t));
     } finally {
       setBusyHoldId(null);
     }
@@ -184,7 +184,7 @@ export function QuoteDepositManager({
       });
       toast.success(t("DepositShareResolved" as any));
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t));
     } finally {
       setBusyHoldId(null);
     }

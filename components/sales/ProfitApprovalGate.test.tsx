@@ -55,7 +55,7 @@ vi.mock("@/components/ui/sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-import { useProfitApproval } from "./ProfitApprovalNotice";
+import { ProfitApprovalNotice, useProfitApproval } from "./ProfitApprovalNotice";
 import ApprovalsPage from "../../app/(dashboard)/[orgId]/approvals/page";
 
 afterEach(() => {
@@ -76,6 +76,34 @@ describe("useProfitApproval while its inputs load", () => {
       useProfitApproval({ orgId: undefined, vehicleId: undefined, salePrice: 0, enabled: false, loading: false })
     );
     expect(result.current.blocked).toBe(false);
+  });
+});
+
+describe("SCRUM-641: a deleted vehicle blocks completion and says why", () => {
+  const active = {
+    orgId: "org1" as Id<"organizations">,
+    vehicleId: "veh1" as Id<"vehicles">,
+    salePrice: 1000,
+    enabled: true,
+  };
+
+  test("a VEHICLE_DELETED verdict reports blocked", () => {
+    stubs.queryResult = { status: "VEHICLE_DELETED" };
+    const { result } = renderHook(() => useProfitApproval(active));
+    expect(result.current.blocked).toBe(true);
+  });
+
+  test("control: a NOT_REQUIRED verdict is not blocked", () => {
+    stubs.queryResult = { status: "NOT_REQUIRED", margin: 1, minimumProfit: 0 };
+    const { result } = renderHook(() => useProfitApproval(active));
+    expect(result.current.blocked).toBe(false);
+  });
+
+  test("the notice renders the localized deleted-vehicle message", () => {
+    stubs.queryResult = { status: "VEHICLE_DELETED" };
+    const { result } = renderHook(() => useProfitApproval(active));
+    render(<ProfitApprovalNotice approval={result.current} />);
+    expect(screen.getByRole("alert").textContent).toContain("ServerError_VEHICLE_DELETED");
   });
 });
 
