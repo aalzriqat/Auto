@@ -324,7 +324,7 @@ describe("large realistic deal resolves under the platform limits (limits ENFORC
         expect(result).toMatchObject({ dealKind: "FINANCED", applicationId: s.applicationId, status: "APPROVED" });
       }
       if (door === "dealWorkspace.financedDealCockpit") {
-        const workspace = result as { pendingDepositRequests: unknown[] };
+        const workspace = result as unknown as { pendingDepositRequests: unknown[] };
         expect(workspace.pendingDepositRequests.length).toBeGreaterThan(0);
       }
       if (door === "dealOverview.financedDealOverview") {
@@ -369,7 +369,7 @@ describe("bounded read proof (limits ENFORCED)", () => {
 
   test("AT the cap (200 pre-deal capitalized rows) the cost basis is really computed, not withheld", async () => {
     const s = await seedFinancedDeal({ preDealCapitalized: MAX_COST_BASIS_EXPENSES });
-    const overview = (await FINANCED_DOORS["dealOverview.financedDealOverview"](s)) as {
+    const overview = (await FINANCED_DOORS["dealOverview.financedDealOverview"](s)) as unknown as {
       vehicleCostBasis: {
         available: boolean; consigned: boolean; baseMinor: number; eligibleExpensesMinor: number;
         totalBeforeDealMinor: number; lineDetail: string; expenses: unknown[];
