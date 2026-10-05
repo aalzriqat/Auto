@@ -101,6 +101,9 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "financeDealCosts.recordDealFee": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "financeDealCosts.recordTemplateFeeActual": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted (position included); one live line per (deal, position) refused inside the idempotent section" },
   "financeDealCosts.recordDirectFeePayment": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted on fee, method, date, reference and the required expectedAmountMinor the approver saw; the HANDOVER_COST_PAID_DIRECT posting is keyed on the fee id plus a stored version and every state check (already paid, custody-linked, no actual, actual changed since the form rendered, earlier payment still posted) is inside the section" },
+  "financeDealCosts.recordExecutionFeeActual": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted on application, currency, amount, payer, custody, paid date and reference; the line it mints posts custody only through syncCustodyFeePosting keyed on that fee id plus a stored version, INSIDE the section, and an already-linked execution fee is refused inside it (SCRUM-690)" },
+  "financeDealCosts.bindExecutionFeeLine": { bucket: "NON_ECONOMIC", mechanism: "sets the executionFeeBinding marker on one identified existing fee line; no posting call is reachable, the only downstream write is the derived-economics recompute (a projection patch, deducted lines only), and re-linking the line already linked returns early (SCRUM-690)" },
+  "financeDealCosts.unbindExecutionFeeLine": { bucket: "NON_ECONOMIC", mechanism: "clears the executionFeeBinding marker on one identified fee line and is refused while the line carries a custody posting or direct payment; no posting call is reachable, and an already-unlinked line returns early (SCRUM-690)" },
   "financeCompanyForward.recordFinanceCompanyForward": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true - fingerprinted on application, method, paid date, reference and the expectedAmountMinor the payer saw; the FINANCE_COMPANY_FORWARD_PAID posting is keyed on the application id plus a stored version and every state check (finalized, transfer not yet confirmed, proof is DUE, amount unchanged, closed period) is inside the section" },
   "financeCompanyForward.reverseFinanceCompanyForward": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true - fingerprinted on application, forward and reason; reverses the pinned forward version through reverseEventIfPosted, keyed on the stored version, and refuses a forward already being taken back" },
   "financeCompanyForward.reportFinanceCompanyForwardReturned": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true - fingerprinted on application, forward and reason; reverses the pinned ON_BOOKS forward version through reverseEventIfPosted, keyed on the stored version" },
@@ -299,7 +302,8 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // 126 -> 128: the two SCRUM-447 mutations above, on top of the SCRUM-435 three (merge of origin/main into SCRUM-447).
     // 128 -> 129: `financingEconomics.recordManualFinanceApproval` (SCRUM-27), on top of main's 128.
     // 129 -> 130: `applications.returnFinanceDisbursementCheque` (SCRUM-239).
-    expect(population).toHaveLength(130);
+    // 130 -> 133: `financeDealCosts.recordExecutionFeeActual`, `.bindExecutionFeeLine` and `.unbindExecutionFeeLine` (SCRUM-690).
+    expect(population).toHaveLength(133);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

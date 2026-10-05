@@ -52,6 +52,12 @@ import { composeCustomerGapToDealer, isMinorAmount, type DealProfit } from "./fi
  * between them (the sum would be corrupt).
  */
 export type RecordedCostsReason = "MIXED_DENOMINATION" | "UNSAFE_AMOUNT";
+/**
+ * Why the expected dealer-borne side is withheld. EXECUTION_FEE_UNCLASSIFIED
+ * (SCRUM-690 F-PNTR-1): the deal's frozen expected total disagrees with the
+ * finance company's execution fee, or which cost is that fee is ambiguous.
+ */
+export type ExpectedCostsReason = "NO_POLICY" | "MIXED_DENOMINATION" | "UNSAFE_AMOUNT" | "EXECUTION_FEE_UNCLASSIFIED";
 
 /** A party row exactly as `applications.dealCockpit` serves it. */
 export type ServedParty = Readonly<{
@@ -130,7 +136,7 @@ export type DealFinancialSummaryInputs = Readonly<{
     totalMinor: number | null;
     remainingMinor: number | null;
     /** Why both are null, when they are — a missing policy is not the only way. */
-    reason: "NO_POLICY" | "MIXED_DENOMINATION" | "UNSAFE_AMOUNT" | null;
+    reason: ExpectedCostsReason | null;
   }>;
 }>;
 
@@ -233,7 +239,7 @@ export type DealFinancialSummary = Readonly<{
     knownCommittedMinor: number | null;
     expectedCostsRemainingMinor: number | null;
     /** Why the expected side is unknown, when it is. */
-    expectedCostsReason: "NO_POLICY" | "MIXED_DENOMINATION" | "UNSAFE_AMOUNT" | null;
+    expectedCostsReason: ExpectedCostsReason | null;
     totalExpectedMinor: number | null;
     /** Why `knownCommitted`/`totalExpected` are withheld although their operands are known: the sum is not a safe integer. */
     aggregateReason: "UNSAFE_AMOUNT" | null;

@@ -23,6 +23,7 @@ import {
 } from "./utils/financeApplicationProjection";
 import { PERMISSIONS, cancelAuthorityFor, isSystemOwnerRole, type Permission } from "./utils/permissions";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { executionFeeHeadline, executionFeePosition, executionFeeUnrecorded } from "./utils/executionFeePosition";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
 import {
@@ -1232,9 +1233,13 @@ async function summarizeCockpitExpenses(
   const sameCurrencyFees = liveFees.filter((fee) => fee.currency === currency);
   const sameCurrencySummary = summarizeFees(sameCurrencyFees);
   const otherCurrencyFees = liveFees.length - sameCurrencyFees.length;
+  // SCRUM-690 F-PNTR-1: the finance company's execution fee as ONE position —
+  // the overview reads the same helper, so the two headlines cannot disagree.
+  const executionFee = executionFeePosition(app, liveFees, currency);
 
   return {
     feeLines,
+    executionFee: executionFeeHeadline(executionFee),
     actualExpensesMinor: sameCurrencySummary.dealerBorneActualMinor,
     feesAwaitingActuals: sameCurrencySummary.linesAwaitingActual + otherCurrencyFees,
     // RECORDED and RECONCILED are different claims: an amount somebody typed and
@@ -1243,7 +1248,10 @@ async function summarizeCockpitExpenses(
     expensesFullyReconciled:
       otherCurrencyFees === 0 &&
       sameCurrencySummary.linesAwaitingActual === 0 &&
-      sameCurrencySummary.linesAwaitingReconciliation === 0,
+      sameCurrencySummary.linesAwaitingReconciliation === 0 &&
+      // A fee the finance company charged and nobody has recorded is not a
+      // finished cost, however reconciled the other lines are.
+      !executionFeeUnrecorded(executionFee),
   };
 }
 
@@ -1351,7 +1359,7 @@ async function buildCockpitMoney(
   const supplierName = vehicle?.sourcedFromName ?? "";
 
   const expenses = await summarizeCockpitExpenses(ctx, app, currency);
-  const { feeLines, actualExpensesMinor, feesAwaitingActuals, expensesFullyReconciled } = expenses;
+  const { feeLines, actualExpensesMinor, feesAwaitingActuals, expensesFullyReconciled, executionFee } = expenses;
 
   // --- the supplier's position -----------------------------------------
   const payables = app.finalizedSaleId
@@ -1547,6 +1555,7 @@ async function buildCockpitMoney(
       customerDirectToDealerMinor: customerGapToDealer.amountMinor,
       actualExpensesMinor,
       expectedExpensesMinor: app.estimatedDealerBorneExpensesMinor,
+      executionFee,
       currency,
       fullySettled,
     });

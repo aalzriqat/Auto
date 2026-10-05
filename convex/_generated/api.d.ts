@@ -180,6 +180,7 @@ import type * as utils_depositSettlementPlan from "../utils/depositSettlementPla
 import type * as utils_egressSink from "../utils/egressSink.js";
 import type * as utils_env from "../utils/env.js";
 import type * as utils_errors from "../utils/errors.js";
+import type * as utils_executionFeePosition from "../utils/executionFeePosition.js";
 import type * as utils_expenseAmortization from "../utils/expenseAmortization.js";
 import type * as utils_facebookApi from "../utils/facebookApi.js";
 import type * as utils_fcCheque from "../utils/fcCheque.js";
@@ -443,6 +444,7 @@ declare const fullApi: ApiFromModules<{
   "utils/egressSink": typeof utils_egressSink;
   "utils/env": typeof utils_env;
   "utils/errors": typeof utils_errors;
+  "utils/executionFeePosition": typeof utils_executionFeePosition;
   "utils/expenseAmortization": typeof utils_expenseAmortization;
   "utils/facebookApi": typeof utils_facebookApi;
   "utils/fcCheque": typeof utils_fcCheque;

@@ -284,6 +284,17 @@ describe("Finance lifecycle phase 1 quote mode", () => {
       issuedTo: "FINANCE_COMPANY",
     });
     await recordReconciledZeroCost(asUser, api, orgId, applicationId);
+    // SCRUM-690 (c22119): the manual admin fee is a configured execution fee, so
+    // the deal cannot finalize until its actual is recorded. Zero = not charged.
+    const executionFeeId = await asUser.mutation(api.financeDealCosts.recordExecutionFeeActual, {
+      orgId,
+      applicationId,
+      actualAmountMinor: 0,
+      expectedCurrency: "JOD",
+      paidBy: "DEALER",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    await asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId: executionFeeId, notes: "Not charged." });
     await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
 
     await t.run(async (ctx) => {
