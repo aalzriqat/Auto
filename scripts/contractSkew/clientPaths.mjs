@@ -901,21 +901,23 @@ function collectFromExpression(expr, context) {
     // `undefined` means no transmitted value. Preserve the other alternative
     // directly so a query's `cond ? undefined : "skip"` can still normalize to
     // the known empty-payload state after the sentinel is removed.
-    if (isUndefinedExpression(node.whenTrue)) {
+    if (isUndefinedExpression(checker, node.whenTrue)) {
       return collectFromExpression(node.whenFalse, nested());
     }
-    if (isUndefinedExpression(node.whenFalse)) {
+    if (isUndefinedExpression(checker, node.whenFalse)) {
       return collectFromExpression(node.whenTrue, nested());
     }
     const whenTrueRefinements = truthyRefinementsForCondition(
       checker,
       node.condition,
       refinements,
+      evidence,
     );
     const whenFalseRefinements = falsyRefinementsForCondition(
       checker,
       node.condition,
       refinements,
+      evidence,
     );
     return mergeClientNodes(
       collectFromExpression(node.whenTrue, nested(prefix, whenTrueRefinements)),
@@ -933,6 +935,20 @@ function collectFromExpression(expr, context) {
   // Not a literal — fall back to the assertion-free type of the expression.
   const type = checker.getTypeAtLocation(node);
   const collected = collectPaths(checker, type, prefix, acc, depth, seen, "LITERAL");
+  // SCRUM-686: TypeScript narrows `a.b` only for a DIRECT condition (or a
+  // readonly property through an aliased one), so a proven `!!a.b` carried by a
+  // const alias is lost here. The use-site refinement recorded from the branch
+  // condition is applied instead — but never for a receiver that is written
+  // anywhere, because then the fact may have been invalidated before this read.
+  const access = routeParamAccess(node);
+  const receiverSymbol = access ? resolveSymbol(checker, access.receiver) : null;
+  if (access && receiverSymbol && !evidence.isWrittenSymbol(receiverSymbol)) {
+    return applyUseSiteRefinement(
+      collected,
+      refinementForExpression(checker, node, refinements),
+      declaredTypeAdmitsUndefined(checker, accessSymbol(checker, node)),
+    );
+  }
   return collected;
 }
 
@@ -940,7 +956,8 @@ function collectIdentifierFromSymbol(node, symbol, context) {
   const { checker, prefix, acc, depth, seen, evidence, expressionSeen, refinements } = context;
   const refinement = refinementForExpression(checker, node, refinements, symbol);
   const routeParam = routeParamRuntimeNode(node, checker, evidence, new Set(), symbol);
-  if (routeParam) return applyUseSiteRefinement(routeParam, refinement);
+  const mayBeUndefined = declaredTypeAdmitsUndefined(checker, symbol);
+  if (routeParam) return applyUseSiteRefinement(routeParam, refinement, mayBeUndefined);
 
   const alias = evidence.assertionInitializerForSymbol(symbol);
   if (alias) {
@@ -952,6 +969,7 @@ function collectIdentifierFromSymbol(node, symbol, context) {
       return applyUseSiteRefinement(
         collectFromExpression(alias.expression, { ...context, depth: depth + 1 }),
         refinement,
+        mayBeUndefined,
       );
     } finally {
       expressionSeen.delete(alias.symbol);
@@ -977,11 +995,12 @@ function collectIdentifierFromSymbol(node, symbol, context) {
         collectPaths(checker, branch, prefix, acc, depth + 1, seen, "LITERAL"),
       );
     }
-    return applyUseSiteRefinement(merged ?? clientNode.unresolved(), refinement);
+    return applyUseSiteRefinement(merged ?? clientNode.unresolved(), refinement, mayBeUndefined);
   }
   return applyUseSiteRefinement(
     collectPaths(checker, type, prefix, acc, depth, seen, "LITERAL"),
     refinement,
+    mayBeUndefined,
   );
 }
 
@@ -1020,8 +1039,45 @@ function shorthandUseSiteBranches(checker, node, declared) {
   return kept;
 }
 
-function isUndefinedExpression(node) {
-  return ts.isIdentifier(node) && node.text === "undefined";
+/**
+ * SCRUM-686 (CS-686-3). Only the GLOBAL `undefined` (or `void 0`) is the undefined
+ * value. `undefined` is not a reserved word: a parameter, a local `const`, an
+ * import or a type-level declaration can all bind the name, and then `x != undefined`
+ * proves nothing. The global value symbol has no declarations in the program; any
+ * resolved symbol that has one is a local binding and gives no proof. An
+ * unresolvable identifier is not trusted either.
+ */
+function isUndefinedExpression(checker, node) {
+  if (ts.isParenthesizedExpression(node)) return isUndefinedExpression(checker, node.expression);
+  if (ts.isVoidExpression(node)) {
+    return ts.isNumericLiteral(node.expression) && node.expression.text === "0";
+  }
+  if (!ts.isIdentifier(node) || node.text !== "undefined") return false;
+  const symbol = checker.getSymbolAtLocation(node);
+  return Boolean(symbol) && (symbol.declarations ?? []).length === 0;
+}
+
+/**
+ * SCRUM-686 (CS-686-1). The checker drops an `undefined` union member from every
+ * type it reads (absence is not a value), so a refinement that proves only
+ * "not null" must put the possibility of `undefined` back, or a required field
+ * would read as always present. Fail closed: no symbol, `any`/`unknown`, an
+ * optional member, or an `undefined`/`void` member all admit undefined.
+ */
+function declaredTypeAdmitsUndefined(checker, symbol) {
+  if (!symbol) return true;
+  if (symbol.flags & ts.SymbolFlags.Optional) return true;
+  const type = checker.getTypeOfSymbol(symbol);
+  if (type.getFlags() & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return true;
+  return typeAdmitsUndefined(type);
+}
+
+function accessSymbol(checker, node) {
+  if (ts.isPropertyAccessExpression(node)) return checker.getSymbolAtLocation(node.name);
+  if (ts.isElementAccessExpression(node) && node.argumentExpression) {
+    return checker.getSymbolAtLocation(node.argumentExpression);
+  }
+  return null;
 }
 
 function createFlowRefinements() {
@@ -1059,86 +1115,425 @@ function refinementForExpression(checker, expression, refinements, knownSymbol =
  * both false. The opposite branches do not prove which operand decided the
  * result and therefore contribute no fabricated narrowing evidence.
  */
-function truthyRefinementsForCondition(checker, condition, currentRefinements) {
+/**
+ * @typedef {{ isWrittenSymbol: (symbol: import("typescript").Symbol | undefined | null) => boolean }} WriteEvidence
+ * @typedef {Set<import("typescript").Symbol> | null} AliasTrail
+ */
+/** @param {WriteEvidence | null} [evidence] */
+function truthyRefinementsForCondition(checker, condition, currentRefinements, evidence = null) {
   const branchRefinements = cloneFlowRefinements(currentRefinements);
-  recordTruthyCondition(checker, condition, branchRefinements);
+  recordTruthyCondition(checker, condition, branchRefinements, evidence);
   return branchRefinements;
 }
 
-function falsyRefinementsForCondition(checker, condition, currentRefinements) {
+/** @param {WriteEvidence | null} [evidence] */
+function falsyRefinementsForCondition(checker, condition, currentRefinements, evidence = null) {
   const branchRefinements = cloneFlowRefinements(currentRefinements);
-  recordFalsyCondition(checker, condition, branchRefinements);
+  recordFalsyCondition(checker, condition, branchRefinements, evidence);
   return branchRefinements;
 }
 
-function recordTruthyCondition(checker, condition, refinements) {
+/**
+ * SCRUM-686. The initializer of a boolean alias such as
+ * `const active = enabled && !!a.id && !!b.id`, but ONLY for a binding that is a
+ * `const`, declared exactly once with an initializer, and never written (a
+ * `let`, a reassigned binding, a destructured or parameter binding is not
+ * evidence). The caller then reads the initializer as if it were written
+ * inline in the condition, which is what `active` means on its true branch.
+ */
+function constAliasInitializer(checker, identifier, evidence) {
+  const symbol = resolveSymbol(checker, identifier);
+  if (!symbol || evidence.isWrittenSymbol(symbol)) return null;
+  const declarations = symbol.declarations ?? [];
+  if (declarations.length !== 1) return null;
+  const [declaration] = declarations;
+  if (!ts.isVariableDeclaration(declaration) || !ts.isIdentifier(declaration.name)) return null;
+  if (!declaration.initializer) return null;
+  const list = declaration.parent;
+  if (!ts.isVariableDeclarationList(list) || !(list.flags & ts.NodeFlags.Const)) return null;
+  return { symbol, initializer: declaration.initializer };
+}
+
+/**
+ * @param {WriteEvidence | null} [evidence]
+ * @param {AliasTrail} [viaAlias] symbols of the const
+ *   aliases being expanded. Non-null means every fact recorded below was reached
+ *   THROUGH an alias, so it is dropped when its subject is written anywhere: the
+ *   alias may have been computed long before the read it is now guarding.
+ */
+function recordTruthyCondition(checker, condition, refinements, evidence = null, viaAlias = null) {
   if (ts.isParenthesizedExpression(condition)) {
-    recordTruthyCondition(checker, condition.expression, refinements);
+    recordTruthyCondition(checker, condition.expression, refinements, evidence, viaAlias);
     return;
   }
   if (ts.isPrefixUnaryExpression(condition) && condition.operator === ts.SyntaxKind.ExclamationToken) {
-    recordFalsyCondition(checker, condition.operand, refinements);
+    recordFalsyCondition(checker, condition.operand, refinements, evidence, viaAlias);
     return;
   }
   if (
     ts.isBinaryExpression(condition) &&
     condition.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
   ) {
-    recordTruthyCondition(checker, condition.left, refinements);
-    recordTruthyCondition(checker, condition.right, refinements);
+    recordTruthyCondition(checker, condition.left, refinements, evidence, viaAlias);
+    recordTruthyCondition(checker, condition.right, refinements, evidence, viaAlias);
     return;
   }
-  recordExpressionRefinement(checker, condition, refinements, "truthy");
+  const nullTest = nullComparisonRefinement(checker, condition);
+  if (nullTest) {
+    recordExpressionRefinement(checker, nullTest.subject, refinements, nullTest.refinement, evidence, viaAlias);
+    return;
+  }
+  if (ts.isIdentifier(condition) && evidence) {
+    const alias = constAliasInitializer(checker, condition, evidence);
+    if (alias && !(viaAlias ?? new Set()).has(alias.symbol)) {
+      recordTruthyCondition(
+        checker,
+        alias.initializer,
+        refinements,
+        evidence,
+        new Set([...(viaAlias ?? []), alias.symbol]),
+      );
+    }
+  }
+  recordExpressionRefinement(checker, condition, refinements, "truthy", evidence, viaAlias);
 }
 
-function recordFalsyCondition(checker, condition, refinements) {
+/**
+ * @param {WriteEvidence | null} [evidence]
+ * @param {AliasTrail} [viaAlias]
+ */
+function recordFalsyCondition(checker, condition, refinements, evidence = null, viaAlias = null) {
   if (ts.isParenthesizedExpression(condition)) {
-    recordFalsyCondition(checker, condition.expression, refinements);
+    recordFalsyCondition(checker, condition.expression, refinements, evidence, viaAlias);
     return;
   }
   if (ts.isPrefixUnaryExpression(condition) && condition.operator === ts.SyntaxKind.ExclamationToken) {
-    recordTruthyCondition(checker, condition.operand, refinements);
+    recordTruthyCondition(checker, condition.operand, refinements, evidence, viaAlias);
     return;
   }
   if (
     ts.isBinaryExpression(condition) &&
     condition.operatorToken.kind === ts.SyntaxKind.BarBarToken
   ) {
-    recordFalsyCondition(checker, condition.left, refinements);
-    recordFalsyCondition(checker, condition.right, refinements);
+    recordFalsyCondition(checker, condition.left, refinements, evidence, viaAlias);
+    recordFalsyCondition(checker, condition.right, refinements, evidence, viaAlias);
     return;
   }
-  recordExpressionRefinement(checker, condition, refinements, "falsy");
+  recordExpressionRefinement(checker, condition, refinements, "falsy", evidence, viaAlias);
 }
 
-function recordExpressionRefinement(checker, condition, refinements, refinement) {
+/**
+ * `x != null`, `x !== null`, `x != undefined`, `x !== undefined` (either side).
+ * Each proves ONLY what the operator proves: `!== null` leaves `undefined`
+ * possible and `!= null` does not exclude `0` or `""`, so none of them is read
+ * as truthiness.
+ */
+function nullComparisonRefinement(checker, condition) {
+  if (!ts.isBinaryExpression(condition)) return null;
+  const operator = condition.operatorToken.kind;
+  const strict = operator === ts.SyntaxKind.ExclamationEqualsEqualsToken;
+  if (!strict && operator !== ts.SyntaxKind.ExclamationEqualsToken) return null;
+  const isNull = (n) => n.kind === ts.SyntaxKind.NullKeyword;
+  const isNullish = (n) => isNull(n) || isUndefinedExpression(checker, n);
+  const left = condition.left;
+  const right = condition.right;
+  const [subject, literal] = isNullish(right) ? [left, right] : [right, left];
+  if (!isNullish(literal)) return null;
+  if (!strict) return { subject, refinement: "nonNullish" };
+  return { subject, refinement: isNull(literal) ? "nonNull" : "nonUndefined" };
+}
+
+/**
+ * @param {WriteEvidence | null} [evidence]
+ * @param {AliasTrail} [viaAlias]
+ */
+function recordExpressionRefinement(checker, condition, refinements, refinement, evidence = null, viaAlias = null) {
   if (ts.isIdentifier(condition)) {
     const symbol = resolveSymbol(checker, condition);
-    if (symbol) refinements.identifiers.set(symbol, refinement);
+    if (symbol && !(viaAlias && evidence?.isWrittenSymbol(symbol))) {
+      refinements.identifiers.set(
+        symbol,
+        combineRefinement(refinements.identifiers.get(symbol), refinement),
+      );
+    }
     return;
   }
   const access = routeParamAccess(condition);
   if (!access) return;
   const receiverSymbol = resolveSymbol(checker, access.receiver);
   if (!receiverSymbol) return;
+  if (viaAlias && evidence?.isWrittenSymbol(receiverSymbol)) return;
+  // CS-686-2: a property fact survives only while the receiver cannot be
+  // reached and mutated through another reference.
+  if (!receiverIsConfinedAt(checker, receiverSymbol, condition)) return;
   const properties = refinements.properties.get(receiverSymbol) ?? new Map();
-  properties.set(access.name, refinement);
+  properties.set(access.name, combineRefinement(properties.get(access.name), refinement));
   refinements.properties.set(receiverSymbol, properties);
 }
 
+/**
+ * Two facts about one subject that both hold (an `&&` chain). `!== null` and
+ * `!== undefined` together are `!= null`; anything else keeps the previous
+ * behaviour (the newer fact replaces the older one).
+ */
+function combineRefinement(previous, next) {
+  if (
+    (previous === "nonNull" && next === "nonUndefined") ||
+    (previous === "nonUndefined" && next === "nonNull")
+  ) {
+    return "nonNullish";
+  }
+  return next;
+}
+
+/** @type {WeakMap<import("typescript").Symbol, import("typescript").Node | null>} */
+const confinementScopes = new WeakMap();
+
+function enclosingFunctionLike(node) {
+  return ts.findAncestor(node.parent, (n) => ts.isFunctionLike(n)) ?? null;
+}
+
+/** True when `target` (a property access) is written, called as a method, or deleted. */
+function isWriteOrCallTarget(access) {
+  let child = access;
+  let parent = access.parent;
+  // Climb destructuring-assignment targets: `[a.x] = ...`, `({ k: a.x } = ...)`, `[...a.x] = ...`,
+  // and type-only wrappers that emit nothing: `a.x! = ...`, `(a.x as T) = ...` (CS-686-2-R).
+  while (
+    parent &&
+    (ts.isParenthesizedExpression(parent) ||
+      isTypeOnlyWrapper(parent) ||
+      ts.isArrayLiteralExpression(parent) ||
+      ts.isSpreadElement(parent) ||
+      ts.isSpreadAssignment(parent) ||
+      (ts.isPropertyAssignment(parent) && parent.initializer === child) ||
+      ts.isObjectLiteralExpression(parent))
+  ) {
+    child = parent;
+    parent = parent.parent;
+  }
+  if (!parent) return true;
+  if (
+    ts.isBinaryExpression(parent) &&
+    parent.left === child &&
+    parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+    parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+  ) {
+    return true;
+  }
+  if (
+    (ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) &&
+    (parent.operator === ts.SyntaxKind.PlusPlusToken || parent.operator === ts.SyntaxKind.MinusMinusToken)
+  ) {
+    return true;
+  }
+  if (ts.isDeleteExpression(parent)) return true;
+  if ((ts.isForOfStatement(parent) || ts.isForInStatement(parent)) && parent.initializer === child) return true;
+  // `a.method()` runs with `this === a`; `tag`x`` likewise.
+  if ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.expression === child) return true;
+  if (ts.isTaggedTemplateExpression(parent) && parent.tag === child) return true;
+  return false;
+}
+
+/**
+ * SCRUM-686 (CS-686-2). The function-like in which `symbol` is a never-escaping
+ * binding, or null. Proof obligation: the binding is a parameter or a `const`
+ * with a plain identifier name, and EVERY reference to it anywhere in its file is
+ * a property/element READ — in the same function body, not in a nested closure,
+ * never passed as an argument, aliased, spread, destructured, captured, returned,
+ * written, or used as a method receiver. Anything else may mutate a property
+ * through another reference, so a fact recorded about `symbol.prop` is unproven.
+ */
+function confinementScope(checker, symbol) {
+  if (confinementScopes.has(symbol)) return confinementScopes.get(symbol);
+  let scope = null;
+  const declarations = symbol.declarations ?? [];
+  if (declarations.length === 1) {
+    const [declaration] = declarations;
+    if (
+      ts.isParameter(declaration) &&
+      ts.isIdentifier(declaration.name) &&
+      ts.isFunctionLike(declaration.parent) &&
+      // A second parameter may be the SAME object at runtime — `f(shared, shared)` —
+      // and mutate it under another name (Codex CS-686-2 closure round).
+      declaration.parent.parameters.length === 1
+    ) {
+      scope = declaration.parent;
+    } else if (
+      ts.isVariableDeclaration(declaration) &&
+      ts.isIdentifier(declaration.name) &&
+      declaration.initializer &&
+      ts.isVariableDeclarationList(declaration.parent) &&
+      declaration.parent.flags & ts.NodeFlags.Const &&
+      // Only a provably FRESH object has no other name. `const box = a`, `= holder.box`,
+      // `= c ? a : {...}`, `= a || {...}`, `= (0, a)` and call results may all alias an
+      // object that escapes or is mutated unseen (Opus seat F1, Codex CS-686-4).
+      isFreshObject(unwrapAliasExpression(declaration.initializer))
+    ) {
+      scope = enclosingFunctionLike(declaration);
+    }
+    // A non-arrow function's parameters also escape through `arguments` (Opus seat F2).
+    if (scope && !ts.isArrowFunction(scope) && referencesArguments(scope)) scope = null;
+    if (scope) {
+      const declarationName = declaration.name;
+      let confined = true;
+      const visit = (node) => {
+        if (!confined) return;
+        if (ts.isIdentifier(node) && node !== declarationName && node.text === declarationName.text) {
+          const referenced = ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node
+            ? checker.getShorthandAssignmentValueSymbol(node.parent)
+            : checker.getSymbolAtLocation(node);
+          if (referenced === symbol) {
+            const parent = node.parent;
+            const isRead =
+              (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
+              parent.expression === node &&
+              !isWriteOrCallTarget(parent) &&
+              enclosingFunctionLike(node) === scope;
+            if (!isRead) confined = false;
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(declaration.getSourceFile());
+      if (!confined || writesAnyProperty(scope)) scope = null;
+    }
+  }
+  confinementScopes.set(symbol, scope);
+  return scope;
+}
+
+/**
+ * True when `fn` (including nested closures) writes, increments or deletes ANY
+ * property. Object identity is not tracked, so any property write in the
+ * receiver's function may be a write to the receiver through another reference
+ * (`other.id = null` where `other === box`).
+ *
+ * ⚠️ Known limit: a mutation inside an opaque CALL (a helper closing over the
+ * same object) is not seen. Proving effects across calls is out of scope here.
+ */
+function writesAnyProperty(fn) {
+  let writes = false;
+  const visit = (node) => {
+    if (writes) return;
+    if (
+      (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
+      isPropertyWrite(node)
+    ) {
+      writes = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  if (fn.body) visit(fn.body);
+  return writes;
+}
+
+/**
+ * An object no other binding can name: an object literal with no accessors (its
+ * reads run no code). Call results are never fresh — Next's `useParams()` returns
+ * one shared, unfrozen context object to every caller (Codex CS-686-5) — so a
+ * route param must be copied into a local before it is guarded.
+ */
+function isFreshObject(node) {
+  return (
+    ts.isObjectLiteralExpression(node) &&
+    node.properties.every(
+      (property) => !ts.isGetAccessorDeclaration(property) && !ts.isSetAccessorDeclaration(property),
+    )
+  );
+}
+
+/** True when `fn`'s own body (not a nested non-arrow function's) mentions `arguments`. */
+function referencesArguments(fn) {
+  let found = false;
+  const visit = (node) => {
+    if (found) return;
+    if (ts.isIdentifier(node) && node.text === "arguments") {
+      found = true;
+      return;
+    }
+    if (node !== fn && ts.isFunctionLike(node) && !ts.isArrowFunction(node)) return;
+    ts.forEachChild(node, visit);
+  };
+  if (fn.body) visit(fn.body);
+  return found;
+}
+
+/** `a!`, `a as T`, `<T>a`, `a satisfies T` — erased at emit, so they never change what is written. */
+function isTypeOnlyWrapper(node) {
+  return (
+    ts.isNonNullExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isTypeAssertionExpression(node) ||
+    (typeof ts.isSatisfiesExpression === "function" && ts.isSatisfiesExpression(node))
+  );
+}
+
+/** Like isWriteOrCallTarget, but a method call is not a write. */
+function isPropertyWrite(access) {
+  let callee = access;
+  while (callee.parent && (ts.isParenthesizedExpression(callee.parent) || isTypeOnlyWrapper(callee.parent))) {
+    callee = callee.parent;
+  }
+  const parent = callee.parent;
+  if (parent && (ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.expression === callee) return false;
+  if (parent && ts.isTaggedTemplateExpression(parent) && parent.tag === callee) return false;
+  return isWriteOrCallTarget(access);
+}
+
+function receiverIsConfinedAt(checker, receiverSymbol, conditionNode) {
+  const scope = confinementScope(checker, receiverSymbol);
+  return Boolean(scope) && enclosingFunctionLike(conditionNode) === scope;
+}
+/** The node a single use-site refinement narrows `node` to. */
+function refineNode(node, refinement) {
+  if (refinement === "truthy") return truthyNode(node);
+  if (refinement === "falsy") return falsyNode(node);
+  return keepValuesNode(node, NULL_TEST_KEEP[refinement]);
+}
 /**
  * Restrict reconstructed runtime evidence to alternatives reachable at the
  * call site. This filters only enumerable falsy values and structurally truthy
  * containers. Wider scalars remain wider, so a truthiness check can never turn
  * an unproven string into an ID or an enumeration member.
  */
-function applyUseSiteRefinement(node, refinement) {
+function applyUseSiteRefinement(node, refinement, mayBeUndefined = false) {
   if (!refinement) return node;
-  const refined = refinement === "truthy" ? truthyNode(node) : falsyNode(node);
+  let refined = refineNode(node, refinement);
+  // CS-686-1: `!== null` does not exclude `undefined`; the checker dropped it from
+  // the type, so put the absence back as an explicit possibility.
+  if (refinement === "nonNull" && mayBeUndefined) {
+    refined = mergeClientNodes(refined, clientNode.literal(new Set([undefined])));
+  }
   // A contradictory branch is unreachable. `unresolved` is the conservative
   // fallback if TypeScript and the syntax evidence ever disagree; it denies a
   // clean PASS without fabricating a concrete BREAKING value.
   return refined ?? clientNode.unresolved();
+}
+
+/** Which literal values survive each null comparison (`!= null`, `!== null`, ...). */
+const NULL_TEST_KEEP = {
+  nonNullish: (value) => value !== null && value !== undefined,
+  nonNull: (value) => value !== null,
+  nonUndefined: (value) => value !== undefined,
+};
+
+function keepValuesNode(node, keep) {
+  if (!keep) return node;
+  if (node.kind === "literal") {
+    const values = new Set([...node.values].filter((value) => keep(value)));
+    return values.size ? clientNode.literal(values) : null;
+  }
+  if (node.kind === "variants") {
+    const nodes = node.nodes.map((n) => keepValuesNode(n, keep)).filter(Boolean);
+    return nodes.length ? clientNode.variants(nodes) : null;
+  }
+  if (node.kind === "assertion") {
+    const inner = keepValuesNode(node.node, keep);
+    return inner ? clientNode.assertion(node.effect, inner) : null;
+  }
+  return node;
 }
 
 function truthyNode(node) {
