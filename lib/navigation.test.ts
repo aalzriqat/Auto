@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { DEFAULT_ROLE_TEMPLATES } from "../convex/utils/permissions";
-import { mainNavigation, navItemPermitted } from "./navigation";
+import { mainNavigation, navItemPermitted, tabTitleNavItem } from "./navigation";
 
 const approvals = mainNavigation.find((item) => item.name === "Approvals")!;
 const permissionsOf = (role: string) => [
@@ -25,5 +25,34 @@ describe("the Approvals entry", () => {
     const vehicles = mainNavigation.find((item) => item.name === "Vehicles")!;
     expect(navItemPermitted(vehicles, ["view:vehicles"])).toBe(true);
     expect(navItemPermitted(vehicles, [])).toBe(false);
+  });
+});
+
+/**
+ * SCRUM-631: which nav section owns the browser tab title. A sale's deal page
+ * lives under /sales but exports its own "Deal | AutoFlow" title; the section
+ * rule must not replace it with "Sales" (Codex SCRUM-631-1).
+ */
+describe("the tab title section", () => {
+  const org = "org1";
+  test.each([
+    ["/org1/vehicles", "Vehicles"],
+    ["/org1/vehicles/abc", "Vehicles"],
+    ["/org1/deals", "DealsTitle"],
+    ["/org1/sales", "Sales"],
+    ["/org1/settings/branches", "Branches"],
+  ])("%s is titled by %s", (pathname, name) => {
+    expect(tabTitleNavItem(pathname, org)?.name).toBe(name);
+  });
+
+  test.each(["/org1/sales/sale123/deal", "/org1/sales/sale123/deal/", "/org1/applications/app1/deal", "/org1/messages"])(
+    "%s keeps its own metadata title",
+    (pathname) => {
+      expect(tabTitleNavItem(pathname, org)).toBeNull();
+    }
+  );
+
+  test("no org yet means no section", () => {
+    expect(tabTitleNavItem("/org1/vehicles", null)).toBeNull();
   });
 });
