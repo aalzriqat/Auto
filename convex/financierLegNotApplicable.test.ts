@@ -200,6 +200,18 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
           allocationDate: Date.now(), status: "ACTIVE", createdBy: s.userId, createdAt: Date.now(),
         });
         await ctx.db.patch(saleId, { canonicalReceivableDocumentId: receivableId });
+        // SCRUM-571 D-43: a zero balance only proves anything once the sale's own journal stands POSTED.
+        const eventId = await ctx.db.insert("accountingEvents", {
+          orgId: s.orgId, eventType: "SALE_COMPLETED", sourceType: "sales", sourceId: saleId, eventVersion: 1,
+          idempotencyKey: `sale_completed_${saleId}`, occurredAt: Date.now(), accountingDate: Date.now(),
+          currency: "JOD", payload: {}, status: "POSTED", createdBy: s.userId, createdAt: Date.now(),
+        });
+        const journalId = await ctx.db.insert("journalEntries", {
+          orgId: s.orgId, accountingEventId: eventId, journalNumber: `JE-${saleId}`, accountingDate: Date.now(),
+          sourceType: "sales", sourceId: saleId, category: "SYSTEM", memo: "sale", currency: "JOD",
+          status: "POSTED", postedBy: s.userId, postedAt: Date.now(), createdAt: Date.now(),
+        });
+        await ctx.db.patch(eventId, { journalEntryId: journalId });
       });
     }
     if (opts.reconciledFee) {

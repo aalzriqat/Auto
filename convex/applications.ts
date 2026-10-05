@@ -969,15 +969,13 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
     ? { financier: financierObligation, supplier: supplierObligation }
     : { financier: "UNKNOWN", supplier: "UNKNOWN" };
 
-  // A financier-less deal (leg NONE) is paid by the CUSTOMER alone, so the sale's
-  // canonical customer invoice IS the money still owed. NONE on the financier leg
-  // must never read as "settled" while that invoice has a balance, or while the
-  // balance cannot be read (AF-567-1). Not evaluated when a financier is in play;
-  // financed-deal customer balances are a separate lane (SCRUM-570).
-  const customerObligation =
-    financierLeg === "NONE"
-      ? await resolveCustomerInvoiceObligation(ctx, app, sale, currency)
-      : undefined;
+  // The customer's side, on EVERY financier leg (SCRUM-571 D-43). A sale must
+  // never read as money-settled while its canonical customer invoice has a
+  // balance, or while that balance or its posted origin cannot be proven.
+  const customerObligation = await resolveCustomerObligation(ctx, app, sale, currency, {
+    financierLeg,
+    settlesDirect,
+  });
 
   return {
     vehicle,
@@ -1003,9 +1001,57 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
 }
 
 /**
- * The customer's side of a financier-less deal: is the sale's canonical invoice
- * paid? Fails closed — a missing pointer, a missing row, another org's row or a
- * row in another currency is UNKNOWN, never CLOSED.
+ * Whether the customer can still owe the dealership anything on this deal, and
+ * if so, whether the sale's canonical invoice has been paid (SCRUM-571 D-43).
+ *
+ * `undefined` means "the customer owes nothing here", and is returned ONLY when
+ * that is proven:
+ *   - a financed deal the settlement plan covers records what the customer owes
+ *     the dealership as the gap (`composeCustomerGapToDealer`, the very
+ *     composition the posting plan reads through `requireCustomerGapToDealer`).
+ *     Exactly 0 is "nothing owed"; an unreadable gap is UNKNOWN, never zero;
+ *   - a financed deal on the legacy, plan-less path has no gap concept: the
+ *     finalization transfer reshapes the customer's invoice down to
+ *     `sale − financed` (`transferFinancedAmountFromCustomerReceivable`), so
+ *     what remains on the invoice IS what the customer owes and it is judged
+ *     directly;
+ *   - before a sale exists nothing has been billed to the customer yet.
+ * A financier-less deal (leg NONE) is paid by the customer alone, so its
+ * invoice is always judged (AF-567-1).
+ */
+async function resolveCustomerObligation(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+  sale: Doc<"sales"> | null | undefined,
+  currency: string,
+  facts: { financierLeg: FinancierLeg; settlesDirect: boolean }
+): Promise<ObligationState | undefined> {
+  if (facts.financierLeg === "NONE") {
+    return resolveCustomerInvoiceObligation(ctx, app, sale, currency);
+  }
+  // No sale yet: no invoice has been issued, and the deal cannot read settled
+  // before it closes anyway.
+  if (!app.finalizedSaleId) return undefined;
+  if (financedSaleRecognitionApplies(app, { settlesDirect: facts.settlesDirect })) {
+    const gap = composeCustomerGapToDealer(app);
+    if (!gap.readable) return "UNKNOWN";
+    if (gap.amountMinor === 0) return undefined;
+  }
+  return resolveCustomerInvoiceObligation(ctx, app, sale, currency);
+}
+
+/**
+ * Is this sale's canonical customer invoice paid? Fails closed: UNKNOWN, never
+ * CLOSED, unless EVERY one of these is proven —
+ *   - the sale is this organization's and names a canonical invoice that exists;
+ *   - the invoice is this organization's, in the deal's currency, an INVOICE
+ *     owed by the CUSTOMER, and sourced from THIS sale;
+ *   - the sale's SALE_COMPLETED accounting event is POSTED and its journal is
+ *     POSTED. A queued, failed, reversed or missing posting means the receivable
+ *     the invoice mirrors was never (or is no longer) on the books, so a zero
+ *     balance proves nothing about the money. Exception: an invoice whose
+ *     original amount is 0 posts no SALE_COMPLETED event (nothing to record),
+ *     so the posting requirement is skipped for it.
  */
 async function resolveCustomerInvoiceObligation(
   ctx: QueryCtx,
@@ -1014,13 +1060,59 @@ async function resolveCustomerInvoiceObligation(
   currency: string
 ): Promise<ObligationState> {
   const receivableId = sale?.canonicalReceivableDocumentId;
-  if (!receivableId) return "UNKNOWN";
+  if (!sale || sale.orgId !== app.orgId || !receivableId) return "UNKNOWN";
   const receivable = await ctx.db.get(receivableId);
-  if (!receivable || receivable.orgId !== app.orgId || receivable.currency !== currency) {
+  if (
+    !receivable ||
+    receivable.orgId !== app.orgId ||
+    receivable.currency !== currency ||
+    receivable.documentType !== "INVOICE" ||
+    receivable.payerType !== "CUSTOMER" ||
+    receivable.sourceType !== "sales" ||
+    receivable.sourceId !== sale._id.toString()
+  ) {
+    return "UNKNOWN";
+  }
+  // A zero-value invoice recognised nothing on the books (a zero-margin agency
+  // sale posts no journal at all), so there is no posting to prove: nothing is
+  // owed whatever the ledger says. Anything billed must stand POSTED.
+  if (receivable.originalAmountMinor !== 0 && !(await saleCompletedPostingIsPosted(ctx, sale))) {
     return "UNKNOWN";
   }
   const outstandingMinor = await getReceivableOutstandingMinor(ctx, receivableId);
   return outstandingMinor > 0 ? "OPEN" : "CLOSED";
+}
+
+/**
+ * Whether the sale's own SALE_COMPLETED event stands POSTED with a POSTED journal
+ * of this organization. Keyed by the event's idempotency key
+ * (`hookSaleCompleted`'s `sale_completed_<saleId>`), the same key every other
+ * reader of this posting uses; a status read in memory, not a query filter.
+ */
+async function saleCompletedPostingIsPosted(ctx: QueryCtx, sale: Doc<"sales">): Promise<boolean> {
+  const event = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", sale.orgId).eq("idempotencyKey", `sale_completed_${sale._id}`)
+    )
+    .first();
+  if (
+    !event ||
+    event.status !== "POSTED" ||
+    event.eventType !== "SALE_COMPLETED" ||
+    event.sourceType !== "sales" ||
+    event.sourceId !== sale._id.toString() ||
+    !event.journalEntryId
+  ) {
+    return false;
+  }
+  const journal = await ctx.db.get(event.journalEntryId);
+  return (
+    journal !== null &&
+    journal.orgId === sale.orgId &&
+    journal.status === "POSTED" &&
+    journal.accountingEventId === event._id
+  );
 }
 
 /**

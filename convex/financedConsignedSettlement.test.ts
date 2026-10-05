@@ -2753,6 +2753,68 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
   });
 
   /**
+   * SCRUM-571 D-43: the direct route has no settlement plan and so no gap, but the
+   * customer can still owe the dealership its own charges on the canonical invoice.
+   * That balance holds the deal open; paying it, with the sale's journal POSTED,
+   * releases it.
+   */
+  test("a direct-route deal is not settled while the customer's invoice is open (SCRUM-571 D-43)", async () => {
+    const s = await seedDealership("directCustomerOwes");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.vehicleId as never, { sourceCost: VEHICLE_PRICE });
+    });
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+        dealerContributionMinor: 0,
+      });
+    });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+    expect(stageOf(await cockpitOf(s, applicationId), "SETTLEMENT")).toBe("COMPLETE"); // control
+
+    // The customer owes 50 on the sale's invoice, and the sale's journal is POSTED.
+    const owed = 50 * SCALE;
+    const ids = await s.t.run(async (ctx) => {
+      const sale = (await ctx.db.query("sales").collect()).find((row) => row.orgId === s.orgId)!;
+      const receivableId = sale.canonicalReceivableDocumentId!;
+      await ctx.db.patch(receivableId, { originalAmountMinor: owed, status: "OPEN" });
+      const user = (await ctx.db.query("users").collect())[0];
+      const eventId = await ctx.db.insert("accountingEvents", {
+        orgId: s.orgId, eventType: "SALE_COMPLETED", sourceType: "sales", sourceId: sale._id,
+        eventVersion: 1, idempotencyKey: `sale_completed_${sale._id}`, occurredAt: Date.now(),
+        accountingDate: Date.now(), currency: "JOD", payload: {}, status: "POSTED", createdBy: user._id,
+        createdAt: Date.now(),
+      });
+      const journalId = await ctx.db.insert("journalEntries", {
+        orgId: s.orgId, accountingEventId: eventId, journalNumber: `JE-${sale._id}`, accountingDate: Date.now(),
+        sourceType: "sales", sourceId: sale._id, category: "SYSTEM", memo: "sale", currency: "JOD",
+        status: "POSTED", postedBy: user._id, postedAt: Date.now(), createdAt: Date.now(),
+      });
+      await ctx.db.patch(eventId, { journalEntryId: journalId });
+      return { receivableId, userId: user._id };
+    });
+    expect(stageOf(await cockpitOf(s, applicationId), "SETTLEMENT")).not.toBe("COMPLETE");
+
+    await s.t.run(async (ctx) => {
+      const paymentId = await ctx.db.insert("canonicalPayments", {
+        orgId: s.orgId, direction: "IN", payerType: "CUSTOMER", method: "CASH", amountMinor: owed,
+        currency: "JOD", scale: 3, status: "SETTLED", idempotencyKey: `direct-paid-${ids.receivableId}`,
+        createdBy: ids.userId, createdAt: Date.now(),
+      });
+      await ctx.db.insert("paymentAllocations", {
+        orgId: s.orgId, paymentId, receivableDocumentId: ids.receivableId, amountMinor: owed, currency: "JOD",
+        scale: 3, allocationDate: Date.now(), status: "ACTIVE", createdBy: ids.userId, createdAt: Date.now(),
+      });
+    });
+    expect(stageOf(await cockpitOf(s, applicationId), "SETTLEMENT")).toBe("COMPLETE");
+  });
+
+  /**
    * OP-F3 follow-through. A stored amount this currency cannot represent must
    * mark ONE row unknown, not reject the query — `dealCockpit` is the whole
    * screen, and Convex accepts NaN as a `v.number()`, which the admin raw-JSON
