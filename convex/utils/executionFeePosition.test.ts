@@ -142,6 +142,39 @@ describe("executionFeePosition — the #pntr shape", () => {
   });
 });
 
+describe("executionFeePosition — deals finalized before the position existed (Opus seat F-1)", () => {
+  // The legacy shape: the fee recorded under another handover type, already
+  // paid; the deal finalized before binding existed. No door can bind it now.
+  const legacyFee = line("legacy", {
+    feeType: "OTHER_CLOSING_EXPENSE",
+    accountingTreatment: "SELLING_EXPENSE",
+  } as Partial<Line>);
+  const sale = "sale1" as Id<"sales">;
+
+  test("a finalized deal with nothing bound keeps its settled reading: no position, no headline operand", () => {
+    for (const frozen of [{ status: "CLOSED", finalizedSaleId: sale }, { finalizedSaleId: sale }, { status: "CLOSED" }] as const) {
+      const position = executionFeePosition(app(frozen as Partial<Doc<"financeApplications">>), [legacyFee], JOD);
+      expect(position).toEqual({ applies: false });
+      expect(executionFeeUnrecorded(position)).toBe(false);
+      expect(executionFeeHeadline(position)).toBeNull();
+    }
+  });
+
+  test("control: the same lines on an OPEN deal still read unrecorded", () => {
+    const position = executionFeePosition(app({ status: "APPROVED" }), [legacyFee], JOD);
+    expect(executionFeeUnrecorded(position)).toBe(true);
+  });
+
+  test("control: a deal finalized WITH a bound line keeps its position", () => {
+    const position = executionFeePosition(
+      app({ status: "CLOSED", finalizedSaleId: sale }),
+      [line("fee", { executionFeeBinding: BINDING })],
+      JOD
+    );
+    expect(position).toMatchObject({ applies: true, bound: { actualMinor: FEE_MINOR }, unrecordedMinor: 0 });
+  });
+});
+
 describe("executionFeeBindRefusal", () => {
   test.each([
     ["voided", { voidedAt: 1 }, /removed/],

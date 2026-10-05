@@ -765,6 +765,10 @@ const dealRailMessages = defineBilingualMessages({
     "Record what the dealership actually paid for this fee (zero if it was not charged), or link the cost already recorded for it. The deal cannot be finalized until then.",
     "سجِّل ما دفعته الوكالة فعليًا لهذه الرسوم (صفر إن لم تُستوفَ)، أو اربط المصروف المسجَّل لها. لا يمكن إتمام الصفقة قبل ذلك.",
   ],
+  ExecutionFeeRecordedElsewhere: [
+    "If this fee is already recorded above under another cost type, remove that cost first and then record the fee here — recording it twice counts and pays it twice.",
+    "إن كانت هذه الرسوم مسجَّلة أعلاه بنوع مصروف آخر، فاحذف ذلك المصروف أولًا ثم سجِّل الرسوم هنا — تسجيلها مرتين يحتسبها ويدفعها مرتين.",
+  ],
   ExecutionFeeLinkedTo: ["Linked to", "مرتبطة بـ"],
   ExecutionFeeLinkLabel: ["Already recorded as a cost?", "مسجَّلة مسبقًا كمصروف؟"],
   ExecutionFeeLinkPlaceholder: ["Choose the cost…", "اختر المصروف…"],

@@ -28,7 +28,12 @@ import { toMinorUnits } from "./money";
 
 type App = Pick<
   Doc<"financeApplications">,
-  "companyRuleSnapshot" | "manualFinanceSnapshot" | "quoteModeAtSubmission" | "estimatedDealerBorneExpensesMinor"
+  | "companyRuleSnapshot"
+  | "manualFinanceSnapshot"
+  | "quoteModeAtSubmission"
+  | "estimatedDealerBorneExpensesMinor"
+  | "status"
+  | "finalizedSaleId"
 >;
 
 type FeeLine = Pick<
@@ -142,6 +147,15 @@ export function executionFeePosition(
   const expectation = executionFeeExpectation(app, currency);
   if (!expectation.applies) return { applies: false };
   const boundLines = liveFees.filter((fee) => fee.voidedAt === undefined && fee.executionFeeBinding !== undefined);
+  // A deal finalized with NOTHING bound predates this position: since it
+  // exists, finalizing requires a binding, and a finalized deal can neither
+  // unbind nor void (`assertDealEconomicsOpen`). No door can record its fee
+  // now, so it keeps the reading it was settled under (legacy rule) rather
+  // than being reclassified as "fee unrecorded" forever. The only writer of
+  // `status: "CLOSED"` (finalize) sets `finalizedSaleId` in the same patch.
+  if (boundLines.length === 0 && (app.finalizedSaleId !== undefined || app.status === "CLOSED")) {
+    return { applies: false };
+  }
   const only = boundLines.length === 1 ? boundLines[0] : undefined;
   const usable = only !== undefined && executionFeeBindRefusal(only, currency) === null ? only : undefined;
   const ambiguous = boundLines.length > 1 || (only !== undefined && usable === undefined);

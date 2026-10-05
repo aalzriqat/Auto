@@ -1909,6 +1909,11 @@ function ExecutionFeeSection({
               {t("ExecutionFeeUnrecorded")}
             </p>
           )}
+          {canManage && fee.unrecorded && eligible.length === 0 && lines.length > 0 && (
+            <p className="text-xs text-muted-foreground" data-testid="deal-execution-fee-recorded-elsewhere">
+              {t("ExecutionFeeRecordedElsewhere")}
+            </p>
+          )}
           {bound && (
             <p className="text-xs text-muted-foreground" data-testid="deal-execution-fee-linked">
               {t("ExecutionFeeLinkedTo")}: <bdi>{describe(bound)}</bdi>

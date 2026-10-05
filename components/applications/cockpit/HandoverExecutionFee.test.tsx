@@ -95,6 +95,18 @@ describe("execution fee row", () => {
     expect(within(row).getByRole("option", { name: /Company fee · 700 JOD/ })).toBeTruthy();
   });
 
+  test("nothing linkable but costs exist: steers to remove-then-record, never silently to a second record (Opus seat F-2)", () => {
+    renderPanel({ ...unrecorded, eligibleFeeIds: [] }, { onRecordExecutionFee: async () => {}, onLinkExecutionFee: async () => {} });
+    const row = screen.getByTestId("deal-execution-fee");
+    expect(within(row).getByTestId("deal-execution-fee-recorded-elsewhere").textContent).toBe(salesEn.ExecutionFeeRecordedElsewhere);
+    expect(within(row).queryByRole("button", { name: salesEn.ExecutionFeeLink })).toBeNull();
+  });
+
+  test("a linkable line exists: no remove-first note", () => {
+    renderPanel(unrecorded, { onLinkExecutionFee: async () => {} });
+    expect(screen.queryByTestId("deal-execution-fee-recorded-elsewhere")).toBeNull();
+  });
+
   test("linking sends the chosen line's id", async () => {
     const onLink = vi.fn(async () => {});
     renderPanel(unrecorded, { onLinkExecutionFee: onLink });
