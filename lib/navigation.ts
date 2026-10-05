@@ -104,3 +104,24 @@ export function navItemPermitted(item: NavItem, permissions: readonly string[]):
   if (!item.permission) return true;
   return permissions.includes(item.permission);
 }
+
+/**
+ * Routes nested under a nav section that are a different kind of page and
+ * export their own title: a sale's deal page lives under /sales but is a deal.
+ */
+const OWN_TITLE_ROUTES: readonly RegExp[] = [/\/sales\/[^/]+\/deal\/?$/];
+
+/**
+ * The nav section whose localized name titles the browser tab for `pathname`
+ * (SCRUM-631), or null when the route's own metadata title should stand —
+ * off-nav routes, the routes above, and before the org is known.
+ */
+export function tabTitleNavItem(pathname: string, orgId: string | null | undefined): NavItem | null {
+  if (!orgId) return null;
+  if (OWN_TITLE_ROUTES.some((route) => route.test(pathname))) return null;
+  return (
+    [...mainNavigation, ...settingsNavigation].find((item) =>
+      pathname.startsWith(`/${orgId}${item.href}`)
+    ) ?? null
+  );
+}

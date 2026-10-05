@@ -737,7 +737,7 @@ export default function Step1QuoteSetup({
         <div className="flex justify-end pt-4 border-t">
           <Button type="submit" disabled={isBlockedByProfit} className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white shadow-md hover:shadow-lg transition-all rounded-full px-8 h-12">
             {t("Next" as any)}
-            <ArrowRight className="w-4 h-4 ms-2" />
+            <ArrowRight className="w-4 h-4 ms-2 rtl:-scale-x-100" />
           </Button>
         </div>
       </form>
