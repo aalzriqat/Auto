@@ -3,7 +3,7 @@
  * The translator is the REAL dictionary for the locale, so the assertions are on the shipped EN/AR wording.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { Id } from "@/convex/_generated/dataModel";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 
@@ -16,6 +16,7 @@ const AR_DELETED = "تم حذف هذه السيارة ولم يعد بالإمك
 const stubs = vi.hoisted(() => ({
   locale: "en" as "en" | "ar",
   verdict: undefined as unknown,
+  mutation: (async () => null) as (...args: unknown[]) => Promise<unknown>,
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -46,7 +47,7 @@ vi.mock("convex/react", async () => {
       if (name === "vehicles:listAll") return [];
       return null;
     },
-    useMutation: () => async () => null,
+    useMutation: () => (...args: unknown[]) => stubs.mutation(...args),
   };
 });
 vi.mock("../components/VehiclePicker", () => ({ default: () => null }));
@@ -69,6 +70,7 @@ function renderStep() {
 beforeEach(() => {
   stubs.locale = "en";
   stubs.verdict = { status: "VEHICLE_DELETED" };
+  stubs.mutation = async () => null;
 });
 afterEach(cleanup);
 
@@ -106,6 +108,7 @@ describe("SCRUM-656: profit-approval alerts follow the language", () => {
       pending: "Approval request is currently pending. Please wait for a manager.",
       rejected: "Your request for this profit amount was rejected. Please increase the profit or request again.",
       request: "Request Profit Approval",
+      requesting: "Requesting...",
       approvedTitle: "Profit Approved",
       approvedBody: "Management approved this sale price (profit over the list price: 100). You may proceed.",
     },
@@ -116,6 +119,7 @@ describe("SCRUM-656: profit-approval alerts follow the language", () => {
       pending: "طلب الاعتماد قيد الانتظار. يرجى انتظار قرار المدير.",
       rejected: "رُفض طلبك لمبلغ الربح هذا. يرجى زيادة الربح أو إعادة الطلب.",
       request: "طلب اعتماد الربح",
+      requesting: "جارٍ الإرسال…",
       approvedTitle: "تم اعتماد الربح",
       approvedBody: "اعتمدت الإدارة سعر البيع هذا (الربح فوق سعر القائمة: 100). يمكنك المتابعة.",
     },
@@ -162,6 +166,17 @@ describe("SCRUM-656: profit-approval alerts follow the language", () => {
     expect(screen.queryByText(copy.requiredTitle)).toBeNull();
   });
 
+  test.each(["en", "ar"] as const)("%s: while the request is in flight the button says so", async (locale) => {
+    stubs.locale = locale;
+    stubs.verdict = verdict("REQUIRED");
+    stubs.mutation = () => new Promise(() => {});
+    renderStep();
+    const copy = COPY[locale];
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: copy.request }));
+    });
+    expect(screen.getByRole("button", { name: copy.requesting }).hasAttribute("disabled")).toBe(true);
+  });
   test("ar: no English approval wording leaks into the Arabic UI", () => {
     stubs.locale = "ar";
     for (const status of ["REQUIRED", "PENDING", "REJECTED", "APPROVED"]) {
