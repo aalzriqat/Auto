@@ -112,6 +112,12 @@ export type DealFinancialSummaryInputs = Readonly<{
     dealerContributionSettlement?: "PAID_SEPARATELY" | "NETTED_FROM_REMITTANCE";
     /** What the financier is expected to remit to the dealership, as the economics froze it. */
     expectedDealerRemittanceMinor?: number;
+    /**
+     * What the financier actually remitted TO THE DEALERSHIP, as confirmed.
+     * The direct route records its own receipt in a separate field, so this is
+     * never a supplier disbursement; a returned cheque clears it.
+     */
+    disbursedAmountMinor?: number;
   }>;
   /**
    * The finance company's configured fees that the DEALERSHIP bears, as the
@@ -188,6 +194,13 @@ export type DealFinancialSummary = Readonly<{
   /** The customer's first payment as the economics froze it, whoever receives it. */
   customerFirstPaymentMinor: number | null;
   financier: Readonly<{
+    /**
+     * The confirmed remittance as `confirmDisbursement` recorded it — on v2
+     * deals the full approved amount (SCRUM-595 c21888), on legacy deals the
+     * net receivable — and null until one is confirmed. `fundedPortionMinor` is the financed
+     * slice of the approved amount, a breakdown, never the receipt (SCRUM-690).
+     */
+    receivedMinor: number | null;
     fundedPortionMinor: number | null;
     outstanding: FinancierOutstanding;
     dealerContributionSettlement?: "PAID_SEPARATELY" | "NETTED_FROM_REMITTANCE";
@@ -252,6 +265,7 @@ export type SummaryMoneyField =
   | "customerGapPlanned"
   | "customerGapCashPlanned"
   | "customerFirstPayment"
+  | "financierReceived"
   | "financierFundedPortion"
   | "financierOutstanding"
   | "supplierAmount"
@@ -419,6 +433,7 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
     customerGapCashPlannedMinor: boundary.serve("customerGapCashPlanned", app.customerGapCashToDealerMinor),
     customerFirstPaymentMinor: boundary.serve("customerFirstPayment", app.customerFirstPaymentMinor),
     financier: {
+      receivedMinor: boundary.serve("financierReceived", app.disbursedAmountMinor),
       fundedPortionMinor: boundary.serve("financierFundedPortion", app.financeCompanyFundedPortionMinor),
       outstanding: financierOutstandingFor(
         {

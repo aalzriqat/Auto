@@ -192,6 +192,7 @@ describe("Deal Cockpit Currency Scale Invariant (BLOCKER 4 Regression)", () => {
         customerGapCashPlannedMinor: null,
         customerFirstPaymentMinor: 5_000_000,
         financier: {
+          receivedMinor: null,
           fundedPortionMinor: 20_000_000,
           outstanding: { state: "OUTSTANDING", amountMinor: 20_000_000, basis: "RECEIVABLE" },
         },
