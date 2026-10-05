@@ -5,6 +5,8 @@
  * `as Id<...>` casts are NOT evidence. NEGATIVE cases keep reporting null.
  * Analysed by the extractor, never compiled by the detector's own project.
  */
+import { useParams } from "next/navigation";
+
 declare function useQuery(fn: unknown, args?: unknown): unknown;
 declare const api: Record<string, Record<string, unknown>>;
 type Id<T extends string> = string & { __table: T };
@@ -311,6 +313,20 @@ export function commaAliasEscapes(a: Box) {
   opaqueMutator(a);
   return useQuery(
     api.skipGate.commaAliasEscapes,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+/**
+ * CS-686-5 (Codex): Next's `useParams()` returns ONE shared, unfrozen context object,
+ * so a second call (or another component) can null the field after the guard.
+ */
+export function sharedParamsEscapes() {
+  const box = useParams<{ id: Id<"vehicles"> | null }>();
+  const other = useParams<{ id: Id<"vehicles"> | null }>();
+  const active = box.id != null;
+  opaqueMutator(other);
+  return useQuery(
+    api.skipGate.sharedParamsEscapes,
     active ? { id: box.id as Id<"vehicles"> } : "skip",
   );
 }

@@ -1368,7 +1368,7 @@ function confinementScope(checker, symbol) {
       // Only a provably FRESH object has no other name. `const box = a`, `= holder.box`,
       // `= c ? a : {...}`, `= a || {...}`, `= (0, a)` and call results may all alias an
       // object that escapes or is mutated unseen (Opus seat F1, Codex CS-686-4).
-      isFreshObject(unwrapAliasExpression(declaration.initializer), checker)
+      isFreshObject(unwrapAliasExpression(declaration.initializer))
     ) {
       scope = enclosingFunctionLike(declaration);
     }
@@ -1430,20 +1430,17 @@ function writesAnyProperty(fn) {
 }
 
 /**
- * An object no other client binding can name: an object literal with no accessors
- * (its reads run no code), or a direct Next `useParams()` result — framework-owned,
- * read-only route params that client code reaches only through this binding.
+ * An object no other binding can name: an object literal with no accessors (its
+ * reads run no code). Call results are never fresh — Next's `useParams()` returns
+ * one shared, unfrozen context object to every caller (Codex CS-686-5) — so a
+ * route param must be copied into a local before it is guarded.
  */
-function isFreshObject(node, checker) {
-  if (ts.isObjectLiteralExpression(node)) {
-    return node.properties.every(
-      (property) => !ts.isGetAccessorDeclaration(property) && !ts.isSetAccessorDeclaration(property),
-    );
-  }
+function isFreshObject(node) {
   return (
-    ts.isCallExpression(node) &&
-    ts.isIdentifier(node.expression) &&
-    isNamedImport(node.expression, checker, "useParams", "next/navigation")
+    ts.isObjectLiteralExpression(node) &&
+    node.properties.every(
+      (property) => !ts.isGetAccessorDeclaration(property) && !ts.isSetAccessorDeclaration(property),
+    )
   );
 }
 

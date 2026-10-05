@@ -139,7 +139,7 @@ describe("SCRUM-686 Codex findings (fail closed)", () => {
     }
   });
   test("CS-686-4 a conditional, logical or comma initializer may alias an existing object", () => {
-    for (const fn of ["conditionalAliasEscapes", "logicalAliasEscapes", "commaAliasEscapes"]) {
+    for (const fn of ["conditionalAliasEscapes", "logicalAliasEscapes", "commaAliasEscapes", "sharedParamsEscapes"]) {
       expect(notProvenClean(field(fn, "id")), fn).toBe(true);
     }
   });
