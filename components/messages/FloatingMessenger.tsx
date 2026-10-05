@@ -79,9 +79,10 @@ function FloatingMessengerInner({ orgId }: Props) {
   // toggles the list itself, so it is not "outside" — otherwise its click would
   // close and reopen.
   // Paused while the new-conversation dialog (a separate portal) is open, so
-  // pressing inside it or escaping it leaves the list behind it intact. The
-  // dialog's own Escape closes it and re-renders before this listener runs, so
-  // an Escape the dialog already handled (defaultPrevented) is ignored too.
+  // pressing inside it or escaping it leaves the list behind it intact. Its
+  // Escape closes it and re-renders, re-attaching this listener, before the
+  // same event reaches the document; Radix layers mark an Escape they handled
+  // with preventDefault, so a handled Escape is ignored here.
   useEffect(() => {
     if (!isListOpen || dialogMode) return;
     function handlePointerDown(e: PointerEvent) {
