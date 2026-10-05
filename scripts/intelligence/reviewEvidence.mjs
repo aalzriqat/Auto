@@ -7,6 +7,8 @@
 // main's code may do that for a pull request (see .github/review-policy.json);
 // output computed by a candidate's own job is a self-report.
 
+import { compareCodeUnits } from "../contractSkew/compareCodeUnits.mjs";
+
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 
 // COMPLETE is reachable only when no review requirement exists: a review can
@@ -320,7 +322,9 @@ export function evaluateReviewEvidence({
   // record.base, if present, is deliberately never read: the range comes from
   // the caller's identities alone.
   const context = { policy, identities, history, testRegistry, runtimeEvidence };
-  const obligations = [...new Set(requirements)].sort().map((requirement) => {
+  // Code-unit order, explicitly: localeCompare would make obligation order
+  // depend on the runner's locale.
+  const obligations = [...new Set(requirements)].sort(compareCodeUnits).map((requirement) => {
     const result = evaluateRequirement(requirement, record, context);
     reasons.push(...result.reasons);
     return { requirement, status: result.status };
