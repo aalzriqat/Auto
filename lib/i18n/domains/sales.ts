@@ -1962,6 +1962,175 @@ const serverErrorMessages = defineBilingualMessages({
     "Choose what happens to the customer's payment (refund or keep as credit) and fill in the credit note and the vehicle return. Nothing has been changed.",
     "اختر ما يحدث لدفعة العميل (ردّها أو الاحتفاظ بها كرصيد دائن) وأكمل إشعار الدائن وإرجاع المركبة. لم يتم تغيير أي شيء.",
   ],
+  // SCRUM-693 / SCRUM-691: the Unwind deal dialog and its entry point.
+  UnwindDealAction: [
+    "Unwind deal",
+    "التراجع عن الصفقة",
+  ],
+  UnwindDealResume: [
+    "Continue unwind",
+    "متابعة التراجع",
+  ],
+  UnwindDealTitle: [
+    "Unwind this deal",
+    "التراجع عن هذه الصفقة",
+  ],
+  UnwindDealDesc: [
+    "Reverse a deal the finance company has already paid, step by step. Each step is recorded and can be continued later.",
+    "عكس صفقة دفعت شركة التمويل قيمتها، خطوة بخطوة. تُسجَّل كل خطوة ويمكن متابعتها لاحقًا.",
+  ],
+  UnwindStepsLabel: [
+    "Unwind steps",
+    "خطوات التراجع",
+  ],
+  UnwindStepStart: [
+    "Reason",
+    "السبب",
+  ],
+  UnwindStepForward: [
+    "Finance-company return",
+    "استرداد شركة التمويل",
+  ],
+  UnwindStepFinish: [
+    "Refund and vehicle",
+    "الردّ والمركبة",
+  ],
+  UnwindStartExplain: [
+    "Record why this deal is being reversed. Nothing is posted yet.",
+    "سجّل سبب التراجع عن هذه الصفقة. لا يُرحَّل أي قيد بعد.",
+  ],
+  UnwindReasonLabel: [
+    "Reason",
+    "السبب",
+  ],
+  UnwindStartAction: [
+    "Start unwind",
+    "بدء التراجع",
+  ],
+  UnwindForwardExplain: [
+    "Record the finance company's return of the payment the dealership forwarded to it. The return must be settled before the refund.",
+    "سجّل استرداد المبلغ الذي دفعته المنشأة لشركة التمويل. يجب تسوية الاسترداد قبل الردّ.",
+  ],
+  UnwindForwardDueLabel: [
+    "Amount to be returned",
+    "المبلغ المطلوب استرداده",
+  ],
+  UnwindForwardDateLabel: [
+    "Date returned",
+    "تاريخ الاسترداد",
+  ],
+  UnwindForwardReferenceLabel: [
+    "Reference of the return",
+    "مرجع الاسترداد",
+  ],
+  UnwindForwardAction: [
+    "Record return",
+    "تسجيل الاسترداد",
+  ],
+  UnwindFinishExplain: [
+    "Refund the full amount the finance company paid, issue the credit note and take the vehicle back. The vehicle goes to inspection before it can be sold again.",
+    "ردّ كامل المبلغ الذي دفعته شركة التمويل، وأصدر إشعار الدائن، واستلم المركبة. تدخل المركبة الفحص قبل أن يمكن بيعها مجددًا.",
+  ],
+  UnwindRefundAmountLabel: [
+    "Refund to the finance company",
+    "المبلغ المردود لشركة التمويل",
+  ],
+  UnwindMethodBank: [
+    "bank transfer",
+    "تحويل بنكي",
+  ],
+  UnwindMethodCash: [
+    "cash",
+    "نقدًا",
+  ],
+  UnwindRefundDateLabel: [
+    "Date refunded",
+    "تاريخ الردّ",
+  ],
+  UnwindBankReferenceLabel: [
+    "Bank reference",
+    "المرجع البنكي",
+  ],
+  UnwindVoucherLabel: [
+    "Voucher number",
+    "رقم السند",
+  ],
+  UnwindAcknowledgedLabel: [
+    "The recipient acknowledged receiving the cash",
+    "أقرّ المستلم باستلام المبلغ نقدًا",
+  ],
+  UnwindCreditNoteLabel: [
+    "Credit note reference",
+    "مرجع إشعار الدائن",
+  ],
+  UnwindVehicleDateLabel: [
+    "Date the vehicle was returned",
+    "تاريخ إرجاع المركبة",
+  ],
+  UnwindVehicleNoteLabel: [
+    "Vehicle condition on return",
+    "حالة المركبة عند الإرجاع",
+  ],
+  UnwindVehicleInspectionNote: [
+    "The vehicle is held for inspection. It returns to sale only after an authorized user clears it.",
+    "تبقى المركبة قيد الفحص. لا تعود للبيع إلا بعد أن يُجيزها مستخدم مخوَّل.",
+  ],
+  UnwindDispositionLabel: [
+    "The customer's own payment",
+    "دفعة العميل نفسه",
+  ],
+  UnwindDispositionPlaceholder: [
+    "Choose what happens to it",
+    "اختر ما يحدث لها",
+  ],
+  UnwindDispositionRefund: [
+    "Refund it to the customer",
+    "ردّها للعميل",
+  ],
+  UnwindDispositionCredit: [
+    "Keep it as customer credit",
+    "الاحتفاظ بها كرصيد دائن للعميل",
+  ],
+  UnwindFinishAction: [
+    "Refund and reverse the sale",
+    "ردّ المبلغ وعكس البيع",
+  ],
+  UnwindAbandonAction: [
+    "Abandon this unwind",
+    "التخلي عن هذا التراجع",
+  ],
+  UnwindAbandonExplain: [
+    "Stop this unwind and leave the deal as it is. Anything already recorded stays recorded.",
+    "أوقف هذا التراجع واترك الصفقة كما هي. ما سُجِّل مسبقًا يبقى مسجّلًا.",
+  ],
+  UnwindAbandonConfirm: [
+    "Abandon unwind",
+    "تأكيد التخلي",
+  ],
+  UnwindPaidDealBanner: [
+    "This deal has been paid by the finance company. Use Unwind deal to record the returned forward, refund the full remittance, and reverse the sale.",
+    "دفعت شركة التمويل قيمة هذه الصفقة. استخدم التراجع عن الصفقة لتسجيل استرداد المبلغ المحوّل للشركة، وردّ كامل المبلغ المستلم منها، ثم عكس البيع.",
+  ],
+  UnwindInProgressBadge: [
+    "Unwinding",
+    "قيد التراجع",
+  ],
+  UnwindStartedSuccess: [
+    "Unwind started.",
+    "بدأ التراجع عن الصفقة.",
+  ],
+  UnwindForwardRecordedSuccess: [
+    "The finance company's return was recorded.",
+    "سُجّل استرداد شركة التمويل.",
+  ],
+  UnwindFinishedSuccess: [
+    "The deal was unwound: the refund and the vehicle return are recorded.",
+    "تم التراجع عن الصفقة: سُجّل الردّ وإرجاع المركبة.",
+  ],
+  UnwindAbandonedSuccess: [
+    "The unwind was abandoned.",
+    "تم التخلي عن التراجع.",
+  ],
 });
 
 /**
@@ -2464,7 +2633,7 @@ export const salesEn = {
   CancelApplication: "Cancel Application",
   ConfirmCancelApplication: "Cancel this application?",
   CancelApplicationWarning: "This permanently voids the application — e.g. because it was submitted against the wrong car. Any vehicle hold from a deposit will be released. To redo the deal, create a new quote and application.",
-  CancelClosedApplicationWarning: "This deal has already been finalized. Cancelling will void the sale, restore the vehicle to Available, reverse the posted accounting entries (revenue, commission, finance receivable, applied deposits), and reinstate any deposit as an active hold. This is blocked once disbursement funds have been confirmed received — that requires a manual accounting correction instead.",
+  CancelClosedApplicationWarning: "This deal has already been finalized. Cancelling will void the sale, restore the vehicle to Available, reverse the posted accounting entries (revenue, commission, finance receivable, applied deposits), and reinstate any deposit as an active hold. Once the finance company's payment has been received, use Unwind deal instead.",
   CancellationReasonLabel: "Reason (optional)",
   CancellationReasonPlaceholder: "e.g. Wrong vehicle selected",
   KeepApplication: "Keep Application",
@@ -3548,7 +3717,7 @@ export const salesAr = {
   CancelApplication: "إلغاء الطلب",
   ConfirmCancelApplication: "هل تريد إلغاء هذا الطلب؟",
   CancelApplicationWarning: "سيؤدي هذا إلى إلغاء الطلب نهائيًا — مثلاً إذا تم تقديمه بسيارة خاطئة. سيتم تحرير أي حجز للمركبة ناتج عن دفعة مقدمة. لإعادة الصفقة، أنشئ عرض سعر وطلبًا جديدين.",
-  CancelClosedApplicationWarning: "تم إنهاء هذه الصفقة بالفعل. سيؤدي الإلغاء إلى إبطال عملية البيع، وإعادة المركبة إلى متاحة، وعكس القيود المحاسبية المرحّلة (الإيراد، العمولة، ذمم التمويل، الدفعات المطبّقة)، وإعادة أي دفعة مقدمة كحجز نشط. هذا الإجراء محظور بعد تأكيد استلام مبلغ الصرف — في تلك الحالة يلزم تصحيح محاسبي يدوي بدلاً من ذلك.",
+  CancelClosedApplicationWarning: "تم إنهاء هذه الصفقة بالفعل. سيؤدي الإلغاء إلى إبطال عملية البيع، وإعادة المركبة إلى متاحة، وعكس القيود المحاسبية المرحّلة (الإيراد، العمولة، ذمم التمويل، الدفعات المطبّقة)، وإعادة أي دفعة مقدمة كحجز نشط. بعد استلام دفعة شركة التمويل، استخدم التراجع عن الصفقة بدلاً من ذلك.",
   CancellationReasonLabel: "السبب (اختياري)",
   CancellationReasonPlaceholder: "مثال: تم اختيار مركبة خاطئة",
   KeepApplication: "الإبقاء على الطلب",
