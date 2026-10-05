@@ -9,7 +9,9 @@ import { describe, expect, test } from "vitest";
 
 const WIZARD_DIR = __dirname;
 const DIRECTIONAL_ICON = /<(ArrowLeft|ArrowRight|ChevronLeft|ChevronRight)\b[^>]*>/g;
-const RTL_FLIP = /\brtl:(-scale-x-100|rotate-180)\b/;
+// The flip must sit in a static className string, so a conditional class
+// (e.g. `isRtl ? "" : "rtl:-scale-x-100"`) cannot satisfy it.
+const RTL_FLIP = /\bclassName="[^"]*\brtl:(-scale-x-100|rotate-180)\b[^"]*"/;
 
 function wizardSources(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
