@@ -323,6 +323,7 @@ jobs:
           const resolved = await resolveConvexPreviewCredentials({
             deployKey: process.env.CONVEX_PREVIEW_DEPLOY_KEY,
             previewName: process.env.CONVEX_PREVIEW_NAME,
+            expectedConvexCloudUrl: process.env.NEXT_PUBLIC_CONVEX_URL,
           });
           if (resolved.authority.convexCloudUrl !== process.env.NEXT_PUBLIC_CONVEX_URL) {
             throw new Error("Rehearsal preview was recreated after the scrub; refusing to deploy.");

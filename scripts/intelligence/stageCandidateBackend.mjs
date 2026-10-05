@@ -160,6 +160,15 @@ export function stageCandidateBackend({ candidateRoot, trustedRoot, stageRoot, t
 
   const files = [];
   for (const directory of STAGED_DIRECTORIES) {
+    // lstat follows symlinked ANCESTORS (packages/ -> elsewhere), so check
+    // every segment, not just the leaf.
+    let walked = candidateRoot;
+    for (const segment of directory.split("/")) {
+      walked = path.join(walked, segment);
+      if (lstatSync(walked).isSymbolicLink()) {
+        throw new StageRefusal("Candidate " + directory + "/ has a symlinked path segment.");
+      }
+    }
     const stat = lstatSync(path.join(candidateRoot, directory));
     if (stat.isSymbolicLink() || !stat.isDirectory()) {
       throw new StageRefusal("Candidate " + directory + "/ is not a plain directory.");

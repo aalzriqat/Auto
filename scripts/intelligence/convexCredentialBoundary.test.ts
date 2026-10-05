@@ -197,7 +197,7 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   "deploy-production.yml":
     "da1f85d00bbd9d7b14d4603dfcab4c831a91307bdac7fae1d40bd88053afdf83",
   "trusted-accounting-rehearsal.yml":
-    "387a1a0130d8ced3e6c38a72ed65c2845242a06d5859c4d3d289fc189e1d1572",
+    "98814f6b769396a309cb77d53ffa001d66197e956527b20ad5234f441a28ec2c",
   "trusted-main-e2e.yml":
     "ba0277012803ed365c944dbad5ecef410036c5773e6b401a7021a0b37855d9f4",
 };
@@ -482,6 +482,20 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       "browser-attack-swarm.yml :: trusted-e2e",
       "trusted-accounting-rehearsal.yml :: rehearsal",
     ]);
+  });
+
+  it("makes every workflow call of resolveConvexPreviewCredentials name the deployment it expects (Codex CR-341-01)", () => {
+    // Without expectedConvexCloudUrl the resolver refuses on every run, so a
+    // call site that omits it is a lane that can never deploy.
+    let calls = 0;
+    for (const name of readdirSync(workflowsDir).filter((file) => /\.ya?ml$/.test(file))) {
+      const source = readFileSync(path.join(workflowsDir, name), "utf8");
+      for (const match of source.matchAll(/resolveConvexPreviewCredentials\(\{([\s\S]*?)\}\);/g)) {
+        calls += 1;
+        expect(match[1], name).toMatch(/expectedConvexCloudUrl:\s*process\.env\.\w+/);
+      }
+    }
+    expect(calls).toBeGreaterThanOrEqual(3);
   });
 
   it("gives the staged deploy container exactly the stage and trusted node_modules, read-only, and the trusted CLI", () => {

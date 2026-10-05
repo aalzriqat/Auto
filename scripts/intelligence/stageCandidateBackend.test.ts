@@ -121,6 +121,24 @@ describe("stageCandidateBackend (SCRUM-350 Option C)", () => {
     expect(() => stage(fx)).toThrow("Candidate backend contains a symlink: lib/leak.json");
   });
 
+  it("refuses a symlinked ANCESTOR of a staged directory (packages/ -> elsewhere), which lstat of the leaf follows", () => {
+    const fx = fixture();
+    const elsewhere = tree({
+      "shared/package.json": DEPENDENCIES["packages/shared/package.json"],
+      "shared/tsconfig.json": DEPENDENCIES["packages/shared/tsconfig.json"],
+      "shared/src/evil.ts": "export const e = 1;",
+    });
+    rmSync(path.join(fx.candidate, "packages"), { recursive: true, force: true });
+    try {
+      // A junction needs no privilege on Windows; on Linux it is a plain symlink.
+      symlinkSync(elsewhere, path.join(fx.candidate, "packages"), "junction");
+    } catch {
+      return;
+    }
+    expect(() => stage(fx)).toThrow("symlinked path segment");
+    expect(existsSync(path.join(fx.stageRoot, "packages"))).toBe(false);
+  });
+
   it("refuses a hard link, which would let a staged file alias one outside the tree", () => {
     const fx = fixture();
     linkSync(path.join(fx.candidate, "lib/money.ts"), path.join(fx.candidate, "lib/alias.ts"));
