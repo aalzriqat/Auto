@@ -169,6 +169,18 @@ describe("dealOverview.financedDealOverview", () => {
     expect(basis.cutoffCreationTime).toBe(app!._creationTime);
   });
 
+  test("SCRUM-690: the confirmed remittance is served from the application row, beside — not instead of — the funded slice", async () => {
+    const s = await seed();
+    const applicationId = await insertApplication(s);
+    const before = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+    expect(before!.financialSummary!.financier.receivedMinor).toBeNull();
+
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { disbursedAmountMinor: 11_000_000 }));
+    const after = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+    expect(after!.financialSummary!.financier.receivedMinor).toBe(11_000_000);
+    expect(after!.financialSummary!.financier.fundedPortionMinor).toBe(9_350_000);
+  });
+
   test("STOCK: the profit is measured against the vehicle's whole book value, never through a supplier settlement", async () => {
     const s = await seed("11");
     await insertExpense(s, {}); // pre-deal, capitalized 100

@@ -98,6 +98,9 @@ export function DealFinancialOverview({
   // is a different fact from one never recorded, and says so. Older payloads
   // carry no list; nothing is then unreadable by this reading.
   const unreadable = new Set((summary.unreadable ?? []).map((entry) => entry.field));
+  // SCRUM-690: a backend that predates the received figure omits the key;
+  // absent is "no confirmed remittance", never a row.
+  const received = summary.financier.receivedMinor ?? null;
   const absentNote = (field: (typeof summary.unreadable)[number]["field"]): string =>
     unreadable.has(field) ? t("OverviewAmountUnreadable") : t("NotRecorded");
 
@@ -264,11 +267,26 @@ export function DealFinancialOverview({
           value={m(summary.customerFirstPaymentMinor)}
           note={summary.customerFirstPaymentMinor === null ? absentNote("customerFirstPayment") : undefined}
         />
+        {/* SCRUM-690: the confirmed remittance is the receipt; the funded
+            portion below is only the financed slice of the approved amount. */}
+        {(received !== null || unreadable.has("financierReceived")) && (
+          <Fact
+            testId="overview-financier-received"
+            label={t("OverviewFinancierReceived")}
+            value={m(received)}
+            tone="in"
+            note={received === null ? t("OverviewAmountUnreadable") : t("OverviewFinancierReceivedNote")}
+          />
+        )}
         <Fact
           testId="overview-financier"
           label={t("OverviewFinancierFunds")}
           value={m(summary.financier.fundedPortionMinor)}
-          note={summary.financier.fundedPortionMinor === null ? absentNote("financierFundedPortion") : undefined}
+          note={
+            summary.financier.fundedPortionMinor === null
+              ? absentNote("financierFundedPortion")
+              : t("OverviewFinancierFundedNote")
+          }
         />
         <Fact
           testId="overview-financier-balance"
