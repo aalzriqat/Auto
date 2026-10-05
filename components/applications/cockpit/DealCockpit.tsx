@@ -1123,6 +1123,8 @@ export function DealCockpit({
     api.dealUnwind.unwindStatus,
     app?.status === "CLOSED" ? { orgId, applicationId } : "skip"
   );
+  // A closed deal's controls that an active unwind bars stay off until its status has been read.
+  const unwindBars = app?.status === "CLOSED" && (unwindStatus === undefined || unwindStatus.status === "ACTIVE");
   const [unwindOpen, setUnwindOpen] = useState(false);
   const [unwindSubmitting, setUnwindSubmitting] = useState(false);
   const [unwindError, setUnwindError] = useState<string | null>(null);
@@ -2807,7 +2809,7 @@ export function DealCockpit({
           plannedCustodyWithheld: dealCosts?.plannedCustodyWithheld ?? false,
           recommended: dealCosts?.recommendedCustody ?? null,
           openPeriodToday: dealCosts?.custodyPostsNow,
-          reopenLocked: unwindStatus?.status === "ACTIVE",
+          reopenLocked: unwindBars,
           dealStopped:
             // The issuing commands' own predicate, when the read has it;
             // the local status check stays as the fallback while it loads.
@@ -2966,7 +2968,7 @@ export function DealCockpit({
         deal.forward.mayRecord === true &&
         deal.forward.onBooksForwardId &&
         // A live unwind owns the forward payment: the server refuses either correction meanwhile.
-        unwindStatus?.status !== "ACTIVE"
+        !unwindBars
           ? {
               canVoid: deal.forward.transferConfirmed !== true,
               open: forwardCorrection,

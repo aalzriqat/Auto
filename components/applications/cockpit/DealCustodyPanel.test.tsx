@@ -315,6 +315,11 @@ describe("DealCustodyPanel", () => {
       expect(a.onReopen).toHaveBeenCalledWith("cust1", "Late receipt");
     });
 
+    test("a closed record's reopen is disabled while a deal unwind owns it (server refuses it)", () => {
+      renderPanel(wiring({ actions: actions(), accounting: { ready: true }, reopenLocked: true, records: [record({ status: "RECONCILED", reconciliationNotes: "Done" })] }));
+      expect((screen.getByRole("button", { name: salesEn.CustodyReopen }) as HTMLButtonElement).disabled).toBe(true);
+    });
+
     test("the server's refusal is shown beside the form, and the dialog stays open", async () => {
       const a = actions({ onMove: vi.fn(async () => { throw new Error("This custody record is already closed."); }) });
       renderPanel(wiring({ actions: a, accounting: { ready: true } }));
