@@ -79,23 +79,43 @@ export async function getPostedLines(
   // cancelled it out. Excluding it here would keep the reversal's inverted
   // lines while silently dropping the original half of the pair, turning a
   // net-zero cancellation into a one-sided, wrong balance.
-  const entries = await ctx.db
+  //
+  // Two index reads (one per status) instead of a query-level filter. Only the
+  // SET of ids is used, so the order of the two reads is irrelevant.
+  const postedEntries = await ctx.db
     .query("journalEntries")
-    .withIndex("by_org_date", (q) => q.eq("orgId", orgId))
-    .filter((q) => q.or(q.eq(q.field("status"), "POSTED"), q.eq(q.field("status"), "REVERSED")))
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "POSTED"))
+    .collect();
+  const reversedEntries = await ctx.db
+    .query("journalEntries")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "REVERSED"))
     .collect();
 
-  const entryIds = new Set(entries.map((e) => e._id));
+  const entryIds = new Set([...postedEntries, ...reversedEntries].map((e) => e._id));
 
-  const allLines = await ctx.db
+  // The accountingDate window is an index range, not a query-level filter.
+  const inRange = await ctx.db
     .query("journalLines")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .filter((q) => {
-      const afterFrom = fromDate !== undefined ? q.gte(q.field("accountingDate"), fromDate) : q.neq(q.field("accountingDate"), -1);
-      const beforeTo = toDate !== undefined ? q.lte(q.field("accountingDate"), toDate) : q.neq(q.field("accountingDate"), -1);
-      return q.and(afterFrom, beforeTo);
+    .withIndex("by_org_date", (q) => {
+      const scoped = q.eq("orgId", orgId);
+      if (fromDate !== undefined && toDate !== undefined) {
+        return scoped.gte("accountingDate", fromDate).lte("accountingDate", toDate);
+      }
+      if (fromDate !== undefined) return scoped.gte("accountingDate", fromDate);
+      if (toDate !== undefined) return scoped.lte("accountingDate", toDate);
+      return scoped;
     })
     .collect();
+
+  // Preserved from the previous query-level filter: whenever either bound is
+  // open, a line carrying the -1 accountingDate sentinel was excluded. This
+  // runs in memory over the already index-narrowed window.
+  const excludeSentinel = fromDate === undefined || toDate === undefined;
+  // The previous read came back in insertion order (by_org index); the date
+  // index returns accountingDate order, so restore insertion order.
+  const allLines = inRange
+    .filter((l) => !excludeSentinel || l.accountingDate !== -1)
+    .sort((a, b) => a._creationTime - b._creationTime);
 
   return allLines.filter((l) => entryIds.has(l.journalEntryId));
 }
@@ -468,22 +488,34 @@ async function getAllocatedAsOfByReceivable(
  * still count, exactly like the CURRENT-status independence documented above
  * for arAging/subledgerReconciliation — only whether it was cancelled BY
  * asOfDate matters.
+ *
+ * Two index reads, no query-level filter:
+ *   A. never cancelled (cancelledAt absent) and issued by asOfDate — an exact
+ *      index range on (cancelledAt = undefined, issueDate <= asOfDate);
+ *   B. cancelled strictly after asOfDate — an index range on cancelledAt; the
+ *      issueDate bound cannot be part of the range (it follows an inequality)
+ *      so it is applied in memory. B is bounded to receivables cancelled after
+ *      asOfDate, which is empty for the default as-of of now.
+ * Merged back into insertion order, which is what the old by_org read returned.
  */
 async function getReceivablesAsOf(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   asOfDate: number
 ) {
-  return await ctx.db
+  const neverCancelled = await ctx.db
     .query("receivableDocuments")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .filter((q) =>
-      q.and(
-        q.lte(q.field("issueDate"), asOfDate),
-        q.or(q.eq(q.field("cancelledAt"), undefined), q.gt(q.field("cancelledAt"), asOfDate))
-      )
+    .withIndex("by_org_cancelledAt_issueDate", (q) =>
+      q.eq("orgId", orgId).eq("cancelledAt", undefined).lte("issueDate", asOfDate)
     )
     .collect();
+  const cancelledLater = (
+    await ctx.db
+      .query("receivableDocuments")
+      .withIndex("by_org_cancelledAt_issueDate", (q) => q.eq("orgId", orgId).gt("cancelledAt", asOfDate))
+      .collect()
+  ).filter((r) => r.issueDate <= asOfDate);
+  return [...neverCancelled, ...cancelledLater].sort((a, b) => a._creationTime - b._creationTime);
 }
 
 type AgingBuckets = { current: number; days30: number; days60: number; days90: number; over90: number };
@@ -597,10 +629,12 @@ export async function computeSubledgerReconciliation(
 ): Promise<SubledgerReconciliationResult> {
     // GL total for AR accounts — cumulative from inception to toDate so the
     // basis matches the subledger outstanding balance (not period movement).
+    // (A former `systemKey != null` query filter was a no-op — the field is
+    // optional string and never null — and the JS filter below already requires
+    // an exact systemKey match, so it is simply dropped.)
     const accounts = await ctx.db
       .query("chartOfAccounts")
       .withIndex("by_org_type", (q) => q.eq("orgId", orgId).eq("type", "ASSET"))
-      .filter((q) => q.neq(q.field("systemKey"), null))
       .collect();
 
     const arAccountIds = new Set(accounts.filter((a) =>
@@ -782,8 +816,7 @@ export async function computePrepaidExpensesReconciliation(
 ): Promise<GlVsSubledgerResult> {
   const active = await ctx.db
     .query("prepaidExpenseSchedules")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "ACTIVE"))
     .collect();
 
   const subByCurrency = new Map<string, number>();
@@ -1081,20 +1114,25 @@ async function computeRecognizedCommissionAsOf(
   orgId: Id<"organizations">,
   toDate: number | undefined
 ): Promise<Map<string, Map<string, number>>> {
-  // by_org_eventType_date exists for exactly this — it loads one event type for
-  // just its own window instead of the org's whole history. Going through
+  // by_org_eventType_status_date loads one event type, one status, for just its
+  // own window instead of the org's whole history. Going through
   // by_org_eventType and filtering afterwards scanned every commission event a
   // dealership had ever posted, twice, inside a live query that also runs
-  // inside the close checklist.
-  const inWindow = async (eventType: "COMMISSION_ACCRUED" | "COMMISSION_ADJUSTED") =>
-    await ctx.db
-      .query("accountingEvents")
-      .withIndex("by_org_eventType_date", (q) => {
-        const scoped = q.eq("orgId", orgId).eq("eventType", eventType);
-        return toDate === undefined ? scoped : scoped.lte("accountingDate", toDate);
-      })
-      .filter((q) => q.or(q.eq(q.field("status"), "POSTED"), q.eq(q.field("status"), "REVERSED")))
-      .collect();
+  // inside the close checklist. POSTED and REVERSED are two index reads (no
+  // query-level filter), merged back into the accountingDate order the previous
+  // single read returned.
+  const inWindow = async (eventType: "COMMISSION_ACCRUED" | "COMMISSION_ADJUSTED") => {
+    const read = async (status: "POSTED" | "REVERSED") =>
+      await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_eventType_status_date", (q) => {
+          const scoped = q.eq("orgId", orgId).eq("eventType", eventType).eq("status", status);
+          return toDate === undefined ? scoped : scoped.lte("accountingDate", toDate);
+        })
+        .collect();
+    const events = [...(await read("POSTED")), ...(await read("REVERSED"))];
+    return events.sort((a, b) => a.accountingDate - b.accountingDate || a._creationTime - b._creationTime);
+  };
 
   const recognized = new Map<string, Map<string, number>>();
   const add = (saleId: unknown, minor: unknown, currency: string) => {
