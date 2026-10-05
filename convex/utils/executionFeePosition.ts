@@ -1,6 +1,5 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import { reasonOf, type ClosingReadinessReason } from "../../lib/closingReadinessReasonCodes";
-import { CUSTODY_POSTABLE_TREATMENTS } from "./dealCustodyPosting";
 import { isMinorAmount } from "./financingEconomics";
 import { toMinorUnits } from "./money";
 
@@ -42,6 +41,7 @@ type FeeLine = Pick<
   | "voidedAt"
   | "feeType"
   | "paidBy"
+  | "paidTo"
   | "currency"
   | "deductedFromSettlement"
   | "accountingTreatment"
@@ -89,10 +89,12 @@ export function executionFeeExpectation(app: App, currency: string): ExecutionFe
 /**
  * Why `line` cannot be the execution fee's actual, or null when it can.
  * Compatible means: live; a finance-company fee; borne by the dealership
- * (paid by it, or by an employee from custody); not withheld from the
- * settlement (the fee is a separate payment, c22119 Q1); of a treatment a
- * custody or direct payment can post; in the deal's currency; and carrying a
- * readable actual — an explicit 0 included.
+ * (paid by it, or by an employee from custody); paid TO the finance company;
+ * not withheld from the settlement (the fee is a separate payment, c22119 Q1);
+ * booked as a finance-company commission — the treatment
+ * `recordExecutionFeeActual` writes, so a payment posts it to that account and
+ * not to whatever a generic cost line was given (Codex F1); in the deal's
+ * currency; and carrying a readable actual — an explicit 0 included.
  */
 export function executionFeeBindRefusal(line: FeeLine, currency: string): string | null {
   if (line.voidedAt !== undefined) return "This cost has been removed, so it cannot be the execution fee.";
@@ -100,11 +102,14 @@ export function executionFeeBindRefusal(line: FeeLine, currency: string): string
   if (line.paidBy !== "DEALER" && line.paidBy !== "EMPLOYEE") {
     return "The execution fee is paid by the dealership (directly or from an employee's custody); this cost was recorded as paid by someone else.";
   }
+  if (line.paidTo !== "FINANCE_COMPANY") {
+    return "The execution fee is paid to the finance company; this cost was recorded as paid to someone else.";
+  }
   if (line.deductedFromSettlement === true) {
     return "This cost was recorded as withheld from the finance company's settlement, but the execution fee is a separate dealership payment.";
   }
-  if (!CUSTODY_POSTABLE_TREATMENTS.has(line.accountingTreatment)) {
-    return `This cost is treated as ${line.accountingTreatment}, which no payment can be recorded against.`;
+  if (line.accountingTreatment !== "FINANCE_COMPANY_COMMISSION") {
+    return `This cost is booked as ${line.accountingTreatment}, but the execution fee is booked as a finance-company commission.`;
   }
   if (line.currency !== currency) return `This cost is in ${line.currency}, but the deal's money is kept in ${currency}.`;
   if (line.actualAmountMinor === undefined || !isMinorAmount(line.actualAmountMinor)) {

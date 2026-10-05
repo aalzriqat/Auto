@@ -43,6 +43,7 @@ function line(id: string, overrides: Partial<Line> = {}): Line {
     voidedAt: undefined,
     feeType: "FINANCE_COMPANY_FEE",
     paidBy: "DEALER",
+    paidTo: "FINANCE_COMPANY",
     currency: JOD,
     deductedFromSettlement: false,
     accountingTreatment: "FINANCE_COMPANY_COMMISSION",
@@ -182,6 +183,12 @@ describe("executionFeeBindRefusal", () => {
     ["paid by the customer", { paidBy: "CUSTOMER" }, /paid by the dealership/],
     ["withheld from settlement", { deductedFromSettlement: true }, /separate dealership payment/],
     ["another currency", { currency: "USD" }, /USD/],
+    // Codex F1: a cost paid to anyone but the finance company is not its fee.
+    ["paid to the government", { paidTo: "GOVERNMENT" }, /paid to the finance company/],
+    ["paid to another party", { paidTo: "OTHER" }, /paid to the finance company/],
+    // ...and one booked under another treatment would post the fee to the wrong account.
+    ["booked as a selling expense", { accountingTreatment: "SELLING_EXPENSE" }, /finance-company commission/],
+    ["booked as an ownership transfer", { accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE" }, /finance-company commission/],
     ["no actual", { actualAmountMinor: undefined }, /zero if nothing was charged/],
   ])("refuses a line %s", (_label, overrides, message) => {
     expect(executionFeeBindRefusal(line("x", overrides as Partial<Line>), JOD)).toMatch(message);

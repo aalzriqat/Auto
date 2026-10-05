@@ -197,6 +197,7 @@ export function DealFinancialOverview({
     NO_POLICY: t("OverviewNoPolicy"),
     MIXED_DENOMINATION: t("OverviewExpectedMixedDenomination"),
     UNSAFE_AMOUNT: t("OverviewExpectedUnreadable"),
+    EXECUTION_FEE_UNCLASSIFIED: t("OverviewExpectedFeeUnclassified"),
   }[outlay.expectedCostsReason ?? "NO_POLICY"];
 
   return (

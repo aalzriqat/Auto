@@ -857,6 +857,42 @@ describe("dealOverview.financedDealOverview", () => {
       const costs = await s.asOwner.query(api.financeDealCosts.listDealCosts, { orgId: s.orgId, applicationId });
       expect(costs.executionFee).toMatchObject({ unrecorded: true, withheld: true });
     });
+
+    // Codex F2: the same conflict must not state the outlay either — neither
+    // the whole 1,250 as "remaining" while unbound, nor 0 once a 700 fee is
+    // linked while the other 550 is still unclassified.
+    test("the conflict withholds the expected outlay too, before and after the fee is linked", async () => {
+      const { s, applicationId } = await pntrShaped("d");
+      await s.t.run((ctx) => ctx.db.patch(applicationId, { estimatedDealerBorneExpensesMinor: 1_250_000 }));
+      const withheld = {
+        expectedCostsRemainingMinor: null,
+        expectedCostsReason: "EXECUTION_FEE_UNCLASSIFIED",
+        totalExpectedMinor: null,
+      };
+      let view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      expect(view!.financialSummary!.dealerOutlay).toMatchObject(withheld);
+      await s.asOwner.mutation(api.financeDealCosts.recordExecutionFeeActual, {
+        orgId: s.orgId,
+        applicationId,
+        actualAmountMinor: 700_000,
+        expectedCurrency: "JOD",
+        paidBy: "DEALER",
+        idempotencyKey: "exec-fee-d-1",
+      });
+      view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      expect(view!.financialSummary!.dealerOutlay).toMatchObject(withheld);
+      expect(view!.financialSummary!.profit).toEqual({ available: false, reason: "ExecutionFeeUnclassified" });
+    });
+
+    test("control: an aggregate equal to the fee still states the outlay", async () => {
+      const { s, applicationId } = await pntrShaped("e");
+      await s.t.run((ctx) => ctx.db.patch(applicationId, { estimatedDealerBorneExpensesMinor: 700_000 }));
+      const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      expect(view!.financialSummary!.dealerOutlay).toMatchObject({
+        expectedCostsRemainingMinor: 700_000,
+        expectedCostsReason: null,
+      });
+    });
   });
 
   test("two safe same-currency actuals that overflow between them are withheld as UNSAFE_AMOUNT, never summed", async () => {

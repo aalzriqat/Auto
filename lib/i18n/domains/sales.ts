@@ -1179,6 +1179,7 @@ const dealOverviewMessages = defineBilingualMessages({
   OverviewNoPolicy: ["no fee policy configured — unknown, not zero", "لا سياسة رسوم مضبوطة — غير معلوم وليس صفرًا"],
   OverviewExpectedMixedDenomination: ["a recorded actual is in another currency — withheld, not zero", "مبلغ فعلي مسجَّل بعملة أخرى — محجوب وليس صفرًا"],
   OverviewExpectedUnreadable: ["a configured or recorded amount could not be read — withheld, not zero", "تعذّرت قراءة مبلغ مضبوط أو مسجَّل — محجوب وليس صفرًا"],
+  OverviewExpectedFeeUnclassified: ["the deal's expected costs disagree with the finance company's execution fee — withheld, not zero", "تخالف المصاريف المتوقعة للصفقة رسومَ تنفيذ شركة التمويل — محجوبة وليست صفرًا"],
   OverviewDealerPaidTotal: ["Total expected dealership outlay", "إجمالي ما يُتوقَّع أن يتحمّله المعرض"],
   OverviewDealerPaidNote: ["known outlay + expected costs still to record", "الالتزام المعلوم + المصاريف المتوقّعة"],
   OverviewDealerPaidUnknown: ["contribution not on record yet", "المساهمة غير مسجَّلة بعد"],

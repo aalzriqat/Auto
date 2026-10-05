@@ -510,7 +510,16 @@ export const financedDealOverview = query({
               cockpit.money.currency
             )
           : undefined);
-      const expectedDealerBorne = dealerBorneExpected(
+      const feeHeadline = executionFeeHeadline(executionFee);
+      // Codex F2: when the frozen aggregate disagrees with the fee, or which
+      // cost is the fee is ambiguous, the outlay built on that aggregate is
+      // withheld with the estimate — neither the whole aggregate as remaining
+      // nor 0 once the fee is linked while the difference is still
+      // unclassified. (An unreadable fee keeps UNSAFE_AMOUNT, below.)
+      const expectedDealerBorne: DealFinancialSummaryInputs["expectedDealerBorne"] =
+        executionFee.applies && (executionFee.aggregateConflict || executionFee.ambiguous)
+        ? { totalMinor: null, remainingMinor: null, reason: "EXECUTION_FEE_UNCLASSIFIED" }
+        : dealerBorneExpected(
         expected.source,
         expected.rows,
         cockpit.money.currency,
@@ -541,7 +550,7 @@ export const financedDealOverview = query({
           fullCostBasis: costBasisFor(null),
           preparation,
           expectedExpensesMinor: expectedDealerBorne.totalMinor ?? undefined,
-          executionFee: executionFeeHeadline(executionFee),
+          executionFee: feeHeadline,
           fullySettled,
           expensesMixed,
           expensesUnreadable:
