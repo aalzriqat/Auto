@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Loader2, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -153,6 +153,7 @@ export function RecordSubmittedQuotationDialog({
    */
   const touchedRef = useRef(false);
   const amountInputRef = useRef<HTMLInputElement>(null);
+  const selectAfterPrefillRef = useRef(false);
   /** The calculation already offered into the field this opening — a one-shot. */
   const prefilledRef = useRef(false);
 
@@ -188,11 +189,12 @@ export function RecordSubmittedQuotationDialog({
   useEffect(() => {
     if (!open || prefilledRef.current || touchedRef.current) return;
     if (calculation.state !== "AVAILABLE") return;
-    // SCRUM-607: an operator already in the field is about to type their own
-    // figure; a prefill landing now would put the caret after it and the first
-    // keystrokes would be appended to the calculated number. The offer is
-    // not lost: onBlur below makes it if the operator leaves the field empty.
-    if (amountInputRef.current && document.activeElement === amountInputRef.current) return;
+    // SCRUM-607: the dialog autofocuses this field, so the figure usually lands
+    // while the operator is already in it. A controlled value change parks the
+    // caret at the end and the first keystrokes would be appended to the
+    // calculated number; select it after the write so typing replaces it.
+    selectAfterPrefillRef.current =
+      amountInputRef.current !== null && document.activeElement === amountInputRef.current;
     prefilledRef.current = true;
     // This is the deliberate handoff from an asynchronously arriving server
     // suggestion into a controlled input; the touched guard prevents it from
@@ -200,6 +202,12 @@ export function RecordSubmittedQuotationDialog({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setAmount(String(calculation.minor / factor));
   }, [open, calculation, factor]);
+
+  useLayoutEffect(() => {
+    if (!selectAfterPrefillRef.current) return;
+    selectAfterPrefillRef.current = false;
+    amountInputRef.current?.select();
+  }, [amount]);
 
   // Exact, never rounded (SCRUM-605): "21428.57213000" once rounded to the
   // calculated 21428.572 and went on the record as SYSTEM_CALCULATED — a figure
@@ -262,12 +270,6 @@ export function RecordSubmittedQuotationDialog({
             <Input
               id="submitted-quotation-amount"
               ref={amountInputRef}
-              onBlur={() => {
-                if (prefilledRef.current || touchedRef.current || amount !== "") return;
-                if (calculation.state !== "AVAILABLE") return;
-                prefilledRef.current = true;
-                setAmount(String(calculation.minor / factor));
-              }}
               inputMode="decimal"
               value={amount}
               aria-invalid={amountInvalid}

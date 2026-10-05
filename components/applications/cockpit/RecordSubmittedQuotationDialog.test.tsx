@@ -132,28 +132,20 @@ describe("SCRUM-607: a late calculation never lands in a field the operator is i
   });
   const field = () => screen.getByLabelText("QuotationAmountLabel") as HTMLInputElement;
 
-  test("calculation resolving while the field is focused leaves it empty", () => {
+  test("calculation resolving while the field is focused prefills it SELECTED, so typing replaces it", () => {
     const view = render(<RecordSubmittedQuotationDialog {...props({ state: "LOADING" })} />);
     field().focus();
     view.rerender(<RecordSubmittedQuotationDialog {...props({ state: "AVAILABLE", minor: 21_428_572 })} />);
-    expect(field().value).toBe("");
-  });
-
-  test("leaving the focused field untouched then offers the calculated figure", () => {
-    const view = render(<RecordSubmittedQuotationDialog {...props({ state: "LOADING" })} />);
-    field().focus();
-    view.rerender(<RecordSubmittedQuotationDialog {...props({ state: "AVAILABLE", minor: 21_428_572 })} />);
-    expect(field().value).toBe("");
-    fireEvent.blur(field());
     expect(field().value).toBe("21428.572");
+    expect(field().selectionStart).toBe(0);
+    expect(field().selectionEnd).toBe("21428.572".length);
   });
 
-  test("typing then blurring never replaces the operator's figure", () => {
+  test("typing before the calculation lands is never replaced", () => {
     const view = render(<RecordSubmittedQuotationDialog {...props({ state: "LOADING" })} />);
     field().focus();
     fireEvent.change(field(), { target: { value: "20000" } });
     view.rerender(<RecordSubmittedQuotationDialog {...props({ state: "AVAILABLE", minor: 21_428_572 })} />);
-    fireEvent.blur(field());
     expect(field().value).toBe("20000");
   });
 
