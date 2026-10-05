@@ -202,6 +202,16 @@ const KNOWN_SURVIVING_REFERENCES: Record<string, string> = {
     "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
   "dealerProductDeferrals.saleId->sales":
     "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
+  // SCRUM-693: an unwind is an audit record of a deal's reversal, like its
+  // sibling `financeCompanyForwards`; same SCRUM-546 document-only treatment.
+  "dealUnwinds.applicationId->financeApplications":
+    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
+  "dealUnwinds.remittanceRefund.paymentId->canonicalPayments":
+    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
+  "dealUnwinds.remittanceRefund.reversedAllocationIds[]->paymentAllocations":
+    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
+  "dealUnwinds.saleId->sales":
+    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
   "depositApplications.depositId->deposits":
     "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
   "depositApplications.quoteId->quotes":

@@ -81,6 +81,9 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "collections.submitCashierReconciliation": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "customers.softDelete": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "deposits.create": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
+  "dealUnwind.abandonDealUnwind": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; posts nothing — ends an ACTIVE unwind (SCRUM-693)" },
+  "dealUnwind.finishDealUnwind": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; the unwind must be ACTIVE (it leaves COMPLETED); the receipt reversal is keyed on the disbursement version it reverses and proven POSTED, and it and the closed-deal teardown commit or roll back together (SCRUM-693 ruling B)" },
+  "dealUnwind.recordDealUnwindForwardReturn": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; STEP_DONE once forwardReturn is recorded, and reverseForward refuses a forward already reversed (SCRUM-693)" },
   "depositRequests.confirm": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; the request must still be PENDING, and only CONFIRM_FINANCE_DISBURSEMENT holders reach the posting (SCRUM-444)" },
   "deposits.release": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "deposits.releaseVehicleAllocation": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
@@ -302,8 +305,8 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // 126 -> 128: the two SCRUM-447 mutations above, on top of the SCRUM-435 three (merge of origin/main into SCRUM-447).
     // 128 -> 129: `financingEconomics.recordManualFinanceApproval` (SCRUM-27), on top of main's 128.
     // 129 -> 130: `applications.returnFinanceDisbursementCheque` (SCRUM-239).
-    // 130 -> 133: `financeDealCosts.recordExecutionFeeActual`, `.bindExecutionFeeLine` and `.unbindExecutionFeeLine` (SCRUM-690).
-    expect(population).toHaveLength(133);
+    // 130 -> 136: the three SCRUM-693 unwind steps (`dealUnwind.*`; `startDealUnwind` writes only the unwind row) + `financeDealCosts.recordExecutionFeeActual`, `.bindExecutionFeeLine` and `.unbindExecutionFeeLine` (SCRUM-690).
+    expect(population).toHaveLength(136);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

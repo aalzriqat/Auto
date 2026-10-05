@@ -85,6 +85,7 @@ import {
 } from "./utils/dealCostLimits";
 export { MAX_CUSTODY_ENTRIES, MAX_DEAL_CUSTODY_DECISION_RECORDS };
 import { recomputeEconomicsForApplication } from "./financingEconomics";
+import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
 import {
   assertMinorAmount,
   isMinorAmount,
@@ -3921,6 +3922,9 @@ export const reopenDealCustody = mutation({
     // parent refuses here, with the override, the reversal and the status
     // patch all still unwritten.
     await requireOwnedRow(ctx, args.orgId, "financeApplications", custody.applicationId, APPLICATION_NOT_FOUND);
+    // SCRUM-693 D2: an unwind proves the deal's custody closed at start and
+    // again at finish; a reopen in between would race that proof.
+    await assertNoActiveDealUnwind(ctx, args.orgId, custody.applicationId);
 
     // Reopening undoes a reconciliation somebody signed off, so it leaves a
     // row. (It no longer withdraws a classification: closing readiness is
@@ -4130,6 +4134,8 @@ export const recordLegalInvoice = mutation({
       args.applicationId,
       APPLICATION_NOT_FOUND
     );
+    // SCRUM-693: the invoice is the recognition source an unwind is reversing.
+    await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
     assertMinorAmount(args.legalInvoiceAmountMinor, "Legal invoice amount");
     if (args.legalInvoiceAmountMinor <= 0) {
       throw new ConvexError("The invoice amount must be greater than zero.");

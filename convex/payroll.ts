@@ -22,6 +22,7 @@ import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money"
 import { paymentMethodValidator, normalizePaymentMethod, PaymentMethod } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
 import { isCommissionOwed } from "./utils/commission";
+import { saleHasActiveDealUnwind } from "./utils/dealUnwindGuard";
 import { checkPostingAllowed } from "./accountingPeriods";
 
 // ─── Employee compensation (fixed monthly salary) ──────────────────────────────
@@ -547,6 +548,8 @@ async function collectUnpaidCommissions(
     if (!isCommissionOwed(s)) continue;
     if (!activeMemberIds.has(s.salespersonId)) continue;
     if (s.saleDate > periodEndMs) continue; // earned after this period
+    // SCRUM-693 D1: a deal being unwound is not swept into a run.
+    if (await saleHasActiveDealUnwind(ctx, orgId, s._id)) continue;
     const entry = byUser.get(s.salespersonId) ?? { minor: 0, saleIds: [] };
     entry.minor += toMinorUnits(s.commissionAmount, currency);
     entry.saleIds.push(s._id);
@@ -775,6 +778,10 @@ async function settleItemCommissions(
     // to the rule would silently produce the disagreement the shared predicate
     // exists to prevent.
     if (!sale || !isCommissionOwed(sale)) continue;
+    // SCRUM-693 D1: nor paid while it is being unwound. The live payable then
+    // differs from the approved snapshot, so payRun's drift check sends the run
+    // back for re-approval instead of silently dropping the line.
+    if (await saleHasActiveDealUnwind(ctx, sale.orgId, sale._id)) continue;
     commissionMinor += toMinorUnits(sale.commissionAmount, item.currency);
     saleIdsToSettle.push(saleId);
   }
