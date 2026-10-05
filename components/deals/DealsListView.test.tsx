@@ -149,6 +149,26 @@ describe("the Deals list is a needs-action queue first", () => {
     expect(screen.queryByRole("button", { name: "LoadMore" })).toBeNull();
   });
 
+  test("dates speak the interface language: an Arabic list never shows a Latin month (SCRUM-694)", () => {
+    renderList({ locale: "ar" });
+    const table = screen.getByRole("table");
+    expect(table.textContent).not.toMatch(/Sep 2026/);
+    expect(table.textContent).toMatch(/سبتمبر 2026/);
+    cleanup();
+    renderList({ locale: "en" });
+    expect(screen.getByRole("table").textContent).toMatch(/Sep 2026/);
+  });
+
+  test("each row has exactly one link to its deal, so the whole row is one target (SCRUM-694)", () => {
+    renderList();
+    fireEvent.click(screen.getByRole("tab", { name: /DealsAll/ }));
+    for (const tableRow of screen.getAllByRole("row").slice(1)) {
+      const links = within(tableRow).getAllByRole("link");
+      expect(links).toHaveLength(1);
+      expect(links[0].getAttribute("href")).toMatch(/\/deal$/);
+    }
+  });
+
   test("an incomplete queue with nothing loadable right now offers no dead Load more click", () => {
     renderList({ canLoadMore: false, loadingMore: false, complete: false });
     expect(screen.queryByText(/DealsLoadedAll/)).toBeNull();
