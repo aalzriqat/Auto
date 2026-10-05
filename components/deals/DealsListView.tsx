@@ -2,12 +2,12 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { format } from "date-fns";
-import { ArrowUpRight, Plus, Search } from "lucide-react";
+import { Banknote, CarFront, ChevronRight, Plus, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { formatLocalized } from "@/lib/dateLocale";
 import { cn } from "@/lib/utils";
 
 /**
@@ -107,6 +107,38 @@ function statusClass(tone: DealRow["statusTone"]): string {
   }
 }
 
+/**
+ * The row's anchor: the car, with the deal's kind on it. No photo is served to
+ * the list, so it is a mark rather than a thumbnail — but it gives every row the
+ * same visual start, and a financed deal reads differently from a cash one
+ * without colour being the only cue (the kind is also written in the row).
+ */
+function VehicleMark({ kind }: Readonly<{ kind: DealKind }>) {
+  return (
+    <span
+      className={cn(
+        "relative flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
+        kind === "FINANCED" ? "bg-primary/10 text-primary" : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+      )}
+      aria-hidden
+    >
+      <CarFront className="h-5 w-5" />
+      {kind === "CASH" && (
+        <Banknote className="absolute -bottom-1 -end-1 h-4 w-4 rounded-sm bg-background p-px" />
+      )}
+    </span>
+  );
+}
+
+function ReasonLine({ reason, t }: Readonly<{ reason: DealReason; t: (key: string) => string }>) {
+  return (
+    <span className="flex items-center gap-2 text-sm">
+      <span className={cn("h-2 w-2 shrink-0 rounded-full", REASON_TONE[reason])} aria-hidden />
+      <span className="truncate">{t(REASON_LABEL[reason])}</span>
+    </span>
+  );
+}
+
 export function DealsListView({
   rows,
   loading,
@@ -116,6 +148,7 @@ export function DealsListView({
   onLoadMore,
   newDealHref,
   t,
+  locale,
 }: Readonly<{
   /** `undefined` while the first page is loading. */
   rows: ReadonlyArray<DealRow> | undefined;
@@ -128,6 +161,8 @@ export function DealsListView({
   /** Present only for a caller who may start a deal. */
   newDealHref: string | null;
   t: (key: string) => string;
+  /** The interface language: month names follow it (an Arabic list never shows "Oct"). */
+  locale?: string;
 }>) {
   const [view, setView] = useState<View>("needs");
   const [reason, setReason] = useState<DealReason | null>(null);
@@ -179,6 +214,7 @@ export function DealsListView({
   const countSuffix = incomplete ? "+" : "";
   // The queue is built from loaded rows only: with more to load, an empty
   // queue proves nothing about older deals (SCRUM-603-2).
+  const showAmount = visible.some((row) => row.amountLabel !== null);
   let emptyKey = "NoDealsFound";
   if (view === "needs" && !filtersActive) emptyKey = incomplete ? "DealsQueueEmptyLoadedOnly" : "DealsQueueEmpty";
 
@@ -259,7 +295,7 @@ export function DealsListView({
         </div>
       )}
 
-      <div className="rounded-md border">
+      <div className="@container rounded-md border">
         <div className="flex flex-wrap items-center gap-2 border-b p-3">
           <div className="relative w-full max-w-sm">
             <Search className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -308,113 +344,133 @@ export function DealsListView({
         ) : (
           <>
             {/* Cards on a phone, a table above it: the same rows, one source. */}
-            <ul className="divide-y sm:hidden" data-testid="deals-cards">
+            <ul className="divide-y @2xl:hidden" data-testid="deals-cards">
               {visible.map((row) => (
                 <li key={row.key}>
-                  <Link href={row.href} className="block space-y-1.5 p-3 hover:bg-muted/40">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium">
-                        <bdi>{row.customerName}</bdi>
-                      </span>
-                      <Badge variant="outline" className={statusClass(row.statusTone)}>
-                        {row.statusLabel}
-                      </Badge>
-                    </div>
-                    {row.reason && (
-                      <p className="flex items-center gap-2 text-sm">
-                        <span className={cn("h-2 w-2 shrink-0 rounded-full", REASON_TONE[row.reason])} aria-hidden />
-                        {t(REASON_LABEL[row.reason])}
+                  <Link
+                    href={row.href}
+                    className="flex gap-3 p-3 transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:outline-none"
+                  >
+                    <VehicleMark kind={row.kind} />
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <span dir="auto" className="min-w-0 truncate font-medium">
+                          <bdi>{row.customerName}</bdi>
+                        </span>
+                        <Badge variant="outline" className={cn("shrink-0 whitespace-nowrap", statusClass(row.statusTone))}>
+                          {row.statusLabel}
+                        </Badge>
+                      </div>
+                      <p dir="auto" className="truncate text-sm text-muted-foreground rtl:text-right">
+                        <bdi>{row.vehicleDesc}</bdi>
                       </p>
-                    )}
-                    <p className="text-sm text-muted-foreground">
-                      <bdi>{row.vehicleDesc}</bdi>
-                      {row.financierLabel && (
-                        <>
+                      {row.reason && <ReasonLine reason={row.reason} t={t} />}
+                      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                        <span className="min-w-0 truncate">
+                          <bdi>{row.salespersonName}</bdi>
                           {" · "}
-                          <bdi>{row.financierLabel}</bdi>
-                        </>
-                      )}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      <bdi>{row.salespersonName}</bdi>
-                      {" · "}
-                      <bdi>{format(row.since, "d MMM yyyy")}</bdi>
-                    </p>
+                          <bdi>{formatLocalized(row.since, "d MMM yyyy", locale)}</bdi>
+                        </span>
+                        {row.amountLabel && (
+                          <span className="shrink-0 font-medium tabular-nums text-foreground">
+                            <bdi dir="ltr">{row.amountLabel}</bdi>
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   </Link>
                 </li>
               ))}
             </ul>
-            <div className="hidden sm:block">
+            {/*
+              Once the LIST (not the viewport) is wide enough: ONE table whose
+              columns appear as the container has room, so a tablet or a
+              desktop with the sidebar open folds the reason under the deal
+              instead of wrapping every cell. The whole row opens the deal.
+            */}
+            <div className="hidden @2xl:block">
               <Table>
                 <TableHeader>
-                  <TableRow>
-                    <TableHead>{t("DealsReasonColumn")}</TableHead>
-                    <TableHead>{t("DealsCustomerVehicleColumn")}</TableHead>
-                    <TableHead>{t("DealsTypeColumn")}</TableHead>
-                    <TableHead>{t("Status")}</TableHead>
-                    <TableHead>{t("DealsSinceColumn")}</TableHead>
-                    <TableHead>{t("DealOwner")}</TableHead>
-                    {visible.some((row) => row.amountLabel !== null) && (
-                      <TableHead className="text-end">{t("Amount")}</TableHead>
-                    )}
-                    <TableHead>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="whitespace-nowrap">{t("DealsCustomerVehicleColumn")}</TableHead>
+                    <TableHead className="hidden whitespace-nowrap @4xl:table-cell">{t("DealsReasonColumn")}</TableHead>
+                    <TableHead className="whitespace-nowrap">{t("Status")}</TableHead>
+                    <TableHead className="hidden whitespace-nowrap @5xl:table-cell">
+                      {t("DealOwner")} · {t("DealsSinceColumn")}
+                    </TableHead>
+                    {showAmount && <TableHead className="whitespace-nowrap text-end">{t("Amount")}</TableHead>}
+                    <TableHead className="w-10">
                       <span className="sr-only">{t("OpenDealRow")}</span>
                     </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {visible.map((row) => (
-                    <TableRow key={row.key} data-testid={`deal-row-${row.key}`}>
-                      <TableCell>
+                    <TableRow
+                      key={row.key}
+                      data-testid={`deal-row-${row.key}`}
+                      className="group relative focus-within:bg-muted/50"
+                    >
+                      <TableCell className="py-3">
+                        <div className="flex items-center gap-3">
+                          <VehicleMark kind={row.kind} />
+                          <div className="min-w-0 max-w-[14rem] @4xl:max-w-[16rem] @6xl:max-w-[22rem]">
+                            <p dir="auto" className="truncate font-medium rtl:text-right">
+                              <bdi>{row.customerName}</bdi>
+                            </p>
+                            <p className="truncate text-xs text-muted-foreground">
+                              <bdi>{row.vehicleDesc}</bdi>
+                              {" · "}
+                              {t(row.kind === "CASH" ? "DealKindCash" : "DealKindFinanced")}
+                              {row.financierLabel && (
+                                <>
+                                  {" · "}
+                                  <bdi>{row.financierLabel}</bdi>
+                                </>
+                              )}
+                            </p>
+                            {row.reason && (
+                              <div className="mt-1 @4xl:hidden">
+                                <ReasonLine reason={row.reason} t={t} />
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell className="hidden @4xl:table-cell">
                         {row.reason ? (
-                          <span className="flex items-center gap-2 text-sm">
-                            <span className={cn("h-2 w-2 shrink-0 rounded-full", REASON_TONE[row.reason])} aria-hidden />
-                            {t(REASON_LABEL[row.reason])}
-                          </span>
+                          <ReasonLine reason={row.reason} t={t} />
                         ) : (
                           <span className="text-sm text-muted-foreground">—</span>
                         )}
                       </TableCell>
                       <TableCell>
-                        <p className="font-medium">
-                          <bdi>{row.customerName}</bdi>
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          <bdi>{row.vehicleDesc}</bdi>
-                        </p>
-                      </TableCell>
-                      <TableCell className="text-sm">
-                        {t(row.kind === "CASH" ? "DealKindCash" : "DealKindFinanced")}
-                        {row.financierLabel && (
-                          <span className="text-muted-foreground">
-                            {" · "}
-                            <bdi>{row.financierLabel}</bdi>
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className={statusClass(row.statusTone)}>
+                        <Badge variant="outline" className={cn("whitespace-nowrap", statusClass(row.statusTone))}>
                           {row.statusLabel}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        <bdi>{format(row.since, "d MMM yyyy")}</bdi>
+                      <TableCell className="hidden text-sm @5xl:table-cell">
+                        <p dir="auto" className="truncate rtl:text-right">
+                          <bdi>{row.salespersonName}</bdi>
+                        </p>
+                        <p className="whitespace-nowrap text-xs text-muted-foreground">
+                          <bdi>{formatLocalized(row.since, "d MMM yyyy", locale)}</bdi>
+                        </p>
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        <bdi>{row.salespersonName}</bdi>
-                      </TableCell>
-                      {visible.some((r) => r.amountLabel !== null) && (
-                        <TableCell className="text-end tabular-nums">
+                      {showAmount && (
+                        <TableCell className="whitespace-nowrap text-end font-medium tabular-nums">
                           {row.amountLabel ? <bdi dir="ltr">{row.amountLabel}</bdi> : ""}
                         </TableCell>
                       )}
                       <TableCell className="text-end">
-                        <Button variant="ghost" size="sm" asChild>
-                          <Link href={row.href} aria-label={`${t("OpenDealRow")}: ${row.customerName}`}>
-                            {t("OpenDealRow")}
-                            <ArrowUpRight className="h-4 w-4 ms-1.5 rtl:-scale-x-100" />
-                          </Link>
-                        </Button>
+                        {/* The row's one link; its overlay makes the whole row the target. */}
+                        <Link
+                          href={row.href}
+                          aria-label={`${t("OpenDealRow")}: ${row.customerName}`}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors after:absolute after:inset-0 after:content-[''] group-hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <ChevronRight className="h-4 w-4 rtl:-scale-x-100" aria-hidden />
+                        </Link>
                       </TableCell>
                     </TableRow>
                   ))}
