@@ -928,6 +928,12 @@ export default defineSchema({
       v.literal("SETTLE_COMMITMENT_AUTHORITY"),
       // SCRUM-239: a cleared finance-company disbursement cheque came back.
       v.literal("RETURN_FINANCE_DISBURSEMENT_CHEQUE"),
+      // SCRUM-693: the steps of unwinding a paid finance deal.
+      v.literal("DEAL_UNWIND_STARTED"),
+      v.literal("DEAL_UNWIND_FORWARD_RETURNED"),
+      v.literal("DEAL_UNWIND_REMITTANCE_REFUNDED"),
+      v.literal("DEAL_UNWIND_COMPLETED"),
+      v.literal("DEAL_UNWIND_ABANDONED"),
     ),
     resourceType: v.string(),
     resourceId: v.string(),
@@ -3447,6 +3453,75 @@ export default defineSchema({
     reversalActorId: v.optional(v.id("users")),
   })
     .index("by_org_application", ["orgId", "applicationId"]),
+
+  /**
+   * SCRUM-693: one server-owned unwind of a CLOSED, finance-company-paid deal.
+   * While a row is ACTIVE no other command may re-disburse, re-forward,
+   * re-register the expected payment, pay the commission or cancel the deal
+   * around it (`assertNoActiveDealUnwind`). Each money leg is recorded with its
+   * evidence only after its reversal is proven POSTED on the books.
+   */
+  dealUnwinds: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    saleId: v.id("sales"),
+    status: v.union(v.literal("ACTIVE"), v.literal("COMPLETED"), v.literal("ABANDONED")),
+    reason: v.string(),
+    startedBy: v.id("users"),
+    startedAt: v.number(),
+    // Snapshots taken at start; every later step refuses when they drifted.
+    remittanceVersion: v.number(),
+    remittanceMinor: v.number(),
+    remittanceMethod: v.union(v.literal("BANK_TRANSFER"), v.literal("CASH")),
+    forwardDueMinor: v.number(),
+    forwardReturn: v.optional(
+      v.object({
+        forwardId: v.optional(v.id("financeCompanyForwards")),
+        returnedAt: v.number(),
+        reference: v.string(),
+        recordedBy: v.id("users"),
+        recordedAt: v.number(),
+      })
+    ),
+    remittanceRefund: v.optional(
+      v.object({
+        method: v.union(v.literal("BANK_TRANSFER"), v.literal("CASH")),
+        refundedAt: v.number(),
+        bankReference: v.optional(v.string()),
+        voucherNumber: v.optional(v.string()),
+        recipientAcknowledged: v.optional(v.boolean()),
+        amountMinor: v.number(),
+        paymentId: v.id("canonicalPayments"),
+        reversedAllocationIds: v.array(v.id("paymentAllocations")),
+        // D5: REVERSED = the posted receipt journal was reversed; NOT_POSTED =
+        // it was only queued and the queued post was cancelled.
+        receiptReversal: v.union(v.literal("REVERSED"), v.literal("NOT_POSTED")),
+        recordedBy: v.id("users"),
+        recordedAt: v.number(),
+      })
+    ),
+    completion: v.optional(
+      v.object({
+        creditNoteReference: v.string(),
+        vehicleReturnedAt: v.number(),
+        vehicleReturnNote: v.string(),
+        customerPaymentDisposition: v.union(v.literal("REFUND"), v.literal("RETAIN_CREDIT")),
+        completedBy: v.id("users"),
+        completedAt: v.number(),
+      })
+    ),
+    abandonment: v.optional(
+      v.object({
+        reason: v.string(),
+        abandonedBy: v.id("users"),
+        abandonedAt: v.number(),
+      })
+    ),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org_application_status", ["orgId", "applicationId", "status"])
+    .index("by_org_sale_status", ["orgId", "saleId", "status"]),
 
   financeDealCustody: defineTable({
     orgId: v.id("organizations"),

@@ -301,6 +301,25 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     }
   });
 
+  it("SCRUM-693 deal-unwind refusals resolve to Arabic in ar and to the server's own text in en", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { DEAL_UNWIND_MESSAGES } = await import("../convex/utils/dealUnwindMessages");
+    const { AppErrorCode } = await import("../convex/utils/errors");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    // Derived from the server table so a new unwind refusal cannot ship untranslated.
+    const codes = Object.keys(DEAL_UNWIND_MESSAGES) as Array<keyof typeof DEAL_UNWIND_MESSAGES>;
+    expect(codes.length).toBe(28);
+    for (const code of codes) {
+      expect(Object.values(AppErrorCode)).toContain(code);
+      const error = new ConvexError({ code, message: DEAL_UNWIND_MESSAGES[code] });
+      const arText = getLocalizedErrorMessage(error, ar);
+      expect(arText).toMatch(/[؀-ۿ]/);
+      expect(arText).not.toBe(DEAL_UNWIND_MESSAGES[code]);
+      expect(getLocalizedErrorMessage(error, en)).toBe(DEAL_UNWIND_MESSAGES[code]);
+    }
+  });
+
   it("SCRUM-113 APPROVAL_VEHICLE_UNAVAILABLE resolves to its dictionary entry in ar and en", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;

@@ -27,6 +27,7 @@ import { assertValidAccountingDate } from "./accountingPeriods";
 import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
 import { isFcLineage, parseFaceAmountMinor, dealChequeCurrency, FC_CHEQUE_DEAL_NEXT_STEP, FC_RETURN_MESSAGES } from "./utils/fcCheque";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
 import {
   assertNoSaleIdOnNewReceivable,
   assertReceiptTargetNotSaleLinked,
@@ -2215,6 +2216,8 @@ export const replaceCheque = mutation({
       if (app.status === "CANCELLED") {
         throw new ConvexError("This cheque belongs to a cancelled finance deal and cannot be replaced.");
       }
+      // SCRUM-693: an unwind clears disbursedAt mid-flight; it alone owns the deal then.
+      await assertNoActiveDealUnwind(ctx, args.orgId, app._id);
       if (app.disbursedAt) {
         throw new ConvexError("This deal's disbursement is already confirmed, so its cheque cannot be replaced.");
       }
