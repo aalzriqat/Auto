@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
 import { REQUIRED_SYSTEM_KEYS } from "./utils/defaultChart";
 
@@ -57,10 +57,26 @@ function pendingEventSummary(event: PendingEventSummary): PendingEventSummary {
   };
 }
 
+const FAILURE_REASON_MAX_CHARS = 300;
+
+// A dead-lettered row's reason is what the last attempt recorded in
+// `lastError` (the enqueue-time `reason` is only why it was deferred). It is
+// truncated and never accompanied by the payload.
+function failedEventSummary(
+  event: PendingEventSummary & { lastError?: string }
+): PendingEventSummary {
+  const summary = pendingEventSummary(event);
+  const failure = event.lastError ?? event.reason;
+  return {
+    ...summary,
+    reason: failure === undefined ? undefined : failure.slice(0, FAILURE_REASON_MAX_CHARS),
+  };
+}
+
 export const status = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const firstAccount = await ctx.db
@@ -104,6 +120,21 @@ export const status = query({
       .take(11);
     const pendingEvents = pendingSample.slice(0, 10);
 
+    // SCRUM-226 — dead-lettered (FAILED) rows are invisible to the PENDING
+    // sample above, so the operator could never see or retry them. Same index,
+    // same bound; shown only to callers who can actually act on them
+    // (`retryFailed` requires MANAGE_FINANCE).
+    const canManageFinance =
+      isSystemOwnerRole(auth.role) || auth.role.permissions.includes(PERMISSIONS.MANAGE_FINANCE);
+    const failedSample = canManageFinance
+      ? await ctx.db
+          .query("pendingAccountingEvents")
+          .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "FAILED"))
+          .order("desc")
+          .take(11)
+      : [];
+    const failedEvents = failedSample.slice(0, 10);
+
     return {
       chartInitialized: firstAccount !== null,
       systemAccountsValid: missingSystemAccountKeys.length === 0,
@@ -112,6 +143,8 @@ export const status = query({
       recentPeriods: recentPeriods.map(periodSummary),
       pendingEvents: pendingEvents.map(pendingEventSummary),
       hasMorePendingEvents: pendingSample.length > pendingEvents.length,
+      failedEvents: failedEvents.map(failedEventSummary),
+      hasMoreFailedEvents: failedSample.length > failedEvents.length,
     };
   },
 });

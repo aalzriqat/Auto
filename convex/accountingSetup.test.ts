@@ -2,6 +2,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { REQUIRED_SYSTEM_KEYS } from "./utils/defaultChart";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
@@ -108,5 +109,84 @@ describe("accounting setup status", () => {
     expect(setupStatus.hasMorePendingEvents).toBe(true);
     expect("payload" in setupStatus.pendingEvents[0]).toBe(false);
     expect("lastError" in setupStatus.pendingEvents[0]).toBe(false);
+  });
+});
+
+describe("SCRUM-226 — dead-lettered outbox rows reach the operator", () => {
+  const failedRow = (orgId: Id<"organizations">, userId: Id<"users">, key: string, createdAt: number) => ({
+    orgId,
+    kind: "POST" as const,
+    status: "FAILED" as const,
+    idempotencyKey: key,
+    accountingDate: createdAt,
+    actorId: userId,
+    attempts: 10,
+    lastError: "chart of accounts was not initialized",
+    createdAt,
+    eventType: "EXPENSE_POSTED",
+    sourceType: "expenses",
+    sourceId: key,
+    eventVersion: 1,
+    occurredAt: createdAt,
+    currency: "JOD",
+    payload: { internalAmountMinor: 123_000 },
+  });
+
+  test("a FAILED row is exposed with its failure reason, without the payload", async () => {
+    const { t, orgId, userId, asUser } = await seedAccountingSetupDealer();
+    const now = Date.now();
+    await t.run((ctx) => ctx.db.insert("pendingAccountingEvents", failedRow(orgId, userId, "dead_1", now)));
+
+    const setupStatus = await asUser.query(api.accountingSetup.status, { orgId });
+
+    expect(setupStatus.failedEvents).toHaveLength(1);
+    expect(setupStatus.failedEvents[0].status).toBe("FAILED");
+    expect(setupStatus.failedEvents[0].reason).toBe("chart of accounts was not initialized");
+    expect(setupStatus.hasMoreFailedEvents).toBe(false);
+    expect("payload" in setupStatus.failedEvents[0]).toBe(false);
+    expect("lastError" in setupStatus.failedEvents[0]).toBe(false);
+  });
+
+  test("the FAILED sample is bounded and reports overflow", async () => {
+    const { t, orgId, userId, asUser } = await seedAccountingSetupDealer();
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 12; i++) {
+        await ctx.db.insert("pendingAccountingEvents", failedRow(orgId, userId, `dead_${i}`, now + i));
+      }
+    });
+
+    const setupStatus = await asUser.query(api.accountingSetup.status, { orgId });
+
+    expect(setupStatus.failedEvents).toHaveLength(10);
+    expect(setupStatus.hasMoreFailedEvents).toBe(true);
+  });
+
+  test("another organization's FAILED rows are never exposed", async () => {
+    const { t, orgId, asUser } = await seedAccountingSetupDealer();
+    const other = await seedAccountingSetupDealer();
+    await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", failedRow(orgId, other.userId, "mine", Date.now()))
+    );
+    const otherStatus = await other.asUser.query(api.accountingSetup.status, { orgId: other.orgId });
+    expect(otherStatus.failedEvents).toEqual([]);
+    expect((await asUser.query(api.accountingSetup.status, { orgId })).failedEvents).toHaveLength(1);
+  });
+
+  test("a view-only user sees no FAILED rows (retry is MANAGE_FINANCE)", async () => {
+    const { t, orgId, userId } = await seedAccountingSetupDealer();
+    const viewerUser = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "viewer_only", email: "v@example.com", name: "Viewer" })
+    );
+    const viewerRole = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "Finance Viewer", permissions: ["view:finance"] })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: viewerUser, roleId: viewerRole }));
+    await t.run((ctx) => ctx.db.insert("pendingAccountingEvents", failedRow(orgId, userId, "dead_v", Date.now())));
+
+    const viewer = t.withIdentity({ subject: "viewer_only", clerkId: "viewer_only" });
+    const setupStatus = await viewer.query(api.accountingSetup.status, { orgId });
+
+    expect(setupStatus.failedEvents).toEqual([]);
   });
 });

@@ -47,11 +47,24 @@ export function PendingAccountingEventsTable({
               <AccountingEmptyRow colSpan={canManageFinance && onRetry ? 6 : 5} label={t("NoPendingAccountingEvents")} />
             ) : (
               events.map((event) => {
-                const isFailed = event.status === "FAILED" || event.attempts > 0;
+                // Only a dead-lettered row can be retried; a PENDING row with
+                // attempts is still in flight and the server refuses it.
+                const isFailed = event.status === "FAILED";
                 const busy = busyAction === `retry_${event._id}`;
                 return (
                   <TableRow key={event._id}>
-                    <TableCell className="font-medium">{eventLabel(event)}</TableCell>
+                    <TableCell className="font-medium">
+                      {eventLabel(event)}{" "}
+                      <span
+                        className={
+                          isFailed
+                            ? "ms-1 rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive"
+                            : "ms-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
+                        }
+                      >
+                        {isFailed ? t("AccountingEventStatusFailed" as any) : t("AccountingEventStatusPending" as any)}
+                      </span>
+                    </TableCell>
                     <TableCell>
                       {event.sourceType}: {event.sourceId}
                     </TableCell>
@@ -68,7 +81,7 @@ export function PendingAccountingEventsTable({
                             variant="outline"
                             disabled={busy}
                             onClick={() => {
-                              if (window.confirm(t("ConfirmRetryOutbox" as any))) {
+                              if (window.confirm(t("ConfirmRetryFailedOutbox" as any))) {
                                 onRetry(event._id);
                               }
                             }}

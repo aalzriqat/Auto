@@ -259,8 +259,8 @@ export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: Accountin
 
       {showClose && (
       <PendingAccountingEventsTable
-        events={setupStatus.pendingEvents}
-        hasMore={setupStatus.hasMorePendingEvents}
+        events={[...(setupStatus.failedEvents ?? []), ...setupStatus.pendingEvents]}
+        hasMore={setupStatus.hasMorePendingEvents || (setupStatus.hasMoreFailedEvents ?? false)}
         canManageFinance={canManageFinance}
         busyAction={busyAction}
         t={t}
