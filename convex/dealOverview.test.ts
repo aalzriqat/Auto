@@ -884,6 +884,30 @@ describe("dealOverview.financedDealOverview", () => {
       expect(view!.financialSummary!.profit).toEqual({ available: false, reason: "ExecutionFeeUnclassified" });
     });
 
+    // Opus L1: an AMBIGUOUS binding (a linked line that is no longer a
+    // compatible fee) withholds the outlay exactly like an aggregate conflict.
+    test("an ambiguous binding withholds the expected outlay", async () => {
+      const { s, applicationId } = await pntrShaped("amb");
+      await s.t.run((ctx) => ctx.db.patch(applicationId, { estimatedDealerBorneExpensesMinor: 700_000 }));
+      const feeId = await s.asOwner.mutation(api.financeDealCosts.recordExecutionFeeActual, {
+        orgId: s.orgId,
+        applicationId,
+        actualAmountMinor: 700_000,
+        expectedCurrency: "JOD",
+        paidBy: "DEALER",
+        idempotencyKey: "exec-fee-amb-1",
+      });
+      await s.t.run((ctx) => ctx.db.patch(feeId, { deductedFromSettlement: true }));
+      const costs = await s.asOwner.query(api.financeDealCosts.listDealCosts, { orgId: s.orgId, applicationId });
+      expect(costs.executionFee).toMatchObject({ boundFeeId: null, withheld: true });
+      const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      expect(view!.financialSummary!.dealerOutlay).toMatchObject({
+        expectedCostsRemainingMinor: null,
+        expectedCostsReason: "EXECUTION_FEE_UNCLASSIFIED",
+        totalExpectedMinor: null,
+      });
+    });
+
     test("control: an aggregate equal to the fee still states the outlay", async () => {
       const { s, applicationId } = await pntrShaped("e");
       await s.t.run((ctx) => ctx.db.patch(applicationId, { estimatedDealerBorneExpensesMinor: 700_000 }));
