@@ -110,7 +110,9 @@ describe("VehiclePicker availability copy (ruling c22077)", () => {
     expect(ar.PickerHeldForDeal).toBe("محجوزة لصفقة");
     expect(ar.PickerAvailabilityUnverified).toBe("تعذّر التحقق من إتاحتها");
     expect(ar.PickerAvailabilityNote).toBe("يمكنك إعداد عرض سعر لهذه السيارة؛ تُتحقّق إتاحتها عند إتمام البيع.");
-    expect(ar.ReservedQuoteWarning).toBeTruthy();
-    expect(ar.ReservedQuoteWarning).not.toBe(en.ReservedQuoteWarning);
+    // Codex B-01: HELD can be an AVAILABLE car under a finance-only hold, so the note says "held", never "reserved".
+    expect(en.ReservedQuoteWarning).toMatch(/^This car is held for a deal, possibly another one\./);
+    expect(en.ReservedQuoteWarning).not.toMatch(/reserved/i);
+    expect(ar.ReservedQuoteWarning).toMatch(/^هذه السيارة محجوزة لصفقة، وقد تكون صفقة أخرى\./);
   });
 });
