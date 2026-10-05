@@ -4,12 +4,17 @@ import { callJev } from "../../scripts/intelligence/jevImpact.mjs";
 import {
   baselineValue,
   classifyErrorToast,
+  clip,
+  findDocument,
   hostileValue,
   judge,
   kindOf,
   markupScriptRan,
   phonePair,
+  readBackOf,
   rulesFor,
+  submissionsToReadBack,
+  summarizeReadBack,
   type Attempt,
   type Field,
   type Outcome,
@@ -78,6 +83,12 @@ type FormSpec = {
   title: RegExp;
   submit: RegExp;
   success: RegExp;
+  /**
+   * The `<route>:create` argument behind each typable field, by its
+   * discovered label. A field missing here is read back as "unmapped": its
+   * value's path is never inferred from where the value turns up (Codex F614-1).
+   */
+  argKeys: Record<string, string>;
   /** Fills required controls the explorer cannot type into (pickers). */
   /** Resolves true when set, or the reason it could not be. */
   prepare?: (dialog: Locator, page: Page) => Promise<true | string>;
@@ -91,6 +102,16 @@ const FORMS: FormSpec[] = [
     title: /^Add Customer$/,
     submit: /^Add Customer$/,
     success: /Customer added successfully/,
+    // CustomerDialog → customers:create (convex/customers.ts create args).
+    argKeys: {
+      "First Name *": "firstName",
+      "Last Name *": "lastName",
+      Email: "email",
+      Phone: "phone",
+      WhatsApp: "whatsapp",
+      "National ID / Passport": "nationalId",
+      Address: "address",
+    },
   },
   {
     id: "task",
@@ -99,6 +120,8 @@ const FORMS: FormSpec[] = [
     title: /^Create Task$/,
     submit: /^Create Task$/,
     success: /Task created successfully/,
+    // tasks:create's only free-text arguments (convex/tasks.ts create args).
+    argKeys: { "Task Title *": "title", "Description / Notes": "description" },
     // The form defaults the due date to now, and the 5-minute alarm cron then
     // notifies and emails the assignee (convex/crons.ts runTriggerAlarms).
     // Two years out, a disposable preview never reaches it (Codex F614-03).
@@ -120,6 +143,8 @@ const FORMS: FormSpec[] = [
     title: /^Add Lead$/,
     submit: /^Add Lead$/,
     success: /Lead added successfully/,
+    // leads:create's only free-text argument (convex/leads.ts create args).
+    argKeys: { Notes: "notes" },
     // The customer picker is required: choose the customer this run seeded,
     // never a record another lane created.
     prepare: async (dialog) => {
@@ -158,6 +183,8 @@ const WRITES_ON_VIEW = /\/(messages|notifications|social-inbox)(\/|$|\?)/;
 const DUPLICATE_WARNING = /already exists|already has an open lead|موجود|مسجل مسبق/i;
 
 type Candidate = { form: FormSpec; field: Field; rule: Rule };
+/** Which save of an attempt: dup-variant's seed, exact control and variant, or a plain attempt. */
+type Submission = "attempt" | "seed" | "control" | "variant";
 type Record_ = {
   n: number;
   form: string;
@@ -165,6 +192,12 @@ type Record_ = {
   rule: Rule;
   outcome: Outcome;
   verdict: Verdict;
+  /** The hostile value typed into the field (clipped) and its full length. */
+  input?: { value: unknown; length: number };
+  /** What the explorer did, in order. */
+  steps: string[];
+  /** Typed → sent → persisted, one per saved submission (dup-variant can save up to three). */
+  readBacks?: ({ submission: Submission; tag: string } & ReturnType<typeof summarizeReadBack>)[];
   toast?: string;
   screenshot?: string;
 };
@@ -200,7 +233,8 @@ const RULE_TEXT: Record<Rule, string> = {
   "dup-variant": "an existing phone number again but in +962 international format instead of 07 local format",
 };
 
-const jevStats = { pickAsked: 0, pickAnswered: 0 };
+/** Jev's use in this run: calls, answers, and the token usage it reported. */
+const jevStats = { pickAsked: 0, pickAnswered: 0, model: undefined as string | undefined, inputTokens: 0, outputTokens: 0, usageMissing: 0, latencyMs: 0 };
 
 /** Jev's suggestion of which candidate to try next, or undefined. Never a verdict. */
 async function jevPick(cands: Candidate[]): Promise<number | undefined> {
@@ -215,10 +249,22 @@ async function jevPick(cands: Candidate[]): Promise<number | undefined> {
     };
   });
   jevStats.pickAsked++;
+  const startedAt = Date.now();
   try {
     const res = (await callJev({ apiKey, state: { form: cands[0]?.form.id }, questions })) as {
       answers?: Record<string, { noul?: number }>;
+      model?: unknown;
+      usage?: { input_tokens?: unknown; output_tokens?: unknown };
     };
+    jevStats.latencyMs += Date.now() - startedAt;
+    if (typeof res.model === "string") jevStats.model = res.model.slice(0, 80);
+    const { input_tokens: inTok, output_tokens: outTok } = res.usage ?? {};
+    if (Number.isSafeInteger(inTok) && Number.isSafeInteger(outTok)) {
+      jevStats.inputTokens += inTok as number;
+      jevStats.outputTokens += outTok as number;
+    } else {
+      jevStats.usageMissing++; // counted, never guessed
+    }
     let best = -1;
     let bestScore = -1;
     for (const [k, v] of Object.entries(res.answers ?? {})) {
@@ -231,6 +277,7 @@ async function jevPick(cands: Candidate[]): Promise<number | undefined> {
     if (best >= 0) jevStats.pickAnswered++;
     return best >= 0 ? best : undefined;
   } catch {
+    jevStats.latencyMs += Date.now() - startedAt;
     return undefined; // a Jev outage only removes the suggestion (SCRUM-360)
   }
 }
@@ -256,9 +303,22 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
     // id comes from customers.create's answer, and each lead save is checked
     // against it (Codex F614-05).
     const mutations: SentMutation[] = [];
+    // The current value of every query the page subscribes to, so a saved
+    // record can be read back as the server returned it (SCRUM-614 2/3).
+    const queries = new Map<string, unknown>();
+    const applyTransition = (socket: number, m: Record<string, unknown>) => {
+      for (const mod of (m.modifications as Record<string, unknown>[] | undefined) ?? []) {
+        const key = `${socket}:${String(mod.queryId)}`;
+        if (mod.type === "QueryUpdated") queries.set(key, mod.value);
+        else queries.delete(key);
+      }
+    };
     page.on("websocket", (ws) => {
+      const socket = sockets.length;
       sockets.push(ws.url());
       const byRequest = new Map<unknown, SentMutation>();
+      // A large transition arrives split into chunks.
+      const chunks = new Map<unknown, string[]>();
       ws.on("framesent", (f) => {
         const m = parseFrame(f.payload);
         if (m?.type !== "Mutation" || typeof m.udfPath !== "string") return;
@@ -268,8 +328,23 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       });
       ws.on("framereceived", (f) => {
         const m = parseFrame(f.payload);
+        if (m?.type === "Transition") applyTransition(socket, m);
+        if (m?.type === "TransitionChunk" && typeof m.chunk === "string") {
+          const parts = chunks.get(m.transitionId) ?? [];
+          parts[Number(m.partNumber)] = m.chunk;
+          chunks.set(m.transitionId, parts);
+          if (parts.filter((p) => p !== undefined).length === Number(m.totalParts)) {
+            chunks.delete(m.transitionId);
+            const whole = parseFrame(parts.join(""));
+            if (whole?.type === "Transition") applyTransition(socket, whole);
+          }
+        }
         const sent = m?.type === "MutationResponse" && m.success === true ? byRequest.get(m.requestId) : undefined;
         if (sent) Object.assign(sent, { ok: true, result: m?.result });
+      });
+      // A closed socket's queries are no longer kept current: drop them.
+      ws.on("close", () => {
+        for (const key of [...queries.keys()]) if (key.startsWith(`${socket}:`)) queries.delete(key);
       });
     });
     const attestation = await attest(page, baseURL, sockets);
@@ -409,19 +484,33 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
     // One fresh record per attempt: fill required fields with valid values,
     // the target field with the hostile one, save, judge.
     let slot = 0;
+    /** The current attempt's step list; reset at the start of each attempt. */
+    let steps: string[] = [];
     async function attemptOnce(
       c: Candidate,
       fields: Field[],
       override?: { label: string; value: string },
-    ): Promise<{ outcome: Outcome; toast?: string; warned: boolean; tag: string; value?: string; dialog?: Locator; setupFailed?: string }> {
+    ): Promise<{
+      outcome: Outcome;
+      toast?: string;
+      warned: boolean;
+      tag: string;
+      value?: string;
+      dialog?: Locator;
+      setupFailed?: string;
+      /** The create mutation this save sent, when exactly one was sent. */
+      created?: { args: Record<string, unknown> | undefined; id: unknown };
+    }> {
       const tag = `${RUN}${(++slot).toString().padStart(2, "0")}`;
       // A failure of the explorer's own setup says nothing about the app:
       // it is reported as inconclusive, never as "Save did nothing".
+      steps.push(`open ${c.form.id} form (${tag})`);
       const dialog = await openForm(c.form);
       if (!dialog) return { outcome: "ignored", warned: false, tag, setupFailed: "form did not open" };
       const prepared = c.form.prepare
         ? await c.form.prepare(dialog, page).catch((e: unknown) => String(e instanceof Error ? e.message : e).split("\n")[0])
         : true;
+      if (c.form.prepare) steps.push(`set pickers: ${prepared === true ? "done" : prepared}`);
       if (prepared !== true) {
         await closeDialog(dialog);
         return { outcome: "ignored", warned: false, tag, setupFailed: `could not set the form's pickers: ${prepared}` };
@@ -434,7 +523,9 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
         for (const f of fields) if (!f.required && f.kind === "text") values.set(f.label, baselineValue(f.kind, tag, 0));
       }
       const value = override?.value ?? hostileValue(c.rule, tag);
-      values.set(override?.label ?? c.field.label, value);
+      const target = override?.label ?? c.field.label;
+      values.set(target, value);
+      steps.push(`fill ${target} = ${JSON.stringify(clip(value, 80))}; ${values.size - 1} other field(s) with valid values`);
       try {
         await fill(dialog, fields, values);
       } catch (error) {
@@ -444,9 +535,24 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       // The duplicate check is debounced: give its warning up to 1.5s to show.
       await appeared(dialog.getByText(DUPLICATE_WARNING).first(), 1_500);
       const warned = DUPLICATE_WARNING.test(await dialog.innerText().catch(() => ""));
+      if (warned) steps.push("duplicate warning shown before Save");
+      const mark = mutations.length;
       const res = await submit(c.form, dialog);
-      return { ...res, warned, tag, value, dialog };
+      steps.push(`Save → ${res.outcome}${res.toast ? ` ("${res.toast.slice(0, 80)}")` : ""}`);
+      const creates = mutations.slice(mark).filter((m) => m.udfPath === `${c.form.route}:create`);
+      const created = creates.length === 1 ? { args: creates[0].args, id: creates[0].ok ? creates[0].result : undefined } : undefined;
+      if (creates.length > 1) steps.push(`${creates.length} ${c.form.route}:create mutations sent for one Save`);
+      return { ...res, warned, tag, value, dialog, created };
     }
+
+    /** The server's own copy of a record, from any query the page holds. */
+    const docFromQueries = (id: string) => {
+      for (const v of queries.values()) {
+        const doc = findDocument(v, id);
+        if (doc) return doc;
+      }
+      return undefined;
+    };
 
     const random = rng(SEED);
     const records: Record_[] = [];
@@ -467,6 +573,12 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
             findings: records.filter((r) => r.verdict.kind === "finding").length,
             advisories: records.filter((r) => r.verdict.kind === "advisory").length,
             inconclusive: records.filter((r) => r.verdict.kind === "inconclusive").length,
+            // How far each saved submission's value was traced: the acceptance
+            // floor is every saved submission at "server-document".
+            readBack: records.reduce<Record<string, number>>((acc, r) => {
+              for (const rb of r.readBacks ?? []) acc[rb.source] = (acc[rb.source] ?? 0) + 1;
+              return acc;
+            }, {}),
           },
           records,
         },
@@ -530,16 +642,18 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
     );
 
     for (let n = 1; n <= MAX_ATTEMPTS && pool.length > 0; n++) {
-      const picked = (await jevPick(pool)) ?? 0;
+      const suggestion = await jevPick(pool);
+      const picked = suggestion ?? 0;
       const c = pool[Math.min(picked, pool.length - 1)];
       pool = pool.filter((p) => p !== c);
+      steps = [`pick ${c.form.id}:${c.field.label}:${c.rule} (${suggestion === undefined ? "no Jev answer: next in seeded order" : `Jev's pick, candidate ${suggestion}`})`];
       const fields = fieldsByForm.get(c.form.id) ?? [];
       const attemptMark = mutations.length;
-      // The outcome of each submission this attempt makes (dup-variant makes up to three).
-      const submissions: string[] = [];
-      const tracked = async (...args: Parameters<typeof attemptOnce>) => {
+      // Each submission this attempt makes (dup-variant makes up to three).
+      const submissions: ({ role: Submission } & Awaited<ReturnType<typeof attemptOnce>>)[] = [];
+      const tracked = async (role: Submission, ...args: Parameters<typeof attemptOnce>) => {
         const r = await attemptOnce(...args);
-        submissions.push(r.outcome);
+        submissions.push({ role, ...r });
         return r;
       };
       let a: Attempt;
@@ -550,7 +664,7 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
         // Seed a record with a local-format number, retry it exactly (the
         // control: is this field policed at all?), then in +962 format.
         const pair = phonePair(Date.now() % 10_000_000);
-        const seeded = await tracked(c, fields, { label: c.field.label, value: pair.local });
+        const seeded = await tracked("seed", c, fields, { label: c.field.label, value: pair.local });
         if (seeded.dialog) await closeDialog(seeded.dialog);
         if (seeded.setupFailed) {
           a = { rule: c.rule, field: c.field, outcome: seeded.outcome };
@@ -560,9 +674,9 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
           a = { rule: c.rule, field: c.field, outcome: seeded.outcome, toast: seeded.toast };
           last = seeded;
         } else {
-          const control = await tracked({ ...c, rule: "dup-exact" }, fields, { label: c.field.label, value: pair.local });
+          const control = await tracked("control", { ...c, rule: "dup-exact" }, fields, { label: c.field.label, value: pair.local });
           if (control.dialog) await closeDialog(control.dialog);
-          last = await tracked(c, fields, { label: c.field.label, value: pair.intl });
+          last = await tracked("variant", c, fields, { label: c.field.label, value: pair.intl });
           setupFailed = control.setupFailed ?? last.setupFailed;
           a = {
             rule: c.rule,
@@ -574,7 +688,7 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
           };
         }
       } else {
-        last = await tracked(c, fields);
+        last = await tracked("attempt", c, fields);
         setupFailed = last.setupFailed;
         a = { rule: c.rule, field: c.field, outcome: last.outcome, toast: last.toast, warned: last.warned };
       }
@@ -585,7 +699,7 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       // leads:create of its own behind it. The check is never vacuous.
       checkLeadCustomers();
       if (c.form.id === "lead") {
-        const saved = submissions.filter((o) => o === "accepted" || o === "accepted-silent").length;
+        const saved = submissions.filter((s) => s.outcome === "accepted" || s.outcome === "accepted-silent").length;
         const confirmed = mutations
           .slice(attemptMark)
           .filter((m) => m.udfPath === "leads:create" && m.ok && m.args?.customerId === seedId).length;
@@ -596,8 +710,52 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
         leadSavesConfirmed += confirmed;
       }
 
+      // Each list is searched at most once per tag per attempt; markup and the
+      // server read-back share the visit.
+      const listTexts = new Map<string, string | undefined>();
+      const listFor = async (tag: string) => {
+        if (!listTexts.has(tag)) {
+          const text = await readBack(c.form, tag);
+          listTexts.set(tag, text);
+          steps.push(`search the ${c.form.route} list for ${tag}: ${text === undefined ? "row not found" : "row found"}`);
+        }
+        return listTexts.get(tag);
+      };
+      const readList = () => listFor(last.tag);
+
+      // Every saved submission is read back as the server stored it (Codex
+      // F614-2): the create mutation's id, then that document in a query the
+      // page holds. If no query holds it yet, searching the list for the
+      // submission's tag subscribes one. The argument comes from the form's
+      // reviewed map, never from where the value turns up (Codex F614-1).
+      const readBackAll = async () => {
+        const out: NonNullable<Record_["readBacks"]> = [];
+        let lastRb: ReturnType<typeof readBackOf> | undefined;
+        for (const s of submissionsToReadBack(submissions)) {
+          const id = s.created?.id;
+          if (s.outcome !== "accepted" && s.outcome !== "accepted-silent") {
+            steps.push(`${s.role} ${s.tag}: the server confirmed the create although the UI reported ${s.outcome}`);
+          }
+          let doc = typeof id === "string" ? docFromQueries(id) : undefined;
+          if (!doc && typeof id === "string") {
+            await listFor(s.tag);
+            for (let i = 0; i < 12 && !doc; i++) {
+              await page.waitForTimeout(250);
+              doc = docFromQueries(id);
+            }
+          }
+          const rb = readBackOf({ typed: s.value, args: s.created?.args, id, doc, expectedKey: c.form.argKeys[c.field.label] });
+          out.push({ submission: s.role, tag: s.tag, ...summarizeReadBack(s.value, rb) });
+          steps.push(`read back ${s.role} ${s.tag}: ${rb.source}${rb.key ? ` (${rb.key})` : ""}${rb.observedKey ? `, value found under ${rb.observedKey}` : ""}`);
+          if (s.tag === last.tag) lastRb = rb;
+        }
+        return { readBacks: out.length ? out : undefined, lastRb };
+      };
+
       if (setupFailed) {
         if (last.dialog) await closeDialog(last.dialog);
+        // A seed saved before a later step failed is still traced.
+        const { readBacks } = await readBackAll();
         records.push({
           n,
           form: c.form.id,
@@ -605,6 +763,9 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
           rule: c.rule,
           outcome: a.outcome,
           verdict: { kind: "inconclusive", check: "setup", reason: `${c.field.label} (${c.rule}): ${setupFailed}` },
+          input: last.value === undefined ? undefined : { value: clip(last.value), length: last.value.length },
+          steps,
+          readBacks,
         });
         saveReport();
         continue;
@@ -622,13 +783,6 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       // found through the tagged name, so its text cannot prove or disprove
       // the round-trip: leave it unread (inconclusive), never "mangled".
       const shownInList = c.field.kind === "name" || c.field.kind === "title";
-      if (c.rule === "unicode" && saved) {
-        const readBackText = await readBack(c.form, last.tag);
-        if (shownInList) {
-          a.readBack = readBackText;
-          a.expected = last.value;
-        }
-      }
       if (c.rule === "markup") {
         // onerror fires only after the image request fails, so each reading
         // waits up to 2s for the detector instead of sampling it at once.
@@ -643,9 +797,26 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
         // echoing the value, say) would otherwise be lost.
         const ranBefore = await ranWithin2s();
         const readBackDone = saved && !ranBefore;
-        const readBackText = readBackDone ? await readBack(c.form, last.tag) : undefined;
+        const readBackText = readBackDone ? await readList() : undefined;
         const ranAfter = readBackDone && (await ranWithin2s());
         a.scriptRan = markupScriptRan({ ranBefore, ranAfter, saved, rendered: shownInList && readBackText !== undefined });
+        steps.push(`markup detector: ran before read-back ${ranBefore}, after ${ranAfter}, rendered in list ${shownInList && readBackText !== undefined}`);
+      }
+
+      const { readBacks, lastRb } = await readBackAll();
+      // The server's copy decides a unicode round-trip, by exact equality; the
+      // list text is the fallback, by containment, and only for fields the
+      // list shows (Codex F614-3).
+      if (c.rule === "unicode" && saved && last.value !== undefined) {
+        if (lastRb?.source === "server-document" && typeof lastRb.persisted === "string") {
+          a.readBack = lastRb.persisted;
+          a.readBackFrom = "server-document";
+          a.expected = last.value;
+        } else if (shownInList) {
+          a.readBack = await readList();
+          a.readBackFrom = "list";
+          a.expected = last.value;
+        }
       }
 
       const verdict = judge(a);
@@ -653,7 +824,19 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
         shot = test.info().outputPath(`finding-${n}-${c.form.id}-${c.rule}.png`);
         await page.screenshot({ path: shot, fullPage: true });
       }
-      records.push({ n, form: c.form.id, field: c.field.label, rule: c.rule, outcome: a.outcome, verdict, toast: a.toast?.slice(0, 300), screenshot: shot });
+      records.push({
+        n,
+        form: c.form.id,
+        field: c.field.label,
+        rule: c.rule,
+        outcome: a.outcome,
+        verdict,
+        input: last.value === undefined ? undefined : { value: clip(last.value), length: last.value.length },
+        steps,
+        readBacks,
+        toast: a.toast?.slice(0, 300),
+        screenshot: shot,
+      });
       saveReport();
     }
 
