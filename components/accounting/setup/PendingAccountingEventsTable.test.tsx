@@ -6,7 +6,7 @@ import type { PendingEventSummary } from "./types";
 
 afterEach(cleanup);
 
-const event = (id: string, status: string, attempts: number): PendingEventSummary => ({
+const event = (id: string, status: string, attempts: number, retryable?: boolean): PendingEventSummary => ({
   _id: id as Id<"pendingAccountingEvents">,
   kind: "POST",
   status,
@@ -17,23 +17,22 @@ const event = (id: string, status: string, attempts: number): PendingEventSummar
   attempts,
   createdAt: 1,
   reason: `reason_${id}`,
+  retryable,
 });
 
 const t = (key: string) => key;
 
-describe("SCRUM-226 — Retry is offered only on FAILED rows", () => {
+function renderTable(events: PendingEventSummary[], onRetry = vi.fn()) {
+  render(
+    <PendingAccountingEventsTable events={events} hasMore={false} canManageFinance t={t as never} onRetry={onRetry} />
+  );
+  return onRetry;
+}
+
+describe("SCRUM-226 — Retry is offered only on retryable FAILED rows", () => {
   test("FAILED gets a Retry button; PENDING with attempts>0 does not", () => {
-    const onRetry = vi.fn();
     vi.spyOn(window, "confirm").mockReturnValue(true);
-    render(
-      <PendingAccountingEventsTable
-        events={[event("dead", "FAILED", 10), event("flaky", "PENDING", 3)]}
-        hasMore={false}
-        canManageFinance
-        t={t as never}
-        onRetry={onRetry}
-      />
-    );
+    const onRetry = renderTable([event("dead", "FAILED", 10, true), event("flaky", "PENDING", 3)]);
 
     const buttons = screen.getAllByRole("button", { name: /RetryEvent/ });
     expect(buttons).toHaveLength(1);
@@ -43,16 +42,16 @@ describe("SCRUM-226 — Retry is offered only on FAILED rows", () => {
     expect(onRetry).toHaveBeenCalledWith("dead");
   });
 
+  test("a FAILED row the server says is not retryable (retired posting) has no Retry button", () => {
+    renderTable([event("retired", "FAILED", 10, false)]);
+
+    expect(screen.getByText("EVT_retired")).toBeTruthy();
+    expect(screen.queryAllByRole("button", { name: /RetryEvent/ })).toHaveLength(0);
+  });
+
   test("FAILED and PENDING rows are visibly labelled differently", () => {
-    render(
-      <PendingAccountingEventsTable
-        events={[event("dead", "FAILED", 10), event("flaky", "PENDING", 3)]}
-        hasMore={false}
-        canManageFinance
-        t={t as never}
-        onRetry={vi.fn()}
-      />
-    );
+    renderTable([event("dead", "FAILED", 10, true), event("flaky", "PENDING", 3)]);
+
     expect(screen.getByText("AccountingEventStatusFailed")).toBeTruthy();
     expect(screen.getByText("AccountingEventStatusPending")).toBeTruthy();
   });

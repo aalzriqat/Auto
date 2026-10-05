@@ -113,76 +113,101 @@ describe("accounting setup status", () => {
 });
 
 describe("SCRUM-226 — dead-lettered outbox rows reach the operator", () => {
-  const failedRow = (orgId: Id<"organizations">, userId: Id<"users">, key: string, createdAt: number) => ({
-    orgId,
-    kind: "POST" as const,
-    status: "FAILED" as const,
-    idempotencyKey: key,
-    accountingDate: createdAt,
-    actorId: userId,
-    attempts: 10,
-    lastError: "chart of accounts was not initialized",
-    createdAt,
-    eventType: "EXPENSE_POSTED",
-    sourceType: "expenses",
-    sourceId: key,
-    eventVersion: 1,
-    occurredAt: createdAt,
-    currency: "JOD",
-    payload: { internalAmountMinor: 123_000 },
-  });
+  type Seed = Awaited<ReturnType<typeof seedAccountingSetupDealer>>;
+
+  async function insertFailed(
+    seed: Pick<Seed, "t" | "orgId" | "userId">,
+    key: string,
+    createdAt = Date.now(),
+    overrides: { kind?: "POST" | "REVERSE"; eventType?: string; sourceType?: string } = {}
+  ) {
+    const { t, orgId, userId } = seed;
+    return t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId,
+        kind: overrides.kind ?? "POST",
+        status: "FAILED",
+        idempotencyKey: key,
+        accountingDate: createdAt,
+        actorId: userId,
+        attempts: 10,
+        lastError: "chart of accounts was not initialized",
+        createdAt,
+        eventType: overrides.eventType ?? "EXPENSE_POSTED",
+        sourceType: overrides.sourceType ?? "expenses",
+        sourceId: key,
+        eventVersion: 1,
+        occurredAt: createdAt,
+        currency: "JOD",
+        payload: { internalAmountMinor: 123_000 },
+      })
+    );
+  }
 
   test("a FAILED row is exposed with its failure reason, without the payload", async () => {
-    const { t, orgId, userId, asUser } = await seedAccountingSetupDealer();
-    const now = Date.now();
-    await t.run((ctx) => ctx.db.insert("pendingAccountingEvents", failedRow(orgId, userId, "dead_1", now)));
+    const seed = await seedAccountingSetupDealer();
+    await insertFailed(seed, "dead_1");
 
-    const setupStatus = await asUser.query(api.accountingSetup.status, { orgId });
+    const setupStatus = await seed.asUser.query(api.accountingSetup.status, { orgId: seed.orgId });
 
     expect(setupStatus.failedEvents).toHaveLength(1);
     expect(setupStatus.failedEvents[0].status).toBe("FAILED");
     expect(setupStatus.failedEvents[0].reason).toBe("chart of accounts was not initialized");
+    expect(setupStatus.failedEvents[0].retryable).toBe(true);
     expect(setupStatus.hasMoreFailedEvents).toBe(false);
     expect("payload" in setupStatus.failedEvents[0]).toBe(false);
     expect("lastError" in setupStatus.failedEvents[0]).toBe(false);
   });
 
-  test("the FAILED sample is bounded and reports overflow", async () => {
-    const { t, orgId, userId, asUser } = await seedAccountingSetupDealer();
-    const now = Date.now();
-    await t.run(async (ctx) => {
-      for (let i = 0; i < 12; i++) {
-        await ctx.db.insert("pendingAccountingEvents", failedRow(orgId, userId, `dead_${i}`, now + i));
-      }
+  test("a FAILED row for a retired posting is not retryable (reviveFailedEntry refuses it)", async () => {
+    const seed = await seedAccountingSetupDealer();
+    await insertFailed(seed, "retired_1", Date.now(), {
+      eventType: "COLLECTION_PAYMENT",
+      sourceType: "transactions",
+    });
+    // A REVERSE row of the same retired family is exempt, exactly as in the revive path.
+    await insertFailed(seed, "retired_rev", Date.now() + 1, {
+      kind: "REVERSE",
+      eventType: "COLLECTION_PAYMENT",
+      sourceType: "transactions",
     });
 
-    const setupStatus = await asUser.query(api.accountingSetup.status, { orgId });
+    const { failedEvents } = await seed.asUser.query(api.accountingSetup.status, { orgId: seed.orgId });
+
+    expect(failedEvents.find((e) => e.sourceId === "retired_1")?.retryable).toBe(false);
+    expect(failedEvents.find((e) => e.sourceId === "retired_rev")?.retryable).toBe(true);
+  });
+
+  test("the FAILED sample is bounded and reports overflow", async () => {
+    const seed = await seedAccountingSetupDealer();
+    const now = Date.now();
+    for (let i = 0; i < 12; i++) await insertFailed(seed, `dead_${i}`, now + i);
+
+    const setupStatus = await seed.asUser.query(api.accountingSetup.status, { orgId: seed.orgId });
 
     expect(setupStatus.failedEvents).toHaveLength(10);
     expect(setupStatus.hasMoreFailedEvents).toBe(true);
   });
 
   test("another organization's FAILED rows are never exposed", async () => {
-    const { t, orgId, asUser } = await seedAccountingSetupDealer();
+    const mine = await seedAccountingSetupDealer();
     const other = await seedAccountingSetupDealer();
-    await t.run((ctx) =>
-      ctx.db.insert("pendingAccountingEvents", failedRow(orgId, other.userId, "mine", Date.now()))
-    );
+    await insertFailed(mine, "mine");
+
     const otherStatus = await other.asUser.query(api.accountingSetup.status, { orgId: other.orgId });
     expect(otherStatus.failedEvents).toEqual([]);
-    expect((await asUser.query(api.accountingSetup.status, { orgId })).failedEvents).toHaveLength(1);
+    expect((await mine.asUser.query(api.accountingSetup.status, { orgId: mine.orgId })).failedEvents).toHaveLength(1);
   });
 
   test("a view-only user sees no FAILED rows (retry is MANAGE_FINANCE)", async () => {
-    const { t, orgId, userId } = await seedAccountingSetupDealer();
-    const viewerUser = await t.run((ctx) =>
-      ctx.db.insert("users", { clerkId: "viewer_only", email: "v@example.com", name: "Viewer" })
-    );
-    const viewerRole = await t.run((ctx) =>
-      ctx.db.insert("roles", { orgId, name: "Finance Viewer", permissions: ["view:finance"] })
-    );
-    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: viewerUser, roleId: viewerRole }));
-    await t.run((ctx) => ctx.db.insert("pendingAccountingEvents", failedRow(orgId, userId, "dead_v", Date.now())));
+    const seed = await seedAccountingSetupDealer();
+    const { t, orgId } = seed;
+    await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "viewer_only", email: "v@example.com", name: "Viewer" });
+      const roleId = await ctx.db.insert("roles", { orgId, name: "Finance Viewer", permissions: ["view:finance"] });
+      await ctx.db.insert("memberships", { orgId, userId, roleId });
+    });
+    await insertFailed(seed, "dead_v");
 
     const viewer = t.withIdentity({ subject: "viewer_only", clerkId: "viewer_only" });
     const setupStatus = await viewer.query(api.accountingSetup.status, { orgId });

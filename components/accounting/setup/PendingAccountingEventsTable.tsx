@@ -1,5 +1,6 @@
 import { Loader2, RotateCw } from "lucide-react";
 import type { Id } from "@/convex/_generated/dataModel";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AccountingEmptyRow, AccountingTableFrame } from "../AccountingTabShared";
@@ -48,22 +49,19 @@ export function PendingAccountingEventsTable({
             ) : (
               events.map((event) => {
                 // Only a dead-lettered row can be retried; a PENDING row with
-                // attempts is still in flight and the server refuses it.
+                // attempts is still in flight and the server refuses it. A
+                // FAILED row for a retired posting is refused too, and the
+                // server says so via `retryable`.
                 const isFailed = event.status === "FAILED";
+                const canRetry = isFailed && event.retryable === true;
                 const busy = busyAction === `retry_${event._id}`;
                 return (
                   <TableRow key={event._id}>
                     <TableCell className="font-medium">
                       {eventLabel(event)}{" "}
-                      <span
-                        className={
-                          isFailed
-                            ? "ms-1 rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive"
-                            : "ms-1 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
-                        }
-                      >
+                      <Badge variant={isFailed ? "destructive" : "outline"} className="ms-1">
                         {isFailed ? t("AccountingEventStatusFailed" as any) : t("AccountingEventStatusPending" as any)}
-                      </span>
+                      </Badge>
                     </TableCell>
                     <TableCell>
                       {event.sourceType}: {event.sourceId}
@@ -75,7 +73,7 @@ export function PendingAccountingEventsTable({
                     </TableCell>
                     {canManageFinance && onRetry && (
                       <TableCell className="text-right">
-                        {isFailed && (
+                        {canRetry && (
                           <Button
                             size="sm"
                             variant="outline"

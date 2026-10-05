@@ -405,7 +405,6 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ConfirmSetReconciliationTarget: ["Set this bank account as the primary reconciliation target?", "تعيين هذا الحساب البنكي كهدف رئيسي للتسوية؟"],
   ConfirmDeactivateBankAccount: ["Deactivate this bank account? It will no longer accept new entries.", "تعطيل هذا الحساب البنكي؟ لن يقبل أي قيود جديدة."],
   ConfirmReopenPeriod: ["Reopen this closed accounting period?", "إعادة فتح هذه الفترة المحاسبية المغلقة؟"],
-  ConfirmRetryOutbox: ["Retry posting this pending accounting event?", "إعادة محاولة ترحيل هذا القيد المحاسبي المعلق؟"],
   ReopenPeriod: ["Reopen period", "إعادة فتح الفترة"],
   AccountingPeriodReopened: ["Accounting period reopened", "تمت إعادة فتح الفترة المحاسبية"],
   RetryEvent: ["Retry event", "إعادة المحاولة"],
