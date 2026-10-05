@@ -104,6 +104,43 @@ describe("vehicleRequests.resolve — auto-post on approval to AVAILABLE", () =>
     });
   });
 
+  test("approving AVAILABLE keeps a held vehicle RESERVED and posts nothing (SCRUM-700 N1)", async () => {
+    const { t, orgId, userId, vehicleId, asUser } = await setup();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "JOD",
+        currencySymbol: "JD",
+        enabledPaymentTypes: ["CASH"],
+        instagramBusinessAccountId: "ig_123",
+        instagramAccessToken: "token_abc",
+        socialAutoPostEnabled: true,
+      });
+      const customerId = await ctx.db.insert("customers", { orgId, firstName: "Held", lastName: "Customer" });
+      await ctx.db.insert("vehicleReservations", {
+        orgId,
+        vehicleId,
+        customerId,
+        status: "ACTIVE",
+        reservedBy: userId,
+        reservedAt: Date.now(),
+      } as any);
+    });
+
+    await asUser.mutation(api.vehicleRequests.create, { orgId, vehicleId, requestedStatus: "AVAILABLE" });
+    const requestId = await getPendingRequestId(t, vehicleId);
+    await asUser.mutation(api.vehicleRequests.resolve, { orgId, requestId, status: "APPROVED" });
+
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(vehicleId))?.status).toBe("RESERVED");
+      const posts = await ctx.db
+        .query("socialPosts")
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", orgId).eq("vehicleId", vehicleId))
+        .collect();
+      expect(posts.length).toBe(0);
+    });
+  });
+
   test("does not queue a post when rejected", async () => {
     const { t, orgId, vehicleId, asUser } = await setup();
     await t.run((ctx) =>
