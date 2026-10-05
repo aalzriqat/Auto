@@ -1330,6 +1330,39 @@ describe("reopening an approval", () => {
     return { seed, applicationId };
   }
 
+  // SCRUM-703: recordSubmittedQuotation writes customerFirstPaymentMinor with no
+  // bump of its own and relies on recomputeAndPatchEconomics, which returns early
+  // until an approval exists. The source scan excuses it on that basis
+  // (REVIEWED_EXCEPTIONS), so the invariant is pinned here: on an APPROVED deal a
+  // changed quotation either refuses and changes nothing, or advances the stamp.
+  // It may never succeed and leave a held confirmation comparing equal.
+  test("a changed quotation on an approved deal never leaves the economics stamp untouched", async () => {
+    const { seed, applicationId } = await seedApproved();
+    const before = await readApp(seed, applicationId);
+
+    const outcome = await seed.asUser
+      .mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(DEAL.quotation + 100),
+        source: "MANUAL_ENTRY",
+        customerFirstPaymentMinor: jod(DEAL.customerFirstPayment + 50),
+      })
+      .then(
+        () => "recorded" as const,
+        () => "refused" as const
+      );
+
+    const after = await readApp(seed, applicationId);
+    if (outcome === "recorded") {
+      expect(after.economicsRevision ?? 0).toBeGreaterThan(before.economicsRevision ?? 0);
+    } else {
+      expect(after.economicsRevision).toBe(before.economicsRevision);
+      expect(after.customerFirstPaymentMinor).toBe(before.customerFirstPaymentMinor);
+      expect(after.submittedQuotationMinor).toBe(before.submittedQuotationMinor);
+    }
+  });
+
   test("withdraws the approval so the quotation can change, without faking an appraisal", async () => {
     const { seed, applicationId } = await seedApproved();
 

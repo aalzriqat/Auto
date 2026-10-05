@@ -1,0 +1,128 @@
+/**
+ * Self-tests for the economics-revision source analyser (SCRUM-703).
+ *
+ * A guard nobody has watched fail is not a guard, so these come before the repo
+ * scan in `convex/economicsRevisionGuard.test.ts`. The `it.each` block pins the
+ * forms that EVADED the first analyser (isolated synthetic probe on main
+ * 785ab82ce, 2026-10-05): shorthand, spread, two untracked figures, and a
+ * revision key that is present but does not advance.
+ */
+import { describe, expect, test } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { backendSourceFiles, findUnbumpedEconomicsWrites } from "./economicsRevisionAnalyzer";
+
+const BUMPED = `
+    await ctx.db.patch(args.applicationId, {
+      economicsRevision: (app.economicsRevision ?? 0) + 1,
+      approvedDealerPurchaseAmountMinor: args.approvedAmountMinor,
+      updatedAt: now,
+    });
+`;
+
+const UNBUMPED = `
+    await ctx.db.patch(args.applicationId, {
+      approvedDealerPurchaseAmountMinor: args.approvedAmountMinor,
+      updatedAt: now,
+    });
+`;
+
+/** Copying the approved amount into settlement evidence moves no economics. */
+const EVIDENCE_ONLY = `
+    await ctx.db.patch(args.applicationId, {
+      supplierDisbursementApprovedAtRecordingMinor: app.approvedDealerPurchaseAmountMinor,
+      updatedAt: now,
+    });
+`;
+
+const flagged = (source: string) => findUnbumpedEconomicsWrites(source, "sample.ts");
+
+describe("the analyzer itself", () => {
+  test("flags a patch that moves the approved amount without bumping", () => {
+    expect(flagged(UNBUMPED)).toHaveLength(1);
+  });
+
+  test("clears the same patch once it bumps", () => {
+    expect(flagged(BUMPED)).toHaveLength(0);
+  });
+
+  test("does not demand a bump for a patch that only copies the figure", () => {
+    expect(flagged(EVIDENCE_ONLY)).toHaveLength(0);
+  });
+
+  test("flags an unbumped ctx.db.replace as readily as a patch", () => {
+    expect(flagged(UNBUMPED.replace("ctx.db.patch(", "ctx.db.replace("))).toHaveLength(1);
+  });
+
+  test("reads a whole payload rather than stopping at the first nested brace", () => {
+    // The bump sits AFTER a nested object, so a non-brace-matched reader would
+    // miss it and report a false offence.
+    const nested = `
+    await ctx.db.patch(id, {
+      snapshot: { basis: "APPRAISAL" },
+      approvedDealerPurchaseAmountMinor: amount,
+      economicsRevision: (app.economicsRevision ?? 0) + 1,
+    });
+`;
+    expect(flagged(nested)).toHaveLength(0);
+  });
+
+  test("descends into subdirectories and skips codegen", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "economics-guard-"));
+    try {
+      const nested = path.join(root, "utils", "deep");
+      fs.mkdirSync(nested, { recursive: true });
+      fs.writeFileSync(path.join(nested, "writer.ts"), UNBUMPED, "utf8");
+      fs.mkdirSync(path.join(root, "_generated"));
+      fs.writeFileSync(path.join(root, "_generated", "api.ts"), UNBUMPED, "utf8");
+
+      const files = backendSourceFiles(root).map((f) => path.relative(root, f));
+      expect(files).toEqual([path.join("utils", "deep", "writer.ts")]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("forms that evaded the first analyzer (SCRUM-703)", () => {
+  test.each([
+    ["shorthand", "await ctx.db.patch(id, { approvedDealerPurchaseAmountMinor });"],
+    ["shorthand among other keys", "await ctx.db.patch(id, { updatedAt, unfinancedPortionMinor, note });"],
+    [
+      "spread of a local literal",
+      "const delta = { approvedDealerPurchaseAmountMinor: amount }; await ctx.db.patch(id, { ...delta });",
+    ],
+    ["the first-payment figure", "await ctx.db.patch(id, { customerFirstPaymentMinor: amount });"],
+    [
+      "the manual-approval dealer-sends figure",
+      "await ctx.db.patch(id, { manualApproval: { ...previous, dealerSendsMinor: amount } });",
+    ],
+    [
+      "a revision left unchanged",
+      "await ctx.db.patch(id, { approvedDealerPurchaseAmountMinor: a, economicsRevision: app.economicsRevision });",
+    ],
+    [
+      "a revision reset to zero",
+      "await ctx.db.patch(id, { approvedDealerPurchaseAmountMinor: a, economicsRevision: 0 });",
+    ],
+  ])("flags an unbumped write: %s", (_name, source) => {
+    expect(flagged(source)).toHaveLength(1);
+  });
+
+  test("still clears a genuine increment, with or without the nullish default", () => {
+    for (const bump of [
+      "economicsRevision: (app.economicsRevision ?? 0) + 1",
+      "economicsRevision: (application.economicsRevision ?? 0) + 1,",
+      "economicsRevision: app.economicsRevision! + 1",
+    ]) {
+      expect(flagged(`await ctx.db.patch(id, { customerFirstPaymentMinor: a, ${bump} });`)).toHaveLength(0);
+    }
+  });
+
+  test("a spread it cannot resolve is NOT treated as moving economics (documented limit)", () => {
+    // Pinned so the limit is a decision rather than an accident. Anything the
+    // analyser cannot see is covered by the behavioural stale-stamp tests.
+    expect(flagged("await ctx.db.patch(id, { ...fromElsewhere });")).toHaveLength(0);
+  });
+});
