@@ -1,0 +1,232 @@
+// Review-audit authority (SCRUM-644 S3b).
+//
+// The trusted controller writes one audit payload per pull request into a run
+// artifact. This module decides which of those payloads count, maps an outcome
+// to a check conclusion, and builds the payload a controller may publish. It
+// is pure: the caller fetches the run by id, its artifact listing and the
+// payload, and passes them in. Nothing here reads a check-run — a check-run is
+// a pointer any same-app token can rewrite, never authority.
+//
+// The binding is to main's CURRENT tip. A rerun keeps its original SHA, so a
+// rerun of an older controller would judge today's merge with yesterday's
+// policy; requiring run SHA == payload workflowSha == payload mainTip == the
+// tip the reader observes rejects it. Absence of such a binding is UNAVAILABLE,
+// never a pass.
+
+import { isCommitSha, VERDICTS } from "./reviewEvidence.mjs";
+
+export const CONTROLLER_WORKFLOW_PATH = ".github/workflows/trusted-review-evidence.yml";
+export const AUDIT_ARTIFACT_NAME = "trusted-review-evidence-audit";
+
+// workflow_dispatch runs the dispatching ref's copy of the workflow, and
+// pull_request runs the candidate's, so neither is a main-controlled run.
+const ADMITTED_EVENTS = new Set(["workflow_run", "push", "schedule"]);
+const MAIN_BRANCH = "main";
+
+export const AUTHORITY_REJECTION = Object.freeze({
+  RUN_REPOSITORY: "RUN_REPOSITORY",
+  RUN_PATH: "RUN_PATH",
+  RUN_EVENT: "RUN_EVENT",
+  RUN_BRANCH: "RUN_BRANCH",
+  RUN_HEAD_REPOSITORY: "RUN_HEAD_REPOSITORY",
+  RUN_CONCLUSION: "RUN_CONCLUSION",
+  ARTIFACT_BINDING: "ARTIFACT_BINDING",
+  PAYLOAD_RUN: "PAYLOAD_RUN",
+  PAYLOAD_REVISION: "PAYLOAD_REVISION",
+});
+
+export const BINDING_STATUS = Object.freeze({
+  BOUND: "BOUND",
+  UNAVAILABLE: "UNAVAILABLE",
+});
+
+export const UNAVAILABLE_REASON = Object.freeze({
+  NO_CURRENT_BINDING: "NO_CURRENT_BINDING",
+  STALE_CONTROLLER: "STALE_CONTROLLER",
+  HEAD_MOVED: "HEAD_MOVED",
+});
+
+// Controller outcomes that are not verdicts: the PR's shape or the
+// infrastructure prevented evaluation. None of them is the record's fault.
+export const NOT_EVALUABLE_REASON = Object.freeze({
+  MERGE_PENDING: "MERGE_PENDING",
+  CONFLICTED: "CONFLICTED",
+  HEAD_MOVED: "HEAD_MOVED",
+  STALE_BASE: "STALE_BASE",
+  FORK: "FORK",
+  MERGE_REF_MISMATCH: "MERGE_REF_MISMATCH",
+  EVALUATION_ERROR: "EVALUATION_ERROR",
+  REGISTRY_BUDGET: "REGISTRY_BUDGET",
+});
+
+const isPlainObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+
+// The API reports a workflow path as `.github/workflows/x.yml@refs/heads/main`.
+const stripRef = (workflowPath) =>
+  typeof workflowPath === "string" ? workflowPath.replace(/@.*$/, "") : workflowPath;
+
+/**
+ * Does this controller run, artifact and payload carry authority?
+ *
+ * Every input is untrusted API output, so any shape may arrive.
+ *
+ * @param {object} input
+ * @param {any} input.run the workflow run, fetched by id
+ * @param {any} input.artifact the artifact entry from that run's listing
+ * @param {any} input.payload the per-PR audit read from that artifact
+ * @param {number} input.repositoryId this repository's numeric id
+ * @returns {{accepted: boolean, rejections: string[]}}
+ */
+export function acceptAuditRun({ run, artifact, payload, repositoryId }) {
+  const rejections = [];
+  const reject = (code) => rejections.push(code);
+  if (!isPlainObject(run) || !isPlainObject(artifact) || !isPlainObject(payload)) {
+    return { accepted: false, rejections: [AUTHORITY_REJECTION.PAYLOAD_RUN] };
+  }
+
+  if (run.repository?.id !== repositoryId) reject(AUTHORITY_REJECTION.RUN_REPOSITORY);
+  if (stripRef(run.path) !== CONTROLLER_WORKFLOW_PATH) reject(AUTHORITY_REJECTION.RUN_PATH);
+  if (!ADMITTED_EVENTS.has(run.event)) reject(AUTHORITY_REJECTION.RUN_EVENT);
+  if (run.head_branch !== MAIN_BRANCH) reject(AUTHORITY_REJECTION.RUN_BRANCH);
+  if (run.head_repository?.id !== repositoryId) reject(AUTHORITY_REJECTION.RUN_HEAD_REPOSITORY);
+  // A failed controller may have uploaded a partial artifact; it is not authority.
+  if (run.status !== "completed" || run.conclusion !== "success") reject(AUTHORITY_REJECTION.RUN_CONCLUSION);
+
+  if (
+    artifact.name !== AUDIT_ARTIFACT_NAME ||
+    artifact.expired !== false ||
+    artifact.workflow_run?.id !== run.id
+  ) {
+    reject(AUTHORITY_REJECTION.ARTIFACT_BINDING);
+  }
+
+  if (payload.controllerRunId !== run.id || payload.runAttempt !== run.run_attempt) {
+    reject(AUTHORITY_REJECTION.PAYLOAD_RUN);
+  }
+  // Equality, not ancestry: the controller evaluated with the policy at the
+  // tip it records, and that tip is the commit the run executed.
+  if (
+    !isCommitSha(run.head_sha) ||
+    payload.workflowSha !== run.head_sha ||
+    payload.mainTip !== run.head_sha
+  ) {
+    reject(AUTHORITY_REJECTION.PAYLOAD_REVISION);
+  }
+
+  return { accepted: rejections.length === 0, rejections };
+}
+
+/**
+ * The audit currently in force for pull request N at head H, or UNAVAILABLE.
+ *
+ * @param {object} input
+ * @param {any} input.candidate
+ *        the binding the caller resolved (following a carry-forward reference
+ *        if there was one), or nothing when no artifact or payload exists
+ * @param {number} input.repositoryId
+ * @param {string | undefined} input.currentMainTip main's tip as the reader observes it
+ * @param {number} input.prNumber
+ * @param {string} input.headSha the PR's current head
+ * @returns {{status: string, reason?: string, rejections?: string[], payload?: any}}
+ */
+export function readAuditBinding({ candidate, repositoryId, currentMainTip, prNumber, headSha }) {
+  const unavailable = (reason, rejections = []) => ({ status: BINDING_STATUS.UNAVAILABLE, reason, rejections });
+  if (!candidate) return unavailable(UNAVAILABLE_REASON.NO_CURRENT_BINDING);
+
+  const { accepted, rejections } = acceptAuditRun({ ...candidate, repositoryId });
+  if (!accepted) return unavailable(UNAVAILABLE_REASON.NO_CURRENT_BINDING, rejections);
+
+  // The predicate has proven payload.mainTip is a commit SHA, so an unreadable
+  // current tip can never equal it.
+  const { payload } = candidate;
+  if (payload.mainTip !== currentMainTip) return unavailable(UNAVAILABLE_REASON.STALE_CONTROLLER);
+  if (payload.N !== prNumber) return unavailable(UNAVAILABLE_REASON.NO_CURRENT_BINDING);
+  if (!isCommitSha(headSha) || payload.H !== headSha) return unavailable(UNAVAILABLE_REASON.HEAD_MOVED);
+  return { status: BINDING_STATUS.BOUND, payload };
+}
+
+const VERDICT_CONCLUSIONS = Object.freeze({
+  [VERDICTS.COMPLETE]: "success",
+  [VERDICTS.NOT_REQUIRED]: "success",
+  [VERDICTS.INCOMPLETE]: "failure",
+  [VERDICTS.INVALID]: "failure",
+  [VERDICTS.REVIEW_UNRESOLVED]: "action_required",
+});
+
+/**
+ * The check-run conclusion for an outcome, or null when no check is written.
+ * Only COMPLETE and NOT_REQUIRED pass; there is no neutral. An unknown outcome
+ * throws rather than defaulting to anything.
+ *
+ * @param {{kind: string, verdict?: string, reason?: string}} outcome
+ * @returns {"success" | "failure" | "action_required" | null}
+ */
+export function conclusionFor(outcome) {
+  if (outcome?.kind === "VERDICT" && Object.hasOwn(VERDICT_CONCLUSIONS, outcome.verdict)) {
+    return VERDICT_CONCLUSIONS[outcome.verdict];
+  }
+  if (outcome?.kind === "NOT_EVALUABLE" && Object.hasOwn(NOT_EVALUABLE_REASON, outcome.reason)) {
+    return "action_required";
+  }
+  // The PR was never fetched, so there is nothing to write on its head.
+  if (outcome?.kind === "UNAVAILABLE") return null;
+  throw new Error(`unknown review-audit outcome: ${JSON.stringify(outcome)}`);
+}
+
+const RECORD_PATH = /^review-evidence\/[A-Za-z0-9._/-]+\.json$/;
+const CODE = /^[A-Z][A-Z_]*$/;
+const shortSha = (sha) => (isCommitSha(sha) ? sha.slice(0, 7) : "unknown");
+
+/**
+ * The publishable audit: controller-derived fields only. Evaluator `detail`
+ * strings quote the candidate's record, so they never reach output, and a
+ * requirement id is published only if it came from the trusted requirement
+ * list.
+ */
+export function buildAuditPayload({
+  controllerRunId,
+  runAttempt,
+  workflowSha,
+  mainTip,
+  prNumber,
+  headSha,
+  mergeSha,
+  policyVersion,
+  requirements,
+  outcome,
+  evaluation,
+  recordPath,
+  recordBlob,
+}) {
+  const trusted = new Set(requirements);
+  const keep = (requirement) => (trusted.has(requirement) ? requirement : undefined);
+  const reasons = (evaluation?.reasons ?? [])
+    .filter((reason) => CODE.test(reason?.code))
+    .map((reason) => ({ code: reason.code, requirement: keep(reason.requirement) }));
+  const runtimeOnly = reasons.length > 0 && reasons.every((reason) => reason.code === "RUNTIME_UNPROVEN");
+
+  return {
+    controllerRunId,
+    runAttempt,
+    workflowSha,
+    mainTip,
+    N: prNumber,
+    H: headSha,
+    M: mergeSha,
+    policyVersion,
+    // Rebuilt from its two known fields, so nothing else on the object rides along.
+    outcome: outcome.kind === "VERDICT" ? { kind: outcome.kind, verdict: outcome.verdict } : { kind: outcome.kind, reason: outcome.reason },
+    conclusion: conclusionFor(outcome),
+    title: `record audit${runtimeOnly ? ": runtime not collected (S3c)" : ""} · valid for main @ ${shortSha(mainTip)}`,
+    reasons,
+    obligations: (evaluation?.obligations ?? [])
+      .filter((obligation) => trusted.has(obligation?.requirement))
+      .map((obligation) => ({ requirement: obligation.requirement, status: obligation.status })),
+    unresolvedReviews: (evaluation?.unresolvedReviews ?? []).filter((requirement) => trusted.has(requirement)),
+    tests: "registered-not-executed",
+    runtime: "not-collected",
+    reviews: "unauthenticated",
+    recordPath: typeof recordPath === "string" && RECORD_PATH.test(recordPath) ? recordPath : "<redacted>",
+    recordBlob: isCommitSha(recordBlob) ? recordBlob : null,
+  };
+}
