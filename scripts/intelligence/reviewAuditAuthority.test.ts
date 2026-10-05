@@ -11,7 +11,8 @@ import {
   readAuditBinding,
   UNAVAILABLE_REASON,
 } from "./reviewAuditAuthority.mjs";
-import { VERDICTS } from "./reviewEvidence.mjs";
+import { readFileSync } from "node:fs";
+import { REASON_CODES, VERDICTS } from "./reviewEvidence.mjs";
 
 // Negative controls for SCRUM-644 S3b authority. The positive control proves a
 // genuine controller binding is accepted, so each refusal below is caused by
@@ -53,8 +54,10 @@ function genuine() {
   return { run, artifact, payload };
 }
 
+const readAll = (candidates: unknown, overrides: Record<string, unknown> = {}) =>
+  readAuditBinding({ candidates, repositoryId: REPO, currentMainTip: TIP, prNumber: PR, headSha: HEAD, ...overrides });
 const read = (candidate: unknown, overrides: Record<string, unknown> = {}) =>
-  readAuditBinding({ candidate, repositoryId: REPO, currentMainTip: TIP, prNumber: PR, headSha: HEAD, ...overrides });
+  readAll(candidate === null || candidate === undefined ? [] : [candidate], overrides);
 
 describe("SCRUM-644 S3b audit authority predicate", () => {
   test("positive control: a genuine controller run, artifact and payload are accepted", () => {
@@ -98,9 +101,62 @@ describe("SCRUM-644 S3b audit authority predicate", () => {
   });
 
   test("missing pieces are refused, not crashed on", () => {
-    const { run, artifact } = genuine();
+    const { run, artifact, payload } = genuine();
     expect(acceptAuditRun({ run, artifact, payload: null, repositoryId: REPO }).accepted).toBe(false);
     expect(acceptAuditRun({ run: undefined, artifact, payload: {}, repositoryId: REPO }).accepted).toBe(false);
+    expect(acceptAuditRun({ run, artifact: null, payload, repositoryId: REPO })).toEqual({
+      accepted: false,
+      rejections: [AUTHORITY_REJECTION.PAYLOAD_RUN],
+    });
+  });
+
+  test("a zero id is not an id, even where both sides agree", () => {
+    const binding = genuine();
+    binding.run.id = 0;
+    binding.run.run_attempt = 0;
+    binding.artifact.workflow_run.id = 0;
+    binding.payload.controllerRunId = 0;
+    binding.payload.runAttempt = 0;
+    binding.run.repository.id = 0;
+    binding.run.head_repository.id = 0;
+    expect(acceptAuditRun({ ...binding, repositoryId: 0 }).rejections).toEqual([
+      AUTHORITY_REJECTION.RUN_REPOSITORY,
+      AUTHORITY_REJECTION.RUN_HEAD_REPOSITORY,
+      AUTHORITY_REJECTION.ARTIFACT_BINDING,
+      AUTHORITY_REJECTION.PAYLOAD_RUN,
+    ]);
+  });
+
+  test("an artifact whose expiry is unknown is not live", () => {
+    for (const expired of [undefined, null, "false", 0]) {
+      const binding = genuine();
+      (binding.artifact as Record<string, unknown>).expired = expired;
+      expect(acceptAuditRun({ ...binding, repositoryId: REPO }).rejections).toEqual([AUTHORITY_REJECTION.ARTIFACT_BINDING]);
+    }
+  });
+
+  test("two absent ids are not a match (an unset repository id cannot admit an id-less run)", () => {
+    const binding = genuine() as unknown as {
+      run: Record<string, unknown>;
+      artifact: Record<string, unknown>;
+      payload: Record<string, unknown>;
+    };
+    delete binding.run.id;
+    delete binding.run.run_attempt;
+    delete binding.run.repository;
+    delete binding.run.head_repository;
+    binding.artifact.workflow_run = {};
+    delete binding.payload.controllerRunId;
+    delete binding.payload.runAttempt;
+    expect(acceptAuditRun({ ...binding, repositoryId: undefined as never })).toEqual({
+      accepted: false,
+      rejections: [
+        AUTHORITY_REJECTION.RUN_REPOSITORY,
+        AUTHORITY_REJECTION.RUN_HEAD_REPOSITORY,
+        AUTHORITY_REJECTION.ARTIFACT_BINDING,
+        AUTHORITY_REJECTION.PAYLOAD_RUN,
+      ],
+    });
   });
 });
 
@@ -121,6 +177,63 @@ describe("SCRUM-644 S3b audit binding reader", () => {
       });
     }
     expect(read("x")).toMatchObject({ status: BINDING_STATUS.UNAVAILABLE, reason: UNAVAILABLE_REASON.NO_CURRENT_BINDING });
+    for (const candidates of [undefined, null, "x", {}]) {
+      expect(readAll(candidates)).toEqual({
+        status: BINDING_STATUS.UNAVAILABLE,
+        reason: UNAVAILABLE_REASON.NO_CURRENT_BINDING,
+        rejections: [],
+      });
+    }
+  });
+
+  test("two accepted runs at the current tip: the newest decides, whatever order they arrive in (M1)", () => {
+    const older = genuine();
+    older.payload = { ...older.payload, outcome: "COMPLETE" } as typeof older.payload;
+    const newer = genuine();
+    newer.run.id = RUN_ID + 5;
+    newer.artifact.workflow_run.id = RUN_ID + 5;
+    newer.payload = { ...newer.payload, controllerRunId: RUN_ID + 5, outcome: "INCOMPLETE" } as typeof newer.payload;
+    const rerun = genuine();
+    rerun.run.run_attempt = 3;
+    rerun.payload = { ...rerun.payload, runAttempt: 3, outcome: "COMPLETE" } as typeof rerun.payload;
+    for (const order of [[older, newer, rerun], [newer, rerun, older], [rerun, older, newer]]) {
+      expect(readAll(order)).toEqual({ status: BINDING_STATUS.BOUND, payload: newer.payload });
+    }
+    // Among attempts of one run, the later attempt decides.
+    expect(readAll([rerun, older])).toEqual({ status: BINDING_STATUS.BOUND, payload: rerun.payload });
+    expect(readAll([older, rerun])).toEqual({ status: BINDING_STATUS.BOUND, payload: rerun.payload });
+  });
+
+  test("an untrusted decoy beside a genuine binding neither wins nor blocks it", () => {
+    const decoy = genuine();
+    decoy.run.id = RUN_ID + 9;
+    decoy.run.event = "workflow_dispatch";
+    decoy.artifact.workflow_run.id = RUN_ID + 9;
+    decoy.payload.controllerRunId = RUN_ID + 9;
+    const binding = genuine();
+    expect(readAll([decoy, binding])).toEqual({ status: BINDING_STATUS.BOUND, payload: binding.payload });
+  });
+
+  test("the newest binding at the current tip is judged on its head, not an older run's", () => {
+    const older = genuine();
+    const newer = genuine();
+    newer.run.id = RUN_ID + 5;
+    newer.artifact.workflow_run.id = RUN_ID + 5;
+    newer.payload.controllerRunId = RUN_ID + 5;
+    newer.payload.H = sha("f");
+    expect(readAll([older, newer]).reason).toBe(UNAVAILABLE_REASON.HEAD_MOVED);
+  });
+
+  test("a missing PR number never matches a payload without one", () => {
+    const binding = genuine() as unknown as { payload: Record<string, unknown> };
+    delete binding.payload.N;
+    expect(read(binding, { prNumber: undefined }).reason).toBe(UNAVAILABLE_REASON.NO_CURRENT_BINDING);
+  });
+
+  test("a payload with no head never matches an unreadable head", () => {
+    const binding = genuine() as unknown as { payload: Record<string, unknown> };
+    delete binding.payload.H;
+    expect(read(binding, { headSha: undefined }).reason).toBe(UNAVAILABLE_REASON.HEAD_MOVED);
   });
 
   test("an old successful run is a decoy once main has moved (S3B-2-RERUN)", () => {
@@ -205,7 +318,19 @@ describe("SCRUM-644 S3b conclusion table", () => {
   test("an unknown outcome throws instead of defaulting", () => {
     expect(() => conclusionFor({ kind: "VERDICT", verdict: "toString" })).toThrow();
     expect(() => conclusionFor({ kind: "NOT_EVALUABLE", reason: "SOMETHING" })).toThrow();
+    expect(() => conclusionFor({ kind: "NOT_EVALUABLE", reason: "toString" })).toThrow();
     expect(() => conclusionFor(undefined as never)).toThrow();
+    for (const reason of ["SOMETHING", "__proto__", "toString", undefined]) {
+      expect(() => conclusionFor({ kind: "UNAVAILABLE", reason: reason as never })).toThrow();
+    }
+  });
+
+  test("a non-string that stringifies to a known key is still unknown", () => {
+    const disguised = { toString: () => "COMPLETE" };
+    for (const verdict of [["COMPLETE"], disguised]) {
+      expect(() => conclusionFor({ kind: "VERDICT", verdict: verdict as never })).toThrow();
+    }
+    expect(() => conclusionFor({ kind: "NOT_EVALUABLE", reason: ["FORK"] as never })).toThrow();
   });
 });
 
@@ -264,14 +389,72 @@ describe("SCRUM-644 S3b publishable payload", () => {
     expect(payload).not.toHaveProperty("proofs");
   });
 
-  test("a runtime-only INCOMPLETE is a failure whose title names the S3c gap", () => {
+  test("a runtime-only INCOMPLETE is a failure whose title says runtime is unproven, nothing more", () => {
     const payload = buildAuditPayload({
       ...base,
       outcome: { kind: "VERDICT", verdict: VERDICTS.INCOMPLETE },
       evaluation: { reasons: [{ code: "RUNTIME_UNPROVEN", requirement: "BOUNDARY", detail: "x" }] },
     });
     expect(payload.conclusion).toBe("failure");
-    expect(payload.title).toBe("record audit: runtime not collected (S3c) · valid for main @ aaaaaaa");
+    expect(payload.title).toBe("record audit: runtime unproven · valid for main @ aaaaaaa");
+  });
+
+  test("a record cannot size the payload: reasons are deduplicated by code and requirement", () => {
+    const reasons = Array.from({ length: 10_000 }, (_, i) => ({ code: "NO_EVIDENCE", requirement: i % 2 ? "BOUNDARY" : HOSTILE, detail: HOSTILE }));
+    const payload = buildAuditPayload({ ...base, outcome: { kind: "VERDICT", verdict: VERDICTS.INCOMPLETE }, evaluation: { reasons } });
+    expect(payload.reasons).toEqual([
+      { code: "NO_EVIDENCE", requirement: undefined },
+      { code: "NO_EVIDENCE", requirement: "BOUNDARY" },
+    ]);
+    expect(JSON.stringify(payload).length).toBeLessThan(4_000);
+  });
+
+  test("a non-string code that stringifies to a valid one is dropped", () => {
+    const payload = buildAuditPayload({
+      ...base,
+      outcome: { kind: "VERDICT", verdict: VERDICTS.INCOMPLETE },
+      evaluation: { reasons: [{ code: ["NO_EVIDENCE"], requirement: "BOUNDARY" }] },
+    });
+    expect(payload.reasons).toEqual([]);
+  });
+
+  test("only codes the evaluator can emit are published, however code-shaped the rest look", () => {
+    const payload = buildAuditPayload({
+      ...base,
+      outcome: { kind: "VERDICT", verdict: VERDICTS.INCOMPLETE },
+      evaluation: {
+        reasons: [
+          { code: "APPROVED", requirement: "BOUNDARY" },
+          { code: "A".repeat(5_000), requirement: "BOUNDARY" },
+          { code: "STALE_EVIDENCE", requirement: "BOUNDARY" },
+        ],
+      },
+    });
+    expect(payload.reasons).toEqual([{ code: "STALE_EVIDENCE", requirement: "BOUNDARY" }]);
+  });
+
+  test("REASON_CODES is exactly the set of codes the evaluator source emits", () => {
+    const source = readFileSync("scripts/intelligence/reviewEvidence.mjs", "utf8");
+    const emitted = new Set([...source.matchAll(/code: "([A-Z_]+)"/g)].map((match) => match[1]));
+    expect([...REASON_CODES].sort()).toEqual([...emitted].sort());
+  });
+
+  test("an obligation status outside the evaluator's set is not published", () => {
+    const payload = buildAuditPayload({
+      ...base,
+      outcome: { kind: "VERDICT", verdict: VERDICTS.INCOMPLETE },
+      evaluation: { obligations: [{ requirement: "BOUNDARY", status: HOSTILE }, { requirement: "BOUNDARY", status: "MISSING" }] },
+    });
+    expect(payload.obligations).toEqual([{ requirement: "BOUNDARY", status: "MISSING" }]);
+  });
+
+  test("an outcome that disagrees with the evaluation verdict is refused", () => {
+    expect(() =>
+      buildAuditPayload({ ...base, outcome: { kind: "VERDICT", verdict: VERDICTS.COMPLETE }, evaluation: { verdict: VERDICTS.INCOMPLETE } }),
+    ).toThrow();
+    expect(
+      buildAuditPayload({ ...base, outcome: { kind: "VERDICT", verdict: VERDICTS.COMPLETE }, evaluation: { verdict: VERDICTS.COMPLETE } }).conclusion,
+    ).toBe("success");
   });
 
   test("unresolved reviews stay visible beside an INCOMPLETE verdict", () => {
@@ -285,9 +468,9 @@ describe("SCRUM-644 S3b publishable payload", () => {
   });
 
   test("a record path outside review-evidence/ or a non-SHA blob is redacted", () => {
-    for (const recordPath of ["../etc/passwd", "review-evidence/x.json\n```", "review-evidence/a b.json", 7]) {
-      expect(buildAuditPayload({ ...base, recordPath, outcome: { kind: "UNAVAILABLE", reason: "X" }, evaluation: {} }).recordPath).toBe("<redacted>");
+    for (const recordPath of ["../etc/passwd", "review-evidence/x.json\n```", "review-evidence/a b.json", "review-evidence/../../x.json", "review-evidence/a/../x.json", 7]) {
+      expect(buildAuditPayload({ ...base, recordPath, outcome: { kind: "UNAVAILABLE", reason: "BATCH_INCOMPLETE" }, evaluation: {} }).recordPath).toBe("<redacted>");
     }
-    expect(buildAuditPayload({ ...base, recordBlob: "HEAD", outcome: { kind: "UNAVAILABLE", reason: "X" }, evaluation: {} }).recordBlob).toBeNull();
+    expect(buildAuditPayload({ ...base, recordBlob: "HEAD", outcome: { kind: "UNAVAILABLE", reason: "BATCH_INCOMPLETE" }, evaluation: {} }).recordBlob).toBeNull();
   });
 });
