@@ -5,6 +5,7 @@ import { FinanceCompanyCard } from "./FinanceCompanyCard";
 import { ManualFinanceCard } from "./ManualFinanceCard";
 import { useFinanceComparison } from "../hooks/useFinanceComparison";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { OTHER_COMPANY_ID } from "../types";
 
 interface FinancePanelProps {
@@ -51,6 +52,7 @@ export function FinancePanel({
   onChangeManualIncludesCommissionInDebt,
 }: FinancePanelProps) {
   const { t } = useLanguage();
+  const money = useMoneyDisplay();
 
   const {
     comparisons,
@@ -80,12 +82,12 @@ export function FinancePanel({
       {desiredProfit > 0 && (
         <div className="flex items-center justify-between rounded-lg bg-indigo-500/10 border border-indigo-500/30 px-4 py-2.5 text-sm">
           <span className="text-indigo-300">
-            {t("Base" as any)} {vehiclePrice.toLocaleString()} {t("JOD" as any)} + {t("DealerProfit" as any)}{" "}
-            {desiredProfit.toLocaleString()} {t("JOD" as any)}
+            {t("Base" as any)} {money.format(vehiclePrice)} + {t("DealerProfit" as any)}{" "}
+            {money.format(desiredProfit)}
           </span>
 
           <span className="font-bold text-indigo-200">
-            = {effectivePrice.toLocaleString()} {t("JOD" as any)} {t("Effective" as any)}
+            = {money.format(effectivePrice)} {t("Effective" as any)}
           </span>
         </div>
       )}

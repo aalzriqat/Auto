@@ -6,7 +6,7 @@ import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { Info, TrendingUp, TrendingDown, Eye, EyeOff } from "lucide-react";
@@ -20,7 +20,7 @@ interface VehicleCostBarProps {
 export function VehicleCostBar({ vehicleId, purchasePrice, salePrice }: VehicleCostBarProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const formatCurrency = useCurrencyFormatter();
+  const { format: formatCurrency } = useMoneyDisplay();
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
   const [isRevealed, setIsRevealed] = useState(false);
 

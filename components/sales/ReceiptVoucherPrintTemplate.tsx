@@ -1,6 +1,7 @@
 "use client";
 
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { DocumentLetterhead, type OrgBranding } from "@/components/print/DocumentLetterhead";
 
 interface ReceiptVoucherPrintTemplateProps {
@@ -24,6 +25,7 @@ export function ReceiptVoucherPrintTemplate({
   orgBranding,
 }: ReceiptVoucherPrintTemplateProps) {
   const { t, isRtl } = useLanguage();
+  const money = useMoneyDisplay();
 
   return (
     <div
@@ -46,7 +48,7 @@ export function ReceiptVoucherPrintTemplate({
         <div className="flex justify-between border-b pb-3">
           <span className="text-sm text-gray-600">{t("AmountLabel")}</span>
           <span className="font-bold text-lg">
-            {amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currency}
+            {money.format(amount, currency)}
           </span>
         </div>
         <div className="flex justify-between">

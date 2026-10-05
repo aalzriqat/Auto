@@ -27,14 +27,8 @@ vi.mock("@/components/providers/OrgProvider", () => ({
   useOrg: () => ({ activeOrgId: "org1" }),
 }));
 vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-vi.mock("@/hooks/useCurrency", () => ({
-  useCurrency: () => ({
-    code: stubs.currency,
-    symbol: stubs.currency,
-    displayLabel: stubs.currency,
-    format: (n: number) => `${n} JOD`,
-    formatCompact: (n: number) => String(n),
-  }),
+vi.mock("@/hooks/useOrgSettings", () => ({
+  useOrgSettings: () => ({ currency: stubs.currency }),
 }));
 vi.mock("@/hooks/use-permissions", () => ({
   usePermissions: () => ({
