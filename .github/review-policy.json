@@ -1,0 +1,46 @@
+{
+  "$comment": [
+    "Review-evidence policy (SCRUM-644). Read by scripts/intelligence/reviewEvidence.mjs.",
+    "",
+    "NOTHING ENFORCES THIS YET. No job evaluates a pull request's evidence record:",
+    "a pull_request job runs the candidate's own code, so it cannot judge that",
+    "candidate. Evaluation belongs to a workflow_run controller pinned to main",
+    "(reserved name .github/workflows/trusted-review-evidence.yml, not built).",
+    "",
+    "Only 'proof:' requirements can be satisfied, by a registered test at head or",
+    "by a trusted workflow run of the exact tested merge. 'review:' and",
+    "'review-invariant:' requirements are reported and stay unresolved: every",
+    "agent writes through one account, so no verdict here can be authenticated.",
+    "A requirement matching neither list fails closed.",
+    "",
+    "Evidence is bound to the requirement it answers: a test only when its title",
+    "carries the requirement id, a workflow only for the ids in its 'proves'.",
+    "The title binding is nominal: the change under review writes the title.",
+    "The rehearsal proves only its own harness-local id. It is not admitted for",
+    "a catalog obligation (proof:REPLAY and the rest) that it does not run.",
+    "No path emits proof:accounting-runtime yet, so until S4 that entry is",
+    "exercised by fixtures only.",
+    "",
+    "COMPLETE needs every requirement proven and none of them a review. Proofs",
+    "that hold beside a review give REVIEW_UNRESOLVED.",
+    "",
+    "'enforcement' is informational: no code reads it. S4 changes that.",
+    "",
+    "Any semantic change bumps policyVersion. A record stamped with another",
+    "version is refused, not migrated."
+  ],
+  "policyVersion": 1,
+  "enforcement": "none",
+  "enforceableRequirementPrefixes": ["proof:"],
+  "reportedRequirementPrefixes": ["review:", "review-invariant:"],
+  "nonMaterialPaths": [
+    { "prefix": "review-evidence/", "extension": ".json" }
+  ],
+  "runtimeWorkflows": [
+    {
+      "path": ".github/workflows/trusted-accounting-rehearsal.yml",
+      "artifact": "trusted-accounting-rehearsal-evidence",
+      "proves": ["proof:accounting-runtime"]
+    }
+  ]
+}
