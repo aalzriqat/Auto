@@ -133,6 +133,7 @@ export function defaultTreatmentFor(feeType: HandoverFeeType): HandoverTreatment
   switch (feeType) {
     case "OWNERSHIP_TRANSFER":
     case "LIEN_REGISTRATION":
+    case "LIEN_RELEASE":
       return "OWNERSHIP_TRANSFER_EXPENSE";
     case "INSURANCE":
       return "INSURANCE_EXPENSE";

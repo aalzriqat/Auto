@@ -3,11 +3,12 @@
  * pays (`HANDOVER_LINE_FEE_TYPES`), so the manual-add menu must offer it, with
  * both languages' labels, without widening what else may be added by hand.
  */
-import { afterEach, describe, expect, test } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { salesEn, salesAr } from "@/lib/i18n/domains/sales";
 import {
   FEE_TYPE_LABEL,
+  defaultTreatmentFor,
   HANDOVER_FEE_TYPES,
   HandoverCostsPanel,
   type HandoverCostsData,
@@ -53,6 +54,45 @@ describe("the manual-add cost-type menu", () => {
     expect(values).not.toContain("FINANCE_COMPANY_FEE");
     expect(values).not.toContain("COMMISSION");
     expect(values).not.toContain("APPRAISAL_FEE");
+  });
+
+  test("defaultTreatmentFor(LIEN_RELEASE) matches the fee template: ownership-transfer expense", () => {
+    expect(defaultTreatmentFor("LIEN_RELEASE")).toBe("OWNERSHIP_TRANSFER_EXPENSE");
+  });
+
+  test("selecting Lien release and submitting sends the default treatment and payee to onAdd", async () => {
+    const onAdd = vi.fn(async () => {});
+    render(
+      <HandoverCostsPanel
+        costs={costs}
+        loading={false}
+        denomination={{ code: "JOD" }}
+        scaleOf={() => 3}
+        money={(minor) => `${minor / 1000} JOD`}
+        canManage
+        dealClosed={false}
+        costSource={{ kind: "PENDING" }}
+        t={t}
+        onAdd={onAdd}
+        onAbandonAdd={() => {}}
+        onRecordActual={async () => {}}
+        onVoid={async () => {}}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: salesEn.AddHandoverCost }));
+    fireEvent.change(screen.getByLabelText(salesEn.CostTypeLabel), { target: { value: "LIEN_RELEASE" } });
+    fireEvent.change(document.getElementById("handover-cost-amount") as HTMLInputElement, { target: { value: "40" } });
+    fireEvent.submit(screen.getByTestId("deal-handover-cost-add"));
+    await waitFor(() =>
+      expect(onAdd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          feeType: "LIEN_RELEASE",
+          accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+          paidTo: "GOVERNMENT",
+          actualAmountMinor: 40_000,
+        })
+      )
+    );
   });
 
   test("LIEN_RELEASE has an English and an Arabic label", () => {

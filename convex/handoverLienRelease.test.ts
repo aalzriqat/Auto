@@ -99,10 +99,10 @@ async function payDirect(seed: Seed, feeId: Id<"financeDealFees">, amountMinor: 
   });
 }
 
-async function expenseBalance(seed: Seed): Promise<number> {
+async function expenseBalance(seed: Seed, systemKey: string = SYSTEM_KEYS.OWNERSHIP_TRANSFER_EXPENSE): Promise<number> {
   return await seed.t.run(async (ctx) => {
     const accounts = (await ctx.db.query("chartOfAccounts").collect()).filter(
-      (a) => a.orgId === seed.orgId && a.systemKey === SYSTEM_KEYS.OWNERSHIP_TRANSFER_EXPENSE
+      (a) => a.orgId === seed.orgId && a.systemKey === systemKey
     );
     let total = 0;
     for (const entry of (await ctx.db.query("journalEntries").collect()).filter((e) => e.orgId === seed.orgId)) {
@@ -139,6 +139,8 @@ describe("LIEN_RELEASE through the real writer", () => {
 
     await payDirect(seed, feeId, jod(40));
     expect(await expenseBalance(seed)).toBe(jod(40));
+    // The treatment the menu pre-selects posts to ownership-transfer expense; Selling Expense is untouched.
+    expect(await expenseBalance(seed, SYSTEM_KEYS.SELLING_EXPENSE)).toBe(0);
     expect(await eventCount(seed, "HANDOVER_COST_PAID_DIRECT")).toBe(1);
     expect((await paidCheck(seed)).status).toBe("READY");
 
@@ -152,6 +154,7 @@ describe("LIEN_RELEASE through the real writer", () => {
     const custodyId = await openCustody(seed, jod(100));
     const feeId = await lienRelease(seed, jod(40), { paidBy: "EMPLOYEE", custodyId });
     expect(await expenseBalance(seed)).toBe(jod(40));
+    expect(await expenseBalance(seed, SYSTEM_KEYS.SELLING_EXPENSE)).toBe(0);
     expect(await eventCount(seed, "CUSTODY_FEE_PAID")).toBe(1);
     expect((await paidCheck(seed)).status).toBe("READY");
 
@@ -181,13 +184,29 @@ describe("a LIEN_RELEASE line is never the finance-company execution fee", () =>
     expect(executionFeeBindRefusal({ ...line, feeType: "FINANCE_COMPANY_FEE" }, "JOD")).toBeNull();
   });
 
-  test("bindExecutionFeeLine refuses a recorded LIEN_RELEASE line", async () => {
+  test("with an execution fee expected, bindExecutionFeeLine refuses LIEN_RELEASE on its fee type and binds a FINANCE_COMPANY_FEE control", async () => {
     const seed = await seedDeal("bind");
-    const feeId = await lienRelease(seed, jod(40));
+    // An applicable expectation, so the call reaches the fee-type predicate
+    // instead of stopping at "no execution fee to record".
+    await seed.t.run((ctx) =>
+      ctx.db.patch("financeApplications", seed.applicationId, {
+        companyRuleSnapshot: { ruleVersion: 1, companyName: "JAF", feeTemplates: [], adminFees: 700 },
+      })
+    );
+    const lienId = await lienRelease(seed, jod(700));
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.bindExecutionFeeLine, { orgId: seed.orgId, feeId })
-    ).rejects.toThrow();
-    const row = await seed.t.run((ctx) => ctx.db.get("financeDealFees", feeId));
-    expect(row?.executionFeeBinding).toBeUndefined();
+      seed.asUser.mutation(api.financeDealCosts.bindExecutionFeeLine, { orgId: seed.orgId, feeId: lienId })
+    ).rejects.toThrow(/Only a finance-company fee can be the execution fee/);
+    expect((await seed.t.run((ctx) => ctx.db.get("financeDealFees", lienId)))?.executionFeeBinding).toBeUndefined();
+
+    const controlId = await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+      expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(),
+      orgId: seed.orgId, applicationId: seed.applicationId,
+      feeType: "FINANCE_COMPANY_FEE", paidBy: "DEALER", paidTo: "FINANCE_COMPANY",
+      accountingTreatment: "FINANCE_COMPANY_COMMISSION", deductedFromSettlement: false,
+      actualAmountMinor: jod(700), source: "MANUAL",
+    });
+    await seed.asUser.mutation(api.financeDealCosts.bindExecutionFeeLine, { orgId: seed.orgId, feeId: controlId });
+    expect((await seed.t.run((ctx) => ctx.db.get("financeDealFees", controlId)))?.executionFeeBinding).toBeDefined();
   });
 });
