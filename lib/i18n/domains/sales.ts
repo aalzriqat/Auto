@@ -1879,10 +1879,6 @@ const serverErrorMessages = defineBilingualMessages({
     "This unwind is already finished or abandoned. Nothing has been changed.",
     "عملية التراجع هذه مكتملة أو متروكة بالفعل. لم يتم تغيير أي شيء.",
   ],
-  ServerError_DEAL_UNWIND_ABANDON_AFTER_REFUND: [
-    "The finance company's payment has already been refunded, so this unwind can no longer be abandoned. Finish it with the credit note and the vehicle return. Nothing has been changed.",
-    "تم بالفعل رد دفعة شركة التمويل، لذا لم يعد بالإمكان ترك عملية التراجع هذه. أكملها بإشعار الدائن وإرجاع المركبة. لم يتم تغيير أي شيء.",
-  ],
   ServerError_DEAL_UNWIND_STEP_DONE: [
     "This step of the unwind is already recorded. Nothing has been changed.",
     "هذه الخطوة من التراجع مسجّلة بالفعل. لم يتم تغيير أي شيء.",
@@ -1934,10 +1930,6 @@ const serverErrorMessages = defineBilingualMessages({
   ServerError_DEAL_UNWIND_REVERSAL_UNPROVEN: [
     "The finance company's receipt could not be confirmed as reversed on the books, so the refund was not recorded. Nothing has been changed. An accountant reviews the deal.",
     "تعذّر التأكد من عكس قيد استلام مبلغ شركة التمويل في الدفاتر، لذلك لم يُسجَّل الردّ. لم يتم تغيير أي شيء، ويراجع المحاسب الصفقة.",
-  ],
-  ServerError_DEAL_UNWIND_REFUND_FIRST: [
-    "Record the refund of the finance company's payment before finishing the unwind. Nothing has been changed.",
-    "سجّل ردّ دفعة شركة التمويل قبل إنهاء التراجع. لم يتم تغيير أي شيء.",
   ],
   ServerError_DEAL_UNWIND_DISPOSITION_REQUIRED: [
     "Choose what happens to the customer's payment (refund or keep as credit) and fill in the credit note and the vehicle return. Nothing has been changed.",

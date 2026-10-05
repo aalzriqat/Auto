@@ -33,8 +33,6 @@ export const DEAL_UNWIND_MESSAGES = {
     "One of the entered texts is too long. Shorten it and try again. Nothing has been changed.",
   DEAL_UNWIND_NOT_ACTIVE:
     "This unwind is already finished or abandoned. Nothing has been changed.",
-  DEAL_UNWIND_ABANDON_AFTER_REFUND:
-    "The finance company's payment has already been refunded, so this unwind can no longer be abandoned. Finish it with the credit note and the vehicle return. Nothing has been changed.",
   DEAL_UNWIND_STEP_DONE:
     "This step of the unwind is already recorded. Nothing has been changed.",
   DEAL_UNWIND_FORWARD_NOT_APPLICABLE:
@@ -61,8 +59,6 @@ export const DEAL_UNWIND_MESSAGES = {
     "The finance company's payment is not allocated exactly to this deal's receivable, so it cannot be reversed safely. Nothing has been changed. An accountant reviews the deal.",
   DEAL_UNWIND_REVERSAL_UNPROVEN:
     "The finance company's receipt could not be confirmed as reversed on the books, so the refund was not recorded. Nothing has been changed. An accountant reviews the deal.",
-  DEAL_UNWIND_REFUND_FIRST:
-    "Record the refund of the finance company's payment before finishing the unwind. Nothing has been changed.",
   DEAL_UNWIND_DISPOSITION_REQUIRED:
     "Choose what happens to the customer's payment (refund or keep as credit) and fill in the credit note and the vehicle return. Nothing has been changed.",
 } as const;

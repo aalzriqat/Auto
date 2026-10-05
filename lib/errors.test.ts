@@ -309,7 +309,7 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
     // Derived from the server table so a new unwind refusal cannot ship untranslated.
     const codes = Object.keys(DEAL_UNWIND_MESSAGES) as Array<keyof typeof DEAL_UNWIND_MESSAGES>;
-    expect(codes.length).toBe(29);
+    expect(codes.length).toBe(27);
     for (const code of codes) {
       expect(Object.values(AppErrorCode)).toContain(code);
       const error = new ConvexError({ code, message: DEAL_UNWIND_MESSAGES[code] });

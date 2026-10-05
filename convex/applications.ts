@@ -23,7 +23,7 @@ import {
 } from "./utils/financeApplicationProjection";
 import { PERMISSIONS, cancelAuthorityFor, isSystemOwnerRole, type Permission } from "./utils/permissions";
 import { throwAppError, AppErrorCode } from "./utils/errors";
-import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
+import { assertNoActiveDealUnwind, paidDealReversalRoute } from "./utils/dealUnwindGuard";
 import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
@@ -3796,9 +3796,11 @@ export const cancelApplication = mutation({
           // page (dealUnwind.ts), never by a bare cancel. Ahead of the forward
           // refusal: the unwind returns the forward itself, so it is the one
           // instruction that leads somewhere.
-          // A v1 deal cannot be unwound, so it keeps the manual-correction refusal.
+          // A v1 deal cannot be unwound, so it keeps the manual-correction
+          // refusal; so does a cheque deal or one whose receipt records
+          // disagree (F2), which the unwind would refuse anyway.
           if (app.disbursedAt) {
-            if (planVersionOf(app) === 2) {
+            if (planVersionOf(app) === 2 && (await paidDealReversalRoute(ctx, app)).route === "UNWIND") {
               throwAppError(AppErrorCode.DEAL_CANCEL_USE_UNWIND, DEAL_UNWIND_MESSAGES.DEAL_CANCEL_USE_UNWIND);
             }
             throw new ConvexError(
