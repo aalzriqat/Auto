@@ -182,7 +182,7 @@ export function shadowedUndefinedParam(undefined: string, id: Id<"vehicles"> | n
   );
 }
 export function shadowedUndefinedLocal(id: Id<"vehicles"> | null) {
-  const undefined = "x";
+  const undefined = "x"; // NOSONAR: deliberate fixture - shadowed undefined binding under test
   const active = id !== undefined;
   return useQuery(
     api.skipGate.shadowedUndefinedLocal,
@@ -227,7 +227,7 @@ export function singleParamOuterWrite(box: Box) {
 /** CS-686-2-R (Codex): a write wrapped in a TypeScript assertion is still a write. */
 export function nonNullWrappedWrite(box: Box) {
   const active = box.id != null;
-  sharedBox.id! = null as unknown as Id<"vehicles">;
+  sharedBox.id! = null as unknown as Id<"vehicles">; // NOSONAR: deliberate fixture - non-null-wrapped write under test
   return useQuery(
     api.skipGate.nonNullWrappedWrite,
     active ? { id: box.id as Id<"vehicles"> } : "skip",
@@ -243,7 +243,7 @@ export function asWrappedWrite(box: Box) {
 }
 export function elementNonNullWrappedWrite(box: Box) {
   const active = box.id != null;
-  sharedBox["id"]! = null as unknown as Id<"vehicles">;
+  sharedBox["id"]! = null as unknown as Id<"vehicles">; // NOSONAR: deliberate fixture - non-null-wrapped element write under test
   return useQuery(
     api.skipGate.elementNonNullWrappedWrite,
     active ? { id: box.id as Id<"vehicles"> } : "skip",
@@ -253,7 +253,7 @@ export function elementNonNullWrappedWrite(box: Box) {
 export function wrappedReadClean(box: Box) {
   const active = box.id != null;
   const seen = sharedBox.id! as Id<"vehicles">;
-  void seen;
+  void seen; // NOSONAR: deliberate fixture - keeps the read alive
   return useQuery(
     api.skipGate.wrappedReadClean,
     active ? { id: box.id as Id<"vehicles"> } : "skip",
@@ -308,7 +308,7 @@ export function logicalAliasEscapes(a: Box | null) {
   );
 }
 export function commaAliasEscapes(a: Box) {
-  const box = (Math.random(), a);
+  const box = (Math.random(), a); // NOSONAR: deliberate fixture - comma expression, not randomness
   const active = box.id != null;
   opaqueMutator(a);
   return useQuery(

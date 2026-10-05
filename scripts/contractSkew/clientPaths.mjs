@@ -1486,6 +1486,12 @@ function receiverIsConfinedAt(checker, receiverSymbol, conditionNode) {
   const scope = confinementScope(checker, receiverSymbol);
   return Boolean(scope) && enclosingFunctionLike(conditionNode) === scope;
 }
+/** The node a single use-site refinement narrows `node` to. */
+function refineNode(node, refinement) {
+  if (refinement === "truthy") return truthyNode(node);
+  if (refinement === "falsy") return falsyNode(node);
+  return keepValuesNode(node, NULL_TEST_KEEP[refinement]);
+}
 /**
  * Restrict reconstructed runtime evidence to alternatives reachable at the
  * call site. This filters only enumerable falsy values and structurally truthy
@@ -1494,12 +1500,7 @@ function receiverIsConfinedAt(checker, receiverSymbol, conditionNode) {
  */
 function applyUseSiteRefinement(node, refinement, mayBeUndefined = false) {
   if (!refinement) return node;
-  let refined =
-    refinement === "truthy"
-      ? truthyNode(node)
-      : refinement === "falsy"
-        ? falsyNode(node)
-        : keepValuesNode(node, NULL_TEST_KEEP[refinement]);
+  let refined = refineNode(node, refinement);
   // CS-686-1: `!== null` does not exclude `undefined`; the checker dropped it from
   // the type, so put the absence back as an explicit possibility.
   if (refinement === "nonNull" && mayBeUndefined) {
@@ -1521,7 +1522,7 @@ const NULL_TEST_KEEP = {
 function keepValuesNode(node, keep) {
   if (!keep) return node;
   if (node.kind === "literal") {
-    const values = new Set([...node.values].filter(keep));
+    const values = new Set([...node.values].filter((value) => keep(value)));
     return values.size ? clientNode.literal(values) : null;
   }
   if (node.kind === "variants") {
