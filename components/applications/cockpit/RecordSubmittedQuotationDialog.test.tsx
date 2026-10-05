@@ -115,3 +115,34 @@ describe("SCRUM-681: the cockpit carries the server's reason into the dialog", (
     ).toEqual({ state: "AVAILABLE", minor: 12_500 * JOD });
   });
 });
+
+describe("SCRUM-607: a late calculation never lands in a field the operator is in", () => {
+  const props = (calculation: QuotationCalculation) => ({
+    open: true,
+    submitting: false,
+    error: null,
+    calculation,
+    requiresLtvPercent: false,
+    canSetLtvPercent: true,
+    factor: JOD,
+    money: (minor: number) => `${minor / JOD} JOD`,
+    t: (key: string) => key,
+    onOpenChange: () => {},
+    onSubmit: vi.fn(),
+  });
+  const field = () => screen.getByLabelText("QuotationAmountLabel") as HTMLInputElement;
+
+  test("calculation resolving while the field is focused leaves it empty", () => {
+    const view = render(<RecordSubmittedQuotationDialog {...props({ state: "LOADING" })} />);
+    field().focus();
+    view.rerender(<RecordSubmittedQuotationDialog {...props({ state: "AVAILABLE", minor: 21_428_572 })} />);
+    expect(field().value).toBe("");
+  });
+
+  test("control: calculation resolving while the field is not focused still prefills", () => {
+    const view = render(<RecordSubmittedQuotationDialog {...props({ state: "LOADING" })} />);
+    field().blur();
+    view.rerender(<RecordSubmittedQuotationDialog {...props({ state: "AVAILABLE", minor: 21_428_572 })} />);
+    expect(field().value).toBe("21428.572");
+  });
+});

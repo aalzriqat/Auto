@@ -152,6 +152,7 @@ export function RecordSubmittedQuotationDialog({
    * typing (SCRUM-321).
    */
   const touchedRef = useRef(false);
+  const amountInputRef = useRef<HTMLInputElement>(null);
   /** The calculation already offered into the field this opening — a one-shot. */
   const prefilledRef = useRef(false);
 
@@ -187,6 +188,10 @@ export function RecordSubmittedQuotationDialog({
   useEffect(() => {
     if (!open || prefilledRef.current || touchedRef.current) return;
     if (calculation.state !== "AVAILABLE") return;
+    // SCRUM-607: an operator already in the field is about to type their own
+    // figure; a prefill landing now would put the caret after it and the first
+    // keystrokes would be appended to the calculated number.
+    if (amountInputRef.current && document.activeElement === amountInputRef.current) return;
     prefilledRef.current = true;
     // This is the deliberate handoff from an asynchronously arriving server
     // suggestion into a controlled input; the touched guard prevents it from
@@ -255,6 +260,7 @@ export function RecordSubmittedQuotationDialog({
             <Label htmlFor="submitted-quotation-amount">{t("QuotationAmountLabel")}</Label>
             <Input
               id="submitted-quotation-amount"
+              ref={amountInputRef}
               inputMode="decimal"
               value={amount}
               aria-invalid={amountInvalid}

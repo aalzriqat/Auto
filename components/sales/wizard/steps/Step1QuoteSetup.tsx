@@ -5,7 +5,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useQuery, useMutation } from "convex/react";
-import { ConvexError } from "convex/values";
+import { GENERIC_ERROR_MESSAGE, getLocalizedErrorMessage } from "@/lib/errors";
 import { toast } from "@/components/ui/sonner";
 import { api } from "@/convex/_generated/api";
 import { Id, Doc } from "@/convex/_generated/dataModel";
@@ -255,11 +255,10 @@ export default function Step1QuoteSetup({
       // indication the request had not been sent. Three E2E specs failed on
       // exactly that and could not report why.
       console.error("requestProfitApproval failed", error);
-      toast.error(
-        error instanceof ConvexError && typeof error.data === "string"
-          ? error.data
-          : "Could not send the approval request. Please try again."
-      );
+      // SCRUM-682: localized, never the raw server string; the generic
+      // English fallback is replaced by a translated, request-specific one.
+      const message = getLocalizedErrorMessage(error, t);
+      toast.error(message === GENERIC_ERROR_MESSAGE ? t("WizardProfitApprovalRequestFailed") : message);
     } finally {
       setIsRequesting(false);
     }
