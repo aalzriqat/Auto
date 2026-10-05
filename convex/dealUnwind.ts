@@ -911,18 +911,24 @@ export const unwindStatus = query({
       canAbandon = holds(role, ABANDON_PERMS);
     }
 
+    // Two tiers, each built field by field (never spread from the row). A finance
+    // reader sees everything. An unwind actor without it (the default MANAGER,
+    // SCRUM-713) sees the refund, its rail, the step and the posting proof, and
+    // NOT `forwardDueMinor` (deposit + dealer contribution: a visible deposit
+    // would reveal the protected contribution) nor any free text.
+    const financeReader = mayReadFinanceEconomics(role);
+    const unwindActor = holds(role, START_PERMS) || holds(role, MONEY_STEP_PERMS);
     const evidence =
-      unwind !== null &&
-      (mayReadFinanceEconomics(role) || holds(role, START_PERMS) || holds(role, MONEY_STEP_PERMS))
+      unwind !== null && (financeReader || unwindActor)
         ? {
-            reason: unwind.reason,
+            reason: financeReader ? unwind.reason : null,
             remittanceMinor: unwind.remittanceMinor,
             remittanceMethod: unwind.remittanceMethod,
-            forwardDueMinor: unwind.forwardDueMinor,
+            forwardDueMinor: financeReader ? unwind.forwardDueMinor : null,
             forwardReturn: unwind.forwardReturn
               ? {
                   returnedAt: unwind.forwardReturn.returnedAt,
-                  reference: unwind.forwardReturn.reference,
+                  reference: financeReader ? unwind.forwardReturn.reference : null,
                   recordedAt: unwind.forwardReturn.recordedAt,
                 }
               : null,
@@ -940,13 +946,13 @@ export const unwindStatus = query({
               ? {
                   creditNoteReference: unwind.completion.creditNoteReference,
                   vehicleReturnedAt: unwind.completion.vehicleReturnedAt,
-                  vehicleReturnNote: unwind.completion.vehicleReturnNote,
+                  vehicleReturnNote: financeReader ? unwind.completion.vehicleReturnNote : null,
                   customerPaymentDisposition: unwind.completion.customerPaymentDisposition,
                   completedAt: unwind.completion.completedAt,
                 }
               : null,
             abandonment: unwind.abandonment
-              ? { reason: unwind.abandonment.reason, abandonedAt: unwind.abandonment.abandonedAt }
+              ? { reason: financeReader ? unwind.abandonment.reason : null, abandonedAt: unwind.abandonment.abandonedAt }
               : null,
           }
         : null;

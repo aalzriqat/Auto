@@ -959,21 +959,33 @@ describe("SCRUM-713 - the default MANAGER role can unwind a paid deal without re
     expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
   });
 
-  test("the unwind actor sees the unwind's own money evidence - and nothing from the finance-economics tier", async () => {
+  test("the unwind actor sees the refund, rail, step and posting proof - and no protected figure, at any step", async () => {
     const { s, applicationId } = await paidDeal("m713_evidence");
-    await start(s, applicationId);
-    const seen = await status(s, applicationId, s.templateManager.as);
-    expect(seen).toMatchObject({
-      evidence: { remittanceMinor: G, remittanceMethod: "BANK_TRANSFER", forwardDueMinor: FORWARD },
+    const as = s.templateManager.as;
+    const unwindId = await start(s, applicationId);
+    const seenAt: unknown[] = [await status(s, applicationId, as)];
+    expect(seenAt[0]).toMatchObject({
+      evidence: { remittanceMinor: G, remittanceMethod: "BANK_TRANSFER", forwardDueMinor: null, reason: null },
     });
-    // The evidence is exactly the unwind row's operational fields.
-    expect(Object.keys(seen.evidence ?? {}).sort()).toEqual(
-      ["abandonment", "completion", "forwardDueMinor", "forwardReturn", "reason", "remittanceMethod", "remittanceMinor", "remittanceRefund"]
-    );
+    await forwardReturn(s, unwindId);
+    seenAt.push(await status(s, applicationId, as));
+    await finish(s, unwindId);
+    const done = await status(s, applicationId, as);
+    seenAt.push(done);
+    expect(done).toMatchObject({
+      evidence: { remittanceRefund: { amountMinor: G, receiptReversal: "REVERSED" }, completion: { vehicleReturnNote: null } },
+    });
+    // Reconstruction attack: derive deposit + dealer contribution from the COMBINATION of every response.
+    const everything = JSON.stringify(seenAt);
+    for (const protectedFigure of [FORWARD, H, C]) expect(everything).not.toContain(String(protectedFigure));
+    expect(everything).not.toContain("Customer returned the car.");
+    expect(everything).not.toContain("FC-RET-1");
+    expect(everything).not.toContain("Returned to the lot.");
+    // A finance reader still sees the full tier.
+    expect(await status(s, applicationId)).toMatchObject({ evidence: { forwardDueMinor: FORWARD, reason: "Customer returned the car." } });
     // The finance-economics tier stays closed to this role: the unwind did not need it.
     expect(mayReadFinanceEconomics({ permissions: TEMPLATE_MANAGER_PERMS } as never)).toBe(false);
   });
-
   test("a role without CANCEL_CLOSED_DEAL is told WHY it cannot start, not given silence", async () => {
     const { s, applicationId } = await paidDeal("m713_reason");
     const seen = await status(s, applicationId, s.cashier.as);
