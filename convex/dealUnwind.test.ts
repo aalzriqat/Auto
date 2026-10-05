@@ -20,6 +20,7 @@ import type { Id } from "./_generated/dataModel";
 import { isFinanceCashReceivedReversalPosted } from "./dealUnwind";
 import { deriveForwardState } from "./utils/financeCompanyForward";
 import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
+import { SYSTEM_KEYS } from "./utils/defaultChart";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -220,6 +221,19 @@ describe("SCRUM-693 - the full unwind of a #pntr-shaped deal", () => {
       expect(after.receivables.length).toBeGreaterThan(0);
       expect(after.receivables.every((r) => r.status === "CANCELLED")).toBe(true);
       expect(after.payments.find((p) => p.amountMinor === G && p.direction === "IN")?.status).toBe("VOIDED");
+      // R1 / L2: the receipt reversal credits the account the refund left from.
+      const receipt = originals.find((e) => e.eventType === "FINANCE_CASH_RECEIVED")!;
+      const receiptReversal = reversals.find((e) => e.reversalOfEventId === receipt._id)!;
+      const creditedKeys = await s.t.run(async (ctx) => {
+        const lines = await ctx.db
+          .query("journalLines")
+          .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", receiptReversal.journalEntryId!))
+          .collect();
+        return Promise.all(
+          lines.filter((line) => line.creditMinor === G).map(async (line) => (await ctx.db.get(line.accountId))?.systemKey)
+        );
+      });
+      expect(creditedKeys).toEqual([method === "CASH" ? SYSTEM_KEYS.CASH_ON_HAND : SYSTEM_KEYS.BANK_ACCOUNT]);
       const totals = await ledgerTotals(s);
       expect(totals.debit).toBe(totals.credit);
 
@@ -553,7 +567,7 @@ describe("SCRUM-693-F2 - a bare cancel points only where the deal can actually g
       apply: (s: Seeded) => setReceiptPostedMethod(s, undefined),
     },
     {
-      name: "a bank receipt whose journal debited cash",
+      name: "a bank payment whose receipt event records cash",
       startRefusal: DEAL_UNWIND_MESSAGES.DEAL_UNWIND_CHAIN_MISMATCH,
       apply: (s: Seeded) => setReceiptPostedMethod(s, "CASH"),
     },
