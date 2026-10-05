@@ -35,6 +35,7 @@ import { disbursementVersionOf, financeDisbursementKeys } from "./utils/financeD
 import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { assertNoPendingDepositRequest } from "./utils/depositRequestGuards";
 import { assertSaleTeardownPreflight } from "./utils/saleCancellation";
+import { assertNoActiveAllocations } from "./collections";
 import { manualPayerOf } from "./utils/manualFinancePayer";
 import { MAX_DIRECT_PAYMENT_REFERENCE_CHARS } from "./utils/feeDocLimits";
 import { getOpenPeriodForDate } from "./accountingPeriods";
@@ -458,6 +459,15 @@ async function assertFinishable(
     activeAllocations.some((allocation) => allocation.receivableDocumentId !== receivable._id)
   ) {
     refuse("DEAL_UNWIND_ALLOCATION_SHAPE");
+  }
+  // The teardown's own allocation-history guard, run as the closing step will meet it: after this
+  // payment's allocations are reversed (each adds a reversal row to the history).
+  if (receivable.status !== "CANCELLED") {
+    await assertNoActiveAllocations(
+      ctx,
+      receivable._id,
+      activeAllocations.map((allocation) => allocation._id)
+    );
   }
   await assertPeriodOpen(ctx, orgId, now);
   // PRB-F2: the teardown's read-only refusals, so the status query and the closing step ask one

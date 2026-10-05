@@ -20,6 +20,24 @@ export async function markVehicleAsSold(
 }
 
 /**
+ * The read-only ownership refusal of `restoreVehicleFromSale`, shared with the unwind status preview
+ * (SCRUM-693 PR-B F2) so both ask one question. A no-op for a car that is not SOLD.
+ */
+export function assertSoldVehicleOwnedBySale(vehicle: Doc<"vehicles">, saleId: Id<"sales">): void {
+  if (vehicle.status !== "SOLD") return;
+  if (vehicle.soldBySaleId === undefined) {
+    throw new ConvexError(
+      "This car does not record which sale marked it sold, so returning it to the lot cannot be done automatically — doing it blind could take the car from a different sale. Nothing is wrong with this sale; the car simply predates sale-ownership tracking. A manual correction is needed."
+    );
+  }
+  if (String(vehicle.soldBySaleId) !== String(saleId)) {
+    throw new ConvexError(
+      "This car's current sale is not the sale being reversed, so it cannot be returned to the lot from here. It was sold again after this sale was cancelled, and that later sale still owns it — cancel that sale instead."
+    );
+  }
+}
+
+/**
  * Puts a vehicle back on the lot after its sale is cancelled/reversed.
  *
  * A SOURCED (drop-ship) car that has NOT arrived has never been owned — it is
@@ -72,16 +90,7 @@ export async function restoreVehicleFromSale(
   // cancel that later sale — when for a car with no recorded owner there IS no
   // later sale, so the instruction pointed at nothing. The Sonnet MAX seat
   // reproduced that through the real cancellation door.
-  if (vehicle.soldBySaleId === undefined) {
-    throw new ConvexError(
-      "This car does not record which sale marked it sold, so returning it to the lot cannot be done automatically — doing it blind could take the car from a different sale. Nothing is wrong with this sale; the car simply predates sale-ownership tracking. A manual correction is needed."
-    );
-  }
-  if (String(vehicle.soldBySaleId) !== String(saleId)) {
-    throw new ConvexError(
-      "This car's current sale is not the sale being reversed, so it cannot be returned to the lot from here. It was sold again after this sale was cancelled, and that later sale still owns it — cancel that sale instead."
-    );
-  }
+  assertSoldVehicleOwnedBySale(vehicle, saleId);
 
   // `preHoldStatus` is a snapshot, and two things can make it wrong by the time
   // a sale is cancelled:

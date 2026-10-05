@@ -9,7 +9,7 @@ import {
 } from "../accounting/workflowHooks";
 import { reverseAllocation, voidCanonicalPayment } from "../subledger";
 import { assertNoSupplierReceiptsForSale, cancelSupplierReceivablesForSale } from "../supplierReceivables";
-import { restoreVehicleFromSale } from "./saleHelpers";
+import { assertSoldVehicleOwnedBySale, restoreVehicleFromSale } from "./saleHelpers";
 import {
   reactivateAllVehiclesForDeposit,
   syncVehicleHoldStatus,
@@ -862,6 +862,9 @@ export async function assertSaleTeardownPreflight(
       await assertTradeInVehicleSafeToReverse(ctx, { orgId, tradeInVehicleId, tradeInVehicle });
     }
   }
+  // The sold car must still be this sale's (restoreVehicleFromSale refuses otherwise).
+  const soldVehicle = await ctx.db.get(sale.vehicleId);
+  if (soldVehicle && soldVehicle.orgId === orgId) assertSoldVehicleOwnedBySale(soldVehicle, sale._id);
 }
 
 export async function cancelCompletedSaleOperationalRecords(

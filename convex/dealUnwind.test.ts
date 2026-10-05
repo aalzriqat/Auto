@@ -339,10 +339,46 @@ describe("SCRUM-693 ruling B - a refusal in the closing step leaves every row as
         return () => s.t.run((ctx) => ctx.db.delete(id));
       },
     },
+    {
+      // PRB-F2 (Codex seat): restoreVehicleFromSale refuses a SOLD car that does not record its sale.
+      name: "the sold car does not record which sale sold it",
+      message: /does not record which sale marked it sold/,
+      async apply(s: Seeded, saleId: Id<"sales">) {
+        await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { soldBySaleId: undefined }));
+        return () => s.t.run((ctx) => ctx.db.patch(s.vehicleId, { soldBySaleId: saleId }));
+      },
+    },
+    {
+      // PRB-F2 (Codex seat): assertNoActiveAllocations refuses a receivable whose history (plus the
+      // reversal row the close adds) exceeds the probe limit, even when every row is REVERSED.
+      name: "the finance receivable has too long an allocation history",
+      message: /too long an allocation history/,
+      async apply(s: Seeded, saleId: Id<"sales">) {
+        const now = Date.now();
+        const ids = await s.t.run(async (ctx) => {
+          const app = (await ctx.db.query("financeApplications").collect()).find((a) => a.finalizedSaleId === saleId)!;
+          const receivable = (await ctx.db.query("receivableDocuments").collect()).find(
+            (r) => r.sourceId === String(app._id)
+          )!;
+          const payment = (await ctx.db.query("canonicalPayments").collect())[0];
+          const out: Id<"paymentAllocations">[] = [];
+          for (let i = 0; i < 200; i++) {
+            out.push(
+              await ctx.db.insert("paymentAllocations", {
+                orgId: s.orgId, paymentId: payment._id, receivableDocumentId: receivable._id, amountMinor: 1,
+                currency: "JOD", scale: 3, allocationDate: now, status: "REVERSED", createdBy: s.owner.userId, createdAt: now,
+              })
+            );
+          }
+          return out;
+        });
+        return () => s.t.run(async (ctx) => { for (const id of ids) await ctx.db.delete(id); });
+      },
+    },
   ];
 
   test.each(BLOCKERS)("$name: refused, nothing moves, and clearing the blocker lets it finish", async (blocker) => {
-    const { s, applicationId } = await paidDeal(`rb_${blocker.name.length}_${blocker.message.source.length}`);
+    const { s, applicationId } = await paidDeal(`rb_${blocker.name.replace(/\W/g, "_")}`);
     const unwindId = await start(s, applicationId);
     await forwardReturn(s, unwindId);
     const saleId = (await s.t.run((ctx) => ctx.db.get(applicationId)))!.finalizedSaleId!;
