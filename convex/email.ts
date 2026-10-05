@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { Resend } from "resend";
 import { rateLimiter } from "./rateLimit";
 import { getValidatedEnv } from "./utils/env";
+import { sinkEgress } from "./utils/egressSink";
 import { renderNotification } from "../lib/notifications/render";
 
 // ─── Rate limiting ───────────────────────────────────────────────────────────
@@ -128,6 +129,16 @@ async function enforceEmailLimit(
   }
 }
 
+/**
+ * The Resend key a sender may use, or undefined when the preview egress sink
+ * holds the send (SCRUM-639). Every sender here already treats a missing key
+ * as "mock, don't send", so the sink rides that existing path rather than
+ * adding a second one.
+ */
+function deliverableResendKey(env: { RESEND_API_KEY?: string }, sender: string): string | undefined {
+  return sinkEgress("email", sender) ? undefined : env.RESEND_API_KEY;
+}
+
 /** Escape user input before interpolating into HTML to prevent XSS/injection. */
 function escapeHtml(s: string): string {
   return s
@@ -226,7 +237,7 @@ export const sendTaskAlarm = internalAction({
     await enforceEmailLimit(ctx, "sendTaskAlarm", "emailBulk", recipientKey(args.toEmail));
 
     const env = getValidatedEnv();
-    const resendApiKey = env.RESEND_API_KEY;
+    const resendApiKey = deliverableResendKey(env, "sendTaskAlarm");
 
     // Generate basic .ics file string
     const dateStart = new Date(args.dueDate);
@@ -311,7 +322,7 @@ export const sendAccountSetupLink = internalAction({
     await enforceEmailLimit(ctx, "sendAccountSetupLink", "emailTransactional", recipientKey(args.toEmail));
 
     const env = getValidatedEnv();
-    const resendApiKey = env.RESEND_API_KEY;
+    const resendApiKey = deliverableResendKey(env, "sendAccountSetupLink");
     const appUrl = env.NEXT_PUBLIC_APP_URL;
     const setupUrl = `${appUrl}/setup-account?ticket=${encodeURIComponent(args.setupToken)}`;
 
@@ -375,7 +386,7 @@ export const sendSupportReply = internalAction({
     await enforceEmailLimit(ctx, "sendSupportReply", "emailTransactional", recipientKey(args.toEmail));
 
     const env = getValidatedEnv();
-    const resendApiKey = env.RESEND_API_KEY;
+    const resendApiKey = deliverableResendKey(env, "sendSupportReply");
 
     const safeBody = escapeHtml(args.bodyText).replace(/\n/g, "<br />");
     const emailHtml = wrapPlainEmailHtml(
@@ -420,7 +431,7 @@ export const sendAutoReplyEmail = internalAction({
     await enforceEmailLimit(ctx, "sendAutoReplyEmail", "emailBulk", recipientKey(args.toEmail));
 
     const env = getValidatedEnv();
-    const resendApiKey = env.RESEND_API_KEY;
+    const resendApiKey = deliverableResendKey(env, "sendAutoReplyEmail");
 
     const greetingName = args.participantName?.trim().split(" ")[0];
     const safeGreetingName = greetingName ? escapeHtml(greetingName) : null;
@@ -527,7 +538,7 @@ export const sendSubscriptionReminderEmail = internalAction({
       return { success: false, error: "rate_limited" };
     }
     const env = getValidatedEnv();
-    const resendApiKey = env.RESEND_API_KEY;
+    const resendApiKey = deliverableResendKey(env, "sendSubscriptionReminderEmail");
     const appUrl = env.NEXT_PUBLIC_APP_URL;
 
     const safeOrgName = escapeHtml(args.orgName);
@@ -592,7 +603,7 @@ export const sendMarketplaceWeeklyReportEmail = internalAction({
       return { success: false, error: "rate_limited" };
     }
     const env = getValidatedEnv();
-    const resendApiKey = env.RESEND_API_KEY;
+    const resendApiKey = deliverableResendKey(env, "sendMarketplaceWeeklyReportEmail");
     const appUrl = env.NEXT_PUBLIC_APP_URL;
 
     const safeOrgName = escapeHtml(args.orgName);
@@ -653,7 +664,7 @@ export const sendTeamInvite = internalAction({
     await enforceEmailLimit(ctx, "sendTeamInvite", "emailTransactional", recipientKey(args.toEmail));
 
     const env = getValidatedEnv();
-    const resendApiKey = env.RESEND_API_KEY;
+    const resendApiKey = deliverableResendKey(env, "sendTeamInvite");
 
     // Build the invite URL from the environment
     const appUrl = env.NEXT_PUBLIC_APP_URL;
@@ -723,7 +734,7 @@ export const sendNotificationEmail = internalAction({
     const { title, message } = renderNotification(args.locale, args.type, args.data);
 
     const env = getValidatedEnv();
-    const resendApiKey = env.RESEND_API_KEY;
+    const resendApiKey = deliverableResendKey(env, "sendNotificationEmail");
     const appUrl = env.NEXT_PUBLIC_APP_URL;
 
     const emailHtml = wrapEmailHtml(
@@ -798,7 +809,7 @@ export const sendUpgradeRequestEmail = internalAction({
     }
 
     const env = getValidatedEnv();
-    const resendApiKey = env.RESEND_API_KEY;
+    const resendApiKey = deliverableResendKey(env, "sendUpgradeRequestEmail");
 
     const safeOrgName = escapeHtml(args.orgName);
     const safeUserName = escapeHtml(args.userName);
@@ -886,7 +897,7 @@ export const sendSupportInboxNotification = internalAction({
     }
 
     const env = getValidatedEnv();
-    const resendApiKey = env.RESEND_API_KEY;
+    const resendApiKey = deliverableResendKey(env, "sendSupportInboxNotification");
     if (!resendApiKey || args.toEmails.length === 0) return { success: true };
 
     const safeName = escapeHtml(args.fromName ?? args.fromEmail);
