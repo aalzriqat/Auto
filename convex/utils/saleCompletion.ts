@@ -36,6 +36,7 @@ import {
 import { computeResoldProductMargin, type FinancedSalePlanPayload } from "../accounting/postingRules";
 import { toMinorUnits, fromMinorUnits, denominationOf, isValidMinorAmount, addMinor } from "./money";
 import { assertProfitApproved, saleRequiresMinimumProfit } from "./profitApproval";
+import { assertVehicleNotDeleted } from "./vehicleLiveness";
 import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
 import { computeConsignedSupplierPosition } from "../../lib/financingEconomics";
 import { openSupplierReceivable } from "../supplierReceivables";
@@ -467,6 +468,12 @@ async function prepareSaleCompletion(
   if (vehicle.status === "ARCHIVED") {
     throwAppError(AppErrorCode.VEHICLE_ARCHIVED, "Cannot sell an archived vehicle. Restore it first.");
   }
+  // SCRUM-641 (D-35): a soft-deleted car is never sold or drafted. AFTER the SOLD and ARCHIVED
+  // checks so a car that was sold and then flagged deleted still reports SOLD, and for BOTH
+  // intents (a DRAFT is the first step of a sale). Replay of an already-completed command never
+  // reaches here: `runWithIdempotency` answers it before the body, and `finalizeDeal` returns an
+  // already-closed sale early.
+  assertVehicleNotDeleted(vehicle);
 
   const customer = await ctx.db.get(args.customerId);
   if (customer?.orgId !== args.orgId) {
@@ -665,6 +672,7 @@ async function prepareSaleCompletion(
       vehicleId: args.vehicleId,
       lineage: { quoteId: args.quoteId },
       actingCustomerId: args.customerId,
+      vehicle,
     });
 
     // SCRUM-260: the minimum-profit approval, judged here for the same reason

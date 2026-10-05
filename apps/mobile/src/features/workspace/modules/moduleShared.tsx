@@ -1,3 +1,4 @@
+import { isConvexError } from "@autoflow/shared";
 import { calculateUnifiedMurabaha } from "@autoflow/shared/financing";
 import { useRouter } from "expo-router";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
@@ -509,14 +510,32 @@ export function requiredText(value: string, locale: AppLocale): string | undefin
   return value.trim() ? undefined : requiredFieldMessage(locale);
 }
 
+/** SCRUM-641: the refusal for a soft-deleted vehicle, same wording as web's `ServerError_VEHICLE_DELETED`. */
+const VEHICLE_DELETED_MESSAGE: Readonly<Record<AppLocale, string>> = {
+  en: "This vehicle has been deleted and can no longer be quoted, reserved, sold or take a deposit.",
+  ar: "تم حذف هذه السيارة ولم يعد بالإمكان تسعيرها أو حجزها أو بيعها أو استلام عربون عليها.",
+};
+
+function isVehicleDeletedError(error: unknown): boolean {
+  if (!isConvexError(error)) return false;
+  const data = error.data;
+  return typeof data === "object" && data !== null && (data as { code?: unknown }).code === "VEHICLE_DELETED";
+}
+
 export function useGenericError() {
   const { locale } = useLocale();
   return (context: string, error: unknown) => {
     console.error(context, error);
     hapticWarning();
+    const lang: AppLocale = locale === "ar" ? "ar" : "en";
+    const title = { en: "Could not save", ar: "تعذر الحفظ" }[lang];
+    if (isVehicleDeletedError(error)) {
+      Alert.alert(title, VEHICLE_DELETED_MESSAGE[lang]);
+      return;
+    }
     Alert.alert(
-      locale === "ar" ? "تعذر الحفظ" : "Could not save",
-      locale === "ar" ? "حدث خطأ غير متوقع. حاول مرة أخرى." : "An unexpected error occurred. Please try again.",
+      title,
+      lang === "ar" ? "حدث خطأ غير متوقع. حاول مرة أخرى." : "An unexpected error occurred. Please try again.",
     );
   };
 }
