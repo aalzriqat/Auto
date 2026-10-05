@@ -130,8 +130,9 @@ function spreadsLocalEconomicsLiteral(payload: string, source: string): boolean 
  * comparing equal, and `economicsRevision: 0` rewinds it onto an old stamp.
  */
 export function bumpsRevision(payload: string): boolean {
-  // The `+ 1` must END the expression: `x + 1 - 1` is a no-op, not an advance.
-  return /economicsRevision\s*:\s*\(?[^,}]*\beconomicsRevision\b[^,}]*\+\s*1\s*(?=,|\}|\r?\n|$)/.test(payload);
+  // The `+ 1` must END the expression: `x + 1 - 1` is a no-op, not an advance,
+  // and a newline does not end it (`- 1` may follow on the next line).
+  return /economicsRevision\s*:\s*\(?[^,}]*\beconomicsRevision\b[^,}]*\+\s*1\s*(?=,|\}|$)/.test(payload);
 }
 
 export function findUnbumpedEconomicsWrites(source: string, file: string, snippetLength = 160): Offence[] {

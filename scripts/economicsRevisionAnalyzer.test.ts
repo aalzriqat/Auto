@@ -155,6 +155,25 @@ describe("Codex gpt-6-sol findings on f4e274bb (SCRUM-703)", () => {
     expect(flagged(noop)).toHaveLength(1);
   });
 
+  test("an increment cancelled on the NEXT line is not an advance either", () => {
+    const multiline = `
+    await ctx.db.patch(id, {
+      economicsRevision: app.economicsRevision + 1
+        - 1,
+      approvedDealerPurchaseAmountMinor: a,
+    });`;
+    expect(flagged(multiline)).toHaveLength(1);
+  });
+
+  test("a genuine increment that is the last key, with no trailing comma, still clears", () => {
+    const last = `
+    await ctx.db.patch(id, {
+      approvedDealerPurchaseAmountMinor: a,
+      economicsRevision: (app.economicsRevision ?? 0) + 1
+    });`;
+    expect(flagged(last)).toHaveLength(0);
+  });
+
   test("a call written with unusual spacing is still scanned", () => {
     expect(flagged(UNBUMPED.replace("ctx.db.patch(", "ctx.db .patch ("))).toHaveLength(1);
   });
