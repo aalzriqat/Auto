@@ -366,4 +366,17 @@ describe("DealCockpit closing bindings (TASK-DEAL-04)", () => {
     expect(within(card).getByTestId("deal-legal-invoice")).toBeTruthy();
     expect(within(card).queryByRole("button", { name: /RecordLegalInvoice/i })).toBeNull();
   });
+
+  test("a CLOSED deal from a backend that predates economicsFrozen is not offered the invoice either", async () => {
+    setupDeal();
+    const costs = { ...(queryResults.get("financeDealCosts:listDealCosts") as Record<string, unknown>) };
+    delete costs.economicsFrozen;
+    queryResults.set("financeDealCosts:listDealCosts", costs);
+    const app = queryResults.get("applications:get") as Record<string, unknown>;
+    queryResults.set("applications:get", { ...app, status: "CLOSED" });
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+
+    const card = await screen.findByTestId("deal-closing-checklist");
+    expect(within(card).queryByRole("button", { name: /RecordLegalInvoice/i })).toBeNull();
+  });
 });
