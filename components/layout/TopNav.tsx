@@ -1,6 +1,7 @@
 "use client";
 
-import { Menu, Search, MessagesSquare } from "lucide-react";
+import { Menu, Search, MessagesSquare, MessageSquarePlus } from "lucide-react";
+import { openFeedbackPanel } from "@/components/feedback/feedbackWidgetStore";
 import Image from "next/image";
 import { UserButton } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
@@ -8,7 +9,7 @@ import Link from "next/link";
 import { OrgSwitcher } from "@/components/layout/OrgSwitcher";
 import { NotificationsBell } from "@/components/layout/NotificationsBell";
 import { WhatsNewButton } from "@/components/layout/WhatsNewButton";
-import { useMessenger } from "@/components/messages/MessengerContext";
+import { MESSENGER_TRIGGER_ID, useMessenger } from "@/components/messages/MessengerContext";
 import { LanguageSwitcher } from "@/components/layout/LanguageSwitcher";
 import GlobalSearchModal from "@/components/search/GlobalSearchModal";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -49,7 +50,7 @@ export function TopNav() {
     activeOrgId && canSeeApprovals ? { orgId: activeOrgId } : "skip"
   );
 
-  const { toggleList } = useMessenger();
+  const { toggleList, isListOpen } = useMessenger();
   const unreadMessages = useQuery(
     api.directMessages.getUnreadCount,
     activeOrgId ? { orgId: activeOrgId } : "skip"
@@ -131,6 +132,19 @@ export function TopNav() {
                   </div>
                 )}
               </div>
+              <div className="shrink-0 border-t border-slate-100 p-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMobileMenuOpen(false);
+                    openFeedbackPanel();
+                  }}
+                  className="flex w-full items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors"
+                >
+                  <MessageSquarePlus className="h-4 w-4 shrink-0 text-slate-400" />
+                  <span className="flex-1 text-start">{t("FeedbackWidgetTitle" as any)}</span>
+                </button>
+              </div>
             </SheetContent>
           </Sheet>
 
@@ -172,12 +186,14 @@ export function TopNav() {
           </Button>
           <OrgSwitcher />
           <LanguageSwitcher />
-          {/* Messenger button */}
+          {/* Messenger button — the only entry to the conversation list (no floating button, SCRUM-612) */}
           <button
+            type="button"
             onClick={toggleList}
             className="relative p-2 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors"
-            aria-label="Messages"
-            id="topnav-messenger-btn"
+            aria-label={t("Messages" as any)}
+            aria-expanded={isListOpen}
+            id={MESSENGER_TRIGGER_ID}
           >
             <MessagesSquare className="h-5 w-5" />
             {unreadMessages != null && unreadMessages > 0 && (
@@ -185,6 +201,16 @@ export function TopNav() {
                 {unreadMessages > 9 ? "9+" : unreadMessages}
               </span>
             )}
+          </button>
+          {/* Feedback — desktop top bar; on phones it lives in the menu drawer */}
+          <button
+            type="button"
+            onClick={openFeedbackPanel}
+            className="hidden md:inline-flex p-2 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors"
+            aria-label={t("FeedbackWidgetTitle" as any)}
+            title={t("FeedbackWidgetTitle" as any)}
+          >
+            <MessageSquarePlus className="h-5 w-5" />
           </button>
           <WhatsNewButton />
           <NotificationsBell />
