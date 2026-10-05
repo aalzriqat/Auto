@@ -22,6 +22,8 @@ import { syncVehicleHoldStatus } from "./utils/depositHelpers";
 import { deriveForwardState } from "./utils/financeCompanyForward";
 import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
+import { mayReadFinanceEconomics } from "./utils/financeApplicationProjection";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -53,15 +55,17 @@ const SALES_PERMS = ALL_PERMS.filter(
 );
 /** Can refund (disbursement + finance view) but not cancel a closed deal. */
 const CASHIER_PERMS = ALL_PERMS.filter((p) => p !== "cancel:closed_deal");
+/** The seeded MANAGER role template exactly as shipped: no VIEW_FINANCE (SCRUM-713). */
+const TEMPLATE_MANAGER_PERMS = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === "MANAGER")!.permissions as string[];
 const FORWARD = H + C;
 const MANUAL_CORRECTION = /manual accounting correction/;
 
 async function seed(tag: string, sourced = false) {
   const s = await seedFinancedDealership(tag, {
     modules: MODULES, ownerPerms: ALL_PERMS, label: "S693", vinPrefix: "VIN693", sourced,
-    actors: { sales: SALES_PERMS, cashier: CASHIER_PERMS, manager: ["manage:users"] },
+    actors: { sales: SALES_PERMS, cashier: CASHIER_PERMS, manager: ["manage:users"], templateManager: TEMPLATE_MANAGER_PERMS },
   });
-  return { ...s, sales: s.actors.sales, cashier: s.actors.cashier, manager: s.actors.manager };
+  return { ...s, sales: s.actors.sales, cashier: s.actors.cashier, manager: s.actors.manager, templateManager: s.actors.templateManager };
 }
 type Seeded = Awaited<ReturnType<typeof seed>>;
 
@@ -927,5 +931,60 @@ describe("SCRUM-693 D6 - unwindStatus and the deals-list badge (Sol c22134 Q12)"
     await abandon(s, unwindId);
     expect(await badge(s, [applicationId])).toEqual([]);
     await expect(badge(s, Array.from({ length: UNWIND_BADGE_BATCH_MAX + 1 }, () => applicationId))).rejects.toThrow();
+  });
+});
+describe("SCRUM-713 - the default MANAGER role can unwind a paid deal without reading finance economics", () => {
+  const status = (s: Seeded, applicationId: Id<"financeApplications">, as = s.owner.as) =>
+    as.query(api.dealUnwind.unwindStatus, { orgId: s.orgId, applicationId });
+
+  test("the shipped MANAGER template lacks VIEW_FINANCE (premise)", () => {
+    expect(TEMPLATE_MANAGER_PERMS).not.toContain("view:finance");
+    expect(TEMPLATE_MANAGER_PERMS).toContain("cancel:closed_deal");
+    expect(TEMPLATE_MANAGER_PERMS).toContain("confirm:finance_disbursement");
+  });
+
+  test("a template MANAGER is offered Start, starts, records the forward return and finishes", async () => {
+    const { s, applicationId } = await paidDeal("m713_full");
+    const as = s.templateManager.as;
+    expect(await status(s, applicationId, as)).toMatchObject({ eligibility: { canStart: true } });
+    const unwindId = await start(s, applicationId, crypto.randomUUID(), as);
+    expect(await status(s, applicationId, as)).toMatchObject({
+      eligibility: { canForwardReturn: true, canAbandon: true },
+    });
+    await as.mutation(api.dealUnwind.recordDealUnwindForwardReturn, {
+      orgId: s.orgId, unwindId, returnedAt: Date.now(), reference: "FC-RET-1", idempotencyKey: crypto.randomUUID(),
+    });
+    expect(await status(s, applicationId, as)).toMatchObject({ eligibility: { canFinish: true } });
+    await finish(s, unwindId, "BANK_TRANSFER", as);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+  });
+
+  test("the unwind actor sees the unwind's own money evidence - and nothing from the finance-economics tier", async () => {
+    const { s, applicationId } = await paidDeal("m713_evidence");
+    await start(s, applicationId);
+    const seen = await status(s, applicationId, s.templateManager.as);
+    expect(seen).toMatchObject({
+      evidence: { remittanceMinor: G, remittanceMethod: "BANK_TRANSFER", forwardDueMinor: FORWARD },
+    });
+    // The evidence is exactly the unwind row's operational fields.
+    expect(Object.keys(seen.evidence ?? {}).sort()).toEqual(
+      ["abandonment", "completion", "forwardDueMinor", "forwardReturn", "reason", "remittanceMethod", "remittanceMinor", "remittanceRefund"]
+    );
+    // The finance-economics tier stays closed to this role: the unwind did not need it.
+    expect(mayReadFinanceEconomics({ permissions: TEMPLATE_MANAGER_PERMS } as never)).toBe(false);
+  });
+
+  test("a role without CANCEL_CLOSED_DEAL is told WHY it cannot start, not given silence", async () => {
+    const { s, applicationId } = await paidDeal("m713_reason");
+    const seen = await status(s, applicationId, s.cashier.as);
+    expect(seen.eligibility.canStart).toBe(false);
+    expect(seen.refusals.start).toMatchObject({ code: "DEAL_UNWIND_PERMISSION" });
+  });
+
+  test("a role holding neither authority is still refused every mutation", async () => {
+    const { s, applicationId } = await paidDeal("m713_sales");
+    expect(await refusalMessageOf(start(s, applicationId, crypto.randomUUID(), s.sales.as))).toBeTruthy();
+    const unwindId = await start(s, applicationId);
+    await expect(finish(s, unwindId, "BANK_TRANSFER", s.sales.as)).rejects.toThrow();
   });
 });

@@ -53,19 +53,22 @@ const REASON_MAX_CHARS = 500;
 /** A client clock a little ahead of the server's is not a future date. */
 const CLOCK_SKEW_MS = 5 * 60 * 1000;
 
-const START_PERMS = [
-  PERMISSIONS.CANCEL_CLOSED_DEAL,
-  PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
-  PERMISSIONS.VIEW_FINANCE,
-];
-const MONEY_STEP_PERMS = [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT, PERMISSIONS.VIEW_FINANCE];
+/**
+ * VIEW_FINANCE is deliberately NOT here (SCRUM-713). It opens the accounting
+ * economics tier, and the default MANAGER role, which holds both of these
+ * authorities, does not carry it: requiring it left a manager with neither the
+ * Cancel door (refused for a disbursed deal) nor the Unwind door. What an unwind
+ * actor needs to see is the unwind's own amounts, and `unwindStatus` projects
+ * exactly that to them without reading the deal's finance economics.
+ */
+const START_PERMS = [PERMISSIONS.CANCEL_CLOSED_DEAL, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT];
+const MONEY_STEP_PERMS = [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT];
 /** Refunding the remittance (MONEY_STEP_PERMS) and cancelling the deal, together. */
-const FINISH_PERMS = [
-  PERMISSIONS.CANCEL_CLOSED_DEAL,
-  PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
-  PERMISSIONS.VIEW_FINANCE,
-];
+const FINISH_PERMS = [PERMISSIONS.CANCEL_CLOSED_DEAL, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT];
 const ABANDON_PERMS = [PERMISSIONS.CANCEL_CLOSED_DEAL];
+
+const UNWIND_PERMISSION_MESSAGE =
+  "Reversing a paid deal needs both the cancel-closed-deal and the confirm-finance-disbursement permissions. Ask an administrator.";
 
 function refuse(code: DealUnwindRefusalCode): never {
   throwAppError(AppErrorCode[code], DEAL_UNWIND_MESSAGES[code]);
@@ -878,6 +881,9 @@ export const unwindStatus = query({
         const refusal = await refusalOf(() => assertStartable(ctx, args.orgId, app));
         if (refusal) refusals.start = refusal;
         canStart = refusal === null;
+      } else if (app.status === "CLOSED" && app.disbursedAt !== undefined) {
+        // Silence here left a manager with no door and no reason (SCRUM-713).
+        refusals.start = { code: "DEAL_UNWIND_PERMISSION", message: UNWIND_PERMISSION_MESSAGE };
       }
     } else {
       const forward = await deriveForwardState(ctx, app);
@@ -906,7 +912,8 @@ export const unwindStatus = query({
     }
 
     const evidence =
-      unwind !== null && mayReadFinanceEconomics(role)
+      unwind !== null &&
+      (mayReadFinanceEconomics(role) || holds(role, START_PERMS) || holds(role, MONEY_STEP_PERMS))
         ? {
             reason: unwind.reason,
             remittanceMinor: unwind.remittanceMinor,
