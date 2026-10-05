@@ -68,12 +68,18 @@ const MAX_TEXT_CHARS = 500;
 /** The server's cap on reference / voucher / credit-note fields (MAX_DIRECT_PAYMENT_REFERENCE_CHARS). */
 const MAX_REFERENCE_CHARS = 200;
 
+const DAY_MS = 86_400_000;
+
 /**
- * A picked calendar day as an instant. Today is sent as "now": midnight of today is earlier than the
- * moment the finance company's payment was confirmed, and the server refuses a refund dated before it.
+ * A picked calendar day as an instant the server accepts. Midnight of the payment's own day is earlier
+ * than the payment, which the server refuses, so on that day the instant is lifted to the payment
+ * (`notBefore`). Today is the dialog's frozen "now": fixed for the dialog's life so a retry after a
+ * lost response carries the same payload as the first attempt.
  */
-function refundInstant(dateInput: string): number {
-  return dateInput === economicTodayDateInput() ? Date.now() : economicDateInputToMs(dateInput);
+function refundInstant(dateInput: string, frozenNow: number, notBefore: number | undefined): number {
+  if (dateInput === economicTodayDateInput()) return Math.max(frozenNow, notBefore ?? 0);
+  const midnight = economicDateInputToMs(dateInput);
+  return notBefore !== undefined && notBefore >= midnight && notBefore < midnight + DAY_MS ? notBefore : midnight;
 }
 
 export function UnwindDealDialog({
@@ -82,6 +88,7 @@ export function UnwindDealDialog({
   submitting,
   error,
   formatMinor,
+  notBefore,
   t,
   onOpenChange,
   onStart,
@@ -94,6 +101,8 @@ export function UnwindDealDialog({
   submitting: boolean;
   error: string | null;
   formatMinor: (minor: number) => string;
+  /** When the finance company's payment was confirmed: a refund cannot be dated before it. */
+  notBefore?: number;
   t: T;
   onOpenChange: (open: boolean) => void;
   onStart: (reason: string) => void | Promise<void>;
@@ -173,7 +182,7 @@ export function UnwindDealDialog({
           />
         )}
         {current === "FINISH" && (
-          <FinishStep status={status} submitting={submitting} formatMinor={formatMinor} t={t} onSubmit={onFinish} />
+          <FinishStep status={status} submitting={submitting} formatMinor={formatMinor} notBefore={notBefore} t={t} onSubmit={onFinish} />
         )}
 
         {active && status.eligibility.canAbandon && (
@@ -336,18 +345,21 @@ function FinishStep({
   status,
   submitting,
   formatMinor,
+  notBefore,
   t,
   onSubmit,
 }: Readonly<{
   status: UnwindStatusView;
   submitting: boolean;
   formatMinor: (minor: number) => string;
+  notBefore?: number;
   t: T;
   onSubmit: (values: UnwindFinishValues) => void | Promise<void>;
 }>) {
   // The refund goes back the way the money arrived; the server refuses any other method.
   const method = status.evidence?.remittanceMethod;
   const [refundedDate, setRefundedDate] = useState(economicTodayDateInput());
+  const [frozenNow] = useState(() => Date.now());
   const [bankReference, setBankReference] = useState("");
   const [voucherNumber, setVoucherNumber] = useState("");
   const [acknowledged, setAcknowledged] = useState(false);
@@ -376,7 +388,7 @@ function FinishStep({
           if (!complete || !method) return;
           void onSubmit({
             method,
-            refundedAt: refundInstant(refundedDate),
+            refundedAt: refundInstant(refundedDate, frozenNow, notBefore),
             ...(method === "BANK_TRANSFER"
               ? { bankReference: bankReference.trim() }
               : { voucherNumber: voucherNumber.trim(), recipientAcknowledged: acknowledged }),

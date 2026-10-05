@@ -1859,7 +1859,8 @@ export function DealCockpit({
     app != null &&
     app.status !== "CANCELLED" &&
     (app.status === "CLOSED"
-      ? canCancelClosedDeal && deal?.forward?.mayCancelFinalized === true && !app.disbursedAt
+      ? // A recorded supplier payment bars bare cancellation just as the company's own payment does.
+        canCancelClosedDeal && deal?.forward?.mayCancelFinalized === true && !app.disbursedAt && !app.supplierDisbursementStatus
       : canCreateApplication && (app.status === "APPROVED" ? canApproveApplication : true));
   // The caller holds the cancel authority but the server still refuses: with no
   // disbursement authority the missing piece is a manager; with it, only the
@@ -1869,6 +1870,7 @@ export function DealCockpit({
     deal?.forward?.planV2 === true &&
     deal.forward.mayCancelFinalized !== true &&
     !app.disbursedAt &&
+    !app.supplierDisbursementStatus &&
     canCancelClosedDeal
       ? canConfirmFinanceDisbursement
         ? "FORWARD"
@@ -2805,6 +2807,7 @@ export function DealCockpit({
           plannedCustodyWithheld: dealCosts?.plannedCustodyWithheld ?? false,
           recommended: dealCosts?.recommendedCustody ?? null,
           openPeriodToday: dealCosts?.custodyPostsNow,
+          reopenLocked: unwindStatus?.status === "ACTIVE",
           dealStopped:
             // The issuing commands' own predicate, when the read has it;
             // the local status check stays as the fallback while it loads.
@@ -2920,9 +2923,12 @@ export function DealCockpit({
                 submitting: unwindSubmitting,
                 error: unwindError,
                 formatMinor: (minor: number) => custodyMoney(minor, economicsCurrencyCode),
+                notBefore: app.disbursedAt,
                 onOpenChange: (next: boolean) => {
                   setUnwindOpen(next);
                   if (next) setUnwindError(null);
+                  // A closed dialog ends its attempt: its key is retired so a later one starts clean.
+                  else unwindKeyRef.current = null;
                 },
                 onStart: async (reason: string) => {
                   await runUnwind("start", "UnwindStartedSuccess", (idempotencyKey) =>
@@ -2956,7 +2962,11 @@ export function DealCockpit({
           : undefined
       }
       forwardCorrection={
-        deal?.forward?.planV2 === true && deal.forward.mayRecord === true && deal.forward.onBooksForwardId
+        deal?.forward?.planV2 === true &&
+        deal.forward.mayRecord === true &&
+        deal.forward.onBooksForwardId &&
+        // A live unwind owns the forward payment: the server refuses either correction meanwhile.
+        unwindStatus?.status !== "ACTIVE"
           ? {
               canVoid: deal.forward.transferConfirmed !== true,
               open: forwardCorrection,
@@ -4755,6 +4765,7 @@ export function DealCockpitView({
     submitting: boolean;
     error: string | null;
     formatMinor: (minor: number) => string;
+    notBefore?: number;
     onOpenChange: (open: boolean) => void;
     onStart: (reason: string) => void | Promise<void>;
     onForwardReturn: (values: { returnedAt: number; reference: string }) => void | Promise<void>;
@@ -6731,6 +6742,16 @@ export function DealCockpitView({
           {t(unwind.status.status === "ACTIVE" ? "UnwindInProgressBadge" : "UnwindPaidDealBanner")}
         </p>
       )}
+      {unwind && !unwind.offered && unwind.status.status === "ACTIVE" && (
+        // A viewer who may act on none of it still sees that the deal is being unwound.
+        <p
+          className="rounded-md border border-amber-500/40 border-s-4 border-s-amber-500 bg-amber-500/5 p-3 text-sm"
+          role="status"
+          data-testid="deal-unwind-banner"
+        >
+          {t("UnwindInProgressBadge")}
+        </p>
+      )}
       {unwind && !unwind.offered && unwind.hint && (
         <p className="text-sm text-muted-foreground" data-testid="deal-unwind-hint">
           {(() => {
@@ -7266,6 +7287,7 @@ export function DealCockpitView({
           submitting={unwind.submitting}
           error={unwind.error}
           formatMinor={unwind.formatMinor}
+          notBefore={unwind.notBefore}
           t={t}
           onOpenChange={unwind.onOpenChange}
           onStart={unwind.onStart}

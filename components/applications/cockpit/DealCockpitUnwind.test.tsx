@@ -328,6 +328,40 @@ describe("SCRUM-691 / 693 -- Unwind deal replaces Cancel on a paid deal", () => 
     expect(call.refundedAt as number).toBeGreaterThanOrEqual(startedAt);
   });
 
+  test("a refund dated the day the finance company paid is never before that payment (server refuses it)", async () => {
+    const paidAt = Date.UTC(2026, 9, 3, 14, 0, 0);
+    render_(ACTIVE("AWAITING_FINISH", "BANK_TRANSFER"), { disbursedAt: paidAt });
+    fireEvent.click(screen.getByTestId("deal-unwind-deal"));
+    fireEvent.change(screen.getByLabelText("UnwindRefundDateLabel"), { target: { value: "2026-10-03" } });
+    fireEvent.change(screen.getByLabelText("UnwindBankReferenceLabel"), { target: { value: "TRX-1" } });
+    fireEvent.change(screen.getByLabelText("UnwindCreditNoteLabel"), { target: { value: "CN-7" } });
+    fireEvent.change(screen.getByLabelText("UnwindVehicleNoteLabel"), { target: { value: "ok" } });
+    fireEvent.click(await screen.findByRole("option", { name: "UnwindDispositionRefund" }));
+    fireEvent.click(screen.getByTestId("deal-unwind-finish-submit"));
+    await waitFor(() => expect(mutationCalls.get("dealUnwind:finishDealUnwind")).toHaveLength(1));
+    const call = mutationCalls.get("dealUnwind:finishDealUnwind")![0] as Record<string, unknown>;
+    // Midnight of that day (2026-10-03T00:00Z) predates the 14:00Z payment.
+    expect(call.refundedAt).toBe(paidAt);
+  });
+
+  test("a deal the finance company paid the supplier on is not offered Cancel, which the server refuses", () => {
+    render_(
+      { ...NO_UNWIND, eligibility: { ...NO_UNWIND.eligibility, canStart: false }, refusals: { start: { code: "DEAL_UNWIND_NOT_ELIGIBLE", message: "x" } } },
+      { disbursedAt: undefined, supplierDisbursementStatus: "CONFIRMED" }
+    );
+    expect(screen.queryByTestId("deal-cancel-application")).toBeNull();
+  });
+
+  test("a viewer who can act on none of an active unwind still sees that it is in progress, with no button", () => {
+    render_({
+      ...ACTIVE("AWAITING_FINISH"),
+      eligibility: { canStart: false, canForwardReturn: false, canFinish: false, canAbandon: false },
+      evidence: null,
+    });
+    expect(screen.queryByTestId("deal-unwind-deal")).toBeNull();
+    expect(screen.getByTestId("deal-unwind-banner").textContent).toBe("UnwindInProgressBadge");
+  });
+
   test("a cash remittance is refunded as cash: voucher and acknowledgement, no bank reference", () => {
     render_(ACTIVE("AWAITING_FINISH", "CASH"));
     fireEvent.click(screen.getByTestId("deal-unwind-deal"));

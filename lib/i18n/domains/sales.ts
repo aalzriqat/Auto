@@ -2084,8 +2084,8 @@ const serverErrorMessages = defineBilingualMessages({
     "اختر ما يحدث لها",
   ],
   UnwindDispositionRefund: [
-    "Refund it to the customer",
-    "ردّها للعميل",
+    "Mark it to be refunded to the customer (paid out separately)",
+    "تحديدها للردّ للعميل (يُصرف الردّ بشكل منفصل)",
   ],
   UnwindDispositionCredit: [
     "Keep it as customer credit",
