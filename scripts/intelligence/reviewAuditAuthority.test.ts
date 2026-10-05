@@ -204,6 +204,21 @@ describe("SCRUM-644 S3b audit binding reader", () => {
     expect(readAll([older, rerun])).toEqual({ status: BINDING_STATUS.BOUND, payload: rerun.payload });
   });
 
+  test("two bindings tied on run and attempt that disagree are UNAVAILABLE, in either order (N2)", () => {
+    const first = genuine();
+    const second = genuine();
+    second.payload = { ...second.payload, outcome: "INCOMPLETE" } as typeof second.payload;
+    for (const order of [[first, second], [second, first]]) {
+      expect(readAll(order)).toEqual({
+        status: BINDING_STATUS.UNAVAILABLE,
+        reason: UNAVAILABLE_REASON.AMBIGUOUS_BINDING,
+        rejections: [],
+      });
+    }
+    // The same binding reached twice is not a disagreement.
+    expect(readAll([first, genuine()])).toEqual({ status: BINDING_STATUS.BOUND, payload: first.payload });
+  });
+
   test("an untrusted decoy beside a genuine binding neither wins nor blocks it", () => {
     const decoy = genuine();
     decoy.run.id = RUN_ID + 9;
@@ -355,6 +370,7 @@ describe("SCRUM-644 S3b publishable payload", () => {
       ...base,
       outcome: { kind: "VERDICT", verdict: VERDICTS.INCOMPLETE, note: HOSTILE },
       evaluation: {
+        verdict: VERDICTS.INCOMPLETE,
         reasons: [
           { code: "NO_EVIDENCE", requirement: "BOUNDARY", detail: HOSTILE },
           { code: "MISSING_OBLIGATION", requirement: HOSTILE, detail: HOSTILE },
@@ -379,7 +395,7 @@ describe("SCRUM-644 S3b publishable payload", () => {
   });
 
   test("the payload is honest about what it does not prove", () => {
-    const payload = buildAuditPayload({ ...base, outcome: { kind: "VERDICT", verdict: VERDICTS.COMPLETE }, evaluation: {} });
+    const payload = buildAuditPayload({ ...base, outcome: { kind: "VERDICT", verdict: VERDICTS.COMPLETE }, evaluation: { verdict: VERDICTS.COMPLETE } });
     expect(payload).toMatchObject({
       tests: "registered-not-executed",
       runtime: "not-collected",
@@ -393,7 +409,7 @@ describe("SCRUM-644 S3b publishable payload", () => {
     const payload = buildAuditPayload({
       ...base,
       outcome: { kind: "VERDICT", verdict: VERDICTS.INCOMPLETE },
-      evaluation: { reasons: [{ code: "RUNTIME_UNPROVEN", requirement: "BOUNDARY", detail: "x" }] },
+      evaluation: { verdict: VERDICTS.INCOMPLETE, reasons: [{ code: "RUNTIME_UNPROVEN", requirement: "BOUNDARY", detail: "x" }] },
     });
     expect(payload.conclusion).toBe("failure");
     expect(payload.title).toBe("record audit: runtime unproven · valid for main @ aaaaaaa");
@@ -401,7 +417,7 @@ describe("SCRUM-644 S3b publishable payload", () => {
 
   test("a record cannot size the payload: reasons are deduplicated by code and requirement", () => {
     const reasons = Array.from({ length: 10_000 }, (_, i) => ({ code: "NO_EVIDENCE", requirement: i % 2 ? "BOUNDARY" : HOSTILE, detail: HOSTILE }));
-    const payload = buildAuditPayload({ ...base, outcome: { kind: "VERDICT", verdict: VERDICTS.INCOMPLETE }, evaluation: { reasons } });
+    const payload = buildAuditPayload({ ...base, outcome: { kind: "VERDICT", verdict: VERDICTS.INCOMPLETE }, evaluation: { verdict: VERDICTS.INCOMPLETE, reasons } });
     expect(payload.reasons).toEqual([
       { code: "NO_EVIDENCE", requirement: undefined },
       { code: "NO_EVIDENCE", requirement: "BOUNDARY" },
@@ -413,7 +429,7 @@ describe("SCRUM-644 S3b publishable payload", () => {
     const payload = buildAuditPayload({
       ...base,
       outcome: { kind: "VERDICT", verdict: VERDICTS.INCOMPLETE },
-      evaluation: { reasons: [{ code: ["NO_EVIDENCE"], requirement: "BOUNDARY" }] },
+      evaluation: { verdict: VERDICTS.INCOMPLETE, reasons: [{ code: ["NO_EVIDENCE"], requirement: "BOUNDARY" }] },
     });
     expect(payload.reasons).toEqual([]);
   });
@@ -423,6 +439,7 @@ describe("SCRUM-644 S3b publishable payload", () => {
       ...base,
       outcome: { kind: "VERDICT", verdict: VERDICTS.INCOMPLETE },
       evaluation: {
+        verdict: VERDICTS.INCOMPLETE,
         reasons: [
           { code: "APPROVED", requirement: "BOUNDARY" },
           { code: "A".repeat(5_000), requirement: "BOUNDARY" },
@@ -437,13 +454,18 @@ describe("SCRUM-644 S3b publishable payload", () => {
     const source = readFileSync("scripts/intelligence/reviewEvidence.mjs", "utf8");
     const emitted = new Set([...source.matchAll(/code: "([A-Z_]+)"/g)].map((match) => match[1]));
     expect([...REASON_CODES].sort()).toEqual([...emitted].sort());
+    // A code emitted any other way (single quotes, a variable, shorthand) would
+    // escape the set above, so every emission must use the literal form.
+    const literal = [...source.matchAll(/(?<![.\w])code: "[A-Z_]+"/g)].length;
+    const anyForm = [...source.matchAll(/(?<![.\w])code\s*[:,}]/g)].length;
+    expect(anyForm).toBe(literal);
   });
 
   test("an obligation status outside the evaluator's set is not published", () => {
     const payload = buildAuditPayload({
       ...base,
       outcome: { kind: "VERDICT", verdict: VERDICTS.INCOMPLETE },
-      evaluation: { obligations: [{ requirement: "BOUNDARY", status: HOSTILE }, { requirement: "BOUNDARY", status: "MISSING" }] },
+      evaluation: { verdict: VERDICTS.INCOMPLETE, obligations: [{ requirement: "BOUNDARY", status: HOSTILE }, { requirement: "BOUNDARY", status: "MISSING" }] },
     });
     expect(payload.obligations).toEqual([{ requirement: "BOUNDARY", status: "MISSING" }]);
   });
@@ -457,12 +479,18 @@ describe("SCRUM-644 S3b publishable payload", () => {
     ).toBe("success");
   });
 
+  test("a VERDICT outcome with no evaluator verdict to agree with is refused (N1)", () => {
+    for (const evaluation of [undefined, {}, { verdict: undefined }, { verdict: null }]) {
+      expect(() => buildAuditPayload({ ...base, outcome: { kind: "VERDICT", verdict: VERDICTS.COMPLETE }, evaluation })).toThrow();
+    }
+  });
+
   test("unresolved reviews stay visible beside an INCOMPLETE verdict", () => {
     const payload = buildAuditPayload({
       ...base,
       requirements: ["BOUNDARY", "REVIEW_X"],
       outcome: { kind: "VERDICT", verdict: VERDICTS.INCOMPLETE },
-      evaluation: { reasons: [{ code: "RUNTIME_UNPROVEN", requirement: "BOUNDARY" }], unresolvedReviews: ["REVIEW_X"] },
+      evaluation: { verdict: VERDICTS.INCOMPLETE, reasons: [{ code: "RUNTIME_UNPROVEN", requirement: "BOUNDARY" }], unresolvedReviews: ["REVIEW_X"] },
     });
     expect(payload.unresolvedReviews).toEqual(["REVIEW_X"]);
   });

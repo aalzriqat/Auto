@@ -44,6 +44,7 @@ export const UNAVAILABLE_REASON = Object.freeze({
   NO_CURRENT_BINDING: "NO_CURRENT_BINDING",
   STALE_CONTROLLER: "STALE_CONTROLLER",
   HEAD_MOVED: "HEAD_MOVED",
+  AMBIGUOUS_BINDING: "AMBIGUOUS_BINDING",
 });
 
 // Controller outcomes that are not verdicts: the PR's shape or the
@@ -156,9 +157,9 @@ export function readAuditBinding({ candidates, repositoryId, currentMainTip, prN
     if (accepted) trusted.push(candidate);
     else rejections.forEach((code) => rejected.add(code));
   }
+  // Nothing present, or nothing trusted, is the same absence: no binding.
   if (trusted.length === 0) return unavailable(UNAVAILABLE_REASON.NO_CURRENT_BINDING, [...rejected].sort());
 
-  // Nothing present, or nothing trusted, is the same absence: no binding.
   // The predicate has proven payload.mainTip is a commit SHA, so an unreadable
   // current tip can never equal it.
   const current = trusted.filter((candidate) => candidate.payload.mainTip === currentMainTip);
@@ -166,7 +167,11 @@ export function readAuditBinding({ candidates, repositoryId, currentMainTip, prN
   const forThisPr = current.filter((candidate) => isId(prNumber) && candidate.payload.N === prNumber);
   if (forThisPr.length === 0) return unavailable(UNAVAILABLE_REASON.NO_CURRENT_BINDING);
 
-  const [newest] = forThisPr.sort(newerFirst);
+  const [newest, next] = forThisPr.sort(newerFirst);
+  // A tie on (run, attempt) would otherwise be settled by the caller's order.
+  if (next && newerFirst(newest, next) === 0 && JSON.stringify(next.payload) !== JSON.stringify(newest.payload)) {
+    return unavailable(UNAVAILABLE_REASON.AMBIGUOUS_BINDING);
+  }
   if (!isCommitSha(headSha) || newest.payload.H !== headSha) return unavailable(UNAVAILABLE_REASON.HEAD_MOVED);
   return { status: BINDING_STATUS.BOUND, payload: newest.payload };
 }
@@ -235,7 +240,8 @@ export function buildAuditPayload({
   const keep = (requirement) => (trusted.has(requirement) ? requirement : undefined);
   // The evaluator's verdict and the outcome being published must be the same
   // judgement; a mismatch is a controller bug, not something to paper over.
-  if (outcome?.kind === "VERDICT" && evaluation?.verdict !== undefined && evaluation.verdict !== outcome.verdict) {
+  // The evaluator always returns a verdict, so a missing one is a mismatch too.
+  if (outcome?.kind === "VERDICT" && evaluation?.verdict !== outcome.verdict) {
     throw new Error("review-audit outcome disagrees with the evaluation verdict");
   }
   // One reason per failing evidence item would let a record size the payload;
