@@ -3572,10 +3572,17 @@ export function DealCockpit({
                       number: dealCosts.legalInvoiceNumber,
                       date: dealCosts.legalInvoiceDate,
                       issuedTo: dealCosts.legalInvoiceIssuedTo,
-                      onRecord: () => {
-                        setLegalInvoiceError(null);
-                        setRecordingLegalInvoice(true);
-                      },
+                      // SCRUM-691 F-PNTR-5: `recordLegalInvoice` refuses once
+                      // the economics are frozen (finalized or CLOSED); the
+                      // screen reads the same predicate instead of offering a
+                      // button the server will refuse. The recorded invoice
+                      // stays visible.
+                      onRecord: (dealCosts.economicsFrozen?.frozen ?? app?.status === "CLOSED")
+                        ? undefined
+                        : () => {
+                            setLegalInvoiceError(null);
+                            setRecordingLegalInvoice(true);
+                          },
                     }
                   : undefined,
             }
@@ -4731,7 +4738,8 @@ export function DealCockpitView({
       number?: string;
       date?: number;
       issuedTo?: string;
-      onRecord: () => void;
+      /** Absent once the server freezes the deal's economics (SCRUM-691 F-PNTR-5). */
+      onRecord?: () => void;
     };
   };
   /**
@@ -5907,7 +5915,7 @@ export function DealCockpitView({
           <ClipboardCheck className="h-4 w-4 shrink-0 text-primary" aria-hidden />
           {t("ClosingReadinessHeading")}
         </CardTitle>
-        {closingChecklist.legalInvoice && (
+        {closingChecklist.legalInvoice?.onRecord && (
           <Button
             type="button"
             size="sm"
