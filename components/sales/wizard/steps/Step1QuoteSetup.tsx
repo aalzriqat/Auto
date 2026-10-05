@@ -686,13 +686,17 @@ export default function Step1QuoteSetup({
         {profitVerdict && (profitVerdict.status === "REQUIRED" || profitVerdict.status === "PENDING" || profitVerdict.status === "REJECTED") && (
           <Alert variant="destructive" className="bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400">
             <ShieldAlert className="h-4 w-4" />
-            <AlertTitle>Approval Required</AlertTitle>
+            <AlertTitle>{t("WizardProfitApprovalRequiredTitle")}</AlertTitle>
             <AlertDescription className="mt-2 flex flex-col gap-3 items-start">
-              <p>At this price the profit over the list price ({currency.format(profitVerdict.margin)}) is below the minimum required profit for this vehicle ({currency.format(profitVerdict.minimumProfit)}).</p>
+              <p>
+                {t("WizardProfitApprovalRequiredBody")
+                  .replace("{margin}", currency.format(profitVerdict.margin))
+                  .replace("{minimum}", currency.format(profitVerdict.minimumProfit))}
+              </p>
 
               {profitVerdict.status === "PENDING" ? (
                 <div className="flex items-center gap-2 text-yellow-600 dark:text-yellow-400 bg-yellow-500/10 px-3 py-1.5 rounded-md text-sm font-medium">
-                  Approval request is currently pending. Please wait for a manager.
+                  {t("WizardProfitApprovalPending")}
                 </div>
               ) : (
                 <>
@@ -700,7 +704,7 @@ export default function Step1QuoteSetup({
                       salesperson may change the price or ask again. */}
                   {profitVerdict.status === "REJECTED" ? (
                     <div className="flex items-center gap-2 text-red-600 dark:text-red-400 bg-red-500/10 px-3 py-1.5 rounded-md text-sm font-medium">
-                      Your request for this profit amount was rejected. Please increase the profit or request again.
+                      {t("WizardProfitApprovalRejected")}
                     </div>
                   ) : null}
                   <Button
@@ -710,7 +714,9 @@ export default function Step1QuoteSetup({
                     onClick={handleRequestApproval}
                     disabled={isRequesting}
                   >
-                    {isRequesting ? "Requesting..." : "Request Profit Approval"}
+                    {isRequesting
+                      ? t("WizardProfitApprovalRequesting")
+                      : t("WizardProfitApprovalRequestAction")}
                   </Button>
                 </>
               )}
@@ -720,9 +726,9 @@ export default function Step1QuoteSetup({
         {profitVerdict?.status === "APPROVED" && (
           <Alert className="bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400">
             <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-            <AlertTitle>Profit Approved</AlertTitle>
+            <AlertTitle>{t("WizardProfitApprovedTitle")}</AlertTitle>
             <AlertDescription>
-              Management approved this sale price (profit over the list price: {currency.format(profitVerdict.margin)}). You may proceed.
+              {t("WizardProfitApprovedBody").replace("{margin}", currency.format(profitVerdict.margin))}
             </AlertDescription>
           </Alert>
         )}

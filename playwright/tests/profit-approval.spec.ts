@@ -18,11 +18,11 @@ import { createVehicle, gotoOrgRoute, testDataSuffix } from "../utils";
  * stays open on page one while the manager responds on page two, because
  * navigating the wizard away would discard the in-progress quote.
  *
- * Locale note: "Approval Required", "Profit Approved", "Request Profit
- * Approval" and the two status sentences are hard-coded English in the
- * component. "Profit", "Next", "Approve" and "Reject" are NOT — they come from
- * t() and would be Arabic under an ar locale. auth.setup.ts pins the locale to
- * English via storageState, which every page in the context inherits.
+ * Locale note: every string asserted here comes from t() and would be Arabic
+ * under an ar locale ("Approval Required", "Profit Approved", "Request Profit
+ * Approval" and the two status sentences are the English halves of the
+ * Wizard* keys added by SCRUM-656). auth.setup.ts pins the locale to English
+ * via storageState, which every page in the context inherits.
  */
 
 // These tests each do several full navigations plus a cold second page that
