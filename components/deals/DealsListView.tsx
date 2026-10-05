@@ -469,7 +469,9 @@ export function DealsListView({
                       </TableCell>
                       <TableCell className="hidden @4xl:table-cell">
                         {row.reason ? (
-                          <ReasonLine reason={row.reason} t={t} />
+                          <div className="max-w-[12rem]">
+                            <ReasonLine reason={row.reason} t={t} />
+                          </div>
                         ) : (
                           <span className="text-sm text-muted-foreground">—</span>
                         )}
@@ -491,7 +493,7 @@ export function DealsListView({
                         </div>
                       </TableCell>
                       <TableCell className="hidden text-sm @5xl:table-cell">
-                        <p data-fact="owner" dir="auto" className="truncate rtl:text-right" title={row.salespersonName}>
+                        <p data-fact="owner" dir="auto" className="max-w-[10rem] truncate rtl:text-right" title={row.salespersonName}>
                           <bdi>{row.salespersonName}</bdi>
                         </p>
                         <p data-fact="date" className="whitespace-nowrap text-xs text-muted-foreground">

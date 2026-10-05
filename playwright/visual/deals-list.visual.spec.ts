@@ -51,6 +51,13 @@ const MAX_ROW_HEIGHT = 96;
 const MAX_CARD_HEIGHT = 156;
 const LATIN_MONTH = /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b/;
 
+/**
+ * Inter/Cairo are not loaded, so each engine falls back to its own sans. CI's
+ * Linux fallback (DejaVu Sans) is wider than Windows' and overflowed the
+ * 1440px register by 26px where a Windows run passed; paint every run in a
+ * wide face so a local pass means a CI pass.
+ */
+const WIDE_FONT = `*{font-family:Verdana,"DejaVu Sans",sans-serif !important}`;
 let css = "";
 test.describe.configure({ mode: "serial" });
 
@@ -94,7 +101,7 @@ function documentFor(
   const dir = locale === "ar" ? "rtl" : "ltr";
   return `<!doctype html>
 <html dir="${dir}" lang="${locale}" class="${theme === "dark" ? "dark" : ""}">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>${WIDE_FONT}</style></head>
 <body class="${locale === "ar" ? "font-cairo" : "font-inter"} antialiased">
 <div class="flex h-screen w-full overflow-hidden bg-slate-50 dark:bg-zinc-950/40" data-testid="shell">
   <aside class="hidden md:flex flex-col w-64 border-e border-slate-200/50 bg-white shadow-sm shrink-0"></aside>
