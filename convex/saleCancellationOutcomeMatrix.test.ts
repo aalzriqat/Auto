@@ -28,10 +28,12 @@
  * runtime (no OCC, no paginated-query limit) and not production data.
  */
 import { finalizeAsOwner, readyDeal, refusalMessageOf, seedFinancedDealership } from "../test-utils/financedDealFixture";
+import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { settleOutbox } from "../test-utils/outboxWork";
 import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import schema from "./schema";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -153,34 +155,71 @@ const FLOWS: Flow[] = [
 // ── observation ─────────────────────────────────────────────────────────────
 
 /**
- * Every table a cancellation can touch, read whole. One dealership per test, so
- * no org filter is needed - and none is wanted: a row written under another org
- * would be exactly the kind of leak a snapshot comparison should catch.
+ * EVERY table in the schema, read whole. A hand-picked list silently omits the
+ * table a cancellation happens to patch (`depositVehicleHolds` and
+ * `accountBalanceSnapshots` were both missing), so a refusal that modified one
+ * of them stayed green. One dealership per test, so no org filter is needed -
+ * and none is wanted: a row written under another org would be exactly the kind
+ * of leak a snapshot comparison should catch.
  */
-const SNAPSHOT_TABLES = [
-  "sales", "vehicles", "financeApplications", "journalEntries", "journalLines", "accountingEvents",
-  "pendingAccountingEvents", "deposits", "depositApplications", "receivableDocuments", "paymentAllocations",
-  "canonicalPayments", "transactions", "vehicleSupplierPayables", "commitmentRoots", "vehicleCommitmentClaims",
-  "applicationStatusLog", "financialAuditLog", "commandIdempotency", "notifications",
-] as const;
+const SNAPSHOT_TABLES = Object.keys(schema.tables);
 
-type Snapshot = Record<(typeof SNAPSHOT_TABLES)[number], unknown[]>;
+type Snapshot = Awaited<ReturnType<typeof dbSnapshot>>;
 
-/** Full row CONTENT of every touched table, ordered by _id. */
+/** Full row CONTENT of every table, ordered by _id. */
 async function snapshot(s: Dealership): Promise<Snapshot> {
-  return await s.t.run(async (ctx) => {
-    const out = {} as Snapshot;
-    for (const table of SNAPSHOT_TABLES) {
-      const rows = await ctx.db.query(table).collect();
-      out[table] = rows.sort((a, b) => (a._id < b._id ? -1 : 1));
-    }
-    return out;
-  });
+  return await dbSnapshot(s.t, SNAPSHOT_TABLES);
 }
 
 /** Tables whose content differs between two snapshots - empty means nothing moved. */
 function changedTables(before: Snapshot, after: Snapshot): string[] {
   return SNAPSHOT_TABLES.filter((table) => JSON.stringify(before[table]) !== JSON.stringify(after[table]));
+}
+
+type SnapshotBalances = Record<string, { debit: number; credit: number }>;
+
+/**
+ * Running balance per `account|currency|period`, summed across the random shards
+ * of `accountBalanceSnapshots` - the rows a closed period's trial balance reads.
+ */
+async function snapshotBalances(s: Dealership): Promise<SnapshotBalances> {
+  return await s.t.run(async (ctx) => {
+    const out: SnapshotBalances = {};
+    for (const row of await ctx.db.query("accountBalanceSnapshots").collect()) {
+      const account = await ctx.db.get(row.accountId);
+      const key = `${account?.systemKey ?? account?.code ?? String(row.accountId)}|${row.currency}|${row.periodId}`;
+      const cur = out[key] ?? { debit: 0, credit: 0 };
+      cur.debit += row.runningDebitMinor;
+      cur.credit += row.runningCreditMinor;
+      out[key] = cur;
+    }
+    return out;
+  });
+}
+
+/** Net (debit - credit) per `account|currency` across all periods; zero entries dropped. */
+function netPerAccount(balances: SnapshotBalances): Record<string, number> {
+  const net: Record<string, number> = {};
+  for (const [key, b] of Object.entries(balances)) {
+    const k = key.split("|").slice(0, 2).join("|");
+    net[k] = (net[k] ?? 0) + b.debit - b.credit;
+  }
+  return Object.fromEntries(Object.entries(net).filter(([, v]) => v !== 0));
+}
+
+/**
+ * The CONSUMER: the public trial balance as of the end of the last period, which
+ * reads `accountBalanceSnapshots` for every period (`getCumulativeBalancesAsOf`)
+ * rather than scanning journal lines. Rows keyed by account code (ids differ per org).
+ */
+async function trialBalanceRows(s: Dealership) {
+  const periods = await s.owner.as.query(api.accountingPeriods.list, { orgId: s.orgId });
+  const toDate = Math.max(...periods.map((p) => p.endDate));
+  const tb = await s.owner.as.query(api.accountingReports.trialBalance, { orgId: s.orgId, toDate });
+  return {
+    isBalanced: tb.isBalanced,
+    rows: tb.rows.map((r) => ({ code: r.code, currency: r.currency, debit: r.debitMinor, credit: r.creditMinor })),
+  };
 }
 
 /** Net debit-minus-credit per system account over every journal line; zero entries dropped. */
@@ -312,6 +351,17 @@ describe.each(FLOWS)("SCRUM-704 outcome matrix - $door", ({ make }) => {
     expect(await snapshot(d.s)).toEqual(before);
   });
 
+  test("(ii-b) the snapshot reads every schema table and sees an in-place patch to a snapshot row", async () => {
+    const d = await make("snapsee");
+    expect(SNAPSHOT_TABLES).toEqual(expect.arrayContaining(["accountBalanceSnapshots", "depositVehicleHolds"]));
+    const before = await snapshot(d.s);
+    await d.s.t.run(async (ctx) => {
+      const row = (await ctx.db.query("accountBalanceSnapshots").first())!;
+      await ctx.db.patch(row._id, { runningDebitMinor: row.runningDebitMinor + 1 });
+    });
+    expect(changedTables(before, await snapshot(d.s))).toEqual(["accountBalanceSnapshots"]);
+  });
+
   test("(iv) re-entry on an already CANCELLED sale: the SALE-side books do not move", async () => {
     const d = await make("reenter");
     await d.cancel("first");
@@ -417,6 +467,25 @@ describe("SCRUM-704 (iii) a closed period: the reversal cannot post today", () =
     expect(drained.ledgerBalanced).toBe(true);
     expect(drained.pending).toEqual(["REVERSE:POSTED", "REVERSE:POSTED", "REVERSE:POSTED"]);
     expect(await netByAccount(deferred.s)).toEqual(referenceNet);
+
+    // The CONSUMER agrees too. A closed period's trial balance reads the running
+    // snapshots, not the journal lines, so a reversal that inserted its lines but
+    // missed the snapshot update would pass every journal-line assertion above.
+    const refTb = await trialBalanceRows(immediate.s);
+    const defTb = await trialBalanceRows(deferred.s);
+    expect(refTb.rows.length).toBeGreaterThan(0);
+    expect(defTb).toEqual(refTb);
+    expect(defTb.isBalanced).toBe(true);
+    // And the snapshot rows themselves, per account/currency (summed over shards and periods),
+    // equal the reference's and the journal-line net.
+    const defNet = netPerAccount(await snapshotBalances(deferred.s));
+    expect(defNet).toEqual(netPerAccount(await snapshotBalances(immediate.s)));
+    const lineNet: Record<string, number> = {};
+    for (const [key, value] of Object.entries(defNet)) {
+      const account = key.split("|")[0];
+      lineNet[account] = (lineNet[account] ?? 0) + value;
+    }
+    expect(lineNet).toEqual(referenceNet);
 
     // FINDING (SCRUM-704 F3): the OPERATIONAL state does NOT converge. The immediate cancel leaves the
     // deposit's hold ACTIVE and the car RESERVED for that customer; the deferred cancel, even after the

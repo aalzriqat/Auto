@@ -4,6 +4,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
+import { MAX_COST_BASIS_EXPENSES } from "./utils/vehicleCostBasis";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -29,12 +30,16 @@ const MODULES = import.meta.glob("./**/*.*s");
  *
  * Three kinds of test, deliberately kept apart:
  *  1. LARGE REALISTIC DEAL - hundreds of rows in every related table at once.
- *     Every door must resolve, and the test records how much of each ceiling it
- *     used.
+ *     Every door must resolve to a payload with its key fields. The test does
+ *     NOT record how much of each ceiling was used: convex-test enforces the
+ *     ceilings but exposes no usage counters, so "resolves" is the only signal.
  *  2. BOUNDED READ PROOF - the one per-deal read that is capped by design
  *     (`financedDealOverview` reads the vehicle's expenses with `.take(cap + 1)`)
  *     is fed more bytes than the read ceiling. It resolves only while the cap
  *     holds; making it `.collect()` fails this test (mutation-proven, see report).
+ *     Over the cap the served cost basis is WITHHELD as `TOO_MANY_ROWS` (asserted
+ *     explicitly), and a case AT the cap asserts the real computed cost basis, so
+ *     removing the cost-basis projection cannot pass on a bare non-null check.
  *  3. FINDING - reads that are UNBOUNDED today. They are not reachable at a
  *     realistic row count (it takes >4,000 rows of ~4 KB free text on ONE deal
  *     to trip the 16 MiB ceiling), but they are unbounded by construction, so
@@ -104,9 +109,25 @@ async function seedVehicle(s: Base, kind: "STOCK" | "SOURCED") {
   );
 }
 
-async function seedFinancedDeal() {
+/**
+ * `preDealCapitalized` rows are registered BEFORE the application (the cost basis
+ * only counts rows whose `_creationTime` precedes the application's), each
+ * capitalizing 1 major unit.
+ */
+async function seedFinancedDeal(opts: { preDealCapitalized?: number } = {}) {
   const s = await seedBase();
   const vehicleId = await seedVehicle(s, "STOCK");
+  const pre = opts.preDealCapitalized ?? 0;
+  if (pre > 0) {
+    await bulk(s.t, pre, (db, i) =>
+      db.insert("expenses", {
+        orgId: s.orgId, vehicleId, title: `Prep ${i}`, amount: 1, date: s.now, category: "REPAIR",
+        status: "PAID", accountingTreatment: "CAPITALIZED_INVENTORY", capitalizedAmount: 1,
+      })
+    );
+    // `_creationTime` is millisecond-resolution: make the application strictly later than every row.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
   const quoteId = await s.t.run((ctx) =>
     ctx.db.insert("quotes", {
       orgId: s.orgId,
@@ -299,21 +320,36 @@ describe("large realistic deal resolves under the platform limits (limits ENFORC
       const s = await seedFinancedDeal();
       for (const fill of Object.values(FINANCED_TABLES)) await fill(s, HEAVY_ROWS, SMALL);
       const result = await FINANCED_DOORS[door](s);
-      expect(result).not.toBeNull();
+      if (door !== "dealOverview.financedDealOverview") {
+        expect(result).toMatchObject({ dealKind: "FINANCED", applicationId: s.applicationId, status: "APPROVED" });
+      }
+      if (door === "dealWorkspace.financedDealCockpit") {
+        const workspace = result as { pendingDepositRequests: unknown[] };
+        expect(workspace.pendingDepositRequests.length).toBeGreaterThan(0);
+      }
+      if (door === "dealOverview.financedDealOverview") {
+        // HEAVY_ROWS (300) expenses are past the 200-row cost-basis cap: the basis is WITHHELD
+        // with an explicit reason, never a prefix sum and never silently absent.
+        const overview = result as { vehicleCostBasis: unknown; financialSummary: unknown };
+        expect(overview.financialSummary).not.toBeNull();
+        expect(overview.vehicleCostBasis).toMatchObject({ available: false, reason: "TOO_MANY_ROWS" });
+      }
     },
     240_000
   );
 
   test("sales.dealCockpit with heavy expenses on an owned car", async () => {
     const s = await seedCashTable("owned car expenses", HEAVY_ROWS, SMALL);
-    expect(await s.asOwner.query(api.sales.dealCockpit, { orgId: s.orgId, saleId: s.saleId })).not.toBeNull();
+    const cockpit = await s.asOwner.query(api.sales.dealCockpit, { orgId: s.orgId, saleId: s.saleId });
+    expect(cockpit).toMatchObject({ dealKind: "CASH", saleId: s.saleId, status: "COMPLETED" });
   }, 240_000);
 
   test.each(["consigned (through dealership) supplier payables", "consigned (direct to supplier) supplier receivables"])(
     "sales.dealCockpit with heavy %s",
     async (name) => {
       const s = await seedCashTable(name, HEAVY_ROWS, SMALL);
-      expect(await s.asOwner.query(api.sales.dealCockpit, { orgId: s.orgId, saleId: s.saleId })).not.toBeNull();
+      const cockpit = await s.asOwner.query(api.sales.dealCockpit, { orgId: s.orgId, saleId: s.saleId });
+      expect(cockpit).toMatchObject({ dealKind: "CASH", saleId: s.saleId, status: "COMPLETED" });
     },
     240_000
   );
@@ -327,7 +363,32 @@ describe("bounded read proof (limits ENFORCED)", () => {
     const s = await seedFinancedDeal();
     await FINANCED_TABLES.expenses(s, FAT_ROWS, FAT);
     const overview = await FINANCED_DOORS["dealOverview.financedDealOverview"](s);
-    expect(overview).not.toBeNull();
+    // Resolving is not enough: the over-cap reason must be the explicit TOO_MANY_ROWS refusal.
+    expect(overview).toMatchObject({ vehicleCostBasis: { available: false, reason: "TOO_MANY_ROWS" } });
+  }, 240_000);
+
+  test("AT the cap (200 pre-deal capitalized rows) the cost basis is really computed, not withheld", async () => {
+    const s = await seedFinancedDeal({ preDealCapitalized: MAX_COST_BASIS_EXPENSES });
+    const overview = (await FINANCED_DOORS["dealOverview.financedDealOverview"](s)) as {
+      vehicleCostBasis: {
+        available: boolean; consigned: boolean; baseMinor: number; eligibleExpensesMinor: number;
+        totalBeforeDealMinor: number; lineDetail: string; expenses: unknown[];
+      };
+    };
+    const basis = overview.vehicleCostBasis;
+    expect(basis).toMatchObject({ available: true, consigned: false, lineDetail: "SERVED" });
+    // Purchase price 9,500 major; each of the 200 rows capitalizes 1 major - same scale for both.
+    const scale = basis.baseMinor / 9_500;
+    expect(Number.isInteger(scale) && scale > 0).toBe(true);
+    expect(basis.expenses).toHaveLength(MAX_COST_BASIS_EXPENSES);
+    expect(basis.eligibleExpensesMinor).toBe(MAX_COST_BASIS_EXPENSES * scale);
+    expect(basis.totalBeforeDealMinor).toBe(basis.baseMinor + basis.eligibleExpensesMinor);
+  }, 240_000);
+
+  test("ONE past the cap (201 rows) flips the same deal to TOO_MANY_ROWS", async () => {
+    const s = await seedFinancedDeal({ preDealCapitalized: MAX_COST_BASIS_EXPENSES + 1 });
+    const overview = await FINANCED_DOORS["dealOverview.financedDealOverview"](s);
+    expect(overview).toMatchObject({ vehicleCostBasis: { available: false, reason: "TOO_MANY_ROWS" } });
   }, 240_000);
 });
 
