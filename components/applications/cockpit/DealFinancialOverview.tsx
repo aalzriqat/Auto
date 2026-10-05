@@ -264,11 +264,26 @@ export function DealFinancialOverview({
           value={m(summary.customerFirstPaymentMinor)}
           note={summary.customerFirstPaymentMinor === null ? absentNote("customerFirstPayment") : undefined}
         />
+        {/* SCRUM-690: the confirmed remittance is the receipt; the funded
+            portion below is only the financed slice of the approved amount. */}
+        {(summary.financier.receivedMinor !== null || unreadable.has("financierReceived")) && (
+          <Fact
+            testId="overview-financier-received"
+            label={t("OverviewFinancierReceived")}
+            value={m(summary.financier.receivedMinor)}
+            tone="in"
+            note={summary.financier.receivedMinor === null ? t("OverviewAmountUnreadable") : t("OverviewFinancierReceivedNote")}
+          />
+        )}
         <Fact
           testId="overview-financier"
           label={t("OverviewFinancierFunds")}
           value={m(summary.financier.fundedPortionMinor)}
-          note={summary.financier.fundedPortionMinor === null ? absentNote("financierFundedPortion") : undefined}
+          note={
+            summary.financier.fundedPortionMinor === null
+              ? absentNote("financierFundedPortion")
+              : t("OverviewFinancierFundedNote")
+          }
         />
         <Fact
           testId="overview-financier-balance"
