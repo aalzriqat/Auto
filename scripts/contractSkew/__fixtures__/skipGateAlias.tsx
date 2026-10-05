@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/rules-of-hooks -- detector fixtures: plain functions that call useQuery so each case is a named extraction site */
 /**
  * SCRUM-686. A boolean const alias of a `&&` guard chain that gates a
  * `cond ? { ...args } : "skip"` ternary. Mirrors components/sales/ProfitApprovalNotice.tsx
@@ -92,7 +93,7 @@ export function aliasNullCompare(args: Args) {
 /** NEGATIVE: the receiver is written, so the alias fact may be stale. */
 export function aliasReceiverWritten(args: Args) {
   const active = args.enabled && !!args.orgId;
-  args.orgId = null;
+  args.orgId = null as Args["orgId"];
   return useQuery(
     api.skipGate.aliasReceiverWritten,
     active ? { orgId: args.orgId as Id<"organizations"> } : "skip",
@@ -307,8 +308,7 @@ export function logicalAliasEscapes(a: Box | null) {
   );
 }
 export function commaAliasEscapes(a: Box) {
-  // eslint-disable-next-line no-sequences
-  const box = (0, a);
+  const box = (Math.random(), a);
   const active = box.id != null;
   opaqueMutator(a);
   return useQuery(
@@ -321,8 +321,8 @@ export function commaAliasEscapes(a: Box) {
  * so a second call (or another component) can null the field after the guard.
  */
 export function sharedParamsEscapes() {
-  const box = useParams<{ id: Id<"vehicles"> | null }>();
-  const other = useParams<{ id: Id<"vehicles"> | null }>();
+  const box = useParams<{ id: string }>() as { id: Id<"vehicles"> | null };
+  const other = useParams<{ id: string }>() as { id: Id<"vehicles"> | null };
   const active = box.id != null;
   opaqueMutator(other);
   return useQuery(
