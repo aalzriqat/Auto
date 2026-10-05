@@ -345,7 +345,7 @@ export function Step3Review({
       {/* ACTIONS */}
       <div className="flex flex-col-reverse sm:flex-row justify-between gap-3 pt-4 border-t">
         <Button variant="outline" onClick={onBack} disabled={isSubmitting} className="w-full sm:w-auto">
-          <ArrowLeft className="w-4 h-4 me-2" />
+          <ArrowLeft className="w-4 h-4 me-2 rtl:-scale-x-100" />
           {t("Back")}
         </Button>
 
