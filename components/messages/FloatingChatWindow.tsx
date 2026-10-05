@@ -117,14 +117,13 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
 
   const chronological = [...(messages ?? [])].reverse();
 
-  // Horizontal position: each window is 336px wide + 8px gap
-  // For RTL: stack from left; for LTR: stack from right
-  // The list panel is 320px, button area ~72px — start after those
+  // Horizontal position: each window is 336px wide + 8px gap, stacked from the
+  // end edge (right in LTR, left in RTL). The conversation list opens from the
+  // top bar, so nothing at the bottom corner needs to be cleared (SCRUM-612).
   const windowWidth = 336;
   const gap = 8;
-  const baseOffset = 72 + 8; // floating button width + gap
-  const listOffset = 328; // conversation list width + gap
-  const offsetX = baseOffset + listOffset + index * (windowWidth + gap);
+  const edgeOffset = 24;
+  const offsetX = edgeOffset + index * (windowWidth + gap);
 
   const positionStyle: React.CSSProperties = isRtl
     ? { left: offsetX }

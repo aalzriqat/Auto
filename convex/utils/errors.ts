@@ -160,6 +160,9 @@ export const AppErrorCode = {
   // missing, in another organisation or soft-deleted; REJECTED stays allowed. Translated under
   // ServerError_<code>.
   APPROVAL_VEHICLE_UNAVAILABLE: "APPROVAL_VEHICLE_UNAVAILABLE",
+  // SCRUM-641 (D-35): see convex/utils/vehicleLiveness.ts. Translated under ServerError_<code>.
+  VEHICLE_DELETED: "VEHICLE_DELETED",
+  VEHICLE_DELETED_FLAG_LOCKED: "VEHICLE_DELETED_FLAG_LOCKED",
   // SCRUM-650. A vehicle's recorded cost is locked once its acquisition posted, and changes only
   // through `vehicles.correctAcquisitionCost`. Each refusal below is raised before the first
   // write and translated under ServerError_<code>.

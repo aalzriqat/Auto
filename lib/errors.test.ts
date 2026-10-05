@@ -326,6 +326,37 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(match?.[1]).toBe(enEntry);
   });
 
+  it("SCRUM-641 VEHICLE_DELETED resolves to its dictionary entry in ar and en, and EN equals the server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { VEHICLE_DELETED_MESSAGE } = await import("../convex/utils/vehicleLiveness");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code: "VEHICLE_DELETED", message: "server text" });
+    const arEntry = (dictionaries.ar as Record<string, string>).ServerError_VEHICLE_DELETED;
+    const enEntry = (dictionaries.en as Record<string, string>).ServerError_VEHICLE_DELETED;
+    expect(arEntry).toMatch(/[؀-ۿ]/);
+    expect(getLocalizedErrorMessage(error, ar)).toBe(arEntry);
+    expect(getLocalizedErrorMessage(error, en)).toBe(enEntry);
+    expect(enEntry).toBe(VEHICLE_DELETED_MESSAGE);
+  });
+
+  it("SCRUM-641 VEHICLE_DELETED_FLAG_LOCKED has ar+en entries and EN equals the adminData server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code: "VEHICLE_DELETED_FLAG_LOCKED", message: "server text" });
+    const arEntry = (dictionaries.ar as Record<string, string>).ServerError_VEHICLE_DELETED_FLAG_LOCKED;
+    const enEntry = (dictionaries.en as Record<string, string>).ServerError_VEHICLE_DELETED_FLAG_LOCKED;
+    expect(arEntry).toMatch(/[؀-ۿ]/);
+    expect(getLocalizedErrorMessage(error, ar)).toBe(arEntry);
+    expect(getLocalizedErrorMessage(error, en)).toBe(enEntry);
+    const source = readFileSync(join(process.cwd(), "convex", "adminData.ts"), "utf8");
+    const match = /AppErrorCode\.VEHICLE_DELETED_FLAG_LOCKED,\s*"([^"]+)"/.exec(source);
+    expect(match?.[1]).toBe(enEntry);
+  });
+
   /** Asserts a coded error resolves to its Arabic and English dictionary entries; returns them. */
   async function expectCodedEntry(code: string) {
     const { dictionaries } = await import("./i18n/dictionaries");

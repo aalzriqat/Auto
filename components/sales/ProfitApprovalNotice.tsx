@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
-import { getErrorMessage } from "@/lib/errors";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 
 /**
  * SCRUM-260: the minimum-profit approval for one vehicle at one price, read
@@ -39,8 +39,12 @@ export function useProfitApproval(args: {
   );
   // INVALID is deliberately not blocking: the server refuses that price with an
   // error naming the amount, which a silently disabled button would hide.
+  // VEHICLE_DELETED (SCRUM-641) blocks too: the server refuses any completion on a deleted car.
   const needsApproval =
-    verdict?.status === "REQUIRED" || verdict?.status === "PENDING" || verdict?.status === "REJECTED";
+    verdict?.status === "REQUIRED" ||
+    verdict?.status === "PENDING" ||
+    verdict?.status === "REJECTED" ||
+    verdict?.status === "VEHICLE_DELETED";
   return {
     verdict: active ? verdict : undefined,
     blocked: !!args.loading || (active && (verdict === undefined || needsApproval)),
@@ -62,6 +66,18 @@ export function ProfitApprovalNotice({ approval }: { approval: ProfitApproval })
 
   if (!verdict || !request || verdict.status === "NOT_REQUIRED" || verdict.status === "INVALID") return null;
 
+  if (verdict.status === "VEHICLE_DELETED") {
+    return (
+      <p
+        role="alert"
+        className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm font-medium text-red-700 dark:text-red-400"
+      >
+        <ShieldAlert className="h-4 w-4 shrink-0" aria-hidden="true" />
+        {t("ServerError_VEHICLE_DELETED" as any)}
+      </p>
+    );
+  }
+
   if (verdict.status === "APPROVED") {
     return (
       <p
@@ -80,7 +96,7 @@ export function ProfitApprovalNotice({ approval }: { approval: ProfitApproval })
       await requestApproval(request);
     } catch (error) {
       console.error("requestProfitApproval failed", error);
-      toast.error(getErrorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t));
 
     } finally {
       setIsRequesting(false);

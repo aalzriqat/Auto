@@ -8,7 +8,7 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
-import { getErrorMessage } from "@/lib/errors";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 import { cn } from "@/lib/utils";
 import { AlertTriangle, Check } from "lucide-react";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -148,7 +148,7 @@ export function DepositAllocationPanel({
       });
       toast.success(t("DepositAllocationSaved" as any));
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t));
     } finally {
       setSaving(false);
     }

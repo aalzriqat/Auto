@@ -45,8 +45,8 @@ test.describe("sales wizard guards (SCRUM-609)", () => {
 
     const selectVehicle = await openInstallmentWizard(page);
 
-    // F-01 — the floating trigger is gone while the wizard is open; the header
-    // offers the same panel.
+    // F-01 — there is no floating trigger; the top bar offers the panel
+    // (SCRUM-612 removed the floating buttons everywhere).
     const feedbackButtons = page.getByRole("button", { name: "Send Feedback" });
     await expect(feedbackButtons).toHaveCount(1);
     const header = page.locator('button[title="Send Feedback"]');
@@ -106,5 +106,145 @@ test.describe("sales wizard guards (SCRUM-609)", () => {
     await expect(terms).toContainText("Down Payment");
     await expect(terms).toContainText("3,000.00");
     await page.getByRole("button", { name: "Generate Quote", exact: true }).click({ trial: true });
+  });
+
+  // SCRUM-612 — on a phone each step's actions are full-width and last on the
+  // page, and the floating Messages / Feedback buttons sat over the bottom
+  // corners. A trial click only probes the button's centre, so this compares
+  // geometry against every fixed-position button on the page.
+  for (const locale of ["en", "ar"] as const) {
+    test(`SCRUM-612 (${locale}): no floating button covers a step action on mobile`, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.addInitScript((value) => localStorage.setItem("autoflow-locale", value), locale);
+      await gotoOrgRoute(page, "sales");
+      await dismissOverlays(page);
+      await page.locator("#btn-new-installment-sale").click();
+      const startFresh = page.getByRole("button", { name: locale === "en" ? "Start Fresh" : "ابدأ من جديد" });
+      const next = page.getByRole("button", { name: locale === "en" ? "Next" : "التالي", exact: true });
+      await expect(startFresh.or(next).first()).toBeVisible();
+      if (await startFresh.isVisible()) await startFresh.click();
+      await expect(next).toBeVisible();
+
+      // Messages stays reachable from the top bar.
+      await expect(page.locator("#topnav-messenger-btn")).toBeVisible();
+      await page.locator("main").evaluate((el) => el.scrollTo(0, el.scrollHeight));
+
+      const action = await next.boundingBox();
+      expect(action).not.toBeNull();
+      const covering = await page.evaluate((a) => {
+        return Array.from(document.querySelectorAll("button"))
+          .filter((b) => getComputedStyle(b).position === "fixed")
+          .map((b) => {
+            const r = b.getBoundingClientRect();
+            return { label: b.getAttribute("aria-label") ?? b.textContent?.trim() ?? "", x: r.x, y: r.y, width: r.width, height: r.height };
+          })
+          .filter((r) => r.width > 0 && r.height > 0)
+          .filter((r) => a.x < r.x + r.width && r.x < a.x + a.width && a.y < r.y + r.height && r.y < a.y + a.height);
+      }, action!);
+      expect(covering, `Next ${JSON.stringify(action)} is covered`).toEqual([]);
+    });
+  }
+
+  test("SCRUM-612: the top-bar Messages button opens the list and closes it again", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("autoflow-locale", "en"));
+    await gotoOrgRoute(page, "sales");
+    await dismissOverlays(page);
+    const trigger = page.locator("#topnav-messenger-btn");
+    const list = page.getByPlaceholder("Search conversations…");
+    await trigger.click();
+    await expect(list).toBeVisible();
+    // The trigger must close the list, not close-then-reopen it.
+    await trigger.click();
+    await expect(list).toHaveCount(0);
+    // The expanded state is announced.
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await trigger.click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    // Desktop chat windows (fixed, z-50) stack along the same end edge; the
+    // list must stay on top of them. A stand-in window is placed where they
+    // render.
+    const listHit = () =>
+      page.getByTestId("messenger-list").evaluate((panel: HTMLElement) => {
+        // A modal sets pointer-events: none on the page behind it, which hides
+        // the list from hit-testing however it paints; force it back on so the
+        // hit test reflects paint order.
+        const previous = panel.style.pointerEvents;
+        panel.style.pointerEvents = "auto";
+        const r = panel.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.x + r.width / 2, r.bottom - 12);
+        panel.style.pointerEvents = previous;
+        return !!hit && panel.contains(hit);
+      });
+    await page.evaluate(() => {
+      const win = document.createElement("div");
+      win.id = "e2e-stand-in-chat";
+      win.className = "fixed bottom-0 z-50";
+      Object.assign(win.style, { right: "24px", left: "24px", height: "90vh" });
+      document.querySelector('[data-testid="messenger-chat-windows"]')!.appendChild(win);
+    });
+    expect(await listHit()).toBe(true);
+    await page.evaluate(() => document.getElementById("e2e-stand-in-chat")!.remove());
+
+    // A modal opened over the list covers it (its backdrop is z-50 too).
+    await page.getByTitle("New message").click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    expect(await listHit()).toBe(false);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(list).toBeVisible();
+
+    // Escape closes the list itself.
+    await page.keyboard.press("Escape");
+    await expect(list).toHaveCount(0);
+  });
+
+  // The update / support-access / impersonation banners stack above the top
+  // bar, pushing it down; the list must still open below the bar and leave the
+  // trigger clickable. A stand-in banner is inserted where they render.
+  test("SCRUM-612: with a banner above the top bar, the Messages list opens below it", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("autoflow-locale", "en"));
+    await gotoOrgRoute(page, "sales");
+    await dismissOverlays(page);
+    const trigger = page.locator("#topnav-messenger-btn");
+    const list = page.getByPlaceholder("Search conversations…");
+    const geometry = () =>
+      trigger.evaluate((el) => {
+        const t = el.getBoundingClientRect();
+        const headerBottom = el.closest("header")!.getBoundingClientRect().bottom;
+        const panel = document.querySelector('input[placeholder="Search conversations…"]')!
+          .closest(".fixed")!.getBoundingClientRect();
+        const hit = document.elementFromPoint(t.x + t.width / 2, t.y + t.height / 2);
+        return { gap: Math.round(panel.top - headerBottom), triggerHit: !!hit && el.contains(hit) };
+      });
+
+    // Banners can appear and be dismissed while the list is already open.
+    await trigger.click();
+    await expect(list).toBeVisible();
+    await trigger.evaluate((el) => {
+      const header = el.closest("header")!;
+      const banner = document.createElement("div");
+      banner.id = "e2e-stand-in-banner";
+      banner.style.height = "96px";
+      banner.style.flexShrink = "0";
+      header.parentElement!.insertBefore(banner, header);
+    });
+    await expect.poll(async () => (await geometry()).gap).toBe(8);
+    expect((await geometry()).triggerHit).toBe(true);
+
+    await page.evaluate(() => document.getElementById("e2e-stand-in-banner")!.remove());
+    await expect.poll(async () => (await geometry()).gap).toBe(8);
+
+    await trigger.click();
+    await expect(list).toHaveCount(0);
+  });
+
+  test("SCRUM-612: on a phone, feedback opens from the menu drawer", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.addInitScript(() => localStorage.setItem("autoflow-locale", "en"));
+    await gotoOrgRoute(page, "sales");
+    await dismissOverlays(page);
+    await page.getByRole("button", { name: "Toggle navigation menu" }).click();
+    await page.getByRole("button", { name: "Send Feedback" }).click();
+    await expect(page.getByText("Report a Bug")).toBeVisible();
   });
 });
