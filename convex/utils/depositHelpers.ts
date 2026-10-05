@@ -217,7 +217,7 @@ export async function getActiveDepositHolds(
 
 /** Exported for saleCancellation.ts's trade-in-reversal safety guard, in addition to internal use by syncVehicleHoldStatus below. */
 export async function hasActiveDepositHold(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   vehicleId: Id<"vehicles">
 ): Promise<boolean> {
   // One definition of "who is holding this car", shared with
@@ -233,7 +233,7 @@ export async function hasActiveDepositHold(
 
 /** Exported for saleCancellation.ts's trade-in-reversal safety guard, in addition to internal use by syncVehicleHoldStatus below. */
 export async function hasActiveReservationHold(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   args: { orgId: Id<"organizations">; vehicleId: Id<"vehicles"> }
 ): Promise<boolean> {
   const now = Date.now();

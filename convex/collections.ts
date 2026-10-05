@@ -416,15 +416,19 @@ async function ensureCanonicalReceivableForLegacy(
 export const ALLOCATION_HISTORY_PROBE_LIMIT = 200;
 
 export async function assertNoActiveAllocations(
-  ctx: MutationCtx,
-  receivableDocumentId: Id<"receivableDocuments">
+  ctx: QueryCtx | MutationCtx,
+  receivableDocumentId: Id<"receivableDocuments">,
+  // SCRUM-693 PR-B F2: the unwind status preview runs this BEFORE the closing step reverses its own
+  // allocations. `reversing` names those: they are not counted as active, and each will add one
+  // reversal row to the history the real probe then sees. Empty for every writing caller.
+  reversing: ReadonlyArray<Id<"paymentAllocations">> = []
 ) {
   const history = await ctx.db
     .query("paymentAllocations")
     .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivableDocumentId))
     .take(ALLOCATION_HISTORY_PROBE_LIMIT + 1);
 
-  if (history.length > ALLOCATION_HISTORY_PROBE_LIMIT) {
+  if (history.length + reversing.length > ALLOCATION_HISTORY_PROBE_LIMIT) {
     // The advice is deliberately state-agnostic. The likeliest way to reach
     // this bound is a long, entirely REVERSED correction history — in which case
     // "reverse the remaining allocations" names an action the operator cannot
@@ -434,7 +438,7 @@ export async function assertNoActiveAllocations(
       "It needs a manual reconciliation before it can be closed."
     );
   }
-  if (history.some((allocation) => allocation.status === "ACTIVE")) {
+  if (history.some((allocation) => allocation.status === "ACTIVE" && !reversing.includes(allocation._id))) {
     throw new ConvexError(
       "This debt still has payments applied to it and cannot be cancelled. Reverse the allocations first."
     );

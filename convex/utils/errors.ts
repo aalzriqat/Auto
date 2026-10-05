@@ -163,6 +163,7 @@ export const AppErrorCode = {
   // SCRUM-641 (D-35): see convex/utils/vehicleLiveness.ts. Translated under ServerError_<code>.
   VEHICLE_DELETED: "VEHICLE_DELETED",
   VEHICLE_DELETED_FLAG_LOCKED: "VEHICLE_DELETED_FLAG_LOCKED",
+  VEHICLE_NOT_READY_FOR_SALE: "VEHICLE_NOT_READY_FOR_SALE",
   // SCRUM-650. A vehicle's recorded cost is locked once its acquisition posted, and changes only
   // through `vehicles.correctAcquisitionCost`. Each refusal below is raised before the first
   // write and translated under ServerError_<code>.

@@ -12,16 +12,17 @@
  * command from moving the deal's money around it.
  *
  * Design: E:/tmp/scrum693-design.md. Rulings: Jira SCRUM-693 c22112 (v1),
- * c22118 (v2, D1-D6) and c22129 (ruling B: refund and close are one step). D3
- * (inspection hold) and D6 (redacted projection) ship in PR B; the deal-page
- * dialog ships in PR C.
+ * c22118 (v2, D1-D6), c22129 (ruling B: refund and close are one step) and
+ * c22134 (D3: the returned car goes into inspection; D6: `unwindStatus` and the
+ * deals-list badge). The deal-page dialog ships in PR C.
  */
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import type { QueryCtx } from "./_generated/server";
+import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
-import { requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
+import { PERMISSIONS, isSystemOwnerRole, type Permission } from "./utils/permissions";
+import { mayReadFinanceEconomics } from "./utils/financeApplicationProjection";
 import { AppErrorCode, throwAppError } from "./utils/errors";
 import { DEAL_UNWIND_MESSAGES, type DealUnwindRefusalCode } from "./utils/dealUnwindMessages";
 import { activeDealUnwindFor, paidDealReversalRoute, receiptPostedToPaymentAccount } from "./utils/dealUnwindGuard";
@@ -33,6 +34,8 @@ import { reverseForward } from "./financeCompanyForward";
 import { disbursementVersionOf, financeDisbursementKeys } from "./utils/financeDisbursementKeys";
 import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { assertNoPendingDepositRequest } from "./utils/depositRequestGuards";
+import { assertSaleTeardownPreflight } from "./utils/saleCancellation";
+import { assertNoActiveAllocations } from "./collections";
 import { manualPayerOf } from "./utils/manualFinancePayer";
 import { MAX_DIRECT_PAYMENT_REFERENCE_CHARS } from "./utils/feeDocLimits";
 import { getOpenPeriodForDate } from "./accountingPeriods";
@@ -189,6 +192,28 @@ async function assertDealUnwindable(
   return sale;
 }
 
+/**
+ * Every refusal start asks of the deal, in its order. Shared with
+ * `unwindStatus`, so `canStart` can never promise a start this would refuse.
+ */
+async function assertStartable(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  app: Doc<"financeApplications">
+): Promise<{ sale: Doc<"sales">; method: "BANK_TRANSFER" | "CASH"; version: number; disbursedAmountMinor: number }> {
+  if ((await activeDealUnwindFor(ctx, orgId, app._id)) !== null) refuse("DEAL_UNWIND_ALREADY_ACTIVE");
+  if (app.disbursedAt === undefined || app.disbursedAmountMinor === undefined) refuse("DEAL_UNWIND_NOT_ELIGIBLE");
+
+  // A cheque deal reverses through the existing returned-cheque path.
+  const route = await paidDealReversalRoute(ctx, app);
+  if (route.route === "CHEQUE") refuse("DEAL_UNWIND_CHEQUE_DEAL");
+  const sale = await assertDealUnwindable(ctx, app, "unwinding this deal");
+  await assertNoPendingDepositRequest(ctx, { orgId, quoteId: app.quoteId, action: "unwind this deal" });
+  if (route.route === "CHAIN_MISMATCH") refuse("DEAL_UNWIND_CHAIN_MISMATCH");
+  if (route.route === "INELIGIBLE") refuse("DEAL_UNWIND_NOT_ELIGIBLE");
+  return { sale, method: route.method, version: disbursementVersionOf(app), disbursedAmountMinor: app.disbursedAmountMinor };
+}
+
 export const startDealUnwind = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -211,18 +236,7 @@ export const startDealUnwind = mutation({
       },
       async () => {
         const app = await loadOwnedApplication(ctx, args.orgId, args.applicationId);
-        if ((await activeDealUnwindFor(ctx, args.orgId, app._id)) !== null) refuse("DEAL_UNWIND_ALREADY_ACTIVE");
-        if (app.disbursedAt === undefined || app.disbursedAmountMinor === undefined) refuse("DEAL_UNWIND_NOT_ELIGIBLE");
-
-        // A cheque deal reverses through the existing returned-cheque path.
-        const route = await paidDealReversalRoute(ctx, app);
-        if (route.route === "CHEQUE") refuse("DEAL_UNWIND_CHEQUE_DEAL");
-        const sale = await assertDealUnwindable(ctx, app, "unwinding this deal");
-        await assertNoPendingDepositRequest(ctx, { orgId: args.orgId, quoteId: app.quoteId, action: "unwind this deal" });
-        if (route.route === "CHAIN_MISMATCH") refuse("DEAL_UNWIND_CHAIN_MISMATCH");
-        if (route.route === "INELIGIBLE") refuse("DEAL_UNWIND_NOT_ELIGIBLE");
-        const { method } = route;
-        const version = disbursementVersionOf(app);
+        const { sale, method, version, disbursedAmountMinor } = await assertStartable(ctx, args.orgId, app);
 
         const now = Date.now();
         const unwindId = await ctx.db.insert("dealUnwinds", {
@@ -234,7 +248,7 @@ export const startDealUnwind = mutation({
           startedBy: user._id,
           startedAt: now,
           remittanceVersion: version,
-          remittanceMinor: app.disbursedAmountMinor,
+          remittanceMinor: disbursedAmountMinor,
           remittanceMethod: method,
           forwardDueMinor: app.financeCompanyForwardDueMinor ?? 0,
           createdAt: now,
@@ -251,7 +265,7 @@ export const startDealUnwind = mutation({
             unwindId,
             saleId: sale._id,
             remittanceVersion: version,
-            remittanceMinor: app.disbursedAmountMinor,
+            remittanceMinor: disbursedAmountMinor,
             remittanceMethod: method,
           },
           idempotencyKey: args.idempotencyKey,
@@ -261,6 +275,28 @@ export const startDealUnwind = mutation({
     );
   },
 });
+
+/**
+ * The refusals the forward step asks before it writes, in its order. Shared
+ * with `unwindStatus`. When the payment is still on the books the step then
+ * reverses it and re-proves the result, which a read cannot predict.
+ */
+async function assertForwardReturnable(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  app: Doc<"financeApplications">,
+  now: number
+) {
+  const proof = await deriveForwardState(ctx, app);
+  if (!proof.applies) refuse("DEAL_UNWIND_FORWARD_NOT_APPLICABLE");
+  if (proof.onBooksForwardId !== null) {
+    await assertPeriodOpen(ctx, orgId, now);
+  } else {
+    if (!proof.versions.some((row) => row.state === "RETURNED")) refuse("DEAL_UNWIND_FORWARD_UNSETTLED");
+    if (forwardCancelRefusal(proof) !== null) refuse("DEAL_UNWIND_FORWARD_UNSETTLED");
+  }
+  return proof;
+}
 
 export const recordDealUnwindForwardReturn = mutation({
   args: {
@@ -289,14 +325,12 @@ export const recordDealUnwindForwardReturn = mutation({
         const now = Date.now();
         const returnedAt = pastDate(args.returnedAt, now);
 
-        let proof = await deriveForwardState(ctx, app);
-        if (!proof.applies) refuse("DEAL_UNWIND_FORWARD_NOT_APPLICABLE");
+        let proof = await assertForwardReturnable(ctx, args.orgId, app, now);
 
         let forwardId: Id<"financeCompanyForwards"> | undefined;
         if (proof.onBooksForwardId !== null) {
           // The payment is on the books: report it returned now and prove the
           // reversal POSTED. A throw rolls back the report.
-          await assertPeriodOpen(ctx, args.orgId, now);
           forwardId = await reverseForward(
             ctx,
             {
@@ -314,9 +348,8 @@ export const recordDealUnwindForwardReturn = mutation({
           if (version?.state !== "RETURNED") refuse("DEAL_UNWIND_FORWARD_REVERSAL_UNPROVEN");
         } else {
           // Already reported returned through the existing button: record the
-          // evidence only, and only when that return is posted.
+          // evidence only (assertForwardReturnable proved it posted).
           const returned = proof.versions.filter((row) => row.state === "RETURNED");
-          if (returned.length === 0) refuse("DEAL_UNWIND_FORWARD_UNSETTLED");
           forwardId = returned[returned.length - 1].forwardId;
         }
         if (forwardCancelRefusal(proof) !== null) refuse("DEAL_UNWIND_FORWARD_UNSETTLED");
@@ -340,6 +373,152 @@ export const recordDealUnwindForwardReturn = mutation({
     );
   },
 });
+
+/**
+ * Every refusal the closing step asks before it writes, in its order. Shared
+ * with `unwindStatus`, so `canFinish` can never promise a close this would
+ * refuse; the status query passes the rail of record and `now` for the two
+ * operator inputs.
+ */
+async function assertFinishable(
+  ctx: QueryCtx,
+  args: {
+    orgId: Id<"organizations">;
+    unwind: Doc<"dealUnwinds">;
+    app: Doc<"financeApplications">;
+    now: number;
+    method: "BANK_TRANSFER" | "CASH";
+    refundedAt: number;
+  }
+) {
+  const { orgId, unwind, app, now, method, refundedAt: requestedRefundedAt } = args;
+  // The same refusals cancelApplication asks of a CLOSED deal, in its order.
+  await assertNoPendingDepositRequest(ctx, { orgId, quoteId: app.quoteId, action: "finish this unwind" });
+  const sale = await assertDealUnwindable(ctx, app, "finishing this unwind");
+  if (sale._id !== unwind.saleId) refuse("DEAL_UNWIND_STALE");
+
+  // Sol: the forward comes back before the remittance goes out.
+  const proof = await deriveForwardState(ctx, app);
+  if (proof.applies && unwind.forwardReturn === undefined) refuse("DEAL_UNWIND_FORWARD_FIRST");
+  if (forwardCancelRefusal(proof) !== null) refuse("DEAL_UNWIND_FORWARD_UNSETTLED");
+
+  // The amount is never typed: it is the remittance snapshotted at start,
+  // and the deal must still carry exactly that disbursement.
+  const version = unwind.remittanceVersion;
+  if (
+    app.disbursedAt === undefined ||
+    app.disbursedAmountMinor !== unwind.remittanceMinor ||
+    disbursementVersionOf(app) !== version
+  ) {
+    refuse("DEAL_UNWIND_STALE");
+  }
+  // DA-1: reversing the receipt journal credits the account it debited, so
+  // the refund must leave by the same rail.
+  if (method !== unwind.remittanceMethod) refuse("DEAL_UNWIND_REFUND_METHOD_MISMATCH");
+  const refundedAt = pastDate(requestedRefundedAt, now, app.disbursedAt);
+
+  // The same chain binding the returned-cheque path proves.
+  const keys = financeDisbursementKeys(app._id, version);
+  const payment = await ctx.db
+    .query("canonicalPayments")
+    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", keys.paymentKey))
+    .unique();
+  const expectedPayerType = app.companyId ? "FINANCE_COMPANY" : "MANUAL_FINANCE_COMPANY";
+  const paymentCurrency = payment?.currency.toUpperCase();
+  if (
+    !payment ||
+    payment.status !== "SETTLED" ||
+    payment.direction !== "IN" ||
+    payment.payerType !== expectedPayerType ||
+    (app.companyId
+      ? payment.financeCompanyId !== app.companyId
+      : payment.payerNameSnapshot !== manualPayerOf(app)?.name) ||
+    payment.amountMinor !== app.disbursedAmountMinor ||
+    payment.receivedAt !== app.disbursedAt ||
+    (app.economicsCurrency !== undefined && paymentCurrency !== app.economicsCurrency.toUpperCase())
+  ) {
+    refuse("DEAL_UNWIND_CHAIN_MISMATCH");
+  }
+  if (payment.method !== unwind.remittanceMethod) refuse("DEAL_UNWIND_REFUND_METHOD_MISMATCH");
+  if (!(await receiptPostedToPaymentAccount(ctx, app, unwind.remittanceMethod))) refuse("DEAL_UNWIND_CHAIN_MISMATCH");
+
+  const receivable = await ctx.db
+    .query("receivableDocuments")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE).eq("sourceId", app._id)
+    )
+    .unique();
+  const activeAllocations = (
+    await ctx.db.query("paymentAllocations").withIndex("by_payment", (q) => q.eq("paymentId", payment._id)).collect()
+  ).filter((allocation) => allocation.status === "ACTIVE");
+  const allocatedMinor = activeAllocations.reduce((sum, allocation) => sum + allocation.amountMinor, 0);
+  if (
+    !receivable ||
+    activeAllocations.length === 0 ||
+    allocatedMinor !== payment.amountMinor ||
+    activeAllocations.some((allocation) => allocation.receivableDocumentId !== receivable._id)
+  ) {
+    refuse("DEAL_UNWIND_ALLOCATION_SHAPE");
+  }
+  // The teardown's own allocation-history guard, run as the closing step will meet it: after this
+  // payment's allocations are reversed (each adds a reversal row to the history).
+  if (receivable.status !== "CANCELLED") {
+    await assertNoActiveAllocations(
+      ctx,
+      receivable._id,
+      activeAllocations.map((allocation) => allocation._id)
+    );
+  }
+  await assertPeriodOpen(ctx, orgId, now);
+  // PRB-F2: the teardown's read-only refusals, so the status query and the closing step ask one
+  // question. The mutation still refuses anything left atomically (ruling B).
+  await assertSaleTeardownPreflight(ctx, { orgId, sale });
+  return { sale, version, refundedAt, keys, payment, activeAllocations };
+}
+
+/** Where the teardown may leave a returned car that D3 moves into inspection. */
+const INSPECTABLE_RETURN_STATUSES = new Set<Doc<"vehicles">["status"]>(["AVAILABLE", "RESERVED", "SOURCING"]);
+
+/**
+ * D3 (Sol A', SCRUM-693 c22134): a car physically returned by an unwind is not
+ * sellable again until someone with vehicle-edit authority clears its
+ * inspection. IN_INSPECTION carries that by itself: the hold resolver promotes
+ * only AVAILABLE/SOURCING and releases only RESERVED, so no hold create,
+ * release, sync or reconcile moves the car out of it.
+ *
+ * - AVAILABLE / SOURCING / RESERVED -> IN_INSPECTION. A reinstated deposit hold
+ *   keeps its row; only the RESERVED projection and its snapshot go.
+ * - A SOURCED car never recorded as arrived is recorded as arrived at the
+ *   return: it is physically here. It stays SOURCED - never owned stock.
+ * - IN_REPAIR, IN_INSPECTION or anything else is left exactly as it is.
+ *
+ * Status only - nothing posts. Runs inside the closing step's transaction, so
+ * a later refusal rolls it back with everything else.
+ */
+export async function placeReturnedVehicleInInspection(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    vehicleReturnedAt: number;
+    actorId: Id<"users">;
+    now: number;
+  }
+): Promise<{ vehicleId: Id<"vehicles">; fromStatus: Doc<"vehicles">["status"]; placed: boolean }> {
+  const vehicle = await ctx.db.get(args.vehicleId);
+  if (!vehicle || vehicle.orgId !== args.orgId) refuse("DEAL_UNWIND_NOT_FOUND");
+  if (!INSPECTABLE_RETURN_STATUSES.has(vehicle.status)) {
+    return { vehicleId: vehicle._id, fromStatus: vehicle.status, placed: false };
+  }
+  await ctx.db.patch(vehicle._id, {
+    status: "IN_INSPECTION",
+    preHoldStatus: undefined,
+    ...(vehicle.sourceType === "SOURCED" && vehicle.arrivedAt == null ? { arrivedAt: args.vehicleReturnedAt } : {}),
+    updatedAt: args.now,
+    updatedBy: args.actorId,
+  });
+  return { vehicleId: vehicle._id, fromStatus: vehicle.status, placed: true };
+}
 
 /**
  * Sol ruling B (SCRUM-693 c22129): "record refund and close deal" is ONE
@@ -409,75 +588,14 @@ export const finishDealUnwind = mutation({
         const now = Date.now();
         const vehicleReturnedAt = pastDate(args.vehicleReturnedAt, now);
 
-        // The same refusals cancelApplication asks of a CLOSED deal, in its order.
-        await assertNoPendingDepositRequest(ctx, { orgId: args.orgId, quoteId: app.quoteId, action: "finish this unwind" });
-        const sale = await assertDealUnwindable(ctx, app, "finishing this unwind");
-        if (sale._id !== unwind.saleId) refuse("DEAL_UNWIND_STALE");
-
-        // Sol: the forward comes back before the remittance goes out.
-        const proof = await deriveForwardState(ctx, app);
-        if (proof.applies && unwind.forwardReturn === undefined) refuse("DEAL_UNWIND_FORWARD_FIRST");
-        if (forwardCancelRefusal(proof) !== null) refuse("DEAL_UNWIND_FORWARD_UNSETTLED");
-
-        // The amount is never typed: it is the remittance snapshotted at start,
-        // and the deal must still carry exactly that disbursement.
-        const version = unwind.remittanceVersion;
-        if (
-          app.disbursedAt === undefined ||
-          app.disbursedAmountMinor !== unwind.remittanceMinor ||
-          disbursementVersionOf(app) !== version
-        ) {
-          refuse("DEAL_UNWIND_STALE");
-        }
-        // DA-1: reversing the receipt journal credits the account it debited, so
-        // the refund must leave by the same rail.
-        if (args.method !== unwind.remittanceMethod) refuse("DEAL_UNWIND_REFUND_METHOD_MISMATCH");
-        const refundedAt = pastDate(args.refundedAt, now, app.disbursedAt);
-
-        // The same chain binding the returned-cheque path proves.
-        const keys = financeDisbursementKeys(app._id, version);
-        const payment = await ctx.db
-          .query("canonicalPayments")
-          .withIndex("by_org_idempotency", (q) => q.eq("orgId", args.orgId).eq("idempotencyKey", keys.paymentKey))
-          .unique();
-        const expectedPayerType = app.companyId ? "FINANCE_COMPANY" : "MANUAL_FINANCE_COMPANY";
-        const paymentCurrency = payment?.currency.toUpperCase();
-        if (
-          !payment ||
-          payment.status !== "SETTLED" ||
-          payment.direction !== "IN" ||
-          payment.payerType !== expectedPayerType ||
-          (app.companyId
-            ? payment.financeCompanyId !== app.companyId
-            : payment.payerNameSnapshot !== manualPayerOf(app)?.name) ||
-          payment.amountMinor !== app.disbursedAmountMinor ||
-          payment.receivedAt !== app.disbursedAt ||
-          (app.economicsCurrency !== undefined && paymentCurrency !== app.economicsCurrency.toUpperCase())
-        ) {
-          refuse("DEAL_UNWIND_CHAIN_MISMATCH");
-        }
-        if (payment.method !== unwind.remittanceMethod) refuse("DEAL_UNWIND_REFUND_METHOD_MISMATCH");
-        if (!(await receiptPostedToPaymentAccount(ctx, app, unwind.remittanceMethod))) refuse("DEAL_UNWIND_CHAIN_MISMATCH");
-
-        const receivable = await ctx.db
-          .query("receivableDocuments")
-          .withIndex("by_org_source", (q) =>
-            q.eq("orgId", args.orgId).eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE).eq("sourceId", app._id)
-          )
-          .unique();
-        const activeAllocations = (
-          await ctx.db.query("paymentAllocations").withIndex("by_payment", (q) => q.eq("paymentId", payment._id)).collect()
-        ).filter((allocation) => allocation.status === "ACTIVE");
-        const allocatedMinor = activeAllocations.reduce((sum, allocation) => sum + allocation.amountMinor, 0);
-        if (
-          !receivable ||
-          activeAllocations.length === 0 ||
-          allocatedMinor !== payment.amountMinor ||
-          activeAllocations.some((allocation) => allocation.receivableDocumentId !== receivable._id)
-        ) {
-          refuse("DEAL_UNWIND_ALLOCATION_SHAPE");
-        }
-        await assertPeriodOpen(ctx, args.orgId, now);
+        const { sale, version, refundedAt, keys, payment, activeAllocations } = await assertFinishable(ctx, {
+          orgId: args.orgId,
+          unwind,
+          app,
+          now,
+          method: args.method,
+          refundedAt: args.refundedAt,
+        });
 
         // 1. The receipt comes off the books.
         for (const allocation of activeAllocations) {
@@ -527,6 +645,15 @@ export const finishDealUnwind = mutation({
           now,
           cancellationReason: reason,
           note: `Deal unwound. Credit note ${creditNoteReference}.`,
+        });
+        // D3 (Sol A', c22134): last of the vehicle writes, after the teardown
+        // restored the car and reinstated any hold.
+        const vehicleInspection = await placeReturnedVehicleInInspection(ctx, {
+          orgId: args.orgId,
+          vehicleId: sale.vehicleId,
+          vehicleReturnedAt,
+          actorId: user._id,
+          now,
         });
 
         // 3. The unwind completes with both legs' evidence.
@@ -590,6 +717,7 @@ export const finishDealUnwind = mutation({
             saleId: sale._id,
             customerPaymentDisposition: args.customerPaymentDisposition,
             vehicleReturnedAt,
+            vehicleInspection,
           },
           idempotencyKey: args.idempotencyKey,
         });
@@ -606,7 +734,13 @@ export const finishDealUnwind = mutation({
           },
           { link: `/${args.orgId}/applications`, excludeUserId: user._id }
         );
-        return { unwindId: unwind._id, applicationId: app._id, receiptReversal, nextDisbursementVersion: version + 1 };
+        return {
+          unwindId: unwind._id,
+          applicationId: app._id,
+          receiptReversal,
+          nextDisbursementVersion: version + 1,
+          vehicleInspection,
+        };
       }
     );
   },
@@ -664,3 +798,178 @@ export const abandonDealUnwind = mutation({
   },
 });
 
+
+// ─── D6: read side (Sol c22134 Q12) ─────────────────────────────────────────
+
+type Refusal = { code: string; message: string };
+type StatusStep = "AWAITING_FORWARD_RETURN" | "AWAITING_FINISH" | "COMPLETED" | "ABANDONED";
+
+/** Unwinds one application can have had: one per attempt, bounded in practice. */
+const UNWIND_HISTORY_LIMIT = 50;
+/** One deals-list page; a longer list is refused rather than half-answered. */
+export const UNWIND_BADGE_BATCH_MAX = 100;
+
+function holds(role: Doc<"roles">, perms: Permission[]): boolean {
+  return isSystemOwnerRole(role) || perms.every((permission) => role.permissions.includes(permission));
+}
+
+/**
+ * Runs a shared refusal helper as a dry run. A refusal is data for the page;
+ * anything that is not a refusal still throws.
+ */
+async function refusalOf(check: () => Promise<unknown>): Promise<Refusal | null> {
+  try {
+    await check();
+    return null;
+  } catch (error) {
+    if (!(error instanceof ConvexError)) throw error;
+    const data: unknown = error.data;
+    if (typeof data === "string") return { code: "REFUSED", message: data };
+    if (data && typeof data === "object" && "code" in data && "message" in data) {
+      return { code: String(data.code), message: String(data.message) };
+    }
+    throw error;
+  }
+}
+
+async function latestUnwindFor(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  applicationId: Id<"financeApplications">
+): Promise<Doc<"dealUnwinds"> | null> {
+  const active = await activeDealUnwindFor(ctx, orgId, applicationId);
+  if (active) return active;
+  const rows = await ctx.db
+    .query("dealUnwinds")
+    .withIndex("by_org_application_status", (q) => q.eq("orgId", orgId).eq("applicationId", applicationId))
+    .take(UNWIND_HISTORY_LIMIT);
+  return rows.reduce<Doc<"dealUnwinds"> | null>(
+    (latest, row) => (latest === null || row.startedAt > latest.startedAt ? row : latest),
+    null
+  );
+}
+
+/**
+ * Where the deal page's unwind stands, for anyone who can see the deal (D6).
+ * Each `can…` flag is the mutation's permission set AND its own refusal
+ * helpers run as a dry run, so a flag never promises a step the server would
+ * refuse at this moment. The money evidence (amounts, references, the reason)
+ * reaches only a caller who may read the deal's finance economics; it is built
+ * field by field, never spread from the row.
+ */
+export const unwindStatus = query({
+  args: { orgId: v.id("organizations"), applicationId: v.id("financeApplications") },
+  handler: async (ctx, args) => {
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId);
+    const unwind = await latestUnwindFor(ctx, args.orgId, app._id);
+    const now = Date.now();
+
+    const refusals: { start?: Refusal; forwardReturn?: Refusal; finish?: Refusal } = {};
+    let step: StatusStep | null = null;
+    let canStart = false;
+    let canForwardReturn = false;
+    let canFinish = false;
+    let canAbandon = false;
+
+    if (unwind === null || unwind.status !== "ACTIVE") {
+      if (unwind !== null) step = unwind.status === "COMPLETED" ? "COMPLETED" : "ABANDONED";
+      if (holds(role, START_PERMS)) {
+        const refusal = await refusalOf(() => assertStartable(ctx, args.orgId, app));
+        if (refusal) refusals.start = refusal;
+        canStart = refusal === null;
+      }
+    } else {
+      const forward = await deriveForwardState(ctx, app);
+      const forwardPending = forward.applies && unwind.forwardReturn === undefined;
+      step = forwardPending ? "AWAITING_FORWARD_RETURN" : "AWAITING_FINISH";
+      if (forwardPending && holds(role, MONEY_STEP_PERMS)) {
+        const refusal = await refusalOf(() => assertForwardReturnable(ctx, args.orgId, app, now));
+        if (refusal) refusals.forwardReturn = refusal;
+        canForwardReturn = refusal === null;
+      }
+      if (holds(role, FINISH_PERMS)) {
+        const refusal = await refusalOf(() =>
+          assertFinishable(ctx, {
+            orgId: args.orgId,
+            unwind,
+            app,
+            now,
+            method: unwind.remittanceMethod,
+            refundedAt: now,
+          })
+        );
+        if (refusal) refusals.finish = refusal;
+        canFinish = refusal === null;
+      }
+      canAbandon = holds(role, ABANDON_PERMS);
+    }
+
+    const evidence =
+      unwind !== null && mayReadFinanceEconomics(role)
+        ? {
+            reason: unwind.reason,
+            remittanceMinor: unwind.remittanceMinor,
+            remittanceMethod: unwind.remittanceMethod,
+            forwardDueMinor: unwind.forwardDueMinor,
+            forwardReturn: unwind.forwardReturn
+              ? {
+                  returnedAt: unwind.forwardReturn.returnedAt,
+                  reference: unwind.forwardReturn.reference,
+                  recordedAt: unwind.forwardReturn.recordedAt,
+                }
+              : null,
+            remittanceRefund: unwind.remittanceRefund
+              ? {
+                  method: unwind.remittanceRefund.method,
+                  refundedAt: unwind.remittanceRefund.refundedAt,
+                  amountMinor: unwind.remittanceRefund.amountMinor,
+                  bankReference: unwind.remittanceRefund.bankReference ?? null,
+                  voucherNumber: unwind.remittanceRefund.voucherNumber ?? null,
+                  receiptReversal: unwind.remittanceRefund.receiptReversal,
+                }
+              : null,
+            completion: unwind.completion
+              ? {
+                  creditNoteReference: unwind.completion.creditNoteReference,
+                  vehicleReturnedAt: unwind.completion.vehicleReturnedAt,
+                  vehicleReturnNote: unwind.completion.vehicleReturnNote,
+                  customerPaymentDisposition: unwind.completion.customerPaymentDisposition,
+                  completedAt: unwind.completion.completedAt,
+                }
+              : null,
+            abandonment: unwind.abandonment
+              ? { reason: unwind.abandonment.reason, abandonedAt: unwind.abandonment.abandonedAt }
+              : null,
+          }
+        : null;
+
+    return {
+      unwindId: unwind?._id ?? null,
+      status: unwind?.status ?? null,
+      step,
+      startedAt: unwind?.startedAt ?? null,
+      eligibility: { canStart, canForwardReturn, canFinish, canAbandon },
+      refusals,
+      evidence,
+    };
+  },
+});
+
+/**
+ * The deals list's "Unwinding" badge (D6): which of one page's applications
+ * have an ACTIVE unwind. One org-scoped index probe per id; ids from another
+ * organisation simply never match.
+ */
+export const activeUnwindApplicationIds = query({
+  args: { orgId: v.id("organizations"), applicationIds: v.array(v.id("financeApplications")) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    if (args.applicationIds.length > UNWIND_BADGE_BATCH_MAX) {
+      throwAppError(AppErrorCode.VALIDATION_FAILED, "Too many deals requested at once.");
+    }
+    const unique = [...new Set(args.applicationIds)];
+    const active = await Promise.all(unique.map((id) => activeDealUnwindFor(ctx, args.orgId, id)));
+    return unique.filter((_, index) => active[index] !== null);
+  },
+});
