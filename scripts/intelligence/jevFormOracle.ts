@@ -41,8 +41,13 @@ export type Attempt = {
   warned?: boolean;
   /** For dup-variant only: how the exact-format control attempt ended. */
   control?: { outcome: Outcome; warned: boolean };
-  /** Row text read back from the list after an accepted save, if any. */
+  /** The saved value read back after an accepted save, if any. */
   readBack?: string;
+  /**
+   * Where `readBack` came from: the server's own field (must equal `expected`
+   * exactly) or a list row's text (must contain it). Unset is read as "list".
+   */
+  readBackFrom?: "server-document" | "list";
   /** The value the rule expects to round-trip, for unicode/markup. */
   expected?: string;
   /** The markup payload executed in the page; undefined when it was never seen rendered. */
@@ -69,6 +74,110 @@ function isRejected(o: Outcome): boolean {
 /** Error-toast text → the outcome it represents. */
 export function classifyErrorToast(text: string): Outcome {
   return RAW_ERROR.test(text) ? "rejected-raw" : "rejected-toast";
+}
+
+/**
+ * What the explorer can prove about one saved value, stage by stage: typed
+ * into the field, sent in the create mutation, and returned by the server for
+ * the created document (SCRUM-614 acceptance 2/3). `source` says how far the
+ * chain was observed; only "server-document" carries a persisted value.
+ */
+export type ReadBack = {
+  source: "server-document" | "field-not-returned" | "document-not-observed" | "no-id" | "not-sent" | "wrong-field" | "unmapped";
+  /** The mutation argument the field is mapped to. */
+  key?: string;
+  /** Where the typed value was actually found, when that is not `key` (wrong-field, unmapped). */
+  observedKey?: string;
+  sent?: unknown;
+  persisted?: unknown;
+};
+
+/**
+ * The one top-level mutation argument holding the typed value, exactly or as
+ * the client trimmed it. Two candidates, or none, is no answer: the value's
+ * path must be proven, never guessed.
+ */
+export function argKeyFor(args: Record<string, unknown> | undefined, typed: string): string | undefined {
+  if (!args) return undefined;
+  for (const want of [typed, typed.trim()]) {
+    const keys = Object.keys(args).filter((k) => args[k] === want);
+    if (keys.length === 1) return keys[0];
+    if (keys.length > 1) return undefined;
+  }
+  return undefined;
+}
+
+/** The object with this `_id` anywhere inside a query result, or undefined. */
+export function findDocument(value: unknown, id: string, depth = 0): Record<string, unknown> | undefined {
+  if (depth > 8 || value === null || typeof value !== "object") return undefined;
+  if (!Array.isArray(value) && (value as Record<string, unknown>)._id === id) return value as Record<string, unknown>;
+  for (const child of Array.isArray(value) ? value : Object.values(value)) {
+    const found = findDocument(child, id, depth + 1);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/**
+ * Typed → sent → persisted, from the create mutation and the server's own
+ * document. The field's argument comes from the form's reviewed map, never
+ * from where the value happens to turn up: a value saved under another field
+ * is "wrong-field", and a field with no mapping is "unmapped" (Codex F614-1).
+ */
+export function readBackOf(o: {
+  typed: string;
+  args: Record<string, unknown> | undefined;
+  id: unknown;
+  doc: Record<string, unknown> | undefined;
+  expectedKey: string | undefined;
+}): ReadBack {
+  const key = o.expectedKey;
+  if (key === undefined) {
+    const observedKey = argKeyFor(o.args, o.typed);
+    return observedKey === undefined ? { source: "unmapped" } : { source: "unmapped", observedKey };
+  }
+  if (!o.args) return { source: "not-sent", key };
+  const sent = o.args[key];
+  if (sent !== o.typed && sent !== o.typed.trim()) {
+    const observedKey = argKeyFor(o.args, o.typed);
+    if (observedKey !== undefined && observedKey !== key) return { source: "wrong-field", key, observedKey, sent };
+    // Neither here nor anywhere else: a value the client changed is still traced at its key.
+    if (!(key in o.args)) return { source: "not-sent", key };
+  }
+  if (typeof o.id !== "string") return { source: "no-id", key, sent };
+  if (!o.doc) return { source: "document-not-observed", key, sent };
+  if (!(key in o.doc)) return { source: "field-not-returned", key, sent };
+  return { source: "server-document", key, sent, persisted: o.doc[key] };
+}
+
+/** A value short enough for the report: long strings keep a prefix and their length. */
+export function clip(v: unknown, max = 120): unknown {
+  return typeof v === "string" && v.length > max ? `${v.slice(0, 60)}… (${v.length} chars)` : v;
+}
+
+/** The read-back as the report stores it: clipped values, comparisons made on the full ones. */
+export function summarizeReadBack(typed: string, rb: ReadBack) {
+  return {
+    ...rb,
+    sent: clip(rb.sent),
+    persisted: clip(rb.persisted),
+    sentEqualsTyped: rb.key === undefined || rb.source === "not-sent" ? undefined : rb.sent === typed,
+    persistedEqualsSent: rb.source === "server-document" ? rb.persisted === rb.sent : undefined,
+  };
+}
+
+/**
+ * Every submission that saved a typed value gets its own read-back: a
+ * dup-variant attempt can save its seed and its control too (Codex F614-2).
+ * "Saved" is the UI's word or the server's: a create the server confirmed
+ * is traced even when the UI then showed an error (Codex F614-4).
+ */
+export function submissionsToReadBack<S extends { outcome: Outcome; value?: string; created?: { id: unknown } }>(
+  subs: readonly S[],
+): (S & { value: string })[] {
+  return subs.filter(
+    (s): s is S & { value: string } => s.value !== undefined && (isAccepted(s.outcome) || typeof s.created?.id === "string"),
+  );
 }
 
 /** Collapse whitespace the way a rendered table cell does. */
@@ -170,7 +279,10 @@ function judgeUnicode(a: Attempt, where: string): Verdict {
     return { kind: "finding", check: "unicode-rejected", reason: `${where}: Arabic/emoji text was refused.` };
   }
   if (a.readBack === undefined || a.expected === undefined) return inconclusive(where, "not read back");
-  return squash(a.readBack).includes(squash(a.expected))
+  // The server's field is the value itself: any added, lost or reflowed
+  // character is a change (Codex F614-3). A list cell holds other text too.
+  const unchanged = a.readBackFrom === "server-document" ? a.readBack === a.expected : squash(a.readBack).includes(squash(a.expected));
+  return unchanged
     ? ok(where)
     : { kind: "finding", check: "unicode-mangled", reason: `${where}: saved text did not read back unchanged.` };
 }
