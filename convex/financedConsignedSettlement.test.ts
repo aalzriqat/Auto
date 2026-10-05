@@ -18,12 +18,14 @@
  */
 import * as applicationsModule from "./applications";
 import * as financingEconomicsModule from "./financingEconomics";
-import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
+import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { financedSaleRecognitionDate } from "./utils/financedSaleRecognition";
 // The notification a recipient actually reads, rendered by the same function
 // every channel uses — asserting the stored row alone would not catch a
@@ -50,7 +52,7 @@ const PERMS = [
   "approve:requests",
   "view:finance_applications", "create:finance_application",
   "review:finance_application", "approve:finance_application",
-  "finalize:financed_deal", "confirm:finance_disbursement",
+  "manage:supplier_settlement", "cancel:closed_deal", "confirm:finance_disbursement",
   "verify:finance_documents", "register:vehicle_handover",
   "register:expected_payment",
   "manage:finance", "view:finance",
@@ -160,6 +162,32 @@ async function seedDealership(tag: string, opts: { sourceType?: "STOCK" | "SOURC
 type Seeded = Awaited<ReturnType<typeof seedDealership>>;
 
 /**
+ * SCRUM-447 D4: `sales.update` now refuses to cancel a sale that belongs to a
+ * financed deal ("cancel this deal from the deal screen"), so no public door
+ * leaves an application CLOSED behind a CANCELLED sale any more. Several tests
+ * here need exactly that LEGACY state as their precondition (a deal cancelled
+ * through the old sales door). This reproduces it faithfully: the sale's
+ * application link is lifted for the duration of the cancel and restored, so
+ * the sale teardown runs exactly as it did and every later assertion sees the
+ * same rows. It is setup for legacy data, NOT a supported door.
+ */
+async function legacyCancelSaleThroughSalesDoor(s: Seeded, saleId: unknown) {
+  const id = saleId as Id<"sales">;
+  const applicationId = await s.t.run(async (ctx) => {
+    const sale = await ctx.db.get(id);
+    const link = sale?.applicationId;
+    await ctx.db.patch(id, { applicationId: undefined });
+    return link;
+  });
+  await s.asApprover.mutation(api.sales.update, {
+    orgId: s.orgId,
+    saleId: id,
+    status: "CANCELLED" as const,
+  });
+  await s.t.run((ctx) => ctx.db.patch(id, { applicationId }));
+}
+
+/**
  * Walks a deal to APPROVED and, unless told otherwise, finalizes it.
  *
  * `downPayment` is the customer's own money in the deal; `totalFinancedAmount`
@@ -253,6 +281,12 @@ async function runDeal(
 ) {
   const downPayment = opts.downPayment ?? 0;
   const mode = opts.mode ?? "CONFIGURED_FINANCE_COMPANY";
+  // SCRUM-495: LEASE and INTERNAL_INSTALLMENT can no longer be SAVED, so a legacy row in either mode
+  // is built the way one actually exists: saved through an operated mode with no company (the same
+  // no-companyId shape those modes had), then stamped into the retired mode below. Everything the
+  // readers derive (`quote.mode` and `quoteModeAtSubmission`) is therefore what a real legacy row carries.
+  const retiredMode = mode === "LEASE" || mode === "INTERNAL_INSTALLMENT" ? mode : undefined;
+  const savedMode = retiredMode ? "MANUAL_FINANCE_COMPANY" : mode;
   const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
     orgId: s.orgId,
     customerId: s.customerId,
@@ -260,23 +294,23 @@ async function runDeal(
     vehiclePrice: VEHICLE_PRICE,
     downPayment,
     termMonths: 48,
-    mode,
+    mode: savedMode,
     ...(mode === "CONFIGURED_FINANCE_COMPANY"
       ? {
           companyId: s.companyId,
           customerEligibilityStatusIds: [s.customerStatusId],
         }
       : {}),
-    ...(mode === "MANUAL_FINANCE_COMPANY" && opts.manualProviderName !== undefined
+    ...(savedMode === "MANUAL_FINANCE_COMPANY" && opts.manualProviderName !== undefined
       ? { manualProviderName: opts.manualProviderName }
       : {}),
-    ...(mode === "MANUAL_FINANCE_COMPANY" ? { manualAdminFees: 0 } : {}),
+    ...(savedMode === "MANUAL_FINANCE_COMPANY" ? { manualAdminFees: 0 } : {}),
     totalFinancedAmount: VEHICLE_PRICE - downPayment,
   });
 
   if (opts.deposit) {
     const taker = opts.depositTakenBy === "approver" ? s.asApprover : s.asUser;
-    await taker.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+    await taker.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       quoteId,
       amount: opts.deposit,
@@ -287,6 +321,13 @@ async function runDeal(
     orgId: s.orgId,
     quoteId,
   });
+  if (retiredMode) {
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(quoteId, { mode: retiredMode });
+      // A legacy retired-mode row never carried the manual-provider snapshot the operated mode stamps.
+      await ctx.db.patch(applicationId, { quoteModeAtSubmission: retiredMode, manualFinanceSnapshot: undefined });
+    });
+  }
   if (opts.omitMode) {
     await s.t.run(async (ctx) => {
       await ctx.db.patch(quoteId, { mode: undefined });
@@ -307,7 +348,7 @@ async function runDeal(
   }
 
   if (opts.depositAfterRoute) {
-    await s.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+    await s.asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       quoteId,
       amount: opts.depositAfterRoute,
@@ -351,6 +392,24 @@ async function runDeal(
     }
   }
 
+  // SCRUM-27: a MANUAL finance company deal cannot be handed over until the
+  // manager has entered its approval letter (G, name, S). A deal whose quote
+  // names the provider gets the letter here, naming the same company at the
+  // vehicle price, so the payer identity every test below reads is unchanged.
+  // A deal whose quote names NO provider has no name a letter could carry, so it
+  // stops here - before handover - which is all its route/label assertions need.
+  if (mode === "MANUAL_FINANCE_COMPANY") {
+    const providerName = opts.manualProviderName?.trim();
+    if (providerName) {
+      await s.asApprover.mutation(api.financingEconomics.recordManualFinanceApproval, {
+        orgId: s.orgId, applicationId,
+        approvedAmountMinor: VEHICLE_PRICE * SCALE, financierName: providerName, dealerSendsMinor: 0,
+      });
+    } else if (opts.finalize === false) {
+      return { quoteId, applicationId, saleId: null };
+    }
+  }
+
   // Anything that must be on the record BEFORE the vehicle goes out.
   //
   // Handover seals the approved amount: `approveDealerPurchaseAmount` now
@@ -370,8 +429,8 @@ async function runDeal(
   });
 
   // The legal invoice the car was sold under, and the deal's costs settled and
-  // checked. Together they are what `classifyDealAccounting` requires, and
-  // classification is what finalization requires. The single cost line carries a
+  // checked. Together they are what finalization's automatic readiness check
+  // requires (SCRUM-407 retired the manual classification step). The single cost line carries a
   // zero actual and is NOT deducted from the settlement — the shape the refusal
   // message itself suggests for a deal the dealership bore no costs on — so the
   // remittance stays the whole approval and these tests keep testing the supplier.
@@ -397,11 +456,6 @@ async function runDeal(
     });
     await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: s.orgId, feeId, notes: "Nothing to match.",
-    });
-    await s.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
-      orgId: s.orgId,
-      applicationId,
-      notes: "Invoice and settlement advice on file.",
     });
   }
 
@@ -821,7 +875,7 @@ describe("a reservation deposit on the direct route", () => {
 
     // 20,000 invoiced, 3,000 already held, so 17,000 left to come.
     const receivable = await financeReceivableOf(s, applicationId);
-    expect(receivable?.originalAmountMinor).toBe((VEHICLE_PRICE - 3_000) * SCALE);
+    expect(receivable?.originalAmountMinor).toBe(VEHICLE_PRICE * SCALE /* SCRUM-435: the company sends the FULL approved amount */);
 
     // The hold is consumed exactly once, and the application row records it.
     const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
@@ -1058,7 +1112,9 @@ describe("an external financier the deal does not name with a companyId", () => 
 describe("a lease, which is external but has no provider identity", () => {
   test("is asked the settlement route before finalizing", async () => {
     const s = await seedDealership("lease1");
-    await expect(runDeal(s, { mode: "LEASE" })).rejects.toThrow(/record the settlement route/i);
+    // SCRUM-495: a lease can no longer be finalized at all, so it is refused the retired-mode message
+    // before it is ever asked the route question (was: /record the settlement route/i).
+    await expectRetiredDealMode(runDeal(s, { mode: "LEASE" }));
   });
 
   test("is refused the direct route, naming the missing provider as the reason", async () => {
@@ -1072,10 +1128,20 @@ describe("a lease, which is external but has no provider identity", () => {
     ).rejects.toThrow(/leasing provider is not recorded/i);
   });
 
-  test("finalizes normally once it is told to settle through the dealership", async () => {
+  test("is refused at finalization even once it is told to settle through the dealership", async () => {
     const s = await seedDealership("lease3");
-    const { saleId } = await runDeal(s, { mode: "LEASE", route: "THROUGH_DEALERSHIP" });
-    expect(saleId).toBeTruthy();
+    // SCRUM-495: was "finalizes normally once it is told to settle through the dealership". A lease can
+    // no longer be finalized, so the same fully-prepared deal (route chosen, reconciled cost evidence) is
+    // refused with the retired-mode message and closes nothing.
+    await expectRetiredDealMode(
+      runDeal(s, {
+        mode: "LEASE",
+        route: "THROUGH_DEALERSHIP",
+        beforeFinalize: (applicationId) => recordReconciledZeroCost(s.asUser, api, s.orgId, applicationId),
+      })
+    );
+    const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
+    expect(sales).toHaveLength(0);
   });
 });
 
@@ -2545,11 +2611,7 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
     const first = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
 
     // Cancelled before any receipt, so the supplier-paid guard does not fire.
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: first.saleId as never,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, first.saleId as never);
 
     // The financier leg of the DEAD deal is then closed. This ordering is the
     // reachable one: `sales.update` refuses to cancel a sale whose supplier
@@ -2890,11 +2952,7 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
         dealerContributionMinor: 0,
       });
     });
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId as never,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, saleId as never);
 
     const profit = (await cockpitOf(s, applicationId))!.money!.managementProfit;
     expect(profit.available).toBe(false);
@@ -3168,11 +3226,7 @@ describe("the supplier is never made debtor for money that did not reach him", (
       (APPROVED - SUPPLIER_ENTITLEMENT) * SCALE
     );
 
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId as never,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, saleId as never);
 
     // The subledger claim is withdrawn...
     const claims = await supplierClaimsOf(s);
@@ -3396,20 +3450,24 @@ describe("cancelling a deal whose financing evidence cannot be read", () => {
     ).rejects.toThrow(/isn't possible to confirm whether the finance company has already paid/i);
   });
 
-  test("a readable application with nothing paid still cancels normally", async () => {
+  test("a readable application with nothing paid is refused only by the financed-deal rule", async () => {
     // The control. Without it the three refusals above are equally satisfied by
     // a guard that refuses every cancellation, which would be its own defect.
     const s = await seedDealership("cancelReadableClean");
     const { saleId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
 
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId as never,
-      status: "CANCELLED" as const,
-    });
+    // SCRUM-447 D4: the payment locks above pass, and the financed-deal refusal
+    // then applies — the sale is cancelled from the deal, never on its own.
+    await expect(
+      s.asApprover.mutation(api.sales.update, {
+        orgId: s.orgId,
+        saleId: saleId as never,
+        status: "CANCELLED" as const,
+      })
+    ).rejects.toThrow(/cancel this deal from the deal screen/i);
 
     const sale = (await s.t.run((ctx) => ctx.db.get(saleId as never))) as { status: string };
-    expect(sale.status).toBe("CANCELLED");
+    expect(sale.status).toBe("COMPLETED");
   });
 });
 
@@ -5061,6 +5119,10 @@ describe("a settlement advice that contradicts the approval", () => {
     const detail = await s.asUser.query(api.applications.get, { orgId: s.orgId, applicationId });
     const cockpitView = await cockpit(s, applicationId);
     const log = await s.asUser.query(api.applications.getLog, { orgId: s.orgId, applicationId });
+    // SCRUM-407's closing-readiness verdict: served to this caller with every
+    // figure withheld and every reason replaced by a plain sentence.
+    const closingReadiness = await s.asUser.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+    expect(closingReadiness.moneyWithheld).toBe(true);
     const handoverToken = await s.asUser.query(api.applications.handoverStamp, {
       orgId: s.orgId,
       applicationId,
@@ -5077,6 +5139,20 @@ describe("a settlement advice that contradicts the approval", () => {
       api.financingEconomics.suggestQuotationForApplication,
       { orgId: s.orgId, applicationId }
     );
+    // SCRUM-404's creation-time preview. Its door is `quotes.get`'s
+    // (`view:customers`), which this sales-only fixture does not hold, so it
+    // refuses — and a refusal is swept like any other response.
+    const dealQuoteId = await s.t.run(
+      async (ctx) => (await ctx.db.get(applicationId as Id<"financeApplications">))!.quoteId
+    );
+    const creationPreview = await s.asUser
+      .query(api.financingEconomics.previewCreationQuotation, {
+        orgId: s.orgId,
+        quoteId: dealQuoteId,
+      })
+      .catch((error: unknown) => ({
+        refusal: error instanceof Error ? error.message : String(error),
+      }));
 
     // ANTI-VACUITY. Every door must have actually returned this deal. An empty
     // page or a null document contains no evidence for the trivial reason, and
@@ -5113,6 +5189,7 @@ describe("a settlement advice that contradicts the approval", () => {
       ["applications.get", detail],
       ["applications.dealCockpit", cockpitView],
       ["applications.getLog", log],
+      ["applications.getClosingReadiness", closingReadiness],
       // The handover stamp. It is issued from the UNREDACTED row and served to
       // any caller who may hand over, so it is exactly the kind of door this
       // scan exists for — and the first version of it did leak: the token
@@ -5123,6 +5200,7 @@ describe("a settlement advice that contradicts the approval", () => {
       ["financingEconomics.listNeedingReconciliation", queue],
       ["financingEconomics.suggestQuotationForApplication", quotation],
       ["financingEconomics.suggestQuotation", suggestion],
+      ["financingEconomics.previewCreationQuotation", creationPreview],
     ];
 
     // COMPLETENESS, enforced rather than asserted in a comment. The list above
@@ -5926,13 +6004,14 @@ describe("one recognized-earning rule, asked identically by every surface", () =
       purchasePaymentMethod: "CASH",
     } as never);
 
-    await s.asUser.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId,
-      financingType: "FINANCED",
-    } as never);
-
+    // SCRUM-504: `sales.update` can no longer move a sale into FINANCED, so the draft completes as
+    // CASH and the completed row is then stamped with the legacy shape this test is about (a
+    // dealer-owned, direct-routed, FINANCED sale, as written before the refusal). The readers under
+    // test (dashboard, report) classify from the stored row, so the stamp is what they see.
     await s.asUser.mutation(api.sales.completeDraft, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, saleId } as never);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { financingType: "FINANCED" });
+    });
 
     // The ranking tile is drawn only for a role that may see people at all, and
     // this file's default role does not carry it — without this the tile is
@@ -6262,11 +6341,7 @@ describe("the deal cockpit's canonical sale destination", () => {
     // A different actor: `sales.update` refuses to let a salesperson approve the
     // cancellation of their own sale, which is a real separation-of-duties rule
     // and not something to work around with a direct patch.
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId!,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, saleId!);
     await s.asApprover.mutation(api.sales.softDelete, { orgId: s.orgId, saleId: saleId! });
 
     const view = await s.asUser.query(api.applications.dealCockpit, {
@@ -6763,7 +6838,7 @@ describe("the closing matrix c16216 requires", () => {
 
     // And asked the company for the remainder rather than the whole invoice.
     const receivable = await financeReceivableOf(s, applicationId);
-    expect(receivable?.originalAmountMinor).toBe((VEHICLE_PRICE - 3_000) * SCALE);
+    expect(receivable?.originalAmountMinor).toBe(VEHICLE_PRICE * SCALE /* SCRUM-435: the company sends the FULL approved amount */);
   });
 
   test("a multi-vehicle quote cannot become a financed deal at all", async () => {
@@ -6884,7 +6959,7 @@ describe("the closing matrix c16216 requires", () => {
     const atSale = await ledgerBySystemKey(s);
     expect(atSale[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY] ?? 0).toBe(0);
     expect(atSale[SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES] ?? 0).toBe(
-      (VEHICLE_PRICE - 3_000) * SCALE
+      VEHICLE_PRICE * SCALE /* SCRUM-435: the company sends the FULL approved amount */
     );
 
     await s.asUser.mutation(api.applications.cancelApplication, { idempotencyKey: crypto.randomUUID(),
@@ -6986,7 +7061,7 @@ describe("the closing matrix c16216 requires", () => {
 
     // And the receivable was not re-opened at a different figure.
     const receivable = await financeReceivableOf(s, applicationId);
-    expect(receivable?.originalAmountMinor).toBe((VEHICLE_PRICE - 3_000) * SCALE);
+    expect(receivable?.originalAmountMinor).toBe(VEHICLE_PRICE * SCALE /* SCRUM-435: the company sends the FULL approved amount */);
   });
 
   test("a deposit belonging to another organization refuses before anything is written", async () => {
@@ -7199,7 +7274,9 @@ describe("the closing matrix c16216 requires", () => {
         downPayment: 3_000,
         depositResolution: { treatment: "APPLY_TO_DEALER_AMOUNT" },
       })
-    ).rejects.toThrow(/exceeds what the dealership billed/i);
+    // SCRUM-435 (v2): refused earlier and in the owner's terms - the deposit is
+    // forwarded to the company, so it cannot be applied against the dealer's amount.
+    ).rejects.toThrow(/deposit is forwarded to the company/i);
 
     // Nothing written, and the deposit is still held for a real decision.
     const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
@@ -7387,7 +7464,7 @@ describe("a deposit released inside a sale journal stays locked until that journ
       downPayment: 3_000,
       beforeHandover: async (appId) => {
         const app = await s.t.run((ctx) => ctx.db.get(appId));
-        await s.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+        await s.asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
           orgId: s.orgId,
           quoteId: app!.quoteId,
           amount: 1_000,
@@ -7565,11 +7642,7 @@ describe("a stale finance application cannot tear down the sale that replaced it
       downPayment: 3_000,
     });
 
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId!,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, saleId!);
 
     // The precondition of the whole defect, asserted rather than assumed:
     // cancelling the sale does NOT cancel the application.
@@ -7684,11 +7757,7 @@ describe("a stale finance application cannot tear down the sale that replaced it
       downPayment: 3_000,
     });
 
-    await s.asApprover.mutation(api.sales.update, {
-      orgId: s.orgId,
-      saleId: saleId!,
-      status: "CANCELLED" as const,
-    });
+    await legacyCancelSaleThroughSalesDoor(s, saleId!);
 
     // Cancelling the sale reinstated the hold: that is the legitimate,
     // once-only restoration, and it is the state the replay must not repeat.
@@ -7937,7 +8006,7 @@ describe("finalization judges the deal's costs as they are NOW, never the stored
       orgId: s.orgId, applicationId, approvedAmountMinor: VEHICLE_PRICE * SCALE, basis: "MANUAL", notes: "Approved at the quotation.",
     });
   };
-  /** The legal invoice and the classification, exactly as `runDeal` records them when it finalizes itself. */
+  /** The legal invoice and a reconciled cost as `runDeal` records them, plus a legacy stamp the finalize door must ignore. */
   const invoiceAndClassify = async (s: Seeded, applicationId: Id<"financeApplications">) => {
     await s.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       orgId: s.orgId, applicationId, legalInvoiceAmountMinor: VEHICLE_PRICE * SCALE,
@@ -7949,7 +8018,9 @@ describe("finalization judges the deal's costs as they are NOW, never the stored
       deductedFromSettlement: false, actualAmountMinor: 0, description: "The dealership bore no closing costs on this deal.",
     });
     await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Nothing to match." });
-    await s.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: s.orgId, applicationId, notes: "Invoice and settlement advice on file." });
+    // A LEGACY stamp, planted raw: SCRUM-407 retired the command that wrote it,
+    // and these cases prove finalization never trusts one.
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { accountingClassification: "CLASSIFIED" }));
     return feeId;
   };
   /** A through-dealership deal walked by the real writers to CLASSIFIED, one step short of finalizing. */
@@ -8009,12 +8080,11 @@ describe("finalization judges the deal's costs as they are NOW, never the stored
 
   test("a legacy deal stamped CLASSIFIED raw over an unchecked new line is refused; a line in another currency likewise", async () => {
     const a = await classifiedDeal("fin-legacy");
-    // A real new line clears the classification; the legacy shape is the stamp planted back over it.
+    // A real new line, unchecked; the legacy shape is the stamp planted over it.
     await a.s.asUser.mutation(api.financeDealCosts.recordDealFee, {
       expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: a.s.orgId, applicationId: a.applicationId,
       feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT", accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE", actualAmountMinor: 90 * SCALE,
     });
-    expect((await a.s.t.run((ctx) => ctx.db.get(a.applicationId)))!.accountingClassification).not.toBe("CLASSIFIED");
     await a.s.t.run((ctx) => ctx.db.patch(a.applicationId, { accountingClassification: "CLASSIFIED" }));
     await expectRefusedWithNoFootprint(a.s, a.applicationId, /nobody has checked/);
 
@@ -8263,5 +8333,311 @@ describe("the legal invoice's date is THE recognition date", () => {
         issuedTo: "FINANCE_COMPANY",
       })
     ).rejects.toThrow(/finalized/);
+  });
+});
+
+/**
+ * SCRUM-407 Part 1 — accounting readiness is an AUTOMATIC check, and closing a
+ * financed deal is an accountant's act.
+ *
+ * The manual `classifyDealAccounting` stamp is retired: finalization re-derives
+ * readiness from the live rows on every route (custody included, which only
+ * the stamp's author used to check), stored economics follow every settlement-
+ * input fee change in the same transaction, and one read-only evaluator serves
+ * both the deal screen and the finalize door.
+ */
+describe("SCRUM-407: automatic closing readiness", () => {
+  const finalizeAs = (who: ReturnType<Seeded["t"]["withIdentity"]>, s: Seeded, applicationId: Id<"financeApplications">) =>
+    who.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId });
+  const openCustodyFor = (s: Seeded, applicationId: Id<"financeApplications">, issuedMinor: number) =>
+    s.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId, userId: s.approverId, issuedMinor, method: "CASH",
+    });
+  const salesOf = (s: Seeded) =>
+    s.t.run(async (ctx) => (await ctx.db.query("sales").collect()).filter((row) => row.orgId === s.orgId));
+  /** Any stamp a legacy run planted is removed: readiness must never read it. */
+  const clearStamp = (s: Seeded, applicationId: Id<"financeApplications">) =>
+    s.t.run((ctx) => ctx.db.patch(applicationId, { accountingClassification: "PENDING_CLASSIFICATION" }));
+  /** A member holding exactly one default role template's permissions. */
+  async function memberWithTemplate(s: Seeded, template: "SALES" | "ACCOUNTANT", tag: string) {
+    const permissions = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === template)!.permissions;
+    const clerkId = `${tag}_${template.toLowerCase()}`;
+    await s.t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId, email: `${clerkId}@example.com`, name: template });
+      const roleId = await ctx.db.insert("roles", { orgId: s.orgId, name: template, permissions });
+      await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+    });
+    return s.t.withIdentity({ subject: clerkId, clerkId });
+  }
+
+  describe.each(["THROUGH_DEALERSHIP", "DIRECT_TO_SUPPLIER"] as const)("custody is settled before a %s deal closes", (route) => {
+    test("an OPEN custody record refuses finalization, and no sale is written", async () => {
+      const s = await seedDealership(`r407-open-${route}`);
+      await expect(
+        runDeal(s, {
+          route,
+          beforeFinalize: async (applicationId) => {
+            await openCustodyFor(s, applicationId, 700 * SCALE);
+            await clearStamp(s, applicationId);
+          },
+        })
+      ).rejects.toThrow(/custody record on this deal is still open/);
+      expect(await salesOf(s)).toEqual([]);
+    });
+
+    test("a CLOSED custody record that no longer balances refuses finalization", async () => {
+      const s = await seedDealership(`r407-unbal-${route}`);
+      await expect(
+        runDeal(s, {
+          route,
+          beforeFinalize: async (applicationId) => {
+            const custodyId = await openCustodyFor(s, applicationId, 700 * SCALE);
+            // Closed while the employee still holds the whole advance — the
+            // stored status says settled, the arithmetic does not.
+            await s.t.run((ctx) => ctx.db.patch(custodyId, { status: "RECONCILED", reconciledAt: Date.now(), reconciledBy: s.userId }));
+            await clearStamp(s, applicationId);
+          },
+        })
+      ).rejects.toThrow(/closed custody record on this deal no longer balances/);
+      expect(await salesOf(s)).toEqual([]);
+    });
+
+    test("a WRITTEN_OFF custody record does not block, and the deal closes without any stamp", async () => {
+      const s = await seedDealership(`r407-woff-${route}`);
+      const { saleId, applicationId } = await runDeal(s, {
+        route,
+        beforeFinalize: async (id) => {
+          const custodyId = await openCustodyFor(s, id, 700 * SCALE);
+          await s.asUser.mutation(api.financeDealCosts.reconcileDealCustody, {
+            orgId: s.orgId, custodyId, notes: "Counted.", writeOffReason: "Lost at the counter.", idempotencyKey: crypto.randomUUID(),
+          });
+          await clearStamp(s, id);
+        },
+      });
+      expect(saleId).toBeTruthy();
+      const app = (await s.t.run((ctx) => ctx.db.get(applicationId)))!;
+      expect(app.status).toBe("CLOSED");
+      expect(app.accountingClassification).toBe("PENDING_CLASSIFICATION");
+    });
+  });
+
+  test("a through-dealership deal finalizes with no CLASSIFIED stamp at all", async () => {
+    const s = await seedDealership("r407-nostamp");
+    const { saleId, applicationId } = await runDeal(s, {
+      route: "THROUGH_DEALERSHIP",
+      beforeFinalize: (id) => clearStamp(s, id),
+    });
+    expect(saleId).toBeTruthy();
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))!.status).toBe("CLOSED");
+  });
+
+  test("a SALES-template member cannot finalize a financed deal; an ACCOUNTANT-template member can", async () => {
+    const through = await seedDealership("r407-perm2");
+    const salesMember = await memberWithTemplate(through, "SALES", "r407-perm2");
+    const accountantMember = await memberWithTemplate(through, "ACCOUNTANT", "r407-perm2");
+    let refusedAsSales: unknown = null;
+    const { saleId } = await runDeal(through, {
+      route: "THROUGH_DEALERSHIP",
+      beforeFinalize: async (id) => {
+        await clearStamp(through, id);
+        refusedAsSales = await finalizeAs(salesMember, through, id).then(() => null, (error: unknown) => error);
+        expect(await salesOf(through)).toEqual([]);
+        await finalizeAs(accountantMember, through, id);
+      },
+    }).catch((error: unknown) => ({ saleId: error }));
+    expect(String(refusedAsSales)).toMatch(/confirm:finance_disbursement/);
+    // The accountant closed it inside the hook, so runDeal's own finalize replays the stored sale.
+    expect(typeof saleId).toBe("string");
+    expect(await salesOf(through)).toHaveLength(1);
+  });
+
+  describe("stored economics follow every settlement-input fee change, after the write", () => {
+    async function approvedDeal(tag: string, templates?: boolean) {
+      const s = await seedDealership(tag);
+      const { applicationId } = await runDeal(s, {
+        route: "THROUGH_DEALERSHIP",
+        finalize: false,
+        beforeHandover: async (id) => {
+          if (templates) {
+            const app = (await s.t.run((ctx) => ctx.db.get(id)))!;
+            await s.t.run((ctx) => ctx.db.patch(id, {
+              companyRuleSnapshot: {
+                ...app.companyRuleSnapshot!,
+                adminFees: undefined,
+                feeTemplates: [{
+                  feeType: "COMMISSION", description: "Commission", estimatedAmountMinor: 300 * SCALE, paidBy: "DEALER",
+                  paidTo: "FINANCE_COMPANY", includedInQuotation: false, deductedFromSettlement: true, refundable: false,
+                  accountingTreatment: "FINANCE_COMPANY_COMMISSION",
+                }],
+              },
+            }));
+          }
+          await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+            orgId: s.orgId, applicationId: id, submittedQuotationMinor: VEHICLE_PRICE * SCALE, source: "MANUAL_ENTRY",
+          });
+          await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+            orgId: s.orgId, applicationId: id, approvedAmountMinor: VEHICLE_PRICE * SCALE, basis: "MANUAL", notes: "Approved at the quotation.",
+          });
+        },
+      });
+      const remittance = async () => (await s.t.run((ctx) => ctx.db.get(applicationId)))!.expectedDealerRemittanceMinor;
+      const base = await remittance();
+      expect(base).toBe(VEHICLE_PRICE * SCALE);
+      return { s, applicationId, remittance, base: base as number };
+    }
+
+    test("recordDealFee → recordActualFeeAmount → voidDealFee each leave the remittance at the NEW figure", async () => {
+      const { s, applicationId, remittance, base } = await approvedDeal("r407-econ");
+      const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, {
+        expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
+        feeType: "COMMISSION", paidBy: "DEALER", paidTo: "FINANCE_COMPANY", accountingTreatment: "FINANCE_COMPANY_COMMISSION",
+        deductedFromSettlement: true, actualAmountMinor: 300 * SCALE,
+      });
+      expect(await remittance()).toBe(base - 300 * SCALE);
+      await s.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+        orgId: s.orgId, feeId, actualAmountMinor: 250 * SCALE, expectedCurrency: "JOD",
+      });
+      expect(await remittance()).toBe(base - 250 * SCALE);
+      await s.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: s.orgId, feeId, reason: "Entered on the wrong deal." });
+      expect(await remittance()).toBe(base);
+    });
+
+    test("recordTemplateFeeActual on a deducted configured fee leaves the remittance at the NEW figure", async () => {
+      const { s, applicationId, remittance, base } = await approvedDeal("r407-econ-tpl", true);
+      await s.asUser.mutation(api.financeDealCosts.recordTemplateFeeActual, {
+        orgId: s.orgId, applicationId, templateIndex: 0, feeType: "COMMISSION",
+        expectedCurrency: "JOD", actualAmountMinor: 280 * SCALE, idempotencyKey: crypto.randomUUID(),
+      });
+      expect(await remittance()).toBe(base - 280 * SCALE);
+    });
+
+    test("re-recording the SAME amount still re-derives the economics, so drifted inputs still refuse the edit", async () => {
+      const { s, applicationId } = await approvedDeal("r407-econ-same");
+      const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, {
+        expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
+        feeType: "COMMISSION", paidBy: "DEALER", paidTo: "FINANCE_COMPANY", accountingTreatment: "FINANCE_COMPANY_COMMISSION",
+        deductedFromSettlement: true, actualAmountMinor: 300 * SCALE,
+      });
+      const otherFeeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, {
+        expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
+        feeType: "COMMISSION", paidBy: "DEALER", paidTo: "FINANCE_COMPANY", accountingTreatment: "FINANCE_COMPANY_COMMISSION",
+        deductedFromSettlement: true, actualAmountMinor: 50 * SCALE,
+      });
+      // Out-of-contract drift on a DIFFERENT line: only the recompute's currency proof can see it.
+      await s.t.run((ctx) => ctx.db.patch(otherFeeId, { currency: "USD" }));
+
+      await expect(s.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+        orgId: s.orgId, feeId, actualAmountMinor: 300 * SCALE, expectedCurrency: "JOD", receiptReference: "R-2",
+      })).rejects.toThrow(/USD/);
+      const fee = (await s.t.run((ctx) => ctx.db.get(feeId)))!;
+      expect(fee.receiptReference).not.toBe("R-2");
+    });
+
+    test("a deducted cost whose treatment has no account BLOCKS readiness — the screen never says READY for a plan that refuses", async () => {
+      const { s, applicationId } = await approvedDeal("r407-unmapped");
+      const feeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, {
+        expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
+        feeType: "COMMISSION", paidBy: "DEALER", paidTo: "FINANCE_COMPANY", accountingTreatment: "REFUNDABLE_DEPOSIT",
+        deductedFromSettlement: true, actualAmountMinor: 120 * SCALE,
+      });
+      await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Matched." });
+
+      const readiness = await s.asUser.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+      const costs = readiness.checks.find((check) => check.key === "COSTS_CLOSABLE");
+      expect(costs?.status).toBe("BLOCKED");
+      expect(costs?.reason).toMatch(/no account to post to/i);
+      expect(readiness.state).not.toBe("READY");
+      await expect(
+        s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId })
+      ).rejects.toThrow(/no account to post to/i);
+      // SCRUM-414: the finalize door's refusal names the same code the panel
+      // translates, alongside the English it has always carried.
+      expect(costs).toMatchObject({ reasonCode: "COSTS_TREATMENT_UNMAPPED", reasonParams: { treatment: "REFUNDABLE_DEPOSIT" } });
+      await expect(
+        s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId })
+      ).rejects.toMatchObject({
+        data: expect.objectContaining({
+          code: "COSTS_TREATMENT_UNMAPPED",
+          params: expect.objectContaining({ treatment: "REFUNDABLE_DEPOSIT" }),
+          message: expect.stringMatching(/no account to post to/i),
+        }),
+      });
+    });
+  });
+
+  describe("the readiness query", () => {
+    test("reports UNAVAILABLE while the deal's settlement inputs are not recorded", async () => {
+      const s = await seedDealership("r407-q-unavail");
+      const { applicationId } = await runDeal(s, { route: "THROUGH_DEALERSHIP", finalize: false });
+      const readiness = await s.asUser.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+      expect(readiness.state).toBe("UNAVAILABLE");
+      const remittance = readiness.checks.find((check) => check.key === "REMITTANCE_KNOWN");
+      expect(remittance?.status).toBe("UNAVAILABLE");
+      expect(remittance?.reason).toMatch(/approved purchase amount/i);
+    });
+
+    test("names a blocking custody record, and withholds every figure from a viewer below the finance tier", async () => {
+      const s = await seedDealership("r407-q-redact");
+      const { applicationId } = await runDeal(s, {
+        route: "THROUGH_DEALERSHIP",
+        finalize: false,
+        beforeHandover: async (id) => {
+          await s.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+            orgId: s.orgId, applicationId: id, submittedQuotationMinor: VEHICLE_PRICE * SCALE, source: "MANUAL_ENTRY",
+          });
+          await s.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+            orgId: s.orgId, applicationId: id, approvedAmountMinor: VEHICLE_PRICE * SCALE, basis: "MANUAL", notes: "Approved.",
+          });
+        },
+      });
+      await openCustodyFor(s, applicationId, 700 * SCALE);
+      // SCRUM-414: a reason whose params name currencies, so the redaction
+      // below has params to withhold.
+      const foreignFeeId = await s.asUser.mutation(api.financeDealCosts.recordDealFee, {
+        expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
+        feeType: "LICENSING", paidBy: "DEALER", paidTo: "GOVERNMENT", accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+        actualAmountMinor: 40 * SCALE,
+      });
+      await s.t.run((ctx) => ctx.db.patch(foreignFeeId, { currency: "USD" }));
+
+      const full = await s.asUser.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+      expect(full.state).toBe("BLOCKED");
+      expect(full.moneyWithheld).toBe(false);
+      expect(full.checks.find((check) => check.key === "CUSTODY_SETTLED")).toMatchObject({ status: "BLOCKED", reason: expect.stringMatching(/still open/) });
+
+      const viewerId = await s.t.run(async (ctx) => {
+        const userId = await ctx.db.insert("users", { clerkId: "r407-q-viewer", email: "r407v@example.com", name: "Viewer" });
+        const roleId = await ctx.db.insert("roles", { orgId: s.orgId, name: "VIEWER", permissions: ["view:finance_applications"] });
+        await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+        return userId;
+      });
+      expect(viewerId).toBeTruthy();
+      const asViewer = s.t.withIdentity({ subject: "r407-q-viewer", clerkId: "r407-q-viewer" });
+      const redacted = await asViewer.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+      expect(redacted.state).toBe("BLOCKED");
+      expect(redacted.moneyWithheld).toBe(true);
+      // The same checks, the same verdicts — only the money-bearing detail is withheld.
+      expect(redacted.checks.map((check) => [check.key, check.status])).toEqual(full.checks.map((check) => [check.key, check.status]));
+      expect(JSON.stringify(redacted)).not.toContain(String(VEHICLE_PRICE * SCALE));
+
+      // SCRUM-414: the finance caller gets codes, with params where the reason
+      // has figures; below the tier every reason is the per-check WITHHELD code
+      // with NO params and none of the evaluator's diagnostic text.
+      expect(full.checks.find((check) => check.key === "CUSTODY_SETTLED")).toMatchObject({ reasonCode: "CUSTODY_OPEN" });
+      expect(full.checks.find((check) => check.key === "COSTS_CLOSABLE")).toMatchObject({
+        reasonCode: "COSTS_FOREIGN_CURRENCY", reasonParams: { count: 1, currency: "JOD" },
+      });
+      for (const check of redacted.checks) {
+        const original = full.checks.find((row) => row.key === check.key)!;
+        expect(check).not.toHaveProperty("reasonParams");
+        if (original.reason === null) {
+          expect(check.reasonCode).toBeNull();
+          continue;
+        }
+        expect(check.reasonCode).toBe(`WITHHELD_${check.key}`);
+        expect(check.reason).not.toBe(original.reason);
+      }
+      expect(JSON.stringify(redacted)).not.toMatch(/reasonParams|USD|JOD/);
+    });
   });
 });

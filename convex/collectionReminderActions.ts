@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { renderNotification } from "../lib/notifications/render";
 import { scaleForCurrency } from "./utils/money";
+import { sinkEgress } from "./utils/egressSink";
 
 type ReminderMessageType = "DUE_SOON" | "OVERDUE" | "CHEQUE_UPCOMING" | "CHEQUE_RETURNED";
 
@@ -62,6 +63,16 @@ export const sendCollectionReminder = internalAction({
       return { success: false };
     }
 
+    // SCRUM-447 D5': never send a finance-company cheque reminder to the customer.
+    if (payload.fcLineageSuppressed) {
+      await ctx.runMutation(internal.collections.markReminderResult, {
+        reminderId: args.reminderId,
+        status: "SKIPPED",
+        error: "Finance-company cheque — not chased from the customer.",
+      });
+      return { success: false, skipped: true };
+    }
+
     const type = reminderNotificationType(payload.reminder.messageType);
     const data = reminderData(payload);
     const locale: "en" | "ar" = "ar";
@@ -90,7 +101,11 @@ export const sendCollectionReminder = internalAction({
 
       await ctx.runMutation(internal.collections.markReminderResult, {
         reminderId: args.reminderId,
-        status: result.success ? "SENT" : result.error === "whatsapp_not_configured" ? "SKIPPED" : "FAILED",
+        status: result.success
+          ? "SENT"
+          : result.error === "whatsapp_not_configured" || result.error === "egress_sunk"
+            ? "SKIPPED"
+            : "FAILED",
         error: result.error,
       });
       return result;
@@ -125,12 +140,16 @@ export const sendCollectionReminder = internalAction({
   },
 });
 
-async function sendSmsReminder(
+export async function sendSmsReminder(
   toPhone: string,
   locale: "en" | "ar",
   type: string,
   data: Record<string, string | number>
 ): Promise<{ success: boolean; skipped?: boolean; error?: string }> {
+  if (sinkEgress("sms", `sendSmsReminder type=${type}`)) {
+    return { success: false, skipped: true, error: "egress_sunk" };
+  }
+
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   const fromPhone = process.env.TWILIO_FROM_NUMBER;

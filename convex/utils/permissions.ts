@@ -118,7 +118,13 @@ export const PERMISSIONS = {
   CREATE_FINANCE_APPLICATION: "create:finance_application",
   REVIEW_FINANCE_APPLICATION: "review:finance_application",
   APPROVE_FINANCE_APPLICATION: "approve:finance_application",
-  FINALIZE_FINANCED_DEAL: "finalize:financed_deal",
+  // SCRUM-413 (owner ruling 2026-09-28): the two authorities split out of the
+  // retired `finalize:financed_deal` (see LEGACY_PERMISSIONS). Recording where
+  // the finance company pays the supplier on a financed deal, and reversing a
+  // financed deal that has already closed — the latter deliberately stronger.
+  // Neither is granted to SALES.
+  MANAGE_SUPPLIER_SETTLEMENT: "manage:supplier_settlement",
+  CANCEL_CLOSED_DEAL: "cancel:closed_deal",
   CONFIRM_FINANCE_DISBURSEMENT: "confirm:finance_disbursement",
   VERIFY_FINANCE_DOCUMENTS: "verify:finance_documents",
   REGISTER_VEHICLE_HANDOVER: "register:vehicle_handover",
@@ -153,17 +159,76 @@ export function isReservedRoleName(name: string): boolean {
   return normalizeRoleName(name) === SYSTEM_OWNER_ROLE_NAME;
 }
 
+/**
+ * SCRUM-413: permission strings that no longer exist as active authorities but
+ * may still sit on stored role rows. Validation accepts them (so an old row
+ * still round-trips through an edit), but NO door checks them, no template
+ * grants them and `roles.create` / `roles.update` refuse to add them.
+ * `finalize:financed_deal` was split into `manage:supplier_settlement` and
+ * `cancel:closed_deal`; holding the old string mints no authority.
+ */
+export const LEGACY_PERMISSIONS: readonly string[] = Object.freeze(["finalize:financed_deal"]);
+const LEGACY_PERMISSION_VALUES = new Set<string>(LEGACY_PERMISSIONS);
+
 export function getInvalidPermissions(permissions: readonly string[]): string[] {
-  return permissions.filter((permission) => !ALL_PERMISSION_VALUES.has(permission));
+  return permissions.filter(
+    (permission) => !ALL_PERMISSION_VALUES.has(permission) && !LEGACY_PERMISSION_VALUES.has(permission)
+  );
+}
+
+/**
+ * Retired permissions in `next` that were not already in `previous`. A role
+ * may keep a legacy value it already stored (round-trip); it may never gain one.
+ */
+export function newlyAddedLegacyPermissions(
+  next: readonly string[],
+  previous: readonly string[]
+): string[] {
+  const before = new Set(previous);
+  return dedupePermissions(next).filter(
+    (permission) => LEGACY_PERMISSION_VALUES.has(permission) && !before.has(permission)
+  );
 }
 
 export function dedupePermissions<T extends string>(permissions: readonly T[]): T[] {
   return Array.from(new Set(permissions));
 }
 
-function hasEveryDefinedPermission(permissions: readonly string[]): boolean {
+/**
+ * The permission set an unflagged legacy OWNER row must hold to be recognised
+ * as the owner — FROZEN at the values `PERMISSIONS` held immediately before
+ * SCRUM-413, and never edited again.
+ *
+ * It used to be "every currently-defined permission", which made every new
+ * permission silently de-owner every unflagged OWNER row until a backfill ran
+ * — and retiring one would have silently promoted rows that never held it.
+ * Frozen, neither can happen: the rows that qualified before still qualify,
+ * and no row starts qualifying. `scrum413PrepareDealAuthorities.test.ts` pins
+ * this list by hash.
+ */
+export const PRE_413_OWNER_FALLBACK_PERMISSIONS: readonly string[] = Object.freeze([
+  "view:org", "edit:org", "view:users", "manage:users", "manage:roles",
+  "view:vehicles", "create:vehicles", "create:vehicles:request", "edit:vehicles", "edit:vehicles:request",
+  "delete:vehicles", "view:vehicle_info", "view:vehicle_leads", "view:vehicle_expenses", "view:vehicle_tasks",
+  "view:vehicle_test_drives", "view:vehicle_work_orders", "view:vehicle_valuations", "edit:vehicle_valuations",
+  "view:customers", "create:customers", "create:customers:request", "edit:customers", "edit:customers:request",
+  "delete:customers", "view:leads", "create:leads", "create:leads:request", "edit:leads", "edit:leads:request",
+  "delete:leads", "view:sales", "create:sales", "create:sales:request", "edit:sales", "edit:sales:request",
+  "delete:sales", "view:expenses", "create:expenses", "create:expenses:request", "edit:expenses",
+  "edit:expenses:request", "delete:expenses", "view:tasks", "create:tasks", "edit:tasks", "delete:tasks",
+  "view:reports", "view:settings", "manage:settings", "website.view", "website.manage", "website.publish",
+  "website.domain.manage", "website.leads.manage", "website.analytics.view", "view:finance", "manage:finance",
+  "reopen:accounting_periods", "view:cost_price", "view:commissions", "manage:commissions", "view:payroll",
+  "manage:payroll", "approve:requests", "view:finance_applications", "create:finance_application",
+  "review:finance_application", "approve:finance_application", "finalize:financed_deal",
+  "confirm:finance_disbursement", "verify:finance_documents", "register:vehicle_handover",
+  "register:expected_payment", "marketplace:settings", "marketplace:respond", "marketplace:analytics",
+]);
+
+function holdsTheFrozenOwnerSet(permissions: readonly string[]): boolean {
+  if (permissions.length < PRE_413_OWNER_FALLBACK_PERMISSIONS.length) return false;
   const permissionSet = new Set(permissions);
-  return ALL_PERMISSIONS.every((permission) => permissionSet.has(permission));
+  return PRE_413_OWNER_FALLBACK_PERMISSIONS.every((permission) => permissionSet.has(permission));
 }
 
 /**
@@ -174,7 +239,47 @@ export function isSystemOwnerRole(role: RoleLike | null | undefined): boolean {
   if (!role || role.isDeleted) return false;
   if (role.isSystemOwnerRole === true) return true;
   if (role.isSystemOwnerRole === false) return false;
-  return role.name === SYSTEM_OWNER_ROLE_NAME && hasEveryDefinedPermission(role.permissions);
+  return role.name === SYSTEM_OWNER_ROLE_NAME && holdsTheFrozenOwnerSet(role.permissions);
+}
+
+/**
+ * SCRUM-413 S413B-3: a row NAMED like the owner that does not qualify as one
+ * (explicit `false`, or unflagged and short of the frozen set). Never promoted,
+ * never written by a backfill; an owner-review item in the diagnostic.
+ */
+export function isUnqualifiedOwnerNamed(role: RoleLike): boolean {
+  return isReservedRoleName(role.name) && !isSystemOwnerRole(role);
+}
+
+/**
+ * SCRUM-413 S413B-1: an unflagged row that qualifies as the owner only through
+ * the frozen fallback, so it needs the explicit flag. Evaluate on the PRE-write
+ * row: a write can change what qualifies.
+ */
+export function needsOwnerFlagStamp(role: RoleLike): boolean {
+  return role.isSystemOwnerRole === undefined && isSystemOwnerRole(role);
+}
+
+/**
+ * SCRUM-413 D-b: the ordered authority tiers needed to cancel a finance
+ * application in `status`. The single source for both `cancelApplication` (which
+ * enforces each tier at its own point in the body) and the cockpit's
+ * `mayCancelFinalized` (which holds every tier or is the owner), so the screen
+ * can never offer what the server refuses.
+ *
+ * CLOSED needs CANCEL_CLOSED_DEAL (deliberately NOT CREATE), plus the
+ * disbursement authority on a v2 deal. Every other status needs CREATE, plus the
+ * approval authority once APPROVED.
+ */
+export function cancelAuthorityFor(status: string, planVersion: number): Permission[][] {
+  if (status === "CLOSED") {
+    return planVersion === 2
+      ? [[PERMISSIONS.CANCEL_CLOSED_DEAL], [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]]
+      : [[PERMISSIONS.CANCEL_CLOSED_DEAL]];
+  }
+  return status === "APPROVED"
+    ? [[PERMISSIONS.CREATE_FINANCE_APPLICATION], [PERMISSIONS.APPROVE_FINANCE_APPLICATION]]
+    : [[PERMISSIONS.CREATE_FINANCE_APPLICATION]];
 }
 
 export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }[] = [
@@ -237,7 +342,8 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.CREATE_FINANCE_APPLICATION,
       PERMISSIONS.REVIEW_FINANCE_APPLICATION,
       PERMISSIONS.APPROVE_FINANCE_APPLICATION,
-      PERMISSIONS.FINALIZE_FINANCED_DEAL,
+      PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT,
+      PERMISSIONS.CANCEL_CLOSED_DEAL,
       PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
       PERMISSIONS.VERIFY_FINANCE_DOCUMENTS,
       PERMISSIONS.REGISTER_VEHICLE_HANDOVER,
@@ -275,7 +381,6 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VIEW_COMMISSIONS,
       PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
       PERMISSIONS.CREATE_FINANCE_APPLICATION,
-      PERMISSIONS.FINALIZE_FINANCED_DEAL,
       PERMISSIONS.REGISTER_VEHICLE_HANDOVER,
       PERMISSIONS.REGISTER_EXPECTED_PAYMENT,
       PERMISSIONS.MARKETPLACE_RESPOND,
@@ -315,6 +420,7 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.MANAGE_FINANCE,
       PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
       PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+      PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT,
       PERMISSIONS.VIEW_PAYROLL,
       PERMISSIONS.MANAGE_PAYROLL,
     ],
@@ -343,6 +449,7 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.MANAGE_FINANCE,
       PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
       PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+      PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT,
       PERMISSIONS.VIEW_COST_PRICE,
       PERMISSIONS.VIEW_COMMISSIONS,
       PERMISSIONS.MANAGE_COMMISSIONS,

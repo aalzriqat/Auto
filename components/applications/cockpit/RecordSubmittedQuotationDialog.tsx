@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
 
 /**
  * Records the quotation the dealership SENT the finance company.
@@ -40,9 +41,35 @@ import {
  */
 export type QuotationCalculation =
   | { state: "LOADING" }
-  | { state: "UNAVAILABLE" }
+  /**
+   * `reason` is the server's, when it gave one. The dialog names the ones the
+   * operator can act on (SCRUM-681) and keeps the generic line for the rest.
+   */
+  | { state: "UNAVAILABLE"; reason?: string }
   /** The solver's figure, in MINOR units. */
   | { state: "AVAILABLE"; minor: number };
+
+/** The calculator's answer as the dialog reads it, from the cockpit's query. */
+export function toQuotationCalculation(
+  canOfferQuotation: boolean,
+  suggestion:
+    | { available: true; submittedQuotationMinor: number }
+    | { available: false; reason: string }
+    | undefined
+): QuotationCalculation {
+  if (!canOfferQuotation) return { state: "UNAVAILABLE" };
+  if (suggestion === undefined) return { state: "LOADING" };
+  return suggestion.available
+    ? { state: "AVAILABLE", minor: suggestion.submittedQuotationMinor }
+    : { state: "UNAVAILABLE", reason: suggestion.reason };
+}
+
+/** Reasons the operator can do something about, each with its own note. */
+const UNAVAILABLE_REASON_KEYS: ReadonlyMap<string, string> = new Map([
+  ["OFFSET_RULE_UNKNOWN", "QuotationUnavailableOffsetRuleUnknown"],
+  ["OFFSET_RULE_DOES_NOT_APPLY", "QuotationUnavailableOffsetRuleDoesNotApply"],
+  ["NO_TARGET_RECORDED", "QuotationUnavailableNoTarget"],
+]);
 
 type RecordSubmittedQuotationDialogProps = {
   open: boolean;
@@ -168,12 +195,14 @@ export function RecordSubmittedQuotationDialog({
     setAmount(String(calculation.minor / factor));
   }, [open, calculation, factor]);
 
-  const parsed = Number(amount);
+  // Exact, never rounded (SCRUM-605): "21428.57213000" once rounded to the
+  // calculated 21428.572 and went on the record as SYSTEM_CALCULATED — a figure
+  // the operator never typed, under a provenance they never claimed.
+  const strict = parseMajorToMinor(amount, Math.round(Math.log10(factor)));
   const entered = amount.trim() !== "";
-  // `!(x > 0)` rather than `x <= 0`: they differ on NaN, and a non-numeric entry
-  // must count as invalid. `NaN <= 0` is false, which would let it through.
-  const amountInvalid = entered && !(parsed > 0);
-  const enteredMinor = entered && parsed > 0 ? Math.round(parsed * factor) : null;
+  const amountTooPrecise = !strict.ok && strict.problem === "TOO_PRECISE";
+  const amountInvalid = entered && !(strict.ok && strict.minor > 0);
+  const enteredMinor = strict.ok && strict.minor > 0 ? strict.minor : null;
 
   const calculatedMinor = calculation.state === "AVAILABLE" ? calculation.minor : null;
   const hasCalculation = calculatedMinor !== null;
@@ -237,7 +266,7 @@ export function RecordSubmittedQuotationDialog({
             />
             {amountInvalid && (
               <p role="alert" className="text-xs font-medium text-destructive">
-                {t("QuotationAmountInvalid")}
+                {t(amountTooPrecise ? "AmountTooPrecise" : "QuotationAmountInvalid")}
               </p>
             )}
 
@@ -274,7 +303,12 @@ export function RecordSubmittedQuotationDialog({
               </div>
             ) : (
               <p className="pt-0.5 text-xs text-muted-foreground">
-                {t("QuotationCalculatorUnavailable")}
+                {t(
+                  (calculation.state === "UNAVAILABLE" &&
+                    calculation.reason !== undefined &&
+                    UNAVAILABLE_REASON_KEYS.get(calculation.reason)) ||
+                    "QuotationCalculatorUnavailable"
+                )}
               </p>
             )}
 

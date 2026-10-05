@@ -67,7 +67,9 @@ const PERMISSIONS = [
   "create:finance_application",
   "review:finance_application",
   "approve:finance_application",
-  "finalize:financed_deal",
+  "manage:supplier_settlement",
+  "cancel:closed_deal",
+  "confirm:finance_disbursement",
   "verify:finance_documents",
   "register:vehicle_handover",
   "register:expected_payment",
@@ -172,7 +174,7 @@ async function quoteFor(seed: Seed, customerId: Id<"customers">, vehicles: Array
 }
 
 const depositOn = async (seed: Seed, quoteId: Id<"quotes">, amount: number) =>
-  await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount });
+  await seed.asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, quoteId, amount });
 
 const directSale = async (
   seed: Seed,

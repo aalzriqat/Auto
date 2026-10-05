@@ -593,10 +593,82 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // `financeDealCosts.planCustodyHandler`, `financeDealCosts.setFeeCustody`, and
   // `financeDealCosts.migrateLegacyCustodyToLedger` (AF-80 employee cash custody accounting).
   // Total: 494 totalMutations, 322 analysed.
+  //
+  // `financingEconomics.applyQuoteFirstPayment` (SCRUM-373 D2) — 495 → 496 total,
+  // 323 → 324 analysed. `orgId` plus a caller-supplied `applicationId`, read
+  // through `requireOwnedRow` after `requireTenantAuth`. Skipped counts unchanged.
+  //
+  // `supplierCostRecoveries.recordReceipt` and `reverseReceipt` (SCRUM-389
+  // supplier cost bearer) — 496 → 498 total, 324 → 326 analysed. Same shape:
+  // `orgId` plus a caller-supplied recovery/receipt id, each read through
+  // `requireOwnedRow` after `requireTenantAuth`. Skipped counts unchanged.
+  //
+  // `migrateRoles.prepareSplitDealAuthorities` (SCRUM-413 PR-A) — 498 → 499
+  // total, `analysed` 326 → 327, skippedNoOrgId unchanged at 157: the
+  // analyser enters it because `acknowledgedLosses` entries carry an
+  // `orgId`, and reports no unguarded write in it. It is an
+  // operator-run internalMutation that walks every `roles` row to add the two
+  // split deal permissions, so it deliberately takes no top-level `orgId`.
+  // Its only caller-supplied ids are the owner's `acknowledgedLosses`
+  // (roleId + orgId), used read-only to match the report and never written
+  // through; an entry whose orgId is not the role's own stays stale. No
+  // public entry point.
+  // Re-measured FROM THE ANALYSER on this tree
+  // ({"totalMutations":499,"analysed":327,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
+  //
+  // `financeDealCosts.classifyDealAccounting` DELETED (SCRUM-407: the manual
+  // classification stamp is retired; readiness is automatic) — one mutation
+  // fewer: 499 → 498 total, 327 → 326 analysed. Skipped counts unchanged.
+  // Re-measured FROM THE ANALYSER after merging main (SCRUM-413 PR-A) into
+  // SCRUM-407 ({"totalMutations":498,"analysed":326,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
+  //
+  // `documents.ensureApplicationDocument` (SCRUM-421: a required rule added
+  // after the application exists gets its per-deal row on first use) — 498 →
+  // 499 total, 326 → 327 analysed. `orgId` plus a caller-supplied
+  // `applicationId` and `ruleId`, each read and matched to `args.orgId` after
+  // `requireTenantAuth` before the insert; the analyser reports no unguarded
+  // write for it. Skipped counts unchanged. Re-measured FROM THE ANALYSER after
+  // merging main and SCRUM-407 into SCRUM-417
+  // ({"totalMutations":499,"analysed":327,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
+  // SCRUM-444: `depositRequests.request/confirm/reject/withdraw` - 499 -> 503 total,
+  // 327 -> 331 analysed. Each takes `orgId` plus caller ids read through an
+  // owned-row check after `requireTenantAuth`. Skipped counts unchanged.
+  //
+  // `financeDealCosts.recordDirectFeePayment` (SCRUM-443) — 503 → 504 total, 331 → 332
+  // analysed. `orgId` plus a caller-supplied `feeId`, read through `requireOwnedRow` after
+  // `requireTenantAuth`; the analyser reports no unguarded write. Skipped counts unchanged.
+  // Re-measured FROM THE ANALYSER after merging SCRUM-444
+  // ({"totalMutations":504,"analysed":332,"skippedNoArgsBlock":15,"skippedNoOrgId":157}).
+  // `applications.correctExpectedPayment` and `applications.attestChequeFace` (SCRUM-447) —
+  // 504 → 506 total, 332 → 334 analysed. Both take `orgId`, read the row through an
+  // org-checked `ctx.db.get` after `requireTenantAuth(MANAGE_FINANCE)`; the analyser reports
+  // no unguarded write. Skipped counts unchanged.
+  //
+  // `financeCompanyForward.recordFinanceCompanyForward/reverseFinanceCompanyForward/
+  // reportFinanceCompanyForwardReturned` (SCRUM-435) - 504 -> 507 total, 332 -> 335
+  // analysed. Each takes `orgId` plus a caller-supplied application (and forward) id read
+  // through `requireOwnedRow` after `requireTenantAuth`. Skipped counts unchanged.
+  // Merge of origin/main into SCRUM-447: 504 + 2 (SCRUM-447) + 3 (SCRUM-435) = 509 total, 332 + 5 = 337 analysed.
+  //
+  // `financingEconomics.recordManualFinanceApproval` (SCRUM-27), on top of main's 509/337 - 509 -> 510 total,
+  // 337 -> 338 analysed. `orgId` plus a caller-supplied `applicationId` read through
+  // `requireOwnedRow` after `requireTenantAuth`; the unguarded-write audit stays empty.
+  // SCRUM-239: + applications.returnFinanceDisbursementCheque - 510 -> 511 total, 338 -> 339 analysed (orgId + tenant-checked ids; unguarded-write audit stays empty).
+  // SCRUM-571 D-8: + paymentIntents.resolveUnmatchedProviderFunds - 511 -> 512 total, 339 -> 340 analysed
+  // (orgId + MANAGE_FINANCE; the held row is read and its orgId compared to the caller's before the patch).
+  // SCRUM-571 D-22: + paymentIntents.linkHeldCaptureToIntent - 512 -> 513 total, 340 -> 341 analysed
+  // (orgId + MANAGE_FINANCE; the held row and the intent are both read and org-compared before the patch).
+  // SCRUM-413 PR-B /simplify: `migrateRoles.prepareSplitDealAuthorities` is now an internalQuery (it only
+  // reads) - 513 -> 512 total, 341 -> 340 analysed. Re-measured FROM THE ANALYSER on this tree.
+  // Skipped counts unchanged.
+  // SCRUM-693: + dealUnwind.startDealUnwind/recordDealUnwindForwardReturn/finishDealUnwind/abandonDealUnwind (+4);
+  // SCRUM-690: + financeDealCosts.recordExecutionFeeActual / bindExecutionFeeLine / unbindExecutionFeeLine (+3).
+  // 512 -> 519 total, 340 -> 347 analysed. Each takes `orgId` and reads through an org-checked load after
+  // `requireTenantAuth` before any write; the unguarded-write audit stays empty. Skipped counts unchanged.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 495,
-      analysed: 323,
+      totalMutations: 519,
+      analysed: 347,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

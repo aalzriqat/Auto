@@ -3,6 +3,7 @@
 import { cn } from "@/lib/utils";
 import { FileText } from "lucide-react";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 
 const DOC_TRANSLATIONS: Record<string, string> = {
   "هوية": "ID Card",
@@ -18,6 +19,11 @@ const DOC_TRANSLATIONS: Record<string, string> = {
   "كفيل انثى او كفيل عادي (يفضل انثى)": "Female Guarantor or Regular (Female Preferred)",
   "هوية/كفيل انثى": "ID / Female Guarantor",
 };
+
+/** A document rule's name in the page language; custom names without a translation stay as entered. */
+export function documentDisplayName(name: string, isRtl: boolean): string {
+  return isRtl ? name : DOC_TRANSLATIONS[name] || name;
+}
 
 interface CompanyDoc {
   _id: string;
@@ -35,6 +41,10 @@ interface ReviewFinanceSummaryProps {
   takafulAmount?: number;
   desiredProfit?: number;
   companyDocs?: CompanyDoc[];
+  /** The terms the salesperson commits to (SCRUM-609 F-03): shown above what the financier derives. */
+  salePrice?: number;
+  downPayment?: number;
+  termMonths?: number;
   className?: string;
 }
 
@@ -48,9 +58,14 @@ export default function ReviewFinanceSummary({
   takafulAmount = 0,
   desiredProfit = 0,
   companyDocs = [],
+  salePrice,
+  downPayment,
+  termMonths,
   className,
 }: ReviewFinanceSummaryProps) {
   const { isRtl, t } = useLanguage();
+  const money = useMoneyDisplay();
+  const showDealTerms = !isCash && salePrice !== undefined;
 
   return (
     <div className={cn("rounded-xl border p-5 space-y-4", className)}>
@@ -65,6 +80,33 @@ export default function ReviewFinanceSummary({
         )}
       </div>
 
+      {/* Committed deal terms */}
+      {showDealTerms && (
+        <dl
+          data-testid="review-deal-terms"
+          className="grid grid-cols-3 gap-3 rounded-lg bg-muted/40 px-3 py-2 text-sm"
+        >
+          <div>
+            <dt className="text-xs text-muted-foreground">{t("SalePrice" as any)}</dt>
+            <dd className="font-semibold tabular-nums">
+              {money.format(salePrice || 0)}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">{t("DownPayment" as any)}</dt>
+            <dd className="font-semibold tabular-nums">
+              {money.format(downPayment || 0)}
+            </dd>
+          </div>
+          {termMonths !== undefined && (
+            <div>
+              <dt className="text-xs text-muted-foreground">{t("TermMonths" as any)}</dt>
+              <dd className="font-semibold tabular-nums">{termMonths}</dd>
+            </div>
+          )}
+        </dl>
+      )}
+
       {/* Main stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {!isCash ? (
@@ -73,44 +115,27 @@ export default function ReviewFinanceSummary({
             <div className="text-center">
               <p className="text-xs text-muted-foreground mb-1">{t("Monthly" as any) || "Monthly"}</p>
               <p className="text-xl font-bold text-indigo-400">
-                {(monthlyInstallment || 0).toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                })}
-                <span className="text-xs text-muted-foreground ms-1">{t("JOD" as any)}</span>
+                {money.amount(monthlyInstallment || 0)}
+                <span className="text-xs text-muted-foreground ms-1">{money.label}</span>
               </p>
             </div>
 
             {/* Financed */}
             <div className="text-center">
               <p className="text-xs text-muted-foreground mb-1">{t("FinancedAmount" as any)}</p>
-              <p className="text-sm font-semibold">
-                {(totalFinancedAmount || 0).toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                })}{" "}
-                {t("JOD" as any)}
-              </p>
+              <p className="text-sm font-semibold">{money.format(totalFinancedAmount || 0)}</p>
             </div>
 
             {/* Profit */}
             <div className="text-center">
               <p className="text-xs text-muted-foreground mb-1">{t("FinanceCompanyProfit" as any)}</p>
-              <p className="text-sm font-semibold">
-                {(totalProfit || 0).toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                })}{" "}
-                {t("JOD" as any)}
-              </p>
+              <p className="text-sm font-semibold">{money.format(totalProfit || 0)}</p>
             </div>
 
             {/* Your profit */}
             <div className="text-center">
               <p className="text-xs text-muted-foreground mb-1">{t("YourProfit" as any)}</p>
-              <p className="text-sm font-semibold text-emerald-400">
-                {(desiredProfit || 0).toLocaleString(undefined, {
-                  minimumFractionDigits: 2,
-                })}{" "}
-                {t("JOD" as any)}
-              </p>
+              <p className="text-sm font-semibold text-emerald-400">{money.format(desiredProfit || 0)}</p>
             </div>
           </>
         ) : (
@@ -118,12 +143,7 @@ export default function ReviewFinanceSummary({
             <p className="text-xs text-muted-foreground mb-1">
               {t("TotalToCollect" as any)}
             </p>
-            <p className="text-2xl font-bold">
-              {(totalFinancedAmount || 0).toLocaleString(undefined, {
-                minimumFractionDigits: 2,
-              })}{" "}
-              {t("JOD" as any)}
-            </p>
+            <p className="text-2xl font-bold">{money.format(totalFinancedAmount || 0)}</p>
           </div>
         )}
       </div>
@@ -152,7 +172,7 @@ export default function ReviewFinanceSummary({
                       : "text-muted-foreground"
                   }
                 >
-                  {isRtl ? doc.documentName : (DOC_TRANSLATIONS[doc.documentName] || doc.documentName)}
+                  {documentDisplayName(doc.documentName, isRtl)}
                   {doc.isRequired && (
                     <span className="text-amber-400 ms-1">*</span>
                   )}

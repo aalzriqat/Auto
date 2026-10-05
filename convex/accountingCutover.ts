@@ -142,12 +142,26 @@ async function sumAllPostedJournalLinesByCurrency(
   }));
 }
 
+/**
+ * The first POSTED OPENING_BALANCE journal of the org, in `by_org` index order.
+ *
+ * `by_org` is every journal the org has ever written, so this walks it lazily
+ * and stops at the first match rather than collecting the range.
+ */
+async function findPostedOpeningBalanceJournal(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">
+): Promise<Doc<"journalEntries"> | null> {
+  // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+  for await (const entry of ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", orgId))) {
+    if (entry.category === "OPENING_BALANCE" && entry.status === "POSTED") return entry;
+  }
+  return null;
+}
+
 async function hasOpeningBalanceCommitment(ctx: QueryCtx, orgId: Id<"organizations">): Promise<boolean> {
-  const postedJournal = await ctx.db
-    .query("journalEntries")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .filter((q) => q.and(q.eq(q.field("category"), "OPENING_BALANCE"), q.eq(q.field("status"), "POSTED")))
-    .first();
+  // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+  const postedJournal = await findPostedOpeningBalanceJournal(ctx, orgId);
   if (postedJournal) return true;
   const pendingDraft = await ctx.db
     .query("openingBalanceDrafts")
@@ -646,11 +660,8 @@ export const hasOpeningBalance = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-    const existing = await ctx.db
-      .query("journalEntries")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.and(q.eq(q.field("category"), "OPENING_BALANCE"), q.eq(q.field("status"), "POSTED")))
-      .first();
+    // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+    const existing = await findPostedOpeningBalanceJournal(ctx, args.orgId);
     return existing !== null;
   },
 });
@@ -682,11 +693,8 @@ export const openingBalanceStatus = query({
   }> => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
-    const postedEntry = await ctx.db
-      .query("journalEntries")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.and(q.eq(q.field("category"), "OPENING_BALANCE"), q.eq(q.field("status"), "POSTED")))
-      .first();
+    // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+    const postedEntry = await findPostedOpeningBalanceJournal(ctx, args.orgId);
 
     const pending = await ctx.db
       .query("openingBalanceDrafts")
@@ -884,11 +892,8 @@ export const signOffCutover = mutation({
     // same person who approved (posted) the org's opening balance — an
     // independent reviewer must confirm the starting position, not the
     // person who set it.
-    const openingBalanceJournal = await ctx.db
-      .query("journalEntries")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.and(q.eq(q.field("category"), "OPENING_BALANCE"), q.eq(q.field("status"), "POSTED")))
-      .first();
+    // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+    const openingBalanceJournal = await findPostedOpeningBalanceJournal(ctx, args.orgId);
     if (openingBalanceJournal && openingBalanceJournal.postedBy === user._id) {
       throw new ConvexError(
         "Cannot sign off: the signer must be different from whoever approved and posted the opening balance."

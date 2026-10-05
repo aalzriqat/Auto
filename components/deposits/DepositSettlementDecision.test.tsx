@@ -56,6 +56,7 @@ const { queryResults } = stubs;
 import { DepositSettlementDecision } from "./DepositSettlementDecision";
 
 const PERMS = [
+  "confirm:finance_disbursement",
   "view:sales", "create:sales", "edit:sales",
   "view:vehicles", "view:customers",
   "manage:finance", "view:finance", "view:expenses", "view:reports",

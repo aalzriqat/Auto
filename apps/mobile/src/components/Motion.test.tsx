@@ -1,6 +1,6 @@
 /// <reference types="jest" />
 
-import { act, fireEvent, render, waitFor } from "@testing-library/react-native";
+import { act, fireEvent, render } from "@testing-library/react-native";
 import { AccessibilityInfo, Text } from "react-native";
 
 import { FadeSlideIn, PressableScale, useCountUp } from "./Motion";
@@ -101,6 +101,18 @@ describe("PressableScale", () => {
 });
 
 describe("reduce motion", () => {
+  // Whenever motion stays enabled, useCountUp / FadeSlideIn start a real
+  // Animated.timing on the wall clock. Under CI load a frame can elapse between
+  // render and the assertion, moving the count off "0". Fake timers freeze that
+  // clock: nothing animates unless a test advances it deliberately.
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   test("FadeSlideIn snaps to fully visible without running the 420ms fade", async () => {
     mockReduceMotion(true);
 
@@ -205,13 +217,20 @@ describe("reduce motion", () => {
 
     const { getByTestId } = await render(<CountUpProbe target={99} />);
 
-    await waitFor(() => {
-      expect(consoleError).toHaveBeenCalledWith(
-        "Failed to read the reduce-motion accessibility setting",
-        expect.any(Error),
-      );
-    });
+    // Flush the rejected read's .catch via microtasks only — no clock advances.
+    await settleAccessibilityRead();
+
+    expect(consoleError).toHaveBeenCalledWith(
+      "Failed to read the reduce-motion accessibility setting",
+      expect.any(Error),
+    );
     // Failing to read the preference must not freeze the counter at its target.
     expect(getByTestId("count").props.children).toBe("0");
+
+    // Motion is genuinely still enabled: advancing the clock rolls the count up.
+    await act(async () => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(getByTestId("count").props.children).toBe("99");
   });
 });

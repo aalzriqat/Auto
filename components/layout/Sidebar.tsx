@@ -8,7 +8,7 @@ import { useOrg } from "@/components/providers/OrgProvider";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { cn } from "@/lib/utils";
-import { mainNavigation as navigation, settingsNavigation } from "@/lib/navigation";
+import { mainNavigation as navigation, settingsNavigation, navItemPermitted } from "@/lib/navigation";
 import { Badge } from "@/components/ui/badge";
 
 export function Sidebar() {
@@ -34,10 +34,7 @@ export function Sidebar() {
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
 
-  const visibleNav = navigation.filter(item => {
-    if (!item.permission) return true;
-    return permissions.includes(item.permission);
-  });
+  const visibleNav = navigation.filter(item => navItemPermitted(item, permissions));
 
   const visibleSettings = settingsNavigation.filter(item => {
     if ((item as { ownerOnly?: boolean }).ownerOnly) return isOwner;

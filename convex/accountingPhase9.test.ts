@@ -436,29 +436,46 @@ describe("Phase 9 — accounting outbox", () => {
 describe("Phase 9 — idempotency fingerprint", () => {
   test("reusing an idempotency key with a different payload is rejected", async () => {
     const { orgId, asUser, customerId } = await seedDealer("idem");
-
-    await asUser.mutation(api.paymentIntents.create, {
-      orgId, customerId, amountMinor: 1000, currency: "JOD", provider: "tap",
-      idempotencyKey: "reused_key_1",
+    // SCRUM-571 S1: an intent needs a target document, sized above 999_999.
+    const receivableDocumentId = await asUser.mutation(internal.subledger.createReceivable, {
+      orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
+      sourceType: "test_intent", sourceId: "idem_receivable",
+      originalAmountMinor: 2_000_000, currency: "JOD",
+      issueDate: Date.now(), dueDate: Date.now(),
     });
 
-    await expect(
-      asUser.mutation(api.paymentIntents.create, {
-        orgId, customerId, amountMinor: 999999, currency: "JOD", provider: "tap",
-        idempotencyKey: "reused_key_1",
-      })
-    ).rejects.toThrow(/different request content/i);
+    // D-20: create is shut for every request, so the idempotency fingerprint on
+    // paymentIntents.create is no longer reachable; both calls are refused and
+    // neither leaves an idempotency record.
+    for (const amountMinor of [1000, 999999]) {
+      await expect(
+        asUser.mutation(api.paymentIntents.create, {
+          orgId, customerId, receivableDocumentId, amountMinor, currency: "JOD", provider: "tap",
+          idempotencyKey: "reused_key_1",
+        })
+      ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
+    }
   });
 
-  test("same key with identical payload still returns the prior result", async () => {
+  // D-20: replay of a prior result is retired with the pilot; a replayed key is refused too.
+  test("same key with identical payload is still refused while payment links are shut", async () => {
     const { orgId, asUser, customerId } = await seedDealer("idem2");
+    const receivableDocumentId = await asUser.mutation(internal.subledger.createReceivable, {
+      orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
+      sourceType: "test_intent", sourceId: "idem2_receivable",
+      originalAmountMinor: 2_000_000, currency: "JOD",
+      issueDate: Date.now(), dueDate: Date.now(),
+    });
     const args = {
-      orgId, customerId, amountMinor: 5000, currency: "JOD", provider: "tap",
+      orgId, customerId, receivableDocumentId, amountMinor: 5000, currency: "JOD", provider: "tap",
       idempotencyKey: "stable_key_1",
     } as const;
-    const a = await asUser.mutation(api.paymentIntents.create, args);
-    const b = await asUser.mutation(api.paymentIntents.create, args);
-    expect(b).toEqual(a);
+    await expect(asUser.mutation(api.paymentIntents.create, args)).rejects.toMatchObject({
+      data: { code: "PAYMENT_LINKS_DISABLED" },
+    });
+    await expect(asUser.mutation(api.paymentIntents.create, args)).rejects.toMatchObject({
+      data: { code: "PAYMENT_LINKS_DISABLED" },
+    });
   });
 });
 
@@ -591,6 +608,8 @@ describe("Phase 9 — finance disbursement receipt", () => {
       ctx.db.insert("financeApplications", {
         orgId, customerId, vehicleId, companyId: financeCompanyId,
         quoteId, salespersonId: userId, status: "CLOSED",
+        // SCRUM-447 B1: confirming consumes a registered tender.
+        expectedPaymentMethod: "BANK_TRANSFER", expectedPaymentDate: Date.now(),
         createdAt: Date.now(), updatedAt: Date.now(),
       })
     );
@@ -740,7 +759,7 @@ describe("Phase 9 — commission payment GL posting", () => {
 // ─── Payment-link settlement must never discard a confirmed payment ──────────
 
 describe("payment intent settlement clamping", () => {
-  test("settles even when the receivable was partly paid through another channel", async () => {
+  test("a capture on a partly-paid receivable is held without throwing while the pilot is shut", async () => {
     const { t, orgId, asUser, customerId, userId } = await seedDealer("clamp");
 
     // A 1,000.000 JOD receivable, and a payment link raised for the full amount.
@@ -764,15 +783,15 @@ describe("payment intent settlement clamping", () => {
       })
     );
 
-    const intentId = await asUser.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
-      orgId,
-      customerId,
-      amountMinor: 1_000_000,
-      currency: "JOD",
-      provider: "tap",
-      externalId: "tap_clamp_1",
-      receivableDocumentId,
-    });
+    // D-20: create is shut, so the pilot-era intent is seeded directly.
+    const intentId = await t.run((ctx) =>
+      ctx.db.insert("paymentIntents", {
+        orgId, customerId, receivableDocumentId, amountMinor: 1_000_000, currency: "JOD",
+        provider: "tap", externalId: "tap_clamp_1", status: "PENDING",
+        idempotencyKey: crypto.randomUUID(), createdBy: userId,
+        createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
 
     // The customer pays 600.000 in cash before the link settles, leaving only
     // 400.000 outstanding — less than the intent's amount.
@@ -793,19 +812,22 @@ describe("payment intent settlement clamping", () => {
     // The provider now confirms the link. This must not throw: a throw rolls
     // back the whole mutation, so a payment the provider has already taken
     // would be lost, and its retries would fail identically.
-    await t.mutation(internal.paymentIntents.settleByExternalId, {
+    // D-22: while the pilot is shut the capture is HELD instead of settled; the
+    // intent goes terminal CAPTURE_HELD, linked to the held row. The no-throw
+    // property (the funds-boundary rule) is what this test still proves.
+    const outcome = await t.mutation(internal.paymentIntents.settleByExternalId, {
       provider: "tap",
       externalId: "tap_clamp_1",
       amountMinor: 1_000_000,
       currency: "JOD",
       providerSignatureVerifiedAt: Date.now(),
     });
+    expect(outcome).toMatchObject({ kind: "HELD" });
 
     const intent = await t.run((ctx) => ctx.db.get(intentId));
-    expect(intent?.status).toBe("SETTLED");
-    // The canonical payment is recorded in full; only the allocation is clamped,
-    // so the extra 600.000 remains as an unapplied balance on the payment.
-    expect(intent?.canonicalPaymentId).toBeTruthy();
+    expect(intent?.status).toBe("CAPTURE_HELD");
+    expect(intent?.heldFundsId).toBe((outcome as { heldId?: unknown }).heldId);
+    expect(intent?.canonicalPaymentId).toBeUndefined();
   });
 });
 

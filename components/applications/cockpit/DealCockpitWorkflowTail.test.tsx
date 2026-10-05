@@ -18,11 +18,21 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
 
-vi.mock("@/components/providers/LanguageProvider", () => ({
-  // Identity `t`, so a missing translation surfaces as its key rather than
-  // silently rendering something plausible.
-  useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
-}));
+vi.mock("@/components/providers/LanguageProvider", async () => {
+  const { dictionaries } = await import("@/lib/i18n/dictionaries");
+  const en = dictionaries.en as Record<string, string>;
+  return {
+    // Identity `t`, so a missing translation surfaces as its key rather than
+    // silently rendering something plausible. The one exception is a closing-readiness
+    // REASON: the list swaps a reason key with no translation for a generic line
+    // (SCRUM-420 S420-01), so identity there would test the fallback, not the code.
+    useLanguage: () => ({
+      t: (key: string) => (key.startsWith("ClosingReason_") ? (en[key] ?? key) : key),
+      isRtl: false,
+      locale: "en",
+    }),
+  };
+});
 
 vi.mock("@/hooks/useCurrency", () => ({
   useCurrency: () => ({
@@ -39,8 +49,8 @@ const stubs = vi.hoisted(() => ({
   permissions: new Set<string>(),
   /** Every mutation call this render made: name → the list of args it got. */
   mutationCalls: new Map<string, unknown[]>(),
-  /** Names whose next call should reject, and with what. */
-  mutationFailures: new Map<string, string>(),
+  /** Names whose next call should reject, and with what (a string becomes an Error). */
+  mutationFailures: new Map<string, string | Error>(),
 }));
 
 vi.mock("@/hooks/use-permissions", () => ({
@@ -53,8 +63,16 @@ vi.mock("@/hooks/use-permissions", () => ({
 
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
+  const resultOf = (reference: never) => stubs.queryResults.get(getFunctionName(reference));
   return {
-    useQuery: (reference: never) => stubs.queryResults.get(getFunctionName(reference)),
+    // As the real hook does: an Error result THROWS during render.
+    useQuery: (reference: never) => {
+      const result = resultOf(reference);
+      if (result instanceof Error) throw result;
+      return result;
+    },
+    useQueries: (queries: Record<string, { query: never }>) =>
+      Object.fromEntries(Object.entries(queries).map(([key, { query }]) => [key, resultOf(query)])),
     useMutation: (reference: never) => {
       const name = getFunctionName(reference);
       return async (args: unknown) => {
@@ -64,7 +82,7 @@ vi.mock("convex/react", async () => {
         const failure = stubs.mutationFailures.get(name);
         if (failure !== undefined) {
           stubs.mutationFailures.delete(name);
-          throw new Error(failure);
+          throw typeof failure === "string" ? new Error(failure) : failure;
         }
         return null;
       };
@@ -80,8 +98,14 @@ vi.mock("@/components/ui/sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
+import { ConvexError } from "convex/values";
 import { DealCockpit } from "./DealCockpit";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import { toast } from "@/components/ui/sonner";
+import { WITHHELD_READINESS_REASON_FALLBACK } from "@/lib/closingReadinessReasonCodes";
+import { dictionaries } from "@/lib/i18n/dictionaries";
+
+const WITHHELD_COSTS_CLOSABLE_EN = (dictionaries.en as Record<string, string>).ClosingReason_WITHHELD_COSTS_CLOSABLE;
 
 const { queryResults, permissions, mutationCalls, mutationFailures } = stubs;
 
@@ -199,8 +223,44 @@ function nextStepBlock(): HTMLElement {
 function grantTheWholeTail() {
   permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
   permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
-  permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+  permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+  // SCRUM-407: the close itself is an accountant's act.
+  permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
 }
+
+/**
+ * The close's own precondition (S414-R2-SKEW-1 / S414-R3-1): the cockpit offers
+ * and submits it only on a LOADED, open READY verdict, so a case that takes the
+ * close reads the readiness and has it READY. Every default template holding
+ * `confirm:finance_disbursement` also holds `view:finance_applications`.
+ */
+function readyToClose() {
+  grantTheWholeTail();
+  permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+  queryResults.set("applications:getClosingReadiness", readinessVerdict("READY"));
+}
+
+/** The closing-readiness verdict as `applications.getClosingReadiness` returns it. */
+function readinessVerdict(state: "READY" | "BLOCKED" | "UNAVAILABLE") {
+  return {
+    state,
+    open: true,
+    checks: [{ key: "CUSTODY_SETTLED", status: state === "READY" ? "READY" : state, reason: null }],
+    unavailableReason: null,
+    moneyWithheld: false,
+  };
+}
+
+/**
+ * The refusal a pre-SCRUM-414 `finalizeDeal` throws on currency drift, in plain
+ * English. Realistic for these fixtures: the application is pinned to JOD and
+ * the organization has since moved to SAR, while the org-settings read the
+ * local denomination guard compares against has not answered — `useCurrency`
+ * falls back to JOD, so that guard does not fire and only the readiness gate
+ * stands between this sentence and a caller without money-read authority.
+ */
+const OLD_BACKEND_DRIFT_REFUSAL =
+  "This deal's figures were recorded in JOD, but the organization's currency is now SAR. A deal is finalized in the currency its figures were recorded in — restore the organization's currency to JOD before finalizing it.";
 
 describe("the step the rail names is a step this screen can take", () => {
   test("handover is offered on the stage the rail is naming", () => {
@@ -233,8 +293,29 @@ describe("the step the rail names is a step this screen can take", () => {
     expect(screen.queryByRole("button", { name: "FinalizeDealAction" })).toBeNull();
   });
 
-  test("closing is offered only once the payment fact the server demands is on file", () => {
+  test.each([
+    ["chequeNeedsCorrection"],
+    ["chequeNeedsAccountingReview"],
+  ])("the register step is withheld while %s is raised, and offered when it is not", (flag) => {
     grantTheWholeTail();
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: false, [flag]: true })
+    );
+    renderCockpit();
+    expect(screen.queryByRole("button", { name: "RegisterExpectedPaymentAction" })).toBeNull();
+    cleanup();
+
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: false, [flag]: false })
+    );
+    renderCockpit();
+    expect(screen.getByRole("button", { name: "RegisterExpectedPaymentAction" })).toBeTruthy();
+  });
+
+  test("closing is offered only once the payment fact the server demands is on file", () => {
+    readyToClose();
     queryResults.set(
       COCKPIT_QUERY,
       cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true })
@@ -294,10 +375,10 @@ describe("a step the server would refuse is not offered as a step", () => {
   });
 
   test("a caller who can neither record the route nor close is not sent to look for it", () => {
-    // No FINALIZE_FINANCED_DEAL, and the route is missing too.
+    // No MANAGE_SUPPLIER_SETTLEMENT, and the route is missing too.
     //
-    // `setSupplierSettlementRoute` takes the SAME permission as the close, and
-    // the review dialog hides its selector without it — so "record the route in
+    // `setSupplierSettlementRoute` takes `manage:supplier_settlement`, and the
+    // review dialog hides its selector without it — so "record the route in
     // Review" would send this caller to a screen with nothing on it. Two
     // individually correct sentences rebuilding the dead end between them.
     permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
@@ -316,6 +397,179 @@ describe("a step the server would refuse is not offered as a step", () => {
     expect(within(block).getByText("FinalizeNeedsRouteAndPermission")).toBeTruthy();
     expect(within(block).queryByText("FinalizeNeedsSettlementRoute")).toBeNull();
     expect(within(block).queryByText("FinalizeNeedsPermission")).toBeNull();
+  });
+
+  // CodeRabbit #352: `finalizeDeal` re-runs the readiness evaluator, so a loaded
+  // verdict that is not READY is a guaranteed refusal — not a step.
+
+  test.each(["BLOCKED", "UNAVAILABLE"] as const)(
+    "the close is withheld while closing readiness is %s, and says so",
+    (state) => {
+      grantTheWholeTail();
+      queryResults.set(COCKPIT_QUERY, cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true }));
+      // A caller who may read the readiness; without it the query is skipped.
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      queryResults.set("applications:getClosingReadiness", readinessVerdict(state));
+
+      renderCockpit();
+
+      const block = nextStepBlock();
+      expect(within(block).queryByRole("button", { name: "FinalizeDealAction" })).toBeNull();
+      expect(within(block).getByText("FinalizeNeedsClosingReadiness")).toBeTruthy();
+    }
+  );
+
+  test("the close is offered once closing readiness is READY (control)", () => {
+    grantTheWholeTail();
+    queryResults.set(COCKPIT_QUERY, cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true }));
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    queryResults.set("applications:getClosingReadiness", readinessVerdict("READY"));
+
+    renderCockpit();
+
+    expect(within(nextStepBlock()).getByRole("button", { name: "FinalizeDealAction" })).toBeTruthy();
+    expect(within(nextStepBlock()).queryByText("FinalizeNeedsClosingReadiness")).toBeNull();
+  });
+
+  test("on a loaded READY verdict the close is offered AND submits (control)", async () => {
+    readyToClose();
+    queryResults.set(COCKPIT_QUERY, cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true }));
+
+    renderCockpit();
+    fireEvent.click(within(nextStepBlock()).getByRole("button", { name: "FinalizeDealAction" }));
+    const confirm = await screen.findByRole("button", { name: /ConfirmFinalizeAction/ });
+
+    expect((confirm as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(mutationCalls.get(FINALIZE_MUTATION)).toHaveLength(1));
+  });
+
+  // S414-R2-SKEW-1: the close is offered only after a READY verdict has LOADED.
+  // A read still in flight is not a failure, so no "could not be checked"
+  // sentence either — the step waits at its blocker, as it does for `app`.
+  test("while the readiness read is in flight the close is not offered yet", () => {
+    grantTheWholeTail();
+    queryResults.set(COCKPIT_QUERY, cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true }));
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+
+    const { rerender } = renderCockpit();
+
+    expect(screen.getByTestId("closing-readiness-loading")).toBeTruthy();
+    expect(within(nextStepBlock()).queryByRole("button", { name: "FinalizeDealAction" })).toBeNull();
+    expect(screen.queryByText("FinalizeWaitsForReadiness")).toBeNull();
+
+    queryResults.set("applications:getClosingReadiness", readinessVerdict("READY"));
+    rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+
+    expect(within(nextStepBlock()).getByRole("button", { name: "FinalizeDealAction" })).toBeTruthy();
+  });
+});
+
+/**
+ * S414-R3-1 (Codex) = the remainder of S414-R2-SKEW-1 (Sol), Option A.
+ *
+ * Invariant: the cockpit offers AND submits Finalize only while it holds a
+ * successfully loaded, open READY verdict, so an older backend's detailed
+ * refusal can never reach a caller without money-read authority through it.
+ * Two paths broke it at 368162d11: a closer who cannot read the readiness (the
+ * query is skipped, so nothing ever "loads"), and a dialog opened on READY that
+ * stayed submittable after the verdict turned.
+ */
+describe("the close needs a loaded READY verdict — to be offered and to be submitted", () => {
+  test("a custom closer who cannot read the readiness is told why, and never reaches finalize", async () => {
+    vi.mocked(toast.error).mockClear();
+    // A custom role: may see the deal and close it, may NOT read the finance
+    // application (no view:finance_applications, no view:finance), so the
+    // readiness query is skipped. No route or denomination blocker.
+    permissions.add(PERMISSIONS.VIEW_SALES);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(COCKPIT_QUERY, cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true }));
+    mutationFailures.set(FINALIZE_MUTATION, new ConvexError(OLD_BACKEND_DRIFT_REFUSAL));
+
+    renderCockpit();
+    const block = nextStepBlock();
+
+    // Taken exactly as an operator would if it were offered, so a regression
+    // shows the leak, not just a missing sentence.
+    const offered = within(block).queryByRole("button", { name: "FinalizeDealAction" });
+    if (offered) {
+      fireEvent.click(offered);
+      fireEvent.click(await screen.findByRole("button", { name: /ConfirmFinalizeAction/ }));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    }
+    expect(document.body.textContent).not.toMatch(/JOD|SAR/);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(mutationCalls.get(FINALIZE_MUTATION)).toBeUndefined();
+    expect(offered).toBeNull();
+    expect(within(block).getByText("FinalizeNeedsReadinessAccess")).toBeTruthy();
+    expect(within(block).queryByText("FinalizeNeedsPermission")).toBeNull();
+  });
+
+  test("a caller lacking BOTH the close and the readiness read is told about the close first", () => {
+    permissions.add(PERMISSIONS.VIEW_SALES);
+    queryResults.set(COCKPIT_QUERY, cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true }));
+
+    renderCockpit();
+
+    expect(within(nextStepBlock()).getByText("FinalizeNeedsPermission")).toBeTruthy();
+    expect(within(nextStepBlock()).queryByText("FinalizeNeedsReadinessAccess")).toBeNull();
+  });
+
+  test("the route is still named before the readiness access", () => {
+    permissions.add(PERMISSIONS.VIEW_SALES);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true, supplierSettlementRouteRequired: true })
+    );
+
+    renderCockpit();
+
+    expect(within(nextStepBlock()).getByText("FinalizeNeedsSettlementRoute")).toBeTruthy();
+    expect(within(nextStepBlock()).queryByText("FinalizeNeedsReadinessAccess")).toBeNull();
+  });
+
+  test.each([
+    {
+      turn: "the read fails",
+      verdict: (): unknown =>
+        new Error(
+          "[CONVEX Q(applications:getClosingReadiness)] Could not find public function for 'applications:getClosingReadiness'."
+        ),
+      reason: "FinalizeWaitsForReadiness",
+    },
+    {
+      turn: "the verdict turns BLOCKED",
+      verdict: (): unknown => readinessVerdict("BLOCKED"),
+      reason: "FinalizeNeedsClosingReadiness",
+    },
+  ])("a dialog opened on READY cannot submit once $turn", async ({ verdict, reason }) => {
+    vi.mocked(toast.error).mockClear();
+    readyToClose();
+    queryResults.set(COCKPIT_QUERY, cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true }));
+    mutationFailures.set(FINALIZE_MUTATION, new ConvexError(OLD_BACKEND_DRIFT_REFUSAL));
+
+    const { rerender } = renderCockpit();
+    fireEvent.click(within(nextStepBlock()).getByRole("button", { name: "FinalizeDealAction" }));
+    const dialog = await screen.findByRole("dialog");
+    const openConfirm = within(dialog).getByRole("button", { name: /ConfirmFinalizeAction/ });
+    expect((openConfirm as HTMLButtonElement).disabled).toBe(false);
+
+    // The verdict turns while the dialog is open.
+    queryResults.set("applications:getClosingReadiness", verdict());
+    rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+
+    const confirm = within(screen.getByRole("dialog")).getByRole("button", { name: /ConfirmFinalizeAction/ });
+    fireEvent.click(confirm);
+    // Give a submit that slipped through the time to reach the stub and surface.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mutationCalls.get(FINALIZE_MUTATION)).toBeUndefined();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toMatch(/JOD|SAR/);
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    expect(within(screen.getByRole("dialog")).getByText(reason)).toBeTruthy();
   });
 });
 
@@ -719,6 +973,24 @@ describe("three permissions, not one", () => {
     expect(screen.queryByRole("button", { name: "FinalizeDealAction" })).toBeNull();
     expect(within(nextStepBlock()).getByText("FinalizeNeedsPermission")).toBeTruthy();
   });
+
+  // SCRUM-407 owner ruling: finalizing a financed deal is for accountants
+  // only. `manage:supplier_settlement` alone — what the default SALES template
+  // holds — no longer offers the close; the server refuses it the same way.
+  test("a caller holding manage:supplier_settlement but not the accountant's permission is not offered the close", () => {
+    permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
+    permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true })
+    );
+
+    renderCockpit();
+
+    expect(screen.queryByRole("button", { name: "FinalizeDealAction" })).toBeNull();
+    expect(within(nextStepBlock()).getByText("FinalizeNeedsPermission")).toBeTruthy();
+  });
 });
 
 describe("the mutations behind the buttons", () => {
@@ -762,7 +1034,7 @@ describe("the mutations behind the buttons", () => {
   });
 
   test("a retried close is the SAME close — one idempotency key, reused", async () => {
-    grantTheWholeTail();
+    readyToClose();
     queryResults.set(
       COCKPIT_QUERY,
       cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true })
@@ -796,8 +1068,81 @@ describe("the mutations behind the buttons", () => {
     expect(calls[1].idempotencyKey).toBe(calls[0].idempotencyKey);
   });
 
-  test("a close that succeeded does not lend its key to the next one", async () => {
+  // SCRUM-414 R1: below the finance tier a refused close carries only a
+  // WITHHELD_* code and the generic fallback; the toast and the dialog show the
+  // code's own translation, never the fallback English.
+  test("a withheld finalize refusal is shown as its translated WITHHELD code", async () => {
+    readyToClose();
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true })
+    );
+    mutationFailures.set(
+      FINALIZE_MUTATION,
+      new ConvexError({ code: "WITHHELD_COSTS_CLOSABLE", message: WITHHELD_READINESS_REASON_FALLBACK })
+    );
+
+    renderCockpit();
+    fireEvent.click(screen.getByRole("button", { name: "FinalizeDealAction" }));
+    fireEvent.click(await screen.findByRole("button", { name: /ConfirmFinalizeAction/ }));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(WITHHELD_COSTS_CLOSABLE_EN);
+    });
+    expect(await screen.findByText(WITHHELD_COSTS_CLOSABLE_EN)).toBeTruthy();
+    expect(screen.queryByText(WITHHELD_READINESS_REASON_FALLBACK)).toBeNull();
+  });
+
+  // SCRUM-414 Codex R2 kept the tail alive on a backend without the readiness
+  // query; S414-R2-SKEW-1 (Sol) is why the close is NOT offered there. Such a
+  // backend predates the redacted refusals, so its `finalizeDeal` names both
+  // currencies in plain English — to a MANAGER who may close but not read
+  // money. The close waits for a verdict that loaded; every other step stays.
+  test("a backend without the readiness query withholds the close, says why, and never reaches finalize", async () => {
+    vi.mocked(toast.error).mockClear();
     grantTheWholeTail();
+    // A caller who reads the readiness, so the missing query IS subscribed —
+    // and no finance-read tier: the MANAGER template's combination.
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true })
+    );
+    queryResults.set(
+      "applications:getClosingReadiness",
+      new Error(
+        "[CONVEX Q(applications:getClosingReadiness)] Could not find public function for 'applications:getClosingReadiness'."
+      )
+    );
+    // The refusal a pre-SCRUM-414 `finalizeDeal` throws on currency drift —
+    // app pinned JOD, org now SAR (see OLD_BACKEND_DRIFT_REFUSAL).
+    mutationFailures.set(FINALIZE_MUTATION, new ConvexError(OLD_BACKEND_DRIFT_REFUSAL));
+
+    renderCockpit();
+
+    // The panel says the read failed; the deal screen itself is intact.
+    expect(screen.getByTestId("closing-readiness-service-unavailable")).toBeTruthy();
+    const block = nextStepBlock();
+
+    // If a close were offered anyway, take it exactly as an operator would, so
+    // a regression shows the leak rather than only a missing sentence.
+    const offered = within(block).queryByRole("button", { name: "FinalizeDealAction" });
+    if (offered) {
+      fireEvent.click(offered);
+      fireEvent.click(await screen.findByRole("button", { name: /ConfirmFinalizeAction/ }));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    }
+    // Neither currency of the old refusal is anywhere on the screen or in a toast.
+    expect(document.body.textContent).not.toMatch(/JOD|SAR/);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(mutationCalls.get(FINALIZE_MUTATION)).toBeUndefined();
+    expect(offered).toBeNull();
+    expect(within(block).getByText("FinalizeWaitsForReadiness")).toBeTruthy();
+    expect(within(block).queryByText("FinalizeNeedsClosingReadiness")).toBeNull();
+  });
+
+  test("a close that succeeded does not lend its key to the next one", async () => {
+    readyToClose();
     queryResults.set(
       COCKPIT_QUERY,
       cockpit({ stages: stages("AFTER_HANDOVER"), expectedPaymentRegistered: true })
@@ -820,5 +1165,66 @@ describe("the mutations behind the buttons", () => {
 
     const calls = mutationCalls.get(FINALIZE_MUTATION) as Array<Record<string, unknown>>;
     expect(calls[1].idempotencyKey).not.toBe(calls[0].idempotencyKey);
+  });
+});
+
+describe("SCRUM-447 finance-company cheque panel wiring in the cockpit", () => {
+  const FC_PANEL = {
+    chequePaymentRegistered: true,
+    chequeNeedsCorrection: false,
+    chequeNeedsAccountingReview: false,
+    chequeFaceAttested: false,
+    chequeFaceUnrecorded: true,
+    unattestedChequeId: "cheque_1",
+    expectedPaymentCorrectable: false,
+    expectedPaymentReRegistrable: false,
+  };
+
+  test("an attest with no unattested cheque to write to stays open and reports, never a success", async () => {
+    grantTheWholeTail();
+    permissions.add(PERMISSIONS.MANAGE_FINANCE);
+    queryResults.set(COCKPIT_QUERY, cockpit({ stages: stages("AFTER_HANDOVER"), ...FC_PANEL }));
+    vi.mocked(toast.success).mockClear();
+
+    const view = renderCockpit();
+    fireEvent.click(screen.getByRole("button", { name: "FcAttestChequeFace" }));
+    fireEvent.change(await screen.findByLabelText("FcChequeFaceLabel"), { target: { value: "1500" } });
+    fireEvent.change(screen.getByLabelText("FcAttestNoteLabel"), { target: { value: "read off the cheque" } });
+
+    // The deal refreshes underneath the open dialog: the cheque it named is gone.
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ stages: stages("AFTER_HANDOVER"), ...FC_PANEL, unattestedChequeId: null })
+    );
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("UnexpectedError");
+    expect(screen.getByLabelText("FcChequeFaceLabel")).toBeTruthy();
+    expect(mutationCalls.get("applications:attestChequeFace")).toBeUndefined();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  test("registering from the cheque panel opens the payment form clean of a stale refusal", async () => {
+    grantTheWholeTail();
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ stages: stages("AFTER_HANDOVER"), ...FC_PANEL, chequeFaceUnrecorded: false, unattestedChequeId: null, expectedPaymentReRegistrable: true })
+    );
+
+    renderCockpit();
+    // A first attempt through the rail is refused and the form shows why.
+    mutationFailures.set(EXPECTED_PAYMENT_MUTATION, "Stale refusal text");
+    fireEvent.click(screen.getByRole("button", { name: "RegisterExpectedPaymentAction" }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Confirm$/ }));
+    await screen.findByText("Stale refusal text");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByText("Stale refusal text")).toBeNull());
+
+    // Reopened from the cheque panel instead: a fresh form, not the old refusal.
+    fireEvent.click(screen.getByRole("button", { name: "RegisterExpectedPayment" }));
+    await screen.findByRole("button", { name: /^Confirm$/ });
+    expect(screen.queryByText("Stale refusal text")).toBeNull();
   });
 });

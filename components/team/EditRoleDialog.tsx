@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { getErrorMessage } from "@/lib/errors";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 
 export function EditRoleDialog({
   role,
@@ -33,12 +33,17 @@ export function EditRoleDialog({
   const updateRole = useMutation(api.roles.update);
 
   const [name, setName] = useState("");
+  // The field shows the translated label; only a real edit renames the role.
+  // The stored name is what template sync and the SCRUM-413 transition key on.
+  const [initialName, setInitialName] = useState("");
   const [permissions, setPermissions] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (role) {
-      setName(t(role.name as any) || role.name);
+      const shownName = t(role.name as any) || role.name;
+      setName(shownName);
+      setInitialName(shownName);
       setPermissions(role.permissions || []);
     }
   }, [role]);
@@ -53,13 +58,13 @@ export function EditRoleDialog({
       await updateRole({
         orgId: activeOrgId,
         roleId: role._id,
-        name,
+        name: name === initialName ? undefined : name,
         permissions,
       });
       toast.success(t("RoleUpdated" as any));
       onOpenChange(false);
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setIsSubmitting(false);
     }

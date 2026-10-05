@@ -460,11 +460,13 @@ export const listValuations = query({
     await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_VEHICLES]);
     const vehicle = await ctx.db.get(vehicleId);
     if (!vehicle || vehicle.orgId !== orgId) throw new ConvexError("Vehicle not found in this organization.");
-    return await ctx.db
+    const rows = await ctx.db
       .query("vehicleValuations")
-      .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId))
-      .filter((q) => q.eq(q.field("orgId"), orgId))
+      .withIndex("by_org_vehicle_company", (q) => q.eq("orgId", orgId).eq("vehicleId", vehicleId))
       .collect();
+    // The index orders by companyId within the (org, vehicle) prefix; callers have
+    // always seen creation order, so restore it.
+    return rows.sort((a, b) => a._creationTime - b._creationTime);
   },
 });
 
@@ -503,8 +505,9 @@ export const saveValuation = mutation({
     // Check if one already exists for this company
     const existing = await ctx.db
       .query("vehicleValuations")
-      .withIndex("by_vehicle", (q) => q.eq("vehicleId", args.vehicleId))
-      .filter((q) => q.eq(q.field("companyId"), args.companyId))
+      .withIndex("by_org_vehicle_company", (q) =>
+        q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId).eq("companyId", args.companyId)
+      )
       .first();
 
     if (existing) {

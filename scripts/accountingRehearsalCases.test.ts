@@ -1173,7 +1173,6 @@ function makeBackend(defects: Defects = {}) {
       case "applications:registerExpectedPayment":
       case "financeDealCosts:recordLegalInvoice":
       case "financeDealCosts:reconcileDealFee":
-      case "financeDealCosts:classifyDealAccounting":
         return { ok: true as const, value: null };
       case "applications:handoverStamp":
         return { ok: true as const, value: { stamp: "economics" } };

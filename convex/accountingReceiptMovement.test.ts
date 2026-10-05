@@ -48,10 +48,10 @@
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { readSourceRelativeTo } from "../test-utils/sourceText";
+import { runContinuationBatch } from "../test-utils/orgResetFixtures";
 import schema from "./schema";
-import { api, internal } from "./_generated/api";
+import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import {
@@ -506,13 +506,13 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     expect(new Set(applications.map((a) => a.eventIdempotencyKey)).size).toBe(3);
 
     // Three separate journals, not one.
-    const events = await t.run((ctx) =>
-      ctx.db
+    const events = await t.run(async (ctx) => {
+      const rows = await ctx.db
         .query("accountingEvents")
         .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "RECEIPT_CREDIT_APPLIED"))
-        .collect()
-    );
+        .collect();
+      return rows.filter((row) => row.eventType === "RECEIPT_CREDIT_APPLIED");
+    });
     expect(events).toHaveLength(3);
     expect((await positionFor(t, orgId, movement._id))!.remainingUnappliedMinor).toBe(4000);
   });
@@ -657,13 +657,13 @@ describe("SCRUM-218-C §5 — exact replay of one application", () => {
     );
     expect(allocations).toHaveLength(1);
 
-    const events = await t.run((ctx) =>
-      ctx.db
+    const events = await t.run(async (ctx) => {
+      const rows = await ctx.db
         .query("accountingEvents")
         .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "RECEIPT_CREDIT_APPLIED"))
-        .collect()
-    );
+        .collect();
+      return rows.filter((row) => row.eventType === "RECEIPT_CREDIT_APPLIED");
+    });
     expect(events).toHaveLength(1);
   });
 
@@ -1027,6 +1027,9 @@ describe("SCRUM-218-C §10 R02 — a batched financial reset never orphans recei
       )
     ).toHaveLength(2);
 
+    // A reset runs only on a suspended organization (SCRUM-559).
+    await t.run((ctx) => ctx.db.patch(orgId, { suspended: true }));
+
     // One row per table per pass — the adversarial batch size.
     //
     // ⚠️ THE ASSERTION RUNS AFTER EVERY COMMITTED PASS, AND IT CHECKS BOTH
@@ -1042,9 +1045,8 @@ describe("SCRUM-218-C §10 R02 — a batched financial reset never orphans recei
     let lastRemaining = Number.POSITIVE_INFINITY;
     let settled = false;
     for (let pass = 0; pass < 400; pass += 1) {
-      const result = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-        orgId, dryRun: false, batchSize: 1,
-      });
+      // D-19: fresh starts are refused; exercised as a continuation.
+      const result = await runContinuationBatch(t, orgId, 1);
 
       await t.run(async (ctx) => {
         // Downward: no application may outlive what it points at.
@@ -1374,7 +1376,7 @@ describe("SCRUM-218-C §9 — runtime authority is never persisted or cached", (
     "./collections.ts",
   ].map((rel) => ({
     rel,
-    text: readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8"),
+    text: readSourceRelativeTo(import.meta.url, rel),
   }));
 
   test("no module-scope cache of a receipt identity exists", () => {

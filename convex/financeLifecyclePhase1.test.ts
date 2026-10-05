@@ -1,6 +1,6 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { registerHandover } from "../test-utils/convexTest";
+import { recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -49,10 +49,13 @@ async function seedFinanceLifecycleDealer(): Promise<SetupResult> {
         "review:finance_application",
         "approve:finance_application",
         "finalize:financed_deal",
+        "confirm:finance_disbursement",
         "view:finance_applications",
         "view:customers",
         "register:vehicle_handover",
         "register:expected_payment",
+        // SCRUM-446: recording the cost evidence a deal needs to close.
+        "create:finance_application",
       ],
     })
   );
@@ -256,6 +259,15 @@ describe("Finance lifecycle phase 1 quote mode", () => {
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
     await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
     await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+    // SCRUM-27: a manual company's deal cannot close until the approval letter is
+    // entered (approved amount, exact name, and what the dealership sends).
+    await asApprover.mutation(api.financingEconomics.recordManualFinanceApproval, {
+      orgId,
+      applicationId,
+      approvedAmountMinor: 31_000_000,
+      financierName: "Manual Bank",
+      dealerSendsMinor: 0,
+    });
     await registerHandover(asUser, api, orgId, applicationId);
     await asUser.mutation(api.applications.registerExpectedPayment, {
       orgId,
@@ -263,6 +275,26 @@ describe("Finance lifecycle phase 1 quote mode", () => {
       method: "CASH",
       expectedDate: Date.now(),
     });
+    await asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId,
+      applicationId,
+      legalInvoiceAmountMinor: 31_000_000,
+      legalInvoiceNumber: "INV-MANUAL-1",
+      legalInvoiceDate: Date.now(),
+      issuedTo: "FINANCE_COMPANY",
+    });
+    await recordReconciledZeroCost(asUser, api, orgId, applicationId);
+    // SCRUM-690 (c22119): the manual admin fee is a configured execution fee, so
+    // the deal cannot finalize until its actual is recorded. Zero = not charged.
+    const executionFeeId = await asUser.mutation(api.financeDealCosts.recordExecutionFeeActual, {
+      orgId,
+      applicationId,
+      actualAmountMinor: 0,
+      expectedCurrency: "JOD",
+      paidBy: "DEALER",
+      idempotencyKey: crypto.randomUUID(),
+    });
+    await asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId: executionFeeId, notes: "Not charged." });
     await asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId, applicationId });
 
     await t.run(async (ctx) => {

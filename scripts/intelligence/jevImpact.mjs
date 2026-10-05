@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
+import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 
 export const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 export const JEV_MODEL = "jev-latest";
@@ -334,24 +335,6 @@ export function deterministicInvariantImpact(changedFiles, invariants) {
     .filter((impact) => impact !== undefined);
 }
 
-function resolveTrustedGitExecutable() {
-  const candidates =
-    process.platform === "win32"
-      ? [
-          "C:\\Program Files\\Git\\cmd\\git.exe",
-          "C:\\Program Files\\Git\\bin\\git.exe",
-          "C:\\Program Files (x86)\\Git\\cmd\\git.exe",
-        ]
-      : process.platform === "darwin"
-        ? ["/usr/bin/git", "/opt/homebrew/bin/git", "/usr/local/bin/git"]
-        : ["/usr/bin/git", "/bin/git"];
-  const executable = candidates.find((candidate) => existsSync(candidate));
-  if (!executable) {
-    throw new Error("A trusted absolute Git executable was not found");
-  }
-  return executable;
-}
-
 function safeGit(repoRoot, args) {
   const output = execFileSync(resolveTrustedGitExecutable(), args, {
     cwd: repoRoot,
@@ -636,6 +619,15 @@ const CORRECTNESS_GOVERNANCE_FILES = new Set([
   ".github/workflows/invariant-governance.yml",
   ".github/workflows/jev-shadow-impact.yml",
   ".github/workflows/jev-historical-calibration.yml",
+  // Review-evidence governance (SCRUM-644). Listed before anything reads them
+  // from a base commit, so a PR editing them is classified by a base that
+  // already knows them. The validator itself lives under scripts/intelligence/.
+  // The rehearsal is listed as an admitted evidence producer: editing it
+  // changes what its artifact can be cited to prove.
+  ".github/review-policy.json",
+  ".github/release-waivers.json",
+  ".github/workflows/trusted-review-evidence.yml",
+  ".github/workflows/trusted-accounting-rehearsal.yml",
   "package.json",
   "pnpm-lock.yaml",
 ]);

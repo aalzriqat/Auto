@@ -9,6 +9,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { isChosenMethod } from "@/components/payments/paymentMethod";
+import { busyCloseGuard } from "@/components/ui/busyCloseGuard";
 import type { Id } from "@/convex/_generated/dataModel";
 import { economicDateInputToMs, economicTodayDateInput } from "@/lib/dateInput";
 import {
@@ -76,7 +78,12 @@ export function parseMajorToMinor(text: string, scale: number): number | null {
   return Number.isSafeInteger(minor) && minor > 0 ? minor : null;
 }
 
-function useResetOnOpen(open: boolean, reset: () => void): void {
+/**
+ * Runs `reset` on the closed -> open transition only — never on a re-render of
+ * an open dialog, which would wipe what the operator is typing. Shared with the
+ * other cockpit dialogs that reset their form the same way.
+ */
+export function useResetOnOpen(open: boolean, reset: () => void): void {
   const wasOpenRef = useRef(false);
   useEffect(() => {
     const justOpened = open && !wasOpenRef.current;
@@ -85,54 +92,6 @@ function useResetOnOpen(open: boolean, reset: () => void): void {
     // `reset` closes over the values the dialog opened with, on purpose.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
-}
-
-/**
- * ## A MOUNTED dialog whose command is in flight is not closable by any route it exposes (R9)
- *
- * Every submit of an open dialog carries the attempt's `intentId`; closing
- * the dialog ABANDONS the attempt and the container retires that identity
- * (`onAbandonMove` and its siblings). Only Cancel was disabled while busy:
- * Escape, the overlay and the corner X still went through `onOpenChange`,
- * so an operator could abandon an attempt whose request was still on the
- * wire. If that request then landed, the money moved under an identity the
- * screen had already forgotten — and the next dialog for the same figures
- * was a NEW command, so a genuine retry paid twice with no replay to stop
- * it. So while `busy`, every close route is refused: the controlled
- * `onOpenChange(false)` is dropped (which is what the X asks for), and the
- * escape and outside-interaction events are cancelled at the layer so the
- * primitive never asks. The dialog reopens its close routes the moment the
- * attempt settles — success closes it through the container, a lost
- * response keeps it open with the failure shown and the SAME identity for
- * the retry, and a definitive refusal is the container's to retire.
- *
- * One rule for every custody dialog, so no door is guarded differently.
- *
- * ⚠️ WHAT THIS DOES NOT COVER (AF-R10-01). The guard only exists while the
- * dialog is mounted. A same-tab route change while the request is on the
- * wire unmounts the whole cockpit: no dismissal event fires, nothing here
- * runs, and the attempt's identity — the panel's per-dialog `intentId` and
- * the mount-scoped map in `useCommandIdentity` — dies with the tree. If the
- * request then lands, cash moved under a key no screen remembers, and the
- * next attempt on return is a NEW command. The operator does see the first
- * movement (the panel is fed by a live query) before they can resubmit, so
- * this is the ordinary re-submit exposure every economic command in the app
- * carries through the same hook — not the silent "lost" signal R8 fixed —
- * but it is a gap in this guard, not a route it refuses. Pinned by the
- * unmount characterization in `DealCockpitCustodyIdentity.test.tsx`.
- */
-function busyCloseGuard(busy: boolean, onOpenChange: (open: boolean) => void) {
-  const refuse = (event: { preventDefault: () => void }) => {
-    if (busy) event.preventDefault();
-  };
-  return {
-    onOpenChange: (open: boolean) => {
-      if (!open && busy) return;
-      onOpenChange(open);
-    },
-    /** Spread onto `DialogContent`: the routes the primitive would otherwise dismiss on. */
-    content: { onEscapeKeyDown: refuse, onPointerDownOutside: refuse, onInteractOutside: refuse },
-  };
 }
 
 function SubmitError({ message }: Readonly<{ message: string | null }>) {
@@ -144,7 +103,7 @@ function SubmitError({ message }: Readonly<{ message: string | null }>) {
   );
 }
 
-/** Hand over / return / reimburse. `kind` decides the copy, the bounds and the default method. */
+/** Hand over / return / reimburse. `kind` decides the copy and the bounds; the method is always chosen, never defaulted. */
 export function CustodyMovementDialog({
   open,
   intentId,
@@ -183,14 +142,16 @@ export function CustodyMovementDialog({
   onSubmit: (values: CustodyMovementValues) => void;
 }>) {
   const [amount, setAmount] = useState("");
-  const [method, setMethod] = useState<PaymentMethod>("CASH");
+  // SCRUM-469: no default. The method picks the ledger account the cash moves
+  // through (an omitted one books to the cash drawer), so it is chosen, never assumed.
+  const [method, setMethod] = useState<PaymentMethod | undefined>(undefined);
   const [reference, setReference] = useState("");
   const [date, setDate] = useState("");
   const [note, setNote] = useState("");
   const [userId, setUserId] = useState<string>("");
   useResetOnOpen(open, () => {
     setAmount(suggestedMinor ? String(suggestedMinor / Math.pow(10, scale)) : "");
-    setMethod("CASH");
+    setMethod(undefined);
     setReference("");
     setDate("");
     setNote("");
@@ -205,7 +166,8 @@ export function CustodyMovementDialog({
   // The recipient is the served row the selection names; an id that is not
   // in the list (stale default, empty picker) is not one to move money to.
   const recipient = needsPerson ? members.find((member) => member.userId === userId) : undefined;
-  const canSubmit = minor !== null && !exceeds && !busy && (!needsPerson || recipient !== undefined);
+  const canSubmit =
+    minor !== null && isChosenMethod(method) && !exceeds && !busy && (!needsPerson || recipient !== undefined);
 
   const copy = {
     ISSUED: { title: "CustodyIssueTitle", desc: "CustodyIssueDesc", cta: "CustodyIssueCash", exceed: "CustodyAmountExceedsIssued" },
@@ -267,7 +229,20 @@ export function CustodyMovementDialog({
 
           <div className="space-y-1.5">
             <Label>{t("CustodyAccount")}</Label>
-            <PaymentMethodSelect t={t} value={method} onValueChange={setMethod} ariaLabel={t("CustodyAccount")} />
+            <PaymentMethodSelect
+              t={t}
+              value={method}
+              onValueChange={setMethod}
+              ariaLabel={t("CustodyAccount")}
+              placeholder={t("MoneyMethodChoose")}
+            />
+            {!isChosenMethod(method) && (
+              // A standing hint, not an alert: it is true from the moment the dialog opens, and the
+              // amount-error alerts above must stay the only alerts a screen reader is interrupted by.
+              <p role="status" data-testid={`${id}-method-required`} className="text-xs font-medium text-destructive">
+                {t("MoneyMethodRequired")}
+              </p>
+            )}
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
@@ -299,6 +274,7 @@ export function CustodyMovementDialog({
             data-testid={`${id}-submit`}
             onClick={() =>
               minor !== null &&
+              isChosenMethod(method) &&
               onSubmit({
                 intentId,
                 amountMinor: minor,
@@ -551,6 +527,24 @@ export function CustodyCloseDialog({
           <DialogDescription>{t("CustodyCloseDesc")}</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
+          {!settled && (
+            // What stops the close, and the actions that settle it — before
+            // any write-off is offered (SCRUM-439). A write-off is for cash
+            // that is really lost, not for costs and returns not yet recorded.
+            <div className="space-y-1 rounded-md border bg-muted/40 p-3 text-sm" data-testid="custody-close-unsettled">
+              {employeeOwesMinor > 0 ? (
+                <p className="font-medium">
+                  <bdi dir="ltr" className="tabular-nums">{money(employeeOwesMinor, currency)}</bdi>{" "}
+                  {t("CustodyCloseStillHeld")}
+                </p>
+              ) : (
+                <p className="font-medium">{t("CustodyCloseOtherOutstanding")}</p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                {t(employeeOwesMinor > 0 ? "CustodyCloseSettleSteps" : "CustodyCloseOtherSteps")}
+              </p>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="custody-close-notes">{t("CustodyCloseNotes")}</Label>
             <Textarea id="custody-close-notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} />

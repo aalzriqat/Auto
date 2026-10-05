@@ -12,6 +12,7 @@ vi.mock("./rateLimit", () => ({
 }));
 
 const PERMISSIONS = [
+  "confirm:finance_disbursement",
   "create:vehicles", "edit:vehicles", "delete:vehicles",
   "view:vehicles", "view:users", "manage:users", "view:reports", "view:sales",
 ];
@@ -801,7 +802,7 @@ describe("inventory intelligence", () => {
       ctx.db.insert("customers", { orgId, firstName: "Reserve", lastName: "Customer" })
     );
 
-    const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+    const reservationId = await asUser.mutation(api.vehicles.createReservation, { depositMethod: "CASH",
       idempotencyKey: crypto.randomUUID(),
       orgId,
       vehicleId,
@@ -880,6 +881,24 @@ describe("inventory intelligence", () => {
     });
   });
 
+  test("update to AVAILABLE keeps a vehicle with a live reservation RESERVED (SCRUM-700 N1)", async () => {
+    const { t, orgId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Held", lastName: "Customer" })
+    );
+    await asUser.mutation(api.vehicles.createReservation, {
+      idempotencyKey: crypto.randomUUID(), orgId, vehicleId, customerId });
+    // A held car was moved to inspection; the reservation is still live.
+    await t.run((ctx) => ctx.db.patch(vehicleId, { status: "IN_INSPECTION", preHoldStatus: undefined }));
+
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, status: "AVAILABLE" });
+
+    const vehicle = await t.run((ctx) => ctx.db.get(vehicleId));
+    expect(vehicle?.status).toBe("RESERVED");
+  });
+
   test("releaseReservation keeps vehicle reserved when another active deposit hold exists", async () => {
     const { t, orgId, userId, asUser } = await setup();
     const vehicleId = await asUser.mutation(api.vehicles.create, {
@@ -910,7 +929,7 @@ describe("inventory intelligence", () => {
     // and names it. Without that proof the authority correctly refuses — a
     // second, unrelated deal on a held vehicle is exactly what it exists to stop,
     // and the same customer is not evidence of the same deal.
-    await asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+    await asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId,
       quoteId,
       amount: 500,

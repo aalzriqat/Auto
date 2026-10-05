@@ -74,6 +74,124 @@ const VIEWPORTS = [
   { name: "1280", width: 1280, height: 900 },
 ] as const;
 
+/**
+ * S414-R2-SKEW-1: the same deal on its closing step with the readiness read
+ * failed — the close withheld with its own reason. The reason is checked
+ * against a hand-written literal, not the dictionary the render used.
+ */
+const READINESS_UNREADABLE = "-readiness-unreadable";
+const FINALIZE_WAITS_LITERAL: Readonly<Record<(typeof LOCALES)[number], string>> = {
+  en: "Closing readiness could not be checked right now, so the deal can't be closed yet. Try again shortly.",
+  ar: "تعذّر فحص جاهزية الإغلاق الآن، لذا لا يمكن إغلاق الصفقة بعد. حاول مجددًا بعد قليل.",
+};
+
+/**
+ * S414-R3-1: the same closing step for a custom closer who may close but not
+ * read the finance application — no readiness panel, the close withheld with
+ * the reason naming the missing access. Hand-written literal, as above.
+ */
+const READINESS_ACCESS = "-readiness-access";
+const FINALIZE_NEEDS_ACCESS_LITERAL: Readonly<Record<(typeof LOCALES)[number], string>> = {
+  en: "Your role can close deals but cannot view finance applications, so this deal's closing readiness can't be checked for you. Ask an administrator to add finance-application view access to your role.",
+  ar: "دورك يسمح بإغلاق الصفقات لكنه لا يسمح بعرض طلبات التمويل، لذا لا يمكن فحص جاهزية إغلاق هذه الصفقة لك. اطلب من المسؤول إضافة صلاحية عرض طلبات التمويل إلى دورك.",
+};
+
+/** The withheld-close states painted below: each reason, and whether a readiness panel is expected. */
+const WITHHELD_CLOSE_VARIANTS: ReadonlyArray<{
+  suffix: string;
+  title: string;
+  literal: Readonly<Record<(typeof LOCALES)[number], string>>;
+  panelTestId: string | null;
+}> = [
+  {
+    suffix: READINESS_UNREADABLE,
+    title: "readiness unreadable withholds the close with its reason",
+    literal: FINALIZE_WAITS_LITERAL,
+    panelTestId: "closing-readiness-service-unavailable",
+  },
+  {
+    suffix: READINESS_ACCESS,
+    title: "no readiness access withholds the close and names the missing access",
+    literal: FINALIZE_NEEDS_ACCESS_LITERAL,
+    panelTestId: null,
+  },
+];
+
+/**
+ * SCRUM-417 UX4 (O2/O3): the sub-step checklist on the LIVE step (Settlement), and the
+ * read-only view of a past and of a future step (what `?stage=` or a rail click
+ * opens). `mode` is what the view card must declare; `checklist` whether the
+ * live card must list sub-steps.
+ */
+const UX4_VARIANTS: ReadonlyArray<{
+  suffix: string;
+  title: string;
+  mode: "past" | "future" | "notApplicable" | null;
+  stage: string | null;
+  /** SCRUM-446: the DISBURSEMENT node is NOT_APPLICABLE and must read as such. */
+  na?: boolean;
+}> = [
+  { suffix: "-ux4-na-rail", title: "a not-needed payment step is a quiet dash on the rail, with no contradicting action", mode: null, stage: null, na: true },
+  { suffix: "-ux4-na-view", title: "opening a not-needed step says so, says why, and names nobody as acting", mode: "notApplicable", stage: "DISBURSEMENT", na: true },
+  { suffix: "-ux4-settlement-checklist", title: "the live Settlement card lists its closing gates, one current", mode: null, stage: null },
+  { suffix: "-ux4-view-past", title: "a past step opens read-only with a way back", mode: "past", stage: "APPLICATION" },
+  { suffix: "-ux4-view-future", title: "a future step says what it needs and who acts", mode: "future", stage: "SETTLEMENT" },
+];
+
+/** Sol UI-446-1: every stage finished, DISBURSEMENT not needed: the collapsed summary. */
+const NA_FINISHED_SUFFIX = "-ux4-na-finished";
+const NA_FINISHED_LITERAL: Readonly<Record<(typeof LOCALES)[number], { finished: string; complete: string; notNeeded: string }>> = {
+  en: { finished: "All stages finished", complete: "complete", notNeeded: "not needed" },
+  ar: { finished: "انتهت جميع المراحل", complete: "مكتملة", notNeeded: "غير مطلوبة" },
+};
+
+/** SCRUM-446: the one-line reason, hand-written for both languages. */
+const NA_REASON_LITERAL: Readonly<Record<(typeof LOCALES)[number], string>> = {
+  en: "No finance company pays the dealership on this deal.",
+  ar: "لا توجد شركة تمويل تدفع للمعرض في هذه الصفقة.",
+};
+
+/**
+ * SCRUM-417 UX5 (O4): below `md` the stage rail is folded behind a disclosure
+ * (`deal-mobile-rail-toggle`). The page is static markup with no hydration, so
+ * opening it is APPLIED to the DOM the way the handler does it: aria-expanded
+ * on the toggle and the folded wrapper's `hidden` class removed. At `md` and
+ * above the rail is always shown, so this is a no-op there.
+ */
+async function openMobileRail(page: Page, width: number) {
+  if (width >= MD_BREAKPOINT_PX) return;
+  const toggle = page.getByTestId("deal-mobile-rail-toggle");
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await page.evaluate(() => {
+    document.querySelector('[data-testid="deal-mobile-rail-toggle"]')?.setAttribute("aria-expanded", "true");
+    document.getElementById("deal-stage-rail-panel")?.classList.remove("hidden");
+  });
+}
+/**
+ * SCRUM-417 UX5 (S7/O4): the cockpit with a step just recorded -- the
+ * persistent "Recorded. Next: ..." line -- and, below `md`, the compact step
+ * bar with the rail folded, then the same page with the rail opened. Suffixes
+ * deliberately do not contain `-ux4-`: the CI frame count for UX4 stays 24.
+ */
+const UX5_SUFFIX = "-ux5-recorded";
+/**
+ * SCRUM-435: the transfer step while the dealership owes the finance company its
+ * forward. `due` offers the recording; `unsettled` names who resolves it.
+ */
+const FORWARD_VARIANTS: ReadonlyArray<{ suffix: string; title: string; offersAction: boolean }> = [
+  { suffix: "-forward-due", title: "the transfer step asks for the payment to the finance company first", offersAction: true },
+  { suffix: "-forward-unsettled", title: "an unsettled payment names who resolves it and offers no action", offersAction: false },
+];
+/**
+ * SCRUM-239: the header action the server offers when the finance company's
+ * transfer is confirmed and the linked cheque CLEARED.
+ */
+const CHEQUE_RETURN_SUFFIX = "-cheque-return";
+const CHEQUE_RETURN_LITERAL: Readonly<Record<(typeof LOCALES)[number], string>> = {
+  en: "Cheque returned by bank",
+  ar: "شيك مرتجع من البنك",
+};
 /** The desktop sidebar (`w-64`) at the default 16px root font size. */
 const SIDEBAR_WIDTH_PX = 256;
 /** Tailwind's `md` breakpoint, where the sidebar appears. */
@@ -110,13 +228,45 @@ test.beforeAll(async () => {
     },
   );
   for (const locale of LOCALES) {
-    for (const name of [`deal-cockpit-${locale}.html`, `deal-cockpit-${locale}.expected.json`]) {
+    for (const name of [
+      `deal-cockpit-${locale}.html`,
+      `deal-cockpit-${locale}.expected.json`,
+      `deal-focus-states-${locale}.html`,
+    ]) {
       const file = resolve(FIXTURES, name);
       expect(existsSync(file), `bridge did not write ${file}`).toBe(true);
       expect(
         statSync(file).mtimeMs,
         `${file} predates this run — a stale artifact, not this bridge's output`,
       ).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
+    }
+    for (const { suffix } of UX4_VARIANTS) {
+      const variantFile = resolve(FIXTURES, `deal-cockpit-${locale}${suffix}.html`);
+      expect(existsSync(variantFile), `bridge did not write ${variantFile}`).toBe(true);
+      expect(statSync(variantFile).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
+    }
+    for (const suffix of [NA_FINISHED_SUFFIX]) {
+      const variantFile = resolve(FIXTURES, `deal-cockpit-${locale}${suffix}.html`);
+      expect(existsSync(variantFile), `bridge did not write ${variantFile}`).toBe(true);
+      expect(statSync(variantFile).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
+    }
+    const ux5File = resolve(FIXTURES, `deal-cockpit-${locale}${UX5_SUFFIX}.html`);
+    expect(existsSync(ux5File), `bridge did not write ${ux5File}`).toBe(true);
+    expect(statSync(ux5File).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
+    for (const { suffix } of FORWARD_VARIANTS) {
+      const variantFile = resolve(FIXTURES, `deal-cockpit-${locale}${suffix}.html`);
+      expect(existsSync(variantFile), `bridge did not write ${variantFile}`).toBe(true);
+      expect(statSync(variantFile).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
+    }
+    for (const suffix of [CHEQUE_RETURN_SUFFIX]) {
+      const variantFile = resolve(FIXTURES, `deal-cockpit-${locale}${suffix}.html`);
+      expect(existsSync(variantFile), `bridge did not write ${variantFile}`).toBe(true);
+      expect(statSync(variantFile).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
+    }
+    for (const { suffix } of WITHHELD_CLOSE_VARIANTS) {
+      const variantFile = resolve(FIXTURES, `deal-cockpit-${locale}${suffix}.html`);
+      expect(existsSync(variantFile), `bridge did not write ${variantFile}`).toBe(true);
+      expect(statSync(variantFile).mtimeMs).toBeGreaterThanOrEqual(RUN_STARTED_AT - 1_000);
     }
   }
 
@@ -143,8 +293,13 @@ function expectedFor(locale: (typeof LOCALES)[number]): { stageOwners: string[] 
   return JSON.parse(readFileSync(resolve(FIXTURES, `deal-cockpit-${locale}.expected.json`), "utf8"));
 }
 
-function documentFor(locale: (typeof LOCALES)[number], theme: (typeof THEMES)[number]): string {
-  const body = readFileSync(resolve(FIXTURES, `deal-cockpit-${locale}.html`), "utf8");
+function documentFor(
+  locale: (typeof LOCALES)[number],
+  theme: (typeof THEMES)[number],
+  variant = "",
+  fixture: "deal-cockpit" | "deal-focus-states" = "deal-cockpit",
+): string {
+  const body = readFileSync(resolve(FIXTURES, `${fixture}-${locale}${variant}.html`), "utf8");
   const dir = locale === "ar" ? "rtl" : "ltr";
   // `<html dir lang class>` and `<body class>` as `app/layout.tsx` and the
   // LanguageProvider set them (the body's background comes from the
@@ -168,9 +323,9 @@ function documentFor(locale: (typeof LOCALES)[number], theme: (typeof THEMES)[nu
 </body></html>`;
 }
 
-async function paint(page: Page, locale: (typeof LOCALES)[number], theme: (typeof THEMES)[number]) {
-  const file = resolve(RUN_DIR, `page-${locale}-${theme}.html`);
-  writeFileSync(file, documentFor(locale, theme));
+async function paint(page: Page, locale: (typeof LOCALES)[number], theme: (typeof THEMES)[number], variant = "") {
+  const file = resolve(RUN_DIR, `page-${locale}-${theme}${variant}.html`);
+  writeFileSync(file, documentFor(locale, theme, variant));
   await page.goto(`file:///${file.replace(/\\/g, "/")}`);
   await expect(page.getByTestId("deal-header")).toBeVisible();
 }
@@ -282,9 +437,113 @@ for (const locale of LOCALES) {
             `header ${JSON.stringify(headerBox)} covers essentials ${JSON.stringify(essentialsBox)}`,
           ).toBeLessThanOrEqual(essentialsBox!.y + 0.5);
 
+          // SCRUM-417 UX3 (O1): what the operator sees on arrival. The live step
+          // (Documents) has its panel directly under the next-step card, painted
+          // and reachable, and the rest of the deal sits in a COLLAPSED record.
+          // Adjacency is asserted at every width. "Within the first screen" is
+          // asserted where it is true (desktop) and MEASURED at 390px, where the
+          // sticky header, identity strip and 8-node rail above the card (rail
+          // and identity are outside O1) take ~690px of an 844px screen; the
+          // measurement is recorded on the test so it is visible, not hidden.
+          const nextStepBox = await page.getByTestId("deal-next-step").boundingBox();
+          const workbenchBox = await page.locator('[data-zone="workbench"]').first().boundingBox();
+          expect(nextStepBox).not.toBeNull();
+          expect(workbenchBox).not.toBeNull();
+          expect(workbenchBox!.y, "the workbench sits under the next-step card").toBeGreaterThanOrEqual(
+            nextStepBox!.y + nextStepBox!.height - 0.5,
+          );
+          expect(workbenchBox!.y - (nextStepBox!.y + nextStepBox!.height), "gap between step and panel").toBeLessThan(40);
+          test.info().annotations.push({
+            type: "workbench-first-screen",
+            description: `next-step y=${Math.round(nextStepBox!.y)} workbench y=${Math.round(workbenchBox!.y)} viewport=${viewport.height}`,
+          });
+          if (desktop) {
+            expect(
+              workbenchBox!.y,
+              `workbench starts at ${workbenchBox!.y}, below the first screen (${viewport.height})`,
+            ).toBeLessThan(viewport.height);
+          }
+          await expect(page.getByTestId("deal-lower-tabs")).toBeVisible();
+          const toggle = page.getByTestId("deal-details-toggle");
+          await expect(toggle).toHaveAttribute("aria-expanded", "false");
+          // Hidden, not removed: every record wrapper is in the document.
+          expect(await page.locator('[data-zone="record"]:not([hidden])').count()).toBe(0);
+          expect(await page.locator('[data-zone="record"][hidden]').count()).toBeGreaterThan(0);
+          await expect(page.getByTestId("deal-details-toggle")).toBeVisible();
+          // Collapsed means hidden, not removed: the money is in the record and
+          // is not painted until it is opened.
+          await expect(page.getByTestId("deal-money")).toBeHidden();
+          // Opus L1: with the record collapsed the grid ends at the toggle. The
+          // row template that keeps the working cards together (N3) belongs to
+          // the EXPANDED record; applied while collapsed it left ~120-144px of
+          // blank rows under the toggle at desktop widths.
+          if (viewport.width >= 1280) {
+            const collapsedEnd = await page.evaluate(() => {
+              const wrapper = document.querySelector('[data-zone="toggle"]') as HTMLElement;
+              const grid = wrapper.parentElement as HTMLElement;
+              return {
+                gridBottom: grid.getBoundingClientRect().bottom,
+                toggleBottom: wrapper.getBoundingClientRect().bottom,
+              };
+            });
+            expect(
+              collapsedEnd.gridBottom - collapsedEnd.toggleBottom,
+              `blank space under the collapsed toggle: ${JSON.stringify(collapsedEnd)}`,
+            ).toBeLessThanOrEqual(0.5);
+          }
+          await page.screenshot({
+            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}-top.png`),
+          });
+          // STATIC EXPANDED-LAYOUT COVERAGE, not an interaction test. The page is
+          // server-rendered markup with no hydration, so nothing here proves the
+          // toggle works in a browser: the collapsed state above is what the markup
+          // renders, and the expanded state below is APPLIED to the DOM by this
+          // script so the layout can be measured and shot. The jsdom suite
+          // (DealCockpitVisualFixture.test.tsx) covers only that the toggle is a
+          // native button, that Enter/Space are not cancelled, and that a click
+          // toggles it; real keyboard activation needs a hydrated browser test
+          // (follow-up SCRUM-465).
+          // Open it. The page is static markup (no React handlers), so the toggle
+          // is applied to the DOM the way its handler does: aria-expanded and the
+          // `hidden` attribute of every record wrapper. The handler itself is
+          // exercised in the jsdom suite (DealCockpitVisualFixture.test.tsx).
+          await page.evaluate(() => {
+            document.querySelector('[data-testid="deal-details-toggle"]')?.setAttribute("aria-expanded", "true");
+            document.querySelectorAll('[data-zone="record"]').forEach((el) => ((el as HTMLElement).hidden = false));
+          });
+          await expect(page.getByTestId("deal-money")).toBeVisible();
+
+          // SCRUM-417 UX3 N3: the money column spans the working panels beside it.
+          // When the money is far TALLER than they are, the working cards must stay
+          // one gap apart (24px), not be pushed apart by the spanning item.
+          if (viewport.width >= 1280) {
+            await page.evaluate(() => {
+              const spacer = document.createElement("div");
+              spacer.style.height = "2600px";
+              spacer.setAttribute("data-n3-spacer", "");
+              document.querySelector('[data-testid="deal-money"]')?.appendChild(spacer);
+            });
+            const tops = await page.evaluate(() =>
+              Array.from(document.querySelectorAll('[data-zone="record"]:not(#deal-record-money)')).map((el) => {
+                // The panel itself, not its grid cell: a stretched cell would hide the gap.
+                const box = (el.firstElementChild ?? el).getBoundingClientRect();
+                return { top: box.top, bottom: box.bottom };
+              })
+            );
+            expect(tops.length).toBeGreaterThan(1);
+            for (let i = 1; i < tops.length; i += 1) {
+              expect(tops[i].top - tops[i - 1].bottom, `gap between record panel ${i - 1} and ${i} with a tall money column`).toBeCloseTo(24, 0);
+            }
+            // The spacer only existed to measure: take it out so the bottom
+            // screenshot shows the real page, not 2600px of nothing.
+            await page.evaluate(() => document.querySelectorAll("[data-n3-spacer]").forEach((el) => el.remove()));
+            expect(await page.locator("[data-n3-spacer]").count()).toBe(0);
+          }
+
           // Painted on screen: header, headline figure, stage rail — inside
           // main's box, not merely inside the viewport.
           await expect(page.locator(".text-3xl").first()).toBeVisible();
+          await openMobileRail(page, viewport.width);
           await expect(page.getByTestId("deal-stage-rail")).toBeVisible();
           const headline = await page.locator(".text-3xl").first().boundingBox();
           expect(headline).not.toBeNull();
@@ -339,15 +598,590 @@ for (const locale of LOCALES) {
           ).toBeLessThanOrEqual(overflow.clientWidth);
           expect(overflow.culprits, `blocks painted outside main at ${viewport.width}px`).toEqual([]);
 
-          // Two frames per combination: what the operator sees on arrival, and
-          // the foot of the cockpit once `main` — not the document, which is
-          // `h-screen overflow-hidden` — is scrolled to its end.
+          // Frames per combination: what the operator sees on arrival (the
+          // collapsed record, taken above), the same screen with Deal details
+          // opened, and the foot of the cockpit once `main` — not the document,
+          // which is `h-screen overflow-hidden` — is scrolled to its end.
           await page.screenshot({
-            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}-top.png`),
+            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}-expanded-top.png`),
           });
           await main.evaluate((el) => el.scrollTo({ top: el.scrollHeight }));
           await page.screenshot({
             path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}-bottom.png`),
+          });
+        } finally {
+          await context.close();
+        }
+      });
+    }
+  }
+}
+
+/**
+ * SCRUM-417 UX5, painted. At 390px: the compact "Step N of M" bar is shown and
+ * the rail is folded until the disclosure opens it; the step card comes before
+ * Deal details; nothing leaks sideways. At 1280px: the bar is absent and the
+ * rail is as before. The "Recorded. Next:" line is painted in both.
+ */
+for (const locale of LOCALES) {
+  for (const theme of THEMES) {
+    for (const viewport of VIEWPORTS) {
+      test(`${locale} · ${theme} · ${viewport.name}px: UX5 recorded line and mobile step bar`, async ({ browser }) => {
+        const context = await browser.newContext({
+          viewport: { width: viewport.width, height: viewport.height },
+          colorScheme: theme,
+        });
+        const page = await context.newPage();
+        try {
+          await paint(page, locale, theme, UX5_SUFFIX);
+          const main = page.getByTestId("shell-main");
+          const mainBox = await main.boundingBox();
+          expect(mainBox).not.toBeNull();
+          const mobile = viewport.width < MD_BREAKPOINT_PX;
+
+          const recorded = page.getByTestId("deal-recorded-feedback");
+          await expect(recorded).toBeVisible();
+          const recordedBox = await recorded.boundingBox();
+          expect(recordedBox!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);
+          expect(recordedBox!.x + recordedBox!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width + 0.5);
+          await expect(page.getByTestId("deal-recorded-feedback-dismiss")).toBeVisible();
+
+          const bar = page.getByTestId("deal-mobile-stepbar");
+          const rail = page.getByTestId("deal-stage-rail");
+          if (mobile) {
+            await expect(bar).toBeVisible();
+            // Position text: the current step never exceeds the total (SCRUM-468).
+            const nums = await page
+              .getByTestId("deal-mobile-step-position")
+              .locator("bdi")
+              .allInnerTexts();
+            expect(nums).toHaveLength(2);
+            expect(Number(nums[0])).toBeGreaterThanOrEqual(1);
+            expect(Number(nums[0])).toBeLessThanOrEqual(Number(nums[1]));
+            expect(await bar.evaluate((el) => getComputedStyle(el).direction)).toBe(locale === "ar" ? "rtl" : "ltr");
+            // Folded: the rail is not painted until the disclosure opens it.
+            await expect(rail).toBeHidden();
+            // The step card comes before Deal details, and starts on the first screen.
+            const nextStepBox = await page.getByTestId("deal-next-step").boundingBox();
+            const identityBox = await page.getByTestId("deal-identity-mobile").boundingBox();
+            expect(nextStepBox).not.toBeNull();
+            expect(identityBox).not.toBeNull();
+            expect(nextStepBox!.y, "the step card sits above Deal details").toBeLessThan(identityBox!.y);
+            expect(nextStepBox!.y, "the step card starts inside the first screen").toBeLessThan(viewport.height);
+            // Reading order = visual order: the identity strip follows the step in
+            // the DOM too, so Tab and a screen reader meet the step first.
+            const domOrder = await page.evaluate(() => {
+              const step = document.querySelector('[data-testid="deal-next-step"]')!;
+              const identity = document.querySelector('[data-testid="deal-identity-mobile"]')!;
+              return Boolean(step.compareDocumentPosition(identity) & Node.DOCUMENT_POSITION_FOLLOWING);
+            });
+            expect(domOrder, "identity follows the step in the DOM on a phone").toBe(true);
+            test.info().annotations.push({
+              type: "cta-first-screen",
+              description: `next-step y=${Math.round(nextStepBox!.y)} h=${Math.round(nextStepBox!.height)} viewport=${viewport.height}`,
+            });
+          } else {
+            await expect(bar).toBeHidden();
+            await expect(rail).toBeVisible();
+            // Desktop keeps its placement, and now by DOM position alone: the
+            // desktop copy of the identity strip sits right under the header, before
+            // the rail and the step, so Tab meets it where it is painted. The phone
+            // copy is display:none here, so it is not in the tab order or the a11y tree.
+            const identityBox = await page.getByTestId("deal-identity").boundingBox();
+            const nextStepBox = await page.getByTestId("deal-next-step").boundingBox();
+            expect(identityBox!.y, "desktop: identity strip stays above the step").toBeLessThan(nextStepBox!.y);
+            await expect(page.getByTestId("deal-identity-mobile")).toBeHidden();
+            const domOrder = await page.evaluate(() => {
+              const step = document.querySelector('[data-testid="deal-next-step"]')!;
+              const identity = document.querySelector('[data-testid="deal-identity"]')!;
+              return Boolean(identity.compareDocumentPosition(step) & Node.DOCUMENT_POSITION_FOLLOWING);
+            });
+            expect(domOrder, "identity precedes the step in the DOM on desktop").toBe(true);
+          }
+
+          const overflow = await main.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+          expect(overflow.scrollWidth, `main scrolls sideways at ${viewport.width}px`).toBeLessThanOrEqual(
+            overflow.clientWidth,
+          );
+          await page.screenshot({
+            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${UX5_SUFFIX}.png`),
+          });
+
+          if (mobile) {
+            await openMobileRail(page, viewport.width);
+            await expect(rail).toBeVisible();
+            expect(await rail.getByRole("button").count()).toBe(8);
+            await page.screenshot({
+              path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}-ux5-rail-open.png`),
+            });
+          }
+        } finally {
+          await context.close();
+        }
+      });
+    }
+  }
+}
+/**
+ * SCRUM-417 — the next-step states the wizard added, painted in the same shell.
+ * The viewport is tall so the whole gallery is on screen at once and `main`
+ * never needs scrolling for the frame. Asserted: every state's row is painted
+ * inside main, its one primary button (where it has one) has a real box and
+ * sits inside main, and nothing scrolls sideways — the Arabic note and the
+ * secondary link are the likeliest to push a 390px row wide.
+ */
+const FOCUS_STATE_IDS = [
+  "reconciliation-resolve",
+  "reconciliation-no-permission",
+  "appraisal-next",
+  "gap-failed",
+  "credit-documents-first",
+  "credit-documents-no-authority",
+  "delivery-documents-await-verifier",
+  "delivery-documents-read-only-role",
+  "handover-blocked",
+  "held-deposit-link",
+  "held-deposit-no-access",
+  "credit-documents-need-read-access",
+  "delivery-documents-need-read-access",
+  "cash-handover",
+  "cash-handover-no-permission",
+  "cash-handover-needs-read-access",
+  "cash-handover-deposit-decision",
+] as const;
+/** S4: states whose reason carries a link to another existing page. */
+const WITH_LINK = new Set(["held-deposit-link", "cash-handover-deposit-decision"]);
+const WITH_PRIMARY = new Set([
+  "reconciliation-resolve",
+  "appraisal-next",
+  "gap-failed",
+  "credit-documents-first",
+  "cash-handover",
+]);
+
+for (const locale of LOCALES) {
+  for (const theme of THEMES) {
+    for (const viewport of VIEWPORTS) {
+      test(`focus states · ${locale} · ${theme} · ${viewport.name}px: every next step painted, one button each, no sideways scroll`, async ({
+        browser,
+      }) => {
+        const context = await browser.newContext({
+          // Tall enough for the whole gallery at 390px (13 states plus the
+          // documents panel since round 2): `main` clips the screenshot to
+          // its own box, so a shorter frame silently drops the last states.
+          viewport: { width: viewport.width, height: 7600 },
+          colorScheme: theme,
+        });
+        const page = await context.newPage();
+        try {
+          const file = resolve(RUN_DIR, `focus-${locale}-${theme}.html`);
+          writeFileSync(file, documentFor(locale, theme, "", "deal-focus-states"));
+          await page.goto(`file:///${file.replace(/\\/g, "/")}`);
+          const main = page.getByTestId("shell-main");
+          const mainBox = (await main.boundingBox())!;
+          expect(mainBox).not.toBeNull();
+          expect(
+            await page.getByTestId("deal-focus-states").evaluate((el) => getComputedStyle(el).direction),
+          ).toBe(locale === "ar" ? "rtl" : "ltr");
+
+          for (const id of FOCUS_STATE_IDS) {
+            const block = page.getByTestId(`focus-state-${id}`);
+            await expect(block, id).toBeVisible();
+            const buttons = block.getByTestId("deal-next-step-action");
+            await expect(buttons, `${id} primary count`).toHaveCount(WITH_PRIMARY.has(id) ? 1 : 0);
+            // S3/S4: a link only where the container gave one; never the passive
+            // documents link for a caller who cannot act on documents.
+            await expect(block.getByTestId("deal-next-step-link"), `${id} link count`).toHaveCount(WITH_LINK.has(id) ? 1 : 0);
+            if (id === "delivery-documents-read-only-role" || id === "delivery-documents-await-verifier") {
+              await expect(block.getByTestId("deal-go-to-documents"), `${id} passive link`).toHaveCount(0);
+            }
+            if (WITH_LINK.has(id)) {
+              const linkBox = (await block.getByTestId("deal-next-step-link").boundingBox())!;
+              expect(linkBox.height, `${id} link height`).toBeGreaterThanOrEqual(36);
+              expect(linkBox.x).toBeGreaterThanOrEqual(mainBox.x - 0.5);
+              expect(linkBox.x + linkBox.width).toBeLessThanOrEqual(mainBox.x + mainBox.width + 0.5);
+            }
+            if (WITH_PRIMARY.has(id)) {
+              const box = (await buttons.boundingBox())!;
+              expect(box.height, `${id} button height`).toBeGreaterThanOrEqual(36);
+              expect(box.x).toBeGreaterThanOrEqual(mainBox.x - 0.5);
+              expect(box.x + box.width).toBeLessThanOrEqual(mainBox.x + mainBox.width + 0.5);
+            }
+          }
+
+          // Round 2 (S417-R2-5): the widest document row — View, Verify and the
+          // replacement upload together — painted inside main, every control
+          // with a real box.
+          const panelRow = page.getByTestId("deal-document-d1");
+          await expect(panelRow).toBeVisible();
+          await expect(panelRow.locator("button, label")).toHaveCount(3);
+          for (const control of await panelRow.locator("button, label").all()) {
+            const box = (await control.boundingBox())!;
+            expect(box.width, "document control width").toBeGreaterThan(0);
+            expect(box.x).toBeGreaterThanOrEqual(mainBox.x - 0.5);
+            expect(box.x + box.width).toBeLessThanOrEqual(mainBox.x + mainBox.width + 0.5);
+          }
+
+          // Round 3 (S417-R3-1): the "No longer required" history — each row
+          // carries View and nothing else, inside main.
+          const history = page.getByTestId("deal-documents-history");
+          await expect(history).toBeVisible();
+          for (const id of ["h1", "h2"]) {
+            const row = history.getByTestId(`deal-document-history-${id}`);
+            await expect(row).toBeVisible();
+            await expect(row.locator("button, label, input")).toHaveCount(1);
+            const box = (await row.locator("button").boundingBox())!;
+            expect(box.x).toBeGreaterThanOrEqual(mainBox.x - 0.5);
+            expect(box.x + box.width).toBeLessThanOrEqual(mainBox.x + mainBox.width + 0.5);
+          }
+
+          const overflow = await main.evaluate((el) => {
+            const box = el.getBoundingClientRect();
+            const culprits = Array.from(el.querySelectorAll<HTMLElement>("*"))
+              .map((node) => ({ node, rect: node.getBoundingClientRect() }))
+              .filter(({ rect }) => rect.width > 0 && (rect.left < box.left - 1 || rect.right > box.right + 1))
+              .slice(0, 8)
+              .map(({ node, rect }) => `${node.tagName.toLowerCase()} [${Math.round(rect.left)}..${Math.round(rect.right)}]`);
+            return { scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, culprits };
+          });
+          expect(overflow.scrollWidth, JSON.stringify(overflow)).toBeLessThanOrEqual(overflow.clientWidth);
+          expect(overflow.culprits).toEqual([]);
+
+          await page.getByTestId("deal-focus-states").screenshot({
+            path: resolve(RUN_DIR, `deal-focus-states-${locale}-${theme}-${viewport.name}.png`),
+          });
+        } finally {
+          await context.close();
+        }
+      });
+    }
+  }
+}
+
+/**
+ * S414-R2-SKEW-1 and S414-R3-1, painted. The next-step block carries the
+ * withheld close's own reason and NO button; the readiness panel names a failed
+ * read, and is absent for a caller who cannot read it; nothing leaks sideways
+ * at 390px or 1280px. Screenshotted at the next-step block (and the panel,
+ * where there is one) so the reason's wrap and tone are judged in both
+ * directions.
+ */
+for (const variant of WITHHELD_CLOSE_VARIANTS) {
+  for (const locale of LOCALES) {
+    for (const theme of THEMES) {
+      for (const viewport of VIEWPORTS) {
+        test(`${locale} · ${theme} · ${viewport.name}px: ${variant.title}`, async ({
+          browser,
+        }) => {
+          const context = await browser.newContext({
+            viewport: { width: viewport.width, height: viewport.height },
+            colorScheme: theme,
+          });
+          const page = await context.newPage();
+          try {
+            await paint(page, locale, theme, variant.suffix);
+            const main = page.getByTestId("shell-main");
+            const mainBox = await main.boundingBox();
+            expect(mainBox).not.toBeNull();
+
+            const nextStep = page.getByTestId("deal-next-step");
+            await expect(nextStep).toBeVisible();
+            // Withheld: no button in the block, and the reason reads exactly the literal.
+            await expect(nextStep.getByRole("button")).toHaveCount(0);
+            const reason = nextStep.getByText(variant.literal[locale], { exact: true });
+            await expect(reason).toBeVisible();
+            const reasonBox = await reason.boundingBox();
+            expect(reasonBox).not.toBeNull();
+            expect(reasonBox!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);
+            expect(reasonBox!.x + reasonBox!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width + 0.5);
+            expect(await reason.evaluate((el) => getComputedStyle(el).direction)).toBe(
+              locale === "ar" ? "rtl" : "ltr",
+            );
+
+            if (variant.panelTestId) {
+              await expect(page.getByTestId(variant.panelTestId)).toBeVisible();
+            } else {
+              await expect(page.getByTestId("closing-readiness-service-unavailable")).toHaveCount(0);
+            }
+
+            const overflow = await main.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+            expect(
+              overflow.scrollWidth,
+              `main scrolls sideways at ${viewport.width}px (${JSON.stringify(overflow)})`,
+            ).toBeLessThanOrEqual(overflow.clientWidth);
+
+            await nextStep.scrollIntoViewIfNeeded();
+            await page.screenshot({
+              path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${variant.suffix}-next-step.png`),
+            });
+            if (variant.panelTestId) {
+              await page.getByTestId(variant.panelTestId).scrollIntoViewIfNeeded();
+              await page.screenshot({
+                path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${variant.suffix}-panel.png`),
+              });
+            }
+          } finally {
+            await context.close();
+          }
+        });
+      }
+    }
+  }
+}
+
+/**
+ * SCRUM-417 UX4, painted. The checklist marks exactly one item current, every
+ * rail node is a real keyboard-focusable button, a viewed step shows its
+ * read-only card with a visible "back to current step" chip, the live step's
+ * card stays on the page, and nothing leaks sideways.
+ */
+for (const variant of UX4_VARIANTS) {
+  for (const locale of LOCALES) {
+    for (const theme of THEMES) {
+      for (const viewport of VIEWPORTS) {
+        test(`${locale} · ${theme} · ${viewport.name}px: ${variant.title}`, async ({ browser }) => {
+          const context = await browser.newContext({
+            viewport: { width: viewport.width, height: viewport.height },
+            colorScheme: theme,
+          });
+          const page = await context.newPage();
+          try {
+            await paint(page, locale, theme, variant.suffix);
+            const main = page.getByTestId("shell-main");
+            const mainBox = await main.boundingBox();
+            expect(mainBox).not.toBeNull();
+
+            // The rail: eight real buttons, exactly one aria-current.
+            await openMobileRail(page, viewport.width);
+            const rail = page.getByTestId("deal-stage-rail");
+            await expect(rail).toBeVisible();
+            expect(await rail.getByRole("button").count()).toBe(8);
+            expect(await rail.locator('[aria-current="step"]').count()).toBe(1);
+            await rail.getByRole("button").first().focus();
+            expect(await page.evaluate(() => document.activeElement?.tagName)).toBe("BUTTON");
+
+            const nextStep = page.getByTestId("deal-next-step");
+            await expect(nextStep).toBeVisible();
+
+            if (variant.na) {
+              // SCRUM-446: the rail says "not needed" and the slot agrees. Literals are
+              // hand-written, not read from the dictionaries the render used.
+              const stateWord = locale === "ar" ? "غير مطلوبة" : "Not needed";
+              const reason = locale === "ar" ? NA_REASON_LITERAL.ar : NA_REASON_LITERAL.en;
+              const node = page.getByTestId("deal-stage-node-DISBURSEMENT");
+              await expect(node).toBeVisible();
+              const label = (await node.getAttribute("aria-label")) ?? "";
+              expect(label, "node accessible name carries the state").toContain(stateWord);
+              expect(label, "node accessible name carries the reason").toContain(reason);
+              await expect(node).not.toHaveAttribute("aria-current", "step");
+              await expect(node.getByTestId("deal-stage-owner")).toHaveCount(0);
+              // The quiet dash: neither the success tick nor a stage number.
+              expect(await node.locator("svg").count()).toBeGreaterThan(0);
+              expect(await node.locator("svg.lucide-check, svg.lucide-circle-check").count()).toBe(0);
+              // No payment action or refusal is offered anywhere on the page.
+              // (The rail node's own accessible name says "Confirm finance company payment
+              // · Not needed", so the action slot is checked, not the whole page.)
+              await expect(nextStep.getByRole("button", { name: /confirm.*(payment|disbursement)|تأكيد.*(دفع|صرف)/i })).toHaveCount(0);
+              expect(await page.getByText(/Nothing is expected from the finance company|لا يوجد مبلغ متوقّع من شركة التمويل/).count()).toBe(0);
+              await node.scrollIntoViewIfNeeded();
+              await page.screenshot({
+                path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${variant.suffix}-rail.png`),
+              });
+            }
+
+            if (variant.mode === null && !variant.na) {
+              const list = page.getByTestId("deal-step-checklist");
+              await expect(list).toBeVisible();
+              expect(await list.locator('[data-status="current"]').count()).toBe(1);
+              expect(await list.locator('[data-status="done"]').count()).toBeGreaterThan(0);
+              // Settlement: the closing gates follow the server's order, so what
+              // is not reached yet is pending, and the unpaid cost is the current one.
+              expect(await list.locator('[data-status="pending"]').count()).toBeGreaterThan(0);
+              await expect(list.getByTestId("deal-step-item-costs-paid")).toHaveAttribute("data-status", "current");
+              await expect(list.getByTestId("deal-step-item-close-deal")).toHaveAttribute("data-status", "pending");
+              await expect(page.getByTestId("deal-stage-view")).toHaveCount(0);
+              const box = await list.boundingBox();
+              expect(box!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);
+              expect(box!.x + box!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width + 0.5);
+              await list.scrollIntoViewIfNeeded();
+            } else if (variant.mode === null) {
+              // na-rail: no step is being viewed; the live step's own card stays.
+              await expect(page.getByTestId("deal-stage-view")).toHaveCount(0);
+              expect(await rail.locator('[aria-current="step"]').count()).toBe(1);
+            } else {
+              const view = page.getByTestId("deal-stage-view");
+              await expect(view).toBeVisible();
+              await expect(view).toHaveAttribute("data-mode", variant.mode);
+              await expect(view).toHaveAttribute("data-stage", variant.stage!);
+              const back = page.getByTestId("deal-stage-view-back");
+              await expect(back).toBeVisible();
+              const backBox = await back.boundingBox();
+              expect(backBox!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);
+              expect(backBox!.x + backBox!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width + 0.5);
+              // Sol UI-446-2: a not-needed step names no owner at all; real stages keep theirs.
+              if (variant.mode === "notApplicable") {
+                await expect(page.getByTestId("deal-stage-view-owner")).toHaveCount(0);
+              } else {
+                await expect(page.getByTestId("deal-stage-view-owner")).toBeVisible();
+              }
+              if (variant.mode === "notApplicable") {
+                await expect(page.getByTestId("deal-stage-view-note")).toHaveText(NA_REASON_LITERAL[locale]);
+                await expect(view.getByText(locale === "ar" ? "غير مطلوبة" : "Not needed", { exact: true })).toBeVisible();
+                await expect(page.getByTestId("deal-stage-view-needs")).toHaveCount(0);
+              }
+              // Only the live step has sub-steps: a viewed one lists none.
+              await expect(view.getByTestId("deal-step-checklist")).toHaveCount(0);
+              if (variant.mode === "future") await expect(page.getByTestId("deal-stage-view-needs")).toBeVisible();
+              // The live step is still the only aria-current node and card.
+              expect(await rail.locator('[aria-current="step"]').count()).toBe(1);
+              await view.scrollIntoViewIfNeeded();
+            }
+            expect(await page.evaluate(() => getComputedStyle(document.body).direction)).toBe(
+              locale === "ar" ? "rtl" : "ltr",
+            );
+
+            const overflow = await main.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+            expect(
+              overflow.scrollWidth,
+              `main scrolls sideways at ${viewport.width}px (${JSON.stringify(overflow)})`,
+            ).toBeLessThanOrEqual(overflow.clientWidth);
+
+            await page.screenshot({
+              path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${variant.suffix}.png`),
+            });
+          } finally {
+            await context.close();
+          }
+        });
+      }
+    }
+  }
+}
+
+/**
+ * SCRUM-435, painted. The step is the live one, names the dealership as the
+ * actor, shows the action only when the server would accept it, and nothing
+ * leaks sideways in either direction or theme.
+ */
+for (const variant of FORWARD_VARIANTS) {
+  for (const locale of LOCALES) {
+    for (const theme of THEMES) {
+      for (const viewport of VIEWPORTS) {
+        test(`${locale} · ${theme} · ${viewport.name}px: ${variant.title}`, async ({ browser }) => {
+          const context = await browser.newContext({
+            viewport: { width: viewport.width, height: viewport.height },
+            colorScheme: theme,
+          });
+          const page = await context.newPage();
+          try {
+            await paint(page, locale, theme, variant.suffix);
+            const main = page.getByTestId("shell-main");
+            const nextStep = page.getByTestId("deal-next-step");
+            await expect(nextStep).toBeVisible();
+            await expect(nextStep.getByTestId("deal-next-step-action")).toHaveCount(variant.offersAction ? 1 : 0);
+            const rail = page.getByTestId("deal-stage-rail");
+            expect(await rail.locator('[aria-current="step"]').count()).toBe(1);
+            expect(await page.evaluate(() => getComputedStyle(document.body).direction)).toBe(
+              locale === "ar" ? "rtl" : "ltr",
+            );
+            const overflow = await main.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+            expect(
+              overflow.scrollWidth,
+              `main scrolls sideways at ${viewport.width}px (${JSON.stringify(overflow)})`,
+            ).toBeLessThanOrEqual(overflow.clientWidth);
+            await nextStep.scrollIntoViewIfNeeded();
+            await page.screenshot({
+              path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${variant.suffix}.png`),
+            });
+          } finally {
+            await context.close();
+          }
+        });
+      }
+    }
+  }
+}
+/**
+ * SCRUM-239, painted: the "Cheque returned by bank" header action. Present, reading
+ * the hand-written literal, visible inside the header without clipping, and nothing
+ * leaks sideways in either direction or theme.
+ */
+for (const locale of LOCALES) {
+  for (const theme of THEMES) {
+    for (const viewport of VIEWPORTS) {
+      test(`${locale} · ${theme} · ${viewport.name}px: the cheque-returned-by-bank action is offered in the header`, async ({ browser }) => {
+        const context = await browser.newContext({
+          viewport: { width: viewport.width, height: viewport.height },
+          colorScheme: theme,
+        });
+        const page = await context.newPage();
+        try {
+          await paint(page, locale, theme, CHEQUE_RETURN_SUFFIX);
+          const main = page.getByTestId("shell-main");
+          const header = page.getByTestId("deal-header");
+          const action = page.getByTestId("deal-cheque-returned-by-bank");
+          await expect(action).toBeVisible();
+          await expect(action).toHaveText(CHEQUE_RETURN_LITERAL[locale]);
+          const headerBox = await header.boundingBox();
+          const actionBox = await action.boundingBox();
+          expect(actionBox).not.toBeNull();
+          expect(actionBox!.x).toBeGreaterThanOrEqual(0);
+          expect(actionBox!.x + actionBox!.width).toBeLessThanOrEqual(viewport.width + 0.5);
+          expect(actionBox!.y + actionBox!.height).toBeLessThanOrEqual(headerBox!.y + headerBox!.height + 0.5);
+          // A phone-sized tap target, stated not hidden: logged, not asserted (same ghost-button size as the sibling header actions).
+          console.log(`ACTION-BOX cheque-return ${locale} ${theme} ${viewport.name}: ${Math.round(actionBox!.width)}x${Math.round(actionBox!.height)}`);
+          expect(await page.evaluate(() => getComputedStyle(document.body).direction)).toBe(locale === "ar" ? "rtl" : "ltr");
+          const overflow = await main.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+          expect(overflow.scrollWidth, `main scrolls sideways (${JSON.stringify(overflow)})`).toBeLessThanOrEqual(overflow.clientWidth);
+          await page.screenshot({
+            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${CHEQUE_RETURN_SUFFIX}.png`),
+            clip: { x: 0, y: 0, width: viewport.width, height: Math.min(viewport.height, 360) },
+          });
+        } finally {
+          await context.close();
+        }
+      });
+    }
+  }
+}
+// Sol UI-446-1: the collapsed summary of a finished deal with a not-needed stage.
+for (const locale of LOCALES) {
+  for (const theme of THEMES) {
+    for (const viewport of VIEWPORTS) {
+      test(`${locale} · ${theme} · ${viewport.name}px: a finished deal with a not-needed step is summarised neutrally, with no completion tick`, async ({ browser }) => {
+        const context = await browser.newContext({
+          viewport: { width: viewport.width, height: viewport.height },
+          colorScheme: theme,
+        });
+        const page = await context.newPage();
+        try {
+          await paint(page, locale, theme, NA_FINISHED_SUFFIX);
+          const main = page.getByTestId("shell-main");
+          const mainBox = await main.boundingBox();
+          expect(mainBox).not.toBeNull();
+          const toggle = page.getByTestId("deal-stages-toggle");
+          await expect(toggle).toBeVisible();
+          const summary = toggle.locator("xpath=..");
+          const lit = NA_FINISHED_LITERAL[locale];
+          await expect(summary).toContainText(lit.finished);
+          await expect(summary).toContainText(lit.complete);
+          await expect(summary).toContainText(lit.notNeeded);
+          expect(await summary.innerText()).not.toContain(locale === "ar" ? "اكتملت جميع المراحل" : "All stages complete");
+          expect(await summary.locator("svg.lucide-check, svg.lucide-circle-check").count()).toBe(0);
+          expect(await summary.locator("bdi[dir=ltr]").allInnerTexts()).toEqual(["7", "1"]);
+          await expect(page.getByTestId("deal-stage-rail")).toHaveCount(0);
+          const box = await summary.boundingBox();
+          expect(box!.x).toBeGreaterThanOrEqual(mainBox!.x - 0.5);
+          expect(box!.x + box!.width).toBeLessThanOrEqual(mainBox!.x + mainBox!.width + 0.5);
+          expect(await page.evaluate(() => getComputedStyle(document.body).direction)).toBe(locale === "ar" ? "rtl" : "ltr");
+          const overflow = await main.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+          expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth);
+          await summary.scrollIntoViewIfNeeded();
+          await page.screenshot({
+            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${NA_FINISHED_SUFFIX}.png`),
+          });
+          await summary.screenshot({
+            path: resolve(RUN_DIR, `deal-cockpit-${locale}-${theme}-${viewport.name}${NA_FINISHED_SUFFIX}-summary.png`),
           });
         } finally {
           await context.close();

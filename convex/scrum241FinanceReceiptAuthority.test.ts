@@ -212,11 +212,7 @@ async function prepareForFinalize(
   await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
     orgId: s.orgId, feeId, notes: "Matched.",
   });
-  await s.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
-    orgId: s.orgId,
-    applicationId,
-    notes: "Invoice and settlement advice on file.",
-  });
+  // SCRUM-407: no manual classification step - finalization checks readiness itself.
 }
 
 async function finalize(s: Seeded, applicationId: Id<"financeApplications">) {
@@ -301,7 +297,12 @@ async function driftOrgCurrencyOutOfContract(s: Seeded, currency: "USD" | "JOD" 
 }
 
 function messageOf(error: unknown) {
-  return String((error as { data?: unknown; message?: string })?.data ?? (error as Error)?.message ?? error);
+  const data = (error as { data?: unknown })?.data;
+  // A coded refusal (SCRUM-414) carries its sentence as `data.message`.
+  if (typeof data === "object" && data !== null && typeof (data as { message?: unknown }).message === "string") {
+    return (data as { message: string }).message;
+  }
+  return String(data ?? (error as Error)?.message ?? error);
 }
 
 async function refusalOf(promise: Promise<unknown>) {
@@ -343,35 +344,17 @@ describe("SCRUM-241 — finance-company receipt settles the exact recorded recei
     const { applicationId } = await approvedDealWithPinnedEconomics(s);
     const withheld = 375 * JOD_SCALE;
     await prepareForFinalize(s, applicationId, { withheldMinor: withheld });
-    await finalize(s, applicationId);
-    const closed = await app(s, applicationId);
-    const net = VEHICLE_PRICE * JOD_SCALE - withheld;
-    expect(closed?.financedSaleNetReceivableMinor).toBe(net);
+    // SCRUM-435 (owner ruling, Option A): the finance company transfers the FULL
+    // approved amount and never deducts. A cost that would be netted from the
+    // transfer is refused at finalization, guided, before any sale exists. (The
+    // netted v1 plan is still read for historical rows - see the v1 fixtures in
+    // `financedSalePostingPlan.test.ts`; nothing new can be finalized under it.)
     const before = await economicDelta(s, applicationId);
-    expect(before.receivable).toMatchObject({ currency: "JOD", status: "OPEN", originalAmountMinor: net });
-
-    const refusal = await refusalOf(
-      s.asUser.mutation(api.applications.confirmDisbursement, {
-        orgId: s.orgId,
-        applicationId,
-        disbursedAmountMinor: VEHICLE_PRICE * JOD_SCALE,
-        idempotencyKey: "s241-net-principal",
-      })
-    );
-    expect(refusal).toMatch(/not what this financing company owes/i);
+    const refusal = await refusalOf(finalize(s, applicationId));
+    expect(refusal).toMatch(/transfers the full approved amount/i);
+    expect(refusal).toMatch(/normal deal cost/i);
     expect(await economicDelta(s, applicationId)).toEqual(before);
-
-    await s.asUser.mutation(api.applications.confirmDisbursement, {
-      orgId: s.orgId,
-      applicationId,
-      disbursedAmountMinor: net,
-      idempotencyKey: "s241-net",
-    });
-    const after = await economicDelta(s, applicationId);
-    expect(after.receivable).toMatchObject({ currency: "JOD", status: "PAID" });
-    expect(after.financeCompanyPayments).toEqual([{ currency: "JOD", amountMinor: net, scale: 3 }]);
-    expect(after.allocations).toEqual([{ amountMinor: net, status: "ACTIVE" }]);
-    expect(after.cashReceivedEvents).toEqual([{ currency: "JOD", amountMinor: net }]);
+    expect((await app(s, applicationId))?.status).not.toBe("CLOSED");
   });
 
   test("BEFORE FINALIZATION, different scale (JOD→USD) — finalizeDeal refuses the incompatible denomination before any sale, receivable or journal exists", async () => {
@@ -609,5 +592,77 @@ describe("SCRUM-241 — finance-company receipt settles the exact recorded recei
     expect(once.financeCompanyPayments).toHaveLength(1);
     expect(once.allocations).toHaveLength(1);
     expect(once.cashReceivedEvents).toHaveLength(1);
+  });
+});
+
+describe("SCRUM-557: finance-company receipt guard allocation status", () => {
+  const SETTLED_REFUSAL =
+    "Part of this deal's finance-company receivable has already been settled, so it cannot be received as a single full payment. Review the existing allocation before recording this receipt.";
+
+  /** A closed financed deal (receivable OPEN) carrying one pre-existing 1_000-minor allocation in `status`. */
+  async function closedDealWithAllocation(tag: string, status: "ACTIVE" | "REVERSED") {
+    const s = await seedDealership(tag);
+    const { applicationId } = await approvedDealWithPinnedEconomics(s);
+    await prepareForFinalize(s, applicationId);
+    await finalize(s, applicationId);
+    const closed = await app(s, applicationId);
+    await s.t.run(async (ctx) => {
+      const receivable = (
+        await ctx.db.query("receivableDocuments").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect()
+      ).find((r) => r.sourceType === "finance_application" && r.sourceId === applicationId)!;
+      const paymentId = await ctx.db.insert("canonicalPayments", {
+        orgId: s.orgId,
+        direction: "IN",
+        payerType: "FINANCE_COMPANY",
+        financeCompanyId: s.companyId,
+        method: "BANK_TRANSFER",
+        amountMinor: 1_000,
+        currency: "JOD",
+        scale: 3,
+        status: "SETTLED",
+        idempotencyKey: `s557-${status}`,
+        createdBy: s.userId,
+        createdAt: Date.now(),
+      });
+      await ctx.db.insert("paymentAllocations", {
+        orgId: s.orgId,
+        paymentId,
+        receivableDocumentId: receivable._id,
+        amountMinor: 1_000,
+        currency: "JOD",
+        scale: 3,
+        allocationDate: Date.now(),
+        status,
+        createdBy: s.userId,
+        createdAt: Date.now(),
+      });
+    });
+    return { s, applicationId, receiptMinor: closed!.financedSaleNetReceivableMinor! };
+  }
+
+  test("a receivable carrying only a REVERSED allocation is ACCEPTED: the receipt proceeds", async () => {
+    const { s, applicationId, receiptMinor } = await closedDealWithAllocation("s557rev", "REVERSED");
+
+    await s.asUser.mutation(api.applications.confirmDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: receiptMinor, idempotencyKey: "s557-rev",
+    });
+
+    expect((await app(s, applicationId))?.disbursedAmountMinor).toBe(receiptMinor);
+    expect((await economicDelta(s, applicationId)).receivable?.status).toBe("PAID");
+  });
+
+  test("the same receivable with an ACTIVE allocation is REFUSED with the settled sentence and zero writes", async () => {
+    const { s, applicationId, receiptMinor } = await closedDealWithAllocation("s557act", "ACTIVE");
+    const before = await economicDelta(s, applicationId);
+
+    await expect(
+      s.asUser.mutation(api.applications.confirmDisbursement, {
+        orgId: s.orgId, applicationId, disbursedAmountMinor: receiptMinor, idempotencyKey: "s557-act",
+      })
+    ).rejects.toThrow(SETTLED_REFUSAL);
+
+    expect(await economicDelta(s, applicationId)).toEqual(before);
+    expect((await app(s, applicationId))?.disbursedAt).toBeUndefined();
+    expect(before.receivable?.status).toBe("OPEN");
   });
 });

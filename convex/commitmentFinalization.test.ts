@@ -309,6 +309,7 @@ const PERMISSIONS = [
   "review:finance_application",
   "approve:finance_application",
   "finalize:financed_deal",
+  "confirm:finance_disbursement",
   "verify:finance_documents",
   "register:vehicle_handover",
   "register:expected_payment",
@@ -429,7 +430,7 @@ async function quoteFor(seed: Seed, customerId: Id<"customers">, vehicles: Array
 }
 
 async function depositOn(seed: Seed, quoteId: Id<"quotes">, amount: number) {
-  return await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+  return await seed.asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
     orgId: seed.orgId,
     quoteId,
     amount,
@@ -481,13 +482,11 @@ async function directSale(
 
 /**
  * COMPLETION DOOR 3, part one. `sales.createDraft` takes the sale's own fields
- * rather than a quote — `quoteId` is optional and carried so the draft is still
- * tied to the deal whose deposit holds the car. Writing it as `{orgId, quoteId}`
- * would not compile, let alone exercise the door.
+ * and, since SCRUM-425, never a quote: a quote becomes a sale only through its
+ * own door. The draft is tied to the car and the customer, nothing else.
  */
 async function createDraftFor(
   seed: Seed,
-  quoteId: Id<"quotes">,
   vehicleId: Id<"vehicles">,
   customerId: Id<"customers">
 ) {
@@ -498,7 +497,6 @@ async function createDraftFor(
     salespersonId: seed.userId,
     salePrice: PRICE,
     saleDate: Date.now(),
-    quoteId,
   });
 }
 
@@ -585,6 +583,8 @@ async function reserve(
     orgId: seed.orgId,
     vehicleId,
     customerId,
+    // SCRUM-445: a deposit's method is asked, never defaulted.
+    ...(extra.depositAmount !== undefined ? { depositMethod: "CASH" } : {}),
     ...extra,
   });
   // `createReservation` returns the vehicleId, not the reservation. Reading the
@@ -1299,24 +1299,105 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
     expectTerminalRoot(root, { status: "CONSUMED", saleId: String(saleId), door: "completeFromQuote" });
   });
 
-  test("F.8c DOOR 3 sales.completeDraft terminalizes the root", async () => {
+  /**
+   * SCRUM-425 (owner ruling c21131). A draft no longer carries a quote, so
+   * door 3 cannot complete a car that a quote's deposit holds — that car
+   * becomes a sale through its own deal's door. The refusal names that deal,
+   * leaves the root OPEN and the draft PENDING, and the quote's door then
+   * consumes the root.
+   */
+  test("F.8c DOOR 3 sales.completeDraft refuses a car another deal holds; the holding deal completes it", async () => {
     const seed = await seedDealer("f8c");
     const v = await vehicle(seed);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     await depositOn(seed, quoteId, 5_000);
-    const draftId = await createDraftFor(seed, quoteId, v, seed.customerA);
+    const draftId = await createDraftFor(seed, v, seed.customerA);
     expect(
       (await rootsOn(seed, v))[0]?.status,
       "precondition: a DRAFT is not a completion — the root is still open"
     ).toBe("OPEN");
 
-    await seed.asUser.mutation(api.sales.completeDraft, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, saleId: draftId });
+    await expect(
+      seed.asUser.mutation(api.sales.completeDraft, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, saleId: draftId })
+    ).rejects.toThrow(/complete the sale on the deal that holds it/);
+    expect((await rootsOn(seed, v))[0]?.status, "a refused door 3 leaves the root open").toBe("OPEN");
+    const draft = await seed.t.run(async (ctx) => await ctx.db.get(draftId));
+    expect(draft?.status, "a refused door 3 leaves the draft as it was").toBe("PENDING");
 
+    const saleId = await completeQuoteOne(seed, quoteId);
     expectTerminalRoot((await rootsOn(seed, v))[0], {
       status: "CONSUMED",
-      saleId: (await salesByVehicle(seed))[String(v)],
-      door: "completeDraft",
+      saleId: String(saleId),
+      door: "completeFromQuote",
     });
+  });
+
+  /**
+   * SCRUM-425 (owner ruling c21131, option C). `sales.createDraft` no longer
+   * accepts `quoteId`, so a quote-linked draft — the second door that named
+   * the quote's car — cannot be created at all. The validator refuses it
+   * before anything is written. (This was `test.fails` F.8c2: a quote-linked
+   * draft and the quote's own door left TWO sale rows on the car.)
+   */
+  test("F.8c2 a draft can no longer be linked to a quote", async () => {
+    const seed = await seedDealer("f8c2");
+    const v = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [v]);
+    await depositOn(seed, quoteId, 5_000);
+
+    await expect(
+      seed.asUser.mutation(api.sales.createDraft, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        customerId: seed.customerA,
+        salespersonId: seed.userId,
+        salePrice: PRICE,
+        saleDate: Date.now(),
+        quoteId,
+      } as never)
+    ).rejects.toThrow(/quoteId/);
+    const salesForCar = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("sales").collect()).filter((sale) => sale.vehicleId === v)
+    );
+    expect(salesForCar, "the refused draft wrote no sale row").toHaveLength(0);
+
+    // The quote's own door is the one way this car becomes a sale.
+    await completeQuoteOne(seed, quoteId);
+  });
+
+  /**
+   * ⚠️ MARKED `test.fails` — the remainder of the SCRUM-425 invariant ("a car
+   * has at most one live sale row"), OUTSIDE the option-C ruling and tracked
+   * separately as SCRUM-436. A draft with NO quote link (what SaleDialog has
+   * always created) for a car a quote holds still survives that quote's own
+   * completion as a stale PENDING row. No second completion or posting occurs
+   * — `completeDraft` refuses the car afterwards — but neither door retires
+   * the draft. When a door starts refusing or retiring it, this flips red:
+   * drop `.fails` and keep it as the regression.
+   */
+  test.fails("F.8c3 an unlinked draft plus the quote's own completion door never yields two sales", async () => {
+    const seed = await seedDealer("f8c3");
+    const v = await vehicle(seed);
+    const quoteId = await quoteFor(seed, seed.customerA, [v]);
+    await depositOn(seed, quoteId, 5_000);
+    await createDraftFor(seed, v, seed.customerA);
+
+    let refused = false;
+    try {
+      await completeQuote(seed, quoteId);
+    } catch {
+      refused = true;
+    }
+
+    const salesForCar = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("sales").collect()).filter((sale) => sale.vehicleId === v)
+    );
+    if (refused) {
+      expect(salesForCar, "a refused completion leaves only the draft").toHaveLength(1);
+      expect(salesForCar[0].status).toBe("PENDING");
+    } else {
+      expect(salesForCar, "the quote's door must not add a second sale beside the draft").toHaveLength(1);
+    }
   });
 
   test("F.8d DOOR 4 applications.finalizeDeal — the real financed close — terminalizes the root", async () => {
@@ -1404,7 +1485,7 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
     // required no later than completion, so the whole sequence is the assertion.
     await expect(
       (async () => {
-        const draftId = await createDraftFor(seed, rival, v, seed.customerB);
+        const draftId = await createDraftFor(seed, v, seed.customerB);
         return await seed.asUser.mutation(api.sales.completeDraft, { idempotencyKey: crypto.randomUUID(),
           orgId: seed.orgId,
           saleId: draftId,
@@ -1462,21 +1543,23 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
       expectedDate: Date.now() + 86_400_000,
     });
 
-    // The deal is closed through a DIFFERENT door — a direct sale on the same
-    // quote, which F.8a requires to consume the root.
-    const saleId = await directSale(seed, quoteA, v, seed.customerA);
+    // SCRUM-69: the old sale-then-cancel route is now refused while the application is in flight
+    // (F.9e-0), so the post-cancellation state (root CONSUMED, application still APPROVED) is seeded.
+    const [rootA] = await rootsOn(seed, v);
+    await seed.t.run((ctx) =>
+      ctx.db.patch(rootA._id, {
+        status: "CONSUMED",
+        closedAt: Date.now(),
+        closedReason: "seeded: post-cancellation state (SCRUM-69 F.9e)",
+      })
+    );
     expect(
       (await rootsOn(seed, v))[0].status,
-      "precondition (F.8a): the direct sale consumed the root"
+      "precondition: the seeded root is CONSUMED"
     ).toBe("CONSUMED");
-
-    // The sale is then cancelled. F.27 requires the root to STAY CONSUMED — and
-    // `saleCancellation.ts` contains zero references to `financeApplications`,
-    // so the application never learns and remains APPROVED.
-    await cancelSale(seed, saleId);
     expect(
       (await seed.t.run((ctx) => ctx.db.get(applicationId)))?.status,
-      "the application is untouched by the cancellation"
+      "the application is untouched"
     ).toBe("APPROVED");
 
     // The car is genuinely free now, so another customer legitimately takes it.
@@ -1518,6 +1601,29 @@ describe("P2-F M3 finalization barrier — CONSUME", () => {
       ),
       "and no second live sale was created"
     ).toHaveLength(0);
+    expect(
+      (await seed.t.run((ctx) => ctx.db.get(v)))?.status,
+      "and the car did not move to SOLD"
+    ).not.toBe("SOLD");
+  });
+
+  test("F.9e-0 (SCRUM-69/532) a direct sale on a car with an APPROVED finance application is REFUSED", async () => {
+    const seed = await seedDealer("f9e0");
+    const v = await vehicle(seed);
+    const quoteA = await quoteFor(seed, seed.customerA, [v]);
+    await depositOn(seed, quoteA, 5_000);
+    const applicationId = await approvedApplication(seed, quoteA);
+    await registerHandover(seed.asUser, api, seed.orgId, applicationId);
+
+    // This is the door F.9e used to close the deal through. The car is held by the application,
+    // so it now refuses before any write; the sale -> cancel -> stale-application sequence F.9e
+    // exercised is no longer reachable through the product.
+    await expect(directSale(seed, quoteA, v, seed.customerA)).rejects.toMatchObject({
+      data: { code: "SALE_COMPLETES_THROUGH_FINANCE_APPLICATION" },
+    });
+    expect((await seed.t.run((ctx) => ctx.db.query("sales").collect())).length, "no sale row").toBe(0);
+    expect((await seed.t.run((ctx) => ctx.db.get(v)))?.status, "car not sold").not.toBe("SOLD");
+    expect((await rootsOn(seed, v))[0].status, "root still OPEN").toBe("OPEN");
   });
 
   test("F.10 one sale stamps exactly one root — sale -> root provenance is a function", async () => {
@@ -2024,7 +2130,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
   test("F.24 releasing the reservation while the FINANCE application is live keeps the root OPEN", async () => {
     const seed = await seedDealer("f24");
     const v = await vehicle(seed);
-    const reservationId = await reserve(seed, v, seed.customerA, { depositAmount: 1_000 });
+    const reservationId = await reserve(seed, v, seed.customerA);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
       orgId: seed.orgId,
@@ -2478,7 +2584,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
   test("F.30 expiry does NOT release a root another live basis still holds", async () => {
     const seed = await seedDealer("f30");
     const v = await vehicle(seed);
-    const reservationId = await reserve(seed, v, seed.customerA, { depositAmount: 1_000 });
+    const reservationId = await reserve(seed, v, seed.customerA);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
       orgId: seed.orgId,
@@ -2564,7 +2670,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
   test("F.33 a rejection that releases BOTH a finance and a reservation basis at once still releases the root", async () => {
     const seed = await seedDealer("f33");
     const v = await vehicle(seed);
-    const reservationId = await reserve(seed, v, seed.customerA, { depositAmount: 1_000 });
+    const reservationId = await reserve(seed, v, seed.customerA);
     const quoteId = await quoteFor(seed, seed.customerA, [v]);
     const applicationId = await seed.asUser.mutation(api.applications.createFromQuote, {
       orgId: seed.orgId,
@@ -2702,7 +2808,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
         expiresAt: realNow + 60_000,
       });
       const quoteId = await quoteFor(seed, seed.customerA, [v]);
-      const depositId = await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+      const depositId = await seed.asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
         orgId: seed.orgId,
         quoteId,
         amount: 5_000,
@@ -2748,7 +2854,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
     // The deal adopts the reservation, so the quote genuinely owns the root it
     // is about to complete against. Without this the sale is refused by the
     // ACQUISITION boundary and the contract never reaches its subject.
-    await seed.asUser.mutation(api.deposits.create, { idempotencyKey: crypto.randomUUID(),
+    await seed.asUser.mutation(api.deposits.create, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId,
       quoteId,
       amount: 5_000,
@@ -2791,7 +2897,7 @@ describe("P2-F M3 finalization barrier — RELEASE", () => {
     await depositOn(seed, heldBy, 5_000);
 
     const rivalQuote = await quoteFor(seed, seed.customerB, [v]);
-    const draftId = await createDraftFor(seed, rivalQuote, v, seed.customerB);
+    const draftId = await createDraftFor(seed, v, seed.customerB);
     expect(draftId, "a draft is NOT gated on the commitment authority").toBeTruthy();
 
     await expect(

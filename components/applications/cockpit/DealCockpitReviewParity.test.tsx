@@ -14,11 +14,15 @@
  * `scripts/` proves that at the file level, this proves it at the call level.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { pickMethod } from "@/test-utils/paymentMethodSelect";
+
+// SCRUM-469: no money dialog pre-selects a method, so the tests choose one.
+vi.mock("@/components/payments/PaymentMethodSelect", () => import("@/test-utils/paymentMethodSelect"));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
-  useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
+  useLanguage: () => ({ t: (key: string) => stubs.t(key), isRtl: false, locale: "en" }),
 }));
 
 vi.mock("@/hooks/useCurrency", () => ({
@@ -36,8 +40,12 @@ const stubs = vi.hoisted(() => ({
   permissions: new Set<string>(),
   mutationCalls: new Map<string, unknown[]>(),
   mutationFailures: new Map<string, string>(),
+  /** The translator the mocked LanguageProvider hands out; a test may swap in an Arabic dictionary. */
+  t: (key: string): string => key,
   /** A mutation held open until the test settles it — for in-flight and late-response cases. */
   mutationHolds: new Map<string, Promise<unknown>>(),
+  /** What a mutation resolves to, where the caller uses the result (default null). */
+  mutationReturns: new Map<string, unknown>(),
   membershipUserId: "user_manager",
 }));
 
@@ -53,6 +61,11 @@ vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   const { ConvexError } = await import("convex/values");
   return {
+    // The cockpit reads closing readiness through the non-throwing useQueries (SCRUM-414 R2).
+    useQueries: (queries: Record<string, { query: never }>) =>
+      Object.fromEntries(
+        Object.entries(queries).map(([key, { query }]) => [key, stubs.queryResults.get(getFunctionName(query))])
+      ),
     useQuery: (reference: never, args: unknown) =>
       args === "skip" ? undefined : stubs.queryResults.get(getFunctionName(reference)),
     useMutation: (reference: never) => {
@@ -72,9 +85,14 @@ vi.mock("convex/react", async () => {
           // "refused:<message>" is the server's OWN answer (thrown inside the
           // mutation, nothing committed); anything else is a lost response.
           if (failure.startsWith("refused:")) throw new ConvexError(failure.slice("refused:".length));
+          // "coded:<CODE>|<message>" is a coded refusal, as `throwAppError` raises it.
+          if (failure.startsWith("coded:")) {
+            const [code, ...message] = failure.slice("coded:".length).split("|");
+            throw new ConvexError({ code, message: message.join("|") });
+          }
           throw new Error(failure);
         }
-        return null;
+        return stubs.mutationReturns.get(name) ?? null;
       };
     },
   };
@@ -90,6 +108,7 @@ vi.mock("@/components/ui/sonner", () => ({
 
 import { DealCockpit } from "./DealCockpit";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import { toast } from "@/components/ui/sonner";
 
 const { queryResults, permissions, mutationCalls } = stubs;
 
@@ -187,16 +206,44 @@ function application(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// A closed deal's unwind status, once read: nothing active, nothing offered. The controls an active unwind
+// bars stay off until it resolves, so a closed deal needs one to be seen as the settled deal these tests mean.
+beforeEach(() => {
+  queryResults.set("dealUnwind:unwindStatus", {
+    unwindId: null,
+    status: null,
+    step: null,
+    startedAt: null,
+    eligibility: { canStart: false, canForwardReturn: false, canFinish: false, canAbandon: false },
+    refusals: {},
+    evidence: null,
+  });
+});
+
 afterEach(() => {
   cleanup();
   queryResults.clear();
   permissions.clear();
   mutationCalls.clear();
   stubs.membershipUserId = "user_manager";
+  stubs.t = (key: string) => key;
 });
 
+/**
+ * The rest of the deal sits behind the "Deal details" toggle (collapsed while the
+ * live step has a panel of its own, and `hidden` — out of the accessibility
+ * tree — while collapsed). These tests exercise the panels in it, so they open
+ * it the way an operator does. Absent while the cockpit is still a skeleton.
+ */
+function openDealDetails() {
+  const toggle = screen.queryByTestId("deal-details-toggle");
+  if (toggle?.getAttribute("aria-expanded") === "false") fireEvent.click(toggle);
+}
+
 function renderCockpit() {
-  return render(<DealCockpit orgId={ORG} applicationId={APP} />);
+  const view = render(<DealCockpit orgId={ORG} applicationId={APP} />);
+  openDealDetails();
+  return view;
 }
 
 const focusRow = () => screen.getByTestId("deal-next-step");
@@ -306,10 +353,20 @@ describe("cancel — applications.cancelApplication, from the header", () => {
     expect(screen.queryByTestId("deal-cancel-application")).toBeNull();
   });
 
-  test("CLOSED needs the finalize permission, and the dialog carries the reversal warning", () => {
-    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
-    queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED" }));
+  test("CLOSED needs cancel:closed_deal (not create), and the dialog carries the reversal warning", () => {
+    permissions.add(PERMISSIONS.CANCEL_CLOSED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    // SCRUM-413 D-37: Cancel on a CLOSED deal needs the server's answer (`mayCancelFinalized`).
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        forward: {
+          planV2: false, applies: false, state: "NOT_DUE", returnedExceptionOpen: false,
+          onBooksForwardId: null, transferConfirmed: false, mayRecord: false, mayCancelFinalized: true,
+        },
+      })
+    );
     queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
     renderCockpit();
     fireEvent.click(screen.getByTestId("deal-cancel-application"));
@@ -319,7 +376,8 @@ describe("cancel — applications.cancelApplication, from the header", () => {
 
 describe("settlement route — applications.setSupplierSettlementRoute, beside the vehicle", () => {
   test("a consigned deal offers the route to a caller who can close, and records the choice", async () => {
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     queryResults.set(COCKPIT_QUERY, cockpit({ status: "APPROVED" }));
     queryResults.set(
       GET_QUERY,
@@ -345,7 +403,8 @@ describe("settlement route — applications.setSupplierSettlementRoute, beside t
   });
 
   test("the direct route is shown disabled with the server's reason while a deposit is held", () => {
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     queryResults.set(COCKPIT_QUERY, cockpit({ status: "APPROVED" }));
     queryResults.set(
       GET_QUERY,
@@ -374,7 +433,8 @@ describe("settlement route — applications.setSupplierSettlementRoute, beside t
     expect(screen.queryByTestId("deal-settlement-route")).toBeNull();
     cleanup();
 
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     queryResults.set(GET_QUERY, application({ status: "APPROVED" }));
     renderCockpit();
     expect(screen.queryByTestId("deal-settlement-route")).toBeNull();
@@ -553,8 +613,473 @@ describe("disbursement — the two confirmations, from the DISBURSEMENT stage", 
     expect(within(focusRow()).queryByRole("button")).toBeNull();
     expect(within(focusRow()).getByText("DisbursementUnavailable")).toBeTruthy();
   });
+
+  // SCRUM-447 N1-A: every recovery action the screen offers is executable in
+  // the state it describes. Under any of these flags the server refuses the
+  // confirmation, so the rail must not offer it and must point at the panel.
+  test.each([
+    ["chequeNeedsAccountingReview", "FcAccountingReviewNotice"],
+    ["chequeFaceUnrecorded", "FcChequeFaceUnrecordedNotice"],
+    ["chequeNeedsCorrection", "FcCorrectNeededNotice"],
+    ["expectedPaymentReRegistrable", "FcReRegisterNotice"],
+  ])("%s withholds ConfirmDisbursement and names the panel's notice", (flag, reasonKey) => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: closedStages, [flag]: true }));
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button", { name: "ConfirmDisbursement" })).toBeNull();
+    expect(within(focusRow()).getAllByText(reasonKey).length).toBeGreaterThan(0);
+  });
+
+  test("CONTROL — a live HELD cheque (all three flags false) still offers ConfirmDisbursement", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: closedStages,
+        chequeNeedsAccountingReview: false,
+        chequeNeedsCorrection: false,
+        expectedPaymentReRegistrable: false,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" })).toBeTruthy();
+  });
+
+  test("CONTROL — direct to the supplier is unchanged by the cheque flags", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ status: "CLOSED", stages: closedStages, chequeNeedsAccountingReview: true })
+    );
+    queryResults.set(
+      GET_QUERY,
+      application({
+        status: "CLOSED",
+        vehicle: { sourceType: "SOURCED", sourcedFromName: "x" },
+        supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+        canSettleDirectToSupplier: true,
+      })
+    );
+    renderCockpit();
+    expect(within(focusRow()).getByRole("button", { name: "ConfirmSupplierDisbursement" })).toBeTruthy();
+  });
 });
 
+/**
+ * SCRUM-435. The finance company sends the FULL approved amount; the dealership
+ * pays back the deposit and its contribution first. The transfer is not offered
+ * until that payment is settled, and the step names who acts.
+ */
+describe("disbursement - the payment to the finance company comes first", () => {
+  const forwardStages = (blocker: string) => [
+    { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+    { key: "DISBURSEMENT", state: "BLOCKED", blocker, authority: "DEALER" },
+    { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+    { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
+  ];
+  const forwardMoney = {
+    currency: "JOD",
+    settlesDirectToSupplier: false,
+    routeKnown: true,
+    profit: { available: false },
+    managementProfit: { available: false },
+    expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
+    parties: [],
+    supplierReceipt: { actionable: false, reason: "NOT_DIRECT_ROUTE" },
+    appraisalGapMinor: undefined,
+    forward: { dueMinor: 1_575_000, depositMinor: 200_000, contributionMinor: 1_375_000, onBooksMinor: 0 },
+  };
+  const forward = (overrides: Record<string, unknown> = {}) => ({
+    planV2: true,
+    applies: true,
+    state: "DUE",
+    returnedExceptionOpen: false,
+    onBooksForwardId: null,
+    transferConfirmed: false,
+    mayRecord: true,
+    mayCancelFinalized: true,
+    ...overrides,
+  });
+
+  const settledStages = [
+    { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+    { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
+    { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+  ];
+
+  test("a closed deal's forward correction waits for the unwind status, which may bar it", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ status: "CLOSED", stages: settledStages, forward: forward({ state: "SETTLED", onBooksForwardId: "fwd_1" }), money: forwardMoney })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    queryResults.delete("dealUnwind:unwindStatus");
+    renderCockpit();
+    expect(screen.queryByTestId("deal-forward-void")).toBeNull();
+  });
+
+  test("ON_BOOKS before the transfer: the manager can void or report it returned, each with a reason", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: settledStages,
+        forward: forward({ state: "SETTLED", onBooksForwardId: "fwd_1" }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+
+    fireEvent.click(screen.getByTestId("deal-forward-void"));
+    const submit = screen.getByRole("button", { name: "ForwardVoidAction", hidden: false });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("ForwardReasonLabel"), { target: { value: "Recorded on the wrong deal" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "ForwardVoidAction" }).at(-1)!);
+
+    await waitFor(() =>
+      expect(mutationCalls.get("financeCompanyForward:reverseFinanceCompanyForward")).toHaveLength(1)
+    );
+    expect(mutationCalls.get("financeCompanyForward:reverseFinanceCompanyForward")![0]).toMatchObject({
+      orgId: ORG,
+      applicationId: APP,
+      forwardId: "fwd_1",
+      reason: "Recorded on the wrong deal",
+    });
+    expect(mutationCalls.get("financeCompanyForward:reportFinanceCompanyForwardReturned")).toBeUndefined();
+  });
+
+  test("a void dialog opened before the transfer does not submit once the transfer is confirmed, and says what to do", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    const before = cockpit({
+      status: "CLOSED",
+      stages: settledStages,
+      forward: forward({ state: "SETTLED", onBooksForwardId: "fwd_1" }),
+      money: forwardMoney,
+    });
+    queryResults.set(COCKPIT_QUERY, before);
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    const view = renderCockpit();
+
+    fireEvent.click(screen.getByTestId("deal-forward-void"));
+    fireEvent.change(screen.getByLabelText("ForwardReasonLabel"), { target: { value: "Recorded on the wrong deal" } });
+    // The transfer is confirmed elsewhere while the dialog is open.
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: settledStages,
+        forward: forward({ state: "SETTLED", onBooksForwardId: "fwd_1", transferConfirmed: true }),
+        money: forwardMoney,
+      })
+    );
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+    fireEvent.click(screen.getAllByRole("button", { name: "ForwardVoidAction" }).at(-1)!);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("ForwardVoidAfterTransfer"));
+    expect(mutationCalls.get("financeCompanyForward:reverseFinanceCompanyForward")).toBeUndefined();
+  });
+
+  test("ON_BOOKS after the transfer: only 'report returned' is offered - a payment cannot be voided any more", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: settledStages,
+        forward: forward({ state: "SETTLED", onBooksForwardId: "fwd_1", transferConfirmed: true }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+
+    expect(screen.queryByTestId("deal-forward-void")).toBeNull();
+    fireEvent.click(screen.getByTestId("deal-forward-returned"));
+    fireEvent.change(screen.getByLabelText("ForwardReasonLabel"), { target: { value: "Company sent it back" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "ForwardReturnedAction" }).at(-1)!);
+
+    await waitFor(() =>
+      expect(mutationCalls.get("financeCompanyForward:reportFinanceCompanyForwardReturned")).toHaveLength(1)
+    );
+    expect(mutationCalls.get("financeCompanyForward:reportFinanceCompanyForwardReturned")![0]).toMatchObject({
+      forwardId: "fwd_1",
+      reason: "Company sent it back",
+    });
+  });
+
+  test("no payment on the books, or a caller the server would refuse: no correction buttons", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ status: "CLOSED", stages: settledStages, forward: forward({ state: "SETTLED" }), money: forwardMoney })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    const first = renderCockpit();
+    expect(screen.queryByTestId("deal-forward-correction")).toBeNull();
+    first.unmount();
+
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: settledStages,
+        forward: forward({ state: "SETTLED", onBooksForwardId: "fwd_1", mayRecord: false }),
+        money: null,
+      })
+    );
+    renderCockpit();
+    expect(screen.queryByTestId("deal-forward-correction")).toBeNull();
+  });
+
+  test("DUE: the step offers the recording, not the transfer, and sends the frozen figure the operator saw", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("AwaitingForwardToFinanceCompany"),
+        forward: forward(),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+
+    expect(within(focusRow()).queryByRole("button", { name: "ConfirmDisbursement" })).toBeNull();
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "RecordForwardToFinanceCompany" }));
+    expect(screen.getByTestId("forward-breakdown").textContent).toContain("1,575");
+    fireEvent.change(screen.getByLabelText("DirectPaymentMethodLabel"), { target: { value: "BANK_TRANSFER" } });
+    fireEvent.click(screen.getByRole("button", { name: "RecordForwardConfirm" }));
+
+    await waitFor(() =>
+      expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")).toHaveLength(1)
+    );
+    const call = mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")![0] as Record<string, unknown>;
+    expect(call).toMatchObject({
+      orgId: ORG,
+      applicationId: APP,
+      method: "BANK_TRANSFER",
+      expectedAmountMinor: 1_575_000,
+    });
+    expect(typeof call.idempotencyKey).toBe("string");
+    expect(mutationCalls.get("applications:confirmDisbursement")).toBeUndefined();
+  });
+
+  test("DUE without the permission: no button, the reason names the manager or accountant", () => {
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("AwaitingForwardToFinanceCompany"),
+        forward: forward({ mayRecord: false }),
+        money: null,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button")).toBeNull();
+    expect(within(focusRow()).getByText("ForwardNeedsPermission")).toBeTruthy();
+  });
+
+  test("an unsettled payment (pending/failed/reversing): no button at all, an accountant resolves it", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("ForwardNotSettled"),
+        forward: forward({ state: "POSTING_PENDING" }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button")).toBeNull();
+    expect(within(focusRow()).getByText("ForwardNotSettledReason")).toBeTruthy();
+  });
+
+  test("SETTLED: the ordinary transfer confirmation is offered again", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: [
+          { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+          { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
+          { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+        ],
+        forward: forward({ state: "SETTLED" }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" })).toBeTruthy();
+  });
+
+  test("returned AFTER the transfer: the step reopens and offers the replacement payment", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("AwaitingForwardToFinanceCompany"),
+        forward: forward({ returnedExceptionOpen: true, transferConfirmed: true }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
+    renderCockpit();
+
+    expect(within(focusRow()).queryByRole("button", { name: "ConfirmDisbursement" })).toBeNull();
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "RecordForwardToFinanceCompany" }));
+    fireEvent.change(screen.getByLabelText("DirectPaymentMethodLabel"), { target: { value: "BANK_TRANSFER" } });
+    fireEvent.click(screen.getByRole("button", { name: "RecordForwardConfirm" }));
+    await waitFor(() =>
+      expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")).toHaveLength(1)
+    );
+    expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")![0]).toMatchObject({
+      applicationId: APP,
+      expectedAmountMinor: 1_575_000,
+    });
+  });
+
+  test("returned AFTER the transfer without the permission: no button, the reason names who acts", () => {
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("AwaitingForwardToFinanceCompany"),
+        forward: forward({ returnedExceptionOpen: true, transferConfirmed: true, mayRecord: false }),
+        money: null,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button")).toBeNull();
+    expect(within(focusRow()).getByText("ForwardNeedsPermission")).toBeTruthy();
+  });
+
+  test("returned AFTER the transfer while the reversal is unsettled: no button, the unsettled reason", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("ForwardNotSettled"),
+        forward: forward({ state: "NEEDS_REPAIR", returnedExceptionOpen: true, transferConfirmed: true }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button")).toBeNull();
+    expect(within(focusRow()).getByText("ForwardReturnedNotSettledReason")).toBeTruthy();
+  });
+
+  test("disbursed with a reported return whose reversal is REVERSAL_PENDING: the live step names the accountant and offers no record action", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("ForwardNotSettled"),
+        forward: forward({ state: "REVERSAL_PENDING", returnedExceptionOpen: true, transferConfirmed: true }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button")).toBeNull();
+    expect(within(focusRow()).getByText("ForwardReturnedNotSettledReason")).toBeTruthy();
+    expect(screen.queryByText("ForwardNotSettledReason")).toBeNull();
+  });
+
+  test("disbursed and SETTLED: no forward action is offered", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: [
+          { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+          { key: "DISBURSEMENT", state: "COMPLETE", authority: "MIRROR" },
+          { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+        ],
+        forward: forward({ state: "SETTLED", transferConfirmed: true }),
+        money: forwardMoney,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
+    renderCockpit();
+    expect(screen.queryByRole("button", { name: "RecordForwardToFinanceCompany" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "ConfirmDisbursement" })).toBeNull();
+  });
+  test("a closed-deal canceller who is not a manager sees who cancels, not a cancel button", () => {
+    permissions.add(PERMISSIONS.CANCEL_CLOSED_DEAL);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("AwaitingForwardToFinanceCompany"),
+        forward: forward({ mayCancelFinalized: false }),
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(screen.queryByTestId("deal-cancel-application")).toBeNull();
+    expect(screen.getByTestId("deal-cancel-manager-hint").textContent).toBe("ManagerCancelsFinalizedDeal");
+  });
+
+  // SCRUM-413 D-37: the server's answer is the only thing that offers Cancel on a CLOSED deal.
+  test("a CLOSED deal with no server answer yet (forward absent) offers no Cancel and no hint", () => {
+    permissions.add(PERMISSIONS.CANCEL_CLOSED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: forwardStages("AwaitingForwardToFinanceCompany"), forward: undefined }));
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(screen.queryByTestId("deal-cancel-application")).toBeNull();
+    expect(screen.queryByTestId("deal-cancel-manager-hint")).toBeNull();
+  });
+
+  test("a full canceller blocked ONLY by the forward gate is not told it lacks permission", () => {
+    permissions.add(PERMISSIONS.CANCEL_CLOSED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: forwardStages("AwaitingForwardToFinanceCompany"),
+        forward: forward({ state: "SETTLED", mayCancelFinalized: false }),
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(screen.queryByTestId("deal-cancel-application")).toBeNull();
+    const hint = screen.getByTestId("deal-cancel-manager-hint").textContent;
+    expect(hint).toBe("CancelWaitsForForward");
+    expect(hint).not.toBe("ManagerCancelsFinalizedDeal");
+  });
+
+  test("the server's yes still offers Cancel", () => {
+    permissions.add(PERMISSIONS.CANCEL_CLOSED_DEAL);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({ status: "CLOSED", stages: forwardStages("AwaitingForwardToFinanceCompany"), forward: forward({ mayCancelFinalized: true }) })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    expect(screen.getByTestId("deal-cancel-application")).toBeTruthy();
+  });
+});
 describe("held deposit on a stopped deal — deposits.release", () => {
   const rejected = {
     status: "REJECTED",
@@ -583,6 +1108,12 @@ describe("held deposit on a stopped deal — deposits.release", () => {
 
     expect(screen.getByTestId("deal-deposit-awaiting-resolution")).toBeTruthy();
     fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    // SCRUM-469: the method is not pre-selected — nothing is sent until one is
+    // chosen (the deposit having been received by CASH does not choose it), and
+    // then exactly the chosen one is.
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    expect(mutationCalls.get("deposits:release")).toBeUndefined();
+    pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
     fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
 
     await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(1));
@@ -591,14 +1122,14 @@ describe("held deposit on a stopped deal — deposits.release", () => {
       orgId: ORG,
       depositId: "dep_1",
       resolution: "REFUNDED",
-      refundMethod: "CASH",
+      refundMethod: "BANK_TRANSFER",
     });
     // The GENERATION-AWARE identity (SCRUM-313): `deposits.release` pays out
     // whatever is FREE on the row, so two genuine payouts of one deposit are
     // byte-identical requests and only the server's `releaseCount` can tell a
     // retry from a second real payout. The intent names deposit, decision,
     // method and the generation observed when the operator decided.
-    expect(call.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:CASH:gen0:[0-9a-f-]{36}$/);
+    expect(call.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:BANK_TRANSFER:gen0:[0-9a-f-]{36}$/);
   });
 
   test("an unknown result keeps the SAME release identity for the retry; a confirmed payout that advanced the generation mints a NEW one", async () => {
@@ -615,6 +1146,7 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     renderCockpit();
 
     fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"));
     fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
     await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(1));
     // Retry the same decision after the lost response.
@@ -636,11 +1168,163 @@ describe("held deposit on a stopped deal — deposits.release", () => {
     cleanup();
     renderCockpit();
     fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"));
     fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
     await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(3));
     const third = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[2];
     expect(third.idempotencyKey).toMatch(/^release-deposit:dep_1:REFUNDED:CASH:gen3:/);
     expect(third.idempotencyKey).not.toBe(first.idempotencyKey);
+  });
+
+  test("SCRUM-469 F1: after a lost response a DIFFERENT method is not sent; the notice offers retry-as-recorded (same key) or dismiss (new key)", async () => {
+    permissions.add(PERMISSIONS.APPROVE_REQUESTS);
+    queryResults.set(COCKPIT_QUERY, cockpit(rejected));
+    queryResults.set(
+      GET_QUERY,
+      application({ status: "REJECTED", deposits: [{ _id: "dep_1", amount: 500, status: "HELD", releaseCount: 0 }] })
+    );
+    stubs.mutationFailures.set("deposits:release", "network lost");
+    renderCockpit();
+
+    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"), "CASH");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(1));
+    const firstKey = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[0]!.idempotencyKey;
+
+    // The operator changes their mind about the method and presses Refund.
+    pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    const notice = await screen.findByTestId("unconfirmed-payout-notice");
+    expect(mutationCalls.get("deposits:release")).toHaveLength(1);
+
+    // Retry exactly as recorded: same method, same key.
+    fireEvent.click(within(notice).getByRole("button", { name: "PayoutUnconfirmedRetry" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(2));
+    const second = (mutationCalls.get("deposits:release") as Array<Record<string, unknown>>)[1]!;
+    expect(second.idempotencyKey).toBe(firstKey);
+    expect(second.refundMethod).toBe("CASH");
+
+    // The retry confirmed: the identity is retired and the notice is gone.
+    await waitFor(() => expect(screen.queryByTestId("unconfirmed-payout-notice")).toBeNull());
+
+    // A fresh unconfirmed attempt, then DISMISS: the next payout is a new command.
+    stubs.mutationFailures.set("deposits:release", "network lost");
+    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"), "CASH");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(3));
+    const lostKey = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[2]!.idempotencyKey;
+    expect(lostKey).not.toBe(firstKey);
+    pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    const secondNotice = await screen.findByTestId("unconfirmed-payout-notice");
+    expect(mutationCalls.get("deposits:release")).toHaveLength(3);
+    fireEvent.click(within(secondNotice).getByRole("button", { name: "PayoutUnconfirmedDismiss" }));
+    await waitFor(() => expect(screen.queryByTestId("unconfirmed-payout-notice")).toBeNull());
+    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(4));
+    const fourth = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[3]!;
+    expect(fourth.idempotencyKey).not.toBe(lostKey);
+  });
+
+  test("SCRUM-530 F1: a refusal of a RETRY never retires a payout whose earlier outcome is unknown", async () => {
+    permissions.add(PERMISSIONS.APPROVE_REQUESTS);
+    queryResults.set(COCKPIT_QUERY, cockpit(rejected));
+    queryResults.set(
+      GET_QUERY,
+      application({ status: "REJECTED", deposits: [{ _id: "dep_1", amount: 500, status: "HELD", releaseCount: 0 }] })
+    );
+    stubs.mutationFailures.set("deposits:release", "network lost");
+    renderCockpit();
+    const releaseKey = (n: number) =>
+      (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[n]!.idempotencyKey;
+    const submitRefund = (method: string) => {
+      fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+      pickMethod(screen.getByRole("dialog"), method);
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    };
+
+    submitRefund("CASH");
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(1));
+    const firstKey = releaseKey(0);
+
+    pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    const notice = await screen.findByTestId("unconfirmed-payout-notice");
+
+    // The retry of the unknown attempt is refused by the server.
+    stubs.mutationFailures.set("deposits:release", "refused:Not permitted");
+    fireEvent.click(within(notice).getByRole("button", { name: "PayoutUnconfirmedRetry" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(2));
+    expect(releaseKey(1)).toBe(firstKey);
+
+    // The earlier attempt may have committed: a different method is still not sent, and a retry keeps the key.
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    submitRefund("BANK_TRANSFER");
+    const stillNotice = await screen.findByTestId("unconfirmed-payout-notice");
+    expect(mutationCalls.get("deposits:release")).toHaveLength(2);
+    fireEvent.click(within(stillNotice).getByRole("button", { name: "PayoutUnconfirmedRetry" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(3));
+    expect(releaseKey(2)).toBe(firstKey);
+  });
+
+  test("SCRUM-469 R4-01: dismissing a possibly committed payout retires its key even when the SAME method is resubmitted at a stale generation", async () => {
+    permissions.add(PERMISSIONS.APPROVE_REQUESTS);
+    queryResults.set(COCKPIT_QUERY, cockpit(rejected));
+    queryResults.set(
+      GET_QUERY,
+      application({ status: "REJECTED", deposits: [{ _id: "dep_1", amount: 500, status: "HELD", releaseCount: 0 }] })
+    );
+    stubs.mutationFailures.set("deposits:release", "network lost");
+    renderCockpit();
+    const releaseKey = (n: number) =>
+      (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[n]!.idempotencyKey;
+    const submitRefund = (method: string) => {
+      fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+      pickMethod(screen.getByRole("dialog"), method);
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    };
+
+    submitRefund("CASH");
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(1));
+    const firstKey = releaseKey(0);
+
+    pickMethod(screen.getByRole("dialog"), "BANK_TRANSFER");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    const notice = await screen.findByTestId("unconfirmed-payout-notice");
+    fireEvent.click(within(notice).getByRole("button", { name: "PayoutUnconfirmedDismiss" }));
+    await waitFor(() => expect(screen.queryByTestId("unconfirmed-payout-notice")).toBeNull());
+
+    // releaseCount is still 0 (stale): the intent string is the SAME as the dismissed one.
+    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"), "CASH");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(2));
+    const second = (mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>)[1]!;
+    expect(second.idempotencyKey).not.toBe(firstKey);
+  });
+
+  test("control: a same-method retry BEFORE dismissal reuses the first key at a stale generation", async () => {
+    permissions.add(PERMISSIONS.APPROVE_REQUESTS);
+    queryResults.set(COCKPIT_QUERY, cockpit(rejected));
+    queryResults.set(
+      GET_QUERY,
+      application({ status: "REJECTED", deposits: [{ _id: "dep_1", amount: 500, status: "HELD", releaseCount: 0 }] })
+    );
+    stubs.mutationFailures.set("deposits:release", "network lost");
+    renderCockpit();
+
+    fireEvent.click(within(screen.getByTestId("deal-deposit-dep_1")).getByRole("button", { name: "Refund" }));
+    pickMethod(screen.getByRole("dialog"), "CASH");
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRefund" }));
+    await waitFor(() => expect(mutationCalls.get("deposits:release")).toHaveLength(2));
+    const [first, second] = mutationCalls.get("deposits:release") as Array<{ idempotencyKey: string }>;
+    expect(second!.idempotencyKey).toBe(first!.idempotencyKey);
   });
 
   test("forfeiting carries no refund method", async () => {
@@ -743,6 +1427,274 @@ describe("documents — documents.updateDocumentStatus / upload, from the checkl
     expect(within(missing).getByText("Upload")).toBeTruthy();
   });
 
+  /**
+   * SCRUM-422 (Sonnet SCRUM422-R1): the server refuses every document write on
+   * a CLOSED or CANCELLED deal, so the checklist offers none — no Upload and no
+   * Verify that can only fail — while the stored file stays viewable.
+   */
+  test.each(["CLOSED", "CANCELLED"])("%s deal: the checklist is view-only", (status) => {
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VERIFY_FINANCE_DOCUMENTS);
+    queryResults.set(COCKPIT_QUERY, cockpit({ status }));
+    queryResults.set(GET_QUERY, application({ status }));
+    queryResults.set(DOCUMENTS_QUERY, [
+      { _id: "doc_1", ruleName: "National ID", status: "UPLOADED", fileUrl: "https://files/x.pdf" },
+      { _id: "doc_2", ruleName: "Salary slip", status: "MISSING", fileUrl: null },
+    ]);
+    renderCockpit();
+
+    const uploaded = screen.getByTestId("deal-document-doc_1");
+    expect(within(uploaded).queryByRole("button", { name: "Verify" })).toBeNull();
+    expect(within(uploaded).getByRole("button", { name: "ViewFile" })).toBeTruthy();
+    const missing = screen.getByTestId("deal-document-doc_2");
+    expect(within(missing).queryByText("Upload")).toBeNull();
+    expect(missing.querySelector('input[type="file"]')).toBeNull();
+  });
+
+  test("CONTROL — a REJECTED deal is not settled, so it keeps its document controls", () => {
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VERIFY_FINANCE_DOCUMENTS);
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "REJECTED" }));
+    queryResults.set(GET_QUERY, application({ status: "REJECTED" }));
+    queryResults.set(DOCUMENTS_QUERY, [
+      { _id: "doc_1", ruleName: "National ID", status: "UPLOADED", fileUrl: "https://files/x.pdf" },
+      { _id: "doc_2", ruleName: "Salary slip", status: "MISSING", fileUrl: null },
+    ]);
+    renderCockpit();
+
+    expect(within(screen.getByTestId("deal-document-doc_1")).getByRole("button", { name: "Verify" })).toBeTruthy();
+    expect(within(screen.getByTestId("deal-document-doc_2")).getByText("Upload")).toBeTruthy();
+  });
+
+  /**
+   * SCRUM-421 (W2 / S417-1): a required rule added after the application was
+   * created has no row. `getForApplication` lists it with `_id: null`; the
+   * upload first materializes the row through `ensureApplicationDocument`,
+   * then runs the ordinary upload on the id it returns.
+   */
+  describe("uploads — a row-less rule, a rejected file, an existing row", () => {
+    function pickFile(row: HTMLElement) {
+      const input = row.querySelector('input[type="file"]') as HTMLInputElement;
+      const file = new File(["%PDF"], "late.pdf", { type: "application/pdf" });
+      fireEvent.change(input, { target: { files: [file] } });
+    }
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({ json: async () => ({ storageId: "storage_1" }) }))
+      );
+      stubs.mutationReturns.set("documents:generateUploadUrl", "https://upload.test/post");
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      stubs.mutationReturns.clear();
+    });
+
+    test("a rule with no row: ensure the row, then upload onto the id it returns", async () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+      stubs.mutationReturns.set("documents:ensureApplicationDocument", "doc_new");
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: null, ruleId: "rule_late", ruleName: "Late salary slip", status: "MISSING", isRequired: true, fileUrl: null },
+      ]);
+      renderCockpit();
+
+      const row = screen.getByTestId("deal-document-rule-rule_late");
+      expect(within(row).getByText("Upload")).toBeTruthy();
+      pickFile(row);
+      await waitFor(() => expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1));
+      expect(mutationCalls.get("documents:ensureApplicationDocument")).toEqual([
+        { orgId: ORG, applicationId: APP, ruleId: "rule_late" },
+      ]);
+      expect(mutationCalls.get("documents:saveDocumentFile")![0]).toEqual({
+        orgId: ORG,
+        documentId: "doc_new",
+        fileId: "storage_1",
+      });
+      // The URL is asked for against the row it will land on, so a settled
+      // deal is refused before any file is stored (CodeRabbit, PR #360).
+      expect(mutationCalls.get("documents:generateUploadUrl")).toEqual([
+        { orgId: ORG, documentId: "doc_new", mimeType: "application/pdf", sizeInBytes: 4 },
+      ]);
+    });
+
+    test("a REJECTED document offers a replacement upload, onto its own row", async () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: "REJECTED", isRequired: true, fileUrl: "https://files/x.pdf" },
+      ]);
+      renderCockpit();
+
+      const row = screen.getByTestId("deal-document-doc_1");
+      // The rejected file stays viewable beside the control that replaces it.
+      expect(within(row).getByRole("button", { name: "ViewFile" })).toBeTruthy();
+      expect(within(row).getByText("ReplaceFile")).toBeTruthy();
+      pickFile(row);
+      await waitFor(() => expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1));
+      expect(mutationCalls.get("documents:ensureApplicationDocument")).toBeUndefined();
+      expect(mutationCalls.get("documents:saveDocumentFile")![0]).toEqual({
+        orgId: ORG,
+        documentId: "doc_1",
+        fileId: "storage_1",
+      });
+      expect(mutationCalls.get("documents:generateUploadUrl")).toEqual([
+        { orgId: ORG, documentId: "doc_1", mimeType: "application/pdf", sizeInBytes: 4 },
+      ]);
+    });
+
+    test("an UPLOADED document offers no replacement — it waits for verification", () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: "UPLOADED", isRequired: true, fileUrl: "https://files/x.pdf" },
+      ]);
+      renderCockpit();
+      const row = screen.getByTestId("deal-document-doc_1");
+      expect(within(row).queryByText("ReplaceFile")).toBeNull();
+      expect(within(row).queryByText("Upload")).toBeNull();
+    });
+
+    /**
+     * Round 2 (Codex S417-R2-5): the controls follow the STATUS, not whether an
+     * older file is attached. `updateDocumentStatus(MISSING)` keeps the file, so
+     * a MISSING row can carry one; the step counts MISSING as uploadable, so
+     * the panel must offer the upload there too — as a replacement, beside a
+     * View of the old file. Swept over status × file × role.
+     */
+    describe("status × file × role: every MISSING or REJECTED row can be uploaded by whoever may upload", () => {
+      const ROLES = {
+        "create only": [PERMISSIONS.CREATE_FINANCE_APPLICATION],
+        "verify only": [PERMISSIONS.VERIFY_FINANCE_DOCUMENTS],
+      } as const;
+      const cases = (["MISSING", "REJECTED", "UPLOADED"] as const).flatMap((status) =>
+        ([true, false] as const).flatMap((hasFile) =>
+          (Object.keys(ROLES) as Array<keyof typeof ROLES>).map((role) => [status, hasFile, role] as const)
+        )
+      );
+
+      test.each(cases)("%s · file attached: %s · %s", (status, hasFile, role) => {
+        permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+        for (const permission of ROLES[role]) permissions.add(permission);
+        queryResults.set(COCKPIT_QUERY, cockpit());
+        queryResults.set(GET_QUERY, application());
+        queryResults.set(DOCUMENTS_QUERY, [
+          {
+            _id: "doc_1",
+            ruleId: "r1",
+            ruleName: "National ID",
+            status,
+            isRequired: true,
+            fileUrl: hasFile ? "https://files/old.pdf" : null,
+          },
+        ]);
+        renderCockpit();
+        const row = screen.getByTestId("deal-document-doc_1");
+
+        const needsFile = status === "MISSING" || status === "REJECTED";
+        let uploadLabel: string | null = null;
+        if (!hasFile) uploadLabel = "Upload";
+        else if (needsFile) uploadLabel = "ReplaceFile";
+        for (const label of ["Upload", "ReplaceFile"]) {
+          if (label === uploadLabel) expect(within(row).getByText(label)).toBeTruthy();
+          else expect(within(row).queryByText(label)).toBeNull();
+        }
+        // The old file stays viewable until a replacement lands.
+        expect(within(row).queryByRole("button", { name: "ViewFile" }) !== null).toBe(hasFile);
+        // Verifying is the verifier's, and needs a file.
+        expect(within(row).queryByRole("button", { name: "Verify" }) !== null).toBe(hasFile && role === "verify only");
+      });
+
+      test("replacing a MISSING row's old file saves onto that row", async () => {
+        permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+        permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+        queryResults.set(COCKPIT_QUERY, cockpit());
+        queryResults.set(GET_QUERY, application());
+        queryResults.set(DOCUMENTS_QUERY, [
+          { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: "MISSING", isRequired: true, fileUrl: "https://files/old.pdf" },
+        ]);
+        renderCockpit();
+        pickFile(screen.getByTestId("deal-document-doc_1"));
+        await waitFor(() => expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1));
+        expect(mutationCalls.get("documents:saveDocumentFile")![0]).toEqual({
+          orgId: ORG,
+          documentId: "doc_1",
+          fileId: "storage_1",
+        });
+      });
+    });
+
+    /**
+     * Round 2 (Sol S421-R2-2): a late rule's row appears MID-upload — the
+     * reactive query re-serves the line under its new document id while the
+     * file is still transferring. Busy must follow the RULE across that, and a
+     * second pick must not start a second save for the same rule.
+     */
+    test("a late rule stays busy while its row materializes: a second pick cannot start a second upload", async () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+      let releaseTransfer: () => void = () => {};
+      const transfer = new Promise<void>((resolve) => {
+        releaseTransfer = resolve;
+      });
+      const fetchMock = vi.fn(async () => {
+        await transfer;
+        return { json: async () => ({ storageId: "storage_1" }) };
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      stubs.mutationReturns.set("documents:ensureApplicationDocument", "doc_new");
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      const lateRow = { ruleId: "rule_late", ruleName: "Late salary slip", status: "MISSING", isRequired: true, fileUrl: null };
+      queryResults.set(DOCUMENTS_QUERY, [{ _id: null, ...lateRow }]);
+      const view = renderCockpit();
+
+      pickFile(screen.getByTestId("deal-document-rule-rule_late"));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+      // The ensure committed; the query now serves the same rule under its row id.
+      queryResults.set(DOCUMENTS_QUERY, [{ _id: "doc_new", ...lateRow }]);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      const materialized = screen.getByTestId("deal-document-doc_new");
+      expect((materialized.querySelector('input[type="file"]') as HTMLInputElement).disabled).toBe(true);
+      pickFile(materialized);
+
+      releaseTransfer();
+      await waitFor(() => expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1);
+      expect(mutationCalls.get("documents:generateUploadUrl")).toHaveLength(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      // Settled: the rule is free again for a genuine next upload.
+      await waitFor(() =>
+        expect((screen.getByTestId("deal-document-doc_new").querySelector('input[type="file"]') as HTMLInputElement).disabled).toBe(false)
+      );
+    });
+
+    test("an existing MISSING row uploads directly, with no ensure call", async () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: "doc_2", ruleId: "r2", ruleName: "Salary slip", status: "MISSING", isRequired: true, fileUrl: null },
+      ]);
+      renderCockpit();
+      pickFile(screen.getByTestId("deal-document-doc_2"));
+      await waitFor(() => expect(mutationCalls.get("documents:saveDocumentFile")).toHaveLength(1));
+      expect(mutationCalls.get("documents:ensureApplicationDocument")).toBeUndefined();
+      expect(mutationCalls.get("documents:saveDocumentFile")![0]).toMatchObject({ documentId: "doc_2" });
+    });
+  });
+
   test("a caller who may not read the document rows sees the read-only checklist and no controls", () => {
     queryResults.set(
       COCKPIT_QUERY,
@@ -757,6 +1709,77 @@ describe("documents — documents.updateDocumentStatus / upload, from the checkl
     expect(panel.textContent).toContain("National ID");
     expect(within(panel).queryByRole("button")).toBeNull();
     expect(screen.queryByText("Upload")).toBeNull();
+    expect(screen.queryByTestId("deal-documents-history")).toBeNull();
+  });
+
+  /**
+   * Round 3 (Codex S417-R3-1): a file uploaded for a requirement removed later
+   * leaves the active checklist but stays viewable, from
+   * `documents.getHistoryForApplication`, in a "No longer required" section —
+   * View only, whatever the caller's document authority.
+   */
+  describe("no longer required — a removed requirement's file is View only, for every role", () => {
+    const HISTORY_QUERY = "documents:getHistoryForApplication";
+    const ROLES = {
+      "read only": [],
+      "create only": [PERMISSIONS.CREATE_FINANCE_APPLICATION],
+      "verify only": [PERMISSIONS.VERIFY_FINANCE_DOCUMENTS],
+      "create and verify": [PERMISSIONS.CREATE_FINANCE_APPLICATION, PERMISSIONS.VERIFY_FINANCE_DOCUMENTS],
+    } as const;
+
+    test.each(Object.keys(ROLES) as Array<keyof typeof ROLES>)("%s", (role) => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      for (const permission of ROLES[role]) permissions.add(permission);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: "MISSING", isRequired: true, fileUrl: null },
+      ]);
+      queryResults.set(HISTORY_QUERY, [
+        { _id: "doc_old", ruleId: "r_gone", status: "UPLOADED", ruleName: null, uploadedAt: Date.UTC(2026, 7, 2), fileUrl: "https://files/old-letter.pdf" },
+        { _id: "doc_rejected", ruleId: "r_other", status: "REJECTED", ruleName: "Company letter", uploadedAt: null, fileUrl: "https://files/letter.png" },
+      ]);
+      renderCockpit();
+
+      const section = screen.getByTestId("deal-documents-history");
+      for (const id of ["doc_old", "doc_rejected"]) {
+        const row = within(section).getByTestId(`deal-document-history-${id}`);
+        const buttons = within(row).getAllByRole("button");
+        expect(buttons.map((button) => button.textContent)).toEqual(["ViewFile"]);
+        expect(row.querySelector('input[type="file"]')).toBeNull();
+      }
+      // A deleted rule is labelled, never blank; a surviving name is kept.
+      expect(within(section).getByTestId("deal-document-history-doc_old").textContent).toContain("RemovedRequirement");
+      expect(within(section).getByTestId("deal-document-history-doc_rejected").textContent).toContain("Company letter");
+      // History rows are not checklist rows: no active-row test id for them.
+      expect(screen.queryByTestId("deal-document-doc_old")).toBeNull();
+    });
+
+    test("View opens the kept file", () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, []);
+      queryResults.set(HISTORY_QUERY, [
+        { _id: "doc_old", ruleId: "r_gone", status: "VERIFIED", ruleName: "Old bank letter", uploadedAt: null, fileUrl: "https://files/old-letter.pdf" },
+      ]);
+      renderCockpit();
+      fireEvent.click(within(screen.getByTestId("deal-document-history-doc_old")).getByRole("button", { name: "ViewFile" }));
+      const frame = document.querySelector('iframe[src="https://files/old-letter.pdf"]');
+      expect(frame).not.toBeNull();
+    });
+
+    test("CONTROL — no history rows, no section", () => {
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      queryResults.set(COCKPIT_QUERY, cockpit());
+      queryResults.set(GET_QUERY, application());
+      queryResults.set(DOCUMENTS_QUERY, [
+        { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: "MISSING", isRequired: true, fileUrl: null },
+      ]);
+      queryResults.set(HISTORY_QUERY, []);
+      renderCockpit();
+      expect(screen.queryByTestId("deal-documents-history")).toBeNull();
+    });
   });
 });
 
@@ -766,9 +1789,20 @@ describe("the close is withheld where the server would refuse the drifted pin �
     { key: "SETTLEMENT", state: "BLOCKED", blocker: "AwaitingSettlement", authority: "DEALER" },
   ];
   function closeable() {
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
     permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
+    // S414-R3-1: the close is offered only on a loaded READY verdict, which a
+    // caller reads with view:finance_applications (every default closer has it).
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    queryResults.set("applications:getClosingReadiness", {
+      state: "READY",
+      open: true,
+      checks: [],
+      unavailableReason: null,
+      moneyWithheld: false,
+    });
     queryResults.set(
       COCKPIT_QUERY,
       cockpit({ status: "APPROVED", expectedPaymentRegistered: true, stages: settlementStages })
@@ -782,6 +1816,47 @@ describe("the close is withheld where the server would refuse the drifted pin �
     expect(within(focusRow()).getByRole("button", { name: "FinalizeDealAction" })).toBeTruthy();
   });
 
+  // SCRUM-417 UX4 round 2 (Sol R2-1 / Opus L4): `finalizeDeal` refuses FIRST on a
+  // waiting deposit request (applications.ts), so the close is not offered and
+  // the checklist's current item is that request, not "Close the deal".
+  const withPendingRequest = (pending: unknown[] | undefined) => {
+    closeable();
+    queryResults.set(GET_QUERY, application({ status: "APPROVED", economicsCurrency: "JOD" }));
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "APPROVED",
+        expectedPaymentRegistered: true,
+        stages: settlementStages,
+        ...(pending === undefined ? {} : { pendingDepositRequests: pending }),
+      })
+    );
+  };
+  const request = { _id: "req_1", amount: 1500, currency: "JOD", requestedBy: "user_1", requestedAt: 1 };
+  const item = (id: string) => within(screen.getByTestId("deal-step-checklist")).getByTestId(`deal-step-item-${id}`);
+
+  test("a waiting deposit request withholds the close, names why, and is the checklist's current item", () => {
+    withPendingRequest([request]);
+    renderCockpit();
+    expect(within(focusRow()).queryByRole("button", { name: "FinalizeDealAction" })).toBeNull();
+    expect(within(focusRow()).getByText("FinalizeNeedsPendingDepositRequestResolved")).toBeTruthy();
+    expect(item("deposit-request-resolved").getAttribute("data-status")).toBe("current");
+    expect(item("close-deal").getAttribute("data-status")).toBe("pending");
+  });
+
+  test("CONTROL -- no waiting request (empty list): the close is current and offered", () => {
+    withPendingRequest([]);
+    renderCockpit();
+    expect(within(focusRow()).getByRole("button", { name: "FinalizeDealAction" })).toBeTruthy();
+    expect(item("close-deal").getAttribute("data-status")).toBe("current");
+    expect(within(screen.getByTestId("deal-step-checklist")).queryByTestId("deal-step-item-deposit-request-resolved")).toBeNull();
+  });
+
+  test("CONTROL -- the payload does not carry the field: nothing is asserted either way", () => {
+    withPendingRequest(undefined);
+    renderCockpit();
+    expect(within(focusRow()).getByRole("button", { name: "FinalizeDealAction" })).toBeTruthy();
+  });
   test("a deal with a named finance company pinned to another currency: the close is withheld and the reason names the boundary", () => {
     closeable();
     queryResults.set(GET_QUERY, application({ status: "APPROVED", economicsCurrency: "USD" }));
@@ -821,7 +1896,8 @@ describe("the close is withheld where the server would refuse the drifted pin �
 
 describe("the route control sits on the step that is waiting for it", () => {
   test("while the application facts are still loading, the step keeps its blocker and names no refusal it cannot yet back with a control", () => {
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
     permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
     queryResults.set(
@@ -844,7 +1920,8 @@ describe("the route control sits on the step that is waiting for it", () => {
   });
 
   test("when the close is refused for want of the route, the control renders inside the focus row and not beside the vehicle", () => {
-    permissions.add(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+    permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     permissions.add(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
     permissions.add(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
     queryResults.set(
@@ -992,7 +2069,30 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
             }
           : null,
       summaryUnavailable,
-      custody: [],
+      // Handover costs are paid out of custody cash (owner ruling 2026-09-28,
+      // SCRUM-439), so a deal whose costs are being recorded has an employee
+      // holding some: without an open record the add door is shut.
+      custody: [
+        {
+          _id: "cust_1",
+          userId: "user_holder",
+          userName: "Holder",
+          currency,
+          status: "OPEN",
+          issuedMinor: 500_000,
+          returnedMinor: 0,
+          reimbursedMinor: 0,
+          summary: {
+            actualExpensesMinor: 0,
+            employeeOwesDealerMinor: 500_000,
+            reimbursementOutstandingMinor: 0,
+            reimbursementOverpaidMinor: 0,
+            overReturnedMinor: 0,
+            settled: false,
+          },
+          summaryUnavailable: null,
+        },
+      ],
     };
   }
   const transferLine = {
@@ -1011,7 +2111,7 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     queryResults.set(GET_QUERY, application({ status: "APPROVED" }));
   }
 
-  test("ADD sends the handover line as dealer-borne with an explicit treatment and a RETAINED identity that survives an unknown result", async () => {
+  test("ADD sends the handover line as the employee's (paid from custody) with an explicit treatment and a RETAINED identity that survives an unknown result", async () => {
     readableDeal();
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
     queryResults.set(COSTS_QUERY, costsPayload());
@@ -1051,11 +2151,15 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
       expectedCurrency: "JOD",
       estimatedAmountMinor: undefined,
       actualAmountMinor: 150_000,
-      paidBy: "DEALER",
+      // Always paid out of custody cash (owner ruling 2026-09-28,
+      // SCRUM-439). This caller has no custody authority, so the line is
+      // sent unlinked and waits under "Charge a cost".
+      paidBy: "EMPLOYEE",
       paidTo: "GOVERNMENT",
       accountingTreatment: "SELLING_EXPENSE",
       source: "MANUAL",
     });
+    expect(first).not.toHaveProperty("custodyId");
     expect(first.idempotencyKey).toMatch(/^record-deal-fee:app_2048:[0-9a-f-]{36}:[0-9a-f-]{36}$/);
     expect(second.idempotencyKey).toBe(first.idempotencyKey);
     // The retry is the SAME request: same currency, same integer, same everything.
@@ -1713,5 +2817,1085 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     expect(screen.getByTestId("deal-handover-cost-add").textContent).toContain("AdditionalCostNote");
     expect(screen.queryByLabelText("CostFigureLabel")).toBeNull();
     expect(screen.getByLabelText("CostPaidOnLabel")).toBeTruthy();
+  });
+
+  // Opus L3: an UNKNOWN add attempt whose form was cancelled is still an
+  // unresolved money command. The panel keeps its active-task marker, so a
+  // live-stage change cannot fold it away, until the attempt is acknowledged.
+  test("an UNKNOWN attempt still marks the panel as an active task after its form is cancelled, until acknowledged", async () => {
+    readableDeal();
+    permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+    queryResults.set(COSTS_QUERY, costsPayload());
+    renderCockpit();
+    await frozenUnknownAdd();
+    expect(screen.getByTestId("deal-handover-costs").hasAttribute("data-active-task")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByTestId("deal-handover-cost-add")).toBeNull();
+    expect(screen.getByTestId("deal-handover-costs-uncertain")).toBeTruthy();
+    expect(screen.getByTestId("deal-handover-costs").hasAttribute("data-active-task")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "HandoverCostAcknowledgeChecked" }));
+    expect(screen.queryByTestId("deal-handover-costs-uncertain")).toBeNull();
+    expect(screen.getByTestId("deal-handover-costs").hasAttribute("data-active-task")).toBe(false);
+  });
+});
+
+// Opus L4: `workbenchPending` is computed by the container, from the queries it
+// actually runs. A caller who may not run the economics query never gets an
+// answer to it, so it must not count as "still loading" for them: their step
+// has no panel here and the record must be open, not an empty workbench over a
+// closed record.
+describe("workbenchPending — a caller who cannot run the economics query", () => {
+  const settlementDeal = {
+    stages: [
+      { key: "APPLICATION", state: "COMPLETE", authority: "DEALER" },
+      { key: "SETTLEMENT", state: "CURRENT", authority: "DEALER" },
+    ],
+  };
+  const isOpen = () => screen.getByTestId("deal-details-toggle").getAttribute("aria-expanded");
+
+  test("without VIEW_FINANCE_APPLICATIONS the never-answered economics query does not hold the record closed", () => {
+    queryResults.set(COCKPIT_QUERY, cockpit(settlementDeal));
+    queryResults.set(GET_QUERY, application());
+    // Deliberately not `renderCockpit`: it opens a collapsed record, which
+    // would hide exactly what is under test.
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+    expect(isOpen()).toBe("true");
+  });
+
+  test("control: WITH VIEW_FINANCE_APPLICATIONS the same unanswered query is still loading, and the record stays closed", () => {
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    queryResults.set(COCKPIT_QUERY, cockpit(settlementDeal));
+    queryResults.set(GET_QUERY, application());
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+    expect(isOpen()).toBe("false");
+  });
+});
+
+describe("cheque returned by the bank - applications.returnFinanceDisbursementCheque, from the header (SCRUM-239)", () => {
+  const RETURN_MUTATION = "applications:returnFinanceDisbursementCheque";
+  const ACTION = "deal-cheque-returned-by-bank";
+  const disbursedStages = [
+    { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+    { key: "DISBURSEMENT", state: "COMPLETE", authority: "MIRROR" },
+    { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+  ];
+  const forwardState = (overrides: Record<string, unknown> = {}) => ({
+    planV2: true,
+    applies: true,
+    state: "SETTLED",
+    returnedExceptionOpen: false,
+    onBooksForwardId: null,
+    transferConfirmed: true,
+    mayRecord: false,
+    mayCancelFinalized: true,
+    ...overrides,
+  });
+  const setDeal = (over: Record<string, unknown> = {}) => {
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: disbursedStages,
+        forward: forwardState(),
+        disbursementReturn: { mayReturn: true, chequeId: "chq_fc1", lastReturnedChequeId: null },
+        ...over,
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursedAt: Date.UTC(2026, 8, 1) }));
+  };
+
+  test("the server's gate is open: the action is offered, and the dialog says what will be reversed", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    setDeal();
+    renderCockpit();
+    fireEvent.click(screen.getByTestId(ACTION));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByText("ChequeReturnedByBankDesc")).toBeTruthy();
+  });
+
+  test("the server withholds the gate (CONFIRM without VIEW_FINANCE, or no cleared cheque): no action", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    setDeal({ disbursementReturn: { mayReturn: false, chequeId: "chq_fc1", lastReturnedChequeId: null } });
+    const view = renderCockpit();
+    expect(screen.queryByTestId(ACTION)).toBeNull();
+    view.unmount();
+    setDeal({ disbursementReturn: { mayReturn: false, chequeId: null, lastReturnedChequeId: null } });
+    renderCockpit();
+    expect(screen.queryByTestId(ACTION)).toBeNull();
+  });
+
+  test("hidden before the transfer is confirmed, without a cheque id, or when the payload lacks the flag", () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    setDeal({ forward: forwardState({ transferConfirmed: false }) });
+    let view = renderCockpit();
+    expect(screen.queryByTestId(ACTION)).toBeNull();
+    view.unmount();
+    setDeal({ disbursementReturn: { mayReturn: true, chequeId: null, lastReturnedChequeId: null } });
+    view = renderCockpit();
+    expect(screen.queryByTestId(ACTION)).toBeNull();
+    view.unmount();
+    setDeal({ disbursementReturn: undefined });
+    renderCockpit();
+    expect(screen.queryByTestId(ACTION)).toBeNull();
+  });
+
+  test("a reason is required; submitting calls the command with the cheque, the reason and ONE key per open", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    setDeal();
+    stubs.mutationFailures.set(RETURN_MUTATION, "connection lost");
+    renderCockpit();
+    fireEvent.click(screen.getByTestId(ACTION));
+    const submit = () => screen.getByRole("button", { name: "ChequeReturnedByBankConfirm" }) as HTMLButtonElement;
+    expect(submit().disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("ChequeReturnedByBankReasonLabel"), { target: { value: "  Insufficient funds  " } });
+    expect(submit().disabled).toBe(false);
+
+    fireEvent.click(submit());
+    await waitFor(() => expect(mutationCalls.get(RETURN_MUTATION)).toHaveLength(1));
+    // A lost response: the operator retries from the same open dialog.
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    await waitFor(() => expect(submit().disabled).toBe(false));
+    fireEvent.click(submit());
+    await waitFor(() => expect(mutationCalls.get(RETURN_MUTATION)).toHaveLength(2));
+
+    const [first, second] = mutationCalls.get(RETURN_MUTATION) as Array<Record<string, unknown>>;
+    expect(first).toMatchObject({
+      orgId: ORG,
+      applicationId: APP,
+      chequeId: "chq_fc1",
+      returnReason: "Insufficient funds",
+    });
+    expect(typeof first.idempotencyKey).toBe("string");
+    expect(second.idempotencyKey).toBe(first.idempotencyKey);
+  });
+
+  test("F3: a confirm whose response was lost keeps its key, but a successful return resets it - the next confirm is a new command", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    const confirmStages = [
+      { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+      { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
+      { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+      { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
+    ];
+    const awaitingConfirm = () => {
+      queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: confirmStages }));
+      queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    };
+    const confirmCalls = () => (mutationCalls.get("applications:confirmDisbursement") ?? []) as Array<Record<string, unknown>>;
+
+    awaitingConfirm();
+    const view = renderCockpit();
+    // v1: the operator confirms; the response is lost, so the key is kept for a retry.
+    stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+    await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    // The operator cancels the dialog; the key stays on the page.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // The deal shows the disbursement (it DID commit) and the bank returns the cheque.
+    setDeal();
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+    openDealDetails();
+    fireEvent.click(screen.getByTestId(ACTION));
+    fireEvent.change(screen.getByLabelText("ChequeReturnedByBankReasonLabel"), { target: { value: "Insufficient funds" } });
+    fireEvent.click(screen.getByRole("button", { name: "ChequeReturnedByBankConfirm" }));
+    await waitFor(() => expect(mutationCalls.get(RETURN_MUTATION)).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // The return reopened the deal for disbursement version 2: confirming again is a NEW command.
+    awaitingConfirm();
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+    openDealDetails();
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+    await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+    const [v1, v2] = confirmCalls();
+    expect(String(v2.idempotencyKey)).toMatch(/^confirm-disbursement:/);
+    expect(v2.idempotencyKey).not.toBe(v1.idempotencyKey);
+  });
+
+  test("SCRUM-239 round 2: the confirm key rotates when the observed disbursementVersion changes (another operator returned the cheque), and is kept while it does not", async () => {
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    const confirmStages = [
+      { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+      { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
+      { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+      { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
+    ];
+    const show = (disbursementVersion?: number) => {
+      queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: confirmStages }));
+      queryResults.set(GET_QUERY, application({ status: "CLOSED", ...(disbursementVersion ? { disbursementVersion } : {}) }));
+    };
+    const confirmCalls = () => (mutationCalls.get("applications:confirmDisbursement") ?? []) as Array<Record<string, unknown>>;
+    const confirmOnce = async (expected: number) => {
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+      await waitFor(() => expect(confirmCalls()).toHaveLength(expected));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      vi.mocked(toast.error).mockClear();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    };
+
+    show();
+    const view = renderCockpit();
+    await confirmOnce(1);
+    // Same observed version (absent = 1): a lost-response retry is the SAME command.
+    await confirmOnce(2);
+    // Another operator returned the cheque: the screen now observes version 2.
+    show(2);
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+    await confirmOnce(3);
+    const [first, retry, afterReturn] = confirmCalls();
+    expect(retry.idempotencyKey).toBe(first.idempotencyKey);
+    expect(afterReturn.idempotencyKey).not.toBe(first.idempotencyKey);
+    // Still version 2: the new key is kept for ITS retry.
+    await confirmOnce(4);
+    expect(confirmCalls()[3].idempotencyKey).toBe(afterReturn.idempotencyKey);
+  });
+  test("SCRUM-239: a coded stale-confirm refusal is shown in the operator's language, not as English passthrough", async () => {
+    const { salesAr } = await import("../../../lib/i18n/domains/sales");
+    stubs.t = (key: string) => (key.startsWith("ServerError_") ? (salesAr as Record<string, string>)[key] ?? key : key);
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+    queryResults.set(
+      COCKPIT_QUERY,
+      cockpit({
+        status: "CLOSED",
+        stages: [
+          { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+          { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
+          { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+          { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
+        ],
+      })
+    );
+    queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+    renderCockpit();
+    stubs.mutationFailures.set(
+      "applications:confirmDisbursement",
+      "coded:FINANCE_CONFIRM_STALE_REQUEST|This confirmation was prepared before the deal's cheque was returned, so it cannot be applied. Nothing has been changed. Reopen the deal and confirm again."
+    );
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    const shown = String(vi.mocked(toast.error).mock.calls.at(-1)?.[0]);
+    expect(shown).toBe((salesAr as Record<string, string>).ServerError_FINANCE_CONFIRM_STALE_REQUEST);
+    expect(shown).not.toContain('{"code"');
+  });
+
+  describe("SCRUM-239 round 3: the confirm is bound to the version the confirmer observed", () => {
+    const stages = [
+      { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+      { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
+      { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+      { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
+    ];
+    const show = (disbursementVersion?: number) => {
+      queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages }));
+      queryResults.set(GET_QUERY, application({ status: "CLOSED", ...(disbursementVersion ? { disbursementVersion } : {}) }));
+    };
+    const confirmCalls = () => (mutationCalls.get("applications:confirmDisbursement") ?? []) as Array<Record<string, unknown>>;
+    const clickConfirm = () => {
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+    };
+    // The toast mock is module-wide and never reset: a notice asserted ABSENT must not be one an earlier test raised.
+    beforeEach(() => {
+      vi.mocked(toast.error).mockClear();
+    });
+
+    test("DEP-2 deploy skew: at version 1 the key expectedDisbursementVersion is ABSENT from the call (an older backend rejects undeclared args)", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      renderCockpit();
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      expect(Object.keys(confirmCalls()[0])).not.toContain("expectedDisbursementVersion");
+    });
+
+    test("DEP-2: an explicit version 1 is also omitted; only a version above 1 is sent", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show(1);
+      renderCockpit();
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      expect(Object.keys(confirmCalls()[0])).not.toContain("expectedDisbursementVersion");
+    });
+
+    test("a version-2 screen sends expectedDisbursementVersion: 2", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show(2);
+      renderCockpit();
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      expect(confirmCalls()[0].expectedDisbursementVersion).toBe(2);
+    });
+
+    test("a coded stale-request refusal retires the key: the next click sends a DIFFERENT key", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      renderCockpit();
+      stubs.mutationFailures.set(
+        "applications:confirmDisbursement",
+        "coded:FINANCE_CONFIRM_STALE_REQUEST|This confirmation was prepared before the deal's cheque was returned, so it cannot be applied. Nothing has been changed. Reopen the deal and confirm again."
+      );
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      stubs.mutationFailures.delete("applications:confirmDisbursement");
+      // Round 4: the refusal closes the dialog; confirming again means reopening it,
+      // and that confirm is a new command.
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      const [first, second] = confirmCalls();
+      expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
+    });
+
+    test("round 4: a coded stale-request refusal CLOSES the confirm dialog", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      renderCockpit();
+      stubs.mutationFailures.set(
+        "applications:confirmDisbursement",
+        "coded:FINANCE_CONFIRM_STALE_REQUEST|This confirmation was prepared before the deal's cheque was returned, so it cannot be applied. Nothing has been changed. Reopen the deal and confirm again."
+      );
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
+    test("round 4: a lost response (not a stale refusal) keeps the dialog open", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      renderCockpit();
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+    });
+
+    test("round 4: a dialog opened at v1 never confirms v2 - when the version moves under it the dialog closes, the key is dropped and a localized notice shows", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      // Open at v1 and leave it open; a lost response first, so a confirm key is KEPT.
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      vi.mocked(toast.error).mockClear();
+      stubs.mutationFailures.delete("applications:confirmDisbursement");
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      // A colleague returns the cheque: the screen now observes version 2.
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      // A confirm WAS sent at v1 and its answer was lost, so "nothing was confirmed" would be untrue (round 5).
+      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedOutcomeUnknown");
+      // Nothing was confirmed at v2 by the stale dialog.
+      expect(confirmCalls()).toHaveLength(1);
+      expect(Object.keys(confirmCalls()[0])).not.toContain("expectedDisbursementVersion");
+      // Reopening observes v2, sends v2, and does NOT reuse the v1 key.
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      expect(confirmCalls()[1].expectedDisbursementVersion).toBe(2);
+      expect(confirmCalls()[1].idempotencyKey).not.toBe(confirmCalls()[0].idempotencyKey);
+    });
+
+    test("round 5 (control): a version move with NOTHING sent shows the plain 'nothing was confirmed' notice", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedWhileConfirming");
+      expect(toast.error).not.toHaveBeenCalledWith("DisbursementChangedOutcomeUnknown");
+      expect(confirmCalls()).toHaveLength(0);
+    });
+
+    test("round 5 F1: a confirm sent at v1 whose outcome is UNKNOWN (transport error), then the version moves - the notice must not claim nothing was confirmed", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      // The mutation may have committed; only the response was lost.
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      vi.mocked(toast.error).mockClear();
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      // A colleague returns the cheque.
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedOutcomeUnknown");
+      expect(toast.error).not.toHaveBeenCalledWith("DisbursementChangedWhileConfirming");
+    });
+
+    test("round 5 F1: a KNOWN refusal (the server answered, nothing committed) clears the unknown-outcome state, so a later version move says nothing was confirmed", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      stubs.mutationFailures.set("applications:confirmDisbursement", "refused:Amount does not match");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      vi.mocked(toast.error).mockClear();
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedWhileConfirming");
+      expect(toast.error).not.toHaveBeenCalledWith("DisbursementChangedOutcomeUnknown");
+    });
+
+    test("round 5 F2: a late stale-refusal for an OLD attempt does not close a dialog reopened at a newer version", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      let settleOld!: () => void;
+      stubs.mutationHolds.set(
+        "applications:confirmDisbursement",
+        new Promise<void>((resolve) => {
+          settleOld = resolve;
+        })
+      );
+      stubs.mutationFailures.set(
+        "applications:confirmDisbursement",
+        "coded:FINANCE_CONFIRM_STALE_REQUEST|This confirmation was prepared before the deal's cheque was returned, so it cannot be applied. Nothing has been changed. Reopen the deal and confirm again."
+      );
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      // The version moves: the v1 dialog closes; the operator reopens at v2.
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      vi.mocked(toast.error).mockClear();
+      // The OLD attempt's answer arrives now.
+      settleOld();
+      // Round 6 (L-B): a superseded attempt's STALE refusal is about a dialog that is gone; it shows nothing.
+      // Wait on a positive completion signal: the old attempt's `finally` resets the
+      // submitting state, which re-enables the reopened dialog's confirm button.
+      await waitFor(() => expect((screen.getByRole("button", { name: "ConfirmReceipt" }) as HTMLButtonElement).disabled).toBe(false));
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+    });
+
+    const STALE = "coded:FINANCE_CONFIRM_STALE_REQUEST|This confirmation was prepared before the deal's cheque was returned, so it cannot be applied. Nothing has been changed. Reopen the deal and confirm again.";
+
+    test("round 6 R6-1: a lost send, then a server REFUSAL of the same key's retry, does not clear the unknown mark - a later version move still says the outcome is unknown", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      // The retry is refused by the server - which says nothing about the FIRST send.
+      stubs.mutationFailures.set("applications:confirmDisbursement", "coded:FORBIDDEN|You cannot do this");
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      expect(confirmCalls()[1].idempotencyKey).toBe(confirmCalls()[0].idempotencyKey);
+      await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2));
+      vi.mocked(toast.error).mockClear();
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedOutcomeUnknown");
+      expect(toast.error).not.toHaveBeenCalledWith("DisbursementChangedWhileConfirming");
+    });
+
+    test("round 6: a retry of a lost send refused as STALE closes the dialog and shows the outcome-unknown notice, not the stale text", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      renderCockpit();
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      vi.mocked(toast.error).mockClear();
+      stubs.mutationFailures.set("applications:confirmDisbursement", STALE);
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(vi.mocked(toast.error).mock.calls).toEqual([["DisbursementChangedOutcomeUnknown"]]);
+    });
+
+    test("round 6 control: a first-and-only ConvexError refusal, then a version move, still says nothing was confirmed", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      stubs.mutationFailures.set("applications:confirmDisbursement", "coded:FORBIDDEN|You cannot do this");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      vi.mocked(toast.error).mockClear();
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedWhileConfirming");
+      expect(toast.error).not.toHaveBeenCalledWith("DisbursementChangedOutcomeUnknown");
+    });
+
+    test("round 6 control: a successful replay of the kept key clears the unknown mark", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      stubs.mutationFailures.delete("applications:confirmDisbursement");
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      vi.mocked(toast.error).mockClear();
+      // Reopen and move the version with nothing sent: the old send was answered, so the plain notice applies.
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedWhileConfirming");
+    });
+
+    test("round 6 Q4: the app query dropping out and returning at v2 closes the dialog opened at v1 with the moved-version notice", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      queryResults.delete(GET_QUERY);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      expect(toast.error).not.toHaveBeenCalled();
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(toast.error).toHaveBeenCalledWith("DisbursementChangedWhileConfirming");
+    });
+
+    test("round 5 F3: the app query going undefined at v2 does not make the effect close the dialog or toast", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show(2);
+      const view = renderCockpit();
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      // The app read drops out (reconnecting): `?? 1` would read this as a move from v2 to v1.
+      queryResults.delete(GET_QUERY);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(toast.error).not.toHaveBeenCalled());
+      // The app comes back at the SAME version: the dialog it had is still open.
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+    });
+
+    const UNKNOWN = "DisbursementChangedOutcomeUnknown";
+    const confirmButton = () => screen.getByRole("button", { name: "ConfirmReceipt" }) as HTMLButtonElement;
+    const lostConfirm = async () => {
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      vi.mocked(toast.error).mockClear();
+    };
+
+    test("round 7 R7-1: a lost send, the dialog CLOSED, then the version moves - the owed outcome-unknown notice is shown once, and the next confirm is a new command at v2", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      await lostConfirm();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      // A colleague returns the cheque while the dialog is closed.
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith(UNKNOWN));
+      // Reopen and confirm: a NEW key, bound to v2, and no second notice.
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(confirmCalls()[1].expectedDisbursementVersion).toBe(2);
+      expect(confirmCalls()[1].idempotencyKey).not.toBe(confirmCalls()[0].idempotencyKey);
+      expect(vi.mocked(toast.error).mock.calls).toEqual([[UNKNOWN]]);
+    });
+
+    test("round 7 R7-L1: the version-move notice and a late STALE answer to the retry show the owed notice exactly ONCE, never the stale text", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      await lostConfirm();
+      let release!: () => void;
+      stubs.mutationHolds.set(
+        "applications:confirmDisbursement",
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+      );
+      stubs.mutationFailures.set("applications:confirmDisbursement", STALE);
+      fireEvent.click(confirmButton());
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      // The v2 query update wins the race: the effect shows the notice and closes the dialog.
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(vi.mocked(toast.error).mock.calls).toEqual([[UNKNOWN]]);
+      // The retry's STALE answer arrives afterwards; flush it, then assert nothing more was said.
+      release();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(vi.mocked(toast.error).mock.calls).toEqual([[UNKNOWN]]);
+    });
+
+    describe("round 7 T7: this operator's OWN successful return proves the confirm committed", () => {
+      const confirmStages = [
+        { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+        { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
+        { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+        { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
+      ];
+      const afterReturn = (version: number) => {
+        queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages: confirmStages }));
+        queryResults.set(GET_QUERY, application({ status: "CLOSED", disbursementVersion: version }));
+      };
+      const submitReturn = async () => {
+        openDealDetails();
+        fireEvent.click(screen.getByTestId(ACTION));
+        fireEvent.change(screen.getByLabelText("ChequeReturnedByBankReasonLabel"), { target: { value: "Insufficient funds" } });
+        fireEvent.click(screen.getByRole("button", { name: "ChequeReturnedByBankConfirm" }));
+        await waitFor(() => expect(mutationCalls.get(RETURN_MUTATION)).toHaveLength(1));
+      };
+
+      test("a lost confirm, then the operator's own successful return, then the app at v2: no owed notice", async () => {
+        permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+        show();
+        const view = renderCockpit();
+        await lostConfirm();
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        setDeal();
+        view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+        await submitReturn();
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        vi.mocked(toast.error).mockClear();
+        afterReturn(2);
+        view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+        openDealDetails();
+        expect(toast.error).not.toHaveBeenCalled();
+        clickConfirm();
+        await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+        expect(confirmCalls()[1].expectedDisbursementVersion).toBe(2);
+        expect(confirmCalls()[1].idempotencyKey).not.toBe(confirmCalls()[0].idempotencyKey);
+      });
+
+      test("the query reaches v2 BEFORE the return's own promise resolves: still no owed notice", async () => {
+        permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+        show();
+        const view = renderCockpit();
+        await lostConfirm();
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        setDeal();
+        view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+        let release!: () => void;
+        stubs.mutationHolds.set(
+          RETURN_MUTATION,
+          new Promise<void>((resolve) => {
+            release = resolve;
+          })
+        );
+        await submitReturn();
+        afterReturn(2);
+        view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+        expect(toast.error).not.toHaveBeenCalled();
+        release();
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(toast.error).not.toHaveBeenCalled();
+      });
+    });
+
+    test("round 8 LOW-1: the defence notice is the ONLY thing that click does - no confirm is sent with it, and the next click mints a fresh v2 key", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      await lostConfirm();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      setDeal();
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      // This operator's own return is held in flight, so the reconcile effect is skipped.
+      let release!: () => void;
+      stubs.mutationHolds.set(
+        RETURN_MUTATION,
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+      );
+      fireEvent.click(screen.getByTestId(ACTION));
+      fireEvent.change(screen.getByLabelText("ChequeReturnedByBankReasonLabel"), { target: { value: "Insufficient funds" } });
+      fireEvent.click(screen.getByRole("button", { name: "ChequeReturnedByBankConfirm" }));
+      await waitFor(() => expect(mutationCalls.get(RETURN_MUTATION)).toHaveLength(1));
+      // The app moves to v2 while the return is still in flight; the owed notice is held back.
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      expect(toast.error).not.toHaveBeenCalled();
+      // The operator opens the confirm dialog at v2 and clicks Confirm.
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+      expect(vi.mocked(toast.error).mock.calls).toEqual([[UNKNOWN]]);
+      // "Review ... before confirming again": nothing was sent on that click.
+      expect(confirmCalls()).toHaveLength(1);
+      // Settle the return, then confirm again: a fresh key at v2.
+      release();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      vi.mocked(toast.error).mockClear();
+      stubs.mutationFailures.delete("applications:confirmDisbursement");
+      if (screen.queryByRole("dialog") === null) fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      expect(confirmCalls()[1].expectedDisbursementVersion).toBe(2);
+      expect(confirmCalls()[1].idempotencyKey).not.toBe(confirmCalls()[0].idempotencyKey);
+    });
+
+    test("round 8 LOW-2: a return clicked while the app is NOT loaded does not clear a v1 unknown mark (no version was observed)", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      await lostConfirm();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      setDeal();
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      // The app read drops out (reconnecting) just before the return is submitted.
+      queryResults.delete(GET_QUERY);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      fireEvent.click(screen.getByTestId(ACTION));
+      fireEvent.change(screen.getByLabelText("ChequeReturnedByBankReasonLabel"), { target: { value: "Insufficient funds" } });
+      fireEvent.click(screen.getByRole("button", { name: "ChequeReturnedByBankConfirm" }));
+      await waitFor(() => expect(mutationCalls.get(RETURN_MUTATION)).toHaveLength(1));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(toast.error).not.toHaveBeenCalled();
+      // The app returns at v2: the lost v1 confirm was never proven committed by THIS return, so the notice is still owed.
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith(UNKNOWN));
+    });
+
+    test("round 8 LOW-3 (reverse of the R7-L1 race): a lost send, the retry refused STALE (notice shown once), THEN the app moves to v2 - no second notice, never the stale text", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      await lostConfirm();
+      stubs.mutationFailures.set("applications:confirmDisbursement", STALE);
+      fireEvent.click(confirmButton());
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(vi.mocked(toast.error).mock.calls).toEqual([[UNKNOWN]]);
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(vi.mocked(toast.error).mock.calls).toEqual([[UNKNOWN]]);
+    });
+
+    test("round 7 control: a version move with the dialog closed and NO unknown mark shows no toast at all", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      const view = renderCockpit();
+      show(2);
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    test("round 4: the moved-version notice exists in EN and AR", async () => {
+      const { salesEn, salesAr } = await import("../../../lib/i18n/domains/sales");
+      expect((salesEn as Record<string, string>).DisbursementChangedWhileConfirming).toMatch(/Nothing was confirmed/);
+      expect((salesAr as Record<string, string>).DisbursementChangedWhileConfirming).toMatch(/[؀-ۿ]/);
+    });
+
+    test("round 5: the unknown-outcome notice exists in EN and AR and does not claim nothing was confirmed", async () => {
+      const { salesEn, salesAr } = await import("../../../lib/i18n/domains/sales");
+      const en = (salesEn as Record<string, string>).DisbursementChangedOutcomeUnknown;
+      const ar = (salesAr as Record<string, string>).DisbursementChangedOutcomeUnknown;
+      expect(en).toMatch(/result is not known/);
+      expect(en).not.toMatch(/Nothing was confirmed/);
+      expect(ar).toMatch(/[؀-ۿ]/);
+      expect(ar).toMatch(/غير معروفة/);
+      expect(ar).toContain("على هذه الشاشة");
+      expect(ar).not.toContain("في هذه الشاشة");
+    });
+
+    test("an unrelated lost response still keeps the key (control for the retirement above)", async () => {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      show();
+      renderCockpit();
+      stubs.mutationFailures.set("applications:confirmDisbursement", "connection lost");
+      clickConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      stubs.mutationFailures.delete("applications:confirmDisbursement");
+      fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      expect(confirmCalls()[1].idempotencyKey).toBe(confirmCalls()[0].idempotencyKey);
+    });
+  });
+});
+describe("SCRUM-522: the finance-company confirm dialog and its retained state", () => {
+  const stages = [
+    { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "MIRROR" },
+    { key: "DISBURSEMENT", state: "BLOCKED", blocker: "AwaitingDisbursement", authority: "MIRROR" },
+    { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+    { key: "SETTLEMENT", state: "PENDING", authority: "DEALER" },
+  ];
+  const APP_B = "app_9999" as Id<"financeApplications">;
+  const CONFIRM = "applications:confirmDisbursement";
+  const show = (disbursementVersion?: number) => {
+    queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages }));
+    queryResults.set(GET_QUERY, application({ status: "CLOSED", ...(disbursementVersion ? { disbursementVersion } : {}) }));
+  };
+  const confirmCalls = () => (mutationCalls.get(CONFIRM) ?? []) as Array<Record<string, unknown>>;
+  /** Opens the dialog unless it is already open, then presses the confirm button. */
+  const openAndConfirm = () => {
+    if (screen.queryByRole("button", { name: "ConfirmReceipt" }) === null) {
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+    }
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmReceipt" }));
+  };
+  beforeEach(() => {
+    vi.mocked(toast.error).mockClear();
+    permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+  });
+
+  test("while the confirm is in flight, Cancel is disabled and Cancel, Escape and an outside click leave the dialog open; once it settles they work again", async () => {
+    show();
+    renderCockpit();
+    let settle: (value: unknown) => void = () => {};
+    // A lost response, so the dialog stays open after settling and Cancel is the positive control.
+    stubs.mutationHolds.set(CONFIRM, new Promise((resolve) => { settle = resolve; }));
+    stubs.mutationFailures.set(CONFIRM, "connection lost");
+    openAndConfirm();
+    await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+    const dialog = screen.getByRole("dialog");
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
+    expect(cancel.disabled).toBe(true);
+
+    fireEvent.click(cancel);
+    fireEvent.keyDown(dialog, { key: "Escape", code: "Escape" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fireEvent.pointerDown(document.body);
+    fireEvent.pointerUp(document.body);
+    fireEvent.click(document.body);
+    expect(screen.queryByRole("dialog")).not.toBeNull();
+
+    // Settled (a lost response keeps the dialog open): Cancel is live again.
+    settle(null);
+    await waitFor(() => expect((within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  test("L-C: a confirm key kept for deal A is never sent for deal B on the same mounted cockpit", async () => {
+    show();
+    const view = renderCockpit();
+    stubs.mutationFailures.set(CONFIRM, "connection lost");
+    openAndConfirm();
+    await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(confirmCalls()[0].applicationId).toBe(APP);
+
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP_B} />);
+    openAndConfirm();
+    await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+    expect(confirmCalls()[1].applicationId).toBe(APP_B);
+    expect(confirmCalls()[1].idempotencyKey).not.toBe(confirmCalls()[0].idempotencyKey);
+  });
+
+  describe("L-C reversed: a late answer to deal A's confirm changes nothing on deal B", () => {
+    const lateAnswer = async (kind: "resolve" | "reject") => {
+      show();
+      const view = renderCockpit();
+      let settle: (value: unknown) => void = () => {};
+      stubs.mutationHolds.set(CONFIRM, new Promise((resolve) => { settle = resolve; }));
+      if (kind === "reject") stubs.mutationFailures.set(CONFIRM, "connection lost");
+      openAndConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      vi.mocked(toast.error).mockClear();
+      vi.mocked(toast.success).mockClear();
+
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP_B} />);
+      // B's own dialog, opened while A's request is still on the wire.
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+      const receipt = () => screen.getByRole("button", { name: "ConfirmReceipt" }) as HTMLButtonElement;
+      // B must not inherit A's in-flight flag.
+      expect(receipt().disabled).toBe(false);
+
+      settle(null);
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      expect(receipt().disabled).toBe(false);
+      expect(toast.error).not.toHaveBeenCalled();
+      // A real success of A is still announced, once, by the recorded-feedback hook
+      // (it settles a held outcome as a notice on a deal switch, by design: the
+      // operator is never left without an outcome for money that moved). That is
+      // the only toast allowed; nothing is raised for a lost response.
+      expect(vi.mocked(toast.success).mock.calls.map((call) => String(call[0]))).toEqual(
+        kind === "resolve" ? ["DisbursementConfirmedSuccess"] : []
+      );
+      // B's first confirm still mints its own key, for B.
+      fireEvent.click(receipt());
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      expect(confirmCalls()[1].applicationId).toBe(APP_B);
+      expect(confirmCalls()[1].idempotencyKey).not.toBe(confirmCalls()[0].idempotencyKey);
+    };
+
+    test("A's confirm RESOLVES late: B's dialog stays open, B is not marked in flight, no toast", () => lateAnswer("resolve"));
+    test("A's confirm is REJECTED late (lost response): B's dialog stays open, no A notice, B's key is its own", () => lateAnswer("reject"));
+  });
+  test("F2: switching deals in the same commit as a version move does not raise A's 'moved under the dialog' notice on B", async () => {
+    show();
+    const view = renderCockpit();
+    // A's confirm dialog is open at version 1 (nothing sent).
+    fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmDisbursement" }));
+    expect(screen.queryByRole("dialog")).not.toBeNull();
+    vi.mocked(toast.error).mockClear();
+
+    show(2); // B is observed at version 2, in the very render that switches the id
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP_B} />);
+    await act(async () => {});
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  describe("L-C reversed, supplier-advice mode and the cheque return", () => {
+    const SUPPLIER = "applications:confirmSupplierDisbursement";
+    const supplierCalls = () => (mutationCalls.get(SUPPLIER) ?? []) as Array<Record<string, unknown>>;
+    const showSupplier = () => {
+      queryResults.set(COCKPIT_QUERY, cockpit({ status: "CLOSED", stages }));
+      queryResults.set(
+        GET_QUERY,
+        application({
+          status: "CLOSED",
+          vehicle: { sourceType: "SOURCED", sourcedFromName: "أبو خالد" },
+          supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+          canSettleDirectToSupplier: true,
+        })
+      );
+    };
+    const openSupplier = () =>
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "ConfirmSupplierDisbursement" }));
+    const recorded = () => screen.getByRole("button", { name: "ConfirmRecorded" }) as HTMLButtonElement;
+
+    const supplierLateAnswer = async (kind: "resolve" | "reject") => {
+      showSupplier();
+      const view = renderCockpit();
+      let settleA: (value: unknown) => void = () => {};
+      let settleB: (value: unknown) => void = () => {};
+      stubs.mutationHolds.set(SUPPLIER, new Promise((resolve) => { settleA = resolve; }));
+      if (kind === "reject") stubs.mutationFailures.set(SUPPLIER, "connection lost");
+      openSupplier();
+      fireEvent.click(recorded());
+      await waitFor(() => expect(supplierCalls()).toHaveLength(1));
+      vi.mocked(toast.error).mockClear();
+
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP_B} />);
+      stubs.mutationHolds.set(SUPPLIER, new Promise((resolve) => { settleB = resolve; }));
+      openSupplier();
+      fireEvent.click(recorded());
+      await waitFor(() => expect(supplierCalls()).toHaveLength(2));
+      expect(supplierCalls()[1].applicationId).toBe(APP_B);
+      // A's key must not be reused for B: the server fingerprints the applicationId.
+      expect(supplierCalls()[1].idempotencyKey).not.toBe(supplierCalls()[0].idempotencyKey);
+
+      settleA(null);
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+      // B is still in flight and still open; nothing of A's answer touched it.
+      expect(screen.queryByRole("dialog")).not.toBeNull();
+      expect(
+        (within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled
+      ).toBe(true);
+      expect(toast.error).not.toHaveBeenCalled();
+      settleB(null);
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    };
+
+    test("supplier: A's confirm RESOLVES late - B has its own key, stays in flight and open", () => supplierLateAnswer("resolve"));
+    test("supplier: A's confirm is REJECTED late - no A notice, B has its own key, stays in flight and open", () => supplierLateAnswer("reject"));
+
+    test("a late A cheque return does not drop B's kept confirm key", async () => {
+      const RETURN = "applications:returnFinanceDisbursementCheque";
+      queryResults.set(
+        COCKPIT_QUERY,
+        cockpit({
+          status: "CLOSED",
+          stages,
+          forward: { planV2: true, applies: true, state: "SETTLED", returnedExceptionOpen: false, onBooksForwardId: null, transferConfirmed: true, mayRecord: false, mayCancelFinalized: true },
+          disbursementReturn: { mayReturn: true, chequeId: "chq_fc1", lastReturnedChequeId: null },
+        })
+      );
+      queryResults.set(GET_QUERY, application({ status: "CLOSED" }));
+      const view = renderCockpit();
+      let settleReturn: (value: unknown) => void = () => {};
+      stubs.mutationHolds.set(RETURN, new Promise((resolve) => { settleReturn = resolve; }));
+      fireEvent.click(screen.getByTestId("deal-cheque-returned-by-bank"));
+      fireEvent.change(screen.getByLabelText("ChequeReturnedByBankReasonLabel"), { target: { value: "Insufficient funds" } });
+      fireEvent.click(screen.getByRole("button", { name: "ChequeReturnedByBankConfirm" }));
+      await waitFor(() => expect(mutationCalls.get(RETURN)).toHaveLength(1));
+
+      view.rerender(<DealCockpit orgId={ORG} applicationId={APP_B} />);
+      // B: a confirm whose response is lost keeps its key (and an owed mark).
+      stubs.mutationFailures.set(CONFIRM, "connection lost");
+      openAndConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+
+      settleReturn(null);
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+      // The retry on B is the SAME command: A's late return did not retire B's key.
+      stubs.mutationFailures.delete(CONFIRM);
+      openAndConfirm();
+      await waitFor(() => expect(confirmCalls()).toHaveLength(2));
+      expect(confirmCalls()[1].applicationId).toBe(APP_B);
+      expect(confirmCalls()[1].idempotencyKey).toBe(confirmCalls()[0].idempotencyKey);
+    });
+  });
+  test("L-C: the owed outcome-unknown notice for deal A is not raised on deal B when the version moves", async () => {
+    show();
+    const view = renderCockpit();
+    stubs.mutationFailures.set(CONFIRM, "connection lost");
+    openAndConfirm();
+    await waitFor(() => expect(confirmCalls()).toHaveLength(1));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    vi.mocked(toast.error).mockClear();
+
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP_B} />);
+    show(2);
+    view.rerender(<DealCockpit orgId={ORG} applicationId={APP_B} />);
+    await act(async () => {});
+    const shown = vi.mocked(toast.error).mock.calls.map((call) => String(call[0]));
+    expect(shown).not.toContain("DisbursementChangedOutcomeUnknown");
+    expect(shown).not.toContain("DisbursementChangedWhileConfirming");
   });
 });

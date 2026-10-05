@@ -28,6 +28,35 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
   }),
 }));
 
+// SCRUM-469: the method picker starts empty, so the tests choose one. A native
+// select stands in for the Radix control (which needs pointer-capture stubs in
+// jsdom); the control's own placeholder/empty behaviour is the shared component's.
+vi.mock("@/components/payments/PaymentMethodSelect", () => ({
+  PaymentMethodSelect: ({
+    value,
+    onValueChange,
+    ariaLabel,
+    placeholder,
+  }: {
+    value: string | undefined;
+    onValueChange: (method: string) => void;
+    ariaLabel?: string;
+    placeholder?: string;
+  }) => (
+    <select
+      aria-label={ariaLabel}
+      data-testid="method-select"
+      data-placeholder={placeholder}
+      value={value ?? ""}
+      onChange={(event) => onValueChange(event.target.value)}
+    >
+      <option value="" />
+      <option value="CASH">CASH</option>
+      <option value="BANK_TRANSFER">BANK_TRANSFER</option>
+    </select>
+  ),
+}));
+
 const tEn = (key: string) => (salesEn as Record<string, string>)[key] ?? key;
 const tAr = (key: string) => (salesAr as Record<string, string>)[key] ?? key;
 const money = (minor: number, currency: string) => `${(minor / 1000).toLocaleString("en-US")} ${currency}`;
@@ -89,6 +118,10 @@ function actions(overrides: Partial<DealCustodyActions> = {}): DealCustodyAction
 function renderPanel(w: DealCustodyWiring, t = tEn) {
   return render(<DealCustodyPanel wiring={w} money={money} t={t} />);
 }
+
+/** SCRUM-469: the method is never prefilled, so a test that submits a movement chooses one. */
+const pickMethod = (dialog: HTMLElement, method = "CASH") =>
+  fireEvent.change(within(dialog).getByTestId("method-select"), { target: { value: method } });
 
 const buttonNames = () => screen.getAllByRole("button").map((b) => b.textContent?.trim());
 
@@ -204,8 +237,33 @@ describe("DealCustodyPanel", () => {
       fireEvent.click(screen.getByRole("button", { name: salesEn.CustodyReimburse }));
       const dialog = screen.getByTestId("custody-reimbursed-dialog");
       expect((within(dialog).getByLabelText(/Amount/) as HTMLInputElement).value).toBe("200");
-      fireEvent.click(within(dialog).getByTestId("custody-reimbursed-submit"));
-      expect(a.onMove).toHaveBeenCalledWith("cust1", "REIMBURSED", expect.objectContaining({ amountMinor: 200_000, method: "CASH" }));
+      // SCRUM-469: the amount is prefilled, the method is NOT. Nothing is sent
+      // until one is chosen, and then exactly that one is.
+      const submit = within(dialog).getByTestId("custody-reimbursed-submit") as HTMLButtonElement;
+      expect((within(dialog).getByTestId("method-select") as HTMLSelectElement).value).toBe("");
+      expect(submit.disabled).toBe(true);
+      expect(within(dialog).getByTestId("custody-reimbursed-method-required").textContent).toBe(salesEn.MoneyMethodRequired);
+      fireEvent.click(submit);
+      expect(a.onMove).not.toHaveBeenCalled();
+      fireEvent.change(within(dialog).getByTestId("method-select"), { target: { value: "BANK_TRANSFER" } });
+      expect(submit.disabled).toBe(false);
+      expect(within(dialog).queryByTestId("custody-reimbursed-method-required")).toBeNull();
+      fireEvent.click(submit);
+      expect(a.onMove).toHaveBeenCalledWith("cust1", "REIMBURSED", expect.objectContaining({ amountMinor: 200_000, method: "BANK_TRANSFER" }));
+    });
+
+    test("every movement dialog opens with no method, and reopening does not remember the last one", () => {
+      const a = actions();
+      renderPanel(wiring({ actions: a, accounting: { ready: true } }));
+      fireEvent.click(screen.getByRole("button", { name: salesEn.CustodyRecordReturn }));
+      let dialog = screen.getByTestId("custody-returned-dialog");
+      fireEvent.change(within(dialog).getByLabelText(/Amount/), { target: { value: "100" } });
+      expect((within(dialog).getByTestId("custody-returned-submit") as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.change(within(dialog).getByTestId("method-select"), { target: { value: "CASH" } });
+      fireEvent.click(within(dialog).getByRole("button", { name: salesEn.Cancel }));
+      fireEvent.click(screen.getByRole("button", { name: salesEn.CustodyRecordReturn }));
+      dialog = screen.getByTestId("custody-returned-dialog");
+      expect((within(dialog).getByTestId("method-select") as HTMLSelectElement).value).toBe("");
     });
 
     test("a return larger than what was issued is refused in the form before any round trip", () => {
@@ -230,7 +288,14 @@ describe("DealCustodyPanel", () => {
       fireEvent.change(within(dialog).getByLabelText(salesEn.CustodyCloseNotes), { target: { value: "Counted." } });
       // Not settled and no write-off chosen: cannot submit.
       expect((within(dialog).getByTestId("custody-close-submit") as HTMLButtonElement).disabled).toBe(true);
-      expect(within(dialog).getByText("360 JOD")).toBeTruthy();
+      // The residual is named twice: once where the dialog says what still
+      // stops the close, once on the write-off offered as the last resort.
+      expect(within(dialog).getAllByText("360 JOD")).toHaveLength(2);
+      // SCRUM-439: before any write-off, the dialog names the steps that
+      // settle the record, so the write-off is not the only way out.
+      const unsettled = within(dialog).getByTestId("custody-close-unsettled");
+      expect(unsettled.textContent).toContain(salesEn.CustodyCloseStillHeld);
+      expect(unsettled.textContent).toContain(salesEn.CustodyCloseSettleSteps);
       fireEvent.click(within(dialog).getByTestId("custody-write-off-toggle"));
       fireEvent.change(within(dialog).getByLabelText(salesEn.CustodyWriteOffReason), { target: { value: "Untraceable" } });
       fireEvent.click(within(dialog).getByTestId("custody-close-submit"));
@@ -250,12 +315,18 @@ describe("DealCustodyPanel", () => {
       expect(a.onReopen).toHaveBeenCalledWith("cust1", "Late receipt");
     });
 
+    test("a closed record's reopen is disabled while a deal unwind owns it (server refuses it)", () => {
+      renderPanel(wiring({ actions: actions(), accounting: { ready: true }, reopenLocked: true, records: [record({ status: "RECONCILED", reconciliationNotes: "Done" })] }));
+      expect((screen.getByRole("button", { name: salesEn.CustodyReopen }) as HTMLButtonElement).disabled).toBe(true);
+    });
+
     test("the server's refusal is shown beside the form, and the dialog stays open", async () => {
       const a = actions({ onMove: vi.fn(async () => { throw new Error("This custody record is already closed."); }) });
       renderPanel(wiring({ actions: a, accounting: { ready: true } }));
       fireEvent.click(screen.getByRole("button", { name: salesEn.CustodyRecordReturn }));
       const dialog = screen.getByTestId("custody-returned-dialog");
       fireEvent.change(within(dialog).getByLabelText(/Amount/), { target: { value: "100" } });
+      pickMethod(dialog);
       fireEvent.click(within(dialog).getByTestId("custody-returned-submit"));
       expect(await within(dialog).findByText("This custody record is already closed.")).toBeTruthy();
       expect(screen.getByTestId("custody-returned-dialog")).toBeTruthy();
@@ -280,6 +351,7 @@ describe("DealCustodyPanel", () => {
       const dialog = screen.getByTestId("custody-issued-dialog");
       // The planned amount, not the recommendation, prefills once a plan exists.
       expect((within(dialog).getByLabelText(/Amount/) as HTMLInputElement).value).toBe("120");
+      pickMethod(dialog);
       fireEvent.click(within(dialog).getByTestId("custody-issued-submit"));
       expect(a.onOpen).toHaveBeenCalledWith(expect.objectContaining({ userId: "u3", amountMinor: 120_000 }));
     });
@@ -339,7 +411,9 @@ describe("DealCustodyPanel", () => {
       );
       fireEvent.click(screen.getByTestId("custody-issue-button"));
       const dialog = screen.getByTestId("custody-issued-dialog");
-      // The stale default "u3" is not a served member: the submit stays shut.
+      // The stale default "u3" is not a served member: the submit stays shut
+      // even with a method chosen, so it is the recipient that is being tested.
+      pickMethod(dialog);
       expect((within(dialog).getByTestId("custody-issued-submit") as HTMLButtonElement).disabled).toBe(true);
       fireEvent.click(within(dialog).getByTestId("custody-issued-submit"));
       expect(a.onOpen).not.toHaveBeenCalled();
@@ -395,6 +469,13 @@ describe("DealCustodyPanel", () => {
       // Economics open: the same record offers it, live.
       renderPanel(wiring({ actions: a, accounting: { ready: true }, dealStopped: false }));
       expect((screen.getByTestId("custody-attach-cust1") as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.queryByTestId("custody-attach-hint-cust1")).toBeNull();
+    });
+
+    test("with nothing to charge, 'charge a cost' is disabled AND says where a cost the employee paid is recorded (SCRUM-439)", () => {
+      renderPanel(wiring({ actions: actions(), accounting: { ready: true }, dealStopped: false }));
+      expect((screen.getByTestId("custody-attach-cust1") as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.getByTestId("custody-attach-hint-cust1").textContent).toBe(salesEn.CustodyAttachHowTo);
     });
 
     test("the operator is never offered as the recipient of their own issuance — the server refuses self-issuance — while the plan may still name them", () => {
@@ -408,6 +489,7 @@ describe("DealCustodyPanel", () => {
       // picker is unset and the money command cannot be submitted as them.
       expect(within(issue).getByTestId("custody-issued-person").textContent).toContain(salesEn.CustodyAssignPersonPlaceholder);
       expect((within(issue).getByLabelText(/Amount/) as HTMLInputElement).value).toBe("120");
+      pickMethod(issue);
       expect((within(issue).getByTestId("custody-issued-submit") as HTMLButtonElement).disabled).toBe(true);
       fireEvent.click(within(issue).getByTestId("custody-issued-submit"));
       expect(a.onOpen).not.toHaveBeenCalled();
@@ -426,6 +508,7 @@ describe("DealCustodyPanel", () => {
       renderPanel(wiring({ actions: b, accounting: { ready: true }, records: [], plannedCustody: { userId: "u3" as Id<"users">, userName: "Lina", amountMinor: 120_000, note: null } }));
       fireEvent.click(screen.getByTestId("custody-issue-button"));
       const issueOther = screen.getByTestId("custody-issued-dialog");
+      pickMethod(issueOther);
       fireEvent.click(within(issueOther).getByTestId("custody-issued-submit"));
       expect(b.onOpen).toHaveBeenCalledWith(expect.objectContaining({ userId: "u3", amountMinor: 120_000 }));
     });

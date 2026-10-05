@@ -13,20 +13,41 @@ import { Loader2, CheckCircle2, XCircle, AlertCircle, Search } from "lucide-reac
 import { toast } from "@/components/ui/sonner";
 import { Id, Doc } from "@/convex/_generated/dataModel";
 import { useTableControls } from "@/hooks/useTableControls";
-import { getErrorMessage } from "@/lib/errors";
+import { getLocalizedErrorMessage } from "@/lib/errors";
+import { PendingDepositRequestsQueue } from "@/components/deposits/DepositRequests";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 
 type ApprovalRequest = Doc<"profitApprovalRequests"> & {
   salespersonName: string;
   vehicleMakeModel: string;
   vehicleVin: string;
+  salePrice?: number;
+  listPrice?: number;
 };
 
 export default function ApprovalsPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const { format } = useCurrency();
+  const { format, code: orgCurrency } = useCurrency();
+  // A request's amounts are in the currency it was raised in, which the org's
+  // currency lock does not freeze (profitApprovalRequests is not a lock row).
+  // Label them in that currency rather than restyling them as today's.
+  const formatIn = (amount: number, currency: string | undefined) =>
+    currency && currency !== orgCurrency ? `${amount.toLocaleString()} ${currency}` : format(amount);
 
-  const pendingApprovals = useQuery(api.approvals.listPendingApprovals, activeOrgId ? { orgId: activeOrgId } : "skip");
+  // This page serves two queues to two different roles (SCRUM-444): profit
+  // approvals (`approve:requests`) and deposit requests
+  // (`confirm:finance_disbursement`, which accountants hold and approvers may
+  // not). A refused query throws into render, so each is asked only of someone
+  // the server will answer — an accountant otherwise saw an error page instead
+  // of the queue they came for.
+  const { hasPermission } = usePermissions();
+  const canApprove = hasPermission(PERMISSIONS.APPROVE_REQUESTS);
+  const pendingApprovals = useQuery(
+    api.approvals.listPendingApprovals,
+    activeOrgId && canApprove ? { orgId: activeOrgId } : "skip"
+  );
   const respondToApproval = useMutation(api.approvals.respondToApproval);
 
   const {
@@ -47,7 +68,7 @@ export default function ApprovalsPage() {
       });
       toast.success(status === "APPROVED" ? t("ApprovalApprovedMsg") : t("ApprovalRejectedMsg"));
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     }
   };
 
@@ -59,7 +80,11 @@ export default function ApprovalsPage() {
         <h2 className="text-3xl font-bold tracking-tight">{t("Approvals")}</h2>
       </div>
 
-      {pendingApprovals && pendingApprovals.length > 0 && (
+      {/* SCRUM-444: deposits a salesperson has asked to record. Nothing is held
+          until one is confirmed here. */}
+      <PendingDepositRequestsQueue orgId={activeOrgId} />
+
+      {canApprove && pendingApprovals && pendingApprovals.length > 0 && (
         <div className="flex items-center w-full max-w-sm space-x-2 relative">
           <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
           <Input
@@ -71,6 +96,7 @@ export default function ApprovalsPage() {
         </div>
       )}
 
+      {canApprove ? (
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {filteredApprovals === undefined ? (
           <div className="col-span-full flex justify-center p-8">
@@ -110,17 +136,35 @@ export default function ApprovalsPage() {
                   <div className="grid grid-cols-2 gap-4 rounded-lg bg-slate-50 p-3 border border-slate-100">
                     <div>
                       <p className="text-xs text-slate-500 font-medium">{t("RequestedProfit")}</p>
-                      <p className="text-lg font-bold text-slate-900">{format(request.requestedProfit)}</p>
+                      <p className="text-lg font-bold text-slate-900">{formatIn(request.requestedProfit, request.currency)}</p>
                     </div>
                     <div>
                       <p className="text-xs text-slate-500 font-medium">{t("MinimumAllowed")}</p>
-                      <p className="text-sm font-semibold text-slate-600">{format(request.minimumProfit)}</p>
+                      <p className="text-sm font-semibold text-slate-600">{formatIn(request.minimumProfit, request.currency)}</p>
                     </div>
+                    {/* SCRUM-260: approving authorizes exactly this price
+                        against exactly this list price, so both are shown. */}
+                    {request.salePrice !== undefined && request.listPrice !== undefined ? (
+                      <>
+                        <div>
+                          <p className="text-xs text-slate-500 font-medium">{t("ApprovalSalePrice" as any)}</p>
+                          <p className="text-sm font-semibold text-slate-900 tabular-nums">
+                            {formatIn(request.salePrice, request.currency)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-slate-500 font-medium">{t("ApprovalListPrice" as any)}</p>
+                          <p className="text-sm font-semibold text-slate-600 tabular-nums">
+                            {formatIn(request.listPrice, request.currency)}
+                          </p>
+                        </div>
+                      </>
+                    ) : null}
                   </div>
 
                   <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 px-3 py-2 rounded-md border border-amber-100">
                     <AlertCircle className="h-4 w-4 shrink-0" />
-                    <span>{t("ShortBy")} {format(request.minimumProfit - request.requestedProfit)}</span>
+                    <span>{t("ShortBy")} {formatIn(request.minimumProfit - request.requestedProfit, request.currency)}</span>
                   </div>
                 </div>
 
@@ -146,6 +190,7 @@ export default function ApprovalsPage() {
           ))
         )}
       </div>
+      ) : null}
     </div>
   );
 }

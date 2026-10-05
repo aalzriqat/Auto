@@ -17,6 +17,10 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { ConvexError } from "convex/values";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { salesEn } from "@/lib/i18n/domains/sales";
+import { pickMethod } from "@/test-utils/paymentMethodSelect";
+
+// SCRUM-469: no money dialog pre-selects a method, so the tests choose one.
+vi.mock("@/components/payments/PaymentMethodSelect", () => import("@/test-utils/paymentMethodSelect"));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({
@@ -54,6 +58,11 @@ vi.mock("@/hooks/use-permissions", () => ({
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   return {
+    // The cockpit reads closing readiness through the non-throwing useQueries (SCRUM-414 R2).
+    useQueries: (queries: Record<string, { query: never }>) =>
+      Object.fromEntries(
+        Object.entries(queries).map(([key, { query }]) => [key, stubs.queryResults.get(getFunctionName(query))])
+      ),
     useQuery: (reference: never) => stubs.queryResults.get(getFunctionName(reference)),
     useMutation: (reference: never) => {
       const name = getFunctionName(reference);
@@ -181,6 +190,7 @@ function openReturnDialog() {
 }
 function submitReturn(dialog: HTMLElement, amount: string) {
   fireEvent.change(within(dialog).getByLabelText(/Amount/), { target: { value: amount } });
+  pickMethod(dialog);
   fireEvent.click(within(dialog).getByTestId("custody-returned-submit"));
 }
 const cancel = (dialog: HTMLElement) => fireEvent.click(within(dialog).getByRole("button", { name: salesEn.Cancel }));
@@ -357,6 +367,7 @@ describe("a MOUNTED custody dialog whose command is in flight cannot be closed b
     renderCockpit([], { userId: "u2", userName: "Rami", amountMinor: 500_000, note: null });
     fireEvent.click(within(panel()).getByTestId("custody-issue-button"));
     const issueDialog = screen.getByTestId("custody-issued-dialog");
+    pickMethod(issueDialog);
     fireEvent.click(within(issueDialog).getByTestId("custody-issued-submit"));
     await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
     await attemptEveryCloseRoute(issueDialog);
@@ -401,6 +412,7 @@ describe("the in-flight guard does not survive an unmount (AF-R10-01, characteri
     fireEvent.click(within(panel()).getByRole("button", { name: salesEn.CustodyIssueMore }));
     const dialog = screen.getByTestId("custody-issued-dialog");
     fireEvent.change(within(dialog).getByLabelText(/Amount/), { target: { value: "100" } });
+    pickMethod(dialog);
     fireEvent.click(within(dialog).getByTestId("custody-issued-submit"));
     await waitFor(() => expect(move).toHaveBeenCalledTimes(1));
     expect(argOf(move, 0)).toMatchObject({ orgId: ORG, custodyId: "cust1", kind: "ISSUED", amountMinor: 100_000 });
@@ -431,6 +443,7 @@ describe("the in-flight guard does not survive an unmount (AF-R10-01, characteri
     fireEvent.click(within(panel()).getByRole("button", { name: salesEn.CustodyIssueMore }));
     const again = screen.getByTestId("custody-issued-dialog");
     fireEvent.change(within(again).getByLabelText(/Amount/), { target: { value: "100" } });
+    pickMethod(again);
     fireEvent.click(within(again).getByTestId("custody-issued-submit"));
     await waitFor(() => expect(move).toHaveBeenCalledTimes(2));
     expect(argOf(move, 1)).toMatchObject({ custodyId: "cust1", kind: "ISSUED", amountMinor: 100_000 });
@@ -481,6 +494,7 @@ describe("issuing the deal's custody carries the same per-attempt identity", () 
     const open = lostThenOk(OPEN, 2);
     renderCockpit([], { userId: "u2", userName: "Rami", amountMinor: 500_000, note: null });
     const first = openIssueDialog();
+    pickMethod(first);
     fireEvent.click(within(first).getByTestId("custody-issued-submit"));
     await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
     expect(argOf(open, 0)).toMatchObject({ orgId: ORG, applicationId: APP, userId: "u2", issuedMinor: 500_000 });
@@ -490,7 +504,9 @@ describe("issuing the deal's custody carries the same per-attempt identity", () 
     expect(keyOf(open, 1)).toBe(keyOf(open, 0));
     cancel(first);
     await waitFor(() => expect(screen.queryByTestId("custody-issued-dialog")).toBeNull());
-    fireEvent.click(within(openIssueDialog()).getByTestId("custody-issued-submit"));
+    const second = openIssueDialog();
+    pickMethod(second);
+    fireEvent.click(within(second).getByTestId("custody-issued-submit"));
     await waitFor(() => expect(open).toHaveBeenCalledTimes(3));
     expect(keyOf(open, 2)).not.toBe(keyOf(open, 0));
   });

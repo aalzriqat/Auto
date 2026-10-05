@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
+import type { ExecutionFeeHeadline } from "./executionFeePosition";
 import { toMinorSameCurrencyOrUndefined, assertFiniteNumber, assertMajorAmountRepresentable } from "./money";
 import {
   isRequestedFinancingTermValid,
@@ -100,6 +101,11 @@ export const gapResolutionValidator = v.union(
 export const settlementStatusValidator = v.union(
   v.literal("NOT_READY"),
   v.literal("EXPECTED"),
+  // SCRUM-567: written by finalizeDeal ONLY for a deal that is provably
+  // financier-less (CASH, no company, no manual payer, not settled direct).
+  // It means "no finance company pays the dealership"; it is NOT "settled" and
+  // no settled/complete derivation may read it as such (fail closed).
+  v.literal("NOT_APPLICABLE"),
   v.literal("PARTIALLY_SETTLED"),
   v.literal("FULLY_SETTLED"),
   v.literal("RECONCILED")
@@ -185,6 +191,14 @@ export const quotationCalculationSnapshotValidator = v.object({
   ruleVersion: v.optional(v.number()),
   recordedBy: v.id("users"),
   recordedAt: v.number(),
+  /**
+   * Which door recorded the CURRENT material quotation (SCRUM-404): the
+   * wizard's confirmed creation, or the deal page's Record dialog. Written only
+   * with this snapshot, which is rewritten only on a material change, so an
+   * identical retry keeps its origin. Absent on older rows, meaning unknown.
+   * Provenance only — nothing gates on it.
+   */
+  recordedVia: v.optional(v.union(v.literal("DEAL_CREATION"), v.literal("RECORD_DIALOG"))),
 });
 
 /**
@@ -397,6 +411,21 @@ export type CustomerQuotePricingSnapshot = {
   takafulAmount: number;
   companyRuleVersion?: number;
 };
+
+/**
+ * Every field the validator declares. Derived from the validator (not hand
+ * listed) so a field added to the snapshot is compared automatically.
+ */
+const PRICING_SNAPSHOT_KEYS = Object.keys(
+  customerQuotePricingSnapshotValidator.fields
+) as Array<keyof CustomerQuotePricingSnapshot>;
+
+/** Field-by-field strict equality of two customer pricing snapshots (optional fields: both absent or both equal). */
+export const pricingSnapshotsEqual = (
+  a: CustomerQuotePricingSnapshot,
+  b: CustomerQuotePricingSnapshot | undefined
+): boolean =>
+  b !== undefined && PRICING_SNAPSHOT_KEYS.every((key) => a[key] === b[key]);
 
 /**
  * Customer eligibility snapshot for financing quotations.
@@ -1086,10 +1115,49 @@ export function assertAppraisalGapSettledToAdvance(
   // SCRUM-117 projection and `register:vehicle_handover` is held by roles the
   // projection withholds it from; a refusal is a response like any other.
   throw new ConvexError(
-    `The finance company approved less than the quotation on this deal, and who covers the difference has not been agreed. Resolve the appraisal gap before ${action}.`
+    `The finance company approved less than the amount requested on this deal, and who covers the difference has not been agreed. Resolve the appraisal gap before ${action}.`
   );
 }
 
+
+/** Every field a settled appraisal-gap split writes; clearing them voids the split. */
+export const GAP_RESOLUTION_CLEARED = Object.freeze({
+  customerGapShareMinor: undefined,
+  dealerGapShareMinor: undefined,
+  customerGapCashToDealerMinor: undefined,
+  customerGapInstallmentToDealerMinor: undefined,
+  customerGapToFinanceCompanyMinor: undefined,
+  gapResolvedAt: undefined,
+  gapResolvedBy: undefined,
+  gapResolutionNotes: undefined,
+});
+
+/**
+ * The `gapResolution` write (and split clearing) an approval implies once its
+ * raw gap is known, or null when nothing should be written. Shared by the
+ * configured and manual approvals so they cannot drift.
+ *
+ * A moved gap voids whatever was agreed against the old number, so the shares
+ * are cleared. FAILED is written when a deal is rejected or cancelled with a gap
+ * open; REJECTED -> PENDING_DOCS is a legal transition, so a reopened deal would
+ * carry "negotiation failed" against a live shortfall unless it is reopened here.
+ */
+export function gapResolutionTransition(
+  newRawGapMinor: number,
+  previousRawGapMinor: number,
+  currentResolution: GapResolution
+):
+  | ({ gapResolution: "NOT_REQUIRED" | "PENDING_NEGOTIATION" } & Partial<typeof GAP_RESOLUTION_CLEARED>)
+  | null {
+  const changed = newRawGapMinor !== previousRawGapMinor;
+  if (newRawGapMinor <= 0) {
+    return { gapResolution: "NOT_REQUIRED", ...(changed ? GAP_RESOLUTION_CLEARED : {}) };
+  }
+  if (changed || currentResolution === undefined || currentResolution === "FAILED") {
+    return { gapResolution: "PENDING_NEGOTIATION", ...(changed ? GAP_RESOLUTION_CLEARED : {}) };
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Keeping the dimensions in step with the legacy status
@@ -1303,7 +1371,37 @@ export const DEAL_STAGE_ORDER: FinancedDealStageKey[] = [
  * cancelled, where the remaining stages will never happen at all. Rendering
  * those as merely "pending" invites an operator to work a dead deal.
  */
-export type DealStageState = "COMPLETE" | "CURRENT" | "BLOCKED" | "PENDING" | "STOPPED";
+export type DealStageState =
+  | "COMPLETE"
+  | "CURRENT"
+  | "BLOCKED"
+  | "PENDING"
+  | "STOPPED"
+  /**
+   * The stage will never happen on this deal, and that is PROVEN rather than
+   * assumed (SCRUM-446): no finance company pays the dealership on it, so there
+   * is nothing to confirm. It is finished for the purpose of choosing the live
+   * stage, but it is not COMPLETE — nobody is claiming money arrived — and it is
+   * never BLOCKED, because nothing anyone does can clear it.
+   */
+  | "NOT_APPLICABLE";
+
+/**
+ * Whether a finance company pays the dealership on this deal — the fact
+ * DISBURSEMENT turns on, resolved ONCE on the server from evidence.
+ *
+ * - `EXPECTED`: a payment from a finance company is part of this deal, so the
+ *   stage waits on the action that records it.
+ * - `NONE`: PROVEN that none is. The application is CLOSED, its linked sale
+ *   exists and is COMPLETED, that sale settled through the dealership, the
+ *   application names no finance company, AND the deal's mode is exactly
+ *   `INTERNAL_INSTALLMENT` (the dealership itself finances). Owner rulings
+ *   OR-1 / OR-2 (SCRUM-486 c21360): a MANUAL finance company and a LEASE company
+ *   owe the dealership the full amount, so those modes are never `NONE`.
+ * - `UNKNOWN`: the evidence is missing or unreadable. Behaves exactly as before
+ *   this fact existed. It is never read as `NONE`.
+ */
+export type FinancierLeg = "EXPECTED" | "NONE" | "UNKNOWN";
 
 /**
  * Every blocker the rail can name, as VALUES rather than only as a type.
@@ -1327,6 +1425,10 @@ export const DEAL_STAGE_BLOCKERS = [
   "DocumentsIncomplete",
   /** Waiting on the financing company to pay — never on the dealership. */
   "AwaitingDisbursement",
+  /** SCRUM-435: the dealership has not yet paid the deposit and its contribution onward. */
+  "AwaitingForwardToFinanceCompany",
+  /** SCRUM-435: that payment is recorded but not yet settled on the books. */
+  "ForwardNotSettled",
   "HandoverBlocked",
   "AwaitingSettlement",
 ] as const;
@@ -1426,13 +1528,13 @@ export interface DealStageFacts extends LifecycleFacts {
   /** Every required document uploaded, verified or waived. */
   requiredDocumentsComplete: boolean;
   /**
-   * Whether any document rule applies to this deal at all.
+   * Whether any REQUIRED document rule applies to this deal.
    *
    * Absent means "assume it does", so a caller that does not answer keeps the
-   * old behaviour. When it is `false` the stage is not rendered: an org with no
-   * `companyDocumentRules` has no paperwork gate, and the documents CARD is
-   * already absent rather than empty in that case — the rail has to agree with
-   * it, or the screen shows a blocker for a checklist that does not exist.
+   * old behaviour. When it is `false` the DELIVERY_ACTIONS stage keeps its
+   * position on the rail but is NOT_APPLICABLE (SCRUM-629 F-07): an optional
+   * document is never a gate, so a deal with none required has no paperwork
+   * step to wait on — and none to claim as finished.
    */
   documentRulesApply?: boolean;
   /**
@@ -1444,6 +1546,12 @@ export interface DealStageFacts extends LifecycleFacts {
    * blocked forever on a finished deal.
    */
   supplierDisbursementConfirmedAt?: number;
+  /**
+   * Whether a finance company pays the dealership on this deal, resolved by the
+   * server (SCRUM-446). Absent means `UNKNOWN`: a caller that cannot answer
+   * keeps the old behaviour. Only `NONE` changes the rail.
+   */
+  financierLeg?: FinancierLeg;
   /**
    * The deal is over for a reason the credit dimension cannot express — the
    * sale itself was cancelled from the sales side, which reverses the GL and
@@ -1461,6 +1569,26 @@ export interface DealStageFacts extends LifecycleFacts {
    * claim; this leaves room for it to say so.
    */
   settlementComplete?: boolean;
+  /**
+   * SCRUM-435 - the forward proof state (`deriveForwardState(...).state`).
+   * Absent, NOT_DUE and SETTLED mean nothing is owed first; anything else
+   * blocks the finance company transfer and is the DEALERSHIP's move.
+   */
+  forwardState?:
+    | "NOT_DUE"
+    | "DUE"
+    | "SETTLED"
+    | "POSTING_PENDING"
+    | "POSTING_FAILED"
+    | "REVERSAL_PENDING"
+    | "NEEDS_REPAIR";
+  /**
+   * SCRUM-435 - true when the finance company sent the dealership's payment back
+   * and no replacement is settled (`deriveForwardState(...).returnedExceptionOpen`).
+   * The transfer stage then stays open even after the transfer was confirmed, so
+   * the amount owed is never a silent liability behind a "complete" step.
+   */
+  forwardExceptionOpen?: boolean;
 }
 
 /**
@@ -1529,16 +1657,17 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
     // zero is not a gap, and `undefined` means none was ever recorded.
     APPROVED_PURCHASE: facts.approvedDealerPurchaseAmountMinor !== undefined && gapResolved,
     // Every required document verified or waived. `every` over an empty
-    // checklist is true, so a deal with no document rules — no paperwork
-    // gate at all — has this stage complete rather than absent: the lifecycle
-    // keeps its eight steps, and the documents card is still absent on its
-    // own account.
-    DELIVERY_ACTIONS: facts.requiredDocumentsComplete,
+    // checklist is true, so with no required rule this would claim paperwork
+    // that never existed was finished — before the credit decision, even
+    // (SCRUM-629 F-07). That deal's stage is NOT_APPLICABLE instead (below):
+    // the rail keeps its eight positions, and nothing is shown as done.
+    DELIVERY_ACTIONS: facts.requiredDocumentsComplete && facts.documentRulesApply !== false,
     // Either route's evidence closes it. Read as an OR rather than by route
     // because the route is not always recorded, and an unknown route must not
     // make a disbursement that demonstrably happened unreadable.
     DISBURSEMENT:
-      facts.disbursedAt !== undefined || facts.supplierDisbursementConfirmedAt !== undefined,
+      (facts.disbursedAt !== undefined || facts.supplierDisbursementConfirmedAt !== undefined) &&
+      facts.forwardExceptionOpen !== true,
     HANDOVER: handover === "HANDED_OVER",
     SETTLEMENT:
       facts.settlementComplete ??
@@ -1558,7 +1687,14 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
           ? "GapNegotiationFailed"
           : "GapUnresolved",
     DELIVERY_ACTIONS: "DocumentsIncomplete",
-    DISBURSEMENT: "AwaitingDisbursement",
+    DISBURSEMENT:
+      facts.forwardState === undefined ||
+      facts.forwardState === "NOT_DUE" ||
+      facts.forwardState === "SETTLED"
+        ? "AwaitingDisbursement"
+        : facts.forwardState === "DUE"
+          ? "AwaitingForwardToFinanceCompany"
+          : "ForwardNotSettled",
     HANDOVER: handover === "BLOCKED" ? "HandoverBlocked" : undefined,
     SETTLEMENT: "AwaitingSettlement",
   };
@@ -1601,11 +1737,32 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
     SETTLEMENT: true,
   };
 
+  // DISBURSEMENT only on PROVEN evidence (SCRUM-446), and DELIVERY_ACTIONS only
+  // when no required document rule applies (SCRUM-629 F-07). Evidence that the
+  // money actually moved wins (`complete` is checked first), and a stopped deal
+  // is stopped, not "not needed".
+  const notApplicable: Record<FinancedDealStageKey, boolean> = {
+    APPLICATION: false,
+    CREDIT_DECISION: false,
+    APPRAISAL: false,
+    APPROVED_PURCHASE: false,
+    DELIVERY_ACTIONS: facts.documentRulesApply === false && !stopped,
+    DISBURSEMENT: facts.financierLeg === "NONE" && !complete.DISBURSEMENT && !stopped,
+    HANDOVER: false,
+    SETTLEMENT: false,
+  };
+
   const order = DEAL_STAGE_ORDER;
-  const firstIncomplete = order.find((key) => !complete[key] && reachable[key]);
+  // A stage that will never happen is finished for this purpose: it must not be
+  // the live stage, or the rail would point the operator at nothing.
+  const firstIncomplete = order.find(
+    (key) => !complete[key] && !notApplicable[key] && reachable[key]
+  );
 
   return order.map((key): DealStage => {
     if (complete[key]) return { key, state: "COMPLETE", authority: STAGE_AUTHORITY[key] };
+    if (notApplicable[key])
+      return { key, state: "NOT_APPLICABLE", authority: STAGE_AUTHORITY[key] };
     if (stopped) return { key, state: "STOPPED", authority: STAGE_AUTHORITY[key] };
     if (key !== firstIncomplete) return { key, state: "PENDING", authority: STAGE_AUTHORITY[key] };
     const blocker = blockers[key];
@@ -1615,8 +1772,10 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
     // offers the dealership's ResolveGapAction on exactly these blockers —
     // so the rail must not say it is waiting on the finance company then.
     const authority: DealStageAuthority =
-      key === "APPROVED_PURCHASE" &&
-      (blocker === "GapUnresolved" || blocker === "GapNegotiationFailed")
+      (key === "APPROVED_PURCHASE" &&
+        (blocker === "GapUnresolved" || blocker === "GapNegotiationFailed")) ||
+      (key === "DISBURSEMENT" &&
+        (blocker === "AwaitingForwardToFinanceCompany" || blocker === "ForwardNotSettled"))
         ? "DEALER"
         : STAGE_AUTHORITY[key];
     return blocker
@@ -1949,9 +2108,50 @@ export type ManagementProfit =
         | "ExpensesMixedDenomination"
         /** A live cost line carries an amount that is not a safe non-negative integer, or the lines overflow: the expense operand is not a figure. */
         | "ExpensesUnreadable"
+        /**
+         * F-PNTR-1: the deal expects a finance-company execution fee, but which
+         * recorded cost IS that fee is ambiguous, or the expected aggregate
+         * disagrees with the fee. Any expense basis would be a guess.
+         */
+        | "ExecutionFeeUnclassified"
         | "CorruptInput"
         | "DealCancelled";
     };
+
+/**
+ * The expense operand of an unsettled financed deal's management profit.
+ *
+ * Legacy (no execution-fee position): the larger of expected and recorded, as
+ * before. With a position (F-PNTR-1, SCRUM-690 c22119 Q5): recorded actuals
+ * PLUS the execution fee not yet recorded — `max()` hid a recorded 550 of other
+ * costs behind an expected 700 fee, understating the estimate by 550. A bound
+ * actual (including an explicit 0) retires the expectation, so it adds nothing.
+ */
+function managementExpenseBasis(args: {
+  actualExpensesMinor: number;
+  expectedExpensesMinor?: number;
+  fullySettled: boolean;
+  executionFee?: ExecutionFeeHeadline | null;
+}): { basisMinor: number; forecast: boolean } | { reason: "ExecutionFeeUnclassified" | "CorruptInput" } {
+  if (args.expectedExpensesMinor !== undefined && !isMinorAmount(args.expectedExpensesMinor)) {
+    return { reason: "CorruptInput" };
+  }
+  if (args.fullySettled) return { basisMinor: args.actualExpensesMinor, forecast: false };
+  const fee = args.executionFee;
+  if (fee) {
+    if ("withheld" in fee) return { reason: "ExecutionFeeUnclassified" };
+    if (!isMinorAmount(fee.unrecordedMinor)) return { reason: "CorruptInput" };
+    return {
+      basisMinor: args.actualExpensesMinor + fee.unrecordedMinor,
+      forecast: fee.unrecordedMinor > 0,
+    };
+  }
+  const expected = args.expectedExpensesMinor ?? 0;
+  return {
+    basisMinor: Math.max(expected, args.actualExpensesMinor),
+    forecast: expected > args.actualExpensesMinor,
+  };
+}
 
 /**
  * The lines behind a CASH deal's profit.
@@ -2098,6 +2298,8 @@ export function deriveManagementProfit(args: {
   customerDirectToDealerMinor?: number;
   actualExpensesMinor: number;
   expectedExpensesMinor?: number;
+  /** F-PNTR-1: the execution-fee position, when the deal expects one. See `managementExpenseBasis`. */
+  executionFee?: ExecutionFeeHeadline | null;
   currency: string;
   fullySettled: boolean;
 }): ManagementProfit {
@@ -2118,12 +2320,9 @@ export function deriveManagementProfit(args: {
   // the row in hand, and the failure mode of assuming it is an overstated profit.
   if (args.dealerContributionMinor === undefined)
     return { available: false, reason: "NoDealerContribution" };
-  if (args.expectedExpensesMinor !== undefined && !isMinorAmount(args.expectedExpensesMinor)) {
-    return { available: false, reason: "CorruptInput" };
-  }
-  const expenseBasisMinor = !args.fullySettled
-    ? Math.max(args.expectedExpensesMinor ?? 0, args.actualExpensesMinor)
-    : args.actualExpensesMinor;
+  const basis = managementExpenseBasis(args);
+  if ("reason" in basis) return { available: false, reason: basis.reason };
+  const expenseBasisMinor = basis.basisMinor;
   // FAIL CLOSED on EVERY operand, the same rule as the STOCK sibling below.
   // `computeDealerProceeds` asserts each input; this once checked only for
   // negatives, so NaN, Infinity, a fraction or an unsafe integer written
@@ -2153,10 +2352,7 @@ export function deriveManagementProfit(args: {
     { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: args.supplierSettlementMinor },
     { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
     {
-      key:
-        !args.fullySettled && (args.expectedExpensesMinor ?? 0) > args.actualExpensesMinor
-          ? "FORECAST_EXPENSES"
-          : "ACTUAL_EXPENSES",
+      key: basis.forecast ? "FORECAST_EXPENSES" : "ACTUAL_EXPENSES",
       sign: -1,
       amountMinor: expenseBasisMinor,
     },
@@ -2206,6 +2402,8 @@ export function deriveStockManagementProfit(args: {
   customerDirectToDealerMinor?: number;
   actualExpensesMinor: number;
   expectedExpensesMinor?: number;
+  /** F-PNTR-1 — see `deriveManagementProfit`. */
+  executionFee?: ExecutionFeeHeadline | null;
   currency: string;
   fullySettled: boolean;
 }): ManagementProfit {
@@ -2215,12 +2413,9 @@ export function deriveStockManagementProfit(args: {
   if (args.vehicleCostMinor === undefined) return { available: false, reason: "NoVehicleCost" };
   if (args.dealerContributionMinor === undefined)
     return { available: false, reason: "NoDealerContribution" };
-  if (args.expectedExpensesMinor !== undefined && !isMinorAmount(args.expectedExpensesMinor)) {
-    return { available: false, reason: "CorruptInput" };
-  }
-  const expenseBasisMinor = !args.fullySettled
-    ? Math.max(args.expectedExpensesMinor ?? 0, args.actualExpensesMinor)
-    : args.actualExpensesMinor;
+  const basis = managementExpenseBasis(args);
+  if ("reason" in basis) return { available: false, reason: basis.reason };
+  const expenseBasisMinor = basis.basisMinor;
   // FAIL CLOSED on every operand, the approved amount included. `v.number()`
   // admits NaN, Infinity, fractions and unsafe integers, and a negative minor
   // amount is not a smaller cost — it is a corrupt row. None of them may reach
@@ -2241,10 +2436,7 @@ export function deriveStockManagementProfit(args: {
     { key: "VEHICLE_COST", sign: -1, amountMinor: args.vehicleCostMinor },
     { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: args.dealerContributionMinor },
     {
-      key:
-        !args.fullySettled && (args.expectedExpensesMinor ?? 0) > args.actualExpensesMinor
-          ? "FORECAST_EXPENSES"
-          : "ACTUAL_EXPENSES",
+      key: basis.forecast ? "FORECAST_EXPENSES" : "ACTUAL_EXPENSES",
       sign: -1,
       amountMinor: expenseBasisMinor,
     },

@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, CheckCircle2 } from "lucide-react";
+import { Loader2, CheckCircle2, LockKeyhole } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -31,6 +31,19 @@ type ConfirmFinalizeDialogProps = {
   t: (key: string) => string;
   onOpenChange: (open: boolean) => void;
   onSubmit: () => void;
+  /**
+   * SCRUM-260: the minimum-profit approval for the price this sale persists,
+   * with its request action. `blocked` disables the close while the server
+   * would refuse it for want of that approval.
+   */
+  profitApproval?: { notice: React.ReactNode; blocked: boolean };
+  /**
+   * S414-R3-1: why the close may not be submitted right now — the dialog can
+   * outlive the READY verdict it was opened on (a failed read, a verdict that
+   * turned BLOCKED), or the caller cannot read the readiness at all. Shown in
+   * place and the confirm is disabled while it is set.
+   */
+  readinessHold?: string | null;
 };
 
 export function ConfirmFinalizeDialog({
@@ -40,6 +53,8 @@ export function ConfirmFinalizeDialog({
   t,
   onOpenChange,
   onSubmit,
+  profitApproval,
+  readinessHold,
 }: Readonly<ConfirmFinalizeDialogProps>) {
   return (
     // Not dismissible while the mutation is in flight.
@@ -67,6 +82,19 @@ export function ConfirmFinalizeDialog({
             <p className="text-sm font-medium">{t("FinalizeCreatesTheSale")}</p>
           </div>
 
+          {profitApproval?.notice}
+
+          {readinessHold && (
+            <p
+              role="status"
+              data-testid="finalize-readiness-hold"
+              className="flex items-start gap-2 rounded-md border border-border bg-muted p-3 text-sm text-foreground"
+            >
+              <LockKeyhole aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              <span>{readinessHold}</span>
+            </p>
+          )}
+
           {/* Every refusal reachable from this button names the thing to change
               — an unrecorded settlement route, missing economics, an unresolved
               عربون. Kept on the dialog rather than only in a toast, because it
@@ -82,7 +110,7 @@ export function ConfirmFinalizeDialog({
           <Button variant="outline" disabled={submitting} onClick={() => onOpenChange(false)}>
             {t("Cancel")}
           </Button>
-          <Button disabled={submitting} onClick={onSubmit}>
+          <Button disabled={submitting || !!profitApproval?.blocked || !!readinessHold} onClick={onSubmit}>
             {submitting ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (

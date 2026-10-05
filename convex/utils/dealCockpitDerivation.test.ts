@@ -623,7 +623,10 @@ describe("the rail is always the same eight stages, in the same order", () => {
     expect(rail.find((s) => s.key === "DELIVERY_ACTIONS")?.blocker).toBe("DocumentsIncomplete");
   });
 
-  test("no document rules: the paperwork stage is complete, not absent, and the tail is reachable", () => {
+  // SCRUM-629 F-07 (ruling c21924): with no required document the paperwork
+  // stage is not needed — never shown as an action completed, which put step 5
+  // "done" ahead of a credit decision nobody had taken yet.
+  test("no document rules: the paperwork stage is not applicable, not absent, and the tail is reachable", () => {
     const rail = deriveDealStages({
       status: "APPROVED",
       creditDecision: "APPROVED",
@@ -633,8 +636,48 @@ describe("the rail is always the same eight stages, in the same order", () => {
       requiredDocumentsComplete: true,
     });
     expect(rail.map((s) => s.key)).toEqual(EIGHT);
-    expect(rail.find((s) => s.key === "DELIVERY_ACTIONS")?.state).toBe("COMPLETE");
+    expect(rail.find((s) => s.key === "DELIVERY_ACTIONS")?.state).toBe("NOT_APPLICABLE");
     expect(rail.find((s) => s.key === "HANDOVER")?.state).toBe("CURRENT");
+  });
+
+  test("no document rules before the credit decision: nothing after it reads as done", () => {
+    const rail = deriveDealStages({
+      status: "PENDING_DOCS",
+      documentRulesApply: false,
+      requiredDocumentsComplete: true,
+    });
+    expect(rail.find((s) => s.key === "CREDIT_DECISION")?.blocker).toBe("AwaitingCreditDecision");
+    expect(rail.find((s) => s.key === "DELIVERY_ACTIONS")?.state).toBe("NOT_APPLICABLE");
+    expect(rail.filter((s) => s.state === "COMPLETE").map((s) => s.key)).toEqual(["APPLICATION"]);
+  });
+
+  test("no document rules on a stopped deal: stopped, not 'not needed'", () => {
+    const rail = deriveDealStages({
+      status: "REJECTED",
+      creditDecision: "REJECTED",
+      documentRulesApply: false,
+      requiredDocumentsComplete: true,
+    });
+    expect(rail.find((s) => s.key === "DELIVERY_ACTIONS")?.state).toBe("STOPPED");
+  });
+
+  test("required documents all verified: the paperwork stage is complete", () => {
+    const rail = deriveDealStages({
+      status: "APPROVED",
+      creditDecision: "APPROVED",
+      documentRulesApply: true,
+      requiredDocumentsComplete: true,
+    });
+    expect(rail.find((s) => s.key === "DELIVERY_ACTIONS")?.state).toBe("COMPLETE");
+  });
+
+  test("a caller that does not say whether rules apply keeps the old reading", () => {
+    const rail = deriveDealStages({
+      status: "APPROVED",
+      creditDecision: "APPROVED",
+      requiredDocumentsComplete: true,
+    });
+    expect(rail.find((s) => s.key === "DELIVERY_ACTIONS")?.state).toBe("COMPLETE");
   });
 
   test("a stopped deal keeps all eight, every unfinished one STOPPED", () => {
@@ -850,5 +893,51 @@ describe("supplier receipt actionability", () => {
         reason: "OBLIGATION_NOT_OPEN",
       });
     }
+  });
+});
+
+/**
+ * SCRUM-435: the stage rail reads the ONE forward proof. The transfer stage names
+ * what is actually blocking it, and the dealership (not the finance company) is
+ * the one acting while a payment to the company is outstanding.
+ */
+describe("the disbursement stage while the dealership owes the finance company a forward", () => {
+  const closed = {
+    status: "CLOSED" as const,
+    finalizedSaleId: "sale1",
+    creditDecision: "APPROVED" as const,
+    appraisalStatus: "FINALIZED" as const,
+    approvedDealerPurchaseAmountMinor: 12_500_000,
+    requiredDocumentsComplete: true,
+    vehicleHandoverAt: Date.UTC(2026, 6, 1),
+  };
+
+  test("v1, settled and not-due deals keep the ordinary transfer blocker", () => {
+    for (const forwardState of [undefined, "NOT_DUE", "SETTLED"] as const) {
+      expect(stages({ ...closed, forwardState }).blocker("DISBURSEMENT")).toBe("AwaitingDisbursement");
+    }
+  });
+
+  test("a DUE forward names the payment to the finance company as the blocker", () => {
+    expect(stages({ ...closed, forwardState: "DUE" }).blocker("DISBURSEMENT")).toBe(
+      "AwaitingForwardToFinanceCompany"
+    );
+  });
+
+  test("every unsettled forward state names the unsettled payment, never the transfer", () => {
+    for (const forwardState of ["POSTING_PENDING", "POSTING_FAILED", "REVERSAL_PENDING", "NEEDS_REPAIR"] as const) {
+      expect(stages({ ...closed, forwardState }).blocker("DISBURSEMENT")).toBe("ForwardNotSettled");
+    }
+  });
+  test("a returned payment keeps the transfer stage open even after the transfer was confirmed", () => {
+    const after = { ...closed, disbursedAt: Date.UTC(2026, 8, 1) };
+    const open = stages({ ...after, forwardState: "DUE", forwardExceptionOpen: true });
+    expect(open.blocker("DISBURSEMENT")).toBe("AwaitingForwardToFinanceCompany");
+    expect(open.state("DISBURSEMENT")).not.toBe("COMPLETE");
+    for (const forwardState of ["POSTING_PENDING", "POSTING_FAILED", "REVERSAL_PENDING", "NEEDS_REPAIR"] as const) {
+      expect(stages({ ...after, forwardState, forwardExceptionOpen: true }).blocker("DISBURSEMENT")).toBe("ForwardNotSettled");
+    }
+    // Once the replacement settles the exception closes and the stage is complete again.
+    expect(stages({ ...after, forwardState: "SETTLED", forwardExceptionOpen: false }).state("DISBURSEMENT")).toBe("COMPLETE");
   });
 });

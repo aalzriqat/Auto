@@ -10,6 +10,7 @@ import { verifyPaymentWebhook } from "./utils/paymentWebhook";
 import { rateLimiter } from "./rateLimit";
 import { normalizedWebsiteHost } from "./websiteConfig";
 import { isLikelyBot } from "./utils/userAgent";
+import { INSTAGRAM_ACCOUNT_IN_USE_MESSAGE } from "./socialIntegrations";
 
 const http = httpRouter();
 const WEBHOOK_RAW_PAYLOAD_MAX_CHARS = 700_000;
@@ -969,8 +970,12 @@ http.route({
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // An account held by another org is the dealer's to resolve — say so,
+      // rather than inviting a retry that can never succeed (SCRUM-622).
       const userMessage =
-        "Instagram connection failed. Please try again later.";
+        err instanceof ConvexError && err.data === INSTAGRAM_ACCOUNT_IN_USE_MESSAGE
+          ? INSTAGRAM_ACCOUNT_IN_USE_MESSAGE
+          : "Instagram connection failed. Please try again later.";
       await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
         source: "instagram-oauth",
         status: "error",
@@ -1179,12 +1184,24 @@ http.route({
         continue;
       }
 
-      const settings = await ctx.runQuery(
+      const { settings, ambiguous } = await ctx.runQuery(
         internal.instagramEngagement.getSettingsByInstagramAccountId,
         {
           instagramBusinessAccountId: igAccountId,
         },
       );
+      if (ambiguous) {
+        // Connected to more than one org (SCRUM-622): never guess the tenant.
+        // Acknowledged like an unrecognized account, but recorded, so the
+        // drop is visible. The row names the account only; it is not linked
+        // to the stored payload, so it does not by itself enable a replay.
+        await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+          source: "instagram",
+          status: "error",
+          summary: `Instagram account ${igAccountId} is connected to more than one org; entry skipped`,
+        });
+        continue;
+      }
       if (!settings) {
         // Unrecognized account (not connected to any org, or already
         // disconnected) — acknowledge so Meta doesn't retry forever.
@@ -1627,12 +1644,24 @@ http.route({
         continue;
       }
 
-      const settings = await ctx.runQuery(
+      const { settings, ambiguous } = await ctx.runQuery(
         internal.facebookEngagement.getSettingsByFacebookPageId,
         {
           facebookPageId: pageId,
         },
       );
+      if (ambiguous) {
+        // Connected to more than one org (SCRUM-622): never guess the tenant.
+        // Acknowledged like an unrecognized Page, but recorded, so the drop is
+        // visible. The row names the Page only; it is not linked to the stored
+        // payload, so it does not by itself enable a replay.
+        await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+          source: "facebook",
+          status: "error",
+          summary: `Facebook Page ${pageId} is connected to more than one org; entry skipped`,
+        });
+        continue;
+      }
       if (!settings) {
         // Unrecognized Page (not connected to any org, or already
         // disconnected) — acknowledge so Meta doesn't retry forever.
@@ -1868,7 +1897,7 @@ http.route({
 
       if (verification.value.kind === "settled") {
         const settlement = verification.value;
-        await ctx.runMutation(internal.paymentIntents.settleByExternalId, {
+        const outcome = await ctx.runMutation(internal.paymentIntents.settleByExternalId, {
           provider: settlement.provider,
           externalId: settlement.externalId,
           amountMinor: settlement.amountMinor,
@@ -1879,6 +1908,20 @@ http.route({
           ...(settlement.providerEventType ? { providerEventType: settlement.providerEventType } : {}),
           ...(settlement.providerAccountId ? { providerAccountId: settlement.providerAccountId } : {}),
         });
+        // SCRUM-571 D-8: 200 only for an outcome that is durable. SETTLED and
+        // ALREADY_SETTLED are a settlement; HELD names its unmatched-funds row.
+        // Anything else is not acknowledged: the throw is caught below and
+        // answered 500, so the provider retries.
+        switch (outcome.kind) {
+          case "SETTLED":
+          case "ALREADY_SETTLED":
+          case "HELD":
+            break;
+          default: {
+            const unexpected: never = outcome;
+            throw new Error(`[payment-webhook] unexpected settlement outcome: ${JSON.stringify(unexpected)}`);
+          }
+        }
       }
 
       return new Response(JSON.stringify({ ok: true }), {

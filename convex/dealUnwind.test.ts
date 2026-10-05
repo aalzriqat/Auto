@@ -1,0 +1,931 @@
+/**
+ * SCRUM-693 - unwinding a paid finance deal from the deal page.
+ *
+ * The #pntr shape on the SCRUM-435 worked example: G = 12,500 approved and
+ * transferred by the finance company, H + C = 1,575 forwarded back to it.
+ * Unwind = the company returns the forward, then ONE step (Sol ruling B,
+ * c22129) refunds the full remittance by the same rail and cancels the deal.
+ * A refusal anywhere in that step - the closed-deal teardown included - leaves
+ * every row as it was.
+ *
+ * Evidence boundary: convex-test only - repository behaviour, not the Convex
+ * runtime (no OCC, no paginated-query limit) and not production data.
+ */
+import {
+  C, G, H, finalizeAsOwner, readyDeal, refusalMessageOf, seedFinancedDealership,
+} from "../test-utils/financedDealFixture";
+import { describe, expect, test, vi } from "vitest";
+import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+import { isFinanceCashReceivedReversalPosted, placeReturnedVehicleInInspection, UNWIND_BADGE_BATCH_MAX } from "./dealUnwind";
+import { syncVehicleHoldStatus } from "./utils/depositHelpers";
+import { deriveForwardState } from "./utils/financeCompanyForward";
+import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
+import { SYSTEM_KEYS } from "./utils/defaultChart";
+
+vi.mock("./rateLimit", () => ({
+  rateLimiter: {
+    limit: vi.fn().mockResolvedValue({ ok: true }),
+    check: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
+  },
+  checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
+}));
+
+const MODULES = import.meta.glob("./**/*.ts");
+
+const ALL_PERMS = [
+  "create:sales", "view:sales", "edit:sales",
+  "view:vehicles", "create:vehicles", "edit:vehicles",
+  "view:customers", "create:customers",
+  "approve:requests",
+  "view:finance_applications", "create:finance_application",
+  "review:finance_application", "approve:finance_application",
+  "manage:supplier_settlement", "cancel:closed_deal", "confirm:finance_disbursement",
+  "verify:finance_documents", "register:vehicle_handover",
+  "register:expected_payment",
+  "manage:finance", "view:finance",
+  "view:commissions", "manage:commissions",
+  "view:reports", "manage:settings",
+];
+/** SALES: no cancel, no disbursement, no finance view. */
+const SALES_PERMS = ALL_PERMS.filter(
+  (p) => !["manage:supplier_settlement", "cancel:closed_deal", "confirm:finance_disbursement", "view:finance", "manage:finance"].includes(p)
+);
+/** Can refund (disbursement + finance view) but not cancel a closed deal. */
+const CASHIER_PERMS = ALL_PERMS.filter((p) => p !== "cancel:closed_deal");
+const FORWARD = H + C;
+const MANUAL_CORRECTION = /manual accounting correction/;
+
+async function seed(tag: string, sourced = false) {
+  const s = await seedFinancedDealership(tag, {
+    modules: MODULES, ownerPerms: ALL_PERMS, label: "S693", vinPrefix: "VIN693", sourced,
+    actors: { sales: SALES_PERMS, cashier: CASHIER_PERMS, manager: ["manage:users"] },
+  });
+  return { ...s, sales: s.actors.sales, cashier: s.actors.cashier, manager: s.actors.manager };
+}
+type Seeded = Awaited<ReturnType<typeof seed>>;
+
+/** Finalized, forward paid to the company, the company's G received. */
+async function paidDeal(
+  tag: string,
+  method: "BANK_TRANSFER" | "CASH" = "BANK_TRANSFER",
+  sourced = false,
+  beforeFinalize?: (s: Seeded, applicationId: Id<"financeApplications">) => Promise<unknown>
+) {
+  const s = await seed(tag, sourced);
+  const { applicationId } = await readyDeal(s);
+  // A consigned car: the finance company pays the dealership, which settles the supplier.
+  if (sourced) {
+    await s.owner.as.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId: s.orgId, applicationId, route: "THROUGH_DEALERSHIP",
+    });
+  }
+  await beforeFinalize?.(s, applicationId);
+  await finalizeAsOwner(s, applicationId);
+  await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
+    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
+    expectedAmountMinor: FORWARD, idempotencyKey: crypto.randomUUID(),
+  });
+  if (method === "CASH") await s.t.run((ctx) => ctx.db.patch(applicationId, { expectedPaymentMethod: "CASH" }));
+  await s.owner.as.mutation(api.applications.confirmDisbursement, {
+    orgId: s.orgId, applicationId, disbursedAmountMinor: G, idempotencyKey: crypto.randomUUID(),
+  });
+  return { s, applicationId };
+}
+
+const start = (s: Seeded, applicationId: Id<"financeApplications">, key = crypto.randomUUID(), as = s.owner.as) =>
+  as.mutation(api.dealUnwind.startDealUnwind, {
+    orgId: s.orgId, applicationId, reason: "Customer returned the car.", idempotencyKey: key,
+  });
+const forwardReturn = (s: Seeded, unwindId: Id<"dealUnwinds">) =>
+  s.owner.as.mutation(api.dealUnwind.recordDealUnwindForwardReturn, {
+    orgId: s.orgId, unwindId, returnedAt: Date.now(), reference: "FC-RET-1", idempotencyKey: crypto.randomUUID(),
+  });
+const finishArgs = (s: Seeded, unwindId: Id<"dealUnwinds">, method: "BANK_TRANSFER" | "CASH" = "BANK_TRANSFER") => ({
+  orgId: s.orgId, unwindId, method, refundedAt: Date.now(),
+  ...(method === "BANK_TRANSFER"
+    ? { bankReference: "TRF-998" }
+    : { voucherNumber: "PV-12", recipientAcknowledged: true }),
+  creditNoteReference: "CN-77", vehicleReturnedAt: Date.now(),
+  vehicleReturnNote: "Returned to the lot.", customerPaymentDisposition: "REFUND" as const,
+  idempotencyKey: crypto.randomUUID(),
+});
+/** Record the remittance refund and close the deal - one step. */
+const finish = (s: Seeded, unwindId: Id<"dealUnwinds">, method: "BANK_TRANSFER" | "CASH" = "BANK_TRANSFER", as = s.owner.as) =>
+  as.mutation(api.dealUnwind.finishDealUnwind, finishArgs(s, unwindId, method));
+const abandon = (s: Seeded, unwindId: Id<"dealUnwinds">) =>
+  s.owner.as.mutation(api.dealUnwind.abandonDealUnwind, {
+    orgId: s.orgId, unwindId, reason: "Customer kept the car.", idempotencyKey: crypto.randomUUID(),
+  });
+const bareCancel = (s: Seeded, applicationId: Id<"financeApplications">) =>
+  s.owner.as.mutation(api.applications.cancelApplication, {
+    orgId: s.orgId, applicationId, reason: "x", idempotencyKey: crypto.randomUUID(),
+  });
+
+const receiptProof = (s: Seeded, applicationId: Id<"financeApplications">, disbursementVersion = 1) =>
+  s.t.run((ctx) => isFinanceCashReceivedReversalPosted(ctx, { orgId: s.orgId, applicationId, disbursementVersion }));
+const receiptEvents = (s: Seeded) =>
+  s.t.run(async (ctx) =>
+    (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect()).filter(
+      (e) => e.eventType === "FINANCE_CASH_RECEIVED"
+    )
+  );
+/** Rewrites the receipt event to the shape it had when posted with `method` (undefined = before SCRUM-599). */
+const setReceiptPostedMethod = (s: Seeded, method: "CASH" | undefined) =>
+  s.t.run(async (ctx) => {
+    const events = (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect()).filter(
+      (e) => e.eventType === "FINANCE_CASH_RECEIVED"
+    );
+    expect(events).toHaveLength(1);
+    const { paymentMethod: _dropped, ...rest } = events[0].payload as Record<string, unknown>;
+    await ctx.db.patch(events[0]._id, { payload: method === undefined ? rest : { ...rest, paymentMethod: method } });
+  });
+
+/**
+ * Every row the combined step writes, reduced to what a partial commit would
+ * change. Two equal snapshots around a refused call prove nothing moved.
+ */
+const moneyState = (s: Seeded, applicationId: Id<"financeApplications">, unwindId: Id<"dealUnwinds">) =>
+  s.t.run(async (ctx) => {
+    const app = (await ctx.db.get(applicationId))!;
+    const sale = (await ctx.db.get(app.finalizedSaleId!))!;
+    const unwind = (await ctx.db.get(unwindId))!;
+    const ofOrg = <T extends { orgId: Id<"organizations"> }>(rows: T[]) => rows.filter((row) => row.orgId === s.orgId);
+    const events = await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect();
+    const payments = await ctx.db.query("canonicalPayments").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect();
+    return {
+      app: {
+        status: app.status,
+        disbursedAt: app.disbursedAt,
+        disbursedAmountMinor: app.disbursedAmountMinor,
+        disbursementVersion: app.disbursementVersion,
+        settlementStatus: app.settlementStatus,
+      },
+      sale: sale.status,
+      vehicle: (await ctx.db.get(sale.vehicleId))?.status,
+      unwind: { status: unwind.status, refunded: unwind.remittanceRefund !== undefined, completed: unwind.completion !== undefined },
+      events: events.map((e) => `${e.eventType}:${e.status}`).sort(),
+      payments: payments.map((p) => `${p.direction}:${p.amountMinor}:${p.status}`).sort(),
+      allocations: ofOrg(await ctx.db.query("paymentAllocations").collect()).map((a) => a.status).sort(),
+      receivables: ofOrg(await ctx.db.query("receivableDocuments").collect()).map((r) => `${r.sourceType}:${r.status}`).sort(),
+      journalLines: ofOrg(await ctx.db.query("journalLines").collect()).length,
+      dealUnwindAudits: ofOrg(await ctx.db.query("financialAuditLog").collect())
+        .filter((row) => row.actionType.startsWith("DEAL_UNWIND"))
+        .map((row) => row.actionType)
+        .sort(),
+    };
+  });
+
+const ledgerTotals = (s: Seeded) =>
+  s.t.run(async (ctx) => {
+    const lines = (await ctx.db.query("journalLines").collect()).filter((line) => line.orgId === s.orgId);
+    return {
+      debit: lines.reduce((sum, line) => sum + line.debitMinor, 0),
+      credit: lines.reduce((sum, line) => sum + line.creditMinor, 0),
+    };
+  });
+
+describe("SCRUM-693 - the full unwind of a #pntr-shaped deal", () => {
+  test.each(["BANK_TRANSFER", "CASH"] as const)(
+    "%s: start -> forward returned -> refund and close: the deal is CANCELLED and every leg is POSTED",
+    async (method) => {
+      const { s, applicationId } = await paidDeal(`happy_${method}`, method);
+      const unwindId = await start(s, applicationId);
+
+      const unwind = await s.t.run((ctx) => ctx.db.get(unwindId));
+      expect(unwind).toMatchObject({ status: "ACTIVE", remittanceMinor: G, remittanceMethod: method, forwardDueMinor: FORWARD });
+
+      await forwardReturn(s, unwindId);
+      const proof = await s.t.run(async (ctx) => deriveForwardState(ctx, (await ctx.db.get(applicationId))!));
+      expect(proof.versions.some((row) => row.state === "RETURNED")).toBe(true);
+
+      const result = await finish(s, unwindId, method);
+      expect(result).toMatchObject({ receiptReversal: "REVERSED", nextDisbursementVersion: 2 });
+
+      const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+      expect(app).toMatchObject({ status: "CANCELLED", disbursementVersion: 2 });
+      expect(app?.disbursedAt).toBeUndefined();
+      expect(app?.disbursedAmountMinor).toBeUndefined();
+      expect(await receiptProof(s, applicationId)).toBe("REVERSED");
+
+      const done = await s.t.run((ctx) => ctx.db.get(unwindId));
+      expect(done?.status).toBe("COMPLETED");
+      expect(done?.remittanceRefund).toMatchObject({ method, amountMinor: G, receiptReversal: "REVERSED" });
+      expect(done?.completion).toMatchObject({ creditNoteReference: "CN-77", customerPaymentDisposition: "REFUND" });
+
+      // F4: the sale, its revenue journal, the receivables and the ledger.
+      const after = await s.t.run(async (ctx) => {
+        const sale = await ctx.db.get(app!.finalizedSaleId!);
+        const events = await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect();
+        const receivables = (await ctx.db.query("receivableDocuments").collect()).filter((r) => r.orgId === s.orgId);
+        const payments = await ctx.db.query("canonicalPayments").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect();
+        return { sale, events, receivables, payments };
+      });
+      expect(after.sale?.status).toBe("CANCELLED");
+      // The sale, the forward and the receipt are each reversed, and each
+      // reversal is itself POSTED - nothing original is left live.
+      const originals = after.events.filter((e) => e.eventType !== "JOURNAL_REVERSAL");
+      expect(originals.map((e) => e.eventType).sort()).toEqual(
+        ["FINANCE_CASH_RECEIVED", "FINANCE_COMPANY_FORWARD_PAID", "SALE_COMPLETED"]
+      );
+      expect(originals.every((e) => e.status === "REVERSED")).toBe(true);
+      const reversals = after.events.filter((e) => e.eventType === "JOURNAL_REVERSAL");
+      expect(reversals).toHaveLength(originals.length);
+      expect(reversals.every((e) => e.status === "POSTED")).toBe(true);
+      expect(after.receivables.length).toBeGreaterThan(0);
+      expect(after.receivables.every((r) => r.status === "CANCELLED")).toBe(true);
+      expect(after.payments.find((p) => p.amountMinor === G && p.direction === "IN")?.status).toBe("VOIDED");
+      // R1 / L2: the receipt reversal credits the account the refund left from.
+      const receipt = originals.find((e) => e.eventType === "FINANCE_CASH_RECEIVED")!;
+      const receiptReversal = reversals.find((e) => e.reversalOfEventId === receipt._id)!;
+      const creditedKeys = await s.t.run(async (ctx) => {
+        const lines = await ctx.db
+          .query("journalLines")
+          .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", receiptReversal.journalEntryId!))
+          .collect();
+        return Promise.all(
+          lines.filter((line) => line.creditMinor === G).map(async (line) => (await ctx.db.get(line.accountId))?.systemKey)
+        );
+      });
+      expect(creditedKeys).toEqual([method === "CASH" ? SYSTEM_KEYS.CASH_ON_HAND : SYSTEM_KEYS.BANK_ACCOUNT]);
+      const totals = await ledgerTotals(s);
+      expect(totals.debit).toBe(totals.credit);
+
+      // F5: managers hear about it like any other cancelled application.
+      const notices = await s.t.run(async (ctx) =>
+        (await ctx.db.query("notifications").collect()).filter(
+          (n) => n.userId === s.manager.userId && n.type === "application.cancelled"
+        )
+      );
+      expect(notices).toHaveLength(1);
+    }
+  );
+
+  test("a replay of the closing step with the same key writes nothing new", async () => {
+    const { s, applicationId } = await paidDeal("replay");
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    const args = finishArgs(s, unwindId);
+    const first = await s.owner.as.mutation(api.dealUnwind.finishDealUnwind, args);
+    const settled = await moneyState(s, applicationId, unwindId);
+    expect(await s.owner.as.mutation(api.dealUnwind.finishDealUnwind, args)).toEqual(first);
+    expect(await moneyState(s, applicationId, unwindId)).toEqual(settled);
+  });
+});
+
+describe("SCRUM-693 ruling B - a refusal in the closing step leaves every row as it was", () => {
+  /**
+   * Each blocker is a closed-deal teardown refusal `start` does not check,
+   * created AFTER the unwind started - the window the old four-step flow left
+   * open with the receipt already reversed.
+   */
+  const BLOCKERS = [
+    {
+      name: "the supplier payable is PAID",
+      message: /supplier payable has been paid/,
+      async apply(s: Seeded, saleId: Id<"sales">) {
+        const now = Date.now();
+        const id = await s.t.run((ctx) =>
+          ctx.db.insert("vehicleSupplierPayables", {
+            orgId: s.orgId, vehicleId: s.vehicleId, saleId, sourcedFromName: "Amman Importer Co", amountDue: 9_000,
+            currency: "JOD", status: "PAID", createdBy: s.owner.userId, createdAt: now, updatedAt: now,
+          })
+        );
+        return () => s.t.run((ctx) => ctx.db.delete(id));
+      },
+    },
+    {
+      name: "the trade-in has been resold",
+      message: /trade-in vehicle has already been resold/,
+      async apply(s: Seeded, saleId: Id<"sales">) {
+        const tradeIn = await s.t.run((ctx) =>
+          ctx.db.insert("vehicles", {
+            orgId: s.orgId, vin: "VIN693TRADE", make: "Kia", model: "Rio", year: 2018, mileage: 90_000,
+            color: "White", fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 4_000, status: "SOLD",
+            sourceType: "STOCK", purchasePrice: 3_000,
+          })
+        );
+        await s.t.run((ctx) => ctx.db.patch(saleId, { tradeInVehicleId: tradeIn, tradeInValue: 3_000 }));
+        return () => s.t.run((ctx) => ctx.db.patch(saleId, { tradeInVehicleId: undefined, tradeInValue: undefined }));
+      },
+    },
+    {
+      name: "the trade-in is reserved",
+      message: /trade-in vehicle is currently reserved/,
+      async apply(s: Seeded, saleId: Id<"sales">) {
+        const tradeIn = await s.t.run((ctx) =>
+          ctx.db.insert("vehicles", {
+            orgId: s.orgId, vin: "VIN693TRADE", make: "Kia", model: "Rio", year: 2018, mileage: 90_000,
+            color: "White", fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 4_000, status: "RESERVED",
+            sourceType: "STOCK", purchasePrice: 3_000,
+          })
+        );
+        await s.t.run((ctx) => ctx.db.patch(saleId, { tradeInVehicleId: tradeIn, tradeInValue: 3_000 }));
+        return () => s.t.run((ctx) => ctx.db.patch(saleId, { tradeInVehicleId: undefined, tradeInValue: undefined }));
+      },
+    },
+    {
+      name: "a legacy receivable is linked to the sale",
+      message: /./,
+      async apply(s: Seeded, saleId: Id<"sales">) {
+        const now = Date.now();
+        const id = await s.t.run((ctx) =>
+          ctx.db.insert("receivables", {
+            orgId: s.orgId, customerId: s.customerId, saleId, sourceType: "INTERNAL_INSTALLMENT",
+            title: "Legacy", originalAmount: 100, outstandingAmount: 100, dueDate: now + 86_400_000,
+            status: "OPEN", createdBy: s.owner.userId, createdAt: now, updatedAt: now,
+          })
+        );
+        return () => s.t.run((ctx) => ctx.db.delete(id));
+      },
+    },
+    {
+      // PRB-F2 (Codex seat): restoreVehicleFromSale refuses a SOLD car that does not record its sale.
+      name: "the sold car does not record which sale sold it",
+      message: /does not record which sale marked it sold/,
+      async apply(s: Seeded, saleId: Id<"sales">) {
+        await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { soldBySaleId: undefined }));
+        return () => s.t.run((ctx) => ctx.db.patch(s.vehicleId, { soldBySaleId: saleId }));
+      },
+    },
+    {
+      // PRB-F2 (Codex seat): assertNoActiveAllocations refuses a receivable whose history (plus the
+      // reversal row the close adds) exceeds the probe limit, even when every row is REVERSED.
+      name: "the finance receivable has too long an allocation history",
+      message: /too long an allocation history/,
+      async apply(s: Seeded, saleId: Id<"sales">) {
+        const now = Date.now();
+        const ids = await s.t.run(async (ctx) => {
+          const app = (await ctx.db.query("financeApplications").collect()).find((a) => a.finalizedSaleId === saleId)!;
+          const receivable = (await ctx.db.query("receivableDocuments").collect()).find(
+            (r) => r.sourceId === String(app._id)
+          )!;
+          const payment = (await ctx.db.query("canonicalPayments").collect())[0];
+          const out: Id<"paymentAllocations">[] = [];
+          for (let i = 0; i < 200; i++) {
+            out.push(
+              await ctx.db.insert("paymentAllocations", {
+                orgId: s.orgId, paymentId: payment._id, receivableDocumentId: receivable._id, amountMinor: 1,
+                currency: "JOD", scale: 3, allocationDate: now, status: "REVERSED", createdBy: s.owner.userId, createdAt: now,
+              })
+            );
+          }
+          return out;
+        });
+        return () => s.t.run(async (ctx) => { for (const id of ids) await ctx.db.delete(id); });
+      },
+    },
+  ];
+
+  test.each(BLOCKERS)("$name: refused, nothing moves, and clearing the blocker lets it finish", async (blocker) => {
+    const { s, applicationId } = await paidDeal(`rb_${blocker.name.replace(/\W/g, "_")}`);
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    const saleId = (await s.t.run((ctx) => ctx.db.get(applicationId)))!.finalizedSaleId!;
+    const clear = await blocker.apply(s, saleId);
+
+    // PRB-F2: the status query never promises a close the closing step refuses.
+    const statusOf = () => s.owner.as.query(api.dealUnwind.unwindStatus, { orgId: s.orgId, applicationId });
+    const blocked = await statusOf();
+    expect(blocked.eligibility.canFinish).toBe(false);
+    expect(blocked.refusals.finish?.message).toMatch(blocker.message);
+
+    const before = await moneyState(s, applicationId, unwindId);
+    const refusal = await refusalMessageOf(finish(s, unwindId));
+    expect(refusal).not.toBeNull();
+    expect(refusal).toMatch(blocker.message);
+    expect(blocked.refusals.finish?.message).toBe(refusal);
+    expect(Object.values(DEAL_UNWIND_MESSAGES)).not.toContain(refusal);
+    expect(await moneyState(s, applicationId, unwindId)).toEqual(before);
+    expect(before.app.disbursedAt).toBeDefined();
+    expect(before.unwind).toEqual({ status: "ACTIVE", refunded: false, completed: false });
+    expect(await receiptProof(s, applicationId)).toBeNull();
+
+    // Control: the same call succeeds once the blocker is gone.
+    await clear();
+    expect((await statusOf()).eligibility.canFinish).toBe(true);
+    await finish(s, unwindId);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+  });
+
+  test("after a refused close the unwind can still be abandoned, and the still-paid deal keeps pointing at it", async () => {
+    const { s, applicationId } = await paidDeal("rb_abandon");
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    const saleId = (await s.t.run((ctx) => ctx.db.get(applicationId)))!.finalizedSaleId!;
+    await BLOCKERS[0].apply(s, saleId);
+    expect(await refusalMessageOf(finish(s, unwindId))).toMatch(BLOCKERS[0].message);
+
+    await abandon(s, unwindId);
+    expect((await s.t.run((ctx) => ctx.db.get(unwindId)))?.status).toBe("ABANDONED");
+    expect(await refusalMessageOf(bareCancel(s, applicationId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_CANCEL_USE_UNWIND);
+    expect((await receiptEvents(s)).some((e) => e.status === "POSTED")).toBe(true);
+  });
+});
+
+describe("SCRUM-693 - the steps run in order and only once", () => {
+  test("the closing step is refused until the forward return is recorded; nothing is written", async () => {
+    const { s, applicationId } = await paidDeal("order1");
+    const unwindId = await start(s, applicationId);
+    const before = await moneyState(s, applicationId, unwindId);
+    expect(await refusalMessageOf(finish(s, unwindId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_FORWARD_FIRST);
+    expect(await moneyState(s, applicationId, unwindId)).toEqual(before);
+  });
+
+  test("a second start while one is active is refused; a replay of the same key returns the same unwind", async () => {
+    const { s, applicationId } = await paidDeal("order3");
+    const key = crypto.randomUUID();
+    const first = await start(s, applicationId, key);
+    expect(await start(s, applicationId, key)).toEqual(first);
+    expect(await refusalMessageOf(start(s, applicationId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_ALREADY_ACTIVE);
+    expect(await s.t.run((ctx) => ctx.db.query("dealUnwinds").collect())).toHaveLength(1);
+  });
+
+  test("a recorded step is not recorded twice, and a completed unwind accepts no further step", async () => {
+    const { s, applicationId } = await paidDeal("order4");
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    expect(await refusalMessageOf(forwardReturn(s, unwindId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_STEP_DONE);
+    await finish(s, unwindId);
+    expect(await refusalMessageOf(finish(s, unwindId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_NOT_ACTIVE);
+    expect(await refusalMessageOf(abandon(s, unwindId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_NOT_ACTIVE);
+  });
+
+  test("an abandoned unwind accepts no further step", async () => {
+    const { s, applicationId } = await paidDeal("order5");
+    const unwindId = await start(s, applicationId);
+    await abandon(s, unwindId);
+    expect(await refusalMessageOf(forwardReturn(s, unwindId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_NOT_ACTIVE);
+    expect(await refusalMessageOf(finish(s, unwindId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_NOT_ACTIVE);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
+  });
+
+  test("closing needs the deal-cancel authority as well as the refund authority", async () => {
+    const { s, applicationId } = await paidDeal("perm_finish");
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    const before = await moneyState(s, applicationId, unwindId);
+    expect(await refusalMessageOf(finish(s, unwindId, "BANK_TRANSFER", s.cashier.as))).not.toBeNull();
+    expect(await moneyState(s, applicationId, unwindId)).toEqual(before);
+  });
+});
+
+describe("SCRUM-693 - the refund goes back by the rail it came in on, and posts in an OPEN period", () => {
+  test("a cash refund of a bank-transfer receipt is refused and nothing moves", async () => {
+    const { s, applicationId } = await paidDeal("rail");
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    const before = await moneyState(s, applicationId, unwindId);
+    expect(await refusalMessageOf(finish(s, unwindId, "CASH"))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_REFUND_METHOD_MISMATCH);
+    expect(await moneyState(s, applicationId, unwindId)).toEqual(before);
+  });
+
+  test("cash without the recipient's acknowledgement is refused", async () => {
+    const { s, applicationId } = await paidDeal("ack", "CASH");
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    expect(
+      await refusalMessageOf(
+        s.owner.as.mutation(api.dealUnwind.finishDealUnwind, {
+          ...finishArgs(s, unwindId, "CASH"), recipientAcknowledged: false,
+        })
+      )
+    ).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_EVIDENCE_REQUIRED);
+  });
+
+  test("D4: a CLOSING period refuses the refund, which posting rules alone would let through", async () => {
+    const { s, applicationId } = await paidDeal("closing");
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    await s.t.run(async (ctx) => {
+      const period = (await ctx.db.query("accountingPeriods").collect()).find((p) => p.orgId === s.orgId)!;
+      await ctx.db.patch(period._id, { status: "CLOSING" });
+    });
+    const before = await moneyState(s, applicationId, unwindId);
+    expect(await refusalMessageOf(finish(s, unwindId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_PERIOD_NOT_OPEN);
+    expect(await moneyState(s, applicationId, unwindId)).toEqual(before);
+  });
+});
+
+describe("SCRUM-693 - the receipt reversal is proven POSTED, not merely queued", () => {
+  test("a receipt that was never posted and is not queued proves NOT_POSTED", async () => {
+    const s = await seed("np");
+    const { applicationId } = await readyDeal(s);
+    expect(await receiptProof(s, applicationId)).toBe("NOT_POSTED");
+  });
+
+  test("a live receipt is not proof of anything", async () => {
+    const { s, applicationId } = await paidDeal("live");
+    expect((await receiptEvents(s)).some((e) => e.status === "POSTED")).toBe(true);
+    expect(await receiptProof(s, applicationId)).toBeNull();
+  });
+
+  test("a reversal that is not POSTED fails the strong proof", async () => {
+    const { s, applicationId } = await paidDeal("strong");
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    await finish(s, unwindId);
+    expect(await receiptProof(s, applicationId)).toBe("REVERSED");
+    await s.t.run(async (ctx) => {
+      const original = (await ctx.db.query("accountingEvents").collect()).find(
+        (e) => e.orgId === s.orgId && e.eventType === "FINANCE_CASH_RECEIVED" && e.status === "REVERSED"
+      )!;
+      await ctx.db.patch(original.reversedByEventId!, { status: "PENDING" });
+    });
+    expect(await receiptProof(s, applicationId)).toBeNull();
+  });
+});
+
+describe("SCRUM-693 - start refuses what it cannot unwind", () => {
+  test("a deal whose company payment is not yet received", async () => {
+    const s = await seed("unpaid");
+    const { applicationId } = await readyDeal(s);
+    await finalizeAsOwner(s, applicationId);
+    expect(await refusalMessageOf(start(s, applicationId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_NOT_ELIGIBLE);
+  });
+
+  test("D1: a deal whose commission is already paid", async () => {
+    const { s, applicationId } = await paidDeal("comm");
+    await s.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      await ctx.db.patch(app!.finalizedSaleId!, { commissionPaidAt: Date.now() });
+    });
+    expect(await refusalMessageOf(start(s, applicationId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_COMMISSION_PAID);
+  });
+
+  test("another organization's deal answers as not found", async () => {
+    const { s, applicationId } = await paidDeal("tenant");
+    const foreignOrgId = await s.t.run(async (ctx) => {
+      const orgId = await ctx.db.insert("organizations", { name: "Other", createdAt: Date.now() });
+      await ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() });
+      const roleId = await ctx.db.insert("roles", { orgId, name: "OWNER", permissions: [...ALL_PERMS], isSystemOwnerRole: true });
+      await ctx.db.insert("memberships", { orgId, userId: s.owner.userId, roleId });
+      return orgId;
+    });
+    expect(
+      await refusalMessageOf(
+        s.owner.as.mutation(api.dealUnwind.startDealUnwind, {
+          orgId: foreignOrgId, applicationId, reason: "x", idempotencyKey: crypto.randomUUID(),
+        })
+      )
+    ).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_NOT_FOUND);
+  });
+
+  test("a user without cancel and disbursement authority is refused", async () => {
+    const { s, applicationId } = await paidDeal("perm");
+    expect(await refusalMessageOf(start(s, applicationId, crypto.randomUUID(), s.sales.as))).not.toBeNull();
+    expect(await s.t.run((ctx) => ctx.db.query("dealUnwinds").collect())).toHaveLength(0);
+  });
+});
+
+describe("SCRUM-693-F2 - a bare cancel points only where the deal can actually go", () => {
+  test("a bank-transfer paid deal points at the unwind", async () => {
+    const { s, applicationId } = await paidDeal("bare");
+    expect(await refusalMessageOf(bareCancel(s, applicationId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_CANCEL_USE_UNWIND);
+  });
+
+  // Each record start refuses must not be told to use the unwind.
+  const NOT_UNWINDABLE: Array<{
+    name: string;
+    method?: "BANK_TRANSFER" | "CASH";
+    startRefusal: string;
+    apply: (s: Seeded, applicationId: Id<"financeApplications">) => Promise<unknown>;
+  }> = [
+    {
+      name: "the deal expects a cheque",
+      startRefusal: DEAL_UNWIND_MESSAGES.DEAL_UNWIND_CHEQUE_DEAL,
+      apply: (s: Seeded, applicationId: Id<"financeApplications">) =>
+        s.t.run((ctx) => ctx.db.patch(applicationId, { expectedPaymentMethod: "CHEQUE" })),
+    },
+    {
+      name: "the receipt was recorded as a cheque",
+      startRefusal: DEAL_UNWIND_MESSAGES.DEAL_UNWIND_CHEQUE_DEAL,
+      apply: (s: Seeded) =>
+        s.t.run(async (ctx) => {
+          const payment = (await ctx.db.query("canonicalPayments").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect())
+            .find((p) => p.amountMinor === G && p.direction === "IN")!;
+          await ctx.db.patch(payment._id, { method: "CHEQUE" });
+        }),
+    },
+    {
+      name: "the recorded receipt is no longer settled",
+      startRefusal: DEAL_UNWIND_MESSAGES.DEAL_UNWIND_CHAIN_MISMATCH,
+      apply: (s: Seeded) =>
+        s.t.run(async (ctx) => {
+          const payment = (await ctx.db.query("canonicalPayments").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect())
+            .find((p) => p.amountMinor === G && p.direction === "IN")!;
+          await ctx.db.patch(payment._id, { status: "VOIDED" });
+        }),
+    },
+    {
+      // R1: a receipt emitted before SCRUM-599 carries no method and debited the bank.
+      name: "a cash receipt whose journal debited the bank",
+      method: "CASH",
+      startRefusal: DEAL_UNWIND_MESSAGES.DEAL_UNWIND_CHAIN_MISMATCH,
+      apply: (s: Seeded) => setReceiptPostedMethod(s, undefined),
+    },
+    {
+      name: "a bank payment whose receipt event records cash",
+      startRefusal: DEAL_UNWIND_MESSAGES.DEAL_UNWIND_CHAIN_MISMATCH,
+      apply: (s: Seeded) => setReceiptPostedMethod(s, "CASH"),
+    },
+  ];
+
+  test.each(NOT_UNWINDABLE)("$name: cancel keeps the manual-correction refusal, and start agrees", async (row) => {
+    const { s, applicationId } = await paidDeal(`f2_${NOT_UNWINDABLE.indexOf(row)}`, row.method);
+    await row.apply(s, applicationId);
+    const cancelRefusal = await refusalMessageOf(bareCancel(s, applicationId));
+    expect(cancelRefusal).toMatch(MANUAL_CORRECTION);
+    expect(cancelRefusal).not.toBe(DEAL_UNWIND_MESSAGES.DEAL_CANCEL_USE_UNWIND);
+    expect(await refusalMessageOf(start(s, applicationId))).toBe(row.startRefusal);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
+  });
+
+  test("R1 control: a bank receipt posted before SCRUM-599 (no method) still unwinds", async () => {
+    const { s, applicationId } = await paidDeal("r1_bank_legacy");
+    await setReceiptPostedMethod(s, undefined);
+    expect(await refusalMessageOf(bareCancel(s, applicationId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_CANCEL_USE_UNWIND);
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    await finish(s, unwindId);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+  });
+
+  test("R1: finish re-checks the account the receipt debited, and moves nothing", async () => {
+    const { s, applicationId } = await paidDeal("r1_finish", "CASH");
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    await setReceiptPostedMethod(s, undefined);
+    const before = await moneyState(s, applicationId, unwindId);
+    expect(await refusalMessageOf(finish(s, unwindId, "CASH"))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_CHAIN_MISMATCH);
+    expect(await moneyState(s, applicationId, unwindId)).toEqual(before);
+  });
+});
+
+describe("SCRUM-693 - nothing else moves the deal's money around an active unwind", () => {
+  test("cancel and the forward's own return button are refused while the unwind is active", async () => {
+    const { s, applicationId } = await paidDeal("guard");
+    await start(s, applicationId);
+    expect(await refusalMessageOf(bareCancel(s, applicationId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_ACTIVE);
+    const forwardId = await s.t.run(async (ctx) => (await ctx.db.query("financeCompanyForwards").first())!._id);
+    expect(
+      await refusalMessageOf(
+        s.owner.as.mutation(api.financeCompanyForward.reportFinanceCompanyForwardReturned, {
+          orgId: s.orgId, applicationId, forwardId, reason: "x", idempotencyKey: crypto.randomUUID(),
+        })
+      )
+    ).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_ACTIVE);
+  });
+
+  test("abandoning after the forward return is allowed, and the still-paid deal keeps pointing at the unwind", async () => {
+    const { s, applicationId } = await paidDeal("r1_control");
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    await abandon(s, unwindId);
+    expect((await s.t.run((ctx) => ctx.db.get(unwindId)))?.status).toBe("ABANDONED");
+    expect(await refusalMessageOf(bareCancel(s, applicationId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_CANCEL_USE_UNWIND);
+  });
+});
+
+describe("SCRUM-693 D3 - the returned car goes into inspection (Sol A', c22134)", () => {
+  const vehicleOf = (s: Seeded) => s.t.run((ctx) => ctx.db.get(s.vehicleId));
+  const reserve = (s: Seeded) =>
+    s.t.run((ctx) =>
+      ctx.db.insert("vehicleReservations", {
+        vehicleId: s.vehicleId, orgId: s.orgId, customerId: s.customerId, status: "ACTIVE",
+        reservedBy: s.owner.userId, reservedAt: Date.now(),
+      })
+    );
+  async function unwound(tag: string, opts: { sourced?: boolean; hold?: boolean } = {}) {
+    const { s, applicationId } = await paidDeal(tag, "BANK_TRANSFER", opts.sourced ?? false);
+    if (opts.hold) await reserve(s);
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    const result = await finish(s, unwindId);
+    return { s, applicationId, unwindId, result };
+  }
+
+  test.each([
+    { name: "stock", sourced: false, hold: false },
+    { name: "stock with a reinstated hold", sourced: false, hold: true },
+    { name: "sourced", sourced: true, hold: false },
+    { name: "sourced with a reinstated hold", sourced: true, hold: true },
+  ])("$name: the car ends IN_INSPECTION and no later hold write moves it", async ({ name, sourced, hold }) => {
+    const { s, result } = await unwound(`insp_${name.replace(/\W/g, "_")}`, { sourced, hold });
+    expect(result.vehicleInspection).toMatchObject({ vehicleId: s.vehicleId, placed: true });
+
+    const vehicle = await vehicleOf(s);
+    expect(vehicle?.status).toBe("IN_INSPECTION");
+    expect(vehicle?.preHoldStatus).toBeUndefined();
+    expect(vehicle?.sourceType).toBe(sourced ? "SOURCED" : "STOCK");
+    if (sourced) expect(vehicle?.arrivedAt).toBeTypeOf("number");
+    // A hold row the teardown reinstated is kept: the deposit still exists.
+    const holds = await s.t.run((ctx) =>
+      ctx.db.query("vehicleReservations").withIndex("by_org_vehicle_status", (q) =>
+        q.eq("orgId", s.orgId).eq("vehicleId", s.vehicleId).eq("status", "ACTIVE")).collect()
+    );
+    expect(holds).toHaveLength(hold ? 1 : 0);
+
+    // Every automatic writer leaves an inspected car alone.
+    await reserve(s);
+    await s.t.run((ctx) => syncVehicleHoldStatus(ctx, s.vehicleId, s.owner.userId));
+    await s.t.run(async (ctx) => {
+      for (const row of await ctx.db.query("vehicleReservations").collect()) {
+        if (row.vehicleId === s.vehicleId) await ctx.db.patch(row._id, { status: "RELEASED", releasedAt: Date.now() });
+      }
+    });
+    await s.t.run((ctx) => syncVehicleHoldStatus(ctx, s.vehicleId, s.owner.userId));
+    expect((await vehicleOf(s))?.status).toBe("IN_INSPECTION");
+
+    const audit = await s.t.run(async (ctx) =>
+      (await ctx.db.query("financialAuditLog").collect()).find((row) => row.actionType === "DEAL_UNWIND_COMPLETED")
+    );
+    expect((audit?.after as { vehicleInspection?: unknown } | undefined)?.vehicleInspection).toMatchObject({ placed: true });
+  });
+
+  test("an arrival already recorded on a sourced car is kept", async () => {
+    const { s, applicationId } = await paidDeal("insp_arrived", "BANK_TRANSFER", true);
+    const arrivedAt = Date.now() - 86_400_000;
+    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { arrivedAt }));
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    await finish(s, unwindId);
+    expect((await vehicleOf(s))?.arrivedAt).toBe(arrivedAt);
+  });
+
+  test.each(["IN_REPAIR", "IN_INSPECTION", "SOLD"] as const)("a car already %s is left as it is", async (status) => {
+    const s = await seed(`insp_keep_${status}`);
+    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { status }));
+    const placed = await s.t.run((ctx) =>
+      placeReturnedVehicleInInspection(ctx, {
+        orgId: s.orgId, vehicleId: s.vehicleId, vehicleReturnedAt: Date.now(), actorId: s.owner.userId, now: Date.now(),
+      })
+    );
+    expect(placed).toEqual({ vehicleId: s.vehicleId, fromStatus: status, placed: false });
+    expect((await vehicleOf(s))?.status).toBe(status);
+  });
+
+  test("a refused closing step leaves the car SOLD", async () => {
+    const { s, applicationId } = await paidDeal("insp_refused");
+    const unwindId = await start(s, applicationId);
+    // The forward has not come back yet, so the closing step refuses.
+    const before = await moneyState(s, applicationId, unwindId);
+    expect(await refusalMessageOf(finish(s, unwindId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_FORWARD_FIRST);
+    expect(await moneyState(s, applicationId, unwindId)).toEqual(before);
+    expect(before.vehicle).toBe("SOLD");
+  });
+
+  test("the closing step's replay does not place the car twice", async () => {
+    const { s, applicationId } = await paidDeal("insp_replay");
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    const args = finishArgs(s, unwindId);
+    const first = await s.owner.as.mutation(api.dealUnwind.finishDealUnwind, args);
+    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { status: "AVAILABLE" })); // inspection cleared by hand
+    expect(await s.owner.as.mutation(api.dealUnwind.finishDealUnwind, args)).toEqual(first);
+    expect((await vehicleOf(s))?.status).toBe("AVAILABLE");
+  });
+
+  test("a full unwind of a deal whose execution fee was paid stays balanced", async () => {
+    const { s, applicationId } = await paidDeal("insp_fee", "BANK_TRANSFER", false, async (seeded, id) => {
+      // The company charged a 50 JOD execution fee when the deal was created.
+      await seeded.t.run(async (ctx) => {
+        const app = (await ctx.db.get(id))!;
+        await ctx.db.patch(id, { companyRuleSnapshot: { ...app.companyRuleSnapshot!, adminFees: 50 } });
+      });
+      const feeId = await seeded.owner.as.mutation(api.financeDealCosts.recordExecutionFeeActual, {
+        orgId: seeded.orgId, applicationId: id, actualAmountMinor: 50_000, expectedCurrency: "JOD",
+        paidBy: "DEALER", idempotencyKey: crypto.randomUUID(),
+      });
+      await seeded.owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
+        orgId: seeded.orgId, feeId, notes: "Execution fee reconciled.",
+      });
+      await seeded.owner.as.mutation(api.financeDealCosts.recordDirectFeePayment, {
+        orgId: seeded.orgId, feeId, method: "BANK_TRANSFER", paidAt: Date.now(), expectedAmountMinor: 50_000,
+        idempotencyKey: crypto.randomUUID(),
+      });
+    });
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    await finish(s, unwindId);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+    const totals = await ledgerTotals(s);
+    expect(totals.debit).toBe(totals.credit);
+  });
+});
+
+describe("SCRUM-693 D6 - unwindStatus and the deals-list badge (Sol c22134 Q12)", () => {
+  const status = (s: Seeded, applicationId: Id<"financeApplications">, as = s.owner.as) =>
+    as.query(api.dealUnwind.unwindStatus, { orgId: s.orgId, applicationId });
+  const badge = (s: Seeded, applicationIds: Id<"financeApplications">[], as = s.owner.as) =>
+    as.query(api.dealUnwind.activeUnwindApplicationIds, { orgId: s.orgId, applicationIds });
+
+  test("absent -> active -> forward returned -> completed, as the owner sees it", async () => {
+    const { s, applicationId } = await paidDeal("st_life");
+    expect(await status(s, applicationId)).toMatchObject({
+      status: null, step: null, evidence: null,
+      eligibility: { canStart: true, canForwardReturn: false, canFinish: false, canAbandon: false },
+    });
+
+    const unwindId = await start(s, applicationId);
+    const active = await status(s, applicationId);
+    expect(active).toMatchObject({
+      unwindId, status: "ACTIVE", step: "AWAITING_FORWARD_RETURN",
+      eligibility: { canStart: false, canForwardReturn: true, canFinish: false, canAbandon: true },
+      refusals: { finish: { code: "DEAL_UNWIND_FORWARD_FIRST" } },
+      evidence: { remittanceMinor: G, remittanceMethod: "BANK_TRANSFER", forwardDueMinor: FORWARD, forwardReturn: null },
+    });
+    // Each flag matches what the mutation then does.
+    expect(await refusalMessageOf(finish(s, unwindId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_FORWARD_FIRST);
+
+    await forwardReturn(s, unwindId);
+    expect(await status(s, applicationId)).toMatchObject({
+      step: "AWAITING_FINISH",
+      eligibility: { canForwardReturn: false, canFinish: true, canAbandon: true },
+      refusals: {},
+      evidence: { forwardReturn: { reference: "FC-RET-1" } },
+    });
+
+    await finish(s, unwindId);
+    expect(await status(s, applicationId)).toMatchObject({
+      status: "COMPLETED", step: "COMPLETED",
+      eligibility: { canStart: false, canForwardReturn: false, canFinish: false, canAbandon: false },
+      evidence: {
+        remittanceRefund: { amountMinor: G, bankReference: "TRF-998", receiptReversal: "REVERSED" },
+        completion: { creditNoteReference: "CN-77" },
+      },
+    });
+  });
+
+  test("abandoned: the latest unwind is shown and a new start is offered", async () => {
+    const { s, applicationId } = await paidDeal("st_abandon");
+    const unwindId = await start(s, applicationId);
+    await abandon(s, unwindId);
+    expect(await status(s, applicationId)).toMatchObject({
+      unwindId, status: "ABANDONED", step: "ABANDONED",
+      eligibility: { canStart: true },
+      evidence: { abandonment: { reason: "Customer kept the car." } },
+    });
+  });
+
+  test("sales sees the step but no money evidence and no money-step flags", async () => {
+    const { s, applicationId } = await paidDeal("st_sales");
+    await start(s, applicationId);
+    const seen = await status(s, applicationId, s.sales.as);
+    expect(seen).toMatchObject({
+      status: "ACTIVE", step: "AWAITING_FORWARD_RETURN", evidence: null, refusals: {},
+      eligibility: { canStart: false, canForwardReturn: false, canFinish: false, canAbandon: false },
+    });
+    expect(JSON.stringify(seen)).not.toContain(String(G));
+    expect(JSON.stringify(seen)).not.toContain("Customer returned the car.");
+  });
+
+  test("the cashier may record the forward and sees evidence, but cannot finish or abandon", async () => {
+    const { s, applicationId } = await paidDeal("st_cashier");
+    await start(s, applicationId);
+    expect(await status(s, applicationId, s.cashier.as)).toMatchObject({
+      evidence: { remittanceMinor: G },
+      eligibility: { canForwardReturn: true, canFinish: false, canAbandon: false },
+    });
+  });
+
+  test("a start refusal is reported with its code, not as a flag alone", async () => {
+    const { s, applicationId } = await paidDeal("st_refusal");
+    await s.t.run(async (ctx) => {
+      const app = (await ctx.db.get(applicationId))!;
+      await ctx.db.patch(app.finalizedSaleId!, { commissionPaidAt: Date.now() });
+    });
+    expect(await status(s, applicationId)).toMatchObject({
+      eligibility: { canStart: false },
+      refusals: { start: { code: "DEAL_UNWIND_COMMISSION_PAID", message: DEAL_UNWIND_MESSAGES.DEAL_UNWIND_COMMISSION_PAID } },
+    });
+  });
+
+  test("another organization's deal is not found, and its unwind never badges", async () => {
+    const { s, applicationId } = await paidDeal("st_tenant");
+    await start(s, applicationId);
+    const foreignOrgId = await s.t.run(async (ctx) => {
+      const orgId = await ctx.db.insert("organizations", { name: "Other", createdAt: Date.now() });
+      await ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() });
+      const roleId = await ctx.db.insert("roles", { orgId, name: "OWNER", permissions: [...ALL_PERMS], isSystemOwnerRole: true });
+      await ctx.db.insert("memberships", { orgId, userId: s.owner.userId, roleId });
+      return orgId;
+    });
+    await expect(
+      s.owner.as.query(api.dealUnwind.unwindStatus, { orgId: foreignOrgId, applicationId })
+    ).rejects.toThrow();
+    expect(
+      await s.owner.as.query(api.dealUnwind.activeUnwindApplicationIds, { orgId: foreignOrgId, applicationIds: [applicationId] })
+    ).toEqual([]);
+  });
+
+  test("the badge lists only ACTIVE unwinds, for sales too, and refuses an oversized page", async () => {
+    const { s, applicationId } = await paidDeal("st_badge");
+    expect(await badge(s, [applicationId], s.sales.as)).toEqual([]);
+    const unwindId = await start(s, applicationId);
+    expect(await badge(s, [applicationId, applicationId], s.sales.as)).toEqual([applicationId]);
+    await abandon(s, unwindId);
+    expect(await badge(s, [applicationId])).toEqual([]);
+    await expect(badge(s, Array.from({ length: UNWIND_BADGE_BATCH_MAX + 1 }, () => applicationId))).rejects.toThrow();
+  });
+});

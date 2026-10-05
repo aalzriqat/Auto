@@ -133,6 +133,11 @@ const PERMISSION_GROUPS = [
   }
 ];
 
+const DEAL_AUTHORITIES: { id: Permission; label: string; hint: string }[] = [
+  { id: PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT, label: "RecordSupplierRoute", hint: "RecordSupplierRouteHint" },
+  { id: PERMISSIONS.CANCEL_CLOSED_DEAL, label: "CancelClosedDeal", hint: "CancelClosedDealHint" },
+];
+
 export function RolePermissionsEditor({
   selectedPermissions,
   onChange,
@@ -291,6 +296,34 @@ export function RolePermissionsEditor({
           </AccordionItem>
         );
       })}
+
+      {/* SCRUM-413: the two financed-deal authorities are independent grants.
+          They have no module toggle (so nothing here is dimmed by a base view),
+          and the server's role validation stays authoritative. */}
+      <AccordionItem value="financedDealAuthorities" className="border rounded-lg px-4 bg-card">
+        <AccordionTrigger className="hover:no-underline py-3">
+          <span className="font-semibold">{t("FinancedDealAuthorities" as any)}</span>
+        </AccordionTrigger>
+        <AccordionContent className="pt-2 pb-4 space-y-3 border-t mt-2">
+          <p className="text-xs text-muted-foreground">{t("FinancedDealAuthoritiesNotice" as any)}</p>
+          {DEAL_AUTHORITIES.map((authority) => (
+            <div key={authority.id} className="flex items-center justify-between gap-3 p-3 rounded border bg-muted/10">
+              <div className="min-w-0">
+                <Label htmlFor={`deal-${authority.id}`} className="text-sm font-medium cursor-pointer">
+                  {t(authority.label as any)}
+                </Label>
+                <p className="text-xs text-muted-foreground">{t(authority.hint as any)}</p>
+              </div>
+              <Switch
+                id={`deal-${authority.id}`}
+                checked={selectedPermissions.includes(authority.id)}
+                disabled={disabled}
+                onCheckedChange={(c) => togglePermission(authority.id, c)}
+              />
+            </div>
+          ))}
+        </AccordionContent>
+      </AccordionItem>
     </Accordion>
   );
 }

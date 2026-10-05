@@ -32,6 +32,9 @@ export const expenseSchema = z
     // the payment date (e.g. insurance paid in June covering July onward).
     // Left empty, recognition begins the month the expense was paid.
     amortizationStartDate: z.string().optional(),
+    // SCRUM-389. Offered only for a SOURCED vehicle; the server is the
+    // authority on whether SUPPLIER is allowed.
+    costBearer: z.enum(["SHOWROOM", "SUPPLIER"]).optional(),
   })
   .refine((v) => !v.isPrepaid || (v.amortizationMonths !== undefined && v.amortizationMonths >= 1), {
     message: "Enter how many months to amortize over",

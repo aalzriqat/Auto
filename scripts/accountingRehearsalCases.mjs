@@ -137,6 +137,7 @@ async function makePartiallyCommittedDeposit({ orgId, ownerMust, label }) {
     orgId,
     quoteId,
     amount: 5000,
+    method: "CASH",
     idempotencyKey: `rehearsal-deposit-${label}-${stamp}`,
   });
 
@@ -866,6 +867,7 @@ export async function runRehearsalCases(ctx) {
         orgId,
         quoteId,
         amount: 5000,
+        method: "CASH",
         idempotencyKey: `rehearsal-rt1-deposit-${stamp}`,
       };
       const firstDeposit = await ownerMust("mutation", "deposits:create", depositArgs);
@@ -1771,11 +1773,8 @@ export async function runRehearsalCases(ctx) {
         expectedCurrency: denom.currency,
       });
       await ownerMust("mutation", "financeDealCosts:reconcileDealFee", { orgId, feeId, notes: "Matched." });
-      await ownerMust("mutation", "financeDealCosts:classifyDealAccounting", {
-        orgId,
-        applicationId,
-        notes: "Invoice and settlement advice on file.",
-      });
+      // SCRUM-407: no manual classification step — finalizeDeal checks the
+      // deal's closing readiness itself.
       const saleId = await ownerMust("mutation", "applications:finalizeDeal", {
         idempotencyKey: `rehearsal-fd1-finalize-${stamp}`,
         orgId,
@@ -1893,7 +1892,7 @@ export async function runRehearsalCases(ctx) {
           "financingEconomics.recordSubmittedQuotation", "financingEconomics.approveDealerPurchaseAmount",
           "applications.registerVehicleHandover", "applications.registerExpectedPayment",
           "financeDealCosts.recordLegalInvoice", "financeDealCosts.recordDealFee", "financeDealCosts.reconcileDealFee",
-          "financeDealCosts.classifyDealAccounting", "applications.finalizeDeal", "applications.confirmDisbursement",
+          "applications.finalizeDeal", "applications.confirmDisbursement",
         ],
       };
     }

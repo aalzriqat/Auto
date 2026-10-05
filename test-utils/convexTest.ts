@@ -5,6 +5,9 @@ import type { SchemaDefinition, GenericSchema } from "convex/server";
 import aggregateComponentSchema from "../node_modules/@convex-dev/aggregate/src/component/schema";
 import rateLimiterComponentSchema from "../node_modules/@convex-dev/rate-limiter/src/component/schema";
 import { aggregateTriggers } from "../convex/aggregates";
+import type { api as ApiRef } from "../convex/_generated/api";
+import type { Id } from "../convex/_generated/dataModel";
+import type schema from "../convex/schema";
 
 /**
  * `convexTest`, with every mounted component registered and `t.run` wired to
@@ -74,10 +77,18 @@ export function convexTestWithComponents<
 >(
   schema: Schema,
   modules: Record<string, () => Promise<unknown>>,
+  // Opt-in: `transactionLimits: true` makes convex-test ENFORCE the platform's
+  // per-transaction ceilings (4,096 index ranges/gets, 32,000 documents, 16 MiB).
+  // Default is off, exactly as before, so no existing suite changes behaviour.
+  options: { transactionLimits?: boolean } = {},
 ): TestConvex<Schema> & { runUnwrapped: TestConvex<Schema>["run"] } {
   // convexTest's own generic widens `Schema` here; re-pinning it keeps the
   // concrete table/index types that every caller's `t.run(ctx => ...)` needs.
-  const t = convexTest(schema, modules) as unknown as TestConvex<Schema>;
+  const t = (
+    options.transactionLimits
+      ? convexTest({ schema, modules, transactionLimits: true })
+      : convexTest(schema, modules)
+  ) as unknown as TestConvex<Schema>;
 
   for (const name of AGGREGATE_COMPONENTS) {
     t.registerComponent(name, aggregateComponentSchema, COMPONENT_MODULES);
@@ -101,6 +112,39 @@ export function convexTestWithComponents<
       fn(aggregateTriggers.wrapDB(ctx as never) as never)) as never)) as typeof t.run;
 
   return t as TestConvex<Schema> & { runUnwrapped: TestConvex<Schema>["run"] };
+}
+
+/**
+ * SCRUM-446: a financed deal that settles through the dealership cannot close
+ * without cost evidence, configured company or not. This records the dealer's
+ * "no closing costs" line at zero and reconciles it — the same evidence a
+ * screen collects — so a fixture about something else can reach `finalizeDeal`.
+ * Must run before the deal closes (closing refuses new costs).
+ */
+type AsIdentity = ReturnType<TestConvex<typeof schema>["withIdentity"]>;
+
+export async function recordReconciledZeroCost(
+  as: AsIdentity,
+  api: typeof ApiRef,
+  orgId: Id<"organizations">,
+  applicationId: Id<"financeApplications">,
+  /** Reconciling takes a different authority from recording; defaults to `as`. */
+  asReconciler: AsIdentity = as
+): Promise<void> {
+  const feeId = await as.mutation(api.financeDealCosts.recordDealFee, {
+    orgId,
+    applicationId,
+    feeType: "OTHER_CLOSING_EXPENSE",
+    paidBy: "DEALER",
+    paidTo: "OTHER",
+    accountingTreatment: "SELLING_EXPENSE",
+    deductedFromSettlement: false,
+    actualAmountMinor: 0,
+    description: "No closing costs.",
+    expectedCurrency: "JOD",
+    idempotencyKey: crypto.randomUUID(),
+  });
+  await asReconciler.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Nothing to match." });
 }
 
 /**

@@ -1,7 +1,7 @@
 /**
- * The 117-entry economic-command classification ratchet (SCRUM-313; 113 at the
+ * The 127-entry economic-command classification ratchet (SCRUM-313; 113 at the
  * RC, +1 for SCRUM-83's `financingEconomics.resolveAppraisalGap`, +1 for
- * SCRUM-215's `financeDealCosts.recordTemplateFeeActual`).
+ * SCRUM-215's `financeDealCosts.recordTemplateFeeActual`, +1 for SCRUM-27's `financingEconomics.recordManualFinanceApproval`).
  *
  * OWNER RULING: every public mutation that can reach a money-bearing sink must
  * carry EXACTLY ONE classification, and this must FAIL whenever a new public
@@ -48,11 +48,14 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "applications.amendSupplierDisbursementAdvice": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "applications.cancelApplication": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "applications.confirmDisbursement": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
+  "applications.returnFinanceDisbursementCheque": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "applications.confirmSupplierDisbursement": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "applications.createFromQuote": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "applications.finalizeDeal": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "applications.repairQuoteEconomicsLineage": { bucket: "NON_ECONOMIC", mechanism: "fills missing quotation lineage fields after exact quote and tenant validation; it creates no payment, receivable, journal, or accounting event" },
   "applications.registerExpectedPayment": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "applications.correctExpectedPayment": { bucket: "NON_ECONOMIC", mechanism: "SCRUM-447: withdraws an unposted expected payment and its HELD cheque (status to CANCELLED); refuses DEPOSITED/CLEARED rows and any receivable allocation; no posting call is reachable from its own body" },
+  "applications.attestChequeFace": { bucket: "NON_ECONOMIC", mechanism: "SCRUM-447: records the operator-attested face on a live unposted cheque (amountMinor/currency/attestedBy); never touches `amount` and posts nothing; the face only gates confirmDisbursement" },
   "applications.registerVehicleHandover": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "applications.setSupplierSettlementRoute": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "applications.updateStatus": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
@@ -78,6 +81,10 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "collections.submitCashierReconciliation": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "customers.softDelete": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "deposits.create": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
+  "dealUnwind.abandonDealUnwind": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; posts nothing — ends an ACTIVE unwind (SCRUM-693)" },
+  "dealUnwind.finishDealUnwind": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; the unwind must be ACTIVE (it leaves COMPLETED); the receipt reversal is keyed on the disbursement version it reverses and proven POSTED, and it and the closed-deal teardown commit or roll back together (SCRUM-693 ruling B)" },
+  "dealUnwind.recordDealUnwindForwardReturn": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; STEP_DONE once forwardReturn is recorded, and reverseForward refuses a forward already reversed (SCRUM-693)" },
+  "depositRequests.confirm": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; the request must still be PENDING, and only CONFIRM_FINANCE_DISBURSEMENT holders reach the posting (SCRUM-444)" },
   "deposits.release": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "deposits.releaseVehicleAllocation": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "deposits.resolveReleasedAllocation": { bucket: "STATE_GUARDED", mechanism: "operates on an existing deposit allocation; the application id it posts under pre-exists the call" },
@@ -87,7 +94,6 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "expenses.reverseExpense": { bucket: "STATE_GUARDED", mechanism: "posts only from pre-existing durable state, so its accounting idempotency key is stable across a retry and the posting engine dedupes it" },
   "expenses.update": { bucket: "STATE_GUARDED", mechanism: "reverses through hookPrepaidExpenseAmortizationsReversed, whose reversal key is derived from the original posted event, not from a fresh id" },
   "financeDealCosts.adoptCompanyFeeTemplates": { bucket: "RETIRED", mechanism: "public compatibility endpoint remains source-visible but always throws; fee-template adoption was retired when adminFees became the sole expected execution-fee authority" },
-  "financeDealCosts.classifyDealAccounting": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financeDealCosts.openDealCustody": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; the ISSUED entry it mints posts under `custody_entry_${entryId}` INSIDE the idempotent section, so a replay returns the stored custody id and never reaches the hook" },
   "financeDealCosts.planCustodyHandler": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic (a `plannedCustody` patch on financeApplications); names who will handle the handover before any cash moves, audited, and posts nothing" },
   "financeDealCosts.migrateLegacyCustodyToLedger": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted on the custody id; every posting it makes is keyed on PRE-EXISTING entry, fee and custody ids through the same hooks the product uses, and a fresh key against a record already CANONICAL is refused inside the section" },
@@ -97,6 +103,13 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "financeDealCosts.recordCustodyMovement": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "financeDealCosts.recordDealFee": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "financeDealCosts.recordTemplateFeeActual": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted (position included); one live line per (deal, position) refused inside the idempotent section" },
+  "financeDealCosts.recordDirectFeePayment": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted on fee, method, date, reference and the required expectedAmountMinor the approver saw; the HANDOVER_COST_PAID_DIRECT posting is keyed on the fee id plus a stored version and every state check (already paid, custody-linked, no actual, actual changed since the form rendered, earlier payment still posted) is inside the section" },
+  "financeDealCosts.recordExecutionFeeActual": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted on application, currency, amount, payer, custody, paid date and reference; the line it mints posts custody only through syncCustodyFeePosting keyed on that fee id plus a stored version, INSIDE the section, and an already-linked execution fee is refused inside it (SCRUM-690)" },
+  "financeDealCosts.bindExecutionFeeLine": { bucket: "NON_ECONOMIC", mechanism: "sets the executionFeeBinding marker on one identified existing fee line; no posting call is reachable, the only downstream write is the derived-economics recompute (a projection patch, deducted lines only), and re-linking the line already linked returns early (SCRUM-690)" },
+  "financeDealCosts.unbindExecutionFeeLine": { bucket: "NON_ECONOMIC", mechanism: "clears the executionFeeBinding marker on one identified fee line and is refused while the line carries a custody posting or direct payment; no posting call is reachable, and an already-unlinked line returns early (SCRUM-690)" },
+  "financeCompanyForward.recordFinanceCompanyForward": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true - fingerprinted on application, method, paid date, reference and the expectedAmountMinor the payer saw; the FINANCE_COMPANY_FORWARD_PAID posting is keyed on the application id plus a stored version and every state check (finalized, transfer not yet confirmed, proof is DUE, amount unchanged, closed period) is inside the section" },
+  "financeCompanyForward.reverseFinanceCompanyForward": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true - fingerprinted on application, forward and reason; reverses the pinned forward version through reverseEventIfPosted, keyed on the stored version, and refuses a forward already being taken back" },
+  "financeCompanyForward.reportFinanceCompanyForwardReturned": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true - fingerprinted on application, forward and reason; reverses the pinned ON_BOOKS forward version through reverseEventIfPosted, keyed on the stored version" },
   "financeDealCosts.recordLegalInvoice": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financeDealCosts.reopenDealCustody": { bucket: "STATE_GUARDED", mechanism: "reverses the stored write-off posting version through reverseEventIfPosted, whose key derives from the pre-existing custody id and version; a retry finds status === OPEN and returns before any posting" },
   "financeDealCosts.setFeeCustody": { bucket: "STATE_GUARDED", mechanism: "charges or releases an EXISTING fee line: the posting it syncs is keyed on the pre-existing fee id plus a version stored on the row (`custodyPosted`), so a retry after a lost response finds the target state already on the books and posts nothing; a second identical call returns early on `fee.custodyId === args.custodyId`" },
@@ -104,8 +117,10 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "financialAudit.approveManualJournal": { bucket: "STATE_GUARDED", mechanism: "refuses unless status === PENDING_APPROVAL; a second approval cannot produce a second journal (rehearsal R10)" },
   "financialAudit.createManualJournal": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financialAudit.rejectManualJournal": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "financingEconomics.applyQuoteFirstPayment": { bucket: "NON_ECONOMIC", mechanism: "patches the finance application's economics (first payment re-derived from the quote) only through the over-inclusive patch heuristic; no posting call is reachable from its own body. Replay-safe by the economics stamp: a retry carries a stale stamp and is refused before the application is written (an impersonated caller's access-audit row from requireTenantAuth may precede it; that row is not economic) (SCRUM-373)" },
   "financingEconomics.approveDealerPurchaseAmount": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financingEconomics.recordAppraisal": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "financingEconomics.recordManualFinanceApproval": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table (financeApplications letter/G/gap) only through the patch heuristic; no posting call is reachable from its own body. Replay-safe by state: an identical letter on an intact unit is a no-op; after handover only an S-only correction is accepted, and nothing after finalize (SCRUM-27)" },
   "financingEconomics.recordSubmittedQuotation": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financingEconomics.reopenApproval": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "financingEconomics.resolveAppraisalGap": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table (financeApplications gap shares/destinations) only through the patch heuristic; no posting call is reachable from its own body. Replay-safe by state: refuses once gapResolution is CUSTOMER_ABSORBS/SPLIT/DEALER_ABSORBS and checks the economics stamp before any write (SCRUM-83)" },
@@ -147,9 +162,11 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "sourcingPayables.recordPartialPayment": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "sourcingPayables.setDisputed": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "supplierReceivables.recordReceipt": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
+  "supplierCostRecoveries.recordReceipt": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; posts synchronously keyed by the receipt id (SCRUM-389)" },
+  "supplierCostRecoveries.reverseReceipt": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted; reverses under its own per-receipt key (SCRUM-389)" },
   "supplierReceivables.setDisputed": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "vehicleEdits.resolve": { bucket: "STATE_GUARDED", mechanism: "refuses unless request.status === PENDING; the same mutation transitions it to APPROVED/REJECTED" },
-  "vehicles.correctAcquisitionCost": { bucket: "STATE_GUARDED", mechanism: "convergent set-to-value: the retry re-reads the patched cost, delta === 0, and throws UNCAUGHT so Convex rolls back before the insert and the hook" },
+  "vehicles.correctAcquisitionCost": { bucket: "STATE_GUARDED", mechanism: "convergent set-to-value: the retry re-reads the patched cost, delta === 0, and throws COST_CORRECTION_NO_CHANGE so Convex rolls back before the insert and the hook" },
   "vehicles.create": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "vehicles.createReservation": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "vehicles.importBulk": { bucket: "IDENTITY_GUARDED", mechanism: "per-row import identity `${importId}:${row.rowId}` — a SECOND valid mechanism, not runWithIdempotency" },
@@ -274,8 +291,22 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // 116 → 117: `applications.repairQuoteEconomicsLineage` (TASK-DEAL-01).
     // 117 → 119: `financeDealCosts.planCustodyHandler` and `financeDealCosts.setFeeCustody` (AF-80).
     // Fee-template adoption is classified RETIRED and therefore excluded from
-    // the live population by construction; the live census currently remains 119.
-    expect(population.length).toBe(119);
+    // the live population by construction; the live census remained 119 until:
+    // 119 → 120: `financingEconomics.applyQuoteFirstPayment` (SCRUM-373 D2).
+    // 120 → 122: `supplierCostRecoveries.recordReceipt` and
+    // `supplierCostRecoveries.reverseReceipt` (SCRUM-389 supplier cost bearer).
+    // 122 → 121: `financeDealCosts.classifyDealAccounting` RETIRED (SCRUM-407),
+    // then deleted outright with its classification entry.
+    // 121 → 122: `depositRequests.confirm` (SCRUM-444); `request` writes only a pending row and is not in the population.
+    // 122 → 123: `financeDealCosts.recordDirectFeePayment` (SCRUM-443).
+    // 123 → 125: `applications.correctExpectedPayment` and
+    // `applications.attestChequeFace` (SCRUM-447).
+    // 123 -> 126: `financeCompanyForward.recordFinanceCompanyForward`, `.reverseFinanceCompanyForward` and `.reportFinanceCompanyForwardReturned` (SCRUM-435).
+    // 126 -> 128: the two SCRUM-447 mutations above, on top of the SCRUM-435 three (merge of origin/main into SCRUM-447).
+    // 128 -> 129: `financingEconomics.recordManualFinanceApproval` (SCRUM-27), on top of main's 128.
+    // 129 -> 130: `applications.returnFinanceDisbursementCheque` (SCRUM-239).
+    // 130 -> 136: the three SCRUM-693 unwind steps (`dealUnwind.*`; `startDealUnwind` writes only the unwind row) + `financeDealCosts.recordExecutionFeeActual`, `.bindExecutionFeeLine` and `.unbindExecutionFeeLine` (SCRUM-690).
+    expect(population).toHaveLength(136);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

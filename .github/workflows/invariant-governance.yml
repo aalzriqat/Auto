@@ -53,6 +53,11 @@ jobs:
         env:
           NODE_ENV: test
 
+      - name: Verify review-evidence validator controls
+        run: pnpm test:review-evidence
+        env:
+          NODE_ENV: test
+
       - name: Evidence boundary
         if: always()
         run: |
@@ -62,4 +67,6 @@ jobs:
             echo "This job verifies invariant-catalog integrity: stable IDs, proof obligations, admissible evidence references, gap ownership, retirement rules, and negative-control requirements."
             echo
             echo "It does **not** claim that every runtime obligation is complete, and it does not replace the full test suite, preview/runtime rehearsals, or open-ended adversarial review."
+            echo
+            echo "The review-evidence step tests the validator library against its negative controls. It evaluates no pull request's evidence record: this job runs the candidate's own code, so nothing here can judge that candidate (SCRUM-644)."
           } >> "$GITHUB_STEP_SUMMARY"

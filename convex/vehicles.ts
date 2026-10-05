@@ -19,13 +19,18 @@ import { validateInput } from "./utils/validation";
 import { CreateVehicleSchema, UpdateVehicleSchema } from "./validations/vehicles";
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
 import { internal } from "./_generated/api";
-import { getOrgCurrency, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
-import { toMinorUnits, fromMinorUnits, assertFiniteNumber } from "./utils/money";
+import { getOrgCurrency, isPostableNow, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
+import { toMinorUnits, fromMinorUnits, assertFiniteNumber, assertMajorAmountRepresentable, toMinorSameCurrencyOrUndefined } from "./utils/money";
+import { settlementView, deriveSettlementStatus } from "./utils/supplierSettlement";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
 import { PURCHASE_IMPORT_MAX_ROWS } from "./utils/importLimits";
 import { findCommandUnit, recordCommandUnit } from "./utils/idempotency";
 import { simplePayloadHash } from "./accounting/postingRules";
 import { hasNonCanonicalVinCharacters, isPlaceholderVin } from "./utils/vin";
+import { throwAppError, AppErrorCode } from "./utils/errors";
+import { SYSTEM_KEYS, type SystemKey } from "./utils/defaultChart";
+import { disbursementAccountKey } from "./accounting/postingRules";
+import { isSystemAccountMapped } from "./chartOfAccounts";
 
 /** The stock kinds `getAgingBuckets` sums over, in key order. */
 const STOCK_KINDS = [OWN_STOCK, SOURCED];
@@ -44,9 +49,9 @@ import { releaseReservationDepositHold } from "./utils/commitmentWriters";
 import {
   amountToMinorOrThrow,
   depositMethodValidator,
-  methodOrDefault,
   normalizeCurrency,
   recordHeldDeposit,
+  requireDepositMethod,
 } from "./utils/depositRecording";
 import {
   assertVehicleImagesAllowed,
@@ -78,6 +83,7 @@ const vehicleSourceType = v.optional(v.union(v.literal("STOCK"), v.literal("SOUR
 
 import { paginationOptsValidator } from "convex/server";
 import { retroactiveOwnershipChangeRefusal } from "./utils/vehicleOwnership";
+import { supplierCostRecoveryConversionRefusal } from "./utils/costBearer";
 import { runWithIdempotency } from "./utils/idempotency";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -1102,6 +1108,14 @@ export async function hasVehicleAcquisitionAccountingExposure(
   return pendingPost !== null;
 }
 
+/** The refusal for a direct edit of a posted purchase cost (vehicles.update and vehicleEdits.resolve). */
+export function throwVehicleCostPosted(): never {
+  throwAppError(
+    AppErrorCode.VEHICLE_COST_POSTED,
+    "This vehicle's purchase cost has already been posted to accounting and can't be edited directly. Use 'Correct purchase cost' instead."
+  );
+}
+
 /**
  * STRICTER than `hasVehicleAcquisitionAccountingExposure`, and deliberately local.
  *
@@ -1287,6 +1301,16 @@ export const update = mutation({
       status: vehicle.status,
     });
     if (ownershipRefusal) throw new ConvexError(ownershipRefusal);
+    // SCRUM-389: a SOURCED car with an open supplier-cost recovery cannot become
+    // owned stock — the supplier would owe the showroom for costs on a car the
+    // showroom now owns, and nothing would ever settle it.
+    const recoveryRefusal = await supplierCostRecoveryConversionRefusal(ctx, {
+      orgId: vehicle.orgId,
+      vehicleId: vehicle._id,
+      currentSourceType: vehicle.sourceType,
+      requestedSourceType: args.sourceType,
+    });
+    if (recoveryRefusal) throw new ConvexError(recoveryRefusal);
 
     // If VIN is being changed, check for duplicates
     if (args.vin) {
@@ -1345,9 +1369,7 @@ export const update = mutation({
       : false;
 
     if (("purchasePrice" in patch || "sourceCost" in patch) && acquisitionAlreadyExposed) {
-      throw new ConvexError(
-        "This vehicle's acquisition cost has already been posted to accounting. Use a correction journal entry instead of editing purchasePrice/sourceCost directly."
-      );
+      throwVehicleCostPosted();
     }
 
     const acquisitionSourceType = (patch.sourceType as "STOCK" | "SOURCED" | undefined) ?? vehicle.sourceType;
@@ -1410,6 +1432,12 @@ export const update = mutation({
       patch.updatedAt = Date.now();
       await ctx.db.patch(args.vehicleId, patch);
 
+      // SCRUM-700 N1: a status written here must still honour a live
+      // reservation or deposit hold, or a held car is advertised AVAILABLE.
+      if (patch.status !== undefined) {
+        await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
+      }
+
       if (needsAcquisitionPosting) {
         await postVehicleAcquisitionIfOwned(ctx, {
           orgId: args.orgId,
@@ -1433,8 +1461,9 @@ export const update = mutation({
         { link: `/${args.orgId}/vehicles?highlightId=${args.vehicleId}` }
       );
 
-      if (patch.status === "AVAILABLE" && vehicle.status !== "AVAILABLE") {
-        const updatedVehicle = { ...vehicle, ...patch } as typeof vehicle;
+      const finalVehicle = patch.status === "AVAILABLE" ? await ctx.db.get(args.vehicleId) : null;
+      if (finalVehicle?.status === "AVAILABLE" && vehicle.status !== "AVAILABLE") {
+        const updatedVehicle = finalVehicle;
         await maybeAutoPostToInstagram(ctx, {
           orgId: args.orgId,
           vehicle: updatedVehicle,
@@ -1566,6 +1595,186 @@ export const upsertLandedCosts = mutation({
   },
 });
 
+// ─── Acquisition cost correction (SCRUM-650) ─────────────────────────────────
+//
+// Invariant: once a vehicle's acquisition has posted, its recorded cost
+// (`vehicles.purchasePrice`), its Vehicle Inventory GL balance and the account
+// the acquisition credited change only together, atomically, through ONE
+// audited correction. The credited account is cash/bank, or AP-Suppliers
+// together with its `vehicleSupplierPayables` row. The correction posts now; it
+// is never queued.
+
+type AcquisitionCostCorrectionType =
+  | "PRIOR_PERIOD_RESTATEMENT"
+  | "SUPPLIER_INVOICE_ERROR"
+  | "CASH_REFUND"
+  | "VENDOR_CREDIT";
+
+/** Both are required to read or write a posted purchase cost — see `correctAcquisitionCost`. */
+const COST_CORRECTION_PERMISSIONS = [PERMISSIONS.MANAGE_FINANCE, PERMISSIONS.VIEW_COST_PRICE];
+
+const AP_CORRECTION_TYPES: readonly AcquisitionCostCorrectionType[] = [
+  "SUPPLIER_INVOICE_ERROR",
+  "VENDOR_CREDIT",
+];
+
+/**
+ * The vehicle, proven to belong to `orgId` (the tenancy guard every
+ * id-taking handler routes through) and not soft-deleted. Both a foreign row
+ * and a deleted one read as VEHICLE_NOT_FOUND, so the reply cannot be used to
+ * probe another organisation's inventory.
+ */
+async function loadOwnedLiveVehicle(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<Doc<"vehicles">> {
+  let vehicle: Doc<"vehicles">;
+  try {
+    vehicle = await requireOwnedRow(ctx, orgId, "vehicles", vehicleId);
+  } catch (error) {
+    if (error instanceof ConvexError) {
+      throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
+    }
+    throw error;
+  }
+  if (vehicle.isDeleted) {
+    throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
+  }
+  return vehicle;
+}
+
+/**
+ * The POSTED acquisition event, payload included. STRICTER than
+ * `hasPostedVehicleAcquisition` (which counts a pending/failed/reversed event
+ * as "exposure" and whose semantics the edit lock deliberately keeps): a
+ * correction posts a delta on top of the ledger's existing balance, so the base
+ * entry must actually be settled.
+ */
+async function findPostedAcquisitionEvent(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<Doc<"accountingEvents"> | null> {
+  return ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId.toString())
+    )
+    .filter((q) =>
+      q.and(q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"), q.eq(q.field("status"), "POSTED"))
+    )
+    .first();
+}
+
+/** The acquisition's outbox POST row in the given status, if one is queued. */
+async function findQueuedAcquisitionPost(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">,
+  status: "PENDING" | "FAILED"
+): Promise<Doc<"pendingAccountingEvents"> | null> {
+  return ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", orgId).eq("idempotencyKey", `vehicle_acquired_${vehicleId}`)
+    )
+    .filter((q) => q.and(q.eq(q.field("kind"), "POST"), q.eq(q.field("status"), status)))
+    .first();
+}
+
+/** How the car was paid, read from the posted event's payload. `undefined` = legacy/unknown (treated as cash). */
+function originalPaymentMethodOf(event: Doc<"accountingEvents">): string | undefined {
+  const payload = event.payload as { paymentMethod?: unknown } | null | undefined;
+  return typeof payload?.paymentMethod === "string" ? payload.paymentMethod : undefined;
+}
+
+/**
+ * The acquisition-time payable of an ON_ACCOUNT purchase: the vehicle's rows
+ * with NO `saleId` (a sale-time payable belongs to the sourced-sale workflow).
+ * `row` is non-null only when there is exactly one.
+ */
+async function loadAcquisitionPayable(
+  ctx: QueryCtx | MutationCtx,
+  vehicle: Pick<Doc<"vehicles">, "_id" | "orgId">
+): Promise<{ row: Doc<"vehicleSupplierPayables"> | null; count: number }> {
+  const rows = (
+    await ctx.db
+      .query("vehicleSupplierPayables")
+      .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicle._id))
+      .collect()
+  ).filter((row) => row.saleId === undefined && row.orgId === vehicle.orgId);
+  return { row: rows.length === 1 ? rows[0] : null, count: rows.length };
+}
+
+/**
+ * How the car was ORIGINALLY paid. The posted event's payload is authoritative;
+ * an event written before the method was recorded falls back to the evidence
+ * that survives it: a sale-less acquisition payable means the purchase was on
+ * account. Without that, a legacy on-account car would read as cash and be
+ * offered a cash refund against money that never left the bank.
+ */
+function resolveOriginalPaymentMethod(
+  event: Doc<"accountingEvents">,
+  acquisitionPayableCount: number
+): string | undefined {
+  return originalPaymentMethodOf(event) ?? (acquisitionPayableCount > 0 ? "ON_ACCOUNT" : undefined);
+}
+
+/**
+ * True when AP-type corrections may rewrite this payable. Judged from the MONEY
+ * (`settlementView`), never the stored status: dispute and un-dispute rewrite
+ * the stored status to DUE_ON_SALE while the row is exactly as payable as before,
+ * so a stored-status test refuses a payable the money says is untouched.
+ * Adjustable = unpaid, not disputed/cancelled/paid, same currency, and the
+ * amount due equals the capitalized cost in minor units.
+ */
+function isPayableAdjustable(
+  row: Doc<"vehicleSupplierPayables"> | null,
+  orgCurrency: string,
+  previousCost: number
+): row is Doc<"vehicleSupplierPayables"> {
+  if (!row) return false;
+  const view = settlementView(row);
+  if (view.status !== "DUE_ON_SALE" && view.status !== "NOT_YET_DUE") return false;
+  if (view.amountPaid !== 0) return false;
+  const dueMinor = toMinorSameCurrencyOrUndefined(row.amountDue, row.currency, orgCurrency);
+  const costMinor = toMinorSameCurrencyOrUndefined(previousCost, orgCurrency, orgCurrency);
+  return dueMinor !== undefined && dueMinor === costMinor;
+}
+
+/** The correction-type matrix, from how the car was originally paid. */
+function allowedAcquisitionCorrectionTypes(
+  originalPaymentMethod: string | undefined,
+  payable: Doc<"vehicleSupplierPayables"> | null,
+  payableAdjustable: boolean
+): AcquisitionCostCorrectionType[] {
+  if (originalPaymentMethod === "ON_ACCOUNT") {
+    const allowed: AcquisitionCostCorrectionType[] = [];
+    if (payableAdjustable) allowed.push("SUPPLIER_INVOICE_ERROR", "VENDOR_CREDIT");
+    if (payable && deriveSettlementStatus(payable) === "PAID") allowed.push("CASH_REFUND");
+    allowed.push("PRIOR_PERIOD_RESTATEMENT");
+    return allowed;
+  }
+  return ["CASH_REFUND", "PRIOR_PERIOD_RESTATEMENT"];
+}
+
+/** The account the correction's counter-line posts to — mirrors ruleVehicleAcquisitionCostCorrected. */
+export function costCorrectionCounterKey(
+  correctionType: AcquisitionCostCorrectionType,
+  paymentMethod: string | undefined
+): SystemKey {
+  switch (correctionType) {
+    case "SUPPLIER_INVOICE_ERROR":
+    case "VENDOR_CREDIT":
+      return SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS;
+    case "CASH_REFUND":
+      return disbursementAccountKey(paymentMethod);
+    case "PRIOR_PERIOD_RESTATEMENT":
+      return SYSTEM_KEYS.RETAINED_EARNINGS;
+  }
+}
+
 /**
  * Corrects a vehicle's acquisition cost after VEHICLE_ACQUIRED has already
  * posted and purchasePrice/sourceCost is locked (see the lock in update()
@@ -1574,6 +1783,12 @@ export const upsertLandedCosts = mutation({
  * profit reports read) in sync with the GL, and preserves the original value
  * in vehicleCostCorrections for audit history. Gated on MANAGE_FINANCE (not
  * EDIT_VEHICLES) since it's a financial correction, not an inventory edit.
+ *
+ * SCRUM-650: the allowed correction type depends on how the car was paid (the
+ * matrix in `allowedAcquisitionCorrectionTypes`), an ON_ACCOUNT AP correction
+ * rewrites the supplier payable in the same transaction, and the correction
+ * must post NOW — a queued correction would leave the vehicle cost and the GL
+ * disagreeing until a period opens, so it is refused instead.
  */
 export const correctAcquisitionCost = mutation({
   args: {
@@ -1592,55 +1807,138 @@ export const correctAcquisitionCost = mutation({
     paymentMethod: v.optional(paymentMethodValidator),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // Both: the correction rewrites a figure that VIEW_COST_PRICE exists to withhold, and the
+    // dialog it serves shows that figure back. MANAGE_FINANCE alone (the default ACCOUNTANT
+    // template) must not be a way around the cost-visibility gate.
+    const { user } = await requireTenantAuth(ctx, args.orgId, COST_CORRECTION_PERMISSIONS);
 
     const reason = args.reason.trim();
-    if (!reason) throw new ConvexError("A reason is required to correct a vehicle's acquisition cost.");
+    if (!reason) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_REASON_REQUIRED,
+        "A reason is required to correct a vehicle's purchase cost."
+      );
+    }
     if (!Number.isFinite(args.newCost) || args.newCost < 0) {
-      throw new ConvexError("New cost must be a non-negative number.");
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_INVALID_AMOUNT,
+        "The new purchase cost must be a valid amount, zero or more."
+      );
     }
     if (args.correctionType === "CASH_REFUND" && !args.paymentMethod) {
-      throw new ConvexError("A payment method is required for a cash-refund correction.");
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_PAYMENT_METHOD_REQUIRED,
+        "Choose the account the refund was received into."
+      );
     }
 
-    const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
-      throw new ConvexError("Vehicle not found in this organization.");
+    const vehicle = await loadOwnedLiveVehicle(ctx, args.orgId, args.vehicleId);
+    // loadOwnedLiveVehicle already proved this through requireOwnedRow; it is
+    // restated inline so the static tenant-write guard can see the proof
+    // before the patch below (scripts/tenantWriteGuard.ts reads the handler only).
+    if (vehicle.orgId !== args.orgId) {
+      throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
     }
     if (vehicle.sourceType === "SOURCED") {
-      throw new ConvexError(
-        "Sourced vehicles never capitalize into inventory — correct sourceCost via a supplier-payable adjustment instead."
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_SOURCED,
+        "Sourced vehicles are not capitalized into inventory. Adjust the supplier payable instead."
       );
     }
     if (vehicle.status === "SOLD") {
-      throw new ConvexError(
-        "This vehicle has already sold — its inventory cost has been relieved to COGS. A prior-period cost correction needs a manual journal entry, not this endpoint."
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_SOLD,
+        "This vehicle has already been sold, so its cost can no longer be corrected here. Ask your accountant for a manual journal entry."
       );
     }
     // Requires a *posted* acquisition, not merely pending: a correction posts
     // a delta on top of the ledger's existing balance, so the base entry
     // must already be settled — correcting against a still-pending base
     // could post before it, or interleave unpredictably with it.
-    if (!(await hasPostedVehicleAcquisition(ctx, args.orgId, args.vehicleId))) {
-      throw new ConvexError(
-        "This vehicle's acquisition cost hasn't posted to accounting yet — edit purchasePrice directly instead."
+    const [currency, acquisitionEvent] = await Promise.all([
+      getOrgCurrency(ctx, args.orgId),
+      findPostedAcquisitionEvent(ctx, args.orgId, args.vehicleId),
+    ]);
+    if (!acquisitionEvent) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_NOT_POSTED,
+        "This vehicle's purchase hasn't been posted to accounting yet, so its cost can't be corrected."
       );
     }
 
+    // An amount that does not survive the round trip through the currency's minor units would
+    // be stored as typed but posted rounded, so the vehicle and the ledger would disagree by
+    // the rounding. Refused before any write.
+    try {
+      assertMajorAmountRepresentable(args.newCost, currency, "New purchase cost");
+    } catch (error) {
+      console.error(error);
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_INVALID_AMOUNT,
+        "The new purchase cost must be a valid amount, zero or more."
+      );
+    }
     const previousCost = vehicle.purchasePrice ?? 0;
-    const delta = args.newCost - previousCost;
-    if (delta === 0) {
-      throw new ConvexError("New cost matches the current cost — nothing to correct.");
+    const previousMinor = toMinorUnits(previousCost, currency);
+    const newMinor = toMinorUnits(args.newCost, currency);
+    const deltaMinor = newMinor - previousMinor;
+    if (deltaMinor === 0) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_NO_CHANGE,
+        "The new purchase cost is the same as the current cost, so there is nothing to correct."
+      );
     }
 
-    const currency = await getOrgCurrency(ctx, args.orgId);
+    // ── The correction-type matrix, enforced from the ORIGINAL payment method.
+    const { row, count: payableCount } = await loadAcquisitionPayable(ctx, vehicle);
+    const originalMethod = resolveOriginalPaymentMethod(acquisitionEvent, payableCount);
+    const rewritesPayable = originalMethod === "ON_ACCOUNT" && AP_CORRECTION_TYPES.includes(args.correctionType);
+    const payableAdjustable = isPayableAdjustable(row, currency, previousCost);
+    if (rewritesPayable) {
+      if (newMinor === 0) {
+        throwAppError(
+          AppErrorCode.COST_CORRECTION_INVALID_AMOUNT,
+          "The new purchase cost must be a valid amount, zero or more."
+        );
+      }
+      if (!payableAdjustable) {
+        throwAppError(
+          AppErrorCode.COST_CORRECTION_PAYABLE_NOT_ADJUSTABLE,
+          "The supplier balance for this vehicle has been partly paid, disputed or settled, so the invoice can't be corrected automatically. Contact finance to record a supplier credit or adjustment."
+        );
+      }
+    }
+    if (!allowedAcquisitionCorrectionTypes(originalMethod, row, payableAdjustable).includes(args.correctionType)) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_TYPE_NOT_ALLOWED,
+        "This correction type doesn't fit how the vehicle was paid for. Choose one of the other options."
+      );
+    }
+    const payableToAdjust = rewritesPayable ? row : null;
+
+    // ── It posts now or not at all. Both halves are checked BEFORE the first
+    // write, so a refusal leaves the vehicle, the payable and the ledger as they were.
     const now = Date.now();
+    const counterKey = costCorrectionCounterKey(args.correctionType, args.paymentMethod);
+    const [counterMapped, inventoryMapped] = await Promise.all([
+      isSystemAccountMapped(ctx, args.orgId, counterKey),
+      isSystemAccountMapped(ctx, args.orgId, SYSTEM_KEYS.VEHICLE_INVENTORY),
+    ]);
+    if (!counterMapped || !inventoryMapped || !(await isPostableNow(ctx, args.orgId, now))) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_NOT_POSTABLE_NOW,
+        "This correction can't be posted right now because the accounting period is closed or the required account is missing. Ask your accountant to open the period or set up the account, then try again."
+      );
+    }
 
     await ctx.db.patch(args.vehicleId, {
       purchasePrice: args.newCost,
       updatedAt: now,
       updatedBy: user._id,
     });
+    if (payableToAdjust) {
+      await ctx.db.patch(payableToAdjust._id, { amountDue: args.newCost, updatedAt: now });
+    }
 
     const correctionId = await ctx.db.insert("vehicleCostCorrections", {
       orgId: args.orgId,
@@ -1649,9 +1947,35 @@ export const correctAcquisitionCost = mutation({
       newCost: args.newCost,
       reason,
       correctionType: args.correctionType,
+      // What the supplier balance was before this correction rewrote it, so the audit trail can
+      // reconstruct the payable from the correction row alone.
+      ...(payableToAdjust
+        ? { payableId: payableToAdjust._id, previousAmountDue: payableToAdjust.amountDue }
+        : {}),
       correctedBy: user._id,
       createdAt: now,
     });
+
+    // A cash/bank correction moved real money, so the cashbook gets a row for it. The ORIGINAL
+    // purchase row is never edited: the correction is its own dated entry, linked back by its
+    // idempotency key. AP and restatement corrections move no cash and write nothing here.
+    //
+    // An ON_ACCOUNT-origin car gets NO row: neither its acquisition nor its supplier payments
+    // (sourcingPayables markPaid / recordPartialPayment) are ever projected into the cashbook, so
+    // a lone refund IN row would drive P&L cost of goods negative. The GL still posts in full.
+    if (args.correctionType === "CASH_REFUND" && originalMethod !== "ON_ACCOUNT") {
+      await ctx.db.insert("transactions", {
+        orgId: args.orgId,
+        // Money back from the supplier is cash IN; an underpayment settled now is cash OUT.
+        type: deltaMinor < 0 ? "IN" : "OUT",
+        amount: fromMinorUnits(Math.abs(deltaMinor), currency),
+        date: now,
+        category: "VEHICLE_PURCHASE",
+        description: `Purchase cost correction (${args.paymentMethod ?? "CASH"}) for vehicle ${vehicle.year} ${vehicle.make} ${vehicle.model} (VIN: ${vehicle.vin})`,
+        idempotencyKey: `vehicle_cost_correction_${correctionId}`,
+        vehicleId: args.vehicleId,
+      });
+    }
 
     await hookVehicleAcquisitionCostCorrected(ctx, {
       orgId: args.orgId,
@@ -1659,7 +1983,7 @@ export const correctAcquisitionCost = mutation({
       // The correction record's own _id, not a timestamp — two corrections
       // landing in the same millisecond must not collide on idempotencyKey.
       correctionToken: correctionId.toString(),
-      deltaMinor: toMinorUnits(delta, currency),
+      deltaMinor,
       currency,
       correctionType: args.correctionType,
       paymentMethod: args.paymentMethod,
@@ -1677,6 +2001,103 @@ export const correctAcquisitionCost = mutation({
     );
 
     return { previousCost, newCost: args.newCost };
+  },
+});
+
+/**
+ * Whether this vehicle's purchase price is locked (SCRUM-650). Uses the exact
+ * semantics of the `vehicles.update` / `vehicleEdits.resolve` lock, so the edit
+ * dialog can show the price read-only precisely when the backend would refuse a
+ * change. Returns a boolean only, never the cost, so VIEW_VEHICLES is enough.
+ */
+export const getPurchaseCostLockState = query({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    await loadOwnedLiveVehicle(ctx, args.orgId, args.vehicleId);
+    return {
+      locked: await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId),
+    };
+  },
+});
+
+/**
+ * Read-only context for the "Correct purchase cost" dialog (SCRUM-650): whether
+ * a correction is possible at all, how the car was paid, what its supplier
+ * payable looks like, which correction types the matrix allows, and the last
+ * few corrections. It cannot ask `isPostableNow` (that needs a MutationCtx), so
+ * "the period is closed" is left to the mutation to refuse.
+ */
+export const getAcquisitionCostCorrectionContext = query({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+  },
+  handler: async (ctx, args) => {
+    // The reply carries the vehicle's cost, so it needs the cost-visibility gate as well.
+    await requireTenantAuth(ctx, args.orgId, COST_CORRECTION_PERMISSIONS);
+
+    const vehicle = await loadOwnedLiveVehicle(ctx, args.orgId, args.vehicleId);
+
+    const currentCost = vehicle.purchasePrice ?? 0;
+    const [currency, correctionRows, event] = await Promise.all([
+      getOrgCurrency(ctx, args.orgId),
+      ctx.db
+        .query("vehicleCostCorrections")
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
+        .order("desc")
+        .take(5),
+      findPostedAcquisitionEvent(ctx, args.orgId, args.vehicleId),
+    ]);
+    const corrections = correctionRows.map((row) => ({
+      previousCost: row.previousCost,
+      newCost: row.newCost,
+      reason: row.reason,
+      correctionType: row.correctionType ?? null,
+      createdAt: row.createdAt,
+    }));
+
+    const blocked = (blockedReason: "SOLD" | "SOURCED" | "NOT_POSTED" | "PENDING_POST" | "POST_FAILED") => ({
+      blockedReason,
+      currentCost,
+      currency,
+      originalPaymentMethod: null,
+      payable: null,
+      allowedTypes: [] as AcquisitionCostCorrectionType[],
+      corrections,
+    });
+    if (vehicle.sourceType === "SOURCED") return blocked("SOURCED");
+    if (vehicle.status === "SOLD") return blocked("SOLD");
+    if (!event) {
+      // Three different truths, three different instructions: still queued (wait for the period
+      // or the chart), dead-lettered (finance must resolve it), and never attempted at all.
+      if (await findQueuedAcquisitionPost(ctx, args.orgId, args.vehicleId, "PENDING")) return blocked("PENDING_POST");
+      if (await findQueuedAcquisitionPost(ctx, args.orgId, args.vehicleId, "FAILED")) return blocked("POST_FAILED");
+      return blocked("NOT_POSTED");
+    }
+
+    const { row, count } = await loadAcquisitionPayable(ctx, vehicle);
+    const originalPaymentMethod = resolveOriginalPaymentMethod(event, count);
+    const payableRow = originalPaymentMethod === "ON_ACCOUNT" ? row : null;
+
+    return {
+      blockedReason: null,
+      currentCost,
+      currency,
+      originalPaymentMethod: originalPaymentMethod ?? null,
+      payable: payableRow
+        ? { status: payableRow.status, amountDue: payableRow.amountDue, amountPaid: settlementView(payableRow).amountPaid }
+        : null,
+      allowedTypes: allowedAcquisitionCorrectionTypes(
+        originalPaymentMethod,
+        payableRow,
+        isPayableAdjustable(payableRow, currency, currentCost)
+      ),
+      corrections,
+    };
   },
 });
 
@@ -1712,7 +2133,32 @@ export const createReservation = mutation({
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
-    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    // SCRUM-444 DA-01: a reservation that carries a deposit posts
+    // DEPOSIT_RECEIVED (via recordHeldDeposit) exactly as `deposits.create`
+    // does, so it needs the same authority — checked HERE, before any write,
+    // rather than the old VIEW_SALES check buried mid-handler. A reservation
+    // with no deposit moves no money and keeps the EDIT_VEHICLES bar.
+    const hasDepositAtEntry = args.depositAmount !== undefined;
+    const { user } = await requireTenantAuth(
+      ctx,
+      args.orgId,
+      hasDepositAtEntry
+        ? [PERMISSIONS.EDIT_VEHICLES, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]
+        : [PERMISSIONS.EDIT_VEHICLES]
+    );
+    // SCRUM-444 F1: a deposit taken on a reservation that is linked to a quote
+    // posts DEPOSIT_RECEIVED with no quote, so the quote's cap and its pending-
+    // request guard cannot see it and the same customer could pay twice. The
+    // quote's own deposit flow sees every receipt, so that is where it goes.
+    // A reservation with no deposit, or a standalone one, is unchanged.
+    // SCRUM-444 R-A: ANY deal lineage counts. `dealDepositId` joins the quote's
+    // deal exactly as `dealQuoteId` does (through the deposit's root), and the
+    // reservation's own deposit would carry no quote either way.
+    if (hasDepositAtEntry && (args.dealQuoteId !== undefined || args.dealDepositId !== undefined)) {
+      throw new ConvexError(
+        "A deposit cannot be taken on a reservation that is linked to a quote or one of its deposits. Reserve without a deposit, then record the deposit (or ask a manager or accountant to) from the quote's deposit screen."
+      );
+    }
     return await runWithIdempotency(
       ctx,
       {
@@ -1751,15 +2197,11 @@ export const createReservation = mutation({
     const resolvedExpiresAt = args.expiresAt ?? (await getDefaultReservationExpiry(ctx, args.orgId, now));
 
     const hasDeposit = args.depositAmount !== undefined;
-    if (
-      hasDeposit &&
-      !isSystemOwnerRole(role) &&
-      !role.permissions.includes(PERMISSIONS.VIEW_SALES)
-    ) {
-      throw new ConvexError(`Forbidden: Missing required permissions: ${PERMISSIONS.VIEW_SALES}`);
-    }
     const currency = hasDeposit ? normalizeCurrency(await getOrgCurrency(ctx, args.orgId)) : undefined;
-    const method = methodOrDefault(args.depositMethod);
+    // SCRUM-445: a deposit's method is asked, never defaulted to CASH.
+    // SCRUM-469: with no deposit there is no money and so no method to judge or
+    // store; it is undefined, not a fabricated CASH.
+    const method = hasDeposit ? requireDepositMethod(args.depositMethod) : undefined;
     const amountMinor = hasDeposit
       ? amountToMinorOrThrow(args.depositAmount!, currency!, "Reservation deposit amount")
       : undefined;
@@ -1864,6 +2306,7 @@ export const createReservation = mutation({
       // customer being reserved for is the operation's own participant — it
       // proves nothing by itself, and is used only to refuse.
       actingCustomerId: args.customerId,
+      vehicle: currentVehicle,
     });
 
     const reservationId = await ctx.db.insert("vehicleReservations", {
@@ -1881,7 +2324,7 @@ export const createReservation = mutation({
     });
 
     let reservationDepositId: Id<"deposits"> | undefined;
-    if (hasDeposit && amountMinor !== undefined && currency !== undefined) {
+    if (hasDeposit && amountMinor !== undefined && currency !== undefined && method !== undefined) {
       const depositId = await recordHeldDeposit(ctx, {
         orgId: args.orgId,
         vehicleId: args.vehicleId,
@@ -1930,6 +2373,7 @@ export const createReservation = mutation({
         quoteId: args.dealQuoteId,
         depositId: args.dealDepositId,
       },
+      vehicle: currentVehicle,
     });
 
     await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);

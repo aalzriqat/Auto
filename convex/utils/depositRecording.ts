@@ -16,6 +16,17 @@ export const depositMethodValidator = v.union(
 
 export type DepositMethod = "CASH" | "BANK_TRANSFER" | "PAYMENT_LINK" | "CARD" | "CHEQUE" | "OTHER";
 
+/**
+ * Every recorded deposit's payment carries the reference `Deposit <id>`. It is a
+ * machine key (`deposits.ts` matches payments on it), not anything an operator
+ * wrote, so a screen must not present it as a receipt number (SCRUM-629 F-23).
+ * Returns the reference only when a person could have written it.
+ */
+export function displayableDepositReference(reference: string | undefined): string | undefined {
+  if (reference === undefined || /^Deposit [a-z0-9]+$/.test(reference)) return undefined;
+  return reference;
+}
+
 export function normalizeCurrency(currency: string): string {
   const normalized = currency.trim().toUpperCase();
   if (!normalized) throw new ConvexError("Currency is required.");
@@ -42,11 +53,22 @@ export function amountToMinorOrThrow(amount: number, currency: string, label = "
   return amountMinor;
 }
 
-export function methodOrDefault(method?: DepositMethod): DepositMethod {
+/**
+ * SCRUM-445 — a deposit's payment method is ASKED, never defaulted. The method
+ * picks the ledger account the money is debited to, so a silent CASH default
+ * books a bank transfer into the cash drawer. The refusal names the next step,
+ * which also covers an older client that still omits the field.
+ */
+export function requireDepositMethod(method?: DepositMethod): DepositMethod {
+  if (method === undefined) {
+    throw new ConvexError(
+      "Choose how the deposit was received (cash, bank transfer, card, cheque or payment link) and try again. If this screen does not offer a method, update the app."
+    );
+  }
   if (method === "OTHER") {
     throw new ConvexError("Select a specific payment method — OTHER is not accepted for a deposit.");
   }
-  return method ?? "CASH";
+  return method;
 }
 
 export async function recordHeldDeposit(

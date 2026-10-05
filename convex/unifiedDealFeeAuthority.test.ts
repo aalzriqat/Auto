@@ -39,11 +39,12 @@ import {
   assertConfiguredFeesRecorded,
 } from "./utils/settlementDeductions";
 import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 import type { Doc, Id } from "./_generated/dataModel";
-import { resolveExpectedExecutionFeesMinor } from "./applications";
+import { resolveExpectedExecutionFeesMinor } from "./utils/creationEconomics";
 import { toMinorUnits, fromMinorUnits } from "./utils/money";
 
 const MODULES = import.meta.glob("./**/*.*s");
@@ -957,7 +958,10 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         issuedTo: "FINANCE_COMPANY",
       });
 
-      const feeId = await asOwner.mutation(api.financeDealCosts.recordDealFee, {
+      // SCRUM-690 F-PNTR-1 (c22119): an unrelated dealership cost — even one
+      // of the fee's amount — does not retire the execution fee. Only a line
+      // LINKED to it does, so finalization is refused until one is.
+      const unrelatedId = await asOwner.mutation(api.financeDealCosts.recordDealFee, {
         expectedCurrency: "JOD",
         orgId,
         applicationId,
@@ -970,17 +974,44 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         description: "Execution fees recorded.",
         idempotencyKey: `fee-auth-${applicationId}`,
       });
+      await asOwner.mutation(api.financeDealCosts.voidDealFee, {
+        orgId,
+        feeId: unrelatedId,
+        reason: "Recorded under the wrong type; the execution fee is linked below.",
+      });
+      await expect(
+        asOwner.mutation(api.applications.finalizeDeal, {
+          orgId,
+          applicationId,
+          idempotencyKey: `authority-finalize-refused-${applicationId}`,
+        })
+      ).rejects.toThrow(/execution fee has no actual recorded/);
+
+      const feeId = await asOwner.mutation(api.financeDealCosts.recordExecutionFeeActual, {
+        orgId,
+        applicationId,
+        actualAmountMinor: 700 * 1000,
+        expectedCurrency: "JOD",
+        paidBy: "DEALER",
+        idempotencyKey: `fee-exec-${applicationId}`,
+      });
       await asOwner.mutation(api.financeDealCosts.reconcileDealFee, {
         orgId,
         feeId,
         notes: "Execution fees reconciled.",
       });
-
-      await asOwner.mutation(api.financeDealCosts.classifyDealAccounting, {
+      // SCRUM-443: a dealer-borne handover cost must reach the ledger from a
+      // recorded source before the deal closes; here the dealership paid it directly.
+      await asOwner.mutation(api.financeDealCosts.recordDirectFeePayment, {
         orgId,
-        applicationId,
-        notes: "Invoice on file, deal classified without requiring fee template actuals.",
+        feeId,
+        method: "BANK_TRANSFER",
+        paidAt: Date.now(),
+        expectedAmountMinor: 700 * 1000,
+        idempotencyKey: `fee-direct-${applicationId}`,
       });
+
+      // SCRUM-407: no manual classification step - finalization checks readiness itself.
 
       const saleId = await asOwner.mutation(api.applications.finalizeDeal, {
         orgId,
@@ -2541,22 +2572,26 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
       test("14. non-Murabaha modes never preserve caller-fabricated financing economics", async () => {
         const { t, orgId, asOwner, customerId, vehicleId } = await setupMatrixEnv();
 
-        const unfinancedModes = ["CASH", "INTERNAL_INSTALLMENT", "LEASE", undefined] as const;
+        // SCRUM-495: INTERNAL_INSTALLMENT and LEASE can no longer be saved, so the stripping rule is
+        // exercised on the modes that still can; the two retired ones are asserted as refused below.
+        const unfinancedModes = ["CASH", undefined] as const;
+
+        const argsFor = (mode: "CASH" | "INTERNAL_INSTALLMENT" | "LEASE" | undefined) => ({
+          orgId,
+          customerId,
+          vehicleId,
+          mode,
+          vehiclePrice: 20_000,
+          downPayment: 5_000,
+          termMonths: 48,
+          totalFinancedAmount: 15_000,
+          monthlyInstallment: 350,
+          profitRateApplied: 8,
+          totalProfit: 1800,
+        });
 
         for (const mode of unfinancedModes) {
-          const quoteId = await asOwner.mutation(api.quotes.saveQuote, {
-            orgId,
-            customerId,
-            vehicleId,
-            mode,
-            vehiclePrice: 20_000,
-            downPayment: 5_000,
-            termMonths: 48,
-            totalFinancedAmount: 15_000,
-            monthlyInstallment: 350,
-            profitRateApplied: 8,
-            totalProfit: 1800,
-          });
+          const quoteId = await asOwner.mutation(api.quotes.saveQuote, argsFor(mode));
 
           const quote = (await t.run((ctx) => ctx.db.get("quotes", quoteId)))!;
           if (mode === "CASH") {
@@ -2571,6 +2606,10 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
             expect(quote.totalProfit).toBeUndefined();
           }
           expect(quote.customerQuotePricingSnapshot).toBeUndefined();
+        }
+
+        for (const mode of ["INTERNAL_INSTALLMENT", "LEASE"] as const) {
+          await expectRetiredDealMode(asOwner.mutation(api.quotes.saveQuote, argsFor(mode)));
         }
       });
     });

@@ -29,8 +29,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useCurrency } from "@/hooks/useCurrency";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { VehicleCostBar } from "../components/VehicleCostBar";
+import { useProfitApproval } from "@/components/sales/ProfitApprovalNotice";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
 import {
   isRequestedFinancingTermValid,
@@ -38,6 +39,9 @@ import {
 } from "@/lib/financing";
 
 export type Step1Values = z.infer<typeof step1Schema>;
+
+/** The one vehicleId error that choosing a finance company answers. */
+const COMPANY_REQUIRED_ERROR = "companyRequired";
 
 // ─────────────────────────────────────────────────────────────
 // Props
@@ -60,7 +64,7 @@ export default function Step1QuoteSetup({
 }: Step1QuoteSetupProps) {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
-  const currency = useCurrency();
+  const currency = useMoneyDisplay();
 
   const isCash = paymentType === "CASH";
 
@@ -88,17 +92,30 @@ export default function Step1QuoteSetup({
     initialData.customerStatuses || []
   );
 
+  // An edit that changes the offers clears the chosen company. Say so, rather
+  // than let Next fail later with no visible cause (SCRUM-628 F-26).
+  const [companyResetByEdit, setCompanyResetByEdit] = useState(false);
+  const resetCompanySelection = () => {
+    if (selectedCompanyId !== undefined) setCompanyResetByEdit(true);
+    setSelectedCompanyId(undefined);
+  };
+
   const toggleStatus = (id: string) => {
     setCustomerStatuses((prev) =>
       prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]
     );
-    setSelectedCompanyId(undefined); // Reset selection when requirements change
+    resetCompanySelection(); // Reset selection when requirements change
   };
 
-  const customerStatusOptions = useQuery(
+  // Undefined while loading: "none configured" is only true once the list has
+  // loaded empty (SCRUM-628 F-12).
+  const customerStatusRows = useQuery(
     api.orgCustomerStatuses.list,
     activeOrgId ? { orgId: activeOrgId } : "skip"
-  )?.filter((s: Doc<"orgCustomerStatuses">) => s.isActive) ?? [];
+  );
+  const customerStatusesLoading = customerStatusRows === undefined;
+  const customerStatusOptions =
+    customerStatusRows?.filter((s: Doc<"orgCustomerStatuses">) => s.isActive) ?? [];
 
   const financeCompanies = useQuery(
     api.finance.listCompanies,
@@ -144,6 +161,17 @@ export default function Step1QuoteSetup({
     },
   });
 
+  const selectCompany = (id: string) => {
+    setSelectedCompanyId(id);
+    setCompanyResetByEdit(false);
+    // Only the "pick a company" error is answered by picking one; a company's
+    // own refusal (status not accepted, fees missing) stays until Next re-checks.
+    // Matched by type, not text: the message changes with the language.
+    if (form.getFieldState("vehicleId").error?.type === COMPANY_REQUIRED_ERROR) {
+      form.clearErrors("vehicleId");
+    }
+  };
+
   const watchedVehicleId = form.watch("vehicleId");
   const watchedPrice = form.watch("vehiclePrice");
   const watchedProfit = form.watch("desiredProfit");
@@ -167,7 +195,7 @@ export default function Step1QuoteSetup({
       "vehiclePrice",
       items.reduce((sum, item) => sum + (item.unitPrice || 0), 0)
     );
-    setSelectedCompanyId(undefined);
+    resetCompanySelection();
   };
 
   // Resolve against the merged picker list, not just AVAILABLE stock — a sourced
@@ -175,20 +203,29 @@ export default function Step1QuoteSetup({
   // `availableVehicles` alone left `selectedVehicle` undefined for sourced cars,
   // so the whole quote (make, VIN, price, minimum profit, notes) rendered empty.
   const selectedVehicle = allPickerVehicles.find((v: Doc<"vehicles">) => v._id === watchedVehicleId);
-  const minimumProfit = selectedVehicle?.minimumProfit || 0;
-  const isProfitBelowMinimum = !isCash && watchedVehicleId && Number(watchedProfit) < minimumProfit;
 
-  const pendingApproval = useQuery(api.approvals.checkPendingApproval,
-    activeOrgId && watchedVehicleId
-      ? { orgId: activeOrgId, vehicleId: watchedVehicleId as Id<"vehicles"> }
-      : "skip"
-  );
+  // SCRUM-260: the server decides. The quote is saved at base + profit (see
+  // quotePayload.ts), and a manager approves exactly that price, so the gate
+  // asks the backend about that price. `blocked` holds Next disabled while the
+  // verdict loads, so it never flickers enabled on a below-minimum deal.
+  const quotedPrice = (Number(watchedPrice) || 0) + (Number(watchedProfit) || 0);
+  // SCRUM-609 F-25: a financed quote needs something left to finance; the
+  // server refuses this case, so stop here instead of at Generate.
+  const downPaymentCoversPrice =
+    paymentType === "INSTALLMENT" &&
+    quotedPrice > 0 &&
+    !((Number(watchedDown) || 0) < quotedPrice);
+  const profitApproval = useProfitApproval({
+    orgId: activeOrgId,
+    vehicleId: watchedVehicleId as Id<"vehicles"> | undefined,
+    salePrice: quotedPrice,
+    enabled: !isCash,
+  });
+  const profitVerdict = profitApproval.verdict?.status === "INVALID" ? undefined : profitApproval.verdict;
+  const isBlockedByProfit = profitApproval.blocked;
 
   const requestProfitApproval = useMutation(api.approvals.requestProfitApproval);
   const [isRequesting, setIsRequesting] = useState(false);
-
-  const hasValidApproval = pendingApproval?.status === "APPROVED" && Number(watchedProfit) >= pendingApproval.requestedProfit;
-  const isBlockedByProfit = isProfitBelowMinimum && !hasValidApproval;
 
   const handleRequestApproval = async () => {
     if (!activeOrgId || !watchedVehicleId) return;
@@ -197,8 +234,7 @@ export default function Step1QuoteSetup({
       await requestProfitApproval({
         orgId: activeOrgId,
         vehicleId: watchedVehicleId as Id<"vehicles">,
-        requestedProfit: Number(watchedProfit) || 0,
-        minimumProfit: minimumProfit,
+        salePrice: quotedPrice,
         wizardSnapshot: {
           paymentType,
           vehiclePrice: Number(watchedPrice) || 0,
@@ -231,9 +267,15 @@ export default function Step1QuoteSetup({
 
   const onSubmit = (values: Step1Values) => {
     if (paymentType === "INSTALLMENT") {
+      if (downPaymentCoversPrice) {
+        form.setFocus("downPayment");
+        return;
+      }
+
       if (!selectedCompanyId) {
         form.setError("vehicleId", {
-          message: "Please select a financing company",
+          type: COMPANY_REQUIRED_ERROR,
+          message: t("PleaseSelectFinanceCompany" as any),
         });
         return;
       }
@@ -417,7 +459,7 @@ export default function Step1QuoteSetup({
                     onChange={(id, price) => {
                       field.onChange(id);
                       form.setValue("vehiclePrice", price);
-                      setSelectedCompanyId(undefined);
+                      resetCompanySelection();
                     }}
                     onSourceVehicle={async (data) => {
                       if (!activeOrgId) throw new Error("No org selected");
@@ -466,7 +508,7 @@ export default function Step1QuoteSetup({
                     disabled={isCash && vehicleItems.length > 1}
                     onChange={(e) => {
                       field.onChange(e);
-                      setSelectedCompanyId(undefined);
+                      resetCompanySelection();
                     }}
                   />
                 </FormControl>
@@ -496,7 +538,7 @@ export default function Step1QuoteSetup({
                         {...field}
                         onChange={(e) => {
                           field.onChange(e);
-                          setSelectedCompanyId(undefined);
+                          resetCompanySelection();
                         }}
                       />
                     </FormControl>
@@ -511,8 +553,20 @@ export default function Step1QuoteSetup({
                   <FormItem>
                     <FormLabel>{t("DownPayment" as any)}</FormLabel>
                     <FormControl>
-                      <Input type="number" {...field} />
+                      <Input
+                        type="number"
+                        {...field}
+                        // Only set when true: an explicit `undefined` would override
+                        // FormControl's aria-invalid for schema errors (Slot merge order).
+                        {...(downPaymentCoversPrice ? { "aria-invalid": true } : {})}
+                      />
                     </FormControl>
+                    {downPaymentCoversPrice && (
+                      <p role="alert" className="text-sm font-medium text-destructive">
+                        {t("DownPaymentMustBeBelowPrice" as any)}
+                      </p>
+                    )}
+                    <FormMessage />
                   </FormItem>
                 )}
               />
@@ -531,7 +585,7 @@ export default function Step1QuoteSetup({
                         {...field}
                         onChange={(e) => {
                           field.onChange(e);
-                          setSelectedCompanyId(undefined);
+                          resetCompanySelection();
                         }}
                       />
                     </FormControl>
@@ -549,7 +603,11 @@ export default function Step1QuoteSetup({
             <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
               {t("CustomerStatusReqs")}
             </label>
-            {customerStatusOptions.length === 0 ? (
+            {customerStatusesLoading ? (
+              <p className="text-sm text-muted-foreground" aria-busy="true">
+                {t("CustomerStatusesLoading" as any)}
+              </p>
+            ) : customerStatusOptions.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 {t("NoCustomerStatusesConfigured" as any) ?? "No customer statuses configured yet — set them up in Finance Settings."}
               </p>
@@ -576,7 +634,24 @@ export default function Step1QuoteSetup({
         )}
 
         {/* Finance panel */}
-        {!isCash && (
+        {!isCash && downPaymentCoversPrice && (
+          <p
+            data-testid="finance-panel-blocked"
+            className="rounded-xl border border-dashed px-4 py-6 text-center text-sm text-muted-foreground"
+          >
+            {t("FinanceOptionsAwaitValidDownPayment" as any)}
+          </p>
+        )}
+        {!isCash && !downPaymentCoversPrice && companyResetByEdit && !selectedCompanyId && (
+          <p
+            role="status"
+            data-testid="finance-company-reset-notice"
+            className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-700 dark:text-amber-300"
+          >
+            {t("FinanceCompanyResetByEdit" as any)}
+          </p>
+        )}
+        {!isCash && !downPaymentCoversPrice && (
           <FinancePanel
             vehicleId={watchedVehicleId}
             vehiclePrice={Number(watchedPrice) || 0}
@@ -584,7 +659,7 @@ export default function Step1QuoteSetup({
             downPayment={Number(watchedDown) || 0}
             termMonths={Number(watchedTerm) || 0}
             selectedCompanyId={selectedCompanyId}
-            onSelectCompany={setSelectedCompanyId}
+            onSelectCompany={selectCompany}
             customerStatuses={customerStatuses}
             manualProfitRate={manualProfitRate}
             manualInsuranceRate={manualInsuranceRate}
@@ -599,51 +674,70 @@ export default function Step1QuoteSetup({
           />
         )}
 
-        {/* Approval Alert */}
-        {isBlockedByProfit && (
+        {/* SCRUM-641: Next is held disabled for a deleted car; say why, in the verified server wording. */}
+        {profitVerdict?.status === "VEHICLE_DELETED" && (
           <Alert variant="destructive" className="bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400">
             <ShieldAlert className="h-4 w-4" />
-            <AlertTitle>Approval Required</AlertTitle>
-            <AlertDescription className="mt-2 flex flex-col gap-3 items-start">
-              <p>The desired profit ({currency.format(Number(watchedProfit))}) is below the minimum required profit for this vehicle ({currency.format(minimumProfit)}).</p>
+            <AlertDescription>{t("ServerError_VEHICLE_DELETED" as any)}</AlertDescription>
+          </Alert>
+        )}
 
-              {pendingApproval?.status === "PENDING" && pendingApproval.requestedProfit === Number(watchedProfit) ? (
+        {/* Approval Alert */}
+        {profitVerdict && (profitVerdict.status === "REQUIRED" || profitVerdict.status === "PENDING" || profitVerdict.status === "REJECTED") && (
+          <Alert variant="destructive" className="bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400">
+            <ShieldAlert className="h-4 w-4" />
+            <AlertTitle>{t("WizardProfitApprovalRequiredTitle")}</AlertTitle>
+            <AlertDescription className="mt-2 flex flex-col gap-3 items-start">
+              <p>
+                {t("WizardProfitApprovalRequiredBody")
+                  .replace("{margin}", currency.format(profitVerdict.margin))
+                  .replace("{minimum}", currency.format(profitVerdict.minimumProfit))}
+              </p>
+
+              {profitVerdict.status === "PENDING" ? (
                 <div className="flex items-center gap-2 text-yellow-600 dark:text-yellow-400 bg-yellow-500/10 px-3 py-1.5 rounded-md text-sm font-medium">
-                  Approval request is currently pending. Please wait for a manager.
-                </div>
-              ) : pendingApproval?.status === "REJECTED" && pendingApproval.requestedProfit === Number(watchedProfit) ? (
-                <div className="flex items-center gap-2 text-red-600 dark:text-red-400 bg-red-500/10 px-3 py-1.5 rounded-md text-sm font-medium">
-                  Your request for this profit amount was rejected. Please increase the profit or request again.
+                  {t("WizardProfitApprovalPending")}
                 </div>
               ) : (
-                <Button
-                  type="button"
-                  variant="destructive"
-                  size="sm"
-                  onClick={handleRequestApproval}
-                  disabled={isRequesting}
-                >
-                  {isRequesting ? "Requesting..." : "Request Profit Approval"}
-                </Button>
+                <>
+                  {/* A rejection closes that request, not the price: the
+                      salesperson may change the price or ask again. */}
+                  {profitVerdict.status === "REJECTED" ? (
+                    <div className="flex items-center gap-2 text-red-600 dark:text-red-400 bg-red-500/10 px-3 py-1.5 rounded-md text-sm font-medium">
+                      {t("WizardProfitApprovalRejected")}
+                    </div>
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    onClick={handleRequestApproval}
+                    disabled={isRequesting}
+                  >
+                    {isRequesting
+                      ? t("WizardProfitApprovalRequesting")
+                      : t("WizardProfitApprovalRequestAction")}
+                  </Button>
+                </>
               )}
             </AlertDescription>
           </Alert>
         )}
-        {hasValidApproval && isProfitBelowMinimum && (
+        {profitVerdict?.status === "APPROVED" && (
           <Alert className="bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400">
             <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-            <AlertTitle>Profit Approved</AlertTitle>
+            <AlertTitle>{t("WizardProfitApprovedTitle")}</AlertTitle>
             <AlertDescription>
-              Your requested profit of {currency.format(pendingApproval.requestedProfit)} was approved by management. You may proceed.
+              {t("WizardProfitApprovedBody").replace("{margin}", currency.format(profitVerdict.margin))}
             </AlertDescription>
           </Alert>
         )}
 
         {/* Footer */}
         <div className="flex justify-end pt-4 border-t">
-          <Button type="submit" disabled={!!isBlockedByProfit} className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white shadow-md hover:shadow-lg transition-all rounded-full px-8 h-12">
+          <Button type="submit" disabled={isBlockedByProfit} className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white shadow-md hover:shadow-lg transition-all rounded-full px-8 h-12">
             {t("Next" as any)}
-            <ArrowRight className="w-4 h-4 ms-2" />
+            <ArrowRight className="w-4 h-4 ms-2 rtl:-scale-x-100" />
           </Button>
         </div>
       </form>

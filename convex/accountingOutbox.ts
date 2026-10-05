@@ -38,7 +38,11 @@ import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
 import { payrollPostingBlockedReason } from "./utils/payrollSourceLedger";
 import { custodyPostingBlockedReason, custodyPostingRefusal } from "./utils/custodySourceLedger";
 import { commissionPostingBlockedReason } from "./utils/commissionSourceLedger";
-import { reverseAccountingEvent } from "./accounting/reversals";
+import {
+  isPostedReversalOf,
+  reversalKeyConflict,
+  reverseAccountingEvent,
+} from "./accounting/reversals";
 import { scheduleAuthorityDispatch } from "./utils/authorityDispatchScheduler";
 import {
   commitDeferredReversal,
@@ -123,13 +127,51 @@ export async function enqueuePendingReversal(
   }
 ): Promise<void> {
   await assertOrgEconomicallyActive(ctx, args.orgId);
+
+  // SCRUM-515 (see isPostedReversalOf): the only no-op is a pending/posted reversal
+  // of THIS original; any other key holder fails closed before any write.
+  // S515-R2/R3: read BOTH holders, refuse a foreign holder in EITHER table, and
+  // only then decide a no-op — a matching holder in one table must never mask a
+  // foreign holder in the other.
+  const ledgerHolder = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", args.orgId).eq("idempotencyKey", args.idempotencyKey)
+    )
+    .unique();
   const existing = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_idempotency", (q) =>
       q.eq("orgId", args.orgId).eq("idempotencyKey", args.idempotencyKey)
     )
     .unique();
-  if (existing) return;
+  if (ledgerHolder && !isPostedReversalOf(ledgerHolder, args.originalEventId)) {
+    throw reversalKeyConflict(
+      args.idempotencyKey,
+      `accounting event ${ledgerHolder._id} (${ledgerHolder.eventType}, ${ledgerHolder.status})`,
+      args.originalEventId
+    );
+  }
+  if (
+    existing &&
+    !(existing.kind === "REVERSE" && existing.originalEventId === args.originalEventId)
+  ) {
+    throw reversalKeyConflict(
+      args.idempotencyKey,
+      `queued outbox row ${existing._id} (${existing.kind}, ${existing.status})`,
+      args.originalEventId
+    );
+  }
+  if (ledgerHolder) return;
+  if (existing) {
+    // Own REVERSE row: only a PENDING one is queued; FAILED/POSTED is not.
+    if (existing.status === "PENDING") return;
+    throw reversalKeyConflict(
+      args.idempotencyKey,
+      `queued outbox row ${existing._id} (${existing.kind}, ${existing.status})`,
+      args.originalEventId
+    );
+  }
 
   await ctx.db.insert("pendingAccountingEvents", {
     orgId: args.orgId,

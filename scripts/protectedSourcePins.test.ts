@@ -369,11 +369,410 @@ describe("protected source content pins", () => {
        * predicate, mutation or export. Cross-lane notice posted BEFORE this
        * change - Jira SCRUM-215 `c20763`. Same governance; both constants
        * recomputed FROM THE FILE with this test's own normalization.
+       *
+       * -- RENEWAL 2026-09-26 - SCRUM-37 tenant read boundary (PR #343) ------
+       *
+       * Previous reviewed postimage, superseded by this entry (the SCRUM-372
+       * vehicle-card permission renewal just above):
+       *
+       *   bytes:  237014
+       *   sha256: 9c353ded4a1154f7cd9095b2de2d984c86b681168161153f216ec0bbfadd2fbc
+       *
+       * Renewed because `getLog` read any organization's application status
+       * history: membership of `args.orgId` proved nothing about
+       * `args.applicationId`, so notes and actor names crossed tenants. The
+       * delta is exactly two hunks, 23 insertions and 9 deletions: (1)
+       * `getLog` proves the application with the existing `requireOwnedRow`
+       * (already imported; missing and foreign refuse identically) and keeps
+       * only log rows stamped with `args.orgId`; (2) `dealCockpit`'s
+       * timeline, whose parent was already owned, keeps only rows stamped
+       * with `args.orgId` before the actor lookup. No new import, export,
+       * write, permission check or query shape: the same `by_application`
+       * reads, narrowed in memory. Read the two hunks; do not take this
+       * note's word for their scope.
+       *
+       * Made under the owner's standing full-authority directive of
+       * 2026-09-26, with the cross-lane notice posted to the ratchet lane
+       * BEFORE the change (Jira SCRUM-215 c20828, #scrum-215). Sol 6 and
+       * Sonnet xhigh approved the code at `3d3443839`; Sol certified this
+       * renewal against main `3866c8505` at `6af70d714`, and it was rebased
+       * onto the SCRUM-372 renewals when #338 merged. The pin is not
+       * weakened, bypassed, deleted, generalized or made vacuous: same exact
+       * byte + sha256 pin, same negative control, same normalization and
+       * bare-CR rejection. Both constants were recomputed FROM THE FILE with
+       * this test's own normalization. `convex/dealWorkspace.ts` is untouched.
+       *
+       * A /simplify pass (owner rule 2026-09-27) then shortened only the two
+       * hunks' comments (27 -> 23 insertions); every code line is unchanged.
+       * Superseded pin for that step: 237857 / 7dfb02c2...0004674.
+       *
+       * -- RENEWAL 2026-09-27 - SCRUM-260 profit approval at the commit (PR #347)
+       *
+       * Previous reviewed postimage, superseded by this entry (the SCRUM-37
+       * renewal just above):
+       *
+       *   bytes:  237565
+       *   sha256: 0ed573139b3ba16ff5dee2d557ae3c6aab51b8ac385b102776545bfbd915b6d6
+       *
+       * Renewed because the minimum-profit approval moved from a quote-time
+       * re-check in `finalizeDeal` to `completeSale`'s shared boundary
+       * (utils/saleCompletion.ts), which proves it against the price the sale
+       * persists for all four sale doors. The delta is exactly two hunks, 3
+       * insertions and 14 deletions: (1) the now-unused import of
+       * `assertProfitApproved` / `quoteModeRequiresMinimumProfit` is removed;
+       * (2) the `finalizeDeal` block that re-checked `quote.desiredProfit` is
+       * replaced by a three-line comment pointing at the shared boundary. No
+       * new `ctx.db` access, query, index, mutation, import or export. Read
+       * the two hunks; do not take this note's word for their scope.
+       *
+       * Made under the owner's standing full-authority directive of
+       * 2026-09-26, with the cross-lane notice posted BEFORE the change (Jira
+       * SCRUM-215 c20962). The SCRUM-260 code was certified by Sol 6 at
+       * `4bcc1ea08` and rebased onto main `a1a0abd64` when #343 merged. Same
+       * governance: not weakened, bypassed, deleted, generalized or made
+       * vacuous. Both constants were recomputed FROM THE FILE with this
+       * test's own normalization. `convex/dealWorkspace.ts` is untouched.
+       *
+       * -- RENEWAL 2026-09-27 (2) - SCRUM-373 D2 quote first-payment correction
+       *
+       * Previous reviewed postimage, superseded by this entry (the SCRUM-260
+       * renewal just above):
+       *
+       *   bytes:  236998
+       *   sha256: ec1c71d89d14d3ea9a545c1fe60ba76ecaa219504da113af3e975191f33132ed
+       *
+       * Renewed so the cockpit can say whether the approver may apply the
+       * quote's first payment to a deal whose recorded split zeroed it. The
+       * delta is three hunks, 36 insertions and 4 deletions: (1) imports of
+       * `mayCorrectFirstPayment`, `quoteDownPaymentMinor` and
+       * `firstPaymentCorrectionBlock` (and `mayEstablishAppliedLtv` dropped from
+       * the projection import); (2) `dealCockpit` also destructures
+       * `user` from its existing `requireTenantAuth` call, permissions
+       * unchanged; (3) `dealCockpit` returns a money-gated
+       * `firstPaymentCorrection` (null when `!canSeeMoney`), reading the quote
+       * only once the cheaper conditions pass. No mutation, write, index or
+       * permission change. Read the three hunks; do not take this note's word
+       * for their scope.
+       *
+       * Amended once inside the same PR (CodeRabbit, #349): the cockpit's offer
+       * read `mayEstablishAppliedLtv` while the action renders only for holders of
+       * VIEW_FINANCE_APPLICATIONS, so the offer now reads `mayCorrectFirstPayment`,
+       * the same permission list the mutation requires. Superseded pin for that
+       * step: 238613 / 446e8979c307456bc4ae53dd26c50081c6654573a06a656c3aa8d74bd8782dca.
+       *
+       * Cross-lane notices posted BEFORE each change (Jira SCRUM-215 c20972, c20975),
+       * under the owner's standing full-authority directive of 2026-09-26.
+       * Same governance: not weakened, bypassed, deleted, generalized or made
+       * vacuous. Both constants were recomputed FROM THE FILE with this test's
+       * own normalization.
+       *
+       * -- RENEWAL 2026-09-27 (3) - SCRUM-404 record the calculated quotation at creation
+       *
+       * Previous reviewed postimage, superseded by this entry (the SCRUM-373 D2
+       * renewal just above, as amended):
+       *
+       *   bytes:  238609
+       *   sha256: fd9e75cde3446c86aea41878b9a3280d894ba39c431546bc1277f66477b1af8a
+       *
+       * Renewed so starting a finance application from a configured-company
+       * quote can record the AutoFlow-calculated quotation the operator was
+       * shown, in the same transaction. The delta, 87 insertions and 108
+       * deletions: (1) imports — `mayRecordSubmittedQuotation` from the
+       * projection, `applySubmittedQuotation` / `assertQuotationRecordAuthority`
+       * from `./financingEconomics`, the two `./utils/creationEconomics`
+       * resolvers (`resolveCreationRuleSnapshot`, `resolveCreationEconomicsInputs`);
+       * the now-unused `buildRuleSnapshot` / `assertFeeTemplatesWithinLimit`
+       * imports dropped; (2) `resolveExpectedExecutionFeesMinor` MOVED unchanged
+       * to `convex/utils/creationEconomics.ts` (its one importer outside this
+       * file, a test, now imports it from there); (3) `createFromQuote` takes an
+       * optional `confirmedCalculatedQuotationMinor`, refused up front unless
+       * the caller holds `create:finance_application` and would pass the
+       * recorder's own authority check; (4) the rule snapshot and the
+       * target / first payment / fees inputs now come from the shared
+       * `resolveCreationRuleSnapshot` / `resolveCreationEconomicsInputs`, the
+       * same helpers the new `previewCreationQuotation` query reads, so the
+       * preview and the creation cannot compute different inputs, and
+       * `repairQuoteEconomicsLineage` reads the same resolver (its NaN price
+       * check now runs before the fee-authority check); (5) after
+       * the application and its side effects are written, a confirmed figure is
+       * recorded through `applySubmittedQuotation` (`recordedVia:
+       * "DEAL_CREATION"`), whose refusal rolls the whole creation back. Without
+       * the new argument the mutation behaves exactly as before. No index,
+       * schema table or permission change. Read the hunks; do not take this
+       * note's word for their scope.
+       *
+       * Same governance: not weakened, bypassed, deleted, generalized or made
+       * vacuous. Both constants were recomputed FROM THE FILE with this test's
+       * own normalization.
+       *
+       * -- RENEWAL 2026-09-28 - SCRUM-407 automatic closing readiness
+       *
+       * Previous reviewed postimage, superseded by this entry (the SCRUM-404
+       * renewal just above):
+       *
+       *   bytes:  237715
+       *   sha256: 530717160b2680b182a29f67a16d85853a4f9f16ec8e5a5f326fe16f2323ef5f
+       *
+       * Renewed for the owner's SCRUM-407 rulings: the manual closing
+       * checklist is removed and accounting readiness becomes an automatic
+       * check; finalizing a financed deal is for accountants only. The delta,
+       * 98 insertions and 70 deletions: (1) `assertFinancedFinalizationEvidence`
+       * — the `accountingClassification === "CLASSIFIED"` stamp gate and the
+       * remittance-known check beside it — is DELETED; finalization now re-runs
+       * the shared evaluator (`evaluateClosingReadiness`, inside
+       * `resolveFinancedSalePlan`), which carries the remittance check itself
+       * and adds the custody OPEN / closed-unbalanced checks for every route;
+       * (2) `finalizeDeal` requires `confirm:finance_disbursement` instead of
+       * `finalize:financed_deal`; (3) a new read-only query
+       * `getClosingReadiness` (view:finance_applications + `requireOwnedRow`)
+       * serves the same evaluator's verdict, with reasons and figures
+       * withheld below owner / view:finance (the SCRUM-117 boundary sweep
+       * covers it); (4) the import from `./utils/financedSaleRecognition`
+       * widened to the evaluator and its types. No schema, index or other
+       * mutation's permission changes. NOT yet reviewed by an independent
+       * seat at the time of this renewal — the renewal records the author's
+       * change, not a review verdict. Read the hunks; do not take this note's
+       * word for their scope.
+       *
+       * Same governance: not weakened, bypassed, deleted, generalized or made
+       * vacuous. Both constants were recomputed FROM THE FILE with this test's
+       * own normalization.
+       *
+       * -- RENEWAL 2026-09-28 (2) - SCRUM-407 /simplify cleanup
+       *
+       * Previous postimage, superseded by this entry (the SCRUM-407 renewal
+       * just above):
+       *
+       *   bytes:  238688
+       *   sha256: 2f26139b5a495584db7597b6fdd0638a186649d78f47e105614d122208c8c8f6
+       *
+       * The delta, 56 insertions and 43 deletions: (1) a new private helper
+       * `closingReadinessInputs` derives the settlement route and the currency
+       * for BOTH `getClosingReadiness` and `finalizeDeal`, and now carries
+       * `finalizeDeal`'s existing deal-currency vs org-currency refusal
+       * (SCRUM-241), moved verbatim, so the query reports that deal as
+       * UNAVAILABLE instead of READY while the door refuses it (P1.4 "one
+       * evaluator"; failing-first test in sn31CurrencyMismatchRepro.test.ts);
+       * (2) `getClosingReadiness` uses `mayReadFinanceEconomics` (the same
+       * owner-or-view:finance rule it spelled out by hand), computes the
+       * open/closed test once, and no longer returns the unused `figures`
+       * block; (3) the import gains `mayReadFinanceEconomics`. The door's
+       * permission, the order of its refusals and every refusal message are
+       * unchanged. NOT yet reviewed by an independent seat at the time of
+       * this renewal. Read the hunks; do not take this note's word for their
+       * scope.
+       *
+       * -- RENEWAL 2026-09-28 (3) - SCRUM-407 review round 1 (doc comment only)
+       *
+       * Previous postimage, superseded by this entry (the /simplify renewal
+       * just above; Sol 6 CERTIFIED the head carrying it, 13b5ee5b7):
+       *
+       *   bytes:  238873
+       *   sha256: 4de5f5712a57aad5f095d98bd95428e6205f0a157a340d2b3a358dae5d82f9be
+       *
+       * The delta is the `getClosingReadiness` doc comment ONLY (Sonnet F2):
+       * it no longer claims the screen and the server "cannot disagree"
+       * without qualification — it scopes that to the closing-evidence checks
+       * and names the finalize preconditions the query does not cover — and
+       * it drops the reference to the `figures` block /simplify removed. No
+       * code line changed. Read the hunk; do not take this note's word for it.
+       *
+       * Same governance: not weakened, bypassed, deleted, generalized or made
+       * vacuous. Both constants were recomputed FROM THE FILE with this test's
+       * own normalization.
+       *
+       * -- RENEWAL 2026-09-28 (4) - SCRUM-407 Sonar S3358 + CodeRabbit #352
+       *
+       * Previous postimage, superseded by this entry (renewal (3) just above;
+       * Sol 6 CERTIFIED the head carrying it, d1610a4f0):
+       *
+       *   bytes:  239345
+       *   sha256: 3a76a51eaea169d1cae957ac278f2fcba6e15c2aa60e46d38a2391ebeb52ca98
+       *
+       * The delta is confined to `getClosingReadiness`, a read-only query:
+       * (1) Sonar S3358 — the nested ternary choosing a check's `reason` is
+       * one ternary with the same three outcomes (null stays null; a finance
+       * reader gets the reason; anyone else gets the withheld text);
+       * (2) CodeRabbit #352 — a verdict that cannot be formed now returns
+       * `unavailableReason`: the evaluator's own refusal for a finance
+       * reader, the new `WITHHELD_UNAVAILABLE_READINESS_REASON` sentence for
+       * anyone else. No mutation, door, permission, refusal or finalize
+       * message changed. Read the hunks; do not take this note's word for
+       * them. Same governance; both constants recomputed FROM THE FILE with
+       * this test's own normalization.
+       *
+       * -- RENEWAL 2026-09-28 (5) - SCRUM-414 readiness reason codes
+       *
+       * Previous postimage, superseded by this entry (renewal (4) just above,
+       * PR #352 head 615dc7995):
+       *
+       *   bytes:  239908
+       *   sha256: c573d153b751c3b0e1860d0eebb2f294fc36aac0f91883cec4b51f2a530ad8b9
+       *
+       * The delta is confined to `getClosingReadiness` (read-only) and its
+       * private input helper: (1) `closingReadinessInputs` now delegates to a
+       * new private `closingReadinessInputsOrRefusal`, which returns the same
+       * two refusals as coded reasons instead of throwing; the wrapper throws
+       * the IDENTICAL English sentence, so `finalizeDeal`'s refusal text and
+       * order are unchanged; (2) each check is served through
+       * `closingReadinessCheckView`, adding `reasonCode` and (finance tier
+       * only) `reasonParams`; below the finance tier the reason is the
+       * per-check `WITHHELD_<KEY>` code with NO params and the existing plain
+       * sentence (redaction test in financedConsignedSettlement.test.ts,
+       * mutation-proven); (3) `unavailableReasonCode`/`unavailableReasonParams`
+       * beside `unavailableReason`, withheld the same way; (4) type imports
+       * from `../lib/closingReadinessReasonCodes`. No mutation, permission,
+       * schema or index changed. NOT yet reviewed by an independent seat at
+       * the time of this renewal. Read the hunks; do not take this note's
+       * word for them. Same governance; both constants recomputed FROM THE
+       * FILE with this test's own normalization.
+       *
+       * -- RENEWAL 2026-09-28 (6) - SCRUM-414 /simplify pass
+       *
+       * Previous postimage, superseded by this entry (renewal (5) just above,
+       * branch head af22ec428):
+       *
+       *   bytes:  243398
+       *   sha256: e1ce2d649656ca3cfe4e134acad649fef6a899bee387d4d976d706bde878c200
+       *
+       * The delta, 72 insertions and 91 deletions, is confined to
+       * `getClosingReadiness` (read-only), its private input helper, and ONE
+       * line of `finalizeDeal`: (1) the private `closingReadinessInputs`
+       * wrapper is deleted; `finalizeDeal` calls
+       * `closingReadinessInputsOrRefusal` and throws its refusal with
+       * `closingRefusalError`, so the two input refusals (unsupported
+       * denomination, currency drift) carry the same `{ message, code,
+       * params? }` payload as the evaluator's refusals instead of a plain
+       * string. The English `message` is the IDENTICAL sentence, thrown at
+       * the same point in the same order; the door's permission and every
+       * other refusal are unchanged (failing assertions updated in
+       * sn31CurrencyMismatchRepro / scrum241FinanceReceiptAuthority to read
+       * `data.message`); (2) the two redaction paths are one pure
+       * `redactClosingReason` + one flattening `closingReasonView`; the wire
+       * shape (`reason`/`reasonCode`/`reasonParams?`,
+       * `unavailableReason`/`unavailableReasonCode`/`unavailableReasonParams?`)
+       * is unchanged, the codes are now required in its type; (3) the
+       * per-check `WITHHELD_READINESS_REASON` sentences and
+       * `WITHHELD_UNAVAILABLE_READINESS_REASON` are deleted (the client
+       * translates the WITHHELD_* code; the English left below the finance
+       * tier is `WITHHELD_READINESS_REASON_FALLBACK`, which names nothing
+       * about the deal), with the orphaned stacked JSDoc above them.
+       * Redaction is unchanged in substance: below the finance tier no
+       * params and no evaluator text are served (leak mutant re-run: letting
+       * params through fails the redaction assertions in
+       * financedConsignedSettlement.test.ts and sn31CurrencyMismatchRepro.test.ts;
+       * file restored byte-identical). No mutation added, no permission,
+       * schema or index changed. NOT yet reviewed by an independent seat at
+       * the time of this renewal. Read the hunks; do not take this note's
+       * word for them. Same governance; both constants recomputed FROM THE
+       * FILE with this test's own normalization.
+       *
+       * -- RENEWAL 2026-09-28 (7) - SCRUM-414 round-1 review fixes (R1 / S414-RED-1)
+       *
+       * Previous postimage, superseded by this entry (renewal (6) just above,
+       * branch head f3560fdff):
+       *
+       *   bytes:  241762
+       *   sha256: 86230d7a5ccb5359c45faf3e88134a410bb95892b0f7238209e7880e060eb583
+       *
+       * The delta, 8 insertions and 19 deletions, applies the readiness
+       * redaction to `finalizeDeal`'s refusals: (1) the private
+       * `redactClosingReason` moves, unchanged in behaviour, to
+       * `lib/closingReadinessReasonCodes.ts` so the query and the mutation
+       * share ONE pure function (the now-unused `WITHHELD_READINESS_REASON_FALLBACK`
+       * / `WithheldClosingReadinessReasonCode` imports go with it);
+       * `getClosingReadiness` is otherwise untouched; (2) `finalizeDeal`
+       * computes `mayReadMoney = mayReadFinanceEconomics(auth.role)` once,
+       * after the unchanged `requireTenantAuth` and before
+       * `runWithIdempotency`, and projects the input refusal through
+       * `redactClosingReason(…, "WITHHELD_UNAVAILABLE")` before throwing
+       * it — still uncaught, at the same point, before any write; (3) it
+       * passes `mayReadMoney` to `resolveFinancedSalePlan`, which redacts the
+       * evaluator's refusal to its check's WITHHELD code. Finance-tier
+       * callers receive byte-identical code/params/English; refusal order and
+       * verdicts are unchanged. No permission, schema, index, posting or
+       * idempotency change (finalizeRefusalRedaction.test.ts, failing-first
+       * and mutation-proven per throw site). NOT yet reviewed by an
+       * independent seat at the time of this renewal. Read the hunks; do not
+       * take this note's word for them. Same governance; both constants
+       * recomputed FROM THE FILE with this test's own normalization.
+       *
+       * -- RENEWAL 2026-09-29 - SCRUM-443 handover costs paid (readiness carries line ids)
+       *
+       * Previous postimage, superseded by this entry (renewal (7) just above):
+       *
+       *   bytes:  241443
+       *   sha256: a3c4ff8ede8b112e0fdbb9748eff8daabc32e6829e7cd5a901570ab80e39c2dc
+       *
+       * The delta, 4 insertions and 1 deletion, passes the new check's
+       * `feeIds` through `getClosingReadiness`: the view type gains an optional
+       * `feeIds?: string[]` and the mapper forwards it when the evaluator set
+       * one (only `HANDOVER_COSTS_PAID` does). Ids only, never an amount or a
+       * param. No permission, schema, index, posting or idempotency change;
+       * `finalizeDeal` is untouched. NOT yet reviewed by an independent seat
+       * at the time of this renewal. Read the hunks; do not take this note's
+       * word for them. Same governance; both constants recomputed FROM THE
+       * FILE with this test's own normalization.
        */
       file: "convex/applications.ts",
-      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25).
-      bytes: 237014,
-      sha256: "9c353ded4a1154f7cd9095b2de2d984c86b681168161153f216ec0bbfadd2fbc",
+      // Renewed for single fee authority (S1-R3-H1..S1-R6-H1), then for the SCRUM-372 vehicle card and its permission (see RENEWALs 2026-09-25), then for the SCRUM-37 tenant read boundary (RENEWAL 2026-09-26), then for the SCRUM-260 commit-point profit approval and the SCRUM-373 D2 first-payment correction (RENEWALs 2026-09-27), then for SCRUM-404 creation-time quotation recording (RENEWAL 2026-09-27 (3)), then for SCRUM-407 automatic closing readiness (RENEWALs 2026-09-28, 2026-09-28 (2), (3) and (4)), then for SCRUM-414 readiness reason codes (RENEWALs 2026-09-28 (5), (6) and (7)).
+      // SCRUM-444 RENEWAL 2026-09-29: three additive refusals (finalizeDeal, cancelApplication, updateStatus->REJECTED) via `assertNoPendingDepositRequest`; previous postimage bytes 241443, sha256 a3c4ff8ede8b112e0fdbb9748eff8daabc32e6829e7cd5a901570ab80e39c2dc. Recomputed from the file with this test's own normalization.
+      // SCRUM-444 RENEWAL 2026-09-29 (2): fix round 2 — `createFromQuote` refuses to adopt a reservation that already holds a deposit (`assertReservationAdoptableWithoutDeposit`); previous postimage bytes 242587, sha256 9756ce0b6cc523161d92d9724e3e2a7e47d30b2ebd4ac28fd2c7206579a218bb. Recomputed from the file with this test's own normalization.
+      // SCRUM-443 RENEWAL 2026-09-29 (handover costs paid, see the JSDoc entry above), re-applied on top of SCRUM-444 when merging origin/main 06d45b966: git auto-merged convex/applications.ts with no conflict; previous postimages 242976 / 19867f44… (main) and 241662 / d532f1c2… (SCRUM-443 branch). Recomputed from the merged file with this test's own normalization.
+      // SCRUM-447 RENEWAL 2026-09-29: finance-company cheque lineage, exact face and lifecycle — `registerExpectedPayment` (face, CHEQUE requires companyId + non-direct route, CLOSED-not-disbursed re-registration), `confirmDisbursement` (exact-face match, refusals before any write), `cancelApplication` (resolves the deal's cheques), `finalizeDeal` (live-cheque check), `setSupplierSettlementRoute` (DIRECT refused while a live FC cheque exists), `dealCockpit` workflow flags, and the new `correctExpectedPayment` / `attestChequeFace` mutations. NOT yet reviewed by an independent seat at the time of this renewal; read the hunks. Previous postimage bytes 243195, sha256 b42c6e1801d6af32ff2b66f67d46a71f30264f3b9fc7b19cbb17f36412e4e580. Recomputed from the file with this test's own normalization.
+      // SCRUM-447 RENEWAL 2026-09-29 (2): batch-fix of the two final seats' findings - confirmDisbursement refuses an unregistered tender (B1) and a non-cheque method over a live FC cheque; registerExpectedPayment on a CLOSED undisbursed deal accepts MANAGE_FINANCE or REGISTER_EXPECTED_PAYMENT (B2); attestChequeFace keeps a required note (B4); the two new mutations load rows through requireOwnedRow (B6); dealCockpit adds chequeNeedsCorrection / chequeFaceAttested workflow flags. NOT yet re-reviewed by an independent seat; read the hunks. Previous postimage bytes 257235, sha256 f8c4cf39ddc0e4e11456de630ceb4cfc3fe929e9d5f0beeab01d042757738881. Recomputed from the file with this test's own normalization.
+      // SCRUM-447 RENEWAL 2026-09-29 (3): batch 2 - dealCockpit reads the linked cheque rows once and adds `chequeNeedsAccountingReview` (a CLEARED, undisbursed cheque; `chequeNeedsCorrection` now yields to it), and `registerExpectedPayment` also treats a stored `expectedPaymentMethod` as already registered. NOT yet re-reviewed by an independent seat; read the hunks. Previous postimage bytes 260419, sha256 d4d5157d0fc4aa2335c27aef0f433a30437796b20737b6c834d06298f9b16a47. Recomputed from the file with this test's own normalization.
+      // SCRUM-447 RENEWAL 2026-09-29 (4): batch 3 - confirmDisbursement names ANY CLEARED linked cheque (mixed with a live HELD or a RETURNED row) as the accounting-review refusal FIRST, through the new shared hasClearedLinkedCheque (convex/utils/fcCheque.ts), which dealCockpit's chequeNeedsCorrection / chequeNeedsAccountingReview now also use so the screen withholds exactly what the server refuses. NOT yet re-reviewed by an independent seat; read the hunks. Previous postimage bytes 261029, sha256 58e23ba0ddb878b702f26025e9fb470cfa81d17d7850c3891601fe2c0016edf7. Recomputed from the file with this test's own normalization.
+      // SCRUM-435 RENEWAL 2026-09-29: forward proof. `confirmDisbursement` refuses until the deposit and contribution the dealership owes the finance company are proven on the books (`deriveForwardState`); `cancelApplication` on a CLOSED v2 deal requires FINALIZE_FINANCED_DEAL and CONFIRM_FINANCE_DISBURSEMENT and the same proof; `dealCockpit` exposes the forward STATUS (no amounts) as `forward`; previous postimage bytes 243195, sha256 b42c6e1801d6af32ff2b66f67d46a71f30264f3b9fc7b19cbb17f36412e4e580. Recomputed from the file with this test's own normalization.
+      // SCRUM-435 RENEWAL 2026-09-29 (2): returned-after-transfer dead end. `dealCockpit` passes one more fact to `deriveDealStages` (`forwardExceptionOpen: forwardProof.returnedExceptionOpen`, 1 insertion) so the transfer stage stays open while a returned payment is owed; previous postimage bytes 247994, sha256 9a69210109ef40519d99e4d92d8db3cf88f2c11e2d093db64b233a2f8f33ba5a. Recomputed from the file with this test's own normalization.
+      // SCRUM-435 RENEWAL 2026-09-30 (CodeRabbit #376): `mayCancelFinalized` also requires CREATE_FINANCE_APPLICATION, which `cancelApplication` checks at entry (1 insertion, cockpit flag only; no mutation, posting or permission-check change); previous postimage bytes 248058, sha256 7cbb3cdb52357ce09b306eb57ab40eedf4bfc35bc158e908f67eb2c3a5b85103. Recomputed from the file with this test's own normalization.
+      // SCRUM-447 RENEWAL 2026-09-30 (merge): origin/main (SCRUM-435 forward proof #376, then SCRUM-446 #378 no-company DISBURSEMENT not-applicable) merged into the SCRUM-447 cheque-lineage branch; all renewal chains above and below are preserved and this entry is the merged postimage. No behaviour change beyond composing the two: `confirmDisbursement` keeps the SCRUM-447 tender/live-cheque refusals followed by the SCRUM-435 forward gate. Recomputed from the merged file with this test's own normalization.
+      // SCRUM-446 RENEWAL 2026-09-29: `resolveFinancierLeg` (DISBURSEMENT NOT_APPLICABLE only on proven evidence), the cancelled-sale guard on `moneySettled`, and the `confirmDisbursement` refusal wording; previous postimage bytes 243195, sha256 b42c6e1801d6af32ff2b66f67d46a71f30264f3b9fc7b19cbb17f36412e4e580. Recomputed from the file with this test's own normalization.
+      // SCRUM-446 RENEWAL 2026-09-30: `resolveFinancierLeg` takes the deal mode (`dealModeOf`) and returns NONE only for INTERNAL_INSTALLMENT (OR-1/OR-2, SCRUM-486 c21360); MANUAL_FINANCE_COMPANY, LEASE, CASH and mode-less deals stay UNKNOWN. Merged with origin/main (SCRUM-435 forward proof) so the pin below covers both. Recomputed from the merged file with this test's own normalization.
+      // SCRUM-446 /simplify 2026-09-30: `loadDealRoute` shared by the cockpit and the confirmDisbursement guard; previous postimage bytes 251598, sha256 068aa9d4b4090407fbef8d68bd6703a1b79af70ca3a71ebdd2ac2e416de00ee9.
+      // SCRUM-495 RENEWAL 2026-09-30: retired deal modes. `createFromQuote` and `finalizeDeal` call `assertOperatedDealMode` (convex/utils/dealModes.ts) and refuse LEASE / INTERNAL_INSTALLMENT with one shared message; `getClosingReadiness` is unchanged (the new DEAL_MODE_RETIRED check lives in the shared evaluator). Purely additive refusals before any write (an import and 2 call sites); no permission, schema, index, posting or idempotency change. previous postimage bytes 251934, sha256 ad2b302db906f1606703c16b24194e57275a3f918df4cfab1c223d00fde7f0f3. Recomputed from the file with this test's own normalization.
+      // SCRUM-495 /simplify 2026-09-30: `finalizeDeal` computes the mode once (`app.quoteModeAtSubmission ?? dealModeOf`) and `createFromQuote` refuses a retired quote before the customer fetch; the refusal is now a structured `DEAL_MODE_RETIRED` AppError (same message); previous postimage bytes 252782, sha256 361893addb014ea8aa1b1bba4898250cbbf9f7efe8397d2b563407cfc7cae234. Recomputed from the file with this test's own normalization.
+      // SCRUM-27 RENEWAL 2026-09-30: manual finance company settlement (backend). finalizeDeal freezes the letter-derived contribution and passes the manual payer identity; confirmDisbursement/cancelApplication/resolveFinancierLeg/ensureFinanceCompanyReceivable/proveFinanceReceiptAuthority recognise the manual payer (manualPayerOf) and refuse a manual deal not on plan v2; supplier-disbursement payer name prefers the letter name (bytes 255218, sha256 3bd3c28f26822ea9b1d7a6f8d56b2131d4f83522896d80586cac2f2d2081f3ce); earlier postimage bytes 251934, sha256 ad2b302db906f1606703c16b24194e57275a3f918df4cfab1c223d00fde7f0f3. Recomputed from the file with this test's own normalization.
+      // SCRUM-27 OR-12 RENEWAL 2026-09-30: `assertDealerEconomicsReady applies the appraisal-gap gate to a manual deal too (it has no quotation, so the early return skipped it); previous postimage bytes 255496, sha256 7c85d4faac1a617dd408eceb2330aba29cf02d984377515138feca40cc6fa977. Recomputed from the file with this test's own normalization.
+      // SCRUM-27 OR-12 /simplify 2026-09-30: comment/docblock wording only in `assertDealerEconomicsReady`; previous postimage bytes 255831, sha256 a2a8fb932401b5c11c4389a8f3132af3f0fce904431f536f0de7bdc554d8f31e.
+      // SCRUM-27 R1 RENEWAL 2026-09-30: manual deals gate handover/finalize on the whole letter unit (assertManualLetterReady, keyed on isManualFinanceApplication), refuse a stored gap-to-financier split, and every payer reader shows the letter name once entered (manualPayerLabel); previous postimage bytes 255846, sha256 7ea672416ea387ade9e402a5bc0a2f1ef7b6c7956904b4cdc1969668a2335eea. Recomputed from the file with this test's own normalization.
+      // SCRUM-27 R1 /simplify RENEWAL 2026-09-30: behaviour-preserving - assertManualLetterReady uses isManualLetterUnitIntact, manualPayerLabel moved to utils/manualFinancePayer.ts and computed once per row in `list`; previous postimage bytes 257647, sha256 e317d47828ff4068df552548008952939016411a123bf8ec655be26557a6baec. Recomputed from the file with this test's own normalization.
+      // SCRUM-447 RENEWAL 2026-09-30 (merge fix): `dealCockpit` gates the cheque/disbursement workflow flags (`chequeFaceUnrecorded`, `unattestedChequeId`, `chequeNeedsCorrection`, `expectedPaymentReRegistrable`) on the resolved financier leg (`settlementFacts.financierLeg !== "NONE"`), so a closed no-company deal is not pointed at registering/attesting a disbursement the server refuses; `expectedPaymentCorrectable` is unchanged; configured-company behaviour is unchanged (12 insertions, 3 deletions, cockpit projection only; no mutation, posting or permission change). Previous postimage bytes 269955, sha256 912cd1702a122046cb2235971796d1693cd533961d3c2897c121f00792cefd22. Recomputed from the file with this test's own normalization.
+      // SCRUM-27 RENEWAL 2026-09-30 (merge): origin/main (SCRUM-447 #375 cheque lineage, SCRUM-435, SCRUM-446) merged into the SCRUM-27 manual-financier branch; all renewal chains above are preserved and this entry is the merged postimage. No behaviour change beyond composing the two; previous SCRUM-27 postimage bytes 257129, sha256 9dc7f2ecdd1927ad0b27d1a9fcad8f316cca20715366077c3ad8ed05c741db7b; main's postimage bytes 270601, sha256 8815826a835f4e84b20fc817fd5ca9f05ae4bfa78bb78d7050281910683c3e0d. Recomputed from the merged file with this test's own normalization.
+      // SCRUM-495 RENEWAL 2026-09-30 (merge): origin/main (SCRUM-27 manual finance company, #385) merged into the retired-deal-modes branch; the SCRUM-495 and SCRUM-27 renewal chains above are both preserved and this entry is the merged postimage. No behaviour change beyond composing the two. Previous postimage (origin/main SCRUM-27) bytes 275796, sha256 76885ab6adcfabcadc11b1a870541fbd6d9e143ad7135fe3eeab18f8febc8c6e. Recomputed from the merged file with this test's own normalization.
+            // SCRUM-390 RENEWAL 2026-09-30: `finalizeDeal` passes `commissionBase` (G = plan v2 `financeCompanyReceivableMinor`, C = `forwardContributionMinor`, plan currency) to `completeSale`, plan v2 only, for the OR-5 commissionable vehicle margin (11 insertions); no permission, index, posting or idempotency change. NOT yet reviewed by an independent seat; read the hunks. Previous postimage bytes 276129, sha256 f664a291b96a3a14a8b07167138bf94cdcc13d40b1fa5b604a60ec69a5f05fcd. Recomputed from the file with this test's own normalization.
+      // SCRUM-239 RENEWAL 2026-09-30: app-owned return of a cleared finance-company disbursement cheque. New mutation `returnFinanceDisbursementCheque` (CONFIRM_FINANCE_DISBURSEMENT + VIEW_FINANCE, runWithIdempotency economic:true, every refusal before the first write, no forward-exception precondition; reverses the version's allocations, voids the payment, reverses/cancels/defers that version's own FINANCE_CASH_RECEIVED, marks the cheque RETURNED, audit-logged); `confirmDisbursement` now derives its payment key and cash-received identity from `financeDisbursementKeys` at the application's `disbursementVersion` (version 1 byte-identical to the historical keys) and stamps the version on the cleared cheque. NOT yet reviewed by an independent seat at the time of this renewal; read the hunks. Previous postimage bytes 276686, sha256 5ad2920f26cac906c1ecfcc79831433ab815e4bab334c730bfdd453614189ec5. Recomputed from the file with this test's own normalization.
+      // SCRUM-239 RENEWAL 2026-09-30 (2): coded, translated reason refusals (FINANCE_RETURN_REASON_REQUIRED / _TOO_LONG with `max`), the manager notification carries the display amount (`cheque.amount`, not minor units), and `dealCockpit` gains `disbursementReturn { mayReturn, chequeId, lastReturnedChequeId }` (server-computed gate for the cockpit action; read-only). Previous postimage bytes 286857, sha256 a5a0d621c22727051bd7ea287c0258205930c017f16c70a9592f712a389ae3c6. Recomputed from the file with this test's own normalization.
+      // SCRUM-239 /simplify 2026-09-30: behaviour-preserving - `returnFinanceDisbursementCheque` computes the payment currency once, and `FC_RETURN_REASON_MAX_LENGTH` moved to utils/fcCheque.ts (shared with the dialog); previous postimage bytes 288109, sha256 63ddd97092a5d28adbc60728c222fc695d9ba9edb6295904d4a0b61c25dce050. Recomputed from the file with this test's own normalization.
+      // SCRUM-239 RENEWAL 2026-09-30 (3): `returnFinanceDisbursementCheque` raises coded FINANCE_RETURN_NOT_FOUND (deal or cheque missing / foreign org) and FINANCE_RETURN_KEY_CONFLICT (contradictory key replay, via the optional `onFingerprintConflict` override of runWithIdempotency); no write before either refusal. Previous postimage bytes 288048, sha256 46b57cf12efad386e4424c722bddc8cf854550c8aaf1282a2813789c10691f51. Recomputed from the file with this test's own normalization.
+      // SCRUM-239 round-2 RENEWAL 2026-09-30: `confirmDisbursement` binds its idempotency fingerprint to the disbursement version (byte-identical at version 1; `disbursementVersion` added above 1) and refuses a stale key with coded FINANCE_CONFIRM_STALE_REQUEST via `onFingerprintConflict`; `returnFinanceDisbursementCheque` refuses a blank or over-long key with coded FINANCE_RETURN_KEY_INVALID before any read. Previous postimage bytes 288344, sha256 ab09b8642fb1158f32c4d342bca02f9bffe865074b3ba21a604dce3c2a0db15b. Recomputed from the file with this test's own normalization.
+      // SCRUM-239 round-3 RENEWAL 2026-09-30: `confirmDisbursement` takes `expectedDisbursementVersion` and refuses a mismatch (or an omitted version above 1) with coded FINANCE_CONFIRM_STALE_REQUEST before the idempotency probe and before any write; its already-confirmed and cheque refusals are coded (FINANCE_CONFIRM_ALREADY_CONFIRMED, FINANCE_CONFIRM_CHEQUE_*). Previous postimage bytes 289851, sha256 ebe97552d6830d5ba949638c4bf97234ed7743453a63714b34598e08d88521bc. Recomputed from the file with this test's own normalization.
+      // SCRUM-528 RENEWAL 2026-10-01: inalizeDeal refuses (coded QUOTE_ECONOMICS_DRIFTED) before the documents check and before any write when the quote's economics no longer agree with the pricing frozen on the application, or when a financed deal has no frozen snapshot (an import and 1 call site; logic in convex/utils/quoteEconomicsAnchor.ts); no permission, schema, index, posting or idempotency change. NOT yet reviewed by an independent seat; read the hunks. Previous postimage bytes 290260, sha256 aad5d6ac5aeb134e1ceeb74ebf19d898e885b979a94a5296d3b44158883c43bf. Recomputed from the file with this test's own normalization.
+      // SCRUM-528 /simplify 2026-10-01: behaviour-preserving - quoteMode declaration hoisted above the anchor call and passed to it (single computation); previous postimage bytes 290608, sha256 5a48dab206df99a5ef8e92bcc3a186addb8aa012e22d4bfedc7b0524380d7a7f. Recomputed from the file with this test's own normalization.
+      // SCRUM-69 RENEWAL 2026-10-01: finalizeDeal passes the FINANCE_FINALIZATION door to completeSale (1 call-site change); previous postimage bytes 290578, sha256 0f849708e6b8e17b758ef951aa00bb52607e64e42d2718b635486929edb53911. Recomputed from the file with this test's own normalization.
+      // SCRUM-555 RENEWAL 2026-10-02: convex-lint cleanup lane (owner ruling (B), Jira c21603-c21605) - five legacy .filter(q.field) reads become index reads + in-memory filters (getActiveReceivableAllocations ACTIVE filter; createFromQuote duplicate check via by_org_quote, in-flight check via by_org_vehicle scoped to the org, guarantors isDeleted !== true, valuation by_vehicle + find(companyId)). Behaviour-preserving read rewrite; no permission, posting, idempotency or write-path change. Reviewed at 48cd9e17d by Opus 5.5 (APPROVE WITH DOCUMENTED LOW RISK) and Codex gpt-6-sol xhigh (555B-01 dispositioned LOW -> SCRUM-557), Jira c21616. Previous postimage bytes 290715, sha256 2e3bf3d24262c8bafc7d0b78d660d902b7b0e1437094012d208e8c191f32cb50. Recomputed from the file with this test's own normalization.
+      // SCRUM-557 RENEWAL 2026-10-02: `createFromQuote` reads the vehicle valuation by exact (org, vehicle, company) through the new index `vehicleValuations.by_org_vehicle_company` (a cross-org row is never selected); no permission, posting, idempotency or refusal change; previous postimage bytes 290899, sha256 2dfd9254f526ec411f35ddc1db0963ae2630223522325e916e90ee6f2cf5fe1a. Recomputed from the file with this test's own normalization.
+      // SCRUM-567 RENEWAL 2026-10-02: financier-less CASH applications - finalizeDeal writes settlementStatus NOT_APPLICABLE on proven financier-less deals (shared isProvablyFinancierless predicate); resolveFinancierLeg returns NONE for a CLOSED, company-less, reciprocally-linked COMPLETED CASH sale; confirmDisbursement refuses with coded FINANCE_CONFIRM_NO_FINANCIER_PAYS / FINANCE_CONFIRM_NO_FINANCE_COMPANY; resolveSettlement holds moneySettled open until the sale's canonical customer invoice is proven paid when the financier leg is NONE (AF-567-1). No permission, index, posting or idempotency change. Reviewed at 4e42f5f52 by Opus 5.5 (APPROVE WITH DOCUMENTED LOW RISK) and Codex gpt-6-sol xhigh (AF-567-1 HIGH, fixed at e9a26c190; re-review pending), Jira c21710/c21711. Previous postimage bytes 291069, sha256 04bc4f66d306b4c9364b73277e6c2bec8fb336dc67b483e17255da422ed728ea. Recomputed from the file with this test's own normalization.
+      // SCRUM-420 RENEWAL 2026-10-03: comment-only - the finalizeDeal docblock names the new FINANCING_RECONCILED readiness check (3 insertions, 1 deletion, all comment lines); the refusal itself lives in the shared evaluator convex/utils/financedSaleRecognition.ts. No code, permission, schema, index, posting or idempotency change. Reviewed with the SCRUM-420 diff by Opus 5.5 (APPROVE) and Codex gpt-6-sol (APPROVE at 5ef9e4eb9). Previous postimage bytes 294188, sha256 d778b3593a20c38f2239f16ffd0e05d2a1efad9c1fd62bcd8bf1bfe13e415235. Recomputed from the file with this test's own normalization.
+      // SCRUM-571 S1 RENEWAL 2026-10-03 (draft-exit T2 guard + merge of main 2d04db43f); previous postimage bytes 294304, sha256 9941acf6f5d1388d6ebc4e4a7776113a3ccdc3637d3be6313b5f0b9a4719bb40. Recomputed from the file with this test's own normalization.
+      // SCRUM-599 RENEWAL 2026-10-04: `confirmDisbursement` derives `disbursementMethod` once, ABOVE `hookFinanceCashReceived`, and passes it as the new required `paymentMethod`, so a CASH receipt from a finance company debits cash on hand 1100 instead of bank 1110; the same variable still feeds `createCanonicalPayment`. Two comments name the receiving account. No permission, schema, index, refusal or idempotency change. Pinned postimage is ea1fad92b. Reviewed at 22ceb6482 by Codex gpt-6-sol (APPROVE) and Opus 5.5 (REQUEST CHANGES: R1-R4, R1 = this pin; all closed at ea1fad92b, Jira c21861); renewed under the owner's 2026-10-04 standing instruction to fix the defects the QA wave found — pending the owner's explicit ratification in Jira. Previous postimage bytes 294304, sha256 9941acf6f5d1388d6ebc4e4a7776113a3ccdc3637d3be6313b5f0b9a4719bb40. Recomputed from the file with this test's own normalization.
+      // SCRUM-603 RENEWAL 2026-10-04: the `list` query pages applications newest first - `.order("desc")` on both its index reads (by_org_status, by_org) plus a 2-line comment (4 insertions); read-only query, no mutation, permission, schema, index, posting or idempotency change. Reviewed with the SCRUM-603 diff (PR #431) by Codex gpt-6-sol. Previous postimage (after SCRUM-599) bytes 294559, sha256 1a982e13cfa8841de2f4da56a4a6a8b2c7d2b44df654bc93ef9b6eae9a1e3836. Recomputed from the file with this test's own normalization.
+      // SCRUM-571 S1 RENEWAL 2026-10-04 (merge of origin/main): combines SCRUM-599, SCRUM-603 and SCRUM-571 only, no new logic; previous postimage bytes 294755, sha256 917fa5a916084a51b4c0854552244f14169da09908d87bab8faa32a1a493a0c3 (main) and bytes 294570, sha256 4de2646d1eb7dcfe552f0f230f6f72ebbdaca97286b02ae37a363a73ea1aa237 (SCRUM-571 side). Recomputed from the merged file with this test's own normalization.
+      // SCRUM-629 wave 2B RENEWAL 2026-10-04 (owner-proxy ruling c21924): two display-read changes in the `dealCockpit` query (and its `buildCockpitMoney` helper), no mutation, permission, schema, index, posting or idempotency change. F-07: `documentRulesApply` is `requiredDocs.length > 0` so DELIVERY_ACTIONS reads NOT_APPLICABLE on a deal that needs no document; F-23: the CUSTOMER party's `reference` passes through `displayableDepositReference`, so the machine key `Deposit <id>` (which deposits.ts matches on) is never shown as a receipt reference. Previous postimage bytes 295021, sha256 b0755122f3ffa868e2413268497fb579ce060855b11f39e8e2816e3ee52000ca. Recomputed from the file with this test's own normalization.
+      // SCRUM-413 PR-B RENEWAL 2026-10-04: deal-door authority split (D-32) - `setSupplierSettlementRoute` requires manage:supplier_settlement; `cancelApplication` is status-sensitive (CLOSED needs cancel:closed_deal, other statuses create:finance_application); the `dealCockpit` `mayCancelFinalized` projection mirrors it. finalize:financed_deal no longer read. NOT yet reviewed by an independent seat; read the hunks. Previous postimage bytes 295120, sha256 eae8817316a377e714f4d78d72f988458fe22ad4edf6549e69848ee19912b04b. Recomputed from the file with this test's own normalization.
+      // SCRUM-413 PR-B RENEWAL 2026-10-04 (2), /simplify cleanup: `cancelAuthorityFor` (convex/utils/permissions.ts) is now the single source of the cancel authority tiers, used by `cancelApplication` and `mayCancelFinalized`; the CLOSED check in `cancelApplication` is an in-memory check on the role the entry gate loaded, refusing with the same FORBIDDEN message as requireTenantAuth; a stale comment removed. Same refusal codes, messages and precedence. NOT yet reviewed by an independent seat; read the hunks. Previous postimage bytes 296557, sha256 7ca78cfd1cc9b769431481cbc22606e996c54da4c8f038a93ebf634f9b669d7f. Recomputed from the file with this test's own normalization.
+      // SCRUM-413 PR-B RENEWAL 2026-10-04 (3), D-37 (Codex F-01): `dealCockpit`'s `mayCancelFinalized` gains one conjunct for a CLOSED v2 deal, `forwardCancelRefusal(forwardProof) === null`, reusing the proof already derived (no extra read); its docblock is reworded. Cockpit projection only: no mutation, permission, schema, index, posting or idempotency change. The fail-closed branch lives in convex/utils/financeCompanyForward.ts. NOT yet reviewed by an independent seat; read the hunks. Previous postimage bytes 296546, sha256 297d44fd7458b015f0c9d1a21669c8c3bc3565f9207072dbb9465094b82759fb. Recomputed from the file with this test's own normalization.
+      // SCRUM-413 PR-B RENEWAL (4): the two cancel forward refusals in cancelApplication now throw a coded AppError (throwAppError(forwardBlock.code, forwardBlock.message)); nothing else in this file changed.
+      // SCRUM-413 PR-B RENEWAL (5), /simplify cleanup: `dealCockpit` names its cancel inputs (`planVersion` hoisted, `cancelPermitted`, `cancelForwardOk`) and returns `cancelPermitted && cancelForwardOk` for `mayCancelFinalized`; docblock trimmed. Same value for every input; no mutation, permission, schema or posting change. NOT yet reviewed by an independent seat; read the hunks. Previous postimage bytes 297003, sha256 afe08de3d3a38ea0ca7bb236b1217a86484832a4fc4f61bd958ff8cb28d2440c. Recomputed from the file with this test's own normalization.
+      // SCRUM-641 RENEWAL 2026-10-04 (updateStatus requireCommercialVehicle): `updateStatus` APPROVED refuses a soft-deleted vehicle (VEHICLE_DELETED), and a missing or foreign one (VEHICLE_NOT_FOUND), before any write, via the shared `requireCommercialVehicle` (convex/utils/vehicleLiveness.ts): an import, one vehicle read and one call; no permission, schema, index, posting or idempotency change, rejection/cancellation paths untouched. Previous postimage bytes 295120, sha256 eae8817316a377e714f4d78d72f988458fe22ad4edf6549e69848ee19912b04b. Recomputed from the file with this test's own normalization.
+      // SCRUM-641 RENEWAL 2026-10-04 (2): `createFromQuote` keeps the quote line's already-loaded vehicle documents and hands them to `assertAcquirable`/`acquireVehicle` (no added read); previous postimage bytes 295369, sha256 338391684e89abb93f07e5ab3a1417c4130914987a72cc4748f3c792cb71c7ca.
+      // SCRUM-641 RENEWAL 2026-10-04 (merge of origin/main 29e2bfd87): combines SCRUM-413 PR-B and SCRUM-641 only, no new logic; previous postimage bytes 296664, sha256 74cc619fd83c3b1a365f18203dc7e6af325dd7782bf280e87c7d66a21d24f1bd (main) and bytes 295593, sha256 5b81ad968622a8593178d8d14c261f466a89f41e52acbb6500223c362434a5ae (SCRUM-641 side). Recomputed from the merged file with this test's own normalization.
+      // SCRUM-690 F-PNTR-1 RENEWAL 2026-10-05: `summarizeCockpitExpenses` reads the execution-fee position (`executionFeePosition`) — an unrecorded fee keeps expenses unreconciled and the headline gets `executionFee`; `buildCockpitMoney` passes it to `deriveManagementProfit`. No permission, posting, idempotency or mutation change; previous postimage bytes 297137, sha256 329ef90b22af01266ab0c272554f0ebfb2e0fc30c8734225053861abdd0cec6d. Recomputed from the file with this test's own normalization.
+      // SCRUM-693 RENEWAL 2026-10-05 (Sol 6 owner-proxy ruling AUTHORIZE, recorded in Jira SCRUM-693): the CLOSED-deal cancel teardown is extracted verbatim into the exported `cancelClosedApplicationTeardown` (and the close-out into its exported helper) so convex/dealUnwind.ts finishes an unwind through the same code; `assertNoActiveDealUnwind` refuses cancel, expected-payment registration/correction, disbursement confirmation and cheque return while an unwind is ACTIVE; a CLOSED, paid v2 deal's cancel refuses with the coded DEAL_CANCEL_USE_UNWIND before the forward refusal (v1 and unpaid v2 unchanged). Sol compared the extracted teardown line by line (same order and operands). Condition: fresh independent exact-SHA certification of the frozen PR #466 head before merge. Previous postimage bytes 297137, sha256 329ef90b22af01266ab0c272554f0ebfb2e0fc30c8734225053861abdd0cec6d. Recomputed from the file with this test's own normalization.
+      // SCRUM-693 RENEWAL 2026-10-05 (2), ruling B F2 (Jira c22129; pin renewal authorized by Sol 6, recorded in Jira SCRUM-693): a CLOSED, paid v2 deal's cancel points at the unwind (DEAL_CANCEL_USE_UNWIND) only when the shared `paidDealReversalRoute` (convex/utils/dealUnwindGuard.ts) says UNWIND; a cheque deal or one whose receipt records disagree keeps the manual-correction refusal it had before. One import and one conjunct; still a refusal before any write; no permission, schema, index, posting or idempotency change. Previous postimage bytes 298607, sha256 d20d5860159609de5ce9645a9fc2fd76f82dcacd13d9c446300a4b3272d5ec32. Recomputed from the file with this test's own normalization.
+      // MERGE 2026-10-05 (PR #466 resynced onto main b6f64fe24): the union of the SCRUM-690 renewal above and the two SCRUM-693 renewals; no other change. Byte-additive proof: 297137 + 620 (SCRUM-690) + 1685 (SCRUM-693) = 299442. Previous postimages 297757 / 2ccb8ecae58098d05573585b6e7b722487961c93f718c9e83a88b622c50e4d9b (main) and 298822 / 65171fad9a7fe45531dff5ec1936a4ef6a5809abc495dd7cad4bcbc7c3038ebc (PR #466). Recomputed from the file with this test's own normalization.
+      bytes: 299442,
+      sha256: "c7609871a759a1c149c3d6c9dd4cf570ee012e7f3cb74da6f221a74b0488ebe5",
     },
     {
       /**
@@ -484,8 +883,9 @@ describe("protected source content pins", () => {
        * authority it must not reinterpret.
        */
       file: "convex/dealWorkspace.ts",
-      bytes: 9216,
-      sha256: "1eb4f689e0082d3b4fbe591cc0a3bf62924734eedf3679c7d011981565aa7ab4",
+      // SCRUM-444 RENEWAL 2026-09-29: the financed cockpit additionally returns `pendingDepositRequests` (read-only, tenant-scoped); previous postimage bytes 9216, sha256 1eb4f689e0082d3b4fbe591cc0a3bf62924734eedf3679c7d011981565aa7ab4. Recomputed from the file with this test's own normalization.
+      bytes: 10142,
+      sha256: "9b3110fb3e3d79b783c09acb18bd9c7b9fdc060edc0385b4561cc501324d4ce1",
     },
   ] as const;
 

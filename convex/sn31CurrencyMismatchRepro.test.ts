@@ -27,6 +27,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { WITHHELD_READINESS_REASON_FALLBACK } from "../lib/closingReadinessReasonCodes";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -216,11 +217,7 @@ async function finalize(s: Seeded, applicationId: Id<"financeApplications">) {
   await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
     orgId: s.orgId, feeId, notes: "Nothing to match.",
   });
-  await s.asUser.mutation(api.financeDealCosts.classifyDealAccounting, {
-    orgId: s.orgId,
-    applicationId,
-    notes: "Invoice and settlement advice on file.",
-  });
+  // SCRUM-407: no manual classification step - finalization checks readiness itself.
   return await s.asUser.mutation(api.applications.finalizeDeal, {
     orgId: s.orgId,
     applicationId,
@@ -347,7 +344,13 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
       refusal = error;
     }
     expect(refusal).toBeDefined();
-    const message = String((refusal as { data?: unknown; message?: string })?.data ?? (refusal as Error)?.message ?? refusal);
+    const data = (refusal as { data?: unknown })?.data;
+    // A coded refusal (SCRUM-414) carries its sentence as `data.message`.
+    const message = String(
+      (typeof data === "object" && data !== null ? (data as { message?: unknown }).message : data) ??
+        (refusal as Error)?.message ??
+        refusal
+    );
     console.log("SN3-1 refusal (merged backend, switch BEFORE finalize):", message);
     expect(message).toMatch(/recorded in JOD, but the organization's currency is now USD/i);
     expect(message).toMatch(/restore the organization's currency to JOD/i);
@@ -368,6 +371,56 @@ describe("SN3-1 — confirmDisbursement when the deal's pinned currency ≠ the 
     });
     expect((await app(s, applicationId))?.status).toBe("CLOSED");
     expect((await settlementDelta(s, applicationId)).receivable).toMatchObject({ currency: "JOD", status: "OPEN" });
+  });
+
+  test("SCRUM-407 P1.4 — the readiness query never shows READY on a drifted pin that finalizeDeal refuses", async () => {
+    const s = await seedDealership("pre3");
+    const { applicationId } = await approvedDealWithPinnedEconomics(s);
+    await driftOrgCurrencyOutOfContract(s, "USD");
+    const refused: unknown = await finalize(s, applicationId).then(() => null, (error: unknown) => error);
+    expect(refused).toBeInstanceOf(Error);
+    expect((refused as Error).message).toMatch(/organization's currency is now USD/i);
+    // SCRUM-414: the door refuses with the same coded payload as the evaluator's refusals.
+    expect((refused as { data?: unknown }).data).toMatchObject({
+      code: "READINESS_CURRENCY_DRIFT",
+      params: { recordedCurrency: "JOD", orgCurrency: "USD" },
+      message: expect.stringMatching(/organization's currency is now USD/),
+    });
+
+    const readiness = () => s.asUser.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+    const unavailable = await readiness();
+    expect(unavailable.state).toBe("UNAVAILABLE");
+    // CodeRabbit #352: the verdict that could not be formed keeps the reason
+    // finalizing refuses with, rather than an empty checklist.
+    expect(unavailable.checks).toHaveLength(0);
+    expect(unavailable.unavailableReason ?? "").toMatch(/organization's currency is now USD/i);
+    // SCRUM-414: the same refusal as a code + params the screen translates.
+    expect(unavailable.unavailableReasonCode).toBe("READINESS_CURRENCY_DRIFT");
+    expect(unavailable.unavailableReasonParams).toEqual({ recordedCurrency: "JOD", orgCurrency: "USD" });
+
+    // Below the finance tier the refusal (which names currencies) is withheld
+    // for a plain sentence — the SCRUM-117 read boundary on this new field.
+    const viewerClerk = `${s.orgId}_viewer`;
+    await s.t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: viewerClerk, email: "viewer@example.com", name: "Viewer" });
+      const roleId = await ctx.db.insert("roles", { orgId: s.orgId, name: "VIEWER", permissions: ["view:finance_applications"] });
+      await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+    });
+    const withheld = await s.t
+      .withIdentity({ subject: viewerClerk, clerkId: viewerClerk })
+      .query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+    expect(withheld.state).toBe("UNAVAILABLE");
+    expect(withheld.moneyWithheld).toBe(true);
+    expect(withheld.unavailableReason).toBe(WITHHELD_READINESS_REASON_FALLBACK);
+    expect(withheld.unavailableReason).not.toMatch(/USD|JOD/);
+    // SCRUM-414: a withheld code, and no params — the currencies are the detail withheld.
+    expect(withheld.unavailableReasonCode).toBe("WITHHELD_UNAVAILABLE");
+    expect(withheld).not.toHaveProperty("unavailableReasonParams");
+    expect(JSON.stringify(withheld)).not.toMatch(/USD|JOD/);
+
+    // Restoring the setting is the only change, and the verdict follows it.
+    await driftOrgCurrencyOutOfContract(s, "JOD");
+    expect((await readiness()).state).toBe("READY");
   });
 
   test("MERGED INVARIANT — the OLD caller's figure (principal at the org's current scale) is still refused at the amount gate on a same-currency deal, zero delta", async () => {

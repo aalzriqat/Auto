@@ -460,6 +460,11 @@ async function allDoors(seeded: Seeded, caller: Caller) {
     await call("applications.handoverStamp", () =>
       caller.query(api.applications.handoverStamp, { orgId, applicationId })
     ),
+    // SCRUM-407's automatic closing readiness: its reasons and figures are
+    // money-tier only, so it is swept like every other door.
+    await call("applications.getClosingReadiness", () =>
+      caller.query(api.applications.getClosingReadiness, { orgId, applicationId })
+    ),
     await call("financingEconomics.getEconomics", () =>
       caller.query(api.financingEconomics.getEconomics, { orgId, applicationId })
     ),
@@ -487,6 +492,20 @@ async function allDoors(seeded: Seeded, caller: Caller) {
         customerFirstPaymentMinor: 0,
       })
     ),
+    /**
+     * SCRUM-404's creation-time preview, on this deal's own quote. It reads the
+     * QUOTE and its company, never the application, so none of the row's
+     * sentinels are among its inputs — a hit here would still be a leak.
+     */
+    await call("financingEconomics.previewCreationQuotation", async () => {
+      const quoteId = await seeded.t.run(
+        async (ctx) => (await ctx.db.get(applicationId))!.quoteId
+      );
+      return await caller.query(api.financingEconomics.previewCreationQuotation, {
+        orgId,
+        quoteId,
+      });
+    }),
   ];
 
   const publicQueriesOf = (module: string, mod: Record<string, unknown>) =>
@@ -721,6 +740,28 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
     // No quotation authority, so no quotation - the gap subtraction is not
     // available to this role in either direction.
     expect(scan(doors, QUOTATION_SENTINELS)).toEqual([]);
+  });
+
+  /**
+   * SCRUM-239: `disbursementVersion` is the counter the confirmer must echo back
+   * to `confirmDisbursement`. It is projected in the DISBURSEMENT_WORKFLOW tier
+   * so the default MANAGER (confirm, no view:finance) observes it; a caller with
+   * neither permission does not.
+   */
+  test("disbursementVersion reaches the default MANAGER and not the default SALES", async () => {
+    const seeded = await seedSentinelDeal("dvTier");
+    await seeded.t.run((ctx) => ctx.db.patch(seeded.applicationId, { disbursementVersion: 2 }));
+    const read = async (caller: Caller) =>
+      (await caller.query(api.applications.get, {
+        orgId: seeded.orgId,
+        applicationId: seeded.applicationId,
+      })) as { disbursementVersion?: number } | null;
+
+    const manager = await read(await seeded.asRole(templateFor("MANAGER")));
+    expect(manager?.disbursementVersion).toBe(2);
+    const sales = await read(await seeded.asRole(templateFor("SALES")));
+    expect(sales).not.toBeNull();
+    expect(sales?.disbursementVersion).toBeUndefined();
   });
 
   test.each([

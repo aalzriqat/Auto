@@ -1,6 +1,7 @@
 import { Doc } from "@/convex/_generated/dataModel";
 import { WizardData } from "./wizard/types";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { DocumentLetterhead, type OrgBranding } from "@/components/print/DocumentLetterhead";
 
 export type { OrgBranding };
@@ -39,7 +40,7 @@ export function QuotePrintTemplate({
   const orgName = orgBranding?.name ?? "";
   const orgAddress = orgBranding?.address ?? "";
   const orgPhone = orgBranding?.phone ?? "";
-  const currencyLabel = orgBranding?.currencySymbol ?? "JOD";
+  const money = useMoneyDisplay();
 
   return (
     <div
@@ -130,7 +131,7 @@ export function QuotePrintTemplate({
                       </td>
                       <td className="py-2.5 px-3 font-mono text-[#111827]">{vehicle.vin ?? t("PendingQuoteVIN" as any)}</td>
                       <td className="py-2.5 px-3 text-end font-medium text-[#111827]">
-                        {unitPrice.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencyLabel}
+                        {money.format(unitPrice)}
                       </td>
                     </tr>
                   ))}
@@ -181,7 +182,7 @@ export function QuotePrintTemplate({
                 <tr>
                   <th scope="row" className="py-3 font-semibold text-[#374151] text-start w-1/3 bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("TotalVehiclePrice" as any)}</th>
                   <td className="py-3 px-3 font-bold text-base text-[#dc2626]">
-                    {selectedResult?.totalFinancedAmount?.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencyLabel}
+                    {typeof selectedResult?.totalFinancedAmount === "number" ? money.format(selectedResult.totalFinancedAmount) : null}
                   </td>
                 </tr>
               </tbody>

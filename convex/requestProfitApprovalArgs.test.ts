@@ -148,7 +148,10 @@ describe("approvals.requestProfitApproval — the wizard's real argument shape",
     expect((tableSnapshot as any).json).toEqual((wizardSnapshotValidator as any).json);
   });
 
-  it("re-requesting at a new profit patches the existing PENDING row", async () => {
+  // SCRUM-260: a pending request is never rewritten — a manager approves it by
+  // id, so editing its terms would approve a price they never saw. A changed
+  // re-request supersedes the old row and inserts a new one.
+  it("re-requesting at a new profit supersedes the PENDING row with a new one", async () => {
     const { t, orgId, vehicleId, asSalesperson } = await setup();
 
     for (const requestedProfit of [100, 250]) {
@@ -161,10 +164,11 @@ describe("approvals.requestProfitApproval — the wizard's real argument shape",
       });
     }
 
-    // The patch branch writes wizardSnapshot too, so it validates against the table
-    // schema independently of the insert branch above.
     const rows = await t.run((ctx) => ctx.db.query("profitApprovalRequests").collect());
-    expect(rows).toHaveLength(1);
-    expect(rows[0].requestedProfit).toBe(250);
+    expect(rows).toHaveLength(2);
+    const [older, newer] = [...rows].sort((a, b) => a._creationTime - b._creationTime);
+    expect(older).toMatchObject({ requestedProfit: 100, status: "REJECTED" });
+    expect(older.supersededAt).toBeTypeOf("number");
+    expect(newer).toMatchObject({ requestedProfit: 250, status: "PENDING" });
   });
 });

@@ -152,7 +152,7 @@ type DbWriteCall = {
   readonly start: number;
 };
 
-function parseModule(source: string, file: string): ts.SourceFile {
+export function parseModule(source: string, file: string): ts.SourceFile {
   return ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 }
 
@@ -168,7 +168,7 @@ function ctxDbMethod(node: ts.CallExpression): DbWriteCall["method"] | null {
 }
 
 /** A string only when it is written as one. A binding is NOT a string. */
-function staticStringOf(node: ts.Expression | undefined): string | null {
+export function staticStringOf(node: ts.Expression | undefined): string | null {
   if (!node) return null;
   if (ts.isStringLiteral(node)) return node.text;
   if (ts.isNoSubstitutionTemplateLiteral(node)) return node.text;

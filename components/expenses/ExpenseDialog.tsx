@@ -37,6 +37,7 @@ import {
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { CostBearerSelect } from "@/components/expenses/CostBearerSelect";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 
 import { expenseSchema, ExpenseFormValues, ExpenseDialogProps } from "./expense.schema";
@@ -86,11 +87,29 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
       isPrepaid: false,
       amortizationMonths: undefined,
       amortizationStartDate: "",
+      costBearer: "SHOWROOM",
     },
   });
   const paymentStatus = form.watch("status");
   const isPrepaid = form.watch("isPrepaid");
   const expenseDateValue = form.watch("date");
+  const selectedVehicleId = form.watch("vehicleId");
+  const costBearer = form.watch("costBearer");
+
+  // SCRUM-389: the bearer choice exists only for a supplier's (SOURCED) car.
+  // An existing supplier-borne expense keeps showing it even if its car is no
+  // longer in the AVAILABLE list this dialog loads.
+  const selectedVehicle = availableVehicles?.find((v: Doc<"vehicles">) => v._id === selectedVehicleId);
+  const showCostBearer = selectedVehicle?.sourceType === "SOURCED" || expense?.costBearer === "SUPPLIER";
+  // Immutable once PAID — the server refuses the change; the control says so first.
+  const costBearerLocked = !!expense && (expense.status ?? "PAID") === "PAID";
+  const isSupplierBorne = showCostBearer && costBearer === "SUPPLIER";
+
+  useEffect(() => {
+    if (!showCostBearer && form.getValues("costBearer") !== "SHOWROOM") {
+      form.setValue("costBearer", "SHOWROOM");
+    }
+  }, [showCostBearer, form]);
 
   useEffect(() => {
     if (expense && open) {
@@ -112,6 +131,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         amortizationStartDate: expense.amortizationStartDate
           ? new Date(expense.amortizationStartDate).toISOString().split('T')[0]
           : "",
+        costBearer: expense.costBearer ?? "SHOWROOM",
       });
     } else if (open && !expense) {
       form.reset({
@@ -129,6 +149,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         isPrepaid: false,
         amortizationMonths: undefined,
         amortizationStartDate: "",
+        costBearer: "SHOWROOM",
       });
     }
   }, [expense, open, form]);
@@ -160,7 +181,9 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           expenseId: expense._id,
           title: values.title,
           amount: values.amount,
-          taxAmount: values.taxAmount || undefined,
+          // 0 must reach the server: omitting it keeps the stored VAT, which
+          // blocks switching a PENDING expense to a SUPPLIER bearer.
+          taxAmount: values.taxAmount ?? 0,
           date: parsedDate,
           category: values.category as any,
           vehicleId: parsedVehicleId === undefined ? null : parsedVehicleId,
@@ -172,6 +195,12 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           isPrepaid: values.isPrepaid ?? false,
           amortizationMonths: values.isPrepaid ? values.amortizationMonths : undefined,
           amortizationStartDate: parsedAmortizationStartDate,
+          // Sent only when it actually changes, so an ordinary edit of a paid
+          // expense never trips the bearer's immutability.
+          costBearer:
+            (values.costBearer ?? "SHOWROOM") !== (expense.costBearer ?? "SHOWROOM")
+              ? values.costBearer
+              : undefined,
         });
         toast.success(t("ExpenseUpdatedSuccess" as any));
       } else {
@@ -197,6 +226,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           // create's schema has no concept of "clearing" a field that doesn't
           // exist yet — null only means something on update.
           amortizationStartDate: parsedAmortizationStartDate ?? undefined,
+          costBearer: isSupplierBorne ? "SUPPLIER" : undefined,
         });
         toast.success(t("ExpenseRecordedSuccess" as any));
       }
@@ -258,7 +288,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                   <FormItem>
                     <FormLabel>{t("VatAmount" as any)} ({t("Optional" as any)})</FormLabel>
                     <FormControl>
-                      <Input type="number" step="0.01" placeholder="0" {...field} />
+                      <Input type="number" step="0.01" placeholder="0" disabled={isSupplierBorne} {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -333,6 +363,42 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                   </FormItem>
                 )}
               />
+
+              {showCostBearer && (
+                <FormField
+                  control={form.control}
+                  name="costBearer"
+                  render={({ field }) => (
+                    <FormItem className="md:col-span-2">
+                      <FormLabel>{t("CostBearerLabel" as any)}</FormLabel>
+                      <CostBearerSelect
+                        t={t}
+                        testId="expense-cost-bearer"
+                        value={field.value ?? "SHOWROOM"}
+                        disabled={costBearerLocked}
+                        onValueChange={(value) => {
+                          field.onChange(value);
+                          // A supplier-borne cost carries no VAT and is never
+                          // prepaid; clear both rather than let the server refuse.
+                          if (value === "SUPPLIER") {
+                            form.setValue("taxAmount", 0);
+                            form.setValue("isPrepaid", false);
+                            form.setValue("amortizationMonths", undefined);
+                          }
+                        }}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {costBearerLocked
+                          ? t("CostBearerLockedHint" as any)
+                          : isSupplierBorne
+                            ? t("CostBearerSupplierHint" as any)
+                            : null}
+                      </p>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
 
               <FormField
                 control={form.control}
@@ -414,7 +480,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                 )}
               />
 
-              {paymentStatus === "PAID" && (
+              {paymentStatus === "PAID" && !isSupplierBorne && (
                 <div className="md:col-span-2 rounded-md border p-3 space-y-3">
                   <FormField
                     control={form.control}

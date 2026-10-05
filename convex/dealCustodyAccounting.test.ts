@@ -10,6 +10,7 @@ import { deriveRecommendedCustody } from "./financeDealCosts";
 import { drainEntries } from "./accountingOutbox";
 import { hookCustodyFeePaid, hookCustodyFeeReversed } from "./accounting/workflowHooks";
 import { getDocumentSize } from "convex/values";
+import { feeDocBytes, MAX_FEE_DOC_BYTES } from "./utils/feeDocLimits";
 import {
   assertStoredVersion,
   CUSTODY_PROOF_CALLER_RESERVE_BYTES,
@@ -253,6 +254,22 @@ const payable = (l: Record<string, number>) => l[SYSTEM_KEYS.EMPLOYEE_REIMBURSEM
 
 const readCosts = (seed: Seed) =>
   seed.asUser.query(api.financeDealCosts.listDealCosts, { orgId: seed.orgId, applicationId: seed.applicationId });
+
+/**
+ * The custody half of the deal's automatic closing readiness (SCRUM-407) — the
+ * checks the retired manual classification ran, now re-run by finalization.
+ * Resolves when both custody checks are READY; otherwise rejects with the
+ * first one's reason, so a refusal reads exactly as finalization would give it.
+ */
+async function custodyClosingReady(seed: Seed): Promise<void> {
+  const readiness = await seed.asUser.query(api.applications.getClosingReadiness, {
+    orgId: seed.orgId, applicationId: seed.applicationId,
+  });
+  for (const key of ["CUSTODY_ON_LEDGER", "CUSTODY_SETTLED"] as const) {
+    const check = readiness.checks.find((row) => row.key === key);
+    if (check?.status !== "READY") throw new Error(`${key}: ${check?.reason ?? check?.status ?? "absent"}`);
+  }
+}
 
 // ---------------------------------------------------------------------------
 
@@ -528,13 +545,15 @@ describe("the reversal matrix (ACC-3): every movement's inverse is the canonical
     expect(clearing(await ledger(seed))).toBe(jod(400));
   });
 
-  test("the classification is withdrawn when a cost moves onto custody", async () => {
+  // SCRUM-407: there is no stored classification left to withdraw — closing
+  // readiness is re-derived from the live rows, so moving a cost onto custody
+  // is seen by the next read without any invalidation step.
+  test("closing readiness sees a cost moved onto an open custody record at once", async () => {
     const seed = await seedDeal("fee-attach-class");
     const custodyId = await openCustody(seed, jod(700));
     const feeId = await employeeFee(seed, undefined, jod(300));
-    await seed.t.run((ctx) => ctx.db.patch(seed.applicationId, { accountingClassification: "CLASSIFIED" }));
     await seed.asUser.mutation(api.financeDealCosts.setFeeCustody, { orgId: seed.orgId, feeId, custodyId });
-    expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.accountingClassification).toBe("PENDING_CLASSIFICATION");
+    await expect(custodyClosingReady(seed)).rejects.toThrow(/CUSTODY_SETTLED: A custody record on this deal is still open/);
   });
 });
 
@@ -826,7 +845,7 @@ describe("un-happening the deal itself", () => {
     ).rejects.toThrow(frozen);
     await expect(
       seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
-        idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.viewerId, issuedMinor: jod(1),
+        idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.viewerId, issuedMinor: jod(1), method: "CASH",
       })
     ).rejects.toThrow(frozen);
     await expect(
@@ -1071,7 +1090,7 @@ describe("the custodian never moves or closes their own custody", () => {
     // The employee holds the money AND the money permission (owner role in this seed).
     const asHolder = seed.t.withIdentity({ subject: "cu_emp_self" });
     const holderMove = (kind: "ISSUED" | "RETURNED" | "REIMBURSED") =>
-      asHolder.mutation(api.financeDealCosts.recordCustodyMovement, { orgId: seed.orgId, custodyId, kind, amountMinor: jod(10), idempotencyKey: crypto.randomUUID() });
+      asHolder.mutation(api.financeDealCosts.recordCustodyMovement, { orgId: seed.orgId, custodyId, kind, amountMinor: jod(10), method: "CASH", idempotencyKey: crypto.randomUUID() });
     const refusal = /somebody other than the person holding the cash/;
     await expect(holderMove("ISSUED")).rejects.toThrow(refusal);
     await expect(holderMove("REIMBURSED")).rejects.toThrow(refusal);
@@ -1085,7 +1104,7 @@ describe("the custodian never moves or closes their own custody", () => {
     ).rejects.toThrow(refusal);
     await expect(
       seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
-        idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.userId, issuedMinor: jod(1),
+        idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.userId, issuedMinor: jod(1), method: "CASH",
       })
     ).rejects.toThrow(/somebody other than the person receiving/);
     expect(await entries(seed, custodyId)).toHaveLength(1);
@@ -1160,6 +1179,31 @@ describe("who may be handed the cash (frozen-candidate finding 3)", () => {
     const theirs = await asEmployee.query(api.financeDealCosts.listCustodyCandidates, { orgId: seed.orgId });
     expect(theirs.candidates.find((c) => c.userId === seed.employeeId)?.isActor).toBe(true);
     expect(theirs.candidates.find((c) => c.userId === seed.userId)?.isActor).toBe(false);
+  });
+
+  // SCRUM-439 review (Sol F4 / Sonnet R2): the list is capped, so a caller can
+  // fall outside it. The caller's own id comes back regardless, so the deal
+  // screen never reads "absent from the list" as "not the caller".
+  test("a caller past the member cap is still named by the read", async () => {
+    const seed = await seedDeal("candidates-cap");
+    const lateActor = await seed.t.run(async (ctx) => {
+      const ownerRole = await ctx.db.insert("roles", { orgId: seed.orgId, name: "OWNER2", permissions: ALL_PERMISSIONS });
+      const viewerRole = await ctx.db.insert("roles", { orgId: seed.orgId, name: "FILLER", permissions: [] });
+      for (let i = 0; i < 200; i++) {
+        const filler = await ctx.db.insert("users", { clerkId: `cu_fill_${i}`, email: `f${i}@x.com`, name: `F${i}` });
+        await ctx.db.insert("memberships", { orgId: seed.orgId, userId: filler, roleId: viewerRole });
+      }
+      const late = await ctx.db.insert("users", { clerkId: "cu_late_actor", email: "late@x.com", name: "Late" });
+      await ctx.db.insert("memberships", { orgId: seed.orgId, userId: late, roleId: ownerRole });
+      return late;
+    });
+    const asLate = seed.t.withIdentity({ subject: "cu_late_actor" });
+    const read = await asLate.query(api.financeDealCosts.listCustodyCandidates, { orgId: seed.orgId });
+    expect(read.truncated).toBe(true);
+    expect(read.candidates.some((c) => c.userId === lateActor)).toBe(false);
+    expect(read.actorId).toBe(lateActor);
+    const mine = await seed.asUser.query(api.financeDealCosts.listCustodyCandidates, { orgId: seed.orgId });
+    expect(mine.actorId).toBe(seed.userId);
   });
 });
 
@@ -1451,8 +1495,7 @@ describe("B — a custody family is on the books completely, or the deal does no
       return { custodyId, issuedId, returnedId, feeId, t0 };
     });
   }
-  const classify = (seed: Seed) =>
-    seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: seed.orgId, applicationId: seed.applicationId, notes: "established" });
+  const classify = (seed: Seed) => custodyClosingReady(seed);
   const migrate = (seed: Seed, custodyId: Id<"financeDealCustody">, idempotencyKey = crypto.randomUUID()) =>
     seed.asUser.mutation(api.financeDealCosts.migrateLegacyCustodyToLedger, { orgId: seed.orgId, custodyId, idempotencyKey });
 
@@ -1494,7 +1537,33 @@ describe("B — a custody family is on the books completely, or the deal does no
     expect(await pending(seed)).toHaveLength(0);
 
     await classify(seed);
-    expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.accountingClassification).toBe("CLASSIFIED");
+  });
+
+  test("SCRUM-443 byte cap: a legacy line whose custody posting record would take it past the cap refuses the migration, writing nothing", async () => {
+    const seed = await seedDeal("legacy-bytes", { templates: false });
+    const { custodyId, feeId, t0 } = await seedLegacyFamily(seed);
+    const row = (await seed.t.run((ctx) => ctx.db.get(feeId)))!;
+    const posted = {
+      custodyPosted: { version: 1, amountMinor: jod(650), custodyId, occurredAt: t0 + DAY },
+      custodyPostingVersion: 1,
+      updatedAt: Date.now(),
+    };
+    // Exactly at the cap without the posting record: the row is legal today,
+    // and the migration's own patch is what would take it over.
+    const bytesWith = (n: number, extra: Record<string, unknown>) => feeDocBytes({ ...row, ...extra, description: "x".repeat(n) });
+    let lo = 0;
+    let hi = MAX_FEE_DOC_BYTES;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (bytesWith(mid, {}) <= MAX_FEE_DOC_BYTES) lo = mid;
+      else hi = mid - 1;
+    }
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { description: "x".repeat(lo) }));
+    expect(bytesWith(lo, {})).toBeLessThanOrEqual(MAX_FEE_DOC_BYTES);
+    expect(bytesWith(lo, posted)).toBeGreaterThan(MAX_FEE_DOC_BYTES);
+    await expect(migrate(seed, custodyId)).rejects.toThrow(/too large to store/);
+    expect(await events(seed)).toHaveLength(0);
+    expect((await seed.t.run((ctx) => ctx.db.get(feeId)))?.custodyPosted).toBeUndefined();
   });
 
   test("a legacy OPEN record with an out-of-pocket position migrates its payable too; a written-off one posts its shortage", async () => {
@@ -1859,17 +1928,14 @@ describe("G1 — the family gate proves the LEDGER, not the rows: only the exact
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       orgId: seed.orgId, applicationId: seed.applicationId, legalInvoiceAmountMinor: jod(10_500), legalInvoiceNumber: "INV-G1", issuedTo: "FINANCE_COMPANY", legalInvoiceDate: Date.now() - DAY,
     });
-    const classify = () =>
-      seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: seed.orgId, applicationId: seed.applicationId, notes: "established" });
+    const classify = () => custodyClosingReady(seed);
     await expect(classify()).rejects.toThrow(/not on the books/);
-    expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.accountingClassification).not.toBe("CLASSIFIED");
 
     // The month reopens and the outbox posts the family; the same rows now pass.
     await reopenPeriod(seed, earlierId);
     expect(await drainUntilSettled(seed)).toEqual(["POSTED"]);
     expect(await familyRefusal(seed)).toBeNull();
     await classify();
-    expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.accountingClassification).toBe("CLASSIFIED");
   }, 30_000);
 
   test("a posting that is PENDING, FAILED, absent, REVERSED, or at a version the row does not name is refused", async () => {
@@ -2104,10 +2170,8 @@ describe("G4 — a line that no longer carries a custody charge must be OFF the 
     // The live rows say nothing is charged; the ledger still carries the
     // charge. The gate reads the ledger through the ever-posted index.
     expect(await familyRefusal(seed)).toMatch(/no longer charged to an employee's custody on this deal .* still on the books/);
-    const classify = () =>
-      seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: seed.orgId, applicationId: seed.applicationId, notes: "established" });
+    const classify = () => custodyClosingReady(seed);
     await expect(classify()).rejects.toThrow(/no longer charged to an employee's custody on this deal .* still on the books/);
-    expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.accountingClassification).not.toBe("CLASSIFIED");
     // One real worker attempt with the period still closed changes nothing.
     await drainOnce(seed);
     expect((await events(seed, "CUSTODY_FEE_PAID")).map((e) => e.status)).toEqual(["POSTED"]);
@@ -2123,7 +2187,6 @@ describe("G4 — a line that no longer carries a custody charge must be OFF the 
     await move(seed, custodyId, "RETURNED", jod(700));
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, custodyId, notes: "all back" });
     await classify();
-    expect((await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))?.accountingClassification).toBe("CLASSIFIED");
   }, 30_000);
 
   test("an unlinked line is held to the same proof; the ever-posted read is bounded and refuses past its cap, never a prefix", async () => {
@@ -4847,5 +4910,207 @@ describe("R8-F3 — the worker proves a queued custody row IS the posting its ke
     expect(await familyRefusal(seed)).toMatch(/its accounting outbox row \(custody_fee_paid_.*_v1\) failed permanently after 10 attempts: .*, so closing is refused until that failure has been repaired and the row retried from the accounting outbox/);
     await seed.t.run((ctx) => ctx.db.delete(fee._id));
     expect(await familyRefusal(seed)).toMatch(/A cost paid out of an employee's custody on this deal is not on the books \(no ledger event and no outbox row exists for it\)/);
+  }, 60_000);
+});
+
+/**
+ * SCRUM-469 — a custody movement that moves cash must state the instrument it
+ * went through. An omitted method used to book to CASH_ON_HAND (a bank transfer
+ * recorded as drawer cash). Refused before anything is written; a provided
+ * method books exactly as before; a REVERSAL, which is the inverse of its
+ * target's journal, needs none.
+ */
+describe("custody movement method is required, never defaulted (SCRUM-469)", () => {
+  const REFUSAL = /Choose how the money moved/;
+
+  async function writes(seed: Seed) {
+    return await seed.t.run(async (ctx) => ({
+      custody: (await ctx.db.query("financeDealCustody").collect()).filter((r) => r.orgId === seed.orgId).length,
+      entries: (await ctx.db.query("financeDealCustodyEntries").collect()).filter((r) => r.orgId === seed.orgId).length,
+      journals: (await ctx.db.query("journalEntries").collect()).filter((r) => r.orgId === seed.orgId).length,
+      events: (await ctx.db.query("accountingEvents").collect()).filter((r) => r.orgId === seed.orgId).length,
+      pending: (await ctx.db.query("pendingAccountingEvents").collect()).filter((r) => r.orgId === seed.orgId).length,
+    }));
+  }
+
+  test("opening custody with no method is refused and writes nothing", async () => {
+    const seed = await seedDeal("m1");
+    const before = await writes(seed);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.employeeId,
+        issuedMinor: jod(700),
+      })
+    ).rejects.toThrow(REFUSAL);
+    expect(await writes(seed)).toEqual(before);
+    expect(cash(await ledger(seed))).toBe(0);
+  }, 60_000);
+
+  test.each(["ISSUED", "RETURNED", "REIMBURSED"] as const)("a %s movement with no method is refused and writes nothing", async (kind) => {
+    const seed = await seedDeal(`m2${kind}`);
+    const custodyId = await openCustody(seed, jod(700));
+    const before = await writes(seed);
+    const ledgerBefore = await ledger(seed);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId, kind, amountMinor: jod(10), idempotencyKey: crypto.randomUUID(),
+      })
+    ).rejects.toThrow(REFUSAL);
+    expect(await writes(seed)).toEqual(before);
+    expect(await ledger(seed)).toEqual(ledgerBefore);
+  }, 60_000);
+
+  test("control: a provided method books to the same accounts as before", async () => {
+    const seed = await seedDeal("m3");
+    const custodyId = await openCustody(seed, jod(700), { method: "BANK_TRANSFER" });
+    await move(seed, custodyId, "RETURNED", jod(100), { method: "CASH" });
+    const l = await ledger(seed);
+    expect(bank(l)).toBe(-jod(700));
+    expect(cash(l)).toBe(jod(100));
+    expect(clearing(l)).toBe(jod(600));
+  }, 60_000);
+
+  test("a REVERSAL needs no method of its own and still reverses the original leg", async () => {
+    const seed = await seedDeal("m4");
+    const custodyId = await openCustody(seed, jod(700), { method: "BANK_TRANSFER" });
+    const [issued] = await entries(seed, custodyId);
+    await reverse(seed, custodyId, issued._id, jod(700));
+    const l = await ledger(seed);
+    expect(bank(l)).toBe(0);
+    expect(cash(l)).toBe(0);
+    expect(clearing(l)).toBe(0);
+  }, 60_000);
+});
+/**
+ * SCRUM-469 round 1 (SOL-02 / SOL-03): the method rule is about a NEW money
+ * movement. A command that already completed replays its stored result whatever
+ * the method it was sent with (a pre-deploy client sent none), and the legacy
+ * migration never books a method-less entry to the drawer.
+ */
+describe("custody method rule: replay and legacy migration (SCRUM-469 round 1)", () => {
+  const REFUSAL = /Choose how the money moved/;
+
+  async function counts(seed: Seed) {
+    return await seed.t.run(async (ctx) => ({
+      custody: (await ctx.db.query("financeDealCustody").collect()).filter((r) => r.orgId === seed.orgId).length,
+      entries: (await ctx.db.query("financeDealCustodyEntries").collect()).filter((r) => r.orgId === seed.orgId).length,
+      journals: (await ctx.db.query("journalEntries").collect()).filter((r) => r.orgId === seed.orgId).length,
+      events: (await ctx.db.query("accountingEvents").collect()).filter((r) => r.orgId === seed.orgId).length,
+      pending: (await ctx.db.query("pendingAccountingEvents").collect()).filter((r) => r.orgId === seed.orgId).length,
+      commands: (await ctx.db.query("commandIdempotency").collect()).filter((r) => r.orgId === seed.orgId).length,
+    }));
+  }
+
+  /** A custody row + entry + COMPLETED command row, exactly as a pre-deploy client's request left them. */
+  async function seedCompletedWithoutMethod(seed: Seed, operation: "openDealCustody" | "recordCustodyMovement", key: string) {
+    return await seed.t.run(async (ctx) => {
+      const custodyId = await ctx.db.insert("financeDealCustody", {
+        orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.employeeId, currency: "JOD",
+        issuedMinor: jod(700), returnedMinor: operation === "recordCustodyMovement" ? jod(100) : 0, reimbursedMinor: 0, status: "OPEN",
+        ledgerPosting: "CANONICAL", createdBy: seed.userId, createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      await ctx.db.insert("financeDealCustodyEntries", {
+        orgId: seed.orgId, custodyId, kind: "ISSUED", amountMinor: jod(700), occurredAt: Date.now(), recordedBy: seed.userId, recordedAt: Date.now(),
+      });
+      if (operation === "recordCustodyMovement") {
+        await ctx.db.insert("financeDealCustodyEntries", {
+          orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: jod(100), occurredAt: Date.now(), recordedBy: seed.userId, recordedAt: Date.now(),
+        });
+      }
+      const fingerprint =
+        operation === "openDealCustody"
+          ? JSON.stringify({ applicationId: seed.applicationId, userId: seed.employeeId, issuedMinor: jod(700), method: null, reference: null, note: null, occurredAt: null })
+          : JSON.stringify({ custodyId, kind: "RETURNED", reversesEntryId: null, amountMinor: jod(100), method: null, reference: null, note: null, occurredAt: null });
+      await ctx.db.insert("commandIdempotency", {
+        orgId: seed.orgId, operation: `financeDealCosts.${operation}`, idempotencyKey: key, status: "COMPLETED",
+        fingerprint, result: custodyId, createdBy: seed.userId, createdAt: Date.now(), completedAt: Date.now(),
+      });
+      return custodyId;
+    });
+  }
+
+  test("SOL-02: a completed openDealCustody sent with no method replays its stored result and writes nothing", async () => {
+    const seed = await seedDeal("r1open");
+    const custodyId = await seedCompletedWithoutMethod(seed, "openDealCustody", "pre-open");
+    const before = await counts(seed);
+    const again = await seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+      idempotencyKey: "pre-open", orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.employeeId, issuedMinor: jod(700),
+    });
+    expect(again).toBe(custodyId);
+    expect(await counts(seed)).toEqual(before);
+  }, 60_000);
+
+  test("SOL-02: a completed recordCustodyMovement sent with no method replays its stored result and writes nothing", async () => {
+    const seed = await seedDeal("r1move");
+    const custodyId = await seedCompletedWithoutMethod(seed, "recordCustodyMovement", "pre-move");
+    const before = await counts(seed);
+    const again = await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+      orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: jod(100), idempotencyKey: "pre-move",
+    });
+    expect(again).toBe(custodyId);
+    expect(await counts(seed)).toEqual(before);
+  }, 60_000);
+
+  test("SOL-02: a NEW key with no method is still refused and leaves no command row, entry, event or journal", async () => {
+    const seed = await seedDeal("r1new");
+    const custodyId = await openCustody(seed, jod(700));
+    const before = await counts(seed);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+        orgId: seed.orgId, custodyId, kind: "RETURNED", amountMinor: jod(10), idempotencyKey: "brand-new-move",
+      })
+    ).rejects.toThrow(REFUSAL);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.openDealCustody, {
+        idempotencyKey: "brand-new-open", orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.viewerId, issuedMinor: jod(10),
+      })
+    ).rejects.toThrow(REFUSAL);
+    expect(await counts(seed)).toEqual(before);
+    expect(await commandRows(seed, "financeDealCosts.recordCustodyMovement")).toHaveLength(0);
+  }, 60_000);
+
+  // ---- SOL-03: legacy migration ------------------------------------------------
+  async function seedLegacy(seed: Seed, methods: Array<"CASH" | "BANK_TRANSFER" | undefined>) {
+    return await seed.t.run(async (ctx) => {
+      const t0 = Date.now() - 10 * DAY;
+      const total = methods.length * jod(100);
+      const custodyId = await ctx.db.insert("financeDealCustody", {
+        orgId: seed.orgId, applicationId: seed.applicationId, userId: seed.employeeId, currency: "JOD",
+        issuedMinor: total, returnedMinor: 0, reimbursedMinor: 0, status: "OPEN",
+        createdBy: seed.userId, createdAt: t0, updatedAt: t0,
+      });
+      for (const [i, method] of methods.entries()) {
+        await ctx.db.insert("financeDealCustodyEntries", {
+          orgId: seed.orgId, custodyId, kind: "ISSUED", amountMinor: jod(100), ...(method ? { method } : {}),
+          occurredAt: t0 + i * DAY, recordedBy: seed.userId, recordedAt: t0 + i * DAY,
+        });
+      }
+      return custodyId;
+    });
+  }
+  const migrateIt = (seed: Seed, custodyId: Id<"financeDealCustody">) =>
+    seed.asUser.mutation(api.financeDealCosts.migrateLegacyCustodyToLedger, { orgId: seed.orgId, custodyId, idempotencyKey: crypto.randomUUID() });
+
+  test("SOL-03: a legacy custody with one method-less entry is refused whole, naming it, and writes nothing", async () => {
+    const seed = await seedDeal("r1legacy", { templates: false });
+    const custodyId = await seedLegacy(seed, ["CASH", undefined, "BANK_TRANSFER"]);
+    const before = await counts(seed);
+    await expect(migrateIt(seed, custodyId)).rejects.toThrow(/no method/);
+    expect(await counts(seed)).toEqual(before);
+    expect(await events(seed)).toHaveLength(0);
+    expect(await pending(seed)).toHaveLength(0);
+    expect((await seed.t.run((ctx) => ctx.db.get(custodyId)))?.ledgerPosting).toBeUndefined();
+    expect(cash(await ledger(seed))).toBe(0);
+  }, 60_000);
+
+  test("SOL-03 control: an all-method legacy custody still migrates and books each leg to its instrument", async () => {
+    const seed = await seedDeal("r1legacyok", { templates: false });
+    const custodyId = await seedLegacy(seed, ["CASH", "BANK_TRANSFER"]);
+    await migrateIt(seed, custodyId);
+    const l = await ledger(seed);
+    expect(cash(l)).toBe(-jod(100));
+    expect(bank(l)).toBe(-jod(100));
+    expect((await seed.t.run((ctx) => ctx.db.get(custodyId)))?.ledgerPosting).toBe("CANONICAL");
   }, 60_000);
 });

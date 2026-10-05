@@ -57,6 +57,11 @@ export function yearMonthFromIndex(idx: number): string {
   return `${year}-${String(month + 1).padStart(2, "0")}`;
 }
 
+/** UTC "YYYY-MM" for a timestamp. */
+export function toYearMonth(timestamp: number): string {
+  return yearMonthFromIndex(yearMonthIndex(timestamp));
+}
+
 /**
  * A timestamp that falls inside calendar month `idx` (its last millisecond),
  * clamped to `now` so the in-progress current month posts as-of-now rather
@@ -65,6 +70,57 @@ export function yearMonthFromIndex(idx: number): string {
  */
 export function occurredAtForMonthIndex(idx: number, now: number): number {
   return Math.min(endOfMonthMs(idx), now);
+}
+
+/**
+ * SCRUM-542 — a monthly posting names the month it belongs to (`yearMonth`) AND
+ * carries the instant it is dated (`occurredAt`); the two must agree, or the
+ * journal lands in a different accounting month than the schedule it advances.
+ * Throws on a malformed "YYYY-MM", a non-finite instant, or an instant outside
+ * that UTC month. A caller/data bug, not a counted skip: the throw rolls the whole
+ * mutation back before any patch or ledger write.
+ */
+export function assertMonthClaim(claim: { yearMonth: string; occurredAt: number }): void {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(claim.yearMonth)) {
+    throw new Error("Month claim refused: yearMonth is not YYYY-MM");
+  }
+  if (!Number.isFinite(claim.occurredAt) || yearMonthIndex(claim.occurredAt) !== yearMonthStringIndex(claim.yearMonth)) {
+    throw new Error(`Month claim refused: occurredAt is not within ${claim.yearMonth}`);
+  }
+}
+
+function refuseFirstOfferable(inputName: string): never {
+  throw new Error(`first offerable month is not representable: ${inputName} is malformed or out of range`);
+}
+
+/**
+ * First calendar month (absolute index) a monthly GL cron may offer an item —
+ * the lower bound of its catch-up range: never earlier than the month after the
+ * last one posted, the month the item was created (INCLUSIVE — months before
+ * the row existed are never back-filled), or its schedule start month (fixed
+ * assets' depreciation start / purchase date; omit for F&I deferrals).
+ */
+export function firstOfferableMonthIndex(input: {
+  lastPostedYearMonth?: string;
+  startAt?: number;
+  createdAt: number;
+}): number {
+  // Math.max(x, NaN) is NaN, and NaN poisons both callers: the cron's `idx <= currentIdx`
+  // loop never runs (silently counted done) and the recognition `< floor` guard silently
+  // passes. Refuse loudly, naming the FIRST offending input.
+  let first = yearMonthIndex(input.createdAt);
+  if (!Number.isFinite(first)) refuseFirstOfferable("createdAt");
+  if (input.startAt !== undefined) {
+    const startIdx = yearMonthIndex(input.startAt);
+    if (!Number.isFinite(startIdx)) refuseFirstOfferable("startAt");
+    first = Math.max(first, startIdx);
+  }
+  if (input.lastPostedYearMonth) {
+    // "YYYY-M" stays accepted (legacy leniency); the month must be 1..12.
+    if (!/^\d{4}-(0?[1-9]|1[0-2])$/.test(input.lastPostedYearMonth)) refuseFirstOfferable("lastPostedYearMonth");
+    first = Math.max(first, yearMonthStringIndex(input.lastPostedYearMonth) + 1);
+  }
+  return first;
 }
 
 /** Last millisecond of calendar month `idx` (year*12 + 0-based month). */

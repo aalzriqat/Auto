@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { ConvexError } from "convex/values";
-import { getErrorMessage, GENERIC_ERROR_MESSAGE } from "./errors";
+import { getErrorMessage, getLocalizedErrorMessage, GENERIC_ERROR_MESSAGE } from "./errors";
 
 /** Mirrors what the browser client hands a `catch` block for a server throw. */
 function convexWrapped(inner: string, kind: "Error" | "ConvexError" = "Error"): string {
@@ -214,5 +214,260 @@ describe("getErrorMessage — totality", () => {
     const result = getErrorMessage(input);
     expect(typeof result).toBe("string");
     expect(result.trim().length).toBeGreaterThan(0);
+  });
+});
+
+describe("getLocalizedErrorMessage - coded server refusals", () => {
+  const table: Record<string, string> = {
+    ServerError_SOME_CODE: "ترجمة {baseCurrency} / {orgCurrency} / {baseCurrency}",
+  };
+  // Mirrors the language provider: an unresolved key comes back as itself.
+  const t = (key: string) => table[key] ?? key;
+
+  it("returns the translation for a code with a dictionary entry, filling placeholders", () => {
+    const error = new ConvexError({ code: "SOME_CODE", message: "English text", baseCurrency: "USD", orgCurrency: "JOD" });
+    expect(getLocalizedErrorMessage(error, t)).toBe("ترجمة USD / JOD / USD");
+  });
+
+  it("falls back to the server message for a code with no dictionary entry", () => {
+    const error = new ConvexError({ code: "UNKNOWN_CODE", message: "English text" });
+    expect(getLocalizedErrorMessage(error, t)).toBe("English text");
+  });
+
+  it("falls back to the message for a plain-string ConvexError", () => {
+    expect(getLocalizedErrorMessage(new ConvexError("Vehicle already sold"), t)).toBe("Vehicle already sold");
+  });
+
+  it("falls back for a non-string code and for a non-Convex error", () => {
+    expect(getLocalizedErrorMessage(new ConvexError({ code: 42, message: "Numeric code" }), t)).toBe("Numeric code");
+    expect(getLocalizedErrorMessage(new Error("boom"), t)).toBe("boom");
+    expect(getLocalizedErrorMessage(undefined, t)).toBe(GENERIC_ERROR_MESSAGE);
+  });
+
+  it("falls back when the translate function throws", () => {
+    const error = new ConvexError({ code: "SOME_CODE", message: "English text" });
+    expect(getLocalizedErrorMessage(error, () => { throw new Error("no provider"); })).toBe("English text");
+  });
+
+  it("the two SCRUM-390 refusal codes resolve to non-key, placeholder-filled Arabic", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const finalize = getLocalizedErrorMessage(
+      new ConvexError({ code: "COMMISSION_BASE_UNUSABLE", message: "en", baseCurrency: "USD", orgCurrency: "JOD" }),
+      ar
+    );
+    expect(finalize).toContain("USD");
+    expect(finalize).toContain("JOD");
+    expect(finalize).toMatch(/[\u0600-\u06FF]/);
+    expect(finalize).not.toMatch(/\{\w+\}/);
+    const recalc = getLocalizedErrorMessage(new ConvexError({ code: "COMMISSION_BASE_UNUSABLE_RECALC", message: "en" }), ar);
+    expect(recalc).toMatch(/[\u0600-\u06FF]/);
+    expect(recalc).not.toBe("en");
+  });
+
+  it("the SCRUM-571 payment-link refusals resolve to Arabic in ar and the server text in en", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { PAYMENT_LINK_REFUSALS } = await import("../convex/paymentIntents");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    // Derived from the server table so a new refusal cannot ship untranslated.
+    for (const code of [...Object.keys(PAYMENT_LINK_REFUSALS), "PAYMENT_LINK_RECEIPT_MANUAL_REFUSED"]) {
+      const error = new ConvexError({ code, message: "server text" });
+      const arText = getLocalizedErrorMessage(error, ar);
+      expect(arText).toMatch(/[؀-ۿ]/);
+      expect(arText).not.toBe("server text");
+      expect(arText).toBe((dictionaries.ar as Record<string, string>)[`ServerError_${code}`]);
+      expect(getLocalizedErrorMessage(error, en)).toBe((dictionaries.en as Record<string, string>)[`ServerError_${code}`]);
+    }
+  });
+
+  it("SCRUM-650 purchase-cost correction refusals resolve to Arabic in ar and the server text in en", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { AppErrorCode } = await import("../convex/utils/errors");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    // Derived from the server enum so a new correction refusal cannot ship untranslated.
+    const codes = Object.values(AppErrorCode).filter(
+      (code) => code === "VEHICLE_COST_POSTED" || code.startsWith("COST_CORRECTION_")
+    );
+    expect(codes.length).toBeGreaterThanOrEqual(11);
+    for (const code of codes) {
+      const error = new ConvexError({ code, message: "server text" });
+      const arText = getLocalizedErrorMessage(error, ar);
+      expect(arText).toMatch(/[؀-ۿ]/);
+      expect(arText).not.toBe("server text");
+      expect(getLocalizedErrorMessage(error, en)).not.toBe("server text");
+      expect(getLocalizedErrorMessage(error, en)).toBe((dictionaries.en as Record<string, string>)[`ServerError_${code}`]);
+    }
+  });
+
+  it("SCRUM-693 deal-unwind refusals resolve to Arabic in ar and to the server's own text in en", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { DEAL_UNWIND_MESSAGES } = await import("../convex/utils/dealUnwindMessages");
+    const { AppErrorCode } = await import("../convex/utils/errors");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    // Derived from the server table so a new unwind refusal cannot ship untranslated.
+    const codes = Object.keys(DEAL_UNWIND_MESSAGES) as Array<keyof typeof DEAL_UNWIND_MESSAGES>;
+    expect(codes.length).toBe(27);
+    for (const code of codes) {
+      expect(Object.values(AppErrorCode)).toContain(code);
+      const error = new ConvexError({ code, message: DEAL_UNWIND_MESSAGES[code] });
+      const arText = getLocalizedErrorMessage(error, ar);
+      expect(arText).toMatch(/[؀-ۿ]/);
+      expect(arText).not.toBe(DEAL_UNWIND_MESSAGES[code]);
+      expect(getLocalizedErrorMessage(error, en)).toBe(DEAL_UNWIND_MESSAGES[code]);
+    }
+  });
+
+  it("SCRUM-113 APPROVAL_VEHICLE_UNAVAILABLE resolves to its dictionary entry in ar and en", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code: "APPROVAL_VEHICLE_UNAVAILABLE", message: "server text" });
+    const arEntry = (dictionaries.ar as Record<string, string>).ServerError_APPROVAL_VEHICLE_UNAVAILABLE;
+    const enEntry = (dictionaries.en as Record<string, string>).ServerError_APPROVAL_VEHICLE_UNAVAILABLE;
+    expect(arEntry).toMatch(/[؀-ۿ]/);
+    expect(getLocalizedErrorMessage(error, ar)).toBe(arEntry);
+    expect(getLocalizedErrorMessage(error, en)).toBe(enEntry);
+    expect(getLocalizedErrorMessage(error, en)).not.toBe("server text");
+  });
+
+  it("SCRUM-113 the EN dictionary text equals the message thrown by respondToApproval", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const enEntry = (dictionaries.en as Record<string, string>).ServerError_APPROVAL_VEHICLE_UNAVAILABLE;
+    expect(enEntry).toBeTruthy();
+    const { join } = await import("node:path");
+    const source = readFileSync(join(process.cwd(), "convex", "approvals.ts"), "utf8");
+    // The server string literal sits right after the code in the throwAppError call.
+    const match = /AppErrorCode\.APPROVAL_VEHICLE_UNAVAILABLE,\s*"([^"]+)"/.exec(source);
+    expect(match?.[1]).toBe(enEntry);
+  });
+
+  it("SCRUM-641 VEHICLE_DELETED resolves to its dictionary entry in ar and en, and EN equals the server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { VEHICLE_DELETED_MESSAGE } = await import("../convex/utils/vehicleLiveness");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code: "VEHICLE_DELETED", message: "server text" });
+    const arEntry = (dictionaries.ar as Record<string, string>).ServerError_VEHICLE_DELETED;
+    const enEntry = (dictionaries.en as Record<string, string>).ServerError_VEHICLE_DELETED;
+    expect(arEntry).toMatch(/[؀-ۿ]/);
+    expect(getLocalizedErrorMessage(error, ar)).toBe(arEntry);
+    expect(getLocalizedErrorMessage(error, en)).toBe(enEntry);
+    expect(enEntry).toBe(VEHICLE_DELETED_MESSAGE);
+  });
+
+  it("SCRUM-693 VEHICLE_NOT_READY_FOR_SALE resolves to its dictionary entry in ar and en, and EN equals the server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { VEHICLE_NOT_READY_FOR_SALE_MESSAGE } = await import("../convex/utils/vehicleLiveness");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code: "VEHICLE_NOT_READY_FOR_SALE", message: "server text" });
+    const arEntry = (dictionaries.ar as Record<string, string>).ServerError_VEHICLE_NOT_READY_FOR_SALE;
+    const enEntry = (dictionaries.en as Record<string, string>).ServerError_VEHICLE_NOT_READY_FOR_SALE;
+    expect(arEntry).toMatch(/[؀-ۿ]/);
+    expect(getLocalizedErrorMessage(error, ar)).toBe(arEntry);
+    expect(getLocalizedErrorMessage(error, en)).toBe(enEntry);
+    expect(enEntry).toBe(VEHICLE_NOT_READY_FOR_SALE_MESSAGE);
+  });
+
+  it("SCRUM-641 VEHICLE_DELETED_FLAG_LOCKED has ar+en entries and EN equals the adminData server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code: "VEHICLE_DELETED_FLAG_LOCKED", message: "server text" });
+    const arEntry = (dictionaries.ar as Record<string, string>).ServerError_VEHICLE_DELETED_FLAG_LOCKED;
+    const enEntry = (dictionaries.en as Record<string, string>).ServerError_VEHICLE_DELETED_FLAG_LOCKED;
+    expect(arEntry).toMatch(/[؀-ۿ]/);
+    expect(getLocalizedErrorMessage(error, ar)).toBe(arEntry);
+    expect(getLocalizedErrorMessage(error, en)).toBe(enEntry);
+    const source = readFileSync(join(process.cwd(), "convex", "adminData.ts"), "utf8");
+    const match = /AppErrorCode\.VEHICLE_DELETED_FLAG_LOCKED,\s*"([^"]+)"/.exec(source);
+    expect(match?.[1]).toBe(enEntry);
+  });
+
+  /** Asserts a coded error resolves to its Arabic and English dictionary entries; returns them. */
+  async function expectCodedEntry(code: string) {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code, message: "server text" });
+    const arEntry = (dictionaries.ar as Record<string, string>)[`ServerError_${code}`];
+    const enEntry = (dictionaries.en as Record<string, string>)[`ServerError_${code}`];
+    expect(arEntry).toMatch(/[؀-ۿ]/);
+    expect(getLocalizedErrorMessage(error, ar)).toBe(arEntry);
+    expect(getLocalizedErrorMessage(error, en)).toBe(enEntry);
+    return { dictionaries, error, en, arEntry, enEntry };
+  }
+
+  /** The string literal convex/roles.ts assigns to a top-level message constant. */
+  async function roleMessageConst(name: string) {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const source = readFileSync(join(process.cwd(), "convex", "roles.ts"), "utf8");
+    const match = new RegExp(`const ${name} =\\s*(['"])((?:(?!\\1).)+)\\1`).exec(source);
+    return { source, message: match?.[2] };
+  }
+
+  it("SCRUM-413 PERMISSION_RETIRED resolves to its dictionary entry in ar and en", async () => {
+    const { dictionaries, error, en, arEntry, enEntry } = await expectCodedEntry("PERMISSION_RETIRED");
+    expect(getLocalizedErrorMessage(error, en)).not.toBe("server text");
+    // The AR names the same two authorities the role editor labels (settings.ts).
+    expect(arEntry).toContain((dictionaries.ar as Record<string, string>).RecordSupplierRoute);
+    expect(arEntry).toContain((dictionaries.ar as Record<string, string>).CancelClosedDeal);
+    expect(enEntry).toContain((dictionaries.en as Record<string, string>).RecordSupplierRoute);
+    expect(enEntry).toContain((dictionaries.en as Record<string, string>).CancelClosedDeal);
+  });
+
+  it("SCRUM-413 OWNER_NAMED_ROLE_LOCKED resolves to its dictionary entry in ar and en, and EN equals the roles.ts message", async () => {
+    const { enEntry } = await expectCodedEntry("OWNER_NAMED_ROLE_LOCKED");
+    expect((await roleMessageConst("OWNER_NAMED_ROLE_LOCKED_MESSAGE")).message).toBe(enEntry);
+  });
+
+  it("SCRUM-413 the EN dictionary text equals the message thrown by roles.create and roles.update", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const enEntry = (dictionaries.en as Record<string, string>).ServerError_PERMISSION_RETIRED;
+    expect(enEntry).toBeTruthy();
+    const { source, message } = await roleMessageConst("RETIRED_PERMISSION_MESSAGE");
+    expect(message).toBe(enEntry);
+    // Both throws use the code, not a bare ConvexError string.
+    expect(source.match(/throwAppError\(AppErrorCode\.PERMISSION_RETIRED, RETIRED_PERMISSION_MESSAGE\)/g)).toHaveLength(2);
+  });
+
+  it("SCRUM-413 D-37 every forward cancel refusal has an AR entry and its EN equals the server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { forwardCancelRefusal } = await import("../convex/utils/financeCompanyForward");
+    const proofOf = (versionStates: string[], state: string) =>
+      ({ applies: true, dueMinor: 1, state, versions: versionStates.map((s) => ({ state: s })) }) as never;
+    const cases: Array<[unknown, string]> = [
+      [proofOf(["ON_BOOKS"], "ON_BOOKS"), "FORWARD_CANCEL_ON_BOOKS"],
+      [proofOf(["POSTING_PENDING"], "POSTING_PENDING"), "FORWARD_CANCEL_POSTING_UNSETTLED"],
+      [proofOf(["POSTING_FAILED"], "POSTING_FAILED"), "FORWARD_CANCEL_POSTING_UNSETTLED"],
+      [proofOf(["REVERSAL_PENDING"], "REVERSAL_PENDING"), "FORWARD_CANCEL_REVERSAL_PENDING"],
+      [proofOf(["NEEDS_REPAIR"], "NEEDS_REPAIR"), "FORWARD_CANCEL_NEEDS_REPAIR"],
+      // Fail-closed: an unreadable proof (no versions) is NEEDS_REPAIR.
+      [proofOf([], "NEEDS_REPAIR"), "FORWARD_CANCEL_NEEDS_REPAIR"],
+    ];
+    const ar = dictionaries.ar as Record<string, string>;
+    const en = dictionaries.en as Record<string, string>;
+    for (const [proof, code] of cases) {
+      const refusal = forwardCancelRefusal(proof as never);
+      expect(refusal?.code).toBe(code);
+      expect(en[`ServerError_${code}`]).toBe(refusal?.message);
+      expect(ar[`ServerError_${code}`]).toMatch(/[؀-ۿ]/);
+      const error = new ConvexError({ code, message: refusal?.message });
+      expect(getLocalizedErrorMessage(error, (k: string) => ar[k] ?? k)).toBe(ar[`ServerError_${code}`]);
+    }
+    expect(forwardCancelRefusal(proofOf([], "SETTLED"))).toBeNull();
+  });
+
+  it("the English dictionary text equals the server's message for both codes", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    expect(dictionaries.en.ServerError_COMMISSION_BASE_UNUSABLE).toContain("{baseCurrency}");
+    expect(dictionaries.en.ServerError_COMMISSION_BASE_UNUSABLE).toContain("{orgCurrency}");
   });
 });

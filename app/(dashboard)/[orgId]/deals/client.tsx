@@ -9,7 +9,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { useCurrency } from "@/hooks/useCurrency";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { DealsListView } from "@/components/deals/DealsListView";
-import { mergeDealRows } from "@/components/deals/dealRows";
+import { dealsPaging, mergeDealRows } from "@/components/deals/dealRows";
 
 const PAGE = 100;
 
@@ -23,7 +23,7 @@ const PAGE = 100;
  */
 export function DealsListClient() {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const { hasPermission } = usePermissions();
   const currency = useCurrency();
 
@@ -44,8 +44,7 @@ export function DealsListClient() {
     return mergeDealRows(applications.results, sales.results, activeOrgId, t, currency.format);
   }, [activeOrgId, applications.results, applications.status, sales.results, sales.status, t, currency]);
 
-  const canLoadMore = applications.status === "CanLoadMore" || sales.status === "CanLoadMore";
-  const loadingMore = applications.status === "LoadingMore" || sales.status === "LoadingMore";
+  const { complete, canLoadMore, loadingMore } = dealsPaging([applications.status, sales.status]);
 
   return (
     <DealsListView
@@ -53,12 +52,14 @@ export function DealsListClient() {
       loading={rows === undefined}
       canLoadMore={canLoadMore}
       loadingMore={loadingMore}
+      complete={complete}
       onLoadMore={() => {
         if (applications.status === "CanLoadMore") applications.loadMore(PAGE);
         if (sales.status === "CanLoadMore") sales.loadMore(PAGE);
       }}
       newDealHref={activeOrgId && hasPermission(PERMISSIONS.CREATE_SALES) ? `/${activeOrgId}/sales` : null}
       t={t}
+      locale={locale}
     />
   );
 }

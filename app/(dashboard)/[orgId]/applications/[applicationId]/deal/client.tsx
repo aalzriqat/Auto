@@ -4,10 +4,12 @@ import { useParams } from "next/navigation";
 import { useOrg } from "@/components/providers/OrgProvider";
 import type { Id } from "@/convex/_generated/dataModel";
 import { DealCockpit } from "@/components/applications/cockpit/DealCockpit";
+import { useStageDeepLink } from "@/components/applications/cockpit/useStageDeepLink";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export function DealCockpitClient() {
   const { activeOrgId } = useOrg();
+  const stageDeepLink = useStageDeepLink();
   const params = useParams<{ applicationId: string }>();
   const applicationId = params?.applicationId;
 
@@ -22,6 +24,7 @@ export function DealCockpitClient() {
     <DealCockpit
       orgId={activeOrgId as Id<"organizations">}
       applicationId={applicationId as Id<"financeApplications">}
+      stageDeepLink={stageDeepLink}
     />
   );
 }

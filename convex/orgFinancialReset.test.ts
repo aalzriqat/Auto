@@ -4,6 +4,7 @@ import schema from "./schema";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { RESET_TABLES_FOR_TEST } from "./orgFinancialReset";
+import { runContinuationBatch } from "../test-utils/orgResetFixtures";
 
 /**
  * This deletes production rows with no undo, so the tests are about what it
@@ -27,7 +28,7 @@ function setup() {
 /** Seeds one org with a row in each of three reset tables plus protected rows. */
 async function seedOrg(t: ReturnType<typeof setup>, name: string) {
   const orgId = await t.run((ctx) =>
-    ctx.db.insert("organizations", { name, createdAt: Date.now() })
+    ctx.db.insert("organizations", { name, createdAt: Date.now(), suspended: true })
   );
 
   await t.run(async (ctx) => {
@@ -87,8 +88,8 @@ async function countFor(
   const rows = await t.run((ctx) =>
     ctx.db
       .query(table)
-      .filter((q) => q.eq(q.field("orgId"), orgId))
       .collect()
+      .then((all) => all.filter((row) => row.orgId === orgId))
   );
   return rows.length;
 }
@@ -119,10 +120,8 @@ describe("resetOrgFinancialData", () => {
     const t = setup();
     const orgId = await seedOrg(t, "Reset Motors");
 
-    const result = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-      orgId,
-      dryRun: false,
-    });
+    // D-19: fresh starts are refused; exercised as a continuation.
+    const result = await runContinuationBatch(t, orgId);
     expect(result.total).toBe(3);
     expect(result.remaining).toBe(0);
 
@@ -142,10 +141,8 @@ describe("resetOrgFinancialData", () => {
     const target = await seedOrg(t, "Target Motors");
     const bystander = await seedOrg(t, "Bystander Motors");
 
-    await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-      orgId: target,
-      dryRun: false,
-    });
+    // D-19: fresh starts are refused; exercised as a continuation.
+    await runContinuationBatch(t, target);
 
     expect(await countFor(t, "chartOfAccounts", target)).toBe(0);
     expect(await countFor(t, "transactions", bystander)).toBe(1);
@@ -159,16 +156,14 @@ describe("resetOrgFinancialData", () => {
     const t = setup();
     const orgId = await seedOrg(t, "Status Motors");
 
-    await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-      orgId,
-      dryRun: false,
-    });
+    // D-19: fresh starts are refused; exercised as a continuation.
+    await runContinuationBatch(t, orgId);
 
     const vehicles = await t.run((ctx) =>
       ctx.db
         .query("vehicles")
-        .filter((q) => q.eq(q.field("orgId"), orgId))
         .collect()
+        .then((all) => all.filter((row) => row.orgId === orgId))
     );
     expect(vehicles).toHaveLength(1);
     expect(vehicles[0].status).toBe("SOLD");
@@ -177,7 +172,7 @@ describe("resetOrgFinancialData", () => {
   test("deletes an appraisal's stored report rather than orphaning it", async () => {
     const t = setup();
     const orgId = await t.run((ctx) =>
-      ctx.db.insert("organizations", { name: "Blob Motors", createdAt: Date.now() })
+      ctx.db.insert("organizations", { name: "Blob Motors", createdAt: Date.now(), suspended: true })
     );
     const blobId = await t.run((ctx) => ctx.storage.store(new Blob(["appraisal.pdf"])));
 
@@ -207,10 +202,8 @@ describe("resetOrgFinancialData", () => {
       });
     });
 
-    await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-      orgId,
-      dryRun: false,
-    });
+    // D-19: fresh starts are refused; exercised as a continuation.
+    await runContinuationBatch(t, orgId);
 
     // An orphaned row is recoverable. A blob with nothing referencing it is
     // not enumerable, not deletable by any code path, and billed indefinitely —
@@ -222,7 +215,7 @@ describe("resetOrgFinancialData", () => {
   test("a partial batch never deletes an application out from under its own fee rows", async () => {
     const t = setup();
     const orgId = await t.run((ctx) =>
-      ctx.db.insert("organizations", { name: "Batch Motors", createdAt: Date.now() })
+      ctx.db.insert("organizations", { name: "Batch Motors", createdAt: Date.now(), suspended: true })
     );
 
     const ids = await t.run(async (ctx) => {
@@ -259,17 +252,14 @@ describe("resetOrgFinancialData", () => {
     // the application in the same pass — leaving the second fee pointing at an
     // applicationId that no longer resolves. Atomicity is no help: the whole
     // broken state commits together.
-    const first = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-      orgId, dryRun: false, batchSize: 1,
-    });
+    // D-19: fresh starts are refused; exercised as a continuation.
+    const first = await runContinuationBatch(t, orgId, 1);
     expect(first.remaining).toBeGreaterThan(0);
     expect(await t.run((ctx) => ctx.db.get(ids.applicationId))).not.toBeNull();
 
     // Repeat until it settles; the parent goes only once the children are gone.
     for (let pass = 0; pass < 8; pass += 1) {
-      await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-        orgId, dryRun: false, batchSize: 1,
-      });
+      await runContinuationBatch(t, orgId, 1);
     }
 
     await t.run(async (ctx) => {
@@ -348,7 +338,13 @@ describe("resetOrgFinancialData", () => {
     // tables and this file's own constant warns, from a previous round, that
     // fixing the destructive path that fired without asking which OTHER one has
     // the same gap is how the second gap survives.
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(36);
+    //
+    // 36 -> 38: `supplierCostRecoveryReceipts` and `supplierCostRecoveries`
+    // (SCRUM-389). A recovery names the expense the reset clears, and a receipt
+    // names its recovery; leaving them would strand an open supplier receivable
+    // against an expense that no longer exists, on a fresh ledger. Listed before
+    // `expenses`, receipts first.
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(38);
   });
 });
 
@@ -445,13 +441,8 @@ describe("resetOrgFinancialData refuses an org carrying authority lifecycle stat
 
     // batchSize 1 is the shape that could orphan: far more lifecycle rows than
     // one pass can clear.
-    await expect(
-      t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-        orgId,
-        dryRun: false,
-        batchSize: 1,
-      })
-    ).rejects.toThrow(/commitment-authority/i);
+    // D-19: fresh starts are refused; exercised as a continuation.
+    await expect(runContinuationBatch(t, orgId, 1)).rejects.toThrow(/commitment-authority/i);
 
     // THE CONTRACT: nothing was deleted. Asserted as an absence, because the
     // damage this prevents is a partial delete, not a bad return value.
@@ -484,10 +475,8 @@ describe("resetOrgFinancialData refuses an org carrying authority lifecycle stat
     const t = setup();
     const orgId = await seedOrg(t, "NoAuth");
 
-    const res = await t.mutation(internal.orgFinancialReset.resetOrgFinancialData, {
-      orgId,
-      dryRun: false,
-    });
+    // D-19: fresh starts are refused; exercised as a continuation.
+    const res = await runContinuationBatch(t, orgId);
 
     expect(res.authorityLifecyclePresent).toBe(false);
     expect(await countFor(t, "chartOfAccounts", orgId)).toBe(0);
@@ -495,5 +484,147 @@ describe("resetOrgFinancialData refuses an org carrying authority lifecycle stat
     // Protected tables still survive, as before.
     expect(await countFor(t, "vehicles", orgId)).toBe(1);
     expect(await countFor(t, "customers", orgId)).toBe(1);
+  });
+});
+
+/**
+ * SCRUM-534 — NO PASS MAY DELETE A ROW THAT A SURVIVING ROW STILL REFERENCES.
+ *
+ * `financeApplications.quoteId` is REQUIRED. `quotes` used to be listed (and
+ * deleted) BEFORE the finance-application group with no `CHILD_TABLES` edge, so
+ * one pass whose finance children exceeded the batch deleted every quote while
+ * the applications survived — a committed, dangling required reference that
+ * SCRUM-528's finalizeDeal then refuses mid-reset with a confusing error.
+ */
+describe("resetOrgFinancialData never strands a surviving row's quote or sale reference", () => {
+  test("a partial pass keeps the quote and sale while applications or their children survive", async () => {
+    const t = setup();
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Quote Order Motors", createdAt: Date.now(), suspended: true })
+    );
+
+    const ids = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "reset_u534", email: "u534@x.com" });
+      const vehicleId = await ctx.db.insert("vehicles", {
+        orgId, vin: "VINRESET534", make: "Kia", model: "Rio", year: 2024, mileage: 10,
+        color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: 15000,
+        status: "AVAILABLE",
+      });
+      const customerId = await ctx.db.insert("customers", {
+        orgId, firstName: "Order", lastName: "Customer",
+      });
+      const quoteId = await ctx.db.insert("quotes", {
+        orgId, customerId, vehicleId, vehiclePrice: 15000, downPayment: 1000,
+        termMonths: 48, status: "ACCEPTED", createdBy: userId, createdAt: Date.now(),
+      });
+      const applicationId = await ctx.db.insert("financeApplications", {
+        orgId, quoteId, customerId, vehicleId, salespersonId: userId,
+        status: "APPROVED", createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      const saleId = await ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId, salePrice: 15000,
+        saleDate: Date.now(), status: "COMPLETED" as const, quoteId, applicationId,
+      });
+      for (const n of [1000, 2000]) {
+        await ctx.db.insert("financeDealFees", {
+          orgId, applicationId, feeType: "LICENSING", currency: "JOD",
+          actualAmountMinor: n, paidBy: "DEALER", paidTo: "GOVERNMENT",
+          accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
+          includedInQuotation: false, deductedFromSettlement: false, refundable: false,
+          source: "MANUAL", createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+        });
+      }
+      return { quoteId, applicationId, saleId };
+    });
+
+    const assertNoDanglingReference = async (pass: number) => {
+      await t.run(async (ctx) => {
+        const apps = await ctx.db.query("financeApplications").collect();
+        for (const app of apps) {
+          expect(await ctx.db.get(app.quoteId), `pass ${pass}: application.quoteId`).not.toBeNull();
+        }
+        const sales = await ctx.db.query("sales").collect();
+        for (const sale of sales) {
+          if (sale.quoteId) {
+            expect(await ctx.db.get(sale.quoteId), `pass ${pass}: sale.quoteId`).not.toBeNull();
+          }
+          if (sale.applicationId) {
+            expect(await ctx.db.get(sale.applicationId), `pass ${pass}: sale.applicationId`).not.toBeNull();
+          }
+        }
+      });
+    };
+
+    // D-19: fresh starts are refused; exercised as a continuation.
+    let remaining = Number.POSITIVE_INFINITY;
+    for (let pass = 0; pass < 12 && remaining > 0; pass += 1) {
+      const res = await runContinuationBatch(t, orgId, 1);
+      remaining = res.remaining;
+      await assertNoDanglingReference(pass);
+    }
+
+    expect(remaining).toBe(0);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(ids.saleId)).toBeNull();
+      expect(await ctx.db.get(ids.applicationId)).toBeNull();
+      expect(await ctx.db.get(ids.quoteId)).toBeNull();
+    });
+  });
+});
+
+/**
+ * SCRUM-546 — `payrollItems.runId` is REQUIRED. `payrollRuns` used to be listed
+ * (and deleted) BEFORE `payrollItems` with no `CHILD_TABLES` edge, so one pass
+ * whose item batch was smaller than the item count deleted the run while items
+ * survived: a committed, dangling required reference.
+ */
+describe("resetOrgFinancialData never strands a payrollItem's run reference", () => {
+  test("a partial pass keeps the payroll run while any of its items survive", async () => {
+    const t = setup();
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Payroll Order Motors", createdAt: Date.now(), suspended: true })
+    );
+
+    const runId = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "reset_u546", email: "u546@x.com" });
+      const id = await ctx.db.insert("payrollRuns", {
+        orgId, periodYear: 2026, periodMonth: 9, currency: "JOD", status: "DRAFT",
+        totalGrossMinor: 3000, totalNetMinor: 3000, createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      for (const n of [1000, 2000]) {
+        await ctx.db.insert("payrollItems", {
+          orgId, runId: id, userId, baseSalaryMinor: n, commissionMinor: 0,
+          otherEarningsMinor: 0, advanceDeductionMinor: 0, otherDeductionMinor: 0,
+          grossMinor: n, netMinor: n, currency: "JOD", commissionSaleIds: [],
+          createdAt: Date.now(),
+        });
+      }
+      return id;
+    });
+
+    // D-19: fresh starts are refused; exercised as a continuation.
+    let remaining = Number.POSITIVE_INFINITY;
+    for (let pass = 0; pass < 12 && remaining > 0; pass += 1) {
+      const res = await runContinuationBatch(t, orgId, 1);
+      remaining = res.remaining;
+      await t.run(async (ctx) => {
+        const items = await ctx.db.query("payrollItems").collect();
+        for (const item of items) {
+          expect(await ctx.db.get(item.runId), `pass ${pass}: payrollItem.runId`).not.toBeNull();
+        }
+        if (pass === 0) {
+          // Precondition: with batchSize 1 exactly one item survives pass 0 and so
+          // does its run; otherwise the loop above would pass vacuously.
+          expect(items, "pass 0: exactly one payrollItem survives").toHaveLength(1);
+          expect(await ctx.db.get(runId), "pass 0: the payroll run survives").not.toBeNull();
+        }
+      });
+    }
+
+    expect(remaining).toBe(0);
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(runId)).toBeNull();
+      expect(await ctx.db.query("payrollItems").collect()).toHaveLength(0);
+    });
   });
 });

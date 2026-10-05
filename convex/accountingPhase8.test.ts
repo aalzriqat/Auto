@@ -6,6 +6,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -121,11 +122,12 @@ describe("Phase 8 — sale cancellation reversal", () => {
       idempotencyKey: "cancel_sale_001",
     });
 
-    const beforeEvents = await t.run((ctx) =>
-      ctx.db.query("accountingEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "SALE_COMPLETED"))
-        .collect()
+    const beforeEvents = await t.run(async (ctx) =>
+      (
+        await ctx.db.query("accountingEvents")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
+      ).filter((e) => e.eventType === "SALE_COMPLETED")
     );
     expect(beforeEvents).toHaveLength(1);
     expect(beforeEvents[0].status).toBe("POSTED");
@@ -135,11 +137,12 @@ describe("Phase 8 — sale cancellation reversal", () => {
 
     await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
 
-    const reversalEvents = await t.run((ctx) =>
-      ctx.db.query("accountingEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "JOURNAL_REVERSAL"))
-        .collect()
+    const reversalEvents = await t.run(async (ctx) =>
+      (
+        await ctx.db.query("accountingEvents")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .collect()
+      ).filter((e) => e.eventType === "JOURNAL_REVERSAL")
     );
     expect(reversalEvents).toHaveLength(1);
 
@@ -306,59 +309,109 @@ describe("Phase 8 — sale cancellation reversal", () => {
 
 // ─── Payment intent settlement ────────────────────────────────────────────────
 
+// SCRUM-571 S1: an untargeted payment intent is refused, so every intent below
+// that is not about a specific receivable is aimed at a real canonical document.
+async function seedCustomerDocument(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  asUser: any,
+  orgId: Id<"organizations">,
+  customerId: Id<"customers">,
+  tag: string,
+  originalAmountMinor: number,
+): Promise<Id<"receivableDocuments">> {
+  return await asUser.mutation(internal.subledger.createReceivable, {
+    orgId,
+    documentType: "INVOICE",
+    payerType: "CUSTOMER",
+    customerId,
+    sourceType: "test_intent",
+    sourceId: `${tag}_receivable`,
+    originalAmountMinor,
+    currency: "JOD",
+    issueDate: Date.now(),
+    dueDate: Date.now(),
+  });
+}
+
+// D-20 (SCRUM-571 S1): the payment-link pilot is shut, so an intent can no longer
+// be created or settled through the public doors. Intents the pilot already
+// issued are seeded directly; the settlement tests below assert the shutdown
+// outcome (a verified capture is HELD, nothing is posted) instead of the retired
+// settle-and-post behaviour.
+async function seedPendingIntent(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  t: any,
+  args: {
+    orgId: Id<"organizations">;
+    customerId: Id<"customers">;
+    createdBy: Id<"users">;
+    receivableDocumentId?: Id<"receivableDocuments">;
+    receivableId?: Id<"receivables">;
+    amountMinor: number;
+    provider: string;
+    externalId?: string;
+    providerAccountId?: string;
+    idempotencyKey: string;
+  },
+): Promise<Id<"paymentIntents">> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return await t.run((ctx: any) =>
+    ctx.db.insert("paymentIntents", {
+      ...args,
+      currency: "JOD",
+      status: "PENDING",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }),
+  );
+}
+
 describe("Phase 8 — payment intent settlement", () => {
-  test("creates a payment intent and settles it posting GL entry", async () => {
-    const { t, orgId, asUser, customerId } = await seedDealer("pi1");
+  test("creating and hand-settling a payment intent are both refused while the pilot is shut", async () => {
+    const { t, orgId, asUser, customerId, userId } = await seedDealer("pi1");
+    const receivableDocumentId = await seedCustomerDocument(asUser, orgId, customerId, "pi1", 5000_000);
 
-    const intentId = await asUser.mutation(api.paymentIntents.create, {
-      orgId, customerId,
-      amountMinor: 5000_000, currency: "JOD", provider: "tap",
-      idempotencyKey: "pi_tap_001",
+    // D-20 P1: create is refused before anything is written.
+    await expect(
+      asUser.mutation(api.paymentIntents.create, {
+        orgId, customerId, receivableDocumentId,
+        amountMinor: 5000_000, currency: "JOD", provider: "tap",
+        idempotencyKey: "pi_tap_001",
+      }),
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
+    expect(await t.run((ctx) => ctx.db.query("paymentIntents").collect())).toHaveLength(0);
+
+    // D-20 P2: markSettled is refused on an intent the pilot issued earlier.
+    const intentId = await seedPendingIntent(t, {
+      orgId, customerId, createdBy: userId, receivableDocumentId,
+      amountMinor: 5000_000, provider: "tap", idempotencyKey: "pi_tap_001",
     });
-    expect(intentId).toBeTruthy();
+    await expect(
+      asUser.mutation(api.paymentIntents.markSettled, {
+        orgId, intentId, externalId: "tap_charge_abc123",
+        idempotencyKey: "settle_tap_001",
+      }),
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
 
-    const pending = await t.run((ctx) => ctx.db.get(intentId));
-    expect(pending?.status).toBe("PENDING");
-
-    await asUser.mutation(api.paymentIntents.markSettled, {
-      orgId, intentId, externalId: "tap_charge_abc123",
-      idempotencyKey: "settle_tap_001",
-    });
-
-    const settled = await t.run((ctx) => ctx.db.get(intentId));
-    expect(settled?.status).toBe("SETTLED");
-    expect(settled?.externalId).toBe("tap_charge_abc123");
-    expect(settled?.canonicalPaymentId).toBeTruthy();
-    const canonicalPayment = await t.run(async (ctx) => {
-      if (!settled?.canonicalPaymentId) return null;
-      return await ctx.db.get(settled.canonicalPaymentId);
-    });
-    expect(canonicalPayment?.method).toBe("PAYMENT_LINK");
-    expect(canonicalPayment?.provider).toBe("tap");
-    expect(canonicalPayment?.providerTransactionId).toBe("tap_charge_abc123");
-
+    const still = await t.run((ctx) => ctx.db.get(intentId));
+    expect(still?.status).toBe("PENDING");
+    expect(still?.canonicalPaymentId).toBeUndefined();
     const glEvents = await t.run((ctx) =>
-      ctx.db.query("accountingEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "PAYMENT_LINK_RECEIVED"))
-        .collect()
+      ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
     );
-    expect(glEvents).toHaveLength(1);
-    expect(glEvents[0].status).toBe("POSTED");
+    expect(glEvents.filter((e) => e.eventType === "PAYMENT_LINK_RECEIVED")).toHaveLength(0);
   });
 
-  test("internal settleByExternalId idempotent on duplicate webhook", async () => {
-    const { t, orgId, asUser, customerId } = await seedDealer("pi2");
-
-    const intentId = await asUser.mutation(api.paymentIntents.create, {
-      orgId, customerId, amountMinor: 1000_000, currency: "JOD", provider: "stripe",
-      externalId: "stripe_pi_abc",
-      checkoutUrl: "https://checkout.stripe.com/c/pay/stripe_pi_abc",
-      providerAccountId: "acct_phase8",
-      idempotencyKey: "pi_stripe_001",
+  test("internal settleByExternalId holds a duplicate webhook once and posts nothing", async () => {
+    const { t, orgId, asUser, customerId, userId } = await seedDealer("pi2");
+    const receivableDocumentId = await seedCustomerDocument(asUser, orgId, customerId, "pi2", 1000_000);
+    const intentId = await seedPendingIntent(t, {
+      orgId, customerId, createdBy: userId, receivableDocumentId,
+      amountMinor: 1000_000, provider: "stripe", externalId: "stripe_pi_abc",
+      providerAccountId: "acct_phase8", idempotencyKey: "pi_stripe_001",
     });
 
-    await t.mutation(internal.paymentIntents.settleByExternalId, {
+    const delivery = {
       provider: "stripe", externalId: "stripe_pi_abc",
       amountMinor: 1000_000,
       currency: "JOD",
@@ -366,45 +419,33 @@ describe("Phase 8 — payment intent settlement", () => {
       providerEventId: "evt_phase8_1",
       providerEventType: "payment_intent.succeeded",
       providerAccountId: "acct_phase8",
-    });
-    await t.mutation(internal.paymentIntents.settleByExternalId, {
-      provider: "stripe", externalId: "stripe_pi_abc",
-      amountMinor: 1000_000,
-      currency: "JOD",
-      providerSignatureVerifiedAt: Date.now(),
-      providerEventId: "evt_phase8_1",
-      providerEventType: "payment_intent.succeeded",
-      providerAccountId: "acct_phase8",
-    });
+    };
+    // D-20 P3: a verified capture is held for finance, not settled.
+    const first = await t.mutation(internal.paymentIntents.settleByExternalId, delivery);
+    const second = await t.mutation(internal.paymentIntents.settleByExternalId, delivery);
+    expect(first).toMatchObject({ kind: "HELD" });
+    expect(second).toMatchObject({ kind: "HELD" });
 
-    const settled = await t.run((ctx) => ctx.db.get(intentId));
-    expect(settled?.status).toBe("SETTLED");
-    expect(settled?.providerEventId).toBe("evt_phase8_1");
-    expect(settled?.providerAmountMinor).toBe(1000_000);
-    expect(settled?.providerCurrency).toBe("JOD");
+    const intent = await t.run((ctx) => ctx.db.get(intentId));
+    expect(intent?.status).toBe("CAPTURE_HELD");
+    const held = await t.run((ctx) => ctx.db.query("unmatchedProviderFunds").collect());
+    expect(held).toHaveLength(1);
+    expect(held[0].reason).toBe("PAYMENT_LINKS_DISABLED");
+    expect(held[0].deliveryCount).toBe(2);
 
     const glEvents = await t.run((ctx) =>
-      ctx.db.query("accountingEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "PAYMENT_LINK_RECEIVED"))
-        .collect()
+      ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
     );
-    expect(glEvents).toHaveLength(1);
+    expect(glEvents.filter((e) => e.eventType === "PAYMENT_LINK_RECEIVED")).toHaveLength(0);
   });
 
-  test("internal settleByExternalId rejects signed provider money mismatch before posting", async () => {
-    const { t, orgId, asUser, customerId } = await seedDealer("pi_mismatch");
-
-    const intentId = await asUser.mutation(api.paymentIntents.create, {
-      orgId,
-      customerId,
-      amountMinor: 1000_000,
-      currency: "JOD",
-      provider: "tap",
-      externalId: "tap_charge_mismatch",
-      checkoutUrl: "https://tap.example/checkout/tap_charge_mismatch",
-      providerAccountId: "merchant_123",
-      idempotencyKey: "pi_mismatch_001",
+  test("internal settleByExternalId holds a signed provider money mismatch and moves the intent to CAPTURE_HELD (D-22)", async () => {
+    const { t, orgId, asUser, customerId, userId } = await seedDealer("pi_mismatch");
+    const receivableDocumentId = await seedCustomerDocument(asUser, orgId, customerId, "pi_mismatch", 1000_000);
+    const intentId = await seedPendingIntent(t, {
+      orgId, customerId, createdBy: userId, receivableDocumentId,
+      amountMinor: 1000_000, provider: "tap", externalId: "tap_charge_mismatch",
+      providerAccountId: "merchant_123", idempotencyKey: "pi_mismatch_001",
     });
 
     const result = await t.mutation(internal.paymentIntents.settleByExternalId, {
@@ -417,75 +458,48 @@ describe("Phase 8 — payment intent settlement", () => {
       providerEventType: "tap.charge.CAPTURED",
       providerAccountId: "merchant_123",
     });
-    expect(result).toBeNull();
+    expect(result).toMatchObject({ kind: "HELD" });
 
-    const failed = await t.run((ctx) => ctx.db.get(intentId));
-    expect(failed?.status).toBe("FAILED");
-    expect(failed?.providerAmountMinor).toBe(999_000);
-    expect(failed?.canonicalPaymentId).toBeUndefined();
+    // D-20/D-22: the shutdown hold comes before the mismatch check, so the intent is
+    // not moved to FAILED; it is CAPTURE_HELD and the capture (own amount) is on the held row.
+    const intent = await t.run((ctx) => ctx.db.get(intentId));
+    expect(intent?.status).toBe("CAPTURE_HELD");
+    expect(intent?.canonicalPaymentId).toBeUndefined();
+    const held = await t.run((ctx) => ctx.db.query("unmatchedProviderFunds").collect());
+    expect(held).toHaveLength(1);
+    expect(held[0].amountMinor).toBe(999_000);
 
     const glEvents = await t.run((ctx) =>
-      ctx.db.query("accountingEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", orgId))
-        .filter((q) => q.eq(q.field("eventType"), "PAYMENT_LINK_RECEIVED"))
-        .collect()
+      ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect(),
     );
-    expect(glEvents).toHaveLength(0);
+    expect(glEvents.filter((e) => e.eventType === "PAYMENT_LINK_RECEIVED")).toHaveLength(0);
   });
 
-  test("settling an intent linked to a receivable allocates the canonical payment", async () => {
-    const { t, orgId, asUser, customerId } = await seedDealer("pi_alloc");
-
-    const receivableDocumentId = await asUser.mutation(internal.subledger.createReceivable, {
-      orgId,
-      documentType: "INVOICE",
-      payerType: "CUSTOMER",
-      customerId,
-      sourceType: "test_intent",
-      sourceId: "pi_alloc_receivable",
-      originalAmountMinor: 1_000_000,
-      currency: "JOD",
-      issueDate: Date.now(),
-      dueDate: Date.now(),
-    });
-
-    const intentId = await asUser.mutation(api.paymentIntents.create, {
-      orgId,
-      customerId,
-      receivableDocumentId,
-      amountMinor: 400_000,
-      currency: "JOD",
-      provider: "tap",
+  test("a captured payment for an intent linked to a document allocates nothing while the pilot is shut", async () => {
+    const { t, orgId, asUser, customerId, userId } = await seedDealer("pi_alloc");
+    const receivableDocumentId = await seedCustomerDocument(asUser, orgId, customerId, "pi_alloc", 1_000_000);
+    await seedPendingIntent(t, {
+      orgId, customerId, createdBy: userId, receivableDocumentId,
+      amountMinor: 400_000, provider: "tap", externalId: "tap_alloc_001",
       idempotencyKey: "pi_alloc_001",
     });
 
-    await asUser.mutation(api.paymentIntents.markSettled, {
-      orgId,
-      intentId,
-      externalId: "tap_alloc_001",
-      idempotencyKey: "settle_tap_alloc_001",
+    // D-20: allocation on settlement is retired with the pilot.
+    await t.mutation(internal.paymentIntents.settleByExternalId, {
+      provider: "tap", externalId: "tap_alloc_001", amountMinor: 400_000, currency: "JOD",
+      providerSignatureVerifiedAt: Date.now(),
     });
 
-    const settled = await t.run((ctx) => ctx.db.get(intentId));
-    expect(settled?.canonicalPaymentId).toBeTruthy();
-    expect(settled?.paymentAllocationId).toBeTruthy();
-
-    const allocation = await t.run(async (ctx) => {
-      if (!settled?.paymentAllocationId) return null;
-      return await ctx.db.get(settled.paymentAllocationId);
-    });
-    expect(allocation?.amountMinor).toBe(400_000);
-    expect(allocation?.receivableDocumentId).toBe(receivableDocumentId);
-
+    expect(await t.run((ctx) => ctx.db.query("paymentAllocations").collect())).toHaveLength(0);
     const balance = await asUser.query(api.subledger.getReceivableBalance, {
       orgId,
       receivableDocumentId,
     });
-    expect(balance?.outstandingMinor).toBe(600_000);
+    expect(balance?.outstandingMinor).toBe(1_000_000);
   });
 
-  test("settling an intent linked to a legacy collection receivable updates collections balance", async () => {
-    const { t, orgId, asUser, customerId } = await seedDealer("pi_legacy");
+  test("a captured payment for an intent linked to a legacy collection receivable leaves its balance alone", async () => {
+    const { t, orgId, asUser, customerId, userId } = await seedDealer("pi_legacy");
 
     const receivableId = await asUser.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
@@ -498,40 +512,25 @@ describe("Phase 8 — payment intent settlement", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
-    const intentId = await asUser.mutation(api.paymentIntents.create, {
-      orgId,
-      customerId,
-      receivableId,
-      amountMinor: 400_000,
-      currency: "JOD",
-      provider: "tap",
+    // D-20: the intent is seeded (create is shut) and a verified capture is held,
+    // so the legacy balance and collection payments are untouched.
+    const intentId = await seedPendingIntent(t, {
+      orgId, customerId, createdBy: userId, receivableId,
+      amountMinor: 400_000, provider: "tap", externalId: "tap_legacy_001",
       idempotencyKey: "pi_legacy_001",
     });
-
-    await asUser.mutation(api.paymentIntents.markSettled, {
-      orgId,
-      intentId,
-      externalId: "tap_legacy_001",
-      idempotencyKey: "settle_tap_legacy_001",
+    await t.mutation(internal.paymentIntents.settleByExternalId, {
+      provider: "tap", externalId: "tap_legacy_001", amountMinor: 400_000, currency: "JOD",
+      providerSignatureVerifiedAt: Date.now(),
     });
 
     await t.run(async (ctx) => {
       const receivable = await ctx.db.get(receivableId);
-      expect(receivable?.outstandingAmount).toBe(600);
-      expect(receivable?.status).toBe("PARTIALLY_PAID");
-
+      expect(receivable?.outstandingAmount).toBe(1_000);
       const intent = await ctx.db.get(intentId);
-      expect(intent?.collectionPaymentId).toBeTruthy();
-      expect(intent?.canonicalPaymentId).toBeTruthy();
-      expect(intent?.paymentAllocationId).toBeTruthy();
-
-      const collectionPayment = intent?.collectionPaymentId
-        ? await ctx.db.get(intent.collectionPaymentId)
-        : null;
-      expect(collectionPayment?.method).toBe("PAYMENT_LINK");
-      expect(collectionPayment?.amount).toBe(400);
-      expect(collectionPayment?.canonicalPaymentId).toBe(intent?.canonicalPaymentId);
-      expect(collectionPayment?.paymentAllocationId).toBe(intent?.paymentAllocationId);
+      expect(intent?.status).toBe("CAPTURE_HELD");
+      expect(intent?.collectionPaymentId).toBeUndefined();
+      expect(intent?.canonicalPaymentId).toBeUndefined();
     });
   });
 
@@ -559,17 +558,21 @@ describe("Phase 8 — payment intent settlement", () => {
         provider: "tap",
         idempotencyKey: "pi_overpay_001",
       })
-    ).rejects.toThrow(/cannot exceed/i);
+    ).rejects.toMatchObject({ data: { code: "PAYMENT_LINKS_DISABLED" } });
+    // D-20: the over-cap check is unreachable while create is shut; it is refused first.
   });
 
   test("expiring a pending intent marks it EXPIRED without posting GL", async () => {
-    const { t, orgId, asUser, customerId } = await seedDealer("pi3");
+    const { t, orgId, asUser, customerId, userId } = await seedDealer("pi3");
+    const receivableDocumentId = await seedCustomerDocument(asUser, orgId, customerId, "pi3", 500_000);
 
-    const intentId = await asUser.mutation(api.paymentIntents.create, { idempotencyKey: crypto.randomUUID(),
-      orgId, customerId, amountMinor: 500_000, currency: "JOD", provider: "telr",
+    // D-20 P4: expire still works on an intent the pilot already issued.
+    const intentId = await seedPendingIntent(t, {
+      orgId, customerId, createdBy: userId, receivableDocumentId,
+      amountMinor: 500_000, provider: "telr", idempotencyKey: crypto.randomUUID(),
     });
 
-    await asUser.mutation(api.paymentIntents.expire, { orgId, intentId });
+    await asUser.mutation(api.paymentIntents.expire, { orgId, intentId, providerStatusConfirmed: true });
 
     const expired = await t.run((ctx) => ctx.db.get(intentId));
     expect(expired?.status).toBe("EXPIRED");
@@ -613,6 +616,8 @@ describe("Phase 8 — finance disbursement", () => {
         orgId, customerId, vehicleId, companyId: financeCompanyId,
         quoteId, salespersonId: userId,
         status: "CLOSED",
+        // SCRUM-447 B1: confirming consumes a registered tender.
+        expectedPaymentMethod: "BANK_TRANSFER", expectedPaymentDate: Date.now(),
         createdAt: Date.now(), updatedAt: Date.now(),
       })
     );

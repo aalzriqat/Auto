@@ -34,7 +34,10 @@ const BASELINE: Record<string, number> = {
   // The deposit module's own writers. In-module, so they are the least
   // dangerous of the set, but still not routed through one function.
   "deposits.ts::holdActive": 1,
-  "deposits.ts::insert:depositVehicleHolds": 3,
+  // SCRUM-444: one of the three moved, unchanged, into `postQuoteDeposit`
+  // (the multi-vehicle hold rows). A pure move: the total stays 3.
+  "deposits.ts::insert:depositVehicleHolds": 2,
+  "utils/quoteDepositPosting.ts::insert:depositVehicleHolds": 1,
   "utils/depositHelpers.ts::holdActive": 6,
   "utils/depositRecording.ts::holdActive": 1,
   // SCRUM-208 c15808 — THE REPRESENTATION CLASS, WRITTEN EXACTLY ONCE.

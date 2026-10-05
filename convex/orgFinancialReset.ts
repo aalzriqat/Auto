@@ -1,6 +1,12 @@
 import { v, ConvexError } from "convex/values";
 import { internalMutation } from "./functions";
-import type { Id } from "./_generated/dataModel";
+import type { DatabaseReader } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
+import {
+  beginResetGenerationPatch,
+  isFreshResetStartRefused,
+  orgResetState,
+} from "./utils/orgResetGeneration";
 
 /**
  * One-off operational tool: clears an organization's accounting, sales and
@@ -31,6 +37,23 @@ import type { Id } from "./_generated/dataModel";
  * previously marked SOLD or RESERVED keep that status with no sale row behind
  * them. They will read as unavailable inventory until someone changes the
  * status by hand. This is a deliberate choice, not an oversight.
+ *
+ * ## Preflight: suspended org, no pending payment intent (SCRUM-559)
+ *
+ * A destructive run refuses, before any delete, unless the organization row is
+ * `suspended` and has no `paymentIntents` row with status PENDING. The reset
+ * spans several passes with no lock, and user-facing writers dereference some
+ * rows this reset deletes (see the accepted optional references in
+ * `scripts/orgFinancialResetReferenceCoverage.test.ts`); a suspended org cannot
+ * pass tenant auth, which is what makes the unordered ones safe mid-reset. The
+ * outbox, `reverseAccountingEvent` and `settleByExternalId` already refuse or
+ * hold for a suspended org, so the PENDING-intent refusal (and edges E2/E3) is
+ * defence in depth in case the org is unsuspended mid-reset (SCRUM-563). A
+ * missing `organizations` row skips the suspension check.
+ * Command-idempotency replay is closed by the reset generation (SCRUM-563, see
+ * `utils/orgResetGeneration.ts`). Surviving active state such as terminal
+ * payment intents is an owner decision tracked in SCRUM-565; SCRUM-563 only
+ * pins today's behaviour.
  */
 const RESET_TABLES = [
   // ⚠️ SCRUM-208 c15825 — AUTHORITY LIFECYCLE FIRST, IN DEPENDENCY ORDER:
@@ -46,10 +69,18 @@ const RESET_TABLES = [
   "commitmentAuthorityAttempt",
   "commitmentAuthorityWork",
   // General ledger
-  "accountingEvents",
+  //
+  // ⚠️ SCRUM-559 (E3). `pendingAccountingEvents` is listed BEFORE
+  // `accountingEvents`: a pending REVERSE row names the event it will reverse
+  // (`originalEventId`), and `accountingOutbox.reversePendingEntry` hands that id
+  // to `reverseAccountingEvent`, which throws on a missing event. It stays AFTER
+  // `commitmentAuthorityWork`, which is its child (see CHILD_TABLES).
   "pendingAccountingEvents",
-  "journalEntries",
+  "accountingEvents",
+  // ⚠️ SCRUM-549: `journalLines.journalEntryId` and `.accountId` are REQUIRED, so
+  // lines go BEFORE their entry and their account (CHILD_TABLES defers both).
   "journalLines",
+  "journalEntries",
   "financialAuditLog",
   "accountBalanceSnapshots",
   "chartOfAccounts",
@@ -91,25 +122,35 @@ const RESET_TABLES = [
   "receiptRetainedPositions",
   "receiptMovements",
   "transactions",
+  // ⚠️ SCRUM-549. paymentVouchers .. receivables are each a child of a later
+  // table here (`cashierReconciliations` is a parent only: it references no reset
+  // table). Vouchers go before the deposits they name (`depositId` REQUIRED).
+  // `paymentAllocations` follows `collectionPayments` (whose `paymentAllocationId` it would otherwise orphan)
+  // and precedes the payment and document it REQUIRES. Approval requests precede
+  // the receivables they name.
+  "paymentVouchers",
   "deposits",
   "collectionPayments",
-  "receivableDocuments",
-  "canonicalPayments",
-  "receivables",
   "paymentAllocations",
-  "postDatedCheques",
-  "cashierReconciliations",
+  "canonicalPayments",
   "collectionApprovalRequests",
-  "paymentVouchers",
-  // Expenses
+  // ⚠️ SCRUM-559 (E6). Cheques go BEFORE the receivables they name
+  // (`postDatedCheques.receivableId`; `collections.clearCheque` reads it and,
+  // when the receivable is gone, silently skips the outstanding-amount check).
+  "postDatedCheques",
+  "receivables",
+  "cashierReconciliations",
+  // Expenses. SCRUM-389 supplier-cost recoveries first: a receipt names its
+  // recovery and a recovery names its expense, so neither may outlive what it
+  // points at (children before parents, plus the CHILD_TABLES edges).
+  "supplierCostRecoveryReceipts",
+  "supplierCostRecoveries",
   "expenses",
-  // Payroll
-  "payrollRuns",
+  // Payroll. ⚠️ SCRUM-546: `payrollItems.runId` is REQUIRED, so items go BEFORE
+  // their run (and `CHILD_TABLES` defers the run while any item remains).
   "payrollItems",
+  "payrollRuns",
   "employeeCompensation",
-  // Sales
-  "sales",
-  "quotes",
   // Finance applications and their children. Ordering IS a safety property,
   // contrary to what this comment used to claim: the batch limit applies to
   // each table separately, so a run that clears one of two fee rows and then
@@ -124,7 +165,35 @@ const RESET_TABLES = [
   "financeDealCustody",
   "applicationStatusLog",
   "financeApplications",
+  // Sales, then receivable documents, then quotes — LAST, because they are
+  // referenced by rows above.
+  //
+  // ⚠️ SCRUM-534. `quotes` and `sales` used to sit BEFORE the finance group with
+  // no `CHILD_TABLES` edge. `financeApplications.quoteId` is REQUIRED, so one
+  // pass whose finance children (or applications) exceeded the batch deleted
+  // every quote while the applications survived: a committed, dangling required
+  // reference. Nothing here can be reached from a quote, so it goes last.
+  //
+  // `sales` follows `financeApplications` (sale.applicationId and
+  // application.finalizedSaleId are both OPTIONAL and form a cycle, so one of
+  // the two must briefly dangle whichever way round this is ordered; neither
+  // may be REQUIRED-dangling, and the required edge — application -> quote — is
+  // the one this order protects). `quotes` follows `sales`.
+  "sales",
+  // SCRUM-549: `receivables` and `sales` hold an optional document link that
+  // `paymentIntents.create` refuses to proceed without, so documents outlive
+  // both (hence after `sales`). A document references no table listed later.
+  "receivableDocuments",
+  "quotes",
+  // SCRUM-571 D-8: `unmatchedProviderFunds` is deliberately NOT listed. A held
+  // provider payment is evidence that money moved at the provider with no
+  // settlement, so a financial reset must not erase it (it is the recovery route,
+  // and it is not a financial authority: it creates no AR, allocation, payment
+  // or posting). It is still deleted with the organization (adminOrgs
+  // ORGANIZATION_DELETION_STEPS).
 ] as const;
+
+type ResetTable = (typeof RESET_TABLES)[number];
 
 /**
  * Tables whose rows reference a parent, keyed by that parent.
@@ -143,7 +212,7 @@ const RESET_TABLES = [
  * including ones added later — the claim was wrong in this comment twice before
  * anything checked it.
  */
-const CHILD_TABLES: Partial<Record<(typeof RESET_TABLES)[number], readonly string[]>> = {
+const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   financeApplications: [
     "financeAppraisals",
     "financeApplicationOverrides",
@@ -151,6 +220,12 @@ const CHILD_TABLES: Partial<Record<(typeof RESET_TABLES)[number], readonly strin
     "financeDealFees",
     "financeDealCustody",
     "applicationStatusLog",
+    // SCRUM-559 (E5). `postDatedCheques.applicationId` / `.originApplicationId`:
+    // `collections.replaceCheque` loads the application (`ctx.db.get`, refuses on
+    // null, ~L2107) and the cheque-face attestation in `applications.ts`
+    // (`requireOwnedRow`, ~L4130) throws when it is gone, so a cheque must not
+    // outlive the application it names.
+    "postDatedCheques",
   ],
   // ⚠️ SCRUM-218-C receipt authority. These edges cover the PARTIAL-DRAIN case:
   // every table is batched independently, so at a small `batchSize` the reset
@@ -168,10 +243,73 @@ const CHILD_TABLES: Partial<Record<(typeof RESET_TABLES)[number], readonly strin
   // first would leave live receipt authority referring to payments,
   // allocations and receivables that no longer exist.
   collectionPayments: ["receiptMovements"],
-  canonicalPayments: ["receiptMovements"],
-  paymentAllocations: ["receiptApplications"],
-  receivableDocuments: ["receiptApplications"],
-  receivables: ["receiptApplications"],
+  // SCRUM-549. `deposits.canonicalPaymentId` is optional but voidDeposit and
+  // voidCanonicalPayment dereference it. `paymentAllocations.paymentId` and
+  // `.receivableDocumentId` are REQUIRED.
+  //
+  // SCRUM-559 (E1). `collectionPayments.canonicalPaymentId`:
+  // `collections.returnClearedCheque` patches `clearedPayment.canonicalPaymentId`
+  // to VOIDED, and a patch on a deleted row throws.
+  canonicalPayments: ["receiptMovements", "paymentAllocations", "deposits", "collectionPayments"],
+  // `receiptMovements.initialAllocationIds[]` is REQUIRED; `collectionPayments.
+  // paymentAllocationId` is optional but listed so no payment points at a
+  // deleted allocation.
+  paymentAllocations: ["receiptApplications", "receiptMovements", "collectionPayments"],
+  // `receivables` and `sales` carry `canonicalReceivableDocumentId` (optional,
+  // but `paymentIntents.create` refuses a missing document).
+  receivableDocuments: ["receiptApplications", "paymentAllocations", "receivables", "sales"],
+  // SCRUM-559 (E6). `postDatedCheques.receivableId`: `collections.clearCheque`
+  // does `receivable = ctx.db.get(cheque.receivableId)` and, on null, skips the
+  // outstanding-amount check while still inserting a `collectionPayments` row
+  // that carries the dead `receivableId` (SCRUM-559 R1 / #17).
+  receivables: ["receiptApplications", "collectionApprovalRequests", "postDatedCheques"],
+  // SCRUM-549 — the ledger. `journalLines.journalEntryId` / `.accountId` and
+  // `accountBalanceSnapshots.accountId` are REQUIRED.
+  //
+  // SCRUM-559 (E2). `accountingEvents.journalEntryId`:
+  // `accounting/reversals.reverseAccountingEvent` patches
+  // `original.journalEntryId` (`ctx.db.patch`, throws on a deleted row) and
+  // loads its lines through it. The reverse edge (`journalEntries.accountingEventId`)
+  // is deliberately NOT added: it would make the graph cyclic.
+  journalEntries: ["journalLines", "accountingEvents"],
+  chartOfAccounts: ["journalLines", "accountBalanceSnapshots"],
+  // `paymentVouchers.depositId` is REQUIRED; `commitmentAuthorityWork.depositId`
+  // is too (not behaviour-tested: the authority preflight refuses a destructive
+  // reset while those rows exist).
+  deposits: ["paymentVouchers", "commitmentAuthorityWork"],
+  commitmentAuthorityWork: ["commitmentAuthorityAttempt"],
+  pendingAccountingEvents: ["commitmentAuthorityWork"],
+  // SCRUM-559 (E3). `pendingAccountingEvents.originalEventId`: the outbox
+  // (`accountingOutbox.reversePendingEntry`, a non-tenant-auth path) passes it to
+  // `reverseAccountingEvent`, which throws "Accounting event not found" when the
+  // event is gone. `pendingAccountingEvents` is therefore listed first.
+  accountingEvents: ["pendingAccountingEvents"],
+  // SCRUM-559 (E4). `financeDealFees.custodyId` and `.custodyPosted.custodyId`:
+  // `financeDealCosts.requireLinkedCustody` (`ctx.db.get`, refuses on null) loads
+  // the custody record a fee names.
+  financeDealCustody: ["financeDealCustodyEntries", "financeDealFees"],
+  // SCRUM-389 — the partial-drain half for the supplier-cost recovery chain.
+  supplierCostRecoveries: ["supplierCostRecoveryReceipts"],
+  expenses: ["supplierCostRecoveries"],
+  // SCRUM-534 — every in-scope table that references a sale or a quote. The
+  // required references are financeApplications.quoteId and
+  // payrollItems.commissionSaleIds; the rest are optional but are deferred the
+  // same way so no pass leaves any of them dangling. SCRUM-549 adds
+  // commitmentAuthorityWork.saleId (REQUIRED); it is not behaviour-tested because
+  // the preflight refuses a destructive reset while authority rows exist.
+  sales: [
+    "financeApplications",
+    "deposits",
+    "receivables",
+    "collectionPayments",
+    "postDatedCheques",
+    "transactions",
+    // payrollItems.commissionSaleIds is a REQUIRED v.array(v.id("sales")).
+    "payrollItems",
+    "commitmentAuthorityWork",
+  ],
+  quotes: ["sales", "financeApplications", "deposits", "receivables"],
+  payrollRuns: ["payrollItems"],
 };
 
 /**
@@ -184,6 +322,86 @@ const CHILD_TABLES: Partial<Record<(typeof RESET_TABLES)[number], readonly strin
 const RESET_DELETE_BATCH = 500;
 
 /**
+ * The index each reset table is read through, so every read is an index range
+ * on `orgId` rather than a filtered table scan (SCRUM-555).
+ *
+ * Each index has `orgId` as its first field, so `q.eq("orgId", orgId)` is a
+ * prefix range returning exactly this org's rows. Tables without `by_org` reuse
+ * an existing orgId-leading index to avoid a schema change and backfill.
+ * `Record<ResetTable, string>` keeps the map exhaustive, and
+ * `orgFinancialResetOrgIndex.test.ts` proves each index exists with orgId first.
+ * Row order is irrelevant: repeated runs delete everything, and `limit + 1`
+ * only detects that more remain.
+ */
+const RESET_ORG_INDEX: Record<ResetTable, string> = {
+  commitmentAuthorityAttempt: "by_org_status",
+  commitmentAuthorityWork: "by_org_status",
+  accountingEvents: "by_org",
+  pendingAccountingEvents: "by_org_status",
+  journalEntries: "by_org",
+  journalLines: "by_org",
+  financialAuditLog: "by_org",
+  accountBalanceSnapshots: "by_org_period",
+  chartOfAccounts: "by_org",
+  receiptApplications: "by_org",
+  receiptRetainedPositions: "by_org",
+  receiptMovements: "by_org",
+  transactions: "by_org",
+  deposits: "by_org",
+  collectionPayments: "by_org",
+  receivableDocuments: "by_org",
+  canonicalPayments: "by_org",
+  receivables: "by_org",
+  paymentAllocations: "by_org",
+  postDatedCheques: "by_org",
+  cashierReconciliations: "by_org",
+  collectionApprovalRequests: "by_org",
+  paymentVouchers: "by_org",
+  supplierCostRecoveryReceipts: "by_org",
+  supplierCostRecoveries: "by_org",
+  expenses: "by_org",
+  payrollItems: "by_org",
+  payrollRuns: "by_org",
+  employeeCompensation: "by_org",
+  financeAppraisals: "by_org",
+  financeApplicationOverrides: "by_org",
+  financeDealCustodyEntries: "by_org",
+  financeDealFees: "by_org",
+  financeDealCustody: "by_org",
+  applicationStatusLog: "by_org",
+  financeApplications: "by_org",
+  sales: "by_org",
+  quotes: "by_org",
+};
+
+/**
+ * Up to `max` of this org's rows in `table`, read through its orgId-leading
+ * index (see `RESET_ORG_INDEX`).
+ *
+ * ⚠️ THE CASTS IN THIS FILE ARE CONFINED TO THIS HELPER. `table` is a union of
+ * 38 table names and the index name is chosen per table at runtime, so
+ * TypeScript cannot relate the two: `withIndex` is only typed against a single table's literal index names.
+ * The casts widen the query to one arbitrary table's shape purely to make the
+ * call compile; the real table and index are `table` and `RESET_ORG_INDEX`,
+ * which `Record<ResetTable, string>` keeps exhaustive and
+ * `orgFinancialResetOrgIndex.test.ts` proves against the schema. The result is
+ * re-asserted to the union of the reset tables' documents, which is exactly
+ * what it contains.
+ */
+async function orgRows(
+  db: DatabaseReader,
+  table: ResetTable,
+  orgId: Id<"organizations">,
+  max: number
+): Promise<Doc<ResetTable>[]> {
+  const rows = await db
+    .query(table as "chartOfAccounts")
+    .withIndex(RESET_ORG_INDEX[table] as "by_org", (q) => q.eq("orgId", orgId))
+    .take(max);
+  return rows as Doc<ResetTable>[];
+}
+
+/**
  * Deletes — or with `dryRun`, merely counts — this org's rows in every table
  * above.
  *
@@ -191,11 +409,11 @@ const RESET_DELETE_BATCH = 500;
  * explicitly, so the natural first invocation is the safe one and the
  * destructive form has to be typed on purpose.
  *
- * Rows are matched with a filter rather than a `by_org` index because the
- * tables here differ in which indexes they carry, and a wrong index name would
- * fail loudly mid-run after earlier tables had already been deleted. Every one
- * of these tables is small on this deployment, so a scan costs little and
- * behaves identically everywhere.
+ * Rows are matched through each table's orgId-leading index (`RESET_ORG_INDEX`)
+ * rather than a filtered scan. The tables differ in which indexes they carry,
+ * so the index is named per table, and the test suite proves every named index
+ * exists with `orgId` first — a wrong name fails in CI, not mid-run after
+ * earlier tables had already been deleted.
  */
 export const resetOrgFinancialData = internalMutation({
   args: {
@@ -219,6 +437,22 @@ export const resetOrgFinancialData = internalMutation({
      * discovering it as an error.
      */
     authorityLifecyclePresent: boolean;
+    /**
+     * SCRUM-559. False when the org is not suspended, which makes a destructive
+     * reset refuse. Reported on a dry run for the same reason as above. An org
+     * row that does not exist reports false.
+     */
+    orgSuspended: boolean;
+    /** SCRUM-559. True when a PENDING online payment intent exists, which makes a destructive reset refuse. */
+    pendingPaymentIntentsPresent: boolean;
+    /** SCRUM-571 S1 (D-22). True when any held provider capture exists for the org, OPEN or RESOLVED; a destructive reset refuses. */
+    heldProviderCapturesPresent: boolean;
+    /**
+     * SCRUM-563. True when the org has cash drawer sessions or movements, which this
+     * reset does not remove and which therefore make a destructive reset refuse.
+     * Reported on a dry run so an operator learns it before the destructive form.
+     */
+    cashDrawerStatePresent: boolean;
   }> => {
     const dryRun = args.dryRun ?? true;
     const limit = Math.min(Math.max(args.batchSize ?? RESET_DELETE_BATCH, 1), RESET_DELETE_BATCH);
@@ -227,6 +461,28 @@ export const resetOrgFinancialData = internalMutation({
     // to act on, which dealership this actually hit.
     const org = await ctx.db.get(args.orgId);
     const orgName = org?.name ?? null;
+
+    // ⚠️ SCRUM-565 D-19 — THE NO-NEW-START BARRIER. FIRST REFUSAL A DESTRUCTIVE
+    // CALL CAN HIT, BEFORE ANY OTHER CHECK AND BEFORE ANY WRITE.
+    //
+    // Invariant: once this is deployed and older invocations have finished, no
+    // organization can NEWLY enter "reset in progress"; a reset already in
+    // progress can only continue. A fresh start is a destructive call for an org
+    // that has no row (nowhere to record a generation, so it would delete
+    // unrecorded) or whose reset is not in progress (`generation === completed`).
+    // Continuations and every dry run are untouched.
+    //
+    // Why first: the barrier is a property of the call, not of the org's data, so
+    // the answer must not depend on suspension, pending intents, authority or
+    // cash state — otherwise an operator fixing those in turn would reach the
+    // barrier last and still be refused. Nothing above this line writes (only
+    // `ctx.db.get`), and nothing below it runs, so the refusal commits no change.
+    if (isFreshResetStartRefused(org, dryRun)) {
+      throw new ConvexError(
+        "Fresh financial resets are disabled (SCRUM-565 D-19). Only an already in-progress " +
+          "reset can continue. Refusing before any deletion."
+      );
+    }
 
     // ⚠️ FAIL-CLOSED PREFLIGHT, TAKEN BEFORE ANY DELETE OR STORAGE WRITE.
     // (SCRUM-208 c15892, Option C.)
@@ -239,24 +495,28 @@ export const resetOrgFinancialData = internalMutation({
     // would throw on every dispatch, burn its retry budget and record a false
     // RETRY_EXHAUSTED against a deal nobody could explain.
     //
-    // `CHILD_TABLES` already defers a parent whose children remain, but the
-    // authority lifecycle is not expressible that way: work rows reference
-    // pending events, deposits, sales, holds and vehicles at once, and the
-    // ordering of this array is not a dependency proof.
+    // SCRUM-549 made every REQUIRED authority reference between reset tables a
+    // `CHILD_TABLES` edge; holds and vehicles sit outside the reset. The one
+    // accepted exception is the optional `commitmentAuthorityWork.activeAttemptId`
+    // back-link to `commitmentAuthorityAttempt`: it has no edge because the
+    // reverse required edge `attempt.workId -> work` exists and adding it would
+    // cycle (ACCEPTED_OPTIONAL_DANGLING in
+    // scripts/orgFinancialResetReferenceCoverage.test.ts). This stays
+    // as defence in depth: work rows also reference those non-reset rows and
+    // lifecycle state, which no edge or ordering can prove safe.
     //
     // ⚠️ SO THIS REFUSES RATHER THAN ORDERING. Safety beats partial progress on
     // a destructive internal tool: an organization carrying canonical authority
     // state simply cannot be reset until the dependency-safe cursor
     // implementation exists. A wrong guess here orphans money records; a refusal
     // costs an operator an error message.
-    const authorityAttempts = await ctx.db
-      .query("commitmentAuthorityAttempt")
-      .filter((q) => q.eq(q.field("orgId"), args.orgId))
-      .take(1);
-    const authorityWork = await ctx.db
-      .query("commitmentAuthorityWork")
-      .filter((q) => q.eq(q.field("orgId"), args.orgId))
-      .take(1);
+    const authorityAttempts = await orgRows(
+      ctx.db,
+      "commitmentAuthorityAttempt",
+      args.orgId,
+      1
+    );
+    const authorityWork = await orgRows(ctx.db, "commitmentAuthorityWork", args.orgId, 1);
     const authorityLifecyclePresent =
       authorityAttempts.length > 0 || authorityWork.length > 0;
 
@@ -270,6 +530,103 @@ export const resetOrgFinancialData = internalMutation({
       );
     }
 
+    // ⚠️ SUSPENSION AND PENDING-INTENT PREFLIGHT (SCRUM-559 I1), ALSO BEFORE ANY
+    // DELETE OR STORAGE WRITE.
+    //
+    // Suspension: unordered references are safe mid-reset only because a
+    // suspended org passes no tenant auth, so no user writer runs between passes.
+    // A PENDING payment intent blocks as defence in depth: settlement already
+    // holds for a suspended org, but the org could be unsuspended mid-reset
+    // (SCRUM-563). A destructive call for a missing organizations row never
+    // reaches this point: D-19 refuses it above as a fresh start, so the
+    // `org !== null` guard below only serves dry runs.
+    // Rationale and limits: see the header docblock. The suspension and
+    // pending-intent refusals (like the authority-lifecycle and cash-drawer
+    // ones) are English-only (internal operator tool); the held-capture refusal
+    // below (D-22) carries an Arabic sentence in the same string.
+    // The held-capture refusal is unconditional, including on a continuation:
+    // it is the S1 stand-in for D-15's HALT. Provenance-based carry-forward of
+    // captures that arrived during the reset is S4 (SCRUM-565, D-23).
+    const orgSuspended = org?.suspended === true;
+    if (!dryRun && org !== null && !orgSuspended) {
+      throw new ConvexError(
+        "Suspend this organization before running the financial reset. A reset runs across " +
+          "several passes, and users must not write to a partially reset organization. " +
+          "Refusing before any deletion."
+      );
+    }
+    const pendingPaymentIntentsPresent =
+      (await ctx.db
+        .query("paymentIntents")
+        .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
+        .first()) !== null;
+    if (!dryRun && pendingPaymentIntentsPresent) {
+      throw new ConvexError(
+        "This organization has pending online payment intents. Settle, fail or expire them " +
+          "with the provider before resetting. Refusing before any deletion."
+      );
+    }
+    // SCRUM-571 S1 (D-22). The reset keeps unmatchedProviderFunds rows (D-8), and a
+    // RESOLVED review is not an economic outcome (D-14), so any row blocks a
+    // destructive run: this is the blocker once the link leaves PENDING.
+    const heldProviderCapturesPresent =
+      (await ctx.db
+        .query("unmatchedProviderFunds")
+        .withIndex("by_org_review", (q) => q.eq("orgId", args.orgId))
+        .first()) !== null;
+    if (!dryRun && heldProviderCapturesPresent) {
+      // Operator-only string: English, with the Arabic sentence in the same
+      // string because a thrown string cannot be translated by key.
+      throw new ConvexError(
+        "A verified provider capture remains recorded for this organization. This reset cannot " +
+          "continue while the held record exists, even if its review is marked resolved. " +
+          "Refusing before any deletion. Keep the organization suspended and escalate for the " +
+          "reviewed reset recovery path (SCRUM-565 S4), which is not available in this version. " +
+          "توجد دفعة مؤكدة من مزوّد الدفع محفوظة لهذه المنشأة. لا يمكن متابعة إعادة الضبط ما دام " +
+          "سجل الدفعة المحتجزة موجودًا، حتى إذا وُسمت مراجعتها بأنها محلولة. تم الرفض قبل أي حذف. " +
+          "أبقِ المنشأة معلّقة وصعّد الحالة إلى مسار استرداد إعادة الضبط المعتمد (SCRUM-565 S4)، " +
+          "وهو غير متاح في هذا الإصدار."
+      );
+    }
+
+    // Cash movements carry their own idempotency replay
+    // (`cashMovements.by_org_idempotency`) outside `commandIdempotency`, and neither
+    // cash table is reset. Leaving them would let a pre-reset key replay after
+    // reactivation, breaking the SCRUM-563 invariant. Whether to delete, close or
+    // carry them is the SCRUM-565 owner decision, so until then the reset refuses.
+    const cashDrawerStatePresent =
+      (await ctx.db
+        .query("cashDrawerSessions")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .first()) !== null ||
+      (await ctx.db
+        .query("cashMovements")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .first()) !== null;
+    if (!dryRun && cashDrawerStatePresent) {
+      throw new ConvexError(
+        "This organization has cash drawer sessions or movements, which this reset does not " +
+          "remove (SCRUM-565). Refusing before any deletion."
+      );
+    }
+
+    // ⚠️ SCRUM-563 — protocol in `utils/orgResetGeneration.ts`. A continuation
+    // batch finds a reset in progress and does not bump again. Dry runs and
+    // refused runs (thrown above) write nothing.
+    //
+    // SCRUM-565 D-19: while `FRESH_RESET_STARTS_BLOCKED` holds, the bump below is
+    // unreachable (a destructive call with no reset in progress was refused at the
+    // top). It stays so that flipping the switch restores the SCRUM-563 protocol
+    // unchanged — the bump still happens BEFORE the first delete, in this same
+    // mutation.
+    const resetState = orgResetState(org);
+    let resetGeneration = resetState.generation;
+    if (!dryRun && org !== null && !resetState.inProgress) {
+      const beginPatch = beginResetGenerationPatch(org);
+      resetGeneration = beginPatch.financialResetGeneration;
+      await ctx.db.patch(args.orgId, beginPatch);
+    }
+
     const perTable: Record<string, number> = {};
     let total = 0;
     let remaining = 0;
@@ -280,10 +637,7 @@ export const resetOrgFinancialData = internalMutation({
     for (const table of RESET_TABLES) {
       // One past the limit, so `remaining` reports honestly whether another
       // run is needed instead of silently stopping at a full batch.
-      const rows = await ctx.db
-        .query(table)
-        .filter((q) => q.eq(q.field("orgId"), args.orgId))
-        .take(limit + 1);
+      const rows = await orgRows(ctx.db, table, args.orgId, limit + 1);
 
       // Deleting a parent while a child still has rows leaves those rows
       // pointing at nothing. Defer the parent entirely — it is reported in
@@ -347,9 +701,25 @@ export const resetOrgFinancialData = internalMutation({
       }
     }
 
+    // SCRUM-563: a destructive run that leaves nothing behind completes the reset.
+    if (!dryRun && org !== null && remaining === 0) {
+      await ctx.db.patch(args.orgId, { financialResetCompletedGeneration: resetGeneration });
+    }
+
     // Reported truthfully on a dry run so an operator sees the precondition
     // BEFORE typing the destructive form, rather than discovering it as an error.
-    return { dryRun, orgName, perTable, total, remaining, authorityLifecyclePresent };
+    return {
+      dryRun,
+      orgName,
+      perTable,
+      total,
+      remaining,
+      authorityLifecyclePresent,
+      orgSuspended,
+      pendingPaymentIntentsPresent,
+      heldProviderCapturesPresent,
+      cashDrawerStatePresent,
+    };
   },
 });
 
@@ -363,6 +733,12 @@ export const RESET_TABLES_FOR_TEST: readonly string[] = RESET_TABLES;
  * never blocked by it. See `orgDeletionCoverage.test.ts`.
  */
 export const CHILD_TABLES_FOR_TEST: Readonly<Record<string, readonly string[]>> = CHILD_TABLES;
+
+/**
+ * Exported so the test suite can prove every index named is a real index with
+ * `orgId` as its first field (SCRUM-555).
+ */
+export const RESET_ORG_INDEX_FOR_TEST: Readonly<Record<string, string>> = RESET_ORG_INDEX;
 
 /** Exported so a caller can type the org argument without importing generated ids. */
 export type ResetOrgId = Id<"organizations">;

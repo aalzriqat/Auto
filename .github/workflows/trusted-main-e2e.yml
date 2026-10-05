@@ -39,17 +39,16 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Install Playwright browsers
-        run: pnpm exec playwright install --with-deps chromium
+        # webkit: the static visual gate proves the deals list's whole-row hit
+        # target in WebKit too (playwright.visual.config.ts, SCRUM-694 M3).
+        run: pnpm exec playwright install --with-deps chromium webkit
 
       - name: Deal cockpit visual gate
         run: |
           set -euo pipefail
           pnpm run test:visual:deal-cockpit
-          SHOTS="$(find test-results/deal-cockpit-visual -mindepth 2 -maxdepth 2 -name 'deal-cockpit-*.png' | wc -l)"
-          if [ "$SHOTS" -ne 16 ]; then
-            echo "expected 16 screenshots, found $SHOTS" >&2
-            exit 1
-          fi
+          # The frame census is shared with playwright.yml (SCRUM-489).
+          node scripts/assertDealCockpitVisualFrames.mjs test-results/deal-cockpit-visual
         env:
           CI: true
 
@@ -77,10 +76,18 @@ jobs:
             --typecheck enable \
             --preview-create "$CONVEX_PREVIEW_NAME" \
             --preview-run e2eBootstrap:markPreviewDeployment \
-            --cmd 'echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"' \
+            --cmd 'echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"; echo "CONVEX_PREVIEW_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"' \
             --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
+      # SCRUM-377: record which deployment this run owns and shorten its expiry,
+      # so the deployment quota is freed even if the run dies before cleanup.
+      - name: Pin the disposable preview for cleanup
+        if: always() && env.CONVEX_PREVIEW_URL != ''
+        run: node scripts/previewDeploymentLifecycle.mjs pin
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
 
       - name: Seed the QA dealership
         run: node scripts/e2ePreviewBootstrap.mjs
@@ -114,3 +121,9 @@ jobs:
           name: trusted-main-playwright-report
           path: playwright-report/
           retention-days: 14
+
+      - name: Delete the disposable preview
+        if: always() && env.CONVEX_PREVIEW_CREATED_AT != ''
+        run: node scripts/previewDeploymentLifecycle.mjs delete
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}

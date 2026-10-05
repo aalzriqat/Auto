@@ -78,7 +78,7 @@ async function openCustody(seed: Seed, issued = jod(700)) {
 }
 
 async function move(seed: Seed, custodyId: Id<"financeDealCustody">, kind: "ISSUED" | "RETURNED" | "REIMBURSED", amountMinor: number) {
-  await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, {
+  await seed.asUser.mutation(api.financeDealCosts.recordCustodyMovement, { method: "CASH",
     orgId: seed.orgId, custodyId, kind, amountMinor, idempotencyKey: crypto.randomUUID(),
   });
 }
@@ -196,7 +196,9 @@ describe("writer decision reads are bounded at MAX_DEAL_CUSTODY_DECISION_RECORDS
     expect(fees).toEqual([]);
   });
 
-  test("PAST the cap: classification is refused with the same reason before any stamp", async () => {
+  // SCRUM-407: the manual classification is retired; the same predicate is the
+  // automatic closing readiness, which reports the cap instead of guessing.
+  test("PAST the cap: closing readiness is unavailable with the same reason, and nothing is stamped", async () => {
     const seed = await seedDeal("cap-classify");
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       orgId: seed.orgId, applicationId: seed.applicationId,
@@ -208,9 +210,11 @@ describe("writer decision reads are bounded at MAX_DEAL_CUSTODY_DECISION_RECORDS
     });
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "matched" });
     await closedRecords(seed, MAX_DEAL_CUSTODY_DECISION_RECORDS + 1);
-    await expect(
-      seed.asUser.mutation(api.financeDealCosts.classifyDealAccounting, { orgId: seed.orgId, applicationId: seed.applicationId, notes: "on file" })
-    ).rejects.toThrow(new RegExp(`more than ${MAX_DEAL_CUSTODY_DECISION_RECORDS} custody records`));
+    const readiness = await seed.asUser.query(api.applications.getClosingReadiness, {
+      orgId: seed.orgId, applicationId: seed.applicationId,
+    });
+    expect(readiness.state).toBe("UNAVAILABLE");
+    expect(JSON.stringify(readiness.checks)).toMatch(new RegExp(`more than ${MAX_DEAL_CUSTODY_DECISION_RECORDS} custody records`));
     const app = (await seed.t.run((ctx) => ctx.db.get(seed.applicationId)))!;
     expect(app.accountingClassification).not.toBe("CLASSIFIED");
     expect(app.accountingClassifiedAt).toBeUndefined();

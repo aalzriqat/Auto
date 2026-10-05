@@ -17,41 +17,75 @@ import {
   hookCustodyWrittenOff,
   hookCustodyWriteOffReversed,
   hookCustodyPayableReclassified,
+  hookHandoverCostPaidDirect,
+  hookHandoverCostPaidDirectReversed,
   type ReversalOutcome,
 } from "./accounting/workflowHooks";
-import { dealCustodyAccountingReadiness } from "./chartOfAccounts";
+import { disbursementAccountKey } from "./accounting/postingRules";
+import {
+  dealCustodyAccountingReadiness,
+  ensureFinancedSettlementAccounts,
+  isChartInitialized,
+  isSystemAccountMapped,
+} from "./chartOfAccounts";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { custodyFeeExpenseKey } from "./utils/dealCustodyPosting";
+import type { SystemKey } from "./utils/defaultChart";
 import {
-  assertCustodyLedgerFamilyComplete,
+  blockingHandoverLines,
+  directPaymentMethodValidator,
+  directPaymentRefusal,
+  handoverPaymentState,
+  type HandoverScope,
+} from "./utils/handoverCostPayment";
+import { dealSettlesDirect, financedSaleRecognitionApplies } from "./utils/financedSaleRecognition";
+import {
   assertStoredVersion,
   custodyEntryPostKey,
   custodyFeePostKey,
   custodyPayableReclassPosted,
   custodyPositionDependencies,
   foldAbandonedPayableDeltas,
+  isStoredVersion,
   loadCustodyEntries,
   nextStoredVersion,
   type CustodyLedgerDependency,
 } from "./utils/custodySourceLedger";
+import { MAX_DIRECT_PAID_LINES, MAX_DIRECT_PAYMENT_VERSIONS, readDirectPaymentFamily } from "./utils/handoverDirectProof";
 import {
-  assertConfiguredFeesRecorded,
+  assertFeeAttachmentCount,
+  assertFeeDocWithinBytes,
+  assertFeeTextWithinCap,
+  feeAfterPatch,
+  MAX_DIRECT_PAYMENT_REFERENCE_CHARS,
+  MAX_FEE_DESCRIPTION_CHARS,
+  MAX_FEE_RECEIPT_REFERENCE_CHARS,
+  MAX_FEE_RECONCILIATION_NOTES_CHARS,
+  MAX_FEE_VOID_REASON_CHARS,
+  truncateFeeText,
+} from "./utils/feeDocLimits";
+import {
   assertExpectedCurrency,
   assertRoomForAnotherLine,
   exactTemplateLine,
   loadActiveFees,
   loadCustodyRecords,
   resolveDealCurrency,
+  assertFeeCustodyCurrency,
+  custodyActualExpensesMinor,
+  summarizeCustody,
+  summarizeReadableCustody,
+  unreadableCustodyAmounts,
 } from "./utils/settlementDeductions";
-import { assertSupportedDenomination } from "./utils/money";
+import { assertSupportedDenomination, fromMinorUnits } from "./utils/money";
 import {
   feeTemplatesExceedConfigurationLimit,
   MAX_CUSTODY_ENTRIES,
   MAX_DEAL_CUSTODY_DECISION_RECORDS,
 } from "./utils/dealCostLimits";
 export { MAX_CUSTODY_ENTRIES, MAX_DEAL_CUSTODY_DECISION_RECORDS };
-import { reconcileEmployeeCustody } from "../lib/financingEconomics";
 import { recomputeEconomicsForApplication } from "./financingEconomics";
+import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
 import {
   assertMinorAmount,
   isMinorAmount,
@@ -59,6 +93,15 @@ import {
   feePartyValidator,
   financeFeeTypeValidator,
 } from "./utils/financingEconomics";
+import { writeAuditLog } from "./utils/auditLog";
+import {
+  executionFeeBindRefusal,
+  executionFeeExpectation,
+  executionFeeHeadline,
+  executionFeePosition,
+  executionFeeUnrecorded,
+  executionFeeWithheld,
+} from "./utils/executionFeePosition";
 
 /**
  * What a financed deal actually cost, itemized — and who is still holding money.
@@ -394,13 +437,15 @@ export function dealAcceptsNewCustodyCash(
 
 function assertDealAcceptsNewCustodyCash(
   app: Pick<Doc<"financeApplications">, "status" | "finalizedSaleId">,
-  action: string
+  action: string,
+  settleSentence = "Custody the employee already holds can still be returned, reimbursed, reversed or reconciled.",
+  gone = "no handover left to fund"
 ): void {
   const state = dealAcceptsNewCustodyCash(app);
   if (state.accepts) return;
   if (state.reason === "APPLICATION_CANCELLED" || state.reason === "APPLICATION_REJECTED") {
     throw new ConvexError(
-      `This deal has been ${state.reason === "APPLICATION_CANCELLED" ? "cancelled" : "rejected"}, so there is no handover left to fund; ${action} is refused. Custody the employee already holds can still be returned, reimbursed, reversed or reconciled. Nothing has been changed.`
+      `This deal has been ${state.reason === "APPLICATION_CANCELLED" ? "cancelled" : "rejected"}, so there is ${gone}; ${action} is refused. ${settleSentence} Nothing has been changed.`
     );
   }
   assertDealEconomicsOpen(app, action);
@@ -506,11 +551,13 @@ async function syncCustodyFeePosting(
     occurredAt,
     replacesReversal: reversal,
   });
-  await ctx.db.patch(fee._id, {
+  const postedPatch = {
     custodyPosted: { version, amountMinor: target.amountMinor, custodyId: target.custodyId, occurredAt },
     custodyPostingVersion: version,
     updatedAt: now,
-  });
+  };
+  assertFeeDocWithinBytes(feeAfterPatch(fee, postedPatch), "posting this cost to custody");
+  await ctx.db.patch(fee._id, postedPatch);
   // The receiving record's payable, dated with the fee and held behind the
   // replacement version (which is itself queued behind the deferred reversal
   // of the version it replaces) and, on the same record, behind that
@@ -530,6 +577,111 @@ async function syncCustodyFeePosting(
   if (posted !== undefined && posted.custodyId !== target.custodyId) {
     await syncCustodyPayable(ctx, posted.custodyId, actorId, now, replacedOffBooks);
   }
+}
+
+/**
+ * A cost line that carries a DIRECT dealership payment (SCRUM-443) is a LEDGER
+ * command the moment it is changed or removed — it reverses a posted journal —
+ * so it carries the disbursement authority, not the cost-entry one. Only
+ * managers and accountants move money (owner ruling R1). Judged on the role
+ * already loaded, like `assertMayPostCustody`.
+ */
+function assertMayMoveDirectPayment(auth: { role: Doc<"roles"> }, action: string): void {
+  if (isSystemOwnerRole(auth.role)) return;
+  if (auth.role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT)) return;
+  throw new ConvexError(
+    `${action} needs the permission to confirm finance disbursements, because the dealership's direct payment of this cost is already on the books and this reverses it. Ask a manager or an accountant.`
+  );
+}
+
+/**
+ * The ledger must be able to take a direct payment BEFORE the line says it was
+ * paid: a payment recorded "operationally only" would let the deal finalize
+ * with the cost nowhere in the books. Refuses when the org has no chart, or
+ * when the treatment's expense account or the cash/bank account it is paid
+ * from cannot be resolved — naming the next step. A period that is not open
+ * yet is NOT a refusal: the posting queues to the outbox like every other
+ * event dated into one.
+ */
+async function assertDirectPaymentAccountingReady(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">,
+  expenseKey: SystemKey,
+  cashKey: SystemKey
+): Promise<void> {
+  if (!(await isChartInitialized(ctx, orgId))) {
+    throw new ConvexError(
+      "The chart of accounts has not been initialized for this organization, so the payment cannot be posted. Set up accounting (Accounting > Chart of Accounts) before recording it; nothing has been recorded."
+    );
+  }
+  // The expense accounts self-heal exactly as they do for a custody-paid cost.
+  await ensureFinancedSettlementAccounts(ctx, orgId, actorId);
+  for (const key of [expenseKey, cashKey]) {
+    if (!(await isSystemAccountMapped(ctx, orgId, key))) {
+      throw new ConvexError(
+        `The "${key}" system account is missing or inactive in the chart of accounts, so the payment cannot be posted. Restore it under Accounting > Chart of Accounts before recording the payment; nothing has been recorded.`
+      );
+    }
+  }
+}
+
+/**
+ * Refuses to CLEAR a live direct payment whose version counter is missing or
+ * does not match it (SCRUM-443 v6, Sol F2). The closing proof enumerates paid
+ * lines through `directPaymentVersion`; a row whose payment carries no valid
+ * matching counter has a POSTED forward event the proof cannot see, and
+ * clearing the row would hide that event for good. No writer produces this
+ * state (a raw edit or a partial legacy import does); the repair is an
+ * accountant's, not a screen's.
+ */
+function assertDirectPaymentCounterIntact(
+  fee: Pick<Doc<"financeDealFees">, "directPayment" | "directPaymentVersion">,
+  action: string
+): void {
+  const paid = fee.directPayment;
+  if (paid === undefined) return;
+  if (!isStoredVersion(fee.directPaymentVersion) || fee.directPaymentVersion !== paid.version) {
+    throw new ConvexError(
+      `This cost carries a direct payment whose record is inconsistent (its payment counter is missing or does not match), so ${action} is refused: it would hide a posting from the closing checks. Nothing has been changed. Contact support or have an accountant repair the record.`
+    );
+  }
+}
+
+/**
+ * Takes a line's live direct payment OFF the books and off the row: reverses
+ * the stored version through the canonical reversal path (or cancels its
+ * still-queued post) and clears `directPayment`, leaving the line UNPAID. There
+ * is no automatic re-post — the operator records the payment again, at the
+ * right amount, as a new version (`directPaymentVersion` is never reused).
+ *
+ * Called AFTER the row's own change has been written, on the row as it now
+ * is. Returns what became of the reversal, or `undefined` when the line
+ * carried no direct payment (so a caller may call it unconditionally).
+ */
+async function reverseDirectFeePayment(
+  ctx: MutationCtx,
+  feeId: Id<"financeDealFees">,
+  actorId: Id<"users">,
+  reason: string
+): Promise<ReversalOutcome | undefined> {
+  const fee = await ctx.db.get(feeId);
+  if (fee === null) throw new ConvexError(FEE_NOT_FOUND);
+  const paid = fee.directPayment;
+  if (paid === undefined) return undefined;
+  assertDirectPaymentCounterIntact(fee, "reversing this direct payment");
+  assertStoredVersion(paid.version, "This cost line's direct payment", "reversing this direct payment");
+  const now = Date.now();
+  const outcome = await hookHandoverCostPaidDirectReversed(ctx, {
+    orgId: fee.orgId,
+    feeId: fee._id,
+    version: paid.version,
+    reason,
+    actorId,
+    reversalDate: now,
+  });
+  await ctx.db.patch(fee._id, { directPayment: undefined, updatedAt: now });
+  return outcome;
 }
 
 /**
@@ -594,46 +746,6 @@ function assertCustodyOpen(custody: Doc<"financeDealCustody">): void {
       "This custody record is closed. Reopen it before changing the costs it was balanced against."
     );
   }
-}
-
-/**
- * Withdraws a deal's accounting classification when its basis changes.
- *
- * CLASSIFIED means somebody established the treatment against a specific set of
- * costs, custody balances and an invoice. Nothing re-checked it afterwards, so
- * adding an unquantified cost — or editing the invoice figure the treatment was
- * granted on — left a deal reading as settled while its own summary said
- * otherwise. This flag exists to be the gate a posting design reads; a gate
- * that silently stops representing its precondition is the whole hazard.
- *
- * Withdrawn with a row rather than silently: it is a human judgement, and
- * losing the fact that it was made and then invalidated is losing the audit.
- */
-async function invalidateClassification(
-  ctx: MutationCtx,
-  app: Doc<"financeApplications">,
-  actorId: Id<"users">,
-  because: string
-): Promise<void> {
-  if (app.accountingClassification !== "CLASSIFIED") return;
-  const now = Date.now();
-  await ctx.db.insert("financeApplicationOverrides", {
-    orgId: app.orgId,
-    applicationId: app._id,
-    field: "accountingClassification",
-    previousValue: "CLASSIFIED",
-    newValue: "PENDING_CLASSIFICATION",
-    reason: because,
-    changedBy: actorId,
-    changedAt: now,
-  });
-  await ctx.db.patch(app._id, {
-    accountingClassification: "PENDING_CLASSIFICATION",
-    accountingClassifiedBy: undefined,
-    accountingClassifiedAt: undefined,
-    accountingClassificationNotes: undefined,
-    updatedAt: now,
-  });
 }
 
 /**
@@ -1127,137 +1239,6 @@ async function companyFor(
   return company !== null && company.orgId === app.orgId ? company : null;
 }
 
-/**
- * Where one custody record stands, using the shared engine for the arithmetic.
- *
- * Closure needs BOTH directions settled, which the engine alone does not tell
- * you: it computes what is *due*, and a debt that is owed but unpaid is not
- * settled. So `settled` requires the employee to hold nothing AND the
- * dealership to have actually paid back everything it owes.
- */
-export function summarizeCustody(
-  custody: Doc<"financeDealCustody">,
-  actualExpensesMinor: number
-) {
-  const reconciliation = reconcileEmployeeCustody({
-    advanceIssuedMinor: custody.issuedMinor,
-    actualExpensesMinor,
-    employeeReturnedMinor: custody.returnedMinor,
-    alreadyReimbursedMinor: custody.reimbursedMinor,
-  });
-
-  return {
-    ...reconciliation,
-    actualExpensesMinor,
-    reimbursedMinor: custody.reimbursedMinor,
-    // The engine decides `reconciled` across all three directions — money still
-    // held, money still owed, and money paid twice. Recomputing it here is how
-    // the two would drift.
-    settled: reconciliation.reconciled,
-  };
-}
-
-/**
- * Sum recorded actuals for one custody from the deal's already-bounded LIVE
- * fee set — or `null` when a linked actual is not a readable minor-unit
- * figure, or the sum leaves the safe range. Callers must pass the result of
- * `loadActiveFees`: querying by custody and filtering voids afterwards would
- * read an unbounded add/void history and could strand both reconciliation and
- * classification at the platform transaction limit even while the deal had
- * fewer than 500 live lines.
- */
-function custodyActualExpensesMinor(
-  liveFees: ReadonlyArray<Doc<"financeDealFees">>,
-  custodyId: Id<"financeDealCustody">
-): number | null {
-  let sum = 0;
-  for (const row of liveFees) {
-    if (row.voidedAt !== undefined || row.custodyId !== custodyId || row.actualAmountMinor === undefined) continue;
-    if (!isMinorAmount(row.actualAmountMinor)) return null;
-    sum += row.actualAmountMinor;
-  }
-  return Number.isSafeInteger(sum) ? sum : null;
-}
-
-/** The live line charged to this record that is not in the record's currency, if any (R5, F4). */
-function custodyForeignCurrencyLine(
-  liveFees: ReadonlyArray<Doc<"financeDealFees">>,
-  custody: Pick<Doc<"financeDealCustody">, "_id" | "currency">
-): Doc<"financeDealFees"> | undefined {
-  return liveFees.find((row) => row.voidedAt === undefined && row.custodyId === custody._id && row.currency !== custody.currency);
-}
-
-/** Why a custody record's balance cannot be stated from its stored totals and linked costs. */
-export type CustodyAmountsUnreadableReason = "UNSAFE_AMOUNT";
-
-/**
- * The readable-balance contract for one custody record: the three stored
- * totals and the linked actuals are each a readable minor-unit figure, and
- * the arithmetic the engine performs on them stays in the safe range. The
- * engine (`reconcileEmployeeCustody`) throws on a corrupt operand and does
- * not check its own results, and a NaN that reached a gate would compare as
- * neither owed nor settled — so no caller reaches it without passing here.
- */
-export function unreadableCustodyAmounts(
-  custody: Pick<Doc<"financeDealCustody">, "issuedMinor" | "returnedMinor" | "reimbursedMinor">,
-  actualExpensesMinor: number | null
-): CustodyAmountsUnreadableReason | null {
-  if (actualExpensesMinor === null) return "UNSAFE_AMOUNT";
-  const operands = [custody.issuedMinor, custody.returnedMinor, custody.reimbursedMinor, actualExpensesMinor];
-  if (!operands.every(isMinorAmount)) return "UNSAFE_AMOUNT";
-  // Every intermediate the engine forms is bounded in magnitude by the sum
-  // of the four operands, so one safe-range check covers them all.
-  return Number.isSafeInteger(operands.reduce((total, amount) => total + amount, 0)) ? null : "UNSAFE_AMOUNT";
-}
-
-/**
- * The custody summary a WRITER may act on, or a refusal. A closure,
- * reconciliation or classification gate that compared against a corrupt
- * balance would be deciding on a number that is not one; every such gate
- * calls this and fails closed with the reason instead.
- */
-function summarizeReadableCustody(
-  custody: Doc<"financeDealCustody">,
-  liveFees: ReadonlyArray<Doc<"financeDealFees">>,
-  action: string
-): ReturnType<typeof summarizeCustody> {
-  // Cents are not fils: a linked line in another currency makes the sum
-  // below a non-figure, and every writer that reads the position refuses
-  // before it is formed (R5, F4).
-  const foreign = custodyForeignCurrencyLine(liveFees, custody);
-  if (foreign !== undefined) assertFeeCustodyCurrency(foreign, custody, action);
-  const actualExpensesMinor = custodyActualExpensesMinor(liveFees, custody._id);
-  if (actualExpensesMinor === null || unreadableCustodyAmounts(custody, actualExpensesMinor) !== null) {
-    throw new ConvexError(
-      `A custody amount or a cost charged to this custody is not a readable figure, so ${action} is refused until the record is corrected.`
-    );
-  }
-  return summarizeCustody(custody, actualExpensesMinor);
-}
-
-/**
- * A cost line and the custody record it is charged to share ONE currency
- * (R5, F4). The record's balance is `issued − returned − custody-paid
- * lines + reimbursed`, summed in minor units — and minor units are not one
- * scale: a USD line is in cents, a JOD record in fils, so a cross-currency
- * charge sums cents into fils and states a position that is not a figure.
- * Refused BEFORE anything is written or posted on every path that links a
- * line to a record or re-posts a linked one, excluded from the screen's
- * eligibility, and refused again by every command that reads the record's
- * position while such a line sits on it. The exit for a legacy link is to
- * release the line (`setFeeCustody` with no record), which reverses its
- * charge without summing it.
- */
-function assertFeeCustodyCurrency(
-  line: Pick<Doc<"financeDealFees">, "currency">,
-  custody: Pick<Doc<"financeDealCustody">, "currency">,
-  action: string
-): void {
-  if (line.currency === custody.currency) return;
-  throw new ConvexError(
-    `This cost is recorded in ${line.currency} while the custody record is in ${custody.currency}; the two cannot be summed, so ${action} is refused. Correct the line's currency or release it from custody first; nothing has been changed.`
-  );
-}
 
 /**
  * Resolves the custody record a fee line may be charged against.
@@ -1693,9 +1674,32 @@ export const listDealCosts = query({
       currency,
       actualTotalMinor: summary ? summary.actualTotalMinor : null,
     });
+    // Whether a configured financed-sale plan covers the deal: the plan itself
+    // recognises a settlement-deducted cost only then (SCRUM-443 v6).
+    const handoverScope: HandoverScope = {
+      planRecognisesDeductions: financedSaleRecognitionApplies(app, { settlesDirect: await dealSettlesDirect(ctx, app) }),
+    };
     const plannedHolder = mayReadPlan && app.plannedCustody ? await ctx.db.get(app.plannedCustody.userId) : null;
+    const executionFee = executionFeePosition(app, fees, currency);
     return {
       currency,
+      /**
+       * The finance company's execution fee (SCRUM-690 F-PNTR-1) — the same
+       * position the finalization gate and both profit headlines read. Null
+       * when the deal expects no such fee. `eligibleFeeIds` are the live lines
+       * `bindExecutionFeeLine` would accept, by its own predicate.
+       */
+      executionFee: executionFee.applies
+        ? {
+            expectedMinor: executionFee.expectedMinor,
+            boundFeeId: executionFee.bound?.feeId ?? null,
+            unrecorded: executionFeeUnrecorded(executionFee),
+            withheld: executionFeeWithheld(executionFeeHeadline(executionFee)),
+            eligibleFeeIds: fees
+              .filter((fee) => fee.executionFeeBinding === undefined && executionFeeBindRefusal(fee, currency) === null)
+              .map((fee) => fee._id),
+          }
+        : null,
       fees: fees.map((fee) => ({
         ...fee,
         status: deriveFeeStatus(fee),
@@ -1707,7 +1711,21 @@ export const listDealCosts = query({
           // Every custody record is opened in the deal's currency, so a line
           // in any other currency matches no record (R5, F4).
           fee.currency === currency,
+        /**
+         * Who paid this handover cost and whether it is on the books
+         * (SCRUM-443) — `handoverCostPayment`, the module the closing check
+         * and the mutation guards read, so the screen cannot disagree with
+         * them. NOT_HANDOVER_LINE for a line outside the invariant.
+         */
+        handoverPayment: handoverPaymentState(fee, handoverScope),
+        /** Whether a direct dealership payment may be recorded on this line now — the mutation's own predicate, in the deal's currency. */
+        directPaymentEligible:
+          dealAcceptsNewCustodyCash(app).accepts &&
+          directPaymentRefusal(fee) === null &&
+          fee.currency === currency,
       })),
+      /** The live handover lines that stop the deal finalizing (no actual, or neither custody-paid nor direct-paid) — by id, for the screen to point at. */
+      handoverCostsBlockingFeeIds: blockingHandoverLines(fees, handoverScope).map((fee) => fee._id),
       /**
        * Whether the org's ledger can take a custody posting right now, with the
        * reason it cannot — the same predicate every custody money mutation
@@ -1757,9 +1775,6 @@ export const listDealCosts = query({
       custody,
       /** More custody records exist than this read hydrates; the list above is a prefix. */
       custodyTruncated,
-      // Stated rather than derived: PENDING_CLASSIFICATION is what an unset
-      // value means, and saying so beats every caller re-deriving it.
-      accountingClassification: app.accountingClassification ?? "PENDING_CLASSIFICATION",
       legalInvoiceAmountMinor: app.legalInvoiceAmountMinor,
       legalInvoiceNumber: app.legalInvoiceNumber,
       legalInvoiceDate: app.legalInvoiceDate,
@@ -1811,6 +1826,35 @@ export const adoptCompanyFeeTemplates = mutation({
 // ---------------------------------------------------------------------------
 // Cost lines
 // ---------------------------------------------------------------------------
+
+/**
+ * Re-derives the deal's stored economics once a SETTLEMENT INPUT has changed
+ * (SCRUM-407 P1.3) — in the same transaction, and only AFTER the fee row is
+ * written, so the expected remittance is derived from the line as it now
+ * stands rather than from the one it replaced.
+ *
+ * Material means a line the finance company withholds from its transfer
+ * (`deductedFromSettlement`): those are the only lines
+ * `settlementDeductedTotalMinor` sums into the remittance. A line the
+ * dealership pays separately changes no stored figure, so it does not bump
+ * `economicsRevision` under a confirmation somebody is looking at. Custody-
+ * only changes (charging a line to custody, opening or reopening a record)
+ * never reach here: they move no settlement input.
+ *
+ * This replaced the recompute `classifyDealAccounting` ran at the moment it
+ * stamped a deal: with the stamp retired, finalization's plan-time
+ * `REMITTANCE_STALE` check would otherwise refuse every deal whose deducted
+ * costs changed after its approval. A refusal inside the recompute is left
+ * uncaught, so it rolls the fee write back with it.
+ */
+async function recomputeAfterSettlementInputChange(
+  ctx: MutationCtx,
+  applicationId: Id<"financeApplications">,
+  deductedFromSettlement: boolean
+): Promise<void> {
+  if (!deductedFromSettlement) return;
+  await recomputeEconomicsForApplication(ctx, applicationId);
+}
 
 export const recordDealFee = mutation({
   args: {
@@ -1880,6 +1924,11 @@ export const recordDealFee = mutation({
     // amount unknown" is a real state, and one worth recording rather than
     // leaving to memory. It just cannot close the deal; see requireCostsClosable.
 
+    // Free text is bounded at the input boundary, BEFORE anything is judged or
+    // written, so a line this writer admits can always take every later write
+    // (pay, void, reconcile, custody) inside MAX_FEE_DOC_BYTES (SCRUM-443 v6).
+    assertFeeTextWithinCap(args.description?.trim(), MAX_FEE_DESCRIPTION_CHARS, "The description", "recording this cost");
+    assertFeeTextWithinCap(args.receiptReference?.trim(), MAX_FEE_RECEIPT_REFERENCE_CHARS, "The receipt reference", "recording this cost");
     assertTimestamp(args.paidAt, "The paid date");
     assertNotFuture(args.paidAt, Date.now(), "The paid date");
     // A line charged to custody posts a custody journal: custody authority.
@@ -1961,16 +2010,11 @@ export const recordDealFee = mutation({
         }
         // An exact replay of a line already recorded returns it above this,
         // and a NEW line on a deal already at the live-line cap is refused
-        // with the classification untouched and no command record kept.
+        // with nothing written and no command record kept.
         assertRoomForAnotherLine(await loadActiveFees(ctx, args.applicationId), "recording this cost");
 
-        await invalidateClassification(
-          ctx, app, user._id,
-          "A new cost was added to the deal after its accounting was classified."
-        );
-
         const now = Date.now();
-        const feeId = await ctx.db.insert("financeDealFees", {
+        const newFee = {
           orgId: args.orgId,
           applicationId: args.applicationId,
           feeType: args.feeType,
@@ -1992,10 +2036,17 @@ export const recordDealFee = mutation({
           createdBy: user._id,
           createdAt: now,
           updatedAt: now,
-        });
+        };
+        // Judged on the resulting row, before anything is written (SCRUM-443).
+        assertFeeAttachmentCount(args.documentStorageIds, "recording this cost");
+        assertFeeDocWithinBytes(newFee, "recording this cost");
+        const feeId = await ctx.db.insert("financeDealFees", newFee);
         // Inside the idempotent section with the insert: a replay returns the
         // stored id above and never posts a second time.
         if (custodyId) await syncCustodyFeePosting(ctx, feeId, user._id, "Handover cost recorded against custody.");
+        // AFTER the insert, so the stored remittance is derived from the line
+        // just written (SCRUM-407 P1.3).
+        await recomputeAfterSettlementInputChange(ctx, args.applicationId, args.deductedFromSettlement ?? false);
         return feeId;
       }
     );
@@ -2034,7 +2085,7 @@ export const recordDealFee = mutation({
  * Not a new way to spend. The row it writes is an ordinary `financeDealFees`
  * line with the same fates as every other: re-recorded through
  * `recordActualFeeAmount`, checked through `reconcileDealFee`, voided through
- * `voidDealFee`, invalidating the classification like any other cost, summed
+ * `voidDealFee`, recomputing the stored economics like any other cost, summed
  * by `summarizeFees` and by `settlementDeductedTotalMinor` under the template's
  * own `deductedFromSettlement` flag.
  */
@@ -2108,6 +2159,7 @@ export const recordTemplateFeeActual = mutation({
       : undefined;
     // A timestamp, not a number: `v.number()` admits NaN, Infinity and
     // negatives, and a stored NaN date is a row no report can order.
+    assertFeeTextWithinCap(args.receiptReference?.trim(), MAX_FEE_RECEIPT_REFERENCE_CHARS, "The receipt reference", "recording this cost");
     assertTimestamp(args.paidAt, "The paid date");
     assertNotFuture(args.paidAt, Date.now(), "The paid date");
 
@@ -2172,21 +2224,22 @@ export const recordTemplateFeeActual = mutation({
             "An actual is already recorded for this configured fee. Edit that line to change the amount, or remove it first."
           );
         }
-        // Same bound as `recordDealFee`, in the same place: before the
-        // classification is touched or the line exists.
+        // Same bound as `recordDealFee`, in the same place: before the line
+        // exists.
         assertRoomForAnotherLine(await loadActiveFees(ctx, args.applicationId), "recording this cost");
 
-        await invalidateClassification(
-          ctx, app, user._id,
-          "A new cost was added to the deal after its accounting was classified."
-        );
-
         const now = Date.now();
-        const feeId = await ctx.db.insert("financeDealFees", {
+        const templateFee = {
           orgId: args.orgId,
           applicationId: args.applicationId,
           feeType: template.feeType,
-          description: template.description?.trim() || undefined,
+          // Copied from the frozen snapshot, which a deal's operator cannot edit
+          // and a manual line can never stand in for (the configured-position
+          // gate matches by position). A legacy over-long description is
+          // therefore SHORTENED to the cap, never refused — a refusal would
+          // strand the position with no door (SCRUM-443 v6). The snapshot keeps
+          // the full text; the identity flag is display-only.
+          description: truncateFeeText(template.description?.trim() ?? "", MAX_FEE_DESCRIPTION_CHARS) || undefined,
           currency,
           // The template's expectation, copied — never the caller's, and
           // never a corrupt one (see above).
@@ -2202,16 +2255,241 @@ export const recordTemplateFeeActual = mutation({
           paidAt: args.paidAt,
           receiptReference: args.receiptReference?.trim() || undefined,
           documentStorageIds: args.documentStorageIds,
-          source: "COMPANY_TEMPLATE",
+          source: "COMPANY_TEMPLATE" as const,
           templateIndex: args.templateIndex,
           createdBy: user._id,
           createdAt: now,
           updatedAt: now,
-        });
+        };
+        assertFeeAttachmentCount(args.documentStorageIds, "recording this cost");
+        assertFeeDocWithinBytes(templateFee, "recording this cost");
+        const feeId = await ctx.db.insert("financeDealFees", templateFee);
         if (custodyId) await syncCustodyFeePosting(ctx, feeId, user._id, "Configured fee actual recorded against custody.");
+        await recomputeAfterSettlementInputChange(ctx, args.applicationId, template.deductedFromSettlement);
         return feeId;
       }
     );
+  },
+});
+
+/**
+ * The deal's execution-fee position, proven for a binding write: the fee
+ * applies, the deal's economics are open, and NO live line is bound yet. The
+ * live lines are read whole (`loadActiveFees` refuses an over-capacity deal
+ * rather than return a partial list), so "no other bound line" is proven, not
+ * sampled.
+ */
+async function requireUnboundExecutionFee(
+  ctx: MutationCtx,
+  app: Doc<"financeApplications">,
+  action: string
+): Promise<{ currency: string; expectedMinor: number | null; liveFees: Array<Doc<"financeDealFees">> }> {
+  assertDealEconomicsOpen(app, action);
+  const currency = await resolveDealCurrency(ctx, app, action);
+  const expectation = executionFeeExpectation(app, currency);
+  if (!expectation.applies) {
+    throw new ConvexError(
+      "This deal's finance company charged no execution fee when the deal was created, so there is no execution fee to record. Record the cost as an additional cost instead."
+    );
+  }
+  const liveFees = await loadActiveFees(ctx, app._id);
+  if (liveFees.some((fee) => fee.executionFeeBinding !== undefined)) {
+    throw new ConvexError(
+      "An actual is already linked as this deal's execution fee. Edit that cost to change the amount, or unlink it first."
+    );
+  }
+  return { currency, expectedMinor: expectation.expectedMinor, liveFees };
+}
+
+/**
+ * Records what the dealership actually paid the finance company for its
+ * EXECUTION FEE (SCRUM-690 F-PNTR-1, c22113 / c22119) and links the new line
+ * as that fee's actual in the same write. Zero is a valid actual — "the fee
+ * was not charged" — and retires the expectation like any other amount.
+ *
+ * The line is an ordinary `financeDealFees` line with fixed shape: a
+ * finance-company fee, paid by the dealership (or an employee from custody),
+ * treated as a finance-company commission, NOT withheld from the settlement —
+ * the fee is a separate payment to the finance company (c21888). Because it is
+ * bound it is a handover cost: a positive actual must be paid from custody or
+ * by a direct dealership payment before the deal finalizes.
+ *
+ * Identity: `runWithIdempotency` over the whole persisted input. A new intent
+ * against a deal whose fee is already linked is refused inside the section.
+ */
+export const recordExecutionFeeActual = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    actualAmountMinor: v.number(),
+    /** REQUIRED. The currency the caller counted `actualAmountMinor` in (SCRUM-319). */
+    expectedCurrency: v.string(),
+    paidBy: v.union(v.literal("DEALER"), v.literal("EMPLOYEE")),
+    paidAt: v.optional(v.number()),
+    receiptReference: v.optional(v.string()),
+    custodyId: v.optional(v.id("financeDealCustody")),
+    idempotencyKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_FINANCE_APPLICATION]);
+    const user = auth.user;
+    assertExpectedCurrency(args.expectedCurrency, "recording the execution fee");
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId, APPLICATION_NOT_FOUND);
+    assertMinorAmount(args.actualAmountMinor, "Actual amount");
+    if (args.custodyId) assertMayPostCustody(auth, "Charging the execution fee to an employee's custody");
+    assertFeeTextWithinCap(args.receiptReference?.trim(), MAX_FEE_RECEIPT_REFERENCE_CHARS, "The receipt reference", "recording the execution fee");
+    assertTimestamp(args.paidAt, "The paid date");
+    assertNotFuture(args.paidAt, Date.now(), "The paid date");
+
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "financeDealCosts.recordExecutionFeeActual",
+        economic: true,
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        fingerprint: JSON.stringify({
+          applicationId: args.applicationId,
+          expectedCurrency: args.expectedCurrency,
+          actualAmountMinor: args.actualAmountMinor,
+          paidBy: args.paidBy,
+          custodyId: args.custodyId ?? null,
+          paidAt: args.paidAt ?? null,
+          receiptReference: args.receiptReference?.trim() || null,
+        }),
+      },
+      async () => {
+        const { currency, expectedMinor, liveFees } = await requireUnboundExecutionFee(ctx, app, "recording the execution fee");
+        if (args.expectedCurrency !== currency) {
+          throw new ConvexError(
+            `This cost was entered in ${args.expectedCurrency}, but the deal's costs are kept in ${currency}. Reload the deal and enter the amount in ${currency}.`
+          );
+        }
+        assertRoomForAnotherLine(liveFees, "recording the execution fee");
+        const shape = {
+          feeType: "FINANCE_COMPANY_FEE" as const,
+          paidBy: args.paidBy,
+          paidTo: "FINANCE_COMPANY" as const,
+          accountingTreatment: "FINANCE_COMPANY_COMMISSION" as const,
+          includedInQuotation: true,
+          deductedFromSettlement: false,
+          refundable: false,
+          currency,
+        };
+        let custodyId: Id<"financeDealCustody"> | undefined;
+        if (args.custodyId) {
+          custodyId = await resolveFeeCustody(ctx, args.orgId, args.applicationId, args.custodyId, shape, user._id);
+        }
+        const now = Date.now();
+        const line = {
+          orgId: args.orgId,
+          applicationId: args.applicationId,
+          ...shape,
+          description: "Execution fee",
+          estimatedAmountMinor: expectedMinor ?? undefined,
+          actualAmountMinor: args.actualAmountMinor,
+          custodyId,
+          paidAt: args.paidAt,
+          receiptReference: args.receiptReference?.trim() || undefined,
+          source: "MANUAL" as const,
+          executionFeeBinding: { boundAt: now, boundBy: user._id },
+          createdBy: user._id,
+          createdAt: now,
+          updatedAt: now,
+        };
+        assertFeeDocWithinBytes(line, "recording the execution fee");
+        const feeId = await ctx.db.insert("financeDealFees", line);
+        if (custodyId) await syncCustodyFeePosting(ctx, feeId, user._id, "Execution fee recorded against custody.");
+        await writeAuditLog(ctx, user, {
+          action: "financeDealCosts.executionFee.recordAndBind",
+          targetTable: "financeDealFees",
+          targetId: feeId,
+          orgId: args.orgId,
+          after: { applicationId: args.applicationId, actualAmountMinor: args.actualAmountMinor, paidBy: args.paidBy, expectedMinor },
+        });
+        await recomputeAfterSettlementInputChange(ctx, args.applicationId, false);
+        return feeId;
+      }
+    );
+  },
+});
+
+/**
+ * Links an EXISTING cost line as the deal's execution-fee actual (c22119 Q2):
+ * for a fee already recorded as an ordinary cost. Explicit, by line id —
+ * never inferred — and only when exactly this line is compatible
+ * (`executionFeeBindRefusal`) and no live line is linked yet. Audited.
+ * Converges on a state: re-linking the line already linked returns it.
+ */
+export const bindExecutionFeeLine = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    feeId: v.id("financeDealFees"),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_FINANCE_APPLICATION]);
+    const fee = await requireOwnedRow(ctx, args.orgId, "financeDealFees", args.feeId, FEE_NOT_FOUND);
+    if (fee.voidedAt === undefined && fee.executionFeeBinding !== undefined) return args.feeId;
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", fee.applicationId, APPLICATION_NOT_FOUND);
+    const { currency } = await requireUnboundExecutionFee(ctx, app, "linking the execution fee");
+    const refusal = executionFeeBindRefusal(fee, currency);
+    if (refusal !== null) throw new ConvexError(`${refusal} Nothing has been changed.`);
+    const now = Date.now();
+    const patch = { executionFeeBinding: { boundAt: now, boundBy: user._id }, updatedAt: now };
+    assertFeeDocWithinBytes(feeAfterPatch(fee, patch), "linking the execution fee");
+    await ctx.db.patch(args.feeId, patch);
+    await writeAuditLog(ctx, user, {
+      action: "financeDealCosts.executionFee.bind",
+      targetTable: "financeDealFees",
+      targetId: args.feeId,
+      orgId: args.orgId,
+      after: { applicationId: fee.applicationId, actualAmountMinor: fee.actualAmountMinor },
+    });
+    await recomputeAfterSettlementInputChange(ctx, fee.applicationId, fee.deductedFromSettlement);
+    return args.feeId;
+  },
+});
+
+/**
+ * Unlinks the execution fee's actual: the fee is UNRECORDED again (c22119 Q4)
+ * and the line returns to an ordinary cost. Refused while the line carries a
+ * custody posting or a direct payment — that cash went to the finance company
+ * for this fee; remove the line (which reverses the payment) instead. Audited,
+ * with the reason.
+ */
+export const unbindExecutionFeeLine = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    feeId: v.id("financeDealFees"),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_FINANCE_APPLICATION]);
+    const fee = await requireOwnedRow(ctx, args.orgId, "financeDealFees", args.feeId, FEE_NOT_FOUND);
+    const reason = args.reason.trim();
+    if (!reason) throw new ConvexError("Say why this cost is no longer the execution fee.");
+    assertFeeTextWithinCap(reason, MAX_FEE_VOID_REASON_CHARS, "The reason", "unlinking the execution fee");
+    if (fee.executionFeeBinding === undefined) return args.feeId;
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", fee.applicationId, APPLICATION_NOT_FOUND);
+    assertDealEconomicsOpen(app, "unlinking the execution fee");
+    if (fee.custodyPosted !== undefined || fee.directPayment !== undefined) {
+      throw new ConvexError(
+        "This execution fee has a payment recorded against it. Remove the cost instead (its payment is reversed) and record the fee again. Nothing has been changed."
+      );
+    }
+    const patch = { executionFeeBinding: undefined, updatedAt: Date.now() };
+    await ctx.db.patch(args.feeId, patch);
+    await writeAuditLog(ctx, user, {
+      action: "financeDealCosts.executionFee.unbind",
+      targetTable: "financeDealFees",
+      targetId: args.feeId,
+      orgId: args.orgId,
+      before: { executionFeeBinding: fee.executionFeeBinding },
+      after: { reason },
+    });
+    await recomputeAfterSettlementInputChange(ctx, fee.applicationId, fee.deductedFromSettlement);
+    return args.feeId;
   },
 });
 
@@ -2272,6 +2550,7 @@ export const recordActualFeeAmount = mutation({
       );
     }
     assertMinorAmount(args.actualAmountMinor, "Actual amount");
+    assertFeeTextWithinCap(args.receiptReference?.trim(), MAX_FEE_RECEIPT_REFERENCE_CHARS, "The receipt reference", "recording this actual amount");
     assertTimestamp(args.paidAt, "The paid date");
     assertNotFuture(args.paidAt, Date.now(), "The paid date");
     // The parent must exist in this org (R6, F3): a line whose deal is gone or
@@ -2308,6 +2587,22 @@ export const recordActualFeeAmount = mutation({
     if (args.custodyId || fee.custodyId) {
       assertMayPostCustody(auth, "Changing a cost charged to an employee's custody");
     }
+    // A line the dealership paid directly (SCRUM-443): a NEW amount takes the
+    // recorded payment off the books and leaves the line unpaid, so it is the
+    // disbursement authority's to do. An unchanged amount (a new receipt
+    // reference, say) moves no money and needs nothing more. Never attached to
+    // custody as well — that would put the one cost on the books twice.
+    if (fee.directPayment !== undefined) {
+      if (args.custodyId) {
+        throw new ConvexError(
+          "This cost was paid directly by the dealership, so it cannot also be charged to an employee's custody. Nothing has been changed."
+        );
+      }
+      if (fee.directPayment.amountMinor !== args.actualAmountMinor) {
+        assertMayMoveDirectPayment(auth, "Changing the amount of a cost the dealership paid directly");
+        assertDirectPaymentCounterIntact(fee, "changing this amount");
+      }
+    }
     const custodyId = args.custodyId
       ? await resolveFeeCustody(ctx, args.orgId, fee.applicationId, args.custodyId, fee, user._id)
       : fee.custodyId;
@@ -2324,15 +2619,11 @@ export const recordActualFeeAmount = mutation({
       assertFeeCustodyCurrency(fee, existing, "re-recording a cost charged to this custody record");
     }
 
+    assertFeeAttachmentCount(args.documentStorageIds, "recording this actual amount");
     const nextStorageIds = args.documentStorageIds ?? fee.documentStorageIds;
     await deleteDroppedAttachments(ctx, fee.documentStorageIds, args.documentStorageIds);
 
-    await invalidateClassification(
-      ctx, parent, user._id,
-      "A recorded cost was changed after the deal's accounting was classified."
-    );
-
-    await ctx.db.patch(args.feeId, {
+    const amountPatch = {
       actualAmountMinor: args.actualAmountMinor,
       paidAt: args.paidAt ?? fee.paidAt,
       receiptReference: args.receiptReference?.trim() || fee.receiptReference,
@@ -2345,12 +2636,27 @@ export const recordActualFeeAmount = mutation({
       reconciledBy: undefined,
       reconciliationNotes: undefined,
       updatedAt: Date.now(),
-    });
+    };
+    assertFeeDocWithinBytes(feeAfterPatch(fee, amountPatch), "recording this actual amount");
+    await ctx.db.patch(args.feeId, amountPatch);
     // The ledger follows the row: a changed amount or custody reverses what
     // was posted and posts the line again at its new figure.
     if (custodyId || fee.custodyPosted) {
       await syncCustodyFeePosting(ctx, args.feeId, user._id, "Handover cost actual re-recorded.");
     }
+    // The same for a direct payment (SCRUM-443): a payment recorded at the
+    // OLD amount is reversed and the line is unpaid again until the operator
+    // records it at the new one. An unchanged amount keeps it.
+    if (fee.directPayment !== undefined && fee.directPayment.amountMinor !== args.actualAmountMinor) {
+      await reverseDirectFeePayment(
+        ctx, args.feeId, user._id,
+        "Handover cost amount changed after its direct payment was recorded."
+      );
+    }
+    // Always re-derive, even when the amount is unchanged: the recompute also
+    // proves the deal's currency facts and company rules, and a drift there
+    // must refuse (and roll back) this edit rather than slip through.
+    await recomputeAfterSettlementInputChange(ctx, fee.applicationId, fee.deductedFromSettlement);
     return args.feeId;
   },
 });
@@ -2406,13 +2712,16 @@ export const reconcileDealFee = mutation({
     if (!notes) {
       throw new ConvexError("Record what was checked before reconciling this cost.");
     }
+    assertFeeTextWithinCap(notes, MAX_FEE_RECONCILIATION_NOTES_CHARS, "The reconciliation notes", "reconciling this cost");
 
-    await ctx.db.patch(args.feeId, {
+    const reconcilePatch = {
       reconciledAt: Date.now(),
       reconciledBy: user._id,
       reconciliationNotes: notes,
       updatedAt: Date.now(),
-    });
+    };
+    assertFeeDocWithinBytes(feeAfterPatch(fee, reconcilePatch), "reconciling this cost");
+    await ctx.db.patch(args.feeId, reconcilePatch);
     return args.feeId;
   },
 });
@@ -2444,6 +2753,7 @@ export const voidDealFee = mutation({
     if (!reason) {
       throw new ConvexError("Say why this cost is being removed.");
     }
+    assertFeeTextWithinCap(reason, MAX_FEE_VOID_REASON_CHARS, "The reason", "removing this cost");
     if (fee.voidedAt !== undefined) return args.feeId;
     // The parent must exist in this org (R6, F3); see recordActualFeeAmount.
     const parent = await requireOwnedRow(ctx, args.orgId, "financeApplications", fee.applicationId, APPLICATION_NOT_FOUND);
@@ -2453,6 +2763,11 @@ export const voidDealFee = mutation({
     }
     // Voiding a custody-charged line reverses its journal (AF-CUST-04).
     if (fee.custodyId) assertMayPostCustody(auth, "Removing a cost charged to an employee's custody");
+    // So does voiding a line the dealership paid directly (SCRUM-443).
+    if (fee.directPayment !== undefined) {
+      assertMayMoveDirectPayment(auth, "Removing a cost the dealership paid directly");
+      assertDirectPaymentCounterIntact(fee, "removing this cost");
+    }
     // The record the line sits on, proven this org's on this deal (R7, F3)
     // — a link nobody can load is refused, never skipped past.
     if (fee.custodyId) {
@@ -2461,23 +2776,27 @@ export const voidDealFee = mutation({
       assertCustodyOpen(custody);
     }
 
-    await invalidateClassification(
-      ctx, parent, user._id,
-      "A cost was removed from the deal after its accounting was classified."
-    );
-
-    await ctx.db.patch(args.feeId, {
+    const voidPatch = {
       voidedAt: Date.now(),
       voidedBy: user._id,
       voidReason: reason,
       updatedAt: Date.now(),
-    });
+    };
+    assertFeeDocWithinBytes(feeAfterPatch(fee, voidPatch), "removing this cost");
+    await ctx.db.patch(args.feeId, voidPatch);
     // A voided line is no longer a custody-paid cost: its posting is reversed
     // (or its queued post cancelled) and the employee's clearing balance rises
     // back by the amount — the same arithmetic the summary performs.
     if (fee.custodyPosted) {
       await syncCustodyFeePosting(ctx, args.feeId, user._id, `Handover cost removed: ${reason}`);
     }
+    // And a directly paid line's payment is reversed exactly once (SCRUM-443):
+    // the second void returns above on `voidedAt`, and the helper is a no-op
+    // once `directPayment` is cleared.
+    if (fee.directPayment !== undefined) {
+      await reverseDirectFeePayment(ctx, args.feeId, user._id, `Handover cost removed: ${reason}`);
+    }
+    await recomputeAfterSettlementInputChange(ctx, fee.applicationId, fee.deductedFromSettlement);
     return args.feeId;
   },
 });
@@ -2512,6 +2831,13 @@ export const setFeeCustody = mutation({
       throw new ConvexError("This cost has been voided and cannot be charged to custody.");
     }
     if (fee.custodyId === args.custodyId) return args.feeId;
+    // A line the dealership paid directly is never also charged to custody
+    // (SCRUM-443): the one cost would reach the ledger twice.
+    if (args.custodyId !== undefined && fee.directPayment !== undefined) {
+      throw new ConvexError(
+        "This cost was paid directly by the dealership, so it cannot also be charged to an employee's custody. Change its amount or remove it first if that payment was wrong. Nothing has been changed."
+      );
+    }
     // The parent must exist in this org (R6, F3); see recordActualFeeAmount.
     const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", fee.applicationId, APPLICATION_NOT_FOUND);
     assertDealEconomicsOpen(app, "moving a cost onto or off custody");
@@ -2524,12 +2850,15 @@ export const setFeeCustody = mutation({
     const custodyId = args.custodyId
       ? await resolveFeeCustody(ctx, args.orgId, fee.applicationId, args.custodyId, fee, user._id)
       : undefined;
-    await invalidateClassification(
-      ctx, app, user._id,
-      "A cost was moved onto or off an employee's custody after the deal's accounting was classified."
-    );
     const now = Date.now();
-    await ctx.db.patch(args.feeId, { custodyId, updatedAt: now });
+    // The link patch is judged on its own, BEFORE it is written. The posting
+    // that follows judges the line with its posting record, but returns early
+    // (nothing to post: no actual, a zero actual, an unchanged target) without
+    // reaching that judgement, so this patch would otherwise land unchecked
+    // (SCRUM-443 v6, Sol F3).
+    const linkPatch = { custodyId, updatedAt: now };
+    assertFeeDocWithinBytes(feeAfterPatch(fee, linkPatch), "moving this cost onto or off custody");
+    await ctx.db.patch(args.feeId, linkPatch);
     await syncCustodyFeePosting(
       ctx, args.feeId, user._id,
       custodyId ? "Handover cost charged to employee custody." : "Handover cost released from employee custody."
@@ -2538,9 +2867,245 @@ export const setFeeCustody = mutation({
   },
 });
 
+/**
+ * Records that the DEALERSHIP itself paid a handover cost (SCRUM-443) — bank
+ * transfer, e-payment, cash or an issued cheque — rather than an employee out
+ * of custody cash. Posts `HANDOVER_COST_PAID_DIRECT`: DR the treatment's
+ * expense / CR the outbound cash or bank account, at the line's recorded
+ * actual, dated when it was paid.
+ *
+ * Why it exists: on an application-routed deal every dealer-borne handover
+ * cost must reach the ledger exactly once, from the cash that paid it, and
+ * the deal cannot finalize otherwise (`HANDOVER_COSTS_PAID`). Custody covers
+ * the employee's cash; this covers the dealership's own.
+ *
+ * Money authority only: `CONFIRM_FINANCE_DISBURSEMENT` (managers,
+ * accountants, owners). The method is REQUIRED — never defaulted — because it
+ * picks the account the money left from. The AMOUNT is required too
+ * (`expectedAmountMinor`): the figure the approver saw and PINNED when they
+ * opened the form. The line's actual is paid only while it is still exactly
+ * that; an edit in between is refused, never paid. Identity:
+ * `runWithIdempotency`, fingerprinted on the whole payload including that
+ * pinned figure, so a replay returns the first result and posts nothing
+ * twice, and the same key for a different intent is refused. Atomic: the row
+ * patch and the posting are one mutation.
+ *
+ * Admission envelope: a deal may carry at most `MAX_DIRECT_PAID_LINES` lines
+ * that ever carried a direct payment, and a line at most
+ * `MAX_DIRECT_PAYMENT_VERSIONS` payment versions — the numbers the closing
+ * proof's read budget is derived from, so anything admitted here can always be
+ * proven at closing.
+ *
+ * A line that has already been paid is refused (no second payment); an amount
+ * edit or a void reverses it (see `recordActualFeeAmount`, `voidDealFee`), and
+ * the operator records it again. Deal cancellation never reverses it — the cash
+ * really left.
+ */
+export const recordDirectFeePayment = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    feeId: v.id("financeDealFees"),
+    /** REQUIRED, no default — it decides which account the money left. */
+    method: directPaymentMethodValidator,
+    /** When the dealership paid it. Dates the posting. */
+    paidAt: v.number(),
+    /**
+     * REQUIRED: the amount, in minor units, the approver SAW and PINNED when
+     * they opened the payment form (the screen holds it fixed; a later edit
+     * raises a notice and needs an explicit re-approval). The payment posts the
+     * line's actual only when it is still exactly this — an edit at any point
+     * after the form opened is refused, never paid at a figure nobody approved.
+     */
+    expectedAmountMinor: v.number(),
+    reference: v.optional(v.string()),
+    idempotencyKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
+    const user = auth.user;
+    const fee = await requireOwnedRow(ctx, args.orgId, "financeDealFees", args.feeId, FEE_NOT_FOUND);
+    // `v.number()` admits NaN, ±Infinity and fractions: none is an amount
+    // anybody saw, and none may be fingerprinted or compared below.
+    if (!isMinorAmount(args.expectedAmountMinor)) {
+      throw new ConvexError("The amount to pay must be a whole number of minor units. Nothing has been recorded.");
+    }
+    // The parent must exist in this org (R6, F3): a line whose deal is gone or
+    // another tenant's is never put on the books.
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", fee.applicationId, APPLICATION_NOT_FOUND);
+    // A real, past-or-present instant: a NaN or a future date is refused before
+    // it is fingerprinted or dated into a period.
+    if (!isTimestamp(args.paidAt)) {
+      throw new ConvexError(`The paid date must be a real timestamp (got ${args.paidAt}).`);
+    }
+    assertNotFuture(args.paidAt, Date.now(), "The paid date");
+    const reference = args.reference?.trim() || undefined;
+    if (reference !== undefined && reference.length > MAX_DIRECT_PAYMENT_REFERENCE_CHARS) {
+      throw new ConvexError(
+        `The payment reference is too long (${reference.length} characters; the most is ${MAX_DIRECT_PAYMENT_REFERENCE_CHARS}). Shorten it and try again. Nothing has been recorded.`
+      );
+    }
+
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "financeDealCosts.recordDirectFeePayment",
+        economic: true,
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        // The WHOLE intent: the line, how it was paid, when, the reference,
+        // and the amount the approver saw — the same key for a different
+        // amount is a different intent, refused, never replayed.
+        fingerprint: JSON.stringify({
+          feeId: args.feeId,
+          method: args.method,
+          paidAt: args.paidAt,
+          reference: reference ?? null,
+          expectedAmountMinor: args.expectedAmountMinor,
+        }),
+      },
+      async () => {
+        // Mutable-state checks live inside the section: a replay of a payment
+        // that was recorded returns it even if the deal froze or the line
+        // changed since — those describe the world after the success.
+        assertDealAcceptsNewCustodyCash(
+          app,
+          "recording a direct payment",
+          "A direct payment already recorded can still be reversed.",
+          "no handover left to pay for"
+        );
+        const refusal = directPaymentRefusal(fee);
+        if (refusal !== null) throw new ConvexError(refusal);
+        const amountMinor = fee.actualAmountMinor as number;
+        // The line is paid in its OWN denomination, which must be the deal's:
+        // a legacy line in another currency is never posted beside the rest.
+        assertSupportedDenomination(fee.currency, "recording this payment");
+        const dealCurrency = await resolveDealCurrency(ctx, app, "recording this payment");
+        if (fee.currency !== dealCurrency) {
+          throw new ConvexError(
+            `This cost is recorded in ${fee.currency} while the deal's costs are kept in ${dealCurrency}, so it cannot be posted with them. Correct the line first; nothing has been recorded.`
+          );
+        }
+        // Money authority (R1): what posts is the amount the approver SAW and
+        // pinned. A cost edited at any time since the form opened is refused
+        // with the new figure, so the payment is recorded again knowingly.
+        if (amountMinor !== args.expectedAmountMinor) {
+          throw new ConvexError(
+            `The amount of this cost changed to ${fromMinorUnits(amountMinor, fee.currency)} ${fee.currency} since you opened the form (you were about to pay ${fromMinorUnits(args.expectedAmountMinor, fee.currency)} ${fee.currency}). Review the cost and record the payment again. Nothing has been recorded.`
+          );
+        }
+        const expense = custodyFeeExpenseKey(fee.accountingTreatment);
+        if (expense.systemKey === null) throw new ConvexError(expense.refusal);
+        const cashKey = disbursementAccountKey(args.method);
+        await assertDirectPaymentAccountingReady(ctx, args.orgId, user._id, expense.systemKey, cashKey);
+
+        // A replacement never overtakes the version it replaces: while an
+        // earlier payment's reversal is still queued for a period that is not
+        // open, that payment is STILL on the books and a second one beside it
+        // would spend the cost twice. Judged on the LEDGER.
+        const action = "recording this payment";
+        const version = nextStoredVersion(fee.directPaymentVersion, "This cost line", action);
+        // The admission envelope (see `MAX_DIRECT_PAYMENT_VERSIONS`): the
+        // closing proof's budget is derived from these two caps, so a payment
+        // that would leave the envelope is refused HERE, guided, and nothing is
+        // written — never admitted and then unprovable at closing.
+        if (version > MAX_DIRECT_PAYMENT_VERSIONS) {
+          throw new ConvexError(
+            `This cost has already been paid and corrected ${MAX_DIRECT_PAYMENT_VERSIONS} times, which is the most one cost line can carry. Remove it and add the cost again as a new line, then record the payment on that. Nothing has been recorded.`
+          );
+        }
+        if (fee.directPaymentVersion === undefined) {
+          const everPaid = await ctx.db
+            .query("financeDealFees")
+            .withIndex("by_application_directPaymentVersion", (q) =>
+              q.eq("applicationId", fee.applicationId).gt("directPaymentVersion", 0)
+            )
+            .take(MAX_DIRECT_PAID_LINES);
+          if (everPaid.length >= MAX_DIRECT_PAID_LINES) {
+            throw new ConvexError(
+              `This deal already has ${MAX_DIRECT_PAID_LINES} cost lines that have carried a direct payment (removed ones count), which is the most one deal can carry. Combine costs into fewer lines, or have the deal's accounting reviewed. Nothing has been recorded.`
+            );
+          }
+        }
+        if (version > 1) {
+          // The SAME family reader the closing proof uses: canonical rows or a
+          // guided refusal, never a guess.
+          const family = await readDirectPaymentFamily(ctx, args.orgId, fee._id, version - 1);
+          for (const [eventVersion, event] of family) {
+            if (event.status === "POSTED") {
+              throw new ConvexError(
+                `An earlier payment of this cost (v${eventVersion}) is still on the books; its reversal is waiting for an accounting period to open (the reversal is dated the day the payment was taken back, so open the period that covers that date). Let the reversal post, then record the payment again. Nothing has been recorded.`
+              );
+            }
+          }
+        }
+
+        const now = Date.now();
+        const paidPatch = {
+          directPayment: {
+            version,
+            amountMinor,
+            method: args.method,
+            paidAt: args.paidAt,
+            reference,
+            recordedBy: user._id,
+            recordedAt: now,
+          },
+          directPaymentVersion: version,
+          updatedAt: now,
+        };
+        // Judged BEFORE the posting: an oversize resulting line writes nothing.
+        assertFeeDocWithinBytes(feeAfterPatch(fee, paidPatch), "recording this payment");
+        await hookHandoverCostPaidDirect(ctx, {
+          orgId: args.orgId,
+          fee,
+          vehicleId: app.vehicleId,
+          version,
+          amountMinor,
+          paymentMethod: args.method,
+          expenseKey: expense.systemKey,
+          cashKey,
+          actorId: user._id,
+          occurredAt: args.paidAt,
+        });
+        await ctx.db.patch(fee._id, paidPatch);
+        return fee._id;
+      }
+    );
+  },
+});
+
 // ---------------------------------------------------------------------------
 // Employee custody
 // ---------------------------------------------------------------------------
+
+/**
+ * SCRUM-469 — a custody movement that moves cash must say which instrument it
+ * went through. The method picks the ledger account (`disbursementAccountKey`
+ * / `cashAccountKey`), and an omitted one used to fall through to CASH_ON_HAND
+ * — a bank transfer booked as drawer cash. Refused, with the next step, before
+ * anything is written. The validator stays optional so an older client gets this
+ * message rather than an argument-validation error.
+ *
+ * A REVERSAL is the one kind exempt: its whole accounting effect is the inverse
+ * of its target's journal, so it never reads a method of its own.
+ */
+function requireCustodyMethod<M extends string>(
+  method: M | undefined,
+  action: string
+): M {
+  if (method === undefined) {
+    throw new ConvexError(
+      `Choose how the money moved (cash, bank transfer, cheque or card) before ${action}. If this screen does not offer a method, update the app. Nothing has been recorded.`
+    );
+  }
+  return method;
+}
+
+/** True only for one of the four instruments a custody movement can name. */
+function isRecordedCustodyMethod(method: string | undefined | null): boolean {
+  return method === "CASH" || method === "BANK_TRANSFER" || method === "CHEQUE" || method === "CARD";
+}
 
 /** Posts one freshly inserted cash entry (ISSUED / RETURNED / REIMBURSED) against its custody record. */
 async function postCustodyEntry(
@@ -2647,6 +3212,12 @@ export const openDealCustody = mutation({
         }),
       },
       async () => {
+        // A payment method belongs to a NEW money movement (SCRUM-469). It is
+        // checked INSIDE the section, not before it: a command that already
+        // completed (a pre-deploy client sent none) must replay its stored
+        // result, and only a genuinely new command is refused. The refusal is an
+        // uncaught throw, so the STARTED row rolls back with the transaction.
+        requireCustodyMethod(args.method, "handing cash to an employee");
         // ⚠️ Every MUTABLE-state check is inside the section (Codex
         // AF-CUST-06): a replay of an issuance that succeeded must return the
         // stored record even if the recipient has since begun offboarding, the
@@ -2681,10 +3252,6 @@ export const openDealCustody = mutation({
           );
         }
 
-        await invalidateClassification(
-          ctx, app, user._id,
-          "Custody was opened on the deal after its accounting was classified."
-        );
 
         const currency = await resolveDealCurrency(ctx, app, "opening custody on this deal");
         const now = Date.now();
@@ -2819,6 +3386,13 @@ export const recordCustodyMovement = mutation({
         }),
       },
       async () => {
+        // A payment method belongs to a NEW money movement (SCRUM-469), so it is
+        // checked inside the section: a completed command replays its stored
+        // result even when it was sent without one (a pre-deploy client). A
+        // REVERSAL is exempt: it is the inverse of its target's journal.
+        if (args.kind !== "REVERSAL") {
+          requireCustodyMethod(args.method, "recording this custody movement");
+        }
         // Re-read inside the section: the row loaded for ownership above is
         // the same row, but the state it carries is what this attempt acts on.
         const current = await ctx.db.get(args.custodyId);
@@ -3145,6 +3719,22 @@ export const migrateLegacyCustodyToLedger = mutation({
             `This custody record's stored totals (issued ${custody.issuedMinor}, returned ${custody.returnedMinor}, reimbursed ${custody.reimbursedMinor}) do not match its own movement log (${projected.issuedMinor}, ${projected.returnedMinor}, ${projected.reimbursedMinor}), so it cannot be migrated as it stands. Correct the record first; nothing has been posted.`
           );
         }
+        // A payment method is an attribute of ONE money movement and is never
+        // inferred (SCRUM-469): a leg with no recorded instrument would be booked
+        // to CASH_ON_HAND by the posting rules. Every non-reversal entry is
+        // proven BEFORE the first leg posts, so the record is refused whole and
+        // nothing reaches the books.
+        const methodless = entries.filter(
+          (entry) => entry.kind !== "REVERSAL" && !isRecordedCustodyMethod(entry.method)
+        );
+        if (methodless.length > 0) {
+          const named = methodless
+            .map((entry) => `${entry.kind} ${entry.amountMinor} on ${new Date(entry.occurredAt).toISOString().slice(0, 10)} (${entry._id})`)
+            .join("; ");
+          throw new ConvexError(
+            `${methodless.length === 1 ? "A movement" : `${methodless.length} movements`} on this custody record has no method recorded (cash, bank transfer, cheque or card), so it cannot be posted to the ledger without guessing the account: ${named}. Have the movement reviewed and its method recorded; nothing has been posted.`
+          );
+        }
         const fees = await loadActiveFees(ctx, custody.applicationId);
         const linked = fees.filter((fee) => fee.custodyId === custody._id);
         for (const fee of linked) {
@@ -3239,11 +3829,13 @@ export const migrateLegacyCustodyToLedger = mutation({
             actorId: user._id,
             occurredAt,
           });
-          await ctx.db.patch(fee._id, {
+          const migratedPatch = {
             custodyPosted: { version, amountMinor: fee.actualAmountMinor, custodyId: custody._id, occurredAt },
             custodyPostingVersion: version,
             updatedAt: Date.now(),
-          });
+          };
+          assertFeeDocWithinBytes(feeAfterPatch(fee, migratedPatch), "migrating this custody record");
+          await ctx.db.patch(fee._id, migratedPatch);
           payableDependencies.push({ must: "SETTLED", idempotencyKey: custodyFeePostKey(fee._id, version) });
           feesPosted += 1;
         }
@@ -3326,14 +3918,18 @@ export const reopenDealCustody = mutation({
     // The parent the stored row names is proven this org's BEFORE anything is
     // written (R8, F2): an owned custody row whose `applicationId` was
     // re-pointed at another tenant's deal would otherwise leave an audit row
-    // against that deal, reverse a posted write-off and withdraw the OTHER
-    // organization's classification. A missing or foreign parent refuses here,
-    // with the override, the reversal and the status patch all still unwritten.
-    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", custody.applicationId, APPLICATION_NOT_FOUND);
+    // against that deal and reverse a posted write-off. A missing or foreign
+    // parent refuses here, with the override, the reversal and the status
+    // patch all still unwritten.
+    await requireOwnedRow(ctx, args.orgId, "financeApplications", custody.applicationId, APPLICATION_NOT_FOUND);
+    // SCRUM-693 D2: an unwind proves the deal's custody closed at start and
+    // again at finish; a reopen in between would race that proof.
+    await assertNoActiveDealUnwind(ctx, args.orgId, custody.applicationId);
 
-    // Reopening undoes a reconciliation somebody signed off, so it leaves a row
-    // — and it withdraws the deal's classification, which may have been granted
-    // on the strength of this record being settled.
+    // Reopening undoes a reconciliation somebody signed off, so it leaves a
+    // row. (It no longer withdraws a classification: closing readiness is
+    // re-derived from the live rows, so the open record is seen at once —
+    // SCRUM-407.)
     await ctx.db.insert("financeApplicationOverrides", {
       orgId: args.orgId,
       applicationId: custody.applicationId,
@@ -3347,10 +3943,6 @@ export const reopenDealCustody = mutation({
       changedBy: user._id,
       changedAt: Date.now(),
     });
-    await invalidateClassification(
-      ctx, app, user._id,
-      "A custody record was reopened after the deal's accounting was classified."
-    );
 
     // A written-off shortage goes back onto the employee's clearing balance:
     // the loss was booked on the strength of a closure that is now withdrawn.
@@ -3412,7 +4004,10 @@ export const listCustodyCandidates = query({
       if (user === null) continue;
       candidates.push({ userId: membership.userId, name: user.name ?? "", isActor: membership.userId === actor._id });
     }
-    return { candidates, truncated: memberships.length > MAX_CUSTODY_CANDIDATES };
+    // The caller by id, independent of the cap: a caller past it is absent
+    // from `candidates`, and a reader deciding "is this record the caller's
+    // own?" must not read that absence as "not the caller" (SCRUM-439).
+    return { actorId: actor._id, candidates, truncated: memberships.length > MAX_CUSTODY_CANDIDATES };
   },
 });
 
@@ -3496,7 +4091,7 @@ export const planCustodyHandler = mutation({
 });
 
 // ---------------------------------------------------------------------------
-// The legal invoice, and accounting classification
+// The legal invoice (and the retired accounting classification)
 // ---------------------------------------------------------------------------
 
 /**
@@ -3507,6 +4102,12 @@ export const planCustodyHandler = mutation({
  * finance company's approved purchase amount, because on a financed deal those
  * are three different numbers describing three different things — and only this
  * one is what the parties signed.
+ *
+ * KEPT while the v1 financed-sale posting plan is in force (SCRUM-407 Part 1):
+ * that plan still posts revenue from `legalInvoiceConsiderationMinor`, so a
+ * recorded invoice remains a required closing-readiness item and this action
+ * stays reachable from the deal's readiness panel. Replacing the invoice as the
+ * revenue source is SCRUM-411.
  */
 export const recordLegalInvoice = mutation({
   args: {
@@ -3533,6 +4134,8 @@ export const recordLegalInvoice = mutation({
       args.applicationId,
       APPLICATION_NOT_FOUND
     );
+    // SCRUM-693: the invoice is the recognition source an unwind is reversing.
+    await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
     assertMinorAmount(args.legalInvoiceAmountMinor, "Legal invoice amount");
     if (args.legalInvoiceAmountMinor <= 0) {
       throw new ConvexError("The invoice amount must be greater than zero.");
@@ -3605,10 +4208,6 @@ export const recordLegalInvoice = mutation({
       });
     }
 
-    await invalidateClassification(
-      ctx, app, user._id,
-      "The legal invoice was re-recorded after the deal's accounting was classified."
-    );
 
     await ctx.db.patch(args.applicationId, {
       legalInvoiceAmountMinor: args.legalInvoiceAmountMinor,
@@ -3624,155 +4223,3 @@ export const recordLegalInvoice = mutation({
   },
 });
 
-/**
- * Marks a deal's accounting treatment as established.
- *
- * The gate the user asked for: estimates are fine to work from operationally,
- * but closure requires reconciliation. So this refuses while any cost is
- * unquantified, unrecorded or unchecked, while any custody record is open, or
- * while the legal invoice — the only figure revenue may be posted from — is
- * missing.
- *
- * It sets a flag and nothing else. No journal entry follows from it yet; that
- * design is deliberately unwritten until real documents confirm how a financed
- * sale is legally structured.
- */
-export const classifyDealAccounting = mutation({
-  args: {
-    orgId: v.id("organizations"),
-    applicationId: v.id("financeApplications"),
-    notes: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [
-      PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
-    ]);
-    const app = await requireOwnedRow(
-      ctx,
-      args.orgId,
-      "financeApplications",
-      args.applicationId,
-      APPLICATION_NOT_FOUND
-    );
-    const notes = args.notes.trim();
-    if (!notes) {
-      throw new ConvexError("Record how this deal's accounting was established.");
-    }
-
-    if (app.legalInvoiceAmountMinor === undefined) {
-      throw new ConvexError(
-        "Record the deal's legal invoice before classifying its accounting. The invoice amount is the only figure revenue may be posted from."
-      );
-    }
-
-    const fees = await loadActiveFees(ctx, args.applicationId);
-    const summary = summarizeFees(fees);
-    // A deal with no live cost lines is the state "nobody itemized anything",
-    // which `summarizeFees` deliberately reports as NOT fully reconciled —
-    // nothing to have reconciled and everything checking out are different
-    // claims. Reading only the awaiting-counts let it through, because both are
-    // zero for an empty list, so a financed deal with an invoice and no costs
-    // at all classified clean.
-    if (summary.lineCount === 0) {
-      throw new ConvexError(
-        "No costs have been itemized on this deal. Record them, or record a zero-cost line saying the dealership bore none, before classifying its accounting."
-      );
-    }
-    if (summary.linesAwaitingActual > 0) {
-      throw new ConvexError(
-        `${summary.linesAwaitingActual} cost(s) on this deal have no actual amount recorded. Estimates may be used to run the deal, but not to close it.`
-      );
-    }
-    if (summary.linesAwaitingReconciliation > 0) {
-      throw new ConvexError(
-        `${summary.linesAwaitingReconciliation} cost(s) on this deal have an amount but nobody has checked it. Reconcile them before closing.`
-      );
-    }
-    // The counts above are blind to WHAT was checked: a reconciled line whose
-    // amount is NaN, a fraction, a negative or an unsafe value (the writers
-    // refuse them, the rows do not) passes both, and the deal would classify
-    // clean on totals that are not figures. The summary's own verdict is the
-    // gate — it is false over any unreadable amount as well as over any
-    // unchecked line — and it is asked directly rather than reassembled.
-    if (summary.amountsUnreadable !== null) {
-      throw new ConvexError(
-        "A cost amount on this deal is not a readable figure, so its accounting cannot be classified until the line is corrected."
-      );
-    }
-    if (!summary.fullyReconciled) {
-      throw new ConvexError(
-        "This deal's costs are not fully reconciled, so its accounting cannot be classified."
-      );
-    }
-    // Every fee the finance company's FROZEN policy configures needs an actual
-    // on the record too — the counts above cannot see a configured fee nobody
-    // recorded. One rule for this door and for finalization's, judged on the
-    // rows already read above; see `assertConfiguredFeesRecorded`.
-    assertConfiguredFeesRecorded(app.companyRuleSnapshot, fees, "closing");
-
-    // Read the arithmetic, not the stored status. A record can be closed and
-    // still be unbalanced — a late receipt against a RECONCILED record is
-    // exactly the case — and a gate that trusts the flag it is meant to be
-    // guarding is not a gate.
-    const custodyRows = await custodyFor(ctx, args.applicationId, "classifying this deal's accounting");
-    // The whole custody FAMILY must be on the books before the deal's
-    // treatment is established on it: a record from before ledger posting,
-    // or a custody-paid line whose posting is missing or stale, is refused
-    // whatever its status says. Same predicate finalization asks; settled
-    // through `migrateLegacyCustodyToLedger`, never inferred here.
-    await assertCustodyLedgerFamilyComplete(ctx, args.orgId, args.applicationId, custodyRows, fees, "classifying this deal's accounting");
-    for (const row of custodyRows) {
-      if (row.status === "OPEN") {
-        throw new ConvexError(
-          "A custody record on this deal is still open. Settle what that person holds or is owed before classifying."
-        );
-      }
-      const custodySummary = summarizeReadableCustody(row, fees, "classifying this deal's accounting");
-      if (!custodySummary.settled && row.status !== "WRITTEN_OFF") {
-        throw new ConvexError(
-          "A closed custody record on this deal no longer balances — its costs changed after it was reconciled. Reopen it and settle it before classifying."
-        );
-      }
-    }
-
-    if (app.accountingClassification === "CLASSIFIED") {
-      throw new ConvexError(
-        "This deal's accounting has already been classified. Change what it was based on to reopen it."
-      );
-    }
-
-    // Establishing a deal's accounting means establishing the figures that
-    // follow from it, not just stamping a flag beside them. Every settlement
-    // cost above now has a checked actual, so this is the first moment the
-    // expected remittance can be derived from what the company actually
-    // withholds — and the last moment before finalization reads it.
-    //
-    // Ordered after the refusals deliberately: a deal that cannot be classified
-    // must not have its stored economics moved on the way to being told so.
-    //
-    // A quoted, approved deal whose customer first payment is unknown would be
-    // recomputed into a WITHHELD split (SCRUM-373: unknown is never zero) and
-    // then stamped classified over figures that no longer exist. Refused here,
-    // before the recompute, so nothing about the deal moves.
-    if (
-      app.submittedQuotationMinor !== undefined &&
-      app.approvedDealerPurchaseAmountMinor !== undefined &&
-      app.customerFirstPaymentMinor === undefined
-    ) {
-      throw new ConvexError(
-        "The customer's first payment is not recorded on this deal, so its funding split cannot be established. Record it before classifying."
-      );
-    }
-    await recomputeEconomicsForApplication(ctx, args.applicationId);
-
-    const now = Date.now();
-    await ctx.db.patch(args.applicationId, {
-      accountingClassification: "CLASSIFIED",
-      accountingClassifiedBy: user._id,
-      accountingClassifiedAt: now,
-      accountingClassificationNotes: notes,
-      updatedAt: now,
-    });
-    return args.applicationId;
-  },
-});

@@ -23,6 +23,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { toYearMonth } from "./utils/expenseAmortization";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -153,6 +154,54 @@ async function seedDealer(t: Harness, tag: string) {
   return { orgId, userId, asUser, customerId };
 }
 
+/**
+ * SCRUM-571 S1: `paymentIntents.create` refuses an untargeted intent, so every
+ * intent here points at its own canonical document (sized above 1_000_000).
+ * The document is created BEFORE any footprint baseline is taken.
+ */
+async function seedTargetDocument(dealer: Awaited<ReturnType<typeof seedDealer>>) {
+  return await dealer.asUser.mutation(internal.subledger.createReceivable, {
+    orgId: dealer.orgId,
+    documentType: "INVOICE",
+    payerType: "CUSTOMER",
+    customerId: dealer.customerId,
+    sourceType: "test_intent",
+    sourceId: `scrum302_${crypto.randomUUID()}`,
+    originalAmountMinor: 2_000_000,
+    currency: "JOD",
+    issueDate: Date.now(),
+    dueDate: Date.now(),
+  });
+}
+
+/**
+ * D-20 (SCRUM-571 S1): `paymentIntents.create` is shut, so the PENDING intent the
+ * pilot would have issued is seeded directly.
+ */
+async function seedIntent(
+  t: Harness,
+  dealer: Awaited<ReturnType<typeof seedDealer>>,
+  externalId: string,
+) {
+  const receivableDocumentId = await seedTargetDocument(dealer);
+  return await t.run((ctx) =>
+    ctx.db.insert("paymentIntents", {
+      orgId: dealer.orgId,
+      customerId: dealer.customerId,
+      receivableDocumentId,
+      amountMinor: 1_000_000,
+      currency: "JOD",
+      provider: "tap",
+      externalId,
+      status: "PENDING",
+      idempotencyKey: crypto.randomUUID(),
+      createdBy: dealer.userId,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  );
+}
+
 async function suspend(t: Harness, orgId: Id<"organizations">) {
   await t.run((ctx) =>
     ctx.db.patch(orgId, {
@@ -175,15 +224,7 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
   test("F1: a SUSPENDED org receives no economic footprint from settleByExternalId", async () => {
     const t = convexTestWithComponents(schema, MODULE_GLOB);
     const dealer = await seedDealer(t, "f1");
-    const intentId = await dealer.asUser.mutation(api.paymentIntents.create, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId: dealer.orgId,
-      customerId: dealer.customerId,
-      amountMinor: 1_000_000,
-      currency: "JOD",
-      provider: "tap",
-      externalId: "tap_f1",
-    });
+    const intentId = await seedIntent(t, dealer, "tap_f1");
 
     await suspend(t, dealer.orgId);
     const before = await economicFootprint(t, dealer.orgId);
@@ -202,18 +243,12 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
     expect(intent?.status).not.toBe("SETTLED");
   });
 
-  test("F1 CONTROL: an ACTIVE org still settles normally", async () => {
+  // D-22: an ACTIVE org's capture is HELD for finance (pilot shut), not settled;
+  // the intent goes terminal CAPTURE_HELD, linked to the held row.
+  test("F1 CONTROL: an ACTIVE org's capture is held, not settled, while the pilot is shut", async () => {
     const t = convexTestWithComponents(schema, MODULE_GLOB);
     const dealer = await seedDealer(t, "f1ctl");
-    const intentId = await dealer.asUser.mutation(api.paymentIntents.create, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId: dealer.orgId,
-      customerId: dealer.customerId,
-      amountMinor: 1_000_000,
-      currency: "JOD",
-      provider: "tap",
-      externalId: "tap_f1ctl",
-    });
+    const intentId = await seedIntent(t, dealer, "tap_f1ctl");
 
     await t.mutation(internal.paymentIntents.settleByExternalId, {
       provider: "tap",
@@ -224,22 +259,17 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
     });
 
     const intent = await t.run((ctx) => ctx.db.get(intentId));
-    expect(intent?.status).toBe("SETTLED");
-    expect((await economicFootprint(t, dealer.orgId)).canonicalPayments).toBeGreaterThan(0);
+    expect(intent?.status).toBe("CAPTURE_HELD");
+    expect((await economicFootprint(t, dealer.orgId)).canonicalPayments).toBe(0);
+    const held = await t.run((ctx) => ctx.db.query("unmatchedProviderFunds").collect());
+    expect(held.map((r) => r.reason)).toEqual(["PAYMENT_LINKS_DISABLED"]);
+    expect(intent?.heldFundsId).toBe(held[0]!._id);
   });
 
   test("F2: an org with destructivePurgeStartedAt receives no economic footprint", async () => {
     const t = convexTestWithComponents(schema, MODULE_GLOB);
     const dealer = await seedDealer(t, "f2");
-    await dealer.asUser.mutation(api.paymentIntents.create, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId: dealer.orgId,
-      customerId: dealer.customerId,
-      amountMinor: 1_000_000,
-      currency: "JOD",
-      provider: "tap",
-      externalId: "tap_f2",
-    });
+    await seedIntent(t, dealer, "tap_f2");
 
     await markDestructivePurgeStarted(t, dealer.orgId);
     const before = await economicFootprint(t, dealer.orgId);
@@ -259,24 +289,8 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
     const t = convexTestWithComponents(schema, MODULE_GLOB);
     const blocked = await seedDealer(t, "xorga");
     const healthy = await seedDealer(t, "xorgb");
-    await blocked.asUser.mutation(api.paymentIntents.create, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId: blocked.orgId,
-      customerId: blocked.customerId,
-      amountMinor: 1_000_000,
-      currency: "JOD",
-      provider: "tap",
-      externalId: "tap_xa",
-    });
-    const healthyIntentId = await healthy.asUser.mutation(api.paymentIntents.create, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId: healthy.orgId,
-      customerId: healthy.customerId,
-      amountMinor: 1_000_000,
-      currency: "JOD",
-      provider: "tap",
-      externalId: "tap_xb",
-    });
+    const blockedIntentId = await seedIntent(t, blocked, "tap_xa");
+    const healthyIntentId = await seedIntent(t, healthy, "tap_xb");
     await suspend(t, blocked.orgId);
 
     const blockedBefore = await economicFootprint(t, blocked.orgId);
@@ -298,7 +312,21 @@ describe("SCRUM-302 F1/F2 — payment webhook internal settlement vs org lifecyc
 
     expect(await economicFootprint(t, blocked.orgId)).toEqual(blockedBefore);
     const healthyIntent = await t.run((ctx) => ctx.db.get(healthyIntentId));
-    expect(healthyIntent?.status).toBe("SETTLED");
+    // D-22: the healthy org's capture is held (pilot shut), not settled; its
+    // intent is terminal CAPTURE_HELD, linked to the row held under ITS org,
+    // while the suspended org's hold is a LIFECYCLE_REFUSED row.
+    expect(healthyIntent?.status).toBe("CAPTURE_HELD");
+    const held = await t.run((ctx) => ctx.db.query("unmatchedProviderFunds").collect());
+    const healthyHeld = held.find((r) => r.orgId === healthy.orgId);
+    expect(healthyHeld?.reason).toBe("PAYMENT_LINKS_DISABLED");
+    expect(healthyIntent?.heldFundsId).toBe(healthyHeld?._id);
+    const blockedHeld = held.find((r) => r.orgId === blocked.orgId);
+    expect(blockedHeld?.reason).toBe("LIFECYCLE_REFUSED");
+    // The suspended org's intent is likewise terminal CAPTURE_HELD, linked to its
+    // LIFECYCLE_REFUSED row (the provider capture is recorded, never dropped).
+    const blockedIntent = await t.run((ctx) => ctx.db.get(blockedIntentId));
+    expect(blockedIntent?.status).toBe("CAPTURE_HELD");
+    expect(blockedIntent?.heldFundsId).toBe(blockedHeld?._id);
   });
 });
 
@@ -354,7 +382,8 @@ describe("SCRUM-302 F3 — fixed asset depreciation cron vs org lifecycle", () =
       orgId: dealer.orgId,
       assetId,
       yearMonth: `${new Date().getUTCFullYear()}-01`,
-      occurredAt: Date.now(),
+      // SCRUM-542: the posting must be dated inside the month it claims.
+      occurredAt: Date.UTC(new Date().getUTCFullYear(), 0, 15, 12),
       systemActorId: dealer.userId,
     });
 
@@ -396,6 +425,25 @@ async function seedActiveDeferral(
       salePrice: 10_000,
       saleDate: Date.now(),
       status: "COMPLETED" as const,
+    })
+  );
+  // SCRUM-537: recognition waits for the sale-completion journal to have POSTED,
+  // so a deferral seeded straight into the table needs that event too.
+  await t.run((ctx) =>
+    ctx.db.insert("accountingEvents", {
+      orgId,
+      eventType: "SALE_COMPLETED",
+      sourceType: "sales",
+      sourceId: saleId.toString(),
+      eventVersion: 1,
+      idempotencyKey: `sale_completed_${saleId}`,
+      occurredAt: Date.now(),
+      accountingDate: Date.now(),
+      currency: "JOD",
+      payload: {},
+      status: "POSTED",
+      createdBy: userId,
+      createdAt: Date.now(),
     })
   );
   return await t.run((ctx) =>
@@ -447,7 +495,9 @@ describe("SCRUM-302 F4 — F&I deferral recognition cron vs org lifecycle", () =
       {
         orgId: dealer.orgId,
         deferralId,
-        yearMonth: `${new Date().getUTCFullYear()}-01`,
+        // S230-R2: the month must be the sale's own (sale + deferral are created now)
+        // and occurredAt must fall inside it.
+        yearMonth: toYearMonth(Date.now()),
         occurredAt: Date.now(),
         systemActorId: dealer.userId,
       }

@@ -75,6 +75,11 @@ vi.mock("@/hooks/use-permissions", () => ({
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   return {
+    // The cockpit reads closing readiness through the non-throwing useQueries (SCRUM-414 R2).
+    useQueries: (queries: Record<string, { query: never }>) =>
+      Object.fromEntries(
+        Object.entries(queries).map(([key, { query }]) => [key, stubs.queryResults.get(getFunctionName(query))])
+      ),
     useQuery: (reference: never) => stubs.queryResults.get(getFunctionName(reference)),
     useMutation: () => vi.fn(),
   };
@@ -143,6 +148,8 @@ function financedDirectDeal(): FinancedDealCockpitData {
     financeCompanyName: "شركة التمويل الوطني",
     activeAppraisalProvider: null,
     stages: [{ key: "APPLICATION", state: "COMPLETE", authority: "DEALER" }],
+    forward: { planV2: false, applies: false, state: "NOT_DUE" as const, returnedExceptionOpen: false, onBooksForwardId: null, transferConfirmed: false, mayRecord: false, mayCancelFinalized: false },
+    disbursementReturn: { mayReturn: false, chequeId: null, lastReturnedChequeId: null },
     documents: [],
     timeline: [],
     money: {
@@ -155,6 +162,7 @@ function financedDirectDeal(): FinancedDealCockpitData {
       parties: [SUPPLIER_OWES_MARGIN],
       supplierReceipt: { actionable: true },
       appraisalGapMinor: undefined,
+      forward: { dueMinor: 0, depositMinor: 0, contributionMinor: 0, onBooksMinor: 0 },
     },
     handoverEvidence: {
       approvedPurchaseAmountMinor: 12_500 * SCALE,
@@ -166,10 +174,20 @@ function financedDirectDeal(): FinancedDealCockpitData {
     settlementAdviceDiscrepancy: null,
     settlementAdviceRequiresReconciliation: false,
     expectedPaymentRegistered: false,
+    chequeFaceUnrecorded: false,
+    unattestedChequeId: null,
+    chequePaymentRegistered: false,
+    expectedPaymentCorrectable: false,
+    expectedPaymentReRegistrable: false,
+    chequeNeedsCorrection: false,
+    chequeNeedsAccountingReview: false,
+    chequeFaceAttested: false,
     supplierSettlementRouteRequired: false,
     economicsRecorded: true,
     economicsStamp: "fixture-economics-stamp",
     pendingDepositResolution: false,
+    pendingDepositRequests: [],
+    firstPaymentCorrection: { block: "NOT_ZERO", quoteDownPaymentMinor: null },
   } satisfies FinancedDealCockpitData;
 }
 
@@ -239,8 +257,18 @@ const FINANCE_MANAGER = {
   permissions: [...FINANCE_READER.permissions, PERMISSIONS.MANAGE_FINANCE],
 };
 
+/**
+ * The MONEY PANEL's settle action. Since SCRUM-417 the cash SETTLEMENT step
+ * names the same action in the focus row too (it opens this same dialog), so
+ * the panel's own button is picked out explicitly; the focus row has its own
+ * suite (`DealCockpitWizard.test.tsx`).
+ */
 function settleButton() {
-  return screen.queryByRole("button", { name: "SettleSupplierAction" });
+  return (
+    screen
+      .queryAllByRole("button", { name: "SettleSupplierAction" })
+      .find((button) => !button.closest('[data-testid="deal-next-step"]')) ?? null
+  );
 }
 
 afterEach(() => {
@@ -449,7 +477,7 @@ describe.each(PATHS)("$path withholds the settlement on a DISPUTED claim, and sa
     tree.serveSupplierReceipt(DISPUTED);
     expect(screen.queryByText("SettleSupplierTitle")).toBeNull();
     expect(settleButton()).toBeNull();
-    expect(screen.getByText("SupplierClaimDisputedGuidance")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("SupplierClaimDisputedGuidance");
   });
 
   test("lifting the dispute restores the action without re-opening the form nobody re-requested", () => {
@@ -468,5 +496,59 @@ describe.each(PATHS)("$path withholds the settlement on a DISPUTED claim, and sa
     tree.serveSupplierReceipt({ actionable: false, reason: "CLAIM_NOT_OPEN" });
     expect(settleButton()).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+/**
+ * SCRUM-444 F3: a deposit request waiting on the deal is shown IN the cockpit,
+ * where an accountant finalizing the deal actually is. Deciders get the
+ * controls; everyone else gets a read-only line naming who has to act.
+ */
+describe("a pending deposit request on the financed cockpit", () => {
+  const pending = [
+    {
+      _id: "req_1" as Id<"depositRequests">,
+      amount: 1500,
+      currency: "JOD",
+      requestedBy: "user_1" as Id<"users">,
+      requestedAt: 1,
+    },
+  ];
+  const mountWithPending = () => {
+    stubs.queryResults.set("dealWorkspace:financedDealCockpit", {
+      ...financedDirectDeal(),
+      pendingDepositRequests: pending,
+    });
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+  };
+
+  test("a confirmer sees the request with confirm and reject at hand", () => {
+    stubs.membership = {
+      roleName: "Accountant",
+      permissions: [...FINANCE_READER.permissions, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT],
+    };
+    mountWithPending();
+    expect(screen.getByTestId("deal-pending-deposit-requests")).toBeTruthy();
+    expect(screen.getByTestId("deposit-request-confirm-open")).toBeTruthy();
+    expect(screen.getByTestId("deposit-request-reject-open")).toBeTruthy();
+    expect(screen.queryByTestId("deal-pending-deposit-readonly")).toBeNull();
+  });
+
+  test("anyone else sees a read-only line and no controls", () => {
+    stubs.membership = FINANCE_READER;
+    mountWithPending();
+    expect(screen.getByTestId("deal-pending-deposit-requests")).toBeTruthy();
+    expect(screen.getByTestId("deal-pending-deposit-readonly")).toBeTruthy();
+    expect(screen.queryByTestId("deposit-request-confirm-open")).toBeNull();
+  });
+
+  test("no block at all when nothing is waiting", () => {
+    stubs.membership = FINANCE_READER;
+    stubs.queryResults.set("dealWorkspace:financedDealCockpit", {
+      ...financedDirectDeal(),
+      pendingDepositRequests: [],
+    });
+    render(<DealCockpit orgId={ORG} applicationId={APP} />);
+    expect(screen.queryByTestId("deal-pending-deposit-requests")).toBeNull();
   });
 });

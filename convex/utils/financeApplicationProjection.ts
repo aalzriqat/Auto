@@ -56,10 +56,12 @@ import { PERMISSIONS, isSystemOwnerRole, type Permission } from "./permissions";
  *   approval workflow; not ordinary sales visibility, and nothing the
  *   disbursement tier must see to confirm a payment. Ruling #4.
  * - `DISBURSEMENT_WORKFLOW` - VIEW_FINANCE *or* CONFIRM_FINANCE_DISBURSEMENT.
- *   Two fields: `financedSaleNetReceivableMinor`, the narrow already-approved
+ *   Three fields: `financedSaleNetReceivableMinor`, the narrow already-approved
  *   workflow exception ruling #3 allows (load-bearing, not cosmetic - see the
- *   note on the field itself), and `plannedCustody`, the handover cash plan
- *   the same tier acts on when it opens the custody record.
+ *   note on the field itself), `plannedCustody`, the handover cash plan
+ *   the same tier acts on when it opens the custody record, and
+ *   `disbursementVersion`, the non-monetary counter the confirmer must echo
+ *   back so the server can refuse a confirm against a version it did not see.
  * - `FINANCE` - VIEW_FINANCE. The accounting economics, per ruling #3:
  *   `appliedLtvPercent`, the funding composition (funded / unfinanced / dealer
  *   contribution), the expected dealer remittance, the customer-to-finance-
@@ -235,6 +237,16 @@ const FIELD_VISIBILITY: Record<
   targetNetProceedsMinor: "FINANCE",
   legalInvoiceAmountMinor: "FINANCE",
   financedSaleRecognitionFingerprint: "FINANCE",
+  /**
+   * SCRUM-435. The plan VERSION is a marker (1 or 2), never an amount: the
+   * cockpit needs it to know whether the forward step exists. The forward
+   * amounts are FINANCE tier - the deposit and the contribution are accounting
+   * economics, and a MANAGER sees the forward STATUS only (from the proof).
+   */
+  financedSalePlanVersion: "OPEN",
+  financeCompanyForwardDueMinor: "FINANCE",
+  forwardDepositPortionMinor: "FINANCE",
+  forwardContributionPortionMinor: "FINANCE",
   /** Free text that records the approved figure — the second recovery route. */
   approvedPurchaseNotes: "FINANCE",
   accountingClassificationNotes: "FINANCE",
@@ -263,6 +275,14 @@ const FIELD_VISIBILITY: Record<
    */
   finalizationIdempotencyKey: "FINANCE",
   disbursementIdempotencyKey: "FINANCE",
+  /**
+   * SCRUM-239: selects the versioned payment/posting keys. A non-monetary
+   * counter, and load-bearing for the confirm command: the confirmer must send
+   * the version it OBSERVED, and the server refuses a mismatch. See the note on
+   * `financedSaleNetReceivableMinor` - withholding it from the default MANAGER
+   * (CONFIRM_FINANCE_DISBURSEMENT, no VIEW_FINANCE) is the same dead-end.
+   */
+  disbursementVersion: "DISBURSEMENT_WORKFLOW",
 
   // --- The appraisal gap: the amount, its allocation and its metadata ------
   /** Ruling #2: an approval fact for the roles that approve and disburse. */
@@ -306,7 +326,15 @@ const FIELD_VISIBILITY: Record<
    */
   approvedDealerPurchaseAmountMinor: "APPROVAL_WORKFLOW",
   /**
-   * The ONLY member of `DISBURSEMENT_WORKFLOW`, and the narrow exception ruling
+   * SCRUM-27. The manual finance company's approval letter, as the manager
+   * typed it: approved amount, the company's name, and what the dealership sends
+   * it. Same tier as the approved amount because the same role enters it and
+   * must read back what it entered; a caller outside that tier gets none of it.
+   */
+  manualApproval: "APPROVAL_WORKFLOW",
+  /**
+   * A member of `DISBURSEMENT_WORKFLOW` (with `plannedCustody` and the
+   * non-monetary `disbursementVersion` counter), and the narrow exception ruling
    * #3 permits for an already-approved workflow tier. Load-bearing, not
    * cosmetic: `confirmDisbursement` checks the caller's amount against this
    * frozen net receivable FIRST, and `DealCockpit` sends
@@ -322,6 +350,7 @@ const FIELD_VISIBILITY: Record<
   vehiclePurchaseCostMinor: "COST",
 };
 
+/** Whether a role holds one permission, the system OWNER holding all of them. */
 function allows(role: Doc<"roles">, permission: Permission): boolean {
   return isSystemOwnerRole(role) || role.permissions.includes(permission);
 }
@@ -371,6 +400,19 @@ export function mayReadQuotationWorkflow(role: Doc<"roles">): boolean {
  */
 export function mayReadFinanceEconomics(role: Doc<"roles">): boolean {
   return visibilityFor(role).FINANCE;
+}
+
+/**
+ * May this caller RECORD a submitted quotation (SCRUM-404)?
+ *
+ * The one statement of `recordSubmittedQuotation`'s door authority, asked of
+ * the role alone so a door that authenticates on something else —
+ * `createFromQuote` on `create:sales` — can ask it before any read, and the
+ * creation-time preview can refuse a figure the caller could not then record.
+ * A subset of `mayReadQuotationWorkflow`, so the preview discloses nothing new.
+ */
+export function mayRecordSubmittedQuotation(role: Doc<"roles">): boolean {
+  return allows(role, PERMISSIONS.CREATE_FINANCE_APPLICATION);
 }
 
 /**

@@ -1,18 +1,18 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useMessenger } from "./MessengerContext";
+import { MESSENGER_TRIGGER_ID, useMessenger } from "./MessengerContext";
 import { FloatingChatWindow } from "./FloatingChatWindow";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import { playSound } from "@/lib/messageSounds";
 import { cn } from "@/lib/utils";
-import { MessagesSquare, MessageSquarePlus, Users, BellOff, Search, X } from "lucide-react";
+import { MessageSquarePlus, Users, BellOff, Search } from "lucide-react";
 import { NewConversationDialog } from "./NewConversationDialog";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { ChatThread } from "./ChatThread";
@@ -36,16 +36,17 @@ function formatRelativeTime(ts: number): string {
 // Desktop: floating panel + windows
 // Mobile: bottom sheet conversation list + full-screen sheet for chat
 function FloatingMessengerInner({ orgId }: Props) {
-  const { t, isRtl } = useLanguage();
-  const { isListOpen, toggleList, closeList, openChats, openChat } = useMessenger();
+  const { t } = useLanguage();
+  const { isListOpen, closeList, openChats, openChat } = useMessenger();
   const [search, setSearch] = useState("");
   const [dialogMode, setDialogMode] = useState<"dm" | "group" | null>(null);
   const [mobileOpenId, setMobileOpenId] = useState<Id<"dmConversations"> | null>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+  // Callback-ref state: the panel can mount after the list opens (it waits for
+  // getMe), and placement must run when it does.
+  const [panelEl, setPanelEl] = useState<HTMLDivElement | null>(null);
 
   const me = useQuery(api.users.getMe);
   const conversations = useQuery(api.directMessages.listConversations, { orgId });
-  const unreadCount = useQuery(api.directMessages.getUnreadCount, { orgId });
   const markDelivered = useMutation(api.directMessages.markDelivered);
   const currentUserId = me?._id;
 
@@ -74,17 +75,66 @@ function FloatingMessengerInner({ orgId }: Props) {
     }
   }, [conversations, currentUserId, markDelivered]);
 
-  // Close list panel when clicking outside
+  // Close list panel on a press outside it, or on Escape. The top-bar button
+  // toggles the list itself, so it is not "outside" — otherwise its click would
+  // close and reopen.
+  // Paused while the new-conversation dialog (a separate portal) is open, so
+  // pressing inside it or escaping it leaves the list behind it intact. Its
+  // Escape closes it and re-renders, re-attaching this listener, before the
+  // same event reaches the document; Radix layers mark an Escape they handled
+  // with preventDefault, so a handled Escape is ignored here.
   useEffect(() => {
-    if (!isListOpen) return;
-    function handleClick(e: MouseEvent) {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
-        closeList();
-      }
+    if (!isListOpen || dialogMode) return;
+    function handlePointerDown(e: PointerEvent) {
+      const target = e.target as Element;
+      if (target.closest?.(`#${MESSENGER_TRIGGER_ID}`)) return;
+      if (panelEl && !panelEl.contains(target)) closeList();
     }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [isListOpen, closeList]);
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && !e.defaultPrevented) closeList();
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isListOpen, closeList, panelEl, dialogMode]);
+
+  // Keep the list just below the top bar. Banners (update, support access,
+  // impersonation) render above the bar and can appear or be dismissed while
+  // the list is open, so the bar's bottom edge is measured and re-measured
+  // whenever the bar or anything above it changes — not assumed.
+  useLayoutEffect(() => {
+    if (!panelEl) return;
+    const panel = panelEl;
+    const bar = document.getElementById(MESSENGER_TRIGGER_ID)?.closest("header");
+    if (!bar) return;
+    const barEl = bar;
+    function place() {
+      const top = Math.round(barEl.getBoundingClientRect().bottom) + 8;
+      panel.style.top = `${top}px`;
+      panel.style.maxHeight = `min(480px, calc(100dvh - ${top + 8}px))`;
+    }
+    const resizes = new ResizeObserver(place);
+    function observeBarAndAbove() {
+      resizes.disconnect();
+      resizes.observe(barEl);
+      for (let el = barEl.previousElementSibling; el; el = el.previousElementSibling) {
+        resizes.observe(el);
+      }
+      place();
+    }
+    const mutations = new MutationObserver(observeBarAndAbove);
+    if (barEl.parentElement) mutations.observe(barEl.parentElement, { childList: true });
+    observeBarAndAbove();
+    window.addEventListener("resize", place);
+    return () => {
+      resizes.disconnect();
+      mutations.disconnect();
+      window.removeEventListener("resize", place);
+    };
+  }, [panelEl]);
 
   type ConvMember = { _id: string; name?: string; imageUrl?: string } | null;
   type ConvItem = { _id: Id<"dmConversations">; type: string; name?: string; members?: ConvMember[]; isMuted?: boolean; hasUnread?: boolean; lastMessageAt: number; lastMessageSenderId?: string; lastMessageBody?: string };
@@ -94,18 +144,6 @@ function FloatingMessengerInner({ orgId }: Props) {
     if (c.name?.toLowerCase().includes(q)) return true;
     return c.members?.some((m: ConvMember) => m?.name?.toLowerCase().includes(q));
   });
-  const displayUnreadCount = unreadCount ?? 0;
-  const hasUnreadMessages = displayUnreadCount > 0;
-
-  // FAB position
-  const fabPosition = isRtl
-    ? "fixed bottom-6 left-6 z-50"
-    : "fixed bottom-6 right-6 z-50";
-
-  // Panel position (above FAB, same side)
-  const panelPosition = isRtl
-    ? "fixed bottom-[72px] left-6 z-50"
-    : "fixed bottom-[72px] right-6 z-50";
 
   function handleSelectConversation(id: Id<"dmConversations">) {
     // Mobile: open sheet; Desktop: open floating window
@@ -121,39 +159,33 @@ function FloatingMessengerInner({ orgId }: Props) {
 
   return (
     <>
-      {/* ── FAB button ──────────────────────────────────────────────────────── */}
-      <button
-        onClick={toggleList}
-        className={cn(
-          fabPosition,
-          "h-14 w-14 rounded-full shadow-xl flex items-center justify-center transition-all duration-200",
-          "bg-gradient-to-br from-blue-600 to-blue-500 text-white hover:scale-105 active:scale-95",
-          isListOpen && "rotate-0",
-          hasUnreadMessages && !isListOpen && "autoflow-chat-attention"
-        )}
-        aria-label={t("Messages")}
-      >
-        {isListOpen ? (
-          <X className="h-6 w-6" />
-        ) : (
-          <MessagesSquare className="h-6 w-6" />
-        )}
-        {/* Unread badge */}
-        {!isListOpen && hasUnreadMessages && (
-          <span className="absolute -top-1 -end-1 min-w-[20px] h-5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1 border-2 border-white">
-            {displayUnreadCount > 9 ? "9+" : displayUnreadCount}
-          </span>
-        )}
-      </button>
+      {/* ── Desktop floating chat windows ────────────────────────────────────── */}
+      {/* Rendered before the list so the list paints over them (same z-50). */}
+      <div className="hidden md:block" data-testid="messenger-chat-windows">
+        {openChats.map((id, i) => (
+          <FloatingChatWindow
+            key={id}
+            conversationId={id}
+            currentUserId={me._id}
+            index={i}
+          />
+        ))}
+      </div>
 
-      {/* ── Conversation list panel ──────────────────────────────────────────── */}
+      {/* ── Conversation list panel — opened from the top-bar Messages button.
+          There is no floating trigger: it covered page actions (SCRUM-612). ── */}
       {isListOpen && (
         <div
-          ref={panelRef}
+          ref={setPanelEl}
+          data-testid="messenger-list"
           className={cn(
-            panelPosition,
-            "w-[320px] bg-white rounded-2xl shadow-2xl border border-slate-200/50 overflow-hidden flex flex-col",
-            "max-h-[480px]"
+            // top / max-height are set from the top bar's position above.
+            // z-50, like the chat windows that stack along the same end edge:
+            // it renders after them, so it paints over them, while dialogs
+            // (z-50, portaled later) still cover it.
+            "fixed top-16 md:top-[4.5rem] end-2 md:end-6 z-50",
+            "w-[min(320px,calc(100vw-1rem))] bg-white rounded-2xl shadow-2xl border border-slate-200/50 overflow-hidden flex flex-col",
+            "max-h-[min(480px,calc(100dvh-5rem))]"
           )}
         >
           {/* Panel header */}
@@ -271,18 +303,6 @@ function FloatingMessengerInner({ orgId }: Props) {
           </div>
         </div>
       )}
-
-      {/* ── Desktop floating chat windows ────────────────────────────────────── */}
-      <div className="hidden md:block">
-        {openChats.map((id, i) => (
-          <FloatingChatWindow
-            key={id}
-            conversationId={id}
-            currentUserId={me._id}
-            index={i}
-          />
-        ))}
-      </div>
 
       {/* ── Mobile: full-screen chat sheet ───────────────────────────────────── */}
       <Sheet open={mobileOpenId !== null} onOpenChange={(v) => !v && setMobileOpenId(null)}>

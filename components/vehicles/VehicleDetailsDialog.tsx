@@ -49,6 +49,11 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { isChosenMethod } from "@/components/payments/paymentMethod";
+import { HeldDepositActions } from "@/components/vehicles/HeldDepositActions";
+import { CorrectAcquisitionCostDialog } from "@/components/vehicles/CorrectAcquisitionCostDialog";
+import { UnconfirmedPayoutNotice } from "@/components/deposits/UnconfirmedPayoutNotice";
+import { usePendingDepositPayouts } from "@/hooks/usePendingDepositPayouts";
 import { getErrorMessage } from "@/lib/errors";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 
@@ -75,6 +80,13 @@ export function VehicleDetailsDialog({
   const canEditVehicles = !permissionsLoading && hasPermission(PERMISSIONS.EDIT_VEHICLES);
   const canViewCustomers = !permissionsLoading && hasPermission(PERMISSIONS.VIEW_CUSTOMERS);
   const canCreateVehicles = !permissionsLoading && hasPermission(PERMISSIONS.CREATE_VEHICLES);
+  // Correcting a posted cost returns the cost, so it needs both permissions (SCRUM-650).
+  const canCorrectCost =
+    !permissionsLoading &&
+    hasPermission(PERMISSIONS.MANAGE_FINANCE) &&
+    hasPermission(PERMISSIONS.VIEW_COST_PRICE);
+  const showCorrectCostAction = canCorrectCost && !!vehicle && vehicle.status !== "SOLD" && vehicle.sourceType !== "SOURCED";
+  const [costCorrectionOpen, setCostCorrectionOpen] = useState(false);
 
   const relations = useQuery(
     api.vehicles.getRelations,
@@ -105,24 +117,56 @@ export function VehicleDetailsDialog({
   );
   const releaseDeposit = useMutation(api.deposits.release);
   const commandId = useCommandIdentity();
+  // SCRUM-469 F1: the identity (resolution + METHOD + key) of a payout that may
+  // have committed, per deposit, kept until confirmed or explicitly dismissed.
+  const pendingPayouts = usePendingDepositPayouts(commandId.retire);
   const upsertLandedCosts = useMutation(api.vehicles.upsertLandedCosts);
   const createReservation = useMutation(api.vehicles.createReservation);
   // Minted at the user-intent boundary and held across attempts. With a deposit
   // this books real customer money, so a per-attempt key would take the deposit
   // twice on a lost response.
-  const reservationKeyRef = useRef<string | null>(null);
+  //
+  // PER VEHICLE, and cleared only by a CONFIRMED success for that vehicle: this
+  // dialog stays mounted across close/reopen and vehicle changes, and closing is
+  // not confirmation, so an attempt that may have committed keeps its identity
+  // (the server refuses a changed request under it rather than double-booking).
+  const reservationKeysRef = useRef<Map<string, string>>(new Map());
   const releaseReservation = useMutation(api.vehicles.releaseReservation);
   const [releasingDepositId, setReleasingDepositId] = useState<string | null>(null);
-  const [refundMethodByDeposit, setRefundMethodByDeposit] = useState<Record<string, PaymentMethod>>({});
+  // SCRUM-469: a refund method belongs to ONE payout. It is stored with the
+  // payout generation (`releaseCount`) it was chosen for, so a CONFIRMED partial
+  // payout (the deposit stays HELD and its releaseCount advances) never carries
+  // it into the next payout, while a retry of the same unconfirmed attempt (same
+  // generation) keeps both its method and its command identity.
+  const [refundChoiceByDeposit, setRefundChoiceByDeposit] = useState<
+    Record<string, { method: PaymentMethod; generation: number }>
+  >({});
   const [landedCostItems, setLandedCostItems] = useState<
     { id: string; label: string; amount: number; paymentMethod: PaymentMethod }[]
   >([]);
   const [savingLandedCosts, setSavingLandedCosts] = useState(false);
   const [reservationCustomerId, setReservationCustomerId] = useState("");
   const [reservationDeposit, setReservationDeposit] = useState("");
+  const [reservationMethod, setReservationMethod] = useState<PaymentMethod | undefined>(undefined);
+  // A deposit taken at reservation is money in hand, so it needs the same
+  // authority as recording one (SCRUM-444). Reserving without a deposit does not.
+  const canRecordDeposit = !permissionsLoading && hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+  const reservationHasDeposit = reservationDeposit !== "";
   const [reservationExpiresAt, setReservationExpiresAt] = useState("");
   const [savingReservation, setSavingReservation] = useState(false);
   const [activeGroup, setActiveGroup] = useState<VehicleDetailsGroup>("overview");
+
+  // Closing the dialog, or looking at another vehicle, clears the chosen
+  // methods: the next open starts with none chosen (SCRUM-469). It deliberately
+  // does NOT touch the reservation idempotency key — an unconfirmed attempt keeps
+  // its identity, so a different method chosen afterwards is refused by the
+  // server (fingerprint mismatch) instead of booking a second deposit.
+  const detailsSessionId = open ? (vehicle?._id ?? null) : null;
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- A new open / vehicle is a new intent: clear the chosen methods.
+    setReservationMethod(undefined);
+    setRefundChoiceByDeposit({});
+  }, [detailsSessionId]);
 
   // Prefill the expiry field from the org's configured hold period (falls
   // back to 3 days) — still editable, so a specific reservation can override it.
@@ -190,23 +234,37 @@ export function VehicleDetailsDialog({
     if (!activeOrgId || !vehicle || !reservationCustomerId) return;
     setSavingReservation(true);
     try {
-      reservationKeyRef.current ??= `vehicle-reservation:${crypto.randomUUID()}`;
+      const keys = reservationKeysRef.current;
+      let idempotencyKey = keys.get(vehicle._id);
+      if (!idempotencyKey) {
+        idempotencyKey = `vehicle-reservation:${crypto.randomUUID()}`;
+        keys.set(vehicle._id, idempotencyKey);
+      }
       await createReservation({
-        idempotencyKey: reservationKeyRef.current,
+        idempotencyKey,
         orgId: activeOrgId,
         vehicleId: vehicle._id,
         customerId: reservationCustomerId as any,
         depositAmount: reservationDeposit ? Number(reservationDeposit) : undefined,
+        depositMethod: reservationDeposit ? reservationMethod : undefined,
         expiresAt: reservationExpiresAt ? new Date(reservationExpiresAt).getTime() : undefined,
       });
-      // Only a SUCCESS retires the identity.
-      reservationKeyRef.current = null;
+      // Only a CONFIRMED success retires this vehicle's identity.
+      keys.delete(vehicle._id);
       setReservationCustomerId("");
       setReservationDeposit("");
+      setReservationMethod(undefined);
       setReservationExpiresAt("");
       toast.success(t("ReservationCreated" as any));
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      // The kept identity refuses a request that differs from the earlier,
+      // possibly-committed attempt. Say so in the user's language instead of
+      // surfacing the server's technical wording.
+      toast.error(
+        getErrorMessage(error).includes("Idempotency key reused with different request content")
+          ? t("ReservationAttemptChanged" as any)
+          : getErrorMessage(error)
+      );
     } finally {
       setSavingReservation(false);
     }
@@ -228,55 +286,74 @@ export function VehicleDetailsDialog({
   const handleReleaseDeposit = async (
     depositId: any,
     resolution: "REFUNDED" | "FORFEITED",
-    observedReleaseCount: number
+    observedReleaseCount: number,
+    // SCRUM-469: the method the operator CHOSE, handed in by the control that
+    // refuses to offer Refund without one. Never read back from state with a
+    // fallback: a refund with no method has no account to leave by.
+    chosenRefundMethod?: PaymentMethod
   ) => {
     if (!activeOrgId) return;
+    if (resolution === "REFUNDED" && !isChosenMethod(chosenRefundMethod)) return;
+    const refundMethod = resolution === "REFUNDED" ? chosenRefundMethod : "NONE";
+    // An earlier attempt on this deposit that never confirmed keeps its identity.
+    // A DIFFERENT decision is refused here (the notice explains) rather than
+    // minting a new key that could pay the same or newly freed money out twice.
+    const gate = pendingPayouts.check(String(depositId), resolution, String(refundMethod));
+    if (gate.status === "blocked") return;
     setReleasingDepositId(depositId);
-    const refundMethod = resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : "NONE";
+    // SCRUM-313 — a GENERATION-AWARE retained identity. This line has been
+    // wrong twice in two opposite directions, so both failures are recorded:
+    //
+    //   1. A key DERIVED from (deposit, resolution) held FOREVER. The SECOND
+    //      genuine payout — the free part today, the rest when the cars it was
+    //      held against fall away — matched the first's stored command: the
+    //      mutation returned without running, moved no money, and the operator
+    //      was told the customer had been refunded.
+    //   2. A key minted PER ATTEMPT (`renew`) to escape (1). That fixes the
+    //      second payout by giving up retry safety entirely: a lost response
+    //      plus one more tap is two payouts of the same free balance.
+    //
+    // Both are avoidable because the server keeps an authoritative monotonic
+    // discriminator. `releaseCount` is incremented inside the same patch that
+    // pays the money out (`convex/utils/depositHelpers.ts`), so it names the
+    // GENERATION of this payout:
+    //
+    //   same generation + same decision -> same key -> a retry is deduped;
+    //   an unknown/lost response        -> the key is NOT retired, so the
+    //                                      retry reuses it;
+    //   a confirmed payout              -> releaseCount advances, so a later
+    //                                      genuine payout is a NEW generation
+    //                                      and gets its OWN identity.
+    //
+    // The refund method is in the intent because it is part of the decision
+    // being made, not a presentation detail: refunding to CASH and refunding
+    // to BANK_TRANSFER are different commands and must not share an identity.
+    //
+    // The intent is the one recorded with the FIRST attempt: a retry after the
+    // generation moved (the lost response had in fact committed, or freed money
+    // arrived) must still be that attempt, not a new command. It is also the
+    // attempt this call belongs to, so a late failure cannot settle a newer record.
+    const intent =
+      gate.recordedIntent ??
+      `release-deposit:${String(depositId)}:${resolution}:${refundMethod}:gen${observedReleaseCount}`;
+    pendingPayouts.record(String(depositId), { resolution, method: String(refundMethod), intent });
     try {
-      // SCRUM-313 — a GENERATION-AWARE retained identity. This line has been
-      // wrong twice in two opposite directions, so both failures are recorded:
-      //
-      //   1. A key DERIVED from (deposit, resolution) held FOREVER. The SECOND
-      //      genuine payout — the free part today, the rest when the cars it was
-      //      held against fall away — matched the first's stored command: the
-      //      mutation returned without running, moved no money, and the operator
-      //      was told the customer had been refunded.
-      //   2. A key minted PER ATTEMPT (`renew`) to escape (1). That fixes the
-      //      second payout by giving up retry safety entirely: a lost response
-      //      plus one more tap is two payouts of the same free balance.
-      //
-      // Both are avoidable because the server keeps an authoritative monotonic
-      // discriminator. `releaseCount` is incremented inside the same patch that
-      // pays the money out (`convex/utils/depositHelpers.ts`), so it names the
-      // GENERATION of this payout:
-      //
-      //   same generation + same decision -> same key -> a retry is deduped;
-      //   an unknown/lost response        -> the key is NOT retired, so the
-      //                                      retry reuses it;
-      //   a confirmed payout              -> releaseCount advances, so a later
-      //                                      genuine payout is a NEW generation
-      //                                      and gets its OWN identity.
-      //
-      // The refund method is in the intent because it is part of the decision
-      // being made, not a presentation detail: refunding to CASH and refunding
-      // to BANK_TRANSFER are different commands and must not share an identity.
-      const generation = observedReleaseCount;
-      const intent = `release-deposit:${String(depositId)}:${resolution}:${refundMethod}:gen${generation}`;
       await releaseDeposit({
         orgId: activeOrgId,
         depositId,
         resolution,
-        refundMethod: resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : undefined,
+        refundMethod: resolution === "REFUNDED" ? chosenRefundMethod : undefined,
         idempotencyKey: commandId.for(intent),
       });
       commandId.retire(intent);
+      pendingPayouts.confirm(String(depositId));
       toast.success(
         resolution === "REFUNDED"
           ? (t("DepositRefundedSuccess" as any) ?? "Deposit refunded")
           : (t("DepositForfeitedSuccess" as any) ?? "Deposit forfeited")
       );
     } catch (error) {
+      pendingPayouts.settleFailure(String(depositId), error, intent);
       toast.error(getErrorMessage(error));
     } finally {
       setReleasingDepositId(null);
@@ -455,6 +532,31 @@ export function VehicleDetailsDialog({
                   <div className="space-y-1">
                     <span className="text-sm font-medium text-muted-foreground">{t("PurchasePrice" as any) || "Purchase Price"}</span>
                     <p className="text-sm font-medium">{vehicle.purchasePrice.toLocaleString()} JOD</p>
+                    {showCorrectCostAction && (
+                      <Button
+                        type="button"
+                        variant="link"
+                        size="sm"
+                        className="h-auto p-0 text-xs"
+                        onClick={() => setCostCorrectionOpen(true)}
+                      >
+                        {t("CostCorrectionAction" as any)}
+                      </Button>
+                    )}
+                  </div>
+                )}
+                {/* Reachable on its own when the price cell is not shown. */}
+                {showCorrectCostAction && !(canViewPurchasePrice && vehicle.purchasePrice !== undefined) && (
+                  <div className="space-y-1">
+                    <Button
+                      type="button"
+                      variant="link"
+                      size="sm"
+                      className="h-auto p-0 text-xs"
+                      onClick={() => setCostCorrectionOpen(true)}
+                    >
+                      {t("CostCorrectionAction" as any)}
+                    </Button>
                   </div>
                 )}
 
@@ -473,8 +575,8 @@ export function VehicleDetailsDialog({
                     </span>
                     <div className="space-y-2">
                       {deposits.map((deposit) => (
-                        <div key={deposit._id} className="bg-muted/30 p-3 rounded-lg border text-sm flex items-center justify-between gap-3">
-                          <div>
+                        <div key={deposit._id} className="bg-muted/30 p-3 rounded-lg border text-sm flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                          <div className="min-w-0">
                             <p className="font-medium">
                               {deposit.amount.toLocaleString()} JOD{" "}
                               <span
@@ -502,36 +604,42 @@ export function VehicleDetailsDialog({
                             {deposit.notes && <p className="text-xs text-muted-foreground mt-0.5 italic">&ldquo;{deposit.notes}&rdquo;</p>}
                           </div>
                           {deposit.status === "HELD" && !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS) && (
-                            <div className="flex gap-2 shrink-0 items-center">
-                              <div className="w-32">
-                                <PaymentMethodSelect
-                                  t={t as any}
-                                  value={refundMethodByDeposit[deposit._id] ?? "CASH"}
-                                  onValueChange={(method) =>
-                                    setRefundMethodByDeposit((prev) => ({ ...prev, [deposit._id]: method }))
-                                  }
-                                  ariaLabel={t("PaymentMethodLabel" as any)}
-                                />
-                              </div>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-7 text-xs"
-                                disabled={releasingDepositId === deposit._id}
-                                onClick={() => handleReleaseDeposit(deposit._id, "REFUNDED", deposit.releaseCount ?? 0)}
-                              >
-                                {t("Refund" as any) ?? "Refund"}
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-7 text-xs text-destructive hover:text-destructive"
-                                disabled={releasingDepositId === deposit._id}
-                                onClick={() => handleReleaseDeposit(deposit._id, "FORFEITED", deposit.releaseCount ?? 0)}
-                              >
-                                {t("Forfeit" as any) ?? "Forfeit"}
-                              </Button>
-                            </div>
+                            <HeldDepositActions
+                              t={t as any}
+                              method={
+                                refundChoiceByDeposit[deposit._id]?.generation === (deposit.releaseCount ?? 0)
+                                  ? refundChoiceByDeposit[deposit._id]?.method
+                                  : undefined
+                              }
+                              onMethodChange={(method) =>
+                                setRefundChoiceByDeposit((prev) => ({
+                                  ...prev,
+                                  [deposit._id]: { method, generation: deposit.releaseCount ?? 0 },
+                                }))
+                              }
+                              busy={releasingDepositId === deposit._id}
+                              onRefund={(method) =>
+                                handleReleaseDeposit(deposit._id, "REFUNDED", deposit.releaseCount ?? 0, method)
+                              }
+                              onForfeit={() => handleReleaseDeposit(deposit._id, "FORFEITED", deposit.releaseCount ?? 0)}
+                            />
+                          )}
+                          {pendingPayouts.blocked[deposit._id] && (
+                            <UnconfirmedPayoutNotice
+                              t={t as any}
+                              pending={pendingPayouts.blocked[deposit._id]!}
+                              busy={releasingDepositId === deposit._id}
+                              onRetry={() => {
+                                const recorded = pendingPayouts.blocked[deposit._id]!;
+                                void handleReleaseDeposit(
+                                  deposit._id,
+                                  recorded.resolution,
+                                  deposit.releaseCount ?? 0,
+                                  recorded.resolution === "REFUNDED" ? (recorded.method as PaymentMethod) : undefined
+                                );
+                              }}
+                              onDismiss={() => pendingPayouts.dismiss(deposit._id)}
+                            />
                           )}
                         </div>
                       ))}
@@ -918,6 +1026,20 @@ export function VehicleDetailsDialog({
                         value={reservationDeposit}
                         onChange={(event) => setReservationDeposit(event.target.value)}
                       />
+                      {reservationHasDeposit && canRecordDeposit ? (
+                        <PaymentMethodSelect
+                          t={t as any}
+                          value={reservationMethod}
+                          onValueChange={setReservationMethod}
+                          ariaLabel={t("PaymentMethodLabel" as any)}
+                          placeholder={t("DepositChooseMethod" as any)}
+                        />
+                      ) : null}
+                      {reservationHasDeposit && !canRecordDeposit ? (
+                        <p className="text-xs text-muted-foreground" data-testid="reservation-deposit-needs-manager">
+                          {t("ReservationDepositNeedsManager" as any)}
+                        </p>
+                      ) : null}
                     </div>
                     <div className="space-y-1">
                       <Label>{t("ExpiresAt" as any)}</Label>
@@ -931,7 +1053,11 @@ export function VehicleDetailsDialog({
                   <div className="flex justify-end">
                     <Button
                       onClick={handleCreateReservation}
-                      disabled={savingReservation || !reservationCustomerId}
+                      disabled={
+                        savingReservation ||
+                        !reservationCustomerId ||
+                        (reservationHasDeposit && (!canRecordDeposit || !isChosenMethod(reservationMethod)))
+                      }
                     >
                       <Plus className="h-4 w-4 me-2" />
                       {t("CreateReservation" as any)}
@@ -1029,6 +1155,13 @@ export function VehicleDetailsDialog({
       </DialogContent>
       {vehicle && (
         <>
+          {canCorrectCost && (
+            <CorrectAcquisitionCostDialog
+              vehicle={vehicle}
+              open={costCorrectionOpen}
+              onOpenChange={setCostCorrectionOpen}
+            />
+          )}
           <TestDriveDialog
             open={testDriveOpen}
             onOpenChange={setTestDriveOpen}
@@ -1039,6 +1172,7 @@ export function VehicleDetailsDialog({
             open={workOrderOpen}
             onOpenChange={setWorkOrderOpen}
             vehicleId={vehicle._id}
+            vehicleSourceType={vehicle.sourceType}
             workOrder={selectedWorkOrder}
           />
         </>

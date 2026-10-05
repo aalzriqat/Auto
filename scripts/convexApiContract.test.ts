@@ -34,7 +34,9 @@ const CONTRACT = path.join(REPO_ROOT, "apps", "mobile", "src", "convexApi.ts");
 // the dealer home screen's workspace search. Same story: the query already
 // existed in `convex/search.ts`, so this is one more real reference now
 // checked against the backend, with nothing dropped from the extraction.
-const EXPECTED_REFERENCE_COUNT = 195;
+// 195 -> 196: `depositRequests:request`, the salesperson's deposit request on the
+// mobile sales wizard (SCRUM-444). A real reference, checked against the backend.
+const EXPECTED_REFERENCE_COUNT = 196;
 
 describe("mobile convexApi contract extraction", () => {
   test("reads the reference out of a multi-line declaration with nested generics", () => {

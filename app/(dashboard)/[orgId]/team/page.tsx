@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EditRoleDialog } from "@/components/team/EditRoleDialog";
+import { syncRolePermissionsMessage } from "@/components/team/syncRolePermissionsMessage";
 import { ChangeMemberRoleDialog } from "@/components/team/ChangeMemberRoleDialog";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { useTableControls } from "@/hooks/useTableControls";
@@ -176,8 +177,11 @@ export default function TeamPage() {
                 onClick={async () => {
                   if (!activeOrgId) return;
                   try {
-                    const n = await syncRolePermissions({ orgId: activeOrgId });
-                    toast.success(`Synced ${n} roles to latest permission templates.`);
+                    // A backend older than this page returns a bare count (the frontend
+                    // deploys first); the sync has already written, so never fail here.
+                    const result: Awaited<ReturnType<typeof syncRolePermissions>> | number =
+                      await syncRolePermissions({ orgId: activeOrgId });
+                    toast.success(syncRolePermissionsMessage(result, (key) => t(key as any)));
                   } catch (e: any) {
                     toast.error(e);
                   }

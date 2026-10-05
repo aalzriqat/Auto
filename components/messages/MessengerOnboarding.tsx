@@ -44,8 +44,8 @@ const STEPS: Step[] = [
     icon: <Users className="h-8 w-8 text-blue-500" />,
     titleEn: "Groups & DMs",
     titleAr: "مجموعات ورسائل خاصة",
-    bodyEn: "Click the chat icon in the top bar or the blue button in the corner to open your conversations. Use the group icon to start a team group chat.",
-    bodyAr: "اضغط على أيقونة المحادثات في الشريط العلوي أو الزر الأزرق في الزاوية لعرض محادثاتك. استخدم أيقونة المجموعة لإنشاء محادثة جماعية.",
+    bodyEn: "Click the chat icon in the top bar to open your conversations. Use the group icon to start a team group chat.",
+    bodyAr: "اضغط على أيقونة المحادثات في الشريط العلوي لعرض محادثاتك. استخدم أيقونة المجموعة لإنشاء محادثة جماعية.",
   },
 ];
 
@@ -92,13 +92,8 @@ export function MessengerOnboarding() {
         aria-label={isRtl ? "إغلاق جولة الرسائل" : "Dismiss messenger onboarding"}
       />
 
-      {/* Card */}
-      <div
-        className={cn(
-          "fixed z-[61] bottom-24 w-[320px] bg-white rounded-2xl shadow-2xl overflow-hidden",
-          isRtl ? "left-6" : "right-6"
-        )}
-      >
+      {/* Card — top-end, under the top-bar Messages button it introduces */}
+      <div className="fixed z-[61] top-20 end-2 sm:end-6 w-[min(320px,calc(100vw-1rem))] bg-white rounded-2xl shadow-2xl overflow-hidden">
         {/* Progress bar */}
         <div className="h-1 bg-slate-100">
           <div
@@ -149,24 +144,7 @@ export function MessengerOnboarding() {
             </Button>
           </div>
         </div>
-
-        {/* Arrow pointing to FAB */}
-        <div
-          className={cn(
-            "absolute -bottom-2 w-4 h-4 bg-white rotate-45 shadow-md",
-            isRtl ? "left-8" : "right-8"
-          )}
-        />
       </div>
-
-      {/* Spotlight ring around the FAB */}
-      <div
-        className={cn(
-          "fixed bottom-4 z-[60] w-20 h-20 rounded-full",
-          "border-4 border-blue-400 animate-pulse pointer-events-none",
-          isRtl ? "left-4" : "right-4"
-        )}
-      />
     </>,
     document.body
   );

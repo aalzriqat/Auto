@@ -2,7 +2,12 @@ packages:
   - "apps/*"
   - "packages/*"
 overrides:
-  undici: ^7.29.0
+  # GHSA-rfgv-xxqx-mfg5 (DoS) and GHSA-w293-vg96-wgc3 (TLS certificate validation
+  # bypass), both HIGH, published 2026-09-29, patched in 7.29.1 (SCRUM-483). Dev-only
+  # (jsdom). dealer-worker's separate npm tree (wrangler -> miniflare) carries the
+  # same pin in dealer-worker/package.json overrides. Pinned exact; 7.29.1 was published
+  # 2026-09-04, clearing the minimumReleaseAge (<24h) gate.
+  undici: 7.29.1
   # Security overrides — force patched transitive deps flagged by `pnpm audit`.
   # GHSA-rgj7-g3m4-5g8c: libheif vulnerabilities (GHSA-g89c-p67h-r497,
   # GHSA-2jg2-4ch7-h545) reachable through sharp's bundled libvips. Patched
@@ -138,9 +143,12 @@ overrides:
   # old-API CommonJS consumers (minimatch@3 via eslint/exceljs) — forcing 5.x
   # there breaks them with "expand is not a function". Only the new-API >=3 line
   # (minimatch@9 via typescript-eslint) can safely take 5.x.
-  "brace-expansion@1": 1.1.18
-  "brace-expansion@2": 2.1.4
-  "brace-expansion@>=3.0.0": 5.0.9
+  # SCRUM-490: bumped to 1.1.20 / 2.1.6 / 5.0.11 for two new HIGH DoS advisories
+  # (nested-brace recursion; patched floors 1.1.20 / 2.1.6 / 5.0.11, all published
+  # 2026-09-14, so they clear the minimumReleaseAge gate). Same per-major pinning.
+  "brace-expansion@1": 1.1.20
+  "brace-expansion@2": 2.1.6
+  "brace-expansion@>=3.0.0": 5.0.11
   # @xmldom/xmldom: pin each line to its own patched release. A batch of HIGH
   # advisories published against this package broke the repo-wide required
   # dependency-audit check with no dependency change anywhere in this
@@ -212,3 +220,34 @@ auditConfig:
   ignoreGhsas:
     - GHSA-w3rx-r6r6-pgpr
     - GHSA-5p2g-fcmc-qvqq
+    # SCRUM-556: node-forge RSA PKCS#1 v1.5 signature verification accepts extra
+    # nested DigestAlgorithm elements (HIGH). Affected <=1.4.0 with
+    # first_patched_version null, and npm's latest is 1.4.0 itself — so no
+    # override or bump can clear it. Reached only through Expo CLI
+    # developer/EAS signing tooling, every path rooted at
+    #   apps/mobile > expo > @expo/cli
+    # (verified with `pnpm why node-forge -r`): @expo/cli 57.0.6 depends on
+    # node-forge 1.4.0 directly and also via @expo/code-signing-certificates
+    # 0.0.6. Not in the Next.js web runtime, the Convex backend, dealer-worker,
+    # or the shipped mobile JS bundle; on-device update signature verification
+    # is native expo-updates.
+    #
+    # Ignored individually rather than by lowering --audit-level, so every other
+    # high advisory still fails the required dependency-audit check. Remove once
+    # node-forge > 1.4.0 ships and pnpm audit no longer reports
+    # GHSA-86w9-cpqp-85rv (both @expo/cli and @expo/code-signing-certificates
+    # must resolve to the patched version).
+    - GHSA-86w9-cpqp-85rv
+    # GHSA-vfj7-8cjw-p6xm: braces <=3.0.3 can exhaust the Node stack on a
+    # deeply nested, attacker-controlled brace pattern. No patched npm release
+    # exists. Every locked path passes through micromatch 4.0.8 and reaches
+    # shadcn's generation CLI, Next ESLint tooling, or Expo/Metro/Jest build
+    # and test tooling. No product source imports these glob packages or passes
+    # request input to them as a pattern. Tooling that processes an untrusted
+    # pattern remains exposed; this exception is not a fix.
+    # Keep the high audit for every other advisory. Remove this entry when
+    # every locked path uses a version the advisory marks fixed, or all paths
+    # are removed. Reassess immediately if a shipped runtime gains a path from
+    # untrusted input to these packages. Ruling: D-16 / SCRUM-583 (Jira c21755);
+    # fail-closed audit hardening is SCRUM-584; shadcn hygiene is SCRUM-585.
+    - GHSA-vfj7-8cjw-p6xm

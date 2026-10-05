@@ -10,6 +10,7 @@ import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentM
 import { fromMinorUnits, toMinorUnits } from "./utils/money";
 import { hookSupplierReceivableCollected } from "./accounting/workflowHooks";
 import { auditLog } from "./financialAudit";
+import { postingStateForKey } from "./accounting/supplierCostRecoveryPosting";
 
 /**
  * Collecting the dealership's agency margin from a supplier who was paid
@@ -158,19 +159,37 @@ export const list = query({
   },
 });
 
+/** Rows read per subledger; one past it means the summary is incomplete. */
+const OUTSTANDING_SUMMARY_LIMIT = 1000;
+
 /**
- * What suppliers still owe the dealership in agency margin, in total and by
- * supplier. The aging view the GL balance alone could never produce.
+ * What suppliers still owe the dealership, in total and by supplier. The aging
+ * view the GL balance alone could never produce.
+ *
+ * SCRUM-389: Receivable from Suppliers now carries TWO subledgers — the agency
+ * margin claims below and the supplier-borne vehicle costs in
+ * `supplierCostRecoveries` — so the totals cover both, or they would disagree
+ * with the account they summarize. A cost recovery counts only once its
+ * source debit has POSTED: a queued one is not in the ledger yet. `complete`
+ * is false when either read hit its bound, so a partial total is never
+ * presented as the whole.
  */
 export const outstandingSummary = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
-    const rows = await ctx.db
+    const fetched = await ctx.db
       .query("vehicleSupplierReceivables")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .take(1000);
+      .take(OUTSTANDING_SUMMARY_LIMIT + 1);
+    const recoveriesFetched = await ctx.db
+      .query("supplierCostRecoveries")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .take(OUTSTANDING_SUMMARY_LIMIT + 1);
+    const complete =
+      fetched.length <= OUTSTANDING_SUMMARY_LIMIT && recoveriesFetched.length <= OUTSTANDING_SUMMARY_LIMIT;
+    const rows = fetched.slice(0, OUTSTANDING_SUMMARY_LIMIT);
 
     let totalDue = 0;
     let totalReceived = 0;
@@ -193,11 +212,41 @@ export const outstandingSummary = query({
       }
     }
 
+    let costRecoveryOutstanding = 0;
+    const liveRecoveries = recoveriesFetched
+      .slice(0, OUTSTANDING_SUMMARY_LIMIT)
+      .filter((recovery) => recovery.status !== "REVERSED");
+    const sourceStates = await Promise.all(
+      liveRecoveries.map((recovery) => postingStateForKey(ctx, args.orgId, recovery.sourceEventKey))
+    );
+    for (const [i, recovery] of liveRecoveries.entries()) {
+      if (sourceStates[i].state !== "POSTED") continue;
+      const due = fromMinorUnits(recovery.amountDueMinor, recovery.currency);
+      const received = fromMinorUnits(recovery.amountRecoveredMinor, recovery.currency);
+      const remaining = fromMinorUnits(
+        Math.max(0, recovery.amountDueMinor - recovery.amountRecoveredMinor),
+        recovery.currency
+      );
+      totalDue += due;
+      totalReceived += received;
+      totalOutstanding += remaining;
+      costRecoveryOutstanding += remaining;
+      if (remaining > 0) {
+        const entry = bySupplier.get(recovery.sourcedFromName) ?? { outstanding: 0, claims: 0 };
+        entry.outstanding += remaining;
+        entry.claims += 1;
+        bySupplier.set(recovery.sourcedFromName, entry);
+      }
+    }
+
     return {
       totalDue,
       totalReceived,
       totalOutstanding,
       disputedAmount,
+      /** The part of `totalOutstanding` that is supplier-borne vehicle cost (SCRUM-389). */
+      costRecoveryOutstanding,
+      complete,
       bySupplier: Array.from(bySupplier.entries())
         .map(([sourcedFromName, v2]) => ({ sourcedFromName, ...v2 }))
         .sort((a, b) => b.outstanding - a.outstanding),
@@ -426,6 +475,36 @@ export const setDisputed = mutation({
 });
 
 /**
+ * The read-only refusal half of `cancelSupplierReceivablesForSale`, shared with the unwind status
+ * preview (SCRUM-693 PR-B F2) so both ask one question. Returns the sale's claims for the caller.
+ *
+ * Keyed on receipts actually recorded, not on `amountReceived`. A claim can
+ * open with part of it already received because the customer's reservation
+ * deposit was applied to the settlement — that is the dealership holding its
+ * own margin in customer cash, not the supplier having paid, and cancelling
+ * reverses that deposit application anyway. Refusing on it would have made
+ * any direct-settled sale with a settlement-applied deposit permanently
+ * uncancellable.
+ */
+export async function assertNoSupplierReceiptsForSale(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  saleId: Id<"sales">
+): Promise<Doc<"vehicleSupplierReceivables">[]> {
+  const rows = await ctx.db
+    .query("vehicleSupplierReceivables")
+    .withIndex("by_sale", (q) => q.eq("saleId", saleId))
+    .collect();
+  const owned = rows.filter((row) => row.orgId === orgId);
+  if (owned.some((row) => (row.receiptSeq ?? 0) > 0)) {
+    throw new ConvexError(
+      "Cannot automatically cancel a sale after the supplier has paid against its commission claim. Use a manual accounting correction."
+    );
+  }
+  return owned;
+}
+
+/**
  * Cancels the claims belonging to a sale being cancelled.
  *
  * Refuses when money has already arrived, for the same reason the payable side
@@ -441,24 +520,7 @@ export async function cancelSupplierReceivablesForSale(
     now: number;
   }
 ): Promise<void> {
-  const rows = await ctx.db
-    .query("vehicleSupplierReceivables")
-    .withIndex("by_sale", (q) => q.eq("saleId", args.saleId))
-    .collect();
-  const owned = rows.filter((row) => row.orgId === args.orgId);
-
-  // Keyed on receipts actually recorded, not on `amountReceived`. A claim can
-  // open with part of it already received because the customer's reservation
-  // deposit was applied to the settlement — that is the dealership holding its
-  // own margin in customer cash, not the supplier having paid, and cancelling
-  // reverses that deposit application anyway. Refusing on it would have made
-  // any direct-settled sale with a settlement-applied deposit permanently
-  // uncancellable.
-  if (owned.some((row) => (row.receiptSeq ?? 0) > 0)) {
-    throw new ConvexError(
-      "Cannot automatically cancel a sale after the supplier has paid against its commission claim. Use a manual accounting correction."
-    );
-  }
+  const owned = await assertNoSupplierReceiptsForSale(ctx, args.orgId, args.saleId);
 
   for (const row of owned) {
     if (row.status === "CANCELLED") continue;

@@ -10,6 +10,9 @@ import { QuotePrintTemplate } from "../../QuotePrintTemplate";
 import { ReceiptVoucherPrintTemplate } from "../../ReceiptVoucherPrintTemplate";
 import { RecordDepositDialog } from "../components/RecordDepositDialog";
 import { QuoteDepositManager } from "@/components/deposits/QuoteDepositManager";
+import { QuoteDepositRequests } from "@/components/deposits/DepositRequests";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { ConsignedSettlementSection } from "../../ConsignedSettlementSection";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -18,8 +21,11 @@ import { api } from "@/convex/_generated/api";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { toast } from "@/components/ui/sonner";
 import { downloadElementAsPdf } from "@/lib/htmlToPdf";
-import { getErrorMessage } from "@/lib/errors";
+import { getErrorMessage, getLocalizedErrorMessage } from "@/lib/errors";
 import { decideDepositSubmission } from "@/lib/depositSettlementSubmission";
+import { supportedCurrencyScale } from "@/convex/utils/money";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
+import { creationQuotationNoteKey } from "./creationQuotationNote";
 
 interface Step4QuoteSuccessProps {
   paymentType: PaymentType;
@@ -54,6 +60,11 @@ export function Step4QuoteSuccess({
 
   const [depositDialogOpen, setDepositDialogOpen] = useState(false);
   const [depositRecorded, setDepositRecorded] = useState(false);
+  // A salesperson asks; a manager or accountant records (SCRUM-444). The button
+  // says which one this person is doing, so it never promises money that only
+  // a confirmation can put on the books.
+  const { hasPermission } = usePermissions();
+  const canRecordDeposit = hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
   const [depositId, setDepositId] = useState<Id<"deposits"> | null>(null);
   const voucher = useQuery(
     api.paymentVouchers.getByDeposit,
@@ -62,6 +73,33 @@ export function Step4QuoteSuccess({
   const [applicationId, setApplicationId] = useState<Id<"financeApplications"> | null>(null);
   const [isStartingApplication, setIsStartingApplication] = useState(false);
   const createApplication = useMutation(api.applications.createFromQuote);
+
+  /**
+   * SCRUM-404: the finance company's quotation AutoFlow would record if the
+   * application were started now. Asked only while it can still matter — an
+   * INSTALLMENT quote with no application yet. `available: false` is an answer,
+   * not a failure: a manually-entered company, a role that may not record it,
+   * or rules that cannot solve all start the application WITHOUT a quotation.
+   */
+  const wantsCreationQuotation = paymentType === "INSTALLMENT" && !applicationId && !!activeOrgId;
+  const creationQuotation = useQuery(
+    api.financingEconomics.previewCreationQuotation,
+    wantsCreationQuotation && activeOrgId ? { orgId: activeOrgId, quoteId } : "skip"
+  );
+  const creationQuotationLoading = wantsCreationQuotation && creationQuotation === undefined;
+  const confirmedQuotation = creationQuotation?.available === true ? creationQuotation : null;
+  const money = useMoneyDisplay();
+  const confirmedQuotationScale = confirmedQuotation
+    ? supportedCurrencyScale(confirmedQuotation.currency)
+    : null;
+  const confirmedQuotationDisplay =
+    confirmedQuotation && confirmedQuotationScale !== null
+      ? money.format(
+          confirmedQuotation.submittedQuotationMinor / 10 ** confirmedQuotationScale,
+          confirmedQuotation.currency,
+          confirmedQuotationScale
+        )
+      : null;
 
   /**
    * EVERY sale this quote produced, not just the first.
@@ -87,7 +125,17 @@ export function Step4QuoteSuccess({
     if (!activeOrgId) return;
     setIsStartingApplication(true);
     try {
-      const id = await createApplication({ orgId: activeOrgId, quoteId });
+      // The figure the operator was shown, sent back as the confirmation. The
+      // server recomputes it in the same transaction and refuses the whole
+      // creation if it no longer matches — nothing is started on a figure the
+      // operator did not see.
+      const id = await createApplication({
+        orgId: activeOrgId,
+        quoteId,
+        ...(confirmedQuotation
+          ? { confirmedCalculatedQuotationMinor: confirmedQuotation.submittedQuotationMinor }
+          : {}),
+      });
       setApplicationId(id);
       toast.success(t("ApplicationStartedSuccess" as any) ?? "Finance application started");
     } catch (error) {
@@ -194,7 +242,7 @@ export function Step4QuoteSuccess({
       completeSaleIdempotencyKeyRef.current = null;
       toast.success(t("SaleCompletedSuccess" as any) ?? "Cash sale completed");
     } catch (error) {
-      toast.error(getErrorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setIsCompletingSale(false);
     }
@@ -383,7 +431,10 @@ export function Step4QuoteSuccess({
         <div className="pt-6 flex flex-wrap gap-4 justify-center items-center">
           <Button
             onClick={handleDownload}
-            className="bg-indigo-600 hover:bg-indigo-700 min-w-[200px]"
+            // Secondary once the deal exists: the one primary action is then
+            // opening it (SCRUM-417).
+            variant={applicationId ? "outline" : "default"}
+            className={applicationId ? "min-w-[200px]" : "bg-indigo-600 hover:bg-indigo-700 min-w-[200px]"}
             size="lg"
           >
             <FileDown className="w-4 h-4 me-2" />
@@ -400,7 +451,9 @@ export function Step4QuoteSuccess({
             <HandCoins className="w-4 h-4 me-2" />
             {depositRecorded
               ? (t("DepositRecorded" as any) ?? "Deposit Recorded ✓")
-              : (t("RecordDeposit" as any) ?? "Record Deposit")}
+              : canRecordDeposit
+                ? (t("RecordDeposit" as any) ?? "Record Deposit")
+                : t("RequestDeposit" as any)}
           </Button>
 
           {depositRecorded && voucher && (
@@ -417,8 +470,17 @@ export function Step4QuoteSuccess({
 
           {paymentType === "INSTALLMENT" && (
             applicationId ? (
-              <Button asChild variant="outline" size="lg" className="min-w-[200px] border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10">
-                <Link href={activeOrgId ? `/${activeOrgId}/deals` : "#"}>
+              // SCRUM-417: straight into the deal just created — the screen
+              // that names its next step — not the Deals list, where the
+              // operator had to find it again. The single primary action once
+              // the application exists; nothing navigates on its own.
+              <Button
+                asChild
+                size="lg"
+                className="order-first min-w-[200px] bg-emerald-600 hover:bg-emerald-700"
+                data-testid="wizard-open-application-deal"
+              >
+                <Link href={activeOrgId ? `/${activeOrgId}/applications/${applicationId}/deal` : "#"}>
                   <FileText className="w-4 h-4 me-2" />
                   {t("ViewApplication" as any) ?? "View Application →"}
                 </Link>
@@ -426,7 +488,7 @@ export function Step4QuoteSuccess({
             ) : (
               <Button
                 onClick={handleStartApplication}
-                disabled={isStartingApplication}
+                disabled={isStartingApplication || creationQuotationLoading}
                 variant="outline"
                 size="lg"
                 className="min-w-[200px]"
@@ -434,7 +496,9 @@ export function Step4QuoteSuccess({
                 <FileText className="w-4 h-4 me-2" />
                 {isStartingApplication
                   ? (t("Saving" as any) || "Saving...")
-                  : (t("StartFinanceApplication" as any) ?? "Start Finance Application")}
+                  : confirmedQuotation
+                    ? (t("StartApplicationRecordQuotation") ?? "Start application & record quotation")
+                    : (t("StartFinanceApplication" as any) ?? "Start Finance Application")}
               </Button>
             )
           )}
@@ -466,6 +530,35 @@ export function Step4QuoteSuccess({
               </Button>
             )
           )}
+
+          {/* SCRUM-404: what starting the application will record, stated before
+              the click. Its own full-width row so it reads as a note on the
+              application button rather than a fifth button in the strip. */}
+          {wantsCreationQuotation && creationQuotation ? (
+            <div className="order-last w-full">
+              {confirmedQuotation && confirmedQuotationDisplay ? (
+                <div className="mx-auto max-w-md space-y-0.5 text-start">
+                  <p className="text-sm text-foreground">
+                    {(t("CreationQuotationTo") ?? "Quotation to {company}:").replace(
+                      "{company}",
+                      selectedCompany?.name ?? "—"
+                    )}{" "}
+                    <bdi className="font-semibold tabular-nums">{confirmedQuotationDisplay}</bdi>
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {t("CreationQuotationCalculated")}
+                  </p>
+                </div>
+              ) : (
+                <p className="mx-auto max-w-md text-start text-xs text-muted-foreground">
+                  {(t(creationQuotationNoteKey(creationQuotation)) ?? "").replace(
+                    "{company}",
+                    selectedCompany?.name ?? "—"
+                  )}
+                </p>
+              )}
+            </div>
+          ) : null}
 
           <Button onClick={onClose} variant="outline" size="lg" className="min-w-[200px]">
             <LogOut className="w-4 h-4 me-2" />
@@ -508,6 +601,7 @@ export function Step4QuoteSuccess({
 
       {activeOrgId ? (
         <div className="space-y-4">
+          <QuoteDepositRequests orgId={activeOrgId} quoteId={quoteId} />
           <QuoteDepositManager
             orgId={activeOrgId}
             quoteId={quoteId}

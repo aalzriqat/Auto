@@ -64,6 +64,331 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   AccountingNoAttentionItemsReportedDesc: ["This list covers the chart, the current open period and retryable pending events only. Failed postings and close review are under Reconcile & Close.", "تغطي هذه القائمة دليل الحسابات والفترة المفتوحة الحالية وأحداث الترحيل المعلقة القابلة لإعادة المحاولة فقط. الترحيلات الفاشلة ومراجعة الإقفال ضمن التسوية والإقفال."],
   AccountingRecentPeriods: ["Recent periods", "الفترات الأخيرة"],
   AccountingAdminSections: ["Admin", "الإدارة"],
+  // SCRUM-542. The English text must equal FIXED_ASSET_DATE_REFUSALS in convex/fixedAssets.ts.
+  DisposalAccountingDateLabel: ["Accounting date", "التاريخ المحاسبي"],
+  ServerError_ASSET_EVENT_DATE_INVALID: [
+    "The accounting date is not a valid date.",
+    "التاريخ المحاسبي غير صالح.",
+  ],
+  ServerError_ASSET_EVENT_DATE_IN_FUTURE: [
+    "The accounting date cannot be later than today ({today}, UTC).",
+    "لا يجوز أن يكون التاريخ المحاسبي لاحقاً لتاريخ اليوم ({today} بالتوقيت العالمي UTC).",
+  ],
+  ServerError_ASSET_EVENT_BEFORE_CAPITALIZATION: [
+    "The accounting date cannot be earlier than the day the asset was capitalized. The earliest allowed date is {earliestDate} (UTC).",
+    "لا يجوز أن يكون التاريخ المحاسبي سابقاً ليوم رسملة الأصل. أول تاريخ مسموح به هو {earliestDate} (بالتوقيت العالمي UTC).",
+  ],
+  ServerError_ASSET_EVENT_BEFORE_DEPRECIATION: [
+    "The accounting date cannot be earlier than the asset's latest posted depreciation. The earliest allowed date is {earliestDate} (UTC).",
+    "لا يجوز أن يكون التاريخ المحاسبي سابقاً لآخر إهلاك تم ترحيله للأصل. أول تاريخ مسموح به هو {earliestDate} (بالتوقيت العالمي UTC).",
+  ],
+  ServerError_ASSET_EVENT_BEFORE_IMPAIRMENT: [
+    "The accounting date cannot be earlier than the day the asset was impaired. The earliest allowed date is {earliestDate} (UTC).",
+    "لا يجوز أن يكون التاريخ المحاسبي سابقاً ليوم تسجيل انخفاض قيمة الأصل. أول تاريخ مسموح به هو {earliestDate} (بالتوقيت العالمي UTC).",
+  ],
+  ServerError_ASSET_PURCHASE_DATE_IN_FUTURE: [
+    "The purchase date cannot be after today ({today}, UTC).",
+    "لا يجوز أن يكون تاريخ الشراء لاحقاً لتاريخ اليوم ({today} بالتوقيت العالمي UTC).",
+  ],
+  ServerError_ASSET_PURCHASE_DATE_INVALID: [
+    "The purchase date is not a valid date.",
+    "تاريخ الشراء غير صالح.",
+  ],
+  ServerError_ASSET_DEPRECIATION_START_DATE_INVALID: [
+    "The depreciation start date is not a valid date.",
+    "تاريخ بدء الاستهلاك غير صالح.",
+  ],
+  // SCRUM-563. The English text must equal the server message in convex/utils/idempotency.ts,
+  // and convex/adminOrgs.ts respectively.
+  ServerError_COMMAND_RECORDED_BEFORE_RESET: [
+    "This request was recorded before the organization's financial data was reset and can no longer be replayed. Start a new operation.",
+    "سُجّل هذا الطلب قبل إعادة ضبط البيانات المالية للمنشأة ولم يعد بالإمكان إعادة إرساله. يرجى بدء عملية جديدة.",
+  ],
+  // SCRUM-571 S1. The English text must equal the server message in convex/paymentIntents.ts
+  // and convex/collections.ts respectively.
+  ServerError_PAYMENT_LINK_TARGET_REQUIRED: [
+    "A payment link must be created against a specific receivable, sale or receivable document. Nothing has been changed.",
+    "يجب إنشاء رابط الدفع مقابل ذمة أو عملية بيع أو مستند ذمة محدد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_EXCEEDS_OUTSTANDING: [
+    "The payment link amount cannot exceed what is still owed on this debt, less payment links already sent and not yet paid. Expiring an unpaid link frees its amount. Nothing has been changed.",
+    "لا يمكن أن يتجاوز مبلغ رابط الدفع ما تبقى مستحقاً على هذه الذمة بعد خصم روابط الدفع التي أُرسلت ولم تُسدَّد بعد. ويؤدي إنهاء صلاحية رابط غير مدفوع إلى تحرير مبلغه. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_NOT_FOUND: [
+    "This payment link could not be found. Nothing has been changed.",
+    "تعذّر العثور على رابط الدفع هذا. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_NOT_PENDING: [
+    "Only a payment link that is still waiting for payment can be expired. Nothing has been changed.",
+    "لا يمكن إنهاء صلاحية إلا رابط دفع ما زال بانتظار السداد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_AMOUNT_NOT_POSITIVE: [
+    "The payment link amount must be greater than zero. Nothing has been changed.",
+    "يجب أن يكون مبلغ رابط الدفع أكبر من صفر. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_PROVIDER_REQUIRED: [
+    "Choose a payment provider for the payment link. Nothing has been changed.",
+    "اختر مزوّد الدفع لرابط الدفع. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_CURRENCY_REQUIRED: [
+    "The payment link needs a currency. Nothing has been changed.",
+    "يحتاج رابط الدفع إلى عملة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_CHECKOUT_URL_INVALID: [
+    "The checkout URL is not a valid web address. Check it and try again. Nothing has been changed.",
+    "عنوان صفحة الدفع ليس عنوان ويب صالحاً. تحقق منه وأعد المحاولة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_CHECKOUT_URL_NOT_HTTPS: [
+    "The checkout URL must start with https://. Nothing has been changed.",
+    "يجب أن يبدأ عنوان صفحة الدفع بـ https://. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_EXTERNAL_ID_REQUIRED: [
+    "Enter the provider reference when a checkout URL is supplied. Nothing has been changed.",
+    "أدخل مرجع المزوّد عند إدخال عنوان صفحة الدفع. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_CUSTOMER_NOT_FOUND: [
+    "This customer could not be found. Nothing has been changed.",
+    "تعذّر العثور على هذا العميل. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_CUSTOMER_REMOVED: [
+    "This customer has been removed and can no longer be sent a payment link. Nothing has been changed.",
+    "تمت إزالة هذا العميل ولم يعد بالإمكان إرسال رابط دفع إليه. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_RECEIVABLE_NOT_FOUND: [
+    "This receivable could not be found. Nothing has been changed.",
+    "تعذّر العثور على هذه الذمة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_RECEIVABLE_CUSTOMER_MISMATCH: [
+    "This receivable belongs to a different customer. Nothing has been changed.",
+    "هذه الذمة تخص عميلاً آخر. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_RECEIVABLE_NO_DOCUMENT: [
+    "This receivable has no accounting document to collect against, so a payment link cannot be created for it. Nothing has been changed.",
+    "ليس لهذه الذمة مستند محاسبي يمكن التحصيل مقابله، لذا لا يمكن إنشاء رابط دفع لها. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_RECEIVABLE_DOCUMENT_MISMATCH: [
+    "The selected receivable document does not belong to the selected receivable. Nothing has been changed.",
+    "مستند الذمة المحدد لا يخص الذمة المحددة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_SALE_NOT_FOUND: [
+    "This sale could not be found. Nothing has been changed.",
+    "تعذّر العثور على عملية البيع هذه. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_SALE_CUSTOMER_MISMATCH: [
+    "This sale belongs to a different customer. Nothing has been changed.",
+    "عملية البيع هذه تخص عميلاً آخر. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_SALE_NO_DOCUMENT: [
+    "This sale has no accounting document to collect against yet. Nothing has been changed.",
+    "ليس لعملية البيع هذه مستند محاسبي يمكن التحصيل مقابله بعد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_SALE_DEBT_MISMATCH: [
+    "The selected sale does not match the selected debt. Choose a matching sale and debt. Nothing has been changed.",
+    "عملية البيع المحددة لا تطابق الذمة المحددة. اختر عملية بيع وذمة متطابقتين. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_DOCUMENT_NOT_FOUND: [
+    "This receivable document could not be found. Nothing has been changed.",
+    "تعذّر العثور على مستند الذمة هذا. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_DOCUMENT_PAYER_MISMATCH: [
+    "This receivable document belongs to a different payer than the selected customer. Nothing has been changed.",
+    "مستند الذمة هذا يخص جهة دافعة غير العميل المحدد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_DOCUMENT_CURRENCY_MISMATCH: [
+    "The payment link currency must match the currency of the debt. Nothing has been changed.",
+    "يجب أن تطابق عملة رابط الدفع عملة الذمة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_DEBT_CLOSED: [
+    "This debt can no longer accept payments. Nothing has been changed.",
+    "لم تعد هذه الذمة تقبل دفعات. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_EXCEEDS_RECEIVABLE: [
+    "The payment link amount cannot exceed what is still owed on this receivable. Nothing has been changed.",
+    "لا يمكن أن يتجاوز مبلغ رابط الدفع ما تبقى مستحقاً على هذه الذمة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_PROVIDER_ID_IN_USE: [
+    "A payment link with this provider reference already exists. Use a different reference. Nothing has been changed.",
+    "يوجد رابط دفع بهذا المرجع لدى المزوّد بالفعل. استخدم مرجعاً مختلفاً. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_NOT_SETTLEABLE: [
+    "Only a payment link that is still waiting for payment can be marked settled. Nothing has been changed.",
+    "لا يمكن تحديد رابط الدفع كمُسوّى إلا إذا كان ما زال بانتظار السداد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_PROVIDER_ID_MISMATCH: [
+    "The settlement ID does not match this payment link's provider reference. Check it and try again. Nothing has been changed.",
+    "معرّف التسوية لا يطابق مرجع المزوّد لرابط الدفع هذا. تحقق منه وأعد المحاولة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_PROVIDER_REFERENCE_UNAVAILABLE: [
+    "This provider reference is unavailable. Ask finance to review it. Nothing has been changed.",
+    "مرجع المزوّد هذا غير متاح. اطلب من قسم المالية مراجعته. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_SETTLEMENT_REQUIRES_REVIEW: [
+    "This payment must be reviewed before the link can be marked settled. Nothing has been changed.",
+    "يجب مراجعة هذه الدفعة قبل تحديد رابط الدفع كمُسوّى. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_CAPTURE_HELD: [
+    "The provider confirmed a capture for this link. It is held for review and the link cannot be expired. Ask finance to review the held payment. Nothing has been changed.",
+    "أكد مزوّد الدفع تحصيل دفعة لهذا الرابط، وهي محتجزة للمراجعة. لا يمكن إنهاء صلاحية الرابط. اطلب من المالية مراجعة الدفعة المحتجزة. لم يتغير شيء.",
+  ],
+  // SCRUM-571 D-8 — resolving a held provider payment.
+  ServerError_UNMATCHED_FUNDS_NOT_FOUND: [
+    "This held payment could not be found. Nothing has been changed.",
+    "تعذّر العثور على هذه الدفعة المحتجزة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_UNMATCHED_FUNDS_ALREADY_RESOLVED: [
+    "This held payment has already been marked as resolved. Nothing has been changed.",
+    "تم إغلاق مراجعة هذه الدفعة المحتجزة مسبقاً. لم يتم تغيير أي شيء.",
+  ],
+  // SCRUM-571 S1 (D-22) — linking a held capture to its payment link.
+  ServerError_UNMATCHED_FUNDS_NO_INTENT: [
+    "This held payment is not linked to a payment link, so there is nothing to repair. Nothing has been changed.",
+    "هذه الدفعة المحتجزة غير مرتبطة برابط دفع، فلا يوجد ما يلزم إصلاحه. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_UNMATCHED_FUNDS_INTENT_NOT_FOUND: [
+    "The payment link for this held payment could not be found. Nothing has been changed.",
+    "تعذّر العثور على رابط الدفع الخاص بهذه الدفعة المحتجزة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_UNMATCHED_FUNDS_INTENT_MISMATCH: [
+    "This held payment does not match the payment link's provider reference. Ask support to investigate. Nothing has been changed.",
+    "هذه الدفعة المحتجزة لا تطابق مرجع المزوّد لرابط الدفع. اطلب من الدعم التحقيق في الأمر. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_UNMATCHED_FUNDS_INTENT_NOT_LINKABLE: [
+    "This payment link is not in a state that can be linked to the held payment. Nothing has been changed.",
+    "رابط الدفع هذا ليس في حالة تسمح بربطه بالدفعة المحتجزة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_UNMATCHED_FUNDS_NOTE_REQUIRED: [
+    "Enter a note describing how this payment was handled. Nothing has been changed.",
+    "أدخل ملاحظة توضح كيف تم التعامل مع هذه الدفعة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_UNMATCHED_FUNDS_NOTE_TOO_LONG: [
+    "The note is too long. Shorten it to 1000 characters or fewer. Nothing has been changed.",
+    "الملاحظة طويلة جداً. اختصرها إلى 1000 حرف أو أقل. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINK_RECEIPT_MANUAL_REFUSED: [
+    "A payment-link receipt cannot be recorded manually. It is recorded automatically when the payment link is settled. Nothing has been changed.",
+    "لا يمكن تسجيل قبض رابط الدفع يدويًا، إذ يُسجَّل تلقائيًا عند تسوية رابط الدفع. لم يتم تغيير أي شيء.",
+  ],
+  // SCRUM-571 slice 1 (D-18/D-20) — competing sale debt containment.
+  ServerError_SALE_DEBT_COMPETING_RECEIVABLE_REFUSED: [
+    "A sale's customer debt is its sale invoice. A separate receivable cannot be created for a sale. Nothing has been changed.",
+    "دَين عملية البيع هو فاتورة البيع نفسها، ولا يمكن إنشاء ذمة مدينة منفصلة لعملية بيع. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_SALE_HAS_LEGACY_RECEIVABLE: [
+    "This sale still has a separate receivable record that must be resolved before the sale can be completed, cancelled or deleted. Contact support. Nothing has been changed.",
+    "لا يزال لهذه العملية سجل ذمة مدينة منفصل يجب معالجته قبل إتمام البيع أو إلغائه أو حذفه. تواصل مع الدعم. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_SALE_DEBT_RECEIPT_REFUSED: [
+    "Payments, credits and cheques for a sale cannot be recorded against a separate receivable. Nothing has been changed.",
+    "لا يمكن تسجيل الدفعات أو الأرصدة الدائنة أو الشيكات الخاصة بعملية بيع على ذمة مدينة منفصلة. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_PAYMENT_LINKS_DISABLED: [
+    "Payment links are not available yet. Nothing has been changed.",
+    "روابط الدفع غير متاحة حاليًا. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_ORG_FINANCIAL_RESET_IN_PROGRESS: [
+    "This organization's financial reset has not finished. It cannot be returned to service until the reset completes.",
+    "لم تكتمل إعادة ضبط البيانات المالية لهذه المنشأة. لا يمكن إعادتها إلى الخدمة قبل اكتمال إعادة الضبط.",
+  ],
+  // SCRUM-113. `approvals.respondToApproval` refuses APPROVED when the request's vehicle is
+  // missing, foreign or soft-deleted; REJECTED stays allowed.
+  ServerError_APPROVAL_VEHICLE_UNAVAILABLE: [
+    "This vehicle is no longer available in this dealership, so the request can't be approved. Reject it instead.",
+    "لم تعد هذه المركبة متاحة في هذا المعرض، لذا لا يمكن الموافقة على الطلب. يُرجى رفضه بدلاً من ذلك.",
+  ],
+  // SCRUM-641 (D-35): see convex/utils/vehicleLiveness.ts.
+  ServerError_VEHICLE_DELETED: [
+    "This vehicle has been deleted and can no longer be quoted, reserved, sold or take a deposit.",
+    "تم حذف هذه السيارة ولم يعد بالإمكان تسعيرها أو حجزها أو بيعها أو استلام عربون عليها.",
+  ],
+  // SCRUM-693 PR-B F1: see convex/utils/vehicleLiveness.ts.
+  ServerError_VEHICLE_NOT_READY_FOR_SALE: [
+    "This vehicle is in inspection or repair and cannot be sold until it is cleared for sale.",
+    "هذه السيارة قيد الفحص أو الصيانة ولا يمكن بيعها حتى يتم اعتمادها للبيع.",
+  ],
+  ServerError_VEHICLE_DELETED_FLAG_LOCKED: [
+    "A vehicle's deleted status cannot be changed by direct edit. Use the vehicle delete or restore workflow instead.",
+    "لا يمكن تغيير حالة حذف السيارة عبر التعديل المباشر. استخدم إجراء حذف السيارة أو استعادتها بدلاً من ذلك.",
+  ],
+  // SCRUM-650. `vehicles.correctAcquisitionCost` and the purchase-cost lock. The English text
+  // equals the server message.
+  ServerError_VEHICLE_NOT_FOUND: [
+    "Vehicle not found in this organization.",
+    "لم يتم العثور على المركبة في هذا المعرض.",
+  ],
+  ServerError_VEHICLE_COST_POSTED: [
+    "This vehicle's purchase cost has already been posted to accounting and can't be edited directly. Use 'Correct purchase cost' instead.",
+    "تم ترحيل تكلفة شراء هذه المركبة إلى المحاسبة ولا يمكن تعديلها مباشرة. استخدم «تصحيح تكلفة الشراء» بدلاً من ذلك.",
+  ],
+  ServerError_COST_CORRECTION_REASON_REQUIRED: [
+    "A reason is required to correct a vehicle's purchase cost.",
+    "يلزم ذكر سبب لتصحيح تكلفة شراء المركبة.",
+  ],
+  ServerError_COST_CORRECTION_INVALID_AMOUNT: [
+    "The new purchase cost must be a valid amount, zero or more.",
+    "يجب أن تكون تكلفة الشراء الجديدة مبلغاً صحيحاً، صفراً أو أكثر.",
+  ],
+  ServerError_COST_CORRECTION_NO_CHANGE: [
+    "The new purchase cost is the same as the current cost, so there is nothing to correct.",
+    "تكلفة الشراء الجديدة مطابقة للتكلفة الحالية، لذلك لا يوجد ما يستدعي التصحيح.",
+  ],
+  ServerError_COST_CORRECTION_SOURCED: [
+    "Sourced vehicles are not capitalized into inventory. Adjust the supplier payable instead.",
+    "المركبات الموردة لا تُسجَّل ضمن المخزون. عدّل ذمة المورد بدلاً من ذلك.",
+  ],
+  ServerError_COST_CORRECTION_SOLD: [
+    "This vehicle has already been sold, so its cost can no longer be corrected here. Ask your accountant for a manual journal entry.",
+    "تم بيع هذه المركبة، لذلك لم يعد بالإمكان تصحيح تكلفتها من هنا. اطلب من المحاسب إجراء قيد يدوي.",
+  ],
+  ServerError_COST_CORRECTION_NOT_POSTED: [
+    "This vehicle's purchase hasn't been posted to accounting yet, so its cost can't be corrected.",
+    "لم يتم ترحيل شراء هذه المركبة إلى المحاسبة بعد، لذلك لا يمكن تصحيح تكلفتها.",
+  ],
+  ServerError_COST_CORRECTION_NOT_POSTABLE_NOW: [
+    "This correction can't be posted right now because the accounting period is closed or the required account is missing. Ask your accountant to open the period or set up the account, then try again.",
+    "لا يمكن ترحيل هذا التصحيح الآن لأن الفترة المحاسبية مغلقة أو أن الحساب المطلوب غير موجود. اطلب من المحاسب فتح الفترة أو إعداد الحساب ثم حاول مجدداً.",
+  ],
+  ServerError_COST_CORRECTION_TYPE_NOT_ALLOWED: [
+    "This correction type doesn't fit how the vehicle was paid for. Choose one of the other options.",
+    "هذا النوع من التصحيح لا يناسب طريقة دفع ثمن المركبة. اختر أحد الخيارات الأخرى.",
+  ],
+  ServerError_COST_CORRECTION_PAYABLE_NOT_ADJUSTABLE: [
+    "The supplier balance for this vehicle has been partly paid, disputed or settled, so the invoice can't be corrected automatically. Contact finance to record a supplier credit or adjustment.",
+    "رصيد المورد لهذه المركبة سُدِّد جزئياً أو عليه نزاع أو تمت تسويته، لذلك لا يمكن تصحيح الفاتورة تلقائياً. تواصل مع المحاسبة لتسجيل رصيد دائن أو تسوية للمورد.",
+  ],
+  ServerError_COST_CORRECTION_PAYMENT_METHOD_REQUIRED: [
+    "Choose the account the refund was received into.",
+    "اختر الحساب الذي استُلم فيه المبلغ المسترد.",
+  ],
+  // SCRUM-413. `roles.create` / `roles.update` refuse a newly added retired permission. The
+  // authority names match the FinancedDeal* labels in settings.ts.
+  ServerError_PERMISSION_RETIRED: [
+    "The \"Finalize financed deal\" permission is no longer used. Grant \"Record the supplier payment route\" or \"Cancel a closed financed deal\" instead.",
+    "صلاحية \"إتمام الصفقة الممولة\" لم تعد مستخدمة. امنح صلاحية \"تسجيل مسار الدفع للمورّد\" أو \"إلغاء صفقة ممولة مغلقة\" بدلاً منها.",
+  ],
+  // SCRUM-413 D-37. Cancelling a CLOSED financed deal is refused while the payment to the
+  // finance company is unsettled (convex/utils/financeCompanyForward.ts forwardCancelRefusal).
+  // The EN text equals the server message.
+  ServerError_FORWARD_CANCEL_ON_BOOKS: [
+    "The deposit and the dealership's contribution have already been paid to the finance company. A manager reports the payment as returned by the company, or an accountant records the correction, before this deal can be cancelled.",
+    "تم سداد العربون ومساهمة المعرض إلى شركة التمويل بالفعل. يسجّل المدير أن الشركة أعادت الدفعة، أو يسجّل المحاسب التصحيح، قبل أن يمكن إلغاء هذه الصفقة.",
+  ],
+  ServerError_FORWARD_CANCEL_POSTING_UNSETTLED: [
+    "The payment to the finance company is not yet settled on the books. An accountant resolves it before this deal can be cancelled.",
+    "الدفعة المسدَّدة لشركة التمويل لم تُسوَّ في الدفاتر بعد. يعالجها المحاسب قبل أن يمكن إلغاء هذه الصفقة.",
+  ],
+  ServerError_FORWARD_CANCEL_REVERSAL_PENDING: [
+    "The reversal of the payment to the finance company is not yet posted. An accountant posts it before this deal can be cancelled.",
+    "عكس الدفعة المسدَّدة لشركة التمويل لم يُرحَّل بعد. يرحّله المحاسب قبل أن يمكن إلغاء هذه الصفقة.",
+  ],
+  ServerError_FORWARD_CANCEL_NEEDS_REPAIR: [
+    "The record of the payment to the finance company does not match the books. An accountant reviews it before this deal can be cancelled.",
+    "سجل الدفعة المسدَّدة لشركة التمويل لا يطابق الدفاتر. يراجعه المحاسب قبل أن يمكن إلغاء هذه الصفقة.",
+  ],
+  // SCRUM-413 S413B-4/L-2
+  ServerError_OWNER_NAMED_ROLE_LOCKED: [
+    "This role is named OWNER but is not the system owner role, so its permissions cannot be edited. Rename it to a different name first.",
+    "هذا الدور يحمل الاسم المحجوز OWNER لكنه ليس دور المالك الأساسي في النظام، لذا لا يمكن تعديل صلاحياته. غيّر اسمه إلى اسم آخر أولاً.",
+  ],
   FinanceCompanyReceivables: ["Finance-company receivables", "ذمم شركات التمويل"],
   FinanceCompanyReceivablesDesc: ["Amounts due from finance companies. Open the originating deal to review or settle them.", "المبالغ المستحقة من شركات التمويل. افتح الصفقة الأصلية للمراجعة أو التسوية."],
   DocumentNumber: ["Document number", "رقم المستند"],
@@ -452,8 +777,21 @@ export const commonEn = {
   SellerSignature: "Seller Signature",
   BuyerSignature: "Buyer Signature",
   ExtendedWarranty: "Extended Warranty",
-  TradeInAllowance: "Trade-in Allowance",
   TotalAmountDueFinanced: "Total Amount Due / Financed",
+  // SCRUM-258: the Bill of Sale totals, stated from server-authoritative economics only.
+  TotalBilled: "Total billed",
+  TradeInCredit: "Trade-in credit",
+  DepositsApplied: "Deposits applied",
+  BalanceDue: "Balance due at sale",
+  AmountFinanced: "Amount financed",
+  CapitalisedCommission: "Commission added to financing",
+  VehiclePaidToSupplier: "Vehicle (paid directly to the supplier)",
+  FlatAnnualProfitRate: "flat annual profit rate",
+  RateNotStated: "rate not stated",
+  BillOfSaleFiguresUnavailable: "Bill of Sale figures unavailable",
+  BillOfSaleUnavailable_NOT_COMPLETED: "Figures are stated only for a completed sale. Complete the sale to print this document.",
+  BillOfSaleUnavailable_LOAD_FAILED: "The figures could not be loaded. Refresh the page; if this continues, contact support.",
+  BillOfSaleUnavailable_DEFAULT: "This sale's recorded figures are incomplete or inconsistent, so none are stated. Ask your accountant to review the sale.",
   PaymentMethodLabel: "Payment Method",
   Back: "Back",
   PrintDocumentBtn: "Print Document",
@@ -743,7 +1081,6 @@ export const commonEn = {
   DisposeAsset: "Dispose Asset",
   DisposeAssetDesc: "Remove this asset from the books and record any sale or scrap proceeds. This cannot be undone.",
   DisposalProceedsLabel: "Proceeds Received",
-  DisposalDateLabel: "Disposal Date",
   CurrentNetBookValue: "Current net book value",
   AssetCapitalized: "Asset capitalized and posted to the ledger.",
   AssetImpaired: "Impairment posted.",
@@ -819,6 +1156,41 @@ export const commonEn = {
   ExternalSettlementId: "External settlement ID",
   PaymentLinkCreated: "Payment link recorded.",
   PaymentLinkSettled: "Payment link settled.",
+  ExpirePaymentLink: "Expire link",
+  ExpirePaymentLinkTitle: "Expire this payment link?",
+  ExpirePaymentLinkDescription:
+    "Expiring the payment link for {customer} ({amount}) frees its amount here so a new link can be issued. It does not deactivate the link at the payment provider: do that there too. If a payment still arrives on this link, it will be held for review, not applied to the debt.",
+  PaymentLinkExpired: "Payment link expired.",
+  HeldPaymentsTitle: "Payments held for review",
+  HeldPaymentsDesc:
+    "Payments the provider confirmed that were not applied to any debt. Nothing here has changed what a customer owes. A payment link with a held payment shows as capture held for review and cannot be expired. Record the money through the normal receipt flow, then mark the item resolved. Closing a review does not settle the payment link or change the customer's balance. A held payment's reference cannot be used to settle a payment link.",
+  PaymentLinkStatus_CAPTURE_HELD: "Capture held for review",
+  PaymentLinkStatus_PENDING: "Pending",
+  PaymentLinkStatus_SETTLED: "Settled",
+  PaymentLinkStatus_FAILED: "Failed",
+  PaymentLinkStatus_EXPIRED: "Expired",
+  PaymentLinkStatus_REFUNDED: "Refunded",
+  ExpireProviderCheckedLabel:
+    "I checked this link in the payment provider's dashboard and it shows no payment.",
+  HeldPaymentsRawMinor: "{amount} {currency} (smallest unit)",
+  HeldPaymentsLoading: "Loading held payments...",
+  HeldPaymentsEmpty: "No payments are being held for review.",
+  HeldPaymentsError: "Held payments could not be loaded. Refresh the page to try again.",
+  HeldPaymentsReason_UNKNOWN_REFERENCE: "Unknown payment reference",
+  HeldPaymentsReason_INTENT_NOT_PENDING: "Link was no longer awaiting payment",
+  HeldPaymentsReason_AMOUNT_OR_ACCOUNT_MISMATCH: "Amount, currency or account did not match",
+  HeldPaymentsReason_LIFECYCLE_REFUSED: "Organization is suspended or closing",
+  HeldPaymentsReason_PAYMENT_LINKS_DISABLED: "Payment links are not available yet",
+  HeldPaymentsReceived: "Received",
+  HeldPaymentsDeliveries: "Deliveries",
+  HeldPaymentsConflict: "Amount differs between deliveries",
+  HeldPaymentsResolve: "Resolve",
+  HeldPaymentsResolved: "Resolved",
+  HeldPaymentsResolveTitle: "Resolve this held payment?",
+  HeldPaymentsResolveDescription:
+    "Record how this payment was handled. This does not move any money or change any balance: record the funds through the normal receipt flow first.",
+  HeldPaymentsNoteLabel: "How was it handled?",
+  HeldPaymentsResolvedToast: "Held payment marked as resolved.",
   LoadingPaymentLinks: "Loading payment links...",
   NoPaymentLinksFound: "No payment links found.",
   OpenCashDrawer: "Open Cash Drawer",
@@ -890,6 +1262,7 @@ export const commonEn = {
   CashierReconciliations: "Cashier Reconciliations",
   CashierReconciliation: "Cashier Reconciliation",
   CashierReconciliationDraftDesc: "{count} cash payment(s), expected {amount}",
+  CashierReconciliationIncomplete: "This day has too many unreconciled payments to total safely, so it cannot be submitted here. Contact support.",
   LoadingExpectedCash: "Loading expected cash...",
   CountedCash: "Counted cash",
   Current: "Current",
@@ -962,6 +1335,9 @@ export const commonEn = {
   // Team
   CommissionPct: "Commission %",
   SyncRolePermissions: "Sync Role Permissions",
+  SyncRolePermissionsDone: "Updated {count} role(s) to the latest permission templates: {roles}.",
+  SyncRolePermissionsNone: "All standard roles already match the latest permission templates.",
+  SyncRolePermissionsSynced: "Role permissions synced to the latest templates.",
 
   // Tasks / common
   AllPriorities: "All priorities",
@@ -1396,8 +1772,20 @@ export const commonAr = {
   SellerSignature: "توقيع البائع",
   BuyerSignature: "توقيع المشتري",
   ExtendedWarranty: "الضمان الممتد",
-  TradeInAllowance: "قيمة السيارة المقايضة",
   TotalAmountDueFinanced: "إجمالي المبلغ المستحق / الممول",
+  TotalBilled: "إجمالي الفاتورة",
+  TradeInCredit: "خصم قيمة السيارة المقايضة",
+  DepositsApplied: "العربون المخصوم",
+  BalanceDue: "الرصيد المستحق عند البيع",
+  AmountFinanced: "المبلغ الممول",
+  CapitalisedCommission: "العمولة المضافة إلى مبلغ التمويل",
+  VehiclePaidToSupplier: "المركبة (مدفوعة مباشرة للمورّد)",
+  FlatAnnualProfitRate: "معدل الربح السنوي الثابت",
+  RateNotStated: "المعدل غير مذكور",
+  BillOfSaleFiguresUnavailable: "أرقام عقد البيع غير متاحة",
+  BillOfSaleUnavailable_NOT_COMPLETED: "تُعرض الأرقام فقط لعملية بيع مكتملة. أكمل عملية البيع لطباعة هذا المستند.",
+  BillOfSaleUnavailable_LOAD_FAILED: "تعذّر تحميل الأرقام. أعد تحميل الصفحة، وإذا استمرت المشكلة فتواصل مع الدعم.",
+  BillOfSaleUnavailable_DEFAULT: "الأرقام المسجلة لعملية البيع هذه ناقصة أو غير متسقة، لذلك لا تُعرض أي أرقام. يرجى طلب مراجعة العملية من المحاسب.",
   PaymentMethodLabel: "طريقة الدفع",
   Back: "رجوع",
   PrintDocumentBtn: "طباعة المستند",
@@ -1685,7 +2073,6 @@ export const commonAr = {
   DisposeAsset: "استبعاد الأصل",
   DisposeAssetDesc: "إزالة هذا الأصل من الدفاتر وتسجيل عائدات البيع أو الخردة إن وجدت. لا يمكن التراجع عن هذا الإجراء.",
   DisposalProceedsLabel: "العائدات المستلمة",
-  DisposalDateLabel: "تاريخ الاستبعاد",
   CurrentNetBookValue: "القيمة الدفترية الصافية الحالية",
   AssetCapitalized: "تمت رسملة الأصل وترحيله إلى دفتر الأستاذ.",
   AssetImpaired: "تم تسجيل انخفاض القيمة.",
@@ -1761,6 +2148,40 @@ export const commonAr = {
   ExternalSettlementId: "معرف التسوية الخارجي",
   PaymentLinkCreated: "تم تسجيل رابط الدفع.",
   PaymentLinkSettled: "تمت تسوية رابط الدفع.",
+  ExpirePaymentLink: "إنهاء صلاحية الرابط",
+  ExpirePaymentLinkTitle: "هل تريد إنهاء صلاحية رابط الدفع هذا؟",
+  ExpirePaymentLinkDescription:
+    "إنهاء صلاحية رابط الدفع الخاص بـ {customer} ({amount}) يُحرّر مبلغه هنا لإصدار رابط جديد، لكنه لا يعطّل الرابط لدى مزوّد الدفع، لذا عطّله هناك أيضاً. وإذا وصلت دفعة عبر هذا الرابط رغم ذلك فستُحتجز للمراجعة ولن تُطبَّق على الدين.",
+  PaymentLinkExpired: "تم إنهاء صلاحية رابط الدفع.",
+  HeldPaymentsTitle: "دفعات محتجزة للمراجعة",
+  HeldPaymentsDesc:
+    "دفعات أكّدها مزوّد الدفع ولم تُطبَّق على أي دين. لم يتغير هنا أي مبلغ مستحق على العميل. يظهر رابط الدفع الذي عليه دفعة محتجزة بحالة «دفعة مؤكدة محتجزة للمراجعة» ولا يمكن إنهاء صلاحيته. سجّل المبلغ عبر مسار الإيصالات المعتاد، ثم أغلق مراجعة البند. إغلاق المراجعة لا يسوّي رابط الدفع ولا يغيّر رصيد العميل. لا يمكن استخدام مرجع دفعة محتجزة لتسوية رابط دفع.",
+  PaymentLinkStatus_CAPTURE_HELD: "دفعة مؤكدة محتجزة للمراجعة",
+  PaymentLinkStatus_PENDING: "قيد الانتظار",
+  PaymentLinkStatus_SETTLED: "مسدد",
+  PaymentLinkStatus_FAILED: "فشل",
+  PaymentLinkStatus_EXPIRED: "منتهي الصلاحية",
+  PaymentLinkStatus_REFUNDED: "مسترد",
+  ExpireProviderCheckedLabel: "تحققت من هذا الرابط في لوحة مزوّد الدفع ولا يظهر أي دفعة.",
+  HeldPaymentsRawMinor: "{amount} {currency} (أصغر وحدة)",
+  HeldPaymentsLoading: "جاري تحميل الدفعات المحتجزة...",
+  HeldPaymentsEmpty: "لا توجد دفعات محتجزة للمراجعة.",
+  HeldPaymentsError: "تعذّر تحميل الدفعات المحتجزة. حدّث الصفحة وحاول مجدداً.",
+  HeldPaymentsReason_UNKNOWN_REFERENCE: "مرجع دفع غير معروف",
+  HeldPaymentsReason_INTENT_NOT_PENDING: "الرابط لم يعد بانتظار الدفع",
+  HeldPaymentsReason_AMOUNT_OR_ACCOUNT_MISMATCH: "المبلغ أو العملة أو الحساب غير مطابق",
+  HeldPaymentsReason_LIFECYCLE_REFUSED: "المنشأة موقوفة أو قيد الإغلاق",
+  HeldPaymentsReason_PAYMENT_LINKS_DISABLED: "روابط الدفع غير متاحة حاليًا",
+  HeldPaymentsReceived: "وقت الاستلام",
+  HeldPaymentsDeliveries: "عدد مرات الوصول",
+  HeldPaymentsConflict: "المبلغ يختلف بين مرات الوصول",
+  HeldPaymentsResolve: "إغلاق المراجعة",
+  HeldPaymentsResolved: "تمت المراجعة",
+  HeldPaymentsResolveTitle: "هل تريد إغلاق مراجعة هذه الدفعة المحتجزة؟",
+  HeldPaymentsResolveDescription:
+    "سجّل كيف تم التعامل مع هذه الدفعة. هذا لا ينقل أي أموال ولا يغيّر أي رصيد: سجّل المبلغ أولاً عبر مسار الإيصالات المعتاد.",
+  HeldPaymentsNoteLabel: "كيف تم التعامل معها؟",
+  HeldPaymentsResolvedToast: "تم إغلاق مراجعة الدفعة المحتجزة.",
   LoadingPaymentLinks: "جاري تحميل روابط الدفع...",
   NoPaymentLinksFound: "لا توجد روابط دفع.",
   OpenCashDrawer: "فتح صندوق النقد",
@@ -1832,6 +2253,7 @@ export const commonAr = {
   CashierReconciliations: "تسويات الصندوق",
   CashierReconciliation: "تسوية الصندوق",
   CashierReconciliationDraftDesc: "{count} دفعة نقدية، المتوقع {amount}",
+  CashierReconciliationIncomplete: "يحتوي هذا اليوم على عدد كبير جداً من الدفعات غير المسوّاة لا يمكن جمعها بأمان، لذا لا يمكن تقديمه من هنا. تواصل مع الدعم.",
   LoadingExpectedCash: "جاري تحميل النقد المتوقع...",
   CountedCash: "النقد المعدود",
   Current: "حالي",
@@ -1904,6 +2326,9 @@ export const commonAr = {
   // Team
   CommissionPct: "نسبة العمولة %",
   SyncRolePermissions: "مزامنة صلاحيات الأدوار",
+  SyncRolePermissionsDone: "تم تحديث {count} من الأدوار إلى أحدث قوالب الصلاحيات: {roles}.",
+  SyncRolePermissionsNone: "جميع الأدوار القياسية مطابقة لأحدث قوالب الصلاحيات.",
+  SyncRolePermissionsSynced: "تمت مزامنة صلاحيات الأدوار مع أحدث القوالب.",
 
   // Tasks / common
   AllPriorities: "جميع الأولويات",

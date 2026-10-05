@@ -1,6 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator } from "./utils/paymentMethods";
+import { costBearerValidator } from "./utils/costBearer";
 import { trustPassportFieldValidators } from "./utils/vehicleStatusGuards";
 import {
   appraisalStatusValidator,
@@ -24,6 +25,7 @@ import {
   quotationSourceValidator,
   settlementStatusValidator,
 } from "./utils/financingEconomics";
+import { directPaymentValidator } from "./utils/handoverCostPayment";
 import { consignedSettlementRouteValidator } from "./utils/vehicleOwnership";
 
 const organizationDeletionRequestStatus = v.union(
@@ -130,6 +132,9 @@ export default defineSchema({
      * one batch — that is normal, and never a reason to fail the batch.
      */
     commitmentAuthorityVersion: v.optional(v.number()),
+    /** SCRUM-563 — financial reset counters; absent means 0. Protocol: `convex/utils/orgResetGeneration.ts`. */
+    financialResetGeneration: v.optional(v.number()),
+    financialResetCompletedGeneration: v.optional(v.number()),
   }),
 
   organizationDeletionRequests: defineTable({
@@ -164,6 +169,8 @@ export default defineSchema({
     // key with materially different inputs is rejected instead of silently
     // returning the prior result.
     fingerprint: v.optional(v.string()),
+    /** SCRUM-563. The org's `financialResetGeneration` at write time (absent = 0); see `utils/orgResetGeneration.ts`. */
+    resetGeneration: v.optional(v.number()),
     createdBy: v.optional(v.id("users")),
     createdAt: v.number(),
     completedAt: v.optional(v.number()),
@@ -730,6 +737,8 @@ export default defineSchema({
     vehicleId: v.optional(v.id("vehicles")),
     customerId: v.optional(v.id("customers")),
     financeCompanyId: v.optional(v.id("financeCompanies")),
+    /** SCRUM-27: the name of a MANUAL finance company (no party row), exactly as on its approval letter. */
+    payerNameSnapshot: v.optional(v.string()),
     salespersonId: v.optional(v.id("users")),
     cashierId: v.optional(v.id("users")),
     description: v.optional(v.string()),
@@ -754,9 +763,11 @@ export default defineSchema({
       v.literal("REFUND_PAYABLE"),
     ),
     documentNumber: v.string(),
-    payerType: v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY")),
+    payerType: v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY"), v.literal("MANUAL_FINANCE_COMPANY")),
     customerId: v.optional(v.id("customers")),
     financeCompanyId: v.optional(v.id("financeCompanies")),
+    /** SCRUM-27: set exactly when payerType is MANUAL_FINANCE_COMPANY (no party row exists). */
+    payerNameSnapshot: v.optional(v.string()),
     sourceType: v.string(),
     sourceId: v.string(),
     originalAmountMinor: v.number(),
@@ -796,9 +807,11 @@ export default defineSchema({
     orgId: v.id("organizations"),
     branchId: v.optional(v.id("branches")),
     direction: v.union(v.literal("IN"), v.literal("OUT")),
-    payerType: v.optional(v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY"))),
+    payerType: v.optional(v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY"), v.literal("MANUAL_FINANCE_COMPANY"))),
     customerId: v.optional(v.id("customers")),
     financeCompanyId: v.optional(v.id("financeCompanies")),
+    /** SCRUM-27: set exactly when payerType is MANUAL_FINANCE_COMPANY. */
+    payerNameSnapshot: v.optional(v.string()),
     method: v.union(
       v.literal("CASH"),
       v.literal("BANK_TRANSFER"),
@@ -899,6 +912,10 @@ export default defineSchema({
       v.literal("ALLOCATE_DEPOSIT"),
       v.literal("RESOLVE_DEPOSIT_ALLOCATION"),
       v.literal("SET_SUPPLIER_SETTLEMENT_ROUTE"),
+      // SCRUM-447: retiring a registered expected payment, and attesting the
+      // face of a legacy finance-company cheque.
+      v.literal("CORRECT_EXPECTED_PAYMENT"),
+      v.literal("ATTEST_CHEQUE_FACE"),
       v.literal("CONFIRM_SUPPLIER_DISBURSEMENT"),
       // Correcting a mistyped settlement advice. Distinct from recording one so
       // the audit trail shows an amendment as an amendment — a second
@@ -909,6 +926,14 @@ export default defineSchema({
       // organization is not on the canonical authority yet. See
       // utils/saleCancellation.ts.
       v.literal("SETTLE_COMMITMENT_AUTHORITY"),
+      // SCRUM-239: a cleared finance-company disbursement cheque came back.
+      v.literal("RETURN_FINANCE_DISBURSEMENT_CHEQUE"),
+      // SCRUM-693: the steps of unwinding a paid finance deal.
+      v.literal("DEAL_UNWIND_STARTED"),
+      v.literal("DEAL_UNWIND_FORWARD_RETURNED"),
+      v.literal("DEAL_UNWIND_REMITTANCE_REFUNDED"),
+      v.literal("DEAL_UNWIND_COMPLETED"),
+      v.literal("DEAL_UNWIND_ABANDONED"),
     ),
     resourceType: v.string(),
     resourceId: v.string(),
@@ -1046,7 +1071,8 @@ export default defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_org", ["orgId"])
-    .index("by_org_user", ["orgId", "userId"]),
+    .index("by_org_user", ["orgId", "userId"])
+    .index("by_org_role", ["orgId", "roleId"]),
 
   membershipOffboardingJobs: defineTable({
     membershipId: v.id("memberships"),
@@ -1249,6 +1275,10 @@ export default defineSchema({
       v.literal("CASH_REFUND"),
       v.literal("VENDOR_CREDIT"),
     )),
+    // Set only when the correction rewrote a supplier payable (SUPPLIER_INVOICE_ERROR /
+    // VENDOR_CREDIT): which row, and the amountDue it held before. SCRUM-650.
+    payableId: v.optional(v.id("vehicleSupplierPayables")),
+    previousAmountDue: v.optional(v.number()),
     correctedBy: v.id("users"),
     createdAt: v.number(),
   }).index("by_org_vehicle", ["orgId", "vehicleId"]),
@@ -1428,6 +1458,92 @@ export default defineSchema({
     .index("by_org_sale", ["orgId", "saleId"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_sale", ["saleId"]),
+
+  /**
+   * SCRUM-389 — a paid SUPPLIER-borne vehicle cost, owed back by the supplier.
+   *
+   * Opened in the SAME transaction as the expense's EXPENSE_POSTED (which, for
+   * a SUPPLIER bearer, debits Receivable from Suppliers rather than an expense
+   * account). Deliberately NOT linked to any sale: recovery has its own
+   * lifecycle, so cancelling a sale can never strand it and settling one can
+   * never absorb it into margin.
+   *
+   * Amounts are integer MINOR units in `currency`. `amountRecoveredMinor` is
+   * the sum of LIVE receipts, maintained in the same mutation that writes or
+   * reverses a receipt; `status` is re-derived from due, recovered and
+   * reversal at every such write (`recoveryStatusFor`), never set by hand.
+   *
+   * The source posting's STATE is not stored — it is derived from
+   * `sourceEventKey` across `accountingEvents` and the outbox, because the
+   * posting can drain, fail or be reversed in transactions that never touch
+   * this row.
+   */
+  supplierCostRecoveries: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    expenseId: v.id("expenses"),
+    /** Snapshot of the supplier at payment — there is no supplier master data. */
+    sourcedFromName: v.string(),
+    amountDueMinor: v.number(),
+    amountRecoveredMinor: v.number(),
+    currency: v.string(),
+    /** How many receipts have ever been recorded (LIVE or REVERSED). */
+    receiptSeq: v.number(),
+    /** Idempotency key of the source EXPENSE_POSTED post. */
+    sourceEventKey: v.string(),
+    status: v.union(
+      v.literal("OPEN"),
+      v.literal("PARTIALLY_RECOVERED"),
+      v.literal("RECOVERED"),
+      v.literal("REVERSED")
+    ),
+    reversedAt: v.optional(v.number()),
+    reversedBy: v.optional(v.id("users")),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
+    .index("by_org_expense", ["orgId", "expenseId"]),
+
+  /**
+   * SCRUM-389 — money actually received from a supplier against one recovery.
+   *
+   * Immutable once LIVE except for its own reversal. Each receipt is its own
+   * posting source (`supplierCostRecoveryReceipts` / receipt id / version 1),
+   * posted SYNCHRONOUSLY — there is no queued receipt, so a LIVE row always has
+   * a POSTED event behind it. `POSTING` exists only inside the recording
+   * mutation (insert, post, patch LIVE); any throw rolls it back, so it is
+   * never persisted.
+   */
+  supplierCostRecoveryReceipts: defineTable({
+    orgId: v.id("organizations"),
+    recoveryId: v.id("supplierCostRecoveries"),
+    vehicleId: v.id("vehicles"),
+    seq: v.number(),
+    amountMinor: v.number(),
+    currency: v.string(),
+    method: v.union(v.literal("CASH"), v.literal("BANK_TRANSFER")),
+    receivedDate: v.number(),
+    reference: v.optional(v.string()),
+    notes: v.optional(v.string()),
+    /**
+     * The caller's command identity (runWithIdempotency). The POSTING's key is
+     * not stored: it is `supplierCostRecoveryReceiptKey(_id)`, one spelling.
+     */
+    idempotencyKey: v.string(),
+    status: v.union(v.literal("POSTING"), v.literal("LIVE"), v.literal("REVERSED")),
+    reversedAt: v.optional(v.number()),
+    reversedBy: v.optional(v.id("users")),
+    reversalReason: v.optional(v.string()),
+    reversalDate: v.optional(v.number()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_recovery", ["orgId", "recoveryId"]),
 
   vehicleSupplierPayables: defineTable({
     orgId: v.id("organizations"),
@@ -1887,6 +2003,28 @@ export default defineSchema({
      */
     consignedMarginCurrency: v.optional(v.string()),
     /**
+     * SCRUM-390 (OR-5): the operands of the "Commissionable vehicle margin" on
+     * a dealer-owned, financed sale completed by `applications.finalizeDeal`
+     * under a v2 financed-sale plan, frozen at completion.
+     *
+     *   commissionable margin = approved (G) - contribution (C) - acquisition cost
+     *
+     * G is the finance company's full transfer and C the showroom contribution,
+     * both in minor units of `currency`, written as ONE object so a partial
+     * record cannot exist. Frozen because the application and the letter they
+     * came from can still move afterwards, and `recalculateCommission` must
+     * never re-derive payroll from them. Absent on every other sale (cash,
+     * `sales.create`, consigned, plan v1 / none) and on every row written before
+     * this field; those keep salePrice - cost.
+     */
+    commissionBase: v.optional(
+      v.object({
+        approvedMinor: v.number(),
+        contributionMinor: v.number(),
+        currency: v.string(),
+      })
+    ),
+    /**
      * What the supplier is owed for the car, in minor units, frozen at
      * completion — his entitlement, denominated in `consignedMarginCurrency`.
      *
@@ -1939,12 +2077,19 @@ export default defineSchema({
     commissionPaidBy: v.optional(v.id("users")),
     commissionPaymentMethod: v.optional(paymentMethodValidator),
     commissionPaymentIdempotencyKey: v.optional(v.string()),
-    isDeleted: v.optional(v.boolean()),
+    // A sale is either live (unset) or soft-deleted (true); `false` is
+    // unrepresentable, so the by_org_deleted / by_org_salesperson_deleted index
+    // orders live sales by creation time (SCRUM-571 S1, D-28).
+    isDeleted: v.optional(v.literal(true)),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
     .index("by_org_salesperson", ["orgId", "salespersonId"])
+    // sales.list pages these natively: `.lt("isDeleted", true)` keeps the unset
+    // (live) rows and skips soft-deleted ones inside the index range.
+    .index("by_org_deleted", ["orgId", "isDeleted"])
+    .index("by_org_salesperson_deleted", ["orgId", "salespersonId", "isDeleted"])
     // Same ordering guarantee as by_org_saleDate, but scoped to one
     // salesperson. by_org_salesperson orders by _creationTime, so paging a
     // single rep's commissions through it would order by when the row was
@@ -2148,6 +2293,15 @@ export default defineSchema({
     // kept it. Absent on rows reversed before this field existed until
     // backfillExpenseReversedAt runs.
     reversedAt: v.optional(v.number()),
+    /**
+     * SCRUM-389 — who bears this cost. Absent means SHOWROOM, which is what
+     * every row written before this field meant. SUPPLIER is allowed only on
+     * an owned SOURCED vehicle, non-prepaid, with no tax, and is immutable once
+     * PAID: a paid SUPPLIER cost posts Dr Receivable from Suppliers (never an
+     * expense account) and opens one `supplierCostRecoveries` row. Enforced by
+     * `assertCostBearerAllowed` in expenses.ts, never by a reader.
+     */
+    costBearer: v.optional(costBearerValidator),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
@@ -2479,7 +2633,8 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_vehicle", ["vehicleId"])
-    .index("by_company", ["companyId"]),
+    .index("by_company", ["companyId"])
+    .index("by_org_vehicle_company", ["orgId", "vehicleId", "companyId"]),
 
   guarantors: defineTable({
     orgId: v.id("organizations"),
@@ -2522,9 +2677,8 @@ export default defineSchema({
     // Core parameters
     vehiclePrice: v.number(),
     // The dealer's own margin on the deal, as the client that built the quote
-    // defines it. Checked against the vehicle's `minimumProfit` by
-    // convex/utils/profitApproval.ts. Optional only for quotes written before
-    // that check existed — new quotes always carry it (absent is read as 0).
+    // defines it. Display only (SCRUM-260): the minimum-profit check derives the
+    // margin from `vehiclePrice` itself, in convex/utils/profitApproval.ts.
     desiredProfit: v.optional(v.number()),
     downPayment: v.number(),
     termMonths: v.number(),
@@ -2663,6 +2817,19 @@ export default defineSchema({
       monthlyInstallment: v.optional(v.number()),
       totalProfit: v.optional(v.number()),
     })),
+    /**
+     * SCRUM-27: what the manager read off the MANUAL finance company's approval
+     * letter (OR-8/OR-11). Present only on a manual application; cleared with the
+     * approval it belongs to. `dealerSendsMinor` is S = held deposit + dealership
+     * contribution - an explicit 0 is a fact, an absent field is "not entered".
+     */
+    manualApproval: v.optional(v.object({
+      approvedAmountMinor: v.number(),
+      financierName: v.string(),
+      dealerSendsMinor: v.number(),
+      enteredBy: v.id("users"),
+      enteredAt: v.number(),
+    })),
     approvedBy: v.optional(v.id("users")),
     approvedAt: v.optional(v.number()),
     finalizedSaleId: v.optional(v.id("sales")),
@@ -2670,6 +2837,9 @@ export default defineSchema({
     disbursedAt: v.optional(v.number()),
     disbursedAmountMinor: v.optional(v.number()),
     disbursementIdempotencyKey: v.optional(v.string()),
+    // SCRUM-239: which disbursement of this application is live. Absent means 1;
+    // a returned cleared cheque bumps it so the next confirmation mints new keys.
+    disbursementVersion: v.optional(v.number()),
     // التنازل بالسيارة للعميل — vehicle handover to the customer, registered
     // before finalizeDeal is allowed to run.
     vehicleHandoverAt: v.optional(v.number()),
@@ -2936,6 +3106,18 @@ export default defineSchema({
      */
     financedSaleNetReceivableMinor: v.optional(v.number()),
 
+    /**
+     * SCRUM-435 (finance-company forward). Written only by finalization. A
+     * plan-version-2 deal: the company transfers the FULL approved amount and
+     * the dealership forwards H (deposit) + C (its contribution) to it. Frozen
+     * at finalize so the forward due never re-derives from moving inputs.
+     * Absent on a v1 deal, which is never recomputed.
+     */
+    financedSalePlanVersion: v.optional(v.union(v.literal(1), v.literal(2))),
+    financeCompanyForwardDueMinor: v.optional(v.number()),
+    forwardDepositPortionMinor: v.optional(v.number()),
+    forwardContributionPortionMinor: v.optional(v.number()),
+
     // Appraisal gap and its negotiated split. The gap negotiated is the RAW
     // difference against the submitted quotation, not the change in the
     // company's funded portion.
@@ -2978,6 +3160,8 @@ export default defineSchema({
     .index("by_vehicle", ["vehicleId"])
     .index("by_status", ["status"])
     .index("by_org_status", ["orgId", "status"])
+    .index("by_org_quote", ["orgId", "quoteId"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_org_reconciliation", ["orgId", "needsFinancingReconciliation"]),
 
   /**
@@ -3106,6 +3290,21 @@ export default defineSchema({
     ),
     /** The highest custody posting version ever used on this line — never reused after a reversal. */
     custodyPostingVersion: v.optional(v.number()),
+    /**
+     * SCRUM-443. What of this line is ON THE BOOKS as a DIRECT dealership
+     * payment right now, or absent when nothing is: the dealership itself paid
+     * the cost (cash, bank transfer, cheque issued, card), recorded by
+     * somebody who may confirm a finance disbursement. `HANDOVER_COST_PAID_DIRECT`
+     * posts once per version against `financeDealFees/<id>` (DR the treatment's
+     * expense / CR the outbound cash or bank account); an amount edit or a void
+     * reverses the live version and leaves the line unpaid again — there is no
+     * automatic re-post. Mutually exclusive with `custodyPosted`: no writer
+     * changes `paidBy`, and only a DEALER line can be paid this way.
+     * Legacy rows carry none and simply read as unpaid.
+     */
+    directPayment: v.optional(directPaymentValidator),
+    /** The highest direct-payment posting version ever used on this line — never reused after a reversal. */
+    directPaymentVersion: v.optional(v.number()),
     paidAt: v.optional(v.number()),
     receiptReference: v.optional(v.string()),
     documentStorageIds: v.optional(v.array(v.id("_storage"))),
@@ -3123,6 +3322,20 @@ export default defineSchema({
      * history; it never satisfies a configured template row.
      */
     templateIndex: v.optional(v.number()),
+    /**
+     * SCRUM-690 F-PNTR-1. Set when this line IS the actual of the deal's
+     * finance-company execution fee (`adminFees` on the frozen snapshot) — an
+     * explicit, audited link by line, never inferred from fee type and payer.
+     * At most one live line per deal carries it (proven by the binding
+     * mutations over the deal's live lines); voiding or unbinding the line
+     * makes the fee unrecorded again. See `utils/executionFeePosition.ts`.
+     */
+    executionFeeBinding: v.optional(
+      v.object({
+        boundAt: v.number(),
+        boundBy: v.id("users"),
+      })
+    ),
 
     /**
      * Set only when a person has confirmed the actual against its evidence.
@@ -3160,6 +3373,15 @@ export default defineSchema({
     // line whose reversal was deferred) — without the unbounded read of
     // every removed row the deal ever had.
     .index("by_application_custodyPostingVersion", ["applicationId", "custodyPostingVersion"])
+    // Every line of a deal that has EVER carried a direct dealership payment
+    // (SCRUM-443), live, zero-edited or removed: `directPaymentVersion` is set
+    // by the one writer that posts one (`recordDirectFeePayment`) and never
+    // unset, so `.gt("directPaymentVersion", 0)` after the application equality
+    // enumerates exactly the lines whose `HANDOVER_COST_PAID_DIRECT` family the
+    // closing gate must prove OFF the books — a voided or zeroed line's
+    // reversal may still be queued behind a closed period, and the row no
+    // longer says so.
+    .index("by_application_directPaymentVersion", ["applicationId", "directPaymentVersion"])
     // The one LIVE line per configured position. `recordTemplateFeeActual`
     // proves uniqueness against this index with every field an equality —
     // `voidedAt` last, so `undefined` (live) is the one value asked for — and
@@ -3208,6 +3430,113 @@ export default defineSchema({
    * `reimbursedMinor` is different and IS stored, because money owed and money
    * actually paid back are separate facts and only the second closes the record.
    */
+  /**
+   * SCRUM-435: one row per forward VERSION (the dealership paying the finance
+   * company H + C). The row holds the payment facts and the reversal INTENT
+   * only. Whether the money is really on the books is DERIVED from the exact
+   * accounting events by `deriveForwardState` — there is deliberately no stored
+   * "pending" label that could disagree with the ledger.
+   */
+  financeCompanyForwards: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    // SCRUM-27: exactly ONE of the two is set - a configured company by id, a manual one by the name on its letter.
+    financeCompanyId: v.optional(v.id("financeCompanies")),
+    payerNameSnapshot: v.optional(v.string()),
+    version: v.number(),
+    amountMinor: v.number(),
+    depositPortionMinor: v.number(),
+    contributionPortionMinor: v.number(),
+    currency: v.string(),
+    method: v.union(
+      v.literal("CASH"),
+      v.literal("BANK_TRANSFER"),
+      v.literal("CHEQUE"),
+      v.literal("CARD")
+    ),
+    paidAt: v.number(),
+    reference: v.optional(v.string()),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+    // Reversal intent (the ledger decides whether it happened).
+    reversalRequestedAt: v.optional(v.number()),
+    reversalIdempotencyKey: v.optional(v.string()),
+    reversalKind: v.optional(v.union(v.literal("VOID"), v.literal("RETURNED"))),
+    reverseReason: v.optional(v.string()),
+    reversedAt: v.optional(v.number()),
+    reversalActorId: v.optional(v.id("users")),
+  })
+    .index("by_org_application", ["orgId", "applicationId"]),
+
+  /**
+   * SCRUM-693: one server-owned unwind of a CLOSED, finance-company-paid deal.
+   * While a row is ACTIVE no other command may re-disburse, re-forward,
+   * re-register the expected payment, pay the commission or cancel the deal
+   * around it (`assertNoActiveDealUnwind`). Each money leg is recorded with its
+   * evidence only after its reversal is proven POSTED on the books.
+   */
+  dealUnwinds: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    saleId: v.id("sales"),
+    status: v.union(v.literal("ACTIVE"), v.literal("COMPLETED"), v.literal("ABANDONED")),
+    reason: v.string(),
+    startedBy: v.id("users"),
+    startedAt: v.number(),
+    // Snapshots taken at start; every later step refuses when they drifted.
+    remittanceVersion: v.number(),
+    remittanceMinor: v.number(),
+    remittanceMethod: v.union(v.literal("BANK_TRANSFER"), v.literal("CASH")),
+    forwardDueMinor: v.number(),
+    forwardReturn: v.optional(
+      v.object({
+        forwardId: v.optional(v.id("financeCompanyForwards")),
+        returnedAt: v.number(),
+        reference: v.string(),
+        recordedBy: v.id("users"),
+        recordedAt: v.number(),
+      })
+    ),
+    remittanceRefund: v.optional(
+      v.object({
+        method: v.union(v.literal("BANK_TRANSFER"), v.literal("CASH")),
+        refundedAt: v.number(),
+        bankReference: v.optional(v.string()),
+        voucherNumber: v.optional(v.string()),
+        recipientAcknowledged: v.optional(v.boolean()),
+        amountMinor: v.number(),
+        paymentId: v.id("canonicalPayments"),
+        reversedAllocationIds: v.array(v.id("paymentAllocations")),
+        // D5: REVERSED = the posted receipt journal was reversed; NOT_POSTED =
+        // it was only queued and the queued post was cancelled.
+        receiptReversal: v.union(v.literal("REVERSED"), v.literal("NOT_POSTED")),
+        recordedBy: v.id("users"),
+        recordedAt: v.number(),
+      })
+    ),
+    completion: v.optional(
+      v.object({
+        creditNoteReference: v.string(),
+        vehicleReturnedAt: v.number(),
+        vehicleReturnNote: v.string(),
+        customerPaymentDisposition: v.union(v.literal("REFUND"), v.literal("RETAIN_CREDIT")),
+        completedBy: v.id("users"),
+        completedAt: v.number(),
+      })
+    ),
+    abandonment: v.optional(
+      v.object({
+        reason: v.string(),
+        abandonedBy: v.id("users"),
+        abandonedAt: v.number(),
+      })
+    ),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org_application_status", ["orgId", "applicationId", "status"])
+    .index("by_org_sale_status", ["orgId", "saleId", "status"]),
+
   financeDealCustody: defineTable({
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
@@ -3351,6 +3680,44 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_application", ["applicationId"]),
+
+  /**
+   * SCRUM-444 — a salesperson's REQUEST that the dealership take a deposit.
+   *
+   * ⚠️ THIS ROW IS NOT MONEY. It has no deposit, transaction, payment, journal,
+   * outbox event or vehicle commitment behind it, and nothing may read it as
+   * "paid". Money reaches the ledger only when an actor holding
+   * CONFIRM_FINANCE_DISBURSEMENT confirms receipt (`depositRequests.confirm`),
+   * which writes the `deposits` row and flips this one to CONFIRMED in the same
+   * transaction. A PENDING request does not hold the car either.
+   */
+  depositRequests: defineTable({
+    orgId: v.id("organizations"),
+    quoteId: v.id("quotes"),
+    customerId: v.id("customers"),
+    vehicleId: v.id("vehicles"),
+    /** Major units, in `currency`. Confirmation must equal this exactly. */
+    amount: v.number(),
+    amountMinor: v.number(),
+    currency: v.string(),
+    note: v.optional(v.string()),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("CONFIRMED"),
+      v.literal("REJECTED"),
+      v.literal("WITHDRAWN")
+    ),
+    requestedBy: v.id("users"),
+    requestedAt: v.number(),
+    idempotencyKey: v.string(),
+    resolvedBy: v.optional(v.id("users")),
+    resolvedAt: v.optional(v.number()),
+    resolutionReason: v.optional(v.string()),
+    confirmedDepositId: v.optional(v.id("deposits")),
+  })
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_quote_status", ["quoteId", "status"])
+    .index("by_quote", ["quoteId"]),
 
   deposits: defineTable({
     orgId: v.id("organizations"),
@@ -3738,7 +4105,22 @@ export default defineSchema({
     // the answer is only ever wanted within one. Leading with orgId makes the
     // tenant boundary part of the access path rather than a filter somebody has
     // to remember to apply.
-    .index("by_org_consumed_sale", ["orgId", "consumedBySaleId"]),
+    .index("by_org_consumed_sale", ["orgId", "consumedBySaleId"])
+    // SCRUM-444 R5 — "THE DISTINCT RESERVATION ORIGINS OF THIS QUOTE'S DEAL".
+    // The reservation-deposit probe seeks `(org, headQuoteId = Q)` and then
+    // steps `originReservationId` forward with `.gt(<last origin>).first()`, so
+    // it costs one seek per DISTINCT origin and skips every other root that
+    // shares one (restoration successors copy `headQuoteId` and
+    // `originReservationId`). It never scans the car's history
+    // (`by_org_vehicle_status` grows for the life of a car).
+    //
+    // Both fields are optional. Convex DOES index a row whose field is
+    // undefined, and it sorts BEFORE every defined value, so a root headed at Q
+    // with no origin sits at the very start of the `(org, Q)` range. The probe's
+    // first seek uses `.gt("originReservationId", undefined)` to step over
+    // those rows; a root with no `headQuoteId` is never in Q's range at all.
+    // No backfill: Convex builds the index on deploy.
+    .index("by_org_head_quote_origin", ["orgId", "headQuoteId", "originReservationId"]),
 
   /**
    * SCRUM-195 — ONE ACQUISITION EPISODE.
@@ -3812,6 +4194,10 @@ export default defineSchema({
     resolvedReason: v.optional(v.string()),
   })
     .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
+    // SCRUM-69 — the finance-held-car guard reads ONLY FINANCE claims. RESERVATION and DEPOSIT
+    // rows are insert-only and pile up on a car forever, so a kind-blind scan could be pushed
+    // past its bound by unrelated history and refuse a car with no finance hold.
+    .index("by_org_vehicle_kind_status", ["orgId", "vehicleId", "evidenceKind", "status"])
     .index("by_root_status", ["rootId", "status"])
     .index("by_consumed_sale", ["consumedBySaleId"])
     .index("by_restored_from", ["restoredFromClaimId"])
@@ -3832,7 +4218,16 @@ export default defineSchema({
     // `depositVehicleHolds` row carries, not by searching the episodes that
     // share a deposit — an index here would only invite that search back.
     .index("by_application", ["applicationId"])
-    .index("by_reservation", ["reservationId"]),
+    .index("by_reservation", ["reservationId"])
+    // SCRUM-444 R5 — the FUNDED reservation episodes that name a quote. Leading
+    // with `(org, quoteId, evidenceKind = "RESERVATION")` and stepping
+    // `depositId` forward with `.gt(<last deposit>).first()` costs one seek per
+    // DISTINCT funded deposit. `depositId` is undefined on an UNFUNDED
+    // reservation's claim (only a funded reservation stamps it) and undefined
+    // sorts before every defined value, so `.gt("depositId", undefined)` never
+    // returns, and never counts, an unfunded reservation. Claims of other
+    // evidence kinds are outside the `RESERVATION` range. No data migration.
+    .index("by_org_quote_kind_deposit", ["orgId", "quoteId", "evidenceKind", "depositId"]),
 
   /**
    * One immutable row per application of deposit money to a sale.
@@ -4221,7 +4616,10 @@ export default defineSchema({
     .index("by_org_paymentDate", ["orgId", "paymentDate"])
     .index("by_receivable", ["receivableId"])
     .index("by_org_customer", ["orgId", "customerId"])
-    .index("by_org_cashier", ["orgId", "cashierId"])
+    // SCRUM-259: a cashier's UNRECONCILED, POSTED payments of one method for a
+    // business day, read as a bounded range rather than a prefix of everything
+    // they ever took. Replaces by_org_cashier, whose only readers these were.
+    .index("by_org_cashier_unreconciled_method_date", ["orgId", "cashierId", "reconciliationId", "status", "method", "paymentDate"])
     .index("by_reconciliation", ["reconciliationId"])
     .index("by_cheque", ["chequeId"]),
 
@@ -4234,7 +4632,30 @@ export default defineSchema({
     saleId: v.optional(v.id("sales")),
     // Set when this cheque is the registered expected-payment method for a
     // finance application, ahead of finalizeDeal — see registerExpectedPayment.
+    //
+    // SCRUM-447 D0 — PERMANENT LINEAGE. Once set, no writer clears it: it marks
+    // the cheque as a finance-company instrument for the rest of its life, and
+    // "active" is a STATUS question (HELD / DEPOSITED), never "is this set".
     applicationId: v.optional(v.id("financeApplications")),
+    // SCRUM-447 D1 — the cheque's FACE, as the operator recorded it (or as
+    // `attestChequeFace` attested it), in minor units of `currency`. `amount`
+    // stays the legacy display figure. A row with no `amountMinor` has an
+    // UNAVAILABLE face and can never be cleared by confirmDisbursement.
+    amountMinor: v.optional(v.number()),
+    currency: v.optional(v.string()),
+    faceAttestedBy: v.optional(v.id("users")),
+    faceAttestedAt: v.optional(v.number()),
+    // SCRUM-447 B4: the operator's stated reason the attested face is correct.
+    faceAttestationNote: v.optional(v.string()),
+    // SCRUM-447 D2 — who drew it. Absent on an application-linked row means the
+    // drawer is UNVERIFIED (history cannot prove it), never "the customer".
+    drawerType: v.optional(v.literal("FINANCE_COMPANY")),
+    financeCompanyId: v.optional(v.id("financeCompanies")),
+    // Immutable lineage anchor: the application this cheque was ever opened for.
+    originApplicationId: v.optional(v.id("financeApplications")),
+    cancelledAt: v.optional(v.number()),
+    cancelledBy: v.optional(v.id("users")),
+    cancellationReason: v.optional(v.string()),
     bank: v.string(),
     chequeNumber: v.string(),
     chequeDate: v.number(),
@@ -4253,6 +4674,8 @@ export default defineSchema({
     returnReason: v.optional(v.string()),
     clearedAt: v.optional(v.number()),
     returnedAfterClearing: v.optional(v.boolean()),
+    // SCRUM-239: the application disbursement version this FC cheque cleared under.
+    disbursementVersion: v.optional(v.number()),
     bankFeeMinor: v.optional(v.number()),
     idempotencyKey: v.optional(v.string()),
     notes: v.optional(v.string()),
@@ -4401,7 +4824,8 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_application", ["applicationId"])
-    .index("by_rule", ["ruleId"]),
+    .index("by_rule", ["ruleId"])
+    .index("by_file", ["fileId"]),
 
   branches: defineTable({
     orgId: v.id("organizations"),
@@ -4494,6 +4918,12 @@ export default defineSchema({
     depositId: v.optional(v.id("deposits")),
     userId: v.optional(v.id("users")), // For partner draws/salaries
     expenseId: v.optional(v.id("expenses")),
+    /**
+     * SCRUM-389 — copied from the expense at the same write. The P&L reads
+     * this table, not `expenses`, so without it a supplier-borne cost would be
+     * counted as COGS. Absent means SHOWROOM (every row written before it).
+     */
+    costBearer: v.optional(costBearerValidator),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
@@ -4546,6 +4976,11 @@ export default defineSchema({
     disposalProceedsMinor: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
+    // `list` pages live rows only through this index, with no post-index filter, using
+    // `.lt("isDeleted", true)`, which matches unset or false. That is defensive: no current
+    // fixed-asset writer sets false, because admin restore refuses financial tables. Should a
+    // false row ever exist, the index orders it as its own group, apart from the unset rows.
+    .index("by_org_deleted", ["orgId", "isDeleted"])
     .index("by_status", ["status"]),
 
   // Immutable, append-only log of every capitalization/depreciation/impairment/
@@ -4569,7 +5004,9 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_asset", ["assetId"])
-    .index("by_org_asset_time", ["orgId", "assetId", "occurredAt"]),
+    .index("by_org_asset_time", ["orgId", "assetId", "occurredAt"])
+    // One bounding event per type for the date guard: the latest of a type is a single read.
+    .index("by_org_asset_type_time", ["orgId", "assetId", "type", "occurredAt"]),
 
   partnerEquity: defineTable({
     orgId: v.id("organizations"),
@@ -5772,6 +6209,18 @@ export default defineSchema({
     approvedBy: v.optional(v.id("users")),
     notes: v.optional(v.string()),
     createdAt: v.number(),
+    // SCRUM-260: the server-computed priced state this request asks approval
+    // for (see convex/utils/profitApproval.ts). An approval authorizes exactly
+    // these values; rows written before them carry none and authorize nothing.
+    salePriceMinor: v.optional(v.number()),
+    listPriceMinor: v.optional(v.number()),
+    minimumProfitMinor: v.optional(v.number()),
+    currency: v.optional(v.string()),
+    // Set when a newer request from the same salesperson replaced this one
+    // while it was still PENDING; the row is closed as REJECTED without a
+    // rejection notice.
+    supersededAt: v.optional(v.number()),
+    respondedAt: v.optional(v.number()),
     // Full wizard state snapshot so salesperson can resume after approval.
     // Must stay in step with `wizardSnapshotValidator` in convex/approvals.ts:
     // a field the args validator accepts but this object omits is an "extra
@@ -5796,6 +6245,9 @@ export default defineSchema({
     .index("by_vehicle", ["vehicleId"])
     .index("by_salesperson", ["salespersonId"])
     .index("by_status", ["status"])
+    // SCRUM-260: the approval lookup for one priced state. Rows written
+    // before SCRUM-260 carry no salePriceMinor and are never matched.
+    .index("by_org_vehicle_salePrice", ["orgId", "vehicleId", "salePriceMinor"])
     // SCRUM-100. `by_org` + a post-read `.filter(status === "PENDING")` reads
     // every request the org ever created and discards most of them; these rows
     // are fat (`wizardSnapshot` carries the whole sale wizard). Bound in the
@@ -6178,8 +6630,17 @@ export default defineSchema({
       v.literal("SETTLED"),
       v.literal("FAILED"),
       v.literal("EXPIRED"),
-      v.literal("REFUNDED")
+      v.literal("REFUNDED"),
+      // SCRUM-571 S1 (D-22): the provider reported a capture for this link that
+      // AutoFlow has neither settled nor applied; the capture sits in
+      // `unmatchedProviderFunds` (heldFundsId). Terminal: never reserved as
+      // collectible, never shown as unpaid, never expirable.
+      v.literal("CAPTURE_HELD")
     ),
+    heldFundsId: v.optional(v.id("unmatchedProviderFunds")),
+    // D-22: operator attestation recorded by `expire` that the provider shows no payment.
+    providerStatusCheckedAt: v.optional(v.number()),
+    providerStatusCheckedBy: v.optional(v.id("users")),
     idempotencyKey: v.string(),
     providerPayload: v.optional(v.any()),
     providerEventId: v.optional(v.string()),
@@ -6199,6 +6660,50 @@ export default defineSchema({
     .index("by_org_idempotency", ["orgId", "idempotencyKey"])
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_receivable", ["receivableId"]),
+
+  // SCRUM-571 D-8 — a signature-verified provider capture that did NOT settle an
+  // intent. `paymentIntents.settleByExternalId` answers the provider 200 only
+  // after the capture has a durable outcome: exactly one settlement, OR exactly
+  // one row here. A row is finance-visible evidence that money moved at the
+  // provider and needs a human decision. It is NOT a receivable, an allocation,
+  // a canonical payment or a posting, and nothing here ever creates one: the
+  // money is reconciled manually through the existing receipt doors, and
+  // `resolveUnmatchedProviderFunds` only records that a person did so.
+  //
+  // One row per capture, keyed (provider, externalId): redelivery bumps
+  // `deliveryCount` instead of inserting. `orgId` is absent only for
+  // UNKNOWN_REFERENCE, where no tenant can be named.
+  unmatchedProviderFunds: defineTable({
+    orgId: v.optional(v.id("organizations")),
+    provider: v.string(),
+    externalId: v.string(),
+    intentId: v.optional(v.id("paymentIntents")),
+    reason: v.union(
+      v.literal("UNKNOWN_REFERENCE"),
+      v.literal("INTENT_NOT_PENDING"),
+      v.literal("AMOUNT_OR_ACCOUNT_MISMATCH"),
+      v.literal("LIFECYCLE_REFUSED"),
+      // SCRUM-571 S1 (D-20): payment links are shut; a verified capture is held, not settled.
+      v.literal("PAYMENT_LINKS_DISABLED")
+    ),
+    intentStatusAtReceipt: v.optional(v.string()),
+    amountMinor: v.number(),
+    currency: v.string(),
+    providerAccountId: v.optional(v.string()),
+    // Bounded: the 20 most recent distinct provider event ids.
+    providerEventIds: v.array(v.string()),
+    deliveryCount: v.number(),
+    // A later delivery of the same capture carried a different amount/currency.
+    amountConflict: v.boolean(),
+    reviewStatus: v.union(v.literal("OPEN"), v.literal("RESOLVED")),
+    resolvedBy: v.optional(v.id("users")),
+    resolvedAt: v.optional(v.number()),
+    resolutionNote: v.optional(v.string()),
+    firstReceivedAt: v.number(),
+    lastReceivedAt: v.number(),
+  })
+    .index("by_provider_external", ["provider", "externalId"])
+    .index("by_org_review", ["orgId", "reviewStatus"]),
 
   // ─── Dealer Network Marketplace (Phase 56+) ──────────────────────────────
   // Cross-org layer: a dealer's marketplace presence is an opt-in flag on top

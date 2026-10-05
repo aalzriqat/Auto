@@ -7,6 +7,7 @@ import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
 import { notifyManagers, notifyUser, getActorName } from "./utils/notifications";
 import { assertDirectVehicleStatusTransition } from "./utils/vehicleStatusGuards";
+import { syncVehicleHoldStatus } from "./utils/depositHelpers";
 
 const vehicleStatus = v.union(
   v.literal("AVAILABLE"),
@@ -172,8 +173,16 @@ export const resolve = mutation({
           status: request.requestedStatus,
         });
 
-        if (request.requestedStatus === "AVAILABLE" && vehicle.status !== "AVAILABLE") {
-          const updatedVehicle = { ...vehicle, status: "AVAILABLE" as const };
+        // SCRUM-700 N1: a live reservation/deposit hold overrides the request.
+        await syncVehicleHoldStatus(ctx, request.vehicleId, user._id);
+        const finalVehicle = await ctx.db.get(request.vehicleId);
+
+        if (
+          request.requestedStatus === "AVAILABLE" &&
+          vehicle.status !== "AVAILABLE" &&
+          finalVehicle?.status === "AVAILABLE"
+        ) {
+          const updatedVehicle = finalVehicle;
           await maybeAutoPostToInstagram(ctx, {
             orgId: args.orgId,
             vehicle: updatedVehicle,

@@ -76,8 +76,10 @@ export function msToDateInput(ms: number): string {
 
 /**
  * The UTC calendar today as "YYYY-MM-DD" — the default and the ceiling of
- * an ECONOMIC date input (a paid date, a custody movement date, an invoice
- * date).
+ * an ECONOMIC date input (a paid date, a custody movement date). A legal
+ * invoice date is the exception: it is a DOCUMENT date, the one printed on
+ * the paper, so `RecordLegalInvoiceDialog` never pre-fills the UTC day when
+ * it differs from the operator's own day (SCRUM-596).
  *
  * The ledger's calendar is UTC: every accounting period is bounded with
  * `Date.UTC` and every posting is bucketed by its UTC month, so "today" for
@@ -106,7 +108,9 @@ export function economicTodayDateInput(): string {
  * Sending the picked day's UTC midnight keeps the accounting date the
  * operator chose; the server derives the period from it and refuses a day
  * its own clock has not reached, which is why economic pickers default to
- * and are capped at `economicTodayDateInput`, never the local today.
+ * and are capped at `economicTodayDateInput`, never the local today
+ * (document dates such as the legal invoice are capped at the earlier of
+ * the two — see `RecordLegalInvoiceDialog`).
  * NaN for an empty/invalid value, like `dateInputToUtcMs`.
  */
 export function economicDateInputToMs(value: string): number {

@@ -15,6 +15,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { scaleForCurrency, assertValidMinorAmount, assertSameCurrency } from "./utils/money";
 import { requireFeature } from "./subscriptions";
+import { assertSourceIsNotSaleDebt } from "./utils/saleDebtContainment";
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -33,11 +34,12 @@ export async function getReceivableOutstandingMinor(
   // getReceivableBalance would show a cancelled sale as still owing in full.
   if (doc.status === "CANCELLED") return 0;
 
-  const activeAllocations = await ctx.db
+  // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+  const receivableAllocations = await ctx.db
     .query("paymentAllocations")
     .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivableId))
-    .filter((q) => q.eq(q.field("status"), "ACTIVE"))
     .collect();
+  const activeAllocations = receivableAllocations.filter((a) => a.status === "ACTIVE");
 
   const allocated = activeAllocations.reduce((s, a) => s + a.amountMinor, 0);
   return Math.max(0, doc.originalAmountMinor - allocated);
@@ -50,11 +52,12 @@ async function getPaymentUnappliedMinor(
   const payment = await ctx.db.get(paymentId);
   if (!payment) throw new ConvexError("Payment not found.");
 
-  const activeAllocations = await ctx.db
+  // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+  const paymentAllocations = await ctx.db
     .query("paymentAllocations")
     .withIndex("by_payment", (q) => q.eq("paymentId", paymentId))
-    .filter((q) => q.eq(q.field("status"), "ACTIVE"))
     .collect();
+  const activeAllocations = paymentAllocations.filter((a) => a.status === "ACTIVE");
 
   const allocated = activeAllocations.reduce((s, a) => s + a.amountMinor, 0);
   return Math.max(0, payment.amountMinor - allocated);
@@ -77,9 +80,11 @@ export async function createReceivableDocument(
   args: {
     orgId: Id<"organizations">;
     documentType: "INVOICE" | "INSTALLMENT" | "DEBIT_ADJUSTMENT" | "CREDIT_ADJUSTMENT" | "WRITE_OFF" | "REFUND_PAYABLE";
-    payerType: "CUSTOMER" | "FINANCE_COMPANY";
+    payerType: "CUSTOMER" | "FINANCE_COMPANY" | "MANUAL_FINANCE_COMPANY";
     customerId?: Id<"customers">;
     financeCompanyId?: Id<"financeCompanies">;
+    /** SCRUM-27: the manual finance company's name off its approval letter (MANUAL_FINANCE_COMPANY only). */
+    payerNameSnapshot?: string;
     sourceType: string;
     sourceId: string;
     originalAmountMinor: number;
@@ -109,6 +114,7 @@ export async function createReceivableDocument(
     payerType: args.payerType,
     customerId: args.customerId,
     financeCompanyId: args.financeCompanyId,
+    payerNameSnapshot: args.payerNameSnapshot,
     sourceType: args.sourceType,
     sourceId: args.sourceId,
     originalAmountMinor: args.originalAmountMinor,
@@ -142,9 +148,10 @@ export async function createCanonicalPayment(
   args: {
     orgId: Id<"organizations">;
     direction: "IN" | "OUT";
-    payerType?: "CUSTOMER" | "FINANCE_COMPANY";
+    payerType?: "CUSTOMER" | "FINANCE_COMPANY" | "MANUAL_FINANCE_COMPANY";
     customerId?: Id<"customers">;
     financeCompanyId?: Id<"financeCompanies">;
+    payerNameSnapshot?: string;
     method: "CASH" | "BANK_TRANSFER" | "CARD" | "PAYMENT_LINK" | "CHEQUE" | "INTERNAL_TRANSFER" | "TRADE_IN" | "OTHER";
     amountMinor: number;
     currency: string;
@@ -182,6 +189,7 @@ export async function createCanonicalPayment(
     payerType: args.payerType,
     customerId: args.customerId,
     financeCompanyId: args.financeCompanyId,
+    payerNameSnapshot: args.payerNameSnapshot,
     method: args.method,
     amountMinor: args.amountMinor,
     currency,
@@ -239,6 +247,14 @@ export async function allocatePaymentToReceivable(
     payment.financeCompanyId &&
     receivable.financeCompanyId &&
     payment.financeCompanyId !== receivable.financeCompanyId
+  ) {
+    throw new ConvexError("Payment finance company does not match the receivable's finance company.");
+  }
+
+  if (
+    payment.payerNameSnapshot &&
+    receivable.payerNameSnapshot &&
+    payment.payerNameSnapshot !== receivable.payerNameSnapshot
   ) {
     throw new ConvexError("Payment finance company does not match the receivable's finance company.");
   }
@@ -312,11 +328,12 @@ export async function voidCanonicalPayment(
   if (!payment || payment.orgId !== args.orgId) throw new ConvexError("Payment not found.");
   if (payment.status === "VOIDED") return;
 
-  const activeAllocations = await ctx.db
+  // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
+  const paymentAllocations = await ctx.db
     .query("paymentAllocations")
     .withIndex("by_payment", (q) => q.eq("paymentId", args.paymentId))
-    .filter((q) => q.eq(q.field("status"), "ACTIVE"))
     .collect();
+  const activeAllocations = paymentAllocations.filter((a) => a.status === "ACTIVE");
   if (activeAllocations.length > 0) {
     throw new ConvexError("Cannot void a payment with active allocations — reverse them first.");
   }
@@ -428,11 +445,22 @@ export const listAllocations = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
     await requireFeature(ctx, args.orgId, "accounting");
+    // SCRUM-261: authorising args.orgId says nothing about the parent id the
+    // caller supplied. Prove the parent is this org's before reading a single
+    // child, and let only children stamped with this org leave. A foreign or
+    // missing parent reads exactly like one with no allocations, as in
+    // getReceivableBalance / getPaymentBalance.
     if (args.receivableDocumentId) {
-      return ctx.db.query("paymentAllocations").withIndex("by_receivable", (q) => q.eq("receivableDocumentId", args.receivableDocumentId!)).collect();
+      const receivable = await ctx.db.get(args.receivableDocumentId);
+      if (!receivable || receivable.orgId !== args.orgId) return [];
+      const rows = await ctx.db.query("paymentAllocations").withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivable._id)).collect();
+      return rows.filter((row) => row.orgId === args.orgId);
     }
     if (args.paymentId) {
-      return ctx.db.query("paymentAllocations").withIndex("by_payment", (q) => q.eq("paymentId", args.paymentId!)).collect();
+      const payment = await ctx.db.get(args.paymentId);
+      if (!payment || payment.orgId !== args.orgId) return [];
+      const rows = await ctx.db.query("paymentAllocations").withIndex("by_payment", (q) => q.eq("paymentId", payment._id)).collect();
+      return rows.filter((row) => row.orgId === args.orgId);
     }
     return [];
   },
@@ -472,6 +500,8 @@ export const createReceivable = internalMutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
+    // SCRUM-571 S1 (D-20): no second debt for a sale. Before the only write.
+    await assertSourceIsNotSaleDebt(ctx, args.orgId, args);
     return createReceivableDocument(ctx, { ...args, actorId: user._id });
   },
 });
@@ -506,6 +536,9 @@ export const allocate = internalMutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
+    // SCRUM-571 S1 (D-20): no allocation to a sale invoice or its legacy mirror.
+    const target = await ctx.db.get(args.receivableDocumentId);
+    if (target && target.orgId === args.orgId) await assertSourceIsNotSaleDebt(ctx, args.orgId, target);
     return allocatePaymentToReceivable(ctx, { ...args, actorId: user._id });
   },
 });

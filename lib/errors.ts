@@ -29,14 +29,12 @@
  * throw the good payload away.
  */
 
-export const GENERIC_ERROR_MESSAGE = "An unexpected error occurred. Please try again later.";
+import { isConvexError } from "@autoflow/shared/convexError";
+import { interpolate } from "./i18n/interpolate";
 
-/**
- * Convex stamps this on every `ConvexError`. Preferred over `instanceof`
- * because more than one copy of the `convex` package can be resolved at once
- * (pnpm keeps one per peer set), and `instanceof` fails across those copies.
- */
-const CONVEX_ERROR_MARKER = Symbol.for("ConvexError");
+export { isConvexError } from "@autoflow/shared/convexError";
+
+export const GENERIC_ERROR_MESSAGE = "An unexpected error occurred. Please try again later.";
 
 /** The developer-thrown message sitting inside Convex's transport wrapper. */
 const CONVEX_INNER_MESSAGE = /Uncaught\s+(?:ConvexError|Error)\s*:\s*([\s\S]*)$/;
@@ -60,19 +58,6 @@ function usableMessage(value: string): string | null {
   if (trimmed.length === 0) return null;
   if (LEAKS_INTERNALS.test(trimmed)) return null;
   return trimmed;
-}
-
-/**
- * Whether a caught value is the server's own refusal (`ConvexError`) rather
- * than a transport failure. The distinction matters to a caller deciding what
- * it knows: a `ConvexError` is thrown inside the mutation and rolls it back,
- * so nothing was committed; anything else may have committed before the
- * response was lost.
- */
-export function isConvexError(error: unknown): error is { data: unknown } {
-  if (typeof error !== "object" || error === null) return false;
-  const candidate = error as Record<PropertyKey, unknown>;
-  return candidate[CONVEX_ERROR_MARKER] === true || candidate.name === "ConvexError";
 }
 
 function hasStringMessage(error: unknown): error is { message: string } {
@@ -140,4 +125,53 @@ export function getErrorMessage(error: unknown): string {
     // a second error.
     return GENERIC_ERROR_MESSAGE;
   }
+}
+
+/** Dictionary key a coded server refusal is translated under (`ServerError_<code>`). */
+export function serverErrorMessageKey(code: string): string {
+  return `ServerError_${code}`;
+}
+
+/**
+ * Like `getErrorMessage`, but a server refusal that carries a `data.code` with a
+ * `ServerError_<code>` dictionary entry is shown in the user's language. The
+ * payload's scalar fields (e.g. `baseCurrency`) fill the `{placeholders}`.
+ * Anything without a translation - a plain-string ConvexError, an unknown code, a
+ * transport failure - falls back to `getErrorMessage`, so behaviour is unchanged
+ * until a code is given a dictionary entry.
+ *
+ * `t` is the language provider's translate function, which returns the key
+ * itself when it cannot resolve one; that is how a missing entry is detected.
+ */
+export function getLocalizedErrorMessage(error: unknown, t: (key: string) => string): string {
+  try {
+    const data = codedPayloadOf(error);
+    if (data !== null) {
+      const key = serverErrorMessageKey(data.code as string);
+      const template = t(key);
+      if (typeof template === "string" && template !== "" && template !== key) {
+        return interpolate(template, scalarFields(data));
+      }
+    }
+  } catch {
+    // fall through to the untranslated message
+  }
+  return getErrorMessage(error);
+}
+
+/** The `ConvexError.data` object when it carries a string `code`, else null. */
+function codedPayloadOf(error: unknown): Record<string, unknown> | null {
+  if (!isConvexError(error)) return null;
+  const data = error.data;
+  if (typeof data !== "object" || data === null) return null;
+  return typeof (data as { code?: unknown }).code === "string" ? (data as Record<string, unknown>) : null;
+}
+
+/** The string and number fields of a payload - the only values a `{placeholder}` can take. */
+function scalarFields(data: Record<string, unknown>): Record<string, string | number> {
+  const values: Record<string, string | number> = {};
+  for (const [name, value] of Object.entries(data)) {
+    if (typeof value === "string" || typeof value === "number") values[name] = value;
+  }
+  return values;
 }

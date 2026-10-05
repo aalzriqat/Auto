@@ -1,7 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { advanceLeadStage } from "./utils/leadStageHelpers";
@@ -23,6 +23,9 @@ import {
 import { calculateUnifiedMurabaha, minimumDownPaymentForFinancingLimit } from "../lib/financing";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { assertMajorAmountRepresentable } from "./utils/money";
+import { assertNoPendingDepositRequest } from "./utils/depositRequestGuards";
+import { assertOperatedDealMode } from "./utils/dealModes";
+import { requireCommercialVehicle } from "./utils/vehicleLiveness";
 
 function assertFiniteNumber(val: unknown, name: string): void {
   if (val !== undefined && (typeof val !== "number" || !Number.isFinite(val))) {
@@ -45,11 +48,11 @@ export const listQuotesByCustomer = query({
   },
   handler: async (ctx, { orgId, customerId }) => {
     await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_CUSTOMERS]);
-    return await ctx.db
+    const customerQuotes = await ctx.db
       .query("quotes")
       .withIndex("by_customer", (q) => q.eq("customerId", customerId))
-      .filter((q) => q.eq(q.field("orgId"), orgId))
       .collect();
+    return customerQuotes.filter((quote) => quote.orgId === orgId);
   },
 });
 
@@ -67,6 +70,17 @@ export const get = query({
     return quote;
   },
 });
+
+/**
+ * A deleted, sold or archived car cannot be offered to a customer (SCRUM-629
+ * F-09). Reserved cars stay quotable: a quote is a draft, and the commitment
+ * boundary decides at deposit and application time.
+ */
+function assertQuotableVehicle(vehicle: Doc<"vehicles">): void {
+  if (vehicle.isDeleted === true || vehicle.status === "SOLD" || vehicle.status === "ARCHIVED") {
+    throw new ConvexError("This vehicle is no longer available to quote.");
+  }
+}
 
 export const saveQuote = mutation({
   args: {
@@ -86,8 +100,8 @@ export const saveQuote = mutation({
     mode: quoteModeValidator,
     leadId: v.optional(v.id("leads")),
     vehiclePrice: v.number(),
-    // The dealer margin the client is quoting. Absent is read as zero, so a
-    // caller that omits it can never slip a below-minimum deal past the check.
+    // The dealer margin the client is quoting, stored for display. It is not
+    // authority: the minimum-profit check derives the margin from the price.
     desiredProfit: v.optional(v.number()),
     downPayment: v.number(),
     termMonths: v.number(),
@@ -108,6 +122,11 @@ export const saveQuote = mutation({
     // gated to VIEW_SALES (held by SALES/MANAGER/ACCOUNTANT/OWNER) rather
     // than CREATE_SALES, which is reserved for finalizing an actual sale.
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+
+    // SCRUM-495 (OR-6 / OR-7): LEASE and INTERNAL_INSTALLMENT are no longer deal
+    // modes. The union above stays wide so a historical quote still validates
+    // and renders; a NEW one is refused here, before anything is read or written.
+    assertOperatedDealMode(args.mode);
 
     // Finite checks on all numeric inputs and caller-supplied outputs
     assertFiniteNumber(args.vehiclePrice, "Vehicle price");
@@ -162,6 +181,8 @@ export const saveQuote = mutation({
 
     let vehicleId = args.vehicleId;
     let vehiclePrice = args.vehiclePrice;
+    // Each vehicle at the price it is quoted at, for the minimum-profit check.
+    const pricedLines: { vehicle: Doc<"vehicles">; price: number }[] = [];
 
     if (args.vehicleItems && args.vehicleItems.length > 0) {
       const seen = new Set<string>();
@@ -179,6 +200,8 @@ export const saveQuote = mutation({
         if (!lineVehicle || lineVehicle.orgId !== args.orgId) {
           throw new ConvexError("Vehicle not found in this organization.");
         }
+        assertQuotableVehicle(lineVehicle);
+        pricedLines.push({ vehicle: lineVehicle, price: item.unitPrice });
       }
       vehicleId = args.vehicleItems[0].vehicleId;
       vehiclePrice = args.vehicleItems.reduce((sum, item) => sum + item.unitPrice, 0);
@@ -187,6 +210,8 @@ export const saveQuote = mutation({
       if (!vehicle || vehicle.orgId !== args.orgId) {
         throw new ConvexError("Vehicle not found in this organization.");
       }
+      assertQuotableVehicle(vehicle);
+      pricedLines.push({ vehicle, price: vehiclePrice });
     }
 
     assertMajorAmountRepresentable(vehiclePrice, orgCurrency, "Vehicle price");
@@ -296,12 +321,8 @@ export const saveQuote = mutation({
       if (maxFinancingLTV !== undefined && maxFinancingLTV > 0) {
         const valuation = await ctx.db
           .query("vehicleValuations")
-          .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId))
-          .filter((q) =>
-            q.and(
-              q.eq(q.field("orgId"), args.orgId),
-              q.eq(q.field("companyId"), company._id),
-            ),
+          .withIndex("by_org_vehicle_company", (q) =>
+            q.eq("orgId", args.orgId).eq("vehicleId", vehicleId).eq("companyId", company._id)
           )
           .first();
 
@@ -432,15 +453,20 @@ export const saveQuote = mutation({
 
     // The UI blocks a below-minimum financed quote unless a manager approved it;
     // enforce the same rule here so a direct API call, an older client, or the
-    // mobile app cannot write one. Financed quotes are single-vehicle, so this
-    // checks the resolved `vehicleId` rather than the line items.
+    // mobile app cannot write one. SCRUM-260: judged on the price each line is
+    // quoted at, never on the caller's `desiredProfit` — and per line, because
+    // a legacy quote with no mode can carry several cars and completes each at
+    // its own price.
     if (quoteModeRequiresMinimumProfit(args.mode)) {
-      await assertProfitApproved(ctx, {
-        orgId: args.orgId,
-        vehicleId,
-        desiredProfit: args.desiredProfit ?? 0,
-        subject: "quote",
-      });
+      for (const line of pricedLines) {
+        await assertProfitApproved(ctx, {
+          orgId: args.orgId,
+          vehicle: line.vehicle,
+          salePrice: line.price,
+          currency: orgCurrency,
+          subject: "quote",
+        });
+      }
     }
 
     if (args.leadId) {
@@ -465,11 +491,17 @@ export const saveQuote = mutation({
       manualCommission,
       manualIncludesCommissionInDebt,
       customerEligibilityStatusIds: _clientStatusIds,
+      vehicleItems,
       ...quoteArgs
     } = args;
 
     return await ctx.db.insert("quotes", {
       ...quoteArgs,
+      // SCRUM-629: an empty list is the single-vehicle shape (priced above from
+      // `vehicleId`), so it is stored as ABSENT. Every reader iterates
+      // `vehicleItems ?? [{ vehicleId }]`, and a stored `[]` would make them
+      // check and hold no car at all.
+      ...(vehicleItems && vehicleItems.length > 0 ? { vehicleItems } : {}),
       vehicleId,
       vehiclePrice,
       // Always written, never left undefined: `applications.finalizeDeal` reads
@@ -507,6 +539,32 @@ export const updateQuoteStatus = mutation({
     const existing = await ctx.db.get(quoteId);
     if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
 
+    // SCRUM-495: a quote stored in a retired mode may not be offered (SHARED) or
+    // accepted as if live. DRAFT and EXPIRED stay open: EXPIRED is its exit.
+    if (status === "SHARED" || status === "ACCEPTED") assertOperatedDealMode(existing.mode);
+
+    // SCRUM-444 DA-03: EXPIRED is the terminal quote status. A deposit request
+    // still waiting on the quote would be orphaned by it, so the quote cannot
+    // expire until the request is confirmed, rejected or withdrawn.
+    if (status === "EXPIRED") {
+      await assertNoPendingDepositRequest(ctx, {
+        orgId,
+        quoteId,
+        action: "expire this quote",
+      });
+    }
+
+    // SCRUM-641: offering or accepting a quote (or reviving an expired one) re-opens it, so every car it
+    // quotes must still be commercial. EXPIRED and un-sharing to DRAFT stay open on a deleted car.
+    let primaryVehicle: Doc<"vehicles"> | undefined;
+    if (status === "SHARED" || status === "ACCEPTED" || (status === "DRAFT" && existing.status === "EXPIRED")) {
+      const quotedIds = new Set([existing.vehicleId, ...(existing.vehicleItems ?? []).map((item) => item.vehicleId)]);
+      for (const id of quotedIds) {
+        const quotedVehicle = requireCommercialVehicle(await ctx.db.get(id), orgId);
+        if (id === existing.vehicleId) primaryVehicle = quotedVehicle;
+      }
+    }
+
     await ctx.db.patch(quoteId, { status });
 
     if (status === "SHARED" && existing.leadId) {
@@ -518,7 +576,7 @@ export const updateQuoteStatus = mutation({
     }
 
     if (status === "ACCEPTED") {
-      const vehicle = await ctx.db.get(existing.vehicleId);
+      const vehicle = primaryVehicle;
       const actorName = await getActorName(ctx);
       await notifyUser(
         ctx,

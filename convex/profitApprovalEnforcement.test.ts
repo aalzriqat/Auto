@@ -12,6 +12,7 @@
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { registerHandover } from "../test-utils/convexTest";
+import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -154,22 +155,7 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
   test("accepts a below-minimum quote once a manager has approved it", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "approved", 1000);
-
-    await ids.asOwner.mutation(api.approvals.requestProfitApproval, {
-      orgId: ids.orgId,
-      vehicleId: ids.vehicleId,
-      requestedProfit: 400,
-      minimumProfit: 1000,
-    });
-    const pending: any = await ids.asOwner.query(api.approvals.checkPendingApproval, {
-      orgId: ids.orgId,
-      vehicleId: ids.vehicleId,
-    });
-    await ids.asOwner.mutation(api.approvals.respondToApproval, {
-      orgId: ids.orgId,
-      requestId: pending._id,
-      status: "APPROVED",
-    });
+    await approveLegacyRequest(t, ids, 400);
 
     const quoteId = await ids.asOwner.mutation(api.quotes.saveQuote, financedQuote(ids, 400));
     expect(quoteId).toBeTruthy();
@@ -178,22 +164,7 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
   test("an approval does not authorise a deeper discount than the one approved", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "deeper", 1000);
-
-    await ids.asOwner.mutation(api.approvals.requestProfitApproval, {
-      orgId: ids.orgId,
-      vehicleId: ids.vehicleId,
-      requestedProfit: 400,
-      minimumProfit: 1000,
-    });
-    const pending: any = await ids.asOwner.query(api.approvals.checkPendingApproval, {
-      orgId: ids.orgId,
-      vehicleId: ids.vehicleId,
-    });
-    await ids.asOwner.mutation(api.approvals.respondToApproval, {
-      orgId: ids.orgId,
-      requestId: pending._id,
-      status: "APPROVED",
-    });
+    await approveLegacyRequest(t, ids, 400);
 
     // The manager saw 400; 100 is a different, worse deal.
     await expect(
@@ -230,8 +201,8 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "foreign", 1000);
 
-    // A stray APPROVED row carrying a different orgId must be ignored — the
-    // approval lookup enters by vehicle, so the org check is what scopes it.
+    // A stray APPROVED row carrying a different orgId must be ignored, even
+    // though it is recorded for exactly the terms being quoted.
     await t.run(async (ctx: any) => {
       const otherOrgId = await ctx.db.insert("organizations", {
         name: "Other",
@@ -240,8 +211,12 @@ describe("quotes.saveQuote enforces the minimum-profit approval", () => {
       await ctx.db.insert("profitApprovalRequests", {
         orgId: otherOrgId,
         vehicleId: ids.vehicleId,
-        requestedProfit: 0,
+        requestedProfit: 400,
         minimumProfit: 1000,
+        salePriceMinor: 20_400_000,
+        listPriceMinor: 20_000_000,
+        minimumProfitMinor: 1_000_000,
+        currency: "JOD",
         salespersonId: ids.userId,
         status: "APPROVED",
         createdAt: Date.now(),
@@ -343,11 +318,7 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
     await ids.asOwner.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: ids.orgId, feeId, notes: "Nothing to match.",
     });
-    await ids.asOwner.mutation(api.financeDealCosts.classifyDealAccounting, {
-      orgId: ids.orgId,
-      applicationId,
-      notes: "Invoice and settlement advice on file.",
-    });
+    // SCRUM-407: no manual classification step - finalization checks readiness itself.
     return { quoteId, applicationId };
   }
 
@@ -382,20 +353,363 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
     expect(saleId).toBeTruthy();
   });
 
-  test("lets a quote written before the margin field existed finalize", async () => {
+  // SCRUM-260 replaced the exemption this test used to assert: a quote with no
+  // recorded margin let a below-minimum deal finalize. The server now derives
+  // the margin from the price the sale persists, so there is always one to
+  // check.
+  test("a quote written before the margin field existed is still checked at finalization", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const ids = await seedOrg(t, "legacy", 1000);
     const { quoteId, applicationId } = await readyToFinalize(t, ids, 1000);
 
-    // Simulate a quote from before this deploy: no margin recorded, so there is
-    // nothing to re-check. In-flight deals must not be stranded.
     await t.run((ctx: any) => ctx.db.patch(quoteId, { desiredProfit: undefined }));
     await t.run((ctx: any) => ctx.db.patch(ids.vehicleId, { minimumProfit: 5000 }));
 
-    const saleId = await ids.asOwner.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(),
+    await expect(
+      ids.asOwner.mutation(api.applications.finalizeDeal, { idempotencyKey: crypto.randomUUID(), orgId: ids.orgId, applicationId })
+    ).rejects.toThrow(/below the minimum profit/i);
+    expect(await salesOf(t, ids)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCRUM-260: the margin is the server's, and an approval covers exactly the
+// priced state the manager saw. Seeded list price 20,000; minimum 1,000.
+// ---------------------------------------------------------------------------
+
+function salesOf(t: any, ids: any) {
+  return t.run((ctx: any) =>
+    ctx.db.query("sales").withIndex("by_org", (q: any) => q.eq("orgId", ids.orgId)).collect()
+  );
+}
+
+/** Requests with the pre-SCRUM-260 argument shape, then approves the newest request. */
+async function approveLegacyRequest(t: any, ids: any, requestedProfit: number) {
+  await ids.asOwner.mutation(api.approvals.requestProfitApproval, {
+    orgId: ids.orgId,
+    vehicleId: ids.vehicleId,
+    requestedProfit,
+    minimumProfit: 1000,
+  });
+  const pending: any = await ids.asOwner.query(api.approvals.checkPendingApproval, {
+    orgId: ids.orgId,
+    vehicleId: ids.vehicleId,
+  });
+  await ids.asOwner.mutation(api.approvals.respondToApproval, {
+    orgId: ids.orgId,
+    requestId: pending._id,
+    status: "APPROVED",
+  });
+  return pending._id;
+}
+
+function directFinancedSale(ids: any, salePrice: number) {
+  return {
+    idempotencyKey: crypto.randomUUID(),
+    orgId: ids.orgId,
+    vehicleId: ids.vehicleId,
+    customerId: ids.customerId,
+    salespersonId: ids.userId,
+    salePrice,
+    saleDate: Date.now(),
+    financingType: "FINANCED" as const,
+  };
+}
+
+describe("SCRUM-260: the server derives the margin from the price", () => {
+  test("a claimed desiredProfit cannot clear a price below the list price", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "claimed", 1000);
+
+    // The wizard folds an editable base into the price. Base 19,000 + claimed
+    // 5,000 would be 24,000 — but the caller sends 19,500 and claims 5,000.
+    await expect(
+      ids.asOwner.mutation(api.quotes.saveQuote, { ...financedQuote(ids, 5000), vehiclePrice: 19500 })
+    ).rejects.toThrow(/below the minimum profit/i);
+  });
+
+  test("the request records the vehicle's minimum, not the requester's", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "forgedmin", 1000);
+
+    await ids.asOwner.mutation(api.approvals.requestProfitApproval, {
       orgId: ids.orgId,
-      applicationId,
+      vehicleId: ids.vehicleId,
+      requestedProfit: 400,
+      minimumProfit: 0,
+    });
+    const rows: any[] = await t.run((ctx: any) => ctx.db.query("profitApprovalRequests").collect());
+    expect(rows).toHaveLength(1);
+    expect(rows[0].minimumProfit).toBe(1000);
+    expect(rows[0].requestedProfit).toBe(400);
+  });
+
+  test("a legacy request is priced from its snapshot's edited base, not the list price", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "snapbase", 1000);
+
+    // Base edited down to 19,000, profit 500: the quote will be 19,500.
+    await ids.asOwner.mutation(api.approvals.requestProfitApproval, {
+      orgId: ids.orgId,
+      vehicleId: ids.vehicleId,
+      requestedProfit: 500,
+      minimumProfit: 1000,
+      wizardSnapshot: { paymentType: "FINANCE", vehiclePrice: 19000, desiredProfit: 500, downPayment: 2000, termMonths: 60 },
+    });
+    const [row]: any[] = await t.run((ctx: any) => ctx.db.query("profitApprovalRequests").collect());
+    expect(row.salePriceMinor).toBe(19_500_000);
+    expect(row.requestedProfit).toBe(-500);
+  });
+});
+
+// Two policy boundaries the seats asked to have pinned rather than assumed.
+describe("SCRUM-260: what the rule does not cover", () => {
+  test("a minimum of zero is no minimum, as before SCRUM-260", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "zeromin", 0);
+
+    // The vehicle form defaults the minimum to 0; treating it as a floor would
+    // put every below-list financed deal behind a manager.
+    expect(
+      await ids.asOwner.query(api.approvals.profitApprovalStatus, {
+        orgId: ids.orgId,
+        vehicleId: ids.vehicleId,
+        salePrice: 19000,
+      })
+    ).toMatchObject({ status: "NOT_REQUIRED" });
+    expect(await ids.asOwner.mutation(api.quotes.saveQuote, { ...financedQuote(ids, 0), vehiclePrice: 19000 })).toBeTruthy();
+  });
+
+  test("a direct sale with no financingType is exempt exactly as an explicit CASH sale", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "omittedtype", 1000);
+    const { financingType: _omitted, ...cashByDefault } = directFinancedSale(ids, 20400);
+
+    // Persisted without a type, every reader treats the sale as not financed,
+    // so the omission grants nothing an explicit CASH would not.
+    await ids.asOwner.mutation(api.sales.create, { ...cashByDefault, status: "COMPLETED" });
+    const [sale]: any[] = await salesOf(t, ids);
+    expect(sale.financingType).toBeUndefined();
+  });
+});
+
+describe("SCRUM-260: an approval covers exactly the priced state approved", () => {
+  test("an approval at one price does not authorize a different below-minimum price", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "otherprice", 1000);
+    await approveLegacyRequest(t, ids, 400);
+
+    // 20,600 is a better deal than the approved 20,400 but still below the
+    // minimum, and nobody approved it.
+    await expect(
+      ids.asOwner.mutation(api.quotes.saveQuote, financedQuote(ids, 600))
+    ).rejects.toThrow(/below the minimum profit/i);
+  });
+
+  test("the exact approved state saves, and saves again on replay", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "replay", 1000);
+    await approveLegacyRequest(t, ids, 400);
+
+    expect(await ids.asOwner.mutation(api.quotes.saveQuote, financedQuote(ids, 400))).toBeTruthy();
+    expect(await ids.asOwner.mutation(api.quotes.saveQuote, financedQuote(ids, 400))).toBeTruthy();
+  });
+
+  test("a list-price change after approval voids it", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "listmoved", 1000);
+    await approveLegacyRequest(t, ids, 400);
+
+    // Same price 20,400 and the same claimed profit; the list moved to 20,100,
+    // so the margin is now 300 — a state the manager never saw.
+    await t.run((ctx: any) => ctx.db.patch(ids.vehicleId, { sellingPrice: 20100 }));
+    await expect(
+      ids.asOwner.mutation(api.quotes.saveQuote, financedQuote(ids, 400))
+    ).rejects.toThrow(/below the minimum profit/i);
+  });
+
+  test("a currency change voids an approval whose numbers still match", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "currency", 1000);
+    await approveLegacyRequest(t, ids, 400);
+
+    // JOD and KWD share a scale, so every minor-unit number still matches.
+    await t.run(async (ctx: any) => {
+      const settings = await ctx.db.query("orgSettings").withIndex("by_org", (q: any) => q.eq("orgId", ids.orgId)).unique();
+      if (settings) await ctx.db.patch(settings._id, { currency: "KWD" });
+      else await ctx.db.insert("orgSettings", { orgId: ids.orgId, currency: "KWD", currencySymbol: "KD", enabledPaymentTypes: [] });
+    });
+    await expect(
+      ids.asOwner.mutation(api.quotes.saveQuote, financedQuote(ids, 400))
+    ).rejects.toThrow(/below the minimum profit/i);
+  });
+
+  test("changing a pending request creates a new row instead of rewriting the one a manager may be viewing", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "immutable", 1000);
+
+    const request = (requestedProfit: number) =>
+      ids.asOwner.mutation(api.approvals.requestProfitApproval, {
+        orgId: ids.orgId, vehicleId: ids.vehicleId, requestedProfit, minimumProfit: 1000,
+      });
+    await request(400);
+    const [first]: any[] = await t.run((ctx: any) => ctx.db.query("profitApprovalRequests").collect());
+    await request(100);
+
+    // The manager approves the card they opened — the 400 request.
+    await expect(
+      ids.asOwner.mutation(api.approvals.respondToApproval, { orgId: ids.orgId, requestId: first._id, status: "APPROVED" })
+    ).rejects.toThrow(/already been resolved/i);
+    const firstNow: any = await t.run((ctx: any) => ctx.db.get(first._id));
+    expect(firstNow.requestedProfit).toBe(400);
+    expect(firstNow.status).toBe("REJECTED");
+    expect(firstNow.supersededAt).toBeTypeOf("number");
+
+    // …and the 100 deal remains unapproved.
+    await expect(
+      ids.asOwner.mutation(api.quotes.saveQuote, financedQuote(ids, 100))
+    ).rejects.toThrow(/below the minimum profit/i);
+  });
+
+  test("an identical re-request returns the same pending row", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "idempotent", 1000);
+    const args = { orgId: ids.orgId, vehicleId: ids.vehicleId, salePrice: 20400 };
+
+    const first = await ids.asOwner.mutation(api.approvals.requestProfitApproval, args);
+    const second = await ids.asOwner.mutation(api.approvals.requestProfitApproval, args);
+    expect(second).toBe(first);
+  });
+
+  test("a price that already clears the minimum is not accepted as a request", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "noneed", 1000);
+
+    await expect(
+      ids.asOwner.mutation(api.approvals.requestProfitApproval, { orgId: ids.orgId, vehicleId: ids.vehicleId, salePrice: 21000 })
+    ).rejects.toThrow(/needs no approval/i);
+  });
+});
+
+describe("SCRUM-260: every completion door enforces the rule on the persisted price", () => {
+  test("sales.create refuses a below-minimum financed sale with no approval and writes nothing", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "direct", 1000);
+
+    // SCRUM-504: a FINANCED sale can no longer be created through this door at all, so the
+    // below-minimum rule is reached only through finalizeDeal (covered above). The door now
+    // refuses first, before the vehicle or the price is read, and writes nothing.
+    await expectFinancedSaleRequiresDeal(
+      ids.asOwner.mutation(api.sales.create, { ...directFinancedSale(ids, 20400), status: "COMPLETED" as const })
+    );
+    expect(await salesOf(t, ids)).toHaveLength(0);
+    const vehicle: any = await t.run((ctx: any) => ctx.db.get(ids.vehicleId));
+    expect(vehicle.status).toBe("AVAILABLE");
+  });
+
+  test("sales.completeDraft refuses a below-minimum financed draft", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "draft", 1000);
+
+    // SCRUM-504: a FINANCED draft can no longer be created through the public door, so the draft
+    // is seeded as the legacy row it would now be. Completing it is refused first by the same
+    // rule (a FINANCED sale needs the Deal's application); the price rule stays on finalizeDeal.
+    const { idempotencyKey: _key, ...draftFields } = directFinancedSale(ids, 20400);
+    const saleId = await t.run((ctx: any) =>
+      ctx.db.insert("sales", { ...draftFields, status: "PENDING", salespersonId: ids.userId })
+    );
+    await expectFinancedSaleRequiresDeal(
+      ids.asOwner.mutation(api.sales.completeDraft, { orgId: ids.orgId, saleId, idempotencyKey: crypto.randomUUID() })
+    );
+    const draft: any = await t.run((ctx: any) => ctx.db.get(saleId));
+    expect(draft.status).toBe("PENDING");
+  });
+
+  test("sales.completeFromQuote gates a legacy quote with no mode, which is financed", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "legacymode", 1000);
+
+    const quoteId = await t.run((ctx: any) =>
+      ctx.db.insert("quotes", {
+        orgId: ids.orgId,
+        customerId: ids.customerId,
+        vehicleId: ids.vehicleId,
+        vehiclePrice: 20400,
+        desiredProfit: 5000,
+        downPayment: 0,
+        termMonths: 0,
+        status: "DRAFT",
+        createdBy: ids.userId,
+        createdAt: Date.now(),
+      })
+    );
+    await expect(
+      ids.asOwner.mutation(api.sales.completeFromQuote, { orgId: ids.orgId, quoteId, idempotencyKey: crypto.randomUUID() })
+    ).rejects.toThrow(/below the minimum profit/i);
+    expect(await salesOf(t, ids)).toHaveLength(0);
+  });
+
+  test("a cash direct sale below the list price is exempt", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "cashdirect", 1000);
+
+    const saleId = await ids.asOwner.mutation(api.sales.create, {
+      ...directFinancedSale(ids, 19000),
+      financingType: "CASH" as const,
+      status: "COMPLETED" as const,
     });
     expect(saleId).toBeTruthy();
+  });
+
+  test("SCRUM-504: a FINANCED sale through the direct door is refused, whatever the price", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "directok", 1000);
+
+    await expectFinancedSaleRequiresDeal(
+      ids.asOwner.mutation(api.sales.create, { ...directFinancedSale(ids, 20400), status: "COMPLETED" as const })
+    );
+    expect(await salesOf(t, ids)).toHaveLength(0);
+  });
+});
+
+describe("SCRUM-260: numeric inputs fail closed", () => {
+  test("a list price not representable in the currency refuses rather than rounding", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "subfils", 1000);
+
+    await t.run((ctx: any) => ctx.db.patch(ids.vehicleId, { sellingPrice: 20000.0004 }));
+    await expect(
+      ids.asOwner.mutation(api.quotes.saveQuote, financedQuote(ids, 1000))
+    ).rejects.toThrow(/cannot be represented/i);
+  });
+});
+
+describe("SCRUM-260: approvals.profitApprovalStatus is the same verdict the mutations enforce", () => {
+  test("reports NOT_REQUIRED, REQUIRED, PENDING and APPROVED", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const ids = await seedOrg(t, "status", 1000);
+    const status = (salePrice: number) =>
+      ids.asOwner.query(api.approvals.profitApprovalStatus, { orgId: ids.orgId, vehicleId: ids.vehicleId, salePrice });
+
+    expect((await status(21000))?.status).toBe("NOT_REQUIRED");
+    expect((await status(20400))?.status).toBe("REQUIRED");
+    const requestId = await ids.asOwner.mutation(api.approvals.requestProfitApproval, {
+      orgId: ids.orgId, vehicleId: ids.vehicleId, salePrice: 20400,
+    });
+    expect((await status(20400))?.status).toBe("PENDING");
+    await ids.asOwner.mutation(api.approvals.respondToApproval, { orgId: ids.orgId, requestId, status: "APPROVED" });
+    expect((await status(20400))?.status).toBe("APPROVED");
+    expect((await status(20500))?.status).toBe("REQUIRED");
+    expect((await status(Number.NaN))?.status).toBe("INVALID");
+
+    // A manager's rejection is reported; a request the salesperson replaced is not.
+    const rejectedId = await ids.asOwner.mutation(api.approvals.requestProfitApproval, {
+      orgId: ids.orgId, vehicleId: ids.vehicleId, salePrice: 20500,
+    });
+    await ids.asOwner.mutation(api.approvals.respondToApproval, { orgId: ids.orgId, requestId: rejectedId, status: "REJECTED" });
+    expect((await status(20500))?.status).toBe("REJECTED");
+    await ids.asOwner.mutation(api.approvals.requestProfitApproval, { orgId: ids.orgId, vehicleId: ids.vehicleId, salePrice: 20600 });
+    await ids.asOwner.mutation(api.approvals.requestProfitApproval, { orgId: ids.orgId, vehicleId: ids.vehicleId, salePrice: 20700 });
+    expect((await status(20600))?.status).toBe("REQUIRED");
   });
 });

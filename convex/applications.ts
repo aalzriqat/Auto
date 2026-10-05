@@ -8,7 +8,7 @@ import { v, ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx, query } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
-import { paginationOptsValidator } from "convex/server";
+import { paginationOptsValidator, type WithoutSystemFields } from "convex/server";
 import {
   requireTenantAuth,
   requireOwnedRow,
@@ -16,21 +16,63 @@ import {
   // allowlist, not a blocklist. Every door that returns one of these rows
   // goes through it.
 } from "./utils/tenancy";
-import { projectFinanceApplication } from "./utils/financeApplicationProjection";
-import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
+import {
+  mayReadFinanceEconomics,
+  mayRecordSubmittedQuotation,
+  projectFinanceApplication,
+} from "./utils/financeApplicationProjection";
+import { PERMISSIONS, cancelAuthorityFor, isSystemOwnerRole, type Permission } from "./utils/permissions";
+import { throwAppError, AppErrorCode } from "./utils/errors";
+import { assertNoActiveDealUnwind, paidDealReversalRoute } from "./utils/dealUnwindGuard";
+import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
+import { executionFeeHeadline, executionFeePosition, executionFeeUnrecorded } from "./utils/executionFeePosition";
 import { notifyManagers, notifyByPermission, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, type DepositTreatment } from "./utils/depositHelpers";
-import { depositMethodValidator, type DepositMethod } from "./utils/depositRecording";
+import {
+  depositMethodValidator,
+  displayableDepositReference,
+  type DepositMethod,
+} from "./utils/depositRecording";
+import {
+  assertNoPendingDepositRequest,
+  assertReservationAdoptableWithoutDeposit,
+} from "./utils/depositRequestGuards";
+import { assertOperatedDealMode } from "./utils/dealModes";
+import { assertQuoteEconomicsMatchFrozen } from "./utils/quoteEconomicsAnchor";
 import { completeSale } from "./utils/saleCompletion";
-import { resolveFinancedSalePlan, financedSaleRecognitionDate } from "./utils/financedSaleRecognition";
-import { assertFeeTemplatesWithinLimit } from "./utils/dealCostLimits";
+import { requireCommercialVehicle } from "./utils/vehicleLiveness";
+import { planVersionOf } from "./utils/financedSalePostingPlan";
+import { deriveForwardState, forwardCancelRefusal, forwardGateRefusal } from "./utils/financeCompanyForward";
+import {
+  resolveFinancedSalePlan,
+  financedSaleRecognitionDate,
+  financedSaleRecognitionApplies,
+  evaluateClosingReadiness,
+  closingRefusalError,
+  type ClosingReadiness,
+  type ClosingReadinessCheck,
+  type ClosingReadinessCheckKey,
+  type DealMode,
+  dealModeOf,
+} from "./utils/financedSaleRecognition";
+import {
+  reasonOf,
+  redactClosingReason,
+  withheldReasonCode,
+  type ClosingReadinessReason,
+  type ClosingReadinessReasonCode,
+  type ClosingReadinessReasonParams,
+} from "../lib/closingReadinessReasonCodes";
 import { loadCustodyRecords } from "./utils/settlementDeductions";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
-import { runWithIdempotency } from "./utils/idempotency";
+import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment";
+import { MAX_IDEMPOTENCY_KEY_LENGTH, runWithIdempotency } from "./utils/idempotency";
 import { registerChequeCore, markChequeClearedCore, assertNoActiveAllocations } from "./collections";
 import {
   hookFinanceDisbursed,
   hookFinanceCashReceived,
+  hookFinanceCashReceivedReturned,
+  isFinanceCashReceivedUndone,
   hookFinanceDisbursementCancelled,
   hookSaleCancelled,
   reverseCommissionForSale,
@@ -38,16 +80,15 @@ import {
 } from "./accounting/workflowHooks";
 import {
   toMinorUnits,
+  fromMinorUnits,
   assertValidMinorAmount,
   toMinorSameCurrencyOrUndefined,
   outstandingMinorFromMajor,
   denominationOf,
   assertSupportedDenomination,
 } from "./utils/money";
-import { assertProfitApproved, quoteModeRequiresMinimumProfit } from "./utils/profitApproval";
 import {
   assertAppraisalGapSettledToAdvance,
-  buildRuleSnapshot,
   composeCustomerGapToDealer,
   creditDecisionForStatus,
   defaultAppraisalFeeResponsibility,
@@ -62,18 +103,28 @@ import {
   settlementStatusForFacts,
   supplierReceiptActionability,
   type FinanceCompanyRuleSnapshot,
+  type FinancierLeg,
   type ObligationState,
   type SettlementObligations,
 } from "./utils/financingEconomics";
 // The anomaly verdict, from the module that owns it. Both handover
 // confirmations must warn about the same deals; see the helper's own note.
-import { approvedAmountIsFarFromEvidenceFor } from "./financingEconomics";
+import {
+  applySubmittedQuotation,
+  approvedAmountIsFarFromEvidenceFor,
+  assertQuotationRecordAuthority,
+  quoteDownPaymentMinor,
+} from "./financingEconomics";
+import { firstPaymentCorrectionBlock, mayCorrectFirstPayment } from "./utils/firstPaymentCorrection";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
   ensureReceivableDocument,
   getReceivableOutstandingMinor,
+  reverseAllocation,
+  voidCanonicalPayment,
 } from "./subledger";
+import { disbursementVersionOf, financeDisbursementKeys } from "./utils/financeDisbursementKeys";
 import { summarizeFees } from "./financeDealCosts";
 import {
   consignedSettlementRoute,
@@ -90,84 +141,31 @@ import {
 } from "./utils/vehicleOwnership";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { auditLog } from "./financialAudit";
+import {
+  chequesForApplication,
+  isLiveFcCheque,
+  isFcLineage,
+  FC_RETURN_MESSAGES,
+  hasClearedLinkedCheque,
+  liveChequesForApplication,
+  clearedDisbursementCheque,
+  latestReturnedAfterClearing,
+  parseFaceAmountMinor,
+  dealChequeCurrency,
+  ATTESTATION_NOTE_MAX_LENGTH,
+  FC_RETURN_REASON_MAX_LENGTH,
+} from "./utils/fcCheque";
 import { assertFinancedDepositsSurviveParentReversal } from "./utils/depositApplications";
 import { projectDealVehicleProfile } from "./utils/dealVehicleProfile";
+import {
+  resolveCreationEconomicsInputs,
+  resolveCreationRuleSnapshot,
+} from "./utils/creationEconomics";
+
+import { isManualFinanceApplication, isManualLetterUnitIntact, MANUAL_GAP_TO_FINANCIER_REFUSAL, manualPayerLabel, manualPayerOf } from "./utils/manualFinancePayer";
 
 /** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
-const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
-
-/**
- * Canonical resolver for a deal's expected execution-fee authority.
- * Enforces the route-wide single-authority invariants across createFromQuote
- * and repairQuoteEconomicsLineage:
- * - CONFIGURED_FINANCE_COMPANY requires companyRuleSnapshot.adminFees (or legacy feeTemplates)
- * - MANUAL_FINANCE_COMPANY requires quote.manualAdminFees
- * - Ambiguous quotes (e.g. companyId with missing/invalid mode) fail closed
- * - Explicit 0 is valid and resolves to 0
- * - Absent authority rejects and NEVER silently converts to 0
- */
-export function resolveExpectedExecutionFeesMinor(args: {
-  quote: {
-    mode?: string;
-    companyId?: Id<"financeCompanies">;
-    manualAdminFees?: number;
-  };
-  companyRuleSnapshot?: FinanceCompanyRuleSnapshot;
-  currency: string;
-}): number {
-  const { quote, companyRuleSnapshot, currency } = args;
-
-  // Ambiguous quote: company is attached but mode is not CONFIGURED_FINANCE_COMPANY
-  if (quote.companyId !== undefined && quote.mode !== "CONFIGURED_FINANCE_COMPANY") {
-    throw new ConvexError(
-      "Finance company can only be set for configured finance company quotes."
-    );
-  }
-
-  if (quote.mode === "CONFIGURED_FINANCE_COMPANY") {
-    if (!quote.companyId || !companyRuleSnapshot) {
-      throw new ConvexError(
-        "The application's frozen finance-company policy is missing. Reconcile the policy snapshot before repairing quotation economics."
-      );
-    }
-    if (companyRuleSnapshot.adminFees !== undefined) {
-      const minor = toMinorUnits(companyRuleSnapshot.adminFees, currency);
-      assertValidMinorAmount(minor, "frozen admin fee total");
-      return minor;
-    }
-    // Historical legacy fallback: snapshot preserved feeTemplates from before single fee authority
-    if (companyRuleSnapshot.feeTemplates && companyRuleSnapshot.feeTemplates.length > 0) {
-      return companyRuleSnapshot.feeTemplates
-        .filter(
-          (template) =>
-            template.includedInQuotation &&
-            (template.paidBy === "DEALER" || template.paidBy === "EMPLOYEE")
-        )
-        .reduce((total, template) => {
-          assertValidMinorAmount(template.estimatedAmountMinor, "included fee estimate");
-          const next = total + template.estimatedAmountMinor;
-          assertValidMinorAmount(next, "included dealer-borne fee total");
-          return next;
-        }, 0);
-    }
-    throw new ConvexError(
-      "Execution Fees are not configured for this finance company. Enter the expected execution fee amount, or enter 0 if none are charged."
-    );
-  }
-
-  if (quote.mode === "MANUAL_FINANCE_COMPANY") {
-    if (quote.manualAdminFees === undefined) {
-      throw new ConvexError(
-        "Execution Fees are not configured for this manual finance company quote. Enter the expected execution fee amount, or enter 0 if none are charged."
-      );
-    }
-    const minor = toMinorUnits(quote.manualAdminFees, currency);
-    assertValidMinorAmount(minor, "manual admin fee total");
-    return minor;
-  }
-
-  return 0;
-}
+export const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
 
 /**
  * Opens (or finds) the canonical receivable owed BY the finance company for a
@@ -178,7 +176,9 @@ async function ensureFinanceCompanyReceivable(
   args: {
     orgId: Id<"organizations">;
     applicationId: Id<"financeApplications">;
-    financeCompanyId: Id<"financeCompanies">;
+    /** Exactly one of this / `payerNameSnapshot` (SCRUM-27). */
+    financeCompanyId?: Id<"financeCompanies">;
+    payerNameSnapshot?: string;
     customerId: Id<"customers">;
     amountMinor: number;
     currency: string;
@@ -186,11 +186,15 @@ async function ensureFinanceCompanyReceivable(
     now: number;
   }
 ) {
+  if ((args.financeCompanyId === undefined) === (args.payerNameSnapshot === undefined)) {
+    throw new ConvexError("A finance-company receivable needs exactly one payer identity.");
+  }
   return await ensureReceivableDocument(ctx, {
     orgId: args.orgId,
     documentType: "INVOICE",
-    payerType: "FINANCE_COMPANY",
+    payerType: args.financeCompanyId ? "FINANCE_COMPANY" : "MANUAL_FINANCE_COMPANY",
     financeCompanyId: args.financeCompanyId,
+    payerNameSnapshot: args.payerNameSnapshot,
     customerId: args.customerId,
     sourceType: FINANCE_APP_RECEIVABLE_SOURCE,
     sourceId: args.applicationId,
@@ -241,7 +245,20 @@ async function proveFinanceReceiptAuthority(
       "No finance-company receivable is recorded for this deal, so there is nothing for this payment to settle. The deal must be finalized, with its receivable opened, before the company's payment can be received."
     );
   }
-  if (receivable.payerType !== "FINANCE_COMPANY" || receivable.financeCompanyId !== app.companyId) {
+  if (app.companyId === undefined && manualPayerOf(app) !== null) {
+    // SCRUM-27 (D7): a manual company has no id to compare. Its identity is the
+    // receivable's own source (matched by the index above) AND the name frozen
+    // on the application at finalize, both server-derived before any write.
+    if (
+      receivable.payerType !== "MANUAL_FINANCE_COMPANY" ||
+      receivable.financeCompanyId !== undefined ||
+      receivable.payerNameSnapshot !== manualPayerOf(app)?.name
+    ) {
+      throw new ConvexError(
+        "The receivable recorded for this deal is not owed by this deal's financing company, so this payment cannot settle it."
+      );
+    }
+  } else if (receivable.payerType !== "FINANCE_COMPANY" || receivable.financeCompanyId !== app.companyId) {
     throw new ConvexError(
       "The receivable recorded for this deal is not owed by this deal's financing company, so this payment cannot settle it."
     );
@@ -304,11 +321,31 @@ async function getActiveReceivableAllocations(
   ctx: MutationCtx,
   receivableDocumentId: Id<"receivableDocuments">
 ) {
-  return await ctx.db
+  const allocations = await ctx.db
     .query("paymentAllocations")
     .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivableDocumentId))
-    .filter((q) => q.eq(q.field("status"), "ACTIVE"))
     .collect();
+  return allocations.filter((allocation) => allocation.status === "ACTIVE");
+}
+
+/**
+ * A MANUAL finance company deal advances only on a complete, consistent letter
+ * unit (SCRUM-27): the letter, `approvedDealerPurchaseAmountMinor` equal to the
+ * letter's amount, the MANUAL basis and a derived gap, all present together.
+ * Then a positive gap must be settled, and only to dealer-bound destinations.
+ * Every refusal is before any write and carries no figures.
+ */
+function assertManualLetterReady(app: Doc<"financeApplications">, action: string): void {
+  if (!isManualLetterUnitIntact(app)) {
+    throw new ConvexError(
+      `This deal's finance company approval letter is not fully recorded. Enter (or re-enter) the letter's approved amount, the company's name and the amount the dealership sends it before ${action}.`
+    );
+  }
+  // Defence against a row a writer bypassed: OR-12 never sends a gap to the financier.
+  if ((app.customerGapToFinanceCompanyMinor ?? 0) > 0) {
+    throw new ConvexError(MANUAL_GAP_TO_FINANCIER_REFUSAL);
+  }
+  assertAppraisalGapSettledToAdvance(app, action);
 }
 
 /**
@@ -317,7 +354,9 @@ async function getActiveReceivableAllocations(
  * A reappraisal or a reopened approval clears the approved purchase amount
  * while `status` stays APPROVED throughout, so status alone cannot be the gate.
  * Deals with no quotation recorded predate this model entirely and are let
- * through, so nothing in flight is stranded.
+ * through, so nothing in flight is stranded. The one exception is a manual
+ * finance company: it never has a quotation, but it does carry an appraisal gap
+ * (sale price minus the letter, OR-12), which is still gated.
  *
  * One copy, two callers: handover and finalization applied the same two checks
  * in the same order and differed only in the closing verb. Two copies of a
@@ -330,7 +369,14 @@ function assertDealerEconomicsReady(
 ): void {
   const action =
     opts.phase === "HANDOVER" ? "handing over the vehicle" : "finalizing";
-  if (app.submittedQuotationMinor === undefined) return;
+  if (app.submittedQuotationMinor === undefined) {
+    // A manual deal has no quotation but its letter, approved amount, MANUAL
+    // basis and OR-12 appraisal gap are one unit, and it is gated on all of
+    // them: keyed on "is manual", NOT on "has a letter", or a deal with no
+    // letter at all would sail through handover and strand at finalization.
+    if (isManualFinanceApplication(app)) assertManualLetterReady(app, action);
+    return;
+  }
   if (app.approvedDealerPurchaseAmountMinor === undefined) {
     throw new ConvexError(
       `The finance company's approved purchase amount is not recorded on this deal. Record it before ${action}.`
@@ -348,70 +394,6 @@ function assertDealerEconomicsReady(
   // not only by the stage rail: a gap the handover stamps is sealed against the
   // one writer that can settle it, and finalization posts from the split.
   assertAppraisalGapSettledToAdvance(app, action);
-}
-
-/**
- * What finalization needs and handover does not.
- *
- * Handing a customer their car is an operational step: the dealership has
- * decided the deal is good and the vehicle goes out. Finalizing is the step that
- * writes money — it creates the sale, the receivables and the journal — so it is
- * the one that must refuse while the figures those postings come from are
- * unestablished. Widening either requirement to handover would strand cars on the
- * lot over a settlement figure nobody needs yet.
- *
- * Deliberately NOT folded into `assertDealerEconomicsReady`, for two separate
- * reasons.
- *
- * The first is the no-quotation carve-out. That exemption is right for the checks
- * it covers — a deal predating the funding-split model has nothing to check — but
- * it is not a licence to post a financed sale whose settlement nobody can name.
- * Those facts are unrelated, and letting the older exemption swallow the newer
- * requirement is how a guard stops guarding.
- *
- * The second is refusal precedence, and it is why this is a separate CALL rather
- * than a later branch of the same one. `assertDealerEconomicsReady` runs at the
- * top of finalization, ahead of the refusals for a missing settlement route, a
- * mismatched finance company, incomplete documents and unapproved profit. Asking
- * a deal for its remittance before telling the operator it has no settlement route
- * recorded answers a question they have not reached yet — the same principle the
- * handover site states, that the more specific refusal is the more useful one. So
- * this runs last, immediately before `completeSale`, after every other refusal has
- * had its say and still before the first write.
- *
- * Scoped to exactly the population the posting plan covers: a configured external
- * financier settling through the dealership. A cash deal, a deal with no named
- * company and a direct-route deal each post something different and none of them
- * raise a dealership-side finance receivable, so none are asked for evidence they
- * have no use for.
- */
-function assertFinancedFinalizationEvidence(
-  app: Doc<"financeApplications">,
-  opts: { settlesDirect: boolean }
-): void {
-  if (opts.settlesDirect) return;
-  if (!app.companyId) return;
-
-  // The single figure the finance-company receivable is opened from. Unknown
-  // means the server could not establish where the customer's money went, and
-  // the honest answer is to refuse rather than fall back to the approved amount,
-  // the quotation, or the customer's financing principal.
-  if (app.expectedDealerRemittanceMinor === undefined) {
-    throw new ConvexError(
-      "What this financing company will actually remit to the dealership is not known on this deal, so the amount it owes cannot be recorded. Resolve the reconciliation note on it before finalizing."
-    );
-  }
-
-  // Every settlement component must already carry an actual, reconciled amount
-  // and an explicit accounting treatment. `classifyDealAccounting` is the step
-  // that establishes all three and refuses while any is missing, so requiring its
-  // flag here asks for the evidence once rather than re-deriving the same
-  // three conditions beside the posting.
-  if (app.accountingClassification !== "CLASSIFIED") {
-    throw new ConvexError(
-      "This deal's accounting has not been classified, so what the financing company withholds cannot be posted to the right accounts. Record the legal invoice and classify the deal before finalizing."
-    );
-  }
 }
 
 /**
@@ -499,15 +481,10 @@ async function settlementPayerForApplication(
   ctx: QueryCtx | MutationCtx,
   app: Doc<"financeApplications">
 ): Promise<SettlementPayer> {
-  let quoteMode = app.quoteModeAtSubmission;
-  if (quoteMode === undefined) {
-    const quote = await ctx.db.get(app.quoteId);
-    if (quote && quote.orgId === app.orgId) quoteMode = quote.mode;
-  }
   return settlementPayer({
-    quoteMode,
+    quoteMode: await dealModeOf(ctx, app),
     financeCompanyId: app.companyId,
-    manualProviderName: app.manualFinanceSnapshot?.providerName,
+    manualProviderName: manualPayerLabel(app),
   });
 }
 
@@ -755,11 +732,92 @@ async function resolveSupplierObligation(
   });
 }
 
-/** What the finance company still owes. Extracted unchanged. */
+/**
+ * SCRUM-567: the deal facts that prove no finance company pays the dealership.
+ * Shared by `finalizeDeal` (write) and `resolveFinancierLeg` (read) so they
+ * cannot drift. `manualPayerOf(app) === null` means "payer not known yet", never
+ * "no payer", so a manual-mode application is excluded by mode, not by letter.
+ */
+function isProvablyFinancierless(
+  app: Doc<"financeApplications">,
+  facts: {
+    settlesDirect: boolean;
+    financingType: Doc<"sales">["financingType"] | undefined;
+    mode: DealMode | undefined;
+  }
+): boolean {
+  return (
+    !facts.settlesDirect &&
+    !financedSaleRecognitionApplies(app, { settlesDirect: false }) &&
+    (facts.mode === "INTERNAL_INSTALLMENT" || facts.financingType === "CASH")
+  );
+}
+
+/**
+ * Whether a finance company pays the dealership on this deal (SCRUM-446).
+ *
+ * Invariant: `NONE` is returned only when the server can PROVE, from records
+ * that cannot drift under the deal, that no finance company ever pays the
+ * dealership on it:
+ * - the application is CLOSED and its linked sale exists in this org, is
+ *   COMPLETED and names THIS application back (`sale.applicationId`);
+ * - the route is known, not cancelled and settles through the dealership;
+ * - `isProvablyFinancierless` holds: no configured company, no manual finance
+ *   mode, and either the mode is `INTERNAL_INSTALLMENT` or the sale's own
+ *   `financingType` is `CASH` (SCRUM-567, including a mode-less application).
+ *
+ * Owner rulings OR-1 / OR-2 (SCRUM-486 c21360): a MANUAL finance company and a
+ * LEASE company that purchases the vehicle owe the dealership the full amount
+ * exactly like a configured one, so MANUAL_FINANCE_COMPANY and LEASE with no
+ * `companyId` are money EXPECTED from a financier, never `NONE`. An unreadable
+ * `financingType` and every other shape of missing evidence are `UNKNOWN`;
+ * unknown evidence is never read as `NONE`.
+ *
+ * Deliberately NOT `NONE`: a configured company with a zero net (SCRUM-315), a
+ * direct-to-supplier deal (the financier pays the supplier and its own stage
+ * evidence applies), a cancelled or missing sale, and a pre-close application.
+ *
+ * Pure, and fed the sale the caller has ALREADY loaded and org-checked, so the
+ * cockpit and `confirmDisbursement` cannot reach two different answers.
+ */
+function resolveFinancierLeg(
+  app: Doc<"financeApplications">,
+  route: { routeKnown: boolean; settlesDirect: boolean; saleCancelled: boolean },
+  sale: Doc<"sales"> | null,
+  mode: DealMode | undefined
+): FinancierLeg {
+  if (
+    app.status === "CLOSED" &&
+    app.finalizedSaleId !== undefined &&
+    sale !== null &&
+    sale.applicationId === app._id &&
+    sale.status === "COMPLETED" &&
+    route.routeKnown &&
+    !route.saleCancelled &&
+    isProvablyFinancierless(app, {
+      settlesDirect: route.settlesDirect,
+      financingType: sale.financingType,
+      mode,
+    })
+  ) {
+    return "NONE";
+  }
+  // SCRUM-27: a manual finance company whose approval letter has been entered
+  // owes the full approved amount exactly like a configured one. Before the
+  // letter is entered nobody knows who the payer is, so it stays UNKNOWN
+  // (waiting) - never NONE.
+  return app.companyId || manualPayerOf(app) ? "EXPECTED" : "UNKNOWN";
+}
+
+/** What the finance company still owes. */
 function resolveFinancierObligation(
   app: Doc<"financeApplications">,
-  settlesDirect: boolean
+  settlesDirect: boolean,
+  financierLeg: FinancierLeg = "UNKNOWN"
 ): ObligationState {
+  // PROVEN that no finance company pays the dealership: there is no obligation
+  // on this leg to be open. The supplier leg is still judged on its own.
+  if (financierLeg === "NONE") return "NONE";
   if (settlesDirect) {
     // A contradicted advice cannot settle anything, whichever side of the
     // approval it falls on.
@@ -798,7 +856,12 @@ function resolveFinancierObligation(
     : "OPEN";
 }
 
-async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">) {
+/**
+ * The org-checked finalized sale, the vehicle, whether the sale is an agent
+ * sale, and the resolved route. The ONE loader behind the cockpit and the
+ * `confirmDisbursement` guard, so they cannot compute different routes.
+ */
+async function loadDealRoute(ctx: QueryCtx | MutationCtx, app: Doc<"financeApplications">) {
   const vehicle = await ctx.db.get(app.vehicleId);
   /**
    * ⚠️ SCRUM-42 — through the SHARED classifier once a sale exists.
@@ -844,11 +907,13 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
       })
     : vehicle != null && isConsignedAgentSale(vehicle);
 
-  const { routeKnown, settlesDirect, saleCancelled } = resolveDealRoute(app, {
-    vehicle,
-    consigned,
-    sale,
-  });
+  const route = resolveDealRoute(app, { vehicle, consigned, sale });
+  return { vehicle, sale, consigned, route };
+}
+
+async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">) {
+  const { vehicle, sale, consigned, route } = await loadDealRoute(ctx, app);
+  const { routeKnown, settlesDirect, saleCancelled } = route;
 
   const supplierClaim = app.finalizedSaleId
     ? (
@@ -884,11 +949,35 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
     supplierClaim,
     margin,
   });
-  const financierObligation = resolveFinancierObligation(app, settlesDirect);
+  const financierLeg = resolveFinancierLeg(
+    app,
+    { routeKnown, settlesDirect, saleCancelled },
+    sale,
+    // Only a CLOSED, company-less deal with a finalized sale can resolve NONE,
+    // and only then does the mode matter (see `resolveFinancierLeg`); a CASH
+    // sale proves it without the mode, so the quote read is skipped.
+    app.status === "CLOSED" &&
+    !app.companyId &&
+    app.finalizedSaleId !== undefined &&
+    sale?.financingType !== "CASH"
+      ? await dealModeOf(ctx, app)
+      : undefined
+  );
+  const financierObligation = resolveFinancierObligation(app, settlesDirect, financierLeg);
 
   const obligations: SettlementObligations = routeKnown
     ? { financier: financierObligation, supplier: supplierObligation }
     : { financier: "UNKNOWN", supplier: "UNKNOWN" };
+
+  // A financier-less deal (leg NONE) is paid by the CUSTOMER alone, so the sale's
+  // canonical customer invoice IS the money still owed. NONE on the financier leg
+  // must never read as "settled" while that invoice has a balance, or while the
+  // balance cannot be read (AF-567-1). Not evaluated when a financier is in play;
+  // financed-deal customer balances are a separate lane (SCRUM-570).
+  const customerObligation =
+    financierLeg === "NONE"
+      ? await resolveCustomerInvoiceObligation(ctx, app, sale, currency)
+      : undefined;
 
   return {
     vehicle,
@@ -896,14 +985,42 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
     routeKnown,
     settlesDirect,
     saleCancelled,
+    financierLeg,
     supplierClaim,
     /** The one resolution of the margin, so the headline cannot reach a second. */
     margin,
     /** The one resolution of what the supplier keeps, for the same reason. */
     supplierEntitlement,
     obligations,
-    moneySettled: settlementIsComplete(obligations),
+    // A cancelled sale's books were reversed: whatever the obligations say, the
+    // money on it is not "settled" (SCRUM-446). Without this a CLOSED application
+    // over a cancelled sale read SETTLEMENT as COMPLETE.
+    moneySettled:
+      !saleCancelled &&
+      settlementIsComplete(obligations) &&
+      (customerObligation === undefined || customerObligation === "CLOSED"),
   };
+}
+
+/**
+ * The customer's side of a financier-less deal: is the sale's canonical invoice
+ * paid? Fails closed — a missing pointer, a missing row, another org's row or a
+ * row in another currency is UNKNOWN, never CLOSED.
+ */
+async function resolveCustomerInvoiceObligation(
+  ctx: QueryCtx,
+  app: Doc<"financeApplications">,
+  sale: Doc<"sales"> | null | undefined,
+  currency: string
+): Promise<ObligationState> {
+  const receivableId = sale?.canonicalReceivableDocumentId;
+  if (!receivableId) return "UNKNOWN";
+  const receivable = await ctx.db.get(receivableId);
+  if (!receivable || receivable.orgId !== app.orgId || receivable.currency !== currency) {
+    return "UNKNOWN";
+  }
+  const outstandingMinor = await getReceivableOutstandingMinor(ctx, receivableId);
+  return outstandingMinor > 0 ? "OPEN" : "CLOSED";
 }
 
 /**
@@ -1118,9 +1235,13 @@ async function summarizeCockpitExpenses(
   const sameCurrencyFees = liveFees.filter((fee) => fee.currency === currency);
   const sameCurrencySummary = summarizeFees(sameCurrencyFees);
   const otherCurrencyFees = liveFees.length - sameCurrencyFees.length;
+  // SCRUM-690 F-PNTR-1: the finance company's execution fee as ONE position —
+  // the overview reads the same helper, so the two headlines cannot disagree.
+  const executionFee = executionFeePosition(app, liveFees, currency);
 
   return {
     feeLines,
+    executionFee: executionFeeHeadline(executionFee),
     actualExpensesMinor: sameCurrencySummary.dealerBorneActualMinor,
     feesAwaitingActuals: sameCurrencySummary.linesAwaitingActual + otherCurrencyFees,
     // RECORDED and RECONCILED are different claims: an amount somebody typed and
@@ -1129,7 +1250,10 @@ async function summarizeCockpitExpenses(
     expensesFullyReconciled:
       otherCurrencyFees === 0 &&
       sameCurrencySummary.linesAwaitingActual === 0 &&
-      sameCurrencySummary.linesAwaitingReconciliation === 0,
+      sameCurrencySummary.linesAwaitingReconciliation === 0 &&
+      // A fee the finance company charged and nobody has recorded is not a
+      // finished cost, however reconciled the other lines are.
+      !executionFeeUnrecorded(executionFee),
   };
 }
 
@@ -1237,7 +1361,7 @@ async function buildCockpitMoney(
   const supplierName = vehicle?.sourcedFromName ?? "";
 
   const expenses = await summarizeCockpitExpenses(ctx, app, currency);
-  const { feeLines, actualExpensesMinor, feesAwaitingActuals, expensesFullyReconciled } = expenses;
+  const { feeLines, actualExpensesMinor, feesAwaitingActuals, expensesFullyReconciled, executionFee } = expenses;
 
   // --- the supplier's position -----------------------------------------
   const payables = app.finalizedSaleId
@@ -1325,7 +1449,8 @@ async function buildCockpitMoney(
       position: customerPosition({ routeKnown, unreadableDeposits, heldDepositMinor }),
       amountMinor: heldDepositMinor,
       currency,
-      reference: depositPayment?.externalReference,
+      // Never the machine key `Deposit <id>` (SCRUM-629 F-23).
+      reference: displayableDepositReference(depositPayment?.externalReference),
     },
     settlesDirect && routeKnown
       ? {
@@ -1375,7 +1500,7 @@ async function buildCockpitMoney(
         },
     {
       party: "FINANCIER" as const,
-      name: app.manualFinanceSnapshot?.providerName ?? "",
+      name: manualPayerLabel(app) ?? "",
       position: financierPosition({
         routeKnown,
         settlesDirect,
@@ -1432,6 +1557,7 @@ async function buildCockpitMoney(
       customerDirectToDealerMinor: customerGapToDealer.amountMinor,
       actualExpensesMinor,
       expectedExpensesMinor: app.estimatedDealerBorneExpensesMinor,
+      executionFee,
       currency,
       fullySettled,
     });
@@ -1605,11 +1731,15 @@ export const list = query({
       pageResult = await ctx.db
         .query("financeApplications")
         .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", args.status as "APPROVED" | "REJECTED" | "DRAFT" | "PENDING_DOCS" | "UNDER_REVIEW" | "CLOSED"))
+        // Newest first: the Deals page shows the first page, and oldest-first
+        // hid every new deal once an org passed one page (SCRUM-603).
+        .order("desc")
         .paginate(args.paginationOpts);
     } else {
       pageResult = await ctx.db
         .query("financeApplications")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .order("desc")
         .paginate(args.paginationOpts);
     }
 
@@ -1626,16 +1756,17 @@ export const list = query({
         // same rule — this file has been corrected twice already for exactly
         // that. The pure form, because `quote` is loaded here anyway for the
         // financed amounts, so it costs no extra read.
+        const payerLabel = manualPayerLabel(app);
         const payer = settlementPayer({
           quoteMode: app.quoteModeAtSubmission ?? quote?.mode,
           financeCompanyId: app.companyId,
-          manualProviderName: app.manualFinanceSnapshot?.providerName,
+          manualProviderName: payerLabel,
         });
         // Trimmed, matching `settlementPayer` — `saveQuote` applies no trim, so
         // a whitespace-only provider name is reachable, and raw truthiness
         // would render it as a blank cell while the resolver correctly called
         // the payer unnamed.
-        const manualProviderName = app.manualFinanceSnapshot?.providerName?.trim() || undefined;
+        const manualProviderName = payerLabel?.trim() || undefined;
 
         return {
           // The list spreads the whole document too, and it authorizes on the
@@ -1941,7 +2072,7 @@ export const dealCockpit = query({
     applicationId: v.id("financeApplications"),
   },
   handler: async (ctx, args) => {
-    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
     const app = await ctx.db.get(args.applicationId);
     if (!app || app.orgId !== args.orgId) return null;
@@ -1987,6 +2118,15 @@ export const dealCockpit = query({
         ? finalizedSale._id
         : null;
 
+    // SCRUM-447 D0/D6: the LIVE finance-company cheque(s) for this deal. A cheque
+    // registered as the payment method counts as "registered" only while a live
+    // row exists — a retired (returned/cancelled/replaced) one does not.
+    const linkedCheques = await chequesForApplication(ctx, app._id);
+    const liveFcCheques = linkedCheques.filter(isLiveFcCheque);
+    const chequeMethodRegistered = app.expectedPaymentMethod === "CHEQUE";
+    const chequeFaceUnrecorded =
+      chequeMethodRegistered && liveFcCheques.some((row) => row.amountMinor === undefined);
+
     // --- documents, which drive both the checklist and the delivery stage ----
     const rules = await ctx.db
       .query("companyDocumentRules")
@@ -2028,8 +2168,29 @@ export const dealCockpit = query({
     // is finished. The rail is qualitative — stage names and blocker keys, no
     // amounts — so it is safe to show a caller who cannot see the money.
     const settlementFacts = await resolveSettlement(ctx, app);
+    // SCRUM-447 x SCRUM-446: the SAME resolved leg `confirmDisbursement` reads. When it is
+    // NONE no finance company pays the dealership, so the cheque / disbursement flags below
+    // must not offer a step the server will refuse (attest, re-register, correct-a-returned-
+    // cheque). `expectedPaymentCorrectable` deliberately stays: clearing a legacy registered
+    // method is the documented exit from that state.
+    const disbursementApplies = settlementFacts.financierLeg !== "NONE";
+    // SCRUM-435: the ONE forward proof feeds the rail, the cockpit view and the
+    // gates; nothing here derives it a second time.
+    const forwardProof = await deriveForwardState(ctx, app);
+    const planVersion = planVersionOf(app);
+    const cancelPermitted =
+      isSystemOwnerRole(role) ||
+      cancelAuthorityFor(app.status, planVersion).every((tier) =>
+        tier.every((permission) => role.permissions.includes(permission))
+      );
+    const cancelForwardOk =
+      app.status !== "CLOSED" || planVersion !== 2 || forwardCancelRefusal(forwardProof) === null;
+    const disbursementCheque = clearedDisbursementCheque(linkedCheques, app);
     const stages = deriveDealStages({
+      forwardState: forwardProof.state,
+      forwardExceptionOpen: forwardProof.returnedExceptionOpen,
       settlementComplete: settlementFacts.moneySettled,
+      financierLeg: settlementFacts.financierLeg,
       dealCancelled: settlementFacts.saleCancelled,
       status: app.status,
       vehicleHandoverAt: app.vehicleHandoverAt,
@@ -2050,20 +2211,23 @@ export const dealCockpit = query({
       // appraisal moot when the economics could be computed without one.
       fundingSplitComputed: app.financeCompanyFundedPortionMinor !== undefined,
       requiredDocumentsComplete,
-      // Whether this deal has a paperwork gate at all. The documents CARD is
-      // already absent rather than empty when no rule applies; without this the
-      // rail would still show a blocker for a checklist that does not exist.
-      documentRulesApply: applicableRules.length > 0,
+      // Whether this deal has a paperwork gate at all: only a REQUIRED rule
+      // makes one (SCRUM-629 F-07). Without any, the stage is NOT_APPLICABLE
+      // rather than complete over an empty checklist.
+      documentRulesApply: requiredDocs.length > 0,
       // The direct route's own disbursement evidence. Without it the stage
       // stays blocked forever on a deal whose money has entirely moved,
       // because the financier paid the supplier and never paid the dealership.
       supplierDisbursementConfirmedAt: app.supplierDisbursementConfirmedAt,
     });
 
-    const timeline = await ctx.db
-      .query("applicationStatusLog")
-      .withIndex("by_application", (q) => q.eq("applicationId", app._id))
-      .collect();
+    // SCRUM-37: a log row's orgId is not forced to match its application's.
+    const timeline = (
+      await ctx.db
+        .query("applicationStatusLog")
+        .withIndex("by_application", (q) => q.eq("applicationId", app._id))
+        .collect()
+    ).filter((entry) => entry.orgId === args.orgId);
     const actorNames = new Map<string, string>();
     for (const entry of timeline) {
       if (actorNames.has(entry.changedBy)) continue;
@@ -2151,7 +2315,7 @@ export const dealCockpit = query({
         profile: vehicleProfile,
       },
       salespersonName: salesperson?.name ?? "",
-      financeCompanyName: company?.name ?? app.manualFinanceSnapshot?.providerName ?? "",
+      financeCompanyName: company?.name ?? manualPayerLabel(app) ?? "",
       /**
        * That the recorded settlement advice disagrees with what the deal was
        * approved at — and nothing about by how much.
@@ -2186,7 +2350,51 @@ export const dealCockpit = query({
        * and no method — only that the step is done. Whoever may see the deal may
        * see which step it is waiting on.
        */
-      expectedPaymentRegistered: Boolean(app.expectedPaymentMethod && app.expectedPaymentDate),
+      expectedPaymentRegistered:
+        Boolean(app.expectedPaymentMethod && app.expectedPaymentDate) &&
+        (!chequeMethodRegistered || liveFcCheques.length > 0),
+      /**
+       * SCRUM-447 D1/D6 workflow flags (no amounts): the live cheque has no
+       * recorded face (legacy row — attest it), and whether the registered
+       * payment can still be corrected (not cancelled, not disbursed).
+       */
+      chequeFaceUnrecorded: disbursementApplies && chequeFaceUnrecorded,
+      // CLOSED, not disbursed, nothing registered: the state correctExpectedPayment
+      // leaves a closed deal in, where registering again is the only way forward.
+      expectedPaymentReRegistrable:
+        disbursementApplies &&
+        app.status === "CLOSED" &&
+        !app.disbursedAt &&
+        !app.expectedPaymentMethod &&
+        !app.expectedPaymentRegisteredAt,
+      // The registered method is a cheque (a workflow fact, no amount).
+      chequePaymentRegistered: chequeMethodRegistered,
+      // SCRUM-447 B2/B4 workflow flags: a cheque payment is registered but no
+      // live cheque backs it (returned/cancelled) and it is still correctable,
+      // and a live cheque's face was attested by a finance manager.
+      // A CLEARED row takes precedence (mirrors correctExpectedPayment, which
+      // refuses it): that deal needs accounting review, never a correction.
+      chequeNeedsCorrection:
+        disbursementApplies &&
+        chequeMethodRegistered &&
+        liveFcCheques.length === 0 &&
+        !hasClearedLinkedCheque(linkedCheques) &&
+        app.status !== "CANCELLED" &&
+        !app.disbursedAt,
+      chequeNeedsAccountingReview:
+        chequeMethodRegistered &&
+        hasClearedLinkedCheque(linkedCheques) &&
+        app.status !== "CANCELLED" &&
+        !app.disbursedAt,
+      chequeFaceAttested: liveFcCheques.some((row) => row.faceAttestedAt !== undefined),
+      // The row the attest action targets. An id, not an amount.
+      unattestedChequeId: disbursementApplies
+        ? (liveFcCheques.find((row) => row.amountMinor === undefined)?._id ?? null)
+        : null,
+      expectedPaymentCorrectable:
+        app.status !== "CANCELLED" &&
+        !app.disbursedAt &&
+        Boolean(app.expectedPaymentMethod),
       /**
        * That `finalizeDeal` will refuse until the settlement route is recorded.
        *
@@ -2276,6 +2484,56 @@ export const dealCockpit = query({
        */
       settlementAdviceDiscrepancy: null as SettlementAdviceEvidence | null,
       stages,
+      /**
+       * SCRUM-435 - the dealership's payment of the deposit and its
+       * contribution to the finance company. STATUS ONLY here: no amount, no
+       * deposit or contribution split. The figures are FINANCE-tier and ride
+       * in `money.forward` for a caller who may see money.
+       */
+      forward: {
+        /** v2 deal (the manager-cancels rule applies, whether or not anything is due). */
+        planV2: planVersion === 2,
+        applies: forwardProof.applies,
+        state: forwardProof.state,
+        returnedExceptionOpen: forwardProof.returnedExceptionOpen,
+        /**
+         * The payment currently on the books, for the void / report-returned
+         * actions. An id, not an amount. Null when nothing settled is on the books.
+         */
+        onBooksForwardId: forwardProof.onBooksForwardId,
+        /** After the transfer a payment can only be reported returned, not voided. */
+        transferConfirmed: app.disbursedAt !== undefined,
+        /** Exactly the permissions the commands require. */
+        mayRecord:
+          isSystemOwnerRole(role) ||
+          (role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT) &&
+            role.permissions.includes(PERMISSIONS.VIEW_FINANCE)),
+        /**
+         * Whether this caller may cancel in the current status: the permission
+         * tiers and, on a CLOSED v2 deal, the forward proof, exactly as
+         * `cancelApplication` applies them (SCRUM-413 D-b, D-37). The other
+         * CLOSED refusals (disbursement already confirmed, supplier already
+         * paid, ...) are NOT mirrored here.
+         */
+        mayCancelFinalized: cancelPermitted && cancelForwardOk,
+      },
+      /**
+       * SCRUM-239: the bank returned the finance company's cheque AFTER it
+       * cleared. `mayReturn` is computed here from the same permissions and the
+       * same cheque binding the command requires, so the screen offers only what
+       * the server accepts. `chequeId` names the cleared cheque to return;
+       * `lastReturnedChequeId` is the newest cheque already returned after
+       * clearing, which is how the screen sees the fact it wrote.
+       */
+      disbursementReturn: {
+        mayReturn:
+          disbursementCheque !== null &&
+          (isSystemOwnerRole(role) ||
+            (role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT) &&
+              role.permissions.includes(PERMISSIONS.VIEW_FINANCE))),
+        chequeId: disbursementCheque?._id ?? null,
+        lastReturnedChequeId: latestReturnedAfterClearing(linkedCheques)?._id ?? null,
+      },
       documents,
       timeline: timeline
         .slice()
@@ -2289,12 +2547,55 @@ export const dealCockpit = query({
         })),
     };
 
-    if (!canSeeMoney) return { ...base, money: null };
+    if (!canSeeMoney) return { ...base, money: null, firstPaymentCorrection: null };
+
+    // SCRUM-373 D2. Money-gated with the rest: it carries the quote's figure.
+    // A deal in an unusable denomination cannot state that figure; the cockpit
+    // must still render (it withholds money spelling there itself), so the
+    // figure reads as unknown and the action is not offered. The mutation
+    // refuses the same deal with the denomination's own message.
+    //
+    // The quote is read only once every cheaper condition passes — the
+    // predicate's first answer is then "no quote figure" — so the hot path for
+    // ordinary deals pays nothing for it.
+    const firstPaymentInput = {
+      app,
+      actorId: user._id,
+      // Exactly the permissions the mutation requires.
+      mayApprove: mayCorrectFirstPayment(role),
+      quoteDownPaymentMinor: undefined as number | undefined,
+    };
+    let firstPaymentBlock = firstPaymentCorrectionBlock(firstPaymentInput);
+    if (firstPaymentBlock === "NO_QUOTE_DOWN_PAYMENT") {
+      try {
+        firstPaymentInput.quoteDownPaymentMinor = await quoteDownPaymentMinor(ctx, app, quote);
+      } catch {
+        firstPaymentInput.quoteDownPaymentMinor = undefined;
+      }
+      firstPaymentBlock = firstPaymentCorrectionBlock(firstPaymentInput);
+    }
 
     return {
       ...base,
       settlementAdviceDiscrepancy: settlementAdviceEvidence,
-      money: await buildCockpitMoney(ctx, app, quote, settlementFacts),
+      money: {
+        ...(await buildCockpitMoney(ctx, app, quote, settlementFacts)),
+        // SCRUM-435 FINANCE tier: what is owed onward, and what it is made of.
+        forward: {
+          dueMinor: forwardProof.dueMinor,
+          depositMinor: app.forwardDepositPortionMinor ?? 0,
+          contributionMinor: app.forwardContributionPortionMinor ?? 0,
+          onBooksMinor: forwardProof.versions.reduce(
+            (sum, version) => (version.state === "ON_BOOKS" ? sum + version.amountMinor : sum),
+            0
+          ),
+        },
+      },
+      firstPaymentCorrection: {
+        /** null when the server would accept the correction. */
+        block: firstPaymentBlock,
+        quoteDownPaymentMinor: firstPaymentInput.quoteDownPaymentMinor ?? null,
+      },
     };
   },
 });
@@ -2309,14 +2610,47 @@ export const createFromQuote = mutation({
      */
     adoptReservationId: v.optional(v.id("vehicleReservations")),
     notes: v.optional(v.string()),
+    /**
+     * SCRUM-404: the AutoFlow-calculated quotation the operator was SHOWN in the
+     * wizard and confirmed by starting the application. Present, the deal is
+     * created with that exact figure recorded as its SYSTEM_CALCULATED
+     * submitted quotation, in the same transaction — or not created at all.
+     * Absent, creation is exactly what it was before: no quotation recorded.
+     * Never inferred: only the wizard's explicit confirmation sends it.
+     */
+    confirmedCalculatedQuotationMinor: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
+
+    // Recording the quotation is `recordSubmittedQuotation`'s act, so a
+    // confirmation needs that door's authority too — asked of the role alone,
+    // before anything is read, so a refusal is independent of every row fact.
+    // Refused outright rather than silently creating without the quotation:
+    // the operator confirmed a figure and must not believe it was recorded.
+    const confirmedQuotation =
+      args.confirmedCalculatedQuotationMinor === undefined
+        ? undefined
+        : {
+            submittedQuotationMinor: args.confirmedCalculatedQuotationMinor,
+            source: "SYSTEM_CALCULATED" as const,
+          };
+    let confirmedQuotationReason: string | undefined;
+    if (confirmedQuotation) {
+      if (!mayRecordSubmittedQuotation(auth.role)) {
+        throw new ConvexError(
+          "Recording the finance company's quotation needs finance-application access. Start the application without it, and ask someone with that access to record the quotation on the deal page."
+        );
+      }
+      confirmedQuotationReason = assertQuotationRecordAuthority(auth.role, confirmedQuotation);
+    }
 
     const quote = await ctx.db.get(args.quoteId);
     if (!quote || quote.orgId !== args.orgId) {
       throw new ConvexError("Quote not found.");
     }
+    // SCRUM-495: a quote left in a retired mode does not become an application.
+    assertOperatedDealMode(quote.mode);
     const customer = await ctx.db.get(quote.customerId);
     if (!customer || customer.orgId !== args.orgId) {
       throw new ConvexError("Quote customer not found in this organization.");
@@ -2331,11 +2665,13 @@ export const createFromQuote = mutation({
     if (quoteVehicleItems.length !== 1) {
       throw new ConvexError("Finance applications currently support exactly one vehicle.");
     }
+    const lineVehicles = new Map<Id<"vehicles">, Doc<"vehicles">>();
     for (const item of quoteVehicleItems) {
       const lineVehicle = await ctx.db.get(item.vehicleId);
       if (!lineVehicle || lineVehicle.orgId !== args.orgId || lineVehicle.isDeleted) {
         throw new ConvexError("Quote vehicle not found in this organization.");
       }
+      lineVehicles.set(item.vehicleId, lineVehicle);
     }
     // Kept for the rule snapshot below rather than re-fetched: this handler
     // already validates the company here, and reading it twice per application
@@ -2351,8 +2687,7 @@ export const createFromQuote = mutation({
     // Check if application already exists for this quote
     const existing = await ctx.db
       .query("financeApplications")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("quoteId"), args.quoteId))
+      .withIndex("by_org_quote", (q) => q.eq("orgId", args.orgId).eq("quoteId", args.quoteId))
       .first();
 
     if (existing) {
@@ -2371,12 +2706,11 @@ export const createFromQuote = mutation({
     // in one place, and the release side (`hasLiveCommitmentBasis`) reads the
     // same array, so acquisition and release cannot drift apart.
     for (const item of quoteVehicleItems) {
-      const activeForVehicle = await ctx.db
+      const vehicleApplications = await ctx.db
         .query("financeApplications")
-        .withIndex("by_vehicle", (q) => q.eq("vehicleId", item.vehicleId))
-        .filter((q) => q.eq(q.field("orgId"), args.orgId))
-        .collect()
-        .then((rows) => rows.find((r) => IN_FLIGHT_FINANCE_STATUSES.includes(r.status)));
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", item.vehicleId))
+        .collect();
+      const activeForVehicle = vehicleApplications.find((r) => IN_FLIGHT_FINANCE_STATUSES.includes(r.status));
       if (activeForVehicle) {
         throw new ConvexError(
           "This vehicle already has an active finance application. Cancel it before starting a new one."
@@ -2419,11 +2753,12 @@ export const createFromQuote = mutation({
       totalFinancedAmount = quote.totalFinancedAmount;
     }
 
-    const guarantors = await ctx.db
+    const customerGuarantors = await ctx.db
       .query("guarantors")
       .withIndex("by_customer", (q) => q.eq("customerId", quote.customerId))
-      .filter((q) => q.neq(q.field("isDeleted"), true))
       .collect();
+    // Rows with `isDeleted` absent are kept — only an explicit `true` excludes.
+    const guarantors = customerGuarantors.filter((g) => g.isDeleted !== true);
 
     const salary = customer.employment?.salary;
     const existingMonthlyDebt = customer.financials?.totalMonthlyDebt;
@@ -2435,13 +2770,17 @@ export const createFromQuote = mutation({
     let vehicleValuation: number | undefined;
     let ltv: number | undefined;
     if (quote.companyId) {
+      const valuationCompanyId = quote.companyId;
       const valuations = await Promise.all(
-        quoteVehicleItems.map((item) =>
-          ctx.db
+        quoteVehicleItems.map(async (item) =>
+          // SCRUM-557: one tenant-led (org, vehicle, company) point read; a row
+          // stamped with another org is never selected.
+          (await ctx.db
             .query("vehicleValuations")
-            .withIndex("by_vehicle", (q) => q.eq("vehicleId", item.vehicleId))
-            .filter((q) => q.eq(q.field("companyId"), quote.companyId))
-            .first()
+            .withIndex("by_org_vehicle_company", (q) =>
+              q.eq("orgId", args.orgId).eq("vehicleId", item.vehicleId).eq("companyId", valuationCompanyId)
+            )
+            .first()) ?? null
         )
       );
       // Only treat the combined valuation as meaningful if every vehicle on the
@@ -2498,21 +2837,14 @@ export const createFromQuote = mutation({
     // When the quote froze its rule snapshot at creation, that frozen authority
     // is preserved so subsequent edits to the finance company cannot silently
     // reinterpret the financial basis (installment, financed amount, DBR, LTV).
-    let companyRuleSnapshot: FinanceCompanyRuleSnapshot | undefined;
+    //
+    // The choice and the fee-template limit live in `resolveCreationRuleSnapshot`
+    // so the creation-time quotation preview resolves the SAME rules (SCRUM-404).
+    const companyRuleSnapshot: FinanceCompanyRuleSnapshot | undefined =
+      resolveCreationRuleSnapshot(quote, quoteCompany);
     let companyRuleVersionId: Id<"financeCompanyRuleVersions"> | undefined;
     if (quote.mode === "CONFIGURED_FINANCE_COMPANY") {
-      if (quote.companyRuleSnapshot) {
-        companyRuleSnapshot = quote.companyRuleSnapshot;
-      } else if (quoteCompany) {
-        companyRuleSnapshot = buildRuleSnapshot(quoteCompany);
-      }
       if (companyRuleSnapshot) {
-        if (companyRuleSnapshot.feeTemplates && companyRuleSnapshot.adminFees === undefined) {
-          assertFeeTemplatesWithinLimit(
-            companyRuleSnapshot.feeTemplates,
-            `Creating an application under ${quoteCompany?.name ?? companyRuleSnapshot.companyName}`
-          );
-        }
         const versionRow = await ctx.db
           .query("financeCompanyRuleVersions")
           .withIndex("by_company_version", (q) =>
@@ -2535,22 +2867,21 @@ export const createFromQuote = mutation({
     // denomination before any write, then convert once at this lineage
     // boundary. A corrupt NaN/negative legacy quote must fail closed rather
     // than seed unusable economics (Convex's v.number() accepts NaN).
-    const targetSellingAmountMinor = toMinorUnits(quote.vehiclePrice, economicsCurrency);
-    const customerFirstPaymentMinor = toMinorUnits(quote.downPayment, economicsCurrency);
-    assertValidMinorAmount(targetSellingAmountMinor, "quoted vehicle price");
-    assertValidMinorAmount(customerFirstPaymentMinor, "quoted customer first payment");
-
+    //
     // Only costs the frozen policy explicitly says are included in the
     // quotation belong in the solver input. Other expected handover costs
     // remain visible in the deal checklist, but adding them here would charge
     // the customer for a cost the policy explicitly excluded. EMPLOYEE means
     // the dealership advances/reimburses the money and is therefore
     // dealer-borne, matching the cockpit's financial summary classification.
-    const dealerBorneExpensesMinor = resolveExpectedExecutionFeesMinor({
-      quote,
-      companyRuleSnapshot,
-      currency: economicsCurrency,
-    });
+    //
+    // One resolver, shared with the creation-time quotation preview (SCRUM-404).
+    const { targetSellingAmountMinor, customerFirstPaymentMinor, dealerBorneExpensesMinor } =
+      resolveCreationEconomicsInputs({
+        quote,
+        companyRuleSnapshot,
+        currency: economicsCurrency,
+      });
 
     // SCRUM-195: a live finance application is per-vehicle commitment evidence
     // in its own right — no deposit required. So creating one is an
@@ -2560,11 +2891,20 @@ export const createFromQuote = mutation({
     // The quote is the lineage: a financed deal that already took a deposit
     // JOINS the root that deposit opened (the ordinary financed flow), while a
     // quote that has proven nothing cannot take a car another deal holds.
+    // SCRUM-444 R-B: a funded reservation is never adopted (its money would be
+    // invisible to the quote); refused before the authority is even asked.
+    if (args.adoptReservationId) {
+      await assertReservationAdoptableWithoutDeposit(ctx, {
+        orgId: args.orgId,
+        reservationId: args.adoptReservationId,
+      });
+    }
     for (const item of quoteVehicleItems) {
       await assertAcquirable(ctx, {
         orgId: args.orgId,
         vehicleId: item.vehicleId,
         lineage: { quoteId: quote._id, adoptReservationId: args.adoptReservationId },
+        vehicle: lineVehicles.get(item.vehicleId),
       });
     }
 
@@ -2612,6 +2952,7 @@ export const createFromQuote = mutation({
         createdBy: auth.user._id,
         evidence: { kind: "FINANCE", applicationId: appId },
         lineage: { quoteId: quote._id, adoptReservationId: args.adoptReservationId },
+        vehicle: lineVehicles.get(item.vehicleId),
       });
     }
 
@@ -2649,6 +2990,28 @@ export const createFromQuote = mutation({
       { actorName, customerName: `${customer?.firstName} ${customer?.lastName}` },
       { link: `/${args.orgId}/applications` }
     );
+
+    // SCRUM-404: record the quotation the operator confirmed, through the SAME
+    // code `recordSubmittedQuotation` runs after its ownership check — the row
+    // is this mutation's own insert. SYSTEM_CALCULATED demands exact equality
+    // with the solver on the row's frozen inputs, so a figure that went stale
+    // between the preview and this click refuses, and the refusal rolls back
+    // everything above: the application, the acquisition, the status log, the
+    // documents and the notifications (all transactional writes).
+    if (confirmedQuotation) {
+      const inserted = await ctx.db.get(appId);
+      if (!inserted) {
+        throw new ConvexError("The new finance application could not be read back.");
+      }
+      await applySubmittedQuotation(ctx, {
+        user: auth.user,
+        role: auth.role,
+        app: inserted,
+        args: { orgId: args.orgId, applicationId: appId, ...confirmedQuotation },
+        reason: confirmedQuotationReason,
+        recordedVia: "DEAL_CREATION",
+      });
+    }
 
     return appId;
   },
@@ -2704,15 +3067,12 @@ export const repairQuoteEconomicsLineage = mutation({
     }
     assertSupportedDenomination(expectedCurrency, "repairing quote economics lineage");
 
-    const targetSellingAmountMinor = toMinorUnits(quote.vehiclePrice, expectedCurrency);
-    const customerFirstPaymentMinor = toMinorUnits(quote.downPayment, expectedCurrency);
-    const dealerBorneExpensesMinor = resolveExpectedExecutionFeesMinor({
-      quote,
-      companyRuleSnapshot: app.companyRuleSnapshot,
-      currency: expectedCurrency,
-    });
-    assertValidMinorAmount(targetSellingAmountMinor, "quoted vehicle price");
-    assertValidMinorAmount(customerFirstPaymentMinor, "quoted customer first payment");
+    const { targetSellingAmountMinor, customerFirstPaymentMinor, dealerBorneExpensesMinor } =
+      resolveCreationEconomicsInputs({
+        quote,
+        companyRuleSnapshot: app.companyRuleSnapshot,
+        currency: expectedCurrency,
+      });
     const expected = {
       economicsCurrency: expectedCurrency,
       targetSellingAmountMinor,
@@ -2855,6 +3215,15 @@ export const updateStatus = mutation({
       await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REVIEW_FINANCE_APPLICATION]);
     }
 
+    // SCRUM-444 DA-03: rejecting ends the deal like cancelling does.
+    if (args.status === "REJECTED" && app.status !== "REJECTED") {
+      await assertNoPendingDepositRequest(ctx, {
+        orgId: args.orgId,
+        quoteId: app.quoteId,
+        action: "reject this application",
+      });
+    }
+
     // SCRUM-195 PHASE-3 DEMOLITION MARKER — THIS DOOR FAILS CLOSED ON PURPOSE.
     //
     // Re-entering the in-flight set means the application is finance-LIVE again
@@ -2913,6 +3282,8 @@ export const updateStatus = mutation({
       if (!quote || quote.orgId !== args.orgId) {
         throw new ConvexError("Application quote not found.");
       }
+      // SCRUM-641 (D-35): approval is new authority over the car; see convex/utils/vehicleLiveness.ts.
+      requireCommercialVehicle(await ctx.db.get(app.vehicleId), args.orgId);
       await assertRequiredApplicationDocumentsComplete(ctx, app, quote);
       approvedBy = auth.user._id;
       approvedAt = Date.now();
@@ -2961,6 +3332,41 @@ export const updateStatus = mutation({
 });
 
 /**
+ * SCRUM-447 D4: a finance-company cheque never outlives its deal. Run BEFORE
+ * any other write in `cancelApplication`: a HELD cheque is CANCELLED (the deal
+ * that owned it is gone), a DEPOSITED one is refused (its bank outcome is
+ * unknown — record the return or the clearing first), and terminal rows
+ * (CLEARED / RETURNED / CANCELLED / REPLACED) are left as they are. The refusal
+ * throws before any cheque is written; a thrown error rolls the whole mutation
+ * back.
+ */
+export async function resolveLinkedChequesForCancellation(
+  ctx: MutationCtx,
+  app: Doc<"financeApplications">,
+  actorId: Id<"users">,
+  reason: string,
+  now: number
+): Promise<void> {
+  const rows = await chequesForApplication(ctx, app._id);
+  const deposited = rows.find((row) => row.status === "DEPOSITED");
+  if (deposited) {
+    throw new ConvexError(
+      "A cheque for this deal is already deposited. Record its return (or clearing) before cancelling the deal."
+    );
+  }
+  for (const row of rows) {
+    if (row.status !== "HELD") continue;
+    await ctx.db.patch(row._id, {
+      status: "CANCELLED",
+      cancelledAt: now,
+      cancelledBy: actorId,
+      cancellationReason: reason,
+      updatedAt: now,
+    });
+  }
+}
+
+/**
  * Voids an application that was submitted in error (e.g. against the wrong
  * vehicle) so the deal can be redone cleanly on a fresh quote. CANCELLED is
  * terminal — the application stays visible for audit purposes but can no
@@ -2969,6 +3375,275 @@ export const updateStatus = mutation({
  * no disbursement has been confirmed, because that branch unwinds the sale,
  * vehicle, deposits, and posted accounting records.
  */
+/**
+ * The teardown of a CLOSED deal: refuses while the finance-company receivable
+ * holds live allocations, reverses a COMPLETED sale (journal, commission,
+ * operational records), reverses the finance disbursement and cancels the
+ * finance-company receivable. Extracted unchanged from `cancelApplication` so
+ * the unwind of a paid deal (SCRUM-693, `finishDealUnwind`) runs the exact
+ * same teardown; each caller keeps its own refusals in front of it.
+ */
+export async function cancelClosedApplicationTeardown(
+  ctx: MutationCtx,
+  args: {
+    app: Doc<"financeApplications">;
+    actorId: Id<"users">;
+    reason: string;
+    cancellationReason: string;
+    now: number;
+  }
+): Promise<void> {
+  const { app, actorId, reason, cancellationReason, now } = args;
+  const orgId = app.orgId;
+  const applicationId = app._id;
+  // SCRUM-121A-PRE §5.1 — resolved and gated HERE, above every write
+  // in this branch, so a refusal leaves the deal exactly as it was.
+  //
+  // `app.disbursedAt` was the only thing standing in for this, and it
+  // is not sufficient: `subledger.allocate` allocates against the
+  // finance-company document without touching the application at all,
+  // so `disbursedAt` stays unset and the guard above sees a clean deal
+  // while the subledger holds live money. The document itself is the
+  // only thing that knows.
+  //
+  // Scope note: this reads the canonical receivable and refuses. It
+  // deliberately changes nothing about `confirmDisbursement`, the
+  // remittance economics, the settlement route, or the deal teardown
+  // below.
+  // SCRUM-27 (D5): found by SOURCE for a manual company too. Gating on
+  // `companyId` alone would skip both the allocation guard and the void.
+  const financeReceivable = app.companyId || manualPayerOf(app)
+    ? await ctx.db
+        .query("receivableDocuments")
+        .withIndex("by_org_source", (q) =>
+          q
+            .eq("orgId", orgId)
+            .eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE)
+            .eq("sourceId", applicationId)
+        )
+        .unique()
+    : null;
+  if (financeReceivable && financeReceivable.status !== "CANCELLED") {
+    await assertNoActiveAllocations(ctx, financeReceivable._id);
+  }
+
+  if (app.finalizedSaleId) {
+    const sale = await ctx.db.get(app.finalizedSaleId);
+    if (sale && sale.orgId === orgId) {
+      // ⚠️ THE PARENT REVERSAL RUNS FIRST, AND ITS OUTCOME IS A GATE.
+      //
+      // Operational reinstatement used to run first and hand the deposit
+      // back before anyone knew whether the sale's journal had actually
+      // reversed. For a FINANCED_SALE_CONSIDERATION deposit that is the
+      // whole question: its release lives inside the sale entry, so a
+      // DEFERRED parent leaves the release standing while the deposit
+      // reads as available again.
+      //
+      // Safe in both directions, verified rather than assumed: nothing in
+      // `cancelCompletedSaleOperationalRecords` reads `accountingEvents`,
+      // and `reverseAccountingEvent` reads only the ORIGINAL event's own
+      // stored journal — never current sale or deposit state. So neither
+      // half depends on the other having run.
+      //
+      // The refusal below is a real rollback boundary: these mutations are
+      // not wrapped in try/catch, so an uncaught throw discards the queued
+      // reversal and every other write in the transaction.
+      // ⚠️ THE EXACT TRANSITION, NOT MERELY 'NOT CANCELLED' — SCRUM-212-R1.
+      //
+      // This asked `sale.status !== "CANCELLED"`, which is a different
+      // question from the one the invariant is about. Every other status
+      // answered yes — PENDING included, and a CANCELLED sale could be
+      // reopened to PENDING through `sales.update`. A sale that never
+      // completed would then run the full completed-sale teardown.
+      //
+      // Only a COMPLETED sale has a projection, a journal, an accrual and
+      // a cashflow row to reverse, so only a COMPLETED sale may be torn
+      // down. Reopening is now also refused at that door; this guard does
+      // not depend on that one holding.
+      if (sale.status === "COMPLETED") {
+        await ctx.db.patch(sale._id, { status: "CANCELLED" });
+        await hookSaleCancelled(ctx, {
+          orgId: orgId,
+          saleId: sale._id,
+          reason,
+          actorId: actorId,
+          reversalDate: now,
+        });
+        await assertFinancedDepositsSurviveParentReversal(ctx, {
+          orgId: orgId,
+          saleId: sale._id,
+        });
+        // Accrual plus every correction posted against it, called
+        // unconditionally for the same reason sales.update's
+        // cancellation does — it is the same entry point, so the two
+        // void paths cannot drift apart.
+        await reverseCommissionForSale(ctx, {
+          orgId: orgId,
+          saleId: sale._id,
+          adjustmentSeq: sale.commissionAdjustmentSeq ?? 0,
+          reason,
+          actorId: actorId,
+          reversalDate: now,
+        });
+
+        // ⚠️ INSIDE THE TRANSITION THAT OWNS IT — SCRUM-212.
+        //
+        // This sat outside the status block, so re-entering on a sale
+        // that was already CANCELLED skipped the reversal, the commission
+        // void and the deposit gate — and still ran the destructive
+        // teardown. By then the car could belong to a LATER sale, and the
+        // teardown would restore it out from under one that is still
+        // COMPLETED, voiding that sale's cashflow row on the way past.
+        //
+        // Destructive teardown belongs to the one transaction that
+        // performs COMPLETED -> CANCELLED for this exact sale, so it now
+        // lives inside the block that performs it and runs at most once.
+        // Everything below stays outside: cancelling the application's
+        // own receivable, disbursement and root state IS idempotent on
+        // re-entry, and re-entry still needs to reach it.
+        //
+        // The deposit gate above still precedes it, and now does so on
+        // the only path that reaches it — so the duplicate call this
+        // block used to need is gone with the hole it was covering.
+        await cancelCompletedSaleOperationalRecords(ctx, {
+          orgId: orgId,
+          sale,
+          actorId: actorId,
+          reason,
+          reversalDate: now,
+        });
+      } else if (sale.status !== "CANCELLED") {
+        // A draft that never completed. Cancelling the application ends
+        // the deal, so the sale goes with it — but `createDraft` performs
+        // no inventory, deposit, CRM or accounting side effects, so there
+        // is nothing to reverse and nothing to hand back.
+        // SCRUM-571 T2: a sale exit refuses while a sale-linked legacy receivable exists.
+        await assertNoSaleLinkedLegacyReceivable(ctx, orgId, sale._id);
+        await ctx.db.patch(sale._id, { status: "CANCELLED" });
+      }
+    }
+  }
+
+  const quote = await ctx.db.get(app.quoteId);
+  // Deliberately NOT gated on the settlement route.
+  //
+  // It looks like it should be: on the direct route `finalizeDeal`
+  // posted no FINANCE_DISBURSED event and opened no finance-company
+  // receivable, so there is nothing to reverse. But the block is already
+  // a no-op in that case — `reverseEventIfPosted` returns NOT_POSTED
+  // when nothing was posted, `cancelPendingPostByKey` finds no queued
+  // row, and `financeReceivable` is null so the patch is skipped. The
+  // guard bought nothing.
+  //
+  // What it DID buy was a hole. It re-derived the route from the LIVE
+  // vehicle, while finalization acted on the state as it was months
+  // earlier. A vehicle converted SOURCED -> STOCK before finalization
+  // (allowed: `retroactiveOwnershipChangeRefusal` only refuses once the
+  // vehicle is SOLD) posts the ordinary finance receivable, and being
+  // converted back to SOURCED afterwards made this branch skip the
+  // reversal that `origin/main` performs — leaving AR-Finance-Companies
+  // debited and an OPEN receivable on a voided deal, permanently.
+  //
+  // Same reasoning as `sales.ts`: "reverseEventIfPosted no-ops when
+  // there is nothing on the books and cancels anything still queued, so
+  // gating on the live amount only created holes."
+  if (
+    (app.companyId || manualPayerOf(app)) &&
+    ((quote?.totalFinancedAmount ?? 0) > 0 || financeReceivable)
+  ) {
+    await hookFinanceDisbursementCancelled(ctx, {
+      orgId: orgId,
+      applicationId: applicationId,
+      reason,
+      actorId: actorId,
+      reversalDate: now,
+    });
+
+    // The canonical finance-company receivable opened at finalizeDeal
+    // is no longer owed once the deal is voided (this branch already
+    // rejects deals whose disbursement was received).
+    if (financeReceivable && financeReceivable.status !== "CANCELLED") {
+      // SCRUM-121A-PRE §5.2 — the same metadata the other two writers
+      // now carry. Without `cancelledAt`, `getReceivablesAsOf` keeps
+      // this document in every historical AR report forever, while this
+      // very branch reverses its GL.
+      //
+      // `cancellationReason` (not `reason`) is the trimmed fallback, so
+      // this is never stored blank. They are separate constants on
+      // purpose: `reason` still feeds the sale reversal, the commission
+      // void and the teardown, which are outside this stage's slice.
+      await ctx.db.patch(financeReceivable._id, {
+        status: "CANCELLED",
+        cancelledAt: now,
+        cancelledBy: actorId,
+        cancellationReason,
+      });
+    }
+  }
+}
+
+/**
+ * The application side of a cancellation: the CANCELLED patch, the release of
+ * the quote's roots and the status-log row. Shared by `cancelApplication` and
+ * `finishDealUnwind` (SCRUM-693).
+ */
+export async function closeOutCancelledApplication(
+  ctx: MutationCtx,
+  args: {
+    app: Doc<"financeApplications">;
+    actorId: Id<"users">;
+    now: number;
+    cancellationReason: string;
+    note: string | undefined;
+    failurePatch?: Partial<WithoutSystemFields<Doc<"financeApplications">>>;
+  }
+): Promise<void> {
+  const { app, actorId, now, cancellationReason } = args;
+  await ctx.db.patch(app._id, {
+    status: "CANCELLED",
+    updatedAt: now,
+    cancelledBy: actorId,
+    cancelledAt: now,
+    cancellationReason,
+    creditDecision: "CANCELLED",
+    // This branch has already reversed the sale and voided the
+    // finance-company receivable, so nothing is expected any more. The
+    // handover timestamp is deliberately left alone — the vehicle
+    // physically went to the customer and later came back, and erasing
+    // that is not the same as reversing it — but a cancelled deal that
+    // was never handed over must not keep claiming it is READY to be.
+    settlementStatus: "NOT_READY",
+    handoverStatus: handoverStatusForFacts({ ...app, status: "CANCELLED" }),
+    // A gap nobody will now negotiate. FAILED is the terminal value the
+    // validator already carries for exactly this.
+    ...(app.gapResolution === "PENDING_NEGOTIATION"
+      ? { gapResolution: "FAILED" as const }
+      : {}),
+    ...(args.failurePatch ?? {}),
+  });
+
+  // SCRUM-195 M3. AFTER the application row itself is CANCELLED, so the
+  // FINANCE basis is genuinely gone when the predicate runs. Before this
+  // patch the application is still in the in-flight set and the root
+  // would correctly refuse to release.
+  await releaseRootsForApplicationQuote(ctx, {
+    orgId: app.orgId,
+    quoteId: app.quoteId,
+    decisionNow: now,
+    reason: "finance application cancelled",
+  });
+
+  await ctx.db.insert("applicationStatusLog", {
+    orgId: app.orgId,
+    applicationId: app._id,
+    fromStatus: app.status,
+    toStatus: "CANCELLED",
+    changedBy: actorId,
+    changedAt: now,
+    note: args.note,
+  });
+}
+
 export const cancelApplication = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -2981,7 +3656,25 @@ export const cancelApplication = mutation({
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
-    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_FINANCE_APPLICATION]);
+    // SCRUM-413 D-b: the entry gate is status-sensitive, but the status is not
+    // known until the application is loaded inside the idempotent body. So the
+    // entry admits EITHER holder (CREATE for every status but CLOSED;
+    // CANCEL_CLOSED for CLOSED), and the body then requires the one that
+    // matches the loaded status. A replay is keyed by org + operation + key,
+    // not by actor, so this entry gate is what bounds who may be served one.
+    let createRefusal: unknown = null;
+    let auth: Awaited<ReturnType<typeof requireTenantAuth>>;
+    try {
+      auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_FINANCE_APPLICATION]);
+    } catch (error) {
+      createRefusal = error;
+      try {
+        auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CANCEL_CLOSED_DEAL]);
+      } catch {
+        // Neither holder: surface the original (CREATE) refusal unchanged.
+        throw error;
+      }
+    }
 
     return await runWithIdempotency(
       ctx,
@@ -3004,6 +3697,27 @@ export const cancelApplication = mutation({
           throw new ConvexError("Application not found");
         }
 
+        // SCRUM-413 D-b: the authority this status needs. CLOSED takes
+        // CANCEL_CLOSED and deliberately NOT CREATE (reversing a closed deal is
+        // its own authority); every other status, including a fresh key against
+        // an already-CANCELLED application, takes CREATE.
+        const authority = cancelAuthorityFor(app.status, planVersionOf(app));
+        if (app.status === "CLOSED") {
+          // The entry gate already loaded and validated the caller's role, so
+          // this is an in-memory check that refuses exactly as requireTenantAuth.
+          const missing = authority[0].filter(
+            (permission) => !auth.role.permissions.includes(permission)
+          );
+          if (missing.length > 0 && !isSystemOwnerRole(auth.role)) {
+            throwAppError(
+              AppErrorCode.FORBIDDEN,
+              `Forbidden: Missing required permissions: ${missing.join(", ")}`
+            );
+          }
+        } else if (createRefusal !== null) {
+          throw createRefusal;
+        }
+
         if (app.status === "CANCELLED") {
           await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
           await releaseRootsForApplicationQuote(ctx, {
@@ -3014,6 +3728,20 @@ export const cancelApplication = mutation({
           });
           return;
         }
+
+        // SCRUM-693: an unwind in progress owns the deal's ending; finish or
+        // abandon it first. After the replay above, so a finished unwind's
+        // CANCELLED deal still answers a retried cancel.
+        await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
+
+        // SCRUM-444 DA-03: cancelling ends the deal, and a deposit request still
+        // waiting on it would be orphaned. After the already-cancelled replay
+        // above, so a retry of a cancellation that succeeded is not refused.
+        await assertNoPendingDepositRequest(ctx, {
+          orgId: args.orgId,
+          quoteId: app.quoteId,
+          action: "cancel this application",
+        });
 
         // Cash in an employee's pocket does not stop being there because the
         // deal did. An OPEN custody record is refused here rather than
@@ -3034,8 +3762,18 @@ export const cancelApplication = mutation({
         // Reversing an already-APPROVED decision is more sensitive than voiding
         // a draft/in-review one, so require the same permission used to approve.
         if (app.status === "APPROVED") {
-          await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_FINANCE_APPLICATION]);
+          await requireTenantAuth(ctx, args.orgId, authority[1]);
         }
+
+        // SCRUM-447 D4: resolve linked finance-company cheques before any other
+        // write (HELD -> CANCELLED; DEPOSITED refused; terminal rows skipped).
+        await resolveLinkedChequesForCancellation(
+          ctx,
+          app,
+          auth.user._id,
+          args.reason?.trim() || "Finance application cancelled",
+          Date.now()
+        );
 
         const reason = args.reason ?? "Finance application cancelled";
         // SCRUM-121A-PRE §5.2 — the stored cancellation reason is never blank.
@@ -3052,16 +3790,36 @@ export const cancelApplication = mutation({
         const now = Date.now();
 
         if (app.status === "CLOSED") {
-          // Undoing a finalized deal touches the sale, vehicle, deposits, and
-          // posted GL — require finalization authority (the same permission
-          // needed to close the deal in the first place), not just approval.
-          await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.FINALIZE_FINANCED_DEAL]);
+          // SCRUM-435 (v2 deals only; v1 is unchanged): the deal has payments the
+          // finance company holds, so a manager cancels it - never sales or an
+          // accountant alone - and only when the forward proof allows it.
+          if (planVersionOf(app) === 2) {
+            try {
+              await requireTenantAuth(ctx, args.orgId, authority[1]);
+            } catch {
+              throw new ConvexError("A manager cancels a finalized deal.");
+            }
+          }
 
+          // SCRUM-693: a paid deal is reversed through Unwind deal on the deal
+          // page (dealUnwind.ts), never by a bare cancel. Ahead of the forward
+          // refusal: the unwind returns the forward itself, so it is the one
+          // instruction that leads somewhere.
+          // A v1 deal cannot be unwound, so it keeps the manual-correction
+          // refusal; so does a cheque deal or one whose receipt records
+          // disagree (F2), which the unwind would refuse anyway.
           if (app.disbursedAt) {
+            if (planVersionOf(app) === 2 && (await paidDealReversalRoute(ctx, app)).route === "UNWIND") {
+              throwAppError(AppErrorCode.DEAL_CANCEL_USE_UNWIND, DEAL_UNWIND_MESSAGES.DEAL_CANCEL_USE_UNWIND);
+            }
             throw new ConvexError(
               "Disbursement has already been confirmed for this deal — funds have been received from the finance company. " +
               "This can't be auto-reversed from here; void it through a manual accounting correction instead."
             );
+          }
+          if (planVersionOf(app) === 2) {
+            const forwardBlock = forwardCancelRefusal(await deriveForwardState(ctx, app));
+            if (forwardBlock !== null) throwAppError(forwardBlock.code, forwardBlock.message);
           }
 
           // The direct route's mirror of the refusal above, and NOT the same
@@ -3092,211 +3850,24 @@ export const cancelApplication = mutation({
             );
           }
 
-          // SCRUM-121A-PRE §5.1 — resolved and gated HERE, above every write
-          // in this branch, so a refusal leaves the deal exactly as it was.
-          //
-          // `app.disbursedAt` was the only thing standing in for this, and it
-          // is not sufficient: `subledger.allocate` allocates against the
-          // finance-company document without touching the application at all,
-          // so `disbursedAt` stays unset and the guard above sees a clean deal
-          // while the subledger holds live money. The document itself is the
-          // only thing that knows.
-          //
-          // Scope note: this reads the canonical receivable and refuses. It
-          // deliberately changes nothing about `confirmDisbursement`, the
-          // remittance economics, the settlement route, or the deal teardown
-          // below.
-          const financeReceivable = app.companyId
-            ? await ctx.db
-                .query("receivableDocuments")
-                .withIndex("by_org_source", (q) =>
-                  q
-                    .eq("orgId", args.orgId)
-                    .eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE)
-                    .eq("sourceId", args.applicationId)
-                )
-                .unique()
-            : null;
-          if (financeReceivable && financeReceivable.status !== "CANCELLED") {
-            await assertNoActiveAllocations(ctx, financeReceivable._id);
-          }
-
-          if (app.finalizedSaleId) {
-            const sale = await ctx.db.get(app.finalizedSaleId);
-            if (sale && sale.orgId === args.orgId) {
-              // ⚠️ THE PARENT REVERSAL RUNS FIRST, AND ITS OUTCOME IS A GATE.
-              //
-              // Operational reinstatement used to run first and hand the deposit
-              // back before anyone knew whether the sale's journal had actually
-              // reversed. For a FINANCED_SALE_CONSIDERATION deposit that is the
-              // whole question: its release lives inside the sale entry, so a
-              // DEFERRED parent leaves the release standing while the deposit
-              // reads as available again.
-              //
-              // Safe in both directions, verified rather than assumed: nothing in
-              // `cancelCompletedSaleOperationalRecords` reads `accountingEvents`,
-              // and `reverseAccountingEvent` reads only the ORIGINAL event's own
-              // stored journal — never current sale or deposit state. So neither
-              // half depends on the other having run.
-              //
-              // The refusal below is a real rollback boundary: these mutations are
-              // not wrapped in try/catch, so an uncaught throw discards the queued
-              // reversal and every other write in the transaction.
-              // ⚠️ THE EXACT TRANSITION, NOT MERELY 'NOT CANCELLED' — SCRUM-212-R1.
-              //
-              // This asked `sale.status !== "CANCELLED"`, which is a different
-              // question from the one the invariant is about. Every other status
-              // answered yes — PENDING included, and a CANCELLED sale could be
-              // reopened to PENDING through `sales.update`. A sale that never
-              // completed would then run the full completed-sale teardown.
-              //
-              // Only a COMPLETED sale has a projection, a journal, an accrual and
-              // a cashflow row to reverse, so only a COMPLETED sale may be torn
-              // down. Reopening is now also refused at that door; this guard does
-              // not depend on that one holding.
-              if (sale.status === "COMPLETED") {
-                await ctx.db.patch(sale._id, { status: "CANCELLED" });
-                await hookSaleCancelled(ctx, {
-                  orgId: args.orgId,
-                  saleId: sale._id,
-                  reason,
-                  actorId: auth.user._id,
-                  reversalDate: now,
-                });
-                await assertFinancedDepositsSurviveParentReversal(ctx, {
-                  orgId: args.orgId,
-                  saleId: sale._id,
-                });
-                // Accrual plus every correction posted against it, called
-                // unconditionally for the same reason sales.update's
-                // cancellation does — it is the same entry point, so the two
-                // void paths cannot drift apart.
-                await reverseCommissionForSale(ctx, {
-                  orgId: args.orgId,
-                  saleId: sale._id,
-                  adjustmentSeq: sale.commissionAdjustmentSeq ?? 0,
-                  reason,
-                  actorId: auth.user._id,
-                  reversalDate: now,
-                });
-
-                // ⚠️ INSIDE THE TRANSITION THAT OWNS IT — SCRUM-212.
-                //
-                // This sat outside the status block, so re-entering on a sale
-                // that was already CANCELLED skipped the reversal, the commission
-                // void and the deposit gate — and still ran the destructive
-                // teardown. By then the car could belong to a LATER sale, and the
-                // teardown would restore it out from under one that is still
-                // COMPLETED, voiding that sale's cashflow row on the way past.
-                //
-                // Destructive teardown belongs to the one transaction that
-                // performs COMPLETED -> CANCELLED for this exact sale, so it now
-                // lives inside the block that performs it and runs at most once.
-                // Everything below stays outside: cancelling the application's
-                // own receivable, disbursement and root state IS idempotent on
-                // re-entry, and re-entry still needs to reach it.
-                //
-                // The deposit gate above still precedes it, and now does so on
-                // the only path that reaches it — so the duplicate call this
-                // block used to need is gone with the hole it was covering.
-                await cancelCompletedSaleOperationalRecords(ctx, {
-                  orgId: args.orgId,
-                  sale,
-                  actorId: auth.user._id,
-                  reason,
-                  reversalDate: now,
-                });
-              } else if (sale.status !== "CANCELLED") {
-                // A draft that never completed. Cancelling the application ends
-                // the deal, so the sale goes with it — but `createDraft` performs
-                // no inventory, deposit, CRM or accounting side effects, so there
-                // is nothing to reverse and nothing to hand back.
-                await ctx.db.patch(sale._id, { status: "CANCELLED" });
-              }
-            }
-          }
-
-          const quote = await ctx.db.get(app.quoteId);
-          // Deliberately NOT gated on the settlement route.
-          //
-          // It looks like it should be: on the direct route `finalizeDeal`
-          // posted no FINANCE_DISBURSED event and opened no finance-company
-          // receivable, so there is nothing to reverse. But the block is already
-          // a no-op in that case — `reverseEventIfPosted` returns NOT_POSTED
-          // when nothing was posted, `cancelPendingPostByKey` finds no queued
-          // row, and `financeReceivable` is null so the patch is skipped. The
-          // guard bought nothing.
-          //
-          // What it DID buy was a hole. It re-derived the route from the LIVE
-          // vehicle, while finalization acted on the state as it was months
-          // earlier. A vehicle converted SOURCED -> STOCK before finalization
-          // (allowed: `retroactiveOwnershipChangeRefusal` only refuses once the
-          // vehicle is SOLD) posts the ordinary finance receivable, and being
-          // converted back to SOURCED afterwards made this branch skip the
-          // reversal that `origin/main` performs — leaving AR-Finance-Companies
-          // debited and an OPEN receivable on a voided deal, permanently.
-          //
-          // Same reasoning as `sales.ts`: "reverseEventIfPosted no-ops when
-          // there is nothing on the books and cancels anything still queued, so
-          // gating on the live amount only created holes."
-          if (
-            app.companyId &&
-            ((quote?.totalFinancedAmount ?? 0) > 0 || financeReceivable)
-          ) {
-            await hookFinanceDisbursementCancelled(ctx, {
-              orgId: args.orgId,
-              applicationId: args.applicationId,
-              reason,
-              actorId: auth.user._id,
-              reversalDate: now,
-            });
-
-            // The canonical finance-company receivable opened at finalizeDeal
-            // is no longer owed once the deal is voided (this branch already
-            // rejects deals whose disbursement was received).
-            if (financeReceivable && financeReceivable.status !== "CANCELLED") {
-              // SCRUM-121A-PRE §5.2 — the same metadata the other two writers
-              // now carry. Without `cancelledAt`, `getReceivablesAsOf` keeps
-              // this document in every historical AR report forever, while this
-              // very branch reverses its GL.
-              //
-              // `cancellationReason` (not `reason`) is the trimmed fallback, so
-              // this is never stored blank. They are separate constants on
-              // purpose: `reason` still feeds the sale reversal, the commission
-              // void and the teardown, which are outside this stage's slice.
-              await ctx.db.patch(financeReceivable._id, {
-                status: "CANCELLED",
-                cancelledAt: now,
-                cancelledBy: auth.user._id,
-                cancellationReason,
-              });
-            }
-          }
+          await cancelClosedApplicationTeardown(ctx, {
+            app,
+            actorId: auth.user._id,
+            reason,
+            cancellationReason,
+            now,
+          });
         } else {
           await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
         }
 
-        await ctx.db.patch(args.applicationId, {
-          status: "CANCELLED",
-          updatedAt: now,
-          cancelledBy: auth.user._id,
-          cancelledAt: now,
+        await closeOutCancelledApplication(ctx, {
+          app,
+          actorId: auth.user._id,
+          now,
           cancellationReason,
-          creditDecision: "CANCELLED",
-          // This branch has already reversed the sale and voided the
-          // finance-company receivable, so nothing is expected any more. The
-          // handover timestamp is deliberately left alone — the vehicle
-          // physically went to the customer and later came back, and erasing
-          // that is not the same as reversing it — but a cancelled deal that
-          // was never handed over must not keep claiming it is READY to be.
-          settlementStatus: "NOT_READY",
-          handoverStatus: handoverStatusForFacts({ ...app, status: "CANCELLED" }),
-          // A gap nobody will now negotiate. FAILED is the terminal value the
-          // validator already carries for exactly this.
-          ...(app.gapResolution === "PENDING_NEGOTIATION"
-            ? { gapResolution: "FAILED" as const }
-            : {}),
-          ...(args.failureReason
+          note: args.reason,
+          failurePatch: args.failureReason
             ? {
                 failureReason: args.failureReason,
                 failureNotes: args.failureNotes ?? cancellationReason,
@@ -3307,28 +3878,7 @@ export const cancelApplication = mutation({
                   defaultAppraisalFeeResponsibility(args.failureReason),
                 appraisalFeeResponsibilityReason: args.appraisalFeeResponsibilityReason,
               }
-            : {}),
-        });
-
-        // SCRUM-195 M3. AFTER the application row itself is CANCELLED, so the
-        // FINANCE basis is genuinely gone when the predicate runs. Before this
-        // patch the application is still in the in-flight set and the root
-        // would correctly refuse to release.
-        await releaseRootsForApplicationQuote(ctx, {
-          orgId: args.orgId,
-          quoteId: app.quoteId,
-          decisionNow: now,
-          reason: "finance application cancelled",
-        });
-
-        await ctx.db.insert("applicationStatusLog", {
-          orgId: args.orgId,
-          applicationId: args.applicationId,
-          fromStatus: app.status,
-          toStatus: "CANCELLED",
-          changedBy: auth.user._id,
-          changedAt: now,
-          note: args.reason,
+            : {},
         });
 
         const actorName = await getActorName(ctx);
@@ -3355,12 +3905,23 @@ export const getLog = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    // SCRUM-37: prove the application is this org's (missing and foreign refuse
+    // alike), then return only log rows stamped with this org.
+    const application = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      "Finance application not found in this organization."
+    );
 
-    const entries = await ctx.db
-      .query("applicationStatusLog")
-      .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
-      .order("asc")
-      .collect();
+    const entries = (
+      await ctx.db
+        .query("applicationStatusLog")
+        .withIndex("by_application", (q) => q.eq("applicationId", application._id))
+        .order("asc")
+        .collect()
+    ).filter((entry) => entry.orgId === args.orgId);
 
     return Promise.all(
       entries.map(async (entry) => {
@@ -3504,10 +4065,11 @@ export const registerVehicleHandover = mutation({
 
 /**
  * Registers how and when the deal's payment is expected to arrive — cash,
- * in-house installment with the customer, a cheque (from the finance company
- * or the customer's bank), or a bank transfer — before finalizeDeal. For
- * CHEQUE this also opens a real postDatedCheques record so it flows through
- * the existing cheque lifecycle (HELD -> DEPOSITED -> CLEARED).
+ * in-house installment with the customer, a finance-company cheque, or a bank
+ * transfer — before finalizeDeal. For CHEQUE this opens a postDatedCheques
+ * record drawn by the deal's finance company (the through-dealership route
+ * only), which is cleared by confirmDisbursement, never from customer
+ * collections.
  */
 export const registerExpectedPayment = mutation({
   args: {
@@ -3519,14 +4081,51 @@ export const registerExpectedPayment = mutation({
       bank: v.string(),
       chequeNumber: v.string(),
     })),
+    // SCRUM-447 D1: the face printed on the instrument, as a decimal string at
+    // the deal currency's scale. Required for CHEQUE; never derived from the quote.
+    faceAmount: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REGISTER_EXPECTED_PAYMENT]);
-    const app = await ctx.db.get(args.applicationId);
-    if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
-    if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before registering expected payment.");
+    // Membership first, the row proven to belong to the org second, and only
+    // then the permission — because which permission applies depends on the row.
+    const { user, role } = await requireTenantAuth(ctx, args.orgId);
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      "Application not found"
+    );
+    await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
+    // SCRUM-447 D3: APPROVED, or CLOSED but not yet disbursed (re-registration
+    // after correctExpectedPayment). A cancelled or disbursed deal never.
+    const closedUndisbursed = app.status === "CLOSED" && !app.disbursedAt;
+    // SCRUM-447 B2: the operator who CORRECTS a closed deal (MANAGE_FINANCE) must
+    // be able to finish the recovery; the default ACCOUNTANT holds the former
+    // and not REGISTER_EXPECTED_PAYMENT. Either permission suffices, and only on
+    // a CLOSED, undisbursed deal — the APPROVED flow is unchanged.
+    const allowed: Permission[] = closedUndisbursed
+      ? [PERMISSIONS.REGISTER_EXPECTED_PAYMENT, PERMISSIONS.MANAGE_FINANCE]
+      : [PERMISSIONS.REGISTER_EXPECTED_PAYMENT];
+    if (!isSystemOwnerRole(role) && !allowed.some((p) => role.permissions.includes(p))) {
+      throwAppError(
+        AppErrorCode.FORBIDDEN,
+        `Forbidden: Missing required permissions: ${PERMISSIONS.REGISTER_EXPECTED_PAYMENT}`
+      );
+    }
+    if (app.status !== "APPROVED" && !closedUndisbursed) {
+      throw new ConvexError("Application must be APPROVED before registering expected payment.");
+    }
     if (!app.vehicleHandoverAt) throw new ConvexError("Register the vehicle handover before the expected payment.");
-    if (app.expectedPaymentRegisteredAt) throw new ConvexError("Expected payment has already been registered.");
+    // A legacy row can carry a method with no `registeredAt`; it is still registered.
+    if (app.expectedPaymentRegisteredAt || app.expectedPaymentMethod) {
+      throw new ConvexError("Expected payment has already been registered.");
+    }
+    if ((await liveChequesForApplication(ctx, args.applicationId)).length > 0) {
+      throw new ConvexError(
+        "This deal already has a live finance-company cheque. Correct the expected payment first."
+      );
+    }
     // A date this mutation ACCEPTS but `finalizeDeal` will not.
     //
     // `v.number()` admits 0 and NaN, and 0 is what the date field produces for
@@ -3547,8 +4146,28 @@ export const registerExpectedPayment = mutation({
       if (!args.chequeDetails?.bank?.trim() || !args.chequeDetails?.chequeNumber?.trim()) {
         throw new ConvexError("Bank and cheque number are required for a cheque payment.");
       }
-      const quote = await ctx.db.get(app.quoteId);
-      const amount = quote?.totalFinancedAmount ?? quote?.vehiclePrice ?? 0;
+      // SCRUM-447 D3: a finance-company cheque needs a real drawer (the deal's
+      // finance company) and the through-dealership route. The direct route means
+      // the company pays the supplier, so no cheque reaches the dealership.
+      if (!app.companyId) {
+        throw new ConvexError(
+          "A cheque payment needs a finance company on the deal so the drawer can be named."
+        );
+      }
+      const settlesDirect =
+        app.status === "CLOSED"
+          ? await closedDealSettlesDirectToSupplier(ctx, app)
+          : await settlesDirectToSupplier(ctx, app);
+      if (settlesDirect) {
+        throw new ConvexError(
+          "This deal settles directly with the supplier, so no finance-company cheque reaches the dealership."
+        );
+      }
+      // D1: the face is what the operator reads off the instrument — never the
+      // quote's financed amount. Parsed exactly at the deal currency's scale.
+      const orgCurrency = await getOrgCurrency(ctx, args.orgId);
+      const chequeCurrency = await dealChequeCurrency(ctx, app, orgCurrency);
+      const amountMinor = parseFaceAmountMinor(args.faceAmount, chequeCurrency);
       await registerChequeCore(ctx, {
         orgId: args.orgId,
         customerId: app.customerId,
@@ -3557,7 +4176,12 @@ export const registerExpectedPayment = mutation({
         bank: args.chequeDetails.bank,
         chequeNumber: args.chequeDetails.chequeNumber,
         chequeDate: args.expectedDate,
-        amount,
+        amount: fromMinorUnits(amountMinor, chequeCurrency),
+        amountMinor,
+        currency: chequeCurrency,
+        drawerType: "FINANCE_COMPANY",
+        financeCompanyId: app.companyId,
+        originApplicationId: args.applicationId,
         actorId: user._id,
       });
     }
@@ -3569,6 +4193,183 @@ export const registerExpectedPayment = mutation({
       expectedPaymentRegisteredAt: now,
       expectedPaymentRegisteredBy: user._id,
       updatedAt: now,
+    });
+    return now;
+  },
+});
+
+/**
+ * SCRUM-447 D3: undoes a registered expected payment on a deal that has not
+ * been disbursed, so it can be registered again correctly (wrong method, wrong
+ * cheque, a returned cheque). Allowed on an APPROVED or CLOSED-not-disbursed
+ * deal; refused when cancelled, disbursed, or when the finance-company
+ * receivable holds any receipt/allocation.
+ *
+ * The single live/last finance-company cheque decides the rest: HELD becomes
+ * CANCELLED, RETURNED is allowed as it is, DEPOSITED is refused (record its
+ * return first) and CLEARED is refused. The cheque KEEPS its applicationId —
+ * lineage is permanent. Everything below the refusals is one transaction; a
+ * repeat call is refused as "nothing registered".
+ */
+export const correctExpectedPayment = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const reason = args.reason.trim();
+    if (!reason) throw new ConvexError("Give a reason for correcting the expected payment.");
+
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      args.applicationId,
+      "Application not found"
+    );
+    if (app.status === "CANCELLED") throw new ConvexError("This application was cancelled.");
+    await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
+    if (app.disbursedAt) {
+      throw new ConvexError(
+        "Disbursement has already been confirmed for this deal, so its expected payment can no longer be corrected."
+      );
+    }
+    if (!app.expectedPaymentMethod) {
+      throw new ConvexError("Nothing registered — there is no expected payment to correct.");
+    }
+
+    // No receipt or allocation may sit on the finance-company receivable.
+    const financeReceivable = app.companyId
+      ? await ctx.db
+          .query("receivableDocuments")
+          .withIndex("by_org_source", (q) =>
+            q
+              .eq("orgId", args.orgId)
+              .eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE)
+              .eq("sourceId", args.applicationId)
+          )
+          .unique()
+      : null;
+    if (financeReceivable && financeReceivable.status !== "CANCELLED") {
+      await assertNoActiveAllocations(ctx, financeReceivable._id);
+    }
+
+    const rows = await chequesForApplication(ctx, args.applicationId);
+    if (rows.some((row) => row.status === "CLEARED")) {
+      throw new ConvexError(
+        "The finance-company cheque for this deal was already cleared, so the expected payment cannot be corrected."
+      );
+    }
+    if (rows.some((row) => row.status === "DEPOSITED")) {
+      throw new ConvexError(
+        "The finance-company cheque is deposited. Record its return first, then correct the expected payment."
+      );
+    }
+    const heldRows = rows.filter((row) => row.status === "HELD");
+    const now = Date.now();
+    for (const row of heldRows) {
+      await ctx.db.patch(row._id, {
+        status: "CANCELLED",
+        cancelledAt: now,
+        cancelledBy: user._id,
+        cancellationReason: reason,
+        updatedAt: now,
+      });
+    }
+
+    await ctx.db.patch(args.applicationId, {
+      expectedPaymentMethod: undefined,
+      expectedPaymentDate: undefined,
+      expectedPaymentRegisteredAt: undefined,
+      expectedPaymentRegisteredBy: undefined,
+      updatedAt: now,
+    });
+
+    await auditLog(ctx, {
+      orgId: args.orgId,
+      actorId: user._id,
+      actionType: "CORRECT_EXPECTED_PAYMENT",
+      resourceType: "financeApplications",
+      resourceId: args.applicationId,
+      description: `Expected payment corrected: ${reason}`,
+      before: {
+        expectedPaymentMethod: app.expectedPaymentMethod,
+        expectedPaymentDate: app.expectedPaymentDate,
+        chequeIds: heldRows.map((row) => row._id),
+      },
+      after: { expectedPaymentMethod: null, expectedPaymentDate: null },
+    });
+    return now;
+  },
+});
+
+/**
+ * SCRUM-447 D1: records the printed face of a finance-company cheque that has
+ * none in minor units (a row registered before the face was captured).
+ * MANAGE_FINANCE; only an application-linked HELD/DEPOSITED cheque with no
+ * `amountMinor`; refused once it exists (an attested face is never edited).
+ * The legacy `amount` is never touched, and the audit event carries it.
+ */
+export const attestChequeFace = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    chequeId: v.id("postDatedCheques"),
+    faceAmount: v.string(),
+    // SCRUM-447 B4: why the operator says this is the printed face. Required.
+    note: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const note = args.note.trim();
+    if (!note) throw new ConvexError("Add a note saying why this face is correct.");
+    if (note.length > ATTESTATION_NOTE_MAX_LENGTH) {
+      throw new ConvexError(
+        `Keep the attestation note to ${ATTESTATION_NOTE_MAX_LENGTH} characters or fewer.`
+      );
+    }
+    const cheque = await requireOwnedRow(ctx, args.orgId, "postDatedCheques", args.chequeId, "Cheque not found.");
+    if (cheque.isDeleted === true) throw new ConvexError("Cheque not found.");
+    if (!cheque.applicationId) {
+      throw new ConvexError("Only a finance-deal cheque can have its face attested here.");
+    }
+    if (cheque.status !== "HELD" && cheque.status !== "DEPOSITED") {
+      throw new ConvexError("Only a held or deposited cheque can have its face attested.");
+    }
+    if (cheque.amountMinor !== undefined) {
+      throw new ConvexError("This cheque's face amount is already recorded and cannot be changed.");
+    }
+    const app = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "financeApplications",
+      cheque.applicationId,
+      "Application not found"
+    );
+    if (app.status === "CANCELLED" || app.disbursedAt) {
+      throw new ConvexError("This deal is cancelled or already disbursed.");
+    }
+    const currency = await dealChequeCurrency(ctx, app, await getOrgCurrency(ctx, args.orgId));
+    const amountMinor = parseFaceAmountMinor(args.faceAmount, currency);
+    const now = Date.now();
+    await ctx.db.patch(args.chequeId, {
+      amountMinor,
+      currency,
+      faceAttestedBy: user._id,
+      faceAttestedAt: now,
+      faceAttestationNote: note,
+      updatedAt: now,
+    });
+    await auditLog(ctx, {
+      orgId: args.orgId,
+      actorId: user._id,
+      actionType: "ATTEST_CHEQUE_FACE",
+      resourceType: "postDatedCheques",
+      resourceId: args.chequeId,
+      description: `Cheque face attested by a finance manager: ${note}`,
+      before: { amount: cheque.amount },
+      after: { amountMinor, currency, note },
     });
     return now;
   },
@@ -3601,18 +4402,14 @@ export const setSupplierSettlementRoute = mutation({
     route: consignedSettlementRouteValidator,
   },
   handler: async (ctx, args) => {
-    // `FINALIZE_FINANCED_DEAL`, not `MANAGE_FINANCE`. The decision has to belong
-    // to whoever triggers the posting, and the default MANAGER and SALES
-    // templates hold the former and not the latter — so gating this on
-    // MANAGE_FINANCE hid the selector from exactly the people who close these
-    // deals and know which way the cheque was made out. They would finalize
-    // with no route recorded, an absent route reads as THROUGH_DEALERSHIP, and
-    // the deal posts the inversion this whole change exists to remove.
-    //
-    // Chosen over adding MANAGE_FINANCE to the MANAGER template, which would
-    // widen access to every other finance mutation and needs a role backfill.
+    // SCRUM-413 D-a: `MANAGE_SUPPLIER_SETTLEMENT`, its own authority (it was
+    // `finalize:financed_deal`, which the SALES template carried, so every
+    // salesperson could decide where the finance company's cheque was made
+    // out). The default MANAGER and ACCOUNTANT templates hold it; SALES does
+    // not. An absent route reads as THROUGH_DEALERSHIP, so whoever records
+    // it must be someone who knows which way the cheque was made out.
     const { user } = await requireTenantAuth(ctx, args.orgId, [
-      PERMISSIONS.FINALIZE_FINANCED_DEAL,
+      PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT,
     ]);
 
     const app = await ctx.db.get(args.applicationId);
@@ -3648,6 +4445,13 @@ export const setSupplierSettlementRoute = mutation({
     // Asked of the quote MODE rather than of `companyId`, which is only ever
     // set on CONFIGURED_FINANCE_COMPANY deals — see `settlementPayer`.
     if (args.route === "DIRECT_TO_SUPPLIER") {
+      // SCRUM-447 D3: on the direct route the company pays the supplier, so a
+      // live finance-company cheque to the dealership contradicts it.
+      if ((await liveChequesForApplication(ctx, args.applicationId)).length > 0) {
+        throw new ConvexError(
+          "This deal has a live finance-company cheque to the dealership, which contradicts the direct route. Correct the expected payment first."
+        );
+      }
       const payer = await settlementPayerForApplication(ctx, app);
       if (!payer.external) {
         throw new ConvexError(
@@ -3727,6 +4531,156 @@ export const setSupplierSettlementRoute = mutation({
   },
 });
 
+/**
+ * The deal-level inputs the closing-readiness evaluator is judged on — the
+ * settlement route and the currency — derived ONCE, by the same rule, for the
+ * deal screen and the finalize door (SCRUM-407 P1.4), so the screen cannot show
+ * READY on a deal the door refuses for its denomination.
+ *
+ * Refuses when the deal's denomination cannot be established, or when its
+ * pinned `economicsCurrency` has drifted from the organization's current
+ * currency: the plan and the receivable take the pin while the sale's own
+ * journal posts in the org's CURRENT currency (completeSale), so finalizing
+ * would recognise the plan's integers under the wrong label and open a debt the
+ * receipt path settles in another currency (SCRUM-241). Pinning the economics
+ * does not lock the org setting, so the two can have drifted apart. Nothing is
+ * converted, relabelled or clipped; restoring the setting makes the same deal
+ * ready.
+ *
+ * The refusal is RETURNED as a coded reason (SCRUM-414): the readiness query
+ * serves it as `unavailableReason*`, and the finalize door throws it with
+ * `closingRefusalError` — the same payload shape as the evaluator's refusals.
+ */
+async function closingReadinessInputsOrRefusal(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">,
+  operation: string
+): Promise<
+  | { ok: true; inputs: { settlesDirect: boolean; currency: string } }
+  | { ok: false; refusal: ClosingReadinessReason }
+> {
+  try {
+    assertSupportedDenomination(app.economicsCurrency, operation);
+  } catch (error) {
+    if (error instanceof ConvexError && typeof error.data === "string") {
+      return { ok: false, refusal: reasonOf("READINESS_INPUTS_UNAVAILABLE", error.data) };
+    }
+    throw error;
+  }
+  const orgCurrencyNow = await getOrgCurrency(ctx, app.orgId);
+  if (app.economicsCurrency !== undefined && app.economicsCurrency !== orgCurrencyNow) {
+    return {
+      ok: false,
+      refusal: reasonOf(
+        "READINESS_CURRENCY_DRIFT",
+        `This deal's figures were recorded in ${app.economicsCurrency}, but the organization's currency is now ${orgCurrencyNow}. A deal is finalized in the currency its figures were recorded in — restore the organization's currency to ${app.economicsCurrency} before finalizing it.`,
+        { recordedCurrency: app.economicsCurrency, orgCurrency: orgCurrencyNow }
+      ),
+    };
+  }
+  return {
+    ok: true,
+    inputs: {
+      settlesDirect: await settlesDirectToSupplier(ctx, app),
+      currency: app.economicsCurrency ?? orgCurrencyNow,
+    },
+  };
+}
+
+/** A readiness reason flattened onto the wire: the English diagnostic, the code, and params only when there are any. */
+type ClosingReasonView = {
+  reason: string | null;
+  reasonCode: ClosingReadinessReasonCode | null;
+  reasonParams?: ClosingReadinessReasonParams;
+};
+
+function closingReasonView(reason: ClosingReadinessReason | null): ClosingReasonView {
+  return {
+    reason: reason?.message ?? null,
+    reasonCode: reason?.code ?? null,
+    ...(reason?.params === undefined ? {} : { reasonParams: reason.params }),
+  };
+}
+
+/** One readiness check as the deal screen is served it. */
+type ClosingReadinessCheckView = ClosingReasonView & {
+  key: ClosingReadinessCheckKey;
+  status: ClosingReadinessCheck["status"];
+  /** The cost lines a BLOCKED check is about (`HANDOVER_COSTS_PAID`), by id — never amounts, so served whole below the finance tier. */
+  feeIds?: string[];
+};
+
+/**
+ * The deal's automatic closing readiness (SCRUM-407 P1.4): the SAME evaluator,
+ * fed by the same `closingReadinessInputsOrRefusal`, that `finalizeDeal` re-runs
+ * internally — so on the closing-evidence checks listed here the screen and the
+ * server cannot disagree, and the server never trusts the screen.
+ *
+ * It is NOT the whole finalize gate. `finalizeDeal` also enforces the workflow
+ * preconditions the deal screen tracks elsewhere (handover, expected payment,
+ * supplier route, required documents, quote match) and judges the operator's
+ * deposit choice and the plan's own balance at the moment of finalizing; READY
+ * here means the accounting evidence is complete, not that all of those pass.
+ *
+ * Read-only and never throws on the deal's own state: a verdict that cannot be
+ * formed is reported as UNAVAILABLE with its reason. Money-bearing reasons are
+ * scoped to the accounting-economics tier (`mayReadFinanceEconomics`: owner or
+ * VIEW_FINANCE) — the SCRUM-117 read boundary, under which the dealer remittance
+ * is a FINANCE-ONLY figure even for a role that confirms disbursements (the
+ * boundary sweep in `financeApplicationBoundary.test.ts` covers this door):
+ * below it every reason is a plain sentence, and
+ * `moneyWithheld` says so explicitly rather than letting an absence stand for a
+ * value (ACC-10).
+ */
+export const getClosingReadiness = query({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+  },
+  handler: async (ctx, args) => {
+    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId);
+    const mayReadMoney = mayReadFinanceEconomics(auth.role);
+    /** Whether this deal is still open to be finalized at all. */
+    const open = app.status !== "CLOSED" && app.status !== "CANCELLED" && app.status !== "REJECTED";
+
+    let readiness: ClosingReadiness = { state: "UNAVAILABLE", checks: [] };
+    /** Why no verdict could be formed — set only when the evaluator refused. */
+    let unavailable: ClosingReadinessReason | null = null;
+    if (open) {
+      try {
+        const inputs = await closingReadinessInputsOrRefusal(ctx, app, "checking this deal's closing readiness");
+        if (inputs.ok) readiness = (await evaluateClosingReadiness(ctx, app, inputs.inputs)).readiness;
+        else unavailable = inputs.refusal;
+      } catch (error) {
+        if (!(error instanceof ConvexError)) throw error;
+        unavailable = reasonOf(
+          "READINESS_INPUTS_UNAVAILABLE",
+          typeof error.data === "string" ? error.data : "This deal's closing readiness cannot be determined from its current records."
+        );
+      }
+    }
+
+    const checks: ClosingReadinessCheckView[] = readiness.checks.map(({ key, status, reason, feeIds }) => ({
+      key,
+      status,
+      ...(feeIds === undefined ? {} : { feeIds }),
+      ...closingReasonView(redactClosingReason(reason, mayReadMoney, withheldReasonCode(key))),
+    }));
+    const why = closingReasonView(redactClosingReason(unavailable, mayReadMoney, "WITHHELD_UNAVAILABLE"));
+
+    return {
+      state: readiness.state,
+      open,
+      checks,
+      unavailableReason: why.reason,
+      unavailableReasonCode: why.reasonCode,
+      ...(why.reasonParams === undefined ? {} : { unavailableReasonParams: why.reasonParams }),
+      moneyWithheld: !mayReadMoney,
+    };
+  },
+});
+
 export const finalizeDeal = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -3750,7 +4704,15 @@ export const finalizeDeal = mutation({
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
-    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.FINALIZE_FINANCED_DEAL]);
+    // Closing a financed deal is an ACCOUNTANT's act (owner ruling, SCRUM-407):
+    // it recognizes the sale, opens the receivables and posts the journal, so it
+    // takes the disbursement authority the accountant templates hold.
+    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
+    // The default MANAGER template confirms disbursements WITHOUT view:finance,
+    // so a refused finalize is redacted exactly as `getClosingReadiness`
+    // redacts for the same caller (SCRUM-414 R1): below the finance tier every
+    // readiness refusal is a WITHHELD_* code, no params, generic English.
+    const mayReadMoney = mayReadFinanceEconomics(auth.role);
 
     return await runWithIdempotency(
       ctx,
@@ -3772,11 +4734,34 @@ export const finalizeDeal = mutation({
         if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
         if (app.status === "CLOSED" && app.finalizedSaleId) return app.finalizedSaleId;
         if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before finalizing");
+        // SCRUM-495: readiness mirrors this for the screen.
+        assertOperatedDealMode(app.quoteModeAtSubmission ?? (await dealModeOf(ctx, app)));
+        // SCRUM-444 DA-03: a waiting deposit request would be orphaned by the
+        // deal closing. Refused up front so the message is this one, not a
+        // later readiness refusal.
+        await assertNoPendingDepositRequest(ctx, {
+          orgId: args.orgId,
+          quoteId: app.quoteId,
+          action: "finalize the deal",
+        });
         if (!app.vehicleHandoverAt) {
           throw new ConvexError("Register the vehicle handover to the customer before finalizing the deal.");
         }
         if (!app.expectedPaymentMethod || !app.expectedPaymentDate) {
           throw new ConvexError("Register how and when the payment is expected before finalizing the deal.");
+        }
+        // SCRUM-447 D3e: a registered CHEQUE method needs exactly one LIVE
+        // finance-company cheque behind it — a retired (returned / cancelled /
+        // replaced) row does not count, and two live rows are ambiguous.
+        if (app.expectedPaymentMethod === "CHEQUE") {
+          const liveCheques = await liveChequesForApplication(ctx, args.applicationId);
+          if (liveCheques.length !== 1) {
+            throw new ConvexError(
+              liveCheques.length === 0
+                ? "The registered cheque is no longer live. Correct the expected payment and register the cheque again before finalizing the deal."
+                : "This deal has more than one live finance-company cheque. Resolve the duplicate before finalizing the deal."
+            );
+          }
         }
         // Same guard as registerVehicleHandover: an approval cleared by a
         // reappraisal leaves status APPROVED, so this is the only thing
@@ -3787,25 +4772,14 @@ export const finalizeDeal = mutation({
         // a SALE. A deal whose denomination cannot be established must not be
         // turned into money here either — otherwise every guard upstream is
         // just a longer road to the same wrong figure.
-        assertSupportedDenomination(app.economicsCurrency, "finalizing this deal");
-
-        // The plan and the receivable take the deal's pinned economicsCurrency;
-        // the sale's own journal posts in the organisation's CURRENT currency
-        // (completeSale). Pinning the economics does not lock the org setting —
-        // nothing financial exists yet — so the two can have drifted apart by
-        // now, and finalizing would then recognise the plan's integers under
-        // the wrong label and open a debt the receipt path settles in another
-        // currency. Refused before the sale exists (SCRUM-241): nothing is
-        // converted, relabelled or clipped. Restoring the setting makes the
-        // same deal finalize.
-        if (app.economicsCurrency !== undefined) {
-          const orgCurrencyNow = await getOrgCurrency(ctx, args.orgId);
-          if (app.economicsCurrency !== orgCurrencyNow) {
-            throw new ConvexError(
-              `This deal's figures were recorded in ${app.economicsCurrency}, but the organization's currency is now ${orgCurrencyNow}. A deal is finalized in the currency its figures were recorded in — restore the organization's currency to ${app.economicsCurrency} before finalizing it.`
-            );
-          }
-        }
+        //
+        // The same derivation the deal screen's readiness query uses, so the two
+        // cannot disagree about the denomination: an unsupported one, or a pin
+        // that has drifted from the org's current currency, is refused here,
+        // before the sale exists (SCRUM-241).
+        const inputs = await closingReadinessInputsOrRefusal(ctx, app, "finalizing this deal");
+        if (!inputs.ok) throw closingRefusalError(redactClosingReason(inputs.refusal, mayReadMoney, "WITHHELD_UNAVAILABLE"));
+        const readinessInputs = inputs.inputs;
 
         // On a consigned car financed by an external company, the route decides
         // opposite balance sheets from the same sale — a payable to the supplier
@@ -3894,6 +4868,10 @@ export const finalizeDeal = mutation({
         if (quote.companyId && quote.companyId !== app.companyId) {
           throw new ConvexError("Application finance company does not match the quote.");
         }
+        // SCRUM-528. The sale below is built from the quote's economics, so they must still agree
+        // with the pricing frozen on this application (before any write).
+        const quoteMode: QuoteMode | undefined = app.quoteModeAtSubmission ?? quote.mode;
+        assertQuoteEconomicsMatchFrozen(app, quote, quoteMode);
         await assertRequiredApplicationDocumentsComplete(ctx, app, quote);
 
         // SCRUM-195 M3, DOOR 4. COMPLETION-TIME OWNERSHIP IS NOT REDUNDANT
@@ -3911,21 +4889,10 @@ export const finalizeDeal = mutation({
         // shared boundary in utils/saleCompletion.ts, which this door reaches
         // below. Four doors, one guard.
 
-        // Re-verify at the commit point, not just at quote time: the approval
-        // could have been rejected or the vehicle's minimum raised in between.
-        // Quotes written before `desiredProfit` existed carry no margin to check
-        // and are let through — the check binds from this deploy forward rather
-        // than stranding deals already in flight.
-        if (quote.desiredProfit !== undefined && quoteModeRequiresMinimumProfit(quote.mode)) {
-          await assertProfitApproved(ctx, {
-            orgId: args.orgId,
-            vehicleId: app.vehicleId,
-            desiredProfit: quote.desiredProfit,
-            subject: "deal",
-          });
-        }
+        // The minimum-profit approval is re-proved at the commit point by
+        // `completeSale`'s shared boundary (SCRUM-260), against the price this
+        // sale persists — `quote.vehiclePrice` below.
 
-        const quoteMode: QuoteMode | undefined = app.quoteModeAtSubmission ?? quote.mode;
         const financingType =
           quoteMode === "LEASE"
             ? "LEASE"
@@ -3938,11 +4905,16 @@ export const finalizeDeal = mutation({
         // The last refusals before the first write. Everything above has had its
         // say, and nothing below can be undone by throwing: no sale row, no
         // application patch, no receivable, no journal, no outbox entry.
-        const settlesDirectAtFinalize = await settlesDirectToSupplier(ctx, app);
-        assertFinancedFinalizationEvidence(app, {
-          settlesDirect: settlesDirectAtFinalize,
-        });
-
+        //
+        // `resolveFinancedSalePlan` first re-runs the automatic closing-readiness
+        // evaluator (`evaluateClosingReadiness`, SCRUM-407) — the same one the
+        // deal screen shows — and refuses on the first unmet accounting
+        // condition: a known remittance, configured fees recorded, the custody
+        // family on the books and settled, reconciled costs, the legal invoice,
+        // and a financing reconciliation flag that has been reviewed
+        // (FINANCING_RECONCILED, SCRUM-420).
+        // The retired `CLASSIFIED` stamp is never read.
+        //
         // How this financed sale will be recognised, frozen before anything is
         // written and derived entirely from the record: the legal invoice the car
         // was sold under, what the company will actually remit, and each cost it
@@ -3954,14 +4926,17 @@ export const finalizeDeal = mutation({
         // derived, it throws here rather than returning nothing, so there is no
         // path where a missing plan quietly falls back to the old posting.
         const financedSalePlan = await resolveFinancedSalePlan(ctx, app, {
-          settlesDirect: settlesDirectAtFinalize,
-          currency: app.economicsCurrency ?? (await getOrgCurrency(ctx, args.orgId)),
+          ...readinessInputs,
           // The same disposition completion will act on, so the plan and the
           // deposits it consumes cannot disagree about whether the money was
           // applied to this purchase at all.
           depositTreatment: args.depositResolution?.treatment,
+          mayReadMoney,
         });
 
+        // The sale row's financingType; the settlementStatus below keys on it too.
+        const saleFinancingType =
+          quoteMode === undefined && app.companyId ? "FINANCED" : financingType;
 
         const saleId = await completeSale(ctx, {
           orgId: args.orgId,
@@ -3975,7 +4950,7 @@ export const finalizeDeal = mutation({
           saleDate: financedSaleRecognitionDate(app, Date.now()),
           status: "COMPLETED",
           downPayment: quote.downPayment,
-          financingType: quoteMode === undefined && app.companyId ? "FINANCED" : financingType,
+          financingType: saleFinancingType,
           loanAmount: quote.totalFinancedAmount,
           termMonths: quote.termMonths,
           applicationId: args.applicationId,
@@ -3986,7 +4961,11 @@ export const finalizeDeal = mutation({
             ? {
                 version: financedSalePlan.version,
                 fingerprint: financedSalePlan.fingerprint,
-                financeCompanyId: app.companyId as string,
+                // Exactly one of the two identities (SCRUM-27): a configured
+                // company's id, or the manual company's letter name.
+                ...(app.companyId
+                  ? { financeCompanyId: app.companyId as string }
+                  : { payerNameSnapshot: manualPayerOf(app)?.name }),
                 legalInvoiceConsiderationMinor:
                   financedSalePlan.legalInvoiceConsiderationMinor,
                 financeCompanyReceivableMinor:
@@ -3995,6 +4974,13 @@ export const finalizeDeal = mutation({
                 customerReceivableMinor: financedSalePlan.customerReceivableMinor,
                 depositLiabilityAppliedMinor:
                   financedSalePlan.depositLiabilityAppliedMinor,
+                // v2 (SCRUM-435): H and C are owed onward to the company.
+                ...(financedSalePlan.version === 2
+                  ? {
+                      forwardDepositMinor: financedSalePlan.forwardDepositMinor,
+                      forwardContributionMinor: financedSalePlan.forwardContributionMinor,
+                    }
+                  : {}),
                 components: financedSalePlan.components.map((component) => ({
                   sourceKind: component.sourceKind,
                   sourceId: component.sourceId,
@@ -4006,6 +4992,17 @@ export const finalizeDeal = mutation({
                 })),
               }
             : undefined,
+          // SCRUM-390 (OR-5): G and C for the "Commissionable vehicle margin", plan
+          // v2 only. `completeSale` applies it to a dealer-owned car alone and
+          // freezes it onto the sale row.
+          commissionBase:
+            financedSalePlan?.version === 2
+              ? {
+                  approvedMinor: financedSalePlan.financeCompanyReceivableMinor,
+                  contributionMinor: financedSalePlan.forwardContributionMinor,
+                  currency: financedSalePlan.currency,
+                }
+              : undefined,
           // Carried from the application onto the sale. Without this every
           // financed consigned deal posted THROUGH_DEALERSHIP no matter what
           // was agreed, because an absent route reads as that — so a deal whose
@@ -4047,7 +5044,9 @@ export const finalizeDeal = mutation({
             | undefined,
           idempotencyKey: args.idempotencyKey,
           actorId: auth.user._id,
-        });
+        },
+        // SCRUM-69: the finance door for this application.
+        { kind: "FINANCE_FINALIZATION", applicationId: args.applicationId });
 
         const now = Date.now();
         // Resolved once, before anything reads it: the patch below and the
@@ -4068,7 +5067,7 @@ export const finalizeDeal = mutation({
         // No reconciliation flag is raised, and now for a better reason than
         // before: there is no longer a knowingly-wrong figure to flag. A deal
         // whose settlement cannot be established refuses at
-        // `assertFinancedFinalizationEvidence` instead of posting and queueing.
+        // the closing-readiness check instead of posting and queueing.
 
         await ctx.db.patch(args.applicationId, {
           status: "CLOSED",
@@ -4079,7 +5078,16 @@ export const finalizeDeal = mutation({
           // change of decision. What moves is settlement: from here the
           // finance company owes the dealership money.
           creditDecision: "APPROVED",
-          settlementStatus: "EXPECTED",
+          // SCRUM-567: NOT_APPLICABLE comes from the same predicate the reader
+          // uses; the reader re-proves the lifecycle on every read, and it is
+          // never read as settled. Anything unproven stays EXPECTED.
+          settlementStatus: isProvablyFinancierless(app, {
+            settlesDirect: directToSupplier,
+            financingType: saleFinancingType,
+            mode: quoteMode,
+          })
+            ? "NOT_APPLICABLE"
+            : "EXPECTED",
           // …except on the direct route, where it owes the dealership nothing.
           // The expected remittance is what the COMPANY will send HERE, and on
           // this route it sends it to the supplier instead. Left at a positive
@@ -4095,6 +5103,24 @@ export const finalizeDeal = mutation({
                 financedSaleRecognitionFingerprint: financedSalePlan.fingerprint,
                 financedSaleNetReceivableMinor:
                   financedSalePlan.financeCompanyReceivableMinor,
+                // SCRUM-435: frozen forward due (H + C) and its split.
+                ...(financedSalePlan.version === 2
+                  ? {
+                      financedSalePlanVersion: 2 as const,
+                      financeCompanyForwardDueMinor: financedSalePlan.forwardDueMinor,
+                      forwardDepositPortionMinor: financedSalePlan.forwardDepositMinor,
+                      forwardContributionPortionMinor: financedSalePlan.forwardContributionMinor,
+                    }
+                  : {}),
+                // SCRUM-27: a manual deal's dealership contribution is derived
+                // at this moment (S minus the deposits held) and frozen here, so
+                // the cockpit and forward readers see the figure that posted.
+                ...(!app.companyId && financedSalePlan.version === 2
+                  ? {
+                      dealerContributionMinor: financedSalePlan.forwardContributionMinor,
+                      economicsRevision: (app.economicsRevision ?? 0) + 1,
+                    }
+                  : {}),
               }
             : {}),
         });
@@ -4134,7 +5160,9 @@ export const finalizeDeal = mutation({
             await ensureFinanceCompanyReceivable(ctx, {
               orgId: args.orgId,
               applicationId: args.applicationId,
-              financeCompanyId: app.companyId as Id<"financeCompanies">,
+              ...(app.companyId
+                ? { financeCompanyId: app.companyId }
+                : { payerNameSnapshot: manualPayerOf(app)?.name }),
               customerId: app.customerId,
               amountMinor: financedSalePlan.financeCompanyReceivableMinor,
               currency: financedSalePlan.currency,
@@ -4207,6 +5235,9 @@ export const confirmDisbursement = mutation({
     applicationId: v.id("financeApplications"),
     disbursedAmountMinor: v.number(),
     idempotencyKey: v.string(),
+    // SCRUM-239 round 3: the disbursement version the confirmer OBSERVED. The
+    // server refuses a mismatch before the idempotency probe and any write.
+    expectedDisbursementVersion: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     // The expected-amount comparison further down is skipped whenever the quote
@@ -4214,6 +5245,32 @@ export const confirmDisbursement = mutation({
     // relied on to reject NaN. Validate the input unconditionally.
     assertValidMinorAmount(args.disbursedAmountMinor, "disbursed amount");
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
+
+    // SCRUM-239: a confirmation belongs to ONE disbursement version. A completed
+    // key is replayed BEFORE the body reads the application, so without the
+    // version in the fingerprint a key kept from version n (lost response) would
+    // replay n's result after a return opened version n+1 - a success toast and
+    // no payment, allocation or FINANCE_CASH_RECEIVED for the new disbursement.
+    // Version 1 keeps the historical fingerprint byte for byte so existing rows
+    // still replay. A missing or foreign row leaves the legacy shape; the body
+    // refuses it exactly as before.
+    const knownApp = await ctx.db.get(args.applicationId);
+    const ownedApp = knownApp && knownApp.orgId === args.orgId ? knownApp : null;
+    const version = ownedApp ? disbursementVersionOf(ownedApp) : 1;
+
+    // SCRUM-239 round 3: a request is bound to the version the CONFIRMER SAW. A
+    // fresh key from a screen that observed version n must not confirm version
+    // n+1's replacement cheque it never saw, so the comparison cannot rest on the
+    // idempotency fingerprint (a fresh key has no row). Only an application of
+    // this organisation is compared: a missing or foreign row falls through and
+    // the body refuses it as before, leaking nothing across tenants. A legacy
+    // client (no expected version) may confirm only a first disbursement.
+    if (ownedApp) {
+      const observed = args.expectedDisbursementVersion;
+      if ((observed !== undefined && observed !== version) || (observed === undefined && version > 1)) {
+        refuseFinanceReturn("FINANCE_CONFIRM_STALE_REQUEST");
+      }
+    }
 
     return await runWithIdempotency(
       ctx,
@@ -4226,17 +5283,34 @@ export const confirmDisbursement = mutation({
         fingerprint: JSON.stringify({
           applicationId: args.applicationId,
           disbursedAmountMinor: args.disbursedAmountMinor,
+          ...(version > 1 ? { disbursementVersion: version } : {}),
         }),
+        // Only a later version can be stale; a version-1 conflict is a plain
+        // key reuse with different content and keeps the default refusal.
+        ...(version > 1
+          ? { onFingerprintConflict: (): never => refuseFinanceReturn("FINANCE_CONFIRM_STALE_REQUEST") }
+          : {}),
       },
       async () => {
         const app = await ctx.db.get(args.applicationId);
         if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found.");
+        // SCRUM-693: no new disbursement while the deal is being unwound.
+        await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
         if (app.status !== "CLOSED") throw new ConvexError("Disbursement can only be confirmed on a closed application.");
-        if (app.disbursedAt) throw new ConvexError("Disbursement has already been confirmed for this application.");
-        if (!app.companyId) throw new ConvexError("This application has no finance company — no disbursement expected.");
+        if (app.disbursedAt) refuseFinanceReturn("FINANCE_CONFIRM_ALREADY_CONFIRMED");
+        if (!app.companyId && manualPayerOf(app) === null) {
+          // Same resolver as the cockpit, so the screen and this guard cannot
+          // disagree about whether a finance company pays on this deal.
+          const { sale, route } = await loadDealRoute(ctx, app);
+          const leg = resolveFinancierLeg(app, route, sale, await dealModeOf(ctx, app));
+          // SCRUM-567: coded, so the screen shows the Arabic text and not the English one.
+          refuseFinanceReturn(
+            leg === "NONE" ? "FINANCE_CONFIRM_NO_FINANCIER_PAYS" : "FINANCE_CONFIRM_NO_FINANCE_COMPANY"
+          );
+        }
         if (args.disbursedAmountMinor <= 0) throw new ConvexError("Disbursement amount must be positive.");
 
-        // This mutation books DR Bank / CR AR-Finance Companies: money that
+        // This mutation books DR bank (cash on hand for a CASH receipt, SCRUM-599) / CR AR-Finance Companies: money that
         // arrived in the dealership's own account, settling a receivable it
         // holds. On the direct route neither exists — the cheque went to the
         // supplier and no finance-company receivable was ever opened. Running it
@@ -4250,6 +5324,40 @@ export const confirmDisbursement = mutation({
         if (await closedDealSettlesDirectToSupplier(ctx, app)) {
           throw new ConvexError(
             "This deal settles directly with the supplier, so the finance company's payment never reaches the dealership's account and there is nothing here to receive. Record the company's payment to the supplier instead, and collect the dealership's margin from the supplier when he pays it."
+          );
+        }
+
+        // SCRUM-447 B1: confirming consumes a REGISTERED tender, never an assumed
+        // one. correctExpectedPayment clears the method and date; without this
+        // guard the bank-transfer default below would settle the deal with no
+        // tender on record. All refusals sit before the first write.
+        if (!app.expectedPaymentMethod || !app.expectedPaymentDate) {
+          throw new ConvexError(
+            "Register the expected payment (method and date) before confirming disbursement."
+          );
+        }
+        if (app.expectedPaymentMethod !== "CHEQUE") {
+          const stillLive = (await chequesForApplication(ctx, args.applicationId)).some(isLiveFcCheque);
+          if (stillLive) {
+            throw new ConvexError(
+              "This deal still has a live finance-company cheque. Correct the expected payment first."
+            );
+          }
+        }
+        // SCRUM-435 (v2): the finance company transfers the FULL approved amount,
+        // and the dealership owes it the deposit and its contribution onward.
+        // The transfer is confirmed only once that forward is proven on the
+        // books (or nothing is due) - by the ONE proof, never a second check.
+        // The refusal names who acts next and never carries the forward amounts.
+        if (planVersionOf(app) === 2) {
+          const forward = await deriveForwardState(ctx, app);
+          const forwardRefusal = forwardGateRefusal(forward.state);
+          if (forwardRefusal !== null) throw new ConvexError(forwardRefusal);
+        } else if (!app.companyId) {
+          // SCRUM-27: a manual company only ever exists on the current plan. One
+          // that does not carry it has no proven forward and must not receive.
+          throw new ConvexError(
+            "This deal was not finalized on the current sale plan, so the finance company's transfer cannot be confirmed here. A manager reviews the deal."
           );
         }
 
@@ -4271,24 +5379,45 @@ export const confirmDisbursement = mutation({
         // the note below, after the cheque is transitioned.)
         let chequeToClear: Doc<"postDatedCheques"> | null = null;
         if (app.expectedPaymentMethod === "CHEQUE") {
-          const cheque = await ctx.db
-            .query("postDatedCheques")
-            .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
-            .filter((q) => q.neq(q.field("isDeleted"), true))
-            .unique();
-          if (!cheque) {
-            throw new ConvexError("Expected cheque record not found for this application.");
+          // SCRUM-447 D0/D1: the LIVE finance-company cheque, never `.unique()`
+          // (lineage is permanent, so retired rows stay linked and would make
+          // a unique read throw). Exactly one live row must exist.
+          const allRows = await chequesForApplication(ctx, args.applicationId);
+          // N1-B: a CLEARED linked row is an accounting review whatever sits
+          // beside it (live HELD, RETURNED), so it is named FIRST, before any
+          // write and before the correct-the-payment refusal.
+          if (hasClearedLinkedCheque(allRows)) {
+            refuseFinanceReturn("FINANCE_CONFIRM_CHEQUE_ALREADY_CLEARED");
           }
-          if (cheque.status === "RETURNED" || cheque.status === "CANCELLED") {
-            throw new ConvexError(
-              "This cheque was returned/cancelled — register a replacement or a different payment method before confirming disbursement."
-            );
+          const liveRows = allRows.filter(isLiveFcCheque);
+          if (liveRows.length === 0) {
+            if (allRows.some((row) => row.status === "RETURNED" || row.status === "CANCELLED")) {
+              refuseFinanceReturn("FINANCE_CONFIRM_CHEQUE_RETURNED_OR_CANCELLED");
+            }
+            refuseFinanceReturn("FINANCE_CONFIRM_CHEQUE_NOT_FOUND");
           }
-          if (cheque.status !== "CLEARED") {
-            chequeToClear = cheque;
+          if (liveRows.length > 1) {
+            refuseFinanceReturn("FINANCE_CONFIRM_MULTIPLE_LIVE_CHEQUES");
           }
+          const cheque = liveRows[0];
+          // D1: the instrument's operator-recorded (or attested) face must equal
+          // the receipt exactly, in the receipt's currency. A legacy row with no
+          // recorded face is refused, never assumed equal. All before any write.
+          if (cheque.amountMinor === undefined) {
+            refuseFinanceReturn("FINANCE_CONFIRM_CHEQUE_FACE_UNRECORDED");
+          }
+          if (cheque.currency !== currency || cheque.amountMinor !== receiptMinor) {
+            refuseFinanceReturn("FINANCE_CONFIRM_CHEQUE_FACE_MISMATCH");
+          }
+          chequeToClear = cheque;
         }
 
+        // SCRUM-239: this disbursement's identity. Version 1 (an absent stamp) is
+        // byte-identical to the keys that have always been used; after a bounced
+        // cheque was undone the application is at version 2+, and every key here
+        // is new, so nothing collides with the undone disbursement's rows.
+        const disbursementVersion = disbursementVersionOf(app);
+        const disbursementKeys = financeDisbursementKeys(args.applicationId, disbursementVersion);
         const now = Date.now();
         await ctx.db.patch(args.applicationId, {
           disbursedAt: now,
@@ -4313,20 +5442,37 @@ export const confirmDisbursement = mutation({
             chequeId: chequeToClear._id,
             clearedAt: now,
           });
+          // Which disbursement this instrument cleared; the return command
+          // refuses a cheque that is not the application's current one.
+          await ctx.db.patch(chequeToClear._id, { disbursementVersion });
         }
 
-        // Post the actual receipt of funds: DR Bank / CR Accounts Receivable —
+        // Post the actual receipt of funds: DR bank or cash on hand / CR Accounts Receivable —
         // Finance Companies. Without this the finance-company receivable opened
         // at finalizeDeal stays open forever even after the money arrives.
+        // The method of record — registered before finalization
+        // (registerExpectedPayment) instead of assuming bank transfer. ONE
+        // value feeds both the posting (SCRUM-599: CASH debits 1100, not
+        // 1110) and the canonical payment below, so they cannot disagree.
+        const disbursementMethod =
+          app.expectedPaymentMethod === "CASH" || app.expectedPaymentMethod === "CHEQUE"
+            ? app.expectedPaymentMethod
+            : "BANK_TRANSFER";
         await hookFinanceCashReceived(ctx, {
           orgId: args.orgId,
           applicationId: args.applicationId,
-          financeCompanyId: app.companyId,
+          // Exactly one identity (SCRUM-27): the configured id, or the manual
+          // company's name frozen on the application.
+          ...(app.companyId
+            ? { financeCompanyId: app.companyId }
+            : { payerNameSnapshot: manualPayerOf(app)?.name }),
           customerId: app.customerId,
           amountMinor: receiptMinor,
           currency,
           actorId: user._id,
           occurredAt: now,
+          disbursementVersion,
+          paymentMethod: disbursementMethod,
         });
 
         // Record the money in the canonical subledger and settle the
@@ -4334,21 +5480,16 @@ export const confirmDisbursement = mutation({
         // proven, never one created here to give the settlement something to
         // allocate against.
         const receivableDocumentId = receivable._id;
-        // Reflects whatever method was registered before finalization
-        // (registerExpectedPayment) instead of assuming bank transfer.
-        const disbursementMethod =
-          app.expectedPaymentMethod === "CASH" || app.expectedPaymentMethod === "CHEQUE"
-            ? app.expectedPaymentMethod
-            : "BANK_TRANSFER";
         const canonicalPaymentId = await createCanonicalPayment(ctx, {
           orgId: args.orgId,
           direction: "IN",
-          payerType: "FINANCE_COMPANY",
+          payerType: app.companyId ? "FINANCE_COMPANY" : "MANUAL_FINANCE_COMPANY",
           financeCompanyId: app.companyId,
+          payerNameSnapshot: app.companyId ? undefined : manualPayerOf(app)?.name,
           method: disbursementMethod,
           amountMinor: receiptMinor,
           currency,
-          idempotencyKey: `finance_disbursement_${args.applicationId}`,
+          idempotencyKey: disbursementKeys.paymentKey,
           actorId: user._id,
           status: "SETTLED",
           externalReference: `Finance disbursement for application ${args.applicationId}`,
@@ -4371,6 +5512,233 @@ export const confirmDisbursement = mutation({
           actorName,
           amount: String(receiptMinor),
         }, { link: `/${args.orgId}/accounting` });
+      }
+    );
+  },
+});
+
+function refuseFinanceReturn(code: keyof typeof FC_RETURN_MESSAGES): never {
+  return throwAppError(AppErrorCode[code], FC_RETURN_MESSAGES[code]);
+}
+
+/**
+ * SCRUM-239: the bank returned a finance-company cheque AFTER it cleared.
+ *
+ * INVARIANT: a CLEARED finance-company disbursement cheque becomes RETURNED only
+ * through this one application-owned command, which in one transaction undoes
+ * exactly that disbursement - the application's receipt fields, every ACTIVE
+ * allocation of its canonical payment, the payment, and its own
+ * FINANCE_CASH_RECEIVED occurrence - and nothing else. It never touches the
+ * sale, the commission, the customer receivable, the forward rows, or another
+ * disbursement's rows. The next `confirmDisbursement` runs at version + 1 and
+ * mints fresh keys, so it cannot collide with what this reversed.
+ *
+ * Every refusal comes before the first write. There is deliberately NO forward
+ * precondition: an open forward exception on the deal has its own path, and
+ * refusing here would leave the operator with no way out (recordForward is the
+ * only command it allows).
+ */
+export const returnFinanceDisbursementCheque = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    chequeId: v.id("postDatedCheques"),
+    returnReason: v.string(),
+    idempotencyKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [
+      PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+      PERMISSIONS.VIEW_FINANCE,
+    ]);
+    // The default idempotency refusals are plain strings; a dialog key that is
+    // blank or too long is refused here, coded and translated, before any read.
+    const keyLength = args.idempotencyKey.trim().length;
+    if (keyLength === 0 || keyLength > MAX_IDEMPOTENCY_KEY_LENGTH) {
+      refuseFinanceReturn("FINANCE_RETURN_KEY_INVALID");
+    }
+    const returnReason = args.returnReason.trim();
+    if (returnReason === "") refuseFinanceReturn("FINANCE_RETURN_REASON_REQUIRED");
+    if (returnReason.length > FC_RETURN_REASON_MAX_LENGTH) {
+      // `max` rides beside the code so the dictionary's `{max}` is filled.
+      throw new ConvexError({
+        code: AppErrorCode.FINANCE_RETURN_REASON_TOO_LONG,
+        message: FC_RETURN_MESSAGES.FINANCE_RETURN_REASON_TOO_LONG,
+        max: FC_RETURN_REASON_MAX_LENGTH,
+      });
+    }
+
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "applications.returnFinanceDisbursementCheque",
+        economic: true,
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+        fingerprint: JSON.stringify({
+          applicationId: args.applicationId,
+          chequeId: args.chequeId,
+          returnReason,
+        }),
+        onFingerprintConflict: () => refuseFinanceReturn("FINANCE_RETURN_KEY_CONFLICT"),
+      },
+      async () => {
+        // A missing row and another organisation's row answer identically, so the
+        // refusal never discloses that a foreign row exists.
+        const app = await ctx.db.get(args.applicationId);
+        if (!app || app.orgId !== args.orgId) refuseFinanceReturn("FINANCE_RETURN_NOT_FOUND");
+        await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
+        if (app.disbursedAt === undefined || app.disbursedAmountMinor === undefined) {
+          refuseFinanceReturn("FINANCE_RETURN_NOT_DISBURSED");
+        }
+        const cheque = await ctx.db.get(args.chequeId);
+        if (!cheque || cheque.orgId !== args.orgId) refuseFinanceReturn("FINANCE_RETURN_NOT_FOUND");
+        if (cheque.status !== "CLEARED" || cheque.isDeleted === true) {
+          refuseFinanceReturn("FINANCE_RETURN_CHEQUE_NOT_CLEARED");
+        }
+
+        // The cheque, the application and the payment must describe ONE
+        // disbursement: the same version, the same instant, the same amount and
+        // currency. The same binding `chequeLineageAudit` checks.
+        const version = disbursementVersionOf(app);
+        const keys = financeDisbursementKeys(args.applicationId, version);
+        const anchorId = cheque.applicationId ?? cheque.originApplicationId;
+        if (
+          !isFcLineage(cheque) ||
+          anchorId !== args.applicationId ||
+          disbursementVersionOf(cheque) !== version ||
+          cheque.clearedAt !== app.disbursedAt ||
+          cheque.amountMinor !== app.disbursedAmountMinor ||
+          cheque.currency === undefined
+        ) {
+          refuseFinanceReturn("FINANCE_RETURN_CHAIN_MISMATCH");
+        }
+
+        const payment = await ctx.db
+          .query("canonicalPayments")
+          .withIndex("by_org_idempotency", (q) => q.eq("orgId", args.orgId).eq("idempotencyKey", keys.paymentKey))
+          .unique();
+        const expectedPayerType = app.companyId ? "FINANCE_COMPANY" : "MANUAL_FINANCE_COMPANY";
+        const paymentCurrency = payment?.currency.toUpperCase();
+        if (
+          !payment ||
+          payment.status !== "SETTLED" ||
+          payment.direction !== "IN" ||
+          payment.payerType !== expectedPayerType ||
+          (app.companyId
+            ? payment.financeCompanyId !== app.companyId
+            : payment.payerNameSnapshot !== manualPayerOf(app)?.name) ||
+          payment.amountMinor !== app.disbursedAmountMinor ||
+          payment.receivedAt !== app.disbursedAt ||
+          paymentCurrency !== cheque.currency.toUpperCase() ||
+          (app.economicsCurrency !== undefined &&
+            paymentCurrency !== app.economicsCurrency.toUpperCase())
+        ) {
+          refuseFinanceReturn("FINANCE_RETURN_CHAIN_MISMATCH");
+        }
+
+        // The remainder sentinel: the payment's ACTIVE allocations must be the
+        // whole payment and all of them on THIS deal's finance-company
+        // receivable. Anything else (a partial reversal by another path, an
+        // allocation elsewhere) is refused rather than partly reversed.
+        const receivable = await ctx.db
+          .query("receivableDocuments")
+          .withIndex("by_org_source", (q) =>
+            q.eq("orgId", args.orgId).eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE).eq("sourceId", args.applicationId)
+          )
+          .unique();
+        const activeAllocations = (
+          await ctx.db.query("paymentAllocations").withIndex("by_payment", (q) => q.eq("paymentId", payment._id)).collect()
+        ).filter((allocation) => allocation.status === "ACTIVE");
+        const allocatedMinor = activeAllocations.reduce((sum, allocation) => sum + allocation.amountMinor, 0);
+        if (
+          !receivable ||
+          activeAllocations.length === 0 ||
+          allocatedMinor !== payment.amountMinor ||
+          activeAllocations.some((allocation) => allocation.receivableDocumentId !== receivable._id)
+        ) {
+          refuseFinanceReturn("FINANCE_RETURN_ALLOCATION_SHAPE");
+        }
+
+        const now = Date.now();
+        for (const allocation of activeAllocations) {
+          await reverseAllocation(ctx, { orgId: args.orgId, allocationId: allocation._id, actorId: user._id });
+        }
+        await voidCanonicalPayment(ctx, { orgId: args.orgId, paymentId: payment._id, actorId: user._id });
+
+        const reversal = await hookFinanceCashReceivedReturned(ctx, {
+          orgId: args.orgId,
+          applicationId: args.applicationId,
+          disbursementVersion: version,
+          reason: `Finance-company cheque returned after clearing: ${returnReason}`,
+          actorId: user._id,
+          reversalDate: now,
+        });
+        // The hook's string is not the evidence (it says REVERSED for any
+        // reversal key it has seen). Read the books: a throw here rolls back
+        // every write above.
+        if (!(await isFinanceCashReceivedUndone(ctx, { orgId: args.orgId, applicationId: args.applicationId, disbursementVersion: version }))) {
+          refuseFinanceReturn("FINANCE_RETURN_REVERSAL_UNPROVEN");
+        }
+
+        await ctx.db.patch(cheque._id, {
+          status: "RETURNED",
+          returnedAt: now,
+          returnReason,
+          returnedAfterClearing: true,
+          disbursementVersion: version,
+          updatedAt: now,
+        });
+        await ctx.db.patch(args.applicationId, {
+          disbursedAt: undefined,
+          disbursedAmountMinor: undefined,
+          disbursementIdempotencyKey: undefined,
+          settlementStatus: "EXPECTED",
+          disbursementVersion: version + 1,
+          updatedAt: now,
+        });
+
+        await auditLog(ctx, {
+          orgId: args.orgId,
+          actorId: user._id,
+          actionType: "RETURN_FINANCE_DISBURSEMENT_CHEQUE",
+          resourceType: "financeApplications",
+          resourceId: args.applicationId,
+          description: `Finance-company cheque returned after clearing: ${returnReason}`,
+          before: {
+            disbursedAt: app.disbursedAt,
+            disbursedAmountMinor: app.disbursedAmountMinor,
+            disbursementIdempotencyKey: app.disbursementIdempotencyKey,
+            disbursementVersion: version,
+            settlementStatus: app.settlementStatus,
+          },
+          after: {
+            chequeId: cheque._id,
+            paymentId: payment._id,
+            reversedAllocationIds: activeAllocations.map((allocation) => allocation._id),
+            cashReceivedSourceId: keys.sourceId,
+            reversalOutcome: reversal,
+            disbursementVersion: version + 1,
+          },
+          idempotencyKey: args.idempotencyKey,
+        });
+
+        const actorName = await getActorName(ctx);
+        await notifyManagers(
+          ctx,
+          args.orgId,
+          "collection.cheque_returned",
+          { actorName, amount: String(cheque.amount) }, // display figure the template expects, not the minor-unit face (1000x)
+          { link: `/${args.orgId}/accounting` }
+        );
+
+        return {
+          chequeId: cheque._id,
+          returnedDisbursementVersion: version,
+          nextDisbursementVersion: version + 1,
+          reversal,
+        };
       }
     );
   },
@@ -4579,7 +5947,12 @@ export const confirmSupplierDisbursement = mutation({
         // simply untrue, and this record is the only place the settlement
         // advice's counterparty is written down.
         let payerName = "The finance company";
-        if (payer.counterparty.kind === "MANUAL_PROVIDER") {
+        const letterPayer = manualPayerOf(app);
+        if (letterPayer !== null) {
+          // SCRUM-27: the name exactly as on the approval letter, which the
+          // manager entered, outranks the quote-time provider label.
+          payerName = letterPayer.name;
+        } else if (payer.counterparty.kind === "MANUAL_PROVIDER") {
           payerName = payer.counterparty.name;
         } else if (app.companyId) {
           const company = await ctx.db.get(app.companyId);

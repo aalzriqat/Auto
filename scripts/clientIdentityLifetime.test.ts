@@ -200,11 +200,19 @@ describe("SCRUM-313 client identity lifetime", () => {
     // list until one exists. `financeDealCosts.reconcileDealCustody` became
     // identity-guarded in the same round and is called from the Deal's
     // custody section through the retained `commandId`, so it is measured
-    // above, not listed here.
+    // above, not listed here. `supplierCostRecoveries.reverseReceipt`
+    // (SCRUM-389 phase 1) is the correction door for a recovery receipt and
+    // shipped without a screen; it joins the list until the reverse action
+    // lands in the sourcing recoveries section (SCRUM-406). The three
+    // identity-guarded `dealUnwind` steps (SCRUM-693 PR A) shipped
+    // backend-first and left this list when the deal page's unwind panel
+    // landed (PR C, SCRUM-691); the panel's retained-key callers are measured
+    // above.
     expect(commandsWithNoClientCaller.sort((a, b) => a.localeCompare(b))).toEqual([
       "collections.applyRetainedCredit",
       "financeDealCosts.migrateLegacyCustodyToLedger",
       "sourcingPayables.recordPartialPayment",
+      "supplierCostRecoveries.reverseReceipt",
     ]);
   });
 

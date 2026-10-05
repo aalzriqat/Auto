@@ -22,6 +22,7 @@ import { Doc, Id } from "@/convex/_generated/dataModel";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { dateInputToUtcMs, todayDateInput, daysFromTodayDateInput } from "@/lib/dateInput";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { isChosenMethod } from "@/components/payments/paymentMethod";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -52,6 +53,8 @@ import { CashDrawerPanel } from "./collections/CashDrawerPanel";
 import { PaymentLinksPanel } from "./collections/PaymentLinksPanel";
 import { InstallmentCalendar } from "./collections/InstallmentCalendar";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
+import { interpolate } from "@/lib/i18n/interpolate";
+import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
 
 type ReceivableRow = Doc<"receivables"> & {
   customerName: string;
@@ -62,6 +65,9 @@ type ChequeRow = Doc<"postDatedCheques"> & {
   customerName: string;
   vehicleLabel?: string;
   receivableTitle?: string;
+  /** SCRUM-447: the row has finance-company lineage; the drawer is named or unverified. */
+  isFinanceCompanyCheque?: boolean;
+  drawerName?: string | null;
 };
 
 type ApprovalRow = Doc<"collectionApprovalRequests"> & {
@@ -393,6 +399,18 @@ export function CollectionsTab() {
                       <TableCell>
                         <div className="font-medium">{cheque.customerName}</div>
                         <div className="text-xs text-muted-foreground">{cheque.receivableTitle || cheque.vehicleLabel || "-"}</div>
+                        {cheque.isFinanceCompanyCheque && (
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                            <Badge variant="outline">{t("FcChequeBadge" as any)}</Badge>
+                            <span className="text-xs text-muted-foreground">
+                              {cheque.drawerName ? (
+                                <DrawerLine template={t("FcDrawerLine" as any)} name={cheque.drawerName} />
+                              ) : (
+                                t("FcDrawerUnverified" as any)
+                              )}
+                            </span>
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell>{cheque.bank}</TableCell>
                       <TableCell>{cheque.chequeNumber}</TableCell>
@@ -404,6 +422,7 @@ export function CollectionsTab() {
                           const isClearing = busyChequeAction?.id === cheque._id && busyChequeAction?.action === "clear";
                           const isChequeBusy = busyChequeAction?.id === cheque._id;
                           return (
+                            <div className="flex flex-col items-end gap-1">
                             <div className="flex justify-end gap-1">
                               <Button
                                 size="sm"
@@ -414,6 +433,7 @@ export function CollectionsTab() {
                                 {isDepositing && <Loader2 className="me-1 h-3.5 w-3.5 animate-spin" />}
                                 {t("Deposit" as any)}
                               </Button>
+                              {!cheque.isFinanceCompanyCheque && (
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -423,14 +443,18 @@ export function CollectionsTab() {
                                 {isClearing && <Loader2 className="me-1 h-3.5 w-3.5 animate-spin" />}
                                 {t("Clear" as any)}
                               </Button>
+                              )}
+                              {!(cheque.isFinanceCompanyCheque && cheque.status === "CLEARED") && (
                               <Button
                                 size="sm"
                                 variant="outline"
-                                disabled={["REPLACED", "CANCELLED"].includes(cheque.status) || isChequeBusy}
+                                disabled={["RETURNED", "REPLACED", "CANCELLED"].includes(cheque.status) || isChequeBusy}
                                 onClick={() => setReturnTarget(cheque)}
                               >
                                 {t("Return" as any)}
                               </Button>
+                              )}
+                              {!cheque.isFinanceCompanyCheque && (
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -439,6 +463,13 @@ export function CollectionsTab() {
                               >
                                 {t("Replace" as any)}
                               </Button>
+                              )}
+                            </div>
+                            {cheque.isFinanceCompanyCheque && (
+                              <span className="text-xs text-muted-foreground">
+                                {t("FcHandledFromDeal" as any)}
+                              </span>
+                            )}
                             </div>
                           );
                         })()}
@@ -636,12 +667,28 @@ export function CollectionsTab() {
         <ReceivableDialog open={receivableDialog} onOpenChange={setReceivableDialog} />
         <PaymentDialog receivable={paymentTarget} onOpenChange={(open) => !open && setPaymentTarget(null)} />
         <ChequeDialog receivable={chequeTarget} onOpenChange={(open) => !open && setChequeTarget(null)} />
-        <ApprovalRequestDialog target={approvalTarget} onOpenChange={(open) => !open && setApprovalTarget(null)} />
+        <KeyedApprovalRequestDialog target={approvalTarget} onOpenChange={(open) => !open && setApprovalTarget(null)} />
         <ReplaceChequeDialog cheque={replaceTarget} onOpenChange={(open) => !open && setReplaceTarget(null)} />
         <ReturnChequeDialog cheque={returnTarget} onOpenChange={(open) => !open && setReturnTarget(null)} />
         <ReconciliationDialog open={reconcileOpen} onOpenChange={setReconcileOpen} />
       </>}
     </div>
+  );
+}
+
+/**
+ * "Drawer: {name}" with the drawer name isolated. A finance company's name is
+ * free text (Latin in an Arabic screen, "Co." or "(Jordan)" endings): unisolated,
+ * its trailing punctuation reorders against the surrounding direction.
+ */
+function DrawerLine({ template, name }: { template: string; name: string }) {
+  const [before, after = ""] = template.split("{name}");
+  return (
+    <>
+      {before}
+      <bdi>{name}</bdi>
+      {after}
+    </>
   );
 }
 
@@ -960,7 +1007,7 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
       setReference("");
       setNotes("");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setSubmitting(false);
     }
@@ -978,7 +1025,7 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
           <Select value={method} onValueChange={setMethod}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
-              {["CASH", "BANK_TRANSFER", "PAYMENT_LINK", "CARD", "OTHER"].map((value) => (
+              {["CASH", "BANK_TRANSFER", "CARD", "OTHER"].map((value) => (
                 <SelectItem key={value} value={value}>{collectionLabel(t, value)}</SelectItem>
               ))}
             </SelectContent>
@@ -1061,18 +1108,34 @@ function ChequeDialog({ receivable, onOpenChange }: { receivable: ReceivableRow 
 
 type DisbursementMethod = "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD";
 
-function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable: ReceivableRow; type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" } | null; onOpenChange: (open: boolean) => void }) {
+type ApprovalTarget = { receivable: ReceivableRow; type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" } | null;
+
+/**
+ * SCRUM-469: keyed by the target so every open is a NEW intent. The dialog is
+ * permanently mounted, so without the key the refund method (and amount, reason,
+ * date) typed for one receivable survived Cancel into the next. The key returns
+ * to "closed" when the dialog closes, so reopening the same receivable is fresh too.
+ */
+export function KeyedApprovalRequestDialog({ target, onOpenChange }: { target: ApprovalTarget; onOpenChange: (open: boolean) => void }) {
+  return <ApprovalRequestDialog key={target ? `${target.receivable._id}:${target.type}` : "closed"} target={target} onOpenChange={onOpenChange} />;
+}
+
+export function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable: ReceivableRow; type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" } | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const requestApproval = useMutation(api.collections.requestApproval);
   const [amount, setAmount] = useState("");
   const [dueDate, setDueDate] = useState(todayInput);
-  const [disbursementMethod, setDisbursementMethod] = useState<DisbursementMethod>("CASH");
+  // SCRUM-469: a refund's method is chosen, never assumed - it picks the account
+  // the money is paid out of, and an unstated one used to be sent as CASH.
+  const [disbursementMethod, setDisbursementMethod] = useState<DisbursementMethod | undefined>(undefined);
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const refundMethodMissing = target?.type === "REFUND" && !isChosenMethod(disbursementMethod);
 
   async function submit() {
     if (!activeOrgId || !target) return;
+    if (refundMethodMissing) return;
     setSubmitting(true);
     try {
       await requestApproval({
@@ -1088,7 +1151,7 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
       onOpenChange(false);
       setAmount("");
       setReason("");
-      setDisbursementMethod("CASH");
+      setDisbursementMethod(undefined);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1114,9 +1177,9 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
           {target?.type === "REFUND" && (
             <>
               <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={t("RefundAmount" as any)} />
-              <Select value={disbursementMethod} onValueChange={(v) => setDisbursementMethod(v as DisbursementMethod)}>
-                <SelectTrigger>
-                  <SelectValue placeholder={t("PaymentMethodLabel" as any)} />
+              <Select value={disbursementMethod ?? ""} onValueChange={(v) => setDisbursementMethod(v as DisbursementMethod)}>
+                <SelectTrigger aria-label={t("PaymentMethodLabel" as any)}>
+                  <SelectValue placeholder={t("RefundChooseMethod" as any)} />
                 </SelectTrigger>
                 <SelectContent>
                   {(Object.keys(disbursementLabels) as DisbursementMethod[]).map((method) => (
@@ -1124,6 +1187,9 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
                   ))}
                 </SelectContent>
               </Select>
+              {refundMethodMissing && (
+                <p className="text-sm font-medium text-destructive" role="status">{t("RefundMethodRequired" as any)}</p>
+              )}
             </>
           )}
           {target?.type === "RESCHEDULE" && <Input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />}
@@ -1131,7 +1197,7 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button onClick={submit} disabled={submitting || !reason || (target?.type === "REFUND" && !amount)}>{submitting ? t("Submitting" as any) : t("Submit" as any)}</Button>
+          <Button onClick={submit} disabled={submitting || !reason || (target?.type === "REFUND" && !amount) || refundMethodMissing}>{submitting ? t("Submitting" as any) : t("Submit" as any)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -1170,7 +1236,14 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
       setReason("");
       setBankFeeMinor("");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      // The server says this key already belongs to a request with different
+      // content: it is dead for what is on screen, so the next attempt is a new
+      // command under a fresh key. (A lost response keeps the key.)
+      const refusedCode = isConvexError(error) ? (error.data as { code?: unknown } | null)?.code : undefined;
+      if (refusedCode === "CHEQUE_RETURN_KEY_CONFLICT") {
+        idempotencyKeyRef.current = null;
+      }
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setSubmitting(false);
     }
@@ -1287,6 +1360,13 @@ function ReconciliationDialog({ open, onOpenChange }: { open: boolean; onOpenCha
   );
   const formatCurrency = useCurrencyFormatter();
 
+  let draftDescription: React.ReactNode = t("LoadingExpectedCash" as any);
+  if (draft?.complete) {
+    draftDescription = interpolate(t("CashierReconciliationDraftDesc" as any), { count: draft.paymentCount, amount: formatCurrency(draft.expectedCash) });
+  } else if (draft) {
+    draftDescription = <span role="alert" className="font-medium text-destructive">{t("CashierReconciliationIncomplete" as any)}</span>;
+  }
+
   async function submit() {
     if (!activeOrgId) return;
     setSubmitting(true);
@@ -1316,7 +1396,7 @@ function ReconciliationDialog({ open, onOpenChange }: { open: boolean; onOpenCha
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{t("CashierReconciliation" as any)}</DialogTitle>
-          <DialogDescription>{draft ? t("CashierReconciliationDraftDesc" as any).replace("{count}", String(draft.paymentCount)).replace("{amount}", formatCurrency(draft.expectedCash)) : t("LoadingExpectedCash" as any)}</DialogDescription>
+          <DialogDescription>{draftDescription}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
           <Input type="date" value={businessDate} onChange={(event) => setBusinessDate(event.target.value)} />
@@ -1325,7 +1405,7 @@ function ReconciliationDialog({ open, onOpenChange }: { open: boolean; onOpenCha
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button onClick={submit} disabled={submitting || !countedCash}>{submitting ? t("Submitting" as any) : t("Submit" as any)}</Button>
+          <Button onClick={submit} disabled={submitting || !countedCash || draft?.complete !== true}>{submitting ? t("Submitting" as any) : t("Submit" as any)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

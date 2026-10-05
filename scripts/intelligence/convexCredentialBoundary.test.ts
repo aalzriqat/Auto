@@ -185,15 +185,21 @@ function localUses(workflow: Workflow): string[] {
 // sha256 of each workflow that can reach a Convex credential.
 const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   "browser-attack-swarm.yml":
-    "6d6726c6668243fe41d23b8e55155a2b1ce638b76e464d6d3bebc02ec228958b",
+    "cdac53b6df9f661ebedc4e2380ae352a4906d6ec408ff8f61a9dbbf402463c2a",
+  "contract-skew.yml":
+    "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
+  "deal-scenarios-e2e.yml":
+    "b6504237de8819f9d408d178fd7b933f4822868b524e859f13a2df8ce0245bee",
+  "prune-convex-previews.yml":
+    "a47a5289bc35c018cbb378d68d7b0d389f3f78774272d4ada03f64eb4197f54d",
   "convex-preview-key-diagnostic.yml":
     "cb33b1b8f2e26457d00f78f31b6460e14df19b2b6f8254e720ca097a8c66dd8c",
   "deploy-production.yml":
     "da1f85d00bbd9d7b14d4603dfcab4c831a91307bdac7fae1d40bd88053afdf83",
   "trusted-accounting-rehearsal.yml":
-    "03ef62654084de7daedd66ba2efdedb01b696261a30613436788ac13108cf470",
+    "387a1a0130d8ced3e6c38a72ed65c2845242a06d5859c4d3d289fc189e1d1572",
   "trusted-main-e2e.yml":
-    "ef51d972770339cbda86da67847f3e4d5974f6f067df8cca06be4608255294d2",
+    "ba0277012803ed365c944dbad5ecef410036c5773e6b401a7021a0b37855d9f4",
 };
 
 function everyJob(): Array<{ label: string; workflow: Workflow; job: Job }> {

@@ -18,7 +18,7 @@ import { ArrowLeft, CheckCircle2, Car, User, TrendingUp, FileText } from "lucide
 import  ReviewVehicleCard  from "../components/ReviewVehicleCard";
 import  ReviewVehicleListCard  from "../components/ReviewVehicleListCard";
 import  ReviewCustomerCard  from "../components/ReviewCustomerCard";
-import  ReviewFinanceSummary  from "../components/ReviewFinanceSummary";
+import  ReviewFinanceSummary, { documentDisplayName }  from "../components/ReviewFinanceSummary";
 import { buildWizardQuotePayload } from "../quotePayload";
 
 export function Step3Review({
@@ -41,7 +41,7 @@ export function Step3Review({
   }) => void;
 }) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, isRtl } = useLanguage();
   const saveQuote = useMutation(api.quotes.saveQuote);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -92,6 +92,12 @@ export function Step3Review({
   const effectivePrice =
     wizardData.vehiclePrice + (wizardData.desiredProfit || 0);
 
+  // SCRUM-609 F-25: a financed quote needs something left to finance. The
+  // server refuses the same case (assertFinancedQuoteContributionValid); this
+  // stops the review from showing negative figures behind an enabled button.
+  const downPaymentCoversPrice =
+    paymentType === "INSTALLMENT" && !((wizardData.downPayment || 0) < effectivePrice);
+
   const selectedResult = useMemo(() => {
     if (paymentType === "CASH") {
       return {
@@ -136,7 +142,8 @@ export function Step3Review({
         monthlyInstallment: result.monthlyInstallment,
         totalProfit: result.totalProfit,
         takafulAmount: result.takafulAmount,
-        companyDocs: [] as any[],
+        // A manual financier has no rules of its own, but org-wide ones (e.g. ID) still apply.
+        companyDocs: documentRules?.filter((r: Doc<"companyDocumentRules">) => !r.companyId) ?? [],
       };
     }
 
@@ -192,7 +199,7 @@ export function Step3Review({
   const [recipientName, setRecipientName] = useState("");
 
   const handleGenerate = async () => {
-    if (!activeOrgId || !selectedResult) return;
+    if (!activeOrgId || !selectedResult || downPaymentCoversPrice) return;
 
     setIsSubmitting(true);
 
@@ -265,36 +272,59 @@ export function Step3Review({
       </div>
 
       {/* FINANCE SUMMARY */}
-      {selectedResult && (
-        <ReviewFinanceSummary
-          {...selectedResult}
-          desiredProfit={wizardData.desiredProfit}
-        />
+      {downPaymentCoversPrice ? (
+        <div
+          role="alert"
+          className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        >
+          {t("DownPaymentMustBeBelowPrice" as any)}
+        </div>
+      ) : (
+        selectedResult && (
+          <ReviewFinanceSummary
+            {...selectedResult}
+            desiredProfit={wizardData.desiredProfit}
+            salePrice={effectivePrice}
+            downPayment={wizardData.downPayment || 0}
+            termMonths={wizardData.termMonths}
+            // The documents box below is the one list, with its loading and empty states.
+            companyDocs={[]}
+          />
+        )
       )}
 
       {/* DOCUMENTS */}
-      {selectedResult && !selectedResult.isCash && (
+      {selectedResult && !selectedResult.isCash && !downPaymentCoversPrice && (
         <div className={cn("border rounded-xl p-4", accentClass)}>
           <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 flex items-center gap-1">
             <FileText className="w-3.5 h-3.5" />
             {t("RequiredDocuments")}
           </p>
 
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
-            {selectedResult.companyDocs?.map((doc: any) => (
-              <div key={doc._id} className="flex items-center gap-2">
-                <span
-                  className={cn(
-                    "w-1.5 h-1.5 rounded-full",
-                    doc.isRequired ? "bg-amber-400" : "bg-muted-foreground"
-                  )}
-                />
-                <span className="text-muted-foreground">
-                  {doc.documentName}
-                </span>
-              </div>
-            ))}
-          </div>
+          {documentRules === undefined ? (
+            <p className="text-sm text-muted-foreground" aria-busy="true">{t("Loading" as any)}</p>
+          ) : (selectedResult.companyDocs?.length ?? 0) === 0 ? (
+            <p className="text-sm text-muted-foreground">{t("NoRequiredDocuments" as any)}</p>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
+              {selectedResult.companyDocs?.map((doc: any) => (
+                <div key={doc._id} className="flex items-center gap-2">
+                  <span
+                    className={cn(
+                      "w-1.5 h-1.5 rounded-full",
+                      doc.isRequired ? "bg-amber-400" : "bg-muted-foreground"
+                    )}
+                  />
+                  <span className={doc.isRequired ? "text-foreground/80" : "text-muted-foreground"}>
+                    {documentDisplayName(doc.documentName, isRtl)}
+                    {doc.isRequired && (
+                      <span className="text-amber-400 ms-1" data-testid="doc-required-marker">*</span>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -315,13 +345,13 @@ export function Step3Review({
       {/* ACTIONS */}
       <div className="flex flex-col-reverse sm:flex-row justify-between gap-3 pt-4 border-t">
         <Button variant="outline" onClick={onBack} disabled={isSubmitting} className="w-full sm:w-auto">
-          <ArrowLeft className="w-4 h-4 me-2" />
+          <ArrowLeft className="w-4 h-4 me-2 rtl:-scale-x-100" />
           {t("Back")}
         </Button>
 
         <Button
           onClick={handleGenerate}
-          disabled={isSubmitting || !selectedResult}
+          disabled={isSubmitting || !selectedResult || downPaymentCoversPrice}
           className={cn(
             "w-full sm:w-auto",
             paymentType === "CASH"

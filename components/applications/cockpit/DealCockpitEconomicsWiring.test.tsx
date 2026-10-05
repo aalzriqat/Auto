@@ -14,7 +14,7 @@
  * query is mounted at all.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import type { Id } from "../../../convex/_generated/dataModel";
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -50,6 +50,11 @@ vi.mock("@/hooks/use-permissions", () => ({
 vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   return {
+    // The cockpit reads closing readiness through the non-throwing useQueries (SCRUM-414 R2).
+    useQueries: (queries: Record<string, { query: never }>) =>
+      Object.fromEntries(
+        Object.entries(queries).map(([key, { query }]) => [key, stubs.queryResults.get(getFunctionName(query))])
+      ),
     useQuery: (reference: never, args: unknown) => {
       const name = getFunctionName(reference);
       stubs.queryArgs.set(name, args);
@@ -142,6 +147,15 @@ afterEach(() => {
   stubs.membershipUserId = "user_sales";
 });
 
+/**
+ * The decision card itself. Since SCRUM-417 the live step names the card's
+ * next action and reason too (the same predicates), so the card's own
+ * assertions are scoped to it; the focus row has its own suite.
+ */
+function decisionCard() {
+  return within(screen.getByTestId("deal-finance-decision"));
+}
+
 function renderCockpit() {
   return render(<DealCockpit orgId={ORG} applicationId={APP} />);
 }
@@ -228,7 +242,7 @@ describe("the facts the card is given", () => {
     // A salesperson holds CREATE but not APPROVE, and the server refuses the
     // rate from them. Telling them to "record the rate with the quotation"
     // would be an instruction they cannot carry out, so they are told who can.
-    expect(screen.getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+    expect(decisionCard().getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
     expect(screen.queryByText("FinanceCompanyLtvMissing")).toBeNull();
   });
 
@@ -258,7 +272,7 @@ describe("the facts the card is given", () => {
 
     renderCockpit();
 
-    expect(screen.getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+    expect(decisionCard().getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
     expect(screen.queryByText("FinanceCompanyLtvMissing")).toBeNull();
   });
 
@@ -277,7 +291,7 @@ describe("the facts the card is given", () => {
 
     expect(screen.getByText("FinanceCompanyLtvMissing")).toBeTruthy();
     expect(screen.queryByText("DealPurchaseLtvNeedsApprover")).toBeNull();
-    expect(screen.getByRole("button", { name: "RecordQuotationAction" })).toBeTruthy();
+    expect(decisionCard().getByRole("button", { name: "RecordQuotationAction" })).toBeTruthy();
   });
 
   /**
@@ -304,7 +318,11 @@ describe("the facts the card is given", () => {
     renderCockpit();
 
     expect(screen.queryByText("FinanceCompanyLtvMissing")).toBeNull();
-    expect(screen.getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+    // The card and the focus row give the SAME reason (SCRUM-417): one reason
+    // table, read by both.
+    const card = screen.getByTestId("deal-finance-decision");
+    expect(within(card).getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
+    expect(within(screen.getByTestId("deal-next-step")).getByText("DealPurchaseLtvNeedsApprover")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "RecordQuotationAction" })).toBeNull();
   });
 
@@ -336,7 +354,7 @@ describe("the facts the card is given", () => {
 
     renderCockpit();
 
-    expect(screen.getByText("ApprovedPurchaseNotOwnDeal")).toBeTruthy();
+    expect(decisionCard().getByText("ApprovedPurchaseNotOwnDeal")).toBeTruthy();
   });
 
   test("and let a different approver record it", () => {
@@ -352,6 +370,6 @@ describe("the facts the card is given", () => {
     renderCockpit();
 
     expect(screen.queryByText("ApprovedPurchaseNotOwnDeal")).toBeNull();
-    expect(screen.getByRole("button", { name: "RecordApprovedPurchaseAction" })).toBeTruthy();
+    expect(decisionCard().getByRole("button", { name: "RecordApprovedPurchaseAction" })).toBeTruthy();
   });
 });

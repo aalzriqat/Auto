@@ -5,7 +5,15 @@ import { paginationOptsValidator } from "convex/server";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireAuth, requireTenantAuth, requireOwner } from "./utils/tenancy";
-import { PERMISSIONS, ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES, isSystemOwnerRole } from "./utils/permissions";
+import {
+  PERMISSIONS,
+  ALL_PERMISSIONS,
+  DEFAULT_ROLE_TEMPLATES,
+  isSystemOwnerRole,
+  isUnqualifiedOwnerNamed,
+  needsOwnerFlagStamp,
+} from "./utils/permissions";
+import { writeAuditLog } from "./utils/auditLog";
 import { notifyUser, notifyManagers } from "./utils/notifications";
 
 const MEMBERSHIP_OFFBOARDING_RETRY_BASE_MS = 60_000;
@@ -1399,24 +1407,52 @@ export const acceptInvitation = mutation({
  * Safe to call after adding new permissions — only updates roles whose names
  * match a template (OWNER, MANAGER, SALES, RECEPTION, ACCOUNTANT).
  * Custom roles are never touched.
+ *
+ * It OVERWRITES a template-named role's permissions, so it is the owner's
+ * explicit act — and since SCRUM-413 it is audited as one: every role whose
+ * permissions actually change gets an `adminAuditLog` row (before/after,
+ * actor), and the caller gets the per-role diff to show. It is also how an
+ * existing org adopts the ACCOUNTANT route grant the owner ruled.
  */
 export const syncRolePermissionsToTemplate = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    await requireOwner(ctx, args.orgId);
+    const { user } = await requireOwner(ctx, args.orgId);
     const roles = await ctx.db
       .query("roles")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .collect();
 
-    let updated = 0;
+    const changes: Array<{ roleId: Id<"roles">; name: string; added: string[]; removed: string[] }> = [];
     for (const role of roles) {
       const template = DEFAULT_ROLE_TEMPLATES.find(t => t.name === role.name);
       if (!template) continue;
-      await ctx.db.patch(role._id, { permissions: [...template.permissions] });
-      updated++;
+      // S413B-4: see isUnqualifiedOwnerNamed
+      if (isUnqualifiedOwnerNamed(role)) continue;
+      const synced: string[] = [...template.permissions];
+      const before = new Set(role.permissions);
+      const after = new Set(synced);
+      const added = synced.filter((p) => !before.has(p));
+      const removed = role.permissions.filter((p) => !after.has(p));
+      // SCRUM-413 S413B-1: overwriting the permissions would de-own an unflagged owner; see needsOwnerFlagStamp.
+      const stampOwnerFlag = needsOwnerFlagStamp(role);
+      if (added.length === 0 && removed.length === 0 && !stampOwnerFlag) continue;
+      await ctx.db.patch(role._id, {
+        permissions: synced,
+        ...(stampOwnerFlag ? { isSystemOwnerRole: true } : {}),
+      });
+      await writeAuditLog(ctx, user, {
+        action: "role.template_sync",
+        targetTable: "roles",
+        targetId: role._id,
+        orgId: args.orgId,
+        // `null` is "unset": convex values cannot carry `undefined`.
+        before: { permissions: role.permissions, ...(stampOwnerFlag ? { isSystemOwnerRole: null } : {}) },
+        after: { permissions: synced, ...(stampOwnerFlag ? { isSystemOwnerRole: true } : {}) },
+      });
+      changes.push({ roleId: role._id, name: role.name, added, removed });
     }
-    return updated;
+    return { changes };
   },
 });
 

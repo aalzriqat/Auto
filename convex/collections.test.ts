@@ -2,7 +2,9 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
+import { Doc, Id } from "./_generated/dataModel";
 import { ruleCollectionRefund } from "./accounting/postingRules";
+import { registerChequeCore } from "./collections";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import {
   occurrenceReversalIdempotencyKey,
@@ -399,7 +401,7 @@ describe("Collections", () => {
         bankFeeMinor: -1,
         idempotencyKey: "return-cleared-bad-fee",
       })
-    ).rejects.toThrow(/non-negative integer/i);
+    ).rejects.toThrow(/CHEQUE_BANK_FEE_INVALID/);
   });
 
   test("approved_refund_posts_outbound_payment_and_reopens_balance", async () => {
@@ -574,15 +576,17 @@ describe("Collections", () => {
       creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
-    const postedBefore = await t.run((ctx) =>
-      ctx.db
-        .query("accountingEvents")
-        .withIndex("by_org_source", (q) =>
-          q.eq("orgId", orgId).eq("sourceType", "receivables").eq("sourceId", receivableId.toString())
+    const postedBefore =
+      (
+        await t.run((ctx) =>
+          ctx.db
+            .query("accountingEvents")
+            .withIndex("by_org_source", (q) =>
+              q.eq("orgId", orgId).eq("sourceType", "receivables").eq("sourceId", receivableId.toString())
+            )
+            .collect()
         )
-        .filter((q) => q.eq(q.field("eventType"), "RECEIVABLE_CREATED"))
-        .first()
-    );
+      ).find((e) => e.eventType === "RECEIVABLE_CREATED") ?? null;
     expect(postedBefore?.status).toBe("POSTED");
 
     const requestId = await asFinance.mutation(api.collections.requestApproval, {
@@ -646,15 +650,17 @@ describe("Collections", () => {
       })
     );
 
-    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
-      idempotencyKey: crypto.randomUUID(),
+    // D-20: createReceivable refuses a saleId now, so the pre-existing legacy
+    // row this test exercises is seeded directly (it models a row created
+    // before the release). The property under test - cancelling it posts no GL
+    // and does not error - is unchanged.
+    const receivableId = await insertReceivable(t, {
       orgId,
       customerId,
+      createdBy: userId,
       saleId,
-      sourceType: "INTERNAL_INSTALLMENT",
       title: "Sale-linked balance",
       amount: 400,
-      dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
     });
 
     const noEventPosted = await t.run((ctx) =>
@@ -1234,26 +1240,43 @@ describe("Collections", () => {
       creditSystemKey: undefined,
     })).rejects.toThrow("credit account");
 
+    // D-20: a sale-linked legacy receivable can no longer be created (the sale's
+    // debt is its invoice), so the original "all links persist" property is
+    // exercised through the allowed path (no saleId), and the saleId case now
+    // asserts the refusal.
+    await expect(
+      asFinance.mutation(api.collections.createReceivable, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId,
+        customerId,
+        saleId: related.saleId,
+        sourceType: "OTHER",
+        title: "Sale-linked receivable",
+        amount: 321.1234,
+        dueDate: Date.now() + 3 * 24 * 60 * 60 * 1000,
+        creditSystemKey: "MISCELLANEOUS_INCOME",
+      })
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_COMPETING_RECEIVABLE_REFUSED" } });
+
     const saleLinkedReceivableId = await asFinance.mutation(api.collections.createReceivable, {
       idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       vehicleId: related.vehicleId,
-      saleId: related.saleId,
       quoteId: related.quoteId,
       applicationId: related.applicationId,
       assignedTo: userId,
       sourceType: "OTHER",
-      title: "Sale-linked receivable",
+      title: "Linked receivable",
       amount: 321.1234,
       dueDate: Date.now() + 3 * 24 * 60 * 60 * 1000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
     await t.run(async (ctx) => {
       const receivable = await ctx.db.get(saleLinkedReceivableId);
       expect(receivable).toMatchObject({
         vehicleId: related.vehicleId,
-        saleId: related.saleId,
         quoteId: related.quoteId,
         applicationId: related.applicationId,
         assignedTo: userId,
@@ -1379,11 +1402,26 @@ describe("Collections", () => {
       paymentDate: Date.now(),
     })).rejects.toThrow("cannot exceed the outstanding");
 
+    // D-20: a caller-supplied saleId on a receipt is refused until the invoice
+    // receipt resolver exists, so the ad-hoc property below (rounding, canonical
+    // mirror, no allocation) is exercised through the allowed path with no saleId.
+    await expect(
+      asFinance.mutation(api.collections.recordPayment, {
+        orgId,
+        customerId,
+        vehicleId,
+        saleId,
+        amount: 12.3456,
+        method: "CASH",
+        paymentDate: Date.now(),
+        idempotencyKey: "ad-hoc-payment-with-sale",
+      })
+    ).rejects.toMatchObject({ data: { code: "SALE_DEBT_RECEIPT_REFUSED" } });
+
     const adHocPaymentId = await asFinance.mutation(api.collections.recordPayment, {
       orgId,
       customerId,
       vehicleId,
-      saleId,
       amount: 12.3456,
       method: "CASH",
       paymentDate: Date.now(),
@@ -1398,8 +1436,8 @@ describe("Collections", () => {
         method: "CASH",
         customerId,
         vehicleId,
-        saleId,
       });
+      expect(payment?.saleId).toBeUndefined();
       expect(payment?.paymentAllocationId).toBeUndefined();
       const canonical = payment?.canonicalPaymentId ? await ctx.db.get(payment.canonicalPaymentId) : null;
       expect(canonical?.method).toBe("CASH");
@@ -1413,18 +1451,14 @@ describe("Collections", () => {
       paymentDate: Date.now(),
     })).rejects.toThrow("OTHER is not accepted");
 
-    const appliedDepositPaymentId = await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
+    // SCRUM-263: a deposit is applied from the deal; this receipt door refuses it.
+    await expect(asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
       customerId,
       amount: 5,
       method: "DEPOSIT_APPLIED",
       paymentDate: Date.now(),
-    });
-    await t.run(async (ctx) => {
-      const payment = await ctx.db.get(appliedDepositPaymentId);
-      const canonical = payment?.canonicalPaymentId ? await ctx.db.get(payment.canonicalPaymentId) : null;
-      expect(canonical?.method).toBe("OTHER");
-    });
+    })).rejects.toThrow("A deposit is applied from the deal");
 
     await asFinance.mutation(api.collections.recordPayment, { idempotencyKey: crypto.randomUUID(),
       orgId,
@@ -1547,13 +1581,16 @@ describe("Collections", () => {
         updatedAt: Date.now(),
       })
     );
+    // SCRUM-447: a finance-company row is replaceable only while it is the
+    // deal's registered payment, and the replacement states its face exactly.
+    await t.run((ctx) => ctx.db.patch(applicationId, { expectedPaymentMethod: "CHEQUE" }));
     const replacementId = await asFinance.mutation(api.collections.replaceCheque, {
       orgId,
       chequeId: appChequeId,
       bank: "Replacement Bank",
       chequeNumber: "APP-2",
       chequeDate: Date.now() + 3 * 86_400_000,
-      amount: 150,
+      faceAmount: "150",
       notes: "Customer changed bank",
     });
     await t.run(async (ctx) => {
@@ -1563,7 +1600,9 @@ describe("Collections", () => {
         status: "REPLACED",
         replacementChequeId: replacementId,
       });
-      expect(oldCheque?.applicationId).toBeUndefined();
+      // SCRUM-447 D0: lineage is permanent — the replaced row keeps its application.
+      expect(oldCheque?.applicationId).toBe(applicationId);
+      expect(oldCheque?.originApplicationId).toBe(applicationId);
       expect(replacement).toMatchObject({
         status: "HELD",
         applicationId,
@@ -2130,6 +2169,178 @@ describe("Collections", () => {
     })).rejects.toThrow("Only submitted reconciliations can be reviewed");
   });
 
+  // SCRUM-259: the reconciliation read the cashier's first 500 payments of all
+  // time and filtered afterwards, so a cash payment behind 500 older rows was
+  // invisible and the day was certified from a hidden prefix.
+  async function seedCashierPayments(
+    t: ReturnType<typeof convexTestWithComponents>,
+    base: { orgId: Id<"organizations">; customerId: Id<"customers">; userId: Id<"users"> },
+    count: number,
+    over: Partial<Doc<"collectionPayments">> & { paymentDate: number }
+  ) {
+    await t.run(async (ctx) => {
+      for (let i = 0; i < count; i += 1) {
+        await ctx.db.insert("collectionPayments", {
+          orgId: base.orgId,
+          customerId: base.customerId,
+          cashierId: base.userId,
+          direction: "IN",
+          method: "CASH",
+          amount: 1,
+          status: "POSTED",
+          createdAt: over.paymentDate,
+          ...over,
+        });
+      }
+    });
+  }
+
+  test("cashier_reconciliation_includes_a_cash_payment_behind_500_older_rows", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const seed = await seedFinanceMember(t);
+    const { orgId, asFinance } = seed;
+    const now = Date.now();
+    await seedCashierPayments(t, seed, 500, { paymentDate: now - 30 * 24 * 60 * 60 * 1000 });
+    await seedCashierPayments(t, seed, 1, { paymentDate: now, amount: 250 });
+
+    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
+    expect(draft).toMatchObject({ complete: true, expectedCash: 250, paymentCount: 1 });
+
+    const reconciliationId = await asFinance.mutation(api.collections.submitCashierReconciliation, {
+      orgId, businessDate: now, countedCash: 250, idempotencyKey: crypto.randomUUID(),
+    });
+    await t.run(async (ctx) => {
+      expect(await ctx.db.get(reconciliationId)).toMatchObject({ expectedCash: 250, difference: 0 });
+      const linked = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_reconciliation", (q) => q.eq("reconciliationId", reconciliationId))
+        .collect();
+      expect(linked.map((payment) => payment.amount)).toEqual([250]);
+    });
+  });
+
+  test("cashier_reconciliation_refuses_a_day_it_cannot_read_completely", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const seed = await seedFinanceMember(t);
+    const { orgId, asFinance } = seed;
+    const now = Date.now();
+    // Split across both drawer methods: the limit is on what is certified.
+    await seedCashierPayments(t, seed, 499, { paymentDate: now });
+    await seedCashierPayments(t, seed, 1, { paymentDate: now, method: "REFUND", direction: "OUT" });
+
+    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
+    expect(draft).toMatchObject({ complete: false, expectedCash: null, paymentCount: null });
+
+    await expect(asFinance.mutation(api.collections.submitCashierReconciliation, {
+      orgId, businessDate: now, countedCash: 0, idempotencyKey: "recon-too-large",
+    })).rejects.toThrow("too many unreconciled payments");
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("cashierReconciliations").collect()).toHaveLength(0);
+      const linked = await ctx.db.query("collectionPayments").collect();
+      expect(linked.filter((payment) => payment.reconciliationId !== undefined)).toHaveLength(0);
+    });
+  });
+
+  test("cashier_reconciliation_refuses_a_day_whose_cash_alone_fills_the_budget", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const seed = await seedFinanceMember(t);
+    const { orgId, asFinance } = seed;
+    const now = Date.now();
+    // CASH alone reaches the 500-document budget, so no REFUND read is issued.
+    await seedCashierPayments(t, seed, 500, { paymentDate: now });
+
+    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
+    expect(draft).toMatchObject({ complete: false, expectedCash: null, paymentCount: null });
+    await expect(asFinance.mutation(api.collections.submitCashierReconciliation, {
+      orgId, businessDate: now, countedCash: 0, idempotencyKey: "recon-cash-only-too-large",
+    })).rejects.toThrow("too many unreconciled payments");
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("cashierReconciliations").collect()).toHaveLength(0);
+    });
+  });
+  test("cashier_reconciliation_certifies_exactly_the_limit_across_both_methods", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const seed = await seedFinanceMember(t);
+    const { orgId, asFinance } = seed;
+    const now = Date.now();
+    await seedCashierPayments(t, seed, 450, { paymentDate: now });
+    await seedCashierPayments(t, seed, 49, { paymentDate: now, method: "REFUND", direction: "OUT" });
+
+    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
+    expect(draft).toMatchObject({ complete: true, expectedCash: 401, paymentCount: 499 });
+  });
+
+  test("cashier_reconciliation_limit_ignores_reconciled_voided_and_non_cash_rows", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const seed = await seedFinanceMember(t);
+    const { orgId, asFinance } = seed;
+    const now = Date.now();
+    // A day already reconciled once must stay reconcilable: rows it linked, rows
+    // since voided, and payments that never enter the drawer do not count.
+    const earlierId = await asFinance.mutation(api.collections.submitCashierReconciliation, {
+      orgId, businessDate: now, countedCash: 0, idempotencyKey: crypto.randomUUID(),
+    });
+    await seedCashierPayments(t, seed, 500, { paymentDate: now, reconciliationId: earlierId });
+    await seedCashierPayments(t, seed, 500, { paymentDate: now, status: "VOIDED" });
+    await seedCashierPayments(t, seed, 500, { paymentDate: now, method: "BANK_TRANSFER" });
+    await seedCashierPayments(t, seed, 1, { paymentDate: now, amount: 40 });
+
+    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
+    expect(draft).toMatchObject({ complete: true, expectedCash: 40, paymentCount: 1 });
+  });
+  test("SCRUM-447 reminders never chase a finance-company cheque from the customer", async () => {
+    vi.useFakeTimers();
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, userId } = await seedFinanceMember(t);
+    const now = Date.now();
+    const dueDate = now + 2 * 24 * 60 * 60 * 1000;
+    const base = {
+      orgId,
+      customerId,
+      bank: "FC Bank",
+      chequeDate: dueDate,
+      amount: 500,
+      status: "HELD" as const,
+      createdBy: userId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    // One row carrying each lineage mark on its own: a drawer type, and the
+    // origin anchor a replacement leaves behind. Neither has a live applicationId.
+    const drawerOnly = await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", { ...base, chequeNumber: "FC-D", drawerType: "FINANCE_COMPANY" as const })
+    );
+    const ordinary = await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", { ...base, chequeNumber: "CUST-1" })
+    );
+
+    const result = await t.mutation(internal.collections.processDailyCollectionReminders, {});
+    // Only the ordinary customer cheque is reminded.
+    expect(result).toMatchObject({ queued: 1 });
+    const reminders = await t.run((ctx) =>
+      ctx.db.query("collectionReminders").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(reminders.map((r) => r.chequeId)).toEqual([ordinary]);
+
+    // Send-time re-read: a reminder queued BEFORE the row was recognised as
+    // finance-company is suppressed by the payload, not sent.
+    const staleReminderId = await t.run((ctx) =>
+      ctx.db.insert("collectionReminders", {
+        orgId,
+        customerId,
+        chequeId: drawerOnly,
+        channel: "SMS",
+        messageType: "CHEQUE_UPCOMING",
+        status: "PENDING",
+        scheduledAt: now,
+        createdAt: now,
+      })
+    );
+    const payload = await t.query(internal.collections.getReminderPayload, { reminderId: staleReminderId });
+    expect(payload?.fcLineageSuppressed).toBe(true);
+    const ordinaryPayload = await t.query(internal.collections.getReminderPayload, { reminderId: reminders[0]._id });
+    expect(ordinaryPayload?.fcLineageSuppressed).toBe(false);
+  });
   test("daily_collection_reminders_queue_channels_dedupe_and_mark_results", async () => {
     // Installed before anything schedules: vitest fake timers only control
     // timers created after this call, so installing them at drain time leaves
@@ -2352,5 +2563,257 @@ describe("refund eligibility", () => {
         status: "APPROVED",
       })
     ).rejects.toThrow(/cancelled/i);
+  });
+});
+
+/**
+ * SCRUM-263: recordPayment is a receipt door. It accepted DEPOSIT_APPLIED,
+ * stored a POSTED inbound payment, reduced the debt and posted it through the
+ * cash-on-hand default, so applying a deposit invented cash that never arrived
+ * and left the real deposit free to be applied a second time. A deposit is
+ * applied from the deal, by the typed path that moves deposit liability.
+ */
+describe("SCRUM-263 recordPayment refuses a deposit application", () => {
+  const REFUSAL = "A deposit is applied from the deal, not recorded as a new payment.";
+  const TRACKED = [
+    "collectionPayments",
+    "canonicalPayments",
+    "paymentAllocations",
+    "transactions",
+    "accountingEvents",
+    "pendingAccountingEvents",
+    "journalEntries",
+    "journalLines",
+    "commandIdempotency",
+  ] as const;
+
+  async function counts(t: ReturnType<typeof convexTestWithComponents>) {
+    return await t.run(async (ctx) => {
+      const out: Record<string, number> = {};
+      for (const table of TRACKED) out[table] = (await ctx.db.query(table).take(10_000)).length;
+      return out;
+    });
+  }
+
+  test("refuses DEPOSIT_APPLIED against a receivable and writes nothing", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(),
+      orgId,
+      customerId,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "Installment 1",
+      amount: 1000,
+      dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
+    });
+    const before = await counts(t);
+
+    await expect(
+      asFinance.mutation(api.collections.recordPayment, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId,
+        receivableId,
+        amount: 300,
+        method: "DEPOSIT_APPLIED",
+        paymentDate: Date.now(),
+      })
+    ).rejects.toThrow(REFUSAL);
+
+    expect(await counts(t)).toEqual(before);
+    const receivable = await t.run((ctx) => ctx.db.get(receivableId));
+    expect(receivable?.outstandingAmount).toBe(1000);
+    expect(receivable?.status).toBe("OPEN");
+  });
+
+  test("refuses DEPOSIT_APPLIED with no receivable and writes nothing", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const before = await counts(t);
+
+    await expect(
+      asFinance.mutation(api.collections.recordPayment, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId,
+        customerId,
+        amount: 5,
+        method: "DEPOSIT_APPLIED",
+        paymentDate: Date.now(),
+      })
+    ).rejects.toThrow(REFUSAL);
+
+    expect(await counts(t)).toEqual(before);
+  });
+
+  test("a refused attempt does not consume its idempotency key", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const idempotencyKey = crypto.randomUUID();
+
+    await expect(
+      asFinance.mutation(api.collections.recordPayment, {
+        idempotencyKey,
+        orgId,
+        customerId,
+        amount: 5,
+        method: "DEPOSIT_APPLIED",
+        paymentDate: Date.now(),
+      })
+    ).rejects.toThrow(REFUSAL);
+
+    // The same key, now carrying genuine cash, is a first attempt, not a
+    // conflicting replay of the refused one.
+    const paymentId = await asFinance.mutation(api.collections.recordPayment, {
+      idempotencyKey,
+      orgId,
+      customerId,
+      amount: 5,
+      method: "CASH",
+      paymentDate: Date.now(),
+    });
+    const payment = await t.run((ctx) => ctx.db.get(paymentId));
+    expect(payment?.method).toBe("CASH");
+  });
+
+  test("a replay of a DEPOSIT_APPLIED command completed before the fix is refused too (Sol D1)", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
+    const idempotencyKey = crypto.randomUUID();
+    const paymentDate = Date.now();
+    // Exactly what the pre-fix mutation left behind after a successful call:
+    // a COMPLETED command whose stored result the wrapper hands back on replay
+    // without running the body again.
+    await t.run((ctx) =>
+      ctx.db.insert("commandIdempotency", {
+        orgId,
+        operation: "collections.recordPayment",
+        idempotencyKey,
+        status: "COMPLETED",
+        fingerprint: JSON.stringify({
+          receivableId: null,
+          customerId,
+          vehicleId: null,
+          saleId: null,
+          amount: 5,
+          method: "DEPOSIT_APPLIED",
+          paymentDate,
+          reference: null,
+        }),
+        result: "stored-result-of-the-old-call",
+        createdBy: userId,
+        createdAt: paymentDate,
+        completedAt: paymentDate,
+      })
+    );
+
+    await expect(
+      asFinance.mutation(api.collections.recordPayment, {
+        idempotencyKey,
+        orgId,
+        customerId,
+        amount: 5,
+        method: "DEPOSIT_APPLIED",
+        paymentDate,
+      })
+    ).rejects.toThrow(REFUSAL);
+  });
+
+  test("genuine inbound methods still record (controls)", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    // PAYMENT_LINK is deliberately absent: recordPayment refuses it (SCRUM-571 S1);
+    // that refusal is asserted in scrum571ReceiptContainment.test.ts.
+    for (const method of ["CASH", "BANK_TRANSFER", "CARD"] as const) {
+      const paymentId = await asFinance.mutation(api.collections.recordPayment, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId,
+        customerId,
+        amount: 5,
+        method,
+        paymentDate: Date.now(),
+      });
+      const payment = await t.run((ctx) => ctx.db.get(paymentId));
+      expect(payment?.method, method).toBe(method);
+      expect(payment?.status, method).toBe("POSTED");
+    }
+  });
+});
+
+describe("SCRUM-447 FC cheque face is rounded in its own denomination", () => {
+  // Invariant: a cheque row carrying {amountMinor, currency} stores
+  // amount === fromMinorUnits(amountMinor, currency). An org can switch
+  // currency after a deal froze its economics, so the deal's denomination
+  // (JOD, 3dp) can have more decimals than the org's (USD, 2dp).
+  async function seedMixedCurrencyDeal() {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const seeded = await seedFinanceMember(t);
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId: seeded.orgId,
+        currency: "USD",
+        currencySymbol: "$",
+        enabledPaymentTypes: [],
+      })
+    );
+    const deal = await seedVehicleQuoteSaleAndApplication(t, seeded);
+    await t.run((ctx) =>
+      ctx.db.patch(deal.applicationId, { economicsCurrency: "JOD", expectedPaymentMethod: "CHEQUE" })
+    );
+    return { t, ...seeded, ...deal };
+  }
+
+  test("replaceCheque stores the face at the deal currency's precision", async () => {
+    const { t, orgId, userId, customerId, vehicleId, applicationId, asFinance } = await seedMixedCurrencyDeal();
+    const oldChequeId = await t.run((ctx) =>
+      ctx.db.insert("postDatedCheques", {
+        orgId,
+        customerId,
+        vehicleId,
+        applicationId,
+        bank: "FC Bank",
+        chequeNumber: "FC-MIX-1",
+        chequeDate: Date.now() + 86_400_000,
+        amount: 1000,
+        status: "HELD",
+        createdBy: userId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+    const newId = await asFinance.mutation(api.collections.replaceCheque, {
+      orgId,
+      chequeId: oldChequeId,
+      bank: "FC Bank",
+      chequeNumber: "FC-MIX-2",
+      chequeDate: Date.now() + 2 * 86_400_000,
+      faceAmount: "1234.567",
+    });
+    const row = await t.run((ctx) => ctx.db.get(newId));
+    expect(row?.currency).toBe("JOD");
+    expect(row?.amountMinor).toBe(1_234_567);
+    expect(row?.amount).toBe(1234.567);
+  });
+
+  test("registerChequeCore rounds a supplied face in its own currency", async () => {
+    const { t, orgId, userId, customerId, vehicleId, applicationId } = await seedMixedCurrencyDeal();
+    const newId = await t.run((ctx) =>
+      registerChequeCore(ctx, {
+        orgId,
+        customerId,
+        vehicleId,
+        applicationId,
+        bank: "FC Bank",
+        chequeNumber: "FC-MIX-3",
+        chequeDate: Date.now() + 86_400_000,
+        amount: 1234.567,
+        amountMinor: 1_234_567,
+        currency: "JOD",
+        actorId: userId,
+      })
+    );
+    const row = await t.run((ctx) => ctx.db.get(newId));
+    expect(row?.amountMinor).toBe(1_234_567);
+    expect(row?.amount).toBe(1234.567);
   });
 });

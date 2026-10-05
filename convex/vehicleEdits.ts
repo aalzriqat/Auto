@@ -16,8 +16,10 @@ import {
 } from "./utils/vehicleStatusGuards";
 import { assertVehicleImagesAllowed } from "./utils/storageValidation";
 import { acquisitionPaymentMethodValidator, type AcquisitionPaymentMethod } from "./utils/paymentMethods";
-import { postVehicleAcquisitionIfOwned, hasVehicleAcquisitionAccountingExposure } from "./vehicles";
+import { postVehicleAcquisitionIfOwned, hasVehicleAcquisitionAccountingExposure, throwVehicleCostPosted } from "./vehicles";
 import { retroactiveOwnershipChangeRefusal } from "./utils/vehicleOwnership";
+import { syncVehicleHoldStatus } from "./utils/depositHelpers";
+import { supplierCostRecoveryConversionRefusal } from "./utils/costBearer";
 
 type VehicleEditPayload = {
   vin?: string;
@@ -214,6 +216,16 @@ export const requestUpdate = mutation({
       status: vehicle.status,
     });
     if (ownershipRefusal) throw new ConvexError(ownershipRefusal);
+    // SCRUM-389: a SOURCED car with an open supplier-cost recovery cannot become
+    // owned stock — the supplier would owe the showroom for costs on a car the
+    // showroom now owns, and nothing would ever settle it.
+    const recoveryRefusal = await supplierCostRecoveryConversionRefusal(ctx, {
+      orgId: vehicle.orgId,
+      vehicleId: vehicle._id,
+      currentSourceType: vehicle.sourceType,
+      requestedSourceType: payload.sourceType,
+    });
+    if (recoveryRefusal) throw new ConvexError(recoveryRefusal);
 
     // Mirrors vehicles.update's acquisition-posting guard: a SOURCED→STOCK
     // flip (or a purchase price set for the first time) requested here must
@@ -406,9 +418,7 @@ export const resolve = mutation({
           ? await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, request.vehicleId)
           : false;
         if (("purchasePrice" in payload || "sourceCost" in payload) && resolveAcquisitionAlreadyExposed) {
-          throw new ConvexError(
-            "This vehicle's acquisition cost has already been posted to accounting. Use a correction journal entry instead of editing purchasePrice/sourceCost directly."
-          );
+          throwVehicleCostPosted();
         }
         const resolveAcquisitionSourceType = payload.sourceType ?? previousVehicle.sourceType;
         const resolveAcquisitionPurchasePrice = "purchasePrice" in payload ? payload.purchasePrice : previousVehicle.purchasePrice;
@@ -429,6 +439,14 @@ export const resolve = mutation({
           status: previousVehicle.status,
         });
         if (resolveOwnershipRefusal) throw new ConvexError(resolveOwnershipRefusal);
+        // SCRUM-389: re-checked at approval — a recovery can open in between.
+        const resolveRecoveryRefusal = await supplierCostRecoveryConversionRefusal(ctx, {
+          orgId: previousVehicle.orgId,
+          vehicleId: previousVehicle._id,
+          currentSourceType: previousVehicle.sourceType,
+          requestedSourceType: payload.sourceType as "STOCK" | "SOURCED" | undefined,
+        });
+        if (resolveRecoveryRefusal) throw new ConvexError(resolveRecoveryRefusal);
 
         const { purchasePaymentMethod: resolvePurchasePaymentMethod, ...vehiclePatchFields } = payload;
 
@@ -437,6 +455,11 @@ export const resolve = mutation({
           updatedBy: user._id, // Manager who approved it
           updatedAt: Date.now(),
         });
+
+        // SCRUM-700 N1: same hold rule as vehicles.update.
+        if (payload.status !== undefined) {
+          await syncVehicleHoldStatus(ctx, request.vehicleId, user._id);
+        }
 
         if (resolveNeedsAcquisitionPosting) {
           await postVehicleAcquisitionIfOwned(ctx, {
@@ -454,7 +477,7 @@ export const resolve = mutation({
 
         if (payload.status === "AVAILABLE" && previousVehicle && previousVehicle.status !== "AVAILABLE") {
           const updatedVehicle = await ctx.db.get(request.vehicleId);
-          if (updatedVehicle) {
+          if (updatedVehicle?.status === "AVAILABLE") {
             await maybeAutoPostToInstagram(ctx, {
               orgId: args.orgId,
               vehicle: updatedVehicle,
