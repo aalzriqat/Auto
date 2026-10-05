@@ -986,23 +986,40 @@ describe("SCRUM-713 - the default MANAGER role can unwind a paid deal without re
     // The finance-economics tier stays closed to this role: the unwind did not need it.
     expect(mayReadFinanceEconomics({ permissions: TEMPLATE_MANAGER_PERMS } as never)).toBe(false);
   });
-  test("a role holding only ONE of the two authorities gains no unwind power (Codex partial-role matrix)", async () => {
-    const { s, applicationId } = await paidDeal("m713_partial");
+  const MISSING_CONFIRM = /confirm:finance_disbursement/;
+  const MISSING_CANCEL = /cancel:closed_deal/;
+  test("START needs BOTH authorities: neither a cancel-only nor a confirm-only role can open an unwind (none exists yet)", async () => {
+    const { s, applicationId } = await paidDeal("m713_partial_start");
+    await expect(start(s, applicationId, crypto.randomUUID(), s.cancelOnly.as)).rejects.toThrow(MISSING_CONFIRM);
+    await expect(start(s, applicationId, crypto.randomUUID(), s.confirmOnly.as)).rejects.toThrow(MISSING_CANCEL);
+    for (const role of [s.confirmOnly, s.cancelOnly]) {
+      expect((await status(s, applicationId, role.as)).eligibility.canStart).toBe(false);
+    }
+    expect(await s.t.run((ctx) => ctx.db.query("dealUnwinds").collect())).toEqual([]);
+  });
+  test("a one-authority role gains no step power on an ACTIVE unwind (forward return, finish, status flags)", async () => {
+    const { s, applicationId } = await paidDeal("m713_partial_steps");
     const unwindId = await start(s, applicationId);
-    const before = await s.t.run((ctx) => ctx.db.get(unwindId));
     for (const role of [s.confirmOnly, s.cancelOnly]) {
       expect(await status(s, applicationId, role.as)).toMatchObject({
         eligibility: { canStart: false, canForwardReturn: false, canFinish: false },
       });
-      await expect(
-        role.as.mutation(api.dealUnwind.recordDealUnwindForwardReturn, {
-          orgId: s.orgId, unwindId, returnedAt: Date.now(), reference: "X-1", idempotencyKey: crypto.randomUUID(),
-        })
-      ).rejects.toThrow();
-      await expect(finish(s, unwindId, "BANK_TRANSFER", role.as)).rejects.toThrow();
     }
-    await expect(start(s, applicationId, crypto.randomUUID(), s.confirmOnly.as)).rejects.toThrow();
-    expect(await s.t.run((ctx) => ctx.db.get(unwindId))).toEqual(before);
+    const forward = (role: typeof s.confirmOnly) =>
+      role.as.mutation(api.dealUnwind.recordDealUnwindForwardReturn, {
+        orgId: s.orgId, unwindId, returnedAt: Date.now(), reference: "X-1", idempotencyKey: crypto.randomUUID(),
+      });
+    await expect(forward(s.confirmOnly)).rejects.toThrow();
+    await expect(forward(s.cancelOnly)).rejects.toThrow(MISSING_CONFIRM);
+    // The owner records the forward return, so the unwind sits at AWAITING_FINISH: a finish
+    // refusal here can only be the permission list, never a state refusal.
+    await forwardReturn(s, unwindId);
+    await expect(finish(s, unwindId, "BANK_TRANSFER", s.cancelOnly.as)).rejects.toThrow(MISSING_CONFIRM);
+    await expect(finish(s, unwindId, "BANK_TRANSFER", s.confirmOnly.as)).rejects.toThrow(MISSING_CANCEL);
+    for (const role of [s.confirmOnly, s.cancelOnly]) {
+      expect((await status(s, applicationId, role.as)).eligibility.canFinish).toBe(false);
+    }
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
   });
 
   test("the permission refusal has an Arabic and an English translation key", async () => {

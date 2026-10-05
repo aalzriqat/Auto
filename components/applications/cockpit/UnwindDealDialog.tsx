@@ -48,8 +48,7 @@ export type UnwindStatusView = Readonly<{
   evidence: Readonly<{
     remittanceMinor: number;
     remittanceMethod: "BANK_TRANSFER" | "CASH";
-    /** 
-ull for an unwind actor without finance-economics read: it equals deposit + contribution (SCRUM-713). */
+    /** `null` for an unwind actor without finance-economics read: it equals deposit + contribution (SCRUM-713). */
     forwardDueMinor: number | null;
   }> | null;
 }>;
