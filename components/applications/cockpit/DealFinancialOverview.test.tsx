@@ -194,6 +194,18 @@ describe("DealFinancialOverview", () => {
       );
       expect(screen.queryByTestId("overview-financier-received")).toBeNull();
     });
+    test("a payload from a backend that predates the field claims no remittance (frontend deploys before Convex)", () => {
+      const { receivedMinor: _omitted, ...olderFinancier } = pntr.financier;
+      render(
+        <DealFinancialOverview
+          summary={{ ...pntr, financier: olderFinancier as typeof pntr.financier }}
+          money={money}
+          t={tEn}
+        />
+      );
+      expect(screen.queryByTestId("overview-financier-received")).toBeNull();
+      expect(screen.queryByText(/NaN/)).toBeNull();
+    });
     test("an unreadable stored remittance is shown as unreadable, not hidden", () => {
       render(
         <DealFinancialOverview

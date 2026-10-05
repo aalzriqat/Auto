@@ -195,8 +195,9 @@ export type DealFinancialSummary = Readonly<{
   customerFirstPaymentMinor: number | null;
   financier: Readonly<{
     /**
-     * The confirmed remittance — the full approved amount (SCRUM-595 c21888) —
-     * and null until one is confirmed. `fundedPortionMinor` is the financed
+     * The confirmed remittance as `confirmDisbursement` recorded it — on v2
+     * deals the full approved amount (SCRUM-595 c21888), on legacy deals the
+     * net receivable — and null until one is confirmed. `fundedPortionMinor` is the financed
      * slice of the approved amount, a breakdown, never the receipt (SCRUM-690).
      */
     receivedMinor: number | null;
