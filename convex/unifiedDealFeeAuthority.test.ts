@@ -958,7 +958,10 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         issuedTo: "FINANCE_COMPANY",
       });
 
-      const feeId = await asOwner.mutation(api.financeDealCosts.recordDealFee, {
+      // SCRUM-690 F-PNTR-1 (c22119): an unrelated dealership cost — even one
+      // of the fee's amount — does not retire the execution fee. Only a line
+      // LINKED to it does, so finalization is refused until one is.
+      const unrelatedId = await asOwner.mutation(api.financeDealCosts.recordDealFee, {
         expectedCurrency: "JOD",
         orgId,
         applicationId,
@@ -970,6 +973,27 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         actualAmountMinor: 700 * 1000,
         description: "Execution fees recorded.",
         idempotencyKey: `fee-auth-${applicationId}`,
+      });
+      await asOwner.mutation(api.financeDealCosts.voidDealFee, {
+        orgId,
+        feeId: unrelatedId,
+        reason: "Recorded under the wrong type; the execution fee is linked below.",
+      });
+      await expect(
+        asOwner.mutation(api.applications.finalizeDeal, {
+          orgId,
+          applicationId,
+          idempotencyKey: `authority-finalize-refused-${applicationId}`,
+        })
+      ).rejects.toThrow(/execution fee has no actual recorded/);
+
+      const feeId = await asOwner.mutation(api.financeDealCosts.recordExecutionFeeActual, {
+        orgId,
+        applicationId,
+        actualAmountMinor: 700 * 1000,
+        expectedCurrency: "JOD",
+        paidBy: "DEALER",
+        idempotencyKey: `fee-exec-${applicationId}`,
       });
       await asOwner.mutation(api.financeDealCosts.reconcileDealFee, {
         orgId,
