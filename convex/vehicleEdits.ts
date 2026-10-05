@@ -18,6 +18,7 @@ import { assertVehicleImagesAllowed } from "./utils/storageValidation";
 import { acquisitionPaymentMethodValidator, type AcquisitionPaymentMethod } from "./utils/paymentMethods";
 import { postVehicleAcquisitionIfOwned, hasVehicleAcquisitionAccountingExposure, throwVehicleCostPosted } from "./vehicles";
 import { retroactiveOwnershipChangeRefusal } from "./utils/vehicleOwnership";
+import { syncVehicleHoldStatus } from "./utils/depositHelpers";
 import { supplierCostRecoveryConversionRefusal } from "./utils/costBearer";
 
 type VehicleEditPayload = {
@@ -455,6 +456,11 @@ export const resolve = mutation({
           updatedAt: Date.now(),
         });
 
+        // SCRUM-700 N1: same hold rule as vehicles.update.
+        if (payload.status !== undefined) {
+          await syncVehicleHoldStatus(ctx, request.vehicleId, user._id);
+        }
+
         if (resolveNeedsAcquisitionPosting) {
           await postVehicleAcquisitionIfOwned(ctx, {
             orgId: args.orgId,
@@ -471,7 +477,7 @@ export const resolve = mutation({
 
         if (payload.status === "AVAILABLE" && previousVehicle && previousVehicle.status !== "AVAILABLE") {
           const updatedVehicle = await ctx.db.get(request.vehicleId);
-          if (updatedVehicle) {
+          if (updatedVehicle?.status === "AVAILABLE") {
             await maybeAutoPostToInstagram(ctx, {
               orgId: args.orgId,
               vehicle: updatedVehicle,
