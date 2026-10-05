@@ -96,3 +96,108 @@ export function aliasReceiverWritten(args: Args) {
     active ? { orgId: args.orgId as Id<"organizations"> } : "skip",
   );
 }
+
+/** CS-686-1: `!== null` leaves `undefined` (absence) possible, so a required id can be absent. */
+export function strictNullKeepsUndefined(args: { id: Id<"vehicles"> | null | undefined }) {
+  const active = args.id !== null;
+  return useQuery(
+    api.skipGate.strictNullKeepsUndefined,
+    active ? { id: args.id as Id<"vehicles"> } : "skip",
+  );
+}
+
+/** CS-686-1 control: `!= null` removes both null and undefined. */
+export function looseNullClean(args: { id: Id<"vehicles"> | null | undefined }) {
+  const active = args.id != null;
+  return useQuery(
+    api.skipGate.looseNullClean,
+    active ? { id: args.id as Id<"vehicles"> } : "skip",
+  );
+}
+
+/** CS-686-1 control: `!== undefined` removes undefined but keeps null. */
+export function strictUndefinedKeepsNull(args: { id: Id<"vehicles"> | null | undefined }) {
+  const active = args.id !== undefined;
+  return useQuery(
+    api.skipGate.strictUndefinedKeepsNull,
+    active ? { id: args.id as Id<"vehicles"> } : "skip",
+  );
+}
+
+type Box = { id: Id<"vehicles"> | null };
+
+/** CS-686-2: the receiver is mutated through ANOTHER reference after the guard. */
+export function mutatedViaOther(box: Box) {
+  const active = box.id != null;
+  const clear = (other: Box) => {
+    other.id = null;
+  };
+  clear(box);
+  return useQuery(
+    api.skipGate.mutatedViaOther,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+
+/** CS-686-2 variants: receiver aliased / spread / captured by a closure. */
+export function aliasedReceiver(box: Box) {
+  const active = box.id != null;
+  const same = box;
+  same.id = null;
+  return useQuery(
+    api.skipGate.aliasedReceiver,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+export function closureReceiver(box: Box) {
+  const active = box.id != null;
+  const reset = () => {
+    box.id = null;
+  };
+  reset();
+  return useQuery(
+    api.skipGate.closureReceiver,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+declare function opaqueMutator(value: unknown): void;
+export function escapedAsArgument(box: Box) {
+  const active = box.id != null;
+  opaqueMutator(box);
+  return useQuery(
+    api.skipGate.escapedAsArgument,
+    active ? { id: box.id as Id<"vehicles"> } : "skip",
+  );
+}
+
+/** CS-686-3: a local binding named `undefined` is not the global. */
+export function shadowedUndefinedParam(undefined: string, id: Id<"vehicles"> | null) {
+  const active = id != undefined;
+  return useQuery(
+    api.skipGate.shadowedUndefinedParam,
+    active ? { id: id as Id<"vehicles"> } : "skip",
+  );
+}
+export function shadowedUndefinedLocal(id: Id<"vehicles"> | null) {
+  const undefined = "x";
+  const active = id !== undefined;
+  return useQuery(
+    api.skipGate.shadowedUndefinedLocal,
+    active ? { id: id as Id<"vehicles"> } : "skip",
+  );
+}
+/** CS-686-3 control: the global `undefined` and `void 0` still prove non-undefined. */
+export function globalUndefinedClean(args: { id: Id<"vehicles"> | undefined }) {
+  const active = args.id !== undefined;
+  return useQuery(
+    api.skipGate.globalUndefinedClean,
+    active ? { id: args.id as Id<"vehicles"> } : "skip",
+  );
+}
+export function voidZeroClean(args: { id: Id<"vehicles"> | undefined }) {
+  const active = args.id !== void 0;
+  return useQuery(
+    api.skipGate.voidZeroClean,
+    active ? { id: args.id as Id<"vehicles"> } : "skip",
+  );
+}

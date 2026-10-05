@@ -89,3 +89,45 @@ describe("NEGATIVE controls still report null", () => {
 });
 
 
+
+const admitsUndefined = (n?: Node): boolean => {
+  const cur = strip(n);
+  if (!cur) return false;
+  if (cur.kind === "literal") return [...(cur.values ?? [])].some((v) => v === undefined);
+  if (cur.kind === "variants") return (cur.nodes ?? []).some(admitsUndefined);
+  return false;
+};
+/** Anything that is NOT a provably-clean Id: null/undefined admitted, or an opaque/unresolved value. */
+const notProvenClean = (n?: Node): boolean => {
+  const cur = strip(n);
+  return admitsNull(cur) || !cur || ["opaqueValue", "unresolved"].includes(cur.kind);
+};
+
+describe("SCRUM-686 Codex findings (fail closed)", () => {
+  test("CS-686-1 `!== null` keeps undefined: a required id can still be absent", () => {
+    expect(admitsUndefined(field("strictNullKeepsUndefined", "id"))).toBe(true);
+    expect(admitsNullOnly(field("strictNullKeepsUndefined", "id"))).toBe(false);
+  });
+  test("CS-686-1 `!== undefined` keeps null", () => {
+    expect(admitsNullOnly(field("strictUndefinedKeepsNull", "id"))).toBe(true);
+    expect(admitsUndefined(field("strictUndefinedKeepsNull", "id"))).toBe(false);
+  });
+  test("CS-686-1 control: `!= null` stays clean", () => {
+    expect(admitsNull(field("looseNullClean", "id"))).toBe(false);
+  });
+  test("CS-686-2 receiver mutated through another reference is not proof", () => {
+    for (const fn of ["mutatedViaOther", "aliasedReceiver", "closureReceiver", "escapedAsArgument"]) {
+      expect(notProvenClean(field(fn, "id")), fn).toBe(true);
+    }
+  });
+  test("CS-686-3 a local binding named `undefined` is not proof", () => {
+    for (const fn of ["shadowedUndefinedParam", "shadowedUndefinedLocal"]) {
+      expect(notProvenClean(field(fn, "id")), fn).toBe(true);
+    }
+  });
+  test("CS-686-3 control: global `undefined` and `void 0` still prove non-undefined", () => {
+    expect(admitsNull(field("globalUndefinedClean", "id"))).toBe(false);
+    expect(admitsUndefined(field("globalUndefinedClean", "id"))).toBe(false);
+    expect(admitsUndefined(field("voidZeroClean", "id"))).toBe(false);
+  });
+});

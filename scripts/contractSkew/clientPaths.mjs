@@ -901,10 +901,10 @@ function collectFromExpression(expr, context) {
     // `undefined` means no transmitted value. Preserve the other alternative
     // directly so a query's `cond ? undefined : "skip"` can still normalize to
     // the known empty-payload state after the sentinel is removed.
-    if (isUndefinedExpression(node.whenTrue)) {
+    if (isUndefinedExpression(checker, node.whenTrue)) {
       return collectFromExpression(node.whenFalse, nested());
     }
-    if (isUndefinedExpression(node.whenFalse)) {
+    if (isUndefinedExpression(checker, node.whenFalse)) {
       return collectFromExpression(node.whenTrue, nested());
     }
     const whenTrueRefinements = truthyRefinementsForCondition(
@@ -943,7 +943,11 @@ function collectFromExpression(expr, context) {
   const access = routeParamAccess(node);
   const receiverSymbol = access ? resolveSymbol(checker, access.receiver) : null;
   if (access && receiverSymbol && !evidence.isWrittenSymbol(receiverSymbol)) {
-    return applyUseSiteRefinement(collected, refinementForExpression(checker, node, refinements));
+    return applyUseSiteRefinement(
+      collected,
+      refinementForExpression(checker, node, refinements),
+      declaredTypeAdmitsUndefined(checker, accessSymbol(checker, node)),
+    );
   }
   return collected;
 }
@@ -952,7 +956,8 @@ function collectIdentifierFromSymbol(node, symbol, context) {
   const { checker, prefix, acc, depth, seen, evidence, expressionSeen, refinements } = context;
   const refinement = refinementForExpression(checker, node, refinements, symbol);
   const routeParam = routeParamRuntimeNode(node, checker, evidence, new Set(), symbol);
-  if (routeParam) return applyUseSiteRefinement(routeParam, refinement);
+  const mayBeUndefined = declaredTypeAdmitsUndefined(checker, symbol);
+  if (routeParam) return applyUseSiteRefinement(routeParam, refinement, mayBeUndefined);
 
   const alias = evidence.assertionInitializerForSymbol(symbol);
   if (alias) {
@@ -964,6 +969,7 @@ function collectIdentifierFromSymbol(node, symbol, context) {
       return applyUseSiteRefinement(
         collectFromExpression(alias.expression, { ...context, depth: depth + 1 }),
         refinement,
+        mayBeUndefined,
       );
     } finally {
       expressionSeen.delete(alias.symbol);
@@ -989,11 +995,12 @@ function collectIdentifierFromSymbol(node, symbol, context) {
         collectPaths(checker, branch, prefix, acc, depth + 1, seen, "LITERAL"),
       );
     }
-    return applyUseSiteRefinement(merged ?? clientNode.unresolved(), refinement);
+    return applyUseSiteRefinement(merged ?? clientNode.unresolved(), refinement, mayBeUndefined);
   }
   return applyUseSiteRefinement(
     collectPaths(checker, type, prefix, acc, depth, seen, "LITERAL"),
     refinement,
+    mayBeUndefined,
   );
 }
 
@@ -1032,8 +1039,45 @@ function shorthandUseSiteBranches(checker, node, declared) {
   return kept;
 }
 
-function isUndefinedExpression(node) {
-  return ts.isIdentifier(node) && node.text === "undefined";
+/**
+ * SCRUM-686 (CS-686-3). Only the GLOBAL `undefined` (or `void 0`) is the undefined
+ * value. `undefined` is not a reserved word: a parameter, a local `const`, an
+ * import or a type-level declaration can all bind the name, and then `x != undefined`
+ * proves nothing. The global value symbol has no declarations in the program; any
+ * resolved symbol that has one is a local binding and gives no proof. An
+ * unresolvable identifier is not trusted either.
+ */
+function isUndefinedExpression(checker, node) {
+  if (ts.isParenthesizedExpression(node)) return isUndefinedExpression(checker, node.expression);
+  if (ts.isVoidExpression(node)) {
+    return ts.isNumericLiteral(node.expression) && node.expression.text === "0";
+  }
+  if (!ts.isIdentifier(node) || node.text !== "undefined") return false;
+  const symbol = checker.getSymbolAtLocation(node);
+  return Boolean(symbol) && (symbol.declarations ?? []).length === 0;
+}
+
+/**
+ * SCRUM-686 (CS-686-1). The checker drops an `undefined` union member from every
+ * type it reads (absence is not a value), so a refinement that proves only
+ * "not null" must put the possibility of `undefined` back, or a required field
+ * would read as always present. Fail closed: no symbol, `any`/`unknown`, an
+ * optional member, or an `undefined`/`void` member all admit undefined.
+ */
+function declaredTypeAdmitsUndefined(checker, symbol) {
+  if (!symbol) return true;
+  if (symbol.flags & ts.SymbolFlags.Optional) return true;
+  const type = checker.getTypeOfSymbol(symbol);
+  if (type.getFlags() & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return true;
+  return typeAdmitsUndefined(type);
+}
+
+function accessSymbol(checker, node) {
+  if (ts.isPropertyAccessExpression(node)) return checker.getSymbolAtLocation(node.name);
+  if (ts.isElementAccessExpression(node) && node.argumentExpression) {
+    return checker.getSymbolAtLocation(node.argumentExpression);
+  }
+  return null;
 }
 
 function createFlowRefinements() {
@@ -1134,7 +1178,7 @@ function recordTruthyCondition(checker, condition, refinements, evidence = null,
     recordTruthyCondition(checker, condition.right, refinements, evidence, viaAlias);
     return;
   }
-  const nullTest = nullComparisonRefinement(condition);
+  const nullTest = nullComparisonRefinement(checker, condition);
   if (nullTest) {
     recordExpressionRefinement(checker, nullTest.subject, refinements, nullTest.refinement, evidence, viaAlias);
     return;
@@ -1184,13 +1228,13 @@ function recordFalsyCondition(checker, condition, refinements, evidence = null, 
  * possible and `!= null` does not exclude `0` or `""`, so none of them is read
  * as truthiness.
  */
-function nullComparisonRefinement(condition) {
+function nullComparisonRefinement(checker, condition) {
   if (!ts.isBinaryExpression(condition)) return null;
   const operator = condition.operatorToken.kind;
   const strict = operator === ts.SyntaxKind.ExclamationEqualsEqualsToken;
   if (!strict && operator !== ts.SyntaxKind.ExclamationEqualsToken) return null;
   const isNull = (n) => n.kind === ts.SyntaxKind.NullKeyword;
-  const isNullish = (n) => isNull(n) || isUndefinedExpression(n);
+  const isNullish = (n) => isNull(n) || isUndefinedExpression(checker, n);
   const left = condition.left;
   const right = condition.right;
   const [subject, literal] = isNullish(right) ? [left, right] : [right, left];
@@ -1207,7 +1251,10 @@ function recordExpressionRefinement(checker, condition, refinements, refinement,
   if (ts.isIdentifier(condition)) {
     const symbol = resolveSymbol(checker, condition);
     if (symbol && !(viaAlias && evidence?.isWrittenSymbol(symbol))) {
-      refinements.identifiers.set(symbol, refinement);
+      refinements.identifiers.set(
+        symbol,
+        combineRefinement(refinements.identifiers.get(symbol), refinement),
+      );
     }
     return;
   }
@@ -1216,9 +1263,134 @@ function recordExpressionRefinement(checker, condition, refinements, refinement,
   const receiverSymbol = resolveSymbol(checker, access.receiver);
   if (!receiverSymbol) return;
   if (viaAlias && evidence?.isWrittenSymbol(receiverSymbol)) return;
+  // CS-686-2: a property fact survives only while the receiver cannot be
+  // reached and mutated through another reference.
+  if (!receiverIsConfinedAt(checker, receiverSymbol, condition)) return;
   const properties = refinements.properties.get(receiverSymbol) ?? new Map();
-  properties.set(access.name, refinement);
+  properties.set(access.name, combineRefinement(properties.get(access.name), refinement));
   refinements.properties.set(receiverSymbol, properties);
+}
+
+/**
+ * Two facts about one subject that both hold (an `&&` chain). `!== null` and
+ * `!== undefined` together are `!= null`; anything else keeps the previous
+ * behaviour (the newer fact replaces the older one).
+ */
+function combineRefinement(previous, next) {
+  if (
+    (previous === "nonNull" && next === "nonUndefined") ||
+    (previous === "nonUndefined" && next === "nonNull")
+  ) {
+    return "nonNullish";
+  }
+  return next;
+}
+
+/** @type {WeakMap<import("typescript").Symbol, import("typescript").Node | null>} */
+const confinementScopes = new WeakMap();
+
+function enclosingFunctionLike(node) {
+  return ts.findAncestor(node.parent, (n) => ts.isFunctionLike(n)) ?? null;
+}
+
+/** True when `target` (a property access) is written, called as a method, or deleted. */
+function isWriteOrCallTarget(access) {
+  let child = access;
+  let parent = access.parent;
+  // Climb destructuring-assignment targets: `[a.x] = ...`, `({ k: a.x } = ...)`, `[...a.x] = ...`.
+  while (
+    parent &&
+    (ts.isParenthesizedExpression(parent) ||
+      ts.isArrayLiteralExpression(parent) ||
+      ts.isSpreadElement(parent) ||
+      ts.isSpreadAssignment(parent) ||
+      (ts.isPropertyAssignment(parent) && parent.initializer === child) ||
+      ts.isObjectLiteralExpression(parent))
+  ) {
+    child = parent;
+    parent = parent.parent;
+  }
+  if (!parent) return true;
+  if (
+    ts.isBinaryExpression(parent) &&
+    parent.left === child &&
+    parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+    parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+  ) {
+    return true;
+  }
+  if (
+    (ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) &&
+    (parent.operator === ts.SyntaxKind.PlusPlusToken || parent.operator === ts.SyntaxKind.MinusMinusToken)
+  ) {
+    return true;
+  }
+  if (ts.isDeleteExpression(parent)) return true;
+  if ((ts.isForOfStatement(parent) || ts.isForInStatement(parent)) && parent.initializer === child) return true;
+  // `a.method()` runs with `this === a`; `tag`x`` likewise.
+  if ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.expression === child) return true;
+  if (ts.isTaggedTemplateExpression(parent) && parent.tag === child) return true;
+  return false;
+}
+
+/**
+ * SCRUM-686 (CS-686-2). The function-like in which `symbol` is a never-escaping
+ * binding, or null. Proof obligation: the binding is a parameter or a `const`
+ * with a plain identifier name, and EVERY reference to it anywhere in its file is
+ * a property/element READ — in the same function body, not in a nested closure,
+ * never passed as an argument, aliased, spread, destructured, captured, returned,
+ * written, or used as a method receiver. Anything else may mutate a property
+ * through another reference, so a fact recorded about `symbol.prop` is unproven.
+ */
+function confinementScope(checker, symbol) {
+  if (confinementScopes.has(symbol)) return confinementScopes.get(symbol);
+  let scope = null;
+  const declarations = symbol.declarations ?? [];
+  if (declarations.length === 1) {
+    const [declaration] = declarations;
+    if (ts.isParameter(declaration) && ts.isIdentifier(declaration.name) && ts.isFunctionLike(declaration.parent)) {
+      scope = declaration.parent;
+    } else if (
+      ts.isVariableDeclaration(declaration) &&
+      ts.isIdentifier(declaration.name) &&
+      declaration.initializer &&
+      ts.isVariableDeclarationList(declaration.parent) &&
+      declaration.parent.flags & ts.NodeFlags.Const
+    ) {
+      scope = enclosingFunctionLike(declaration);
+    }
+    if (scope) {
+      const declarationName = declaration.name;
+      let confined = true;
+      const visit = (node) => {
+        if (!confined) return;
+        if (ts.isIdentifier(node) && node !== declarationName && node.text === declarationName.text) {
+          const referenced = ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node
+            ? checker.getShorthandAssignmentValueSymbol(node.parent)
+            : checker.getSymbolAtLocation(node);
+          if (referenced === symbol) {
+            const parent = node.parent;
+            const isRead =
+              (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) &&
+              parent.expression === node &&
+              !isWriteOrCallTarget(parent) &&
+              enclosingFunctionLike(node) === scope;
+            if (!isRead) confined = false;
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(declaration.getSourceFile());
+      if (!confined) scope = null;
+    }
+  }
+  confinementScopes.set(symbol, scope);
+  return scope;
+}
+
+function receiverIsConfinedAt(checker, receiverSymbol, conditionNode) {
+  const scope = confinementScope(checker, receiverSymbol);
+  return Boolean(scope) && enclosingFunctionLike(conditionNode) === scope;
 }
 /**
  * Restrict reconstructed runtime evidence to alternatives reachable at the
@@ -1226,14 +1398,19 @@ function recordExpressionRefinement(checker, condition, refinements, refinement,
  * containers. Wider scalars remain wider, so a truthiness check can never turn
  * an unproven string into an ID or an enumeration member.
  */
-function applyUseSiteRefinement(node, refinement) {
+function applyUseSiteRefinement(node, refinement, mayBeUndefined = false) {
   if (!refinement) return node;
-  const refined =
+  let refined =
     refinement === "truthy"
       ? truthyNode(node)
       : refinement === "falsy"
         ? falsyNode(node)
         : keepValuesNode(node, NULL_TEST_KEEP[refinement]);
+  // CS-686-1: `!== null` does not exclude `undefined`; the checker dropped it from
+  // the type, so put the absence back as an explicit possibility.
+  if (refinement === "nonNull" && mayBeUndefined) {
+    refined = mergeClientNodes(refined, clientNode.literal(new Set([undefined])));
+  }
   // A contradictory branch is unreachable. `unresolved` is the conservative
   // fallback if TypeScript and the syntax evidence ever disagree; it denies a
   // clean PASS without fabricating a concrete BREAKING value.
