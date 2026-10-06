@@ -327,7 +327,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
     const purchasePrice = parseOptionalNumber(form.purchasePrice);
     const consignment = form.ownership === "SOURCED";
     const owned = form.ownership === "STOCK";
-    const valid = validate({
+    const ownershipErrors = {
       ownership: creating && !form.ownership ? requiredSelectionMessage(locale) : undefined,
       sourcedFromName: creating && consignment ? requiredText(form.sourcedFromName, locale) : undefined,
       sourceCost: creating && consignment && !(sourceCost !== undefined && sourceCost > 0) ? invalidNumberMessage(locale) : undefined,
@@ -336,6 +336,10 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
       purchasePrice: creating && owned && form.purchasePrice.trim() && !(purchasePrice !== undefined && purchasePrice > 0) ? invalidNumberMessage(locale) : undefined,
       purchasePaymentMethod: creating && owned && purchasePrice !== undefined && purchasePrice > 0 && !form.purchasePaymentMethod ? requiredSelectionMessage(locale) : undefined,
       purchaseSupplierName: creating && owned && form.purchasePaymentMethod === "ON_ACCOUNT" ? requiredText(form.purchaseSupplierName, locale) : undefined,
+    };
+    const ownershipGap = Object.values(ownershipErrors).some(Boolean);
+    const valid = validate({
+      ...ownershipErrors,
       make: requiredText(form.make, locale),
       model: requiredText(form.model, locale),
       year: year === null ? invalidNumberMessage(locale) : undefined,
@@ -349,18 +353,13 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
       // The ownership questions live on step 2 of 3 and the save button on step 3,
       // so a refusal there must take the operator back to the unanswered question
       // rather than leave the error on a screen they have already left.
-      if (!valid && creating && vehicleStep === 2) {
-        const ownershipGap = !form.ownership
-          || (consignment && (!form.sourcedFromName.trim() || !(sourceCost !== undefined && sourceCost > 0)))
-          || (owned && ((form.purchasePrice.trim() !== "" && !(purchasePrice !== undefined && purchasePrice > 0))
-            || (purchasePrice !== undefined && purchasePrice > 0 && !form.purchasePaymentMethod)
-            || (form.purchasePaymentMethod === "ON_ACCOUNT" && !form.purchaseSupplierName.trim())));
-        if (ownershipGap) setVehicleStep(1);
-      }
+      if (!valid && creating && vehicleStep === 2 && ownershipGap) setVehicleStep(1);
       return;
     }
     setSaving(true);
     try {
+      // `purchasePrice` is not part of the shared payload: it travels only with an
+      // edit or an owned car, never with a consignment car.
       const payload = {
         orgId,
         vin,
@@ -372,20 +371,18 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
         color: form.color || "-",
         fuelType: form.fuelType || "-",
         transmission: form.transmission || "-",
-        purchasePrice,
         sellingPrice,
         status: form.status,
         notes: maybeText(form.notes),
         imageIds: photos.map((photo) => photo.id),
       };
       if (editing) {
-        await updateVehicle({ ...payload, vehicleId: editing._id });
+        await updateVehicle({ ...payload, purchasePrice, vehicleId: editing._id });
       } else {
         createVehicleKeyRef.current ??= `vehicle-create:${crypto.randomUUID()}`;
         // The two ownership shapes are mutually exclusive on the wire: a consignment
         // car carries its supplier and cost and never a purchase price; an owned car
         // carries its price and settlement and never a consignment supplier.
-        const { purchasePrice: _ownedPrice, ...withoutPrice } = payload;
         const ownershipArgs = consignment
           ? { sourceType: "SOURCED" as const, sourcedFromName: form.sourcedFromName.trim(), sourceCost }
           : {
@@ -399,7 +396,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
                 : {}),
             };
         await createVehicle({
-          ...(consignment ? withoutPrice : payload),
+          ...payload,
           ...ownershipArgs,
           idempotencyKey: createVehicleKeyRef.current,
         });

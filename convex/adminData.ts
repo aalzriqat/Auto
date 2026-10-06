@@ -7,7 +7,7 @@ import { requireSuperAdmin } from "./utils/tenancy";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { logAdminAction } from "./adminAudit";
 import { assertAdminMayMutateTable } from "./utils/financialGuards";
-import { VEHICLE_SOURCE_SHAPE_MESSAGES } from "./utils/vehicleSourceShape";
+import { VEHICLE_OWNERSHIP_FIELD_KEYS, throwVehicleSourceShape } from "./utils/vehicleSourceShape";
 
 // Tables browsable in the cross-org Data Browser UI. Deliberately a subset
 // of every org-scoped table (excludes internal/derived tables like
@@ -171,13 +171,8 @@ function assertPatchDoesNotForgeVehicleLifecycle(
  * workflow are the doors. Only a change is refused, so the editor's whole-record
  * round trip (which re-sends current values) still saves.
  */
-const VEHICLE_OWNERSHIP_FIELDS = [
-  "sourceType",
-  "sourcedFromName",
-  "sourceCost",
-  "purchasePrice",
-  "purchasePaymentMethod",
-] as const;
+// `purchaseSupplierName` is a transient posting input, never a stored vehicle field.
+const VEHICLE_OWNERSHIP_FIELDS = VEHICLE_OWNERSHIP_FIELD_KEYS.filter((key) => key !== "purchaseSupplierName");
 
 function assertPatchDoesNotChangeVehicleOwnership(
   table: string,
@@ -190,7 +185,7 @@ function assertPatchDoesNotChangeVehicleOwnership(
   for (const field of VEHICLE_OWNERSHIP_FIELDS) {
     if (!(field in next)) continue;
     if (String(next[field] ?? "") === String(before[field] ?? "")) continue;
-    throwAppError(AppErrorCode.VEHICLE_OWNERSHIP_FIELDS_LOCKED, VEHICLE_SOURCE_SHAPE_MESSAGES.VEHICLE_OWNERSHIP_FIELDS_LOCKED);
+    throwVehicleSourceShape("VEHICLE_OWNERSHIP_FIELDS_LOCKED");
   }
 }
 

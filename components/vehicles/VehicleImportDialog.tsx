@@ -15,6 +15,7 @@ import {
   type ImportPreflightInfo,
 } from "@/components/import/ImportWizard";
 import {
+  ACQUISITION_PAYMENT_METHODS,
   PaymentMethodSelect,
   type AcquisitionPaymentMethod,
 } from "@/components/payments/PaymentMethodSelect";
@@ -132,7 +133,7 @@ const PREVIEW_COLUMNS = [
 function normalizeImportSourceType(raw: unknown): "STOCK" | "SOURCED" | undefined {
   const value = String(raw ?? "").trim().toUpperCase();
   if (!value) return undefined;
-  if (value === "SOURCED" || value.includes("SOURCE") || value.includes("CONSIGN") || value.includes("مصدر") || value.includes("خارج") || value.includes("برسم")) {
+  if (value.includes("SOURCE") || value.includes("CONSIGN") || value.includes("مصدر") || value.includes("خارج") || value.includes("برسم")) {
     return "SOURCED";
   }
   if (value === "STOCK" || value === "OWNED" || value === "OWN" || value.includes("مخزون") || value.includes("مملوك") || value.includes("ملك")) {
@@ -417,30 +418,11 @@ function renderVehiclePreviewCell(row: ImportRow, key: string) {
 // ---------------------------------------------------------------------------
 type AcquisitionPosting = "OPENING_STOCK" | "PURCHASE";
 
-/**
- * The four settled methods AND ON_ACCOUNT.
- *
- * An earlier revision offered only the four settled methods, reasoning that
- * exposing supplier credit here would be an asymmetry with the single-vehicle
- * form. That was the wrong trade once this dialog started POSTING. With
- * ON_ACCOUNT withheld, a dealer who bought on supplier credit had no truthful
- * selection: every remaining option credits cash, bank, cheque or card for money
- * that never moved, and writes no `vehicleSupplierPayables` row. An importer
- * that can only record a purchase by misstating how it was paid defeats the
- * point of SCRUM-59, which exists to stop the importer writing the wrong books.
- *
- * The server already implements, guards and tests this branch — it demands a
- * supplier name per capitalizing row and credits AP-Suppliers instead of cash.
- * Only this list withheld it. Owner decision, 2026-08-19, scoped to the bulk
- * importer and deliberately not to the single-vehicle form.
- */
-const IMPORT_PAYMENT_METHODS: readonly AcquisitionPaymentMethod[] = [
-  "CASH",
-  "BANK_TRANSFER",
-  "CHEQUE",
-  "CARD",
-  "ON_ACCOUNT",
-];
+// The importer offers the four settled methods AND ON_ACCOUNT
+// (`ACQUISITION_PAYMENT_METHODS`): a dealer who bought on supplier credit has no
+// truthful selection otherwise, and SCRUM-59 exists to stop the importer writing
+// the wrong books. The server demands a supplier name per capitalizing row and
+// credits AP-Suppliers instead of cash. Owner decision, 2026-08-19.
 
 /** Rows that will actually reach Vehicle Inventory: owned, with a cost. */
 function capitalizingRows(rows: Record<string, any>[]) {
@@ -645,7 +627,7 @@ function ImportAccountingChoice({
                 t={t as any}
                 value={paymentMethod ?? undefined}
                 onValueChange={setPaymentMethod}
-                methods={IMPORT_PAYMENT_METHODS}
+                methods={ACQUISITION_PAYMENT_METHODS}
                 ariaLabel={t("ImportPaidFrom" as any)}
                 placeholder={t("ImportPaidFromPlaceholder" as any)}
               />

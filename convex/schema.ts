@@ -1796,7 +1796,8 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_org", ["orgId"])
-    .index("by_org_status", ["orgId", "status"]),
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"]),
 
   customers: defineTable({
     orgId: v.id("organizations"),

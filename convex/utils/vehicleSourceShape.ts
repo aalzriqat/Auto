@@ -107,10 +107,8 @@ export function assertVehicleSourceShapeOnUpdate(
   patch: VehicleSourceFields
 ): void {
   const existingType = storedVehicleSourceType(existing.sourceType);
-  const patchType = patch.sourceType === undefined ? null : parseVehicleSourceType(patch.sourceType);
-  if (patch.sourceType !== undefined && patch.sourceType !== null && !patchType) {
-    throwVehicleSourceShape("VEHICLE_SOURCE_TYPE_REQUIRED");
-  }
+  const patchType = parseVehicleSourceType(patch.sourceType);
+  if (patch.sourceType != null && !patchType) throwVehicleSourceShape("VEHICLE_SOURCE_TYPE_REQUIRED");
   const typeChanges = patchType !== null && patchType !== existingType;
   const nameChanges =
     patch.sourcedFromName !== undefined &&
@@ -138,16 +136,78 @@ export function assertVehicleSourceShapeOnUpdate(
  * an on-account purchase must name its creditor in `purchaseSupplierName` (never
  * `sourcedFromName`). Both are required before anything is written.
  */
-export function assertOwnedPurchaseTerms(input: {
-  purchasePrice?: number | null;
-  purchasePaymentMethod?: string | null;
-  purchaseSupplierName?: string | null;
-}): void {
+export function assertOwnedPurchaseTerms(input: OwnedPurchaseTermsInput): void {
   const priced = typeof input.purchasePrice === "number" && input.purchasePrice > 0;
   if (priced && !input.purchasePaymentMethod) {
     throwAppError(AppErrorCode.VALIDATION_FAILED, "Payment method is required when a purchase price is entered.");
   }
-  if (input.purchasePaymentMethod === "ON_ACCOUNT" && !hasText(input.purchaseSupplierName)) {
+  assertOnAccountHasCreditor(input.purchasePaymentMethod, input.purchaseSupplierName);
+}
+
+export interface OwnedPurchaseTermsInput {
+  purchasePrice?: number | null;
+  purchasePaymentMethod?: string | null;
+  purchaseSupplierName?: string | null;
+}
+
+/** An on-account purchase must name its creditor; any other method needs none. */
+export function assertOnAccountHasCreditor(
+  method: string | null | undefined,
+  creditorName: string | null | undefined
+): void {
+  if (method === "ON_ACCOUNT" && !hasText(creditorName)) {
     throwVehicleSourceShape("VEHICLE_PURCHASE_SUPPLIER_REQUIRED");
   }
 }
+
+/**
+ * True when the submission states a positive finite price, a settlement method
+ * and (for ON_ACCOUNT) a creditor — the buy-out / owned-purchase terms in full.
+ */
+export function ownedPurchaseTermsComplete(input: OwnedPurchaseTermsInput): boolean {
+  return (
+    typeof input.purchasePrice === "number" &&
+    Number.isFinite(input.purchasePrice) &&
+    input.purchasePrice > 0 &&
+    !!input.purchasePaymentMethod &&
+    (input.purchasePaymentMethod !== "ON_ACCOUNT" || hasText(input.purchaseSupplierName))
+  );
+}
+
+/**
+ * INTAKE of a new vehicle: the explicit, coherent ownership shape, plus — for an
+ * owned (non-SOURCED) row — its purchase terms. Returns the canonical type.
+ * (importBulk keeps the bare shape guard: its terms are batch-level.)
+ */
+export function assertVehicleIntake(input: VehicleSourceFields & OwnedPurchaseTermsInput): VehicleSourceType {
+  const type = assertVehicleIntakeSourceShape(input);
+  if (type !== "SOURCED") assertOwnedPurchaseTerms(input);
+  return type;
+}
+
+/** Direct shape check for a consignment vehicle's supplier and cost. */
+export function assertSourcedShape(name: string | null | undefined, cost: number | null | undefined): void {
+  assertShapeFor("SOURCED", name, cost);
+}
+
+/**
+ * The type a patch asks the vehicle to BECOME, or null when it names none or
+ * names the type the stored row already has (absent stored type = STOCK).
+ */
+export function requestedVehicleSourceTypeChange(
+  existing: VehicleSourceFields,
+  patch: VehicleSourceFields
+): VehicleSourceType | null {
+  const requested = parseVehicleSourceType(patch.sourceType);
+  return requested !== null && requested !== storedVehicleSourceType(existing.sourceType) ? requested : null;
+}
+
+/** The six fields that make up a vehicle's ownership and acquisition terms. */
+export const VEHICLE_OWNERSHIP_FIELD_KEYS = [
+  "sourceType",
+  "sourcedFromName",
+  "sourceCost",
+  "purchasePrice",
+  "purchasePaymentMethod",
+  "purchaseSupplierName",
+] as const;

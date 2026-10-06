@@ -7,7 +7,14 @@
 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PaymentMethodSelect, type AcquisitionPaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import {
+  ACQUISITION_PAYMENT_METHODS,
+  PaymentMethodSelect,
+  type AcquisitionPaymentMethod,
+  type Translate,
+} from "@/components/payments/PaymentMethodSelect";
+import { parseVehicleSourceType } from "@/convex/utils/vehicleSourceShape";
+import { ownershipGaps } from "@/lib/vehicles/ownershipGaps";
 import { cn } from "@/lib/utils";
 
 export type OwnershipChoice = "SOURCED" | "STOCK";
@@ -37,12 +44,10 @@ export const EMPTY_OWNERSHIP_DRAFT: OwnershipDraft = {
   purchaseSupplierName: "",
 };
 
-const ACQUISITION_METHODS: readonly AcquisitionPaymentMethod[] = ["CASH", "BANK_TRANSFER", "CHEQUE", "CARD", "ON_ACCOUNT"];
-
 /** A request payload needs the approver's decision unless it already names a real sourceType. */
 export function needsOwnershipDecision(payload: { sourceType?: unknown } | null | undefined): boolean {
   const sourceType = payload?.sourceType;
-  return sourceType !== "STOCK" && sourceType !== "SOURCED";
+  return parseVehicleSourceType(typeof sourceType === "string" ? sourceType : null) === null;
 }
 
 /**
@@ -52,18 +57,13 @@ export function needsOwnershipDecision(payload: { sourceType?: unknown } | null 
  */
 export function buildOwnershipDecision(draft: OwnershipDraft | undefined): OwnershipDecision | null {
   if (!draft?.sourceType) return null;
+  if (ownershipGaps(draft, { typeRequired: true, costRequired: true, purchaseTerms: "required" })) return null;
   if (draft.sourceType === "SOURCED") {
-    const name = draft.sourcedFromName.trim();
-    const cost = Number(draft.sourceCost);
-    if (!name || !Number.isFinite(cost) || cost <= 0) return null;
-    return { sourceType: "SOURCED", sourcedFromName: name, sourceCost: cost };
+    return { sourceType: "SOURCED", sourcedFromName: draft.sourcedFromName.trim(), sourceCost: Number(draft.sourceCost) };
   }
   const price = Number(draft.purchasePrice);
-  if (!Number.isFinite(price) || price <= 0 || !draft.purchasePaymentMethod) return null;
   if (draft.purchasePaymentMethod === "ON_ACCOUNT") {
-    const supplier = draft.purchaseSupplierName.trim();
-    if (!supplier) return null;
-    return { sourceType: "STOCK", purchasePrice: price, purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: supplier };
+    return { sourceType: "STOCK", purchasePrice: price, purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: draft.purchaseSupplierName.trim() };
   }
   return { sourceType: "STOCK", purchasePrice: price, purchasePaymentMethod: draft.purchasePaymentMethod };
 }
@@ -72,7 +72,7 @@ interface Props {
   idPrefix: string;
   draft: OwnershipDraft;
   onChange: (next: OwnershipDraft) => void;
-  t: (key: any) => string;
+  t: Translate;
 }
 
 export function ApprovalOwnershipChooser({ idPrefix, draft, onChange, t }: Readonly<Props>) {
@@ -129,7 +129,7 @@ export function ApprovalOwnershipChooser({ idPrefix, draft, onChange, t }: Reado
               t={t}
               value={draft.purchasePaymentMethod}
               onValueChange={(method) => set({ purchasePaymentMethod: method })}
-              methods={ACQUISITION_METHODS}
+              methods={ACQUISITION_PAYMENT_METHODS}
               ariaLabel={t("PaymentMethodLabel")}
             />
           </div>

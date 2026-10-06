@@ -285,7 +285,7 @@ export default function VehiclesPage() {
   const handleResolveEdit = async (
     requestId: Id<"vehicleEdits">,
     status: "APPROVED" | "REJECTED",
-    ownership?: OwnershipDecision,
+    ownership?: OwnershipDecision | null,
   ) => {
     if (!activeOrgId) return;
     try {
@@ -1112,7 +1112,7 @@ export default function VehiclesPage() {
                           idPrefix={`own-${req._id}`}
                           draft={draft}
                           onChange={(next) => setOwnershipDrafts((prev) => ({ ...prev, [req._id]: next }))}
-                          t={t as (key: any) => string}
+                          t={t}
                         />
                       )}
                     </div>
@@ -1123,7 +1123,7 @@ export default function VehiclesPage() {
                       <Button
                         size="sm"
                         disabled={askOwnership && !decision}
-                        onClick={() => handleResolveEdit(req._id, "APPROVED", decision ?? undefined)}
+                        onClick={() => handleResolveEdit(req._id, "APPROVED", decision)}
                         className="bg-green-600 hover:bg-green-700 text-white"
                       >
                         <Check className="h-4 w-4 me-1" /> {t("Approve" as any)}
