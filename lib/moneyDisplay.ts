@@ -59,12 +59,31 @@ export function formatMoneyAmount(amount: number, currency: string, scale = mone
  * scale comes from the factor the caller already derived from the currency, so
  * 316_500 fils reads "316.500" and 25_000_000 reads "25,000".
  */
+/**
+ * A typed major amount as an exact minor-unit integer, or null when it carries
+ * more decimals than the currency holds (SCRUM-606). `Math.round` would
+ * silently turn 12.3456 JOD into 12.346 and record a figure nobody typed.
+ */
+export function exactMinorFromMajor(major: number, scale: number): number | null {
+  if (!Number.isFinite(major)) return null;
+  const scaled = major * Math.pow(10, scale);
+  const minor = Math.round(scaled);
+  // Tolerance absorbs binary noise only (1.005 * 1000 = 1004.9999999999999).
+  if (Math.abs(scaled - minor) > 1e-6 + Math.abs(scaled) * 1e-12) return null;
+  return Number.isSafeInteger(minor) ? minor : null;
+}
+
+/**
+ * A minor-unit figure (fils, cents) as a number under the display policy; the
+ * scale comes from the factor the caller derived from the currency, so 316_500
+ * fils reads "316.500" and 25_000_000 reads "25,000".
+ */
 export function formatMinorAmount(minor: number, factor: number): string {
   const scale = Math.max(0, Math.round(Math.log10(factor)));
   return formatMoneyAmount(minor / factor, "", scale);
 }
 
-/** "11,100 JOD" / "316.854 د.أ".`scale` overrides the currency's own when the server supplies it. */
+/** "11,100 JOD" / "316.854 د.أ". `scale` overrides the currency's own when the server supplies it. */
 export function formatMoneyDisplay(amount: number, currency: string, locale: MoneyLocale, scale?: number): string {
   if (!Number.isFinite(amount)) return "—";
   return `${formatMoneyAmount(amount, currency, scale)} ${moneyDisplayLabel(currency, locale)}`;

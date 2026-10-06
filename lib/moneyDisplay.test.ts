@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { formatMinorAmount, formatMoneyAmount, formatMoneyDisplay, moneyDisplayLabel, moneyDisplayScale } from "./moneyDisplay";
+import { exactMinorFromMajor, formatMinorAmount,formatMoneyAmount, formatMoneyDisplay, moneyDisplayLabel, moneyDisplayScale } from "./moneyDisplay";
 
 const NBSP = " ";
 
@@ -107,6 +107,22 @@ describe("formatMinorAmount (cockpit minor-unit figures, SCRUM-366)", () => {
   });
   test("a 0-decimal currency shows no decimals", () => {
     expect(formatMinorAmount(5000, 1)).toBe("5,000");
+  });
+});
+
+describe("exactMinorFromMajor (typed amounts recorded exactly or refused, SCRUM-606)", () => {
+  test("exact amounts convert, absorbing binary noise", () => {
+    expect(exactMinorFromMajor(1.005, 3)).toBe(1005);
+    expect(exactMinorFromMajor(316.854, 3)).toBe(316_854);
+    expect(exactMinorFromMajor(25, 2)).toBe(2500);
+  });
+  test("more decimals than the currency holds is refused, never rounded", () => {
+    expect(exactMinorFromMajor(12.3456, 3)).toBeNull();
+    expect(exactMinorFromMajor(10.005, 2)).toBeNull();
+    expect(exactMinorFromMajor(1.5, 0)).toBeNull();
+  });
+  test("non-finite is refused", () => {
+    expect(exactMinorFromMajor(Number.NaN, 2)).toBeNull();
   });
 });
 

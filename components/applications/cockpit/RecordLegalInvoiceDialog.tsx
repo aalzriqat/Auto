@@ -20,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { exactMinorFromMajor } from "@/lib/moneyDisplay";
 import {
   economicDateInputToMs,
   economicTodayDateInput,
@@ -32,7 +33,7 @@ function parseMajor(value: string, scale: number): number | null {
   if (!trimmed) return null;
   const parsed = Number(trimmed);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
-  return Math.round(parsed * Math.pow(10, scale));
+  return exactMinorFromMajor(parsed, scale);
 }
 
 /**

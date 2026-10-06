@@ -13,6 +13,7 @@ import { isChosenMethod } from "@/components/payments/paymentMethod";
 import { busyCloseGuard } from "@/components/ui/busyCloseGuard";
 import type { Id } from "@/convex/_generated/dataModel";
 import { economicDateInputToMs, economicTodayDateInput } from "@/lib/dateInput";
+import { exactMinorFromMajor } from "@/lib/moneyDisplay";
 import {
   Dialog,
   DialogContent,
@@ -74,8 +75,8 @@ export type CustodyMovementValues = Readonly<{
 export function parseMajorToMinor(text: string, scale: number): number | null {
   const parsed = Number(text);
   if (text.trim() === "" || !Number.isFinite(parsed) || !(parsed > 0)) return null;
-  const minor = Math.round(parsed * Math.pow(10, scale));
-  return Number.isSafeInteger(minor) && minor > 0 ? minor : null;
+  const minor = exactMinorFromMajor(parsed, scale);
+  return minor !== null && minor > 0 ? minor : null;
 }
 
 /**

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { exactMinorFromMajor } from "@/lib/moneyDisplay";
 import { Separator } from "@/components/ui/separator";
 import { economicDateInputToMs, economicTodayDateInput } from "@/lib/dateInput";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
@@ -466,7 +467,7 @@ function parseMajor(value: string, scale: number): number | null {
   if (!trimmed) return null;
   const major = Number(trimmed);
   if (!Number.isFinite(major) || major < 0) return null;
-  return Math.round(major * Math.pow(10, scale));
+  return exactMinorFromMajor(major, scale);
 }
 
 const selectClass =
