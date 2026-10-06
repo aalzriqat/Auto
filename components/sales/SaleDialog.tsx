@@ -230,6 +230,8 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     vehicleId: selectedVehicleId as Id<"vehicles"> | undefined,
     salePrice: Number(watchAll.salePrice) || 0,
     enabled: (watchAll.financingType ?? "CASH") !== "CASH" && (!sale || sale.status === "PENDING"),
+    // SCRUM-659: a CASH sale has no profit rule but still cannot complete on a deleted car.
+    livenessOnly: (watchAll.financingType ?? "CASH") === "CASH" && (!sale || sale.status === "PENDING"),
   });
   const blockedByProfit = watchAll.status === "COMPLETED" && profitApproval.blocked;
 
