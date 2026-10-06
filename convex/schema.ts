@@ -1779,6 +1779,7 @@ export default defineSchema({
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
       purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+      purchaseSupplierName: v.optional(v.string()),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
@@ -1795,7 +1796,8 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_org", ["orgId"])
-    .index("by_org_status", ["orgId", "status"]),
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"]),
 
   customers: defineTable({
     orgId: v.id("organizations"),
@@ -2066,6 +2068,16 @@ export default defineSchema({
      */
     consignedSupplierGrossReceiptMinor: v.optional(v.number()),
     canonicalReceivableDocumentId: v.optional(v.id("receivableDocuments")),
+    /**
+     * SCRUM-571 (D-48): whether the organization had a chart of accounts when this
+     * sale was COMPLETED, i.e. whether SALE_COMPLETED was owed to the general
+     * ledger. Snapshotted at completion and never recomputed, so a later chart
+     * initialization or plan change cannot move an old sale's settled reading.
+     * `false` (a Free/Starter org with no chart) means no posting proof exists to
+     * demand; absent (a legacy row) is read as required - it fails closed. Read by
+     * `resolveCustomerInvoicePosition`.
+     */
+    glPostingRequired: v.optional(v.boolean()),
     commissionAmount: v.optional(v.number()), // Calculated at sale time
     // How many COMMISSION_ADJUSTED corrections have been posted against this
     // sale's accrual. Monotonic, never reset — it discriminates each

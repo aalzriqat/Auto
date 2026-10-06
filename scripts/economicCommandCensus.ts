@@ -11,8 +11,8 @@
  *   reverse  financial sink  -> public mutation   (over reversed edges)
  * Agreement is asserted, not assumed — see the test beside this file.
  *
- * ── Six blind spots this analyzer has already had, each of which produced a
- * WRONG census before it was caught. All six are pinned as regression tests in
+ * ── Seven blind spots this analyzer has already had, each of which produced a
+ * WRONG census before it was caught. All seven are pinned as regression tests in
  * `economicCommandCensus.test.ts`; do not "simplify" any of them away.
  *
  *  1. BARE-NAME CALLEE RESOLUTION fuses this graph. `create`, `add` and
@@ -54,6 +54,12 @@
  *     this read: the DECL matcher never matches `let`, so the `let` branch in
  *     `declarationEdgeText` is currently unreachable. Documented, not changed.)
  *
+ *  7. A CONVEX FUNCTION REFERENCE IS A DELEGATION (SCRUM-743). `ctx.runMutation(
+ *     internal.m.f, …)` and `scheduler.runAfter(0, internal.m.f)` reach `m.f`
+ *     without a call expression, and a public ACTION (not only a mutation) is a
+ *     client-callable command. Neither was in the graph: six public mutations and
+ *     one action reached money through references alone (136 -> 143).
+ *
  * ── KNOWN under-inclusive gaps. The list is NOT exhaustive of what a regex call
  *   graph can miss; known gaps include:
  *   SCRUM-742 (regex shapes, pinned as KNOWN GAP tests, guarded by a tripwire):
@@ -63,14 +69,18 @@
  *   (b) ANY call on a top-level `function` declaration line, i.e. a parameter
  *       default (`function w(ctx, x = sink(ctx))`) or a one-line body
  *       (`function w(ctx) { hookX(ctx); }`), gets no edge (the line is not read).
- *   SCRUM-743 (HIGH, NOT guarded by any tripwire): Convex function REFERENCES
- *       are not modelled: `ctx.runMutation(internal.…)`, `ctx.runAction(…)`,
- *       `ctx.scheduler.runAfter/runAt(…, internal.…|api.…)`.
- *   Also not modelled: namespace/default imports, re-exports, and function
- *   values passed without being called (other than `hook*` names).
- *   No SCRUM-742 shape is on a current money path; the `SCRUM-742 tripwire` test
- *   in `economicCommandCensus.test.ts` fails if one appears in convex/. The fix
- *   is a TypeScript-AST rewrite of edge extraction (SCRUM-742).
+ *   SCRUM-743 closed the Convex function REFERENCE gap (blind spot 7:
+ *       `ctx.runMutation/runAction(internal.…)`, `ctx.scheduler.runAfter/runAt(…,
+ *       internal.…|api.…)` are edges; public ACTIONS are entrypoints).
+ *   Still not modelled (SCRUM-742, NOT guarded by any tripwire): `httpAction`
+ *   route handlers (`http.route`), namespace/default imports, re-exports, and
+ *   function values passed without being called (other than `hook*` names), and
+ *   a function reference held in a variable.
+ *   The `SCRUM-742 tripwire` test in `economicCommandCensus.test.ts` guards ONLY
+ *   the two regex call shapes (a) and (b) above, and fails if one appears in
+ *   convex/; none is on a current money path. The unguarded gaps (HTTP routes,
+ *   imports/re-exports, uncalled values, variable-held references) have no
+ *   tripwire. The fix is a TypeScript-AST rewrite of edge extraction (SCRUM-742).
  *
  * The design OBJECTIVE is an OVER-INCLUSIVE bias: a false positive costs one
  * explicit classification; a false negative hides a command that can duplicate
@@ -304,9 +314,45 @@ export function buildGraph(convexRoot: string): Graph {
         if (tm?.has(n)) link(s.id, tm.get(n)!);
       }
     }
+    // Blind spot 7: delegation through a Convex function reference.
+    for (const target of functionReferenceTargets(body)) link(s.id, target);
   }
 
   return { symbols, edges, rEdges, sinks: findSinks(symbols) };
+}
+
+/**
+ * Blind spot 7 (SCRUM-743). `ctx.runMutation(internal.m.f, …)`,
+ * `ctx.scheduler.runAfter(0, internal.m.f, …)`, `runAt` and `runAction` reach
+ * `m.f` through a FUNCTION REFERENCE, never a call expression, so the bare-call
+ * edges above cannot see them. `internal.a.b.f` / `api.a.b.f` names module
+ * `a/b`, export `f`. Every occurrence links, whatever wraps it — over-inclusive,
+ * like the rest of this file. Comments are stripped first: a reference named
+ * in prose is not a delegation (`accountingPeriods.lock` was a false positive
+ * from exactly that).
+ *
+ * KNOWN GAP (SCRUM-742): references held in a variable, namespace/default
+ * imports, re-exports and httpAction handlers are not resolved.
+ */
+const FUNCTION_REFERENCE = /\b(?:internal|api)\.((?:[A-Za-z_]\w*\.)+[A-Za-z_]\w*)/g;
+
+export function functionReferenceTargets(body: string): string[] {
+  const out: string[] = [];
+  for (const m of stripComments(body).matchAll(FUNCTION_REFERENCE)) {
+    const parts = m[1].split(".");
+    const name = parts.pop()!;
+    out.push(`${parts.join("/")}.${name}`);
+  }
+  return out;
+}
+
+/**
+ * A client-callable entrypoint. Public ACTIONS are included (SCRUM-743 ruling
+ * A): an action is a public command that can delegate to a money-moving
+ * internal mutation, and a retried action replays that delegation.
+ */
+export function isPublicEntrypoint(kind: string): boolean {
+  return kind === "publicMutation" || kind === "publicAction";
 }
 
 /**
@@ -334,11 +380,11 @@ export function findSinks(symbols: Map<string, SymbolRecord>): Set<string> {
   return out;
 }
 
-/** Forward: every public mutation from which a sink is reachable. */
+/** Forward: every public entrypoint from which a sink is reachable. */
 export function censusForward(g: Graph): Set<string> {
   const out = new Set<string>();
   for (const s of g.symbols.values()) {
-    if (s.kind !== "publicMutation") continue;
+    if (!isPublicEntrypoint(s.kind)) continue;
     const seen = new Set([s.id]);
     const stack = [s.id];
     let hit = g.sinks.has(s.id);
@@ -356,7 +402,7 @@ export function censusForward(g: Graph): Set<string> {
   return out;
 }
 
-/** Reverse: every public mutation reachable from a sink over reversed edges. */
+/** Reverse: every public entrypoint reachable from a sink over reversed edges. */
 export function censusReverse(g: Graph): Set<string> {
   const seen = new Set(g.sinks);
   const q = [...g.sinks];
@@ -367,7 +413,7 @@ export function censusReverse(g: Graph): Set<string> {
     }
   }
   const out = new Set<string>();
-  for (const id of seen) if (g.symbols.get(id)?.kind === "publicMutation") out.add(id);
+  for (const id of seen) if (isPublicEntrypoint(g.symbols.get(id)?.kind ?? "")) out.add(id);
   return out;
 }
 

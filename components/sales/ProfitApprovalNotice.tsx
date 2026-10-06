@@ -24,17 +24,28 @@ export function useProfitApproval(args: {
   /** False for cash sales and anything else the rule does not cover. */
   enabled: boolean;
   /**
+   * SCRUM-659: a CASH deal has no profit rule but still cannot proceed on a
+   * deleted car. When `enabled` is false and this is true, the hook subscribes
+   * in liveness-only mode: it blocks on VEHICLE_DELETED and never on profit.
+   */
+  livenessOnly?: boolean;
+  /**
    * True while the inputs that decide `enabled` are still loading. The hook is
    * inactive then, and without this an inactive hook reports "not blocked", so a
    * completion control would flicker enabled until the inputs resolve.
    */
   loading?: boolean;
 }) {
-  const active = args.enabled && !!args.orgId && !!args.vehicleId && args.salePrice > 0;
+  const active = (args.enabled || args.livenessOnly === true) && !!args.orgId && !!args.vehicleId && args.salePrice > 0;
   const verdict = useQuery(
     api.approvals.profitApprovalStatus,
     active
-      ? { orgId: args.orgId as Id<"organizations">, vehicleId: args.vehicleId as Id<"vehicles">, salePrice: args.salePrice }
+      ? {
+          orgId: args.orgId as Id<"organizations">,
+          vehicleId: args.vehicleId as Id<"vehicles">,
+          salePrice: args.salePrice,
+          ...(args.enabled ? {} : { livenessOnly: true }),
+        }
       : "skip"
   );
   // INVALID is deliberately not blocking: the server refuses that price with an

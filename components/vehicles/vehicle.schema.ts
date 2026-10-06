@@ -20,7 +20,10 @@ export const vehicleSchema = z.object({
   // doesn't accept it, since purchasePrice locks once posted) — VehicleDialog
   // enforces it's set whenever purchasePrice is entered on that path, rather
   // than baking a create-only rule into this shared create/edit schema.
-  purchasePaymentMethod: z.enum(["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"]).optional(),
+  purchasePaymentMethod: z.enum(["CASH", "BANK_TRANSFER", "CHEQUE", "CARD", "ON_ACCOUNT"]).optional(),
+  // SCRUM-717 (D-45): who is owed when an OWNED car is bought on account. Never
+  // `sourcedFromName`, which is the consignment supplier and nothing else.
+  purchaseSupplierName: z.string().optional(),
   minimumProfit: z.coerce.number().min(0).optional(),
   sellingPrice: z.coerce.number().min(0),
   status: z.enum(["AVAILABLE", "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR", "ARCHIVED", "SOURCING"]).optional(),
