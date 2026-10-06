@@ -2185,6 +2185,10 @@ const quoteWizardQaMessages = defineBilingualMessages({
   ],
   WizardProfitApprovalRequestAction: ["Request Profit Approval", "طلب اعتماد الربح"],
   WizardProfitApprovalRequesting: ["Requesting...", "جارٍ الإرسال…"],
+  WizardProfitApprovalRequestFailed: [
+    "Could not send the approval request. Please try again.",
+    "تعذّر إرسال طلب الاعتماد. يرجى المحاولة مرة أخرى.",
+  ],
   WizardProfitApprovedTitle: ["Profit Approved", "تم اعتماد الربح"],
   WizardProfitApprovedBody: [
     "Management approved this sale price (profit over the list price: {margin}). You may proceed.",
