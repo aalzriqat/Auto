@@ -165,6 +165,7 @@ import type * as utils_commitmentWriters from "../utils/commitmentWriters.js";
 import type * as utils_costBearer from "../utils/costBearer.js";
 import type * as utils_creationEconomics from "../utils/creationEconomics.js";
 import type * as utils_custodySourceLedger from "../utils/custodySourceLedger.js";
+import type * as utils_customerInvoiceObligation from "../utils/customerInvoiceObligation.js";
 import type * as utils_dealCostLimits from "../utils/dealCostLimits.js";
 import type * as utils_dealCustodyPosting from "../utils/dealCustodyPosting.js";
 import type * as utils_dealFinancialSummary from "../utils/dealFinancialSummary.js";
@@ -432,6 +433,7 @@ declare const fullApi: ApiFromModules<{
   "utils/costBearer": typeof utils_costBearer;
   "utils/creationEconomics": typeof utils_creationEconomics;
   "utils/custodySourceLedger": typeof utils_custodySourceLedger;
+  "utils/customerInvoiceObligation": typeof utils_customerInvoiceObligation;
   "utils/dealCostLimits": typeof utils_dealCostLimits;
   "utils/dealCustodyPosting": typeof utils_dealCustodyPosting;
   "utils/dealFinancialSummary": typeof utils_dealFinancialSummary;

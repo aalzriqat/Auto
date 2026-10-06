@@ -28,9 +28,11 @@ import {
   positionForObligation,
   supplierReceiptActionability,
   pricingSnapshotsEqual,
+  settlementIsComplete,
   type ObligationState,
   type SupplierClaimStatus,
 } from "./utils/financingEconomics";
+import { resolveCustomerInvoicePosition, toCockpitCustomerInvoice, type CustomerInvoicePosition } from "./utils/customerInvoiceObligation";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
 import { classifySaleTimeCredits, customerBilledLinesMinor, sumBilledLinesMinor, completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
@@ -2763,8 +2765,15 @@ export const dealCockpit = query({
 
     // A cancelled sale's obligations were cancelled with it, so the rail must not
     // sit blocked on a settlement that will never happen.
+    // D-43: a completed sale is not settled while the customer's invoice has a balance,
+    // judged by the same predicate the financed cockpit uses. A draft has no invoice yet.
+    const customerPosition: CustomerInvoicePosition =
+      sale.status === "COMPLETED"
+        ? await resolveCustomerInvoicePosition(ctx, sale, { orgId: args.orgId, currency })
+        : { state: "NONE", outstandingMinor: null };
     const settlementComplete =
-      dealCancelled || supplierObligation === "CLOSED" || supplierObligation === "NONE";
+      dealCancelled ||
+      settlementIsComplete({ financier: "NONE", supplier: supplierObligation, customer: customerPosition.state });
 
     const stages = deriveCashDealStages({
       saleStatus: sale.status,
@@ -2948,6 +2957,11 @@ export const dealCockpit = query({
        */
       settlementAdviceRequiresReconciliation: false,
       settlementAdviceDiscrepancy: null,
+      /**
+       * SCRUM-571 (D-48): the QUALITATIVE state of the customer's invoice, for every
+       * caller. The amount rides in `money.customerInvoice` for `view:finance` only.
+       */
+      customerInvoiceState: customerPosition.state,
       stages,
       /**
        * Empty, and the view hides the card rather than showing an empty one. The
@@ -3085,6 +3099,12 @@ export const dealCockpit = query({
           awaitingActuals: 0,
         },
         parties,
+        /**
+         * SCRUM-571 (D-48): what the customer still owes on the sale's canonical
+         * invoice, from the same read the settlement obligation was judged on.
+         * `outstandingMinor` is null unless the invoice is proven (OPEN or CLOSED).
+         */
+        customerInvoice: toCockpitCustomerInvoice(customerPosition, currency),
         /**
          * Same authority as the financed screen: the row says what is owed,
          * this says whether a receipt may be recorded against it NOW. A
