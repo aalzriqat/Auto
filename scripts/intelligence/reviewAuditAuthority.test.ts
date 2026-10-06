@@ -68,6 +68,12 @@ describe("SCRUM-644 S3b audit authority predicate", () => {
     ["a run in another repository", (b) => { b.run.repository.id = FOREIGN_REPO; }, AUTHORITY_REJECTION.RUN_REPOSITORY],
     ["a different workflow file", (b) => { b.run.path = ".github/workflows/other.yml@refs/heads/main"; }, AUTHORITY_REJECTION.RUN_PATH],
     ["the controller path with a lookalike suffix", (b) => { b.run.path = `${CONTROLLER_WORKFLOW_PATH}.bak`; }, AUTHORITY_REJECTION.RUN_PATH],
+    ["the controller path with a lookalike suffix before the ref", (b) => { b.run.path = `${CONTROLLER_WORKFLOW_PATH}x@refs/heads/main`; }, AUTHORITY_REJECTION.RUN_PATH],
+    ["a ref suffix spanning a line break", (b) => { b.run.path = `${CONTROLLER_WORKFLOW_PATH}@refs/heads/main\nx`; }, AUTHORITY_REJECTION.RUN_PATH],
+    ["a ref suffix spanning a carriage return", (b) => { b.run.path = `${CONTROLLER_WORKFLOW_PATH}@refs/heads/main\rx`; }, AUTHORITY_REJECTION.RUN_PATH],
+    ["a ref suffix spanning a Unicode line separator", (b) => { b.run.path = `${CONTROLLER_WORKFLOW_PATH}@refs/heads/main\u2028x`; }, AUTHORITY_REJECTION.RUN_PATH],
+    ["a ref suffix spanning a Unicode paragraph separator", (b) => { b.run.path = `${CONTROLLER_WORKFLOW_PATH}@refs/heads/main\u2029x`; }, AUTHORITY_REJECTION.RUN_PATH],
+    ["a line break before the controller path", (b) => { b.run.path = `x\n${CONTROLLER_WORKFLOW_PATH}@refs/heads/main`; }, AUTHORITY_REJECTION.RUN_PATH],
     ["a pull_request run (the candidate's copy)", (b) => { b.run.event = "pull_request"; }, AUTHORITY_REJECTION.RUN_EVENT],
     ["a workflow_dispatch run (the dispatching ref's copy)", (b) => { b.run.event = "workflow_dispatch"; }, AUTHORITY_REJECTION.RUN_EVENT],
     ["a run on a branch other than main", (b) => { b.run.head_branch = "feature"; }, AUTHORITY_REJECTION.RUN_BRANCH],
@@ -292,6 +298,17 @@ describe("SCRUM-644 S3b audit binding reader", () => {
       reason: UNAVAILABLE_REASON.NO_CURRENT_BINDING,
       rejections: [AUTHORITY_REJECTION.RUN_EVENT],
     });
+  });
+
+  test("rejections are reported in code-unit order, not the order they were found", () => {
+    const wrongPath = genuine();
+    wrongPath.run.path = ".github/workflows/other.yml@refs/heads/main";
+    const wrongEvent = genuine();
+    wrongEvent.run.event = "workflow_dispatch";
+    const found = [AUTHORITY_REJECTION.RUN_PATH, AUTHORITY_REJECTION.RUN_EVENT];
+    const expected = [...found].sort((a, b) => (a < b ? -1 : 1));
+    expect(expected).not.toEqual(found);
+    expect(readAll([wrongPath, wrongEvent]).rejections).toEqual(expected);
   });
 
   test("a carried-forward reference to a run at an older tip is rejected", () => {

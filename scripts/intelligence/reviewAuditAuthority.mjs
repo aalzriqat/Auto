@@ -71,8 +71,15 @@ const isId = (value) => Number.isSafeInteger(value) && value > 0;
 const sameId = (a, b) => isId(a) && a === b;
 
 // The API reports a workflow path as `.github/workflows/x.yml@refs/heads/main`.
-const stripRef = (workflowPath) =>
-  typeof workflowPath === "string" ? workflowPath.replace(/@.*$/, "") : workflowPath;
+// Only an `@` after the last line terminator counts (the ones regex `.` refuses),
+// so a path with an embedded line break is left whole and fails the comparison.
+const LINE_TERMINATORS = ["\n", "\r", "\u2028", "\u2029"];
+const stripRef = (workflowPath) => {
+  if (typeof workflowPath !== "string") return workflowPath;
+  const lastBreak = Math.max(...LINE_TERMINATORS.map((terminator) => workflowPath.lastIndexOf(terminator)));
+  const at = workflowPath.indexOf("@", lastBreak + 1);
+  return at === -1 ? workflowPath : workflowPath.slice(0, at);
+};
 
 /**
  * Does this controller run, artifact and payload carry authority?
@@ -127,6 +134,7 @@ export function acceptAuditRun({ run, artifact, payload, repositoryId }) {
 
 // Newest first: a higher run id, then a higher attempt, observed later state.
 const newerFirst = (a, b) => b.run.id - a.run.id || b.run.run_attempt - a.run.run_attempt;
+const byCodeUnit = (a, b) => (a < b ? -1 : Number(a > b));
 
 /**
  * The audit currently in force for pull request N at head H, or UNAVAILABLE.
@@ -158,7 +166,7 @@ export function readAuditBinding({ candidates, repositoryId, currentMainTip, prN
     else rejections.forEach((code) => rejected.add(code));
   }
   // Nothing present, or nothing trusted, is the same absence: no binding.
-  if (trusted.length === 0) return unavailable(UNAVAILABLE_REASON.NO_CURRENT_BINDING, [...rejected].sort());
+  if (trusted.length === 0) return unavailable(UNAVAILABLE_REASON.NO_CURRENT_BINDING, [...rejected].sort(byCodeUnit));
 
   // The predicate has proven payload.mainTip is a commit SHA, so an unreadable
   // current tip can never equal it.
@@ -167,7 +175,8 @@ export function readAuditBinding({ candidates, repositoryId, currentMainTip, prN
   const forThisPr = current.filter((candidate) => isId(prNumber) && candidate.payload.N === prNumber);
   if (forThisPr.length === 0) return unavailable(UNAVAILABLE_REASON.NO_CURRENT_BINDING);
 
-  const [newest] = forThisPr.sort(newerFirst);
+  forThisPr.sort(newerFirst);
+  const [newest] = forThisPr;
   // A tie on (run, attempt) would otherwise be settled by the caller's order.
   const tied = forThisPr.filter((candidate) => newerFirst(newest, candidate) === 0);
   if (tied.some((candidate) => JSON.stringify(candidate.payload) !== JSON.stringify(newest.payload))) {
