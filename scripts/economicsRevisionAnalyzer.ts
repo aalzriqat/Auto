@@ -155,12 +155,6 @@ export const REVIEWED_EXCEPTIONS: ReadonlyArray<{ file: string; contains: string
     reason:
       "recordSubmittedQuotation cannot move a held confirmation: applySubmittedQuotation refuses once an approved purchase amount exists (pinned by message in financingEconomics.test.ts, SCRUM-703), and before approval there is no funding split to confirm. Where it does reach recomputeAndPatchEconomics, both of that function's patch branches advance economicsRevision. NOT covered: the recompute's no-write exits (manual finance, missing approval/quotation/LTV) — relaxing the approved-refusal for those needs its own bump.",
   },
-  {
-    file: "applications.ts",
-    contains: "app.customerFirstPaymentMinor === undefined",
-    reason:
-      "KNOWN OPEN DEFECT, SCRUM-394: repairQuoteEconomicsLineage fills an unknown first payment without bumping economicsRevision or recomputing the split. Excused here only so the ratchet stays green while the fix goes through the invariant-first financial path; remove this entry in that fix.",
-  },
 ];
 
 type Exceptions = ReadonlyArray<{ file: string; contains: string }>;
