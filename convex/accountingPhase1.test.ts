@@ -596,10 +596,15 @@ describe("Phase 1 — accounting periods", () => {
         .unique();
       await ctx.db.patch(membership!.roleId, { name: "OWNER", isSystemOwnerRole: true });
     });
+    // SCRUM-651 (D-42): this FAILED row carries no eventType, so the AP-Suppliers reconciliation
+    // cannot rule out that it moves AP and (correctly) reports UNAVAILABLE, which surfaces as a
+    // warning that must be acknowledged verbatim. The override itself is unchanged.
+    expect(checklist.warnings.some((w) => /Supplier payables reconciliation could not be completed/.test(w))).toBe(true);
     await asUser.mutation(api.accountingPeriods.close, {
       orgId,
       periodId,
       overrideReason: "Failed event will be retried after fixing the underlying cause",
+      acknowledgedWarnings: checklist.warnings,
     });
     const closed = await asUser.query(api.accountingPeriods.get, { orgId, periodId });
     expect(closed?.status).toBe("CLOSED");

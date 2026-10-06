@@ -98,6 +98,11 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "The depreciation start date is not a valid date.",
     "تاريخ بدء الاستهلاك غير صالح.",
   ],
+  // SCRUM-651. The English text must equal SUPPLIER_PAYABLE_PAID_CANCEL_MESSAGE in convex/utils/saleCancellation.ts.
+  ServerError_SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED: [
+    "Cannot automatically cancel a sale after the supplier payable has been paid, in whole or in part. Use a manual accounting correction.",
+    "لا يمكن إلغاء البيع تلقائياً بعد سداد ذمة المورّد كلياً أو جزئياً. يلزم إجراء تصحيح محاسبي يدوي.",
+  ],
   // SCRUM-563. The English text must equal the server message in convex/utils/idempotency.ts,
   // and convex/adminOrgs.ts respectively.
   ServerError_COMMAND_RECORDED_BEFORE_RESET: [

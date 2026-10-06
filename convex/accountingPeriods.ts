@@ -18,6 +18,7 @@ import {
   computeCommissionRecognitionDivergence,
   computePrepaidRecognitionShortfall,
   GlVsSubledgerResult,
+  SupplierPayablesReconciliationResult,
 } from "./accountingReports";
 
 const periodStatusValidator = v.union(
@@ -358,7 +359,7 @@ export type CloseChecklistResult = {
   prepaidRecognitionShortfallScheduleCount: number;
   arReconciliation: SubledgerReconciliationResult;
   vehicleInventoryReconciliation: GlVsSubledgerResult;
-  supplierPayablesReconciliation: GlVsSubledgerResult;
+  supplierPayablesReconciliation: SupplierPayablesReconciliationResult;
   customerDepositsReconciliation: GlVsSubledgerResult;
   commissionPayableReconciliation: GlVsSubledgerResult;
 };
@@ -438,7 +439,9 @@ async function computeCloseChecklist(
     await Promise.all([
       computeSubledgerReconciliation(ctx, orgId, period.endDate),
       computeVehicleInventoryReconciliation(ctx, orgId, period.endDate),
-      computeSupplierPayablesReconciliation(ctx, orgId, period.endDate),
+      computeSupplierPayablesReconciliation(ctx, orgId, period.endDate, {
+        outboxEvents: [...allPendingOutbox, ...allFailedOutbox],
+      }),
       computeCustomerDepositsReconciliation(ctx, orgId, period.endDate),
       computeCommissionPayableReconciliation(ctx, orgId, period.endDate, { sales: allSales }),
       computePrepaidRecognitionShortfall(ctx, orgId, period.endDate),
@@ -488,7 +491,16 @@ async function computeCloseChecklist(
     const badCurrencies = vehicleInventoryRecon.currencies.filter((c) => !vehicleInventoryRecon.byCurrency[c].isReconciled);
     warnings.push(`Vehicle Inventory subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
   }
-  if (!supplierPayablesRecon.isReconciled) {
+  if (supplierPayablesRecon.status === "UNAVAILABLE") {
+    // Could not see everything (too many rows to read, or AP-affecting postings
+    // still in flight): never report that as reconciled, and never as a
+    // difference in an empty list of currencies either.
+    warnings.push(
+      supplierPayablesRecon.unavailableReason === "PENDING_POSTINGS"
+        ? "Supplier payables reconciliation could not be completed: accounting postings or drafts that affect supplier payables are still pending. Resolve them, then re-check."
+        : "Supplier payables reconciliation could not be completed: there are too many records to verify in one pass. Review supplier payables manually."
+    );
+  } else if (!supplierPayablesRecon.isReconciled) {
     const badCurrencies = supplierPayablesRecon.currencies.filter((c) => !supplierPayablesRecon.byCurrency[c].isReconciled);
     warnings.push(`Supplier payables subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
   }

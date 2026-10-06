@@ -26,6 +26,9 @@ import {
 import { beginUserRun } from "./commitmentKernel";
 import { assertNoSaleLinkedLegacyReceivable } from "./saleDebtContainment";
 import { auditLog } from "../financialAudit";
+import { AppErrorCode, throwAppError } from "./errors";
+import { toMinorUnits } from "./money";
+import { settlementView } from "./supplierSettlement";
 
 async function getActiveReceivableAllocations(
   ctx: QueryCtx | MutationCtx,
@@ -295,6 +298,23 @@ async function cancelProductDeferrals(
   }
 }
 
+/** Must equal ServerError_SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED (EN) in lib/i18n/domains/common.ts. */
+const SUPPLIER_PAYABLE_PAID_CANCEL_MESSAGE =
+  "Cannot automatically cancel a sale after the supplier payable has been paid, in whole or in part. Use a manual accounting correction.";
+
+/**
+ * SCRUM-651 (D-42). Money has left on this payable: a recorded payment of any size, or the legacy
+ * PAID flag (a row settled before `amountPaid` existed, which `settlementView` reads as fully
+ * paid). The paid AMOUNT decides, not the status label: DISPUTED / PARTIALLY_PAID rows keep their
+ * payments, and the label alone cannot tell a disputed-and-unpaid row from a disputed-and-part-paid one.
+ */
+function hasSupplierPaymentOutstanding(payable: Doc<"vehicleSupplierPayables">): boolean {
+  if (payable.status === "CANCELLED") return false;
+  // No separate `status === "PAID"` branch: settlementView already reads a legacy PAID row as fully
+  // paid, so a zero-amount PAID row (nothing ever left) correctly does NOT refuse the cancellation.
+  return toMinorUnits(settlementView(payable).amountPaid, payable.currency) > 0;
+}
+
 /** The read-only refusal half of `cancelPendingSupplierPayables`; returns the sale's payables. */
 async function assertNoPaidSupplierPayable(
   ctx: QueryCtx | MutationCtx,
@@ -306,14 +326,19 @@ async function assertNoPaidSupplierPayable(
     .withIndex("by_sale", (q) => q.eq("saleId", saleId))
     .collect();
   const orgPayables = payables.filter((payable) => payable.orgId === orgId);
-  if (orgPayables.some((payable) => payable.status === "PAID")) {
-    throw new ConvexError(
-      "Cannot automatically cancel a sale after the supplier payable has been paid. Use a manual accounting correction."
-    );
+  if (orgPayables.some(hasSupplierPaymentOutstanding)) {
+    throwAppError(AppErrorCode.SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED, SUPPLIER_PAYABLE_PAID_CANCEL_MESSAGE);
   }
   return orgPayables;
 }
 
+/**
+ * SCRUM-651 (D-42). Cancels EVERY live payable on the sale (PENDING, NOT_YET_DUE, DUE_ON_SALE,
+ * DISPUTED), because the sale reversal that runs in the same mutation reverses the whole AP credit
+ * and a payable left standing would be a liability with no ledger behind it. A payable with any
+ * payment recorded refuses first (`assertNoPaidSupplierPayable`), before any write here; the throw
+ * is uncaught so the enclosing mutation rolls back, including the reversal queued by the caller.
+ */
 async function cancelPendingSupplierPayables(
   ctx: MutationCtx,
   args: {
@@ -336,7 +361,7 @@ async function cancelPendingSupplierPayables(
   const orgPayables = await assertNoPaidSupplierPayable(ctx, args.orgId, args.saleId);
 
   for (const payable of orgPayables) {
-    if (payable.status === "PENDING") {
+    if (payable.status !== "CANCELLED") {
       await ctx.db.patch(payable._id, {
         status: "CANCELLED",
         cancelledAt: args.now,

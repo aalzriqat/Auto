@@ -17,6 +17,7 @@ import { requireFeature } from "./subscriptions";
 import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { recognizedDueThroughDateMinor } from "./utils/expenseAmortization";
+import { settlementView } from "./utils/supplierSettlement";
 
 /**
  * GL Phase 14 note on aggregation: every aggregate below keys on
@@ -885,24 +886,166 @@ export async function computePrepaidRecognitionShortfall(
   return { hasShortfall: scheduleCount > 0, scheduleCount, byCurrency };
 }
 
+/**
+ * SCRUM-651 (D-42). The AP-Suppliers subledger and its honesty about what it could see.
+ *
+ * AVAILABLE: `byCurrency` / `isReconciled` are the real comparison.
+ * UNAVAILABLE: the whole truth could not be read, so NOTHING is claimed - `isReconciled` is false
+ * and `currencies` / `byCurrency` are empty. A consumer that only reads `isReconciled` can
+ * therefore never mistake "could not check" for "reconciled"; `status` / `unavailableReason` say why.
+ */
+export type SupplierPayablesReconciliationResult = GlVsSubledgerResult & {
+  status: "AVAILABLE" | "UNAVAILABLE";
+  unavailableReason?: "OVER_LIMIT" | "PENDING_POSTINGS";
+};
+
+/**
+ * How many supplier-payable rows (all open-balance statuses together) and, separately, how many
+ * outbox events / drafts one reconciliation reads before it declares itself UNAVAILABLE. The whole
+ * figure is needed to be true, so a truncated read is refused rather than summed. 4,000 sits well
+ * under the Convex 16,384-documents-per-function ceiling and leaves room for the GL read the same
+ * function does and for the rest of the period-close checklist that shares the transaction.
+ */
+const SUPPLIER_PAYABLES_RECON_READ_LIMIT = 4000;
+
+/** Every status that can carry an open balance. CANCELLED is the one status whose AP credit is reversed. */
+const SUPPLIER_PAYABLE_OPEN_STATUSES = [
+  "PENDING",
+  "NOT_YET_DUE",
+  "DUE_ON_SALE",
+  "PARTIALLY_PAID",
+  "DISPUTED",
+  "PAID",
+] as const;
+
+/**
+ * Posting event types whose rule debits or credits ACCOUNTS_PAYABLE_SUPPLIERS. Derived from every
+ * `SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS` reference in accounting/postingRules.ts (via `git grep`),
+ * not by hand: consignedAgentSaleLines + ruleSaleCompleted (SALE_COMPLETED), ruleSupplierPaymentSettled
+ * (SUPPLIER_PAYMENT_SETTLED), ruleVehicleAcquired (VEHICLE_ACQUIRED, ON_ACCOUNT) and
+ * ruleVehicleAcquisitionCostCorrected (VEHICLE_ACQUISITION_COST_CORRECTED). SALE_CANCELLED is never
+ * emitted (hookSaleCancelled is a reversal hook) and CONSIGNED_SALE_RECLASSIFIED has no AP line.
+ */
+const AP_AFFECTING_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "SALE_COMPLETED",
+  "SUPPLIER_PAYMENT_SETTLED",
+  "VEHICLE_ACQUIRED",
+  "VEHICLE_ACQUISITION_COST_CORRECTED",
+]);
+
+async function hasPendingApAffectingPosting(
+  ctx: QueryCtx,
+  events: Array<Doc<"pendingAccountingEvents">>
+): Promise<boolean> {
+  for (const event of events) {
+    if (event.kind === "REVERSE") {
+      // A queued reversal inherits the AP effect of the event it reverses. One that cannot be
+      // resolved is treated as AP-affecting: unknown must not read as safe.
+      const original = event.originalEventId ? await ctx.db.get(event.originalEventId) : null;
+      if (!original || AP_AFFECTING_EVENT_TYPES.has(original.eventType)) return true;
+    } else if (!event.eventType || AP_AFFECTING_EVENT_TYPES.has(event.eventType)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * A manual journal or opening-balance draft still awaiting approval that touches the AP account
+ * will move the GL when approved, so the comparison is not final. "over" = could not read them all.
+ */
+async function pendingApDraftState(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  readLimit: number
+): Promise<"NONE" | "PENDING" | "OVER_LIMIT"> {
+  const apAccount = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS))
+    .unique();
+  if (!apAccount) return "NONE";
+
+  const manual = await ctx.db
+    .query("manualJournalDrafts")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING_APPROVAL"))
+    .take(readLimit + 1);
+  const opening = await ctx.db
+    .query("openingBalanceDrafts")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING_APPROVAL"))
+    .take(readLimit + 1);
+  if (manual.length > readLimit || opening.length > readLimit) return "OVER_LIMIT";
+
+  const touchesAp = (lines: Array<{ accountId: Id<"chartOfAccounts"> }>) =>
+    lines.some((line) => line.accountId === apAccount._id);
+  return manual.some((d) => touchesAp(d.lines)) || opening.some((d) => touchesAp(d.lines)) ? "PENDING" : "NONE";
+}
+
 export async function computeSupplierPayablesReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
-  toDate: number | undefined
-): Promise<GlVsSubledgerResult> {
-  const pending = await ctx.db
-    .query("vehicleSupplierPayables")
-    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
-    .collect();
+  toDate: number | undefined,
+  opts: {
+    readLimit?: number;
+    /** PENDING + FAILED outbox rows the caller already read (period close shares them); read here if omitted. */
+    outboxEvents?: Array<Doc<"pendingAccountingEvents">>;
+  } = {}
+): Promise<SupplierPayablesReconciliationResult> {
+  const readLimit = opts.readLimit ?? SUPPLIER_PAYABLES_RECON_READ_LIMIT;
+  const unavailable = (unavailableReason: "OVER_LIMIT" | "PENDING_POSTINGS"): SupplierPayablesReconciliationResult => ({
+    currencies: [],
+    byCurrency: {},
+    isReconciled: false,
+    status: "UNAVAILABLE",
+    unavailableReason,
+  });
 
+  // 1. Postings still in flight: the GL side is about to move, so a comparison now is not the truth.
+  let outboxEvents = opts.outboxEvents;
+  if (!outboxEvents) {
+    const queued = await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+      .take(readLimit + 1);
+    const failed = await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "FAILED"))
+      .take(readLimit + 1);
+    if (queued.length > readLimit || failed.length > readLimit) return unavailable("OVER_LIMIT");
+    outboxEvents = [...queued, ...failed];
+  }
+  if (await hasPendingApAffectingPosting(ctx, outboxEvents)) return unavailable("PENDING_POSTINGS");
+  const drafts = await pendingApDraftState(ctx, orgId, readLimit);
+  if (drafts === "OVER_LIMIT") return unavailable("OVER_LIMIT");
+  if (drafts === "PENDING") return unavailable("PENDING_POSTINGS");
+
+  // 2. Every non-CANCELLED payable, under one shared bound. Status is a label, not the balance: a
+  // payable leaves PENDING on a partial payment or a dispute while the liability stands.
+  const rows: Array<Doc<"vehicleSupplierPayables">> = [];
+  for (const status of SUPPLIER_PAYABLE_OPEN_STATUSES) {
+    const budget = readLimit - rows.length;
+    const batch = await ctx.db
+      .query("vehicleSupplierPayables")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .take(budget + 1);
+    if (batch.length > budget) return unavailable("OVER_LIMIT");
+    rows.push(...batch);
+  }
+
+  // Signed open balance in minor units. Deliberately NOT clamped: an overpaid row is a real
+  // negative that the GL carries (AP in debit), and a legacy PAID row with no amountPaid is read by
+  // settlementView as fully paid (contributes 0). Soft-deleted vehicles do not matter - the
+  // liability does not go away with the car.
   const subByCurrency = new Map<string, number>();
-  for (const p of pending) {
-    const minor = toMinorUnits(p.amountDue, p.currency);
-    subByCurrency.set(p.currency, (subByCurrency.get(p.currency) ?? 0) + minor);
+  for (const p of rows) {
+    const openMinor = toMinorUnits(p.amountDue, p.currency) - toMinorUnits(settlementView(p).amountPaid, p.currency);
+    subByCurrency.set(p.currency, (subByCurrency.get(p.currency) ?? 0) + openMinor);
+  }
+  for (const [currency, minor] of subByCurrency) {
+    if (minor === 0) subByCurrency.delete(currency);
   }
 
   const glByCurrency = await computeGlBalanceByCurrency(ctx, orgId, SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, toDate);
-  return combineGlAndSubledger(glByCurrency, subByCurrency);
+  return { ...combineGlAndSubledger(glByCurrency, subByCurrency), status: "AVAILABLE" };
 }
 
 export const supplierPayablesReconciliation = query({
