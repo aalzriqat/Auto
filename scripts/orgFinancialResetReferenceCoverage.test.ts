@@ -218,6 +218,12 @@ const KNOWN_SURVIVING_REFERENCES: Record<string, string> = {
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "depositApplications.saleId->sales":
     "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
+  // SCRUM-712: a cancelled-sale share is an audit record of a deposit decision,
+  // a sibling of `depositApplications`; same document-only treatment.
+  "depositCancellationPendings.depositId->deposits":
+    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
+  "depositCancellationPendings.saleId->sales":
+    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
   "depositRequests.confirmedDepositId->deposits":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "depositRequests.quoteId->quotes":

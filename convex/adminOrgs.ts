@@ -216,6 +216,9 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // and its allocations). Appended last because the order is pinned; the index
   // leads with orgId, so the org-scoped read is a prefix scan.
   { kind: "orgRows", table: "dealUnwinds", index: "by_org_application_status" },
+  // SCRUM-712: cancelled-sale deposit shares. Appended last because the order is
+  // pinned; the index leads with orgId, so the org-scoped read is a prefix scan.
+  { kind: "orgRows", table: "depositCancellationPendings", index: "by_org_status" },
 ];
 
 async function findActiveDeletionRequest(ctx: MutationCtx, orgId: Id<"organizations">) {
