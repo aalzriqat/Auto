@@ -16,7 +16,7 @@
  *
  * The self-tests at the top come first deliberately, in the same spirit as
  * `tenantWriteGuard.test.ts`: a guard nobody has watched fail is not a guard.
- * They pin the FIVE blind spots this analyzer actually had, each of which
+ * They pin the SIX blind spots this analyzer actually had, each of which
  * produced a wrong census before it was caught. Deleting any of them re-opens a
  * hole that has already cost real analysis once.
  */
@@ -180,7 +180,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "workOrders.update": { bucket: "STATE_GUARDED", mechanism: "refuses when the work order already carries expenseId, which this same mutation patches on success" },
 };
 
-describe("analyzer self-tests — the five blind spots, pinned", () => {
+describe("analyzer self-tests — the six blind spots, pinned", () => {
   test("BLIND SPOT 1: a callee is resolved through imports, never by bare name", () => {
     // `create`, `add` and `update` are symbol names in dozens of modules. Bare
     // name resolution fused the graph and reported 348 of 349 public mutations
@@ -372,6 +372,78 @@ describe("analyzer self-tests — the five blind spots, pinned", () => {
       expect(blanked).toBe("export function bar() { return 1; }\n" + " ".repeat("/** foo() */".length) + "\n");
       expect(blanked.length).toBe(tail.length);
       expect(blanked.split("\n").length).toBe(tail.split("\n").length);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("BLIND SPOT 6: a factory-built hook is a real call (SCRUM-738 F1)", () => {
+    // `export const hookCommissionPaid = makeCommissionHook(...)` puts its only
+    // callee on the DECLARATION line, which edge extraction used to skip (it
+    // sliced from the line after). Comment-derived edges had hidden that. The
+    // declaration line's code after the first `=` is now read for `const`/`let`,
+    // minus the Convex builder call (`mutation(`) which would otherwise fuse the
+    // graph, and a call may carry a type-argument list (`make<T>(`).
+    const fixture = [
+      'export function makeHook(name: string) {',
+      '  return async (ctx: any) => { await ctx.db.insert("receivables", { name }); };',
+      '}',
+      'export function makeHook2<T>(opts: T) {',
+      '  return async (ctx: any) => { await ctx.db.insert("receipts" + "x", opts); await ctx.db.insert("deposits", {}); };',
+      '}',
+      'export function plain() { return 1; }',
+      'export function a() { return 1; }',
+      'export const mutation = customMutation(rawMutation);',
+      'export const hookA = makeHook("X");',
+      'export const hookB = makeHook2<{ k: string }>({',
+      '  k: "v",',
+      '});',
+      'export const pubA = mutation({',
+      '  handler: async (ctx: any) => { await hookA(ctx); },',
+      '});',
+      'export const pubB = mutation({',
+      '  handler: async (ctx: any) => { await hookB(ctx); },',
+      '});',
+      'export const pubNoCall = mutation({',
+      '  handler: async (ctx: any) => { return 1; },',
+      '});',
+      'export const pubGeneric = mutation<Args>({',
+      '  handler: async (ctx: any) => { return 1; },',
+      '});',
+      // A comparison is not a type-argument list: no edge to `a`.
+      'export const pubCompare = mutation({',
+      '  handler: async (ctx: any, b: number, c: (n: number) => number) => { return a < b && c(1); },',
+      '});',
+      // function declarations are excluded from the declaration-line read.
+      'export function fnDefault(x = plain()) { return x; }',
+    ].join("\n");
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "census738f1-"));
+    try {
+      fs.writeFileSync(path.join(dir, "fx6.ts"), fixture);
+      const g = buildGraph(dir);
+      const edgesOf = (n: string) => [...(g.edges.get(`fx6.${n}`) ?? [])].sort();
+
+      // The factory callee is on the declaration line only.
+      expect(edgesOf("hookA")).toEqual(["fx6.makeHook"]);
+      expect(edgesOf("hookB")).toEqual(["fx6.makeHook2"]);
+      // The builder call never becomes an edge, so the graph cannot fuse.
+      for (const n of ["pubNoCall", "pubGeneric"]) expect(edgesOf(n), n).toEqual([]);
+      expect(edgesOf("pubA")).toEqual(["fx6.hookA"]);
+      expect(edgesOf("pubB")).toEqual(["fx6.hookB"]);
+      // `a < b && c(` is a comparison, not `a<...>(`.
+      expect(edgesOf("pubCompare")).toEqual([]);
+      // Safe option for `function`: the declaration line is not read.
+      expect(edgesOf("fnDefault")).toEqual([]);
+
+      expect(g.sinks.has("fx6.makeHook")).toBe(true);
+      expect(g.sinks.has("fx6.makeHook2")).toBe(true);
+      const forward = censusForward(g);
+      expect(forward.has("fx6.pubA")).toBe(true);
+      expect(forward.has("fx6.pubB")).toBe(true);
+      expect(forward.has("fx6.pubNoCall")).toBe(false);
+      expect(forward.has("fx6.pubGeneric")).toBe(false);
+      expect(forward.has("fx6.pubCompare")).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

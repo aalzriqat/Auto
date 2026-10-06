@@ -11,8 +11,8 @@
  *   reverse  financial sink  -> public mutation   (over reversed edges)
  * Agreement is asserted, not assumed — see the test beside this file.
  *
- * ── Five blind spots this analyzer has already had, each of which produced a
- * WRONG census before it was caught. All five are pinned as regression tests in
+ * ── Six blind spots this analyzer has already had, each of which produced a
+ * WRONG census before it was caught. All six are pinned as regression tests in
  * `economicCommandCensus.test.ts`; do not "simplify" any of them away.
  *
  *  1. BARE-NAME CALLEE RESOLUTION fuses this graph. `create`, `add` and
@@ -43,6 +43,14 @@
  *     edge (SCRUM-738). Edge extraction reads comment-free text (`stripComments`,
  *     TypeScript-aware so strings, templates and regexes are not mistaken for
  *     comments). Sinks and mint/post checks deliberately still read raw bodies.
+ *
+ *  6. A FACTORY-BUILT HOOK IS A REAL CALL. Edge text started on the line AFTER
+ *     the declaration, so `export const hookX = makeHook("X", ...)` and
+ *     `makeReversalHook<T>({` had no edge to their factory; comment-derived edges
+ *     had been hiding that (SCRUM-738 review F1). The declaration line's code
+ *     after the first `=` is read for `const`/`let`, with the Convex builder
+ *     calls blanked so a command does not link to the `mutation` wrapper, and a
+ *     call may carry a type-argument list.
  *
  * Bias is deliberately OVER-INCLUSIVE throughout. A false positive costs one
  * explicit classification; a false negative hides a command that can duplicate
@@ -165,6 +173,26 @@ export function stripComments(src: string): string {
   return chars.join("");
 }
 
+const BUILDER_CALL =
+  /\b(?:mutation|internalMutation|query|internalQuery|action|internalAction|httpAction)\b(?=\s*[(<])/g;
+
+/**
+ * Blind spot 6. The part of a declaration line that can hold a real callee:
+ * for `const`/`let`, the comment-free text AFTER the first `=` (so a factory-built
+ * hook, `const hookX = makeHook("X")`, keeps its edge to `makeHook`), with the
+ * Convex builder calls blanked (`= mutation({` must not link every command to the
+ * `mutation` wrapper symbol, blind spot 1). `function` declarations contribute
+ * nothing: the line holds only the name and parameter list, whose sole possible
+ * call is a default value, and reading it would add the function's own signature
+ * types as noise. The declaration regex already restricts lines to these shapes.
+ */
+function declarationEdgeText(codeLine: string): string {
+  if (!/^(?:export\s+)?(?:const|let)\s/.test(codeLine)) return "";
+  const eq = codeLine.indexOf("=");
+  if (eq === -1) return "";
+  return codeLine.slice(eq + 1).replace(BUILDER_CALL, (m) => " ".repeat(m.length));
+}
+
 /** Parses the convex tree into symbols and an import-resolved call graph. */
 export function buildGraph(convexRoot: string): Graph {
   const symbols = new Map<string, SymbolRecord>();
@@ -216,7 +244,7 @@ export function buildGraph(convexRoot: string): Graph {
       else if (/=\s*(internalQuery|query)\s*\(/.test(head)) kind = "query";
       const id = `${rel}.${s.name}`;
       symbols.set(id, { id, file: rel, name: s.name, kind, body, line: s.i + 1 });
-      edgeText.set(id, codeLines.slice(s.i + 1, end).join("\n"));
+      edgeText.set(id, [declarationEdgeText(codeLines[s.i] ?? ""), ...codeLines.slice(s.i + 1, end)].join("\n"));
       nameMap.set(s.name, id);
     });
     perFile.set(rel, nameMap);
@@ -239,7 +267,9 @@ export function buildGraph(convexRoot: string): Graph {
     const local = perFile.get(s.file)!;
     const imap = importsOf.get(s.file)!;
     const names = new Set<string>();
-    for (const m of body.matchAll(/\b([A-Za-z_]\w*)\s*\(/g)) names.add(m[1]);
+    // A call may carry a type-argument list (`makeHook<T>(`); `a < b && c(` is
+    // not one, because the `<...>` must close before the `(` with no parens inside.
+    for (const m of body.matchAll(/\b([A-Za-z_]\w*)\s*(?:<[^()]*>)?\s*\(/g)) names.add(m[1]);
     for (const m of body.matchAll(/\b(hook[A-Z]\w*)\b/g)) names.add(m[1]);
     for (const n of names) {
       if (local.has(n)) link(s.id, local.get(n)!);
