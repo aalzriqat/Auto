@@ -224,6 +224,28 @@ describe("auditStagedBackendInputs (SCRUM-350 F1)", () => {
     expect(result.status).toBe(1);
   });
 
+  it("refuses an outside .wasm import: the wasm plugin reads that file, so it is an input (Codex on PR #341)", async () => {
+    const wasmHeader = "\0asm\u0001\0\0\0";
+    const { root, stageRoot } = stage();
+    write(root, { "outside.wasm": wasmHeader });
+    write(stageRoot, {
+      "convex/wasmLeak.ts":
+        "import wasm from " + JSON.stringify(path.join(root, "outside.wasm").replaceAll("\\", "/")) +
+        ";\nexport const w = wasm;\n",
+    });
+    const result = await audit(stageRoot);
+    expect(result.stderr).toContain("A bundled input is outside the staged backend");
+    expect(result.status).toBe(1);
+
+    // Control: the same import of a file inside the stage is accepted.
+    const inside = stage();
+    write(inside.stageRoot, {
+      "convex/inner.wasm": wasmHeader,
+      "convex/wasmOk.ts": 'import wasm from "./inner.wasm";\nexport const w = wasm;\n',
+    });
+    expect((await audit(inside.stageRoot)).status).toBe(0);
+  });
+
   it("audits every stage against its own working directory, not the first stage this process audited", async () => {
     // esbuild pins process.cwd() at load. Without a fresh loader the second
     // audit resolves against the first stage, which is gone (Linux) or only

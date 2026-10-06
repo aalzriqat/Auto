@@ -52,6 +52,7 @@ const CONFIG_ENTRIES = ["schema", "convex.config", "auth.config"];
 // certify a partition the deploy never produces (Sonnet F1 on PR #341).
 const MUST_BE_ISOLATE = ["http", "crons", "schema", "auth.config"];
 const ACTIONS_PREFIX = "actions/";
+const WASM_NAMESPACE = /^wasm-(?:binary|stub):(.+)$/;
 // The CLI's per-line fallback, used only when its parser rejects the source.
 const USE_NODE_LINE = /^\s*("|')use node("|');?\s*$/;
 
@@ -183,8 +184,16 @@ export async function auditStagedBackendInputs({ stageRoot }) {
       throw new AuditRefusal("The trusted bundler refused the staged backend.");
     }
     for (const input of Object.keys(result.metafile.inputs)) {
-      // Plugin namespaces (server-only-stub:, wasm-binary:, async-hooks-shim:)
-      // are generated contents, not files.
+      // The CLI's wasm plugin reads the file named after these namespaces
+      // (wasm.js onLoad), so the path is a real read, not generated content
+      // (Codex on PR #341).
+      const wasm = WASM_NAMESPACE.exec(input);
+      if (wasm) {
+        recorded.add(path.resolve(stageRoot, wasm[1]));
+        continue;
+      }
+      // Other plugin namespaces (server-only-stub:, async-hooks-shim:) are
+      // generated contents, not files.
       if (/^[a-z-]+:/.test(input) && !/^[A-Za-z]:[\\/]/.test(input)) continue;
       recorded.add(path.resolve(stageRoot, input));
     }
