@@ -43,6 +43,7 @@ import { ConvexError } from "convex/values";
 import { assertAcquisitionTargetLive } from "./utils/vehicleLiveness";
 import {
   hasActiveDepositHold,
+  hasActiveDepositHoldExact,
   resolveHoldTargetStatus,
   syncVehicleHoldStatus,
 } from "./utils/depositHelpers";
@@ -1974,6 +1975,13 @@ export async function hasLiveCommitmentBasis(
      * did.
      */
     decision?: AuthorityDecisionContext;
+    /**
+     * SCRUM-712 Q34 — read the LEGACY deposit basis exactly instead of through the
+     * 50-row reader. Set only by a door that has just cleared a cancelled-sale
+     * share, where the legacy reader's false "no hold" would free the car. Ignored
+     * under a canonical decision, which already reads exact ranges.
+     */
+    exactDepositReader?: boolean;
   }
 ): Promise<boolean> {
   const skip = (kind: "DEPOSIT" | "RESERVATION" | "FINANCE") =>
@@ -2004,7 +2012,9 @@ export async function hasLiveCommitmentBasis(
   if (!skip("DEPOSIT")) {
     const held = canonical
       ? await hasCanonicalDepositHold(ctx, canonical, args.vehicleId)
-      : await hasActiveDepositHold(ctx, args.vehicleId);
+      : args.exactDepositReader
+        ? await hasActiveDepositHoldExact(ctx, args.vehicleId)
+        : await hasActiveDepositHold(ctx, args.vehicleId);
     if (held) return true;
   }
 
@@ -2731,6 +2741,8 @@ export async function releaseRootIfNoLiveBasis(
     decisionNow: number;
     /** Canonical orgs read the exact ranges. See `hasLiveCommitmentBasis`. */
     decision?: AuthorityDecisionContext;
+    /** See hasLiveCommitmentBasis: only after a cancelled-sale share has cleared. */
+    exactDepositReader?: boolean;
   }
 ): Promise<void> {
   const root = await openRootForFinalization(ctx, args.orgId, args.vehicleId);
@@ -2742,6 +2754,7 @@ export async function releaseRootIfNoLiveBasis(
       vehicleId: args.vehicleId,
       decisionNow: args.decisionNow,
       ...(args.decision ? { decision: args.decision } : {}),
+      ...(args.exactDepositReader ? { exactDepositReader: true } : {}),
     })
   ) {
     return;

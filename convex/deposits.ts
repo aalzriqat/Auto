@@ -219,6 +219,9 @@ export const release = mutation({
           throwAppError(AppErrorCode.DEPOSIT_NOT_FOUND, "Deposit not found in this organization.");
         }
 
+        // A row that carries a cancelled-sale share decides its follow-up through the
+        // exact liveness reader (SCRUM-712 Q34); every other row is unchanged.
+        const carriesShare = await hasPendingDispositionForDeposit(ctx, args.orgId, args.depositId);
         await releaseHeldDeposit(ctx, {
           orgId: args.orgId,
           depositId: args.depositId,
@@ -240,6 +243,7 @@ export const release = mutation({
             vehicleId,
             reason: `deposit ${args.resolution.toLowerCase()}`,
             decisionNow: releasedAt,
+            ...(carriesShare ? { exactDepositReader: true } : {}),
           });
         }
 
@@ -958,7 +962,7 @@ export const resolveReleasedAllocation = mutation({
         idempotencyKey: args.idempotencyKey,
       });
       // Exactly this hold's share, after its money has actually moved.
-      await clearPendingDisposition(ctx, {
+      const clearedShare = await clearPendingDisposition(ctx, {
         orgId: args.orgId,
         depositId: hold.depositId,
         holdId: hold._id,
@@ -971,13 +975,23 @@ export const resolveReleasedAllocation = mutation({
       });
       // The decision is made: ask the canonical authority whether anything still
       // holds the car, now that this share no longer does.
-      await releaseRootIfNoLiveBasis(ctx, {
-        orgId: args.orgId,
-        vehicleId: hold.vehicleId,
-        reason: `cancelled-sale deposit share ${args.treatment.toLowerCase()}`,
-        decisionNow: now,
-      });
-      await syncVehicleHoldStatus(ctx, hold.vehicleId, user._id);
+      //
+      // ONLY when a share was actually cleared. A slice with no pending row (a
+      // legacy cancellation, or one released while the deal was alive) is paid out
+      // exactly as it was before SCRUM-712: running the root release and the status
+      // sync here would add behaviour to rows this change knows nothing about. And
+      // when it does run, the deposit basis is read EXACTLY, because the share just
+      // cleared was the last thing proving the car was not free.
+      if (clearedShare) {
+        await releaseRootIfNoLiveBasis(ctx, {
+          orgId: args.orgId,
+          vehicleId: hold.vehicleId,
+          reason: `cancelled-sale deposit share ${args.treatment.toLowerCase()}`,
+          decisionNow: now,
+          exactDepositReader: true,
+        });
+        await syncVehicleHoldStatus(ctx, hold.vehicleId, user._id, { exactDepositReader: true });
+      }
     } else {
       if (!args.reason?.trim()) {
         throw new ConvexError(

@@ -454,3 +454,128 @@ describe("SCRUM-712 batch 2", () => {
     expect(await s.t.run((ctx) => hasPendingDispositionExceptSale(ctx, s.orgId, row.vehicleId, otherSale))).toBe(true);
   });
 });
+
+// ─── Q34: legacy payouts stay neutral; the post-clear liveness read is exact ─
+
+describe("SCRUM-712 Q34: slice payouts", () => {
+  const OPEN_ROOT = (s: Seed, vehicleId: Id<"vehicles">) => ({
+    orgId: s.orgId, vehicleId, customerId: s.customerId, status: "OPEN" as const,
+    openedAt: Date.now(), openedBy: s.userId,
+  });
+  const holdOf = (s: Seed, vehicleId: Id<"vehicles">) =>
+    s.t.run(async (ctx) =>
+      (await ctx.db.query("depositVehicleHolds").collect()).find((h) => h.orgId === s.orgId && h.vehicleId === vehicleId)!
+    );
+  const resolveSlice = (s: Seed, holdId: Id<"depositVehicleHolds">, treatment: "REFUND_TO_CUSTOMER" | "FORFEITED") =>
+    s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: s.orgId, holdId, treatment,
+      ...(treatment === "REFUND_TO_CUSTOMER" ? { refundMethod: "CASH" as const } : { reason: "Walked away" }),
+    });
+  // A slice released while the deal was alive: NO pending row exists for it.
+  async function legacySlice(tag: string) {
+    const s = await seed(tag, 2);
+    await payDeposit(s, 5_000);
+    await s.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: s.orgId, quoteId: s.quoteId,
+      allocations: [{ vehicleId: s.vehicleA, amount: 3_000 }, { vehicleId: s.vehicleB!, amount: 2_000 }],
+    });
+    await s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: s.orgId, quoteId: s.quoteId, vehicleId: s.vehicleA,
+    });
+    expect(await pendingRows(s)).toHaveLength(0);
+    return { s, hold: await holdOf(s, s.vehicleA) };
+  }
+
+  for (const treatment of ["REFUND_TO_CUSTOMER", "FORFEITED"] as const) {
+    test(`legacy ${treatment}: two OPEN roots and no pending row — the payout succeeds untouched`, async () => {
+      const { s, hold } = await legacySlice(`legacy2root${treatment}`);
+      const rootIds = await s.t.run(async (ctx) => [
+        await ctx.db.insert("commitmentRoots", OPEN_ROOT(s, s.vehicleA)),
+        await ctx.db.insert("commitmentRoots", OPEN_ROOT(s, s.vehicleA)),
+      ]);
+      await resolveSlice(s, hold._id, treatment);
+      const roots = await s.t.run(async (ctx) => Promise.all(rootIds.map((id) => ctx.db.get(id))));
+      expect(roots.map((r) => r!.status)).toEqual(["OPEN", "OPEN"]);
+      expect((await s.t.run((ctx) => ctx.db.get(hold._id)))!.allocationStatus).toBe("RESOLVED");
+    });
+  }
+
+  // A shared deposit whose cancelled sale left a pending share on the car's slice.
+  async function cancelledSlice(tag: string) {
+    const s = await seed(tag, 2);
+    await payDeposit(s, 5_000);
+    await s.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: s.orgId, quoteId: s.quoteId,
+      allocations: [{ vehicleId: s.vehicleA, amount: 3_000 }, { vehicleId: s.vehicleB!, amount: 2_000 }],
+    });
+    await sell(s, s.vehicleA, PRICE_A);
+    const saleB = await sell(s, s.vehicleB!, PRICE_B);
+    await cancel(s, saleB);
+    const [row] = await pendingRows(s);
+    return { s, row, hold: (await s.t.run((ctx) => ctx.db.get(row.holdId!)))! };
+  }
+  // 51 stale non-HELD rows still flagged holdActive, THEN one live HELD row: the
+  // bounded legacy reader sees only the stale ones.
+  async function staleThenLive(s: Seed, vehicleId: Id<"vehicles">) {
+    await s.t.run(async (ctx) => {
+      const [template] = (await ctx.db.query("deposits").collect()).filter((d) => d.orgId === s.orgId);
+      const { _id, _creationTime, ...copy } = template;
+      for (let i = 0; i < 51; i++) {
+        await ctx.db.insert("deposits", { ...copy, vehicleId, status: "VOIDED", holdActive: true, idempotencyKey: `stale-${i}` });
+      }
+      await ctx.db.insert("deposits", { ...copy, vehicleId, status: "HELD", holdActive: true, idempotencyKey: "live" });
+    });
+  }
+  const vehicleStatus = (s: Seed, v: Id<"vehicles">) => s.t.run(async (ctx) => (await ctx.db.get(v))!.status);
+
+  test("newly cleared slice: 51 stale rows plus a live hold keep the car RESERVED", async () => {
+    const { s, row, hold } = await cancelledSlice("sliceStale");
+    expect(hold.allocationStatus).toBe("RELEASED_AWAITING_DECISION");
+    await staleThenLive(s, s.vehicleB!);
+    await resolveSlice(s, row.holdId!, "REFUND_TO_CUSTOMER");
+    expect((await pendingRows(s)).map((r) => r.status)).toEqual(["RELEASED"]);
+    expect(await vehicleStatus(s, s.vehicleB!)).toBe("RESERVED");
+  });
+
+  test("newly cleared whole row: 51 stale rows plus a live hold keep the car RESERVED and its root open", async () => {
+    const s = await cancelledWithDeposit("wholeStale");
+    const depositId = await s.t.run(async (ctx) => (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)!._id);
+    await staleThenLive(s, s.vehicleA);
+    const rootId = await s.t.run((ctx) => ctx.db.insert("commitmentRoots", OPEN_ROOT(s, s.vehicleA)));
+    await s.asManager.mutation(api.deposits.release, {
+      idempotencyKey: crypto.randomUUID(), orgId: s.orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH" as const,
+    });
+    expect((await pendingRows(s)).map((r) => r.status)).toEqual(["RELEASED"]);
+    expect(await vehicleStatus(s, s.vehicleA)).toBe("RESERVED");
+    expect((await s.t.run((ctx) => ctx.db.get(rootId)))!.status).toBe("OPEN");
+  });
+
+  test("shared share: a second share of the SAME car still outstanding keeps it RESERVED", async () => {
+    const { s, row } = await cancelledSlice("anotherShare");
+    await s.t.run(async (ctx) => {
+      const { _id, _creationTime, ...copy } = row;
+      await ctx.db.insert("depositCancellationPendings", { ...copy, holdId: undefined, applicationId: row.applicationId });
+    });
+    await resolveSlice(s, row.holdId!, "FORFEITED");
+    expect((await pendingRows(s)).map((r) => r.status).sort()).toEqual(["FORFEITED", "PENDING"]);
+    expect(await vehicleStatus(s, s.vehicleB!)).toBe("RESERVED");
+  });
+
+  test("replay: the second resolution is refused and the cleared share stays cleared", async () => {
+    const { s, row } = await cancelledSlice("replaySlice");
+    await resolveSlice(s, row.holdId!, "REFUND_TO_CUSTOMER");
+    await expect(resolveSlice(s, row.holdId!, "REFUND_TO_CUSTOMER")).rejects.toThrow(/has not been released/i);
+    expect((await pendingRows(s)).map((r) => r.status)).toEqual(["RELEASED"]);
+  });
+
+  test("deferred reversal: refused while the application is REVERSING, clears once REVERSED", async () => {
+    const { s, row } = await cancelledSlice("deferredSlice");
+    await s.t.run(async (ctx) => ctx.db.patch(row.applicationId, { status: "REVERSING" }));
+    await expect(resolveSlice(s, row.holdId!, "REFUND_TO_CUSTOMER")).rejects.toThrow();
+    expect((await pendingRows(s)).map((r) => r.status)).toEqual(["PENDING"]);
+    expect(await vehicleStatus(s, s.vehicleB!)).not.toBe("AVAILABLE");
+    await s.t.run(async (ctx) => ctx.db.patch(row.applicationId, { status: "REVERSED" }));
+    await resolveSlice(s, row.holdId!, "REFUND_TO_CUSTOMER");
+    expect((await pendingRows(s)).map((r) => r.status)).toEqual(["RELEASED"]);
+  });
+});
