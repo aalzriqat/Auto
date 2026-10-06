@@ -20,7 +20,7 @@
  * produced a wrong census before it was caught. Deleting any of them re-opens a
  * hole that has already cost real analysis once.
  */
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -40,6 +40,17 @@ import {
 } from "./economicCommandCensus";
 
 const CONVEX_ROOT = path.resolve(__dirname, "..", "convex");
+
+// The real-tree build runs under CI v8 coverage and takes several seconds since
+// SCRUM-738 parses each file with TypeScript; the default 5 s budget made
+// BLIND SPOT 1 time out in CI run 37418341588.
+const REAL_TREE_BUDGET_MS = 120_000;
+
+// The real convex/ graph is built at most once per file, on first use.
+let realTree: ReturnType<typeof buildGraph> | undefined;
+function realTreeGraph(): ReturnType<typeof buildGraph> {
+  return (realTree ??= buildGraph(CONVEX_ROOT));
+}
 
 const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "accountingCutover.approveOpeningBalance": { bucket: "STATE_GUARDED", mechanism: "refuses unless the draft is in an approvable state; proven by rehearsal R10-style replay" },
@@ -187,13 +198,16 @@ describe("analyzer self-tests — the six blind spots, pinned", () => {
     // name resolution fused the graph and reported 348 of 349 public mutations
     // as economic. If a future edit reintroduces name-based linking, the
     // population explodes and this catches it.
-    const g = buildGraph(CONVEX_ROOT);
+    // Same memo as realTreeGraph(). The literal `buildGraph` call stays in this
+    // body because the ECON-1 invariant-catalog proof requires the test to call
+    // the analyzer itself; this test is first in the file, so it builds the tree.
+    const g = (realTree ??= buildGraph(CONVEX_ROOT));
     const population = censusForward(g);
     const publicMutations = [...g.symbols.values()].filter((s) => s.kind === "publicMutation");
     expect(publicMutations.length).toBeGreaterThan(300);
     // A fused graph puts essentially EVERY public mutation in the population.
     expect(population.size).toBeLessThan(publicMutations.length * 0.6);
-  });
+  }, REAL_TREE_BUDGET_MS);
 
   test("BLIND SPOT 2: a financial sink is not only a ledger insert", () => {
     // Defining a sink as a journal/accountingEvents insert dropped seven
@@ -499,9 +513,14 @@ describe("analyzer self-tests — the six blind spots, pinned", () => {
 });
 
 describe("SCRUM-313 economic command classification ratchet", () => {
-  const g = buildGraph(CONVEX_ROOT);
-  const forward = censusForward(g);
-  const reverse = censusReverse(g);
+  let g: ReturnType<typeof buildGraph>;
+  let forward: Set<string>;
+  let reverse: Set<string>;
+  beforeAll(() => {
+    g = realTreeGraph();
+    forward = censusForward(g);
+    reverse = censusReverse(g);
+  }, REAL_TREE_BUDGET_MS);
 
   test("the population is derived identically in both directions", () => {
     const onlyForward = [...forward].filter((x) => !reverse.has(x)).sort((a, b) => a.localeCompare(b));
@@ -706,5 +725,5 @@ describe("SCRUM-742 tripwire — call shapes the census cannot see must not appe
       offenders,
       "uncovered census call shape — see SCRUM-742; run a manual census check or land SCRUM-742",
     ).toEqual([]);
-  });
+  }, REAL_TREE_BUDGET_MS);
 });
