@@ -284,7 +284,12 @@ export const requestUpdate = mutation({
         const normOld = oldValue === "" ? undefined : oldValue;
         
         if (normNew !== normOld) {
-          filteredPayload[key] = value;
+          if (key === "sourcedFromName") {
+            // Same rule as vehicles.update: store the trimmed name, never a blank one.
+            if (typeof newValue === "string" && newValue !== "") filteredPayload[key] = newValue;
+          } else {
+            filteredPayload[key] = value;
+          }
         }
       }
     }
@@ -518,6 +523,14 @@ export const resolve = mutation({
           purchaseSupplierName: resolvePurchaseSupplierName,
           ...vehiclePatchFields
         } = payload;
+
+        // SCRUM-717: also covers requests written before requestUpdate trimmed — never
+        // persist a blank supplier name, and store the trimmed one.
+        if (typeof vehiclePatchFields.sourcedFromName === "string") {
+          const trimmedSourcedFromName = vehiclePatchFields.sourcedFromName.trim();
+          if (trimmedSourcedFromName === "") delete vehiclePatchFields.sourcedFromName;
+          else vehiclePatchFields.sourcedFromName = trimmedSourcedFromName;
+        }
 
         await ctx.db.patch(request.vehicleId, {
           ...(vehiclePatchFields as any),

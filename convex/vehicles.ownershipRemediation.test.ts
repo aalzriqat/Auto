@@ -8,7 +8,7 @@
  * Every refusal asserts that NOTHING was written (a caught Convex error does not
  * roll back, so "rejected" alone proves too little).
  */
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expectAppError } from "../test-utils/expectAppError";
 import schema from "./schema";
@@ -309,6 +309,107 @@ describe("SOURCED -> STOCK buy-out clears the consignment fields", () => {
     expect(vehicle?.color).toBe("Blue");
     expect(vehicle?.sourcedFromName).toBeUndefined();
     expect(vehicle && "sourcedFromName" in vehicle).toBe(false);
+  });
+});
+
+// ───────────────────────────── FIX 5b: no door persists a blank supplier name ─────────────────────────────
+
+describe("SCRUM-717: no door persists a blank consignment supplier name", () => {
+  const neverBlank = (name: string | undefined) => name === undefined || name.trim() !== "";
+
+  async function seedStockVehicle(d: Dealer, extra: Record<string, unknown> = {}) {
+    return d.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: d.orgId, ...baseVehicle, sourceType: "STOCK",
+        addedBy: d.ownerId, updatedBy: d.ownerId, updatedAt: Date.now(), ...extra,
+      })
+    );
+  }
+  async function asSuperAdmin(d: Dealer) {
+    await d.t.run((ctx) => ctx.db.insert("users", { clerkId: "dev_717", email: "admin717@autoflow.dev" }));
+    return d.t.withIdentity({ subject: "dev_717" });
+  }
+
+  describe("admin editor (adminData.adminUpdateRecord)", () => {
+    const original = process.env.SUPER_ADMIN_EMAILS;
+    beforeEach(() => {
+      process.env.SUPER_ADMIN_EMAILS = "admin717@autoflow.dev";
+      process.env.CLERK_JWT_ISSUER_DOMAIN ??= "https://test.clerk.accounts.dev";
+      process.env.NEXT_PUBLIC_APP_URL ??= "https://test.example.com";
+    });
+    afterEach(() => {
+      if (original === undefined) delete process.env.SUPER_ADMIN_EMAILS;
+      else process.env.SUPER_ADMIN_EMAILS = original;
+    });
+
+    test.each([[""], ["   "]])("absent -> %j on a STOCK car is refused; the field stays absent", async (blank) => {
+      const d = await seedDealer(`a${blank.length}`);
+      const admin = await asSuperAdmin(d);
+      const vehicleId = await seedStockVehicle(d);
+      await expectAppError(
+        admin.mutation(api.adminData.adminUpdateRecord, { table: "vehicles", id: vehicleId, patch: { sourcedFromName: blank } }),
+        "VEHICLE_OWNERSHIP_FIELDS_LOCKED",
+        "A vehicle's ownership type, consignment supplier, supplier cost, purchase price and payment method drive accounting and can't be changed in the data browser. Use the vehicle's edit screen or the cost-correction workflow."
+      );
+      const vehicle = await getVehicle(d, vehicleId);
+      expect(vehicle && "sourcedFromName" in vehicle).toBe(false);
+    });
+
+    test("control: a whole-record round trip re-sending current values still saves an unrelated edit", async () => {
+      const d = await seedDealer("a3");
+      const admin = await asSuperAdmin(d);
+      const vehicleId = await seedStockVehicle(d, { purchasePrice: 9000 });
+      await admin.mutation(api.adminData.adminUpdateRecord, {
+        table: "vehicles", id: vehicleId,
+        patch: { sourceType: "STOCK", purchasePrice: 9000, color: "Blue" },
+      });
+      const vehicle = await getVehicle(d, vehicleId);
+      expect(vehicle?.color).toBe("Blue");
+      expect(vehicle?.purchasePrice).toBe(9000);
+      expect(vehicle?.sourceType).toBe("STOCK");
+    });
+  });
+
+  describe("approval workflow (vehicleEdits.requestUpdate / resolve)", () => {
+    const approve = (d: Dealer, requestId: Id<"vehicleEdits">) =>
+      d.asOwner.mutation(api.vehicleEdits.resolve, { orgId: d.orgId, requestId, status: "APPROVED" });
+
+    test("a blank supplier name requested on a legacy STOCK row is never persisted; the other field is", async () => {
+      const d = await seedDealer("r1");
+      const vehicleId = await seedStockVehicle(d, { sourcedFromName: "Legacy Supplier" });
+      const requestId = await d.asOwner.mutation(api.vehicleEdits.requestUpdate, {
+        orgId: d.orgId, vehicleId, payload: { sourcedFromName: "   ", color: "Blue" } as never,
+      });
+      await approve(d, requestId);
+      const vehicle = await getVehicle(d, vehicleId);
+      expect(vehicle?.color).toBe("Blue");
+      expect(neverBlank(vehicle?.sourcedFromName)).toBe(true);
+    });
+
+    test("control: a PENDING request written by the old code with a blank name persists no whitespace on approval", async () => {
+      const d = await seedDealer("r2");
+      const vehicleId = await seedStockVehicle(d);
+      const requestId = await d.t.run((ctx) =>
+        ctx.db.insert("vehicleEdits", {
+          orgId: d.orgId, vehicleId, requestedBy: d.ownerId, type: "UPDATE", status: "PENDING", createdAt: Date.now(),
+          payload: { sourcedFromName: "   ", color: "Blue" },
+        })
+      );
+      await approve(d, requestId);
+      const vehicle = await getVehicle(d, vehicleId);
+      expect(vehicle?.color).toBe("Blue");
+      expect(neverBlank(vehicle?.sourcedFromName)).toBe(true);
+    });
+
+    test("control: a SOURCED row's supplier rename is stored trimmed", async () => {
+      const d = await seedDealer("r3");
+      const vehicleId = await seedStockVehicle(d, { ...sourcedFields });
+      const requestId = await d.asOwner.mutation(api.vehicleEdits.requestUpdate, {
+        orgId: d.orgId, vehicleId, payload: { sourcedFromName: "  Al Noor  " } as never,
+      });
+      await approve(d, requestId);
+      expect((await getVehicle(d, vehicleId))?.sourcedFromName).toBe("Al Noor");
+    });
   });
 });
 

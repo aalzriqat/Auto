@@ -182,9 +182,12 @@ function assertPatchDoesNotChangeVehicleOwnership(
   if (table !== "vehicles") return;
   if (!patch || typeof patch !== "object") return;
   const next = patch as Record<string, unknown>;
+  // Only undefined/null mean "absent". An absent field and "" are different stored states, so
+  // absent -> "" (or "   ") is a change: `vehicles.update` never persists a blank supplier name.
+  const norm = (value: unknown) => (value === undefined || value === null ? undefined : String(value));
   for (const field of VEHICLE_OWNERSHIP_FIELDS) {
     if (!(field in next)) continue;
-    if (String(next[field] ?? "") === String(before[field] ?? "")) continue;
+    if (norm(next[field]) === norm(before[field])) continue;
     throwVehicleSourceShape("VEHICLE_OWNERSHIP_FIELDS_LOCKED");
   }
 }
