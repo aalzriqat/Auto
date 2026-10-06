@@ -64,6 +64,7 @@ import {
   trustPassportFieldValidators,
   type VehicleLifecycleStatus,
 } from "./utils/vehicleStatusGuards";
+import { assertNoPendingBeforeAvailable } from "./utils/depositCancellationPending";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -1320,6 +1321,12 @@ export const update = mutation({
       throw new ConvexError("Vehicle not found in this organization.");
     }
     assertDirectVehicleStatusTransition(vehicle.status, args.status);
+    await assertNoPendingBeforeAvailable(ctx, {
+      orgId: args.orgId,
+      vehicleId: vehicle._id,
+      currentStatus: vehicle.status,
+      nextStatus: args.status,
+    });
     await assertVehicleImagesAllowed(ctx, args.imageIds);
 
     // SCRUM-717 (D-45): the same coherence rule `create` enforces, applied only
@@ -2556,6 +2563,12 @@ export const markSourcedVehicleArrived = mutation({
     if (vehicle.arrivedAt != null) {
       return args.vehicleId;
     }
+    await assertNoPendingBeforeAvailable(ctx, {
+      orgId: args.orgId,
+      vehicleId: vehicle._id,
+      currentStatus: vehicle.status,
+      nextStatus: vehicle.status === "SOURCING" ? "AVAILABLE" : undefined,
+    });
 
     const now = Date.now();
 

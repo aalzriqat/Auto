@@ -10,6 +10,7 @@ import {
 import { reverseAllocation, voidCanonicalPayment } from "../subledger";
 import { assertNoSupplierReceiptsForSale, cancelSupplierReceivablesForSale } from "../supplierReceivables";
 import { assertSoldVehicleOwnedBySale, restoreVehicleFromSale } from "./saleHelpers";
+import { recordPendingDisposition } from "./depositCancellationPending";
 import {
   reactivateAllVehiclesForDeposit,
   syncVehicleHoldStatus,
@@ -487,6 +488,16 @@ async function reinstateAppliedDeposits(
   const touchedDeposits = new Set<string>();
   for (const application of reversed) {
     touchedDeposits.add(application.depositId.toString());
+    // SCRUM-712: the share is now owed a refund-or-forfeit decision, and the car
+    // stays locked until it has one. Written here, in the shared teardown, so the
+    // sales, applications and unwind doors all inherit it; idempotent per
+    // application, so a replay cannot open a second claim.
+    await recordPendingDisposition(ctx, {
+      orgId: args.orgId,
+      applicationId: application.applicationId,
+      actorId: args.actorId,
+      now: args.reversalDate,
+    });
     // ⚠️ A SLICED DEPOSIT'S PARENT FLAG IS NOT THE CAR HOLD — its slices are,
     // and they are gated below. A DIRECT deposit's flag IS the car hold, so it
     // waits for the reversing journal.

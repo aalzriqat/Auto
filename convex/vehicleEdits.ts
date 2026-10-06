@@ -14,6 +14,7 @@ import {
   trustPassportFieldValidators,
   type VehicleLifecycleStatus,
 } from "./utils/vehicleStatusGuards";
+import { assertNoPendingBeforeAvailable } from "./utils/depositCancellationPending";
 import { assertVehicleImagesAllowed } from "./utils/storageValidation";
 import { acquisitionPaymentMethodValidator, type AcquisitionPaymentMethod } from "./utils/paymentMethods";
 import { postVehicleAcquisitionIfOwned, hasVehicleAcquisitionAccountingExposure, throwVehicleCostPosted } from "./vehicles";
@@ -218,6 +219,12 @@ export const requestUpdate = mutation({
     }
     const payload = normalizeVehicleEditPayload(args.payload);
     assertDirectVehicleStatusTransition(vehicle.status, payload.status);
+    await assertNoPendingBeforeAvailable(ctx, {
+      orgId: args.orgId,
+      vehicleId: vehicle._id,
+      currentStatus: vehicle.status,
+      nextStatus: payload.status,
+    });
     await assertVehicleImagesAllowed(ctx, payload.imageIds);
     assertValidOwnerCount(payload.ownerCount);
 
@@ -449,6 +456,12 @@ export const resolve = mutation({
 
         const payload = normalizeVehicleEditPayload(request.payload);
         assertDirectVehicleStatusTransition(previousVehicle.status, payload.status);
+        await assertNoPendingBeforeAvailable(ctx, {
+          orgId: args.orgId,
+          vehicleId: previousVehicle._id,
+          currentStatus: previousVehicle.status,
+          nextStatus: payload.status,
+        });
         await assertVehicleImagesAllowed(ctx, payload.imageIds);
         if (
           typeof payload.sellingPrice === "number" &&

@@ -4332,6 +4332,57 @@ export default defineSchema({
     .index("by_org_event_key", ["orgId", "eventIdempotencyKey"])
     .index("by_org_customer", ["orgId", "customerId"]),
 
+  /**
+   * SCRUM-712 — one row per deposit share a CANCELLED completed sale consumed.
+   *
+   * The share is the customer's money, still owed a decision (refund or
+   * forfeit), and until that decision is recorded the car it was paid against
+   * is not available to anybody. Written by the shared sale-teardown writer in
+   * the cancellation transaction; the natural key is the application row, so a
+   * retry or replay can never open a second claim.
+   *
+   * This is a DISPOSITION record, not a cash ledger: the money's own state stays
+   * on `deposits` / `depositVehicleHolds`. QUARANTINED is for legacy rows whose
+   * provenance cannot be proved; it blocks exactly like PENDING.
+   */
+  depositCancellationPendings: defineTable({
+    orgId: v.id("organizations"),
+    depositId: v.id("deposits"),
+    vehicleId: v.id("vehicles"),
+    saleId: v.id("sales"),
+    /** Natural key: one share per application row. */
+    applicationId: v.id("depositApplications"),
+    /** Present for a shared (sliced) deposit; absent when the whole row is the share. */
+    holdId: v.optional(v.id("depositVehicleHolds")),
+    amountMinor: v.number(),
+    currency: v.string(),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("RELEASED"),
+      v.literal("FORFEITED"),
+      v.literal("QUARANTINED")
+    ),
+    createdAt: v.number(),
+    createdBy: v.id("users"),
+    resolvedAt: v.optional(v.number()),
+    resolvedBy: v.optional(v.id("users")),
+    resolutionReference: v.optional(v.string()),
+  })
+    .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
+    // The org-level "is anything blocking at all" probe, read once per function.
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_application", ["orgId", "applicationId"])
+    .index("by_deposit", ["depositId"])
+    // Exact lookups for a deposit's undecided shares. `by_deposit` plus a take(N)
+    // loses a pending row behind N already-decided ones (SCRUM-712 B1). `holdId` is
+    // absent for a whole-row (direct) share and the index matches that as undefined.
+    .index("by_deposit_status", ["depositId", "status"])
+    .index("by_deposit_hold_status", ["depositId", "holdId", "status"])
+    // Exact "any blocking share of a DIFFERENT sale on this car" — two statuses x
+    // (saleId < s, saleId > s) existence ranges, no page that a sale's own shares
+    // can fill (SCRUM-712 round 3).
+    .index("by_org_vehicle_status_sale", ["orgId", "vehicleId", "status", "saleId"]),
+
   /* ─────────────────────────────────────────────────────────────────────────
    * SCRUM-218-C — the direct-collection receipt movement model.
    *
