@@ -324,9 +324,14 @@ describe("auditStagedBackendInputs (SCRUM-350 F1)", () => {
   // (components/definition/bundle.js findComponentDependencies). The audit walks
   // only convex/, so a component directory elsewhere is read unaudited
   // (Sonnet S2 on PR #341).
+  // Codex then found convex/_generated, which the audit skips as entry points.
+  // Only the two root configs may be candidate .config. inputs; components come
+  // from the trusted node_modules.
   const componentHomes: Array<[string, string]> = [
     ["lib/zz", "../lib/zz"],
     ["packages/shared/src/zz", "../packages/shared/src/zz"],
+    ["convex/_generated/zz", "./_generated/zz"],
+    ["convex/nested", "./nested"],
   ];
   for (const [home, relative] of componentHomes) {
     it("refuses a component directory in " + home + " whose own files the CLI would bundle", async () => {
@@ -341,7 +346,8 @@ describe("auditStagedBackendInputs (SCRUM-350 F1)", () => {
           ' with { type: "text" };\nexport const d = decoy;\n',
       });
       const result = await audit(stageRoot);
-      expect(result.stderr).toContain("component directory outside convex/");
+      // convex/nested is walked by the audit, so its leak fails the bundle first.
+      expect(result.stderr).toMatch(/component directory other than the root configuration|trusted bundler refused/);
       expect(result.status).toBe(1);
     });
 
@@ -352,10 +358,37 @@ describe("auditStagedBackendInputs (SCRUM-350 F1)", () => {
         [home + "/other.config.ts"]: "export const o = 1;\n",
       });
       const result = await audit(stageRoot);
-      expect(result.stderr).toContain("component directory outside convex/");
+      expect(result.stderr).toContain("component directory other than the root configuration");
       expect(result.status).toBe(1);
     });
   }
+
+  for (const home of ["lib/zz.config.d/x.ts", "packages/shared/src/zz.config.d/x.ts"]) {
+    it("refuses a .config. directory name, not just a basename: " + home + " (Sonnet closure on PR #341)", async () => {
+      const { stageRoot } = stage();
+      write(stageRoot, {
+        "convex/entry.ts": 'import "../' + home.replace(/\.ts$/, "") + '";\n',
+        [home]: "export const x = 1;\n",
+      });
+      const result = await audit(stageRoot);
+      expect(result.stderr).toContain("component directory other than the root configuration");
+      expect(result.status).toBe(1);
+    });
+  }
+
+  it("accepts the root configs and trusted components, which carry .config. in their paths (Sonnet closure on PR #341)", async () => {
+    const { stageRoot } = stage({
+      "convex/deals.ts": "export const total = 1;\n",
+      "convex/auth.config.ts": "export default { providers: [] };\n",
+      "convex/convex.config.ts":
+        'import rateLimiter from "@convex-dev/rate-limiter/convex.config.js";\nexport default { rateLimiter };\n',
+    });
+    rmSync(path.join(stageRoot, "node_modules"), { recursive: true, force: true });
+    symlinkSync(path.resolve(process.cwd(), "node_modules"), path.join(stageRoot, "node_modules"), "junction");
+    const result = await audit(stageRoot);
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  });
 
   it.skipIf(process.platform === "win32")(
     "refuses an outside .wasm import whose path contains a line terminator (Sonnet F1 on PR #341)",

@@ -561,7 +561,8 @@ jobs:
       # read a file, and in the deploy container /proc/self/environ holds the
       # key. So the trusted CLI's own bundle calls run here first, with no
       # credential and no network over the same read-only mounts, and every
-      # file they read must lie inside the stage or trusted node_modules.
+      # file the audit models them reading must lie inside the stage or trusted
+      # node_modules. A model, not a proof: unknown read channels are SCRUM-745.
       - name: Audit staged backend inputs without credentials
         run: |
           set -euo pipefail

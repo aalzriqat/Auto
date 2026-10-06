@@ -4,8 +4,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * Proves, with no credential present, which files the trusted Convex CLI's
- * bundler reads when it deploys the staged candidate backend (SCRUM-350 F1).
+ * Checks, with no credential present, the files the trusted Convex CLI's
+ * bundler is modelled to read when it deploys the staged candidate backend
+ * (SCRUM-350 F1). It is a model, not a proof; see the caveat below.
  *
  * A candidate import is an instruction to the bundler to read a file. An
  * absolute import, or a JSON import attribute on an extensionless path, makes
@@ -21,9 +22,9 @@ import { fileURLToPath } from "node:url";
  * - every recorded input resolves, after following links, inside the staged
  *   backend directories or the trusted node_modules.
  *
- * Resolution is deterministic over the same files, and the stage pins every
- * tsconfig the bundler consults, so the credential-bearing deploy that follows
- * reads the same inputs this proved.
+ * Resolution is deterministic over the same files and the stage pins every
+ * tsconfig the bundler consults, but the deploy opens more paths than this
+ * audit records (a Linux strace measured 2048 against 1055).
  *
  * This is a MODEL of the CLI's reads, not the CLI: the deploy runs three esbuild
  * passes with different options, plugins and directory walks, and this audit
@@ -66,6 +67,8 @@ const WASM_NAMESPACE = /^wasm-(?:binary|stub):([\s\S]+)$/;
 // without sourcesContent: false) reads the files an inline map's "sources"
 // names, which this audit's own bundle does not (Codex HIGH on PR #341).
 const SOURCE_MAP_COMMENT = /\/[/*][#@]\s*sourceMappingURL=/;
+// The only candidate files the CLI may treat as component definitions.
+const ROOT_CONFIG = /^convex\/(?:convex|auth)\.config\.[A-Za-z]+$/;
 // The CLI's per-line fallback, used only when its parser rejects the source.
 const USE_NODE_LINE = /^\s*("|')use node("|');?\s*$/;
 
@@ -216,7 +219,7 @@ export async function auditStagedBackendInputs({ stageRoot }) {
     names.map((name) => path.join(stageRoot, name)).filter((root) => existsSync(root)).map((root) => realpathSync(root));
   const allowedRoots = rootsFor(AUDIT_ALLOWED_DIRECTORIES);
   const candidateRoots = rootsFor(AUDIT_ALLOWED_DIRECTORIES.filter((name) => name !== "node_modules"));
-  const outsideConvexRoots = rootsFor(AUDIT_ALLOWED_DIRECTORIES.filter((name) => name !== "node_modules" && name !== "convex"));
+  const realStageRoot = realpathSync(stageRoot);
   for (const input of recorded) {
     let real;
     try {
@@ -233,14 +236,19 @@ export async function auditStagedBackendInputs({ stageRoot }) {
     // and bundles each file in its directory as an entry point
     // (components/definition/bundle.js findComponentDependencies). This audit
     // walks convex/ alone, so a component directory anywhere else would be read
-    // unaudited by the credential-bearing deploy (Sonnet S2 on PR #341).
-    if (
-      outsideConvexRoots.some((root) => isInside(root, real)) &&
-      (path.relative(stageRoot, input) + "\n" + path.relative(stageRoot, real)).includes(".config.")
-    ) {
-      throw new AuditRefusal(
-        "A component directory outside convex/ is not allowed: " + JSON.stringify(input.slice(0, 200)),
-      );
+    // unaudited by the credential-bearing deploy (Sonnet S2, Codex on PR #341:
+    // lib/, packages/shared/src and convex/_generated all escaped the walk). So
+    // a candidate input with ".config." anywhere in its path may only be one of
+    // the two root configs; components come from the trusted node_modules.
+    if (candidateRoots.some((root) => isInside(root, real))) {
+      const configNames = [path.relative(stageRoot, input), path.relative(realStageRoot, real)]
+        .map((name) => name.split(path.sep).join("/"))
+        .filter((name) => name.includes(".config."));
+      if (configNames.some((name) => !ROOT_CONFIG.test(name))) {
+        throw new AuditRefusal(
+          "A component directory other than the root configuration is not allowed: " + JSON.stringify(input.slice(0, 200)),
+        );
+      }
     }
     // esbuild also reads the file a loaded candidate source names in a
     // sourceMappingURL comment; that read never appears in the metafile
