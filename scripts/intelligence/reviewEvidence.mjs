@@ -42,6 +42,27 @@ const INVALIDATING = new Set([
   "MALFORMED_RECORD",
 ]);
 
+// Every reason code this evaluator can emit. A publisher allows only these, so a
+// code is a fact about the evaluation, never text from the record.
+export const REASON_CODES = Object.freeze([
+  ...INVALIDATING,
+  "BAD_SHA",
+  "STALE_EVIDENCE",
+  "EVIDENCE_NOT_FOR_REQUIREMENT",
+  "TEST_NOT_REGISTERED",
+  "TEST_PARAMETERIZED",
+  "RUNTIME_UNAVAILABLE",
+  "RUNTIME_UNPROVEN",
+  "RUNTIME_WRONG_MERGE",
+  "RUNTIME_AMBIGUOUS",
+  "UNKNOWN_EVIDENCE",
+  "REVIEW_NOT_PROVABLE",
+  "UNCLASSIFIED_REQUIREMENT",
+  "EXCEPTED",
+  "MISSING_OBLIGATION",
+  "NO_EVIDENCE",
+]);
+
 const isPlainObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 
 // Formats a value for a reason's detail. String() throws on a JSON object such

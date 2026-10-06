@@ -11,6 +11,14 @@ export type PaymentMethod = "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD";
  * that have no "unpaid" concept.
  */
 export type AcquisitionPaymentMethod = PaymentMethod | "ON_ACCOUNT";
+/** Every method a vehicle acquisition can be settled by, ON_ACCOUNT included. */
+export const ACQUISITION_PAYMENT_METHODS: readonly AcquisitionPaymentMethod[] = [
+  "CASH",
+  "BANK_TRANSFER",
+  "CHEQUE",
+  "CARD",
+  "ON_ACCOUNT",
+];
 export type Translate = (key: any) => string;
 
 const DEFAULT_PAYMENT_METHODS: PaymentMethod[] = ["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"];

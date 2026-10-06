@@ -1,6 +1,7 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
 import { convexTestWithComponents, recordReconciledZeroCost } from "../test-utils/convexTest";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
+import { seedSaleInvoice } from "../test-utils/saleInvoiceFixtures";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -182,25 +183,12 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
     // invoice, so a fixture whose intent is "genuinely finished" seeds that invoice and pays it in full.
     if (opts.paidInvoice && finalizedSaleId && saleKind !== "deleted") {
       const saleId = finalizedSaleId;
-      await s.t.run(async (ctx) => {
-        const amountMinor = 10_500_000;
-        const receivableId = await ctx.db.insert("receivableDocuments", {
-          orgId: s.orgId, documentType: "INVOICE", documentNumber: `INV-${saleId}`, payerType: "CUSTOMER",
-          customerId: s.customerId, sourceType: "sales", sourceId: saleId, originalAmountMinor: amountMinor,
-          currency: "JOD", scale: 3, issueDate: Date.now(), dueDate: Date.now(), status: "PAID",
-          createdAt: Date.now(), createdBy: s.userId,
-        });
-        const paymentId = await ctx.db.insert("canonicalPayments", {
-          orgId: s.orgId, direction: "IN", payerType: "CUSTOMER", customerId: s.customerId, method: "CASH",
-          amountMinor, currency: "JOD", scale: 3, status: "SETTLED",
-          idempotencyKey: `fl-paid-${saleId}`, createdBy: s.userId, createdAt: Date.now(),
-        });
-        await ctx.db.insert("paymentAllocations", {
-          orgId: s.orgId, paymentId, receivableDocumentId: receivableId, amountMinor, currency: "JOD", scale: 3,
-          allocationDate: Date.now(), status: "ACTIVE", createdBy: s.userId, createdAt: Date.now(),
-        });
-        await ctx.db.patch(saleId, { canonicalReceivableDocumentId: receivableId });
-      });
+      // SCRUM-571 D-43: a zero balance only proves anything once the sale's own journal stands POSTED.
+      await s.t.run((ctx) =>
+        seedSaleInvoice(ctx, {
+          orgId: s.orgId, saleId, userId: s.userId, customerId: s.customerId, posting: "POSTED",
+        })
+      );
     }
     if (opts.reconciledFee) {
       await recordReconciledZeroCost(s.asOwner, api, s.orgId, applicationId);

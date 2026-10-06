@@ -13,6 +13,11 @@ export function expensePostedKey(expenseId: Id<"expenses">): string {
   return `expense_posted_${expenseId}`;
 }
 
+/** The one spelling of a sale's SALE_COMPLETED idempotency key (what `hookSaleCompleted` writes). */
+export function saleCompletedKey(saleId: Id<"sales">): string {
+  return `sale_completed_${saleId}`;
+}
+
 export type EventType =
   | "DEPOSIT_RECEIVED"
   | "DEPOSIT_APPLIED"
