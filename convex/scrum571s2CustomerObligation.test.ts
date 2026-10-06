@@ -259,6 +259,15 @@ describe("SCRUM-571 s2a: the customer's invoice gates 'settled' on every financi
     expect(await settlementOf(s, applicationId)).not.toBe("COMPLETE");
   });
 
+  test("a pending financed deal with no canonical invoice fails closed: UNKNOWN, never NONE, never settled", async () => {
+    const s = await seed("pending");
+    const { applicationId, saleId } = await insertFinancedDeal(s, { gapCashMinor: 0, invoice: "none" });
+    await s.t.run((ctx) => ctx.db.patch(saleId, { status: "PENDING" }));
+    const view = await s.asOwner.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+    expect(view!.customerInvoiceState).toBe("UNKNOWN");
+    expect(await settlementOf(s, applicationId)).not.toBe("COMPLETE");
+  });
+
   test("a gap that cannot be read is UNKNOWN, never settled", async () => {
     const s = await seed("gapnan");
     const { applicationId } = await insertFinancedDeal(s, { gapCashMinor: -5, openMinor: 0 });

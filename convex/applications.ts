@@ -967,13 +967,14 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
   const financierObligation = resolveFinancierObligation(app, settlesDirect, financierLeg);
 
   // The customer's side is judged on EVERY financier leg (SCRUM-571 D-43).
-  // A sale that is not COMPLETED (a cancelled one, whose books were reversed)
-  // owes no invoice to describe: NONE, as the cash cockpit reads it, and without
-  // touching the invoice at all.
-  const saleOwesNoInvoice = saleCancelled || (sale != null && sale.status !== "COMPLETED");
+  // A cancelled sale's books were reversed, so there is no invoice to describe:
+  // NONE, as the cash cockpit reads it, and without touching the invoice at all.
+  // Any other non-completed sale (e.g. PENDING) stays judged and fails closed,
+  // because NONE counts as "nothing owed" in settlementIsComplete.
+  const saleCancelledForInvoice = saleCancelled || sale?.status === "CANCELLED";
   const customerPosition: CustomerInvoicePosition = !routeKnown
     ? { state: "UNKNOWN", outstandingMinor: null }
-    : saleOwesNoInvoice
+    : saleCancelledForInvoice
       ? { state: "NONE", outstandingMinor: null }
       : await resolveCustomerPosition(ctx, app, sale, currency, financierLeg, settlesDirect);
   const obligations: SettlementObligations = routeKnown
