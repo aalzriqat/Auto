@@ -1298,8 +1298,10 @@ describe("Fix #11 — flipping a SOURCED vehicle to owned stock capitalizes it",
     );
     expect(eventBeforeFlip).toBeNull();
 
+    // SCRUM-717 (D-45): a buy-out states its terms explicitly — the price is no
+    // longer inferred from the mirrored consignment cost.
     await asOwner.mutation(api.vehicles.update, {
-      orgId, vehicleId, sourceType: "STOCK", purchasePaymentMethod: "CASH",
+      orgId, vehicleId, sourceType: "STOCK", purchasePrice: 9000, purchasePaymentMethod: "CASH",
     });
 
     const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
@@ -1336,8 +1338,12 @@ describe("Fix #11 — flipping a SOURCED vehicle to owned stock capitalizes it",
     });
 
     await expect(
-      asOwner.mutation(api.vehicles.update, { orgId, vehicleId, sourceType: "STOCK" })
-    ).rejects.toThrow(/[Pp]ayment method is required/);
+      asOwner.mutation(api.vehicles.update, { orgId, vehicleId, sourceType: "STOCK", purchasePrice: 9000 })
+    ).rejects.toThrow(/how it was paid/);
+    // And no price at all is refused the same way (never inferred from sourceCost).
+    await expect(
+      asOwner.mutation(api.vehicles.update, { orgId, vehicleId, sourceType: "STOCK", purchasePaymentMethod: "CASH" })
+    ).rejects.toThrow(/agreed purchase price/);
   });
 
   test("a STOCK vehicle created without a purchase price capitalizes once one is set via update()", async () => {
@@ -1380,7 +1386,7 @@ describe("Fix #13 — ON_ACCOUNT credit purchases for owned vehicles", () => {
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(),
       orgId, ...baseVehicle, purchasePrice: 10000,
-      purchasePaymentMethod: "ON_ACCOUNT", sourcedFromName: "Credit Supplier Co",
+      purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: "Credit Supplier Co",
     });
 
     const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
@@ -1397,6 +1403,11 @@ describe("Fix #13 — ON_ACCOUNT credit purchases for owned vehicles", () => {
     expect(payable?.amountDue).toBe(10000);
     expect(payable?.sourcedFromName).toBe("Credit Supplier Co");
     expect(payable?.status).toBe("PENDING");
+    // SCRUM-717: the owned car's creditor lives on the payable only — the vehicle
+    // row never carries a consignment supplier.
+    const ownedRow = await t.run((ctx) => ctx.db.get(vehicleId));
+    expect(ownedRow?.sourcedFromName).toBeUndefined();
+    expect(ownedRow?.sourceCost).toBeUndefined();
 
     // No cash actually moved — the legacy transactions table shouldn't record one.
     const legacyTx = await t.run(async (ctx) =>
@@ -1421,7 +1432,7 @@ describe("Fix #13 — ON_ACCOUNT credit purchases for owned vehicles", () => {
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(),
       orgId, ...baseVehicle, purchasePrice: 10000,
-      purchasePaymentMethod: "ON_ACCOUNT", sourcedFromName: "Credit Supplier Co",
+      purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: "Credit Supplier Co",
     });
     const payable = await t.run((ctx) =>
       ctx.db.query("vehicleSupplierPayables").withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId)).first()
@@ -1455,8 +1466,8 @@ describe("Fix #13 — ON_ACCOUNT credit purchases for owned vehicles", () => {
     });
 
     await asOwner.mutation(api.vehicles.update, {
-      orgId, vehicleId, sourceType: "STOCK",
-      purchasePaymentMethod: "ON_ACCOUNT", sourcedFromName: "Credit Supplier Co",
+      orgId, vehicleId, sourceType: "STOCK", purchasePrice: 9000,
+      purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: "Credit Supplier Co",
     });
 
     const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
@@ -1940,7 +1951,7 @@ describe("Review issue #1 — payment method required whenever a purchase price 
       orgId,
       payload: {
         ...baseVehicle, vin: "ONACCT0000000001", purchasePrice: 7000,
-        purchasePaymentMethod: "ON_ACCOUNT", sourcedFromName: "Approval Flow Supplier",
+        purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: "Approval Flow Supplier",
       },
     });
     await asOwner.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" });
@@ -1957,9 +1968,11 @@ describe("Review issue #1 — payment method required whenever a purchase price 
       ctx.db.query("vehicleSupplierPayables").withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicle!._id)).first()
     );
     expect(payable?.sourcedFromName).toBe("Approval Flow Supplier");
+    // SCRUM-717: the creditor is on the payable, never on the owned vehicle row.
+    expect(vehicle?.sourcedFromName).toBeUndefined();
   });
 
-  test("an approved UPDATE request flipping SOURCED to STOCK posts VEHICLE_ACQUIRED (previously a silent gap)", async () => {
+  test("an UPDATE request flipping SOURCED to STOCK is refused; the authorized direct door posts VEHICLE_ACQUIRED", async () => {
     const { t, orgId, asOwner } = await seedDealer("ri1f");
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(),
@@ -1976,11 +1989,23 @@ describe("Review issue #1 — payment method required whenever a purchase price 
     );
     expect(eventBeforeFlip).toBeNull();
 
-    const requestId = await asOwner.mutation(api.vehicleEdits.requestUpdate, {
-      orgId, vehicleId,
-      payload: { sourceType: "STOCK", purchasePaymentMethod: "CASH" },
+    // SCRUM-717 (D-45): an ownership change is never an approval request.
+    await expect(
+      asOwner.mutation(api.vehicleEdits.requestUpdate, {
+        orgId, vehicleId,
+        payload: { sourceType: "STOCK", purchasePrice: 8500, purchasePaymentMethod: "CASH" },
+      })
+    ).rejects.toThrow(/can't go through an approval request/);
+    expect(
+      await t.run((ctx) =>
+        ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId)).collect()
+      )
+    ).toHaveLength(0);
+
+    // The authorized door: a finance user states the buy-out terms directly.
+    await asOwner.mutation(api.vehicles.update, {
+      orgId, vehicleId, sourceType: "STOCK", purchasePrice: 8500, purchasePaymentMethod: "CASH",
     });
-    await asOwner.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" });
 
     const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
     const cash = await accountBySystemKey(t, orgId, "CASH_ON_HAND");
@@ -1989,7 +2014,7 @@ describe("Review issue #1 — payment method required whenever a purchase price 
     expect(lines.find((l) => l.accountId === cash._id)?.creditMinor).toBe(8_500_000);
   });
 
-  test("requestUpdate rejects a SOURCED-to-STOCK flip with no payment method", async () => {
+  test("requestUpdate rejects a SOURCED-to-STOCK flip (with or without a payment method)", async () => {
     const { orgId, asOwner } = await seedDealer("ri1g");
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(),
@@ -2001,7 +2026,7 @@ describe("Review issue #1 — payment method required whenever a purchase price 
       asOwner.mutation(api.vehicleEdits.requestUpdate, {
         orgId, vehicleId, payload: { sourceType: "STOCK" },
       })
-    ).rejects.toThrow(/[Pp]ayment method is required/);
+    ).rejects.toThrow(/can't go through an approval request/);
   });
 });
 
@@ -2172,7 +2197,7 @@ describe("Review issue #5 — vehicle acquisition cost correction", () => {
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(),
       orgId, ...baseVehicle, purchasePrice: 10000,
-      purchasePaymentMethod: "ON_ACCOUNT", sourcedFromName: "Credit Supplier Co",
+      purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: "Credit Supplier Co",
     });
 
     await asOwner.mutation(api.vehicles.correctAcquisitionCost, {
@@ -2194,7 +2219,7 @@ describe("Review issue #5 — vehicle acquisition cost correction", () => {
     const vehicleId2 = await asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(),
       orgId, ...baseVehicle, vin: "1HGCM82633A000002", purchasePrice: 10000,
-      purchasePaymentMethod: "ON_ACCOUNT", sourcedFromName: "Credit Supplier Co",
+      purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: "Credit Supplier Co",
     });
     await asOwner.mutation(api.vehicles.correctAcquisitionCost, {
       orgId, vehicleId: vehicleId2, newCost: 9700, reason: "Supplier invoice was entered with the wrong total",
@@ -2379,6 +2404,7 @@ async function glBalanceMinor(t: Ctx["t"], orgId: Id<"organizations">, systemKey
 const baseImportRow = {
   make: "Kia", model: "Sportage", year: 2023, color: "Silver",
   fuelType: "Petrol", transmission: "Automatic", sellingPrice: 15000,
+  sourceType: "STOCK",
 };
 
 async function vehicleByVin(t: Ctx["t"], orgId: Id<"organizations">, vin: string) {
@@ -2473,7 +2499,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
         acquisitionPosting: "PURCHASE", importId: "imp-3",
         purchasePaymentMethod: "ON_ACCOUNT",
         vehicles: [
-          { rowId: 1, ...baseImportRow, vin: "IMPORTOA00000001A", purchasePrice: 10000, sourcedFromName: "Gulf Motors" },
+          { rowId: 1, ...baseImportRow, vin: "IMPORTOA00000001A", purchasePrice: 10000, purchaseSupplierName: "Gulf Motors" },
           { rowId: 2, ...baseImportRow, vin: "IMPORTOA00000002B", purchasePrice: 10000 },
         ],
       })
@@ -2495,7 +2521,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
       acquisitionPosting: "PURCHASE", importId: "imp-4",
       purchasePaymentMethod: "ON_ACCOUNT",
       vehicles: [
-        { rowId: 1, ...baseImportRow, vin: "IMPORTOA00000003C", purchasePrice: 10000, sourcedFromName: "Gulf Motors" },
+        { rowId: 1, ...baseImportRow, vin: "IMPORTOA00000003C", purchasePrice: 10000, purchaseSupplierName: "Gulf Motors" },
       ],
     });
 
@@ -3070,14 +3096,14 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     // produce the row below, while every server test hand-built it and passed.
     // The client end is pinned in components/vehicles/vehicleImportRow.test.ts
     // ("keeps the supplier on an OWNED row"), which asserts derivation emits
-    // exactly this shape: sourceType not SOURCED, sourcedFromName present,
-    // sourceCost undefined. Importing the dialog here instead would drag a .tsx
+    // exactly this shape: sourceType STOCK, purchaseSupplierName present (SCRUM-717:
+    // never sourcedFromName), sourceCost undefined. Importing the dialog here instead would drag a .tsx
     // module into convex/tsconfig and break the convex-backend gate.
     await asOwner.mutation(api.vehicles.importBulk, {
       orgId, acquisitionPosting: "PURCHASE", importId: "imp-fill-2", purchasePaymentMethod: "ON_ACCOUNT",
       vehicles: [{ rowId: 1,
         ...baseImportRow, vin: "IMPORTE2E0000001A",
-        purchasePrice: 10000, sourcedFromName: "Atiwi Motors",
+        purchasePrice: 10000, purchaseSupplierName: "Atiwi Motors",
       }],
     });
 
@@ -3381,7 +3407,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     const { t, orgId, asOwner } = await seedDealer("s59supp");
     await asOwner.mutation(api.vehicles.importBulk, {
       orgId, acquisitionPosting: "PURCHASE", importId: "imp-34", purchasePaymentMethod: "ON_ACCOUNT",
-      vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTSUPP00001A", purchasePrice: 10000, sourcedFromName: "Gulf Motors" }],
+      vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTSUPP00001A", purchasePrice: 10000, purchaseSupplierName: "Gulf Motors" }],
     });
     const before = await worldDelta(t, orgId);
 
@@ -3390,7 +3416,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
     await expect(
       asOwner.mutation(api.vehicles.importBulk, {
         orgId, acquisitionPosting: "PURCHASE", importId: "imp-35", purchasePaymentMethod: "ON_ACCOUNT",
-        vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTSUPP00001A", purchasePrice: 10000, sourcedFromName: "Delta Auto" }],
+        vehicles: [{ rowId: 1, ...baseImportRow, vin: "IMPORTSUPP00001A", purchasePrice: 10000, purchaseSupplierName: "Delta Auto" }],
       })
     ).rejects.toThrow(/owed to Gulf Motors, this file says Delta Auto/);
 
@@ -3399,7 +3425,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
 
   test("ON_ACCOUNT: a retry naming the SAME supplier is a retry, and creates no second payable", async () => {
     const { t, orgId, asOwner } = await seedDealer("s59supp2");
-    const row = { rowId: 1, ...baseImportRow, vin: "IMPORTSUPP00002B", purchasePrice: 10000, sourcedFromName: "Gulf Motors" };
+    const row = { rowId: 1, ...baseImportRow, vin: "IMPORTSUPP00002B", purchasePrice: 10000, purchaseSupplierName: "Gulf Motors" };
     await asOwner.mutation(api.vehicles.importBulk, {
       orgId, acquisitionPosting: "PURCHASE", importId: "imp-36", purchasePaymentMethod: "ON_ACCOUNT", vehicles: [row],
     });
@@ -3820,7 +3846,7 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
       ["cost", { purchasePrice: 12000 }, "CASH"],
       ["payment method", {}, "BANK_TRANSFER"],
       ["ownership", { sourceType: "SOURCED", sourcedFromName: "Other Dealer", sourceCost: 9000 }, "CASH"],
-      ["supplier", { sourcedFromName: "Someone Else" }, "CASH"],
+      ["supplier", { purchaseSupplierName: "Someone Else" }, "CASH"],
     ];
 
     for (const [label, change, method] of variants) {

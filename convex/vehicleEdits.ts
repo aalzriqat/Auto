@@ -20,6 +20,44 @@ import { postVehicleAcquisitionIfOwned, hasVehicleAcquisitionAccountingExposure,
 import { retroactiveOwnershipChangeRefusal } from "./utils/vehicleOwnership";
 import { syncVehicleHoldStatus } from "./utils/depositHelpers";
 import { supplierCostRecoveryConversionRefusal } from "./utils/costBearer";
+import {
+  assertOwnedPurchaseTerms,
+  assertVehicleIntakeSourceShape,
+  assertVehicleSourceShapeOnUpdate,
+  parseVehicleSourceType,
+  storedVehicleSourceType,
+  throwVehicleSourceShape,
+} from "./utils/vehicleSourceShape";
+
+/**
+ * SCRUM-717 (D-45): the ownership decision an approver makes when approving a
+ * CREATE request that was submitted without one (a WhatsApp intake request has no
+ * sourceType). It REPLACES the request's six ownership fields wholesale, so an
+ * approver can never be left holding a half-stripped shape.
+ */
+const ownershipDecisionValidator = v.object({
+  sourceType: v.union(v.literal("STOCK"), v.literal("SOURCED")),
+  sourcedFromName: v.optional(v.string()),
+  sourceCost: v.optional(v.number()),
+  purchasePrice: v.optional(v.number()),
+  purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+  purchaseSupplierName: v.optional(v.string()),
+});
+
+const OWNERSHIP_PAYLOAD_KEYS = [
+  "sourceType",
+  "sourcedFromName",
+  "sourceCost",
+  "purchasePrice",
+  "purchasePaymentMethod",
+  "purchaseSupplierName",
+] as const;
+
+function stripOwnershipFields(payload: VehicleEditPayload): VehicleEditPayload {
+  const copy: Record<string, unknown> = { ...payload };
+  for (const key of OWNERSHIP_PAYLOAD_KEYS) delete copy[key];
+  return copy as VehicleEditPayload;
+}
 
 type VehicleEditPayload = {
   vin?: string;
@@ -33,6 +71,8 @@ type VehicleEditPayload = {
   transmission?: string;
   purchasePrice?: number;
   purchasePaymentMethod?: AcquisitionPaymentMethod;
+  /** SCRUM-717: the creditor of an owned car bought ON_ACCOUNT; never `sourcedFromName`. */
+  purchaseSupplierName?: string;
   minimumProfit?: number;
   sellingPrice?: number;
   status?: string;
@@ -85,6 +125,7 @@ export const requestCreate = mutation({
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
       purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+      purchaseSupplierName: v.optional(v.string()),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
@@ -112,29 +153,11 @@ export const requestCreate = mutation({
     await assertVehicleImagesAllowed(ctx, payload.imageIds);
     assertValidOwnerCount(payload.ownerCount);
 
-    if (payload.sourceType === "SOURCED") {
-      if (!payload.sourcedFromName?.trim()) {
-        throw new ConvexError("Sourced vehicles require a supplier dealer name.");
-      }
-      if (payload.sourceCost === undefined || payload.sourceCost === null) {
-        throw new ConvexError("Sourced vehicles require a supplier cost.");
-      }
-    }
-
-    if (
-      payload.sourceType !== "SOURCED" &&
-      payload.purchasePrice != null &&
-      payload.purchasePrice > 0 &&
-      !payload.purchasePaymentMethod
-    ) {
-      throw new ConvexError("Payment method is required when a purchase price is entered.");
-    }
-    if (
-      payload.sourceType !== "SOURCED" &&
-      payload.purchasePaymentMethod === "ON_ACCOUNT" &&
-      !payload.sourcedFromName?.trim()
-    ) {
-      throw new ConvexError("A supplier name (sourcedFromName) is required for a vehicle purchased on account.");
+    // SCRUM-717 (D-45): the same explicit, coherent ownership decision
+    // `vehicles.create` requires — refused here so it never becomes a request a
+    // manager is asked to approve.
+    if (assertVehicleIntakeSourceShape(payload) === "STOCK") {
+      assertOwnedPurchaseTerms(payload);
     }
 
     const requestId = await ctx.db.insert("vehicleEdits", {
@@ -175,6 +198,7 @@ export const requestUpdate = mutation({
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
       purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+      purchaseSupplierName: v.optional(v.string()),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
@@ -227,6 +251,18 @@ export const requestUpdate = mutation({
     });
     if (recoveryRefusal) throw new ConvexError(recoveryRefusal);
 
+    // SCRUM-717 (D-45): an ownership CHANGE (consignment <-> owned) moves money
+    // and is never an approval request. It is made directly, by a finance user,
+    // from the vehicle's edit screen, where the buy-out terms are required.
+    if (
+      payload.sourceType !== undefined &&
+      parseVehicleSourceType(payload.sourceType) !== storedVehicleSourceType(vehicle.sourceType)
+    ) {
+      throwVehicleSourceShape("VEHICLE_OWNERSHIP_CHANGE_NOT_REQUESTABLE");
+    }
+    // A supplier/cost edit must still leave the stored type coherent.
+    assertVehicleSourceShapeOnUpdate(vehicle, payload);
+
     // Mirrors vehicles.update's acquisition-posting guard: a SOURCED→STOCK
     // flip (or a purchase price set for the first time) requested here must
     // carry a payment method too, or the manager who approves it has no way
@@ -245,11 +281,8 @@ export const requestUpdate = mutation({
     ) {
       throw new ConvexError("Payment method is required to post this vehicle's acquisition cost to accounting.");
     }
-    if (
-      payload.purchasePaymentMethod === "ON_ACCOUNT" &&
-      !(payload.sourcedFromName ?? vehicle.sourcedFromName)?.trim()
-    ) {
-      throw new ConvexError("A supplier name (sourcedFromName) is required for a vehicle purchased on account.");
+    if (payload.purchasePaymentMethod === "ON_ACCOUNT" && !payload.purchaseSupplierName?.trim()) {
+      throwVehicleSourceShape("VEHICLE_PURCHASE_SUPPLIER_REQUIRED");
     }
 
     const filteredPayload: Record<string, unknown> = {};
@@ -329,6 +362,8 @@ export const resolve = mutation({
     orgId: v.id("organizations"),
     requestId: v.id("vehicleEdits"),
     status: v.union(v.literal("APPROVED"), v.literal("REJECTED")),
+    /** SCRUM-717: the approver's ownership decision for a CREATE request. Refused for UPDATE. */
+    ownership: v.optional(ownershipDecisionValidator),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
@@ -341,6 +376,9 @@ export const resolve = mutation({
     if (request.status !== "PENDING") {
       throw new ConvexError("Request is already resolved.");
     }
+    if (args.ownership && request.type !== "CREATE") {
+      throwVehicleSourceShape("VEHICLE_OWNERSHIP_CHANGE_NOT_REQUESTABLE");
+    }
 
     await ctx.db.patch(request._id, {
       status: args.status,
@@ -350,18 +388,31 @@ export const resolve = mutation({
 
     if (args.status === "APPROVED") {
       if (request.type === "CREATE") {
-        const payload = normalizeVehicleEditPayload(request.payload);
+        // SCRUM-717 (D-45): the approver's explicit ownership decision, when the
+        // request was submitted without one (WhatsApp intake), replaces the
+        // request's six ownership fields wholesale. Whatever the request carried
+        // is judged by the same intake guard `vehicles.create` applies — a CREATE
+        // that names no coherent ownership is refused, never defaulted to STOCK.
+        const baseCreatePayload = normalizeVehicleEditPayload(request.payload);
+        const payload: VehicleEditPayload = args.ownership
+          ? { ...stripOwnershipFields(baseCreatePayload), ...args.ownership }
+          : baseCreatePayload;
         assertDirectVehicleCreateStatus(payload.status);
         await assertVehicleImagesAllowed(ctx, payload.imageIds);
 
-        const isSourced = payload.sourceType === "SOURCED";
+        const isSourced = assertVehicleIntakeSourceShape(payload) === "SOURCED";
+        if (!isSourced) assertOwnedPurchaseTerms(payload);
         // Mirrors vehicles.create: sourced vehicles carry their cost in
         // sourceCost, not purchasePrice, but the vehicle record still stores
         // purchasePrice so downstream reads stay consistent either way.
         const effectivePurchasePrice = isSourced
           ? (payload.sourceCost ?? payload.purchasePrice)
           : payload.purchasePrice;
-        const { purchasePaymentMethod, ...vehicleFields } = payload;
+        const {
+          purchasePaymentMethod,
+          purchaseSupplierName: createPurchaseSupplierName,
+          ...vehicleFields
+        } = payload;
 
         const vehicleId = await ctx.db.insert("vehicles", {
           ...(vehicleFields as any),
@@ -378,7 +429,7 @@ export const resolve = mutation({
           isSourced,
           purchasePrice: effectivePurchasePrice,
           purchasePaymentMethod,
-          supplierName: payload.sourcedFromName,
+          supplierName: createPurchaseSupplierName,
           vehicleLabel: `${payload.year ?? ""} ${payload.make ?? ""} ${payload.model ?? ""}`.trim(),
           vin: payload.vin ?? vehicleId.toString(),
           actorId: user._id,
@@ -448,7 +499,30 @@ export const resolve = mutation({
         });
         if (resolveRecoveryRefusal) throw new ConvexError(resolveRecoveryRefusal);
 
-        const { purchasePaymentMethod: resolvePurchasePaymentMethod, ...vehiclePatchFields } = payload;
+        // SCRUM-717 (D-45): re-checked at approval. A request can carry no
+        // ownership change at all (a request written before this rule existed, or
+        // one forged through the table), and a patch that contradicts the stored
+        // shape is refused here exactly as `vehicles.update` refuses it.
+        if (
+          payload.sourceType !== undefined &&
+          parseVehicleSourceType(payload.sourceType) !== storedVehicleSourceType(previousVehicle.sourceType)
+        ) {
+          throwVehicleSourceShape("VEHICLE_OWNERSHIP_CHANGE_NOT_REQUESTABLE");
+        }
+        assertVehicleSourceShapeOnUpdate(previousVehicle, payload);
+        if (
+          resolveNeedsAcquisitionPosting &&
+          payload.purchasePaymentMethod === "ON_ACCOUNT" &&
+          !payload.purchaseSupplierName?.trim()
+        ) {
+          throwVehicleSourceShape("VEHICLE_PURCHASE_SUPPLIER_REQUIRED");
+        }
+
+        const {
+          purchasePaymentMethod: resolvePurchasePaymentMethod,
+          purchaseSupplierName: resolvePurchaseSupplierName,
+          ...vehiclePatchFields
+        } = payload;
 
         await ctx.db.patch(request.vehicleId, {
           ...(vehiclePatchFields as any),
@@ -468,7 +542,7 @@ export const resolve = mutation({
             isSourced: false,
             purchasePrice: resolveAcquisitionPurchasePrice,
             purchasePaymentMethod: resolvePurchasePaymentMethod,
-            supplierName: payload.sourcedFromName ?? previousVehicle.sourcedFromName,
+            supplierName: resolvePurchaseSupplierName,
             vehicleLabel: `${payload.year ?? previousVehicle.year} ${payload.make ?? previousVehicle.make} ${payload.model ?? previousVehicle.model}`,
             vin: payload.vin ?? previousVehicle.vin ?? "",
             actorId: user._id,
@@ -504,12 +578,12 @@ export const getHistory = query({
     // We allow anyone in the org to view history
     await requireTenantAuth(ctx, args.orgId);
 
-    const edits = await ctx.db
+    const orgEdits = await ctx.db
       .query("vehicleEdits")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
       .order("desc")
       .collect();
+    const edits = orgEdits.filter((edit) => edit.vehicleId === args.vehicleId);
 
     // Enrich with user names
     return Promise.all(

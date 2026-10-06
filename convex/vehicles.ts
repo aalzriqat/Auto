@@ -85,6 +85,14 @@ import { paginationOptsValidator } from "convex/server";
 import { retroactiveOwnershipChangeRefusal } from "./utils/vehicleOwnership";
 import { supplierCostRecoveryConversionRefusal } from "./utils/costBearer";
 import { runWithIdempotency } from "./utils/idempotency";
+import {
+  assertOwnedPurchaseTerms,
+  assertVehicleIntakeSourceShape,
+  assertVehicleSourceShapeOnUpdate,
+  parseVehicleSourceType,
+  storedVehicleSourceType,
+  throwVehicleSourceShape,
+} from "./utils/vehicleSourceShape";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -880,6 +888,8 @@ export const create = mutation({
     imageIds: v.optional(v.array(v.id("_storage"))),
     /** How the dealer paid for the vehicle — drives the GL credit side (Cash/Bank/Cheque/Card/AP-Suppliers for ON_ACCOUNT). Ignored for SOURCED vehicles, which never capitalize into inventory. */
     purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+    /** SCRUM-717: the creditor of an OWNED car bought ON_ACCOUNT. Never `sourcedFromName`, which is consignment only. */
+    purchaseSupplierName: v.optional(v.string()),
     ...trustPassportFieldValidators,
     // SCRUM-313 census. This path calls `postVehicleAcquisitionIfOwned`, which
     // has NO posted-check, with the vehicle id minted by the insert below. A
@@ -915,6 +925,7 @@ export const create = mutation({
           sourceCost: args.sourceCost ?? null,
           sellingPrice: args.sellingPrice,
           purchasePaymentMethod: args.purchasePaymentMethod ?? null,
+          purchaseSupplierName: args.purchaseSupplierName?.trim() || null,
         }),
       },
       async () => {
@@ -937,31 +948,19 @@ export const create = mutation({
     assertDirectVehicleCreateStatus(args.status);
     await assertVehicleImagesAllowed(ctx, args.imageIds);
 
-    const isSourced = args.sourceType === "SOURCED";
-
-    // Sourced vehicles must identify the supplier and cost so that downstream
-    // GL posting (AP-Suppliers credit) and supplier payable creation work correctly.
-    if (isSourced) {
-      if (!args.sourcedFromName?.trim()) {
-        throw new ConvexError("Sourced vehicles require a supplier dealer name (sourcedFromName).");
-      }
-      if (args.sourceCost === undefined || args.sourceCost === null) {
-        throw new ConvexError("Sourced vehicles require a supplier cost (sourceCost).");
-      }
-      assertFiniteNumber(args.sourceCost, "supplier cost");
-    }
-
-    // A purchase price with no declared payment method would silently post as
-    // CASH (normalizePaymentMethod's default) even when the dealer actually
-    // paid by bank transfer, cheque, or card — require an explicit choice.
-    if (!isSourced && args.purchasePrice != null && args.purchasePrice > 0 && !args.purchasePaymentMethod) {
-      throw new ConvexError("Payment method is required when a purchase price is entered.");
-    }
-    // Reuses sourcedFromName as the generic "who is this owed to" field —
-    // same requirement SOURCED vehicles already have for the same reason
-    // (downstream AP-Suppliers/supplier-payable creation needs a name).
-    if (!isSourced && args.purchasePaymentMethod === "ON_ACCOUNT" && !args.sourcedFromName?.trim()) {
-      throw new ConvexError("A supplier name (sourcedFromName) is required for a vehicle purchased on account.");
+    // SCRUM-717 (D-45): the ownership decision is explicit and coherent. No
+    // default to STOCK; a consignment car carries its supplier and a positive
+    // cost; an owned car carries NEITHER (its on-account creditor travels in
+    // `purchaseSupplierName`). A contradicting submission is refused, never
+    // stripped — and before the first write.
+    const isSourced = assertVehicleIntakeSourceShape(args) === "SOURCED";
+    if (!isSourced) {
+      // A purchase price with no declared payment method would silently post as
+      // CASH (normalizePaymentMethod's default) even when the dealer actually
+      // paid by bank transfer, cheque, or card — require an explicit choice.
+      // An on-account purchase must name its creditor (AP-Suppliers credit and
+      // the supplier payable need a name).
+      assertOwnedPurchaseTerms(args);
     }
 
     // VIN is optional for sourced vehicles (car doesn't exist yet); generate a
@@ -1027,7 +1026,7 @@ export const create = mutation({
       isSourced,
       purchasePrice: effectivePurchasePrice,
       purchasePaymentMethod: args.purchasePaymentMethod,
-      supplierName: args.sourcedFromName,
+      supplierName: args.purchaseSupplierName,
       vehicleLabel: `${args.year} ${args.make.trim()} ${args.model.trim()}`,
       vin: normalizedVin,
       actorId: user._id,
@@ -1238,6 +1237,8 @@ export const update = mutation({
     imageIds: v.optional(v.array(v.id("_storage"))),
     /** How the dealer paid — required if this update capitalizes an acquisition that hasn't posted yet (e.g. a SOURCED→STOCK flip, or a purchase price set for the first time). Ignored otherwise. */
     purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+    /** SCRUM-717: the creditor when the acquisition above is ON_ACCOUNT. Never `sourcedFromName`. */
+    purchaseSupplierName: v.optional(v.string()),
     ...trustPassportFieldValidators,
   },
   handler: async (ctx, args) => {
@@ -1257,19 +1258,11 @@ export const update = mutation({
     assertDirectVehicleStatusTransition(vehicle.status, args.status);
     await assertVehicleImagesAllowed(ctx, args.imageIds);
 
-    // When switching to or retaining SOURCED, mirror the create-time invariant:
-    // sourcedFromName and sourceCost are both required.
-    const effectiveSourceType = args.sourceType ?? vehicle.sourceType;
-    if (effectiveSourceType === "SOURCED") {
-      const effectiveName = args.sourcedFromName ?? vehicle.sourcedFromName;
-      const effectiveCost = args.sourceCost ?? vehicle.sourceCost;
-      if (!effectiveName?.trim()) {
-        throw new ConvexError("Sourced vehicles require a supplier dealer name (sourcedFromName).");
-      }
-      if (effectiveCost === undefined || effectiveCost === null) {
-        throw new ConvexError("Sourced vehicles require a supplier cost (sourceCost).");
-      }
-    }
+    // SCRUM-717 (D-45): the same coherence rule `create` enforces, applied only
+    // when this patch CHANGES the type, the supplier or the cost — an existing
+    // inconsistent row stays editable for unrelated fields, and a refusal here
+    // happens before any write.
+    assertVehicleSourceShapeOnUpdate(vehicle, args);
 
     // Changing what a vehicle IS, after it has been sold, rewrites history in
     // whichever direction it runs. Both are refused.
@@ -1312,6 +1305,36 @@ export const update = mutation({
     });
     if (recoveryRefusal) throw new ConvexError(recoveryRefusal);
 
+    // SCRUM-717 (D-45) ownership flips. They are the two ways a car's ownership
+    // changes after intake, and each is decided before any write.
+    const currentSourceType = storedVehicleSourceType(vehicle.sourceType);
+    const requestedSourceType = parseVehicleSourceType(args.sourceType);
+    const changesSourceType = requestedSourceType !== null && requestedSourceType !== currentSourceType;
+    // STOCK -> SOURCED: once the purchase is posted OR queued, declaring the car
+    // consigned would orphan the VEHICLE_ACQUIRED entry (inventory and cash/AP for
+    // a car the dealership then claims it never bought). A genuine mistake is an
+    // audited reversal or cost correction, not a flip.
+    if (
+      changesSourceType &&
+      requestedSourceType === "SOURCED" &&
+      (await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId))
+    ) {
+      throwVehicleSourceShape("VEHICLE_OWNERSHIP_FLIP_POSTED");
+    }
+    // SOURCED -> STOCK is a buy-out: it capitalizes inventory and moves money or
+    // opens a payable, so it needs finance authority and the NEGOTIATED amount and
+    // settlement stated in this very patch — never the mirrored consignment cost.
+    if (changesSourceType && requestedSourceType === "STOCK") {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES, PERMISSIONS.MANAGE_FINANCE]);
+      const termsStated =
+        typeof args.purchasePrice === "number" &&
+        Number.isFinite(args.purchasePrice) &&
+        args.purchasePrice > 0 &&
+        !!args.purchasePaymentMethod &&
+        (args.purchasePaymentMethod !== "ON_ACCOUNT" || !!args.purchaseSupplierName?.trim());
+      if (!termsStated) throwVehicleSourceShape("VEHICLE_BUYOUT_TERMS_REQUIRED");
+    }
+
     // If VIN is being changed, check for duplicates
     if (args.vin) {
       const normalizedVin = args.vin.trim().toUpperCase();
@@ -1329,9 +1352,10 @@ export const update = mutation({
       }
     }
 
-    // purchasePaymentMethod is a transient input for the acquisition posting
-    // below, not a persisted vehicle field — exclude it from the patch.
-    const { orgId: _, vehicleId: __, purchasePaymentMethod: ___, ...updates } = args;
+    // purchasePaymentMethod and purchaseSupplierName are transient inputs for the
+    // acquisition posting below, not persisted vehicle fields — exclude them from
+    // the patch.
+    const { orgId: _, vehicleId: __, purchasePaymentMethod: ___, purchaseSupplierName: ____, ...updates } = args;
     const patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(updates)) {
       if (value !== undefined) {
@@ -1383,8 +1407,8 @@ export const update = mutation({
     if (needsAcquisitionPosting && !args.purchasePaymentMethod) {
       throw new ConvexError("Payment method is required to post this vehicle's acquisition cost to accounting.");
     }
-    if (needsAcquisitionPosting && args.purchasePaymentMethod === "ON_ACCOUNT" && !(args.sourcedFromName ?? vehicle.sourcedFromName)?.trim()) {
-      throw new ConvexError("A supplier name (sourcedFromName) is required for a vehicle purchased on account.");
+    if (needsAcquisitionPosting && args.purchasePaymentMethod === "ON_ACCOUNT" && !args.purchaseSupplierName?.trim()) {
+      throwVehicleSourceShape("VEHICLE_PURCHASE_SUPPLIER_REQUIRED");
     }
 
     if (Object.keys(patch).length > 0) {
@@ -1445,7 +1469,7 @@ export const update = mutation({
           isSourced: false,
           purchasePrice: acquisitionPurchasePrice,
           purchasePaymentMethod: args.purchasePaymentMethod,
-          supplierName: args.sourcedFromName ?? vehicle.sourcedFromName,
+          supplierName: args.purchaseSupplierName,
           vehicleLabel: `${(patch.year as number | undefined) ?? vehicle.year} ${(patch.make as string | undefined) ?? vehicle.make} ${(patch.model as string | undefined) ?? vehicle.model}`,
           vin: ((patch.vin as string | undefined) ?? vehicle.vin) || "",
           actorId: user._id,
@@ -2652,9 +2676,6 @@ export const createSourced = mutation({
       );
     }
 
-    if (!args.sourcedFromName.trim()) {
-      throw new ConvexError("Sourced vehicles require a supplier dealer name (sourcedFromName).");
-    }
     // NaN fails `<= 0`, so it would flow into cost, COGS and profit unchecked.
     // Unlike create/update this path runs no Zod schema at all, so every numeric
     // field here needs an explicit guard — not just the one with a range check.
@@ -2662,9 +2683,12 @@ export const createSourced = mutation({
     assertFiniteNumber(args.sellingPrice, "selling price");
     assertFiniteNumber(args.year, "year");
     assertFiniteNumber(args.mileage, "mileage");
-    if (args.sourceCost <= 0) {
-      throw new ConvexError("Supplier cost must be greater than zero.");
-    }
+    // SCRUM-717 (D-45): the shared shape rule — supplier named, cost positive.
+    assertVehicleIntakeSourceShape({
+      sourceType: "SOURCED",
+      sourcedFromName: args.sourcedFromName,
+      sourceCost: args.sourceCost,
+    });
     // The ranges are lifted from CreateVehicleSchema, the schema the `create`
     // path does run, so the two entry points accept the same numbers. They are
     // deliberately not stricter than it: `sellingPrice: 0` is legal there and
@@ -3150,6 +3174,7 @@ async function importRowFingerprint(
     color: string; mileage?: number; fuelType: string; transmission: string;
     sellingPrice: number; status?: string; notes?: string;
     purchasePrice?: number; sourceType?: string; sourcedFromName?: string; sourceCost?: number;
+    purchaseSupplierName?: string;
     valuations?: Array<{ companyId?: string; companyName?: string; valuationAmount: number }>;
   },
   paymentMethod: AcquisitionPaymentMethod
@@ -3221,6 +3246,7 @@ async function importRowFingerprint(
     sourceType: ownershipOf(row),
     sourcedFromName: text(row.sourcedFromName),
     sourceCost: row.sourceCost ?? null,
+    purchaseSupplierName: text(row.purchaseSupplierName),
     paymentMethod,
     valuations,
   });
@@ -3376,11 +3402,15 @@ export const importBulk = mutation({
       status: v.optional(v.string()),
       notes: v.optional(v.string()),
       // Owned stock vs sourced (drop-ship from another dealer). SOURCED rows
-      // carry the supplier name + cost and land as SOURCING status; anything
-      // else is treated as owned STOCK.
+      // carry the supplier name + cost and land as SOURCING status. SCRUM-717:
+      // the type is an EXPLICIT choice — a blank or unrecognised value is
+      // refused for the file, never defaulted to owned STOCK — and an owned row
+      // carries no `sourcedFromName`/`sourceCost`.
       sourceType: v.optional(v.string()),
       sourcedFromName: v.optional(v.string()),
       sourceCost: v.optional(v.number()),
+      /** SCRUM-717: the creditor of an OWNED row bought ON_ACCOUNT (never `sourcedFromName`). */
+      purchaseSupplierName: v.optional(v.string()),
       // Per-company financing valuations carried over from the spreadsheet's
       // valuation columns. `companyId` targets an existing finance company;
       // `companyName` (no companyId) means the column's header didn't match
@@ -3428,6 +3458,13 @@ export const importBulk = mutation({
       for (const val of row.valuations ?? []) {
         assertFiniteNumber(val.valuationAmount, "valuation amount");
       }
+      // SCRUM-717 (D-45): the RAW row's ownership decision, before anything is
+      // normalised. A blank or unknown type is refused (not defaulted to STOCK),
+      // and an owned row may not carry consignment fields. An incomplete SOURCED
+      // row keeps its mode-specific handling below (OPENING_STOCK skips it,
+      // PURCHASE refuses the file), so this only adds what was silently guessed.
+      if (parseVehicleSourceType(row.sourceType) === "SOURCED") continue;
+      assertVehicleIntakeSourceShape(row);
     }
 
     // The same rules vehicles.create enforces for a single acquisition, applied
@@ -3642,14 +3679,14 @@ export const importBulk = mutation({
       // time. The two cases are indistinguishable from the row alone, so this
       // FAILS CLOSED and asks a human instead of guessing in either direction.
       if (args.purchasePaymentMethod === "ON_ACCOUNT") {
-        // sourcedFromName doubles as the generic "who is this owed to" field
-        // here exactly as it does on vehicles.create — the AP-Suppliers credit
-        // and the vehicleSupplierPayables row both need a name.
+        // `purchaseSupplierName` is the "who is this owed to" field here exactly
+        // as it is on vehicles.create — the AP-Suppliers credit and the
+        // vehicleSupplierPayables row both need a name.
         const missingSupplier = args.vehicles.filter(
           (row) =>
             (row.sourceType ?? "").trim().toUpperCase() !== "SOURCED" &&
             (row.purchasePrice ?? 0) > 0 &&
-            !row.sourcedFromName?.trim()
+            !row.purchaseSupplierName?.trim()
         );
         if (missingSupplier.length > 0) {
           throw new ConvexError(
@@ -3773,7 +3810,7 @@ export const importBulk = mutation({
               .query("vehicleSupplierPayables")
               .withIndex("by_vehicle", (q) => q.eq("vehicleId", existing._id))
               .collect();
-            const supplier = row.sourcedFromName ?? "";
+            const supplier = row.purchaseSupplierName ?? "";
             if (!payables.some((payable) => sameText(payable.sourcedFromName, supplier))) {
               contradictions.push(
                 payables.length === 0
@@ -3978,7 +4015,7 @@ export const importBulk = mutation({
           purchasePrice: isSourced ? sourceCost : row.purchasePrice,
           ...(isSourced
             ? { sourceType: "SOURCED" as const, sourcedFromName: row.sourcedFromName!.trim(), sourceCost }
-            : {}),
+            : { sourceType: "STOCK" as const }),
           status: status as VehicleLifecycleStatus,
           notes: row.notes,
           addedBy: user._id,
@@ -3999,7 +4036,7 @@ export const importBulk = mutation({
             isSourced,
             purchasePrice: isSourced ? sourceCost : row.purchasePrice,
             purchasePaymentMethod: args.purchasePaymentMethod,
-            supplierName: row.sourcedFromName?.trim(),
+            supplierName: row.purchaseSupplierName?.trim(),
             vehicleLabel: `${row.year} ${row.make.trim()} ${row.model.trim()}`,
             vin: insertedVin,
             actorId: user._id,

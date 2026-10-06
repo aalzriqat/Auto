@@ -127,7 +127,7 @@ async function createOnAccountVehicle(d: Dealer, price = 12500) {
   return d.asOwner.mutation(api.vehicles.create, {
     idempotencyKey: crypto.randomUUID(),
     orgId: d.orgId, ...baseVehicle, purchasePrice: price,
-    purchasePaymentMethod: "ON_ACCOUNT", sourcedFromName: "Credit Supplier Co",
+    purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: "Credit Supplier Co",
   });
 }
 
@@ -724,10 +724,17 @@ describe("SCRUM-650 batch 2 A6: equal-value submits on a posted car", () => {
     expect(after?.color).toBe("Red");
     expect(after?.purchasePrice).toBe(12500);
 
+    // A changed price on a posted car is refused by the cost lock.
+    const locked = await refusalOf(
+      d.asOwner.mutation(api.vehicles.update, { orgId: d.orgId, vehicleId, color: "Blue", purchasePrice: 13000 })
+    );
+    expect(locked?.code).toBe("VEHICLE_COST_POSTED");
+    // SCRUM-717: a sourceCost key on an owned car is refused earlier still, by the
+    // ownership-shape guard (an owned car never carries a supplier cost).
     const data = await refusalOf(
       d.asOwner.mutation(api.vehicles.update, { orgId: d.orgId, vehicleId, color: "Blue", sourceCost: 0 })
     );
-    expect(data?.code).toBe("VEHICLE_COST_POSTED");
+    expect(data?.code).toBe("VEHICLE_STOCK_CARRIES_SOURCING");
     expect((await d.t.run((ctx) => ctx.db.get(vehicleId)))?.color).toBe("Red");
   });
 

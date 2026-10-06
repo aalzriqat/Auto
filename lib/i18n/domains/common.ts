@@ -359,6 +359,49 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Choose the account the refund was received into.",
     "اختر الحساب الذي استُلم فيه المبلغ المسترد.",
   ],
+  // SCRUM-725 (D-44 c). The EN text equals the server message.
+  ServerError_COST_CORRECTION_RESTATEMENT_PERIOD_OPEN: [
+    "Restating a purchase cost through retained earnings is only available when the purchase was recorded in a closed accounting period. This purchase is still in an open period, so choose another correction type.",
+    "إعادة بيان تكلفة الشراء عبر الأرباح المحتجزة متاحة فقط عندما يكون الشراء مسجلاً في فترة محاسبية مغلقة. هذا الشراء ما زال في فترة مفتوحة، لذا اختر نوع تصحيح آخر.",
+  ],
+  // SCRUM-717 (D-45). Vehicle ownership shape refusals (convex/utils/vehicleSourceShape.ts).
+  // The EN text equals the server message.
+  ServerError_VEHICLE_SOURCE_TYPE_REQUIRED: [
+    "Choose how this vehicle is held before saving: consignment (on sale for a supplier, nothing paid now) or owned by the dealership.",
+    "اختر كيف تُحتفظ بهذه المركبة قبل الحفظ: برسم البيع (معروضة للبيع لحساب مورّد دون دفع أي مبلغ الآن) أو مملوكة للمعرض.",
+  ],
+  ServerError_VEHICLE_STOCK_CARRIES_SOURCING: [
+    "An owned vehicle can't carry a consignment supplier or supplier cost. Remove them, or mark the vehicle as consignment.",
+    "لا يمكن أن تحمل المركبة المملوكة للمعرض اسم مورّد أو تكلفة مورّد خاصة ببيع برسم البيع. أزلهما أو اعتبر المركبة برسم البيع.",
+  ],
+  ServerError_VEHICLE_SOURCED_SUPPLIER_REQUIRED: [
+    "A consignment vehicle needs the supplier's name.",
+    "المركبة برسم البيع تتطلب اسم المورّد.",
+  ],
+  ServerError_VEHICLE_SOURCED_COST_INVALID: [
+    "A consignment vehicle needs a supplier cost greater than zero.",
+    "المركبة برسم البيع تتطلب تكلفة مورّد أكبر من صفر.",
+  ],
+  ServerError_VEHICLE_PURCHASE_SUPPLIER_REQUIRED: [
+    "A supplier name is required for a vehicle purchased on account.",
+    "اسم المورّد مطلوب للمركبة المشتراة على الحساب.",
+  ],
+  ServerError_VEHICLE_OWNERSHIP_FLIP_POSTED: [
+    "This vehicle's purchase has already been posted to accounting, so it can't be changed to consignment. To fix a mistaken entry, use 'Correct purchase cost' or ask your accountant for a reversal.",
+    "تم ترحيل شراء هذه المركبة إلى المحاسبة، لذلك لا يمكن تحويلها إلى برسم البيع. لتصحيح إدخال خاطئ استخدم «تصحيح تكلفة الشراء» أو اطلب من المحاسب عكس القيد.",
+  ],
+  ServerError_VEHICLE_OWNERSHIP_CHANGE_NOT_REQUESTABLE: [
+    "Changing how a vehicle is held (consignment or owned) can't go through an approval request. A finance user makes this change directly from the vehicle's edit screen.",
+    "لا يمكن تغيير صفة المركبة (برسم البيع أو مملوكة) عبر طلب موافقة. يجري مستخدم الشؤون المالية هذا التغيير مباشرة من شاشة تعديل المركبة.",
+  ],
+  ServerError_VEHICLE_BUYOUT_TERMS_REQUIRED: [
+    "Buying out a consignment vehicle needs the agreed purchase price (greater than zero) and how it was paid. For a purchase on account, also enter the supplier's name.",
+    "شراء مركبة برسم البيع يتطلب سعر الشراء المتفق عليه (أكبر من صفر) وطريقة الدفع. وللشراء على الحساب أدخل أيضاً اسم المورّد.",
+  ],
+  ServerError_VEHICLE_OWNERSHIP_FIELDS_LOCKED: [
+    "A vehicle's ownership type, consignment supplier, supplier cost, purchase price and payment method drive accounting and can't be changed in the data browser. Use the vehicle's edit screen or the cost-correction workflow.",
+    "نوع ملكية المركبة ومورّد البيع برسم البيع وتكلفة المورّد وسعر الشراء وطريقة الدفع تؤثر على المحاسبة ولا يمكن تغييرها من متصفح البيانات. استخدم شاشة تعديل المركبة أو إجراء تصحيح التكلفة.",
+  ],
   // SCRUM-413. `roles.create` / `roles.update` refuse a newly added retired permission. The
   // authority names match the FinancedDeal* labels in settings.ts.
   ServerError_PERMISSION_RETIRED: [
