@@ -53,19 +53,37 @@ const REASON_MAX_CHARS = 500;
 /** A client clock a little ahead of the server's is not a future date. */
 const CLOCK_SKEW_MS = 5 * 60 * 1000;
 
-const START_PERMS = [
-  PERMISSIONS.CANCEL_CLOSED_DEAL,
-  PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
-  PERMISSIONS.VIEW_FINANCE,
-];
-const MONEY_STEP_PERMS = [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT, PERMISSIONS.VIEW_FINANCE];
+/**
+ * VIEW_FINANCE is deliberately NOT here (SCRUM-713). It opens the accounting
+ * economics tier, and the default MANAGER role, which holds both of these
+ * authorities, does not carry it: requiring it left a manager with neither the
+ * Cancel door (refused for a disbursed deal) nor the Unwind door. What an unwind
+ * actor needs to see is the unwind's own amounts, and `unwindStatus` projects
+ * exactly that to them without reading the deal's finance economics.
+ */
+const START_PERMS = [PERMISSIONS.CANCEL_CLOSED_DEAL, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT];
+const MONEY_STEP_PERMS = [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT];
+/**
+ * The forward-return step is delegable to a finance handler (CONFIRM + VIEW_FINANCE, as before) or to a
+ * deal canceller (CONFIRM + CANCEL_CLOSED_DEAL, the default MANAGER). CONFIRM alone is not enough: dropping
+ * VIEW_FINANCE from the list must not turn a confirm-only custom role into an unwind actor (Codex, SCRUM-713).
+ */
+function mayRecordForwardReturn(role: Doc<"roles">): boolean {
+  return (
+    holds(role, MONEY_STEP_PERMS) &&
+      (isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_FINANCE) || role.permissions.includes(PERMISSIONS.CANCEL_CLOSED_DEAL))
+  );
+}
 /** Refunding the remittance (MONEY_STEP_PERMS) and cancelling the deal, together. */
-const FINISH_PERMS = [
-  PERMISSIONS.CANCEL_CLOSED_DEAL,
-  PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
-  PERMISSIONS.VIEW_FINANCE,
-];
+const FINISH_PERMS = [PERMISSIONS.CANCEL_CLOSED_DEAL, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT];
 const ABANDON_PERMS = [PERMISSIONS.CANCEL_CLOSED_DEAL];
+
+const UNWIND_PERMISSION_MESSAGE =
+  "Reversing a paid deal needs both the cancel-closed-deal and the confirm-finance-disbursement permissions. Ask an administrator.";
+
+function refuseUnwindPermission(): never {
+  throwAppError(AppErrorCode.FORBIDDEN, UNWIND_PERMISSION_MESSAGE);
+}
 
 function refuse(code: DealUnwindRefusalCode): never {
   throwAppError(AppErrorCode[code], DEAL_UNWIND_MESSAGES[code]);
@@ -307,7 +325,8 @@ export const recordDealUnwindForwardReturn = mutation({
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, MONEY_STEP_PERMS);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, MONEY_STEP_PERMS);
+    if (!mayRecordForwardReturn(role)) refuseUnwindPermission();
     const reference = requiredText(args.reference, MAX_DIRECT_PAYMENT_REFERENCE_CHARS, "DEAL_UNWIND_EVIDENCE_REQUIRED");
     return await runWithIdempotency(
       ctx,
@@ -878,12 +897,15 @@ export const unwindStatus = query({
         const refusal = await refusalOf(() => assertStartable(ctx, args.orgId, app));
         if (refusal) refusals.start = refusal;
         canStart = refusal === null;
+      } else if (app.status === "CLOSED" && app.disbursedAt !== undefined) {
+        // Silence here left a manager with no door and no reason (SCRUM-713).
+        refusals.start = { code: "DEAL_UNWIND_PERMISSION", message: UNWIND_PERMISSION_MESSAGE };
       }
     } else {
       const forward = await deriveForwardState(ctx, app);
       const forwardPending = forward.applies && unwind.forwardReturn === undefined;
       step = forwardPending ? "AWAITING_FORWARD_RETURN" : "AWAITING_FINISH";
-      if (forwardPending && holds(role, MONEY_STEP_PERMS)) {
+      if (forwardPending && mayRecordForwardReturn(role)) {
         const refusal = await refusalOf(() => assertForwardReturnable(ctx, args.orgId, app, now));
         if (refusal) refusals.forwardReturn = refusal;
         canForwardReturn = refusal === null;
@@ -905,17 +927,24 @@ export const unwindStatus = query({
       canAbandon = holds(role, ABANDON_PERMS);
     }
 
+    // Two tiers, each built field by field (never spread from the row). A finance
+    // reader sees everything. An unwind actor without it (the default MANAGER,
+    // SCRUM-713) sees the refund, its rail, the step and the posting proof, and
+    // NOT `forwardDueMinor` (deposit + dealer contribution: a visible deposit
+    // would reveal the protected contribution) nor any free text.
+    const financeReader = mayReadFinanceEconomics(role);
+    const unwindActor = holds(role, START_PERMS) || mayRecordForwardReturn(role);
     const evidence =
-      unwind !== null && mayReadFinanceEconomics(role)
+      unwind !== null && (financeReader || unwindActor)
         ? {
-            reason: unwind.reason,
+            reason: financeReader ? unwind.reason : null,
             remittanceMinor: unwind.remittanceMinor,
             remittanceMethod: unwind.remittanceMethod,
-            forwardDueMinor: unwind.forwardDueMinor,
+            forwardDueMinor: financeReader ? unwind.forwardDueMinor : null,
             forwardReturn: unwind.forwardReturn
               ? {
                   returnedAt: unwind.forwardReturn.returnedAt,
-                  reference: unwind.forwardReturn.reference,
+                  reference: financeReader ? unwind.forwardReturn.reference : null,
                   recordedAt: unwind.forwardReturn.recordedAt,
                 }
               : null,
@@ -933,13 +962,13 @@ export const unwindStatus = query({
               ? {
                   creditNoteReference: unwind.completion.creditNoteReference,
                   vehicleReturnedAt: unwind.completion.vehicleReturnedAt,
-                  vehicleReturnNote: unwind.completion.vehicleReturnNote,
+                  vehicleReturnNote: financeReader ? unwind.completion.vehicleReturnNote : null,
                   customerPaymentDisposition: unwind.completion.customerPaymentDisposition,
                   completedAt: unwind.completion.completedAt,
                 }
               : null,
             abandonment: unwind.abandonment
-              ? { reason: unwind.abandonment.reason, abandonedAt: unwind.abandonment.abandonedAt }
+              ? { reason: financeReader ? unwind.abandonment.reason : null, abandonedAt: unwind.abandonment.abandonedAt }
               : null,
           }
         : null;

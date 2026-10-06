@@ -190,6 +190,34 @@ overrides:
   # advisory.
   "@xmldom/xmldom@0.8": 0.8.15
   "@xmldom/xmldom@0.9": 0.9.12
+  # SCRUM-732: three advisories published with no dependency change in this
+  # repository broke the required dependency-audit check repo-wide (the drift
+  # class tracked as SCRUM-244). Each package resolves to exactly ONE version
+  # in the graph (verified with `pnpm why <pkg> -r`), so plain keys suffice;
+  # all three patched releases are in the same major line as the copy they
+  # replace (patch/minor bumps, no cross-major jump).
+  #
+  # proxy-addr: GHSA-jqcg-44mw-7w3h (CRITICAL). Vulnerable >=1.1.0 <2.0.8,
+  # patched floor 2.0.8, published 2026-09-15. Resolved 2.0.7.
+  #
+  # Pinned exact so lockfile regeneration cannot drift onto a release younger
+  # than the pnpm 11 minimumReleaseAge (<24h) supply-chain gate.
+  #
+  # NOT added to auditConfig.ignoreGhsas: a patched, compatible release exists.
+  proxy-addr: 2.0.8
+  # source-map-js: GHSA-68fv-2mgg-jv7q (HIGH). Vulnerable >=1.0.0 <1.2.2,
+  # patched floor 1.2.2, published 2026-09-30. Resolved 1.2.1. Pinned exact
+  # for the same minimumReleaseAge reason as above (1.2.2 is older than 24h).
+  #
+  # NOT added to auditConfig.ignoreGhsas: a patched, compatible release exists.
+  source-map-js: 1.2.2
+  # compression: GHSA-vc2v-76pw-4v95 (HIGH). Vulnerable <1.8.2, patched floor
+  # 1.8.2, published 2026-09-11. Resolved 1.8.1. Reached only transitively via
+  #   apps/mobile > @clerk/expo > ... > @expo/cli
+  # Pinned exact for the same minimumReleaseAge reason as above.
+  #
+  # NOT added to auditConfig.ignoreGhsas: a patched, compatible release exists.
+  compression: 1.8.2
 # GHSA-mh99 (brace-expansion unbounded-expansion DoS) is patched by the pins
 # above. Separate per-major overrides remain necessary because minimatch@3's
 # old-API CommonJS consumers are incompatible with the 5.x export shape.

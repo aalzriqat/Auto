@@ -48,7 +48,8 @@ export type UnwindStatusView = Readonly<{
   evidence: Readonly<{
     remittanceMinor: number;
     remittanceMethod: "BANK_TRANSFER" | "CASH";
-    forwardDueMinor: number;
+    /** `null` for an unwind actor without finance-economics read: it equals deposit + contribution (SCRUM-713). */
+    forwardDueMinor: number | null;
   }> | null;
 }>;
 
@@ -296,7 +297,7 @@ function ForwardStep({
         }}
       >
         <p className="text-sm text-muted-foreground">{t("UnwindForwardExplain")}</p>
-        {due !== undefined && due > 0 && (
+        {due != null && due > 0 && (
           <p className="text-sm font-medium" data-testid="deal-unwind-forward-due">
             {t("UnwindForwardDueLabel")}: <span dir="ltr">{formatMinor(due)}</span>
           </p>
