@@ -1,4 +1,6 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
@@ -412,12 +414,24 @@ describe("SCRUM-644 S3b-2 end to end with the S3b-1 reader", () => {
 
 describe("SCRUM-644 S3b-2 test-file admission", () => {
   test("the excluded directories are exactly CI's unit collector's, which covers every root vitest.config.ts exclude", () => {
-    const runner = readFileSync(path.join(ROOT, "scripts/runVitestCoverageShards.mjs"), "utf8");
+    const runner = readFileSync(path.join(ROOT, "scripts/runVitestCoverageShards.mjs"), "utf8").replaceAll("\r\n", "\n");
     const set = runner.match(/const excludedDirs = new Set\(\[([\s\S]*?)\]\)/);
     expect(set).not.toBeNull();
     const runnerDirs = [...(set?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((match) => match[1]);
     expect([...runnerDirs].sort()).toEqual([...UNIT_SUITE_EXCLUDED_DIRS].sort());
     expect(runner).toMatch(/if \(!entry\.isFile\(\)\) continue;/);
+    expect(runner).toMatch(/process\.env\.AUTOFLOW_COVERAGE_DISCOVERY_ROOT \?\? "\.",/);
+
+    // Every skip in the collector is pinned. The one file skip beyond the
+    // directory set is the authority suite, which the same job then runs as
+    // its own process, so admitting it still means "the unit job executes it".
+    const body = runner.match(/function collectUnitTestFiles\([\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(body.match(/continue;/g)?.length).toBe(5);
+    expect(body).toContain("if (!/\\.test\\.tsx?$/.test(entry.name)) continue;");
+    expect(body).toContain("if (candidate === authorityTest) continue;");
+    expect(runner).toContain('const authorityTest = "convex/unifiedDealFeeAuthority.test.ts";');
+    expect(runner).toMatch(/runVitest\(\[\s*"run",\s*authorityTest,/);
+    expect(isAdmittedTestFile("convex/unifiedDealFeeAuthority.test.ts")).toBe(true);
 
     const config = readFileSync(path.join(ROOT, "vitest.config.ts"), "utf8");
     const block = config.match(/test:\s*\{[\s\S]*?include: \["\*\*\/\*\.test\.ts", "\*\*\/\*\.test\.tsx"\],\s*exclude: \[([\s\S]*?)\]/);
@@ -434,7 +448,7 @@ describe("SCRUM-644 S3b-2 test-file admission", () => {
     expect(isAdmittedTestFile("convex/x.test.ts")).toBe(true);
     expect(isAdmittedTestFile("components/x.test.tsx")).toBe(true);
     expect(isAdmittedTestFile("convex/builder/x.test.ts")).toBe(true);
-    const refused = ["convex/x.ts", "convex/x.spec.ts", "lib/node_modules/x.test.ts", "a/.claude/x.test.ts", "convex/../x.test.ts", "convex/./x.test.ts", "/x.test.ts", 7];
+    const refused = ["convex/x.ts", "convex/x.spec.ts", "lib/node_modules/x.test.ts", "a/.claude/x.test.ts", "convex/../x.test.ts", "convex/./x.test.ts", "/x.test.ts", ":(top)convex/x.test.ts", "convex/a:b/x.test.ts", 7];
     for (const dir of UNIT_SUITE_EXCLUDED_DIRS) refused.push(`${dir}/x.test.ts`, `convex/${dir}/x.test.ts`, `lib/a/${dir}/x.test.tsx`);
     for (const file of refused) expect(isAdmittedTestFile(file), String(file)).toBe(false);
   });
@@ -445,6 +459,35 @@ describe("SCRUM-644 S3b-2 git port", () => {
     expect(() => git.isAncestor("--output=/tmp/x", MAIN_TIP)).toThrow("not a commit SHA");
     expect(() => git.blobSize(MAIN_TIP, "-x")).toThrow("bad path");
     expect(() => git.fetchPull(0)).toThrow("bad PR number");
+  });
+
+  // F1: `ls-tree` reads its path as a pathspec, so `:(top)a/b` named the
+  // regular file `a/b` while `<sha>:<path>` read the literal `:(top)a` symlink.
+  test("fileMode reports the mode of the literal path that is read, never a pathspec match", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "tre-mode-"));
+    try {
+      const run = (args: string[], input?: string) =>
+        execFileSync("git", ["-C", dir, ...args], { input, encoding: "utf8" }).trim();
+      run(["init", "-q"]);
+      const regular = run(["hash-object", "-w", "--stdin"], "regular");
+      const link = run(["hash-object", "-w", "--stdin"], "not a test");
+      const plain = run(["mktree"], `100644 blob ${regular}\tfake.test.ts\n`);
+      const linked = run(["mktree"], `120000 blob ${link}\tfake.test.ts\n`);
+      const root = run(["mktree"], `040000 tree ${linked}\t:(top)scripts\n040000 tree ${plain}\tscripts\n`);
+      const commit = run(["-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", root, "-m", "t"]);
+      const git = createGitPort({ cwd: dir });
+
+      expect(git.fileMode(commit, ":(top)scripts/fake.test.ts")).toBe("120000");
+      expect(git.show(commit, ":(top)scripts/fake.test.ts")).toBe("not a test");
+      expect(git.fileMode(commit, "scripts/fake.test.ts")).toBe("100644");
+      expect(git.fileMode(commit, "scripts/*.test.ts")).toBeNull();
+      expect(git.fileMode(commit, "scripts")).toBe("040000");
+      // A trailing slash lists the directory's one child: a record, but not this path.
+      expect(git.fileMode(commit, "scripts/")).toBeNull();
+      expect(git.fileMode(commit, "missing.test.ts")).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -465,7 +508,7 @@ describe("SCRUM-644 S3b-2 workflow structure", () => {
   test("holds nothing at workflow level, exactly the four permissions on its one job, and no secret", () => {
     expect(Object.keys(workflow.jobs)).toEqual(["reconcile"]);
     expect(workflow.permissions).toEqual({});
-    expect(workflow.jobs.reconcile.permissions).toEqual({ checks: "write", contents: "read", "pull-requests": "read", actions: "read" });
+    expect(workflow.jobs.reconcile.permissions).toEqual({ checks: "write", contents: "read", "pull-requests": "read" });
     expect(text).not.toMatch(/secrets\.|secrets\[/);
   });
 

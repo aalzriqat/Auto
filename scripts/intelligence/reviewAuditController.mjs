@@ -54,7 +54,8 @@ const RECORD_PREFIX = "review-evidence/";
 const isRecordCandidate = (file) => file.startsWith(RECORD_PREFIX) && file.endsWith(".json");
 
 export function isAdmittedTestFile(file) {
-  if (typeof file !== "string" || !/\.test\.tsx?$/.test(file)) return false;
+  // ":" is refused outright: it is git's pathspec-magic and tree-ish separator.
+  if (typeof file !== "string" || !/\.test\.tsx?$/.test(file) || file.includes(":")) return false;
   const segments = file.split("/");
   if (segments.some((segment) => segment === ".." || segment === "." || segment === "")) return false;
   return !segments.slice(0, -1).some((segment) => UNIT_SUITE_EXCLUDED_DIRS.includes(segment));

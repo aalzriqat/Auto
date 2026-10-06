@@ -16,9 +16,10 @@ import { isCommitSha } from "./reviewEvidence.mjs";
 
 const SHA = /^[0-9a-f]{40}$/;
 
-function git(args, { allowFailure = false } = {}) {
+/** @param {string[]} args @param {{allowFailure?: boolean, cwd?: string}} [options] */
+function git(args, { allowFailure = false, cwd = undefined } = {}) {
   try {
-    return execFileSync("git", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+    return execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
   } catch (error) {
     if (allowFailure) return null;
     throw error;
@@ -36,46 +37,53 @@ const requirePath = (file) => {
   return file;
 };
 
-export function createGitPort() {
+/** @param {{cwd?: string}} [options] the repository to run git in; defaults to the process's. */
+export function createGitPort({ cwd = undefined } = {}) {
+  const run = (args, options = {}) => git(args, { ...options, cwd });
   const blobSpec = (sha, file) => `${requireSha(sha)}:${requirePath(file)}`;
   return {
     fetchPull(number) {
       if (!Number.isSafeInteger(number) || number <= 0) throw new Error("bad PR number");
-      git(["fetch", "--no-tags", "--quiet", "origin",
+      run(["fetch", "--no-tags", "--quiet", "origin",
         `+refs/pull/${number}/head:refs/tre/${number}/head`,
         `+refs/pull/${number}/merge:refs/tre/${number}/merge`]);
       return {
-        head: git(["rev-parse", `refs/tre/${number}/head`]).trim(),
-        merge: git(["rev-parse", `refs/tre/${number}/merge`]).trim(),
+        head: run(["rev-parse", `refs/tre/${number}/head`]).trim(),
+        merge: run(["rev-parse", `refs/tre/${number}/merge`]).trim(),
       };
     },
     parents(sha) {
-      return git(["show", "-s", "--format=%P", requireSha(sha)]).trim().split(/\s+/).filter(Boolean);
+      return run(["show", "-s", "--format=%P", requireSha(sha)]).trim().split(/\s+/).filter(Boolean);
     },
     changedFiles(from, to) {
-      const out = git(["diff", "--no-renames", "--name-only", "-z", requireSha(from), requireSha(to)]);
+      const out = run(["diff", "--no-renames", "--name-only", "-z", requireSha(from), requireSha(to)]);
       return out.split("\0").filter(Boolean);
     },
     isAncestor(ancestor, descendant) {
       // Exit 1 (not an ancestor) and 128 (unknown object) are both "no".
-      return git(["merge-base", "--is-ancestor", requireSha(ancestor), requireSha(descendant)], { allowFailure: true }) !== null;
+      return run(["merge-base", "--is-ancestor", requireSha(ancestor), requireSha(descendant)], { allowFailure: true }) !== null;
     },
     blobSize(sha, file) {
-      const out = git(["cat-file", "-s", blobSpec(sha, file)], { allowFailure: true });
+      const out = run(["cat-file", "-s", blobSpec(sha, file)], { allowFailure: true });
       return out === null ? null : Number(out.trim());
     },
     fileMode(sha, file) {
-      // "<mode> <type> <id>\t<path>"; absent path → empty output → null.
-      const out = git(["ls-tree", requireSha(sha), "--", requirePath(file)], { allowFailure: true });
-      const mode = out?.split(" ", 1)[0];
-      return mode ? mode : null;
+      // ls-tree takes pathspecs (":(top)a/b" names a/b), while blobSize/show
+      // read <sha>:<path> literally; --literal-pathspecs makes both one entry.
+      // Records are "<mode> <type> <id>\t<path>\0"; anything but exactly one
+      // record for exactly this path → null.
+      const out = run(["--literal-pathspecs", "ls-tree", "-z", "--full-tree", requireSha(sha), "--", requirePath(file)], { allowFailure: true });
+      const records = (out ?? "").split("\0").filter(Boolean);
+      if (records.length !== 1) return null;
+      const [meta, entryPath] = records[0].split("\t");
+      return entryPath === file ? meta.split(" ", 1)[0] || null : null;
     },
     blobId(sha, file) {
-      const out = git(["rev-parse", blobSpec(sha, file)], { allowFailure: true });
+      const out = run(["rev-parse", blobSpec(sha, file)], { allowFailure: true });
       return out === null ? null : out.trim();
     },
     show(sha, file) {
-      return git(["show", blobSpec(sha, file)]);
+      return run(["show", blobSpec(sha, file)]);
     },
   };
 }
