@@ -224,6 +224,7 @@ export default function Step1QuoteSetup({
     vehicleId: watchedVehicleId as Id<"vehicles"> | undefined,
     salePrice: quotedPrice,
     enabled: !isCash,
+    livenessOnly: isCash,
   });
   const profitVerdict = profitApproval.verdict?.status === "INVALID" ? undefined : profitApproval.verdict;
   const isBlockedByProfit = profitApproval.blocked;

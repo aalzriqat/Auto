@@ -344,7 +344,12 @@ describe("resetOrgFinancialData", () => {
     // names its recovery; leaving them would strand an open supplier receivable
     // against an expense that no longer exists, on a fresh ledger. Listed before
     // `expenses`, receipts first.
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(38);
+    //
+    // 38 -> 39: `depositCancellationPendings` (SCRUM-712). A pending share is
+    // deposit money state — it names a deposit, an application and a hold the
+    // reset clears — so leaving it would strand a car locked RESERVED against a
+    // deposit that no longer exists. It sits in the `deposits` group.
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(39);
   });
 });
 

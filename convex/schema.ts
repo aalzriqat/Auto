@@ -272,7 +272,10 @@ export default defineSchema({
     // Lets a report load one event type for just its own window instead of the
     // org's whole history — the reversals the operational P&L needs are only
     // ever the ones dated inside the window being reported.
-    .index("by_org_eventType_date", ["orgId", "eventType", "accountingDate"]),
+    .index("by_org_eventType_date", ["orgId", "eventType", "accountingDate"])
+    // SCRUM-555 lane-B: status-aware window read (POSTED / REVERSED) without a
+    // query-level filter — used by computeRecognizedCommissionAsOf.
+    .index("by_org_eventType_status_date", ["orgId", "eventType", "status", "accountingDate"]),
 
   // Durable outbox for accounting events that could not post at the time of the
   // domain operation (no chart of accounts or no open period). Instead of
@@ -718,7 +721,9 @@ export default defineSchema({
     .index("by_org_date", ["orgId", "accountingDate"])
     .index("by_org_period", ["orgId", "periodId"])
     .index("by_org_source", ["orgId", "sourceType", "sourceId"])
-    .index("by_accounting_event", ["accountingEventId"]),
+    .index("by_accounting_event", ["accountingEventId"])
+    // SCRUM-555 lane-B: getPostedLines reads POSTED and REVERSED entries.
+    .index("by_org_status", ["orgId", "status"]),
 
   journalLines: defineTable({
     orgId: v.id("organizations"),
@@ -747,7 +752,9 @@ export default defineSchema({
     .index("by_journal_entry", ["journalEntryId"])
     .index("by_org_account", ["orgId", "accountId"])
     .index("by_org_account_date", ["orgId", "accountId", "accountingDate"])
-    .index("by_org_customer", ["orgId", "customerId"]),
+    .index("by_org_customer", ["orgId", "customerId"])
+    // SCRUM-555 lane-B: getPostedLines date-range read without a query filter.
+    .index("by_org_date", ["orgId", "accountingDate"]),
 
   // ─── Phase 3: Receivables, payments, and allocations subledger ────────────
 
@@ -801,7 +808,10 @@ export default defineSchema({
     .index("by_org_source", ["orgId", "sourceType", "sourceId"])
     .index("by_org_source_issueDate", ["orgId", "sourceType", "issueDate"])
     .index("by_org_status", ["orgId", "status"])
-    .index("by_org_dueDate", ["orgId", "dueDate"]),
+    .index("by_org_dueDate", ["orgId", "dueDate"])
+    // SCRUM-555 lane-B: getReceivablesAsOf (not-cancelled-by-asOf) without a
+    // query filter.
+    .index("by_org_cancelledAt_issueDate", ["orgId", "cancelledAt", "issueDate"]),
 
   canonicalPayments: defineTable({
     orgId: v.id("organizations"),
@@ -1779,6 +1789,7 @@ export default defineSchema({
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
       purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+      purchaseSupplierName: v.optional(v.string()),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
@@ -1795,7 +1806,8 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_org", ["orgId"])
-    .index("by_org_status", ["orgId", "status"]),
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"]),
 
   customers: defineTable({
     orgId: v.id("organizations"),
@@ -2066,6 +2078,16 @@ export default defineSchema({
      */
     consignedSupplierGrossReceiptMinor: v.optional(v.number()),
     canonicalReceivableDocumentId: v.optional(v.id("receivableDocuments")),
+    /**
+     * SCRUM-571 (D-48): whether the organization had a chart of accounts when this
+     * sale was COMPLETED, i.e. whether SALE_COMPLETED was owed to the general
+     * ledger. Snapshotted at completion and never recomputed, so a later chart
+     * initialization or plan change cannot move an old sale's settled reading.
+     * `false` (a Free/Starter org with no chart) means no posting proof exists to
+     * demand; absent (a legacy row) is read as required - it fails closed. Read by
+     * `resolveCustomerInvoicePosition`.
+     */
+    glPostingRequired: v.optional(v.boolean()),
     commissionAmount: v.optional(v.number()), // Calculated at sale time
     // How many COMMISSION_ADJUSTED corrections have been posted against this
     // sale's accrual. Monotonic, never reset — it discriminates each
@@ -2161,7 +2183,9 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_status", ["status"])
-    .index("by_expense", ["expenseId"]),
+    .index("by_expense", ["expenseId"])
+    // SCRUM-555 lane-B: ACTIVE-schedule read without a query filter.
+    .index("by_org_status", ["orgId", "status"]),
 
   // One row per failed cron catch-up attempt on a schedule — the cron's
   // aggregate stats.failed counter used to discard which schedule/org/error
@@ -4307,6 +4331,57 @@ export default defineSchema({
     .index("by_hold", ["holdId"])
     .index("by_org_event_key", ["orgId", "eventIdempotencyKey"])
     .index("by_org_customer", ["orgId", "customerId"]),
+
+  /**
+   * SCRUM-712 — one row per deposit share a CANCELLED completed sale consumed.
+   *
+   * The share is the customer's money, still owed a decision (refund or
+   * forfeit), and until that decision is recorded the car it was paid against
+   * is not available to anybody. Written by the shared sale-teardown writer in
+   * the cancellation transaction; the natural key is the application row, so a
+   * retry or replay can never open a second claim.
+   *
+   * This is a DISPOSITION record, not a cash ledger: the money's own state stays
+   * on `deposits` / `depositVehicleHolds`. QUARANTINED is for legacy rows whose
+   * provenance cannot be proved; it blocks exactly like PENDING.
+   */
+  depositCancellationPendings: defineTable({
+    orgId: v.id("organizations"),
+    depositId: v.id("deposits"),
+    vehicleId: v.id("vehicles"),
+    saleId: v.id("sales"),
+    /** Natural key: one share per application row. */
+    applicationId: v.id("depositApplications"),
+    /** Present for a shared (sliced) deposit; absent when the whole row is the share. */
+    holdId: v.optional(v.id("depositVehicleHolds")),
+    amountMinor: v.number(),
+    currency: v.string(),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("RELEASED"),
+      v.literal("FORFEITED"),
+      v.literal("QUARANTINED")
+    ),
+    createdAt: v.number(),
+    createdBy: v.id("users"),
+    resolvedAt: v.optional(v.number()),
+    resolvedBy: v.optional(v.id("users")),
+    resolutionReference: v.optional(v.string()),
+  })
+    .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
+    // The org-level "is anything blocking at all" probe, read once per function.
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_application", ["orgId", "applicationId"])
+    .index("by_deposit", ["depositId"])
+    // Exact lookups for a deposit's undecided shares. `by_deposit` plus a take(N)
+    // loses a pending row behind N already-decided ones (SCRUM-712 B1). `holdId` is
+    // absent for a whole-row (direct) share and the index matches that as undefined.
+    .index("by_deposit_status", ["depositId", "status"])
+    .index("by_deposit_hold_status", ["depositId", "holdId", "status"])
+    // Exact "any blocking share of a DIFFERENT sale on this car" — two statuses x
+    // (saleId < s, saleId > s) existence ranges, no page that a sale's own shares
+    // can fill (SCRUM-712 round 3).
+    .index("by_org_vehicle_status_sale", ["orgId", "vehicleId", "status", "saleId"]),
 
   /* ─────────────────────────────────────────────────────────────────────────
    * SCRUM-218-C — the direct-collection receipt movement model.

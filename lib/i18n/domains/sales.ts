@@ -2963,6 +2963,9 @@ export const salesEn = {
   PositionSettled: "Settled",
   PositionNotInvolved: "Nothing outstanding",
   PositionUnknown: "Cannot be determined",
+  CustomerInvoiceBalance: "Customer invoice balance",
+  CustomerInvoiceUnproven: "Not confirmed yet",
+  CustomerInvoiceStateOpen: "The customer's invoice is still open",
   AppraisalGapLabel: "Appraisal gap",
   NoAppraisalGap: "None",
   RouteUnknownWarning:
@@ -4046,6 +4049,9 @@ export const salesAr = {
   PositionSettled: "مسوَّاة",
   PositionNotInvolved: "لا يوجد",
   PositionUnknown: "غير محدَّد",
+  CustomerInvoiceBalance: "المتبقي على فاتورة العميل",
+  CustomerInvoiceUnproven: "لم يُتحقَّق منه بعد",
+  CustomerInvoiceStateOpen: "فاتورة العميل لا تزال مفتوحة",
   AppraisalGapLabel: "فرق تخمين",
   NoAppraisalGap: "لا يوجد",
   RouteUnknownWarning:

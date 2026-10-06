@@ -2508,6 +2508,12 @@ export function DealCockpit({
       hasPermission(PERMISSIONS.VIEW_VEHICLES) &&
       !!app?.quote &&
       app.quote.mode !== "CASH",
+    // SCRUM-659: a CASH deal still cannot close on a deleted car.
+    livenessOnly:
+      canCloseDeal &&
+      hasPermission(PERMISSIONS.VIEW_VEHICLES) &&
+      !!app?.quote &&
+      app.quote.mode === "CASH",
     loading: permissionsLoading || app === undefined,
   });
 
@@ -4400,6 +4406,48 @@ function DealPartyFacts({
   );
 }
 
+/** The note under the invoice balance: an OPEN invoice is owed, a CLOSED one is settled; unproven states say nothing. */
+const INVOICE_NOTE_KEY: Record<string, string | undefined> = {
+  OPEN: POSITION_LABEL.OWED_TO_DEALERSHIP,
+  CLOSED: POSITION_LABEL.SETTLED,
+};
+
+/**
+ * SCRUM-571 (D-48): what the customer still owes on the deal's invoice, as its own
+ * tile and NOT a party row. The CUSTOMER party row states the held deposit; this
+ * is the invoice debt the settlement stage is waiting on, so the two never share
+ * a figure. Served, not derived: the state and the amount come from the same
+ * server read the stage was judged on. Nothing is shown before an invoice exists
+ * (`NONE`), and an unproven invoice states no amount rather than a zero.
+ */
+function CustomerInvoiceFact({
+  invoice,
+  money,
+  t,
+}: Readonly<{
+  /** Optional at runtime: a payload from a backend that predates the field renders no tile. */
+  invoice: DealMoney["customerInvoice"] | undefined;
+  money: (minor: number) => string;
+  t: (key: string) => string;
+}>) {
+  if (!invoice || invoice.state === "NONE") return null;
+  const noteKey = INVOICE_NOTE_KEY[invoice.state];
+  return (
+    <div
+      className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2"
+      data-testid="deal-customer-invoice"
+    >
+      <MoneyFact
+        label={t("CustomerInvoiceBalance")}
+        value={invoice.outstandingMinor !== null ? money(invoice.outstandingMinor) : null}
+        unavailableKey="CustomerInvoiceUnproven"
+        note={noteKey ? t(noteKey) : undefined}
+        t={t}
+      />
+    </div>
+  );
+}
+
 /**
  * Only where an APPLICATION exists. `فرق تخمين` is the difference between the
  * finance company's appraisal and the price — a cash deal has no appraisal, so
@@ -4472,6 +4520,7 @@ function MoneyPanel({
   summary,
   parties,
   overview,
+  customerInvoice,
   t,
 }: Readonly<{
   money: (minor: number) => string;
@@ -4500,6 +4549,8 @@ function MoneyPanel({
     onSettleSupplier: (() => void) | undefined;
     supplierGuidance: string | undefined;
   }> | null;
+  /** The customer's invoice debt (SCRUM-571 D-48), separate from the deposit on the party row. */
+  customerInvoice: DealMoney["customerInvoice"];
   t: (key: string) => string;
 }>) {
   /**
@@ -4572,6 +4623,7 @@ function MoneyPanel({
             )}
           </div>
         )}
+        <CustomerInvoiceFact invoice={customerInvoice} money={money} t={t} />
         {typeof canonicalProfit !== "string" && <ProfitBreakdown profit={canonicalProfit} money={money} t={t} />}
         {overview?.data?.vehicleCostBasis && (
           <VehicleCostBasisSection
@@ -5916,6 +5968,14 @@ export function DealCockpitView({
               <CardContent className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
                 <Lock className="h-4 w-4" />
                 {t("MoneyPanelHidden")}
+                {/* SCRUM-571 (D-48): the QUALITATIVE state only. The amount is
+                    finance-tier and was never sent to this caller. */}
+                {deal.customerInvoiceState === "OPEN" && (
+                  <span data-testid="deal-customer-invoice-state">
+                    {" · "}
+                    {t("CustomerInvoiceStateOpen")}
+                  </span>
+                )}
               </CardContent>
             </Card>
           ) : (
@@ -5971,6 +6031,7 @@ export function DealCockpitView({
                       }
                     : null
                 }
+                customerInvoice={deal.money.customerInvoice}
                 t={t}
               />
 

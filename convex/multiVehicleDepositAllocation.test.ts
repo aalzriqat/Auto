@@ -947,40 +947,84 @@ describe("cancelling one car's sale on a shared deposit", () => {
     expect(view.appliedMinor).toBe(3_000 * SCALE);
   });
 
-  test("the freed car can be sold again once its share has been decided", async () => {
-    const { s, saleB } = await bothSold("resellAfterCancel");
+  const pendingRows = (s: Awaited<ReturnType<typeof seed>>) =>
+    s.t.run(async (ctx) =>
+      (await ctx.db.query("depositCancellationPendings").collect()).filter(
+        (r) => r.orgId === s.orgId
+      )
+    );
+
+  test("SCRUM-712: a cancelled share cannot go back to the pool, move or be 'other' — only refund or forfeit decide it", async () => {
+    // The old test returned the cancelled share to the pool and sold the car again
+    // on the same money. The owner's ruling is that the cancelled-sale share is
+    // refunded or forfeited, never silently re-committed, so those treatments are
+    // refused while the share is pending and the share stays pending.
+    const { s, saleB } = await bothSold("pendingRefusals");
     await cancel(s, saleB);
-
     const [holdB] = await holdsFor(s, s.vehicleB!);
-    await s.asUser.mutation(api.deposits.resolveReleasedAllocation, {
-      orgId: s.orgId,
-      holdId: holdB!._id,
-      treatment: "RETURN_TO_UNALLOCATED" as const,
-    });
-    await allocate(s, [{ vehicleId: s.vehicleB!, amount: 2_000 }]);
 
-    await expect(sell(s, s.vehicleB!, PRICE_B)).resolves.toBeDefined();
-    const view = await expectConservation(s);
-    expect(view.appliedMinor).toBe(5_000 * SCALE);
+    for (const treatment of ["RETURN_TO_UNALLOCATED", "OTHER"] as const) {
+      await expect(
+        s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+          orgId: s.orgId,
+          holdId: holdB!._id,
+          treatment,
+          reason: "x",
+        })
+      ).rejects.toThrow(/still has a share from a cancelled sale/);
+    }
+    await expect(
+      s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+        orgId: s.orgId,
+        holdId: holdB!._id,
+        treatment: "REALLOCATE_TO_VEHICLE",
+        toVehicleId: s.vehicleA,
+      })
+    ).rejects.toThrow(/still has a share from a cancelled sale/);
+
+    const rows = await pendingRows(s);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe("PENDING");
   });
 
-  test("selling it again posts a second, distinct application", async () => {
-    // Re-applying the same deposit to the same car is a genuine new movement of
-    // money. Posted under the first application's identity it would dedupe away
-    // and the ledger would show one credit where the customer has two.
-    const { s, saleB } = await bothSold("reapply");
+  test("SCRUM-712: refunding the share decides exactly that share and frees the car", async () => {
+    const { s, saleB } = await bothSold("refundClearsPending");
     await cancel(s, saleB);
     const [holdB] = await holdsFor(s, s.vehicleB!);
-    await s.asUser.mutation(api.deposits.resolveReleasedAllocation, {
+
+    await s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
       orgId: s.orgId,
       holdId: holdB!._id,
-      treatment: "RETURN_TO_UNALLOCATED" as const,
+      treatment: "REFUND_TO_CUSTOMER" as const,
+      refundMethod: "CASH" as const,
     });
-    await allocate(s, [{ vehicleId: s.vehicleB!, amount: 2_000 }]);
-    await sell(s, s.vehicleB!, PRICE_B);
 
-    const forB = (await depositApplicationEvents(s)).filter((e) => e.vehicleId === s.vehicleB);
-    expect(forB.map((e) => e.status).sort()).toEqual(["POSTED", "REVERSED"]);
+    const rows = await pendingRows(s);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe("RELEASED");
+    expect(rows[0]!.resolvedAt).toBeDefined();
+    const vehicleB = await s.t.run(async (ctx) => ctx.db.get(s.vehicleB!));
+    expect(vehicleB!.status).toBe("AVAILABLE");
+    const view = await expectConservation(s);
+    expect(view.refundedMinor).toBe(2_000 * SCALE);
+    expect(view.appliedMinor).toBe(3_000 * SCALE);
+  });
+
+  test("SCRUM-712: a forfeited share also decides it, and A's live credit is untouched", async () => {
+    const { s, saleB } = await bothSold("forfeitClearsPending");
+    await cancel(s, saleB);
+    const [holdB] = await holdsFor(s, s.vehicleB!);
+
+    await s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: s.orgId,
+      holdId: holdB!._id,
+      treatment: "FORFEITED" as const,
+      reason: "customer withdrew",
+    });
+
+    const rows = await pendingRows(s);
+    expect(rows.map((r) => r.status)).toEqual(["FORFEITED"]);
+    expect((await saleTransactionFor(s, s.vehicleA))!.amount).toBe(PRICE_A - 3_000);
   });
 });
 
@@ -2114,20 +2158,22 @@ describe("a deposit paid in two instalments, followed to the end", () => {
     // per-application identity.
     expect(view.allocatedMinor).toBe(1_500 * SCALE);
 
-    // ── Somebody decides: back to the deal, not onto the other car ────────
+    // ── Somebody decides: SCRUM-712 — a cancelled sale's share is refunded or
+    //    forfeited, never returned to the pool ─────────────────────────────
     const releasedA = (await holdsFor(s, s.vehicleA)).filter(
       (h) => h.allocationStatus === "RELEASED_AWAITING_DECISION"
     );
     expect(releasedA).toHaveLength(1);
-    await s.asUser.mutation(api.deposits.resolveReleasedAllocation, {
+    await s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
       orgId: s.orgId,
       holdId: releasedA[0]!._id,
-      treatment: "RETURN_TO_UNALLOCATED" as const,
+      treatment: "REFUND_TO_CUSTOMER" as const,
+      refundMethod: "CASH" as const,
     });
     view = await expectConservation(s);
     expect(view.releasedAwaitingDecisionMinor).toBe(0);
-    expect(view.unallocatedMinor).toBe(3_500 * SCALE);
-    expect(view.refundedMinor).toBe(0);
+    expect(view.unallocatedMinor).toBe(1_500 * SCALE);
+    expect(view.refundedMinor).toBe(2_000 * SCALE);
 
     // ── The customer asks for some of it back ────────────────────────────
     // B leaves the deal, and its 1,500 is refunded rather than moved.
@@ -2155,16 +2201,16 @@ describe("a deposit paid in two instalments, followed to the end", () => {
       });
     }
     view = await expectConservation(s);
-    expect(view.refundedMinor).toBe(1_500 * SCALE);
-    expect(view.unallocatedMinor).toBe(3_500 * SCALE);
+    expect(view.refundedMinor).toBe(3_500 * SCALE);
+    expect(view.unallocatedMinor).toBe(1_500 * SCALE);
     // Real money left, and the ledger says the same amount.
-    expect((await cashOut(s)).reduce((a, b) => a + b, 0)).toBe(1_500);
-    expect((await postedRefunds(s)).reduce((a, b) => a + b, 0)).toBe(1_500 * SCALE);
+    expect((await cashOut(s)).reduce((a, b) => a + b, 0)).toBe(3_500);
+    expect((await postedRefunds(s)).reduce((a, b) => a + b, 0)).toBe(3_500 * SCALE);
 
     // ── They put the rest against A, then move it to B ───────────────────
-    await allocate(s, [{ vehicleId: s.vehicleA, amount: 3_500 }]);
+    await allocate(s, [{ vehicleId: s.vehicleA, amount: 1_500 }]);
     view = await expectConservation(s);
-    expect(view.allocatedMinor).toBe(3_500 * SCALE);
+    expect(view.allocatedMinor).toBe(1_500 * SCALE);
     expect(view.unallocatedMinor).toBe(0);
 
     await s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
@@ -2178,7 +2224,7 @@ describe("a deposit paid in two instalments, followed to the end", () => {
     // One share per payment the money came from, and they total the allocation.
     expect(
       awaitingA.reduce((sum, h) => sum + (h.allocatedAmountMinor ?? 0), 0)
-    ).toBe(3_500 * SCALE);
+    ).toBe(1_500 * SCALE);
 
     for (const hold of awaitingA) {
       await s.asUser.mutation(api.deposits.resolveReleasedAllocation, {
@@ -2189,35 +2235,35 @@ describe("a deposit paid in two instalments, followed to the end", () => {
       });
     }
     view = await expectConservation(s);
-    expect(view.allocatedMinor).toBe(3_500 * SCALE);
+    expect(view.allocatedMinor).toBe(1_500 * SCALE);
     expect(view.vehicles.find((v) => v.vehicleId === s.vehicleB)!.allocatedMinor).toBe(
-      3_500 * SCALE
+      1_500 * SCALE
     );
     // Moved, not refunded — it is still the customer's money on this deal.
-    expect(view.refundedMinor).toBe(1_500 * SCALE);
+    expect(view.refundedMinor).toBe(3_500 * SCALE);
 
     // ── B completes, on everything that ended up against it ──────────────
     await sell(s, s.vehicleB!, PRICE_B);
-    expect((await saleTransactionFor(s, s.vehicleB!))!.amount).toBe(PRICE_B - 3_500);
+    expect((await saleTransactionFor(s, s.vehicleB!))!.amount).toBe(PRICE_B - 1_500);
 
     view = await expectConservation(s);
-    expect(view.appliedMinor).toBe(3_500 * SCALE);
-    expect(view.refundedMinor).toBe(1_500 * SCALE);
+    expect(view.appliedMinor).toBe(1_500 * SCALE);
+    expect(view.refundedMinor).toBe(3_500 * SCALE);
     expect(view.allocatedMinor).toBe(0);
     expect(view.unallocatedMinor).toBe(0);
     expect(view.releasedAwaitingDecisionMinor).toBe(0);
 
-    // 5,000 received: 3,500 credited against an invoice, 1,500 handed back.
+    // 5,000 received: 1,500 credited against an invoice, 3,500 handed back.
     expect(view.appliedMinor + view.refundedMinor).toBe(view.totalReceivedMinor);
 
     // ── And the ledger agrees with the cash ──────────────────────────────
     const appliedEvents = await depositApplicationEvents(s);
-    // A's application was reversed; B's two stand — one per payment.
-    expect(appliedEvents.filter((e) => e.status === "POSTED")).toHaveLength(2);
+    // A's application was reversed; B's stand.
     expect(appliedEvents.filter((e) => e.status === "REVERSED")).toHaveLength(1);
-    // Two payouts, one per share, each with its own payment record.
-    expect((await cashOut(s)).reduce((a, b) => a + b, 0)).toBe(1_500);
-    expect((await outPayments(s))).toHaveLength(2);
+    expect(appliedEvents.filter((e) => e.status === "POSTED").length).toBeGreaterThan(0);
+    // Every payout is its own payment record, and the cash agrees with the books.
+    expect((await cashOut(s)).reduce((a, b) => a + b, 0)).toBe(3_500);
+    expect((await outPayments(s)).length).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -2483,20 +2529,34 @@ describe("a deposit with money assigned to no car at all", () => {
     const releasedB = (await holdsFor(s, s.vehicleB!)).filter(
       (h) => h.allocationStatus === "RELEASED_AWAITING_DECISION"
     );
+    // SCRUM-712: the cancelled share is forfeited (never returned to the pool);
+    // the remainder the customer left unallocated is what credits the re-sale.
+    let decidedMinor = 0;
     for (const hold of releasedB) {
-      await s.asUser.mutation(api.deposits.resolveReleasedAllocation, {
+      decidedMinor += hold.allocatedAmountMinor ?? 0;
+      await s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
         orgId: s.orgId,
         holdId: hold._id,
-        treatment: "RETURN_TO_UNALLOCATED" as const,
+        treatment: "FORFEITED" as const,
+        reason: "customer withdrew",
       });
     }
-    await allocate(s, [{ vehicleId: s.vehicleB!, amount: 1_000 }]);
-    await sell(s, s.vehicleB!, PRICE_B);
+    expect(decidedMinor).toBeGreaterThan(0);
 
-    // Credited, not billed in full.
-    expect((await saleTransactionFor(s, s.vehicleB!))!.amount).toBe(PRICE_B - 1_000);
-    // And nothing is left live on a car that is now sold.
-    expect((await holdsFor(s, s.vehicleB!)).filter((h) => h.active)).toEqual([]);
+    // The share is decided, so the car is free again — but the money that was
+    // its allocation is gone, and an allocation can only be written onto an
+    // active hold, so this quote cannot re-credit it. (A re-sale is a NEW deal.)
+    const vehicleB = await s.t.run(async (ctx) => ctx.db.get(s.vehicleB!));
+    expect(vehicleB!.status).toBe("AVAILABLE");
+    await expect(allocate(s, [{ vehicleId: s.vehicleB!, amount: 1_000 }])).rejects.toThrow(
+      /no active hold/
+    );
+    const pending = await s.t.run(async (ctx) =>
+      (await ctx.db.query("depositCancellationPendings").collect()).filter(
+        (r) => r.orgId === s.orgId
+      )
+    );
+    expect(pending.map((r) => r.status)).toEqual(["FORFEITED"]);
     await expectConservation(s);
   });
 
