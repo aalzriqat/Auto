@@ -105,7 +105,7 @@ export function PendingAccountingEventsTable({
       {onLoadMoreFailed && (
         <Button size="sm" variant="outline" disabled={loadingMoreFailed} onClick={onLoadMoreFailed}>
           {loadingMoreFailed && <Loader2 className="h-4 w-4 animate-spin" />}
-          {t("LoadMoreFailedEvents" as any)}
+          {t("LoadMore")}
         </Button>
       )}
       {hasMore && <p className="text-xs text-muted-foreground">{t("MorePendingAccountingEvents")}</p>}
