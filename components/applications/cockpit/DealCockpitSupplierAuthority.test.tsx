@@ -160,10 +160,12 @@ function financedDirectDeal(): FinancedDealCockpitData {
       managementProfit: profit,
       expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
       parties: [SUPPLIER_OWES_MARGIN],
+      customerInvoice: { state: "NONE", outstandingMinor: null, currency: "JOD" },
       supplierReceipt: { actionable: true },
       appraisalGapMinor: undefined,
       forward: { dueMinor: 0, depositMinor: 0, contributionMinor: 0, onBooksMinor: 0 },
     },
+    customerInvoiceState: "NONE",
     handoverEvidence: {
       approvedPurchaseAmountMinor: 12_500 * SCALE,
       financeCompanyFundedPortionMinor: 12_000 * SCALE,
@@ -240,9 +242,11 @@ function cashDirectDeal(): CashDealCockpitData {
       },
       expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
       parties: [SUPPLIER_OWES_MARGIN],
+      customerInvoice: { state: "NONE", outstandingMinor: null, currency: "JOD" },
       supplierReceipt: { actionable: true },
       appraisalGapMinor: undefined,
     },
+    customerInvoiceState: "NONE",
   } satisfies CashDealCockpitData;
 }
 

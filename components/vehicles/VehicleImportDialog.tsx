@@ -15,6 +15,7 @@ import {
   type ImportPreflightInfo,
 } from "@/components/import/ImportWizard";
 import {
+  ACQUISITION_PAYMENT_METHODS,
   PaymentMethodSelect,
   type AcquisitionPaymentMethod,
 } from "@/components/payments/PaymentMethodSelect";
@@ -123,13 +124,22 @@ const PREVIEW_COLUMNS = [
   { key: "valuations", label: "Financing Company Valuations" },
 ];
 
-function normalizeImportSourceType(raw: unknown): "STOCK" | "SOURCED" {
+/**
+ * SCRUM-717 (D-45): ownership is an explicit decision, so a blank or unrecognized
+ * cell is NOT read as owned stock. It returns undefined and `validateVehicleRow`
+ * turns that into a row error. (It used to default to STOCK, which is how a
+ * consignment car with an empty Type cell became a capitalized purchase.)
+ */
+function normalizeImportSourceType(raw: unknown): "STOCK" | "SOURCED" | undefined {
   const value = String(raw ?? "").trim().toUpperCase();
-  if (!value) return "STOCK";
-  if (value === "SOURCED" || value.includes("SOURCE") || value.includes("مصدر") || value.includes("خارج")) {
+  if (!value) return undefined;
+  if (value.includes("SOURCE") || value.includes("CONSIGN") || value.includes("مصدر") || value.includes("خارج") || value.includes("برسم")) {
     return "SOURCED";
   }
-  return "STOCK";
+  if (value === "STOCK" || value === "OWNED" || value === "OWN" || value.includes("مخزون") || value.includes("مملوك") || value.includes("ملك")) {
+    return "STOCK";
+  }
+  return undefined;
 }
 
 /**
@@ -315,14 +325,14 @@ export function deriveVehicleRow(mapped: Record<string, any>): Record<string, an
     // For a sourced vehicle the supplier cost is the same "Cost" column that
     // owned stock uses for purchase price; importBulk mirrors it into sourceCost.
     sourceCost: sourceType === "SOURCED" && purchasePrice ? purchasePrice : undefined,
-    // Kept for STOCK rows too, not just SOURCED. importBulk writes
-    // `sourcedFromName` onto the vehicle document ONLY for a SOURCED row, so this
-    // does not pollute owned stock — but a PURCHASE on ON_ACCOUNT needs the
-    // supplier name to credit AP-Suppliers and to create the payable, and every
-    // capitalizing row is STOCK by definition. Discarding it here made the
-    // supplier column unreachable, so selecting "On account" blocked the import
-    // forever even from a spreadsheet that named the supplier in every row.
-    sourcedFromName: sourcedFrom || undefined,
+    // SCRUM-717 (D-45): the supplier column feeds exactly one of two fields,
+    // chosen by ownership. A consignment row keeps it as `sourcedFromName`. An
+    // OWNED row sends it as `purchaseSupplierName`, the creditor of a purchase on
+    // account, and never as `sourcedFromName`, which would mark an owned car as
+    // someone else's consignment. A PURCHASE on ON_ACCOUNT needs this name to
+    // credit AP-Suppliers and create the payable.
+    sourcedFromName: sourceType === "SOURCED" ? sourcedFrom || undefined : undefined,
+    purchaseSupplierName: sourceType === "STOCK" ? sourcedFrom || undefined : undefined,
     status: mapped.status ? String(mapped.status).toUpperCase() : undefined,
     notes: mapped.notes ? String(mapped.notes).trim() : undefined,
     valuations,
@@ -359,6 +369,9 @@ export function validateVehicleRow(row: Record<string, any>): string[] {
   // is the control; catching it here names the row instead of failing the file
   // with a count after the operator has already pressed Import.
   if (row.purchasePrice !== undefined && row.purchasePrice < 0) errors.push("Negative Cost");
+  if (row.sourceType !== "STOCK" && row.sourceType !== "SOURCED") {
+    errors.push("Ownership type is missing or not recognized (use Stock / Owned, or Sourced / Consignment)");
+  }
   if (row.sourceType === "SOURCED") {
     // Sourced vehicles must name their supplier and carry a supplier cost — the
     // same constraint the create-sourced flow enforces (backend re-checks too).
@@ -382,9 +395,9 @@ function renderVehiclePreviewCell(row: ImportRow, key: string) {
         ? row.mileage.toLocaleString()
         : <span className="text-muted-foreground text-xs">TBD</span>;
     case "sourceType":
-      return row.sourceType === "SOURCED"
-        ? <span className="text-xs text-orange-600">Sourced</span>
-        : <span className="text-xs text-muted-foreground">Stock</span>;
+      if (row.sourceType === "SOURCED") return <span className="text-xs text-orange-600">Sourced</span>;
+      if (row.sourceType === "STOCK") return <span className="text-xs text-muted-foreground">Stock</span>;
+      return <span className="text-destructive">—</span>;
     case "purchasePrice": return row.purchasePrice ? row.purchasePrice.toLocaleString() : "—";
     case "sellingPrice": return row.sellingPrice > 0 ? row.sellingPrice.toLocaleString() : "—";
     case "valuations": {
@@ -405,34 +418,15 @@ function renderVehiclePreviewCell(row: ImportRow, key: string) {
 // ---------------------------------------------------------------------------
 type AcquisitionPosting = "OPENING_STOCK" | "PURCHASE";
 
-/**
- * The four settled methods AND ON_ACCOUNT.
- *
- * An earlier revision offered only the four settled methods, reasoning that
- * exposing supplier credit here would be an asymmetry with the single-vehicle
- * form. That was the wrong trade once this dialog started POSTING. With
- * ON_ACCOUNT withheld, a dealer who bought on supplier credit had no truthful
- * selection: every remaining option credits cash, bank, cheque or card for money
- * that never moved, and writes no `vehicleSupplierPayables` row. An importer
- * that can only record a purchase by misstating how it was paid defeats the
- * point of SCRUM-59, which exists to stop the importer writing the wrong books.
- *
- * The server already implements, guards and tests this branch — it demands a
- * supplier name per capitalizing row and credits AP-Suppliers instead of cash.
- * Only this list withheld it. Owner decision, 2026-08-19, scoped to the bulk
- * importer and deliberately not to the single-vehicle form.
- */
-const IMPORT_PAYMENT_METHODS: readonly AcquisitionPaymentMethod[] = [
-  "CASH",
-  "BANK_TRANSFER",
-  "CHEQUE",
-  "CARD",
-  "ON_ACCOUNT",
-];
+// The importer offers the four settled methods AND ON_ACCOUNT
+// (`ACQUISITION_PAYMENT_METHODS`): a dealer who bought on supplier credit has no
+// truthful selection otherwise, and SCRUM-59 exists to stop the importer writing
+// the wrong books. The server demands a supplier name per capitalizing row and
+// credits AP-Suppliers instead of cash. Owner decision, 2026-08-19.
 
 /** Rows that will actually reach Vehicle Inventory: owned, with a cost. */
 function capitalizingRows(rows: Record<string, any>[]) {
-  return rows.filter((r) => r.sourceType !== "SOURCED" && Number(r.purchasePrice) > 0);
+  return rows.filter((r) => r.sourceType === "STOCK" && Number(r.purchasePrice) > 0);
 }
 
 /**
@@ -477,7 +471,7 @@ export function purchaseBlockers(
     // AP-Suppliers credit and the `vehicleSupplierPayables` row both need it.
     missingSupplier:
       paymentMethod === "ON_ACCOUNT"
-        ? capitalizingRows(rows).filter((r) => !String(r.sourcedFromName ?? "").trim()).length
+        ? capitalizingRows(rows).filter((r) => !String(r.purchaseSupplierName ?? "").trim()).length
         : 0,
     // Counted over EVERY parsed row, not just the valid ones. A file of 26 rows
     // is a 26-row file whether or not one of them currently fails validation;
@@ -633,7 +627,7 @@ function ImportAccountingChoice({
                 t={t as any}
                 value={paymentMethod ?? undefined}
                 onValueChange={setPaymentMethod}
-                methods={IMPORT_PAYMENT_METHODS}
+                methods={ACQUISITION_PAYMENT_METHODS}
                 ariaLabel={t("ImportPaidFrom" as any)}
                 placeholder={t("ImportPaidFromPlaceholder" as any)}
               />
@@ -877,6 +871,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
           sourceType: v.sourceType,
           sourcedFromName: v.sourcedFromName,
           sourceCost: v.sourceCost,
+          purchaseSupplierName: v.purchaseSupplierName,
           status: v.status,
           notes: v.notes,
           valuations: v.valuations,

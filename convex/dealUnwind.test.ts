@@ -299,6 +299,22 @@ describe("SCRUM-693 ruling B - a refusal in the closing step leaves every row as
       },
     },
     {
+      // SCRUM-651 (D-42): a PART-paid payable refuses too - money already left, and the label alone
+      // (PARTIALLY_PAID) is not what decides; the recorded paid amount is.
+      name: "the supplier payable is PARTIALLY_PAID",
+      message: /supplier payable has been paid/,
+      async apply(s: Seeded, saleId: Id<"sales">) {
+        const now = Date.now();
+        const id = await s.t.run((ctx) =>
+          ctx.db.insert("vehicleSupplierPayables", {
+            orgId: s.orgId, vehicleId: s.vehicleId, saleId, sourcedFromName: "Amman Importer Co", amountDue: 9_000,
+            amountPaid: 3_000, currency: "JOD", status: "PARTIALLY_PAID", createdBy: s.owner.userId, createdAt: now, updatedAt: now,
+          })
+        );
+        return () => s.t.run((ctx) => ctx.db.delete(id));
+      },
+    },
+    {
       name: "the trade-in has been resold",
       message: /trade-in vehicle has already been resold/,
       async apply(s: Seeded, saleId: Id<"sales">) {
@@ -410,6 +426,23 @@ describe("SCRUM-693 ruling B - a refusal in the closing step leaves every row as
     expect((await statusOf()).eligibility.canFinish).toBe(true);
     await finish(s, unwindId);
     expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+  });
+
+  test("SCRUM-651: an unpaid DISPUTED supplier payable does not block the close and is cancelled with the deal", async () => {
+    const { s, applicationId } = await paidDeal("rb_disputed_unpaid");
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    const saleId = (await s.t.run((ctx) => ctx.db.get(applicationId)))!.finalizedSaleId!;
+    const now = Date.now();
+    const payableId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId: s.orgId, vehicleId: s.vehicleId, saleId, sourcedFromName: "Amman Importer Co", amountDue: 9_000,
+        currency: "JOD", status: "DISPUTED", disputeReason: "Wrong figure", createdBy: s.owner.userId, createdAt: now, updatedAt: now,
+      })
+    );
+    await finish(s, unwindId);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+    expect((await s.t.run((ctx) => ctx.db.get(payableId)))?.status).toBe("CANCELLED");
   });
 
   test("after a refused close the unwind can still be abandoned, and the still-paid deal keeps pointing at it", async () => {

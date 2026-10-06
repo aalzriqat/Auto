@@ -18,8 +18,28 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/sonner";
 import { DialogFooterActions, errorMessage } from "../AccountingTabShared";
+import {
+  SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
+  SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
+} from "@/convex/utils/closeWarnings";
 import type { PeriodSummary, Translate } from "./types";
 import { periodLabel } from "./types";
+
+/**
+ * Display-only translation of the server's fixed close warnings. The server
+ * text is also the acknowledgement key (matched by exact string on close), so
+ * it is never altered — only what is rendered changes. Unknown warnings render
+ * as sent.
+ */
+const KNOWN_WARNING_KEYS: Readonly<Record<string, string>> = {
+  [SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING]: "ClosePeriodWarnSupplierPayablesReconPending",
+  [SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING]: "ClosePeriodWarnSupplierPayablesReconTooMany",
+};
+
+function displayWarning(warning: string, t: Translate): string {
+  const key = KNOWN_WARNING_KEYS[warning];
+  return key ? t(key) : warning;
+}
 
 type ClosePeriodReviewDialogProps = {
   orgId: Id<"organizations">;
@@ -145,7 +165,7 @@ export function ClosePeriodReviewDialog({
                         }}
                         className="mt-0.5"
                       />
-                      <span className="text-sm leading-snug text-amber-900 dark:text-amber-200">{warning}</span>
+                      <span className="text-sm leading-snug text-amber-900 dark:text-amber-200">{displayWarning(warning, t)}</span>
                     </li>
                   ))}
                 </ul>
