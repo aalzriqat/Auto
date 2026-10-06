@@ -903,8 +903,10 @@ export type SupplierPayablesReconciliationResult = GlVsSubledgerResult & {
  * How many supplier-payable rows (all open-balance statuses together) and, separately, how many
  * outbox events / drafts one reconciliation reads before it declares itself UNAVAILABLE. The whole
  * figure is needed to be true, so a truncated read is refused rather than summed. 4,000 sits well
- * under the Convex 16,384-documents-per-function ceiling and leaves room for the GL read the same
- * function does and for the rest of the period-close checklist that shares the transaction.
+ * under the Convex 16,384-documents-per-function ceiling. The limit bounds only this function's own
+ * payable, outbox and draft reads; it does not budget the GL read (computeGlBalanceByCurrency reads
+ * every posted line via getPostedLines) or the rest of the period-close checklist. Fully paid rows
+ * still count toward it.
  */
 const SUPPLIER_PAYABLES_RECON_READ_LIMIT = 4000;
 

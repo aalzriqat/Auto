@@ -13,7 +13,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { computeSupplierPayablesReconciliation } from "./accountingReports";
 import { seedOrgWithMember } from "../test-utils/seedOrg";
@@ -412,6 +412,50 @@ describe("SCRUM-651 - sale cancellation tears down every unpaid payable and refu
     expect((await s.t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("CANCELLED");
     expect((await payableOf(s, payableId))?.status).toBe("CANCELLED");
     expect((await payableOf(s, zeroPaidId))?.status).toBe("CANCELLED");
+    expect(await apNetMinor(s)).toBe(0);
+  });
+
+  test("cancelling while no period is open: payable CANCELLED at once, AP UNAVAILABLE/PENDING_POSTINGS until the reversal drains, then reconciled", async () => {
+    const s = await seedDealer("c_queued");
+    const { saleId, payableId } = await sourcedSale(s);
+    const setPeriods = (status: "OPEN" | "FUTURE") =>
+      s.t.run(async (ctx) => {
+        for (const period of await ctx.db.query("accountingPeriods").collect()) {
+          if (period.orgId === s.orgId) await ctx.db.patch(period._id, { status });
+        }
+      });
+    const drain = async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      try {
+        await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+        for (let pass = 0; pass < 10; pass += 1) {
+          await s.t.finishAllScheduledFunctions(vi.runAllTimers);
+          const queued = (await s.t.run(async (ctx) => await ctx.db.system.query("_scheduled_functions").collect())).filter(
+            (f) => f.state.kind === "pending" || f.state.kind === "inProgress"
+          ).length;
+          if (queued === 0) break;
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    };
+
+    // No open period covers the cancellation date, so the AP reversal is queued, not posted.
+    await setPeriods("FUTURE");
+    await cancel(s, saleId);
+    expect((await payableOf(s, payableId))?.status).toBe("CANCELLED");
+    const queued = await recon(s);
+    expect(queued.status).toBe("UNAVAILABLE");
+    expect(queued.unavailableReason).toBe("PENDING_POSTINGS");
+    expect(queued.isReconciled).toBe(false);
+
+    // Opening the period and draining posts the reversal; the books then agree with no difference.
+    await setPeriods("OPEN");
+    await drain();
+    const settled = await recon(s);
+    expect(settled.status).toBe("AVAILABLE");
+    expect(settled.isReconciled).toBe(true);
+    expect(settled.byCurrency.JOD).toMatchObject({ glBalanceMinor: 0, subledgerBalanceMinor: 0, isReconciled: true });
     expect(await apNetMinor(s)).toBe(0);
   });
 

@@ -9,6 +9,10 @@ import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { auditLog } from "./financialAudit";
 import { requireFeature } from "./subscriptions";
 import {
+  SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
+  SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
+} from "./utils/closeWarnings";
+import {
   computeSubledgerReconciliation,
   SubledgerReconciliationResult,
   computeVehicleInventoryReconciliation,
@@ -494,8 +498,8 @@ async function computeCloseChecklist(
     // difference in an empty list of currencies either.
     warnings.push(
       supplierPayablesRecon.unavailableReason === "PENDING_POSTINGS"
-        ? "Supplier payables reconciliation could not be completed: accounting postings or drafts that affect supplier payables are still pending. Resolve them, then re-check."
-        : "Supplier payables reconciliation could not be completed: there are too many records to verify in one pass. Review supplier payables manually."
+        ? SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING
+        : SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING
     );
   } else if (!supplierPayablesRecon.isReconciled) {
     const badCurrencies = supplierPayablesRecon.currencies.filter((c) => !supplierPayablesRecon.byCurrency[c].isReconciled);
