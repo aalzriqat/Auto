@@ -76,7 +76,8 @@ function mayRecordForwardReturn(role: Doc<"roles">): boolean {
 }
 /** Refunding the remittance (MONEY_STEP_PERMS) and cancelling the deal, together. */
 const FINISH_PERMS = [PERMISSIONS.CANCEL_CLOSED_DEAL, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT];
-const ABANDON_PERMS = [PERMISSIONS.CANCEL_CLOSED_DEAL];
+/** Walking away from an unwind needs the same two authorities as opening one (SCRUM-719): CANCEL alone must not release another actor's lock. */
+const ABANDON_PERMS = START_PERMS;
 
 const UNWIND_PERMISSION_MESSAGE =
   "Reversing a paid deal needs both the cancel-closed-deal and the confirm-finance-disbursement permissions. Ask an administrator.";
