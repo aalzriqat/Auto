@@ -1326,6 +1326,22 @@ const CLEARED_CLAIM = {
 } as const;
 
 /**
+ * SCRUM-226 — the ONE predicate for "a retry of this dead-lettered row can
+ * ever post": `reviveFailedEntry` enforces it, and `accountingSetup.listFailedEvents`
+ * reads it so the operator is never offered a Retry the server will refuse. A
+ * retired POST can never post (see the SCRUM-234 note in `reviveFailedEntry`);
+ * REVERSE rows are exempt.
+ */
+export function isOutboxRowRevivable(
+  row: Pick<Doc<"pendingAccountingEvents">, "kind" | "eventType" | "sourceType">
+): boolean {
+  return !(
+    row.kind === "POST" &&
+    retiredPostingRefusal({ eventType: row.eventType ?? "", sourceType: row.sourceType })
+  );
+}
+
+/**
  * SCRUM-222 §3.5.1 — REVIVE A DEAD-LETTERED ROW, DURABLY. The single authority
  * for what "give this row another chance" means, shared by both redrive doors
  * (`retryFailed` and `prepaidExpenses.redriveScheduleEvents`).
@@ -1369,15 +1385,7 @@ export async function reviveFailedEntry(
   // rather than a queued no-op. REVERSE rows are exempt for the same reason the
   // worker exempts them: a reversal unwinds something that already posted and
   // never routes through the engine's retirement check.
-  if (
-    current.kind === "POST" &&
-    retiredPostingRefusal({
-      eventType: current.eventType ?? "",
-      sourceType: current.sourceType,
-    })
-  ) {
-    return false;
-  }
+  if (!isOutboxRowRevivable(current)) return false;
 
   await ctx.db.patch(current._id, {
     status: "PENDING" as const,

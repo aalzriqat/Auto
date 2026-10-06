@@ -382,7 +382,22 @@ describe("vehicleEdits approval on a WhatsApp-sourced request", () => {
     await t.run((ctx) => ctx.db.patch(edit._id, { payload: { ...edit.payload, imageIds: [] } }));
 
     const asOwner = t.withIdentity({ subject: `owner_${orgId}` });
-    await asOwner.mutation(api.vehicleEdits.resolve, { orgId, requestId: edit._id, status: "APPROVED" });
+
+    // SCRUM-717 (D-45): the WhatsApp request carries no ownership decision, so
+    // approving it as-is is refused — nothing is defaulted to STOCK — and the
+    // request stays PENDING (the refusal rolls the whole approval back).
+    await expect(
+      asOwner.mutation(api.vehicleEdits.resolve, { orgId, requestId: edit._id, status: "APPROVED" })
+    ).rejects.toThrow(/Choose how this vehicle is held/);
+    expect(
+      await t.run((ctx) => ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect())
+    ).toHaveLength(0);
+    expect((await t.run((ctx) => ctx.db.get(edit._id)))?.status).toBe("PENDING");
+
+    // The approver classifies the car as part of approving it.
+    await asOwner.mutation(api.vehicleEdits.resolve, {
+      orgId, requestId: edit._id, status: "APPROVED", ownership: { sourceType: "STOCK" },
+    });
 
     const vehicles = await t.run((ctx) => ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect());
     expect(vehicles).toHaveLength(1);

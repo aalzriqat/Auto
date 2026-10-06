@@ -129,6 +129,10 @@ const RESET_TABLES = [
   // and precedes the payment and document it REQUIRES. Approval requests precede
   // the receivables they name.
   "paymentVouchers",
+  // SCRUM-712. A cancelled-sale share names its deposit and sale (both REQUIRED).
+  // It must go with them: once the deposit is gone nothing can decide the share,
+  // and a surviving PENDING row would keep its car locked forever.
+  "depositCancellationPendings",
   "deposits",
   "collectionPayments",
   "paymentAllocations",
@@ -276,7 +280,7 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   // `paymentVouchers.depositId` is REQUIRED; `commitmentAuthorityWork.depositId`
   // is too (not behaviour-tested: the authority preflight refuses a destructive
   // reset while those rows exist).
-  deposits: ["paymentVouchers", "commitmentAuthorityWork"],
+  deposits: ["paymentVouchers", "commitmentAuthorityWork", "depositCancellationPendings"],
   commitmentAuthorityWork: ["commitmentAuthorityAttempt"],
   pendingAccountingEvents: ["commitmentAuthorityWork"],
   // SCRUM-559 (E3). `pendingAccountingEvents.originalEventId`: the outbox
@@ -307,6 +311,7 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
     // payrollItems.commissionSaleIds is a REQUIRED v.array(v.id("sales")).
     "payrollItems",
     "commitmentAuthorityWork",
+    "depositCancellationPendings",
   ],
   quotes: ["sales", "financeApplications", "deposits", "receivables"],
   payrollRuns: ["payrollItems"],
@@ -347,6 +352,7 @@ const RESET_ORG_INDEX: Record<ResetTable, string> = {
   receiptRetainedPositions: "by_org",
   receiptMovements: "by_org",
   transactions: "by_org",
+  depositCancellationPendings: "by_org_status",
   deposits: "by_org",
   collectionPayments: "by_org",
   receivableDocuments: "by_org",

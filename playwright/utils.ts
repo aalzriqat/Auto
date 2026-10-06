@@ -309,8 +309,10 @@ export async function createVehicle(
   await dialog.getByLabel("Mileage").fill("100");
   await advanceVehicleWizard(dialog, 3, "Acquisition & cost");
 
-  // Step 3/5 — Acquisition & cost. Vehicle source defaults to STOCK with
-  // purchasePrice 0, so no payment method is required on this path.
+  // Step 3/5 — Acquisition & cost. SCRUM-717 (D-45): ownership has no default, so
+  // the helper chooses "Owned" explicitly. Left unpriced (purchasePrice 0), an
+  // owned car needs no payment method on this path and posts nothing.
+  await dialog.getByRole("button", { name: /^Owned/ }).click();
   await dialog.getByLabel("Selling Price (JOD)").fill("15000");
   // Only the profit-approval spec needs a floor; left at the form default (0)
   // otherwise so no other spec accidentally trips the approval gate.

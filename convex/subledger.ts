@@ -10,7 +10,7 @@ import { assertOrgEconomicallyActive } from "./utils/orgLifecycle";
 import { v, ConvexError } from "convex/values";
 import { query, MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation } from "./functions";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { scaleForCurrency, assertValidMinorAmount, assertSameCurrency } from "./utils/money";
@@ -25,6 +25,19 @@ export async function getReceivableOutstandingMinor(
 ): Promise<number> {
   const doc = await ctx.db.get(receivableId);
   if (!doc) throw new ConvexError("Receivable not found.");
+  return await outstandingFromReceivableDoc(ctx, doc);
+}
+
+/**
+ * The current outstanding balance of a receivable the caller has ALREADY read, so
+ * a caller that needs the document for its own checks does not read it twice.
+ * `getReceivableOutstandingMinor` delegates here; the semantics are identical.
+ */
+export async function outstandingFromReceivableDoc(
+  ctx: QueryCtx | MutationCtx,
+  doc: Doc<"receivableDocuments">
+): Promise<number> {
+  const receivableId = doc._id;
   // A cancelled receivable's allocations are reversed (see saleCancellation.ts),
   // which would otherwise make originalAmountMinor - 0 read as fully
   // outstanding again — this is a CURRENT-balance helper (unlike

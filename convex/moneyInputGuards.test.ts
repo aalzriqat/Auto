@@ -238,6 +238,7 @@ describe("money entry points reject NaN", () => {
       fuelType: "Petrol",
       transmission: "Automatic",
       sellingPrice,
+      sourceType: "STOCK",
     });
 
     await expect(

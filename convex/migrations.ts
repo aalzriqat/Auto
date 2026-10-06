@@ -23,6 +23,7 @@ import {
   type SocialPlatform,
 } from "./utils/materialization";
 import { ALL_PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
+import { hasPendingDisposition } from "./utils/depositCancellationPending";
 import {
   hasActiveDepositHold,
   hasActiveReservationHold,
@@ -1176,7 +1177,8 @@ export const reconcileVehicleHolds = internalMutation({
 
       const hasHold =
         (await hasActiveDepositHold(ctx, vehicle._id)) ||
-        (await hasActiveReservationHold(ctx, { orgId: args.orgId, vehicleId: vehicle._id }));
+        (await hasActiveReservationHold(ctx, { orgId: args.orgId, vehicleId: vehicle._id })) ||
+        (await hasPendingDisposition(ctx, args.orgId, vehicle._id));
 
       // Ask the hold state machine itself what it would do, rather than
       // re-deriving it here. The previous flat RESERVED/AVAILABLE pair drifted

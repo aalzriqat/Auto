@@ -728,9 +728,9 @@ describe("deposits multi-vehicle holds", () => {
     // This used to put every hold on the quote back on, from whichever
     // cancellation ran first — so cancelling car A re-reserved car B while B's
     // sale was still live. Now each share lands in RELEASED_AWAITING_DECISION
-    // and its car comes off hold: the money is not committed to anything until
-    // somebody says what happens to it, and the car is free to be sold to
-    // somebody else in the meantime.
+    // and its car comes off its sale. SCRUM-712: each share is also a PENDING
+    // disposition, so the car stays locked (RESERVED) until somebody refunds or
+    // forfeits that share — it is no longer free to be sold on again meanwhile.
     for (const saleId of saleIds) {
       await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
     }
@@ -738,8 +738,8 @@ describe("deposits multi-vehicle holds", () => {
     await t.run(async (ctx) => {
       const primary = await ctx.db.get(vehicleId);
       const secondary = await ctx.db.get(secondVehicleId);
-      expect(primary?.status).toBe("AVAILABLE");
-      expect(secondary?.status).toBe("AVAILABLE");
+      expect(primary?.status).toBe("RESERVED");
+      expect(secondary?.status).toBe("RESERVED");
 
       // The money is back on the books as held — it was never refunded.
       const deposit = await ctx.db.get(depositId);

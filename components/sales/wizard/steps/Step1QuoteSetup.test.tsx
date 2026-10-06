@@ -93,6 +93,32 @@ describe("SCRUM-641 R2-F1: the wizard explains a deleted-vehicle block", () => {
   });
 });
 
+/** SCRUM-659: a CASH quote has no profit rule but still cannot proceed on a deleted car. */
+describe("SCRUM-659: CASH quotes block on a deleted vehicle", () => {
+  const renderCash = () =>
+    render(
+      <Step1QuoteSetup
+        paymentType="CASH"
+        initialData={{ vehicleId: VEHICLE, vehiclePrice: 11_100, desiredProfit: 0 } as never}
+        onNext={vi.fn()}
+      />
+    );
+
+  test("a VEHICLE_DELETED verdict disables Next and explains why", () => {
+    stubs.verdict = { status: "VEHICLE_DELETED" };
+    renderCash();
+    expect(screen.getByRole("button", { name: dictionaries.en.Next as string }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText(EN_DELETED)).toBeTruthy();
+  });
+
+  test("control: a NOT_REQUIRED verdict does not block a CASH quote", () => {
+    stubs.verdict = { status: "NOT_REQUIRED", margin: 1, minimumProfit: 0 };
+    renderCash();
+    expect(screen.queryByText(EN_DELETED)).toBeNull();
+    expect(screen.getByRole("button", { name: dictionaries.en.Next as string }).hasAttribute("disabled")).toBe(false);
+  });
+});
+
 /**
  * SCRUM-656: the wizard's profit-approval alerts were hard-coded English. The
  * expected wording is written out literally (not read from the dictionary) so a

@@ -26,6 +26,8 @@ export type PendingEventSummary = {
   attempts: number;
   createdAt: number;
   reason?: string;
+  /** Server-computed (FAILED rows only): a retry can actually post. */
+  retryable?: boolean;
 };
 
 export type PeriodFormState = {
