@@ -50,11 +50,25 @@
  *     had been hiding that (SCRUM-738 review F1). The declaration line's code
  *     after the first `=` is read for `const`/`let`, with the Convex builder
  *     calls blanked so a command does not link to the `mutation` wrapper, and a
- *     call may carry a type-argument list.
+ *     call may carry a type-argument list. (In practice only `const` lines reach
+ *     this read: the DECL matcher never matches `let`, so the `let` branch in
+ *     `declarationEdgeText` is currently unreachable. Documented, not changed.)
  *
- * Bias is deliberately OVER-INCLUSIVE throughout. A false positive costs one
+ * ── Two KNOWN under-inclusive gaps (SCRUM-742, pinned as KNOWN GAP tests):
+ *   (a) a generic call whose type argument contains parentheses, e.g.
+ *       `make<{ cb: (x: number) => void }>()`, gets no edge (the type-argument
+ *       pattern cannot span `(`);
+ *   (b) a call in a parameter default on a `function` declaration line, e.g.
+ *       `function w(ctx, x = sink(ctx))`, gets no edge (those lines are not read).
+ *   Neither shape is on a current money path; the `SCRUM-742 tripwire` test in
+ *   `economicCommandCensus.test.ts` fails if either appears in convex/. The fix
+ *   is a TypeScript-AST rewrite of edge extraction (SCRUM-742).
+ *
+ * The design OBJECTIVE is an OVER-INCLUSIVE bias: a false positive costs one
  * explicit classification; a false negative hides a command that can duplicate
- * money on a retry.
+ * money on a retry. That objective is NOT a proof of completeness: this is a
+ * regex call graph, and the two gaps above are exactly where it errs the other
+ * way.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -185,6 +199,9 @@ const BUILDER_CALL =
  * nothing: the line holds only the name and parameter list, whose sole possible
  * call is a default value, and reading it would add the function's own signature
  * types as noise. The declaration regex already restricts lines to these shapes.
+ * That omission is the KNOWN GAP (b) of SCRUM-742. Likewise the `let` alternative
+ * below is currently UNREACHABLE: DECL only matches `const`, never `let`, so no
+ * `let` declaration line ever arrives here (SCRUM-738 N3).
  */
 function declarationEdgeText(codeLine: string): string {
   if (!/^(?:export\s+)?(?:const|let)\s/.test(codeLine)) return "";

@@ -24,6 +24,7 @@ import { describe, expect, test } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import ts from "typescript";
 import {
   buildGraph,
   censusForward,
@@ -395,7 +396,9 @@ describe("analyzer self-tests — the six blind spots, pinned", () => {
       'export function a() { return 1; }',
       'export const mutation = customMutation(rawMutation);',
       'export const hookA = makeHook("X");',
-      'export const hookB = makeHook2<{ k: string }>({',
+      // A NESTED generic inside the type argument (`Id<"t">`), as the real
+      // reversal hooks in convex/accounting/workflowHooks.ts carry.
+      'export const hookB = makeHook2<{ k: Id<"t"> }>({',
       '  k: "v",',
       '});',
       'export const pubA = mutation({',
@@ -414,8 +417,6 @@ describe("analyzer self-tests — the six blind spots, pinned", () => {
       'export const pubCompare = mutation({',
       '  handler: async (ctx: any, b: number, c: (n: number) => number) => { return a < b && c(1); },',
       '});',
-      // function declarations are excluded from the declaration-line read.
-      'export function fnDefault(x = plain()) { return x; }',
     ].join("\n");
 
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "census738f1-"));
@@ -433,8 +434,6 @@ describe("analyzer self-tests — the six blind spots, pinned", () => {
       expect(edgesOf("pubB")).toEqual(["fx6.hookB"]);
       // `a < b && c(` is a comparison, not `a<...>(`.
       expect(edgesOf("pubCompare")).toEqual([]);
-      // Safe option for `function`: the declaration line is not read.
-      expect(edgesOf("fnDefault")).toEqual([]);
 
       expect(g.sinks.has("fx6.makeHook")).toBe(true);
       expect(g.sinks.has("fx6.makeHook2")).toBe(true);
@@ -447,6 +446,52 @@ describe("analyzer self-tests — the six blind spots, pinned", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // ── KNOWN GAPS (SCRUM-742). These two tests assert the gap EXISTS today, so
+  // they are deliberately written to BREAK the moment the analyzer is rewritten
+  // over the TypeScript AST and the gap closes. When they fail: that is the
+  // fix landing. Flip each `toEqual([])` to the control's expectation, rename the
+  // test, and delete the matching SCRUM-742 tripwire below. Neither shape is on a
+  // current money path; the tripwire test over the real tree enforces that.
+  const edgesIn = (file: string, fixture: string, name: string): string[] => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "census742-"));
+    try {
+      fs.writeFileSync(path.join(dir, `${file}.ts`), fixture);
+      const g = buildGraph(dir);
+      return [...(g.edges.get(`${file}.${name}`) ?? [])].sort();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("KNOWN GAP (SCRUM-742): a generic call whose type argument contains parentheses gets no edge", () => {
+    // `(?:<[^()]*>)?` cannot span the `(x: number)` inside the type argument.
+    const fixture = [
+      "export function make<T>(): number { return 1; }",
+      "export const hookGap = make<{ cb: (x: number) => void }>();",
+      // Control: the same call without parentheses in the type argument IS an edge.
+      'export const hookCtl = make<{ k: Id<"t"> }>();',
+    ].join("\n");
+    expect(edgesIn("fx742a", fixture, "hookCtl")).toEqual(["fx742a.make"]);
+    // MUST FLIP to ["fx742a.make"] when SCRUM-742 lands.
+    expect(edgesIn("fx742a", fixture, "hookGap")).toEqual([]);
+  });
+
+  test("KNOWN GAP (SCRUM-742): a call in a parameter default on a `function` declaration line gets no edge", () => {
+    // Function declaration lines are not read for edges (only const/let are).
+    const fixture = [
+      "export function plain() { return 1; }",
+      "export function fnDefault(x = plain()) { return x; }",
+      // Control: the same call in the BODY is an edge.
+      // (Multi-line: the declaration line itself is never read for `function`.)
+      "export function fnBody(x: number) {",
+      "  return plain() + x;",
+      "}",
+    ].join("\n");
+    expect(edgesIn("fx742b", fixture, "fnBody")).toEqual(["fx742b.plain"]);
+    // MUST FLIP to ["fx742b.plain"] when SCRUM-742 lands.
+    expect(edgesIn("fx742b", fixture, "fnDefault")).toEqual([]);
   });
 });
 
@@ -544,5 +589,83 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     ];
     for (const id of MANIFEST_SAMPLE) expect([...forward], id).toContain(id);
     expect(forward.size).toBeGreaterThan(31);
+  });
+
+  test("factory-built reversal and commission hooks keep their real edges and reach a sink (SCRUM-738 N1)", () => {
+    // The real `export const hookX = makeY<{ ... Id<"t"> ... }>({` declarations
+    // in convex/accounting/workflowHooks.ts. If the declaration-line read or the
+    // type-argument pattern regressed, these hooks would lose their only edge.
+    const H = "accounting/workflowHooks";
+    const hasEdge = (from: string, to: string) => g.edges.get(`${H}.${from}`)?.has(`${H}.${to}`) === true;
+    expect(g.symbols.has(`${H}.hookCommissionReversed`)).toBe(true);
+    expect(hasEdge("hookCommissionReversed", "makeReversalHook")).toBe(true);
+    expect(hasEdge("hookCommissionPaid", "makeCommissionHook")).toBe(true);
+
+    const reachesSink = (start: string): boolean => {
+      const seen = new Set([start]);
+      const stack = [start];
+      while (stack.length) {
+        const cur = stack.pop()!;
+        if (g.sinks.has(cur)) return true;
+        for (const n of g.edges.get(cur) ?? []) {
+          if (!seen.has(n)) { seen.add(n); stack.push(n); }
+        }
+      }
+      return false;
+    };
+    expect(reachesSink(`${H}.hookCommissionPaid`)).toBe(true);
+    expect(reachesSink(`${H}.reverseCommissionForSale`)).toBe(true);
+  });
+});
+
+describe("SCRUM-742 tripwire — call shapes the census cannot see must not appear in convex/", () => {
+  // The census builds edges with a regex over comment-stripped text. Two call
+  // shapes produce NO edge (see the KNOWN GAP tests above). They are unreachable
+  // from any money path today; this keeps that true. Measured 2026-10-06 over
+  // 262 non-test sources: (a) zero; (b) only `Date.now()` defaults
+  // (collections.ts:175, marketplaceReports.ts:169, utils/paymentWebhook.ts:345),
+  // which can neither reach a sink nor hide a call to one.
+  const walkSources = (dir: string, out: string[] = []): string[] => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name !== "_generated") walkSources(p, out);
+      } else if (e.name.endsWith(".ts") && !e.name.endsWith(".test.ts")) out.push(p);
+    }
+    return out;
+  };
+
+  test("SCRUM-742 tripwire: no uncovered census call shape exists in convex/ sources", () => {
+    const offenders: string[] = [];
+    for (const file of walkSources(CONVEX_ROOT)) {
+      const sf = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
+      const at = (n: ts.Node) =>
+        `${path.relative(CONVEX_ROOT, file).replace(/\\/g, "/")}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`;
+      const visit = (n: ts.Node): void => {
+        // (a) a generic call whose type argument contains parentheses.
+        if (ts.isCallExpression(n) && n.typeArguments?.some((t) => t.getText(sf).includes("("))) {
+          offenders.push(`(a) generic type argument with parentheses at ${at(n)}`);
+        }
+        // (b) a parameter default containing a call other than `Date.now`.
+        if (ts.isFunctionDeclaration(n) || ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isMethodDeclaration(n)) {
+          for (const p of n.parameters) {
+            if (!p.initializer) continue;
+            const scan = (m: ts.Node): void => {
+              if (ts.isCallExpression(m) && m.expression.getText(sf) !== "Date.now") {
+                offenders.push(`(b) parameter default calling ${m.expression.getText(sf)} at ${at(m)}`);
+              }
+              ts.forEachChild(m, scan);
+            };
+            scan(p.initializer);
+          }
+        }
+        ts.forEachChild(n, visit);
+      };
+      visit(sf);
+    }
+    expect(
+      offenders,
+      "uncovered census call shape — see SCRUM-742; run a manual census check or land SCRUM-742",
+    ).toEqual([]);
   });
 });
