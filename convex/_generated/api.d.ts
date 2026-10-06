@@ -248,6 +248,7 @@ import type * as utils_vehicleCost from "../utils/vehicleCost.js";
 import type * as utils_vehicleCostBasis from "../utils/vehicleCostBasis.js";
 import type * as utils_vehicleLiveness from "../utils/vehicleLiveness.js";
 import type * as utils_vehicleOwnership from "../utils/vehicleOwnership.js";
+import type * as utils_vehicleSourceShape from "../utils/vehicleSourceShape.js";
 import type * as utils_vehicleStatusGuards from "../utils/vehicleStatusGuards.js";
 import type * as utils_vehicleTextMatch from "../utils/vehicleTextMatch.js";
 import type * as utils_vin from "../utils/vin.js";
@@ -516,6 +517,7 @@ declare const fullApi: ApiFromModules<{
   "utils/vehicleCostBasis": typeof utils_vehicleCostBasis;
   "utils/vehicleLiveness": typeof utils_vehicleLiveness;
   "utils/vehicleOwnership": typeof utils_vehicleOwnership;
+  "utils/vehicleSourceShape": typeof utils_vehicleSourceShape;
   "utils/vehicleStatusGuards": typeof utils_vehicleStatusGuards;
   "utils/vehicleTextMatch": typeof utils_vehicleTextMatch;
   "utils/vin": typeof utils_vin;
