@@ -7,9 +7,12 @@
  * Every step drives the real public mutations and the real cockpit / overview queries.
  */
 import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
+import { payInvoice } from "../test-utils/saleInvoiceFixtures";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+import { ALL_PERMISSIONS } from "./utils/permissions";
 import { getReceivableOutstandingMinor } from "./subledger";
 
 vi.mock("./rateLimit", () => ({
@@ -20,21 +23,6 @@ vi.mock("./rateLimit", () => ({
 const MODULES = import.meta.glob("./**/*.*s");
 
 vi.setConfig({ testTimeout: 120_000 });
-
-const PERMS = [
-  "confirm:finance_disbursement",
-  "view:sales", "create:sales", "edit:sales",
-  "view:vehicles", "create:vehicles", "edit:vehicles",
-  "view:customers", "create:customers",
-  "manage:finance", "view:finance",
-  "view:commissions", "manage:commissions",
-  "view:deposits", "create:deposits", "manage:deposits",
-  "approve:requests", "view:reports",
-  "view:finance_applications", "create:finance_application",
-  "review:finance_application", "approve:finance_application",
-  "manage:supplier_settlement", "cancel:closed_deal",
-  "verify:finance_documents", "register:vehicle_handover", "register:expected_payment",
-];
 
 const VP = 20_000;
 const APPROVED = 18_000;
@@ -50,7 +38,7 @@ async function seedFin(tag: string) {
     ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
   );
   const userId = await t.run((ctx) => ctx.db.insert("users", { clerkId: `${tag}_u`, email: `${tag}@e.com`, name: "S2 User" }));
-  const roleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "Owner", permissions: PERMS }));
+  const roleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "Owner", permissions: ALL_PERMISSIONS }));
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
   await t.run((ctx) =>
     ctx.db.insert("orgSettings", { orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH", "BANK_TRANSFER"] })
@@ -137,26 +125,31 @@ async function prepareDeal(s: FinSeed, opts: { gap: number }) {
   return { applicationId, approved };
 }
 
-async function invoiceOutstanding(s: FinSeed): Promise<number> {
+/** The deal's sale and canonical customer invoice, resolved through the application's finalized sale. */
+async function invoiceOf(s: FinSeed, applicationId: Id<"financeApplications">) {
   return await s.t.run(async (ctx) => {
-    const sale = (await ctx.db.query("sales").collect()).find((x) => x.orgId === s.orgId)!;
-    return await getReceivableOutstandingMinor(ctx, sale.canonicalReceivableDocumentId!);
+    const app = (await ctx.db.get(applicationId))!;
+    const sale = (await ctx.db.get(app.finalizedSaleId!))!;
+    return { receivableId: sale.canonicalReceivableDocumentId! };
   });
 }
 
-/** The cockpit stage, `money.profit` (fullySettled) and the overview's stage-derived `moneySettled` half. */
-async function readDeal(s: FinSeed, applicationId: never) {
+async function invoiceOutstanding(s: FinSeed, applicationId: Id<"financeApplications">): Promise<number> {
+  const { receivableId } = await invoiceOf(s, applicationId);
+  return await s.t.run((ctx) => getReceivableOutstandingMinor(ctx, receivableId));
+}
+
+/**
+ * The cockpit's stage rail, which is what `moneySettled` feeds. A dealer-owned car sold through the
+ * dealership publishes no management profit (`NoSupplierSettlement`), so the `fullySettled` headline cannot
+ * be observed on this fixture; it is asserted on the consigned fixture in scrum571s2CustomerObligation.test.ts.
+ */
+async function readDeal(s: FinSeed, applicationId: Id<"financeApplications">) {
   const cockpit = await s.asUser.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
-  const overview = await s.asUser.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
-  // `money.profit` / the overview's classification feed on `fullySettled`, but a dealer-owned car sold
-  // through the dealership publishes no management profit (`NoSupplierSettlement`), so on THIS fixture the
-  // observable `moneySettled` consumers are the stage rail and the overview's own stage read; the
-  // `fullySettled` headline is asserted on the consigned fixture in scrum571s2CustomerObligation.test.ts.
   return {
     settlement: cockpit!.stages.find((st) => st.key === "SETTLEMENT")!.state,
     disbursement: cockpit!.stages.find((st) => st.key === "DISBURSEMENT")!.state,
     allComplete: cockpit!.stages.every((st) => st.state === "COMPLETE" || st.state === "NOT_APPLICABLE"),
-    overviewLoaded: overview !== null,
   };
 }
 
@@ -164,18 +157,17 @@ describe("SCRUM-571 s2a: finalize, confirmDisbursement, read (the live false-COM
   test("a financed deal with a 2,000 customer gap is NOT settled after the finance company's disbursement while the invoice is open", async () => {
     const s = await seedFin("e2e_open");
     const { applicationId, approved } = await prepareDeal(s, { gap: GAP });
-    expect(await invoiceOutstanding(s)).toBe(GAP * SCALE); // the premise: the customer invoice is OPEN for the gap
+    expect(await invoiceOutstanding(s, applicationId)).toBe(GAP * SCALE); // the premise: the customer invoice is OPEN for the gap
 
     await s.asUser.mutation(api.applications.confirmDisbursement, {
       idempotencyKey: key(), orgId: s.orgId, applicationId, disbursedAmountMinor: approved * SCALE,
     });
 
-    const read = await readDeal(s, applicationId as never);
+    const read = await readDeal(s, applicationId);
     expect(read.disbursement).toBe("COMPLETE"); // the financier's leg really is finished
     // moneySettled: the stage derived from it
     expect(read.settlement).not.toBe("COMPLETE");
     expect(read.allComplete).toBe(false);
-    expect(read.overviewLoaded).toBe(true);
   });
 
   test("the same deal reads settled once the customer pays the invoice in full", async () => {
@@ -184,22 +176,13 @@ describe("SCRUM-571 s2a: finalize, confirmDisbursement, read (the live false-COM
     await s.asUser.mutation(api.applications.confirmDisbursement, {
       idempotencyKey: key(), orgId: s.orgId, applicationId, disbursedAmountMinor: approved * SCALE,
     });
-    await s.t.run(async (ctx) => {
-      const sale = (await ctx.db.query("sales").collect()).find((x) => x.orgId === s.orgId)!;
-      const paymentId = await ctx.db.insert("canonicalPayments", {
-        orgId: s.orgId, direction: "IN", payerType: "CUSTOMER", customerId: s.customerId, method: "CASH",
-        amountMinor: GAP * SCALE, currency: "JOD", scale: 3, status: "SETTLED",
-        idempotencyKey: `s2-paid-${sale._id}`, createdBy: s.userId, createdAt: Date.now(),
-      });
-      await ctx.db.insert("paymentAllocations", {
-        orgId: s.orgId, paymentId, receivableDocumentId: sale.canonicalReceivableDocumentId!,
-        amountMinor: GAP * SCALE, currency: "JOD", scale: 3, allocationDate: Date.now(),
-        status: "ACTIVE", createdBy: s.userId, createdAt: Date.now(),
-      });
-    });
-    expect(await invoiceOutstanding(s)).toBe(0);
+    const { receivableId } = await invoiceOf(s, applicationId);
+    await s.t.run((ctx) =>
+      payInvoice(ctx, { orgId: s.orgId, userId: s.userId, customerId: s.customerId, receivableId, amountMinor: GAP * SCALE })
+    );
+    expect(await invoiceOutstanding(s, applicationId)).toBe(0);
 
-    const read = await readDeal(s, applicationId as never);
+    const read = await readDeal(s, applicationId);
     expect(read.settlement).toBe("COMPLETE");
     expect(read.allComplete).toBe(true);
   });

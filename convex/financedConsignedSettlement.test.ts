@@ -20,6 +20,7 @@ import * as applicationsModule from "./applications";
 import * as financingEconomicsModule from "./financingEconomics";
 import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
+import { payInvoice, seedSaleCompletedPosting } from "../test-utils/saleInvoiceFixtures";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -2779,38 +2780,16 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
 
     // The customer owes 50 on the sale's invoice, and the sale's journal is POSTED.
     const owed = 50 * SCALE;
-    const ids = await s.t.run(async (ctx) => {
-      const sale = (await ctx.db.query("sales").collect()).find((row) => row.orgId === s.orgId)!;
-      const receivableId = sale.canonicalReceivableDocumentId!;
-      await ctx.db.patch(receivableId, { originalAmountMinor: owed, status: "OPEN" });
-      const user = (await ctx.db.query("users").collect())[0];
-      const eventId = await ctx.db.insert("accountingEvents", {
-        orgId: s.orgId, eventType: "SALE_COMPLETED", sourceType: "sales", sourceId: sale._id,
-        eventVersion: 1, idempotencyKey: `sale_completed_${sale._id}`, occurredAt: Date.now(),
-        accountingDate: Date.now(), currency: "JOD", payload: {}, status: "POSTED", createdBy: user._id,
-        createdAt: Date.now(),
-      });
-      const journalId = await ctx.db.insert("journalEntries", {
-        orgId: s.orgId, accountingEventId: eventId, journalNumber: `JE-${sale._id}`, accountingDate: Date.now(),
-        sourceType: "sales", sourceId: sale._id, category: "SYSTEM", memo: "sale", currency: "JOD",
-        status: "POSTED", postedBy: user._id, postedAt: Date.now(), createdAt: Date.now(),
-      });
-      await ctx.db.patch(eventId, { journalEntryId: journalId });
-      return { receivableId, userId: user._id };
+    const receivableId = await s.t.run(async (ctx) => {
+      const app = (await ctx.db.get(applicationId))!;
+      const sale = (await ctx.db.get(app.finalizedSaleId!))!;
+      await ctx.db.patch(sale.canonicalReceivableDocumentId!, { originalAmountMinor: owed, status: "OPEN" });
+      await seedSaleCompletedPosting(ctx, { orgId: s.orgId, saleId: sale._id, userId: s.userId });
+      return sale.canonicalReceivableDocumentId!;
     });
     expect(stageOf(await cockpitOf(s, applicationId), "SETTLEMENT")).not.toBe("COMPLETE");
 
-    await s.t.run(async (ctx) => {
-      const paymentId = await ctx.db.insert("canonicalPayments", {
-        orgId: s.orgId, direction: "IN", payerType: "CUSTOMER", method: "CASH", amountMinor: owed,
-        currency: "JOD", scale: 3, status: "SETTLED", idempotencyKey: `direct-paid-${ids.receivableId}`,
-        createdBy: ids.userId, createdAt: Date.now(),
-      });
-      await ctx.db.insert("paymentAllocations", {
-        orgId: s.orgId, paymentId, receivableDocumentId: ids.receivableId, amountMinor: owed, currency: "JOD",
-        scale: 3, allocationDate: Date.now(), status: "ACTIVE", createdBy: ids.userId, createdAt: Date.now(),
-      });
-    });
+    await s.t.run((ctx) => payInvoice(ctx, { orgId: s.orgId, userId: s.userId, receivableId, amountMinor: owed }));
     expect(stageOf(await cockpitOf(s, applicationId), "SETTLEMENT")).toBe("COMPLETE");
   });
 

@@ -3,7 +3,9 @@ import { convexTestWithComponents, recordReconciledZeroCost } from "../test-util
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
-import { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
+import { seedSaleCompletedPosting, seedSaleInvoice, type SaleCompletedPostingStatus } from "../test-utils/saleInvoiceFixtures";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 
 type TestConvex = ConvexTestInstance<typeof schema>;
@@ -82,9 +84,9 @@ describe("SCRUM-571 s2a: the customer's invoice gates 'settled' on every financi
     /** Invoice amount outstanding after allocations; 0 pays it in full. */
     openMinor?: number;
     /** `none`: the sale carries no canonical pointer. */
-    invoice?: "present" | "none";
-    /** Whether the sale-completed event and journal are POSTED (the default). */
-    posted?: "yes" | "event-pending" | "journal-draft" | "no-event" | "no-journal";
+    invoice?: "none";
+    /** The sale-completed posting's state; POSTED by default. */
+    posted?: SaleCompletedPostingStatus;
     reconciledFee?: boolean;
     /** Invoice face value; 0 is a zero-value invoice that recognised nothing. */
     invoiceMinor?: number;
@@ -123,6 +125,7 @@ describe("SCRUM-571 s2a: the customer's invoice gates 'settled' on every financi
       // The financier's own leg is finished, so only the customer's invoice can keep the deal open.
       settlementStatus: "FULLY_SETTLED" as const,
     };
+    // A reconciled-fee deal starts APPROVED (the fee is recorded through the real mutation) and closes after.
     const applicationId = await s.t.run((ctx) =>
       ctx.db.insert("financeApplications", {
         orgId: s.orgId,
@@ -130,7 +133,6 @@ describe("SCRUM-571 s2a: the customer's invoice gates 'settled' on every financi
         customerId: s.customerId,
         vehicleId: s.vehicleId,
         salespersonId: s.userId,
-        status: opts.reconciledFee ? ("APPROVED" as const) : closedFields.status,
         quoteModeAtSubmission: "CONFIGURED_FINANCE_COMPANY" as const,
         companyId,
         economicsCurrency: "JOD",
@@ -140,7 +142,7 @@ describe("SCRUM-571 s2a: the customer's invoice gates 'settled' on every financi
         dealerContributionMinor: 1_650_000,
         ...(opts.gapCashMinor !== undefined ? { customerGapCashToDealerMinor: opts.gapCashMinor } : {}),
         ...(opts.gapInstallmentMinor !== undefined ? { customerGapInstallmentToDealerMinor: opts.gapInstallmentMinor } : {}),
-        ...(opts.reconciledFee ? {} : closedFields),
+        ...(opts.reconciledFee ? { status: "APPROVED" as const } : closedFields),
         createdAt: Date.now(),
         updatedAt: Date.now(),
       })
@@ -148,47 +150,11 @@ describe("SCRUM-571 s2a: the customer's invoice gates 'settled' on every financi
     await s.t.run((ctx) => ctx.db.patch(saleId, { applicationId }));
 
     await s.t.run(async (ctx) => {
+      const base = { orgId: s.orgId, saleId, userId: s.userId };
       if (opts.invoice !== "none") {
-        const originalMinor = opts.invoiceMinor ?? 1_000_000;
-        const receivableId = await ctx.db.insert("receivableDocuments", {
-          orgId: s.orgId, documentType: "INVOICE", documentNumber: `INV-${saleId}`, payerType: "CUSTOMER",
-          customerId: s.customerId, sourceType: "sales", sourceId: saleId, originalAmountMinor: originalMinor,
-          currency: "JOD", scale: 3, issueDate: Date.now(), dueDate: Date.now(),
-          status: openMinor === 0 ? "PAID" : "OPEN", createdAt: Date.now(), createdBy: s.userId,
-        });
-        const paidMinor = originalMinor - openMinor;
-        if (paidMinor > 0) {
-          const paymentId = await ctx.db.insert("canonicalPayments", {
-            orgId: s.orgId, direction: "IN", payerType: "CUSTOMER", customerId: s.customerId, method: "CASH",
-            amountMinor: paidMinor, currency: "JOD", scale: 3, status: "SETTLED",
-            idempotencyKey: `co-paid-${saleId}`, createdBy: s.userId, createdAt: Date.now(),
-          });
-          await ctx.db.insert("paymentAllocations", {
-            orgId: s.orgId, paymentId, receivableDocumentId: receivableId, amountMinor: paidMinor, currency: "JOD",
-            scale: 3, allocationDate: Date.now(), status: "ACTIVE", createdBy: s.userId, createdAt: Date.now(),
-          });
-        }
-        await ctx.db.patch(saleId, { canonicalReceivableDocumentId: receivableId });
+        await seedSaleInvoice(ctx, { ...base, customerId: s.customerId, originalMinor: opts.invoiceMinor ?? 1_000_000, openMinor });
       }
-
-      const posted = opts.posted ?? "yes";
-      if (posted !== "no-event") {
-        const eventId = await ctx.db.insert("accountingEvents", {
-          orgId: s.orgId, eventType: "SALE_COMPLETED", sourceType: "sales", sourceId: saleId, eventVersion: 1,
-          idempotencyKey: `sale_completed_${saleId}`, occurredAt: Date.now(), accountingDate: Date.now(),
-          currency: "JOD", payload: {}, status: posted === "event-pending" ? "PENDING" : "POSTED",
-          createdBy: s.userId, createdAt: Date.now(),
-        });
-        if (posted !== "no-journal") {
-          const journalId = await ctx.db.insert("journalEntries", {
-            orgId: s.orgId, accountingEventId: eventId, journalNumber: `JE-${saleId}`, accountingDate: Date.now(),
-            sourceType: "sales", sourceId: saleId, category: "SYSTEM", memo: "sale", currency: "JOD",
-            status: posted === "journal-draft" ? "DRAFT" : "POSTED", postedBy: s.userId, postedAt: Date.now(),
-            createdAt: Date.now(),
-          });
-          await ctx.db.patch(eventId, { journalEntryId: journalId });
-        }
-      }
+      await seedSaleCompletedPosting(ctx, { ...base, status: opts.posted });
     });
 
     if (opts.reconciledFee) {
@@ -254,7 +220,7 @@ describe("SCRUM-571 s2a: the customer's invoice gates 'settled' on every financi
   test("a zero-value invoice recognised nothing: it needs no posting to read settled", async () => {
     const s = await seed("zero");
     const { applicationId } = await insertFinancedDeal(s, {
-      gapCashMinor: 500_000, invoiceMinor: 0, openMinor: 0, posted: "no-event",
+      gapCashMinor: 500_000, invoiceMinor: 0, openMinor: 0, posted: "MISSING",
     });
     expect(await settlementOf(s, applicationId)).toBe("COMPLETE");
   });
@@ -266,43 +232,22 @@ describe("SCRUM-571 s2a: the customer's invoice gates 'settled' on every financi
       expect(await settlementOf(s, applicationId)).toBe("COMPLETE");
     });
 
-    test("an invoice in another currency", async () => {
-      const s = await seed("fc_cur");
+    test.each<{ name: string; patch: (ctx: MutationCtx) => Promise<Partial<Doc<"receivableDocuments">>> }>([
+      { name: "an invoice in another currency", patch: async () => ({ currency: "USD" }) },
+      {
+        name: "an invoice from another organization",
+        patch: async (ctx) => ({
+          orgId: await ctx.db.insert("organizations", { name: "CO foreign", createdAt: Date.now() }),
+        }),
+      },
+      { name: "an invoice whose payer is not the customer", patch: async () => ({ payerType: "FINANCE_COMPANY" }) },
+      { name: "an invoice that belongs to another sale", patch: async () => ({ sourceId: "some_other_sale" }) },
+    ])("$name", async ({ patch }) => {
+      const s = await seed("fc_invoice");
       const { applicationId, saleId } = await insertFinancedDeal(s, { gapCashMinor: 500_000, openMinor: 0 });
       await s.t.run(async (ctx) => {
         const sale = (await ctx.db.get(saleId))!;
-        await ctx.db.patch(sale.canonicalReceivableDocumentId!, { currency: "USD" });
-      });
-      expect(await settlementOf(s, applicationId)).not.toBe("COMPLETE");
-    });
-
-    test("an invoice from another organization", async () => {
-      const s = await seed("fc_org");
-      const { applicationId, saleId } = await insertFinancedDeal(s, { gapCashMinor: 500_000, openMinor: 0 });
-      await s.t.run(async (ctx) => {
-        const foreign = await ctx.db.insert("organizations", { name: "CO foreign", createdAt: Date.now() });
-        const sale = (await ctx.db.get(saleId))!;
-        await ctx.db.patch(sale.canonicalReceivableDocumentId!, { orgId: foreign });
-      });
-      expect(await settlementOf(s, applicationId)).not.toBe("COMPLETE");
-    });
-
-    test("an invoice whose payer is not the customer", async () => {
-      const s = await seed("fc_payer");
-      const { applicationId, saleId } = await insertFinancedDeal(s, { gapCashMinor: 500_000, openMinor: 0 });
-      await s.t.run(async (ctx) => {
-        const sale = (await ctx.db.get(saleId))!;
-        await ctx.db.patch(sale.canonicalReceivableDocumentId!, { payerType: "FINANCE_COMPANY" });
-      });
-      expect(await settlementOf(s, applicationId)).not.toBe("COMPLETE");
-    });
-
-    test("an invoice that belongs to another sale", async () => {
-      const s = await seed("fc_src");
-      const { applicationId, saleId } = await insertFinancedDeal(s, { gapCashMinor: 500_000, openMinor: 0 });
-      await s.t.run(async (ctx) => {
-        const sale = (await ctx.db.get(saleId))!;
-        await ctx.db.patch(sale.canonicalReceivableDocumentId!, { sourceId: "some_other_sale" });
+        await ctx.db.patch(sale.canonicalReceivableDocumentId!, await patch(ctx));
       });
       expect(await settlementOf(s, applicationId)).not.toBe("COMPLETE");
     });
@@ -313,13 +258,13 @@ describe("SCRUM-571 s2a: the customer's invoice gates 'settled' on every financi
       expect(await settlementOf(s, applicationId)).not.toBe("COMPLETE");
     });
 
-    test.each<{ name: string; posted: NonNullable<DealOpts["posted"]> }>([
-      { name: "a sale-completed event that is only queued (PENDING)", posted: "event-pending" },
-      { name: "a posted event whose journal is not POSTED", posted: "journal-draft" },
-      { name: "a posted event with no journal", posted: "no-journal" },
-      { name: "no sale-completed event at all", posted: "no-event" },
-    ])("$name", async ({ name, posted }) => {
-      const s = await seed(`fc_${name.replace(/\W+/g, "").slice(0, 16)}`);
+    test.each<{ name: string; posted: SaleCompletedPostingStatus }>([
+      { name: "a sale-completed event that is only queued (PENDING)", posted: "PENDING" },
+      { name: "a posted event whose journal is not POSTED", posted: "JOURNAL_DRAFT" },
+      { name: "a posted event with no journal", posted: "NO_JOURNAL" },
+      { name: "no sale-completed event at all", posted: "MISSING" },
+    ])("$name", async ({ posted }) => {
+      const s = await seed(`fc_${posted}`);
       const { applicationId } = await insertFinancedDeal(s, { gapCashMinor: 500_000, openMinor: 0, posted });
       expect(await settlementOf(s, applicationId)).not.toBe("COMPLETE");
     });
