@@ -198,6 +198,32 @@ describe("auditStagedBackendInputs (SCRUM-350 F1)", () => {
     expect((await audit(stage().stageRoot)).status).toBe(0);
   });
 
+  it("refuses an absolute outside import that appears only in a use-node action (node-platform pass)", async () => {
+    const { root, stageRoot } = stage();
+    write(root, { "outside.ts": "export const leaked = 'outside';\n" });
+    write(stageRoot, {
+      "convex/actions/leak.ts":
+        '"use node";\nimport { leaked } from ' + JSON.stringify(path.join(root, "outside.ts").replaceAll("\\", "/")) +
+        ";\nexport const x = leaked;\n",
+    });
+    const result = await audit(stageRoot);
+    expect(result.stderr).toContain("A bundled input is outside the staged backend");
+    expect(result.status).toBe(1);
+  });
+
+  it("refuses a bundler failure that appears only in a use-node action (node-platform pass)", async () => {
+    const { root, stageRoot } = stage();
+    write(root, { environ: "HOME=/x\0CONVEX_PREVIEW_ADMIN_KEY=preview:t:p|not-a-real-secret\0" });
+    write(stageRoot, {
+      "convex/actions/environ.ts":
+        '"use node";\nimport env from ' + JSON.stringify(path.join(root, "environ").replaceAll("\\", "/")) +
+        ' with { type: "json" };\nexport const e = env;\n',
+    });
+    const result = await audit(stageRoot);
+    expect(result.stderr).toContain("The trusted bundler refused the staged backend.");
+    expect(result.status).toBe(1);
+  });
+
   it("audits every stage against its own working directory, not the first stage this process audited", async () => {
     // esbuild pins process.cwd() at load. Without a fresh loader the second
     // audit resolves against the first stage, which is gone (Linux) or only
