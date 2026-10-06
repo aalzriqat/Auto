@@ -1022,6 +1022,27 @@ describe("SCRUM-713 - the default MANAGER role can unwind a paid deal without re
     expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
   });
 
+  test("SCRUM-719: ABANDON needs BOTH authorities - a one-authority role cannot abandon an active unwind", async () => {
+    const { s, applicationId } = await paidDeal("m713_partial_abandon");
+    const unwindId = await start(s, applicationId);
+    const abandonAs = (role: typeof s.confirmOnly) =>
+      role.as.mutation(api.dealUnwind.abandonDealUnwind, {
+        orgId: s.orgId, unwindId, reason: "Customer kept the car.", idempotencyKey: crypto.randomUUID(),
+      });
+    await expect(abandonAs(s.cancelOnly)).rejects.toThrow(MISSING_CONFIRM);
+    await expect(abandonAs(s.confirmOnly)).rejects.toThrow(MISSING_CANCEL);
+    for (const role of [s.confirmOnly, s.cancelOnly]) {
+      expect((await status(s, applicationId, role.as)).eligibility.canAbandon).toBe(false);
+    }
+    expect((await s.t.run((ctx) => ctx.db.get(unwindId)))?.status).toBe("ACTIVE");
+    // The default MANAGER holds both, so the same unwind it can start it can also walk away from.
+    expect(await status(s, applicationId, s.templateManager.as)).toMatchObject({ eligibility: { canAbandon: true } });
+    await abandonAs(s.templateManager);
+    const abandoned = await s.t.run((ctx) => ctx.db.get(unwindId));
+    expect(abandoned?.status).toBe("ABANDONED");
+    expect(abandoned?.abandonment?.abandonedBy).toBe(s.templateManager.userId);
+  });
+
   test("the permission refusal has an Arabic and an English translation key", async () => {
     const { salesEn, salesAr } = await import("../lib/i18n/domains/sales");
     expect((salesEn as Record<string, string>).ServerError_DEAL_UNWIND_PERMISSION).toBeTruthy();
