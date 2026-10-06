@@ -532,9 +532,11 @@ describe("SCRUM-712 Q34: slice payouts", () => {
     const { s, row, hold } = await cancelledSlice("sliceStale");
     expect(hold.allocationStatus).toBe("RELEASED_AWAITING_DECISION");
     await staleThenLive(s, s.vehicleB!);
+    const rootId = await s.t.run((ctx) => ctx.db.insert("commitmentRoots", OPEN_ROOT(s, s.vehicleB!)));
     await resolveSlice(s, row.holdId!, "REFUND_TO_CUSTOMER");
     expect((await pendingRows(s)).map((r) => r.status)).toEqual(["RELEASED"]);
     expect(await vehicleStatus(s, s.vehicleB!)).toBe("RESERVED");
+    expect((await s.t.run((ctx) => ctx.db.get(rootId)))!.status).toBe("OPEN");
   });
 
   test("newly cleared whole row: 51 stale rows plus a live hold keep the car RESERVED and its root open", async () => {
