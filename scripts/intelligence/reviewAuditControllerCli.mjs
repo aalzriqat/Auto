@@ -64,6 +64,12 @@ export function createGitPort() {
       const out = git(["cat-file", "-s", blobSpec(sha, file)], { allowFailure: true });
       return out === null ? null : Number(out.trim());
     },
+    fileMode(sha, file) {
+      // "<mode> <type> <id>\t<path>"; absent path → empty output → null.
+      const out = git(["ls-tree", requireSha(sha), "--", requirePath(file)], { allowFailure: true });
+      const mode = out?.split(" ", 1)[0];
+      return mode ? mode : null;
+    },
     blobId(sha, file) {
       const out = git(["rev-parse", blobSpec(sha, file)], { allowFailure: true });
       return out === null ? null : out.trim();

@@ -40,10 +40,12 @@ export const LIMITS = Object.freeze({
   registryBytes: 8 * 1024 * 1024,
 });
 
-// Mirrors the root vitest.config.ts include/exclude, so only a file the unit
-// suite would collect can be cited as a registered test. A drift test pins it.
-export const VITEST_EXCLUDED_PREFIXES = Object.freeze(["node_modules/", ".next/", "out/", "build/", "apps/", "packages/", ".claude/"]);
-const VITEST_EXCLUDED_SEGMENTS = Object.freeze(["node_modules", ".claude"]);
+// Mirrors how CI's unit job collects tests (runVitestCoverageShards.mjs
+// collectUnitTestFiles): a directory with one of these names is skipped at ANY
+// depth, and only regular files count. That is narrower than the root
+// vitest.config.ts excludes, and CI runs the narrower set. Drift tests pin both.
+export const UNIT_SUITE_EXCLUDED_DIRS = Object.freeze(["node_modules", ".next", "out", "build", "apps", "packages", ".claude", ".git"]);
+const REGULAR_FILE_MODES = new Set(["100644", "100755"]);
 
 /** Thrown when the run cannot continue: every PR not yet audited is BATCH_INCOMPLETE. */
 export class BatchHalt extends Error {}
@@ -54,9 +56,8 @@ const isRecordCandidate = (file) => file.startsWith(RECORD_PREFIX) && file.endsW
 export function isAdmittedTestFile(file) {
   if (typeof file !== "string" || !/\.test\.tsx?$/.test(file)) return false;
   const segments = file.split("/");
-  if (segments.some((segment) => segment === ".." || segment === "")) return false;
-  if (VITEST_EXCLUDED_PREFIXES.some((prefix) => file.startsWith(prefix))) return false;
-  return !segments.slice(0, -1).some((segment) => VITEST_EXCLUDED_SEGMENTS.includes(segment));
+  if (segments.some((segment) => segment === ".." || segment === "." || segment === "")) return false;
+  return !segments.slice(0, -1).some((segment) => UNIT_SUITE_EXCLUDED_DIRS.includes(segment));
 }
 
 /**
@@ -118,7 +119,8 @@ function buildTestRegistry(git, merge, record) {
   const registry = {};
   let total = 0;
   for (const file of citedTestFiles(record)) {
-    if (!isAdmittedTestFile(file)) continue;
+    // A symlink or submodule is not a file the unit job collects.
+    if (!isAdmittedTestFile(file) || !REGULAR_FILE_MODES.has(git.fileMode(merge, file))) continue;
     const size = git.blobSize(merge, file);
     if (size === null) continue;
     total += size;
@@ -135,11 +137,22 @@ function buildTestRegistry(git, merge, record) {
 /**
  * Provenance of the live merge. Returns the identities, or a NOT_EVALUABLE reason.
  */
+/**
+ * What the PR's own metadata says, read both before evaluating and again just
+ * before publishing: the live PR can change under a fixed head (TRE-1).
+ * @returns {string | null} a NOT_EVALUABLE reason, or null when it is evaluable
+ */
+function prStateReason(pr, repositoryId) {
+  if (pr.mergeable === null) return NOT_EVALUABLE_REASON.MERGE_PENDING;
+  if (pr.mergeable !== true) return NOT_EVALUABLE_REASON.CONFLICTED;
+  if (pr.head?.repo?.id !== repositoryId) return NOT_EVALUABLE_REASON.FORK;
+  if (pr.state !== "open" || pr.base?.ref !== MAIN) return NOT_EVALUABLE_REASON.STALE_BASE;
+  return null;
+}
+
 function provenance({ pr, repositoryId, mainTip, git }) {
-  if (pr.mergeable === null) return { reason: NOT_EVALUABLE_REASON.MERGE_PENDING };
-  if (pr.mergeable !== true) return { reason: NOT_EVALUABLE_REASON.CONFLICTED };
-  if (pr.head?.repo?.id !== repositoryId) return { reason: NOT_EVALUABLE_REASON.FORK };
-  if (pr.base?.ref !== MAIN) return { reason: NOT_EVALUABLE_REASON.STALE_BASE };
+  const stateReason = prStateReason(pr, repositoryId);
+  if (stateReason) return { reason: stateReason };
   const head = pr.head?.sha;
   if (!isCommitSha(head) || !isCommitSha(pr.merge_commit_sha)) return { reason: NOT_EVALUABLE_REASON.MERGE_REF_MISMATCH };
   const fetched = git.fetchPull(pr.number);
@@ -213,6 +226,13 @@ export async function auditPullRequest({ prNumber, context }) {
     if (latest.head?.sha !== head) {
       return { ...notEvaluable(NOT_EVALUABLE_REASON.HEAD_MOVED, head, merge), publish: false };
     }
+    // Same head, but the PR itself changed: retargeted, closed, conflicted or
+    // re-merged. A later run skips a PR that left main, so a verdict written
+    // now would never be replaced; publish the refusal on the unchanged head.
+    const drift =
+      prStateReason(latest, repositoryId) ??
+      (latest.merge_commit_sha === merge ? null : NOT_EVALUABLE_REASON.MERGE_REF_MISMATCH);
+    if (drift) return notEvaluable(drift, head, merge);
 
     const outcome = { kind: "VERDICT", verdict: evaluation.verdict };
     return {

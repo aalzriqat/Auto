@@ -20,7 +20,7 @@ import {
   LIMITS,
   runController,
   UNCLASSIFIED_REQUIREMENT,
-  VITEST_EXCLUDED_PREFIXES,
+  UNIT_SUITE_EXCLUDED_DIRS,
 } from "./reviewAuditController.mjs";
 import { createGitPort } from "./reviewAuditControllerCli.mjs";
 import { VERDICTS } from "./reviewEvidence.mjs";
@@ -37,7 +37,7 @@ const RUN = { id: 900, attempt: 1, workflowSha: MAIN_TIP, artifactName: AUDIT_AR
 
 type Blobs = Record<string, string>;
 
-function fakeGit(options: { files: string[]; blobs?: Blobs; parents?: string[]; fetched?: { head: string; merge: string } }) {
+function fakeGit(options: { files: string[]; blobs?: Blobs; modes?: Record<string, string>; parents?: string[]; fetched?: { head: string; merge: string } }) {
   const blobs = options.blobs ?? {};
   return {
     fetchPull: vi.fn(() => options.fetched ?? { head: HEAD, merge: MERGE }),
@@ -45,6 +45,7 @@ function fakeGit(options: { files: string[]; blobs?: Blobs; parents?: string[]; 
     changedFiles: vi.fn((from: string, to: string) => (from === MAIN_TIP && to === MERGE ? options.files : [])),
     isAncestor: vi.fn(() => true),
     blobSize: vi.fn((_sha: string, file: string) => (Object.hasOwn(blobs, file) ? Buffer.byteLength(blobs[file]) : null)),
+    fileMode: vi.fn((_sha: string, file: string) => (Object.hasOwn(blobs, file) ? (options.modes?.[file] ?? "100644") : null)),
     blobId: vi.fn(() => sha("d")),
     show: vi.fn((_sha: string, file: string) => blobs[file]),
   };
@@ -53,6 +54,7 @@ function fakeGit(options: { files: string[]; blobs?: Blobs; parents?: string[]; 
 function pull(overrides: Record<string, unknown> = {}) {
   return {
     number: 7,
+    state: "open",
     mergeable: true,
     merge_commit_sha: MERGE,
     base: { ref: "main" },
@@ -159,14 +161,19 @@ describe("SCRUM-644 S3b-2 controller outcomes", () => {
     ["a conflicted PR", { files: [] }, [pull({ mergeable: false })], NOT_EVALUABLE_REASON.CONFLICTED],
     ["a fork", { files: [] }, [pull({ head: { sha: HEAD, repo: { id: 1 } } })], NOT_EVALUABLE_REASON.FORK],
     ["a PR retargeted off main", { files: [] }, [pull({ base: { ref: "release" } })], NOT_EVALUABLE_REASON.STALE_BASE],
+    ["a closed PR", { files: [] }, [pull({ state: "closed" })], NOT_EVALUABLE_REASON.STALE_BASE],
+    ["a deleted fork (null head repository)", { files: [] }, [pull({ head: { sha: HEAD, repo: null } })], NOT_EVALUABLE_REASON.FORK],
     ["a head that moved before the fetch", { files: [], fetched: { head: sha("e"), merge: MERGE } }, [pull()], NOT_EVALUABLE_REASON.HEAD_MOVED],
     ["a merge ref that is not merge_commit_sha", { files: [], fetched: { head: HEAD, merge: sha("e") } }, [pull()], NOT_EVALUABLE_REASON.MERGE_REF_MISMATCH],
     ["a merge whose second parent is not the head", { files: [], parents: [MAIN_TIP, sha("e")] }, [pull()], NOT_EVALUABLE_REASON.MERGE_REF_MISMATCH],
     ["an octopus merge", { files: [], parents: [MAIN_TIP, HEAD, sha("e")] }, [pull()], NOT_EVALUABLE_REASON.MERGE_REF_MISMATCH],
     ["a merge computed against an older main", { files: [], parents: [sha("e"), HEAD] }, [pull()], NOT_EVALUABLE_REASON.STALE_BASE],
   ];
-  test.each(provenanceCases)("%s is NOT_EVALUABLE, never a verdict", async (_name, git, sequence, reason) => {
-    const { payload, github } = await auditOne(fakeGit(git), sequence);
+  test.each(provenanceCases)("%s is NOT_EVALUABLE, never a verdict", async (_name, gitOptions, sequence, reason) => {
+    const git = fakeGit(gitOptions);
+    const { payload, github } = await auditOne(git, sequence);
+    // Refused before anything is evaluated, not merely caught later.
+    expect(git.changedFiles).not.toHaveBeenCalled();
     expect(payload.outcome).toEqual({ kind: "NOT_EVALUABLE", reason });
     expect(payload.conclusion).toBe("action_required");
     expect(github.checkRuns.map((run) => run.conclusion)).toEqual(["action_required"]);
@@ -226,6 +233,28 @@ describe("SCRUM-644 S3b-2 controller outcomes", () => {
     };
     expect(await reasonsFor("convex/guard.test.ts")).toEqual([]);
     expect(await reasonsFor("packages/shared/src/guard.test.ts")).toEqual([{ code: "TEST_NOT_REGISTERED", requirement: "proof:NEGATIVE" }]);
+    expect(await reasonsFor("convex/build/guard.test.ts")).toEqual([{ code: "TEST_NOT_REGISTERED", requirement: "proof:NEGATIVE" }]);
+  });
+
+  test("M1: a cited test that is a symlink or submodule is not registered; a regular or executable file is", async () => {
+    const testSource = 'import { test } from "vitest";\ntest("guards proof:NEGATIVE", () => {});\n';
+    const file = "convex/guard.test.ts";
+    const record = JSON.stringify({
+      policyVersion: policy.policyVersion,
+      obligations: [{ requirement: "proof:NEGATIVE", evidence: [{ kind: "test", file, title: "guards proof:NEGATIVE", sha: HEAD }] }],
+    });
+    const reasonsWithMode = async (mode: string) => {
+      const { payload } = await auditOne(
+        fakeGit({
+          files: ["convex/finance.ts", "review-evidence/a.json"],
+          blobs: { "review-evidence/a.json": record, [file]: testSource },
+          modes: { [file]: mode },
+        }),
+      );
+      return payload.reasons.filter((reason: { requirement?: string }) => reason.requirement === "proof:NEGATIVE");
+    };
+    for (const mode of ["120000", "160000"]) expect(await reasonsWithMode(mode), mode).toEqual([{ code: "TEST_NOT_REGISTERED", requirement: "proof:NEGATIVE" }]);
+    for (const mode of ["100644", "100755"]) expect(await reasonsWithMode(mode), mode).toEqual([]);
   });
 
   test("a head that moves during evaluation publishes nothing for the stale head", async () => {
@@ -235,6 +264,26 @@ describe("SCRUM-644 S3b-2 controller outcomes", () => {
     ]);
     expect(payload.outcome).toEqual({ kind: "NOT_EVALUABLE", reason: NOT_EVALUABLE_REASON.HEAD_MOVED });
     expect(github.checkRuns).toEqual([]);
+  });
+
+  // TRE-1 (Codex, cb4ee2ea4): the live PR can change under a fixed head. A later
+  // run skips a PR that left main, so a success written now would never be replaced.
+  const recordOnly = () => fakeGit({ files: ["review-evidence/x.json"], blobs: { "review-evidence/x.json": "{}" } });
+  test.each([
+    ["retargeted off main", pull({ base: { ref: "release" }, merge_commit_sha: sha("e") }), NOT_EVALUABLE_REASON.STALE_BASE],
+    ["closed", pull({ state: "closed" }), NOT_EVALUABLE_REASON.STALE_BASE],
+    ["given a new merge commit", pull({ merge_commit_sha: sha("e") }), NOT_EVALUABLE_REASON.MERGE_REF_MISMATCH],
+    ["now conflicted", pull({ mergeable: false }), NOT_EVALUABLE_REASON.CONFLICTED],
+    ["moved to a fork head repository", pull({ head: { sha: HEAD, repo: { id: 1 } } }), NOT_EVALUABLE_REASON.FORK],
+  ])("TRE-1: a PR %s during evaluation is NOT_EVALUABLE on its unchanged head, never success", async (_name, latest, reason) => {
+    const { payload, github } = await auditOne(recordOnly(), [pull({ state: "open" }), latest]);
+    expect(payload.outcome).toEqual({ kind: "NOT_EVALUABLE", reason });
+    expect(github.checkRuns.map((run) => [run.head_sha, run.conclusion])).toEqual([[HEAD, "action_required"]]);
+  });
+
+  test("TRE-1 control: an unchanged open PR keeps its verdict", async () => {
+    const { payload } = await auditOne(recordOnly(), [pull({ state: "open" }), pull({ state: "open" })]);
+    expect(payload.outcome).toEqual({ kind: "VERDICT", verdict: VERDICTS.NOT_REQUIRED });
   });
 
   test("candidate text never reaches the check-run", async () => {
@@ -247,7 +296,7 @@ describe("SCRUM-644 S3b-2 controller outcomes", () => {
     expect(published).not.toContain("APPROVED");
     expect(published).not.toContain("a`b");
     expect(github.checkRuns[0].output).toEqual({
-      title: expect.stringMatching(/^record audit( : runtime unproven)? · valid for main @ aaaaaaa$/),
+      title: expect.stringMatching(/^record audit(: runtime unproven)? · valid for main @ aaaaaaa$/),
       summary: expect.stringContaining(`Controller run 900 attempt 1; artifact \`${AUDIT_ARTIFACT_NAME}\`, file \`audit-7.json\`.`),
     });
   });
@@ -362,28 +411,34 @@ describe("SCRUM-644 S3b-2 end to end with the S3b-1 reader", () => {
 });
 
 describe("SCRUM-644 S3b-2 test-file admission", () => {
-  test("the excluded prefixes are exactly the root vitest.config.ts excludes", () => {
+  test("the excluded directories are exactly CI's unit collector's, which covers every root vitest.config.ts exclude", () => {
+    const runner = readFileSync(path.join(ROOT, "scripts/runVitestCoverageShards.mjs"), "utf8");
+    const set = runner.match(/const excludedDirs = new Set\(\[([\s\S]*?)\]\)/);
+    expect(set).not.toBeNull();
+    const runnerDirs = [...(set?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+    expect([...runnerDirs].sort()).toEqual([...UNIT_SUITE_EXCLUDED_DIRS].sort());
+    expect(runner).toMatch(/if \(!entry\.isFile\(\)\) continue;/);
+
     const config = readFileSync(path.join(ROOT, "vitest.config.ts"), "utf8");
     const block = config.match(/test:\s*\{[\s\S]*?include: \["\*\*\/\*\.test\.ts", "\*\*\/\*\.test\.tsx"\],\s*exclude: \[([\s\S]*?)\]/);
     expect(block).not.toBeNull();
     const excludes = [...(block?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((match) => match[1]);
-    const asPrefix = (entry: string) => entry.replace(/^\*\*\//, "").replace(/\/\*\*$/, "").concat("/");
-    expect([...new Set(excludes.map(asPrefix))].sort()).toEqual([...VITEST_EXCLUDED_PREFIXES].sort());
+    expect(excludes.length).toBeGreaterThan(0);
     for (const entry of excludes) {
       const file = entry.replaceAll("**", "deep").concat("/x.test.ts");
       expect(isAdmittedTestFile(file), file).toBe(false);
     }
   });
 
-  test("only unit-suite test files are admitted", () => {
+  test("only unit-suite test files are admitted: excluded directory names are refused at any depth", () => {
     expect(isAdmittedTestFile("convex/x.test.ts")).toBe(true);
     expect(isAdmittedTestFile("components/x.test.tsx")).toBe(true);
-    for (const file of ["convex/x.ts", "convex/x.spec.ts", "lib/node_modules/x.test.ts", "a/.claude/x.test.ts", "convex/../x.test.ts", "/x.test.ts", 7]) {
-      expect(isAdmittedTestFile(file), String(file)).toBe(false);
-    }
+    expect(isAdmittedTestFile("convex/builder/x.test.ts")).toBe(true);
+    const refused = ["convex/x.ts", "convex/x.spec.ts", "lib/node_modules/x.test.ts", "a/.claude/x.test.ts", "convex/../x.test.ts", "convex/./x.test.ts", "/x.test.ts", 7];
+    for (const dir of UNIT_SUITE_EXCLUDED_DIRS) refused.push(`${dir}/x.test.ts`, `convex/${dir}/x.test.ts`, `lib/a/${dir}/x.test.tsx`);
+    for (const file of refused) expect(isAdmittedTestFile(file), String(file)).toBe(false);
   });
 });
-
 describe("SCRUM-644 S3b-2 git port", () => {
   test("refuses anything but a full SHA or a plain path before calling git", () => {
     const git = createGitPort();
