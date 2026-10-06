@@ -324,6 +324,27 @@ describe("SCRUM-712 S3: exits", () => {
     expect((await pendingRows(s)).map((r) => r.status)).toEqual(["RELEASED"]);
   });
 
+  test("B1: decided history beyond 50 rows cannot hide a live share from the deposit predicates", async () => {
+    const s = await cancelledWithDeposit("b1History");
+    const depositId = await depositIdOf(s);
+    const [live] = await pendingRows(s);
+    await s.t.run(async (ctx) => {
+      // The live share must be the NEWEST row, so a bounded scan of history misses it.
+      await ctx.db.delete(live._id);
+      for (let i = 0; i < 55; i++) {
+        const { _id, _creationTime, ...copy } = live;
+        await ctx.db.insert("depositCancellationPendings", {
+          ...copy, applicationId: live.applicationId, status: "RELEASED", createdAt: live.createdAt - 1 - i,
+        });
+      }
+      const { _id: _liveId, _creationTime: _liveTime, ...liveCopy } = live;
+      await ctx.db.insert("depositCancellationPendings", liveCopy);
+    });
+    await expect(
+      s.asManager.mutation(api.deposits.voidDeposit, { orgId: s.orgId, depositId })
+    ).rejects.toThrow(/awaiting a refund or forfeiture decision/);
+  });
+
   test("a quarantined share keeps blocking exactly like a pending one", async () => {
     const s = await cancelledWithDeposit("quarantine");
     const [row] = await pendingRows(s);
@@ -386,6 +407,63 @@ describe("SCRUM-712 S5: backfill of cancelled sales that predate the table", () 
     expect((await pendingRows(s)).map((r) => r.status)).toEqual(["QUARANTINED"]);
     // The sold car keeps its sold status; the quarantined share is reported, not dropped.
     expect(await s.t.run(async (ctx) => (await ctx.db.get(s.vehicleA))!.status)).toBe("SOLD");
+  });
+
+  test("B2: a slice resolved as OTHER paid nothing out, so it is quarantined, not 'decided'", async () => {
+    const s = await seed("s5Other", 2);
+    await payDeposit(s, 1_000);
+    await s.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: s.orgId, quoteId: s.quoteId,
+      allocations: [{ vehicleId: s.vehicleA, amount: 400 }, { vehicleId: s.vehicleB!, amount: 600 }],
+    });
+    const sale = await sell(s, s.vehicleA, PRICE_A);
+    await cancel(s, sale);
+    await asLegacy(s);
+    await s.t.run(async (ctx) => {
+      const hold = (await ctx.db.query("depositVehicleHolds").collect()).find((h) => h.vehicleId === s.vehicleA)!;
+      await ctx.db.patch(hold._id, { allocationStatus: "RESOLVED", resolutionTreatment: "OTHER" });
+    });
+    expect(await backfill(s, false)).toMatchObject({ decided: 0, created: 0, quarantined: 1 });
+    expect((await pendingRows(s)).map((r) => r.status)).toEqual(["QUARANTINED"]);
+  });
+
+  test("F3: a whole-row share whose deposit was applied again later is superseded", async () => {
+    const s = await cancelledWithDeposit("s5Superseded");
+    await asLegacy(s);
+    await s.t.run(async (ctx) => {
+      const first = (await ctx.db.query("depositApplications").collect()).find((a) => a.orgId === s.orgId)!;
+      const { _id, _creationTime, ...copy } = first;
+      await ctx.db.insert("depositApplications", { ...copy, appliedAt: first.appliedAt + 1_000 });
+    });
+    expect(await backfill(s, false)).toMatchObject({ superseded: 1, created: 1 });
+    // Only the newest application owns the money, so only it carries a share.
+    expect(await pendingRows(s)).toHaveLength(1);
+  });
+
+  test("F2: a quarantined share leaves only through the audited exit, which re-syncs the car", async () => {
+    const s = await cancelledWithDeposit("s5Exit");
+    const [row] = await pendingRows(s);
+    await s.t.run((ctx) => ctx.db.patch(row._id, { status: "QUARANTINED" }));
+    const resolve = (over: Partial<{ actorId: Id<"users">; reason: string; resolution: "RELEASED" | "FORFEITED" | "PENDING" }>) =>
+      s.t.mutation(internal.migrateDepositCancellationPendings.resolveQuarantinedPending, {
+        orgId: s.orgId, pendingId: row._id, actorId: s.userId, reason: "refunded by bank on 2026-05-01",
+        resolution: "RELEASED", ...over,
+      });
+    await expect(resolve({ reason: "   " })).rejects.toThrow(/reason is required/);
+    const nobody = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "nobody", email: "n@e.com", name: "N" }));
+    await expect(resolve({ actorId: nobody })).rejects.toThrow();
+    expect((await pendingRows(s)).map((r) => r.status)).toEqual(["QUARANTINED"]);
+    // The reinstated deposit is the only other thing holding the car; release it so the exit alone decides.
+    await s.t.run(async (ctx) => {
+      const deposit = (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)!;
+      await ctx.db.patch(deposit._id, { holdActive: false });
+    });
+    await resolve({});
+    const [done] = await pendingRows(s);
+    expect(done).toMatchObject({ status: "RELEASED", resolvedBy: s.userId });
+    expect(done.resolutionReference).toMatch(/refunded by bank/);
+    expect(await s.t.run(async (ctx) => (await ctx.db.get(s.vehicleA))!.status)).not.toBe("RESERVED");
+    await expect(resolve({})).rejects.toThrow(/Only a quarantined/);
   });
 
   test("another organization's applications are never touched", async () => {

@@ -53,7 +53,7 @@ async function orgHasAnyBlocking(
   return row !== null;
 }
 
-function forgetOrgMemo(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): void {
+export function forgetOrgMemo(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): void {
   orgHasBlocking.get(ctx.db)?.delete(orgId);
 }
 
@@ -136,15 +136,14 @@ export async function hasPendingDispositionForDeposit(
   orgId: Id<"organizations">,
   depositId: Id<"deposits">
 ): Promise<boolean> {
-  const rows = await ctx.db
+  // Exact: one range over the blocking statuses, so decided history can never hide it.
+  const row = await ctx.db
     .query("depositCancellationPendings")
-    .withIndex("by_deposit", (q) => q.eq("depositId", depositId))
-    .take(50);
-  // A full page cannot prove the remainder is decided, so it blocks too.
-  return (
-    rows.length === 50 ||
-    rows.some((row) => row.orgId === orgId && (row.status === "PENDING" || row.status === "QUARANTINED"))
-  );
+    .withIndex("by_deposit_status", (q) =>
+      q.eq("depositId", depositId).gte("status", BLOCKING_FROM).lte("status", BLOCKING_TO)
+    )
+    .first();
+  return row !== null && row.orgId === orgId;
 }
 
 export const PENDING_EXIT_MESSAGE =
@@ -157,19 +156,19 @@ async function pendingShareOfHold(
   depositId: Id<"deposits">,
   holdId: Id<"depositVehicleHolds"> | undefined
 ): Promise<Doc<"depositCancellationPendings"> | null> {
-  const rows = await ctx.db
+  // Exact (deposit, hold) range over the blocking statuses — never a paged scan of
+  // the deposit's history (SCRUM-712 B1). `holdId` undefined is the whole-row share.
+  const row = await ctx.db
     .query("depositCancellationPendings")
-    .withIndex("by_deposit", (q) => q.eq("depositId", depositId))
-    .take(50);
-  return (
-    rows.find(
-      (row) =>
-        row.orgId === orgId &&
-        (row.status === "PENDING" || row.status === "QUARANTINED") &&
-        row.holdId === holdId
-    ) ?? null
-  );
+    .withIndex("by_deposit_hold_status", (q) =>
+      q.eq("depositId", depositId).eq("holdId", holdId).gte("status", BLOCKING_FROM).lte("status", BLOCKING_TO)
+    )
+    .first();
+  return row !== null && row.orgId === orgId ? row : null;
 }
+
+export const PENDING_CLEAR_REFUSED_MESSAGE =
+  "This vehicle share is awaiting a refund or forfeiture decision that cannot be recorded yet — its sale's journal reversal has not posted, or the share is under review. Nothing was paid out.";
 
 /** Refuses a treatment that would leave a pending share undecided while moving its money. */
 export async function assertNoPendingShareOnHold(
@@ -198,10 +197,22 @@ export async function clearPendingDisposition(
     actorId: Id<"users">;
     now: number;
     reference: string;
+    /**
+     * A slice payout names its own share. If that share exists but cannot be
+     * cleared, the whole mutation must abort — otherwise the money moves while the
+     * share stays pending forever (SCRUM-712 B1/F5). A whole-row payout of free
+     * money may legitimately leave the share alone, so it does not set this.
+     */
+    required?: boolean;
   }
 ): Promise<boolean> {
   const row = await pendingShareOfHold(ctx, args.orgId, args.depositId, args.holdId);
-  if (!row || row.status !== "PENDING" || args.paidMinor < row.amountMinor) return false;
+  if (!row) return false;
+  const refuse = (): false => {
+    if (args.required) throw new ConvexError(PENDING_CLEAR_REFUSED_MESSAGE);
+    return false;
+  };
+  if (row.status !== "PENDING" || args.paidMinor < row.amountMinor) return refuse();
   // S4: the share's own journal reversal must be PROVED posted. A closed period
   // leaves the application REVERSING until the outbox posts the reversal, and
   // `paidMinor` can be satisfied by unrelated free money on the same row — so
@@ -209,7 +220,7 @@ export async function clearPendingDisposition(
   // the reversal posted, immediately or via commitDeferredReversal) clears it.
   const application = await ctx.db.get(row.applicationId);
   if (!application || application.orgId !== args.orgId || application.status !== "REVERSED") {
-    return false;
+    return refuse();
   }
   await ctx.db.patch(row._id, {
     status: args.resolution === "FORFEITED" ? "FORFEITED" : "RELEASED",

@@ -967,6 +967,7 @@ export const resolveReleasedAllocation = mutation({
         actorId: user._id,
         now,
         reference: `deposits.resolveReleasedAllocation ${hold._id}`,
+        required: true,
       });
       // The decision is made: ask the canonical authority whether anything still
       // holds the car, now that this share no longer does.
