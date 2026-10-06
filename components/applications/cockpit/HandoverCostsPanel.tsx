@@ -70,6 +70,7 @@ export const HANDOVER_FEE_TYPES = [
   "LICENSING",
   "STAMPS",
   "LIEN_REGISTRATION",
+  "LIEN_RELEASE",
   "INSPECTION",
   "INSURANCE",
   "OTHER_CLOSING_EXPENSE",
@@ -132,6 +133,7 @@ export function defaultTreatmentFor(feeType: HandoverFeeType): HandoverTreatment
   switch (feeType) {
     case "OWNERSHIP_TRANSFER":
     case "LIEN_REGISTRATION":
+    case "LIEN_RELEASE":
       return "OWNERSHIP_TRANSFER_EXPENSE";
     case "INSURANCE":
       return "INSURANCE_EXPENSE";

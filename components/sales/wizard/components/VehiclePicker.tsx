@@ -410,11 +410,11 @@ export default function VehiclePicker({
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <p className={labelCls}>{t("SupplierCostLabel" as any)} ({currency.label}) *</p>
-                    <input className={inputCls} type="number" min="0" step="0.01" value={sourceData.sourceCost || ""} onChange={(e) => setSourceData((d) => ({ ...d, sourceCost: parseFloat(e.target.value) || 0 }))} placeholder="0.000" />
+                    <input className={inputCls} type="number" min="0" step="0.001" value={sourceData.sourceCost || ""} onChange={(e) => setSourceData((d) => ({ ...d, sourceCost: parseFloat(e.target.value) || 0 }))} placeholder="0.000" />
                   </div>
                   <div>
                     <p className={labelCls}>{t("SellingPriceLabel" as any)} ({currency.label}) *</p>
-                    <input className={inputCls} type="number" min="0" step="0.01" value={sourceData.sellingPrice || ""} onChange={(e) => setSourceData((d) => ({ ...d, sellingPrice: parseFloat(e.target.value) || 0 }))} placeholder="0.000" />
+                    <input className={inputCls} type="number" min="0" step="0.001" value={sourceData.sellingPrice || ""} onChange={(e) => setSourceData((d) => ({ ...d, sellingPrice: parseFloat(e.target.value) || 0 }))} placeholder="0.000" />
                   </div>
                 </div>
                 {sourceData.sourceCost > 0 && sourceData.sellingPrice > 0 && (

@@ -12,6 +12,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expectAppError } from "../test-utils/expectAppError";
+import { dbSnapshot } from "../test-utils/dbSnapshot";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -101,20 +102,13 @@ async function quoteFor(seed: Seed, vehicles: Array<Id<"vehicles">>) {
   });
 }
 
-async function dbCounts(seed: Seed): Promise<Record<string, number>> {
-  return await seed.t.run(async (ctx) => {
-    const counts: Record<string, number> = {};
-    for (const name of Object.keys(schema.tables)) {
-      counts[name] = (await (ctx.db.query(name as never) as { collect(): Promise<unknown[]> }).collect()).length;
-    }
-    return counts;
-  });
-}
+// Row CONTENT, not counts: a refusal that patched an existing row would leave every count equal.
+const snapshot = (seed: Seed) => dbSnapshot(seed.t, Object.keys(schema.tables));
 
 async function expectNotReadyAndNothingWritten(seed: Seed, attempt: () => Promise<unknown>) {
-  const before = await dbCounts(seed);
+  const before = await snapshot(seed);
   await expectAppError(attempt(), "VEHICLE_NOT_READY_FOR_SALE", NOT_READY_MESSAGE);
-  expect(await dbCounts(seed), "nothing at all was written").toEqual(before);
+  expect(await snapshot(seed), "nothing at all was written, and no existing row was modified").toEqual(before);
 }
 
 const completeQuote = (seed: Seed, quoteId: Id<"quotes">) =>
@@ -139,6 +133,16 @@ const draftArgs = (seed: Seed, vehicleId: Id<"vehicles">) => ({
   salespersonId: seed.userId,
   salePrice: PRICE,
   saleDate: Date.now(),
+});
+
+describe("SCRUM-705: the nothing-written assertion sees an in-place edit", () => {
+  test("a modified existing row changes the snapshot although every row count is equal", async () => {
+    const seed = await seedDealer();
+    const v = await vehicle(seed);
+    const before = await snapshot(seed);
+    await seed.t.run((ctx) => ctx.db.patch(v, { sellingPrice: PRICE + 1 }));
+    expect(await snapshot(seed)).not.toEqual(before);
+  });
 });
 
 describe.each(BLOCKED)("SCRUM-693 F1: a %s car is not sold", (blocked) => {
