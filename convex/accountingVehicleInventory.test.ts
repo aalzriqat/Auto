@@ -1778,6 +1778,36 @@ describe("Opening-balance backfill for pre-existing inventory", () => {
     expect(second.skipped).toBe(1);
   });
 
+  test("SCRUM-743: a replayed backfill leaves exactly one opening-balance economic effect per vehicle", async () => {
+    // The public command is in the economic census as STATE_GUARDED; this is the
+    // replay evidence. Asserts the BOOKS, not the returned counters.
+    const { t, orgId, asOwner } = await seedDealer("bf743");
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: "REPLAY743000000001", make: "Kia", model: "Rio", year: 2020,
+        mileage: 30000, color: "Red", fuelType: "Gasoline", transmission: "Automatic",
+        purchasePrice: 5000, sellingPrice: 7000, status: "AVAILABLE", sourceType: "STOCK",
+      })
+    );
+
+    for (let run = 0; run < 3; run++) {
+      await asOwner.mutation(api.accountingMigration.backfillVehicleInventoryOpeningBalances, { orgId, dryRun: false });
+    }
+
+    const events = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId.toString())
+        )
+        .collect()
+    );
+    expect(events.filter((e) => e.eventType === "VEHICLE_INVENTORY_OPENING_BALANCE")).toHaveLength(1);
+    const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
+    const { lines } = await linesForEvent(t, orgId, "vehicles", vehicleId, "VEHICLE_INVENTORY_OPENING_BALANCE");
+    expect(lines.filter((l) => l.accountId === inventory._id).reduce((s, l) => s + (l.debitMinor ?? 0), 0)).toBe(5_000_000);
+  });
+
   test("skips already-sold vehicles", async () => {
     const { t, orgId, asOwner } = await seedDealer("bf2");
     await t.run((ctx) =>
