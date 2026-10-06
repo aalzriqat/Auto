@@ -195,7 +195,7 @@ describe("SCRUM-651 - reconciliation counts every non-CANCELLED payable by its o
       idempotencyKey: "ap651_onacct_1", orgId: s.orgId, vin: "1HGCM82633A651001", make: "Honda", model: "Accord", year: 2020,
       mileage: 10000, color: "White", fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 20_000,
       status: "AVAILABLE", sourceType: "STOCK", purchasePrice: 10_000,
-      purchasePaymentMethod: "ON_ACCOUNT", sourcedFromName: "Credit Supplier Co",
+      purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierName: "Credit Supplier Co",
     });
     const payable = await s.t.run((ctx) =>
       ctx.db.query("vehicleSupplierPayables").withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId)).first()
