@@ -1640,7 +1640,7 @@ export async function restoreCommitment(
   // `resolveActingRoot`, so it needs its own gate. The one thing it may do is
   // restore the hold of the deposit whose own share is pending (the
   // cancellation's authority restoration, synchronous or deferred); a share of
-  // any OTHER deposit on the car still refuses.
+  // any OTHER sale on the car still refuses.
   const pendingElsewhere = await pendingBlocksRestoration(
     ctx,
     args.decision.orgId,

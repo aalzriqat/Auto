@@ -556,6 +556,49 @@ describe("SCRUM-712 batch 2", () => {
     ).rejects.toThrow(/No refund or forfeiture door/);
   });
 
+  test("Codex R3-1: fifty shares of the SAME sale never block, and a foreign one beyond them always does", async () => {
+    const s = await cancelledWithDeposit("sale50");
+    const [row] = await pendingRows(s);
+    const { hasPendingDispositionExceptSale } = await import("./utils/depositCancellationPending");
+    const other = await s.t.run(async (ctx) => {
+      const copy = (await ctx.db.get(row.saleId))!;
+      const { _id, _creationTime, ...rest } = copy;
+      const otherSale = await ctx.db.insert("sales", { ...rest });
+      const { _id: _rid, _creationTime: _rt, ...shareCopy } = row;
+      for (let i = 0; i < 49; i++) await ctx.db.insert("depositCancellationPendings", { ...shareCopy });
+      return otherSale;
+    });
+    // 50 rows now, all this sale's: the old take(50) page was full and said "blocked".
+    expect(await s.t.run((ctx) => hasPendingDispositionExceptSale(ctx, s.orgId, row.vehicleId, row.saleId))).toBe(false);
+    await s.t.run(async (ctx) => {
+      const { _id, _creationTime, ...shareCopy } = row;
+      await ctx.db.insert("depositCancellationPendings", { ...shareCopy, saleId: other });
+    });
+    expect(await s.t.run((ctx) => hasPendingDispositionExceptSale(ctx, s.orgId, row.vehicleId, row.saleId))).toBe(true);
+  });
+
+  test("R3-2: an org with more than 200 blocking shares still blocks the car that sorts past the cap", async () => {
+    const s = await cancelledWithDeposit("cap202");
+    const [row] = await pendingRows(s);
+    const lastVehicle = await s.t.run(async (ctx) => {
+      const base = (await ctx.db.get(s.vehicleA))!;
+      const { _id, _creationTime, ...vehicleCopy } = base;
+      const { _id: _rid, _creationTime: _rt, ...shareCopy } = row;
+      let last = s.vehicleA;
+      for (let i = 0; i < 202; i++) {
+        last = await ctx.db.insert("vehicles", { ...vehicleCopy, vin: `CAP${i}VIN${i}` });
+        await ctx.db.insert("depositCancellationPendings", { ...shareCopy, vehicleId: last });
+      }
+      return last;
+    });
+    expect(await s.t.run((ctx) => hasPendingDisposition(ctx, s.orgId, lastVehicle))).toBe(true);
+    const clean = await s.t.run(async (ctx) => {
+      const base = (await ctx.db.get(s.vehicleA))!;
+      const { _id, _creationTime, ...vehicleCopy } = base;
+      return await ctx.db.insert("vehicles", { ...vehicleCopy, vin: "CAPCLEANVIN" });
+    });
+    expect(await s.t.run((ctx) => hasPendingDisposition(ctx, s.orgId, clean))).toBe(false);
+  });
   test("a share of ANOTHER sale still refuses the cancellation's authority restoration", async () => {
     const s = await cancelledWithDeposit("exemptOther");
     const [row] = await pendingRows(s);

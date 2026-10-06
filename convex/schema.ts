@@ -4353,7 +4353,11 @@ export default defineSchema({
     // loses a pending row behind N already-decided ones (SCRUM-712 B1). `holdId` is
     // absent for a whole-row (direct) share and the index matches that as undefined.
     .index("by_deposit_status", ["depositId", "status"])
-    .index("by_deposit_hold_status", ["depositId", "holdId", "status"]),
+    .index("by_deposit_hold_status", ["depositId", "holdId", "status"])
+    // Exact "any blocking share of a DIFFERENT sale on this car" — two statuses x
+    // (saleId < s, saleId > s) existence ranges, no page that a sale's own shares
+    // can fill (SCRUM-712 round 3).
+    .index("by_org_vehicle_status_sale", ["orgId", "vehicleId", "status", "saleId"]),
 
   /* ─────────────────────────────────────────────────────────────────────────
    * SCRUM-218-C — the direct-collection receipt movement model.

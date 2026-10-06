@@ -120,7 +120,7 @@ export async function assertNoPendingBeforeAvailable(
  * For the cancellation's own authority restoration only: it re-establishes the
  * holds of the deposits the cancelled sale consumed — one share per instalment —
  * so that sale's own rows must not refuse it, deposit by deposit. Anything else
- * on the car still does. Bounded read.
+ * on the car still does.
  */
 export async function hasPendingDispositionExceptSale(
   ctx: QueryCtx | MutationCtx,
@@ -128,19 +128,27 @@ export async function hasPendingDispositionExceptSale(
   vehicleId: Id<"vehicles">,
   saleId: Id<"sales">
 ): Promise<boolean> {
-  const rows = await ctx.db
-    .query("depositCancellationPendings")
-    .withIndex("by_org_vehicle_status", (q) =>
-      q
-        .eq("orgId", orgId)
-        .eq("vehicleId", vehicleId)
-        .gte("status", BLOCKING_FROM)
-        .lte("status", BLOCKING_TO)
-    )
-    .take(50);
-  if (rows.some((row) => row.saleId !== saleId)) return true;
-  // A full page of one sale's rows could hide a different one beyond it.
-  return rows.length === 50;
+  // Exact, not a page: the sale's own shares (one per instalment, any number) can
+  // never fill a window and hide or fake a foreign one. Four existence ranges —
+  // each blocking status x {saleId below, saleId above} — and only on the
+  // restoration path, never per car.
+  for (const status of ["PENDING", "QUARANTINED"] as const) {
+    const below = await ctx.db
+      .query("depositCancellationPendings")
+      .withIndex("by_org_vehicle_status_sale", (q) =>
+        q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("status", status).lt("saleId", saleId)
+      )
+      .first();
+    if (below !== null) return true;
+    const above = await ctx.db
+      .query("depositCancellationPendings")
+      .withIndex("by_org_vehicle_status_sale", (q) =>
+        q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("status", status).gt("saleId", saleId)
+      )
+      .first();
+    if (above !== null) return true;
+  }
+  return false;
 }
 
 /** Does this deposit still have an undecided share (PENDING or QUARANTINED)? */
