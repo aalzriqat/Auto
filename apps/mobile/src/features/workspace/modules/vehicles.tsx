@@ -10,13 +10,31 @@ import { api, type MobileVehicle, type MobileVehicleStatus } from "../../../conv
 import { getFuelTypeOptions, getTransmissionOptions, getVehicleColorOptions, getVehicleMakeOptions } from "../../../data/mobileOptions";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { getMobileVinReadiness, normalizeVinInput } from "../mobileVinDecode";
-import { PAGE_SIZE, type Option, fetchDecodedMobileVin, vinNotReadyMessage, vinChecksumWarningMessage, vinDecodeResultMessage, compactNumber, money, maybeText, parseOptionalNumber, parseRequiredNumber, invalidNumberMessage, requiredFieldMessage, requiredText, useFormErrors, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, MetricCard, ModuleList, getOptionLabel, firstVehicleImageUrl, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
+import { PAGE_SIZE, type Option, fetchDecodedMobileVin, vinNotReadyMessage, vinChecksumWarningMessage, vinDecodeResultMessage, compactNumber, money, maybeText, parseOptionalNumber, parseRequiredNumber, invalidNumberMessage, requiredFieldMessage, requiredSelectionMessage, requiredText, useFormErrors, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, MetricCard, ModuleList, getOptionLabel, firstVehicleImageUrl, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { useRouter } from "expo-router";
 import { GradientFill } from "../../../components/Premium";
 import { Icon } from "../../../components/Icon";
 import { PressableScale } from "../../../components/Motion";
 import { theme } from "../../../theme";
 import { useStyles } from "./moduleStyles";
+
+// SCRUM-717 (D-45): a new vehicle carries an explicit ownership decision. Nothing is
+// pre-selected; an empty `ownership` blocks the save with an inline error.
+type MobileOwnershipChoice = "" | "SOURCED" | "STOCK";
+type MobileAcquisitionMethod = "" | "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD" | "ON_ACCOUNT";
+const EMPTY_OWNERSHIP: {
+  ownership: MobileOwnershipChoice;
+  sourcedFromName: string;
+  sourceCost: string;
+  purchasePaymentMethod: MobileAcquisitionMethod;
+  purchaseSupplierName: string;
+} = {
+  ownership: "",
+  sourcedFromName: "",
+  sourceCost: "",
+  purchasePaymentMethod: "",
+  purchaseSupplierName: "",
+};
 
 export function VehiclesModule({ orgId, permissions }: { orgId: string; permissions: readonly string[] }) {
   const styles = useStyles();
@@ -50,6 +68,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
   const formVinRef = useRef("");
   const [vinDecodeMessage, setVinDecodeMessage] = useState<string | null>(null);
   const [form, setForm] = useState({
+    ...EMPTY_OWNERSHIP,
     vin: "",
     make: "",
     model: "",
@@ -102,7 +121,8 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
     },
   ];
   const { errors, reset, validate } = useFormErrors<
-    "make" | "model" | "year" | "mileage" | "sellingPrice" | "vin"
+    | "make" | "model" | "year" | "mileage" | "sellingPrice" | "vin"
+    | "ownership" | "sourcedFromName" | "sourceCost" | "purchasePrice" | "purchasePaymentMethod" | "purchaseSupplierName"
   >();
   const vehicleVinReadiness = getMobileVinReadiness(form.vin);
   const selectedVehicleStatusLabel = getOptionLabel(
@@ -125,6 +145,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
     setVinDecodeMessage(null);
     setPhotos([]);
     setForm({
+      ...EMPTY_OWNERSHIP,
       vin: "",
       make: "",
       model: "",
@@ -156,6 +177,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
         .filter((photo) => Boolean(photo.uri)),
     );
     setForm({
+      ...EMPTY_OWNERSHIP,
       vin: vehicle.vin,
       make: vehicle.make,
       model: vehicle.model,
@@ -298,7 +320,22 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
     // All three old alerts collapse into one pass. They used to fire one at a
     // time, so a vehicle with a missing make AND a malformed VIN cost three
     // dismiss-and-retry cycles before the form would save.
+    // SCRUM-717 (D-45): a NEW vehicle must carry an explicit ownership decision.
+    // The server re-validates every one of these; this only names the gap inline.
+    const creating = !editing;
+    const sourceCost = parseOptionalNumber(form.sourceCost);
+    const purchasePrice = parseOptionalNumber(form.purchasePrice);
+    const consignment = form.ownership === "SOURCED";
+    const owned = form.ownership === "STOCK";
     const valid = validate({
+      ownership: creating && !form.ownership ? requiredSelectionMessage(locale) : undefined,
+      sourcedFromName: creating && consignment ? requiredText(form.sourcedFromName, locale) : undefined,
+      sourceCost: creating && consignment && !(sourceCost !== undefined && sourceCost > 0) ? invalidNumberMessage(locale) : undefined,
+      // Same terms as web and the server: an owned car may be entered unpriced, but a
+      // price that is entered must be positive and must say how it was paid.
+      purchasePrice: creating && owned && form.purchasePrice.trim() && !(purchasePrice !== undefined && purchasePrice > 0) ? invalidNumberMessage(locale) : undefined,
+      purchasePaymentMethod: creating && owned && purchasePrice !== undefined && purchasePrice > 0 && !form.purchasePaymentMethod ? requiredSelectionMessage(locale) : undefined,
+      purchaseSupplierName: creating && owned && form.purchasePaymentMethod === "ON_ACCOUNT" ? requiredText(form.purchaseSupplierName, locale) : undefined,
       make: requiredText(form.make, locale),
       model: requiredText(form.model, locale),
       year: year === null ? invalidNumberMessage(locale) : undefined,
@@ -309,6 +346,17 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
         : requiredFieldMessage(locale),
     });
     if (!valid || year === null || mileage === null || sellingPrice === null) {
+      // The ownership questions live on step 2 of 3 and the save button on step 3,
+      // so a refusal there must take the operator back to the unanswered question
+      // rather than leave the error on a screen they have already left.
+      if (!valid && creating && vehicleStep === 2) {
+        const ownershipGap = !form.ownership
+          || (consignment && (!form.sourcedFromName.trim() || !(sourceCost !== undefined && sourceCost > 0)))
+          || (owned && ((form.purchasePrice.trim() !== "" && !(purchasePrice !== undefined && purchasePrice > 0))
+            || (purchasePrice !== undefined && purchasePrice > 0 && !form.purchasePaymentMethod)
+            || (form.purchasePaymentMethod === "ON_ACCOUNT" && !form.purchaseSupplierName.trim())));
+        if (ownershipGap) setVehicleStep(1);
+      }
       return;
     }
     setSaving(true);
@@ -324,7 +372,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
         color: form.color || "-",
         fuelType: form.fuelType || "-",
         transmission: form.transmission || "-",
-        purchasePrice: parseOptionalNumber(form.purchasePrice),
+        purchasePrice,
         sellingPrice,
         status: form.status,
         notes: maybeText(form.notes),
@@ -334,9 +382,25 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
         await updateVehicle({ ...payload, vehicleId: editing._id });
       } else {
         createVehicleKeyRef.current ??= `vehicle-create:${crypto.randomUUID()}`;
+        // The two ownership shapes are mutually exclusive on the wire: a consignment
+        // car carries its supplier and cost and never a purchase price; an owned car
+        // carries its price and settlement and never a consignment supplier.
+        const { purchasePrice: _ownedPrice, ...withoutPrice } = payload;
+        const ownershipArgs = consignment
+          ? { sourceType: "SOURCED" as const, sourcedFromName: form.sourcedFromName.trim(), sourceCost }
+          : {
+              sourceType: "STOCK" as const,
+              purchasePrice,
+              ...(form.purchasePaymentMethod
+                ? { purchasePaymentMethod: form.purchasePaymentMethod as Exclude<MobileAcquisitionMethod, ""> }
+                : {}),
+              ...(form.purchasePaymentMethod === "ON_ACCOUNT"
+                ? { purchaseSupplierName: form.purchaseSupplierName.trim() }
+                : {}),
+            };
         await createVehicle({
-          ...payload,
-          sourceType: "STOCK" as const,
+          ...(consignment ? withoutPrice : payload),
+          ...ownershipArgs,
           idempotencyKey: createVehicleKeyRef.current,
         });
         // Only a SUCCESS retires the identity.
@@ -532,7 +596,56 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
               <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "اللون" : "Color"} value={form.color} options={vehicleColorOptions} onChange={(color) => setForm((prev) => ({ ...prev, color }))} />
               <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "الوقود" : "Fuel"} value={form.fuelType} options={fuelTypeOptions} onChange={(fuelType) => setForm((prev) => ({ ...prev, fuelType }))} />
               <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "القير" : "Transmission"} value={form.transmission} options={transmissionOptions} onChange={(transmission) => setForm((prev) => ({ ...prev, transmission }))} />
-              <FormField keyboardType="numeric" label={locale === "ar" ? "سعر الشراء" : "Purchase price"} value={form.purchasePrice} onChangeText={(purchasePrice) => setForm((prev) => ({ ...prev, purchasePrice }))} />
+              {editing ? (
+                <FormField keyboardType="numeric" label={locale === "ar" ? "سعر الشراء" : "Purchase price"} value={form.purchasePrice} onChangeText={(purchasePrice) => setForm((prev) => ({ ...prev, purchasePrice }))} />
+              ) : (
+                <>
+                  <Text style={styles.photoSectionLabel}>{locale === "ar" ? "ملكية السيارة" : "Vehicle ownership"}</Text>
+                  <SegmentedControl<MobileOwnershipChoice>
+                    value={form.ownership}
+                    onChange={(ownership) => setForm((prev) => ({ ...prev, ownership }))}
+                    options={[
+                      { value: "SOURCED", label: locale === "ar" ? "برسم البيع" : "Consignment" },
+                      { value: "STOCK", label: locale === "ar" ? "مملوكة" : "Owned" },
+                    ]}
+                  />
+                  <Text style={errors.ownership ? styles.warningText : styles.photoSectionHint} accessibilityRole="alert">
+                    {errors.ownership
+                      ?? (form.ownership === "SOURCED"
+                        ? (locale === "ar" ? "سيارة المورّد معروضة للبيع لحسابه. لا يُدفع شيء الآن." : "The supplier's car, on sale for them. Nothing is paid now.")
+                        : form.ownership === "STOCK"
+                          ? (locale === "ar" ? "اشترى المعرض هذه السيارة. أدخل السعر وطريقة الدفع." : "The dealership bought this car. Enter the price and how it was paid.")
+                          : (locale === "ar" ? "اختر برسم البيع أو مملوكة للمتابعة." : "Choose consignment or owned to continue."))}
+                  </Text>
+                  {form.ownership === "SOURCED" ? (
+                    <>
+                      <FormField error={errors.sourcedFromName} label={locale === "ar" ? "اسم المورّد" : "Supplier name"} value={form.sourcedFromName} onChangeText={(sourcedFromName) => setForm((prev) => ({ ...prev, sourcedFromName }))} />
+                      <FormField error={errors.sourceCost} keyboardType="numeric" label={locale === "ar" ? "تكلفة المورّد" : "Supplier cost"} value={form.sourceCost} onChangeText={(sourceCost) => setForm((prev) => ({ ...prev, sourceCost }))} />
+                    </>
+                  ) : null}
+                  {form.ownership === "STOCK" ? (
+                    <>
+                      <FormField error={errors.purchasePrice} keyboardType="numeric" label={locale === "ar" ? "سعر الشراء" : "Purchase price"} value={form.purchasePrice} onChangeText={(purchasePrice) => setForm((prev) => ({ ...prev, purchasePrice }))} />
+                      <SelectField
+                        error={errors.purchasePaymentMethod}
+                        label={locale === "ar" ? "طريقة الدفع" : "Payment method"}
+                        value={form.purchasePaymentMethod}
+                        onChange={(value) => setForm((prev) => ({ ...prev, purchasePaymentMethod: value as MobileAcquisitionMethod }))}
+                        options={[
+                          { label: locale === "ar" ? "نقداً" : "Cash", value: "CASH" },
+                          { label: locale === "ar" ? "تحويل بنكي" : "Bank transfer", value: "BANK_TRANSFER" },
+                          { label: locale === "ar" ? "شيك" : "Cheque", value: "CHEQUE" },
+                          { label: locale === "ar" ? "بطاقة" : "Card", value: "CARD" },
+                          { label: locale === "ar" ? "على الحساب" : "On account", value: "ON_ACCOUNT" },
+                        ]}
+                      />
+                      {form.purchasePaymentMethod === "ON_ACCOUNT" ? (
+                        <FormField error={errors.purchaseSupplierName} label={locale === "ar" ? "المورّد المستحق عليه الحساب" : "Supplier owed on account"} value={form.purchaseSupplierName} onChangeText={(purchaseSupplierName) => setForm((prev) => ({ ...prev, purchaseSupplierName }))} />
+                      ) : null}
+                    </>
+                  ) : null}
+                </>
+              )}
               <FormField error={errors.sellingPrice} keyboardType="numeric" label={locale === "ar" ? "سعر البيع" : "Selling price"} value={form.sellingPrice} onChangeText={(sellingPrice) => setForm((prev) => ({ ...prev, sellingPrice }))} />
               <SelectField
                 label={locale === "ar" ? "الحالة" : "Status"}
