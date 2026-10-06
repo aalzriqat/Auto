@@ -205,10 +205,47 @@ describe("SCRUM-571 s2a: the customer's invoice gates 'settled' on every financi
     expect(profit.classification).not.toBe("ESTIMATED_AWAITING_SETTLEMENT");
   });
 
-  test("a financed deal with gap exactly 0 is unchanged: an open invoice does not hold it", async () => {
+  test("a financed deal with gap exactly 0 is still judged on its invoice: an open invoice holds it (D-48)", async () => {
     const s = await seed("gap0");
     const { applicationId } = await insertFinancedDeal(s, { gapCashMinor: 0, gapInstallmentMinor: 0, openMinor: 500_000 });
+    expect(await settlementOf(s, applicationId)).not.toBe("COMPLETE");
+  });
+
+  test("control: a gap-0 deal whose invoice is a paid zero-value invoice reads settled without a posting", async () => {
+    const s = await seed("gap0zero");
+    const { applicationId } = await insertFinancedDeal(s, {
+      gapCashMinor: 0, gapInstallmentMinor: 0, invoiceMinor: 0, openMinor: 0, posted: "MISSING",
+    });
     expect(await settlementOf(s, applicationId)).toBe("COMPLETE");
+  });
+
+  test("a gap-0 deal with no canonical invoice is UNKNOWN, never settled", async () => {
+    const s = await seed("gap0none");
+    const { applicationId } = await insertFinancedDeal(s, { gapCashMinor: 0, gapInstallmentMinor: 0, invoice: "none" });
+    expect(await settlementOf(s, applicationId)).not.toBe("COMPLETE");
+  });
+
+  test("the financed cockpit names the invoice balance beside the deposit position, and withholds it without view:finance", async () => {
+    const s = await seed("f4fin");
+    const { applicationId } = await insertFinancedDeal(s, { gapCashMinor: 500_000, openMinor: 500_000 });
+    const view = await s.asOwner.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+    expect(view!.customerInvoiceState).toBe("OPEN");
+    expect(view!.money!.customerInvoice).toEqual({ state: "OPEN", outstandingMinor: 500_000, currency: "JOD" });
+    // The deposit row is a different fact and stays on its own party row.
+    expect(view!.money!.parties.find((p) => p.party === "CUSTOMER")).toBeDefined();
+
+    const viewerId = await s.t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "co_f4fin_viewer", email: "co.f4v@example.com", name: "Viewer" })
+    );
+    const roleId = await s.t.run((ctx) =>
+      ctx.db.insert("roles", { orgId: s.orgId, name: "SALES", permissions: ["view:sales", "view:finance_applications"], isSystemOwnerRole: false })
+    );
+    await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId: viewerId, roleId }));
+    const viewer = await s.t
+      .withIdentity({ subject: "co_f4fin_viewer", clerkId: "co_f4fin_viewer" })
+      .query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+    expect(viewer!.customerInvoiceState).toBe("OPEN");
+    expect(viewer!.money).toBeNull();
   });
 
   test("a gap that cannot be read is UNKNOWN, never settled", async () => {

@@ -107,7 +107,7 @@ import {
   type ObligationState,
   type SettlementObligations,
 } from "./utils/financingEconomics";
-import { resolveCustomerInvoiceObligation } from "./utils/customerInvoiceObligation";
+import { resolveCustomerInvoicePosition, type CustomerInvoicePosition } from "./utils/customerInvoiceObligation";
 // The anomaly verdict, from the module that owns it. Both handover
 // confirmations must warn about the same deals; see the helper's own note.
 import {
@@ -967,11 +967,14 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
   const financierObligation = resolveFinancierObligation(app, settlesDirect, financierLeg);
 
   // The customer's side is judged on EVERY financier leg (SCRUM-571 D-43).
+  const customerPosition: CustomerInvoicePosition = routeKnown
+    ? await resolveCustomerPosition(ctx, app, sale, currency, financierLeg, settlesDirect)
+    : { state: "UNKNOWN" };
   const obligations: SettlementObligations = routeKnown
     ? {
         financier: financierObligation,
         supplier: supplierObligation,
-        customer: await resolveCustomerObligation(ctx, app, sale, currency, financierLeg, settlesDirect),
+        customer: customerPosition.state,
       }
     : { financier: "UNKNOWN", supplier: "UNKNOWN", customer: "UNKNOWN" };
 
@@ -988,6 +991,8 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
     /** The one resolution of what the supplier keeps, for the same reason. */
     supplierEntitlement,
     obligations,
+    /** The customer-invoice debt, from the same read the customer obligation was judged on. */
+    customerInvoice: { state: customerPosition.state, outstandingMinor: customerPosition.outstandingMinor, currency },
     // A cancelled sale's books were reversed: whatever the obligations say, the
     // money on it is not "settled" (SCRUM-446). Without this a CLOSED application
     // over a cancelled sale read SETTLEMENT as COMPLETE.
@@ -997,28 +1002,30 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
 
 /**
  * What the customer still owes on this deal (SCRUM-571 D-43), judged by the
- * shared invoice predicate. "NONE" only where nothing is owed is proven: no sale
- * yet, or a plan-covered deal whose customer gap is exactly 0. An unreadable gap
- * is UNKNOWN, never zero. On the legacy plan-less path the finalization transfer
- * already shrank the invoice to what the customer owes, so it is judged directly.
+ * shared invoice predicate. "NONE" only before finalization, when there is no
+ * sale and so no invoice yet. An unreadable gap is UNKNOWN, never zero. Once the
+ * deal is finalized the canonical invoice is ALWAYS judged, including on a
+ * plan-covered deal whose customer gap is exactly 0: the gap is a figure on the
+ * application, the invoice is what the customer actually owes, and a deal reads
+ * settled only when that invoice is proven paid (a paid zero-value invoice still
+ * reads CLOSED). On the legacy plan-less path the finalization transfer already
+ * shrank the invoice to what the customer owes, so it is judged directly.
  */
-async function resolveCustomerObligation(
+async function resolveCustomerPosition(
   ctx: QueryCtx,
   app: Doc<"financeApplications">,
   sale: Doc<"sales"> | null | undefined,
   currency: string,
   financierLeg: FinancierLeg,
   settlesDirect: boolean
-): Promise<ObligationState> {
+): Promise<CustomerInvoicePosition> {
   if (financierLeg !== "NONE") {
-    if (!app.finalizedSaleId) return "NONE";
-    if (financedSaleRecognitionApplies(app, { settlesDirect })) {
-      const gap = composeCustomerGapToDealer(app);
-      if (!gap.readable) return "UNKNOWN";
-      if (gap.amountMinor === 0) return "NONE";
+    if (!app.finalizedSaleId) return { state: "NONE" };
+    if (financedSaleRecognitionApplies(app, { settlesDirect }) && !composeCustomerGapToDealer(app).readable) {
+      return { state: "UNKNOWN" };
     }
   }
-  return resolveCustomerInvoiceObligation(ctx, sale, { orgId: app.orgId, currency });
+  return resolveCustomerInvoicePosition(ctx, sale, { orgId: app.orgId, currency });
 }
 
 /**
@@ -1589,6 +1596,18 @@ async function buildCockpitMoney(
       awaitingActuals: feesAwaitingActuals,
     },
     parties,
+    /**
+     * SCRUM-571 (D-48): what the customer still owes on the deal's canonical
+     * invoice, SEPARATE from the CUSTOMER party row above (which states the held
+     * deposit position). The state is the one the settlement obligation was judged
+     * on and the amount comes from the same read, so the two cannot diverge.
+     * `outstandingMinor` is null unless the invoice is proven (OPEN or CLOSED).
+     */
+    customerInvoice: {
+      state: settlementFacts.customerInvoice.state,
+      outstandingMinor: settlementFacts.customerInvoice.outstandingMinor ?? null,
+      currency,
+    },
     /**
      * Whether "Settle supplier" may be recorded NOW, decided here from the same
      * claim `recordReceipt` will refuse on. The supplier row above keeps saying
@@ -2421,6 +2440,11 @@ export const dealCockpit = query({
        * obligation only the permitted could discharge.
        */
       economicsStamp: economicsStamp(app),
+      /**
+       * SCRUM-571 (D-48): the QUALITATIVE state of the customer's invoice, for every
+       * caller. The amount rides in `money.customerInvoice` for `view:finance` only.
+       */
+      customerInvoiceState: settlementFacts.customerInvoice.state,
       /**
        * The denomination this deal's money may be SPELLED in, or null.
        *
