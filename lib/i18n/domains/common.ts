@@ -411,6 +411,7 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   EventRetried: ["Retry queued — the posting will be re-attempted shortly.", "تمت جدولة إعادة المحاولة — سيُعاد ترحيل القيد قريباً."],
   AccountingEventStatusFailed: ["Failed", "فشل"],
   AccountingEventStatusPending: ["Pending", "قيد الانتظار"],
+  LoadMoreFailedEvents: ["Load more failed events", "تحميل المزيد من الأحداث الفاشلة"],
   ConfirmRetryFailedOutbox: ["Retry posting this failed accounting event?", "إعادة محاولة ترحيل هذا القيد المحاسبي الفاشل؟"],
   Unmatch: ["Unmatch", "فك المطابقة"],
   ConfirmUnmatch: ["Unmatch this transaction line?", "فك مطابقة هذا السطر؟"],

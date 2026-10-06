@@ -14,6 +14,9 @@ type PendingAccountingEventsTableProps = {
   busyAction?: string | null;
   t: Translate;
   onRetry?: (eventId: Id<"pendingAccountingEvents">) => void;
+  /** Present only while more FAILED rows can be paged in. */
+  onLoadMoreFailed?: () => void;
+  loadingMoreFailed?: boolean;
 };
 
 function eventLabel(event: PendingEventSummary): string {
@@ -27,6 +30,8 @@ export function PendingAccountingEventsTable({
   busyAction,
   t,
   onRetry,
+  onLoadMoreFailed,
+  loadingMoreFailed,
 }: Readonly<PendingAccountingEventsTableProps>) {
   return (
     <div className="space-y-3">
@@ -97,6 +102,12 @@ export function PendingAccountingEventsTable({
           </TableBody>
         </Table>
       </AccountingTableFrame>
+      {onLoadMoreFailed && (
+        <Button size="sm" variant="outline" disabled={loadingMoreFailed} onClick={onLoadMoreFailed}>
+          {loadingMoreFailed && <Loader2 className="h-4 w-4 animate-spin" />}
+          {t("LoadMoreFailedEvents" as any)}
+        </Button>
+      )}
       {hasMore && <p className="text-xs text-muted-foreground">{t("MorePendingAccountingEvents")}</p>}
     </div>
   );

@@ -1,8 +1,9 @@
 import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { query, type QueryCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS, roleHasPermission } from "./utils/permissions";
+import { PERMISSIONS } from "./utils/permissions";
 import { isOutboxRowRevivable } from "./accountingOutbox";
 import { requireFeature } from "./subscriptions";
 import { REQUIRED_SYSTEM_KEYS } from "./utils/defaultChart";
@@ -76,6 +77,12 @@ async function takeByStatus(
   return { rows: sample.slice(0, limit), hasMore: sample.length > limit };
 }
 
+// Slices by code point, not UTF-16 unit, so a surrogate pair (emoji, rare CJK)
+// at the cap is kept whole rather than split into a lone surrogate.
+export function truncateByCodePoints(text: string, max: number): string {
+  return text.length <= max ? text : Array.from(text).slice(0, max).join("");
+}
+
 // A dead-lettered row's reason is what the last attempt recorded in
 // `lastError` (the enqueue-time `reason` is only why it was deferred). It is
 // truncated and never accompanied by the payload. `retryable` is computed by
@@ -87,7 +94,7 @@ function failedEventSummary(
   const failure = event.lastError ?? event.reason;
   return {
     ...pendingEventSummary(event),
-    reason: failure === undefined ? undefined : failure.slice(0, FAILURE_REASON_MAX_CHARS),
+    reason: failure === undefined ? undefined : truncateByCodePoints(failure, FAILURE_REASON_MAX_CHARS),
     retryable: isOutboxRowRevivable(event),
   };
 }
@@ -95,7 +102,7 @@ function failedEventSummary(
 export const status = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const firstAccount = await ctx.db
@@ -132,17 +139,10 @@ export const status = query({
       return b.periodNumber - a.periodNumber;
     });
 
-    // SCRUM-226 — dead-lettered (FAILED) rows are invisible to a PENDING-only
-    // sample, so the operator could never see or retry them. Same index, same
-    // bound; FAILED rows are read only for callers who can act on them
-    // (`retryFailed` requires MANAGE_FINANCE).
-    const canManageFinance = roleHasPermission(auth.role, PERMISSIONS.MANAGE_FINANCE);
-    const [pending, failed] = await Promise.all([
-      takeByStatus(ctx, args.orgId, "PENDING", OUTBOX_SAMPLE_LIMIT),
-      canManageFinance
-        ? takeByStatus(ctx, args.orgId, "FAILED", OUTBOX_SAMPLE_LIMIT)
-        : Promise.resolve({ rows: [], hasMore: false }),
-    ]);
+    // FAILED rows are not sampled here: a fixed newest-N window would hide an
+    // older revivable row behind newer retired ones (SCRUM-226-1). They are
+    // read page by page through `listFailedEvents`.
+    const pending = await takeByStatus(ctx, args.orgId, "PENDING", OUTBOX_SAMPLE_LIMIT);
 
     return {
       chartInitialized: firstAccount !== null,
@@ -152,8 +152,25 @@ export const status = query({
       recentPeriods: recentPeriods.map(periodSummary),
       pendingEvents: pending.rows.map(pendingEventSummary),
       hasMorePendingEvents: pending.hasMore,
-      failedEvents: failed.rows.map(failedEventSummary),
-      hasMoreFailedEvents: failed.hasMore,
     };
+  },
+});
+
+// SCRUM-226-1 — every FAILED posting is reachable, page by page, newest first.
+// The old fixed sample hid an older revivable row once newer retired ones filled
+// it. MANAGE_FINANCE only (same grant `retryFailed` requires); rows are the
+// same summary projection as before, never the raw payload.
+export const listFailedEvents = query({
+  args: { orgId: v.id("organizations"), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const page = await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "FAILED"))
+      .order("desc")
+      .paginate(args.paginationOpts);
+    return { ...page, page: page.page.map(failedEventSummary) };
   },
 });

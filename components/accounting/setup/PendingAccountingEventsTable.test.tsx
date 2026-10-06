@@ -49,6 +49,40 @@ describe("SCRUM-226 — Retry is offered only on retryable FAILED rows", () => {
     expect(screen.queryAllByRole("button", { name: /RetryEvent/ })).toHaveLength(0);
   });
 
+  test("SCRUM-226-1: Load more is shown only while more FAILED rows can be paged in", () => {
+    const onLoadMoreFailed = vi.fn();
+    const { rerender } = render(
+      <PendingAccountingEventsTable
+        events={[event("dead", "FAILED", 10, true)]}
+        hasMore={false}
+        canManageFinance
+        t={t as never}
+        onRetry={vi.fn()}
+        onLoadMoreFailed={onLoadMoreFailed}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /LoadMoreFailedEvents/ }));
+    expect(onLoadMoreFailed).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <PendingAccountingEventsTable
+        events={[event("dead", "FAILED", 10, true)]}
+        hasMore={false}
+        canManageFinance
+        t={t as never}
+        onRetry={vi.fn()}
+        onLoadMoreFailed={onLoadMoreFailed}
+        loadingMoreFailed
+      />
+    );
+    expect((screen.getByRole("button", { name: /LoadMoreFailedEvents/ }) as HTMLButtonElement).disabled).toBe(true);
+
+    rerender(
+      <PendingAccountingEventsTable events={[event("dead", "FAILED", 10, true)]} hasMore={false} canManageFinance t={t as never} onRetry={vi.fn()} />
+    );
+    expect(screen.queryByRole("button", { name: /LoadMoreFailedEvents/ })).toBeNull();
+  });
+
   test("FAILED and PENDING rows are visibly labelled differently", () => {
     renderTable([event("dead", "FAILED", 10, true), event("flaky", "PENDING", 3)]);
 
