@@ -1038,7 +1038,9 @@ describe("SCRUM-713 - the default MANAGER role can unwind a paid deal without re
     // The default MANAGER holds both, so the same unwind it can start it can also walk away from.
     expect(await status(s, applicationId, s.templateManager.as)).toMatchObject({ eligibility: { canAbandon: true } });
     await abandonAs(s.templateManager);
-    expect((await s.t.run((ctx) => ctx.db.get(unwindId)))?.status).not.toBe("ACTIVE");
+    const abandoned = await s.t.run((ctx) => ctx.db.get(unwindId));
+    expect(abandoned?.status).toBe("ABANDONED");
+    expect(abandoned?.abandonment?.abandonedBy).toBe(s.templateManager.userId);
   });
 
   test("the permission refusal has an Arabic and an English translation key", async () => {
