@@ -66,6 +66,10 @@ import {
   stampAcquisitionPointer,
 } from "./utils/commitmentSources";
 import { IN_FLIGHT_FINANCE_STATUSES as FINANCE_IN_FLIGHT } from "./utils/financeStatuses";
+import {
+  hasPendingDisposition,
+  hasPendingDispositionExceptDeposit,
+} from "./utils/depositCancellationPending";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 
@@ -75,6 +79,13 @@ import { MutationCtx, QueryCtx } from "./_generated/server";
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const COMMITMENT_MESSAGES = {
+  /**
+   * SCRUM-712 — a cancelled sale's deposit share on this car has no refund or
+   * forfeit recorded yet. Applies to EVERY customer, including the one whose
+   * deposit it is (Sol 6 ruling c22231, option A).
+   */
+  pendingDepositDisposition:
+    "A deposit from a cancelled sale on this vehicle still needs a refund or forfeiture decision. Complete that decision before the vehicle can be committed, sold or made available again.",
   heldByAnotherDeal:
     "This vehicle is already committed to another deal. Release that commitment before starting a new one.",
   heldByAnotherDealSale:
@@ -344,6 +355,17 @@ export async function resolveActingRoot(
   // `vehicles.createReservation`), where there is no cache to bound; the query
   // context exists for tests and read-only callers.
   const decisionNow = Date.now();
+
+  // ⚠️ SCRUM-712: BEFORE ownership, JOIN, adoption or OPEN_NEW. An undecided
+  // cancelled-sale deposit share locks the car for everybody, the cancelled
+  // customer included, and for every authority version: this reads the
+  // disposition table, not the V1 kernel, so a LEGACY organization is covered.
+  // `acquireVehicle`, `assertAcquirable` and `assertSaleMayCompleteForVehicle`
+  // all reach this function, so they inherit the refusal.
+  if (await hasPendingDisposition(ctx, args.orgId, args.vehicleId)) {
+    return { decision: "REFUSE", message: COMMITMENT_MESSAGES.pendingDepositDisposition };
+  }
+
   const ownership = await resolveOwnership(ctx, args.orgId, args.vehicleId);
 
   if (ownership.kind === "AMBIGUOUS") {
@@ -1595,6 +1617,24 @@ export async function restoreCommitment(
     createdBy: Id<"users">;
   }
 ): Promise<RestorationOutcome> {
+  // ⚠️ SCRUM-712: this door reaches `executeAcquisition` WITHOUT going through
+  // `resolveActingRoot`, so it needs its own gate. The one thing it may do is
+  // restore the hold of the deposit whose own share is pending (the
+  // cancellation's authority restoration, synchronous or deferred); a share of
+  // any OTHER deposit on the car still refuses.
+  const pendingElsewhere =
+    args.source.kind === "DEPOSIT"
+      ? await hasPendingDispositionExceptDeposit(
+          ctx,
+          args.decision.orgId,
+          args.vehicleId,
+          args.source.depositId
+        )
+      : await hasPendingDisposition(ctx, args.decision.orgId, args.vehicleId);
+  if (pendingElsewhere) {
+    return { decision: "REFUSE", reason: COMMITMENT_MESSAGES.pendingDepositDisposition };
+  }
+
   const resolved = await resolveRestorationDecision(ctx, {
     decision: args.decision,
     source: args.source,
@@ -1922,6 +1962,12 @@ export async function hasLiveCommitmentBasis(
 ): Promise<boolean> {
   const skip = (kind: "DEPOSIT" | "RESERVATION" | "FINANCE") =>
     args.excludeKinds !== undefined && args.excludeKinds.includes(kind);
+
+  // ⚠️ SCRUM-712: AN INDEPENDENT BLOCK, evaluated before and regardless of
+  // `excludeKinds`. A caller that excludes the DEPOSIT kind to ask "does
+  // anything ELSE hold this car?" must still be told that an undecided
+  // cancelled-sale share does.
+  if (await hasPendingDisposition(ctx, args.orgId, args.vehicleId)) return true;
 
   // ⚠️ ONE CLOCK, OR NONE. A decision carrying a different instant from the one
   // this call was told to judge against would silently answer a second

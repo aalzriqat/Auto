@@ -175,3 +175,69 @@ describe("SCRUM-712 S1: cancelling a completed sale writes a PENDING per consume
     expect(await pendingRows(s)).toHaveLength(1);
   });
 });
+
+// ─── S2: the doors refuse while a share is undecided ─────────────────────────
+
+const PENDING_MESSAGE = /still needs a refund or forfeiture decision/;
+
+async function cancelledWithDeposit(tag: string) {
+  const s = await seed(tag, 1);
+  await payDeposit(s, 1_000);
+  const sale = await sell(s, s.vehicleA, PRICE_A);
+  await cancel(s, sale);
+  expect(await pendingRows(s)).toHaveLength(1);
+  return s;
+}
+
+describe("SCRUM-712 S2: a pending share locks the car for everybody", () => {
+  test("a new sale of the car is refused, for the same customer", async () => {
+    const s = await cancelledWithDeposit("resaleSame");
+    await expect(sell(s, s.vehicleA, PRICE_A)).rejects.toThrow(PENDING_MESSAGE);
+  });
+
+  test("a new walk-in sale to a DIFFERENT customer is refused too", async () => {
+    const s = await cancelledWithDeposit("resaleOther");
+    const other = await s.t.run((ctx) =>
+      ctx.db.insert("customers", { orgId: s.orgId, firstName: "Rival", lastName: "Buyer" })
+    );
+    await expect(
+      s.asUser.mutation(api.sales.create, {
+        idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId: s.vehicleA, customerId: other,
+        salespersonId: s.userId, salePrice: PRICE_A, saleDate: Date.now(), status: "COMPLETED" as const,
+      })
+    ).rejects.toThrow(PENDING_MESSAGE);
+  });
+
+  test("a direct move to AVAILABLE is refused", async () => {
+    const s = await cancelledWithDeposit("statusAvail");
+    await s.t.run((ctx) => ctx.db.patch(s.vehicleA, { status: "IN_INSPECTION" }));
+    await expect(
+      s.asUser.mutation(api.vehicles.update, { orgId: s.orgId, vehicleId: s.vehicleA, status: "AVAILABLE" })
+    ).rejects.toThrow(PENDING_MESSAGE);
+    // Staying where it is is not a move, and is not refused.
+    await expect(
+      s.asUser.mutation(api.vehicles.update, { orgId: s.orgId, vehicleId: s.vehicleA, status: "IN_INSPECTION" })
+    ).resolves.toBeDefined();
+  });
+
+  test("a sourced car cannot be marked arrived onto the lot", async () => {
+    const s = await cancelledWithDeposit("arrived");
+    await s.t.run((ctx) => ctx.db.patch(s.vehicleA, { status: "SOURCING", sourceType: "SOURCED" }));
+    await expect(
+      s.asUser.mutation(api.vehicles.markSourcedVehicleArrived, { orgId: s.orgId, vehicleId: s.vehicleA })
+    ).rejects.toThrow(PENDING_MESSAGE);
+  });
+
+  test("another car in the same org is unaffected", async () => {
+    const s = await seed("isolated", 2);
+    await payDeposit(s, 1_000);
+    await s.asUser.mutation(api.deposits.allocateToVehicles, {
+      orgId: s.orgId, quoteId: s.quoteId,
+      allocations: [{ vehicleId: s.vehicleA, amount: 400 }, { vehicleId: s.vehicleB!, amount: 600 }],
+    });
+    const saleA = await sell(s, s.vehicleA, PRICE_A);
+    await cancel(s, saleA);
+    expect(await s.t.run((ctx) => hasPendingDisposition(ctx, s.orgId, s.vehicleA))).toBe(true);
+    await expect(sell(s, s.vehicleB!, PRICE_B)).resolves.toBeDefined();
+  });
+});

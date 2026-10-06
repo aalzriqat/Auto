@@ -9,6 +9,7 @@
  *  - the vehicle predicate is a bounded, tenant-scoped existence read that does
  *    not depend on the organization's authority version.
  */
+import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 
@@ -29,6 +30,58 @@ export async function hasPendingDisposition(
       )
       .first();
     if (row) return true;
+  }
+  return false;
+}
+
+export const PENDING_AVAILABILITY_MESSAGE =
+  "A deposit from a cancelled sale on this vehicle still needs a refund or forfeiture decision. Complete it before the vehicle can be made available again.";
+
+/**
+ * Refuses a direct move TO `AVAILABLE` while a share is undecided. The pure
+ * status guard cannot read the database, so every status door calls this beside
+ * it (vehicles.update, vehicleEdits request + approval, vehicleRequests request
+ * + approval). Staying on the current status is never refused.
+ */
+export async function assertNoPendingBeforeAvailable(
+  ctx: QueryCtx | MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    currentStatus: string;
+    nextStatus: string | undefined;
+  }
+): Promise<void> {
+  const next = args.nextStatus?.trim().toUpperCase();
+  if (next !== "AVAILABLE" || next === args.currentStatus.trim().toUpperCase()) return;
+  if (await hasPendingDisposition(ctx, args.orgId, args.vehicleId)) {
+    throw new ConvexError(PENDING_AVAILABILITY_MESSAGE);
+  }
+}
+
+/**
+ * Does any undecided share on this vehicle belong to a DIFFERENT deposit?
+ *
+ * For the cancellation's own authority restoration only: it re-establishes the
+ * hold of the very deposit whose share just went pending, so that deposit's own
+ * rows must not refuse it. Anything else on the car still does. Bounded read.
+ */
+export async function hasPendingDispositionExceptDeposit(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">,
+  depositId: Id<"deposits">
+): Promise<boolean> {
+  for (const status of BLOCKING) {
+    const rows = await ctx.db
+      .query("depositCancellationPendings")
+      .withIndex("by_org_vehicle_status", (q) =>
+        q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("status", status)
+      )
+      .take(50);
+    if (rows.some((row) => row.depositId !== depositId)) return true;
+    // A full page of one deposit's rows could hide a different one beyond it.
+    if (rows.length === 50) return true;
   }
   return false;
 }
