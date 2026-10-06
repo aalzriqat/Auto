@@ -486,6 +486,63 @@ describe("runVitestCoverageShards", () => {
     );
   });
 
+  // SCRUM-140: with only the blob reporter a subprocess that exits 1 prints
+  // nothing, so a teardown race, an unhandled error and a real failing test are
+  // indistinguishable. Fifteen Sonar-shard failures in CI between 2026-09-27 and
+  // 2026-10-06 read only "blob report written ... status=1".
+  describe("SCRUM-140 every test-running subprocess explains its own failure", () => {
+    const testRunning = (calls: typeof childBoundary.calls) =>
+      calls.map(rawArgs).filter((args) => args.includes("--coverage") && !args.some((arg) => arg.startsWith("--merge-reports=")));
+
+    test.each(["unit", "sonar"])("%s mode: a console reporter beside blob, and the output file bound to blob only", async (mode) => {
+      await run(mode, { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_SHARDS: "2" });
+      const calls = testRunning(childBoundary.calls);
+      expect(calls.length).toBeGreaterThanOrEqual(3);
+      for (const args of calls) {
+        expect(args).toContain("--reporter=blob");
+        expect(args).toContain("--reporter=dot");
+        const outputs = args.filter((arg) => arg.startsWith("--outputFile"));
+        expect(outputs).toHaveLength(1);
+        expect(outputs[0]).toMatch(/^--outputFile\.blob=.+\.json$/);
+        expect(outputs[0]).toContain(path.join(process.cwd(), TEST_BLOB_DIR));
+      }
+    });
+
+    test("the real Vitest, given the runner's own reporter arguments, reports a zero-failing-test error and still writes the blob", async () => {
+      await run("sonar", { VITEST_COVERAGE_SHARDS: "2" });
+      const shard = testRunning(childBoundary.calls).find((args) => args.some((arg) => arg.startsWith("--shard=")));
+      const reporting = (shard ?? []).filter((arg) => arg.startsWith("--reporter=") || arg.startsWith("--outputFile"));
+      expect(reporting.length).toBeGreaterThan(0);
+
+      const fixture = mkdtempSync(path.join(os.tmpdir(), "autoflow-scrum140-"));
+      tempDiscoveryRoots.push(fixture);
+      writeFileSync(
+        path.join(fixture, "late.test.js"),
+        "test('passes', () => { setTimeout(() => { throw new Error('late teardown boom'); }, 1); });\n" +
+          "test('waits', async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });\n",
+      );
+      const blob = path.join(fixture, "blob.json");
+      const args = reporting.map((arg) => (arg.startsWith("--outputFile.blob=") ? `--outputFile.blob=${blob}` : arg));
+      const env: NodeJS.ProcessEnv = { ...process.env };
+      for (const key of Object.keys(env)) {
+        if (key.startsWith("VITEST") || key === "NODE_V8_COVERAGE") delete env[key];
+      }
+      const real = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      const result = real.spawnSync(
+        process.execPath,
+        [path.join(process.cwd(), "node_modules", "vitest", "vitest.mjs"), "run", "--root", fixture, "--globals", ...args],
+        { encoding: "utf8", env, timeout: 120_000 },
+      );
+      const output = `${result.stdout}${result.stderr}`.replace(/\x1b\[[0-9;]*m/g, "");
+
+      expect(result.status).toBe(1);
+      expect(output).toMatch(/Tests\s+2 passed/);
+      expect(output).toMatch(/Errors\s+1 error/);
+      expect(output).toContain("late teardown boom");
+      expect(readdirSync(fixture)).toContain("blob.json");
+    });
+  });
+
   test("propagates a child-process launch error instead of converting it into a green result", async () => {
     childBoundary.results.push({ status: null, signal: null, error: new Error("spawn exploded") });
     await expect(run("sonar")).rejects.toThrow("spawn exploded");
