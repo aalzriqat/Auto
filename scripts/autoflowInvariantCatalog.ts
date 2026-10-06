@@ -597,7 +597,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       structural(
         "scripts/economicCommandCensus.test.ts",
         ["MUTATION"],
-        "Command-to-money-sink census over imported calls and Convex function references, seeded from public mutations and actions, with pinned analyzer blind spots and a classification ratchet; not yet source-complete (SCRUM-742)."
+        "Command-to-money-sink census over imported calls and Convex function references (regex call graph), seeded from public mutations and actions, with pinned analyzer blind spots, a classification ratchet, and a SCRUM-742 tripwire for the known uncovered call shapes; not yet source-complete (SCRUM-742)."
       ),
       execution(
         "convex/idempotencyEconomicCommands.test.ts",

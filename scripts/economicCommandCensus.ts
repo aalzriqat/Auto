@@ -11,8 +11,8 @@
  *   reverse  financial sink  -> public mutation   (over reversed edges)
  * Agreement is asserted, not assumed — see the test beside this file.
  *
- * ── Four blind spots this analyzer has already had, each of which produced a
- * WRONG census before it was caught. All four are pinned as regression tests in
+ * ── Seven blind spots this analyzer has already had, each of which produced a
+ * WRONG census before it was caught. All seven are pinned as regression tests in
  * `economicCommandCensus.test.ts`; do not "simplify" any of them away.
  *
  *  1. BARE-NAME CALLEE RESOLUTION fuses this graph. `create`, `add` and
@@ -37,12 +37,58 @@
  *     transactions row and posts — is invisible to a check that reads only the
  *     command's own body. A local-only check called 13 further commands safe.
  *
- * Bias is deliberately OVER-INCLUSIVE throughout. A false positive costs one
+ *  5. COMMENT TEXT IS NOT A CALL. A body is sliced to the next declaration, so
+ *     the next function's JSDoc sits in the previous body, and matching call /
+ *     hook tokens over raw text turned a JSDoc naming a hook into a false money
+ *     edge (SCRUM-738). Edge extraction reads comment-free text (`stripComments`,
+ *     TypeScript-aware so strings, templates and regexes are not mistaken for
+ *     comments). Sinks and mint/post checks deliberately still read raw bodies.
+ *
+ *  6. A FACTORY-BUILT HOOK IS A REAL CALL. Edge text started on the line AFTER
+ *     the declaration, so `export const hookX = makeHook("X", ...)` and
+ *     `makeReversalHook<T>({` had no edge to their factory; comment-derived edges
+ *     had been hiding that (SCRUM-738 review F1). The declaration line's code
+ *     after the first `=` is read for `const`/`let`, with the Convex builder
+ *     calls blanked so a command does not link to the `mutation` wrapper, and a
+ *     call may carry a type-argument list. (In practice only `const` lines reach
+ *     this read: the DECL matcher never matches `let`, so the `let` branch in
+ *     `declarationEdgeText` is currently unreachable. Documented, not changed.)
+ *
+ *  7. A CONVEX FUNCTION REFERENCE IS A DELEGATION (SCRUM-743). `ctx.runMutation(
+ *     internal.m.f, …)` and `scheduler.runAfter(0, internal.m.f)` reach `m.f`
+ *     without a call expression, and a public ACTION (not only a mutation) is a
+ *     client-callable command. Neither was in the graph: six public mutations and
+ *     one action reached money through references alone (136 -> 143).
+ *
+ * ── KNOWN under-inclusive gaps. The list is NOT exhaustive of what a regex call
+ *   graph can miss; known gaps include:
+ *   SCRUM-742 (regex shapes, pinned as KNOWN GAP tests, guarded by a tripwire):
+ *   (a) a generic call whose type argument contains parentheses, e.g.
+ *       `make<{ cb: (x: number) => void }>()`, gets no edge (the type-argument
+ *       pattern cannot span `(`);
+ *   (b) ANY call on a top-level `function` declaration line, i.e. a parameter
+ *       default (`function w(ctx, x = sink(ctx))`) or a one-line body
+ *       (`function w(ctx) { hookX(ctx); }`), gets no edge (the line is not read).
+ *   SCRUM-743 closed the Convex function REFERENCE gap (blind spot 7:
+ *       `ctx.runMutation/runAction(internal.…)`, `ctx.scheduler.runAfter/runAt(…,
+ *       internal.…|api.…)` are edges; public ACTIONS are entrypoints).
+ *   Still not modelled (SCRUM-742, NOT guarded by any tripwire): `httpAction`
+ *   route handlers (`http.route`), namespace/default imports, re-exports, and
+ *   function values passed without being called (other than `hook*` names), and
+ *   a function reference held in a variable.
+ *   No SCRUM-742 shape is on a current money path; the `SCRUM-742 tripwire` test
+ *   in `economicCommandCensus.test.ts` fails if one appears in convex/. The fix
+ *   is a TypeScript-AST rewrite of edge extraction (SCRUM-742).
+ *
+ * The design OBJECTIVE is an OVER-INCLUSIVE bias: a false positive costs one
  * explicit classification; a false negative hides a command that can duplicate
- * money on a retry.
+ * money on a retry. That objective is NOT a guarantee or a proof of
+ * completeness: this is a regex call graph, and the gaps listed above are where
+ * it errs the other way.
  */
 import fs from "node:fs";
 import path from "node:path";
+import ts from "typescript";
 
 export type Bucket = "IDENTITY_GUARDED" | "STATE_GUARDED" | "NON_ECONOMIC" | "RETIRED";
 
@@ -106,16 +152,94 @@ export interface Graph {
   sinks: Set<string>;
 }
 
+/**
+ * Blind spot 5. Returns `src` with every comment replaced by spaces, keeping
+ * every newline (so line numbers match) and never fusing neighbours
+ * (`foo/**\/bar` becomes `foo      bar`).
+ *
+ * It parses with TypeScript rather than scanning characters because a comment
+ * marker is only a comment in code position: `//` inside a string, a template
+ * text, or a regex literal (`/["']\/\//`) is not one, and a call inside a
+ * `${...}` template expression is real code. Every token's leading trivia
+ * (the gap between its full start and its real start) holds only whitespace and
+ * comments, so those gaps are the complete set of comments in the file.
+ * Used for EDGE EXTRACTION only; sinks and mint/post checks read raw bodies.
+ */
+export function stripComments(src: string): string {
+  const sf = ts.createSourceFile("census.ts", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const chars = src.split("");
+  const blank = (from: number, to: number) => {
+    for (let i = from; i < to; i++) if (chars[i] !== "\n" && chars[i] !== "\r") chars[i] = " ";
+  };
+  const trivia = (from: number, to: number) => {
+    let i = from;
+    while (i < to) {
+      if (src[i] === "/" && src[i + 1] === "/") {
+        let e = i;
+        while (e < to && src[e] !== "\n" && src[e] !== "\r") e++;
+        blank(i, e);
+        i = e;
+      } else if (src[i] === "/" && src[i + 1] === "*") {
+        const close = src.indexOf("*/", i + 2);
+        const e = close === -1 || close + 2 > to ? to : close + 2;
+        blank(i, e);
+        i = e;
+      } else i++;
+    }
+  };
+  const visit = (node: ts.Node) => {
+    if (node.kind >= ts.SyntaxKind.FirstJSDocNode && node.kind <= ts.SyntaxKind.LastJSDocNode) return;
+    // A token is a leaf even when it has children: a JSDoc that ends the file is
+    // attached to the EndOfFileToken as a child, which `kids.length === 0` missed.
+    const isToken = node.kind >= ts.SyntaxKind.FirstToken && node.kind <= ts.SyntaxKind.LastToken;
+    const kids = isToken ? [] : node.getChildren(sf);
+    if (kids.length === 0) {
+      trivia(node.pos, node.getStart(sf));
+      return;
+    }
+    for (const k of kids) visit(k);
+  };
+  visit(sf);
+  return chars.join("");
+}
+
+const BUILDER_CALL =
+  /\b(?:mutation|internalMutation|query|internalQuery|action|internalAction|httpAction)\b(?=\s*[(<])/g;
+
+/**
+ * Blind spot 6. The part of a declaration line that can hold a real callee:
+ * for `const`/`let`, the comment-free text AFTER the first `=` (so a factory-built
+ * hook, `const hookX = makeHook("X")`, keeps its edge to `makeHook`), with the
+ * Convex builder calls blanked (`= mutation({` must not link every command to the
+ * `mutation` wrapper symbol, blind spot 1). `function` declarations contribute
+ * nothing: the WHOLE declaration line is unread, so a call in a parameter default
+ * AND a call in a body that opens and closes on that same line
+ * (`function f(ctx) { hookX(ctx); }`) both get no edge. Reading the line would
+ * add the function's own signature types as noise. That omission is the KNOWN GAP
+ * (b) of SCRUM-742, guarded by a tripwire test over convex/. Likewise the `let` alternative
+ * below is currently UNREACHABLE: DECL only matches `const`, never `let`, so no
+ * `let` declaration line ever arrives here (SCRUM-738 N3).
+ */
+function declarationEdgeText(codeLine: string): string {
+  if (!/^(?:export\s+)?(?:const|let)\s/.test(codeLine)) return "";
+  const eq = codeLine.indexOf("=");
+  if (eq === -1) return "";
+  return codeLine.slice(eq + 1).replace(BUILDER_CALL, (m) => " ".repeat(m.length));
+}
+
 /** Parses the convex tree into symbols and an import-resolved call graph. */
 export function buildGraph(convexRoot: string): Graph {
   const symbols = new Map<string, SymbolRecord>();
   const perFile = new Map<string, Map<string, string>>();
   const importsOf = new Map<string, Map<string, string>>();
+  const edgeText = new Map<string, string>();
 
   for (const file of walk(convexRoot)) {
     const rel = path.relative(convexRoot, file).replace(/\\/g, "/").replace(/\.ts$/, "");
     const src = fs.readFileSync(file, "utf8");
     const lines = src.split(/\r?\n/);
+    // Comment-free twin of `lines`, same line count, for edge extraction only.
+    const codeLines = stripComments(src).split(/\r?\n/);
 
     // Blind spot 1: edges resolve through real import statements, never by name.
     const imap = new Map<string, string>();
@@ -154,6 +278,7 @@ export function buildGraph(convexRoot: string): Graph {
       else if (/=\s*(internalQuery|query)\s*\(/.test(head)) kind = "query";
       const id = `${rel}.${s.name}`;
       symbols.set(id, { id, file: rel, name: s.name, kind, body, line: s.i + 1 });
+      edgeText.set(id, [declarationEdgeText(codeLines[s.i] ?? ""), ...codeLines.slice(s.i + 1, end)].join("\n"));
       nameMap.set(s.name, id);
     });
     perFile.set(rel, nameMap);
@@ -172,12 +297,13 @@ export function buildGraph(convexRoot: string): Graph {
   };
 
   for (const s of symbols.values()) {
-    // Comments are not calls: `reopen() refuses LOCKED` in prose linked lock -> reopen.
-    const body = stripComments(s.body.split("\n").slice(1).join("\n"));
+    const body = edgeText.get(s.id) ?? "";
     const local = perFile.get(s.file)!;
     const imap = importsOf.get(s.file)!;
     const names = new Set<string>();
-    for (const m of body.matchAll(/\b([A-Za-z_]\w*)\s*\(/g)) names.add(m[1]);
+    // A call may carry a type-argument list (`makeHook<T>(`); `a < b && c(` is
+    // not one, because the `<...>` must close before the `(` with no parens inside.
+    for (const m of body.matchAll(/\b([A-Za-z_]\w*)\s*(?:<[^()]*>)?\s*\(/g)) names.add(m[1]);
     for (const m of body.matchAll(/\b(hook[A-Z]\w*)\b/g)) names.add(m[1]);
     for (const n of names) {
       if (local.has(n)) link(s.id, local.get(n)!);
@@ -186,7 +312,7 @@ export function buildGraph(convexRoot: string): Graph {
         if (tm?.has(n)) link(s.id, tm.get(n)!);
       }
     }
-    // Blind spot 5: delegation through a Convex function reference.
+    // Blind spot 7: delegation through a Convex function reference.
     for (const target of functionReferenceTargets(body)) link(s.id, target);
   }
 
@@ -194,7 +320,7 @@ export function buildGraph(convexRoot: string): Graph {
 }
 
 /**
- * Blind spot 5 (SCRUM-743). `ctx.runMutation(internal.m.f, …)`,
+ * Blind spot 7 (SCRUM-743). `ctx.runMutation(internal.m.f, …)`,
  * `ctx.scheduler.runAfter(0, internal.m.f, …)`, `runAt` and `runAction` reach
  * `m.f` through a FUNCTION REFERENCE, never a call expression, so the bare-call
  * edges above cannot see them. `internal.a.b.f` / `api.a.b.f` names module
@@ -207,10 +333,6 @@ export function buildGraph(convexRoot: string): Graph {
  * imports, re-exports and httpAction handlers are not resolved.
  */
 const FUNCTION_REFERENCE = /\b(?:internal|api)\.((?:[A-Za-z_]\w*\.)+[A-Za-z_]\w*)/g;
-
-export function stripComments(body: string): string {
-  return body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:\w"'`])\/\/.*$/gm, "$1");
-}
 
 export function functionReferenceTargets(body: string): string[] {
   const out: string[] = [];

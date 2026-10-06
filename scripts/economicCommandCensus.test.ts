@@ -16,12 +16,15 @@
  *
  * The self-tests at the top come first deliberately, in the same spirit as
  * `tenantWriteGuard.test.ts`: a guard nobody has watched fail is not a guard.
- * They pin the FOUR blind spots this analyzer actually had, each of which
+ * They pin the SEVEN blind spots this analyzer actually had, each of which
  * produced a wrong census before it was caught. Deleting any of them re-opens a
  * hole that has already cost real analysis once.
  */
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import ts from "typescript";
 import {
   buildGraph,
   censusForward,
@@ -29,15 +32,26 @@ import {
   findSinks,
   functionReferenceTargets,
   hasCommandIdentity,
-  stripComments,
   mintsAndPostsLocally,
   mintsAndPostsTransitively,
   MONEY_TABLES,
+  stripComments,
   type Bucket,
   type SymbolRecord,
 } from "./economicCommandCensus";
 
 const CONVEX_ROOT = path.resolve(__dirname, "..", "convex");
+
+// The real-tree build runs under CI v8 coverage and takes several seconds since
+// SCRUM-738 parses each file with TypeScript; the default 5 s budget made
+// BLIND SPOT 1 time out in CI run 37418341588.
+const REAL_TREE_BUDGET_MS = 120_000;
+
+// The real convex/ graph is built at most once per file, on first use.
+let realTree: ReturnType<typeof buildGraph> | undefined;
+function realTreeGraph(): ReturnType<typeof buildGraph> {
+  return (realTree ??= buildGraph(CONVEX_ROOT));
+}
 
 const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "accountingCutover.approveOpeningBalance": { bucket: "STATE_GUARDED", mechanism: "refuses unless the draft is in an approvable state; proven by rehearsal R10-style replay" },
@@ -136,7 +150,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "fixedAssets.capitalize": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "fixedAssets.dispose": { bucket: "STATE_GUARDED", mechanism: "hookAssetDisposed keys on `asset_disposed_${assetId}` — the PRE-EXISTING asset, so a retry reproduces the key and the posting engine dedupes it" },
   "fixedAssets.impair": { bucket: "STATE_GUARDED", mechanism: "hookAssetImpaired keys on `asset_impaired_${assetId}` — pre-existing asset id, stable across a retry" },
-  "fixedAssets.remove": { bucket: "STATE_GUARDED", mechanism: "delegates to dispose; same stable `asset_disposed_${assetId}` key" },
+  "fixedAssets.remove": { bucket: "STATE_GUARDED", mechanism: "refuses removal of a capitalized, undisposed asset (callers must dispose instead); soft-deletes only legacy or already-DISPOSED assets, which carry no ledger effect" },
   "fixedAssets.update": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "orgSettings.upsert": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "partnerEquity.add": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
@@ -186,19 +200,22 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "workOrders.update": { bucket: "STATE_GUARDED", mechanism: "refuses when the work order already carries expenseId, which this same mutation patches on success" },
 };
 
-describe("analyzer self-tests — the four blind spots, pinned", () => {
+describe("analyzer self-tests — the six blind spots, pinned", () => {
   test("BLIND SPOT 1: a callee is resolved through imports, never by bare name", () => {
     // `create`, `add` and `update` are symbol names in dozens of modules. Bare
     // name resolution fused the graph and reported 348 of 349 public mutations
     // as economic. If a future edit reintroduces name-based linking, the
     // population explodes and this catches it.
-    const g = buildGraph(CONVEX_ROOT);
+    // Same memo as realTreeGraph(). The literal `buildGraph` call stays in this
+    // body because the ECON-1 invariant-catalog proof requires the test to call
+    // the analyzer itself; this test is first in the file, so it builds the tree.
+    const g = (realTree ??= buildGraph(CONVEX_ROOT));
     const population = censusForward(g);
     const publicMutations = [...g.symbols.values()].filter((s) => s.kind === "publicMutation");
     expect(publicMutations.length).toBeGreaterThan(300);
     // A fused graph puts essentially EVERY public mutation in the population.
     expect(population.size).toBeLessThan(publicMutations.length * 0.6);
-  });
+  }, REAL_TREE_BUDGET_MS);
 
   test("BLIND SPOT 2: a financial sink is not only a ledger insert", () => {
     // Defining a sink as a journal/accountingEvents insert dropped seven
@@ -268,7 +285,7 @@ describe("analyzer self-tests — the four blind spots, pinned", () => {
     expect(mintsAndPostsTransitively(g, command.id)).toBe(true);
   });
 
-  test("BLIND SPOT 5: a Convex function reference is an edge, in every delegation form", () => {
+  test("BLIND SPOT 7: a Convex function reference is an edge, in every delegation form", () => {
     // SCRUM-743: runMutation / scheduler.runAfter / runAt / runAction reach the
     // target through a reference, never a call expression. Each form must link.
     const body = [
@@ -290,7 +307,7 @@ describe("analyzer self-tests — the four blind spots, pinned", () => {
     expect(stripComments('const u = "https://example.com";')).toContain("https://example.com");
   });
 
-  test("BLIND SPOT 5: the real delegated paths are in the population, the comment edge is not", () => {
+  test("BLIND SPOT 7: the real delegated paths are in the population, the comment edge is not", () => {
     const g = buildGraph(CONVEX_ROOT);
     const forward = censusForward(g);
     const edge = (a: string, b: string) => g.edges.get(a)?.has(b) ?? false;
@@ -312,12 +329,251 @@ describe("analyzer self-tests — the four blind spots, pinned", () => {
     expect(edge("accountingPeriods.lock", "accountingPeriods.reopen")).toBe(false);
     expect([...forward]).not.toContain("accountingPeriods.lock");
   });
+
+  test("BLIND SPOT 5: comment text is not a call (SCRUM-738)", () => {
+    // A body is sliced from its declaration to the NEXT declaration, so the next
+    // function's leading JSDoc lands in the previous symbol's body, and call/hook
+    // tokens were matched over raw text. A JSDoc naming a hook therefore produced
+    // a false money edge. Edge extraction now strips comments with a TypeScript
+    // aware pass; it must stay precise in BOTH directions: no edge from a comment,
+    // and no real call lost to a `//` or `/*` that is only text inside a literal.
+    const BT = "`";
+    const fixture = [
+      "export function foo(x: number) { return x; }",
+      "export function hookX() { return 0; }",
+      "export function runWith(h: unknown) { return h; }",
+      "export function awaitfoo() { return 0; }",
+      // (a) comments only. The JSDoc on nextOne is attributed to commentsOnly.
+      "export function commentsOnly() {",
+      "  // calls foo() and hookX here",
+      "  /** hookX and foo() in a block */",
+      "  return 1; // trailing foo() hookX",
+      "}",
+      "/**",
+      " * Leading JSDoc of the NEXT declaration: names `hookX` and foo().",
+      " */",
+      "export function nextOne() { return 2; }",
+      // (b) real edges that sit beside a trailing comment on the same line.
+      "export function realCall() {",
+      "  const y = foo(1); // mentions runWith() only in a comment",
+      "  return y;",
+      "}",
+      "export function realHookValue() {",
+      "  runWith(hookX); /* trailing */",
+      "}",
+      "export function realHookConst() {",
+      "  const h = hookX; // trailing foo()",
+      "  return h;",
+      "}",
+      // Replacing a comment must not glue its neighbours: awaitfoo is NOT foo.
+      "export function gluing() {",
+      "  return await/**/foo(1);",
+      "}",
+      // (c) comment markers inside literals must not hide a following real call.
+      "export function dqString() {",
+      '  const s = "https://example.com"; foo(1);',
+      "  runWith(2);",
+      "}",
+      "export function sqString() {",
+      "  const s = 'http://x /* y'; foo(1);",
+      "  runWith(2);",
+      "}",
+      "export function templateText() {",
+      "  const t = " + BT + "a // b /* c" + BT + "; foo(1);",
+      "  runWith(2);",
+      "}",
+      "export function regexSlashes() {",
+      String.raw`  const r = /["']\/\//; foo(1);`,
+      "  runWith(2);",
+      "}",
+      "export function regexQuote() {",
+      String.raw`  const r = /"/; foo(1);`,
+      "  runWith(2);",
+      "}",
+      "export function regexBlockOpen() {",
+      String.raw`  const r = /a\/*b/; foo(1);`,
+      "  runWith(2);",
+      "}",
+      // (d) a call inside a template expression is still a call.
+      "export function templateCall() {",
+      "  return " + BT + "x ${foo()} y // z" + BT + ";",
+      "}",
+      "export function nestedTemplateCall() {",
+      "  return " + BT + "a ${" + BT + "b ${runWith(1)}" + BT + "} /* c" + BT + ";",
+      "}",
+    ].join("\n");
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "census738-"));
+    try {
+      fs.writeFileSync(path.join(dir, "fx.ts"), fixture);
+      // (e) a JSDoc that is the LAST content of a file hangs off the EndOfFileToken.
+      fs.writeFileSync(
+        path.join(dir, "tail.ts"),
+        "export function foo() { return 0; }\nexport function bar() { return 1; }\n/** foo() */\n",
+      );
+      const g = buildGraph(dir);
+      const edgesOf = (n: string) => [...(g.edges.get(`fx.${n}`) ?? [])].sort();
+
+      // (a) comments create no edge, including the JSDoc the slicer mis-attributes.
+      expect(edgesOf("commentsOnly")).toEqual([]);
+      expect(edgesOf("nextOne")).toEqual([]);
+
+      // (b) real call / hook-as-value edges survive beside a trailing comment.
+      expect(edgesOf("realCall")).toEqual(["fx.foo"]);
+      expect(edgesOf("realHookValue")).toEqual(["fx.hookX", "fx.runWith"]);
+      expect(edgesOf("realHookConst")).toEqual(["fx.hookX"]);
+      expect(edgesOf("gluing")).toEqual(["fx.foo"]);
+
+      // (c) literals that merely contain `//` or `/*` lose nothing after them.
+      for (const n of ["dqString", "sqString", "templateText", "regexSlashes", "regexQuote", "regexBlockOpen"]) {
+        expect(edgesOf(n), n).toEqual(["fx.foo", "fx.runWith"]);
+      }
+
+      // (d) calls inside template expressions are still seen.
+      expect(edgesOf("templateCall")).toEqual(["fx.foo"]);
+      expect(edgesOf("nestedTemplateCall")).toEqual(["fx.runWith"]);
+
+      // (e) terminal JSDoc is comment text too: no edge, and the text is blanked.
+      expect([...(g.edges.get("tail.bar") ?? [])]).toEqual([]);
+      const tail = "export function bar() { return 1; }\n/** foo() */\n";
+      const blanked = stripComments(tail);
+      expect(blanked).toBe("export function bar() { return 1; }\n" + " ".repeat("/** foo() */".length) + "\n");
+      expect(blanked.length).toBe(tail.length);
+      expect(blanked.split("\n").length).toBe(tail.split("\n").length);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("BLIND SPOT 6: a factory-built hook is a real call (SCRUM-738 F1)", () => {
+    // `export const hookCommissionPaid = makeCommissionHook(...)` puts its only
+    // callee on the DECLARATION line, which edge extraction used to skip (it
+    // sliced from the line after). Comment-derived edges had hidden that. The
+    // declaration line's code after the first `=` is now read for `const`/`let`,
+    // minus the Convex builder call (`mutation(`) which would otherwise fuse the
+    // graph, and a call may carry a type-argument list (`make<T>(`).
+    const fixture = [
+      'export function makeHook(name: string) {',
+      '  return async (ctx: any) => { await ctx.db.insert("receivables", { name }); };',
+      '}',
+      'export function makeHook2<T>(opts: T) {',
+      '  return async (ctx: any) => { await ctx.db.insert("receipts" + "x", opts); await ctx.db.insert("deposits", {}); };',
+      '}',
+      'export function plain() { return 1; }',
+      'export function a() { return 1; }',
+      'export const mutation = customMutation(rawMutation);',
+      'export const hookA = makeHook("X");',
+      // A NESTED generic inside the type argument (`Id<"t">`), as the real
+      // reversal hooks in convex/accounting/workflowHooks.ts carry.
+      'export const hookB = makeHook2<{ k: Id<"t"> }>({',
+      '  k: "v",',
+      '});',
+      'export const pubA = mutation({',
+      '  handler: async (ctx: any) => { await hookA(ctx); },',
+      '});',
+      'export const pubB = mutation({',
+      '  handler: async (ctx: any) => { await hookB(ctx); },',
+      '});',
+      'export const pubNoCall = mutation({',
+      '  handler: async (ctx: any) => { return 1; },',
+      '});',
+      'export const pubGeneric = mutation<Args>({',
+      '  handler: async (ctx: any) => { return 1; },',
+      '});',
+      // A comparison is not a type-argument list: no edge to `a`.
+      'export const pubCompare = mutation({',
+      '  handler: async (ctx: any, b: number, c: (n: number) => number) => { return a < b && c(1); },',
+      '});',
+    ].join("\n");
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "census738f1-"));
+    try {
+      fs.writeFileSync(path.join(dir, "fx6.ts"), fixture);
+      const g = buildGraph(dir);
+      const edgesOf = (n: string) => [...(g.edges.get(`fx6.${n}`) ?? [])].sort();
+
+      // The factory callee is on the declaration line only.
+      expect(edgesOf("hookA")).toEqual(["fx6.makeHook"]);
+      expect(edgesOf("hookB")).toEqual(["fx6.makeHook2"]);
+      // The builder call never becomes an edge, so the graph cannot fuse.
+      for (const n of ["pubNoCall", "pubGeneric"]) expect(edgesOf(n), n).toEqual([]);
+      expect(edgesOf("pubA")).toEqual(["fx6.hookA"]);
+      expect(edgesOf("pubB")).toEqual(["fx6.hookB"]);
+      // `a < b && c(` is a comparison, not `a<...>(`.
+      expect(edgesOf("pubCompare")).toEqual([]);
+
+      expect(g.sinks.has("fx6.makeHook")).toBe(true);
+      expect(g.sinks.has("fx6.makeHook2")).toBe(true);
+      const forward = censusForward(g);
+      expect(forward.has("fx6.pubA")).toBe(true);
+      expect(forward.has("fx6.pubB")).toBe(true);
+      expect(forward.has("fx6.pubNoCall")).toBe(false);
+      expect(forward.has("fx6.pubGeneric")).toBe(false);
+      expect(forward.has("fx6.pubCompare")).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // ── KNOWN GAPS (SCRUM-742). These two tests assert the gap EXISTS today, so
+  // they are deliberately written to BREAK the moment the analyzer is rewritten
+  // over the TypeScript AST and the gap closes. When they fail: that is the
+  // fix landing. Flip each `toEqual([])` to the control's expectation, rename the
+  // test, and delete the matching SCRUM-742 tripwire below. Neither shape is on a
+  // current money path; the tripwire test over the real tree enforces that.
+  const edgesIn = (file: string, fixture: string, name: string): string[] => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "census742-"));
+    try {
+      fs.writeFileSync(path.join(dir, `${file}.ts`), fixture);
+      const g = buildGraph(dir);
+      return [...(g.edges.get(`${file}.${name}`) ?? [])].sort();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("KNOWN GAP (SCRUM-742): a generic call whose type argument contains parentheses gets no edge", () => {
+    // `(?:<[^()]*>)?` cannot span the `(x: number)` inside the type argument.
+    const fixture = [
+      "export function make<T>(): number { return 1; }",
+      "export const hookGap = make<{ cb: (x: number) => void }>();",
+      // Control: the same call without parentheses in the type argument IS an edge.
+      'export const hookCtl = make<{ k: Id<"t"> }>();',
+    ].join("\n");
+    expect(edgesIn("fx742a", fixture, "hookCtl")).toEqual(["fx742a.make"]);
+    // MUST FLIP to ["fx742a.make"] when SCRUM-742 lands.
+    expect(edgesIn("fx742a", fixture, "hookGap")).toEqual([]);
+  });
+
+  test("KNOWN GAP (SCRUM-742): any call on a `function` declaration line (parameter default or one-line body) gets no edge", () => {
+    // Function declaration lines are not read for edges (only const/let are), so
+    // neither a parameter default nor a body that opens and closes on that line.
+    const fixture = [
+      "export function plain() { return 1; }",
+      "export function fnDefault(x = plain()) { return x; }",
+      "export function one() { return plain(); }",
+      // Control: the same call on a LATER line is an edge.
+      // (Multi-line: the declaration line itself is never read for `function`.)
+      "export function fnBody(x: number) {",
+      "  return plain() + x;",
+      "}",
+    ].join("\n");
+    expect(edgesIn("fx742b", fixture, "fnBody")).toEqual(["fx742b.plain"]);
+    // BOTH MUST FLIP to ["fx742b.plain"] when SCRUM-742 lands.
+    expect(edgesIn("fx742b", fixture, "fnDefault")).toEqual([]);
+    expect(edgesIn("fx742b", fixture, "one")).toEqual([]);
+  });
 });
 
 describe("SCRUM-313 economic command classification ratchet", () => {
-  const g = buildGraph(CONVEX_ROOT);
-  const forward = censusForward(g);
-  const reverse = censusReverse(g);
+  let g: ReturnType<typeof buildGraph>;
+  let forward: Set<string>;
+  let reverse: Set<string>;
+  beforeAll(() => {
+    g = realTreeGraph();
+    forward = censusForward(g);
+    reverse = censusReverse(g);
+  }, REAL_TREE_BUDGET_MS);
 
   test("the population is derived identically in both directions", () => {
     const onlyForward = [...forward].filter((x) => !reverse.has(x)).sort((a, b) => a.localeCompare(b));
@@ -414,4 +670,118 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     for (const id of MANIFEST_SAMPLE) expect([...forward], id).toContain(id);
     expect(forward.size).toBeGreaterThan(31);
   });
+
+  test("factory-built reversal and commission hooks keep their real edges and reach a sink (SCRUM-738 N1)", () => {
+    // The real `export const hookX = makeY<{ ... Id<"t"> ... }>({` declarations
+    // in convex/accounting/workflowHooks.ts. If the declaration-line read or the
+    // type-argument pattern regressed, these hooks would lose their only edge.
+    const H = "accounting/workflowHooks";
+    const hasEdge = (from: string, to: string) => g.edges.get(`${H}.${from}`)?.has(`${H}.${to}`) === true;
+    expect(g.symbols.has(`${H}.hookCommissionReversed`)).toBe(true);
+    expect(hasEdge("hookCommissionReversed", "makeReversalHook")).toBe(true);
+    expect(hasEdge("hookCommissionPaid", "makeCommissionHook")).toBe(true);
+
+    const reachesSink = (start: string): boolean => {
+      const seen = new Set([start]);
+      const stack = [start];
+      while (stack.length) {
+        const cur = stack.pop()!;
+        if (g.sinks.has(cur)) return true;
+        for (const n of g.edges.get(cur) ?? []) {
+          if (!seen.has(n)) { seen.add(n); stack.push(n); }
+        }
+      }
+      return false;
+    };
+    expect(reachesSink(`${H}.hookCommissionPaid`)).toBe(true);
+    expect(reachesSink(`${H}.reverseCommissionForSale`)).toBe(true);
+  });
+});
+
+describe("SCRUM-742 tripwire — call shapes the census cannot see must not appear in convex/", () => {
+  // The census builds edges with a regex over comment-stripped text. Two call
+  // shapes produce NO edge (see the KNOWN GAP tests above): (a) a generic call
+  // with parentheses in its type argument; (b) ANY call or `hook*` reference on a
+  // top-level `function` declaration line (parameter default or one-line body).
+  // They are unreachable from any money path today; this keeps that true.
+  // Measured 2026-10-06 over 262 non-test sources: (a) zero; (b) zero beyond
+  // `Date.now()` (which can neither reach a sink nor hide a call to one).
+  // Function REFERENCES (`ctx.runMutation(internal.…)`, scheduler) are a separate,
+  // untested gap: SCRUM-743.
+  // ~80% of the 262 non-test convex sources measured 2026-10-06.
+  const FILE_FLOOR = 210;
+  // COUPLING: this must match the analyzer's unexported `walk` in
+  // scripts/economicCommandCensus.ts (every `.ts` under convex/, skipping
+  // `_generated` and `*.test.ts`). It is duplicated rather than imported because
+  // exporting `walk` would be an executable change to the analyzer; the file-count
+  // floor below catches a narrowed copy.
+  const walkSources = (dir: string, out: string[] = []): string[] => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name !== "_generated") walkSources(p, out);
+      } else if (e.name.endsWith(".ts") && !e.name.endsWith(".test.ts")) out.push(p);
+    }
+    return out;
+  };
+
+  test("SCRUM-742 tripwire: no uncovered census call shape exists in convex/ sources", () => {
+    const offenders: string[] = [];
+    const files = walkSources(CONVEX_ROOT);
+    // Floor: a walker narrowed by mistake must not pass this test vacuously.
+    expect(files.length, "tripwire scanned suspiciously few convex sources").toBeGreaterThanOrEqual(FILE_FLOOR);
+    for (const file of files) {
+      const sf = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
+      const at = (n: ts.Node) =>
+        `${path.relative(CONVEX_ROOT, file).replace(/\\/g, "/")}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`;
+      const startLine = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line;
+      // Top-level `function` declarations are exactly what the analyzer's DECL
+      // matches as a `function` line, and the whole line is unread for edges.
+      const unreadFunctionLines = sf.statements.filter(ts.isFunctionDeclaration);
+      for (const decl of unreadFunctionLines) {
+        const declLine = startLine(decl);
+        const scanLine = (m: ts.Node): void => {
+          if (startLine(m) === declLine) {
+            if (ts.isCallExpression(m) && m.expression.getText(sf) !== "Date.now") {
+              offenders.push(`(b) call ${m.expression.getText(sf)} on a function declaration line at ${at(m)}`);
+            } else if (ts.isIdentifier(m) && m !== decl.name && /^hook[A-Z]/.test(m.text)) {
+              // (the declared name itself is the symbol, not a reference to one)
+              offenders.push(`(b) ${m.text} on a function declaration line at ${at(m)}`);
+            }
+          }
+          ts.forEachChild(m, scanLine);
+        };
+        scanLine(decl);
+      }
+      const visit = (n: ts.Node): void => {
+        // (a) a generic call whose type argument contains parentheses.
+        if (ts.isCallExpression(n) && n.typeArguments?.some((t) => t.getText(sf).includes("("))) {
+          offenders.push(`(a) generic type argument with parentheses at ${at(n)}`);
+        }
+        // (b') a parameter default containing a call other than `Date.now`, on any
+        // function form not already covered by the top-level declaration scan.
+        if (
+          (ts.isFunctionDeclaration(n) && !unreadFunctionLines.includes(n)) ||
+          ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isMethodDeclaration(n)
+        ) {
+          for (const p of n.parameters) {
+            if (!p.initializer) continue;
+            const scan = (m: ts.Node): void => {
+              if (ts.isCallExpression(m) && m.expression.getText(sf) !== "Date.now") {
+                offenders.push(`(b') parameter default calling ${m.expression.getText(sf)} at ${at(m)}`);
+              }
+              ts.forEachChild(m, scan);
+            };
+            scan(p.initializer);
+          }
+        }
+        ts.forEachChild(n, visit);
+      };
+      visit(sf);
+    }
+    expect(
+      offenders,
+      "uncovered census call shape — see SCRUM-742; run a manual census check or land SCRUM-742",
+    ).toEqual([]);
+  }, REAL_TREE_BUDGET_MS);
 });
