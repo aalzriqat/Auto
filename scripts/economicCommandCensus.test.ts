@@ -168,7 +168,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "payroll.recoverAdvance": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "prepaidExpenses.approveCorrectionRequest": { bucket: "STATE_GUARDED", mechanism: "refuses unless request.status === PENDING" },
   "prepaidExpenses.correctSchedule": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
-  "prepaidExpenses.redriveScheduleEvents": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743 (was NON_ECONOMIC, which was false: reviveFailedEntry and drainEntries schedule claimOutboxRow, which posts): revives only FAILED non-retired rows, drainEntries skips rows that are not PENDING or already dispatched, claimOutboxRow refuses an already-claimed row, and the worker posts under the idempotencyKey stored on the row, deduped by_org_idempotency" },
+  "prepaidExpenses.redriveScheduleEvents": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743 (was NON_ECONOMIC, which was false: reviveFailedEntry returns a FAILED row to PENDING and drainEntries schedules claimOutboxRow, which posts): revives only FAILED non-retired rows, drainEntries skips rows that are not PENDING or already dispatched, claimOutboxRow refuses an already-claimed row, and the worker posts under the idempotencyKey stored on the row, deduped by_org_idempotency" },
   "prepaidExpenses.runAmortizationNow": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743 public ACTION: one runMutation(catchUpScheduleMutation) per schedule; amortizeScheduleForMonth refuses a month <= lastRecognizedYearMonth and a month with nothing due, and advances that cursor in the SAME transaction as hookPrepaidExpenseAmortized, keyed `prepaid_amort_${scheduleId}_${yearMonth}`, so a re-run after partial success re-posts no month" },
   "prepaidExpenses.retryAmortizationFailure": { bucket: "STATE_GUARDED", mechanism: "hookPrepaidExpenseAmortized keys on `prepaid_amort_${scheduleId}_${yearMonth}` — both pre-existing/deterministic, which is precisely what makes a RETRY endpoint safe" },
   "sales.completeDraft": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
@@ -610,6 +610,11 @@ describe("SCRUM-313 economic command classification ratchet", () => {
       }
       return false;
     };
+    // Controls: the walk must see the known STATE_GUARDED paths, and every named
+    // worker must still exist, so a rename cannot silently empty the check.
+    for (const worker of POSTING_WORKERS) expect(g.symbols.has(worker)).toBe(true);
+    expect(reaches("prepaidExpenses.redriveScheduleEvents")).toBe(true);
+    expect(reaches("accountingOutbox.retryFailed")).toBe(true);
     const offenders = Object.entries(CLASSIFICATION)
       .filter(([id, entry]) => entry.bucket === "NON_ECONOMIC" && forward.has(id) && reaches(id))
       .map(([id]) => id)
