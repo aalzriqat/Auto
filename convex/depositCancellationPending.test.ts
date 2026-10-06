@@ -13,6 +13,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { hasPendingDisposition } from "./utils/depositCancellationPending";
+import { syncVehicleHoldStatus } from "./utils/depositHelpers";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -239,5 +240,71 @@ describe("SCRUM-712 S2: a pending share locks the car for everybody", () => {
     await cancel(s, saleA);
     expect(await s.t.run((ctx) => hasPendingDisposition(ctx, s.orgId, s.vehicleA))).toBe(true);
     await expect(sell(s, s.vehicleB!, PRICE_B)).resolves.toBeDefined();
+  });
+});
+
+// ─── S3: only a refund or forfeiture decides the share, and it frees the car ─
+
+describe("SCRUM-712 S3: exits", () => {
+  const release = (s: Seed, depositId: Id<"deposits">, resolution: "REFUNDED" | "FORFEITED") =>
+    s.asManager.mutation(api.deposits.release, {
+      idempotencyKey: crypto.randomUUID(), orgId: s.orgId, depositId, resolution,
+      ...(resolution === "REFUNDED" ? { refundMethod: "CASH" as const } : {}),
+    });
+  const depositIdOf = (s: Seed) =>
+    s.t.run(async (ctx) => (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)!._id);
+  const status = (s: Seed) => s.t.run(async (ctx) => (await ctx.db.get(s.vehicleA))!.status);
+
+  test("while pending the car is not advertised as available", async () => {
+    const s = await cancelledWithDeposit("lockedStatus");
+    expect(await status(s)).not.toBe("AVAILABLE");
+  });
+
+  test("even with every other hold gone, the status writer keeps the car off AVAILABLE", async () => {
+    // releaseHoldForApplicationQuote and friends clear holdActive and re-sync. The
+    // pending share is the only thing left holding the car, and it must be enough.
+    const s = await cancelledWithDeposit("syncLock");
+    await s.t.run(async (ctx) => {
+      const deposit = (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)!;
+      await ctx.db.patch(deposit._id, { holdActive: false });
+      await syncVehicleHoldStatus(ctx, s.vehicleA);
+    });
+    expect(await status(s)).toBe("RESERVED");
+  });
+
+  test("refunding the reinstated whole-row deposit decides the share and frees the car", async () => {
+    const s = await cancelledWithDeposit("refundDirect");
+    await release(s, await depositIdOf(s), "REFUNDED");
+    const rows = await pendingRows(s);
+    expect(rows.map((r) => r.status)).toEqual(["RELEASED"]);
+    expect(rows[0].resolvedAt).toBeDefined();
+    expect(await status(s)).toBe("AVAILABLE");
+    expect(await s.t.run((ctx) => hasPendingDisposition(ctx, s.orgId, s.vehicleA))).toBe(false);
+  });
+
+  test("forfeiting it decides the share as FORFEITED", async () => {
+    const s = await cancelledWithDeposit("forfeitDirect");
+    await release(s, await depositIdOf(s), "FORFEITED");
+    expect((await pendingRows(s)).map((r) => r.status)).toEqual(["FORFEITED"]);
+    expect(await status(s)).toBe("AVAILABLE");
+  });
+
+  test("voiding the deposit as 'recorded in error' is refused while its share is pending", async () => {
+    const s = await cancelledWithDeposit("voidRefused");
+    await expect(
+      s.asManager.mutation(api.deposits.voidDeposit, { orgId: s.orgId, depositId: await depositIdOf(s) })
+    ).rejects.toThrow(/awaiting a refund or forfeiture decision/);
+    expect((await pendingRows(s)).map((r) => r.status)).toEqual(["PENDING"]);
+  });
+
+  test("a quarantined share keeps blocking exactly like a pending one", async () => {
+    const s = await cancelledWithDeposit("quarantine");
+    const [row] = await pendingRows(s);
+    await s.t.run((ctx) => ctx.db.patch(row._id, { status: "QUARANTINED" }));
+    expect(await s.t.run((ctx) => hasPendingDisposition(ctx, s.orgId, s.vehicleA))).toBe(true);
+    await release(s, await depositIdOf(s), "REFUNDED");
+    // A human reconciliation, never a side effect of a payout.
+    expect((await pendingRows(s)).map((r) => r.status)).toEqual(["QUARANTINED"]);
+    await expect(sell(s, s.vehicleA, PRICE_A)).rejects.toThrow(PENDING_MESSAGE);
   });
 });

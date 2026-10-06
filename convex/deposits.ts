@@ -13,6 +13,12 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import {
+  assertNoPendingShareOnHold,
+  clearPendingDisposition,
+  hasPendingDispositionForDeposit,
+  PENDING_EXIT_MESSAGE,
+} from "./utils/depositCancellationPending";
+import {
   releaseAllVehiclesForDeposit,
   releaseHeldDeposit,
   maybeReleaseVehicleHold,
@@ -289,6 +295,11 @@ export const voidDeposit = mutation({
       throw new ConvexError(
         "This deposit has been applied to a completed sale, so it cannot be voided as recorded in error. Cancel that sale first."
       );
+    }
+    // SCRUM-712: a cancelled sale's share is customer money awaiting a refund or
+    // forfeiture decision; "recorded in error" would erase it instead.
+    if (await hasPendingDispositionForDeposit(ctx, args.orgId, args.depositId)) {
+      throw new ConvexError(PENDING_EXIT_MESSAGE);
     }
 
     const now = Date.now();
@@ -792,6 +803,17 @@ export const resolveReleasedAllocation = mutation({
       depositId: hold.depositId,
     };
 
+    // SCRUM-712: only a refund or a forfeiture decides a cancelled sale's share.
+    // Moving it, returning it to the pool or recording "other" would leave the
+    // share undecided (or spend it twice), so those are refused up front.
+    if (args.treatment !== "REFUND_TO_CUSTOMER" && args.treatment !== "FORFEITED") {
+      await assertNoPendingShareOnHold(ctx, {
+        orgId: args.orgId,
+        depositId: hold.depositId,
+        holdId: hold._id,
+      });
+    }
+
     // SCRUM-641 (D-35): re-holding a soft-deleted car is a fresh acquisition; refuse before any write.
     if (args.treatment === "RETURN_TO_UNALLOCATED") {
       await assertDepositTargetNotDeleted(ctx, args.orgId, hold.vehicleId);
@@ -935,6 +957,26 @@ export const resolveReleasedAllocation = mutation({
         occurredAt: now,
         idempotencyKey: args.idempotencyKey,
       });
+      // Exactly this hold's share, after its money has actually moved.
+      await clearPendingDisposition(ctx, {
+        orgId: args.orgId,
+        depositId: hold.depositId,
+        holdId: hold._id,
+        resolution: args.treatment === "FORFEITED" ? "FORFEITED" : "REFUNDED",
+        paidMinor: amountMinor,
+        actorId: user._id,
+        now,
+        reference: `deposits.resolveReleasedAllocation ${hold._id}`,
+      });
+      // The decision is made: ask the canonical authority whether anything still
+      // holds the car, now that this share no longer does.
+      await releaseRootIfNoLiveBasis(ctx, {
+        orgId: args.orgId,
+        vehicleId: hold.vehicleId,
+        reason: `cancelled-sale deposit share ${args.treatment.toLowerCase()}`,
+        decisionNow: now,
+      });
+      await syncVehicleHoldStatus(ctx, hold.vehicleId, user._id);
     } else {
       if (!args.reason?.trim()) {
         throw new ConvexError(

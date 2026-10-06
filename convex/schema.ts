@@ -4345,6 +4345,8 @@ export default defineSchema({
     resolutionReference: v.optional(v.string()),
   })
     .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
+    // The org-level "is anything blocking at all" probe, read once per function.
+    .index("by_org_status", ["orgId", "status"])
     .index("by_org_application", ["orgId", "applicationId"])
     .index("by_deposit", ["depositId"]),
 

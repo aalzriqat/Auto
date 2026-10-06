@@ -10,6 +10,12 @@ import { normalizeCurrency, amountToMinorOrThrow, type DepositMethod } from "./d
 import { fromMinorUnits } from "./money";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { assertQuoteDepositConservation } from "./depositAllocation";
+import {
+  clearPendingDisposition,
+  hasPendingDisposition,
+  hasPendingDispositionForDeposit,
+  PENDING_EXIT_MESSAGE,
+} from "./depositCancellationPending";
 import { createCanonicalPayment } from "../subledger";
 import {
   getOrgCurrency,
@@ -287,10 +293,15 @@ export async function syncVehicleHoldStatus(
   if (!vehicle || vehicle.isDeleted) return;
   if (vehicle.status === "SOLD" || vehicle.status === "ARCHIVED") return;
 
+  // SCRUM-712: a cancelled sale's undecided deposit share holds the car like any
+  // other basis, whichever door asked and whatever the caller already computed.
+  // Asked LAST: it only matters when nothing else holds the car, and skipping it
+  // otherwise keeps a 100-car deposit under the per-function index-range limit.
   const hasHold =
-    options.hasHold ??
-    ((await hasActiveDepositHold(ctx, vehicleId)) ||
-      (await hasActiveReservationHold(ctx, { orgId: vehicle.orgId, vehicleId })));
+    (options.hasHold ??
+      ((await hasActiveDepositHold(ctx, vehicleId)) ||
+        (await hasActiveReservationHold(ctx, { orgId: vehicle.orgId, vehicleId })))) ||
+    (await hasPendingDisposition(ctx, vehicle.orgId, vehicleId));
 
   // One resolver decides the target for both this function and the
   // reconcileVehicleHolds migration, so a dry-run preview cannot disagree with
@@ -678,6 +689,10 @@ export async function recordUnpostedDepositTreatment(
   for (const deposit of deposits) {
     if (!deposit.holdActive) continue;
     if (deposit.vehicleId !== args.vehicleId) continue;
+    // SCRUM-712: "OTHER" is not a decision about a cancelled sale's share.
+    if (await hasPendingDispositionForDeposit(ctx, deposit.orgId, deposit._id)) {
+      throw new ConvexError(PENDING_EXIT_MESSAGE);
+    }
     await ctx.db.patch(deposit._id, {
       // status deliberately untouched — the money is still held.
       holdActive: false,
@@ -1070,6 +1085,19 @@ export async function releaseHeldDeposit(
     notes: args.notes ?? deposit.notes,
     ...(args.treatment ? { resolutionTreatment: args.treatment } : {}),
     ...(args.saleId ? { resolutionSaleId: args.saleId } : {}),
+  });
+  // SCRUM-712: paying out the free part of a reinstated whole-row deposit decides
+  // that deposit's cancelled-sale share (the one with no hold of its own) — and
+  // only that one. Cleared BEFORE the cars are released, so the car lock lifts
+  // in the same transaction as the decision, never earlier.
+  await clearPendingDisposition(ctx, {
+    orgId: args.orgId,
+    depositId: args.depositId,
+    resolution: args.resolution,
+    paidMinor: amountMinor,
+    actorId: args.actorId,
+    now,
+    reference: `deposits.release ${args.depositId} #${releaseSeq}`,
   });
   if (closesTheRow) await releaseAllVehiclesForDeposit(ctx, deposit);
   const amountMajor = fromMinorUnits(amountMinor, currency);

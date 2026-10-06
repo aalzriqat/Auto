@@ -13,8 +13,49 @@ import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 
-/** Statuses that keep the car locked. QUARANTINED blocks exactly like PENDING. */
-const BLOCKING = ["PENDING", "QUARANTINED"] as const;
+/**
+ * Statuses that keep the car locked: QUARANTINED blocks exactly like PENDING.
+ *
+ * ⚠️ ONE index range, on purpose. Of the four statuses only PENDING and
+ * QUARANTINED sort between "PENDING" and "QUARANTINED" (FORFEITED < PENDING,
+ * RELEASED > QUARANTINED), so a closed range reads exactly the blocking rows.
+ * This predicate runs once per car on multi-car quotes, and two ranges per car
+ * blew Convex's 4096-ranges-per-function limit on a 100-car quote.
+ */
+const BLOCKING_FROM = "PENDING";
+const BLOCKING_TO = "QUARANTINED";
+
+/**
+ * Per-execution memo of "does this org have ANY blocking share". A 100-car
+ * deposit asks the per-car question a hundred times; the org-level answer is one
+ * range read, and for an org with nothing pending (almost always) it answers
+ * every car. Keyed by the db handle so it lives exactly one function execution,
+ * and dropped by every writer in this module so the same transaction never reads
+ * a stale "none".
+ */
+const orgHasBlocking = new WeakMap<object, Map<string, boolean>>();
+
+async function orgHasAnyBlocking(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">
+): Promise<boolean> {
+  const memo = orgHasBlocking.get(ctx.db) ?? new Map<string, boolean>();
+  orgHasBlocking.set(ctx.db, memo);
+  const cached = memo.get(orgId);
+  if (cached !== undefined) return cached;
+  const row = await ctx.db
+    .query("depositCancellationPendings")
+    .withIndex("by_org_status", (q) =>
+      q.eq("orgId", orgId).gte("status", BLOCKING_FROM).lte("status", BLOCKING_TO)
+    )
+    .first();
+  memo.set(orgId, row !== null);
+  return row !== null;
+}
+
+function forgetOrgMemo(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): void {
+  orgHasBlocking.get(ctx.db)?.delete(orgId);
+}
 
 /** Is any cancelled-sale deposit share on this vehicle still undecided? */
 export async function hasPendingDisposition(
@@ -22,16 +63,18 @@ export async function hasPendingDisposition(
   orgId: Id<"organizations">,
   vehicleId: Id<"vehicles">
 ): Promise<boolean> {
-  for (const status of BLOCKING) {
-    const row = await ctx.db
-      .query("depositCancellationPendings")
-      .withIndex("by_org_vehicle_status", (q) =>
-        q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("status", status)
-      )
-      .first();
-    if (row) return true;
-  }
-  return false;
+  if (!(await orgHasAnyBlocking(ctx, orgId))) return false;
+  const row = await ctx.db
+    .query("depositCancellationPendings")
+    .withIndex("by_org_vehicle_status", (q) =>
+      q
+        .eq("orgId", orgId)
+        .eq("vehicleId", vehicleId)
+        .gte("status", BLOCKING_FROM)
+        .lte("status", BLOCKING_TO)
+    )
+    .first();
+  return row !== null;
 }
 
 export const PENDING_AVAILABILITY_MESSAGE =
@@ -72,18 +115,101 @@ export async function hasPendingDispositionExceptDeposit(
   vehicleId: Id<"vehicles">,
   depositId: Id<"deposits">
 ): Promise<boolean> {
-  for (const status of BLOCKING) {
-    const rows = await ctx.db
-      .query("depositCancellationPendings")
-      .withIndex("by_org_vehicle_status", (q) =>
-        q.eq("orgId", orgId).eq("vehicleId", vehicleId).eq("status", status)
-      )
-      .take(50);
-    if (rows.some((row) => row.depositId !== depositId)) return true;
-    // A full page of one deposit's rows could hide a different one beyond it.
-    if (rows.length === 50) return true;
+  const rows = await ctx.db
+    .query("depositCancellationPendings")
+    .withIndex("by_org_vehicle_status", (q) =>
+      q
+        .eq("orgId", orgId)
+        .eq("vehicleId", vehicleId)
+        .gte("status", BLOCKING_FROM)
+        .lte("status", BLOCKING_TO)
+    )
+    .take(50);
+  if (rows.some((row) => row.depositId !== depositId)) return true;
+  // A full page of one deposit's rows could hide a different one beyond it.
+  return rows.length === 50;
+}
+
+/** Does this deposit still have an undecided share (PENDING or QUARANTINED)? */
+export async function hasPendingDispositionForDeposit(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  depositId: Id<"deposits">
+): Promise<boolean> {
+  const rows = await ctx.db
+    .query("depositCancellationPendings")
+    .withIndex("by_deposit", (q) => q.eq("depositId", depositId))
+    .take(50);
+  // A full page cannot prove the remainder is decided, so it blocks too.
+  return (
+    rows.length === 50 ||
+    rows.some((row) => row.orgId === orgId && (row.status === "PENDING" || row.status === "QUARANTINED"))
+  );
+}
+
+export const PENDING_EXIT_MESSAGE =
+  "This deposit still has a share from a cancelled sale awaiting a refund or forfeiture decision. Decide that share first; it cannot be voided, reallocated, returned to the pool or recorded as another treatment.";
+
+/** The one undecided share a hold carries, if any. */
+async function pendingShareOfHold(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  depositId: Id<"deposits">,
+  holdId: Id<"depositVehicleHolds"> | undefined
+): Promise<Doc<"depositCancellationPendings"> | null> {
+  const rows = await ctx.db
+    .query("depositCancellationPendings")
+    .withIndex("by_deposit", (q) => q.eq("depositId", depositId))
+    .take(50);
+  return (
+    rows.find(
+      (row) =>
+        row.orgId === orgId &&
+        (row.status === "PENDING" || row.status === "QUARANTINED") &&
+        row.holdId === holdId
+    ) ?? null
+  );
+}
+
+/** Refuses a treatment that would leave a pending share undecided while moving its money. */
+export async function assertNoPendingShareOnHold(
+  ctx: QueryCtx | MutationCtx,
+  args: { orgId: Id<"organizations">; depositId: Id<"deposits">; holdId: Id<"depositVehicleHolds"> }
+): Promise<void> {
+  if (await pendingShareOfHold(ctx, args.orgId, args.depositId, args.holdId)) {
+    throw new ConvexError(PENDING_EXIT_MESSAGE);
   }
-  return false;
+}
+
+/**
+ * A refund or forfeiture of a share decides exactly that share: clears the ONE
+ * PENDING row it names (by hold, or the whole-row share when `holdId` is absent)
+ * and nothing else. QUARANTINED rows are never cleared here — they need a human
+ * reconciliation. `paidMinor` must cover the share, or it stays pending.
+ */
+export async function clearPendingDisposition(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    depositId: Id<"deposits">;
+    holdId?: Id<"depositVehicleHolds">;
+    resolution: "REFUNDED" | "FORFEITED";
+    paidMinor: number;
+    actorId: Id<"users">;
+    now: number;
+    reference: string;
+  }
+): Promise<boolean> {
+  const row = await pendingShareOfHold(ctx, args.orgId, args.depositId, args.holdId);
+  if (!row || row.status !== "PENDING" || args.paidMinor < row.amountMinor) return false;
+  await ctx.db.patch(row._id, {
+    status: args.resolution === "FORFEITED" ? "FORFEITED" : "RELEASED",
+    resolvedAt: args.now,
+    resolvedBy: args.actorId,
+    resolutionReference: args.reference,
+  });
+  forgetOrgMemo(ctx, args.orgId);
+  return true;
 }
 
 /**
@@ -110,6 +236,7 @@ export async function recordPendingDisposition(
     )
     .first();
   if (existing) return existing._id;
+  forgetOrgMemo(ctx, application.orgId);
   return await ctx.db.insert("depositCancellationPendings", {
     orgId: application.orgId,
     depositId: application.depositId,
