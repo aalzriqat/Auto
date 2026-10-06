@@ -665,15 +665,10 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // SCRUM-690: + financeDealCosts.recordExecutionFeeActual / bindExecutionFeeLine / unbindExecutionFeeLine (+3).
   // 512 -> 519 total, 340 -> 347 analysed. Each takes `orgId` and reads through an org-checked load after
   // `requireTenantAuth` before any write; the unguarded-write audit stays empty. Skipped counts unchanged.
-  // SCRUM-712 batch: + migrateDepositCancellationPendings.resolveQuarantinedPending (+1), 520 -> 521 total,
-  // 348 -> 349 analysed (org-scoped read, permission-checked actor).
-  // SCRUM-712 S5: + migrateDepositCancellationPendings.backfillDepositCancellationPendings (+1) - 519 -> 520
-  // total, 347 -> 348 analysed. It takes `orgId`, scans only that org's applications by index and
-  // org-compares every sale/deposit it reads before any write.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 521,
-      analysed: 349,
+      totalMutations: 519,
+      analysed: 347,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 157,
     });

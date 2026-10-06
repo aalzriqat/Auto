@@ -264,8 +264,6 @@ export async function recordPendingDisposition(
     applicationId: Id<"depositApplications">;
     actorId: Id<"users">;
     now: number;
-    /** Legacy backfill only: an ambiguous share is written QUARANTINED, never guessed. */
-    status?: "PENDING" | "QUARANTINED";
   }
 ): Promise<Id<"depositCancellationPendings"> | null> {
   const application: Doc<"depositApplications"> | null = await ctx.db.get(args.applicationId);
@@ -289,7 +287,7 @@ export async function recordPendingDisposition(
     ...(application.holdId ? { holdId: application.holdId } : {}),
     amountMinor: application.amountMinor,
     currency: application.currency,
-    status: args.status ?? "PENDING",
+    status: "PENDING",
     createdAt: args.now,
     createdBy: args.actorId,
   });
