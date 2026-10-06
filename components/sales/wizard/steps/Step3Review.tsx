@@ -45,20 +45,14 @@ export function Step3Review({
   const saveQuote = useMutation(api.quotes.saveQuote);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const availableVehicles = useQuery(
+  // SCRUM-689: resolve the quoted car(s) from the org's whole live stock rather
+  // than per-status lists, so a held, sold or sourced car still reviews and
+  // prints with its own data. Deleted cars are excluded server-side.
+  const orgVehicles = useQuery(
     api.vehicles.listAll,
-    activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE", includeReserved: true } : "skip"
+    activeOrgId ? { orgId: activeOrgId } : "skip"
   );
-  // Sourced cars sit in SOURCING status, in a separate list — without them the
-  // review/print resolves a sourced vehicle to undefined and shows empty data.
-  const sourcingVehicles = useQuery(
-    api.vehicles.listAll,
-    activeOrgId ? { orgId: activeOrgId, status: "SOURCING" } : "skip"
-  );
-  const allVehicles = useMemo(
-    () => [...(availableVehicles ?? []), ...(sourcingVehicles ?? [])],
-    [availableVehicles, sourcingVehicles]
-  );
+  const allVehicles = useMemo(() => orgVehicles ?? [], [orgVehicles]);
 
   const financeCompanies = useQuery(
     api.finance.listCompanies,
