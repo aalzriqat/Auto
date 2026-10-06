@@ -98,6 +98,11 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "The depreciation start date is not a valid date.",
     "تاريخ بدء الاستهلاك غير صالح.",
   ],
+  // SCRUM-651. The English text must equal SUPPLIER_PAYABLE_PAID_CANCEL_MESSAGE in convex/utils/saleCancellation.ts.
+  ServerError_SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED: [
+    "Cannot automatically cancel a sale after the supplier payable has been paid, in whole or in part. Use a manual accounting correction.",
+    "لا يمكن إلغاء البيع تلقائياً بعد سداد ذمة المورّد كلياً أو جزئياً. يلزم إجراء تصحيح محاسبي يدوي.",
+  ],
   // SCRUM-563. The English text must equal the server message in convex/utils/idempotency.ts,
   // and convex/adminOrgs.ts respectively.
   ServerError_COMMAND_RECORDED_BEFORE_RESET: [
@@ -1018,6 +1023,8 @@ export const commonEn = {
   ClosePeriodBlockersLabel: "Blockers — must be resolved before closing",
   ClosePeriodWarningsLabel: "Warnings — review and acknowledge each one",
   ClosePeriodNoIssues: "No blockers or warnings for this period.",
+  ClosePeriodWarnSupplierPayablesReconPending: "Supplier payables reconciliation could not be completed: accounting postings or drafts that affect supplier payables are still pending. Resolve them, then re-check.",
+  ClosePeriodWarnSupplierPayablesReconTooMany: "Supplier payables reconciliation could not be completed: there are too many records to verify in one pass. Review supplier payables manually.",
   ClosePeriodOverrideReasonLabel: "Override reason",
   ClosePeriodOverrideReasonPlaceholder: "Explain why this period is being closed despite open blockers.",
   ClosePeriodOverrideOwnerOnlyHint: "Only the organization owner can close a period with open blockers.",
@@ -2010,6 +2017,8 @@ export const commonAr = {
   ClosePeriodBlockersLabel: "معوقات — يجب حلها قبل الإغلاق",
   ClosePeriodWarningsLabel: "تحذيرات — راجع وأقر بكل واحد منها",
   ClosePeriodNoIssues: "لا توجد معوقات أو تحذيرات لهذه الفترة.",
+  ClosePeriodWarnSupplierPayablesReconPending: "تعذّر إكمال تسوية ذمم الموردين: ما زالت قيود الترحيل المحاسبية أو المسودات المؤثرة على ذمم الموردين معلقة. عالجها ثم أعد التحقق.",
+  ClosePeriodWarnSupplierPayablesReconTooMany: "تعذّر إكمال تسوية ذمم الموردين: عدد السجلات أكبر من أن يُتحقق منه في مرة واحدة. راجع ذمم الموردين يدوياً.",
   ClosePeriodOverrideReasonLabel: "سبب التجاوز",
   ClosePeriodOverrideReasonPlaceholder: "اشرح سبب إغلاق هذه الفترة رغم وجود معوقات.",
   ClosePeriodOverrideOwnerOnlyHint: "يمكن لمالك المؤسسة فقط إغلاق فترة بها معوقات مفتوحة.",

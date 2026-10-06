@@ -101,6 +101,9 @@ export const AppErrorCode = {
   ASSET_PURCHASE_DATE_IN_FUTURE: "ASSET_PURCHASE_DATE_IN_FUTURE",
   ASSET_PURCHASE_DATE_INVALID: "ASSET_PURCHASE_DATE_INVALID",
   ASSET_DEPRECIATION_START_DATE_INVALID: "ASSET_DEPRECIATION_START_DATE_INVALID",
+  // SCRUM-651. Sale / deal teardown refuses while any supplier payable on the sale carries a
+  // recorded payment (whole or part). Translated under ServerError_<code>.
+  SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED: "SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED",
   // SCRUM-563. Post-reset safety. A command identity recorded before an org financial reset
   // cannot replay after it; the org cannot be reactivated mid-reset. Translated under
   // ServerError_<code>.

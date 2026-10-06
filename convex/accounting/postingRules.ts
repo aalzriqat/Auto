@@ -123,6 +123,44 @@ export const ALL_EVENT_TYPES = new Set<string>([
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
 ]);
 
+/**
+ * SCRUM-651: does a posting of this event type debit or credit
+ * ACCOUNTS_PAYABLE_SUPPLIERS? Exhaustive over EventType (`satisfies`), so a new
+ * event type fails typecheck until someone classifies it. The AP-Suppliers
+ * reconciliation reads this to decide whether a queued posting makes its
+ * comparison non-final; a missing `true` would let it report "reconciled" while
+ * an AP-moving posting is still in flight.
+ * Rules touching AP: consignedAgentSaleLines + ruleSaleCompleted, ruleSupplierPaymentSettled,
+ * ruleVehicleAcquired (ON_ACCOUNT), ruleVehicleAcquisitionCostCorrected (invoice error / vendor credit).
+ */
+export const AP_AFFECTING_BY_EVENT_TYPE = {
+  DEPOSIT_RECEIVED: false, DEPOSIT_APPLIED: false, DEPOSIT_APPLIED_TO_SETTLEMENT: false,
+  DEPOSIT_REFUNDED: false, DEPOSIT_FORFEITED: false,
+  SALE_COMPLETED: true, SALE_CANCELLED: false, COLLECTION_PAYMENT: false, COLLECTION_REFUND: false,
+  RECEIPT_CREDIT_APPLIED: false, EXPENSE_POSTED: false,
+  CHEQUE_RECEIVED: false, CHEQUE_DEPOSITED: false, CHEQUE_CLEARED: false, CHEQUE_RETURNED: false,
+  COMMISSION_ACCRUED: false, COMMISSION_ADJUSTED: false, COMMISSION_PAID: false,
+  FINANCE_DISBURSED: false, FINANCE_CASH_RECEIVED: false, PAYMENT_LINK_RECEIVED: false,
+  SUPPLIER_PAYMENT_SETTLED: true, SUPPLIER_RECEIVABLE_COLLECTED: false, SUPPLIER_COST_RECOVERY_RECEIVED: false,
+  ASSET_CAPITALIZED: false, DEPRECIATION_POSTED: false, ASSET_IMPAIRED: false, ASSET_DISPOSED: false,
+  CAPITAL_CONTRIBUTED: false, PARTNER_DREW: false, PROFIT_DISTRIBUTED: false,
+  CLAIM_SETTLED: false, CLAIM_WRITTEN_OFF: false,
+  CASH_DRAWER_DEPOSITED: false,
+  VEHICLE_ACQUIRED: true, VEHICLE_LANDED_COST_CAPITALIZED: false, VEHICLE_INVENTORY_OPENING_BALANCE: false,
+  VEHICLE_ACQUISITION_COST_CORRECTED: true, VEHICLE_PREP_EXPENSE_RECLASSIFIED: false, TRADE_IN_ACCEPTED: false,
+  FI_COMMISSION_RECOGNIZED: false,
+  PREPAID_EXPENSE_AMORTIZED: false, PREPAID_EXPENSE_REFUNDED: false, PREPAID_EXPENSE_WRITTEN_OFF: false,
+  RECEIVABLE_CREATED: false,
+  CONSIGNED_SALE_RECLASSIFIED: false,
+  EMPLOYEE_ADVANCE_PAID: false, EMPLOYEE_ADVANCE_RECOVERED: false, PAYROLL_ACCRUED: false, PAYROLL_PAID: false,
+  CUSTODY_CASH_ISSUED: false, CUSTODY_CASH_RETURNED: false, CUSTODY_REIMBURSED: false,
+  CUSTODY_FEE_PAID: false, CUSTODY_WRITTEN_OFF: false,
+  CUSTODY_PAYABLE_RECLASSIFIED: false,
+  HANDOVER_COST_PAID_DIRECT: false,
+  FINANCE_COMPANY_FORWARD_PAID: false,
+  JOURNAL_REVERSAL: false,
+} satisfies Record<EventType, boolean>;
+
 export interface LineSpec {
   accountSystemKey: SystemKey;
   debitMinor: number;
