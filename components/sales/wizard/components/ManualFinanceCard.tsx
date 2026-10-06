@@ -140,7 +140,7 @@ export function ManualFinanceCard({
           <label className="text-[11px] text-muted-foreground">{t("ExecutionCommission" as any)}</label>
           <input
             type="number"
-            step="0.01"
+            step="0.001"
             value={executionCommission || ""}
             onChange={(e) => {
               onChangeExecutionCommission(parseFloat(e.target.value) || 0);
@@ -154,7 +154,7 @@ export function ManualFinanceCard({
           <label className="text-[11px] text-muted-foreground">{t("ExecutionFees" as any)}</label>
           <input
             type="number"
-            step="0.01"
+            step="0.001"
             value={executionFees !== undefined ? executionFees : ""}
             onChange={(e) => {
               const val = e.target.value.trim();
