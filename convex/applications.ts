@@ -3155,6 +3155,10 @@ export const repairQuoteEconomicsLineage = mutation({
       ...(app.estimatedClosingExpensesMinor === undefined
         ? { estimatedClosingExpensesMinor: expected.estimatedClosingExpensesMinor }
         : {}),
+      // See `economicsRevision` in the schema. The repair can fill the first payment the funding
+      // split is derived from, so a stamp read before it must stop matching (SCRUM-394). It refuses
+      // once approval evidence exists, so there is no stored split or reconciliation reason to recompute.
+      economicsRevision: (app.economicsRevision ?? 0) + 1,
       updatedAt: now,
     });
     for (const field of missing) {
