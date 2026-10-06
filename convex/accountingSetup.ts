@@ -1,8 +1,10 @@
 import { v } from "convex/values";
-import { query } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
+import { query, type QueryCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { isOutboxRowRevivable } from "./accountingOutbox";
 import { requireFeature } from "./subscriptions";
 import { REQUIRED_SYSTEM_KEYS } from "./utils/defaultChart";
 
@@ -57,6 +59,46 @@ function pendingEventSummary(event: PendingEventSummary): PendingEventSummary {
   };
 }
 
+const OUTBOX_SAMPLE_LIMIT = 10;
+const FAILURE_REASON_MAX_CHARS = 300;
+
+// Reads limit + 1 rows so `hasMore` is known without a second query.
+async function takeByStatus(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  status: PendingAccountingStatus,
+  limit: number
+) {
+  const sample = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+    .order("desc")
+    .take(limit + 1);
+  return { rows: sample.slice(0, limit), hasMore: sample.length > limit };
+}
+
+// Slices by code point, not UTF-16 unit, so a surrogate pair (emoji, rare CJK)
+// at the cap is kept whole rather than split into a lone surrogate.
+export function truncateByCodePoints(text: string, max: number): string {
+  return text.length <= max ? text : Array.from(text).slice(0, max).join("");
+}
+
+// A dead-lettered row's reason is what the last attempt recorded in
+// `lastError` (the enqueue-time `reason` is only why it was deferred). It is
+// truncated and never accompanied by the payload. `retryable` is computed by
+// the same predicate `reviveFailedEntry` enforces, so Retry is never offered
+// on a row the server will refuse.
+function failedEventSummary(
+  event: PendingEventSummary & { lastError?: string }
+): PendingEventSummary & { retryable: boolean } {
+  const failure = event.lastError ?? event.reason;
+  return {
+    ...pendingEventSummary(event),
+    reason: failure === undefined ? undefined : truncateByCodePoints(failure, FAILURE_REASON_MAX_CHARS),
+    retryable: isOutboxRowRevivable(event),
+  };
+}
+
 export const status = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
@@ -97,12 +139,10 @@ export const status = query({
       return b.periodNumber - a.periodNumber;
     });
 
-    const pendingSample = await ctx.db
-      .query("pendingAccountingEvents")
-      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
-      .order("desc")
-      .take(11);
-    const pendingEvents = pendingSample.slice(0, 10);
+    // FAILED rows are not sampled here: a fixed newest-N window would hide an
+    // older revivable row behind newer retired ones (SCRUM-226-1). They are
+    // read page by page through `listFailedEvents`.
+    const pending = await takeByStatus(ctx, args.orgId, "PENDING", OUTBOX_SAMPLE_LIMIT);
 
     return {
       chartInitialized: firstAccount !== null,
@@ -110,8 +150,27 @@ export const status = query({
       missingSystemAccountKeys,
       currentOpenPeriod: currentOpenPeriod ? periodSummary(currentOpenPeriod) : null,
       recentPeriods: recentPeriods.map(periodSummary),
-      pendingEvents: pendingEvents.map(pendingEventSummary),
-      hasMorePendingEvents: pendingSample.length > pendingEvents.length,
+      pendingEvents: pending.rows.map(pendingEventSummary),
+      hasMorePendingEvents: pending.hasMore,
     };
+  },
+});
+
+// SCRUM-226-1 — every FAILED posting is reachable, page by page, newest first.
+// The old fixed sample hid an older revivable row once newer retired ones filled
+// it. MANAGE_FINANCE only (same grant `retryFailed` requires); rows are the
+// same summary projection as before, never the raw payload.
+export const listFailedEvents = query({
+  args: { orgId: v.id("organizations"), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const page = await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "FAILED"))
+      .order("desc")
+      .paginate(args.paginationOpts);
+    return { ...page, page: page.page.map(failedEventSummary) };
   },
 });
