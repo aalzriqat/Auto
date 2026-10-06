@@ -36,7 +36,7 @@ export type AccountingSetupView = "all" | "settings" | "close";
 export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: AccountingSetupView }> = {}) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const { hasPermission, isOwner, isLoading: permissionsLoading } = usePermissions();
+  const { hasPermission, isOwner, permissions, isLoading: permissionsLoading } = usePermissions();
   const [periodDialogOpen, setPeriodDialogOpen] = useState(false);
   const [periodForm, setPeriodForm] = useState<PeriodFormState>(defaultPeriodForm);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -69,7 +69,10 @@ export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: Accountin
     loadMore: loadMoreFailed,
   } = usePaginatedQuery(
     api.accountingSetup.listFailedEvents,
-    activeOrgId && canManageFinance && view !== "settings" ? { orgId: activeOrgId } : "skip",
+    // SCRUM-226-2: gate on the server-resolved list, not hasPermission (true for any role NAMED "OWNER").
+    activeOrgId && permissions.includes(PERMISSIONS.MANAGE_FINANCE) && view !== "settings"
+      ? { orgId: activeOrgId }
+      : "skip",
     { initialNumItems: FAILED_PAGE_SIZE }
   );
 
