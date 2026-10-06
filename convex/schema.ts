@@ -1779,6 +1779,7 @@ export default defineSchema({
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
       purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
+      purchaseSupplierName: v.optional(v.string()),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
@@ -1795,7 +1796,8 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_org", ["orgId"])
-    .index("by_org_status", ["orgId", "status"]),
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"]),
 
   customers: defineTable({
     orgId: v.id("organizations"),
