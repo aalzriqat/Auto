@@ -4400,6 +4400,12 @@ function DealPartyFacts({
   );
 }
 
+/** The note under the invoice balance: an OPEN invoice is owed, a CLOSED one is settled; unproven states say nothing. */
+const INVOICE_NOTE_KEY: Record<string, string | undefined> = {
+  OPEN: POSITION_LABEL.OWED_TO_DEALERSHIP,
+  CLOSED: POSITION_LABEL.SETTLED,
+};
+
 /**
  * SCRUM-571 (D-48): what the customer still owes on the deal's invoice, as its own
  * tile and NOT a party row. The CUSTOMER party row states the held deposit; this
@@ -4419,7 +4425,7 @@ function CustomerInvoiceFact({
   t: (key: string) => string;
 }>) {
   if (!invoice || invoice.state === "NONE") return null;
-  const proven = invoice.state === "OPEN" || invoice.state === "CLOSED";
+  const noteKey = INVOICE_NOTE_KEY[invoice.state];
   return (
     <div
       className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2"
@@ -4427,15 +4433,9 @@ function CustomerInvoiceFact({
     >
       <MoneyFact
         label={t("CustomerInvoiceBalance")}
-        value={proven && invoice.outstandingMinor !== null ? money(invoice.outstandingMinor) : null}
+        value={invoice.outstandingMinor !== null ? money(invoice.outstandingMinor) : null}
         unavailableKey="CustomerInvoiceUnproven"
-        note={
-          invoice.state === "OPEN"
-            ? t("PositionOwedToDealership")
-            : invoice.state === "CLOSED"
-              ? t("PositionSettled")
-              : undefined
-        }
+        note={noteKey ? t(noteKey) : undefined}
         t={t}
       />
     </div>

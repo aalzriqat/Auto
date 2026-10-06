@@ -2073,7 +2073,7 @@ export default defineSchema({
      * initialization or plan change cannot move an old sale's settled reading.
      * `false` (a Free/Starter org with no chart) means no posting proof exists to
      * demand; absent (a legacy row) is read as required - it fails closed. Read by
-     * `resolveCustomerInvoiceObligation`.
+     * `resolveCustomerInvoicePosition`.
      */
     glPostingRequired: v.optional(v.boolean()),
     commissionAmount: v.optional(v.number()), // Calculated at sale time

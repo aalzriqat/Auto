@@ -32,7 +32,7 @@ import {
   type ObligationState,
   type SupplierClaimStatus,
 } from "./utils/financingEconomics";
-import { resolveCustomerInvoicePosition, type CustomerInvoicePosition } from "./utils/customerInvoiceObligation";
+import { resolveCustomerInvoicePosition, toCockpitCustomerInvoice, type CustomerInvoicePosition } from "./utils/customerInvoiceObligation";
 import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { auditLog } from "./financialAudit";
 import { classifySaleTimeCredits, customerBilledLinesMinor, sumBilledLinesMinor, completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
@@ -2770,7 +2770,7 @@ export const dealCockpit = query({
     const customerPosition: CustomerInvoicePosition =
       sale.status === "COMPLETED"
         ? await resolveCustomerInvoicePosition(ctx, sale, { orgId: args.orgId, currency })
-        : { state: "NONE" };
+        : { state: "NONE", outstandingMinor: null };
     const settlementComplete =
       dealCancelled ||
       settlementIsComplete({ financier: "NONE", supplier: supplierObligation, customer: customerPosition.state });
@@ -3104,11 +3104,7 @@ export const dealCockpit = query({
          * invoice, from the same read the settlement obligation was judged on.
          * `outstandingMinor` is null unless the invoice is proven (OPEN or CLOSED).
          */
-        customerInvoice: {
-          state: customerPosition.state,
-          outstandingMinor: customerPosition.outstandingMinor ?? null,
-          currency,
-        },
+        customerInvoice: toCockpitCustomerInvoice(customerPosition, currency),
         /**
          * Same authority as the financed screen: the row says what is owed,
          * this says whether a receipt may be recorded against it NOW. A

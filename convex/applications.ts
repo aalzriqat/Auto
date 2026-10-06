@@ -107,7 +107,7 @@ import {
   type ObligationState,
   type SettlementObligations,
 } from "./utils/financingEconomics";
-import { resolveCustomerInvoicePosition, type CustomerInvoicePosition } from "./utils/customerInvoiceObligation";
+import { resolveCustomerInvoicePosition, toCockpitCustomerInvoice, type CustomerInvoicePosition } from "./utils/customerInvoiceObligation";
 // The anomaly verdict, from the module that owns it. Both handover
 // confirmations must warn about the same deals; see the helper's own note.
 import {
@@ -969,7 +969,7 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
   // The customer's side is judged on EVERY financier leg (SCRUM-571 D-43).
   const customerPosition: CustomerInvoicePosition = routeKnown
     ? await resolveCustomerPosition(ctx, app, sale, currency, financierLeg, settlesDirect)
-    : { state: "UNKNOWN" };
+    : { state: "UNKNOWN", outstandingMinor: null };
   const obligations: SettlementObligations = routeKnown
     ? {
         financier: financierObligation,
@@ -992,7 +992,7 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
     supplierEntitlement,
     obligations,
     /** The customer-invoice debt, from the same read the customer obligation was judged on. */
-    customerInvoice: { state: customerPosition.state, outstandingMinor: customerPosition.outstandingMinor, currency },
+    customerInvoice: toCockpitCustomerInvoice(customerPosition, currency),
     // A cancelled sale's books were reversed: whatever the obligations say, the
     // money on it is not "settled" (SCRUM-446). Without this a CLOSED application
     // over a cancelled sale read SETTLEMENT as COMPLETE.
@@ -1019,11 +1019,14 @@ async function resolveCustomerPosition(
   financierLeg: FinancierLeg,
   settlesDirect: boolean
 ): Promise<CustomerInvoicePosition> {
-  if (financierLeg !== "NONE") {
-    if (!app.finalizedSaleId) return { state: "NONE" };
-    if (financedSaleRecognitionApplies(app, { settlesDirect }) && !composeCustomerGapToDealer(app).readable) {
-      return { state: "UNKNOWN" };
-    }
+  const financed = financierLeg !== "NONE";
+  if (financed && !app.finalizedSaleId) return { state: "NONE", outstandingMinor: null };
+  if (
+    financed &&
+    financedSaleRecognitionApplies(app, { settlesDirect }) &&
+    !composeCustomerGapToDealer(app).readable
+  ) {
+    return { state: "UNKNOWN", outstandingMinor: null };
   }
   return resolveCustomerInvoicePosition(ctx, sale, { orgId: app.orgId, currency });
 }
@@ -1603,11 +1606,7 @@ async function buildCockpitMoney(
      * on and the amount comes from the same read, so the two cannot diverge.
      * `outstandingMinor` is null unless the invoice is proven (OPEN or CLOSED).
      */
-    customerInvoice: {
-      state: settlementFacts.customerInvoice.state,
-      outstandingMinor: settlementFacts.customerInvoice.outstandingMinor ?? null,
-      currency,
-    },
+    customerInvoice: settlementFacts.customerInvoice,
     /**
      * Whether "Settle supplier" may be recorded NOW, decided here from the same
      * claim `recordReceipt` will refuse on. The supplier row above keeps saying

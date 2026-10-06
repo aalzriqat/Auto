@@ -1,13 +1,35 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { saleCompletedKey } from "../accounting/postingRules";
-import { getReceivableOutstandingMinor } from "../subledger";
+import { outstandingFromReceivableDoc } from "../subledger";
 import type { ObligationState } from "./financingEconomics";
+
+/**
+ * The customer-invoice judgement together with what is still owed on it, from the
+ * SAME reads, so the state a cockpit gates on and the amount it names cannot
+ * diverge. `outstandingMinor` is a number only when the state is OPEN or CLOSED;
+ * an unproven (UNKNOWN) or not-yet-existing (NONE) invoice names no amount, so it
+ * is `null`.
+ */
+export type CustomerInvoicePosition = { state: ObligationState; outstandingMinor: number | null };
+
+/**
+ * The cockpit's `customerInvoice` shape, shared by the financed and the cash
+ * cockpit so the two cannot spell it differently. The amount is `null` unless the
+ * invoice is proven (OPEN or CLOSED).
+ */
+export function toCockpitCustomerInvoice(
+  position: CustomerInvoicePosition,
+  currency: string
+): { state: ObligationState; outstandingMinor: number | null; currency: string } {
+  return { state: position.state, outstandingMinor: position.outstandingMinor, currency };
+}
 
 /**
  * Is this sale's canonical customer invoice paid? The ONE judgement the financed
  * cockpit and the cash cockpit share (SCRUM-571 D-43), so no reader can call a
- * sale settled while its customer still owes on it.
+ * sale settled while its customer still owes on it. It returns the state together
+ * with what is still owed, from the same reads.
  *
  * Fails closed: UNKNOWN, never CLOSED, unless the sale is this organization's,
  * names a canonical invoice that exists in the same organization and currency,
@@ -26,26 +48,12 @@ import type { ObligationState } from "./financingEconomics";
  * (a legacy row) require it. It is never re-derived from the current chart or
  * plan, so a later upgrade cannot flip an old paid no-GL sale to UNKNOWN.
  */
-export async function resolveCustomerInvoiceObligation(
-  ctx: QueryCtx,
-  sale: Doc<"sales"> | null | undefined,
-  scope: { orgId: Id<"organizations">; currency: string }
-): Promise<ObligationState> {
-  return (await resolveCustomerInvoicePosition(ctx, sale, scope)).state;
-}
-
-/**
- * The customer-invoice judgement together with what is still owed on it, from the
- * SAME reads, so the state a cockpit gates on and the amount it names cannot
- * diverge. `outstandingMinor` is present only when the state is OPEN or CLOSED
- * (an unproven invoice names no amount).
- */
 export async function resolveCustomerInvoicePosition(
   ctx: QueryCtx,
   sale: Doc<"sales"> | null | undefined,
   scope: { orgId: Id<"organizations">; currency: string }
 ): Promise<CustomerInvoicePosition> {
-  const unknown: CustomerInvoicePosition = { state: "UNKNOWN" };
+  const unknown: CustomerInvoicePosition = { state: "UNKNOWN", outstandingMinor: null };
   const receivableId = sale?.canonicalReceivableDocumentId;
   if (!sale || sale.orgId !== scope.orgId || !receivableId) return unknown;
   const receivable = await ctx.db.get(receivableId);
@@ -60,18 +68,17 @@ export async function resolveCustomerInvoicePosition(
   ) {
     return unknown;
   }
-  if (
-    sale.glPostingRequired !== false &&
-    receivable.originalAmountMinor !== 0 &&
-    !(await saleCompletedPostingIsPosted(ctx, sale))
-  ) {
-    return unknown;
-  }
-  const outstandingMinor = await getReceivableOutstandingMinor(ctx, receivableId);
+  // The posting proof and the allocations are independent reads off the same
+  // receivable, so they run together. The proof is still enforced before the
+  // balance is trusted: a failed proof returns UNKNOWN whatever the balance is.
+  const postingRequired = sale.glPostingRequired !== false && receivable.originalAmountMinor !== 0;
+  const [postingProven, outstandingMinor] = await Promise.all([
+    postingRequired ? saleCompletedPostingIsPosted(ctx, sale) : Promise.resolve(true),
+    outstandingFromReceivableDoc(ctx, receivable),
+  ]);
+  if (!postingProven) return unknown;
   return { state: outstandingMinor > 0 ? "OPEN" : "CLOSED", outstandingMinor: Math.max(0, outstandingMinor) };
 }
-
-export type CustomerInvoicePosition = { state: ObligationState; outstandingMinor?: number };
 
 /** The sale's own SALE_COMPLETED event stands POSTED, with a POSTED journal of this organization. */
 async function saleCompletedPostingIsPosted(ctx: QueryCtx, sale: Doc<"sales">): Promise<boolean> {
