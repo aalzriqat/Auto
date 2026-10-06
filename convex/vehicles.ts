@@ -163,6 +163,14 @@ export async function postVehicleAcquisitionIfOwned(
 ): Promise<void> {
   if (args.isSourced || args.purchasePrice == null || args.purchasePrice <= 0) return;
 
+  // Defence at the money point: the caller's `isSourced` flag is a claim, the
+  // stored row is the truth. Every caller posts AFTER its insert/patch, so the
+  // row already reflects the final type; a consignment row never posts a purchase.
+  const stored = await ctx.db.get(args.vehicleId);
+  if (stored && storedVehicleSourceType(stored.sourceType) === "SOURCED") {
+    throwVehicleSourceShape("VEHICLE_SOURCED_ACQUISITION_REFUSED");
+  }
+
   const isOnAccount = args.purchasePaymentMethod === "ON_ACCOUNT";
   if (isOnAccount && !args.supplierName?.trim()) {
     throw new ConvexError("A supplier name is required for a vehicle purchased on account.");

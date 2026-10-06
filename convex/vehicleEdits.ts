@@ -394,11 +394,16 @@ export const resolve = mutation({
         const {
           purchasePaymentMethod,
           purchaseSupplierName: createPurchaseSupplierName,
+          sourcedFromName,
+          sourceCost,
           ...vehicleFields
         } = payload;
 
         const vehicleId = await ctx.db.insert("vehicles", {
           ...(vehicleFields as any),
+          // Mirrors vehicles.create: an owned car never carries consignment fields
+          // (a whitespace-only name passes the shape guard, so drop them here).
+          ...(isSourced ? { sourcedFromName, sourceCost } : {}),
           purchasePrice: effectivePurchasePrice,
           orgId: args.orgId,
           addedBy: request.requestedBy,

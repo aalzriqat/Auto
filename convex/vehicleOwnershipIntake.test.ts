@@ -20,6 +20,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { VEHICLE_SOURCE_SHAPE_MESSAGES } from "./utils/vehicleSourceShape";
+import { postVehicleAcquisitionIfOwned } from "./vehicles";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -685,5 +686,41 @@ describe("the data browser (adminData.adminUpdateRecord)", () => {
       });
       expect((await d.t.run((ctx) => ctx.db.get(vehicleId)))?.color).toBe("Green");
     });
+  });
+});
+
+describe("SCRUM-717 /simplify correctness items", () => {
+  test("approving a STOCK CREATE whose sourcedFromName is only whitespace persists no sourcedFromName", async () => {
+    const d = await seedDealer("s15");
+    const requestId = await d.asOwner.mutation(api.vehicleEdits.requestCreate, {
+      orgId: d.orgId,
+      payload: { ...baseVehicle, sourceType: "STOCK", sourcedFromName: "   ", purchasePrice: 7000, purchasePaymentMethod: "CASH" },
+    });
+    await d.asOwner.mutation(api.vehicleEdits.resolve, { orgId: d.orgId, requestId, status: "APPROVED" });
+    const vehicle = await d.t.run((ctx) =>
+      ctx.db.query("vehicles").withIndex("by_org_vin", (q) => q.eq("orgId", d.orgId).eq("vin", baseVehicle.vin)).unique()
+    );
+    expect(vehicle?.sourceType).toBe("STOCK");
+    expect(vehicle?.sourcedFromName).toBeUndefined();
+    expect(vehicle?.sourceCost).toBeUndefined();
+  });
+
+  test("postVehicleAcquisitionIfOwned refuses to post when the STORED row is SOURCED, whatever isSourced says", async () => {
+    const d = await seedDealer("s16");
+    const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, ...sourcedFields,
+    });
+    const before = await worldCounts(d);
+    await expectAppError(
+      d.t.run((ctx) =>
+        postVehicleAcquisitionIfOwned(ctx, {
+          orgId: d.orgId, vehicleId, isSourced: false, purchasePrice: 9000, purchasePaymentMethod: "CASH",
+          vehicleLabel: "2020 Honda Accord", vin: baseVehicle.vin, actorId: d.ownerId,
+        })
+      ),
+      ...code("VEHICLE_SOURCED_ACQUISITION_REFUSED")
+    );
+    expect(await worldCounts(d)).toEqual(before);
+    expect(await acquisitionEvents(d, vehicleId)).toHaveLength(0);
   });
 });

@@ -193,6 +193,7 @@ export const AppErrorCode = {
   VEHICLE_OWNERSHIP_CHANGE_NOT_REQUESTABLE: "VEHICLE_OWNERSHIP_CHANGE_NOT_REQUESTABLE",
   VEHICLE_BUYOUT_TERMS_REQUIRED: "VEHICLE_BUYOUT_TERMS_REQUIRED",
   VEHICLE_OWNERSHIP_FIELDS_LOCKED: "VEHICLE_OWNERSHIP_FIELDS_LOCKED",
+  VEHICLE_SOURCED_ACQUISITION_REFUSED: "VEHICLE_SOURCED_ACQUISITION_REFUSED",
   // SCRUM-413. `roles.create` / `roles.update` refuse a newly added `finalize:financed_deal`
   // (retired; split into manage:supplier_settlement and cancel:closed_deal). Translated under
   // ServerError_<code>.

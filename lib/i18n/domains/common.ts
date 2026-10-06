@@ -402,6 +402,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "A vehicle's ownership type, consignment supplier, supplier cost, purchase price and payment method drive accounting and can't be changed in the data browser. Use the vehicle's edit screen or the cost-correction workflow.",
     "نوع ملكية المركبة ومورّد البيع برسم البيع وتكلفة المورّد وسعر الشراء وطريقة الدفع تؤثر على المحاسبة ولا يمكن تغييرها من متصفح البيانات. استخدم شاشة تعديل المركبة أو إجراء تصحيح التكلفة.",
   ],
+  ServerError_VEHICLE_SOURCED_ACQUISITION_REFUSED: [
+    "This vehicle is held on consignment, so a purchase can't be posted for it. Nothing was posted.",
+    "هذه المركبة برسم البيع، لذلك لا يمكن ترحيل شراء لها. لم يتم ترحيل أي مبلغ.",
+  ],
   // SCRUM-413. `roles.create` / `roles.update` refuse a newly added retired permission. The
   // authority names match the FinancedDeal* labels in settings.ts.
   ServerError_PERMISSION_RETIRED: [

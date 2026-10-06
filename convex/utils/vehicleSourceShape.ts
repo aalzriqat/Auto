@@ -44,6 +44,8 @@ export const VEHICLE_SOURCE_SHAPE_MESSAGES = {
     "Buying out a consignment vehicle needs the agreed purchase price (greater than zero) and how it was paid. For a purchase on account, also enter the supplier's name.",
   VEHICLE_OWNERSHIP_FIELDS_LOCKED:
     "A vehicle's ownership type, consignment supplier, supplier cost, purchase price and payment method drive accounting and can't be changed in the data browser. Use the vehicle's edit screen or the cost-correction workflow.",
+  VEHICLE_SOURCED_ACQUISITION_REFUSED:
+    "This vehicle is held on consignment, so a purchase can't be posted for it. Nothing was posted.",
 } as const;
 
 export type VehicleSourceShapeCode = keyof typeof VEHICLE_SOURCE_SHAPE_MESSAGES;
