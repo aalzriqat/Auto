@@ -246,21 +246,39 @@ describe("auditStagedBackendInputs (SCRUM-350 F1)", () => {
     expect((await audit(inside.stageRoot)).status).toBe(0);
   });
 
-  it("refuses a staged source that names an external source map, which esbuild reads outside the metafile (Sonnet F2 on PR #341)", async () => {
-    const { root, stageRoot } = stage();
-    write(root, { "outside.map": '{"version":3,"sources":[],"mappings":""}\n' });
-    write(stageRoot, {
-      "convex/mapLeak.ts": "export const m = 1;\n//# sourceMappingURL=../../outside.map\n",
-    });
-    const result = await audit(stageRoot);
-    expect(result.stderr).toContain("references an external source map");
-    expect(result.status).toBe(1);
+  // esbuild reads the file a sourceMappingURL comment names, and an inline
+  // map's "sources" too in the deploy's component bundle; neither is a metafile
+  // input (Sonnet F2, Codex HIGH, Sonnet L1/L2 on PR #341).
+  const sourceMapComments = [
+    "//# sourceMappingURL=../../outside.map",
+    "//@ sourceMappingURL=../../outside.map",
+    "/*# sourceMappingURL=../../outside.map */",
+    "/*@ sourceMappingURL=../../outside.map */",
+    "//# sourceMappingURL=data:application/json;base64,e30=",
+  ];
+  const sourceMapHomes: Array<[string, string]> = [
+    ["convex/mapLeak.ts", ""],
+    ["lib/mapLeak.ts", 'import "../lib/mapLeak";\n'],
+    ["packages/shared/src/mapLeak.ts", 'import "../packages/shared/src/mapLeak";\n'],
+  ];
+  for (const comment of sourceMapComments) {
+    for (const [home, importer] of sourceMapHomes) {
+      it("refuses a source map comment in " + home + ": " + comment, async () => {
+        const { stageRoot } = stage();
+        write(stageRoot, {
+          [home]: "export const m = 1;\n" + comment + "\n",
+          ...(importer ? { "convex/entry.ts": importer } : {}),
+        });
+        const result = await audit(stageRoot);
+        expect(result.stderr).toContain("carries a source map comment");
+        expect(result.status).toBe(1);
+      });
+    }
+  }
 
-    // Control: an inline data: source map is not a file read.
-    const inline = stage({
-      "convex/mapOk.ts": "export const m = 1;\n//# sourceMappingURL=data:application/json;base64,e30=\n",
-    });
-    expect((await audit(inline.stageRoot)).status).toBe(0);
+  it("accepts a stage with no source map comment (control for the refusals above)", async () => {
+    const { stageRoot } = stage({ "convex/clean.ts": "export const m = 1;\n" });
+    expect((await audit(stageRoot)).status).toBe(0);
   });
 
   it.skipIf(process.platform === "win32")(

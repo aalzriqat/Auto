@@ -54,8 +54,11 @@ const MUST_BE_ISOLATE = ["http", "crons", "schema", "auth.config"];
 const ACTIONS_PREFIX = "actions/";
 // [\s\S]: a path may carry a line terminator, which "." would not match.
 const WASM_NAMESPACE = /^wasm-(?:binary|stub):([\s\S]+)$/;
-// Any sourceMappingURL comment that is not an inline data: URL.
-const EXTERNAL_SOURCE_MAP = /\/[/*][#@]\s*sourceMappingURL=(?!data:)/;
+// Any sourceMappingURL comment, inline data: URLs included: the deploy's
+// component-definition bundle (components/definition/bundle.js, sourcemap: true
+// without sourcesContent: false) reads the files an inline map's "sources"
+// names, which this audit's own bundle does not (Codex HIGH on PR #341).
+const SOURCE_MAP_COMMENT = /\/[/*][#@]\s*sourceMappingURL=/;
 // The CLI's per-line fallback, used only when its parser rejects the source.
 const USE_NODE_LINE = /^\s*("|')use node("|');?\s*$/;
 
@@ -222,8 +225,8 @@ export async function auditStagedBackendInputs({ stageRoot }) {
     // sourceMappingURL comment; that read never appears in the metafile
     // (Sonnet F2 on PR #341). Candidate sources may not carry one.
     if (candidateRoots.some((root) => isInside(root, real)) && !/\.wasm$/i.test(real) &&
-        EXTERNAL_SOURCE_MAP.test(readFileSync(real, "utf8"))) {
-      throw new AuditRefusal("A staged source references an external source map: " + JSON.stringify(input.slice(0, 200)));
+        SOURCE_MAP_COMMENT.test(readFileSync(real, "utf8"))) {
+      throw new AuditRefusal("A staged source carries a source map comment: " + JSON.stringify(input.slice(0, 200)));
     }
   }
   if (recorded.size === 0) {
