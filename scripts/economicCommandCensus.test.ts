@@ -27,7 +27,9 @@ import {
   censusForward,
   censusReverse,
   findSinks,
+  functionReferenceTargets,
   hasCommandIdentity,
+  stripComments,
   mintsAndPostsLocally,
   mintsAndPostsTransitively,
   MONEY_TABLES,
@@ -44,7 +46,11 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "accountingCutover.rejectOpeningBalanceDraft": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "accountingMigration.backfillFixedAssetMinorUnits": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "accountingMigration.backfillPartnerEquityMinorUnits": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
-  "accountingOutbox.retryFailed": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "accountingMigration.backfillVehicleInventoryOpeningBalances": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: dryRun unless explicitly false; each vehicle is SKIPPED when a VEHICLE_ACQUIRED/VEHICLE_INVENTORY_OPENING_BALANCE event already exists or a vehicle_acquired_ row is pending, and the posting it delegates to keys on `vehicle_inventory_opening_${vehicleId}` — the pre-existing vehicle — which the posting engine dedupes by_org_idempotency" },
+  "accountingOutbox.redrive": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: schedules the outbox drain, which claims only PENDING rows and posts each under the idempotencyKey STORED on the row; the posting engine dedupes that key by_org_idempotency, so a re-run re-drives nothing already posted" },
+  "accountingOutbox.retryFailed": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743 (was NON_ECONOMIC, which was false: it revives the row and schedules claimOutboxRow, which posts): refuses unless the row is FAILED, reviveFailedEntry re-checks FAILED and refuses a retired posting, and the worker posts under the idempotencyKey stored on the row, deduped by_org_idempotency; a retry finds the row no longer FAILED and throws" },
+  "accountingPeriods.open": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: schedules the outbox drain after opening the period; the drain posts only PENDING rows under their stored idempotencyKey, deduped by_org_idempotency, so a duplicate drain posts nothing twice" },
+  "accountingPeriods.reopen": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: schedules the outbox drain after reopening the period; the drain posts only PENDING rows under their stored idempotencyKey, deduped by_org_idempotency, so a duplicate drain posts nothing twice" },
   "applications.amendSupplierDisbursementAdvice": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "applications.cancelApplication": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "applications.confirmDisbursement": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
@@ -66,6 +72,8 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "cashDrawer.close": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "cashDrawer.open": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "cashDrawer.recordMovement": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "chartOfAccounts.initialize": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: schedules the outbox drain once the chart exists; the drain posts only PENDING rows under their stored idempotencyKey, deduped by_org_idempotency, so a repeat initialize posts nothing twice" },
+  "chartOfAccounts.repairMissingSystemAccounts": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: schedules the outbox drain after restoring system accounts; the drain posts only PENDING rows under their stored idempotencyKey, deduped by_org_idempotency" },
   "collections.applyRetainedCredit": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "collections.clearCheque": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "collections.createInstallmentPlan": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
@@ -147,6 +155,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "prepaidExpenses.approveCorrectionRequest": { bucket: "STATE_GUARDED", mechanism: "refuses unless request.status === PENDING" },
   "prepaidExpenses.correctSchedule": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "prepaidExpenses.redriveScheduleEvents": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "prepaidExpenses.runAmortizationNow": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743 public ACTION: one runMutation(catchUpScheduleMutation) per schedule; amortizeScheduleForMonth refuses a month <= lastRecognizedYearMonth and a month with nothing due, and advances that cursor in the SAME transaction as hookPrepaidExpenseAmortized, keyed `prepaid_amort_${scheduleId}_${yearMonth}`, so a re-run after partial success re-posts no month" },
   "prepaidExpenses.retryAmortizationFailure": { bucket: "STATE_GUARDED", mechanism: "hookPrepaidExpenseAmortized keys on `prepaid_amort_${scheduleId}_${yearMonth}` — both pre-existing/deterministic, which is precisely what makes a RETRY endpoint safe" },
   "sales.completeDraft": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "sales.completeFromQuote": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
@@ -258,6 +267,51 @@ describe("analyzer self-tests — the four blind spots, pinned", () => {
     expect(mintsAndPostsLocally(command.body)).toBe(false);
     expect(mintsAndPostsTransitively(g, command.id)).toBe(true);
   });
+
+  test("BLIND SPOT 5: a Convex function reference is an edge, in every delegation form", () => {
+    // SCRUM-743: runMutation / scheduler.runAfter / runAt / runAction reach the
+    // target through a reference, never a call expression. Each form must link.
+    const body = [
+      "await ctx.runMutation(internal.prepaidExpenses.catchUpScheduleMutation, {});",
+      "await ctx.scheduler.runAfter(0, internal.accountingOutbox.drainPendingAccountingEvents, {});",
+      "await ctx.scheduler.runAt(when, internal.accountingOutbox.claimOutboxRow, {});",
+      "await ctx.runAction(api.nested.dir.doThing, {});",
+    ].join("\n");
+    expect(functionReferenceTargets(body)).toEqual([
+      "prepaidExpenses.catchUpScheduleMutation",
+      "accountingOutbox.drainPendingAccountingEvents",
+      "accountingOutbox.claimOutboxRow",
+      "nested/dir.doThing",
+    ]);
+    // A reference or a call named only in prose is not a delegation.
+    expect(functionReferenceTargets("// see internal.accountingOutbox.redrive\n/* api.a.b */")).toEqual([]);
+    expect(stripComments("x(); // reopen() refuses LOCKED")).not.toMatch(/reopen/);
+    // A URL in a string is not a comment.
+    expect(stripComments('const u = "https://example.com";')).toContain("https://example.com");
+  });
+
+  test("BLIND SPOT 5: the real delegated paths are in the population, the comment edge is not", () => {
+    const g = buildGraph(CONVEX_ROOT);
+    const forward = censusForward(g);
+    const edge = (a: string, b: string) => g.edges.get(a)?.has(b) ?? false;
+    // Pinned real paths, each through a function reference.
+    expect(edge("accountingPeriods.open", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
+    expect(edge("accountingPeriods.reopen", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
+    expect(edge("chartOfAccounts.initialize", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
+    expect(edge("chartOfAccounts.repairMissingSystemAccounts", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
+    expect(edge("accountingOutbox.retryFailed", "accountingOutbox.claimOutboxRow")).toBe(true);
+    expect(edge("prepaidExpenses.runAmortizationNow", "prepaidExpenses.catchUpScheduleMutation")).toBe(true);
+    for (const id of [
+      "accountingPeriods.open", "accountingPeriods.reopen", "chartOfAccounts.initialize",
+      "chartOfAccounts.repairMissingSystemAccounts", "accountingOutbox.redrive",
+      "accountingMigration.backfillVehicleInventoryOpeningBalances", "prepaidExpenses.runAmortizationNow",
+    ]) expect([...forward], id).toContain(id);
+    // A public ACTION is a seed (ruling A), not only a mutation.
+    expect(g.symbols.get("prepaidExpenses.runAmortizationNow")?.kind).toBe("publicAction");
+    // The false positive: `lock` named `reopen()` in a comment.
+    expect(edge("accountingPeriods.lock", "accountingPeriods.reopen")).toBe(false);
+    expect([...forward]).not.toContain("accountingPeriods.lock");
+  });
 });
 
 describe("SCRUM-313 economic command classification ratchet", () => {
@@ -306,7 +360,12 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     // 128 -> 129: `financingEconomics.recordManualFinanceApproval` (SCRUM-27), on top of main's 128.
     // 129 -> 130: `applications.returnFinanceDisbursementCheque` (SCRUM-239).
     // 130 -> 136: the three SCRUM-693 unwind steps (`dealUnwind.*`; `startDealUnwind` writes only the unwind row) + `financeDealCosts.recordExecutionFeeActual`, `.bindExecutionFeeLine` and `.unbindExecutionFeeLine` (SCRUM-690).
-    expect(population).toHaveLength(136);
+    // 136 -> 143 (SCRUM-743): function-reference edges and public actions as entrypoints add
+    // accountingPeriods.open/.reopen, chartOfAccounts.initialize/.repairMissingSystemAccounts,
+    // accountingOutbox.redrive, accountingMigration.backfillVehicleInventoryOpeningBalances and
+    // the action prepaidExpenses.runAmortizationNow. accountingPeriods.lock is NOT among them:
+    // its only edge was `reopen()` written in a comment.
+    expect(population).toHaveLength(143);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

@@ -98,6 +98,7 @@ export interface InvariantDefinition {
 }
 
 const SCRUM_342 = "SCRUM-342";
+const SCRUM_743 = "SCRUM-743";
 const RUNTIME_EVIDENCE: readonly EvidenceMechanism[] = ["EXECUTION", "PREVIEW"];
 const ANY_EXECUTABLE_EVIDENCE: readonly EvidenceMechanism[] = [
   "EXECUTION",
@@ -297,11 +298,15 @@ const required = (
   acceptedEvidence: readonly EvidenceMechanism[] = RUNTIME_EVIDENCE
 ): ProofRequirement => ({ obligation, status: "REQUIRED", acceptedEvidence });
 
-const deferred = (obligation: ProofObligation, reason: string): ProofRequirement => ({
+const deferred = (
+  obligation: ProofObligation,
+  reason: string,
+  tracking: string = SCRUM_342
+): ProofRequirement => ({
   obligation,
   status: "DEFERRED",
   reason,
-  tracking: SCRUM_342,
+  tracking,
 });
 
 const notApplicable = (obligation: ProofObligation, reason: string): ProofRequirement => ({
@@ -562,9 +567,9 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
     id: "ECON-1",
     title: "Economic command classification",
     severity: "CRITICAL",
-    state: "ENFORCED",
+    state: "PARTIAL",
     statement:
-      "Every public mutation that can reach a money-bearing sink must have exactly one explicit replay-safety classification in the economic-command census.",
+      "Every public mutation or action that can reach a money-bearing sink must have exactly one explicit replay-safety classification in the economic-command census.",
     sourceAreas: ["convex/**", "scripts/economicCommandCensus.ts"],
     profile: profile({ economicImpact: "INDIRECT" }),
     requirements: [
@@ -582,12 +587,17 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         "RECONCILIATION",
         "This invariant does not assert a subledger or GL balance."
       ),
+      deferred(
+        "BOUNDARY",
+        "The census resolves imported calls and internal.*/api.* function references from public mutations and actions, but not httpAction route handlers, namespace/default imports, re-exports, or function values passed uncalled; SCRUM-742 closes those with an AST resolver.",
+        SCRUM_743
+      ),
     ],
     proofs: proofSet("ECON-1", [
       structural(
         "scripts/economicCommandCensus.test.ts",
         ["MUTATION"],
-        "Source-complete command-to-money-sink census with pinned analyzer blind spots and a classification ratchet."
+        "Command-to-money-sink census over imported calls and Convex function references, seeded from public mutations and actions, with pinned analyzer blind spots and a classification ratchet; not yet source-complete (SCRUM-742)."
       ),
       execution(
         "convex/idempotencyEconomicCommands.test.ts",
@@ -595,8 +605,9 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         "Execution checks for one-intent/one-economic-effect and fingerprint completeness on identity-guarded commands."
       ),
     ]),
+    tracking: SCRUM_743,
     evidenceBoundary:
-      "This proves the exact census/classification contract and representative execution semantics. It does not mean every classification mechanism is automatically correct for every possible runtime interleaving.",
+      "This proves the classification contract for the population the analyzer can see, and representative execution semantics. The population is bounded by the analyzer's resolution forms (see the deferred BOUNDARY obligation): it is not yet an exact contract over every entrypoint, and it does not mean every classification mechanism is correct for every runtime interleaving. ENFORCED returns only when SCRUM-742 has landed and the measured population matches an independent enumeration.",
   },
   {
     id: "ECON-2",

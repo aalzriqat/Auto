@@ -1303,6 +1303,44 @@ describe("Phase 3 — runAmortizationNow isolates per-schedule failures and repo
     expect(failures.filter((f) => f.resolvedAt === undefined)).toHaveLength(1);
   });
 
+  test("SCRUM-743: a same-month re-run after partial success posts each schedule-month exactly once", async () => {
+    // runAmortizationNow is a public ACTION in the economic census (STATE_GUARDED).
+    // Run 1: one schedule posts, one fails. The failure is repaired and the
+    // action re-run in the same month: the posted schedule must post NOTHING
+    // again, and the repaired one must catch up exactly once.
+    const { t, orgId, asOwner } = await seedDealer("run-now-replay");
+    const create = (title: string) => asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
+      orgId, title, amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const goodSchedule = await scheduleForExpense(t, await create("Good Insurance"));
+    const badSchedule = await scheduleForExpense(t, await create("Broken Insurance"));
+    const realKey = badSchedule!.expenseSystemKey;
+    await t.run((ctx) => ctx.db.patch(badSchedule!._id, { expenseSystemKey: "NOT_A_REAL_SYSTEM_KEY" }));
+
+    const first = await asOwner.action(api.prepaidExpenses.runAmortizationNow, { orgId });
+    expect(first.failed.map((r) => r.scheduleId)).toEqual([badSchedule!._id]);
+
+    await t.run((ctx) => ctx.db.patch(badSchedule!._id, { expenseSystemKey: realKey }));
+    const second = await asOwner.action(api.prepaidExpenses.runAmortizationNow, { orgId });
+    expect(second.failed).toHaveLength(0);
+    expect(second.posted.map((r) => r.scheduleId)).toEqual([badSchedule!._id]);
+    await asOwner.action(api.prepaidExpenses.runAmortizationNow, { orgId });
+
+    const elapsedMonths = Math.min(new Date().getUTCMonth() + 1, 12);
+    const events = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    for (const schedule of [goodSchedule!, badSchedule!]) {
+      const keys = events
+        .map((e) => e.idempotencyKey)
+        .filter((k) => k.startsWith(`prepaid_amort_${schedule._id}_`));
+      expect(keys, schedule._id).toHaveLength(elapsedMonths);
+      expect(new Set(keys).size, schedule._id).toBe(keys.length);
+    }
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(2 * elapsedMonths * 100_000);
+  });
+
   test("a schedule blocked on its source expense is reported in `blocked`, not silently swallowed", async () => {
     const { t, orgId, asOwner } = await seedDealer("run-now-blocked");
     const expenseId = await t.run((ctx) =>

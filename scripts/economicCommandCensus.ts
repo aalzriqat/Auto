@@ -172,7 +172,8 @@ export function buildGraph(convexRoot: string): Graph {
   };
 
   for (const s of symbols.values()) {
-    const body = s.body.split("\n").slice(1).join("\n");
+    // Comments are not calls: `reopen() refuses LOCKED` in prose linked lock -> reopen.
+    const body = stripComments(s.body.split("\n").slice(1).join("\n"));
     const local = perFile.get(s.file)!;
     const imap = importsOf.get(s.file)!;
     const names = new Set<string>();
@@ -185,9 +186,49 @@ export function buildGraph(convexRoot: string): Graph {
         if (tm?.has(n)) link(s.id, tm.get(n)!);
       }
     }
+    // Blind spot 5: delegation through a Convex function reference.
+    for (const target of functionReferenceTargets(body)) link(s.id, target);
   }
 
   return { symbols, edges, rEdges, sinks: findSinks(symbols) };
+}
+
+/**
+ * Blind spot 5 (SCRUM-743). `ctx.runMutation(internal.m.f, …)`,
+ * `ctx.scheduler.runAfter(0, internal.m.f, …)`, `runAt` and `runAction` reach
+ * `m.f` through a FUNCTION REFERENCE, never a call expression, so the bare-call
+ * edges above cannot see them. `internal.a.b.f` / `api.a.b.f` names module
+ * `a/b`, export `f`. Every occurrence links, whatever wraps it — over-inclusive,
+ * like the rest of this file. Comments are stripped first: a reference named
+ * in prose is not a delegation (`accountingPeriods.lock` was a false positive
+ * from exactly that).
+ *
+ * KNOWN GAP (SCRUM-742): references held in a variable, namespace/default
+ * imports, re-exports and httpAction handlers are not resolved.
+ */
+const FUNCTION_REFERENCE = /\b(?:internal|api)\.((?:[A-Za-z_]\w*\.)+[A-Za-z_]\w*)/g;
+
+export function stripComments(body: string): string {
+  return body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:\w"'`])\/\/.*$/gm, "$1");
+}
+
+export function functionReferenceTargets(body: string): string[] {
+  const out: string[] = [];
+  for (const m of stripComments(body).matchAll(FUNCTION_REFERENCE)) {
+    const parts = m[1].split(".");
+    const name = parts.pop()!;
+    out.push(`${parts.join("/")}.${name}`);
+  }
+  return out;
+}
+
+/**
+ * A client-callable entrypoint. Public ACTIONS are included (SCRUM-743 ruling
+ * A): an action is a public command that can delegate to a money-moving
+ * internal mutation, and a retried action replays that delegation.
+ */
+export function isPublicEntrypoint(kind: string): boolean {
+  return kind === "publicMutation" || kind === "publicAction";
 }
 
 /**
@@ -215,11 +256,11 @@ export function findSinks(symbols: Map<string, SymbolRecord>): Set<string> {
   return out;
 }
 
-/** Forward: every public mutation from which a sink is reachable. */
+/** Forward: every public entrypoint from which a sink is reachable. */
 export function censusForward(g: Graph): Set<string> {
   const out = new Set<string>();
   for (const s of g.symbols.values()) {
-    if (s.kind !== "publicMutation") continue;
+    if (!isPublicEntrypoint(s.kind)) continue;
     const seen = new Set([s.id]);
     const stack = [s.id];
     let hit = g.sinks.has(s.id);
@@ -237,7 +278,7 @@ export function censusForward(g: Graph): Set<string> {
   return out;
 }
 
-/** Reverse: every public mutation reachable from a sink over reversed edges. */
+/** Reverse: every public entrypoint reachable from a sink over reversed edges. */
 export function censusReverse(g: Graph): Set<string> {
   const seen = new Set(g.sinks);
   const q = [...g.sinks];
@@ -248,7 +289,7 @@ export function censusReverse(g: Graph): Set<string> {
     }
   }
   const out = new Set<string>();
-  for (const id of seen) if (g.symbols.get(id)?.kind === "publicMutation") out.add(id);
+  for (const id of seen) if (isPublicEntrypoint(g.symbols.get(id)?.kind ?? "")) out.add(id);
   return out;
 }
 
