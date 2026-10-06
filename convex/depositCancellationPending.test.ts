@@ -297,6 +297,33 @@ describe("SCRUM-712 S3: exits", () => {
     expect((await pendingRows(s)).map((r) => r.status)).toEqual(["PENDING"]);
   });
 
+  test("S4: a payout of unrelated free money cannot decide a share whose reversal has not posted", async () => {
+    // Closed period: the application sits at REVERSING until the journal reversal
+    // posts. The row holds MORE than that share, so the free part alone would
+    // satisfy the old "paid >= share" test and clear a share still spent on the books.
+    const s = await cancelledWithDeposit("s4Reversing");
+    const depositId = await depositIdOf(s);
+    await s.t.run(async (ctx) => {
+      const deposit = (await ctx.db.get(depositId))!;
+      await ctx.db.patch(depositId, {
+        amount: deposit.amount * 2,
+        amountMinor: (deposit.amountMinor ?? deposit.amount * SCALE) * 2,
+      });
+      const app = (await ctx.db.query("depositApplications").collect()).find((a) => a.orgId === s.orgId)!;
+      await ctx.db.patch(app._id, { status: "REVERSING" });
+    });
+    await release(s, depositId, "REFUNDED");
+    expect((await pendingRows(s)).map((r) => r.status)).toEqual(["PENDING"]);
+    expect(await status(s)).not.toBe("AVAILABLE");
+    // Once the reversal is proved posted the same payout does decide it.
+    await s.t.run(async (ctx) => {
+      const app = (await ctx.db.query("depositApplications").collect()).find((a) => a.orgId === s.orgId)!;
+      await ctx.db.patch(app._id, { status: "REVERSED" });
+    });
+    await release(s, depositId, "REFUNDED");
+    expect((await pendingRows(s)).map((r) => r.status)).toEqual(["RELEASED"]);
+  });
+
   test("a quarantined share keeps blocking exactly like a pending one", async () => {
     const s = await cancelledWithDeposit("quarantine");
     const [row] = await pendingRows(s);

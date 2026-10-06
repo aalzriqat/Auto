@@ -202,6 +202,15 @@ export async function clearPendingDisposition(
 ): Promise<boolean> {
   const row = await pendingShareOfHold(ctx, args.orgId, args.depositId, args.holdId);
   if (!row || row.status !== "PENDING" || args.paidMinor < row.amountMinor) return false;
+  // S4: the share's own journal reversal must be PROVED posted. A closed period
+  // leaves the application REVERSING until the outbox posts the reversal, and
+  // `paidMinor` can be satisfied by unrelated free money on the same row — so
+  // the payout alone proves nothing about this share. Only REVERSED (set when
+  // the reversal posted, immediately or via commitDeferredReversal) clears it.
+  const application = await ctx.db.get(row.applicationId);
+  if (!application || application.orgId !== args.orgId || application.status !== "REVERSED") {
+    return false;
+  }
   await ctx.db.patch(row._id, {
     status: args.resolution === "FORFEITED" ? "FORFEITED" : "RELEASED",
     resolvedAt: args.now,
