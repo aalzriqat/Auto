@@ -1327,7 +1327,7 @@ const CLEARED_CLAIM = {
 
 /**
  * SCRUM-226 — the ONE predicate for "a retry of this dead-lettered row can
- * ever post": `reviveFailedEntry` enforces it, and `accountingSetup.status`
+ * ever post": `reviveFailedEntry` enforces it, and `accountingSetup.listFailedEvents`
  * reads it so the operator is never offered a Retry the server will refuse. A
  * retired POST can never post (see the SCRUM-234 note in `reviveFailedEntry`);
  * REVERSE rows are exempt.

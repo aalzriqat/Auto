@@ -243,15 +243,6 @@ export function isSystemOwnerRole(role: RoleLike | null | undefined): boolean {
 }
 
 /**
- * Non-throwing permission test: the system owner holds everything, any other
- * role must list the permission. For callers that need a boolean, not a refusal.
- */
-export function roleHasPermission(role: RoleLike | null | undefined, permission: Permission): boolean {
-  if (!role) return false;
-  return isSystemOwnerRole(role) || role.permissions.includes(permission);
-}
-
-/**
  * SCRUM-413 S413B-3: a row NAMED like the owner that does not qualify as one
  * (explicit `false`, or unflagged and short of the frozen set). Never promoted,
  * never written by a backfill; an owner-review item in the diagnostic.

@@ -1,49 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  PERMISSIONS,
-  ALL_PERMISSIONS,
-  DEFAULT_ROLE_TEMPLATES,
-  cancelAuthorityFor,
-  isUnqualifiedOwnerNamed,
-  roleHasPermission,
-} from "./permissions";
-
-describe("roleHasPermission", () => {
-  it("returns false for a null or undefined role", () => {
-    expect(roleHasPermission(null, PERMISSIONS.VIEW_VEHICLES)).toBe(false);
-    expect(roleHasPermission(undefined, PERMISSIONS.VIEW_VEHICLES)).toBe(false);
-  });
-
-  it("grants a system owner every permission even when it is not listed", () => {
-    const owner = { name: "OWNER", permissions: [] as string[], isSystemOwnerRole: true };
-    expect(roleHasPermission(owner, PERMISSIONS.MANAGE_FINANCE)).toBe(true);
-    expect(roleHasPermission(owner, PERMISSIONS.VIEW_VEHICLES)).toBe(true);
-  });
-
-  it("grants a non-owner role the permissions it lists", () => {
-    const role = { name: "SALES", permissions: [PERMISSIONS.VIEW_VEHICLES] };
-    expect(roleHasPermission(role, PERMISSIONS.VIEW_VEHICLES)).toBe(true);
-  });
-
-  it("refuses a non-owner role a permission it does not list", () => {
-    const role = { name: "SALES", permissions: [PERMISSIONS.VIEW_VEHICLES] };
-    expect(roleHasPermission(role, PERMISSIONS.MANAGE_FINANCE)).toBe(false);
-  });
-
-  it("refuses an owner-NAMED role that does not qualify as the system owner", () => {
-    const flaggedOff = { name: "OWNER", permissions: [] as string[], isSystemOwnerRole: false };
-    const unflaggedShort = { name: "OWNER", permissions: [PERMISSIONS.VIEW_VEHICLES] };
-    expect(isUnqualifiedOwnerNamed(flaggedOff)).toBe(true);
-    expect(isUnqualifiedOwnerNamed(unflaggedShort)).toBe(true);
-    expect(roleHasPermission(flaggedOff, PERMISSIONS.MANAGE_FINANCE)).toBe(false);
-    expect(roleHasPermission(unflaggedShort, PERMISSIONS.MANAGE_FINANCE)).toBe(false);
-  });
-
-  it("refuses a deleted system-owner role a permission it does not list", () => {
-    const deletedOwner = { name: "OWNER", permissions: [] as string[], isSystemOwnerRole: true, isDeleted: true };
-    expect(roleHasPermission(deletedOwner, PERMISSIONS.MANAGE_FINANCE)).toBe(false);
-  });
-});
+import { PERMISSIONS, ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES, cancelAuthorityFor } from "./permissions";
 
 describe("cancelAuthorityFor", () => {
   it("CLOSED needs CANCEL_CLOSED_DEAL (not CREATE), plus disbursement authority on v2", () => {
