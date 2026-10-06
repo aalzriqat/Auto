@@ -24,7 +24,11 @@ import { fileURLToPath } from "node:url";
  *
  * Resolution is deterministic over the same files and the stage pins every
  * tsconfig the bundler consults, but the deploy opens more paths than this
- * audit records (a Linux strace measured 2048 against 1055).
+ * audit records (an earlier-seat strace run suggested roughly twice as many;
+ * no artifact is committed, so treat the figure as unverified).
+ *
+ * Consequence: any candidate file with ".config." in its path, and any local
+ * component under convex/, is refused; only the two root configs are allowed.
  *
  * This is a MODEL of the CLI's reads, not the CLI: the deploy runs three esbuild
  * passes with different options, plugins and directory walks, and this audit

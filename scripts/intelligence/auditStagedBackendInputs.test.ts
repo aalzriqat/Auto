@@ -347,7 +347,11 @@ describe("auditStagedBackendInputs (SCRUM-350 F1)", () => {
       });
       const result = await audit(stageRoot);
       // convex/nested is walked by the audit, so its leak fails the bundle first.
-      expect(result.stderr).toMatch(/component directory other than the root configuration|trusted bundler refused/);
+      expect(result.stderr).toMatch(
+        home === "convex/nested"
+          ? /component directory other than the root configuration|trusted bundler refused/
+          : /component directory other than the root configuration/,
+      );
       expect(result.status).toBe(1);
     });
 
@@ -363,7 +367,17 @@ describe("auditStagedBackendInputs (SCRUM-350 F1)", () => {
     });
   }
 
-  for (const home of ["lib/zz.config.d/x.ts", "packages/shared/src/zz.config.d/x.ts"]) {
+  // The anchors and extension class of ROOT_CONFIG are pinned by lookalikes
+  // (Sonnet F1 on PR #341): a nested convex/ directory, a directory named like a
+  // root config, and a different extension.
+  for (const home of [
+    "lib/zz.config.d/x.ts",
+    "packages/shared/src/zz.config.d/x.ts",
+    "lib/convex/convex.config.ts",
+    "packages/shared/src/convex/auth.config.ts",
+    "convex/convex.config.d/x.ts",
+    "convex/other.config.ts",
+  ]) {
     it("refuses a .config. directory name, not just a basename: " + home + " (Sonnet closure on PR #341)", async () => {
       const { stageRoot } = stage();
       write(stageRoot, {

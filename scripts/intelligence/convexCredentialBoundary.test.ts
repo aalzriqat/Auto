@@ -21,8 +21,9 @@ import { referencesConvexSecret } from "./workflowSecretReferences";
  *   CLI in a container that sees exactly the staged backend and the trusted
  *   node_modules, both read-only, with typecheck and codegen off, so no
  *   candidate package, binary or typescript ever runs beside the key;
- * - a credential-free audit before it proves every file that CLI's bundler
- *   reads lies inside the stage (Sol F1 on PR #341).
+ * - a credential-free audit before it checks the files that CLI's bundler is
+ *   modelled to read lie inside the stage; a model, not a proof (Sol F1 on
+ *   PR #341, SCRUM-745).
  *
  * The two staged container steps are recognised by their EXACT canonical
  * command, never by name: whatever else such a step runs is classified like
