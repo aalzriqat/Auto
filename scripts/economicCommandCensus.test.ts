@@ -478,20 +478,23 @@ describe("analyzer self-tests — the six blind spots, pinned", () => {
     expect(edgesIn("fx742a", fixture, "hookGap")).toEqual([]);
   });
 
-  test("KNOWN GAP (SCRUM-742): a call in a parameter default on a `function` declaration line gets no edge", () => {
-    // Function declaration lines are not read for edges (only const/let are).
+  test("KNOWN GAP (SCRUM-742): any call on a `function` declaration line (parameter default or one-line body) gets no edge", () => {
+    // Function declaration lines are not read for edges (only const/let are), so
+    // neither a parameter default nor a body that opens and closes on that line.
     const fixture = [
       "export function plain() { return 1; }",
       "export function fnDefault(x = plain()) { return x; }",
-      // Control: the same call in the BODY is an edge.
+      "export function one() { return plain(); }",
+      // Control: the same call on a LATER line is an edge.
       // (Multi-line: the declaration line itself is never read for `function`.)
       "export function fnBody(x: number) {",
       "  return plain() + x;",
       "}",
     ].join("\n");
     expect(edgesIn("fx742b", fixture, "fnBody")).toEqual(["fx742b.plain"]);
-    // MUST FLIP to ["fx742b.plain"] when SCRUM-742 lands.
+    // BOTH MUST FLIP to ["fx742b.plain"] when SCRUM-742 lands.
     expect(edgesIn("fx742b", fixture, "fnDefault")).toEqual([]);
+    expect(edgesIn("fx742b", fixture, "one")).toEqual([]);
   });
 });
 
@@ -620,11 +623,21 @@ describe("SCRUM-313 economic command classification ratchet", () => {
 
 describe("SCRUM-742 tripwire — call shapes the census cannot see must not appear in convex/", () => {
   // The census builds edges with a regex over comment-stripped text. Two call
-  // shapes produce NO edge (see the KNOWN GAP tests above). They are unreachable
-  // from any money path today; this keeps that true. Measured 2026-10-06 over
-  // 262 non-test sources: (a) zero; (b) only `Date.now()` defaults
-  // (collections.ts:175, marketplaceReports.ts:169, utils/paymentWebhook.ts:345),
-  // which can neither reach a sink nor hide a call to one.
+  // shapes produce NO edge (see the KNOWN GAP tests above): (a) a generic call
+  // with parentheses in its type argument; (b) ANY call or `hook*` reference on a
+  // top-level `function` declaration line (parameter default or one-line body).
+  // They are unreachable from any money path today; this keeps that true.
+  // Measured 2026-10-06 over 262 non-test sources: (a) zero; (b) zero beyond
+  // `Date.now()` (which can neither reach a sink nor hide a call to one).
+  // Function REFERENCES (`ctx.runMutation(internal.…)`, scheduler) are a separate,
+  // untested gap: SCRUM-743.
+  // ~80% of the 262 non-test convex sources measured 2026-10-06.
+  const FILE_FLOOR = 210;
+  // COUPLING: this must match the analyzer's unexported `walk` in
+  // scripts/economicCommandCensus.ts (every `.ts` under convex/, skipping
+  // `_generated` and `*.test.ts`). It is duplicated rather than imported because
+  // exporting `walk` would be an executable change to the analyzer; the file-count
+  // floor below catches a narrowed copy.
   const walkSources = (dir: string, out: string[] = []): string[] => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, e.name);
@@ -637,22 +650,48 @@ describe("SCRUM-742 tripwire — call shapes the census cannot see must not appe
 
   test("SCRUM-742 tripwire: no uncovered census call shape exists in convex/ sources", () => {
     const offenders: string[] = [];
-    for (const file of walkSources(CONVEX_ROOT)) {
+    const files = walkSources(CONVEX_ROOT);
+    // Floor: a walker narrowed by mistake must not pass this test vacuously.
+    expect(files.length, "tripwire scanned suspiciously few convex sources").toBeGreaterThanOrEqual(FILE_FLOOR);
+    for (const file of files) {
       const sf = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
       const at = (n: ts.Node) =>
         `${path.relative(CONVEX_ROOT, file).replace(/\\/g, "/")}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`;
+      const startLine = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line;
+      // Top-level `function` declarations are exactly what the analyzer's DECL
+      // matches as a `function` line, and the whole line is unread for edges.
+      const unreadFunctionLines = sf.statements.filter(ts.isFunctionDeclaration);
+      for (const decl of unreadFunctionLines) {
+        const declLine = startLine(decl);
+        const scanLine = (m: ts.Node): void => {
+          if (startLine(m) === declLine) {
+            if (ts.isCallExpression(m) && m.expression.getText(sf) !== "Date.now") {
+              offenders.push(`(b) call ${m.expression.getText(sf)} on a function declaration line at ${at(m)}`);
+            } else if (ts.isIdentifier(m) && m !== decl.name && /^hook[A-Z]/.test(m.text)) {
+              // (the declared name itself is the symbol, not a reference to one)
+              offenders.push(`(b) ${m.text} on a function declaration line at ${at(m)}`);
+            }
+          }
+          ts.forEachChild(m, scanLine);
+        };
+        scanLine(decl);
+      }
       const visit = (n: ts.Node): void => {
         // (a) a generic call whose type argument contains parentheses.
         if (ts.isCallExpression(n) && n.typeArguments?.some((t) => t.getText(sf).includes("("))) {
           offenders.push(`(a) generic type argument with parentheses at ${at(n)}`);
         }
-        // (b) a parameter default containing a call other than `Date.now`.
-        if (ts.isFunctionDeclaration(n) || ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isMethodDeclaration(n)) {
+        // (b') a parameter default containing a call other than `Date.now`, on any
+        // function form not already covered by the top-level declaration scan.
+        if (
+          (ts.isFunctionDeclaration(n) && !unreadFunctionLines.includes(n)) ||
+          ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isMethodDeclaration(n)
+        ) {
           for (const p of n.parameters) {
             if (!p.initializer) continue;
             const scan = (m: ts.Node): void => {
               if (ts.isCallExpression(m) && m.expression.getText(sf) !== "Date.now") {
-                offenders.push(`(b) parameter default calling ${m.expression.getText(sf)} at ${at(m)}`);
+                offenders.push(`(b') parameter default calling ${m.expression.getText(sf)} at ${at(m)}`);
               }
               ts.forEachChild(m, scan);
             };

@@ -54,21 +54,29 @@
  *     this read: the DECL matcher never matches `let`, so the `let` branch in
  *     `declarationEdgeText` is currently unreachable. Documented, not changed.)
  *
- * ── Two KNOWN under-inclusive gaps (SCRUM-742, pinned as KNOWN GAP tests):
+ * ── KNOWN under-inclusive gaps. The list is NOT exhaustive of what a regex call
+ *   graph can miss; known gaps include:
+ *   SCRUM-742 (regex shapes, pinned as KNOWN GAP tests, guarded by a tripwire):
  *   (a) a generic call whose type argument contains parentheses, e.g.
  *       `make<{ cb: (x: number) => void }>()`, gets no edge (the type-argument
  *       pattern cannot span `(`);
- *   (b) a call in a parameter default on a `function` declaration line, e.g.
- *       `function w(ctx, x = sink(ctx))`, gets no edge (those lines are not read).
- *   Neither shape is on a current money path; the `SCRUM-742 tripwire` test in
- *   `economicCommandCensus.test.ts` fails if either appears in convex/. The fix
+ *   (b) ANY call on a top-level `function` declaration line, i.e. a parameter
+ *       default (`function w(ctx, x = sink(ctx))`) or a one-line body
+ *       (`function w(ctx) { hookX(ctx); }`), gets no edge (the line is not read).
+ *   SCRUM-743 (HIGH, NOT guarded by any tripwire): Convex function REFERENCES
+ *       are not modelled: `ctx.runMutation(internal.…)`, `ctx.runAction(…)`,
+ *       `ctx.scheduler.runAfter/runAt(…, internal.…|api.…)`.
+ *   Also not modelled: namespace/default imports, re-exports, and function
+ *   values passed without being called (other than `hook*` names).
+ *   No SCRUM-742 shape is on a current money path; the `SCRUM-742 tripwire` test
+ *   in `economicCommandCensus.test.ts` fails if one appears in convex/. The fix
  *   is a TypeScript-AST rewrite of edge extraction (SCRUM-742).
  *
  * The design OBJECTIVE is an OVER-INCLUSIVE bias: a false positive costs one
  * explicit classification; a false negative hides a command that can duplicate
- * money on a retry. That objective is NOT a proof of completeness: this is a
- * regex call graph, and the two gaps above are exactly where it errs the other
- * way.
+ * money on a retry. That objective is NOT a guarantee or a proof of
+ * completeness: this is a regex call graph, and the gaps listed above are where
+ * it errs the other way.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -196,10 +204,11 @@ const BUILDER_CALL =
  * hook, `const hookX = makeHook("X")`, keeps its edge to `makeHook`), with the
  * Convex builder calls blanked (`= mutation({` must not link every command to the
  * `mutation` wrapper symbol, blind spot 1). `function` declarations contribute
- * nothing: the line holds only the name and parameter list, whose sole possible
- * call is a default value, and reading it would add the function's own signature
- * types as noise. The declaration regex already restricts lines to these shapes.
- * That omission is the KNOWN GAP (b) of SCRUM-742. Likewise the `let` alternative
+ * nothing: the WHOLE declaration line is unread, so a call in a parameter default
+ * AND a call in a body that opens and closes on that same line
+ * (`function f(ctx) { hookX(ctx); }`) both get no edge. Reading the line would
+ * add the function's own signature types as noise. That omission is the KNOWN GAP
+ * (b) of SCRUM-742, guarded by a tripwire test over convex/. Likewise the `let` alternative
  * below is currently UNREACHABLE: DECL only matches `const`, never `let`, so no
  * `let` declaration line ever arrives here (SCRUM-738 N3).
  */
