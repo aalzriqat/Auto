@@ -61,7 +61,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "accountingMigration.backfillFixedAssetMinorUnits": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "accountingMigration.backfillPartnerEquityMinorUnits": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "accountingMigration.backfillVehicleInventoryOpeningBalances": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: dryRun unless explicitly false; each vehicle is SKIPPED when a VEHICLE_ACQUIRED/VEHICLE_INVENTORY_OPENING_BALANCE event already exists or a vehicle_acquired_ row is pending, and the posting it delegates to keys on `vehicle_inventory_opening_${vehicleId}` — the pre-existing vehicle — which the posting engine dedupes by_org_idempotency" },
-  "accountingOutbox.redrive": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: schedules the outbox drain, which claims only PENDING rows and posts each under the idempotencyKey STORED on the row; the posting engine dedupes that key by_org_idempotency, so a re-run re-drives nothing already posted" },
+  "accountingOutbox.redrive": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: drains the first page of the outbox inline and schedules the claims, which claim only PENDING rows and posts each under the idempotencyKey STORED on the row; the posting engine dedupes that key by_org_idempotency, so a re-run re-drives nothing already posted" },
   "accountingOutbox.retryFailed": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743 (was NON_ECONOMIC, which was false: it revives the row and schedules claimOutboxRow, which posts): refuses unless the row is FAILED, reviveFailedEntry re-checks FAILED and refuses a retired posting, and the worker posts under the idempotencyKey stored on the row, deduped by_org_idempotency; a retry finds the row no longer FAILED and throws" },
   "accountingPeriods.open": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: schedules the outbox drain after opening the period; the drain posts only PENDING rows under their stored idempotencyKey, deduped by_org_idempotency, so a duplicate drain posts nothing twice" },
   "accountingPeriods.reopen": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743: schedules the outbox drain after reopening the period; the drain posts only PENDING rows under their stored idempotencyKey, deduped by_org_idempotency, so a duplicate drain posts nothing twice" },
@@ -168,7 +168,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "payroll.recoverAdvance": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "prepaidExpenses.approveCorrectionRequest": { bucket: "STATE_GUARDED", mechanism: "refuses unless request.status === PENDING" },
   "prepaidExpenses.correctSchedule": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
-  "prepaidExpenses.redriveScheduleEvents": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
+  "prepaidExpenses.redriveScheduleEvents": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743 (was NON_ECONOMIC, which was false: reviveFailedEntry and drainEntries schedule claimOutboxRow, which posts): revives only FAILED non-retired rows, drainEntries skips rows that are not PENDING or already dispatched, claimOutboxRow refuses an already-claimed row, and the worker posts under the idempotencyKey stored on the row, deduped by_org_idempotency" },
   "prepaidExpenses.runAmortizationNow": { bucket: "STATE_GUARDED", mechanism: "SCRUM-743 public ACTION: one runMutation(catchUpScheduleMutation) per schedule; amortizeScheduleForMonth refuses a month <= lastRecognizedYearMonth and a month with nothing due, and advances that cursor in the SAME transaction as hookPrepaidExpenseAmortized, keyed `prepaid_amort_${scheduleId}_${yearMonth}`, so a re-run after partial success re-posts no month" },
   "prepaidExpenses.retryAmortizationFailure": { bucket: "STATE_GUARDED", mechanism: "hookPrepaidExpenseAmortized keys on `prepaid_amort_${scheduleId}_${yearMonth}` — both pre-existing/deterministic, which is precisely what makes a RETRY endpoint safe" },
   "sales.completeDraft": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
@@ -200,7 +200,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "workOrders.update": { bucket: "STATE_GUARDED", mechanism: "refuses when the work order already carries expenseId, which this same mutation patches on success" },
 };
 
-describe("analyzer self-tests — the six blind spots, pinned", () => {
+describe("analyzer self-tests — the seven blind spots, pinned", () => {
   test("BLIND SPOT 1: a callee is resolved through imports, never by bare name", () => {
     // `create`, `add` and `update` are symbol names in dozens of modules. Bare
     // name resolution fused the graph and reported 348 of 349 public mutations
@@ -308,9 +308,11 @@ describe("analyzer self-tests — the six blind spots, pinned", () => {
   });
 
   test("BLIND SPOT 7: the real delegated paths are in the population, the comment edge is not", () => {
-    const g = buildGraph(CONVEX_ROOT);
+    const g = realTreeGraph();
     const forward = censusForward(g);
     const edge = (a: string, b: string) => g.edges.get(a)?.has(b) ?? false;
+    expect(edge("prepaidExpenses.redriveScheduleEvents", "accountingOutbox.drainEntries")).toBe(true);
+    expect(edge("accountingOutbox.drainEntries", "accountingOutbox.claimOutboxRow")).toBe(true);
     // Pinned real paths, each through a function reference.
     expect(edge("accountingPeriods.open", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
     expect(edge("accountingPeriods.reopen", "accountingOutbox.drainPendingAccountingEvents")).toBe(true);
@@ -328,7 +330,7 @@ describe("analyzer self-tests — the six blind spots, pinned", () => {
     // The false positive: `lock` named `reopen()` in a comment.
     expect(edge("accountingPeriods.lock", "accountingPeriods.reopen")).toBe(false);
     expect([...forward]).not.toContain("accountingPeriods.lock");
-  });
+  }, REAL_TREE_BUDGET_MS);
 
   test("BLIND SPOT 5: comment text is not a call (SCRUM-738)", () => {
     // A body is sliced from its declaration to the NEXT declaration, so the next
@@ -582,6 +584,39 @@ describe("SCRUM-313 economic command classification ratchet", () => {
     expect(onlyReverse).toEqual([]);
   });
 
+  test("no NON_ECONOMIC command reaches the outbox posting worker (SCRUM-743 review F1)", () => {
+    // `retryFailed` and `redriveScheduleEvents` were both labelled NON_ECONOMIC
+    // while scheduling `claimOutboxRow`, which posts. A NON_ECONOMIC label is a
+    // claim that no money moves, so it must never sit on a graph path to a worker
+    // that posts. Over-inclusive on purpose: a false hit costs one re-bucketing.
+    const POSTING_WORKERS = new Set([
+      "accountingOutbox.claimOutboxRow",
+      "accountingOutbox.postOutboxRow",
+      "accountingOutbox.drainEntries",
+      "accountingOutbox.drainPendingAccountingEvents",
+    ]);
+    const reaches = (from: string): boolean => {
+      const seen = new Set<string>([from]);
+      const queue = [from];
+      while (queue.length > 0) {
+        const id = queue.pop()!;
+        for (const next of g.edges.get(id) ?? []) {
+          if (POSTING_WORKERS.has(next)) return true;
+          if (!seen.has(next)) {
+            seen.add(next);
+            queue.push(next);
+          }
+        }
+      }
+      return false;
+    };
+    const offenders = Object.entries(CLASSIFICATION)
+      .filter(([id, entry]) => entry.bucket === "NON_ECONOMIC" && forward.has(id) && reaches(id))
+      .map(([id]) => id)
+      .sort((a, b) => a.localeCompare(b));
+    expect(offenders).toEqual([]);
+  });
+
   test("the population is exactly the classified set", () => {
     const liveClassified = Object.entries(CLASSIFICATION)
       .filter(([, entry]) => entry.bucket !== "RETIRED")
@@ -709,7 +744,7 @@ describe("SCRUM-742 tripwire — call shapes the census cannot see must not appe
   // Function REFERENCES (`ctx.runMutation(internal.…)`, scheduler) are modelled
   // since SCRUM-743 (blind spot 7). Still UNGUARDED by this tripwire, SCRUM-742:
   // httpAction route handlers, namespace/default imports, re-exports, and function
-  // values passed uncalled.
+  // values passed uncalled, and function references held in a variable.
   // ~80% of the 262 non-test convex sources measured 2026-10-06.
   const FILE_FLOOR = 210;
   // COUPLING: this must match the analyzer's unexported `walk` in

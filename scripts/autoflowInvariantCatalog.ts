@@ -99,7 +99,6 @@ export interface InvariantDefinition {
 
 const SCRUM_342 = "SCRUM-342";
 const SCRUM_742 = "SCRUM-742";
-const SCRUM_743 = "SCRUM-743";
 const RUNTIME_EVIDENCE: readonly EvidenceMechanism[] = ["EXECUTION", "PREVIEW"];
 const ANY_EXECUTABLE_EVIDENCE: readonly EvidenceMechanism[] = [
   "EXECUTION",
@@ -393,7 +392,7 @@ const MANDATORY_OBLIGATION_FLOORS: Readonly<
 > = {
   "TEN-1": ["NEGATIVE", "TENANCY", "MUTATION", "BOUNDARY"],
   "AUTH-1": ["NEGATIVE", "AUTHORIZATION", "MUTATION"],
-  "ECON-1": ["REPLAY", "MUTATION", "CONCURRENCY", "REVERSAL", "RECONCILIATION"],
+  "ECON-1": ["REPLAY", "MUTATION", "CONCURRENCY", "REVERSAL", "RECONCILIATION", "BOUNDARY"],
   "ECON-2": [
     "REPLAY",
     "NEGATIVE",
@@ -590,7 +589,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       ),
       deferred(
         "BOUNDARY",
-        "The census resolves imported calls and internal.*/api.* function references from public mutations and actions, but not httpAction route handlers, namespace/default imports, re-exports, or function values passed uncalled; SCRUM-742 closes those with an AST resolver.",
+        "The census resolves imported calls and internal.*/api.* function references from public mutations and actions, but not httpAction route handlers, namespace/default imports, re-exports, function values passed uncalled, function references held in a variable, or public mutations built by a custom builder wrapper; SCRUM-742 closes those with an AST resolver.",
         SCRUM_742
       ),
     ],
@@ -606,7 +605,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
         "Execution checks for one-intent/one-economic-effect and fingerprint completeness on identity-guarded commands."
       ),
     ]),
-    tracking: SCRUM_743,
+    tracking: SCRUM_742,
     evidenceBoundary:
       "This proves the classification contract for the population the analyzer can see, and representative execution semantics. The population is bounded by the analyzer's resolution forms (see the deferred BOUNDARY obligation): it is not yet an exact contract over every entrypoint, and it does not mean every classification mechanism is correct for every runtime interleaving. ENFORCED returns only when SCRUM-742 has landed and the measured population matches an independent enumeration.",
   },
