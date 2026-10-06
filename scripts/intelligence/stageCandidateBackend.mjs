@@ -198,28 +198,42 @@ export function stageCandidateBackend({ candidateRoot, trustedRoot, stageRoot, t
   return { version: 1, testedSha: testedSha ?? null, files: manifest };
 }
 
-const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : undefined;
-if (invokedPath && invokedPath === fileURLToPath(import.meta.url)) {
+/**
+ * The workflow's entry point: environment in, fixed text out, an exit code.
+ * Exported so the tests exercise it in-process.
+ * @param {Record<string, string | undefined>} env
+ * @param {{ write(text: string): unknown }} stdout
+ * @param {{ write(text: string): unknown }} stderr
+ * @returns {number}
+ */
+export function runStageCli(env, stdout, stderr) {
   try {
     const manifest = stageCandidateBackend({
-      candidateRoot: process.env.CANDIDATE_ROOT ?? "",
-      trustedRoot: process.env.TRUSTED_ROOT ?? "",
-      stageRoot: process.env.STAGE_ROOT ?? "",
-      testedSha: process.env.TESTED_SHA,
+      candidateRoot: env.CANDIDATE_ROOT ?? "",
+      trustedRoot: env.TRUSTED_ROOT ?? "",
+      stageRoot: env.STAGE_ROOT ?? "",
+      testedSha: env.TESTED_SHA,
     });
-    if (process.env.STAGE_MANIFEST_PATH) {
-      writeFileSync(process.env.STAGE_MANIFEST_PATH, JSON.stringify(manifest, null, 2) + "\n");
+    if (env.STAGE_MANIFEST_PATH) {
+      writeFileSync(env.STAGE_MANIFEST_PATH, JSON.stringify(manifest, null, 2) + "\n");
     }
-    process.stdout.write(
+    stdout.write(
       "Staged " + manifest.files.length + " candidate backend files from " +
         STAGED_DIRECTORIES.join("/, ") + "/ with trusted dependencies.\n",
     );
+    return 0;
   } catch (error) {
-    process.stderr.write(
+    stderr.write(
       (error instanceof StageRefusal
         ? error.message
         : "Staging failed unexpectedly (" + String(error?.code ?? "no code") + ").") + "\n",
     );
-    process.exit(1);
+    return 1;
   }
+}
+
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : undefined;
+if (invokedPath && invokedPath === fileURLToPath(import.meta.url)) {
+  const code = runStageCli(process.env, process.stdout, process.stderr);
+  if (code !== 0) process.exit(code);
 }

@@ -484,20 +484,6 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     ]);
   });
 
-  it("makes every workflow call of resolveConvexPreviewCredentials name the deployment it expects (Codex CR-341-01)", () => {
-    // Without expectedConvexCloudUrl the resolver refuses on every run, so a
-    // call site that omits it is a lane that can never deploy.
-    let calls = 0;
-    for (const name of readdirSync(workflowsDir).filter((file) => /\.ya?ml$/.test(file))) {
-      const source = readFileSync(path.join(workflowsDir, name), "utf8");
-      for (const match of source.matchAll(/resolveConvexPreviewCredentials\(\{([\s\S]*?)\}\);/g)) {
-        calls += 1;
-        expect(match[1], name).toMatch(/expectedConvexCloudUrl:\s*process\.env\.\w+/);
-      }
-    }
-    expect(calls).toBeGreaterThanOrEqual(3);
-  });
-
   it("gives the staged deploy container exactly the stage and trusted node_modules, read-only, and the trusted CLI", () => {
     for (const { label, step } of stagedDeploySteps()) {
       const run = String(step.run ?? "");

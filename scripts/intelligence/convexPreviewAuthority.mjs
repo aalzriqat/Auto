@@ -270,7 +270,7 @@ export async function requestPreviewClaim({
       redirect: "error",
       signal: controller.signal,
     });
-  } catch (error) {
+  } catch {
     if (controller.signal.aborted) {
       throw new Error("Convex preview authority request timed out.");
     }

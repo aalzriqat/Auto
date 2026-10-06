@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   DEPENDENCY_SURFACE,
   StageRefusal,
+  runStageCli,
   stageCandidateBackend,
 } from "./stageCandidateBackend.mjs";
 
@@ -137,6 +138,50 @@ describe("stageCandidateBackend (SCRUM-350 Option C)", () => {
     }
     expect(() => stage(fx)).toThrow("symlinked path segment");
     expect(existsSync(path.join(fx.stageRoot, "packages"))).toBe(false);
+  });
+
+  it("the workflow entry point stages, writes the manifest and prints only fixed text; a refusal exits 1 with its message", () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const sink = (lines: string[]) => ({ write: (text: string) => void lines.push(text) });
+    const fx = fixture();
+    const manifestPath = path.join(tree({}), "manifest.json");
+    const code = runStageCli(
+      {
+        CANDIDATE_ROOT: fx.candidate,
+        TRUSTED_ROOT: fx.trusted,
+        STAGE_ROOT: fx.stageRoot,
+        TESTED_SHA: "b".repeat(40),
+        STAGE_MANIFEST_PATH: manifestPath,
+      },
+      sink(out),
+      sink(err),
+    );
+    expect(code).toBe(0);
+    expect(err).toEqual([]);
+    expect(out.join("")).toBe(
+      "Staged 4 candidate backend files from convex/, lib/, packages/shared/src/ with trusted dependencies.\n",
+    );
+    expect(JSON.parse(readFileSync(manifestPath, "utf8")).testedSha).toBe("b".repeat(40));
+
+    // A refusal carries its own fixed message; the stage is never half-written.
+    const refused = fixture({ "convex/node_modules/x.ts": "x" });
+    const refusedErr: string[] = [];
+    expect(
+      runStageCli(
+        { CANDIDATE_ROOT: refused.candidate, TRUSTED_ROOT: refused.trusted, STAGE_ROOT: refused.stageRoot },
+        sink([]),
+        sink(refusedErr),
+      ),
+    ).toBe(1);
+    expect(refusedErr.join("")).toBe("Candidate backend contains node_modules: convex/node_modules\n");
+
+    // Anything unexpected prints a code, never the underlying message.
+    const unexpected: string[] = [];
+    expect(
+      runStageCli({ CANDIDATE_ROOT: "/no/such/root", TRUSTED_ROOT: fx.trusted, STAGE_ROOT: path.join(tree({}), "s2") }, sink([]), sink(unexpected)),
+    ).toBe(1);
+    expect(unexpected.join("")).toMatch(/^(Candidate .*|Staging failed unexpectedly \((ENOENT|no code)\))\n$/);
   });
 
   it("refuses a hard link, which would let a staged file alias one outside the tree", () => {

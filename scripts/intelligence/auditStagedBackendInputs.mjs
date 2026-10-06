@@ -121,7 +121,8 @@ function entryPointSuperset(dir, parse) {
     }
   };
   visit(dir);
-  return { isolate: isolate.sort(), node: node.sort() };
+  const byPath = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  return { isolate: isolate.sort(byPath), node: node.sort(byPath) };
 }
 
 /**
