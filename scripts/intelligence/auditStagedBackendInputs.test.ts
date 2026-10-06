@@ -281,6 +281,82 @@ describe("auditStagedBackendInputs (SCRUM-350 F1)", () => {
     expect((await audit(stageRoot)).status).toBe(0);
   });
 
+  it("refuses a source map comment in a use-node entry point, the node-platform pass (Sonnet T1 on PR #341)", async () => {
+    const { stageRoot } = stage({
+      "convex/actions/mapLeak.ts": '"use node";\nexport const m = 1;\n//# sourceMappingURL=../../outside.map\n',
+    });
+    const result = await audit(stageRoot);
+    expect(result.stderr).toContain("carries a source map comment");
+    expect(result.status).toBe(1);
+  });
+
+  it("refuses a source map comment buried in the middle of a large file (Sonnet T1 on PR #341)", async () => {
+    const filler = (tag: string) =>
+      Array.from({ length: 4_000 }, (_, index) => "export const " + tag + index + " = 1;\n").join("");
+    const { stageRoot } = stage({
+      "convex/big.ts": filler("a") + "//# sourceMappingURL=../../outside.map\n" + filler("b"),
+    });
+    const result = await audit(stageRoot);
+    expect(result.stderr).toContain("carries a source map comment");
+    expect(result.status).toBe(1);
+  }, 30_000);
+
+  it("accepts the trusted node_modules, whose own files carry source map comments (Sonnet T1 on PR #341)", async () => {
+    // convex's dist files end in a sourceMappingURL comment. The refusal is for
+    // candidate sources only; widening it to node_modules would refuse every deploy.
+    // The whole-node_modules mount also links the repository's own shared package,
+    // so the default fixture's import of it is replaced by a self-contained file.
+    const { stageRoot } = stage({
+      "convex/deals.ts": "export const total = 1;\n",
+      "convex/usesConvex.ts": 'import { v } from "convex/values";\nexport const arg = v.string();\n',
+    });
+    // Mount the whole trusted node_modules, as the workflow does, so convex's own
+    // dependency files resolve inside the allowed root.
+    rmSync(path.join(stageRoot, "node_modules"), { recursive: true, force: true });
+    symlinkSync(path.resolve(process.cwd(), "node_modules"), path.join(stageRoot, "node_modules"), "junction");
+    const result = await audit(stageRoot);
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  });
+
+  // The CLI registers every input whose path contains ".config." as a component
+  // and bundles every file in that directory as an entry point
+  // (components/definition/bundle.js findComponentDependencies). The audit walks
+  // only convex/, so a component directory elsewhere is read unaudited
+  // (Sonnet S2 on PR #341).
+  const componentHomes: Array<[string, string]> = [
+    ["lib/zz", "../lib/zz"],
+    ["packages/shared/src/zz", "../packages/shared/src/zz"],
+  ];
+  for (const [home, relative] of componentHomes) {
+    it("refuses a component directory in " + home + " whose own files the CLI would bundle", async () => {
+      const { root, stageRoot } = stage();
+      write(root, { "decoy.txt": "outside" });
+      write(stageRoot, {
+        "convex/convex.config.ts":
+          'import zz from "' + relative + '/convex.config";\nexport default { zz };\n',
+        [home + "/convex.config.ts"]: "export default {};\n",
+        [home + "/leak.ts"]:
+          "import decoy from " + JSON.stringify(path.join(root, "decoy.txt").replaceAll("\\", "/")) +
+          ' with { type: "text" };\nexport const d = decoy;\n',
+      });
+      const result = await audit(stageRoot);
+      expect(result.stderr).toContain("component directory outside convex/");
+      expect(result.status).toBe(1);
+    });
+
+    it("refuses a plain .config. file in " + home + " that is imported without being a component", async () => {
+      const { stageRoot } = stage();
+      write(stageRoot, {
+        "convex/convex.config.ts": 'import "' + relative + '/other.config";\nexport default {};\n',
+        [home + "/other.config.ts"]: "export const o = 1;\n",
+      });
+      const result = await audit(stageRoot);
+      expect(result.stderr).toContain("component directory outside convex/");
+      expect(result.status).toBe(1);
+    });
+  }
+
   it.skipIf(process.platform === "win32")(
     "refuses an outside .wasm import whose path contains a line terminator (Sonnet F1 on PR #341)",
     async () => {

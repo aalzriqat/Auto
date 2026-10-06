@@ -25,6 +25,13 @@ import { fileURLToPath } from "node:url";
  * tsconfig the bundler consults, so the credential-bearing deploy that follows
  * reads the same inputs this proved.
  *
+ * This is a MODEL of the CLI's reads, not the CLI: the deploy runs three esbuild
+ * passes with different options, plugins and directory walks, and this audit
+ * runs one. Each divergence found so far (wasm, source map files, an inline
+ * map's "sources", component directories) is refused explicitly. Read channels
+ * nobody has found yet are NOT covered; SCRUM-745 tracks replacing the model
+ * with a run of the real CLI under a read tracer.
+ *
  * Run it with the stage as the working directory. Output reaches public logs;
  * this container holds no secret, and it prints counts and candidate paths only.
  */
@@ -209,6 +216,7 @@ export async function auditStagedBackendInputs({ stageRoot }) {
     names.map((name) => path.join(stageRoot, name)).filter((root) => existsSync(root)).map((root) => realpathSync(root));
   const allowedRoots = rootsFor(AUDIT_ALLOWED_DIRECTORIES);
   const candidateRoots = rootsFor(AUDIT_ALLOWED_DIRECTORIES.filter((name) => name !== "node_modules"));
+  const outsideConvexRoots = rootsFor(AUDIT_ALLOWED_DIRECTORIES.filter((name) => name !== "node_modules" && name !== "convex"));
   for (const input of recorded) {
     let real;
     try {
@@ -219,6 +227,19 @@ export async function auditStagedBackendInputs({ stageRoot }) {
     if (!allowedRoots.some((root) => isInside(root, real))) {
       throw new AuditRefusal(
         "A bundled input is outside the staged backend: " + JSON.stringify(input.slice(0, 200)),
+      );
+    }
+    // The CLI treats every input whose path contains ".config." as a component
+    // and bundles each file in its directory as an entry point
+    // (components/definition/bundle.js findComponentDependencies). This audit
+    // walks convex/ alone, so a component directory anywhere else would be read
+    // unaudited by the credential-bearing deploy (Sonnet S2 on PR #341).
+    if (
+      outsideConvexRoots.some((root) => isInside(root, real)) &&
+      (path.relative(stageRoot, input) + "\n" + path.relative(stageRoot, real)).includes(".config.")
+    ) {
+      throw new AuditRefusal(
+        "A component directory outside convex/ is not allowed: " + JSON.stringify(input.slice(0, 200)),
       );
     }
     // esbuild also reads the file a loaded candidate source names in a

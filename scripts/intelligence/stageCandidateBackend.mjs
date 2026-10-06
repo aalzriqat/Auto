@@ -24,7 +24,8 @@ import { fileURLToPath } from "node:url";
  *   candidate — the backend's import closure (convex/ reaches lib/, and lib/
  *   reaches the `@autoflow/shared` workspace package through its trusted
  *   node_modules link). Anything else it reaches for is absent, so the bundle
- *   fails closed, and auditStagedBackendInputs.mjs proves no read escapes;
+ *   fails closed, and auditStagedBackendInputs.mjs refuses every read channel
+ *   found so far (it models the CLI; unknown channels are tracked in SCRUM-745);
  * - every dependency, CLI-configuration, package-metadata and tsconfig file is
  *   TRUSTED's copy, and the candidate's must be byte-identical to it. A PR that
  *   changes dependencies cannot be deployed this way, because its lockfile
