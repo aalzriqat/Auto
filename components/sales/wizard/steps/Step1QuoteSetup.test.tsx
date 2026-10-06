@@ -187,3 +187,27 @@ describe("SCRUM-656: profit-approval alerts follow the language", () => {
     }
   });
 });
+
+/** SCRUM-682: a failed approval request is reported in the user's language. */
+describe("SCRUM-682: the approval-request failure toast is localized", () => {
+  const FAILED = {
+    en: "Could not send the approval request. Please try again.",
+    ar: "تعذّر إرسال طلب الاعتماد. يرجى المحاولة مرة أخرى.",
+  } as const;
+
+  test.each(["en", "ar"] as const)("%s: an unexpected failure shows the translated fallback", async (locale) => {
+    const { toast } = await import("@/components/ui/sonner");
+    vi.mocked(toast.error).mockClear();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    stubs.locale = locale;
+    stubs.verdict = { status: "REQUIRED", margin: 100, minimumProfit: 5000 };
+    stubs.mutation = async () => {
+      throw new Error("[CONVEX M(approvals:requestProfitApproval)] ArgumentValidationError: field vehicleId");
+    };
+    renderStep();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: dictionaries[locale].WizardProfitApprovalRequestAction as string }));
+    });
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(FAILED[locale]);
+  });
+});

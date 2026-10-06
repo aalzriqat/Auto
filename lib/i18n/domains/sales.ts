@@ -1882,6 +1882,10 @@ const serverErrorMessages = defineBilingualMessages({
     "This deal's sale is not completed, so there is nothing to unwind. An accountant reviews the deal. Nothing has been changed.",
     "عملية البيع في هذه الصفقة غير مكتملة، لذلك لا يوجد ما يمكن التراجع عنه. يراجع المحاسب الصفقة. لم يتم تغيير أي شيء.",
   ],
+  ServerError_DEAL_UNWIND_PERMISSION: [
+    "Reversing a paid deal needs both the cancel-closed-deal and the confirm-finance-disbursement permissions. Ask an administrator.",
+    "عكس صفقة مدفوعة يتطلب صلاحيتي إلغاء الصفقة المغلقة وتأكيد صرف التمويل معًا. يرجى مراجعة المسؤول.",
+  ],
   ServerError_DEAL_UNWIND_COMMISSION_PAID: [
     "The salesperson's commission on this deal has already been paid. Recovering it is not supported yet; an accountant reviews the deal. Nothing has been changed.",
     "صُرفت عمولة مندوب المبيعات على هذه الصفقة. استرداد العمولة غير مدعوم بعد؛ يراجع المحاسب الصفقة. لم يتم تغيير أي شيء.",
@@ -2181,6 +2185,10 @@ const quoteWizardQaMessages = defineBilingualMessages({
   ],
   WizardProfitApprovalRequestAction: ["Request Profit Approval", "طلب اعتماد الربح"],
   WizardProfitApprovalRequesting: ["Requesting...", "جارٍ الإرسال…"],
+  WizardProfitApprovalRequestFailed: [
+    "Could not send the approval request. Please try again.",
+    "تعذّر إرسال طلب الاعتماد. يرجى المحاولة مرة أخرى.",
+  ],
   WizardProfitApprovedTitle: ["Profit Approved", "تم اعتماد الربح"],
   WizardProfitApprovedBody: [
     "Management approved this sale price (profit over the list price: {margin}). You may proceed.",
