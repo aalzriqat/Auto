@@ -577,6 +577,19 @@ describe("SCRUM-712 batch 2", () => {
     expect(await s.t.run((ctx) => hasPendingDispositionExceptSale(ctx, s.orgId, row.vehicleId, row.saleId))).toBe(true);
   });
 
+  test("Opus L1: a foreign QUARANTINED share blocks the sale's own restoration just like a PENDING one", async () => {
+    const s = await cancelledWithDeposit("foreignQuar");
+    const [row] = await pendingRows(s);
+    const { hasPendingDispositionExceptSale } = await import("./utils/depositCancellationPending");
+    await s.t.run(async (ctx) => {
+      const sale = (await ctx.db.get(row.saleId))!;
+      const { _id, _creationTime, ...saleCopy } = sale;
+      const other = await ctx.db.insert("sales", { ...saleCopy });
+      const { _id: _rid, _creationTime: _rt, ...shareCopy } = row;
+      await ctx.db.insert("depositCancellationPendings", { ...shareCopy, saleId: other, status: "QUARANTINED" });
+    });
+    expect(await s.t.run((ctx) => hasPendingDispositionExceptSale(ctx, s.orgId, row.vehicleId, row.saleId))).toBe(true);
+  });
   test("R3-2: an org with more than 200 blocking shares still blocks the car that sorts past the cap", async () => {
     const s = await cancelledWithDeposit("cap202");
     const [row] = await pendingRows(s);
