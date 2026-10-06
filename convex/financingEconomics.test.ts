@@ -474,6 +474,18 @@ describe("base approval — the confirmed deal", () => {
     const repaired = await readApp(seed, applicationId);
     expect(repaired.estimatedDealerBorneExpensesMinor).toBe(jod(140));
     expect(repaired.estimatedClosingExpensesMinor).toBe(jod(140));
+    // SCRUM-394: filling an unknown first payment moves a figure a held confirmation depends on,
+    // so the revision advances (once) and a stamp read before the repair no longer matches.
+    expect(repaired.customerFirstPaymentMinor).toBeDefined();
+    expect(repaired.economicsRevision).toBe(1);
+    // A repair that finds nothing missing writes nothing and must not advance it again.
+    await seed.asUser.mutation(api.applications.repairQuoteEconomicsLineage, {
+      orgId: seed.orgId,
+      applicationId,
+      expectedCurrency: "JOD",
+      dryRun: false,
+    });
+    expect((await readApp(seed, applicationId)).economicsRevision).toBe(1);
 
     await seed.t.run((ctx) =>
       ctx.db.patch(applicationId, {
