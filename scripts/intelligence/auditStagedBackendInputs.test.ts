@@ -246,6 +246,38 @@ describe("auditStagedBackendInputs (SCRUM-350 F1)", () => {
     expect((await audit(inside.stageRoot)).status).toBe(0);
   });
 
+  it("refuses a staged source that names an external source map, which esbuild reads outside the metafile (Sonnet F2 on PR #341)", async () => {
+    const { root, stageRoot } = stage();
+    write(root, { "outside.map": '{"version":3,"sources":[],"mappings":""}\n' });
+    write(stageRoot, {
+      "convex/mapLeak.ts": "export const m = 1;\n//# sourceMappingURL=../../outside.map\n",
+    });
+    const result = await audit(stageRoot);
+    expect(result.stderr).toContain("references an external source map");
+    expect(result.status).toBe(1);
+
+    // Control: an inline data: source map is not a file read.
+    const inline = stage({
+      "convex/mapOk.ts": "export const m = 1;\n//# sourceMappingURL=data:application/json;base64,e30=\n",
+    });
+    expect((await audit(inline.stageRoot)).status).toBe(0);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses an outside .wasm import whose path contains a line terminator (Sonnet F1 on PR #341)",
+    async () => {
+      const { root, stageRoot } = stage();
+      write(root, { "out\nside.wasm": "\0asm\u0001\0\0\0" });
+      write(stageRoot, {
+        "convex/wasmNl.ts":
+          "import wasm from " + JSON.stringify(path.join(root, "out\nside.wasm")) + ";\nexport const w = wasm;\n",
+      });
+      const result = await audit(stageRoot);
+      expect(result.stderr).toContain("A bundled input is outside the staged backend");
+      expect(result.status).toBe(1);
+    },
+  );
+
   it("audits every stage against its own working directory, not the first stage this process audited", async () => {
     // esbuild pins process.cwd() at load. Without a fresh loader the second
     // audit resolves against the first stage, which is gone (Linux) or only
