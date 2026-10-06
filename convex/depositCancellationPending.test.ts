@@ -466,6 +466,43 @@ describe("SCRUM-712 S5: backfill of cancelled sales that predate the table", () 
     await expect(resolve({})).rejects.toThrow(/Only a quarantined/);
   });
 
+  test("M1: resolving a quarantined share also releases the commitment root it was holding open", async () => {
+    const s = await cancelledWithDeposit("s5ExitRoot");
+    const [row] = await pendingRows(s);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(row._id, { status: "QUARANTINED" });
+      const deposit = (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)!;
+      await ctx.db.patch(deposit._id, { holdActive: false });
+      for (const root of await ctx.db.query("commitmentRoots").collect()) {
+        if (root.orgId === s.orgId && root.vehicleId === s.vehicleA) await ctx.db.delete(root._id);
+      }
+      await ctx.db.insert("commitmentRoots", {
+        orgId: s.orgId, vehicleId: s.vehicleA, customerId: s.customerId, status: "OPEN" as const,
+        openedAt: Date.now(), openedBy: s.userId, lineageGeneration: 0,
+      });
+    });
+    const rootStatus = () =>
+      s.t.run(async (ctx) => (await ctx.db.query("commitmentRoots").collect()).find((r) => r.orgId === s.orgId && r.vehicleId === s.vehicleA)!.status);
+    expect(await rootStatus()).toBe("OPEN");
+    await s.t.mutation(internal.migrateDepositCancellationPendings.resolveQuarantinedPending, {
+      orgId: s.orgId, pendingId: row._id, actorId: s.userId, reason: "refunded by bank", resolution: "RELEASED",
+    });
+    expect(await s.t.run(async (ctx) => (await ctx.db.get(s.vehicleA))!.status)).not.toBe("RESERVED");
+    // The stale root would refuse every other buyer with "held by another deal".
+    expect(await rootStatus()).toBe("RELEASED");
+  });
+
+  test("L1: reconcileVehicleHolds does not preview a release the write would refuse", async () => {
+    const s = await cancelledWithDeposit("s5Reconcile");
+    await s.t.run(async (ctx) => {
+      const deposit = (await ctx.db.query("deposits").collect()).find((d) => d.orgId === s.orgId)!;
+      await ctx.db.patch(deposit._id, { holdActive: false });
+    });
+    expect((await pendingRows(s)).map((r) => r.status)).toEqual(["PENDING"]);
+    const out = await s.t.mutation(internal.migrations.reconcileVehicleHolds, { orgId: s.orgId, dryRun: true });
+    expect(out.released.filter((r) => r.vehicleId === s.vehicleA.toString())).toEqual([]);
+  });
+
   test("another organization's applications are never touched", async () => {
     const a = await cancelledWithDeposit("s5OrgA");
     const b = await cancelledWithDeposit("s5OrgB");

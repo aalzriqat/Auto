@@ -15,6 +15,7 @@
  */
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
+import { releaseRootIfNoLiveBasis } from "./commitments";
 import { internalMutation } from "./functions";
 import { forgetOrgMemo, recordPendingDisposition } from "./utils/depositCancellationPending";
 import { syncVehicleHoldStatus } from "./utils/depositHelpers";
@@ -244,6 +245,17 @@ export const resolveQuarantinedPending = internalMutation({
     forgetOrgMemo(ctx, args.orgId);
     const vehicle = await ctx.db.get(row.vehicleId);
     if (vehicle && vehicle.orgId === args.orgId && vehicle.status !== "SOLD") {
+      // A terminal resolution is a decision door like refund/forfeit: the commitment
+      // root held open by this share's QUARANTINED row must be re-evaluated, or the
+      // car is advertised AVAILABLE while the stale root refuses every other buyer.
+      if (args.resolution !== "PENDING") {
+        await releaseRootIfNoLiveBasis(ctx, {
+          orgId: args.orgId,
+          vehicleId: row.vehicleId,
+          reason: "quarantined deposit share resolved",
+          decisionNow: Date.now(),
+        });
+      }
       await syncVehicleHoldStatus(ctx, vehicle._id);
     }
     return { status: args.resolution };

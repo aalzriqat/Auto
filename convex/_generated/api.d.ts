@@ -177,6 +177,7 @@ import type * as utils_dedup from "../utils/dedup.js";
 import type * as utils_defaultChart from "../utils/defaultChart.js";
 import type * as utils_depositAllocation from "../utils/depositAllocation.js";
 import type * as utils_depositApplications from "../utils/depositApplications.js";
+import type * as utils_depositCancellationPending from "../utils/depositCancellationPending.js";
 import type * as utils_depositHelpers from "../utils/depositHelpers.js";
 import type * as utils_depositRecording from "../utils/depositRecording.js";
 import type * as utils_depositRequestGuards from "../utils/depositRequestGuards.js";
@@ -445,6 +446,7 @@ declare const fullApi: ApiFromModules<{
   "utils/defaultChart": typeof utils_defaultChart;
   "utils/depositAllocation": typeof utils_depositAllocation;
   "utils/depositApplications": typeof utils_depositApplications;
+  "utils/depositCancellationPending": typeof utils_depositCancellationPending;
   "utils/depositHelpers": typeof utils_depositHelpers;
   "utils/depositRecording": typeof utils_depositRecording;
   "utils/depositRequestGuards": typeof utils_depositRequestGuards;
