@@ -5,6 +5,17 @@ import { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 
+// The professional-plan test drains everything it scheduled, which includes a
+// notification email whose sender calls `rateLimiter.limit`. The component is
+// opt-in (test-utils/convexTest.ts), so unstubbed the scheduled sender throws
+// `Component "rateLimiter" is not registered` — logged from a scheduled
+// function on every CI run of this file (SCRUM-311). Stubbed the way the other
+// suites that reach a sender do.
+vi.mock("./rateLimit", () => ({
+  rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
+  checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
+}));
+
 afterEach(() => {
   vi.useRealTimers();
 });
