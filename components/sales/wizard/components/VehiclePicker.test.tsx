@@ -67,7 +67,7 @@ describe("VehiclePicker availability badge (selected car)", () => {
     expect(note()).toBeNull();
   });
 
-  test("an AVAILABLE car the server calls HELD (finance-only hold) shows held", () => {
+  test("AVAILABLE status + root HELD: the badge follows the server verdict, not the status", () => {
     render(<VehiclePicker vehicles={[car("AVAILABLE")]} availability={verdicts({ v1: "HELD" })} value="v1" onChange={() => {}} />);
     expect(badge()?.getAttribute("data-availability")).toBe("HELD");
   });
@@ -110,7 +110,7 @@ describe("VehiclePicker availability copy (ruling c22077)", () => {
     expect(ar.PickerHeldForDeal).toBe("محجوزة لصفقة");
     expect(ar.PickerAvailabilityUnverified).toBe("تعذّر التحقق من إتاحتها");
     expect(ar.PickerAvailabilityNote).toBe("يمكنك إعداد عرض سعر لهذه السيارة؛ تُتحقّق إتاحتها عند إتمام البيع.");
-    // Codex B-01: HELD can be an AVAILABLE car under a finance-only hold, so the note says "held", never "reserved".
+    // Codex B-01: HELD (an OPEN root) can sit on a car whose status is still AVAILABLE, so the note says "held", never "reserved".
     expect(en.ReservedQuoteWarning).toMatch(/^This car is held for a deal, possibly another one\./);
     expect(en.ReservedQuoteWarning).not.toMatch(/reserved/i);
     expect(ar.ReservedQuoteWarning).toMatch(/^هذه السيارة محجوزة لصفقة، وقد تكون صفقة أخرى\./);
