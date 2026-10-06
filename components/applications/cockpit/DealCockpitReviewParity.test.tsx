@@ -1979,7 +1979,7 @@ describe("the customer's financing plan is readable on the Deal, separately from
     expect(panel.textContent).toContain("2,000 Jordanian Dinar");
     expect(panel.textContent).toContain("15,000 Jordanian Dinar");
     expect(panel.textContent).toContain("48 MonthsUnit");
-    expect(panel.textContent).toContain("362.5 Jordanian Dinar");
+    expect(panel.textContent).toContain("362.500 Jordanian Dinar");
     // Not a money-panel figure: the dealer's approved purchase amount is not here.
     expect(panel.textContent).not.toContain("16,500");
   });

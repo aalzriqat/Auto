@@ -190,6 +190,7 @@ import { DealClosingReadinessList, closingReasonText, type ClosingReadinessView 
 import { useClosingReadiness } from "./useClosingReadiness";
 import { closingReadinessRefusalOf } from "@/lib/closingReadinessReasonCodes";
 import { ProfitApprovalNotice, useProfitApproval } from "@/components/sales/ProfitApprovalNotice";
+import { formatMinorAmount, formatMoneyAmount } from "@/lib/moneyDisplay";
 
 /**
  * The financed-deal cockpit.
@@ -1344,7 +1345,7 @@ export function DealCockpit({
     isConsignedDeal && app?.supplierSettlementRoute === "DIRECT_TO_SUPPLIER";
   const supplierName = app?.vehicle?.sourcedFromName ?? undefined;
   const formatEconomics = (minor: number) => {
-    return `${(minor / economicsFactor).toLocaleString()} ${
+    return `${formatMinorAmount(minor, economicsFactor)} ${
       economicsCurrencyCode === orgCurrency.code ? currencyMarker(economicsCurrencyCode) : economicsCurrencyCode
     }`;
   };
@@ -1473,7 +1474,7 @@ export function DealCockpit({
           denomination: { code: dealCosts?.currency ?? economicsCurrencyCode },
           scaleOf: (cur: string) => safeScaleForCurrency(cur, 2),
           money: (minor: number, currency: string) =>
-            `${(minor / Math.pow(10, safeScaleForCurrency(currency, 2))).toLocaleString()} ${
+            `${formatMinorAmount(minor, Math.pow(10, safeScaleForCurrency(currency, 2)))} ${
               currency === orgCurrency.code ? currencyMarker(currency) : currency
             }`,
           // Frozen once the sale is recognized (`economicsFrozen`): the server
@@ -1741,9 +1742,7 @@ export function DealCockpit({
       : undefined;
   const formatPlanMajor = (major: number, currency: string) => {
     const scale = safeScaleForCurrency(currency, 2);
-    return `${major.toLocaleString(undefined, {
-      maximumFractionDigits: scale,
-    })} ${
+    return `${formatMoneyAmount(major, currency, scale)} ${
       currency === orgCurrency.code ? currencyMarker(currency) : currency
     }`;
   };
@@ -2677,7 +2676,7 @@ export function DealCockpit({
    * is a new command rather than a silent replay of the first.
    */
   const custodyMoney = (minor: number, currency: string) =>
-    `${(minor / Math.pow(10, safeScaleForCurrency(currency, 2))).toLocaleString()} ${
+    `${formatMinorAmount(minor, Math.pow(10, safeScaleForCurrency(currency, 2)))} ${
       currency === orgCurrency.code ? currencyMarker(currency) : currency
     }`;
   // One intent per dialog attempt. The deal, record and kind are named for
@@ -5427,7 +5426,7 @@ export function DealCockpitView({
   // a different one it would label the amount as something it is not.
   const marker =
     locale === "ar" && dealCurrency === currency.code ? currency.symbol : dealCurrency;
-  const money = (minor: number) => `${(minor / factor).toLocaleString()} ${marker}`;
+  const money = (minor: number) => `${formatMinorAmount(minor, factor)} ${marker}`;
 
   // The discrepancy's own figures.
   //
@@ -5465,7 +5464,7 @@ export function DealCockpitView({
   const discrepancyMarker =
     locale === "ar" && discrepancyCurrency === currency.code ? currency.symbol : discrepancyCurrency;
   const discrepancyMoney = (minor: number) =>
-    `${(minor / discrepancyFactor).toLocaleString()} ${discrepancyMarker}`;
+    `${formatMinorAmount(minor, discrepancyFactor)} ${discrepancyMarker}`;
 
   // The economics block is denominated in the APPLICATION's pinned currency,
   // which the money block need not even be present to establish — a MANAGER
@@ -5502,14 +5501,14 @@ export function DealCockpitView({
     if (denominationUnusable || served === null) return null;
     const servedMarker =
       locale === "ar" && served.code === currency.code ? currency.symbol : served.code;
-    return `${(minor / Math.pow(10, served.scale)).toLocaleString()} ${servedMarker}`;
+    return `${formatMinorAmount(minor, Math.pow(10, served.scale))} ${servedMarker}`;
   };
   // Withheld outright rather than approximated: a figure the operator cannot
   // tell is wrong is worse than a visible blank beside the restatement notice.
   const decisionMoney = (minor: number) =>
     denominationUnusable
       ? "—"
-      : `${(minor / decisionFactor).toLocaleString()} ${decisionMarker}`;
+      : `${formatMinorAmount(minor, decisionFactor)} ${decisionMarker}`;
   const adviceRecordedLabel =
     discrepancy?.recordedMinor != null ? discrepancyMoney(discrepancy.recordedMinor) : t("Unknown");
   const adviceApprovedLabel =

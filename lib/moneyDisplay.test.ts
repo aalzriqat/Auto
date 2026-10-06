@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { formatMoneyAmount, formatMoneyDisplay, moneyDisplayLabel, moneyDisplayScale } from "./moneyDisplay";
+import { formatMinorAmount, formatMoneyAmount, formatMoneyDisplay, moneyDisplayLabel, moneyDisplayScale } from "./moneyDisplay";
 
 const NBSP = " ";
 
@@ -92,6 +92,32 @@ describe("wizard money formatting goes through one policy", () => {
     test(`no ${label}`, () => {
       const offenders = files.filter((f) => pattern.test(readFileSync(f, "utf8"))).map((f) => f.slice(root.length + 1));
       expect(offenders).toEqual([]);
+    });
+  }
+});
+
+describe("formatMinorAmount (cockpit minor-unit figures, SCRUM-366)", () => {
+  test("JOD fils keep the full scale unless whole", () => {
+    expect(formatMinorAmount(316_500, 1000)).toBe("316.500");
+    expect(formatMinorAmount(25_000_000, 1000)).toBe("25,000");
+  });
+  test("a 2-decimal currency uses its own scale", () => {
+    expect(formatMinorAmount(123_456, 100)).toBe("1,234.56");
+    expect(formatMinorAmount(1_500_000, 100)).toBe("15,000");
+  });
+  test("a 0-decimal currency shows no decimals", () => {
+    expect(formatMinorAmount(5000, 1)).toBe("5,000");
+  });
+});
+
+describe("cockpit minor-unit figures never use raw toLocaleString", () => {
+  const root = join(__dirname, "..");
+  for (const f of ["components/applications/cockpit/DealCockpit.tsx", "components/applications/cockpit/ConfirmHandoverDialog.tsx"]) {
+    test(f, () => {
+      const hits = readFileSync(join(root, f), "utf8")
+        .split("\n")
+        .filter((l) => /\/ .*\)\.toLocaleString\(|major\.toLocaleString\(/.test(l));
+      expect(hits).toEqual([]);
     });
   }
 });
