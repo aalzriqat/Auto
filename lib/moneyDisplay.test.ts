@@ -96,6 +96,36 @@ describe("wizard money formatting goes through one policy", () => {
   }
 });
 
+/**
+ * SCRUM-685/675: the quote/sale dialogs, the consigned settlement preview and the
+ * expense form once hard-coded "JOD" / a fixed locale / a "$" label next to a
+ * number. They now take the org's currency from useMoneyDisplay.
+ */
+describe("dialog money display is currency-derived", () => {
+  const root = join(__dirname, "..");
+  const files = [
+    "components/sales/QuoteDialog.tsx",
+    "components/sales/SaleDialog.tsx",
+    "components/sales/ConsignedSettlementSection.tsx",
+    "components/expenses/ExpenseDialog.tsx",
+  ];
+  const banned: Array<[string, RegExp]> = [
+    ["raw toLocaleString", /\.toLocaleString\(/],
+    ["a hard-coded JOD suffix", /\}\s*JOD\b|>\s*JOD\s*</],
+    ["the USD amount label", /AmountUSD/],
+  ];
+  for (const [label, pattern] of banned) {
+    test(`no ${label}`, () => {
+      const offenders = files.filter((f) => pattern.test(readFileSync(join(root, f), "utf8")));
+      expect(offenders).toEqual([]);
+    });
+  }
+  test("each file uses useMoneyDisplay", () => {
+    const missing = files.filter((f) => !readFileSync(join(root, f), "utf8").includes("useMoneyDisplay"));
+    expect(missing).toEqual([]);
+  });
+});
+
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
     const path = join(dir, name);
