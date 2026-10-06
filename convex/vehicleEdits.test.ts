@@ -330,6 +330,7 @@ describe("vehicleEdits.resolve", () => {
         transmission: "Automatic",
         sellingPrice: 26000,
         status: "AVAILABLE",
+        sourceType: "STOCK",
       },
     });
 
@@ -452,6 +453,7 @@ describe("vehicleEdits.resolve", () => {
           transmission: "Automatic",
           sellingPrice: 27000,
           status: "AVAILABLE",
+          sourceType: "STOCK",
         },
         status: "PENDING",
         createdAt: Date.now(),

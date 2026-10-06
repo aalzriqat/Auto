@@ -26,6 +26,14 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Plus, Search, Pencil, ImageIcon, Download, ClipboardList, Check, X, Hourglass, History, FileSpreadsheet, AlertTriangle, LayoutGrid, List, Bookmark, MoreHorizontal, Archive } from "lucide-react";
 import { VehicleImportDialog } from "@/components/vehicles/VehicleImportDialog";
+import {
+  ApprovalOwnershipChooser,
+  EMPTY_OWNERSHIP_DRAFT,
+  buildOwnershipDecision,
+  needsOwnershipDecision,
+  type OwnershipDecision,
+  type OwnershipDraft,
+} from "@/components/vehicles/ApprovalOwnershipChooser";
 import { VehicleExportButton } from "@/components/vehicles/VehicleExportButton";
 import { toast } from "@/components/ui/sonner";
 import {
@@ -180,6 +188,8 @@ export default function VehiclesPage() {
   const [statusRequestVehicle, setStatusRequestVehicle] = useState<Doc<"vehicles"> | null>(null);
   const [isApprovalsDialogOpen, setIsApprovalsDialogOpen] = useState(false);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+  // SCRUM-717: per-request ownership decisions for CREATE requests that arrive without one.
+  const [ownershipDrafts, setOwnershipDrafts] = useState<Record<string, OwnershipDraft>>({});
   const [statusRequestNotes, setStatusRequestNotes] = useState("");
   const [selectedStatus, setSelectedStatus] = useState<VehicleStatus | "">("");
 
@@ -272,10 +282,14 @@ export default function VehiclesPage() {
     }
   };
 
-  const handleResolveEdit = async (requestId: Id<"vehicleEdits">, status: "APPROVED" | "REJECTED") => {
+  const handleResolveEdit = async (
+    requestId: Id<"vehicleEdits">,
+    status: "APPROVED" | "REJECTED",
+    ownership?: OwnershipDecision | null,
+  ) => {
     if (!activeOrgId) return;
     try {
-      await resolveEditRequest({ orgId: activeOrgId, requestId, status });
+      await resolveEditRequest({ orgId: activeOrgId, requestId, status, ...(ownership ? { ownership } : {}) });
       toast.success(`Edit request ${status.toLowerCase()}`);
     } catch (error) {
       // Approving an edit that changes a posted cost is refused with VEHICLE_COST_POSTED.
@@ -1072,9 +1086,13 @@ export default function VehiclesPage() {
             ) : (
               <>
                 {/* Edit Requests */}
-                {pendingEdits?.map((req: Doc<"vehicleEdits"> & { user: { name: string; email: string } | null; vehicle: Doc<"vehicles"> | null }) => (
+                {pendingEdits?.map((req: Doc<"vehicleEdits"> & { user: { name: string; email: string } | null; vehicle: Doc<"vehicles"> | null }) => {
+                  const askOwnership = req.type === "CREATE" && needsOwnershipDecision(req.payload);
+                  const draft = ownershipDrafts[req._id] ?? EMPTY_OWNERSHIP_DRAFT;
+                  const decision = askOwnership ? buildOwnershipDecision(draft) : undefined;
+                  return (
                   <div key={req._id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 border rounded-lg bg-card">
-                    <div className="space-y-1">
+                    <div className="space-y-1 min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <Badge variant={req.type === "CREATE" ? "default" : "secondary"}>
                           {req.type === "CREATE" ? t("NewVehicleReq" as any) : t("EditDetailsReq" as any)}
@@ -1089,17 +1107,31 @@ export default function VehiclesPage() {
                         <span>•</span>
                         <span>Price: {req.payload?.sellingPrice?.toLocaleString()} JOD</span>
                       </div>
+                      {askOwnership && (
+                        <ApprovalOwnershipChooser
+                          idPrefix={`own-${req._id}`}
+                          draft={draft}
+                          onChange={(next) => setOwnershipDrafts((prev) => ({ ...prev, [req._id]: next }))}
+                          t={t}
+                        />
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <Button variant="outline" size="sm" onClick={() => handleResolveEdit(req._id, "REJECTED")} className="text-red-500 hover:text-red-600 hover:bg-red-50 border-red-200">
                         <X className="h-4 w-4 me-1" /> {t("Reject" as any)}
                       </Button>
-                      <Button size="sm" onClick={() => handleResolveEdit(req._id, "APPROVED")} className="bg-green-600 hover:bg-green-700 text-white">
+                      <Button
+                        size="sm"
+                        disabled={askOwnership && !decision}
+                        onClick={() => handleResolveEdit(req._id, "APPROVED", decision)}
+                        className="bg-green-600 hover:bg-green-700 text-white"
+                      >
                         <Check className="h-4 w-4 me-1" /> {t("Approve" as any)}
                       </Button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
 
                 {/* Status Requests */}
                 {pendingRequests?.map((req: Doc<"vehicleStatusRequests"> & { vehicle: { make: string; model: string; year: number; vin: string | undefined; currentStatus: string } | null; user: { name: string; email: string } | null }) => (

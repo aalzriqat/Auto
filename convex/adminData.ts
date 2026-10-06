@@ -7,6 +7,7 @@ import { requireSuperAdmin } from "./utils/tenancy";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { logAdminAction } from "./adminAudit";
 import { assertAdminMayMutateTable } from "./utils/financialGuards";
+import { VEHICLE_OWNERSHIP_FIELD_KEYS, throwVehicleSourceShape } from "./utils/vehicleSourceShape";
 
 // Tables browsable in the cross-org Data Browser UI. Deliberately a subset
 // of every org-scoped table (excludes internal/derived tables like
@@ -160,6 +161,37 @@ function assertPatchDoesNotForgeVehicleLifecycle(
   }
 }
 
+/**
+ * SCRUM-717 (D-45): a vehicle's ownership shape drives accounting — `sourceType`
+ * decides whether an acquisition posts, `sourceCost`/`purchasePrice` are the
+ * amounts, `purchasePaymentMethod` the settlement. A generic field editor writes
+ * none of the journals or the conversion audit row that `vehicles.update` writes
+ * with them, so a CHANGE here would rewrite what a car is worth and who owns it
+ * with no ledger trace. Refused; the vehicle's edit screen and the cost-correction
+ * workflow are the doors. Only a change is refused, so the editor's whole-record
+ * round trip (which re-sends current values) still saves.
+ */
+// `purchaseSupplierName` is a transient posting input, never a stored vehicle field.
+const VEHICLE_OWNERSHIP_FIELDS = VEHICLE_OWNERSHIP_FIELD_KEYS.filter((key) => key !== "purchaseSupplierName");
+
+function assertPatchDoesNotChangeVehicleOwnership(
+  table: string,
+  patch: unknown,
+  before: Record<string, unknown>
+): void {
+  if (table !== "vehicles") return;
+  if (!patch || typeof patch !== "object") return;
+  const next = patch as Record<string, unknown>;
+  // Only undefined/null mean "absent". An absent field and "" are different stored states, so
+  // absent -> "" (or "   ") is a change: `vehicles.update` never persists a blank supplier name.
+  const norm = (value: unknown) => (value === undefined || value === null ? undefined : String(value));
+  for (const field of VEHICLE_OWNERSHIP_FIELDS) {
+    if (!(field in next)) continue;
+    if (norm(next[field]) === norm(before[field])) continue;
+    throwVehicleSourceShape("VEHICLE_OWNERSHIP_FIELDS_LOCKED");
+  }
+}
+
 export const listAdminTables = query({
   args: {},
   handler: async (ctx) => {
@@ -216,6 +248,12 @@ export const adminUpdateRecord = mutation({
     if (!before) throwAppError(AppErrorCode.VALIDATION_FAILED, "Record not found.");
 
     assertPatchDoesNotForgeVehicleLifecycle(
+      args.table,
+      args.patch,
+      before as unknown as Record<string, unknown>
+    );
+
+    assertPatchDoesNotChangeVehicleOwnership(
       args.table,
       args.patch,
       before as unknown as Record<string, unknown>
