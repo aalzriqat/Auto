@@ -202,7 +202,7 @@ export function DepositAllocationPanel({
               <Input
                 type="number"
                 min={0}
-                step="0.01"
+                step="0.001"
                 inputMode="decimal"
                 aria-label={`${t("DepositAllocation" as any)} — ${v.label}`}
                 className="w-32 text-end tabular-nums"
