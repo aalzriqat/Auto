@@ -15,11 +15,8 @@ on:
     workflows: ["Invariant Governance"]
     types: [completed]
 
-permissions:
-  checks: write
-  contents: read
-  pull-requests: read
-  actions: read
+# Nothing at workflow level; the one job holds exactly what it uses.
+permissions: {}
 
 concurrency:
   group: tre-reconcile
@@ -27,8 +24,14 @@ concurrency:
 
 jobs:
   reconcile:
-    name: trusted-review-evidence
+    # Not the check name it publishes: one writer per check name.
+    name: reconcile review evidence
     if: github.ref == 'refs/heads/main'
+    permissions:
+      checks: write
+      contents: read
+      pull-requests: read
+      actions: read
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

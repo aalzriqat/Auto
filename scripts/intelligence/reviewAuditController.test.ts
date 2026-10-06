@@ -407,10 +407,55 @@ describe("SCRUM-644 S3b-2 workflow structure", () => {
     expect(workflow.concurrency).toEqual({ group: "tre-reconcile", "cancel-in-progress": false });
   });
 
-  test("holds exactly the four permissions and no secret", () => {
-    expect(workflow.permissions).toEqual({ checks: "write", contents: "read", "pull-requests": "read", actions: "read" });
-    expect(workflow.jobs.reconcile.permissions).toBeUndefined();
-    expect(text).not.toMatch(/secrets\./);
+  test("holds nothing at workflow level, exactly the four permissions on its one job, and no secret", () => {
+    expect(Object.keys(workflow.jobs)).toEqual(["reconcile"]);
+    expect(workflow.permissions).toEqual({});
+    expect(workflow.jobs.reconcile.permissions).toEqual({ checks: "write", contents: "read", "pull-requests": "read", actions: "read" });
+    expect(text).not.toMatch(/secrets\.|secrets\[/);
+  });
+
+  test("workflow_run pwn-request class: no PR-controlled expression, nothing interpolated into a shell, every action pinned", () => {
+    // Only these two expressions exist anywhere in the file; both are run context, never PR data.
+    const expressions = [...text.matchAll(/\$\{\{\s*([^}]*?)\s*\}\}/g)].map((match) => match[1]);
+    expect([...new Set(expressions)].sort()).toEqual(["github.token", "github.workflow_sha"]);
+    const steps: { run?: string; uses?: string; with?: Record<string, unknown> }[] = workflow.jobs.reconcile.steps;
+    for (const step of steps) {
+      if (step.run !== undefined) expect(step.run, step.run).not.toContain("${{");
+      if (step.uses !== undefined) expect(step.uses).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
+    }
+    // One checkout, of the workflow's own revision; no other step selects a ref.
+    const refs = steps.filter((step) => step.with && "ref" in step.with).map((step) => step.with?.ref);
+    expect(refs).toEqual(["${{ github.workflow_sha }}"]);
+  });
+
+  test("the controller never executes candidate content: git is the only process, no dynamic code", () => {
+    const controller = readFileSync(path.join(ROOT, "scripts/intelligence/reviewAuditController.mjs"), "utf8");
+    const cli = readFileSync(path.join(ROOT, "scripts/intelligence/reviewAuditControllerCli.mjs"), "utf8");
+    for (const source of [controller, cli]) {
+      expect(source).not.toMatch(/\beval\(|new Function|\bimport\(|\brequire\(|\bspawn(Sync)?\(|\bexec\(|\bexecSync\(/);
+    }
+    expect(controller).not.toContain("child_process");
+    expect([...cli.matchAll(/execFileSync\(([^,]+),/g)].map((match) => match[1])).toEqual(['"git"']);
+  });
+
+  test("report-only: the check name collides with no release-gated check or waiver", () => {
+    const waivers = JSON.parse(readFileSync(path.join(ROOT, ".github/release-waivers.json"), "utf8"));
+    const names: string[] = [];
+    const walk = (node: unknown) => {
+      if (Array.isArray(node)) node.forEach(walk);
+      else if (node && typeof node === "object") {
+        for (const [key, value] of Object.entries(node)) {
+          if (key === "name" && typeof value === "string") names.push(value);
+          walk(value);
+        }
+      }
+    };
+    walk(waivers);
+    expect(names.length).toBeGreaterThan(0);
+    expect(names.map((name) => name.toLowerCase())).not.toContain(CHECK_NAME);
+    expect(JSON.stringify(waivers)).not.toContain(CHECK_NAME);
+    // The job's own check-run must not carry the published name either.
+    expect(workflow.jobs.reconcile.name).not.toBe(CHECK_NAME);
   });
 
   test("checks out the workflow's own revision without credentials and asserts it is main's tip", () => {
