@@ -67,9 +67,34 @@ function auditCli(stageRoot: string) {
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
+const requireFromHere = createRequire(import.meta.url);
+
+/**
+ * esbuild reads process.cwd() once, when it is first loaded, and never again;
+ * the audit assumes a fresh process per stage (the workflow gives it one). So
+ * an in-process audit has to load esbuild and the Convex bundler anew, with
+ * the working directory already set to its stage, or the second stage is
+ * resolved against the first (deleted on Linux, kept alive by the helper
+ * process on Windows, which hid it).
+ */
+function freshBundler() {
+  for (const key of Object.keys(requireFromHere.cache)) {
+    if (!/[\\/]node_modules[\\/](esbuild|convex)[\\/]/.test(key)) continue;
+    if (/[\\/]esbuild[\\/]lib[\\/]main\.js$/.test(key)) {
+      try {
+        (requireFromHere.cache[key]?.exports as { stop?: () => void } | undefined)?.stop?.();
+      } catch {
+        // Already stopped.
+      }
+    }
+    delete requireFromHere.cache[key];
+  }
+}
+
 /** The same audit in-process (vitest forks, so chdir is per file), shaped like the CLI result. */
 async function audit(stageRoot: string) {
   const original = process.cwd();
+  freshBundler();
   process.chdir(stageRoot);
   try {
     const result = await auditStagedBackendInputs({ stageRoot });
@@ -79,6 +104,7 @@ async function audit(stageRoot: string) {
     return { status: 1, stdout: "", stderr: error.message };
   } finally {
     process.chdir(original);
+    freshBundler();
   }
 }
 
@@ -166,6 +192,23 @@ describe("auditStagedBackendInputs (SCRUM-350 F1)", () => {
     const result = await audit(stageRoot);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("The trusted bundler refused the staged backend.");
+
+    // Control: a bundler that fails on any input would also "refuse"; a valid
+    // stage audited the same way passes, so the refusal is about the environ import.
+    expect((await audit(stage().stageRoot)).status).toBe(0);
+  });
+
+  it("audits every stage against its own working directory, not the first stage this process audited", async () => {
+    // esbuild pins process.cwd() at load. Without a fresh loader the second
+    // audit resolves against the first stage, which is gone (Linux) or only
+    // coincidentally at the same depth (Windows).
+    const first = stage();
+    expect((await audit(first.stageRoot)).status).toBe(0);
+    rmSync(first.root, { recursive: true, force: true });
+    const nested = stage({ "lib/deep/extra.ts": "export const deep = 1;\n", "convex/deep.ts": 'import { deep } from "../lib/deep/extra";\nexport const d = deep;\n' });
+    const second = await audit(nested.stageRoot);
+    expect(second.stderr).toBe("");
+    expect(second.status).toBe(0);
   });
 
   it("refuses an outside read from convex.config.ts, which the CLI's component pass also bundles (Sonnet C1 on PR #341)", async () => {
@@ -182,6 +225,8 @@ describe("auditStagedBackendInputs (SCRUM-350 F1)", () => {
     const result = await audit(stageRoot);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("The trusted bundler refused the staged backend.");
+
+    expect((await audit(stage().stageRoot)).status).toBe(0);
 
     const outside = stage();
     write(outside.root, { "outside.ts": "export default {};\n" });
@@ -267,7 +312,7 @@ describe("auditStagedBackendInputs (SCRUM-350 F1)", () => {
     await expect(auditStagedBackendInputs({ stageRoot: "" })).rejects.toThrow(AuditRefusal);
   });
 
-  it("refuses a stage with no entry points, and a bundle that records no inputs", async () => {
+  it("refuses a stage with no entry points", async () => {
     const empty = stage();
     rmSync(path.join(empty.stageRoot, "convex"), { recursive: true, force: true });
     mkdirSync(path.join(empty.stageRoot, "convex"), { recursive: true });

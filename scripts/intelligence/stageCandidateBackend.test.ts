@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -176,12 +177,38 @@ describe("stageCandidateBackend (SCRUM-350 Option C)", () => {
     ).toBe(1);
     expect(refusedErr.join("")).toBe("Candidate backend contains node_modules: convex/node_modules\n");
 
-    // Anything unexpected prints a code, never the underlying message.
+    // Anything that is not a StageRefusal prints a code, never the underlying
+    // message: a valid stage whose manifest cannot be written (missing directory).
+    const generic = fixture();
     const unexpected: string[] = [];
     expect(
-      runStageCli({ CANDIDATE_ROOT: "/no/such/root", TRUSTED_ROOT: fx.trusted, STAGE_ROOT: path.join(tree({}), "s2") }, sink([]), sink(unexpected)),
+      runStageCli(
+        {
+          CANDIDATE_ROOT: generic.candidate,
+          TRUSTED_ROOT: generic.trusted,
+          STAGE_ROOT: generic.stageRoot,
+          STAGE_MANIFEST_PATH: path.join(tree({}), "missing-dir", "manifest.json"),
+        },
+        sink([]),
+        sink(unexpected),
+      ),
     ).toBe(1);
-    expect(unexpected.join("")).toMatch(/^(Candidate .*|Staging failed unexpectedly \((ENOENT|no code)\))\n$/);
+    expect(unexpected).toEqual(["Staging failed unexpectedly (ENOENT).\n"]);
+  });
+
+  it("the script exits 0 on success and 1 on refusal, which the workflow step depends on", () => {
+    const script = path.resolve(process.cwd(), "scripts/intelligence/stageCandidateBackend.mjs");
+    const run = (fx: ReturnType<typeof fixture>) =>
+      spawnSync(process.execPath, [script], {
+        encoding: "utf8",
+        env: { ...process.env, CANDIDATE_ROOT: fx.candidate, TRUSTED_ROOT: fx.trusted, STAGE_ROOT: fx.stageRoot },
+      });
+    const ok = run(fixture());
+    expect(ok.status).toBe(0);
+    expect(ok.stdout).toMatch(/^Staged 4 candidate backend files from convex\/, lib\/, packages\/shared\/src\/ with trusted dependencies\.\n$/);
+    const refused = run(fixture({ "convex/node_modules/x.ts": "x" }));
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toBe("Candidate backend contains node_modules: convex/node_modules\n");
   });
 
   it("refuses a hard link, which would let a staged file alias one outside the tree", () => {
