@@ -18,6 +18,7 @@ import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { recognizedDueThroughDateMinor } from "./utils/expenseAmortization";
 import { settlementView } from "./utils/supplierSettlement";
+import { AP_AFFECTING_BY_EVENT_TYPE } from "./accounting/postingRules";
 
 /**
  * GL Phase 14 note on aggregation: every aggregate below keys on
@@ -68,6 +69,19 @@ async function getOrgCurrencyForReports(ctx: QueryCtx, orgId: Id<"organizations"
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
+/** accountingDate value historical queries treat as "no date" when a range bound is open. */
+const NO_ACCOUNTING_DATE_SENTINEL = -1;
+
+/**
+ * Concatenate index reads and put them back in insertion (_creationTime) order,
+ * or by `primary` first when given, with _creationTime as the tiebreak.
+ */
+function mergeByCreation<T extends { _creationTime: number }>(parts: T[][], primary?: (row: T) => number): T[] {
+  return parts
+    .flat()
+    .sort((a, b) => (primary ? primary(a) - primary(b) : 0) || a._creationTime - b._creationTime);
+}
+
 export async function getPostedLines(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
@@ -80,21 +94,18 @@ export async function getPostedLines(
   // cancelled it out. Excluding it here would keep the reversal's inverted
   // lines while silently dropping the original half of the pair, turning a
   // net-zero cancellation into a one-sided, wrong balance.
-  //
-  // Two index reads (one per status) instead of a query-level filter. Only the
-  // SET of ids is used, so the order of the two reads is irrelevant.
-  const postedEntries = await ctx.db
-    .query("journalEntries")
-    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "POSTED"))
-    .collect();
-  const reversedEntries = await ctx.db
-    .query("journalEntries")
-    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "REVERSED"))
-    .collect();
+  const [postedEntries, reversedEntries] = await Promise.all(
+    (["POSTED", "REVERSED"] as const).map((status) =>
+      ctx.db
+        .query("journalEntries")
+        .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+        .collect()
+    )
+  );
+  const entryIds = new Set<Id<"journalEntries">>();
+  for (const e of postedEntries) entryIds.add(e._id);
+  for (const e of reversedEntries) entryIds.add(e._id);
 
-  const entryIds = new Set([...postedEntries, ...reversedEntries].map((e) => e._id));
-
-  // The accountingDate window is an index range, not a query-level filter.
   const inRange = await ctx.db
     .query("journalLines")
     .withIndex("by_org_date", (q) => {
@@ -108,17 +119,14 @@ export async function getPostedLines(
     })
     .collect();
 
-  // Preserved from the previous query-level filter: whenever either bound is
-  // open, a line carrying the -1 accountingDate sentinel was excluded. This
-  // runs in memory over the already index-narrowed window.
+  // With an open bound, a line carrying the -1 sentinel date stays excluded.
   const excludeSentinel = fromDate === undefined || toDate === undefined;
-  // The previous read came back in insertion order (by_org index); the date
-  // index returns accountingDate order, so restore insertion order.
-  const allLines = inRange
-    .filter((l) => !excludeSentinel || l.accountingDate !== -1)
-    .sort((a, b) => a._creationTime - b._creationTime);
-
-  return allLines.filter((l) => entryIds.has(l.journalEntryId));
+  // Callers expect insertion order; the date index returns accountingDate order.
+  return mergeByCreation([
+    inRange.filter(
+      (l) => (!excludeSentinel || l.accountingDate !== NO_ACCOUNTING_DATE_SENTINEL) && entryIds.has(l.journalEntryId)
+    ),
+  ]);
 }
 
 // ─── Trial Balance ────────────────────────────────────────────────────────────
@@ -490,33 +498,28 @@ async function getAllocatedAsOfByReceivable(
  * for arAging/subledgerReconciliation — only whether it was cancelled BY
  * asOfDate matters.
  *
- * Two index reads, no query-level filter:
- *   A. never cancelled (cancelledAt absent) and issued by asOfDate — an exact
- *      index range on (cancelledAt = undefined, issueDate <= asOfDate);
- *   B. cancelled strictly after asOfDate — an index range on cancelledAt; the
- *      issueDate bound cannot be part of the range (it follows an inequality)
- *      so it is applied in memory. B is bounded to receivables cancelled after
- *      asOfDate, which is empty for the default as-of of now.
- * Merged back into insertion order, which is what the old by_org read returned.
+ * Two index reads: never cancelled and issued by asOfDate, plus cancelled
+ * after asOfDate (issueDate applied in memory; it follows an inequality).
  */
 async function getReceivablesAsOf(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   asOfDate: number
 ) {
-  const neverCancelled = await ctx.db
-    .query("receivableDocuments")
-    .withIndex("by_org_cancelledAt_issueDate", (q) =>
-      q.eq("orgId", orgId).eq("cancelledAt", undefined).lte("issueDate", asOfDate)
-    )
-    .collect();
-  const cancelledLater = (
-    await ctx.db
+  const [neverCancelled, cancelledAfter] = await Promise.all([
+    ctx.db
+      .query("receivableDocuments")
+      .withIndex("by_org_cancelledAt_issueDate", (q) =>
+        q.eq("orgId", orgId).eq("cancelledAt", undefined).lte("issueDate", asOfDate)
+      )
+      .collect(),
+    ctx.db
       .query("receivableDocuments")
       .withIndex("by_org_cancelledAt_issueDate", (q) => q.eq("orgId", orgId).gt("cancelledAt", asOfDate))
-      .collect()
-  ).filter((r) => r.issueDate <= asOfDate);
-  return [...neverCancelled, ...cancelledLater].sort((a, b) => a._creationTime - b._creationTime);
+      .collect(),
+  ]);
+  // Both streams are in issueDate order, not insertion order, so the merge sort stays.
+  return mergeByCreation([neverCancelled, cancelledAfter.filter((r) => r.issueDate <= asOfDate)]);
 }
 
 type AgingBuckets = { current: number; days30: number; days60: number; days90: number; over90: number };
@@ -630,9 +633,6 @@ export async function computeSubledgerReconciliation(
 ): Promise<SubledgerReconciliationResult> {
     // GL total for AR accounts — cumulative from inception to toDate so the
     // basis matches the subledger outstanding balance (not period movement).
-    // (A former `systemKey != null` query filter was a no-op — the field is
-    // optional string and never null — and the JS filter below already requires
-    // an exact systemKey match, so it is simply dropped.)
     const accounts = await ctx.db
       .query("chartOfAccounts")
       .withIndex("by_org_type", (q) => q.eq("orgId", orgId).eq("type", "ASSET"))
@@ -908,46 +908,50 @@ export type SupplierPayablesReconciliationResult = GlVsSubledgerResult & {
  */
 const SUPPLIER_PAYABLES_RECON_READ_LIMIT = 4000;
 
-/** Every status that can carry an open balance. CANCELLED is the one status whose AP credit is reversed. */
-const SUPPLIER_PAYABLE_OPEN_STATUSES = [
-  "PENDING",
-  "NOT_YET_DUE",
-  "DUE_ON_SALE",
-  "PARTIALLY_PAID",
-  "DISPUTED",
-  "PAID",
-] as const;
-
 /**
- * Posting event types whose rule debits or credits ACCOUNTS_PAYABLE_SUPPLIERS. Derived from every
- * `SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS` reference in accounting/postingRules.ts (via `git grep`),
- * not by hand: consignedAgentSaleLines + ruleSaleCompleted (SALE_COMPLETED), ruleSupplierPaymentSettled
- * (SUPPLIER_PAYMENT_SETTLED), ruleVehicleAcquired (VEHICLE_ACQUIRED, ON_ACCOUNT) and
- * ruleVehicleAcquisitionCostCorrected (VEHICLE_ACQUISITION_COST_CORRECTED). SALE_CANCELLED is never
- * emitted (hookSaleCancelled is a reversal hook) and CONSIGNED_SALE_RECLASSIFIED has no AP line.
+ * Every status that can carry an open balance, in read order. Exhaustive over the schema's status
+ * union, so a new payable status fails typecheck until it is classified. CANCELLED is the one
+ * status whose AP credit is reversed.
  */
-const AP_AFFECTING_EVENT_TYPES: ReadonlySet<string> = new Set([
-  "SALE_COMPLETED",
-  "SUPPLIER_PAYMENT_SETTLED",
-  "VEHICLE_ACQUIRED",
-  "VEHICLE_ACQUISITION_COST_CORRECTED",
-]);
+const SUPPLIER_PAYABLE_STATUS_CARRIES_BALANCE = {
+  PENDING: true,
+  NOT_YET_DUE: true,
+  DUE_ON_SALE: true,
+  PARTIALLY_PAID: true,
+  DISPUTED: true,
+  PAID: true,
+  CANCELLED: false,
+} satisfies Record<Doc<"vehicleSupplierPayables">["status"], boolean>;
+const SUPPLIER_PAYABLE_OPEN_STATUSES = (
+  Object.keys(SUPPLIER_PAYABLE_STATUS_CARRIES_BALANCE) as Array<keyof typeof SUPPLIER_PAYABLE_STATUS_CARRIES_BALANCE>
+).filter((status) => SUPPLIER_PAYABLE_STATUS_CARRIES_BALANCE[status]);
+
+/** Posting event types whose rule touches ACCOUNTS_PAYABLE_SUPPLIERS (classified in postingRules.ts). */
+const AP_AFFECTING_EVENT_TYPES: ReadonlySet<string> = new Set(
+  Object.entries(AP_AFFECTING_BY_EVENT_TYPE)
+    .filter(([, affectsAp]) => affectsAp)
+    .map(([eventType]) => eventType)
+);
 
 async function hasPendingApAffectingPosting(
   ctx: QueryCtx,
   events: Array<Doc<"pendingAccountingEvents">>
 ): Promise<boolean> {
+  // Postings need no reads, so settle them first.
+  const reversals: Array<Doc<"pendingAccountingEvents">> = [];
   for (const event of events) {
-    if (event.kind === "REVERSE") {
-      // A queued reversal inherits the AP effect of the event it reverses. One that cannot be
-      // resolved is treated as AP-affecting: unknown must not read as safe.
-      const original = event.originalEventId ? await ctx.db.get(event.originalEventId) : null;
-      if (!original || AP_AFFECTING_EVENT_TYPES.has(original.eventType)) return true;
-    } else if (!event.eventType || AP_AFFECTING_EVENT_TYPES.has(event.eventType)) {
-      return true;
-    }
+    if (event.kind === "REVERSE") reversals.push(event);
+    else if (!event.eventType || AP_AFFECTING_EVENT_TYPES.has(event.eventType)) return true;
   }
-  return false;
+  // A queued reversal inherits the AP effect of the event it reverses. One that cannot be
+  // resolved is treated as AP-affecting: unknown must not read as safe.
+  const originalIds = new Set<NonNullable<Doc<"pendingAccountingEvents">["originalEventId"]>>();
+  for (const event of reversals) {
+    if (!event.originalEventId) return true;
+    originalIds.add(event.originalEventId);
+  }
+  const originals = await Promise.all([...originalIds].map((id) => ctx.db.get(id)));
+  return originals.some((original) => !original || AP_AFFECTING_EVENT_TYPES.has(original.eventType));
 }
 
 /**
@@ -959,25 +963,25 @@ async function pendingApDraftState(
   orgId: Id<"organizations">,
   readLimit: number
 ): Promise<"NONE" | "PENDING" | "OVER_LIMIT"> {
-  const apAccount = await ctx.db
-    .query("chartOfAccounts")
-    .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS))
-    .unique();
+  const [apAccount, manual, opening] = await Promise.all([
+    ctx.db
+      .query("chartOfAccounts")
+      .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS))
+      .unique(),
+    ctx.db
+      .query("manualJournalDrafts")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING_APPROVAL"))
+      .take(readLimit + 1),
+    ctx.db
+      .query("openingBalanceDrafts")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING_APPROVAL"))
+      .take(readLimit + 1),
+  ]);
   if (!apAccount) return "NONE";
-
-  const manual = await ctx.db
-    .query("manualJournalDrafts")
-    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING_APPROVAL"))
-    .take(readLimit + 1);
-  const opening = await ctx.db
-    .query("openingBalanceDrafts")
-    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING_APPROVAL"))
-    .take(readLimit + 1);
   if (manual.length > readLimit || opening.length > readLimit) return "OVER_LIMIT";
 
-  const touchesAp = (lines: Array<{ accountId: Id<"chartOfAccounts"> }>) =>
-    lines.some((line) => line.accountId === apAccount._id);
-  return manual.some((d) => touchesAp(d.lines)) || opening.some((d) => touchesAp(d.lines)) ? "PENDING" : "NONE";
+  const touchesAp = [...manual, ...opening].some((d) => d.lines.some((line) => line.accountId === apAccount._id));
+  return touchesAp ? "PENDING" : "NONE";
 }
 
 export async function computeSupplierPayablesReconciliation(
@@ -1000,21 +1004,25 @@ export async function computeSupplierPayablesReconciliation(
   });
 
   // 1. Postings still in flight: the GL side is about to move, so a comparison now is not the truth.
-  let outboxEvents = opts.outboxEvents;
-  if (!outboxEvents) {
-    const queued = await ctx.db
-      .query("pendingAccountingEvents")
-      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
-      .take(readLimit + 1);
-    const failed = await ctx.db
-      .query("pendingAccountingEvents")
-      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "FAILED"))
-      .take(readLimit + 1);
-    if (queued.length > readLimit || failed.length > readLimit) return unavailable("OVER_LIMIT");
-    outboxEvents = [...queued, ...failed];
-  }
+  // The outbox and draft reads are independent, so they run together; the verdicts below are
+  // still taken in the original order (outbox over-limit, queued posting, drafts).
+  const readOutbox = async (): Promise<Array<Doc<"pendingAccountingEvents">> | null> => {
+    const [queued, failed] = await Promise.all(
+      (["PENDING", "FAILED"] as const).map((status) =>
+        ctx.db
+          .query("pendingAccountingEvents")
+          .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+          .take(readLimit + 1)
+      )
+    );
+    return queued.length > readLimit || failed.length > readLimit ? null : [...queued, ...failed];
+  };
+  const [outboxEvents, drafts] = await Promise.all([
+    opts.outboxEvents ?? readOutbox(),
+    pendingApDraftState(ctx, orgId, readLimit),
+  ]);
+  if (!outboxEvents) return unavailable("OVER_LIMIT");
   if (await hasPendingApAffectingPosting(ctx, outboxEvents)) return unavailable("PENDING_POSTINGS");
-  const drafts = await pendingApDraftState(ctx, orgId, readLimit);
   if (drafts === "OVER_LIMIT") return unavailable("OVER_LIMIT");
   if (drafts === "PENDING") return unavailable("PENDING_POSTINGS");
 
@@ -1258,23 +1266,19 @@ async function computeRecognizedCommissionAsOf(
   toDate: number | undefined
 ): Promise<Map<string, Map<string, number>>> {
   // by_org_eventType_status_date loads one event type, one status, for just its
-  // own window instead of the org's whole history. Going through
-  // by_org_eventType and filtering afterwards scanned every commission event a
-  // dealership had ever posted, twice, inside a live query that also runs
-  // inside the close checklist. POSTED and REVERSED are two index reads (no
-  // query-level filter), merged back into the accountingDate order the previous
-  // single read returned.
+  // own window instead of the org's whole history (this runs inside the close
+  // checklist). POSTED and REVERSED are two reads merged back into accountingDate order.
   const inWindow = async (eventType: "COMMISSION_ACCRUED" | "COMMISSION_ADJUSTED") => {
-    const read = async (status: "POSTED" | "REVERSED") =>
-      await ctx.db
+    const read = (status: "POSTED" | "REVERSED") =>
+      ctx.db
         .query("accountingEvents")
         .withIndex("by_org_eventType_status_date", (q) => {
           const scoped = q.eq("orgId", orgId).eq("eventType", eventType).eq("status", status);
           return toDate === undefined ? scoped : scoped.lte("accountingDate", toDate);
         })
         .collect();
-    const events = [...(await read("POSTED")), ...(await read("REVERSED"))];
-    return events.sort((a, b) => a.accountingDate - b.accountingDate || a._creationTime - b._creationTime);
+    const [posted, reversed] = await Promise.all([read("POSTED"), read("REVERSED")]);
+    return mergeByCreation([posted, reversed], (e) => e.accountingDate);
   };
 
   const recognized = new Map<string, Map<string, number>>();

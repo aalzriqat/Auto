@@ -16,6 +16,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { computeSupplierPayablesReconciliation } from "./accountingReports";
+import { seedOrgWithMember } from "../test-utils/seedOrg";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -27,22 +28,17 @@ const JOD = (major: number) => major * 1000; // JOD has three decimals
 
 async function seedDealer(tag: string) {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
-  const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `AP651 ${tag}`, createdAt: Date.now() }));
-  await t.run((ctx) =>
-    ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
-  );
-  const userId = await t.run((ctx) => ctx.db.insert("users", { clerkId: `${tag}_user`, email: `${tag}@example.com`, name: `${tag} User` }));
-  const roleId = await t.run((ctx) =>
-    ctx.db.insert("roles", {
-      orgId, name: "Owner",
-      permissions: [
-        "view:sales", "create:sales", "edit:sales", "delete:sales", "manage:finance", "view:finance",
-        "view:customers", "create:customers", "view:vehicles", "create:vehicles", "edit:vehicles",
-        "approve:requests", "view:commissions", "manage:commissions",
-      ],
-    })
-  );
-  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  const { orgId, userId } = await seedOrgWithMember(t, {
+    clerkId: `${tag}_user`,
+    orgName: `AP651 ${tag}`,
+    roleName: "Owner",
+    memberName: `${tag} User`,
+    permissions: [
+      "view:sales", "create:sales", "edit:sales", "delete:sales", "manage:finance", "view:finance",
+      "view:customers", "create:customers", "view:vehicles", "create:vehicles", "edit:vehicles",
+      "approve:requests", "view:commissions", "manage:commissions",
+    ],
+  });
   await t.run((ctx) => ctx.db.insert("orgSettings", { orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"] }));
   const asUser = t.withIdentity({ subject: `${tag}_user`, clerkId: `${tag}_user` });
   await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
@@ -115,8 +111,24 @@ async function refusalCode(attempt: Promise<unknown>): Promise<string> {
 
 const eventCount = (s: Seed, eventType: string) =>
   s.t.run(async (ctx) =>
-    (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect()).filter((e) => e.eventType === eventType).length
+    (
+      await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_eventType_date", (q) => q.eq("orgId", s.orgId).eq("eventType", eventType as never))
+        .collect()
+    ).length
   );
+
+/** A hand-seeded supplier payable (no writer reaches these shapes); defaults to a JOD row from an old dealer. */
+const insertPayable = (s: Seed, vehicleId: Id<"vehicles">, fields: Record<string, unknown>) => {
+  const now = Date.now();
+  return s.t.run((ctx) =>
+    ctx.db.insert("vehicleSupplierPayables", {
+      orgId: s.orgId, vehicleId, sourcedFromName: "Old Dealer", currency: "JOD", createdBy: s.userId, createdAt: now, updatedAt: now,
+      ...fields,
+    } as never)
+  );
+};
 
 describe("SCRUM-651 - reconciliation counts every non-CANCELLED payable by its open balance", () => {
   test("CONTROL: a fresh consigned sale reconciles", async () => {
@@ -170,15 +182,8 @@ describe("SCRUM-651 - reconciliation counts every non-CANCELLED payable by its o
     const s = await seedDealer("legacy");
     const { vehicleId } = await sourcedSale(s); // 19,000 live
     const now = Date.now();
-    const insert = (fields: Record<string, unknown>) =>
-      s.t.run((ctx) =>
-        ctx.db.insert("vehicleSupplierPayables", {
-          orgId: s.orgId, vehicleId, sourcedFromName: "Old Dealer", currency: "JOD", createdBy: s.userId, createdAt: now, updatedAt: now,
-          ...fields,
-        } as never)
-      );
-    await insert({ amountDue: 15_000, status: "PAID", paidAt: now }); // legacy: settled before amountPaid existed
-    await insert({ amountDue: 1_000, status: "PAID", amountPaid: 1_500, paidAt: now }); // paid twice over
+    await insertPayable(s, vehicleId, { amountDue: 15_000, status: "PAID", paidAt: now }); // legacy: settled before amountPaid existed
+    await insertPayable(s, vehicleId, { amountDue: 1_000, status: "PAID", amountPaid: 1_500, paidAt: now }); // paid twice over
     const r = await recon(s);
     // 19,000 + 0 + (1,000 - 1,500) = 18,500 - signed, never clamped to zero.
     expect(r.byCurrency.JOD.subledgerBalanceMinor).toBe(JOD(18_500));
@@ -206,12 +211,7 @@ describe("SCRUM-651 - reconciliation counts every non-CANCELLED payable by its o
     const s = await seedDealer("ccy");
     const { vehicleId } = await sourcedSale(s); // JOD
     const now = Date.now();
-    await s.t.run((ctx) =>
-      ctx.db.insert("vehicleSupplierPayables", {
-        orgId: s.orgId, vehicleId, sourcedFromName: "US Dealer", amountDue: 2_000, currency: "USD", status: "DISPUTED",
-        createdBy: s.userId, createdAt: now, updatedAt: now,
-      })
-    );
+    await insertPayable(s, vehicleId, { sourcedFromName: "US Dealer", amountDue: 2_000, currency: "USD", status: "DISPUTED" });
     // Fixture GL for the USD payable (the org posts in JOD, so no real writer reaches this).
     await s.t.run(async (ctx) => {
       const account = (await ctx.db
@@ -407,12 +407,7 @@ describe("SCRUM-651 - sale cancellation tears down every unpaid payable and refu
     const s = await seedDealer("c_zero_paid");
     const { saleId, vehicleId, payableId } = await sourcedSale(s);
     const now = Date.now();
-    const zeroPaidId = await s.t.run((ctx) =>
-      ctx.db.insert("vehicleSupplierPayables", {
-        orgId: s.orgId, vehicleId, saleId, sourcedFromName: "Old Dealer", currency: "JOD", createdBy: s.userId,
-        createdAt: now, updatedAt: now, amountDue: 0, status: "PAID", paidAt: now,
-      } as never)
-    );
+    const zeroPaidId = await insertPayable(s, vehicleId, { saleId, amountDue: 0, status: "PAID", paidAt: now });
     expect(await refusalCode(cancel(s, saleId))).toBe("RESOLVED");
     expect((await s.t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("CANCELLED");
     expect((await payableOf(s, payableId))?.status).toBe("CANCELLED");

@@ -89,11 +89,8 @@ export function assertValidAccountingDate(value: number, label: string): void {
  * The first period (in startDate order) that starts on or before
  * `startAtOrBefore` and satisfies `accept`.
  *
- * The startDate bound is an index range, not a query-level filter; the
- * remaining conditions (endDate / status) are applied in memory to the
- * index-narrowed stream, which stops at the first match exactly as the former
- * `.filter(...).first()` did. An org has at most a few dozen periods, so the
- * stream is small by construction.
+ * startDate is an index range; endDate / status are checked in memory over the
+ * stream, which stops at the first match. An org has few periods.
  */
 async function findFirstPeriodStartingBy(
   ctx: QueryCtx | MutationCtx,
