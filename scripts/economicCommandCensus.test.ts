@@ -33,6 +33,7 @@ import {
   mintsAndPostsLocally,
   mintsAndPostsTransitively,
   MONEY_TABLES,
+  stripComments,
   type Bucket,
   type SymbolRecord,
 } from "./economicCommandCensus";
@@ -130,7 +131,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "fixedAssets.capitalize": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
   "fixedAssets.dispose": { bucket: "STATE_GUARDED", mechanism: "hookAssetDisposed keys on `asset_disposed_${assetId}` — the PRE-EXISTING asset, so a retry reproduces the key and the posting engine dedupes it" },
   "fixedAssets.impair": { bucket: "STATE_GUARDED", mechanism: "hookAssetImpaired keys on `asset_impaired_${assetId}` — pre-existing asset id, stable across a retry" },
-  "fixedAssets.remove": { bucket: "STATE_GUARDED", mechanism: "delegates to dispose; same stable `asset_disposed_${assetId}` key" },
+  "fixedAssets.remove": { bucket: "STATE_GUARDED", mechanism: "refuses removal of a capitalized, undisposed asset (callers must dispose instead); soft-deletes only legacy or already-DISPOSED assets, which carry no ledger effect" },
   "fixedAssets.update": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "orgSettings.upsert": { bucket: "NON_ECONOMIC", mechanism: "reaches a money-bearing table only through the over-inclusive patch heuristic; no posting call is reachable from its own body" },
   "partnerEquity.add": { bucket: "IDENTITY_GUARDED", mechanism: "runWithIdempotency with economic: true — caller-supplied identity, fingerprinted" },
@@ -337,6 +338,11 @@ describe("analyzer self-tests — the five blind spots, pinned", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "census738-"));
     try {
       fs.writeFileSync(path.join(dir, "fx.ts"), fixture);
+      // (e) a JSDoc that is the LAST content of a file hangs off the EndOfFileToken.
+      fs.writeFileSync(
+        path.join(dir, "tail.ts"),
+        "export function foo() { return 0; }\nexport function bar() { return 1; }\n/** foo() */\n",
+      );
       const g = buildGraph(dir);
       const edgesOf = (n: string) => [...(g.edges.get(`fx.${n}`) ?? [])].sort();
 
@@ -358,6 +364,14 @@ describe("analyzer self-tests — the five blind spots, pinned", () => {
       // (d) calls inside template expressions are still seen.
       expect(edgesOf("templateCall")).toEqual(["fx.foo"]);
       expect(edgesOf("nestedTemplateCall")).toEqual(["fx.runWith"]);
+
+      // (e) terminal JSDoc is comment text too: no edge, and the text is blanked.
+      expect([...(g.edges.get("tail.bar") ?? [])]).toEqual([]);
+      const tail = "export function bar() { return 1; }\n/** foo() */\n";
+      const blanked = stripComments(tail);
+      expect(blanked).toBe("export function bar() { return 1; }\n" + " ".repeat("/** foo() */".length) + "\n");
+      expect(blanked.length).toBe(tail.length);
+      expect(blanked.split("\n").length).toBe(tail.split("\n").length);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

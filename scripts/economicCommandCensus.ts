@@ -151,7 +151,10 @@ export function stripComments(src: string): string {
   };
   const visit = (node: ts.Node) => {
     if (node.kind >= ts.SyntaxKind.FirstJSDocNode && node.kind <= ts.SyntaxKind.LastJSDocNode) return;
-    const kids = node.getChildren(sf);
+    // A token is a leaf even when it has children: a JSDoc that ends the file is
+    // attached to the EndOfFileToken as a child, which `kids.length === 0` missed.
+    const isToken = node.kind >= ts.SyntaxKind.FirstToken && node.kind <= ts.SyntaxKind.LastToken;
+    const kids = isToken ? [] : node.getChildren(sf);
     if (kids.length === 0) {
       trivia(node.pos, node.getStart(sf));
       return;
