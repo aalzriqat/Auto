@@ -2508,6 +2508,12 @@ export function DealCockpit({
       hasPermission(PERMISSIONS.VIEW_VEHICLES) &&
       !!app?.quote &&
       app.quote.mode !== "CASH",
+    // SCRUM-659: a CASH deal still cannot close on a deleted car.
+    livenessOnly:
+      canCloseDeal &&
+      hasPermission(PERMISSIONS.VIEW_VEHICLES) &&
+      !!app?.quote &&
+      app.quote.mode === "CASH",
     loading: permissionsLoading || app === undefined,
   });
 
