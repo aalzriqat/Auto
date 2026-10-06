@@ -107,11 +107,15 @@ export const backfillDepositCancellationPendings = internalMutation({
       // later: the money moved on to the newer application, which carries its own
       // share. Two undecided shares on one unit of money can never both clear.
       if (!application.holdId) {
-        const siblings = await ctx.db
+        // Exact, not a bounded page: the NEWEST application of the deposit (creation
+        // order, so ties resolve deterministically) is the only one that owns the
+        // money. Anything older whole-row is superseded (Codex: take(50) missed #51).
+        const newest = await ctx.db
           .query("depositApplications")
           .withIndex("by_deposit", (q) => q.eq("depositId", application.depositId))
-          .take(50);
-        if (siblings.some((other) => other._id !== application._id && other.appliedAt > application.appliedAt)) {
+          .order("desc")
+          .first();
+        if (newest && newest._id !== application._id) {
           report.superseded += 1;
           continue;
         }
@@ -205,6 +209,31 @@ export const resolveQuarantinedPending = internalMutation({
     const row = await ctx.db.get(args.pendingId);
     if (!row || row.orgId !== args.orgId) throw new ConvexError("Deposit share not found in this organization.");
     if (row.status !== "QUARANTINED") throw new ConvexError("Only a quarantined deposit share can be resolved here.");
+
+    if (args.resolution === "PENDING") {
+      // Back to PENDING only if a normal exit still exists for it; otherwise the car
+      // would be locked with no door that can ever clear it.
+      const deposit = await ctx.db.get(row.depositId);
+      const hold = row.holdId ? await ctx.db.get(row.holdId) : null;
+      const exitReachable = row.holdId
+        ? hold?.allocationStatus === "RELEASED_AWAITING_DECISION"
+        : deposit?.status === "HELD";
+      if (!exitReachable) {
+        throw new ConvexError(
+          "No refund or forfeiture door is open for this share, so it cannot be returned to pending. Resolve it as released or forfeited instead."
+        );
+      }
+    } else {
+      // A terminal resolution frees the car, so the share's own journal reversal must
+      // be PROVED posted — the same gate a payout has. A REVERSING application is an
+      // unposted reversal and keeps blocking.
+      const application = await ctx.db.get(row.applicationId);
+      if (!application || application.orgId !== args.orgId || application.status !== "REVERSED") {
+        throw new ConvexError(
+          "This share's sale reversal has not posted yet, so it cannot be closed. Wait for the reversal to post."
+        );
+      }
+    }
 
     await ctx.db.patch(row._id, {
       status: args.resolution,

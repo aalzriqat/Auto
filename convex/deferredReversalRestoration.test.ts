@@ -1,3 +1,4 @@
+import { recordPendingDisposition } from "./utils/depositCancellationPending";
 /**
  * SCRUM-208 — A CAR COMES BACK ONLY AFTER ITS REVERSING JOURNAL EXISTS.
  *
@@ -670,6 +671,16 @@ describe("a deal paid in instalments", () => {
 
     const first = await instalment("one");
     const second = await instalment("two");
+    // SCRUM-712 F1: the cancellation records one pending share per instalment; restoration must still be all-or-nothing.
+    {
+      await seed.t.run(async (c) => {
+        const r = c.db.query("depositApplications");
+        for (const a of await r.collect()) {
+          await recordPendingDisposition(c, { orgId: seed.orgId, applicationId: a._id, actorId: seed.userId, now: 1 });
+        }
+      });
+    }
+
 
     // The REAL finalization writer: it patches the ROOT and nothing else.
     await seed.t.run((ctx) =>

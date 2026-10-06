@@ -33,24 +33,35 @@ const BLOCKING_TO = "QUARANTINED";
  * and dropped by every writer in this module so the same transaction never reads
  * a stale "none".
  */
-const orgHasBlocking = new WeakMap<object, Map<string, boolean>>();
+const ORG_BLOCKING_CAP = 200;
+type OrgBlocking = { complete: boolean; vehicles: Set<string> };
+const orgHasBlocking = new WeakMap<object, Map<string, OrgBlocking>>();
 
-async function orgHasAnyBlocking(
+async function orgBlockingVehicles(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">
-): Promise<boolean> {
-  const memo = orgHasBlocking.get(ctx.db) ?? new Map<string, boolean>();
+): Promise<OrgBlocking> {
+  const memo = orgHasBlocking.get(ctx.db) ?? new Map<string, OrgBlocking>();
   orgHasBlocking.set(ctx.db, memo);
   const cached = memo.get(orgId);
   if (cached !== undefined) return cached;
-  const row = await ctx.db
+  const rows = await ctx.db
     .query("depositCancellationPendings")
     .withIndex("by_org_status", (q) =>
       q.eq("orgId", orgId).gte("status", BLOCKING_FROM).lte("status", BLOCKING_TO)
     )
-    .first();
-  memo.set(orgId, row !== null);
-  return row !== null;
+    .take(ORG_BLOCKING_CAP + 1);
+  // Within the cap the answer is a complete vehicle set, so a per-car question is a
+  // Set lookup and costs NO index range (SCRUM-712 F2: a 100-car quote asked this
+  // once per car and hit Convex's 4096-ranges limit as soon as ANY car in the org
+  // held a share). Over the cap the set is incomplete, so it is not used: the
+  // per-car range read stays the (correct, slower) fallback — never fail open.
+  const answer: OrgBlocking =
+    rows.length > ORG_BLOCKING_CAP
+      ? { complete: false, vehicles: new Set() }
+      : { complete: true, vehicles: new Set(rows.map((row) => row.vehicleId as string)) };
+  memo.set(orgId, answer);
+  return answer;
 }
 
 export function forgetOrgMemo(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): void {
@@ -63,7 +74,8 @@ export async function hasPendingDisposition(
   orgId: Id<"organizations">,
   vehicleId: Id<"vehicles">
 ): Promise<boolean> {
-  if (!(await orgHasAnyBlocking(ctx, orgId))) return false;
+  const known = await orgBlockingVehicles(ctx, orgId);
+  if (known.complete) return known.vehicles.has(vehicleId);
   const row = await ctx.db
     .query("depositCancellationPendings")
     .withIndex("by_org_vehicle_status", (q) =>
@@ -103,17 +115,18 @@ export async function assertNoPendingBeforeAvailable(
 }
 
 /**
- * Does any undecided share on this vehicle belong to a DIFFERENT deposit?
+ * Does any undecided share on this vehicle belong to a DIFFERENT sale?
  *
  * For the cancellation's own authority restoration only: it re-establishes the
- * hold of the very deposit whose share just went pending, so that deposit's own
- * rows must not refuse it. Anything else on the car still does. Bounded read.
+ * holds of the deposits the cancelled sale consumed — one share per instalment —
+ * so that sale's own rows must not refuse it, deposit by deposit. Anything else
+ * on the car still does. Bounded read.
  */
-export async function hasPendingDispositionExceptDeposit(
+export async function hasPendingDispositionExceptSale(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   vehicleId: Id<"vehicles">,
-  depositId: Id<"deposits">
+  saleId: Id<"sales">
 ): Promise<boolean> {
   const rows = await ctx.db
     .query("depositCancellationPendings")
@@ -125,8 +138,8 @@ export async function hasPendingDispositionExceptDeposit(
         .lte("status", BLOCKING_TO)
     )
     .take(50);
-  if (rows.some((row) => row.depositId !== depositId)) return true;
-  // A full page of one deposit's rows could hide a different one beyond it.
+  if (rows.some((row) => row.saleId !== saleId)) return true;
+  // A full page of one sale's rows could hide a different one beyond it.
   return rows.length === 50;
 }
 

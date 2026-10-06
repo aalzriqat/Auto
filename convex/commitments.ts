@@ -68,7 +68,7 @@ import {
 import { IN_FLIGHT_FINANCE_STATUSES as FINANCE_IN_FLIGHT } from "./utils/financeStatuses";
 import {
   hasPendingDisposition,
-  hasPendingDispositionExceptDeposit,
+  hasPendingDispositionExceptSale,
 } from "./utils/depositCancellationPending";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
@@ -1598,6 +1598,25 @@ export async function resolveRestorationDecision(
 }
 
 /**
+ * SCRUM-712 — may a restoration proceed past the car's undecided deposit shares?
+ * The cancellation's own restoration (SALE_CANCELLED) is exempt from the shares
+ * of the sale it is restoring — every instalment of it, not just the deposit being
+ * restored; a share of any OTHER sale refuses. Evaluated BEFORE the first write of
+ * a restoration: a refusal after `makeSourceLive` would commit a live deposit with
+ * no root and report it as lawful (F1).
+ */
+async function pendingBlocksRestoration(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">,
+  intent: RestorationIntent
+): Promise<boolean> {
+  return intent.kind === "SALE_CANCELLED"
+    ? await hasPendingDispositionExceptSale(ctx, orgId, vehicleId, intent.saleId)
+    : await hasPendingDisposition(ctx, orgId, vehicleId);
+}
+
+/**
  * SCRUM-208 — THE RESTORATION DOOR. Decide, then execute through `acquireVehicle`.
  *
  * ⚠️ IT DOES NOT OPEN A ROOT ITSELF. Execution goes through `acquireVehicle`,
@@ -1622,15 +1641,12 @@ export async function restoreCommitment(
   // restore the hold of the deposit whose own share is pending (the
   // cancellation's authority restoration, synchronous or deferred); a share of
   // any OTHER deposit on the car still refuses.
-  const pendingElsewhere =
-    args.source.kind === "DEPOSIT"
-      ? await hasPendingDispositionExceptDeposit(
-          ctx,
-          args.decision.orgId,
-          args.vehicleId,
-          args.source.depositId
-        )
-      : await hasPendingDisposition(ctx, args.decision.orgId, args.vehicleId);
+  const pendingElsewhere = await pendingBlocksRestoration(
+    ctx,
+    args.decision.orgId,
+    args.vehicleId,
+    args.intent
+  );
   if (pendingElsewhere) {
     return { decision: "REFUSE", reason: COMMITMENT_MESSAGES.pendingDepositDisposition };
   }
@@ -2488,6 +2504,22 @@ export async function restoreAuthorityAfterReversal(
   const probe = await probeCanonicalHold(ctx, decision, args.vehicleId);
   if (!probe.ok) {
     return { outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT", detail: probe.reason };
+  }
+
+  // ⚠️ SCRUM-712 F1: the pending-share gate is evaluated HERE, before anything is
+  // written. `restoreCommitment` repeats it, but by then `makeSourceLive` has
+  // already made the deposit live, and a refusal at that point returned a
+  // false-lawful outcome with the write committed.
+  if (
+    await pendingBlocksRestoration(ctx, args.orgId, args.vehicleId, {
+      kind: "SALE_CANCELLED",
+      saleId: args.saleId,
+    })
+  ) {
+    return {
+      outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS",
+      detail: COMMITMENT_MESSAGES.pendingDepositDisposition,
+    };
   }
 
   // ⚠️ DECIDE BEFORE MAKING THE SOURCE LIVE, AND LET THE RESOLVER OWN THE

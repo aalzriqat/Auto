@@ -35,8 +35,8 @@ const PRICE_A = 3_000;
 const PRICE_B = 20_000;
 const SCALE = 1000;
 
-async function seed(tag: string, vehicleCount: 1 | 2) {
-  const t = convexTestWithComponents(schema, MODULE_GLOB);
+async function seed(tag: string, vehicleCount: 1 | 2, limits = false) {
+  const t = convexTestWithComponents(schema, MODULE_GLOB, { transactionLimits: limits });
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Pend ${tag}`, createdAt: Date.now() })
   );
@@ -474,5 +474,98 @@ describe("SCRUM-712 S5: backfill of cancelled sales that predate the table", () 
     // run only scans A's applications.
     expect(await backfill(a, false)).toMatchObject({ scanned: 1, created: 1 });
     expect(await pendingRows(b)).toHaveLength(1);
+  });
+});
+
+// ─── Batch 2: runtime limit + exit guards ────────────────────────────────────
+
+describe("SCRUM-712 batch 2", () => {
+  test("F2: asking about 4,500 cars costs no index range per car while a share exists in the org", async () => {
+    // Under the platform's 4096-ranges-per-execution ceiling the old per-car range
+    // read throws here; the org-level vehicle set answers every car for free.
+    const s = await seed("f2Lim", 1, true);
+    await payDeposit(s, 1_000);
+    await cancel(s, await sell(s, s.vehicleA, PRICE_A));
+    const answers = await s.t.run(async (ctx) => {
+      let blocked = 0;
+      for (let i = 0; i < 4_500; i++) if (await hasPendingDisposition(ctx, s.orgId, s.vehicleA)) blocked++;
+      return blocked;
+    });
+    expect(answers).toBe(4_500);
+  });
+
+  test("Codex F2: with 60 successive applications on one deposit exactly the newest carries a share", async () => {
+    vi.useFakeTimers();
+    try {
+      const s = await cancelledWithDeposit("sib60");
+      await s.t.run(async (ctx) => {
+        for (const row of await ctx.db.query("depositCancellationPendings").collect()) await ctx.db.delete(row._id);
+        await ctx.db.patch(s.vehicleA, { status: "AVAILABLE" });
+      });
+      await s.t.run(async (ctx) => {
+        const first = (await ctx.db.query("depositApplications").collect()).find((a) => a.orgId === s.orgId)!;
+        const { _id, _creationTime, ...copy } = first;
+        for (let i = 1; i < 60; i++) await ctx.db.insert("depositApplications", { ...copy, appliedAt: first.appliedAt + i });
+      });
+      const first = await s.t.mutation(
+        internal.migrateDepositCancellationPendings.backfillDepositCancellationPendings,
+        { orgId: s.orgId, dryRun: false }
+      );
+      expect(first.status).toBe("SCHEDULED");
+      await s.t.finishAllScheduledFunctions(vi.runAllTimers);
+      const rows = await pendingRows(s);
+      expect(rows).toHaveLength(1);
+      const newest = await s.t.run(async (ctx) => {
+        const apps = await ctx.db.query("depositApplications").collect();
+        return apps[apps.length - 1]._id;
+      });
+      expect(rows[0].applicationId).toBe(newest);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a terminal quarantine resolution is refused while the sale reversal has not posted", async () => {
+    const s = await cancelledWithDeposit("exitReversing");
+    const [row] = await pendingRows(s);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(row._id, { status: "QUARANTINED" });
+      await ctx.db.patch(row.applicationId, { status: "REVERSING" });
+    });
+    const resolve = (resolution: "RELEASED" | "FORFEITED" | "PENDING") =>
+      s.t.mutation(internal.migrateDepositCancellationPendings.resolveQuarantinedPending, {
+        orgId: s.orgId, pendingId: row._id, actorId: s.userId, reason: "checked", resolution,
+      });
+    await expect(resolve("RELEASED")).rejects.toThrow(/reversal has not posted/);
+    await expect(resolve("FORFEITED")).rejects.toThrow(/reversal has not posted/);
+    expect((await pendingRows(s)).map((r) => r.status)).toEqual(["QUARANTINED"]);
+    expect(await s.t.run((ctx) => hasPendingDisposition(ctx, s.orgId, s.vehicleA))).toBe(true);
+  });
+
+  test("a quarantined share cannot go back to PENDING when no refund door is open for it", async () => {
+    const s = await cancelledWithDeposit("exitNoDoor");
+    const [row] = await pendingRows(s);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(row._id, { status: "QUARANTINED" });
+      await ctx.db.patch(row.depositId, { status: "VOIDED" });
+    });
+    await expect(
+      s.t.mutation(internal.migrateDepositCancellationPendings.resolveQuarantinedPending, {
+        orgId: s.orgId, pendingId: row._id, actorId: s.userId, reason: "checked", resolution: "PENDING",
+      })
+    ).rejects.toThrow(/No refund or forfeiture door/);
+  });
+
+  test("a share of ANOTHER sale still refuses the cancellation's authority restoration", async () => {
+    const s = await cancelledWithDeposit("exemptOther");
+    const [row] = await pendingRows(s);
+    const otherSale = await s.t.run(async (ctx) => {
+      const copy = (await ctx.db.get((await ctx.db.query("sales").collect())[0]._id))!;
+      const { _id, _creationTime, ...rest } = copy;
+      return await ctx.db.insert("sales", { ...rest });
+    });
+    const { hasPendingDispositionExceptSale } = await import("./utils/depositCancellationPending");
+    expect(await s.t.run((ctx) => hasPendingDispositionExceptSale(ctx, s.orgId, row.vehicleId, row.saleId))).toBe(false);
+    expect(await s.t.run((ctx) => hasPendingDispositionExceptSale(ctx, s.orgId, row.vehicleId, otherSale))).toBe(true);
   });
 });
