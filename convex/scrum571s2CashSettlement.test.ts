@@ -213,6 +213,15 @@ describe("SCRUM-571 D-48: the cockpit names the customer's invoice balance", () 
     expect(deal!.money!.customerInvoice).toEqual({ state: "CLOSED", outstandingMinor: 0, currency: "JOD" });
   });
 
+  test("a cancelled cash sale describes no invoice: NONE (parity with the financed cockpit)", async () => {
+    const s = await seedCashSale("f4_cancelled");
+    await payInFull(s);
+    await s.t.run((ctx) => ctx.db.patch(s.saleId, { status: "CANCELLED" }));
+    const deal = await s.as.query(api.sales.dealCockpit, { orgId: s.orgId, saleId: s.saleId });
+    expect(deal!.customerInvoiceState).toBe("NONE");
+    expect(deal!.money!.customerInvoice).toEqual({ state: "NONE", outstandingMinor: null, currency: "JOD" });
+  });
+
   test("a caller without view:finance gets the qualitative state and no amount", async () => {
     const s = await seedCashSale("f4_redact");
     const viewer = await asViewerWithoutFinance(s);

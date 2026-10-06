@@ -967,9 +967,15 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
   const financierObligation = resolveFinancierObligation(app, settlesDirect, financierLeg);
 
   // The customer's side is judged on EVERY financier leg (SCRUM-571 D-43).
-  const customerPosition: CustomerInvoicePosition = routeKnown
-    ? await resolveCustomerPosition(ctx, app, sale, currency, financierLeg, settlesDirect)
-    : { state: "UNKNOWN", outstandingMinor: null };
+  // A sale that is not COMPLETED (a cancelled one, whose books were reversed)
+  // owes no invoice to describe: NONE, as the cash cockpit reads it, and without
+  // touching the invoice at all.
+  const saleOwesNoInvoice = saleCancelled || (sale != null && sale.status !== "COMPLETED");
+  const customerPosition: CustomerInvoicePosition = !routeKnown
+    ? { state: "UNKNOWN", outstandingMinor: null }
+    : saleOwesNoInvoice
+      ? { state: "NONE", outstandingMinor: null }
+      : await resolveCustomerPosition(ctx, app, sale, currency, financierLeg, settlesDirect);
   const obligations: SettlementObligations = routeKnown
     ? {
         financier: financierObligation,

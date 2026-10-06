@@ -248,6 +248,17 @@ describe("SCRUM-571 s2a: the customer's invoice gates 'settled' on every financi
     expect(viewer!.money).toBeNull();
   });
 
+  test("a cancelled financed deal describes no invoice: NONE, not CLOSED, and never settled", async () => {
+    const s = await seed("cancelled");
+    // A paid invoice is the worst case: it would read CLOSED / 0 / settled.
+    const { applicationId, saleId } = await insertFinancedDeal(s, { gapCashMinor: 0, openMinor: 0 });
+    await s.t.run((ctx) => ctx.db.patch(saleId, { status: "CANCELLED" }));
+    const view = await s.asOwner.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+    expect(view!.customerInvoiceState).toBe("NONE");
+    expect(view!.money!.customerInvoice).toEqual({ state: "NONE", outstandingMinor: null, currency: "JOD" });
+    expect(await settlementOf(s, applicationId)).not.toBe("COMPLETE");
+  });
+
   test("a gap that cannot be read is UNKNOWN, never settled", async () => {
     const s = await seed("gapnan");
     const { applicationId } = await insertFinancedDeal(s, { gapCashMinor: -5, openMinor: 0 });
