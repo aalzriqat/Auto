@@ -10,7 +10,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { hasPendingDisposition } from "./utils/depositCancellationPending";
 import { syncVehicleHoldStatus } from "./utils/depositHelpers";
@@ -333,5 +333,68 @@ describe("SCRUM-712 S3: exits", () => {
     // A human reconciliation, never a side effect of a payout.
     expect((await pendingRows(s)).map((r) => r.status)).toEqual(["QUARANTINED"]);
     await expect(sell(s, s.vehicleA, PRICE_A)).rejects.toThrow(PENDING_MESSAGE);
+  });
+});
+
+// ─── S5: legacy rows are backfilled fail-closed ──────────────────────────────
+
+describe("SCRUM-712 S5: backfill of cancelled sales that predate the table", () => {
+  const backfill = (s: Seed, dryRun: boolean) =>
+    s.t.mutation(internal.migrateDepositCancellationPendings.backfillDepositCancellationPendings, {
+      orgId: s.orgId, dryRun,
+    });
+  /** A legacy world: the cancellation happened, but wrote no pending row and freed the car. */
+  const asLegacy = async (s: Seed) => {
+    await s.t.run(async (ctx) => {
+      for (const row of await ctx.db.query("depositCancellationPendings").collect()) await ctx.db.delete(row._id);
+      await ctx.db.patch(s.vehicleA, { status: "AVAILABLE" });
+    });
+  };
+
+  test("dry run writes nothing; the real run records PENDING and locks the car; a re-run is a no-op", async () => {
+    const s = await cancelledWithDeposit("s5Basic");
+    await asLegacy(s);
+    const dry = await backfill(s, true);
+    expect(dry).toMatchObject({ created: 1, quarantined: 0, dryRun: true });
+    expect(await pendingRows(s)).toHaveLength(0);
+
+    const real = await backfill(s, false);
+    expect(real).toMatchObject({ created: 1, quarantined: 0 });
+    expect((await pendingRows(s)).map((r) => r.status)).toEqual(["PENDING"]);
+    expect(await s.t.run(async (ctx) => (await ctx.db.get(s.vehicleA))!.status)).toBe("RESERVED");
+
+    const again = await backfill(s, true);
+    expect(again).toMatchObject({ created: 0, quarantined: 0, alreadyRecorded: 1 });
+  });
+
+  test("a share whose money was already refunded is decided, not re-opened", async () => {
+    const s = await cancelledWithDeposit("s5Decided");
+    const depositId = (await s.t.run((ctx) => ctx.db.query("deposits").collect())).find((d) => d.orgId === s.orgId)!._id;
+    await s.asManager.mutation(api.deposits.release, {
+      idempotencyKey: crypto.randomUUID(), orgId: s.orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH",
+    });
+    await asLegacy(s);
+    expect(await backfill(s, false)).toMatchObject({ created: 0, quarantined: 0, decided: 1 });
+    expect(await pendingRows(s)).toHaveLength(0);
+  });
+
+  test("a car already sold on is quarantined for a human, never guessed", async () => {
+    const s = await cancelledWithDeposit("s5Quarantine");
+    await asLegacy(s);
+    await s.t.run((ctx) => ctx.db.patch(s.vehicleA, { status: "SOLD" }));
+    expect(await backfill(s, false)).toMatchObject({ created: 0, quarantined: 1 });
+    expect((await pendingRows(s)).map((r) => r.status)).toEqual(["QUARANTINED"]);
+    // The sold car keeps its sold status; the quarantined share is reported, not dropped.
+    expect(await s.t.run(async (ctx) => (await ctx.db.get(s.vehicleA))!.status)).toBe("SOLD");
+  });
+
+  test("another organization's applications are never touched", async () => {
+    const a = await cancelledWithDeposit("s5OrgA");
+    const b = await cancelledWithDeposit("s5OrgB");
+    await asLegacy(a);
+    // Running org B's backfill on B's world (separate t) cannot see A at all; and A's
+    // run only scans A's applications.
+    expect(await backfill(a, false)).toMatchObject({ scanned: 1, created: 1 });
+    expect(await pendingRows(b)).toHaveLength(1);
   });
 });
