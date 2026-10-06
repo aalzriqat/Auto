@@ -505,7 +505,7 @@ describe("SCRUM-644 S3b-2 workflow structure", () => {
     expect(workflow.concurrency).toEqual({ group: "tre-reconcile", "cancel-in-progress": false });
   });
 
-  test("holds nothing at workflow level, exactly the four permissions on its one job, and no secret", () => {
+  test("holds nothing at workflow level, exactly the three permissions on its one job, and no secret", () => {
     expect(Object.keys(workflow.jobs)).toEqual(["reconcile"]);
     expect(workflow.permissions).toEqual({});
     expect(workflow.jobs.reconcile.permissions).toEqual({ checks: "write", contents: "read", "pull-requests": "read" });
