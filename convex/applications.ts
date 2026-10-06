@@ -969,14 +969,20 @@ async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">)
   // The customer's side is judged on EVERY financier leg (SCRUM-571 D-43).
   // A cancelled sale's books were reversed, so there is no invoice to describe:
   // NONE, as the cash cockpit reads it, and without touching the invoice at all.
-  // Any other non-completed sale (e.g. PENDING) stays judged and fails closed,
-  // because NONE counts as "nothing owed" in settlementIsComplete.
+  // Any other linked sale that is not COMPLETED (e.g. PENDING) fails closed to
+  // UNKNOWN WITHOUT reading the invoice: its books are not final, so a paid
+  // invoice plus a posted event cannot prove the customer is settled, and NONE
+  // would count as "nothing owed" in settlementIsComplete (S2-C1). With no
+  // linked sale (pre-finalization) the position is resolved as before.
   const saleCancelledForInvoice = saleCancelled || sale?.status === "CANCELLED";
+  const saleNotCompleted = sale != null && sale.status !== "COMPLETED";
   const customerPosition: CustomerInvoicePosition = !routeKnown
     ? { state: "UNKNOWN", outstandingMinor: null }
     : saleCancelledForInvoice
       ? { state: "NONE", outstandingMinor: null }
-      : await resolveCustomerPosition(ctx, app, sale, currency, financierLeg, settlesDirect);
+      : saleNotCompleted
+        ? { state: "UNKNOWN", outstandingMinor: null }
+        : await resolveCustomerPosition(ctx, app, sale, currency, financierLeg, settlesDirect);
   const obligations: SettlementObligations = routeKnown
     ? {
         financier: financierObligation,

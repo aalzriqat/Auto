@@ -259,7 +259,22 @@ describe("SCRUM-571 s2a: the customer's invoice gates 'settled' on every financi
     expect(await settlementOf(s, applicationId)).not.toBe("COMPLETE");
   });
 
-  test("a pending financed deal with no canonical invoice fails closed: UNKNOWN, never NONE, never settled", async () => {
+  test("a finalized sale that is PENDING reads UNKNOWN even with a paid canonical invoice and a posted event (S2-C1)", async () => {
+    const control = await seed("pendctl");
+    const ctl = await insertFinancedDeal(control, { gapCashMinor: 0, openMinor: 0 });
+    // Control: the identical fixture, sale untouched, reads settled.
+    expect(await settlementOf(control, ctl.applicationId)).toBe("COMPLETE");
+
+    const s = await seed("pendinv");
+    const { applicationId, saleId } = await insertFinancedDeal(s, { gapCashMinor: 0, openMinor: 0 });
+    await s.t.run((ctx) => ctx.db.patch(saleId, { status: "PENDING" }));
+    const view = await s.asOwner.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+    expect(view!.customerInvoiceState).toBe("UNKNOWN");
+    expect(view!.money!.customerInvoice).toEqual({ state: "UNKNOWN", outstandingMinor: null, currency: "JOD" });
+    expect(await settlementOf(s, applicationId)).not.toBe("COMPLETE");
+  });
+
+  test("a pending financed deal with no canonical invoice pointer fails closed: UNKNOWN, never NONE, never settled (missing-pointer case)", async () => {
     const s = await seed("pending");
     const { applicationId, saleId } = await insertFinancedDeal(s, { gapCashMinor: 0, invoice: "none" });
     await s.t.run((ctx) => ctx.db.patch(saleId, { status: "PENDING" }));
