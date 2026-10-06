@@ -2149,6 +2149,18 @@ describe("Review issue #5 — vehicle acquisition cost correction", () => {
       idempotencyKey: crypto.randomUUID(),
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
+    // SCRUM-725: a restatement is only for a purchase booked in a CLOSED period.
+    await t.run(async (ctx) => {
+      await ctx.db.insert("accountingPeriods", {
+        orgId, startDate: Date.UTC(2019, 0, 1), endDate: Date.UTC(2019, 11, 31, 23, 59, 59, 999),
+        fiscalYear: 2019, periodNumber: 1, status: "CLOSED", createdAt: Date.now(),
+      });
+      const acquisition = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId.toString()))
+        .first();
+      await ctx.db.patch(acquisition!._id, { accountingDate: Date.UTC(2019, 5, 15) });
+    });
 
     await asOwner.mutation(api.vehicles.correctAcquisitionCost, {
       orgId, vehicleId, newCost: 12000, reason: "Original invoice was mis-entered",

@@ -1767,20 +1767,45 @@ function isPayableAdjustable(
   return dueMinor !== undefined && dueMinor === costMinor;
 }
 
+/**
+ * SCRUM-725: whether the period the acquisition was booked into is CLOSED or
+ * LOCKED. A prior-period restatement through retained earnings only describes a
+ * purchase whose period is already shut; for a purchase still in an open (or
+ * future) period the right correction is the ordinary one, so the restatement
+ * type is offered and accepted only when this is true. A missing period is not
+ * "closed" — nothing has been shut, so the restatement is not offered.
+ */
+async function isAcquisitionPeriodClosed(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  acquisitionDate: number
+): Promise<boolean> {
+  // The period that contains the date is the latest one starting on or before it.
+  const period = await ctx.db
+    .query("accountingPeriods")
+    .withIndex("by_org_startDate", (q) => q.eq("orgId", orgId).lte("startDate", acquisitionDate))
+    .order("desc")
+    .first();
+  if (!period || period.endDate < acquisitionDate) return false;
+  return period.status === "CLOSED" || period.status === "LOCKED";
+}
+
 /** The correction-type matrix, from how the car was originally paid. */
 function allowedAcquisitionCorrectionTypes(
   originalPaymentMethod: string | undefined,
   payable: Doc<"vehicleSupplierPayables"> | null,
-  payableAdjustable: boolean
+  payableAdjustable: boolean,
+  acquisitionPeriodClosed: boolean
 ): AcquisitionCostCorrectionType[] {
+  const restatement: AcquisitionCostCorrectionType[] = acquisitionPeriodClosed ? ["PRIOR_PERIOD_RESTATEMENT"] : [];
   if (originalPaymentMethod === "ON_ACCOUNT") {
     const allowed: AcquisitionCostCorrectionType[] = [];
     if (payableAdjustable) allowed.push("SUPPLIER_INVOICE_ERROR", "VENDOR_CREDIT");
     if (payable && deriveSettlementStatus(payable) === "PAID") allowed.push("CASH_REFUND");
-    allowed.push("PRIOR_PERIOD_RESTATEMENT");
+    allowed.push(...restatement);
     return allowed;
   }
-  return ["CASH_REFUND", "PRIOR_PERIOD_RESTATEMENT"];
+  return ["CASH_REFUND", ...restatement];
 }
 
 /** The account the correction's counter-line posts to — mirrors ruleVehicleAcquisitionCostCorrected. */
@@ -1932,7 +1957,19 @@ export const correctAcquisitionCost = mutation({
         );
       }
     }
-    if (!allowedAcquisitionCorrectionTypes(originalMethod, row, payableAdjustable).includes(args.correctionType)) {
+    // SCRUM-725: a restatement through retained earnings is for a purchase whose
+    // period is already closed. Refused with its own code, not the generic
+    // "type doesn't fit", so the dialog can say exactly why even if a client
+    // sends the type anyway.
+    const acquisitionPeriodClosed = await isAcquisitionPeriodClosed(ctx, args.orgId, acquisitionEvent.accountingDate);
+    if (args.correctionType === "PRIOR_PERIOD_RESTATEMENT" && !acquisitionPeriodClosed) {
+      throwAppError(
+        AppErrorCode.COST_CORRECTION_RESTATEMENT_PERIOD_OPEN,
+        "Restating a purchase cost through retained earnings is only available when the purchase was recorded in a closed accounting period. This purchase is still in an open period, so choose another correction type."
+      );
+    }
+    const allowedTypes = allowedAcquisitionCorrectionTypes(originalMethod, row, payableAdjustable, acquisitionPeriodClosed);
+    if (!allowedTypes.includes(args.correctionType)) {
       throwAppError(
         AppErrorCode.COST_CORRECTION_TYPE_NOT_ALLOWED,
         "This correction type doesn't fit how the vehicle was paid for. Choose one of the other options."
@@ -2118,8 +2155,10 @@ export const getAcquisitionCostCorrectionContext = query({
       allowedTypes: allowedAcquisitionCorrectionTypes(
         originalPaymentMethod,
         payableRow,
-        isPayableAdjustable(payableRow, currency, currentCost)
+        isPayableAdjustable(payableRow, currency, currentCost),
+        await isAcquisitionPeriodClosed(ctx, args.orgId, event.accountingDate)
       ),
+      // SCRUM-725: restatement is offered only for a closed-period acquisition.
       corrections,
     };
   },

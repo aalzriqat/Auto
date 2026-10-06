@@ -137,6 +137,34 @@ async function payableOf(t: Dealer["t"], vehicleId: Id<"vehicles">) {
   );
 }
 
+/**
+ * SCRUM-725: a prior-period restatement describes a purchase booked in a period
+ * that is already shut. Moves the car's posted acquisition into a CLOSED 2019
+ * period (the open 2020-2035 period the correction itself posts into is left as
+ * it was), which is the only situation the restatement type is offered for.
+ */
+async function bookAcquisitionInClosedPeriod(d: Dealer, vehicleId: Id<"vehicles">) {
+  await d.t.run(async (ctx) => {
+    const existing = await ctx.db
+      .query("accountingPeriods")
+      .withIndex("by_org_startDate", (q) => q.eq("orgId", d.orgId).eq("startDate", Date.UTC(2019, 0, 1)))
+      .first();
+    if (!existing) {
+      await ctx.db.insert("accountingPeriods", {
+        orgId: d.orgId, startDate: Date.UTC(2019, 0, 1), endDate: Date.UTC(2019, 11, 31, 23, 59, 59, 999),
+        fiscalYear: 2019, periodNumber: 1, status: "CLOSED", createdAt: Date.now(),
+      });
+    }
+    const events = await ctx.db
+      .query("accountingEvents")
+      .withIndex("by_org_source", (q) => q.eq("orgId", d.orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId.toString()))
+      .collect();
+    for (const event of events) {
+      if (event.eventType === "VEHICLE_ACQUIRED") await ctx.db.patch(event._id, { accountingDate: Date.UTC(2019, 5, 15) });
+    }
+  });
+}
+
 describe("SCRUM-650 correctAcquisitionCost — cash acquisition", () => {
   test("1. CASH_REFUND with the original method lowers cost, inventory and returns the cash", async () => {
     const d = await seedDealer("c1");
@@ -373,6 +401,7 @@ describe("SCRUM-650 correctAcquisitionCost — preconditions", () => {
   test("7b. an unmapped counter-account refuses NOT_POSTABLE_NOW: nothing queued, nothing patched", async () => {
     const d = await seedDealer("p7b");
     const vehicleId = await createCashVehicle(d);
+    await bookAcquisitionInClosedPeriod(d, vehicleId);
     const retained = await d.t.run((ctx) =>
       ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", d.orgId).eq("systemKey", "RETAINED_EARNINGS")).unique()
     );
@@ -470,9 +499,13 @@ describe("SCRUM-650 getAcquisitionCostCorrectionContext", () => {
       blockedReason: null, currentCost: 12500, currency: "JOD",
       originalPaymentMethod: "ON_ACCOUNT",
       payable: { status: "PENDING", amountDue: 12500, amountPaid: 0 },
-      allowedTypes: ["SUPPLIER_INVOICE_ERROR", "VENDOR_CREDIT", "PRIOR_PERIOD_RESTATEMENT"],
+      // SCRUM-725: the purchase is in an OPEN period, so no restatement is offered.
+      allowedTypes: ["SUPPLIER_INVOICE_ERROR", "VENDOR_CREDIT"],
       corrections: [],
     });
+    await bookAcquisitionInClosedPeriod(d, vehicleId);
+    context = await d.asOwner.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: d.orgId, vehicleId });
+    expect(context.allowedTypes).toEqual(["SUPPLIER_INVOICE_ERROR", "VENDOR_CREDIT", "PRIOR_PERIOD_RESTATEMENT"]);
     await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
       orgId: d.orgId, vehicleId, newCost: 9800, reason: "Supplier invoice was wrong",
       correctionType: "SUPPLIER_INVOICE_ERROR",
@@ -489,8 +522,13 @@ describe("SCRUM-650 getAcquisitionCostCorrectionContext", () => {
     const context = await d.asOwner.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: d.orgId, vehicleId });
     expect(context).toMatchObject({
       blockedReason: null, originalPaymentMethod: "CASH", payable: null,
-      allowedTypes: ["CASH_REFUND", "PRIOR_PERIOD_RESTATEMENT"],
+      // SCRUM-725: restatement only once the purchase's period is closed.
+      allowedTypes: ["CASH_REFUND"],
     });
+    await bookAcquisitionInClosedPeriod(d, vehicleId);
+    expect(
+      (await d.asOwner.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: d.orgId, vehicleId })).allowedTypes
+    ).toEqual(["CASH_REFUND", "PRIOR_PERIOD_RESTATEMENT"]);
     const noCostId = await d.asOwner.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, vin: "1HGCM82633A000003",
     });
@@ -546,6 +584,7 @@ describe("SCRUM-650 batch 2 A1: the cost-visibility gate", () => {
   test("the default ACCOUNTANT template (MANAGE_FINANCE, no VIEW_COST_PRICE) is refused by the query and the mutation; SENIOR_ACCOUNTANT is allowed", async () => {
     const d = await seedDealer("b1");
     const vehicleId = await createCashVehicle(d);
+    await bookAcquisitionInClosedPeriod(d, vehicleId);
     const asAccountant = await memberFromTemplate(d, "ACCOUNTANT", "b1acc");
     const asSenior = await memberFromTemplate(d, "SENIOR_ACCOUNTANT", "b1sen");
     const before = await snapshot(d.t, d.orgId, vehicleId);
@@ -703,6 +742,7 @@ describe("SCRUM-650 batch 2 A4: the cashbook projection of a cash correction", (
       idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, vin: "1HGCM82633A000009",
       purchasePrice: 8000, purchasePaymentMethod: "CASH",
     });
+    await bookAcquisitionInClosedPeriod(d, cashId);
     const countRows = async () => (await d.t.run((ctx) => ctx.db.query("transactions").collect())).length;
     const before = await countRows();
     await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
@@ -832,6 +872,58 @@ describe("SCRUM-650 batch 2 extras", () => {
   });
 });
 
+describe("SCRUM-725: a prior-period restatement only for a purchase in a closed period", () => {
+  test("an OPEN-period purchase: the type is not offered and the server refuses it with its own code, writing nothing", async () => {
+    const d = await seedDealer("r725a");
+    const vehicleId = await createCashVehicle(d);
+    const before = await snapshot(d.t, d.orgId, vehicleId);
+    const journalsBefore = (await d.t.run((ctx) => ctx.db.query("journalEntries").collect())).length;
+
+    const context = await d.asOwner.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: d.orgId, vehicleId });
+    expect(context.allowedTypes).not.toContain("PRIOR_PERIOD_RESTATEMENT");
+
+    // A client that sends it anyway is refused, with the specific code (not TYPE_NOT_ALLOWED).
+    const data = await refusalOf(
+      d.asOwner.mutation(api.vehicles.correctAcquisitionCost, { orgId: d.orgId, vehicleId, newCost: 9800, ...RESTATE })
+    );
+    expect(data?.code).toBe("COST_CORRECTION_RESTATEMENT_PERIOD_OPEN");
+    expect(data?.message).toMatch(/closed accounting period/);
+    expect(await snapshot(d.t, d.orgId, vehicleId)).toEqual(before);
+    expect((await d.t.run((ctx) => ctx.db.query("journalEntries").collect())).length).toBe(journalsBefore);
+  });
+
+  test("a CLOSED-period purchase: the type is offered and accepted, posting one retained-earnings correction", async () => {
+    const d = await seedDealer("r725b");
+    const vehicleId = await createCashVehicle(d);
+    await bookAcquisitionInClosedPeriod(d, vehicleId);
+
+    const context = await d.asOwner.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: d.orgId, vehicleId });
+    expect(context.allowedTypes).toContain("PRIOR_PERIOD_RESTATEMENT");
+
+    await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, { orgId: d.orgId, vehicleId, newCost: 9800, ...RESTATE });
+    expect((await d.t.run((ctx) => ctx.db.get(vehicleId)))?.purchasePrice).toBe(9800);
+    const entries = await d.t.run((ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", d.orgId)).collect()
+    );
+    expect(entries.filter((e) => e.sourceType === "vehicleCostCorrections")).toHaveLength(1);
+  });
+
+  test("a LOCKED period counts as closed", async () => {
+    const d = await seedDealer("r725c");
+    const vehicleId = await createCashVehicle(d);
+    await bookAcquisitionInClosedPeriod(d, vehicleId);
+    await d.t.run(async (ctx) => {
+      const period = await ctx.db
+        .query("accountingPeriods")
+        .withIndex("by_org_startDate", (q) => q.eq("orgId", d.orgId).eq("startDate", Date.UTC(2019, 0, 1)))
+        .first();
+      await ctx.db.patch(period!._id, { status: "LOCKED" });
+    });
+    const context = await d.asOwner.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: d.orgId, vehicleId });
+    expect(context.allowedTypes).toContain("PRIOR_PERIOD_RESTATEMENT");
+  });
+});
+
 describe("SCRUM-650 batch 2 A12: the counter-account mirror matches what the ledger posts", () => {
   type Case = { original: "CASH" | "BANK_TRANSFER" | "ON_ACCOUNT" | "PAID_ON_ACCOUNT"; type: "CASH_REFUND" | "SUPPLIER_INVOICE_ERROR" | "VENDOR_CREDIT" | "PRIOR_PERIOD_RESTATEMENT"; method?: "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD" };
   const cases: Case[] = [];
@@ -855,6 +947,8 @@ describe("SCRUM-650 batch 2 A12: the counter-account mirror matches what the led
         });
       }
     }
+    // SCRUM-725: the restatement is only accepted for a purchase in a closed period.
+    if (c.type === "PRIOR_PERIOD_RESTATEMENT") await bookAcquisitionInClosedPeriod(d, vehicleId);
     // Both directions: down, then up.
     for (const newCost of [9800, 11000]) {
       await d.asOwner.mutation(api.vehicles.correctAcquisitionCost, {
