@@ -16,11 +16,13 @@
  *
  * The self-tests at the top come first deliberately, in the same spirit as
  * `tenantWriteGuard.test.ts`: a guard nobody has watched fail is not a guard.
- * They pin the FOUR blind spots this analyzer actually had, each of which
+ * They pin the FIVE blind spots this analyzer actually had, each of which
  * produced a wrong census before it was caught. Deleting any of them re-opens a
  * hole that has already cost real analysis once.
  */
 import { describe, expect, test } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   buildGraph,
@@ -177,7 +179,7 @@ const CLASSIFICATION: Record<string, { bucket: Bucket; mechanism: string }> = {
   "workOrders.update": { bucket: "STATE_GUARDED", mechanism: "refuses when the work order already carries expenseId, which this same mutation patches on success" },
 };
 
-describe("analyzer self-tests — the four blind spots, pinned", () => {
+describe("analyzer self-tests — the five blind spots, pinned", () => {
   test("BLIND SPOT 1: a callee is resolved through imports, never by bare name", () => {
     // `create`, `add` and `update` are symbol names in dozens of modules. Bare
     // name resolution fused the graph and reported 348 of 349 public mutations
@@ -257,6 +259,108 @@ describe("analyzer self-tests — the four blind spots, pinned", () => {
     };
     expect(mintsAndPostsLocally(command.body)).toBe(false);
     expect(mintsAndPostsTransitively(g, command.id)).toBe(true);
+  });
+
+  test("BLIND SPOT 5: comment text is not a call (SCRUM-738)", () => {
+    // A body is sliced from its declaration to the NEXT declaration, so the next
+    // function's leading JSDoc lands in the previous symbol's body, and call/hook
+    // tokens were matched over raw text. A JSDoc naming a hook therefore produced
+    // a false money edge. Edge extraction now strips comments with a TypeScript
+    // aware pass; it must stay precise in BOTH directions: no edge from a comment,
+    // and no real call lost to a `//` or `/*` that is only text inside a literal.
+    const BT = "`";
+    const fixture = [
+      "export function foo(x: number) { return x; }",
+      "export function hookX() { return 0; }",
+      "export function runWith(h: unknown) { return h; }",
+      "export function awaitfoo() { return 0; }",
+      // (a) comments only. The JSDoc on nextOne is attributed to commentsOnly.
+      "export function commentsOnly() {",
+      "  // calls foo() and hookX here",
+      "  /** hookX and foo() in a block */",
+      "  return 1; // trailing foo() hookX",
+      "}",
+      "/**",
+      " * Leading JSDoc of the NEXT declaration: names `hookX` and foo().",
+      " */",
+      "export function nextOne() { return 2; }",
+      // (b) real edges that sit beside a trailing comment on the same line.
+      "export function realCall() {",
+      "  const y = foo(1); // mentions runWith() only in a comment",
+      "  return y;",
+      "}",
+      "export function realHookValue() {",
+      "  runWith(hookX); /* trailing */",
+      "}",
+      "export function realHookConst() {",
+      "  const h = hookX; // trailing foo()",
+      "  return h;",
+      "}",
+      // Replacing a comment must not glue its neighbours: awaitfoo is NOT foo.
+      "export function gluing() {",
+      "  return await/**/foo(1);",
+      "}",
+      // (c) comment markers inside literals must not hide a following real call.
+      "export function dqString() {",
+      '  const s = "https://example.com"; foo(1);',
+      "  runWith(2);",
+      "}",
+      "export function sqString() {",
+      "  const s = 'http://x /* y'; foo(1);",
+      "  runWith(2);",
+      "}",
+      "export function templateText() {",
+      "  const t = " + BT + "a // b /* c" + BT + "; foo(1);",
+      "  runWith(2);",
+      "}",
+      "export function regexSlashes() {",
+      String.raw`  const r = /["']\/\//; foo(1);`,
+      "  runWith(2);",
+      "}",
+      "export function regexQuote() {",
+      String.raw`  const r = /"/; foo(1);`,
+      "  runWith(2);",
+      "}",
+      "export function regexBlockOpen() {",
+      String.raw`  const r = /a\/*b/; foo(1);`,
+      "  runWith(2);",
+      "}",
+      // (d) a call inside a template expression is still a call.
+      "export function templateCall() {",
+      "  return " + BT + "x ${foo()} y // z" + BT + ";",
+      "}",
+      "export function nestedTemplateCall() {",
+      "  return " + BT + "a ${" + BT + "b ${runWith(1)}" + BT + "} /* c" + BT + ";",
+      "}",
+    ].join("\n");
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "census738-"));
+    try {
+      fs.writeFileSync(path.join(dir, "fx.ts"), fixture);
+      const g = buildGraph(dir);
+      const edgesOf = (n: string) => [...(g.edges.get(`fx.${n}`) ?? [])].sort();
+
+      // (a) comments create no edge, including the JSDoc the slicer mis-attributes.
+      expect(edgesOf("commentsOnly")).toEqual([]);
+      expect(edgesOf("nextOne")).toEqual([]);
+
+      // (b) real call / hook-as-value edges survive beside a trailing comment.
+      expect(edgesOf("realCall")).toEqual(["fx.foo"]);
+      expect(edgesOf("realHookValue")).toEqual(["fx.hookX", "fx.runWith"]);
+      expect(edgesOf("realHookConst")).toEqual(["fx.hookX"]);
+      expect(edgesOf("gluing")).toEqual(["fx.foo"]);
+
+      // (c) literals that merely contain `//` or `/*` lose nothing after them.
+      for (const n of ["dqString", "sqString", "templateText", "regexSlashes", "regexQuote", "regexBlockOpen"]) {
+        expect(edgesOf(n), n).toEqual(["fx.foo", "fx.runWith"]);
+      }
+
+      // (d) calls inside template expressions are still seen.
+      expect(edgesOf("templateCall")).toEqual(["fx.foo"]);
+      expect(edgesOf("nestedTemplateCall")).toEqual(["fx.runWith"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

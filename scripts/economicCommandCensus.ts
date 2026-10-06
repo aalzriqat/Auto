@@ -11,8 +11,8 @@
  *   reverse  financial sink  -> public mutation   (over reversed edges)
  * Agreement is asserted, not assumed — see the test beside this file.
  *
- * ── Four blind spots this analyzer has already had, each of which produced a
- * WRONG census before it was caught. All four are pinned as regression tests in
+ * ── Five blind spots this analyzer has already had, each of which produced a
+ * WRONG census before it was caught. All five are pinned as regression tests in
  * `economicCommandCensus.test.ts`; do not "simplify" any of them away.
  *
  *  1. BARE-NAME CALLEE RESOLUTION fuses this graph. `create`, `add` and
@@ -37,12 +37,20 @@
  *     transactions row and posts — is invisible to a check that reads only the
  *     command's own body. A local-only check called 13 further commands safe.
  *
+ *  5. COMMENT TEXT IS NOT A CALL. A body is sliced to the next declaration, so
+ *     the next function's JSDoc sits in the previous body, and matching call /
+ *     hook tokens over raw text turned a JSDoc naming a hook into a false money
+ *     edge (SCRUM-738). Edge extraction reads comment-free text (`stripComments`,
+ *     TypeScript-aware so strings, templates and regexes are not mistaken for
+ *     comments). Sinks and mint/post checks deliberately still read raw bodies.
+ *
  * Bias is deliberately OVER-INCLUSIVE throughout. A false positive costs one
  * explicit classification; a false negative hides a command that can duplicate
  * money on a retry.
  */
 import fs from "node:fs";
 import path from "node:path";
+import ts from "typescript";
 
 export type Bucket = "IDENTITY_GUARDED" | "STATE_GUARDED" | "NON_ECONOMIC" | "RETIRED";
 
@@ -106,16 +114,67 @@ export interface Graph {
   sinks: Set<string>;
 }
 
+/**
+ * Blind spot 5. Returns `src` with every comment replaced by spaces, keeping
+ * every newline (so line numbers match) and never fusing neighbours
+ * (`foo/**\/bar` becomes `foo      bar`).
+ *
+ * It parses with TypeScript rather than scanning characters because a comment
+ * marker is only a comment in code position: `//` inside a string, a template
+ * text, or a regex literal (`/["']\/\//`) is not one, and a call inside a
+ * `${...}` template expression is real code. Every token's leading trivia
+ * (the gap between its full start and its real start) holds only whitespace and
+ * comments, so those gaps are the complete set of comments in the file.
+ * Used for EDGE EXTRACTION only; sinks and mint/post checks read raw bodies.
+ */
+export function stripComments(src: string): string {
+  const sf = ts.createSourceFile("census.ts", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const chars = src.split("");
+  const blank = (from: number, to: number) => {
+    for (let i = from; i < to; i++) if (chars[i] !== "\n" && chars[i] !== "\r") chars[i] = " ";
+  };
+  const trivia = (from: number, to: number) => {
+    let i = from;
+    while (i < to) {
+      if (src[i] === "/" && src[i + 1] === "/") {
+        let e = i;
+        while (e < to && src[e] !== "\n" && src[e] !== "\r") e++;
+        blank(i, e);
+        i = e;
+      } else if (src[i] === "/" && src[i + 1] === "*") {
+        const close = src.indexOf("*/", i + 2);
+        const e = close === -1 || close + 2 > to ? to : close + 2;
+        blank(i, e);
+        i = e;
+      } else i++;
+    }
+  };
+  const visit = (node: ts.Node) => {
+    if (node.kind >= ts.SyntaxKind.FirstJSDocNode && node.kind <= ts.SyntaxKind.LastJSDocNode) return;
+    const kids = node.getChildren(sf);
+    if (kids.length === 0) {
+      trivia(node.pos, node.getStart(sf));
+      return;
+    }
+    for (const k of kids) visit(k);
+  };
+  visit(sf);
+  return chars.join("");
+}
+
 /** Parses the convex tree into symbols and an import-resolved call graph. */
 export function buildGraph(convexRoot: string): Graph {
   const symbols = new Map<string, SymbolRecord>();
   const perFile = new Map<string, Map<string, string>>();
   const importsOf = new Map<string, Map<string, string>>();
+  const edgeText = new Map<string, string>();
 
   for (const file of walk(convexRoot)) {
     const rel = path.relative(convexRoot, file).replace(/\\/g, "/").replace(/\.ts$/, "");
     const src = fs.readFileSync(file, "utf8");
     const lines = src.split(/\r?\n/);
+    // Comment-free twin of `lines`, same line count, for edge extraction only.
+    const codeLines = stripComments(src).split(/\r?\n/);
 
     // Blind spot 1: edges resolve through real import statements, never by name.
     const imap = new Map<string, string>();
@@ -154,6 +213,7 @@ export function buildGraph(convexRoot: string): Graph {
       else if (/=\s*(internalQuery|query)\s*\(/.test(head)) kind = "query";
       const id = `${rel}.${s.name}`;
       symbols.set(id, { id, file: rel, name: s.name, kind, body, line: s.i + 1 });
+      edgeText.set(id, codeLines.slice(s.i + 1, end).join("\n"));
       nameMap.set(s.name, id);
     });
     perFile.set(rel, nameMap);
@@ -172,7 +232,7 @@ export function buildGraph(convexRoot: string): Graph {
   };
 
   for (const s of symbols.values()) {
-    const body = s.body.split("\n").slice(1).join("\n");
+    const body = edgeText.get(s.id) ?? "";
     const local = perFile.get(s.file)!;
     const imap = importsOf.get(s.file)!;
     const names = new Set<string>();
