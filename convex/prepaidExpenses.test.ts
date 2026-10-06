@@ -1309,8 +1309,11 @@ describe("Phase 3 — runAmortizationNow isolates per-schedule failures and repo
     // action re-run in the same month: the posted schedule must post NOTHING
     // again, and the repaired one must catch up exactly once.
     const { t, orgId, asOwner } = await seedDealer("run-now-replay");
+    // Paid in January of the CURRENT fiscal year (the seeded open period), like the
+    // elapsed-months test above: a fixed year breaks the period and the month count each January.
+    const fiscalYear = new Date().getUTCFullYear();
     const create = (title: string) => asOwner.mutation(api.expenses.create, { idempotencyKey: crypto.randomUUID(),
-      orgId, title, amount: 1200, date: Date.UTC(2026, 0, 1),
+      orgId, title, amount: 1200, date: Date.UTC(fiscalYear, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
     });
     const goodSchedule = await scheduleForExpense(t, await create("Good Insurance"));

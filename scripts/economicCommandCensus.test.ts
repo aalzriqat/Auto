@@ -706,8 +706,10 @@ describe("SCRUM-742 tripwire — call shapes the census cannot see must not appe
   // They are unreachable from any money path today; this keeps that true.
   // Measured 2026-10-06 over 262 non-test sources: (a) zero; (b) zero beyond
   // `Date.now()` (which can neither reach a sink nor hide a call to one).
-  // Function REFERENCES (`ctx.runMutation(internal.…)`, scheduler) are a separate,
-  // untested gap: SCRUM-743.
+  // Function REFERENCES (`ctx.runMutation(internal.…)`, scheduler) are modelled
+  // since SCRUM-743 (blind spot 7). Still UNGUARDED by this tripwire, SCRUM-742:
+  // httpAction route handlers, namespace/default imports, re-exports, and function
+  // values passed uncalled.
   // ~80% of the 262 non-test convex sources measured 2026-10-06.
   const FILE_FLOOR = 210;
   // COUPLING: this must match the analyzer's unexported `walk` in

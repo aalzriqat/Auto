@@ -76,9 +76,11 @@
  *   route handlers (`http.route`), namespace/default imports, re-exports, and
  *   function values passed without being called (other than `hook*` names), and
  *   a function reference held in a variable.
- *   No SCRUM-742 shape is on a current money path; the `SCRUM-742 tripwire` test
- *   in `economicCommandCensus.test.ts` fails if one appears in convex/. The fix
- *   is a TypeScript-AST rewrite of edge extraction (SCRUM-742).
+ *   The `SCRUM-742 tripwire` test in `economicCommandCensus.test.ts` guards ONLY
+ *   the two regex call shapes (a) and (b) above, and fails if one appears in
+ *   convex/; none is on a current money path. The unguarded gaps (HTTP routes,
+ *   imports/re-exports, uncalled values, variable-held references) have no
+ *   tripwire. The fix is a TypeScript-AST rewrite of edge extraction (SCRUM-742).
  *
  * The design OBJECTIVE is an OVER-INCLUSIVE bias: a false positive costs one
  * explicit classification; a false negative hides a command that can duplicate

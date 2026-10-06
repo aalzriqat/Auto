@@ -98,6 +98,7 @@ export interface InvariantDefinition {
 }
 
 const SCRUM_342 = "SCRUM-342";
+const SCRUM_742 = "SCRUM-742";
 const SCRUM_743 = "SCRUM-743";
 const RUNTIME_EVIDENCE: readonly EvidenceMechanism[] = ["EXECUTION", "PREVIEW"];
 const ANY_EXECUTABLE_EVIDENCE: readonly EvidenceMechanism[] = [
@@ -590,7 +591,7 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       deferred(
         "BOUNDARY",
         "The census resolves imported calls and internal.*/api.* function references from public mutations and actions, but not httpAction route handlers, namespace/default imports, re-exports, or function values passed uncalled; SCRUM-742 closes those with an AST resolver.",
-        SCRUM_743
+        SCRUM_742
       ),
     ],
     proofs: proofSet("ECON-1", [
