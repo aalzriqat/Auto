@@ -1610,7 +1610,9 @@ const dealOverviewMessages = defineBilingualMessages({
     "employee-paid configured fees not yet recorded",
     "الرسوم المضبوطة التي يدفعها الموظف ولم تُسجَّل بعد",
   ],
-  CustodyRecommendedNotConfigured: ["No configured fees to base a recommendation on.", "لا رسوم مضبوطة لبناء توصية عليها."],
+  // SCRUM-440 (Sol ruling B): neutral guidance, never a claim that no fees exist —
+  // the finance company's fees are held as Execution Fees, not as templates.
+  CustodyRecommendedNotConfigured: ["No amount is suggested for this deal. Enter the planned handover amount.", "لا يوجد مبلغ مقترح لهذه الصفقة. أدخل مبلغ التسليم المخطط."],
   CustodyRecommendedNoEmployeeFees: ["The company's configured fees are not paid by an employee.", "رسوم الشركة المضبوطة لا يدفعها موظف."],
   CustodyRecommendedUnreadable: ["Withheld: a configured fee amount could not be read.", "محجوب: تعذّرت قراءة مبلغ رسم مضبوط."],
   CustodyIssueCash: ["Hand over cash", "تسليم نقد"],
