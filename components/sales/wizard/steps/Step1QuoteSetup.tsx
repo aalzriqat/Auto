@@ -50,6 +50,8 @@ const COMPANY_REQUIRED_ERROR = "companyRequired";
 interface Step1QuoteSetupProps {
   paymentType: PaymentType;
   initialData: WizardData;
+  /** SCRUM-746: opens the picker's "source a vehicle" form pre-filled (the "source another like this" launch). Not part of the persisted draft. */
+  initialSourceData?: WizardData["sourceLikeVehicle"];
   onNext: (data: WizardData) => void;
 }
 
@@ -60,6 +62,7 @@ interface Step1QuoteSetupProps {
 export default function Step1QuoteSetup({
   paymentType,
   initialData,
+  initialSourceData,
   onNext,
 }: Step1QuoteSetupProps) {
   const { activeOrgId } = useOrg();
@@ -450,6 +453,7 @@ export default function Step1QuoteSetup({
                       if (!activeOrgId) throw new Error("No org selected");
                       return await createSourced({ orgId: activeOrgId, ...data });
                     }}
+                    initialSourceData={initialSourceData}
                   />
                 ) : (
                   <VehiclePicker
@@ -469,7 +473,7 @@ export default function Step1QuoteSetup({
                       });
                       return newId;
                     }}
-                    initialSourceData={initialData.sourceLikeVehicle}
+                    initialSourceData={initialSourceData}
                   />
                 )}
               </FormControl>

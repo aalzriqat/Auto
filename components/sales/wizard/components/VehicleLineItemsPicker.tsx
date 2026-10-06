@@ -13,6 +13,8 @@ interface VehicleLineItemsPickerProps {
   items: VehicleLineItem[];
   onChange: (items: VehicleLineItem[]) => void;
   onSourceVehicle?: (data: SourceVehicleData) => Promise<string>;
+  /** SCRUM-746: opens the first row's "source a vehicle" form pre-filled. */
+  initialSourceData?: Partial<SourceVehicleData>;
 }
 
 /**
@@ -28,6 +30,7 @@ export function VehicleLineItemsPicker({
   items,
   onChange,
   onSourceVehicle,
+  initialSourceData,
 }: VehicleLineItemsPickerProps) {
   const { t } = useLanguage();
   const currency = useMoneyDisplay();
@@ -56,6 +59,7 @@ export function VehicleLineItemsPicker({
               value={item.vehicleId}
               onChange={(id, price) => updateItem(index, id, price)}
               onSourceVehicle={onSourceVehicle}
+              initialSourceData={index === 0 ? initialSourceData : undefined}
             />
           </div>
           {items.length > 1 && (
