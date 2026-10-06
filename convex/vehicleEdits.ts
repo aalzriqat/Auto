@@ -25,6 +25,7 @@ import {
   assertOnAccountHasCreditor,
   assertVehicleIntake,
   assertVehicleSourceShapeOnUpdate,
+  parseVehicleSourceType,
   requestedVehicleSourceTypeChange,
   throwVehicleSourceShape,
 } from "./utils/vehicleSourceShape";
@@ -364,10 +365,23 @@ export const resolve = mutation({
       throwVehicleSourceShape("VEHICLE_OWNERSHIP_CHANGE_NOT_REQUESTABLE");
     }
 
+    // SCRUM-717: the approver's decision only FILLS a missing classification. A
+    // request that already names a recognised sourceType carries the requester's
+    // explicit, validated ownership; replacing it would be an unrecorded override.
+    // Refused before the status patch so nothing is written.
+    if (args.ownership && parseVehicleSourceType(request.payload.sourceType) !== null) {
+      throwVehicleSourceShape("VEHICLE_OWNERSHIP_ALREADY_CLASSIFIED");
+    }
+    const appliedOwnership = args.ownership && args.status === "APPROVED" ? args.ownership : null;
+
     await ctx.db.patch(request._id, {
       status: args.status,
       resolvedBy: user._id,
       resolvedAt: Date.now(),
+      // The approval record states the ownership that was actually applied.
+      ...(appliedOwnership
+        ? { payload: { ...stripOwnershipFields(request.payload as VehicleEditPayload), ...appliedOwnership } }
+        : {}),
     });
 
     if (args.status === "APPROVED") {

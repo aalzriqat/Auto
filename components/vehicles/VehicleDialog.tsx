@@ -554,6 +554,13 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                           disabled={!!vehicle && type !== storedSourceType && !!ownershipChangeBlocked}
                           onClick={() => {
                             field.onChange(type);
+                            // A saved SOURCED car's stored purchasePrice is its
+                            // consignment-cost mirror, not a purchase. Buying it out
+                            // starts from no price, so the agreed amount must be typed;
+                            // choosing consignment again restores the stored mirror.
+                            if (vehicle && storedSourceType === "SOURCED") {
+                              form.setValue("purchasePrice", type === "STOCK" ? 0 : vehicle.purchasePrice);
+                            }
                             if (type === "SOURCED") {
                               form.setValue("status", "SOURCING");
                             } else if (form.getValues("status") === "SOURCING") {

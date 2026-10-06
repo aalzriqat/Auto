@@ -398,6 +398,18 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Buying out a consignment vehicle needs the agreed purchase price (greater than zero) and how it was paid. For a purchase on account, also enter the supplier's name.",
     "شراء مركبة برسم البيع يتطلب سعر الشراء المتفق عليه (أكبر من صفر) وطريقة الدفع. وللشراء على الحساب أدخل أيضاً اسم المورّد.",
   ],
+  ServerError_VEHICLE_OWNERSHIP_ALREADY_CLASSIFIED: [
+    "This request already states how the vehicle is held (consignment or owned), so the approver can't override it. Reject the request and ask for a corrected one.",
+    "هذا الطلب يحدد مسبقاً صفة المركبة (برسم البيع أو مملوكة)، لذلك لا يمكن للمعتمِد تجاوزها. ارفض الطلب واطلب طلباً مصححاً.",
+  ],
+  ServerError_VEHICLE_OWNERSHIP_FLIP_LANDED_COSTS: [
+    "This vehicle carries landed costs that have been posted or queued to accounting as owned inventory, so it can't be changed to consignment. To fix a mistaken entry, ask your accountant for a reversal.",
+    "تحمل هذه المركبة تكاليف إضافية تم ترحيلها أو وضعها في قائمة الترحيل المحاسبي كمخزون مملوك، لذلك لا يمكن تحويلها إلى برسم البيع. لتصحيح إدخال خاطئ اطلب من المحاسب عكس القيد.",
+  ],
+  ServerError_VEHICLE_BUYOUT_SOURCED_LANDED_COSTS: [
+    "This consignment vehicle has landed costs recorded against it. Remove them before buying the vehicle out, so the purchase is capitalized once at the agreed price.",
+    "هذه المركبة برسم البيع مسجل عليها تكاليف إضافية. أزلها قبل شراء المركبة، ليُسجَّل الشراء مرة واحدة بالسعر المتفق عليه.",
+  ],
   ServerError_VEHICLE_OWNERSHIP_FIELDS_LOCKED: [
     "A vehicle's ownership type, consignment supplier, supplier cost, purchase price and payment method drive accounting and can't be changed in the data browser. Use the vehicle's edit screen or the cost-correction workflow.",
     "نوع ملكية المركبة ومورّد البيع برسم البيع وتكلفة المورّد وسعر الشراء وطريقة الدفع تؤثر على المحاسبة ولا يمكن تغييرها من متصفح البيانات. استخدم شاشة تعديل المركبة أو إجراء تصحيح التكلفة.",

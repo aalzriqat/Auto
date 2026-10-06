@@ -511,11 +511,12 @@ export const exportData = query({
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
     const canViewCostPrice = role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
 
-    const vehicles = await ctx.db
+    const orgVehicles = await ctx.db
       .query("vehicles")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.neq(q.field("isDeleted"), true))
       .collect();
+    // In-memory filter of the already-loaded rows (not a database scan).
+    const vehicles = orgVehicles.filter((vehicle) => vehicle.isDeleted !== true);
 
     const companies = await ctx.db
       .query("financeCompanies")
@@ -542,8 +543,10 @@ export const exportData = query({
     return {
       vehicles: vehicles.map((vehicle) => {
         const sourceType = (vehicle.sourceType ?? "STOCK") as "STOCK" | "SOURCED";
-        // "Cost" carries purchasePrice for stock and sourceCost for sourced.
-        const cost = canViewCostPrice ? vehicle.purchasePrice ?? vehicle.sourceCost ?? null : null;
+        // "Cost" and "Sourced From" are chosen by sourceType, so an owned row never
+        // exports a stale consignment cost or supplier left on it.
+        const costValue = sourceType === "SOURCED" ? vehicle.sourceCost ?? vehicle.purchasePrice : vehicle.purchasePrice;
+        const cost = canViewCostPrice ? costValue ?? null : null;
         return {
           make: vehicle.make,
           model: vehicle.model,
@@ -554,7 +557,7 @@ export const exportData = query({
           cost,
           sellingPrice: vehicle.sellingPrice,
           sourceType,
-          sourcedFrom: vehicle.sourcedFromName ?? "",
+          sourcedFrom: sourceType === "SOURCED" ? vehicle.sourcedFromName ?? "" : "",
           valuations: valuationsByVehicle.get(vehicle._id) ?? [],
         };
       }),
@@ -1117,6 +1120,57 @@ export async function hasVehicleAcquisitionAccountingExposure(
   return pendingPost !== null;
 }
 
+/**
+ * True once a landed-cost capitalization (posted or queued) exists for the
+ * vehicle. Together with `hasVehicleAcquisitionAccountingExposure` this is the
+ * vehicle's owned-inventory exposure: a landed cost debits Vehicle Inventory for
+ * a car the dealership owns, and can exist without any acquisition (an owned car
+ * entered without a purchase price). `landedCostTotal` is NOT evidence, because
+ * it can be edited back to 0 after the posting, so the accounting records
+ * themselves are read, by index range on the source and idempotency prefixes
+ * that `hookVehicleLandedCostCapitalized` writes.
+ *
+ * Deliberately separate from `hasVehicleAcquisitionAccountingExposure`, whose
+ * semantics `accountingMigration.ts` depends on. The flip guard in `update`
+ * checks the two separately because each has its own coded refusal.
+ */
+export async function hasVehicleLandedCostAccountingExposure(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<boolean> {
+  const sourcePrefix = `${vehicleId}_`;
+  const postedLandedCost = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", "vehicleLandedCosts").gte("sourceId", sourcePrefix).lt("sourceId", `${sourcePrefix}￿`)
+    )
+    .first();
+  if (postedLandedCost !== null) return true;
+
+  const keyPrefix = `landed_cost_${vehicleId}_`;
+  const queuedLandedCost = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", orgId).gte("idempotencyKey", keyPrefix).lt("idempotencyKey", `${keyPrefix}￿`)
+    )
+    .first();
+  return queuedLandedCost !== null;
+}
+
+/** True when the vehicle's landed-cost row holds any non-zero item (offsetting items included). */
+async function hasNonZeroLandedCostItems(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<boolean> {
+  const row = await ctx.db
+    .query("vehicleLandedCosts")
+    .withIndex("by_org_vehicle", (q) => q.eq("orgId", orgId).eq("vehicleId", vehicleId))
+    .first();
+  return (row?.items ?? []).some((item) => item.amount !== 0);
+}
+
 /** The refusal for a direct edit of a posted purchase cost (vehicles.update and vehicleEdits.resolve). */
 export function throwVehicleCostPosted(): never {
   throwAppError(
@@ -1330,12 +1384,23 @@ export const update = mutation({
     if (changedSourceType === "SOURCED" && (await getAcquisitionExposure())) {
       throwVehicleSourceShape("VEHICLE_OWNERSHIP_FLIP_POSTED");
     }
+    // The same orphaning applies to a posted or queued landed-cost capitalization,
+    // which debits Vehicle Inventory with or without any acquisition.
+    if (changedSourceType === "SOURCED" && (await hasVehicleLandedCostAccountingExposure(ctx, args.orgId, args.vehicleId))) {
+      throwVehicleSourceShape("VEHICLE_OWNERSHIP_FLIP_LANDED_COSTS");
+    }
     // SOURCED -> STOCK is a buy-out: it capitalizes inventory and moves money or
     // opens a payable, so it needs finance authority and the NEGOTIATED amount and
     // settlement stated in this very patch — never the mirrored consignment cost.
     if (changedSourceType === "STOCK") {
       await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES, PERMISSIONS.MANAGE_FINANCE]);
       if (!ownedPurchaseTermsComplete(args)) throwVehicleSourceShape("VEHICLE_BUYOUT_TERMS_REQUIRED");
+      // Landed costs entered against a consignment car are informational and never
+      // capitalized; bought out afterwards they would be unbooked inventory cost
+      // (and offsetting items hide behind a zero total). Refused before any write.
+      if (await hasNonZeroLandedCostItems(ctx, args.orgId, args.vehicleId)) {
+        throwVehicleSourceShape("VEHICLE_BUYOUT_SOURCED_LANDED_COSTS");
+      }
     }
 
     // If VIN is being changed, check for duplicates
@@ -1363,9 +1428,13 @@ export const update = mutation({
     for (const [key, value] of Object.entries(updates)) {
       if (value !== undefined) {
         const newValue = key === "vin" ? (value as string).trim().toUpperCase()
-          : key === "make" || key === "model" || key === "color"
+          : key === "make" || key === "model" || key === "color" || key === "sourcedFromName"
             ? (value as string).trim()
             : value;
+        // A blank supplier name is no claim at all: never persist it (on an owned
+        // car it would be residue; on a consignment car the shape guard already
+        // refused it above).
+        if (key === "sourcedFromName" && newValue === "") continue;
 
         if (key === "imageIds") {
           const oldImages = JSON.stringify(vehicle.imageIds || []);
@@ -1455,6 +1524,13 @@ export const update = mutation({
 
       patch.updatedBy = user._id;
       patch.updatedAt = Date.now();
+      // A buy-out ends the consignment: its supplier and entitlement now live only
+      // in the conversion snapshot written above. Setting them to undefined removes
+      // the fields, so an owned car never keeps consignment residue.
+      if (previousSourceType === "SOURCED" && nextSourceType === "STOCK") {
+        patch.sourcedFromName = undefined;
+        patch.sourceCost = undefined;
+      }
       await ctx.db.patch(args.vehicleId, patch);
 
       // SCRUM-700 N1: a status written here must still honour a live

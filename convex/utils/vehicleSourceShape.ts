@@ -42,6 +42,12 @@ export const VEHICLE_SOURCE_SHAPE_MESSAGES = {
     "Changing how a vehicle is held (consignment or owned) can't go through an approval request. A finance user makes this change directly from the vehicle's edit screen.",
   VEHICLE_BUYOUT_TERMS_REQUIRED:
     "Buying out a consignment vehicle needs the agreed purchase price (greater than zero) and how it was paid. For a purchase on account, also enter the supplier's name.",
+  VEHICLE_OWNERSHIP_ALREADY_CLASSIFIED:
+    "This request already states how the vehicle is held (consignment or owned), so the approver can't override it. Reject the request and ask for a corrected one.",
+  VEHICLE_OWNERSHIP_FLIP_LANDED_COSTS:
+    "This vehicle carries landed costs that have been posted or queued to accounting as owned inventory, so it can't be changed to consignment. To fix a mistaken entry, ask your accountant for a reversal.",
+  VEHICLE_BUYOUT_SOURCED_LANDED_COSTS:
+    "This consignment vehicle has landed costs recorded against it. Remove them before buying the vehicle out, so the purchase is capitalized once at the agreed price.",
   VEHICLE_OWNERSHIP_FIELDS_LOCKED:
     "A vehicle's ownership type, consignment supplier, supplier cost, purchase price and payment method drive accounting and can't be changed in the data browser. Use the vehicle's edit screen or the cost-correction workflow.",
   VEHICLE_SOURCED_ACQUISITION_REFUSED:
