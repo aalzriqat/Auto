@@ -56,8 +56,8 @@ async function open(page: Page, orgId: string, route: string) {
 
 const text = (l: Locator) => l.textContent({ timeout: 2_000 }).catch(() => null);
 
-/** The one Leads card, found by structure (heading + 4xl headline + green "still active" line). */
-const LEADS_CARD = "xpath=//div[h3[contains(@class,'uppercase')]][div[contains(@class,'text-4xl')]][div[contains(@class,'16a34a')]]";
+/** The one Leads card (the Vehicles card has the same shape, so structure alone is not unique). */
+const LEADS_CARD = "[data-testid='dashboard-leads-card']";
 
 async function readDashboard(page: Page, orgId: string): Promise<Reading[]> {
   await open(page, orgId, "/dashboard");
@@ -68,10 +68,10 @@ async function readDashboard(page: Page, orgId: string): Promise<Reading[]> {
     const tiles = card.locator("div.flex.gap-6 > div > div.text-xl");
     if ((await tiles.count()) !== 2) return null;
     const read = [
-      num(await text(card.locator("> div.text-4xl"))),
+      num(await text(card.locator("div.text-4xl"))),
       num(await text(tiles.nth(0))),
       num(await text(tiles.nth(1))),
-      num(await text(card.locator("> div[class*='16a34a']"))),
+      num(await text(card.locator("div[class*='16a34a']"))),
     ];
     return read.some((v) => v === null) ? null : read;
   });
@@ -94,26 +94,37 @@ async function readNotifications(page: Page, orgId: string): Promise<Reading[]> 
   const feed = page.locator("div.border.rounded-md.divide-y").first();
   const feedVisible = await feed.waitFor({ state: "visible", timeout: 15_000 }).then(() => true, () => false);
   const more = page.getByRole("button", { name: /load more|المزيد/i });
-  // Every page is read: stop only when the control is gone and the row count stopped changing.
-  for (let i = 0, rows = -1; feedVisible && i < 200; i++) {
-    const now = await feed.locator("> *").count();
-    if (!(await more.isVisible().catch(() => false)) && now === rows) break;
-    rows = now;
-    if (await more.isVisible().catch(() => false)) await more.click();
-    await page.waitForLoadState("networkidle").catch(() => undefined);
+  const rowCount = () => feed.locator("> *").count();
+  // The feed div exists while the first page is still loading; wait for a row or the empty state.
+  if (feedVisible) await expect.poll(rowCount, { timeout: 15_000 }).toBeGreaterThan(0).catch(() => undefined);
+  // Only the newest 50 rows are compared, so load until 50 are present or no more pages arrive.
+  for (let i = 0; feedVisible && i < 20; i++) {
+    const before = await rowCount();
+    if (before >= 50) break;
+    // Load more disappears while a page is in flight: wait briefly for it, else the feed is complete.
+    const appeared = await more.waitFor({ state: "visible", timeout: 3_000 }).then(() => true, () => false);
+    if (!appeared) break;
+    await more.click();
+    await expect.poll(rowCount, { timeout: 10_000 }).toBeGreaterThan(before).catch(() => undefined);
   }
   const snapshot = feedVisible
     ? await settled(async () => {
         const rows = feed.locator("> *");
-        const total = await rows.count();
-        if (total === 0) return null;
-        // The bell shows the newest 50 non-archived rows (convex/notifications.ts list), so compare against those.
-        const unreadAmongNewest50 = await rows.evaluateAll(
-          (els) => els.slice(0, 50).filter((el) => el.querySelector("svg.lucide-check") !== null).length,
-        );
-        const badge = page.locator("button:has(svg.lucide-bell) > div").first();
-        const bell = (await badge.count()) === 0 ? 0 : num(await text(badge));
-        return bell === null ? null : { bell, unread: unreadAmongNewest50 };
+        if ((await rows.count()) === 0) return null;
+        // Self-check: every inbox row carries an Archive control; a lone child without one is the empty state.
+        // Anything else means these selectors no longer describe the screen: UNREADABLE, not zero.
+        const inbox = await rows.evaluateAll((els) => {
+          const withArchive = els.filter((el) => el.querySelector("svg.lucide-archive") !== null);
+          if (withArchive.length !== els.length) return els.length === 1 && withArchive.length === 0 ? { unread: 0 } : null;
+          // The bell shows the newest 50 non-archived rows (convex/notifications.ts list).
+          return { unread: els.slice(0, 50).filter((el) => el.querySelector("svg.lucide-check") !== null).length };
+        });
+        if (inbox === null) return null;
+        const bellButton = page.locator("button:has(svg.lucide-bell)");
+        if ((await bellButton.count()) !== 1) return null;
+        const badge = bellButton.locator("> div");
+        const bell = (await badge.count()) === 0 ? 0 : num(await text(badge.first()));
+        return bell === null ? null : { bell, unread: inbox.unread };
       })
     : null;
   return [
