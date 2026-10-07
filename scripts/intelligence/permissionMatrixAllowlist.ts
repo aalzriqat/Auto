@@ -80,7 +80,7 @@ export const NO_GUARD_ALLOWLIST: AllowEntry[] = [
     "convex/support.ts:sendReply",
   ]),
   { id: "convex/prepaidExpenses.ts:runAmortizationNow", reason: "action delegating to listActiveForManualRun, which requires MANAGE_FINANCE (read by the PR #512 reviewer, prepaidExpenses.ts:556)" },
-  { id: "convex/subscriptions.ts:requestUpgrade", reason: "action delegating to _requireMemberOrg (read by the PR #512 reviewer)" },
+  { id: "convex/subscriptions.ts:requestUpgrade", reason: "action delegating to _requireMemberOrg, which is member-only (requireTenantAuth with no permission; read by the PR #512 reviewer, subscriptions.ts:731)" },
   { id: "convex/organizations.ts:listMine", reason: SELF },
   { id: "convex/marketplaceListings.ts:getMyListings", reason: "inline ctx.auth identity check, seller-scoped (read)" },
   { id: "convex/marketplaceListings.ts:getListingById", reason: "LIVE listings are public; non-LIVE only to the owner or a super-admin (read)" },
@@ -88,7 +88,7 @@ export const NO_GUARD_ALLOWLIST: AllowEntry[] = [
   { id: "convex/sales.ts:listCommissionsPaginated", reason: "delegates to commissionPage(), which calls requireTenantAuth with VIEW_COMMISSIONS (convex/sales.ts:1308, read)" },
   { id: "convex/dealWorkspace.ts:financedDealCockpit", reason: "authorization delegated to api.applications.dealCockpit through ctx.runQuery (documented at dealWorkspace.ts:124), plus its own requireOwnedRow (read)" },
   { id: "convex/subscriptions.ts:getShowPricing", reason: "no guard at all; returns a global display flag (reviewer-read). Harmless today, listed so it cannot grow silently" },
-  ...entries("UNRULED: unauthenticated mutation gated only by a public id; allowContact and acceptOffer create a lead in a dealer's pipeline (reviewer-read, marketplaceBuyerActions.ts:126-179)", [
+  ...entries("UNRULED: unauthenticated mutation gated by a public id (allowContact and acceptOffer also by the buyer's phone); those two create a lead in a dealer's pipeline (reviewer-read, marketplaceBuyerActions.ts:126-179)", [
     "convex/marketplaceBuyerActions.ts:shortlistOffer",
     "convex/marketplaceBuyerActions.ts:declineOffer",
     "convex/marketplaceBuyerActions.ts:allowContact",
@@ -147,7 +147,7 @@ export const MEMBER_ONLY_ALLOWLIST: AllowEntry[] = [
 
 /** guard === "inline": no permission argument, but the handler reads PERMISSIONS.* itself. */
 export const INLINE_ALLOWLIST: AllowEntry[] = [
-  { id: "convex/applications.ts:registerExpectedPayment", reason: "reads REGISTER_EXPECTED_PAYMENT / MANAGE_FINANCE after auth (inline check at applications.ts:163, read by the reviewer)" },
+  { id: "convex/applications.ts:registerExpectedPayment", reason: "reads REGISTER_EXPECTED_PAYMENT / MANAGE_FINANCE after auth (inline check at applications.ts:4160-4168, read by the reviewer)" },
   ...entries("PERMISSIONS.* is read inside the handler; the check itself NOT individually read", [
     "convex/dashboard.ts:stats",
     "convex/dashboard.ts:dataQualityStats",

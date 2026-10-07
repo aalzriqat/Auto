@@ -2,7 +2,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { PERMISSIONS } from "../../convex/utils/permissions";
-import { extractGuards, fnId, type FnGuard, type Guard } from "./permissionMatrix";
+import ts from "typescript";
+import { BUILDERS, extractGuards, fnId, type FnGuard, type Guard } from "./permissionMatrix";
 import { AUTHED_ONLY_ALLOWLIST, INLINE_ALLOWLIST, MEMBER_ONLY_ALLOWLIST, NO_GUARD_ALLOWLIST, type AllowEntry } from "./permissionMatrixAllowlist";
 
 const convexDir = join(__dirname, "..", "..", "convex");
@@ -31,6 +32,9 @@ export const g = mutation({ handler: async (ctx) => { await requireAuth(ctx); } 
 export const h = action({ handler: async (ctx) => { await ctx.runMutation(internal.x.y, {}); } });
 export const i =
   mutation({ handler: async () => {} });
+export const j = socialBulkMutation({ handler: async () => {} });
+export const k = mutation({ handler: async (ctx, a) => { await requireOwner(ctx, a.orgId); } });
+export const l = mutation({ handler: async (ctx, a) => { await requireTenantAuth(ctx, a.orgId, [...AUTH_LIST]); } });
 `),
     ).toEqual([
       ["a", "mutation", "permission", ["EDIT_LEADS", "VIEW_LEADS"]],
@@ -42,6 +46,9 @@ export const i =
       ["g", "mutation", "authed", []],
       ["h", "action", "none", []],
       ["i", "mutation", "none", []],
+      ["j", "mutation", "none", []],
+      ["k", "mutation", "owner", []],
+      ["l", "mutation", "permission", ["$AUTH_LIST"]],
     ]);
   });
 
@@ -77,9 +84,27 @@ describe("permission matrix of the real convex/ directory (SCRUM-616)", () => {
   const all = scan();
 
   it("sees every export a plain text search sees (the scanner cannot go blind)", () => {
-    const broad = sources().reduce((n, s) => n + [...s.text.matchAll(/^export const \w+\s*=\s*(query|mutation|action)\(/gm)].length, 0);
+    const names = Object.keys(BUILDERS).join("|");
+    const broad = sources().reduce((n, s) => n + [...s.text.matchAll(new RegExp(`^export const \\w+\\s*=\\s*(${names})\\(`, "gm"))].length, 0);
     expect(all.length).toBe(broad);
     expect(all.length).toBeGreaterThan(600);
+  });
+
+  it("convex/functions.ts exports no public builder the scanner does not know (PR #512 NEW-1)", () => {
+    const text = readFileSync(join(convexDir, "functions.ts"), "utf8");
+    const sf = ts.createSourceFile("functions.ts", text, ts.ScriptTarget.Latest, true);
+    const exported = sf.statements.flatMap((s) =>
+      ts.isVariableStatement(s) && s.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
+        ? s.declarationList.declarations.map((d) => d.name.getText(sf))
+        : [],
+    );
+    expect(exported.length).toBeGreaterThan(2);
+    // `internal*` builders register private functions; every other exported builder is public.
+    expect(exported.filter((n) => !n.startsWith("internal") && !(n in BUILDERS))).toEqual([]);
+  });
+
+  it("the scanner sees the socialBulkMutation export setConversationVehicle", () => {
+    expect(all.find((g) => fnId(g) === "convex/socialInbox.ts:setConversationVehicle")?.guard).toBe("permission");
   });
 
   it("every PERMISSIONS key a guard names exists in the catalogue", () => {
@@ -99,13 +124,20 @@ describe("permission matrix of the real convex/ directory (SCRUM-616)", () => {
   it("every export that reads PERMISSIONS inline is listed on purpose", () => exact("inline", INLINE_ALLOWLIST));
   it("every export open to any signed-in user of any org is listed on purpose", () => exact("authed", AUTHED_ONLY_ALLOWLIST));
 
-  it("every mutation in a money file carries a permission or platform guard, apart from the retired stubs", () => {
+  it("every mutation in a money file carries a permission, platform or owner guard, apart from the retired stubs", () => {
     const moneyFile =
-      /^convex\/(accounting\w*|ledger\w*|glPosting|financeCompanyForward|financingEconomics|dealUnwind|deposits?\w*|payments?\w*|collections?\w*|payroll\w*|commissions?\w*|cashDrawer|expenses|transactions|settlement\w*|refunds?\w*|invoices?\w*|receipts?\w*)\.ts$/;
+      /^convex\/(accounting\w*|ledger\w*|glPosting|financeCompanyForward|financingEconomics|dealUnwind|deposits?\w*|payments?\w*|collections?\w*|payroll\w*|commissions?\w*|cashDrawer|expenses|transactions|settlement\w*|refunds?\w*|invoices?\w*|receipts?\w*|applications|sales|quotes|financeDealCosts|prepaidExpenses|bankReconciliation|bankAccounts|chartOfAccounts|fixedAssets|partnerEquity|claims|supplierCostRecoveries|sourcingPayables|supplierReceivables|finance)\.ts$/;
     const money = all.filter((g) => g.kind === "mutation" && moneyFile.test(g.file));
     expect(money.length).toBeGreaterThan(20);
-    const stubs = new Set(["convex/transactions.ts:add", "convex/transactions.ts:update", "convex/transactions.ts:remove", "convex/accountingMigration.ts:migrateUnpostedTransactions"]);
-    const offenders = money.filter((g) => g.guard !== "permission" && g.guard !== "platform" && !stubs.has(fnId(g)));
+    const stubs = new Set([
+      "convex/transactions.ts:add",
+      "convex/transactions.ts:update",
+      "convex/transactions.ts:remove",
+      "convex/accountingMigration.ts:migrateUnpostedTransactions",
+      // Checks REGISTER_EXPECTED_PAYMENT / MANAGE_FINANCE inline after auth (applications.ts:4160-4168).
+      "convex/applications.ts:registerExpectedPayment",
+    ]);
+    const offenders = money.filter((g) => !["permission", "platform", "owner"].includes(g.guard) && !stubs.has(fnId(g)));
     expect(offenders.map((g) => `${fnId(g)} (${g.guard})`)).toEqual([]);
   });
 });

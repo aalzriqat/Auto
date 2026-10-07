@@ -2,16 +2,22 @@ import ts from "typescript";
 
 /**
  * Tool-enumerated permission matrix (SCRUM-616, SCRUM-760 gate G6): for every
- * public Convex query / mutation / action, which guard its OWN handler calls.
+ * public Convex query / mutation / action, which guard calls appear in its OWN handler.
  * Read from the TypeScript syntax tree, never typed from memory. Pure: callers
  * pass file text in.
  *
  * Only the exported builder call's own subtree is inspected, so a neighbouring
- * export, an internal function or a comment can never lend it a guard.
+ * export, an internal function or a comment can never lend it a guard. It proves a
+ * guard call is PRESENT in the handler, not that it runs on every path (a guard in a
+ * dead branch, a swallowed try, or after a write still counts), and a permission list
+ * is not pinned: changing the keys keeps the class "permission". When several
+ * requireTenantAuth calls exist their keys are merged, which can read as "needs all"
+ * when either suffices.
  *
  *  - "permission": requireTenantAuth(ctx, org, <permissions>) — a literal list yields
  *                  PERMISSIONS keys, a named constant yields "$NAME"
- *  - "platform":   requireSuperAdmin / requireSupportAgent / requireOwner / requireRealOwner
+ *  - "platform":   requireSuperAdmin / requireSupportAgent
+ *  - "owner":      requireOwner / requireRealOwner (organization owner, not a cross-tenant role)
  *  - "member":     requireTenantAuth(ctx, org) with no permission argument, no PERMISSIONS reference
  *  - "inline":     requireTenantAuth(ctx, org) with no permission argument, but the handler reads
  *                  PERMISSIONS.X itself (the check is not proven by this scanner)
@@ -21,7 +27,7 @@ import ts from "typescript";
  * Validation helpers (assertX, requireFeature, requireOwnedRow ...) are NOT guards.
  */
 
-export type Guard = "permission" | "platform" | "member" | "inline" | "authed" | "none";
+export type Guard = "permission" | "platform" | "owner" | "member" | "inline" | "authed" | "none";
 export type Kind = "query" | "mutation" | "action";
 
 export type FnGuard = {
@@ -32,8 +38,14 @@ export type FnGuard = {
   permissions: string[]; // PERMISSIONS keys, e.g. VIEW_LEADS, or "$CONSTANT"
 };
 
-const BUILDERS = new Set<string>(["query", "mutation", "action"]);
-const PLATFORM = new Set(["requireSuperAdmin", "requireSupportAgent", "requireOwner", "requireRealOwner"]);
+/**
+ * Public function builders and the kind each registers. `socialBulkMutation` is the
+ * wrapper exported by convex/functions.ts (PR #512 NEW-1); the test fails if that file
+ * ever exports another public builder that is not listed here.
+ */
+export const BUILDERS: Record<string, Kind> = { query: "query", mutation: "mutation", action: "action", socialBulkMutation: "mutation" };
+const PLATFORM = new Set(["requireSuperAdmin", "requireSupportAgent"]);
+const OWNER = new Set(["requireOwner", "requireRealOwner"]);
 const AUTHED = new Set(["requireAuth", "requireOrCreateAuthenticatedUser"]);
 
 const calleeName = (call: ts.CallExpression): string | undefined =>
@@ -44,6 +56,7 @@ function classify(node: ts.Node, sf: ts.SourceFile): { guard: Guard; permissions
   let permissionCall = false;
   let tenantCall = false;
   let platform = false;
+  let owner = false;
   let authed = false;
   let inlinePermission = false;
 
@@ -61,9 +74,13 @@ function classify(node: ts.Node, sf: ts.SourceFile): { guard: Guard; permissions
           };
           collect(arg);
           if (keys.length > 0) keys.forEach((k) => permissions.add(k));
-          else permissions.add(`$${arg.getText(sf).replace(/^\[?\s*\.\.\./, "").replace(/\]$/, "").trim()}`);
+          else {
+            const text = arg.getText(sf).trim();
+            permissions.add(`$${text.startsWith("[") && text.endsWith("]") ? text.slice(1, -1).replace(/^\s*\.\.\./, "").trim() : text}`);
+          }
         } else tenantCall = true;
       } else if (name && PLATFORM.has(name)) platform = true;
+      else if (name && OWNER.has(name)) owner = true;
       else if (name && AUTHED.has(name)) authed = true;
     }
     if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "PERMISSIONS") inlinePermission = true;
@@ -74,6 +91,7 @@ function classify(node: ts.Node, sf: ts.SourceFile): { guard: Guard; permissions
   const sorted = [...permissions].sort((a, b) => a.localeCompare(b));
   if (permissionCall) return { guard: "permission", permissions: sorted };
   if (platform) return { guard: "platform", permissions: [] };
+  if (owner) return { guard: "owner", permissions: [] };
   if (tenantCall) return { guard: inlinePermission ? "inline" : "member", permissions: [] };
   if (authed) return { guard: "authed", permissions: [] };
   return { guard: "none", permissions: [] };
@@ -89,8 +107,8 @@ export function extractGuards(file: string, source: string): FnGuard[] {
       const init = decl.initializer;
       if (!init || !ts.isCallExpression(init) || !ts.isIdentifier(decl.name)) continue;
       const builder = calleeName(init);
-      if (!builder || !BUILDERS.has(builder)) continue;
-      out.push({ file, name: decl.name.text, kind: builder as Kind, ...classify(init, sf) });
+      if (!builder || !(builder in BUILDERS)) continue;
+      out.push({ file, name: decl.name.text, kind: BUILDERS[builder], ...classify(init, sf) });
     }
   }
   return out;
