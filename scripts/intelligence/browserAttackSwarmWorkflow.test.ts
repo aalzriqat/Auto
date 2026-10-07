@@ -369,6 +369,15 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       "Copy candidate source without git metadata for the writable build",
     );
     expect(String(copy.run ?? "")).toContain("rsync -a --exclude=/.git");
+    // Opus L2: the copy must share no inode with the checkout, the only mount
+    // is the copy, and the copy happens before the build that writes to it.
+    expect(String(copy.run ?? "")).not.toMatch(/--link-dest|--hard-links|--copy-links|--inplace|\s-[a-zA-Z]*[HL]/);
+    expect(dockerOptions[0].match(/--volume\s+("[^"]*"|\S+)|(?:^|\s)-v\s+("[^"]*"|\S+)/g)?.map((v) => v.replace(/^\s*(--volume|-v)\s+/, ""))).toEqual([
+      '"$RUNNER_TEMP/candidate-build-src:/app"',
+    ]);
+    const buildSteps = workflow.jobs["candidate-build"].steps ?? [];
+    expect(buildSteps.indexOf(copy)).toBeGreaterThanOrEqual(0);
+    expect(buildSteps.indexOf(copy)).toBeLessThan(buildSteps.indexOf(build));
     const artifact = step(
       "candidate-build",
       "Stage and hash exact-SHA candidate runtime artifact",
