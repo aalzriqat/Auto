@@ -250,6 +250,7 @@ async function recomputeAndPatchEconomics(
         ? {
             appliedLtvPercent: app.quotationCalculationSnapshot.appliedLtvPercent,
             customerFirstPaymentMinor:
+              app.quoteFirstPaymentCorrectedMinor ??
               app.quotationCalculationSnapshot.customerFirstPaymentMinor,
           }
         : undefined,
@@ -1889,6 +1890,8 @@ export async function applySubmittedQuotation(
     ...(quotationPreviouslyRecorded && !materiallyChanged
       ? {}
       : {
+    // A new snapshot supersedes any earlier first-payment correction.
+    quoteFirstPaymentCorrectedMinor: undefined,
     quotationCalculationSnapshot: {
       mode: args.source,
       targetNetProceedsMinor: targetForSolver,
@@ -2863,21 +2866,18 @@ export const applyQuoteFirstPayment = mutation({
     await ctx.db.patch(app._id, {
       customerFirstPaymentMinor: firstPaymentMinor,
       // The recorded zero was an error, not a quoted figure (the dealer ruled the
-      // quote's down payment was the first payment all along), so the frozen
-      // quote-side baseline carries the corrected value as well. Otherwise the
-      // correction itself reads as a financing-term change and moves the
-      // shortfall by the first-payment delta (SCRUM-766, CodeRabbit). A
-      // SYSTEM_CALCULATED snapshot is the exception: its quotation is the solver's
-      // output at the first payment it was recorded with, so rewriting that input
-      // would make the snapshot claim a first payment the figure never used. It
-      // stays as priced (SCRUM-766, Codex R1).
-      ...(app.quotationCalculationSnapshot && app.quotationCalculationSnapshot.mode !== "SYSTEM_CALCULATED"
-        ? {
-            quotationCalculationSnapshot: {
-              ...app.quotationCalculationSnapshot,
-              customerFirstPaymentMinor: firstPaymentMinor,
-            },
-          }
+      // quote's down payment was the first payment all along), so the quote-side
+      // baseline carries the corrected value as well. Otherwise the correction
+      // itself reads as a financing-term change and moves the shortfall by the
+      // first-payment delta (SCRUM-766, CodeRabbit). The snapshot is NOT rewritten:
+      // it records the inputs and solver result the quotation was priced from, and
+      // a rewritten input would contradict that result (Codex R1/R2). The
+      // correction is its own field, and only for a dealer-chosen figure - a
+      // SYSTEM_CALCULATED quotation is the solver's output at the zero it was
+      // recorded with, so there the delta stays a visible financing term.
+      ...(app.quotationCalculationSnapshot &&
+      app.quotationCalculationSnapshot.mode !== "SYSTEM_CALCULATED"
+        ? { quoteFirstPaymentCorrectedMinor: firstPaymentMinor }
         : {}),
       // See `economicsRevision` in the schema.
       economicsRevision: (app.economicsRevision ?? 0) + 1,

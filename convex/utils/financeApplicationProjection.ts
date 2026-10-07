@@ -195,6 +195,7 @@ const FIELD_VISIBILITY: Record<
   submittedQuotationOverrideReason: "FINANCE",
   /** The solver's own inputs and result. */
   quotationCalculationSnapshot: "FINANCE",
+  quoteFirstPaymentCorrectedMinor: "FINANCE",
   estimatedDealerBorneExpensesMinor: "FINANCE",
   quotationBufferMinor: "FINANCE",
   dealerEstimateMinor: "FINANCE",

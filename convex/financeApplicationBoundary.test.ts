@@ -858,6 +858,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
         "targetNetProceedsMinor",
         "companyRuleSnapshot",
         "quotationCalculationSnapshot",
+        "quoteFirstPaymentCorrectedMinor",
         "approvedPurchaseNotes",
         "supplierDisbursedAmountMinor",
         "supplierDisbursementReference",

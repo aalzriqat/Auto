@@ -2939,6 +2939,11 @@ export default defineSchema({
     // Mode, inputs, solver result, rule version and override, frozen at the
     // moment the quotation was recorded.
     quotationCalculationSnapshot: v.optional(quotationCalculationSnapshotValidator),
+    // The quote-side first payment after `applyQuoteFirstPayment` corrected a
+    // recorded-as-zero one (SCRUM-766). The snapshot above stays exactly as the
+    // solver and the dealer saw it; the NET shortfall reads this ahead of the
+    // snapshot's first payment. Cleared when a quotation is re-recorded.
+    quoteFirstPaymentCorrectedMinor: v.optional(v.number()),
     estimatedDealerBorneExpensesMinor: v.optional(v.number()),
     quotationBufferMinor: v.optional(v.number()),
     submittedQuotationAt: v.optional(v.number()),

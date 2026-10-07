@@ -6540,7 +6540,9 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
     });
     const app = await readApp(seed, applicationId);
     expect(app.customerFirstPaymentMinor).toBe(jod(500));
-    expect(app.quotationCalculationSnapshot?.customerFirstPaymentMinor).toBe(jod(500));
+    // The snapshot stays as the quotation was priced; the correction is its own field.
+    expect(app.quotationCalculationSnapshot?.customerFirstPaymentMinor).toBe(0);
+    expect(app.quoteFirstPaymentCorrectedMinor).toBe(jod(500));
     // Same as a deal quoted with a 500 first payment and approved at 11,500.
     expect(app.netShortfallMinor).toBe(jod(850));
   });
@@ -6596,6 +6598,7 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
     const app = await readApp(seed, applicationId);
     expect(app.customerFirstPaymentMinor).toBe(jod(500));
     expect(app.quotationCalculationSnapshot?.customerFirstPaymentMinor).toBe(0);
+    expect(app.quoteFirstPaymentCorrectedMinor).toBeUndefined();
   });
 
   // Opus L1: the resolver's own guard, independent of the clearing writers. A stale
