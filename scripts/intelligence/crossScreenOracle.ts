@@ -56,9 +56,9 @@ export const FACTS: Fact[] = [
     surfaces: [
       { id: "dashboard.totalLeads", route: "/dashboard", reads: "Total Leads headline" },
       { id: "dashboard.tileNew", route: "/dashboard", reads: "New tile" },
-      { id: "dashboard.tileQualified", route: "/dashboard", reads: "Qualified tile (interested + test drive)" },
+      { id: "dashboard.tileQualified", route: "/dashboard", reads: "second tile (labelled Interested in EN; interested + test drive)" },
     ],
-    caveat: "Other stages have no tile, so the parts may be smaller than the headline; only a part total ABOVE it is a contradiction.",
+    caveat: "Other stages have no tile, so the parts may be smaller than the headline; only a part total ABOVE it is a contradiction. All figures come from one dashboard.stats result, so this is a same-source sanity check, not an independent cross-check.",
   },
   {
     id: "leads.tilesWithinActive",
@@ -67,18 +67,18 @@ export const FACTS: Fact[] = [
     surfaces: [
       { id: "dashboard.stillActive", route: "/dashboard", reads: "\"N still active\" line" },
       { id: "dashboard.tileNew", route: "/dashboard", reads: "New tile" },
-      { id: "dashboard.tileQualified", route: "/dashboard", reads: "Qualified tile (interested + test drive)" },
+      { id: "dashboard.tileQualified", route: "/dashboard", reads: "second tile (labelled Interested in EN; interested + test drive)" },
     ],
   },
   {
     id: "notifications.unread",
-    description: "Unread notifications: the bell badge equals the unread rows on the Notifications page once every page is loaded.",
+    description: "Unread notifications: the bell badge equals the unread rows among the newest 50 non-archived rows of the Notifications page.",
     relation: { kind: "equal" },
     surfaces: [
       { id: "nav.bellBadge", route: "/dashboard", reads: "bell badge (0 when absent)" },
-      { id: "notifications.unreadRows", route: "/notifications", reads: "rows still showing the mark-as-read control, after Load more is exhausted" },
+      { id: "notifications.unreadRows", route: "/notifications", reads: "rows still showing the mark-as-read control, among the first 50 rows after Load more is exhausted" },
     ],
-    caveat: "The bell counts only the newest 75 notifications (notifications.list takes 75) and the page counts all of them, so they diverge once an account holds more than 75.",
+    caveat: "The bell reads notifications.list: the newest 75 rows with archived ones dropped, then cut to 50 (convex/notifications.ts:19-25). The page pages through all non-archived rows, so only its newest 50 are comparable; if more than 25 of an account\u0027s newest 75 are archived the bell sees fewer than 50 and a mismatch is a design limit, not a defect.",
   },
 ];
 
@@ -120,4 +120,4 @@ export function judgeAll(readings: Reading[], facts: Fact[] = FACTS): Verdict[] 
 }
 
 /** True when the run found nothing wrong. UNREADABLE is a failure, never a pass. */
-export const allAgree = (vs: Verdict[]) => vs.every((v) => v.result === "AGREE");
+export const allAgree = (vs: Verdict[]) => vs.length > 0 && vs.every((v) => v.result === "AGREE");

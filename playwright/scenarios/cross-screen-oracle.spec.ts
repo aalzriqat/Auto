@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { FACTS, allAgree, fingerprint, judgeAll, type Reading } from "../../scripts/intelligence/crossScreenOracle";
 import { resolveOrgId } from "../utils";
 import { attest, convexDeploymentOf, servedDeployments } from "./formExplorer/attestedPreview";
@@ -14,8 +14,13 @@ import { attest, convexDeploymentOf, servedDeployments } from "./formExplorer/at
  * explorer. Once opted in, a screen it cannot read is a FAILURE, not a skip
  * (SCRUM-760 R4): a wrong selector must fail loudly, not pass quietly.
  *
- * Readers here are bound to the markup as of main 857eba9db. They have not been
- * exercised against a signed-in preview from this branch.
+ * Readers are structural, never keyed on label text, so the same run covers EN
+ * and AR. A reader returns null (UNREADABLE) unless it observed a loaded and
+ * settled screen: several of these screens render 0 while their query is still
+ * loading, so "0" is only trusted after the value held steady.
+ *
+ * Bound to the markup as of main 857eba9db. Not yet exercised against a
+ * signed-in preview from this branch.
  */
 
 const num = (text: string | null | undefined): number | null => {
@@ -23,39 +28,98 @@ const num = (text: string | null | undefined): number | null => {
   return m ? Number(m[0].replace(/,/g, "")) : null;
 };
 
+const SETTLE_READS = 3;
+const SETTLE_GAP_MS = 1_000;
+const SETTLE_DEADLINE_MS = 30_000;
+
+/** The reader's value once it has been identical SETTLE_READS times in a row; null if it never settles. */
+async function settled<T>(read: () => Promise<T | null>): Promise<T | null> {
+  const deadline = Date.now() + SETTLE_DEADLINE_MS;
+  let last: string | undefined;
+  let streak = 0;
+  let value: T | null = null;
+  while (Date.now() < deadline) {
+    value = await read().catch(() => null);
+    const key = value === null ? undefined : JSON.stringify(value);
+    streak = key !== undefined && key === last ? streak + 1 : key === undefined ? 0 : 1;
+    last = key;
+    if (streak >= SETTLE_READS) return value;
+    await new Promise((r) => setTimeout(r, SETTLE_GAP_MS));
+  }
+  return null;
+}
+
 async function open(page: Page, orgId: string, route: string) {
   await page.goto(`/${orgId}${route}`);
   await page.waitForLoadState("networkidle").catch(() => undefined);
 }
 
+const text = (l: Locator) => l.textContent({ timeout: 2_000 }).catch(() => null);
+
+/** The one Leads card, found by structure (heading + 4xl headline + green "still active" line). */
+const LEADS_CARD = "xpath=//div[h3[contains(@class,'uppercase')]][div[contains(@class,'text-4xl')]][div[contains(@class,'16a34a')]]";
+
 async function readDashboard(page: Page, orgId: string): Promise<Reading[]> {
   await open(page, orgId, "/dashboard");
-  const card = page.locator("h3", { hasText: /leads/i }).first().locator("xpath=..");
-  const big = card.locator("div.text-4xl").first();
-  const tile = (label: RegExp) => card.locator("p", { hasText: label }).first().locator("xpath=preceding-sibling::div[1]");
-  const still = card.locator("div.text-sm.font-medium").filter({ hasText: /\d/ }).first();
-  const bell = page.locator("button:has(svg.lucide-bell) span").first();
+  const figures = await settled(async () => {
+    const cards = page.locator(LEADS_CARD);
+    if ((await cards.count()) !== 1) return null;
+    const card = cards.first();
+    const tiles = card.locator("div.flex.gap-6 > div > div.text-xl");
+    if ((await tiles.count()) !== 2) return null;
+    const read = [
+      num(await text(card.locator("> div.text-4xl"))),
+      num(await text(tiles.nth(0))),
+      num(await text(tiles.nth(1))),
+      num(await text(card.locator("> div[class*='16a34a']"))),
+    ];
+    return read.some((v) => v === null) ? null : read;
+  });
+  const at = (i: number) => (figures ? figures[i] : null);
   return [
-    { surface: "dashboard.totalLeads", value: num(await big.textContent({ timeout: 15_000 }).catch(() => null)) },
-    { surface: "dashboard.tileNew", value: num(await tile(/^\s*new\s*$/i).textContent({ timeout: 5_000 }).catch(() => null)) },
-    { surface: "dashboard.tileQualified", value: num(await tile(/qualified/i).textContent({ timeout: 5_000 }).catch(() => null)) },
-    { surface: "dashboard.stillActive", value: num(await still.textContent({ timeout: 5_000 }).catch(() => null)) },
-    // No badge means zero unread; a missing bell button means unreadable.
-    { surface: "nav.bellBadge", value: (await page.locator("button:has(svg.lucide-bell)").count()) === 0 ? null : num(await bell.textContent({ timeout: 2_000 }).catch(() => "0")) ?? 0 },
+    { surface: "dashboard.totalLeads", value: at(0) },
+    { surface: "dashboard.tileNew", value: at(1) },
+    { surface: "dashboard.tileQualified", value: at(2) },
+    { surface: "dashboard.stillActive", value: at(3) },
   ];
 }
 
+/**
+ * Bell badge and Notifications rows are read from the same page load, so both
+ * come from one settled snapshot. The bell shows no badge at zero, which is
+ * indistinguishable from "still loading" until the feed itself has rendered.
+ */
 async function readNotifications(page: Page, orgId: string): Promise<Reading[]> {
   await open(page, orgId, "/notifications");
+  const feed = page.locator("div.border.rounded-md.divide-y").first();
+  const feedVisible = await feed.waitFor({ state: "visible", timeout: 15_000 }).then(() => true, () => false);
   const more = page.getByRole("button", { name: /load more|المزيد/i });
-  for (let i = 0; i < 200 && (await more.isVisible().catch(() => false)); i++) {
-    await more.click();
+  // Every page is read: stop only when the control is gone and the row count stopped changing.
+  for (let i = 0, rows = -1; feedVisible && i < 200; i++) {
+    const now = await feed.locator("> *").count();
+    if (!(await more.isVisible().catch(() => false)) && now === rows) break;
+    rows = now;
+    if (await more.isVisible().catch(() => false)) await more.click();
     await page.waitForLoadState("networkidle").catch(() => undefined);
   }
-  const feed = page.locator("div.border.rounded-md.divide-y").first();
-  const ready = await feed.waitFor({ state: "visible", timeout: 15_000 }).then(() => true, () => false);
-  // An unread row is the only one that carries the mark-as-read (check) control.
-  return [{ surface: "notifications.unreadRows", value: ready ? await feed.locator("button:has(svg.lucide-check)").count() : null }];
+  const snapshot = feedVisible
+    ? await settled(async () => {
+        const rows = feed.locator("> *");
+        const total = await rows.count();
+        if (total === 0) return null;
+        // The bell shows the newest 50 non-archived rows (convex/notifications.ts list), so compare against those.
+        const unreadAmongNewest50 = await rows.evaluateAll(
+          (els) => els.slice(0, 50).filter((el) => el.querySelector("svg.lucide-check") !== null).length,
+        );
+        const badge = page.locator("button:has(svg.lucide-bell) > div").first();
+        const bell = (await badge.count()) === 0 ? 0 : num(await text(badge));
+        return bell === null ? null : { bell, unread: unreadAmongNewest50 };
+      })
+    : null;
+  return [
+    { surface: "nav.bellBadge", value: snapshot ? snapshot.bell : null },
+    { surface: "notifications.unreadRows", value: snapshot ? snapshot.unread : null },
+  ];
 }
 
 test.describe("Cross-screen consistency oracle (read-only)", () => {
@@ -79,15 +143,13 @@ test.describe("Cross-screen consistency oracle (read-only)", () => {
 
     mkdirSync(testInfo.outputDir, { recursive: true });
     writeFileSync(
-      testInfo.outputPath("cross-screen-scenarios.json"),
+      testInfo.outputPath("cross-screen-observations.json"),
       JSON.stringify(
         verdicts.map((v) => ({
-          id: v.fact,
+          fact: v.fact,
           fingerprint: fingerprint(v),
-          facts: [v.fact],
           surfaces: FACTS.find((f) => f.id === v.fact)?.surfaces.map((s) => `${s.route}#${s.id}`) ?? [],
-          expected: "AGREE",
-          observed: v,
+          verdict: v,
         })),
         null,
         2,

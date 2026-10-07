@@ -45,13 +45,18 @@ describe("crossScreenOracle", () => {
     expect(allAgree(vs)).toBe(false);
   });
 
-  it("fingerprints are stable across order and merge repeat findings", () => {
-    const a = judge(fact("notifications.unread"), [r("nav.unreadBadge", 3), r("notifications.unreadRows", 2)]);
-    const b = judge(fact("notifications.unread"), [r("notifications.unreadRows", 5), r("nav.unreadBadge", 1)]);
+  it("fingerprints are stable across order and values, and distinguish results", () => {
+    const a = judge(fact("notifications.unread"), [r("nav.bellBadge", 3), r("notifications.unreadRows", 2)]);
+    const b = judge(fact("notifications.unread"), [r("notifications.unreadRows", 5), r("nav.bellBadge", 1)]);
+    expect(a.result).toBe("DISAGREE");
+    expect(b.result).toBe("DISAGREE");
     expect(fingerprint(a)).toBe(fingerprint(b));
-    expect(fingerprint(a)).not.toBe(fingerprint({ fact: "notifications.unread", result: "UNREADABLE", missing: ["nav.unreadBadge"] }));
+    expect(fingerprint(a)).not.toBe(fingerprint({ fact: "notifications.unread", result: "UNREADABLE", missing: ["nav.bellBadge"] }));
   });
 
+  it("an empty verdict list is never a pass", () => {
+    expect(allAgree([])).toBe(false);
+  });
   it("every fact names at least two surfaces, unique within the fact", () => {
     for (const f of FACTS) {
       expect(f.surfaces.length).toBeGreaterThanOrEqual(2);
