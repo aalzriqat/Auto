@@ -1764,9 +1764,10 @@ export async function runRehearsalCases(ctx) {
         legalInvoiceDate: Date.now(),
         issuedTo: "FINANCE_COMPANY",
       });
-      // A cost the company WITHHOLDS, so the figure it remits is the net, not
-      // the customer's principal — the distinction the receipt gate exists for.
-      const withheld = 375 * m;
+      // SCRUM-435 (full transfer): the company remits the FULL approved amount, so a
+      // cost can no longer be deducted from its transfer. This is a normal deal
+      // cost the dealer bears; it must not change what the company owes.
+      const dealerCost = 375 * m;
       const feeId = await ownerMust("mutation", "financeDealCosts:recordDealFee", {
         idempotencyKey: `rehearsal-fd1-fee-${stamp}`,
         orgId,
@@ -1775,9 +1776,9 @@ export async function runRehearsalCases(ctx) {
         paidBy: "DEALER",
         paidTo: "FINANCE_COMPANY",
         accountingTreatment: "FINANCE_COMPANY_COMMISSION",
-        deductedFromSettlement: true,
-        actualAmountMinor: withheld,
-        description: "Withheld by the company.",
+        deductedFromSettlement: false,
+        actualAmountMinor: dealerCost,
+        description: "A normal deal cost borne by the dealer.",
         // SCRUM-319: every cost write names the currency its integer is in.
         expectedCurrency: denom.currency,
       });
@@ -1792,8 +1793,9 @@ export async function runRehearsalCases(ctx) {
 
       const closed = await ownerMust("query", "applications:get", { orgId, applicationId });
       expectEqual(closed?.status, "CLOSED", "application status after finalizeDeal");
-      const net = price * m - withheld;
-      expectEqual(closed?.financedSaleNetReceivableMinor, net, "the frozen figure the company owes (gross − withheld)");
+      // Full transfer: what the company owes is the whole approved amount, not net of any dealer cost.
+      const net = price * m;
+      expectEqual(closed?.financedSaleNetReceivableMinor, net, "the frozen figure the company owes (the full approved amount)");
 
       // The canonical receivable the finalization opened, in the pinned denomination.
       const receivables = await ownerMust("query", "subledger:listReceivables", { orgId, customerId, limit: 50 });
@@ -1809,17 +1811,17 @@ export async function runRehearsalCases(ctx) {
       expectEqual(receivable.scale, denom.decimals, "the receivable's minor-unit scale");
       expectEqual(receivable.status, "OPEN", "the receivable's status before the receipt");
 
-      // The customer's principal is not what the company owes: refused, and
-      // nothing is written — no payment, no allocation, no event.
+      // A remittance short by the dealer's own cost is not what the company owes:
+      // refused, and nothing is written — no payment, no allocation, no event.
       const wrongAmount = await ownerCall("mutation", "applications:confirmDisbursement", {
         orgId,
         applicationId,
-        disbursedAmountMinor: price * m,
-        idempotencyKey: `rehearsal-fd1-principal-${stamp}`,
+        disbursedAmountMinor: net - dealerCost,
+        idempotencyKey: `rehearsal-fd1-short-${stamp}`,
       });
-      if (wrongAmount.ok) fail("a receipt of the customer's PRINCIPAL was accepted on a deal whose net remittance is smaller");
+      if (wrongAmount.ok) fail("a SHORT receipt (net of the dealer's own cost) was accepted on a deal where the company transfers the full approved amount");
       if (!/not what this financing company owes/i.test(String(wrongAmount.error ?? ""))) {
-        fail(`the principal was refused for the wrong reason: ${String(wrongAmount.error ?? "").slice(0, 200)}`);
+        fail(`the short receipt was refused for the wrong reason: ${String(wrongAmount.error ?? "").slice(0, 200)}`);
       }
       const afterRefusal = await ownerMust("query", "applications:get", { orgId, applicationId });
       if (afterRefusal?.disbursedAt !== undefined) fail("the refused receipt still marked the application disbursed");
@@ -1888,14 +1890,14 @@ export async function runRehearsalCases(ctx) {
         saleId: String(saleId),
         currency: denom.currency,
         minorUnitScale: m,
-        principalMinor: price * m,
-        withheldMinor: withheld,
+        approvedAmountMinor: price * m,
+        dealerCostMinor: dealerCost,
         netRemittanceMinor: net,
         receivable: { id: String(receivable._id), originalAmountMinor: receivable.originalAmountMinor, statusAfter: balance?.doc?.status },
         payment: { id: String(active[0].paymentId), amountMinor: payment?.payment?.amountMinor, currency: payment?.payment?.currency },
         allocationMinor: active[0].amountMinor,
         journal: { entryId: String(cash.entry._id), journalNumber: cash.entry.journalNumber },
-        principalRefused: true,
+        shortReceiptRefused: true,
         commandsExercised: [
           "finance.createCompany", "quotes.saveQuote", "applications.createFromQuote", "applications.updateStatus",
           "financingEconomics.recordSubmittedQuotation", "financingEconomics.approveDealerPurchaseAmount",
