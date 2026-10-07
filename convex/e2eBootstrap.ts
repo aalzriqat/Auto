@@ -152,7 +152,7 @@ import { createOrganizationWithDefaultRoles } from "./organizations";
 import { DEFAULT_LEAD_SOURCES } from "./orgLeadSources";
 import { DEFAULT_STAGES } from "./orgPipelineStages";
 import { DEFAULT_SETTINGS } from "./orgSettings";
-import { PERMISSIONS, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
+import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
 import { DEFAULT_CHART } from "./utils/defaultChart";
 
 /** Prefix on every error this module throws, so a CI log names the subsystem. */
@@ -1204,6 +1204,100 @@ export const assertE2EBootstrap = internalQuery({
       ),
       primary: { userId: primary.userId, roleName: primary.roleName },
       approver: { userId: approver.userId, roleName: approver.roleName },
+    };
+  },
+});
+
+// ─── Hunt seat re-roling (SCRUM-768, SCRUM-760 G8-C) ─────────────────────────
+
+/**
+ * The roles a hunt seat can be moved to: exactly the dealership roles the
+ * product seeds.
+ *
+ * ⚠️ SUPER-ADMIN IS DELIBERATELY ABSENT. It is granted only by the
+ * deployment's `SUPER_ADMIN_EMAILS`, which `REAL_DEPLOYMENT_ENV_MARKERS` names
+ * as a sign of a real deployment. Setting it on the hunt preview would make
+ * every guard in this module refuse that preview (SCRUM-769).
+ *
+ * ⚠️ SUPPORT AGENT IS DELIBERATELY ABSENT. A real support agent holds ZERO org
+ * memberships (the dashboard routes to /support only then), and a seeded seat
+ * cannot shed its membership without deleting a row other rows may reference.
+ * Granting the agent row on top of a dealership role stacks both authorities
+ * and would record false access facts, so support needs its own identity.
+ */
+export const HUNT_SEAT_ROLES: string[] = DEFAULT_ROLE_TEMPLATES.map((template) => template.name);
+
+/**
+ * Moves one already-seeded hunt seat to another role on the disposable preview,
+ * so a manual hunt can cover every role with the two Clerk identities the
+ * bootstrap already seats.
+ *
+ * ⚠️ THE TARGET ROLE IS RESET TO ITS PRODUCT TEMPLATE. `bindMembership` widens
+ * the approver's role with `E2E_APPROVER_REQUIRED_PERMISSIONS` so the scripted
+ * suite can drive approvals. A hunt looking for ACCESS defects must see the
+ * permissions a real dealership's role has, so the role is reset here. The QA
+ * dealership's roles are preview-only rows; nothing outside this preview reads
+ * them.
+ *
+ * Same gates as the bootstrap: the deployment's identity matches the URL the
+ * workflow named, it declares itself a preview, it carries none of a real
+ * deployment's configuration, its marker vouches for it and records a seeded
+ * QA organization.
+ */
+export const setHuntSeatRole = internalMutation({
+  args: {
+    seat: v.union(v.literal("primary"), v.literal("approver")),
+    clerkUserId: v.string(),
+    role: v.string(),
+    expectedCloudUrl: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const deploymentIdentity = checkDeploymentIdentity(args.expectedCloudUrl);
+    const marker = await requireMarker(ctx);
+    if (!marker.orgId || !marker.bootstrappedAt) {
+      throw new ConvexError(
+        `${ERR}: this preview was never seeded, so there is no hunt seat to re-role. Run the bootstrap first.`
+      );
+    }
+    if (!HUNT_SEAT_ROLES.includes(args.role)) {
+      throw new ConvexError(
+        `${ERR}: "${args.role}" is not a hunt role. Allowed: ${HUNT_SEAT_ROLES.join(", ")}.`
+      );
+    }
+    const seat: SeatKey = args.seat;
+    const clerkUserId = requireNonBlank(args.clerkUserId, `${SEAT_LABEL[seat]} clerkUserId`);
+    const user = await findUserByClerkId(ctx, clerkUserId);
+    if (!user) {
+      throw new ConvexError(`${ERR}: ${SEAT_LABEL[seat]} has no user row on this preview; it was never seated.`);
+    }
+    const memberships = await membershipsOf(ctx, user._id);
+    const membership = memberships.find((m) => m.orgId === marker.orgId);
+    if (!membership || memberships.length !== 1) {
+      throw new ConvexError(
+        `${ERR}: ${SEAT_LABEL[seat]} must hold exactly one membership, in the QA organization. Refusing to re-role.`
+      );
+    }
+
+    const template = DEFAULT_ROLE_TEMPLATES.find((t) => t.name === args.role);
+    const role = await findRoleByName(ctx, marker.orgId, args.role);
+    if (!template || !role) {
+      throw new ConvexError(`${ERR}: the QA organization has no role named ${args.role}.`);
+    }
+    const templatePermissions = [...template.permissions];
+    const held = new Set<string>(role.permissions);
+    const differs =
+      held.size !== templatePermissions.length || templatePermissions.some((p) => !held.has(p));
+    if (differs) {
+      await ctx.db.patch(role._id, { permissions: templatePermissions });
+    }
+    if (membership.roleId !== role._id) {
+      await ctx.db.patch(membership._id, { roleId: role._id });
+    }
+    return {
+      deploymentIdentity,
+      seat,
+      role: role.name,
+      permissionsResetToTemplate: differs,
     };
   },
 });
