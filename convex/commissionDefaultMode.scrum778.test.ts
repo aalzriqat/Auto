@@ -154,3 +154,103 @@ describe("SCRUM-778: an unset commission mode is MANUAL", () => {
     expect(await d.commissionPayableMinor()).toBe(Math.round(sale!.commissionAmount! * 100));
   });
 });
+
+/**
+ * SCRUM-778 seat finding F1 (Codex HIGH / Opus MEDIUM): a mobile bundle built
+ * before this change defaults an unset mode to AUTO_MEMBER inside its general
+ * settings form and sends it on every save. A generic settings save must not
+ * be able to switch a dealership into automatic commission — only a deliberate
+ * mode choice may, through `setCommissionMode`.
+ */
+describe("SCRUM-778: an automatic mode needs a deliberate choice", () => {
+  const storedMode = (d: Awaited<ReturnType<typeof seedDealer>>) =>
+    d.t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", d.orgId))
+        .unique();
+      return effectiveCommissionMode(row);
+    });
+
+  test("a legacy general-settings save carrying AUTO_MEMBER cannot switch an unset org to automatic", async () => {
+    const d = await seedDealer("legacy_save");
+    await expect(
+      d.as.mutation(api.orgSettings.upsert, {
+        orgId: d.orgId, dealershipPhone: "+962790000000", commissionMode: "AUTO_MEMBER",
+      })
+    ).rejects.toThrow(/commission mode/i);
+    expect(await storedMode(d)).toBe("MANUAL");
+
+    await d.completeSale();
+    expect(await d.commissionPayableMinor()).toBe(0);
+  });
+
+  test("the same legacy save on an org with no settings row creates nothing automatic", async () => {
+    const d = await seedDealer("legacy_norow");
+    await d.t.run(async (ctx) => {
+      const row = await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", d.orgId)).unique();
+      if (row) await ctx.db.delete(row._id);
+    });
+    await expect(
+      d.as.mutation(api.orgSettings.upsert, { orgId: d.orgId, dealershipPhone: "+962790000001", commissionMode: "AUTO_MEMBER" })
+    ).rejects.toThrow(/commission mode/i);
+    expect(await storedMode(d)).toBe("MANUAL");
+  });
+
+  // Control: resending the mode already in force is not a change and still saves.
+  test("a settings save that resends the mode already in force still saves", async () => {
+    const d = await seedDealer("resend", "AUTO_MEMBER");
+    await d.as.mutation(api.orgSettings.upsert, { orgId: d.orgId, dealershipPhone: "+962790000002", commissionMode: "AUTO_MEMBER" });
+    expect(await storedMode(d)).toBe("AUTO_MEMBER");
+    const phone = await d.t.run(async (ctx) =>
+      (await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", d.orgId)).unique())?.dealershipPhone
+    );
+    expect(phone).toBe("+962790000002");
+  });
+
+  test("the owner opts into automatic deliberately with setCommissionMode, and it accrues", async () => {
+    const d = await seedDealer("optin");
+    await d.as.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "AUTO_MEMBER" });
+    expect(await storedMode(d)).toBe("AUTO_MEMBER");
+
+    await d.completeSale();
+    expect(await d.commissionPayableMinor()).toBeGreaterThan(0);
+
+    await d.as.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "MANUAL" });
+    expect(await storedMode(d)).toBe("MANUAL");
+  });
+
+  test("only the owner may change the commission mode", async () => {
+    const d = await seedDealer("nonowner");
+    const managerId = await d.t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "s778_mgr", email: "s778mgr@example.com", name: "Manager" })
+    );
+    const roleId = await d.t.run((ctx) =>
+      ctx.db.insert("roles", { orgId: d.orgId, name: "MANAGER", permissions: PERMISSIONS })
+    );
+    await d.t.run((ctx) => ctx.db.insert("memberships", { orgId: d.orgId, userId: managerId, roleId }));
+    const asManager = d.t.withIdentity({ subject: "s778_mgr", clerkId: "s778_mgr" });
+
+    await expect(
+      asManager.mutation(api.orgSettings.setCommissionMode, { orgId: d.orgId, commissionMode: "AUTO_MEMBER" })
+    ).rejects.toThrow();
+    expect(await storedMode(d)).toBe("MANUAL");
+  });
+
+  // Seat finding F2 (Opus): a commissions reviewer without VIEW_SETTINGS read
+  // orgSettings.get as null, so an AUTO org showed them the MANUAL work queue.
+  test("a commissions reviewer without settings access reads the mode actually in force", async () => {
+    const d = await seedDealer("reviewer", "AUTO_MEMBER");
+    const reviewerId = await d.t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "s778_rev", email: "s778rev@example.com", name: "Reviewer" })
+    );
+    const roleId = await d.t.run((ctx) =>
+      ctx.db.insert("roles", { orgId: d.orgId, name: "SENIOR_ACCOUNTANT", permissions: ["view:commissions", "manage:commissions"] })
+    );
+    await d.t.run((ctx) => ctx.db.insert("memberships", { orgId: d.orgId, userId: reviewerId, roleId }));
+    const asReviewer = d.t.withIdentity({ subject: "s778_rev", clerkId: "s778_rev" });
+
+    expect(await asReviewer.query(api.orgSettings.get, { orgId: d.orgId })).toBeNull();
+    expect(await asReviewer.query(api.orgSettings.getCommissionMode, { orgId: d.orgId })).toBe("AUTO_MEMBER");
+  });
+});

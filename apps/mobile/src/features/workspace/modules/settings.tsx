@@ -19,6 +19,7 @@ export function SettingsModule({
   const reportError = useGenericError();
   const settings = useQuery(api.orgSettings.get, { orgId: org._id });
   const upsertSettings = useMutation(api.orgSettings.upsert);
+  const setCommissionMode = useMutation(api.orgSettings.setCommissionMode);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     dealershipName: "",
@@ -63,6 +64,14 @@ export function SettingsModule({
   async function save() {
     setSaving(true);
     try {
+      // SCRUM-778: the commission mode changes only through its own door, and
+      // only when the owner actually picked a different one here.
+      if (form.commissionMode !== (settings?.commissionMode ?? "MANUAL")) {
+        await setCommissionMode({
+          orgId: org._id,
+          commissionMode: form.commissionMode as "AUTO_TIERS" | "AUTO_MEMBER" | "MANUAL",
+        });
+      }
       await upsertSettings({
         orgId: org._id,
         dealershipName: maybeText(form.dealershipName),
@@ -77,7 +86,6 @@ export function SettingsModule({
         timezone: maybeText(form.timezone),
         approvalThresholdEnabled: form.approvalThresholdEnabled === "true",
         approvalMinProfitPercent: parseOptionalNumber(form.approvalMinProfitPercent),
-        commissionMode: form.commissionMode as "AUTO_TIERS" | "AUTO_MEMBER" | "MANUAL",
         generatedLeadAutoAssignmentEnabled: form.generatedLeadAutoAssignmentEnabled === "true",
         reservationHoldDays: parseOptionalNumber(form.reservationHoldDays),
       });

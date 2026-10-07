@@ -13,6 +13,7 @@ export function CommissionSettingsModule({ orgId }: { orgId: string }) {
   const reportError = useGenericError();
   const settings = useQuery(api.orgSettings.get, { orgId });
   const upsertSettings = useMutation(api.orgSettings.upsert);
+  const setCommissionMode = useMutation(api.orgSettings.setCommissionMode);
   const [saving, setSaving] = useState(false);
   const [mode, setMode] = useState<MobileOrgSettings["commissionMode"]>("MANUAL");
   const [tiersText, setTiersText] = useState("");
@@ -45,11 +46,12 @@ export function CommissionSettingsModule({ orgId }: { orgId: string }) {
   async function save() {
     setSaving(true);
     try {
-      await upsertSettings({
-        orgId,
-        commissionMode: mode,
-        commissionTiers: parsedTiers,
-      });
+      // SCRUM-778: the mode changes only through its own door, and only when
+      // the owner actually picked a different one.
+      if (mode && mode !== (settings?.commissionMode ?? "MANUAL")) {
+        await setCommissionMode({ orgId, commissionMode: mode });
+      }
+      await upsertSettings({ orgId, commissionTiers: parsedTiers });
       Alert.alert("AutoFlow", locale === "ar" ? "تم الحفظ" : "Saved");
     } catch (error) {
       reportError("Mobile commission settings save failed", error);
