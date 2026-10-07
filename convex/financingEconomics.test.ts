@@ -170,11 +170,16 @@ async function seedDealer(
     ...(companyRules.lowerAppraisalTolerancePercent !== undefined
       ? { lowerAppraisalTolerancePercent: companyRules.lowerAppraisalTolerancePercent }
       : {}),
-    ...(companyRules.ltvBasis !== undefined ? { ltvBasis: companyRules.ltvBasis } : {}),
     ...(companyRules.minimumCustomerFirstPaymentMinor !== undefined
       ? { minimumCustomerFirstPaymentMinor: companyRules.minimumCustomerFirstPaymentMinor }
       : {}),
   });
+
+  // SCRUM-766: createCompany/updateCompany now refuse the retired appraisal
+  // bases, so the legacy row shape these tests exercise is written directly.
+  if (companyRules.ltvBasis !== undefined) {
+    await t.run((ctx) => ctx.db.patch(companyId, { ltvBasis: companyRules.ltvBasis }));
+  }
 
   return {
     t,
@@ -188,6 +193,14 @@ async function seedDealer(
     asUser,
     asApprover,
   };
+}
+
+/** Writes a retired LTV basis straight onto the company row (the API now refuses it). */
+async function setLegacyLtvBasis(
+  seed: Seed,
+  ltvBasis: "INDEPENDENT_APPRAISAL" | "LOWER_OF_APPRAISAL_AND_QUOTATION"
+): Promise<void> {
+  await seed.t.run((ctx) => ctx.db.patch(seed.companyId, { ltvBasis }));
 }
 
 /** Creates the quote and the application the economics hang off. */
@@ -853,8 +866,8 @@ describe("a manually named approval", () => {
       maxFinancingLTV: 85,
       defaultLtvPercent: 85,
       customerFirstPaymentOffsetsUnfinancedShare: true,
-      ltvBasis: "INDEPENDENT_APPRAISAL",
     });
+    await setLegacyLtvBasis(seed, "INDEPENDENT_APPRAISAL");
 
     const applicationId = await createApplication(seed);
     await recordBaselineQuotation(seed, applicationId);
@@ -880,12 +893,10 @@ describe("a manually named approval", () => {
     // ...and the funding split is still computable, because the company's rule
     // needs the appraisal as its base and one is on file.
     expect(after.financeCompanyFundedPortionMinor).not.toBeUndefined();
-    // SCRUM-766: the shortfall against an appraisal-lending company is
-    // UNAVAILABLE - the appraisal the quotation expected was never frozen - so
-    // it fails closed and is flagged rather than guessed.
-    expect(after.netShortfallMethod).toBe("UNAVAILABLE");
-    expect(after.needsFinancingReconciliation).toBe(true);
-    expect(after.financingReconciliationReason).toContain("lends against the appraisal");
+    // SCRUM-766 (owner c22425): the appraisal is not a second money authority -
+    // the shortfall is measured on the approved amount like any other company's.
+    expect(after.netShortfallMethod).toBe("NET");
+    expect(after.financingReconciliationReason ?? "").not.toContain("lends against the appraisal");
 
     const appraisals = await seed.t.run((ctx) =>
       ctx.db
@@ -1191,8 +1202,8 @@ describe("incomplete economics", () => {
       isActive: true,
       maxFinancingLTV: 85,
       defaultLtvPercent: 85,
-      ltvBasis: "INDEPENDENT_APPRAISAL",
     });
+    await setLegacyLtvBasis(seed, "INDEPENDENT_APPRAISAL");
 
     const applicationId = await createApplication(seed);
     await recordBaselineQuotation(seed, applicationId);
@@ -1229,8 +1240,8 @@ describe("incomplete economics", () => {
       isActive: true,
       maxFinancingLTV: 85,
       defaultLtvPercent: 85,
-      ltvBasis: "INDEPENDENT_APPRAISAL",
     });
+    await setLegacyLtvBasis(seed, "INDEPENDENT_APPRAISAL");
     const applicationId = await createApplication(seed);
     await recordBaselineQuotation(seed, applicationId);
     await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
@@ -2101,10 +2112,10 @@ describe("LTV configuration", () => {
       isActive: true,
       maxFinancingLTV: 85,
       defaultLtvPercent: 85,
-      ltvBasis: "INDEPENDENT_APPRAISAL",
       allowsQuotationAboveAppraisal: true,
       lowerAppraisalTolerancePercent: 10,
     });
+    await setLegacyLtvBasis(seed, "INDEPENDENT_APPRAISAL");
 
     const applicationId = await createApplication(seed);
     await recordBaselineQuotation(seed, applicationId);
@@ -6226,6 +6237,8 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
     firstPaymentAtApprovalMajor?: number;
     approvedMajor: number;
     appliedLtvPercent?: number;
+    /** A deal whose quotation terms were never frozen (nothing to measure against). */
+    withoutQuotationSnapshot?: boolean;
   }) {
     const seed = await seedDealer(options.companyRules ?? {});
     const applicationId = await createApplication(seed);
@@ -6247,6 +6260,11 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
         ctx.db.patch(applicationId, {
           customerFirstPaymentMinor: jod(options.firstPaymentAtApprovalMajor as number),
         })
+      );
+    }
+    if (options.withoutQuotationSnapshot) {
+      await seed.t.run((ctx) =>
+        ctx.db.patch(applicationId, { quotationCalculationSnapshot: undefined })
       );
     }
     await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
@@ -6331,9 +6349,19 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
     expect(app.netShortfallMinor).toBe(jod(300));
   });
 
-  test("a company that lends against the appraisal has an UNAVAILABLE shortfall: fails closed at the gate, the resolver and the cockpit", async () => {
+  test("an appraisal-basis company is measured on the approved amount like any other: 12,500 -> 11,500 at 85% is 850, not UNAVAILABLE (owner c22425)", async () => {
     const { seed, applicationId } = await approvedWith({
       companyRules: { ltvBasis: "INDEPENDENT_APPRAISAL" },
+      approvedMajor: 11_500,
+    });
+    const app = await readApp(seed, applicationId);
+    expect(app.netShortfallMethod).toBe("NET");
+    expect(app.netShortfallMinor).toBe(jod(850));
+  });
+
+  test("a deal whose quotation terms were never frozen has an UNAVAILABLE shortfall: fails closed at the gate, the resolver and the cockpit", async () => {
+    const { seed, applicationId } = await approvedWith({
+      withoutQuotationSnapshot: true,
       approvedMajor: 11_500,
     });
     const app = await readApp(seed, applicationId);

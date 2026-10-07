@@ -1070,11 +1070,11 @@ export type NetShortfallDerivation =
  * it cannot be worked out. UNAVAILABLE is never guessed:
  *
  * - no frozen quote-time LTV / first payment (the quotation snapshot): the
- *   baseline the shortfall is measured against does not exist;
- * - a company that lends against the independent appraisal (alone or "lower
- *   of"): the quote-time side needs the EXPECTED appraisal, which the quotation
- *   does not freeze yet. Substituting the quotation would price the baseline on a
- *   base the company never used.
+ *   baseline the shortfall is measured against does not exist.
+ *
+ * An appraisal-basis company (retired; none exist, and updateCompany refuses to
+ * save one) is measured like every other: approved x rate. No expected
+ * appraisal is frozen (owner ruling c22425).
  */
 function deriveNetShortfallFor(
   args: {
@@ -1094,16 +1094,11 @@ function deriveNetShortfallFor(
         "The quotation's own LTV and first payment were never frozen on this deal, so the shortfall cannot be measured against what the quotation promised.",
     };
   }
-  if (
+  // Owner ruling c22425: the approved amount is the only money authority, so the
+  // actual side is approved x rate for every basis - an appraisal is provenance.
+  const appraisalBasis =
     args.ltvBasis === "INDEPENDENT_APPRAISAL" ||
-    args.ltvBasis === "LOWER_OF_APPRAISAL_AND_QUOTATION"
-  ) {
-    return {
-      method: "UNAVAILABLE",
-      reason:
-        "This finance company lends against the appraisal, and the appraisal the quotation expected was not frozen, so the shortfall cannot be measured.",
-    };
-  }
+    args.ltvBasis === "LOWER_OF_APPRAISAL_AND_QUOTATION";
   const result = computeNetShortfall({
     quote: {
       quotationMinor: args.submittedQuotationMinor,
@@ -1114,7 +1109,7 @@ function deriveNetShortfallFor(
       approvedPurchaseAmountMinor: args.approvedDealerPurchaseAmountMinor,
       appliedLtvPercent: args.appliedLtvPercent,
       customerFirstPaymentMinor: args.customerFirstPaymentMinor,
-      ltvBaseMinor: actualLtvBaseMinor,
+      ltvBaseMinor: appraisalBasis ? undefined : actualLtvBaseMinor,
     },
   });
   return {
