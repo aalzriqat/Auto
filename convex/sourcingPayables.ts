@@ -1,7 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { hookSupplierPaymentSettled } from "./accounting/workflowHooks";
@@ -245,6 +245,16 @@ export const markPaid = mutation({
         if (payable.status === "CANCELLED") {
           throw new ConvexError("This payable was cancelled with its sale.");
         }
+        // setDisputed's contract: payment is refused while a dispute stands
+        // (SCRUM-773). recordPartialPayment already refused it; this did not.
+        if (payable.status === "DISPUTED") {
+          throw new ConvexError(
+            "This payable is under dispute. Resolve the dispute before paying against it."
+          );
+        }
+        if (args.paymentAccountId) {
+          await requireOwnedRow(ctx, args.orgId, "chartOfAccounts", args.paymentAccountId, "Payment account not found.");
+        }
         // Only what is still owed. Posting `amountDue` on a partially-paid row
         // would discharge AP-Suppliers a second time for the instalments
         // already posted, leaving the account short by exactly what had been
@@ -382,6 +392,9 @@ export const recordPartialPayment = mutation({
           throw new ConvexError(
             "This payable is under dispute. Resolve the dispute before paying against it."
           );
+        }
+        if (args.paymentAccountId) {
+          await requireOwnedRow(ctx, args.orgId, "chartOfAccounts", args.paymentAccountId, "Payment account not found.");
         }
 
         // The payment must be representable in the payable's currency. JOD
