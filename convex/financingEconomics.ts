@@ -2866,8 +2866,12 @@ export const applyQuoteFirstPayment = mutation({
       // quote's down payment was the first payment all along), so the frozen
       // quote-side baseline carries the corrected value as well. Otherwise the
       // correction itself reads as a financing-term change and moves the
-      // shortfall by the first-payment delta (SCRUM-766, CodeRabbit).
-      ...(app.quotationCalculationSnapshot
+      // shortfall by the first-payment delta (SCRUM-766, CodeRabbit). A
+      // SYSTEM_CALCULATED snapshot is the exception: its quotation is the solver's
+      // output at the first payment it was recorded with, so rewriting that input
+      // would make the snapshot claim a first payment the figure never used. It
+      // stays as priced (SCRUM-766, Codex R1).
+      ...(app.quotationCalculationSnapshot && app.quotationCalculationSnapshot.mode !== "SYSTEM_CALCULATED"
         ? {
             quotationCalculationSnapshot: {
               ...app.quotationCalculationSnapshot,
