@@ -15,7 +15,7 @@
  */
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const RULING_ID = /^SCRUM-\d{1,6}#c\d{1,8}$/;
@@ -50,6 +50,13 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     process.exit(2);
   }
   const target = resolve(dirname(fileURLToPath(import.meta.url)), "../../regression/rulings.json");
+  const repoRoot = resolve(dirname(target), "..");
+  const rel = relative(repoRoot, resolve(textFile));
+  if (rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)) {
+    // The repo is public: a ruling text file left inside it can be committed by a stray `git add -A`.
+    console.error("refusing --text-file inside the repository; keep ruling text outside the working tree");
+    process.exit(2);
+  }
   const current = JSON.parse(readFileSync(target, "utf8"));
   const date = arg("date") ?? new Date().toISOString().slice(0, 10);
   const next = upsertRuling(current, { id, text: readFileSync(textFile, "utf8"), date });

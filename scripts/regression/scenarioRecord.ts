@@ -249,6 +249,47 @@ function* stringsIn(value: unknown): Generator<string> {
   else if (isObject(value)) for (const v of Object.values(value)) yield* stringsIn(v);
 }
 
+/**
+ * A `rule` record names a function (`subject`); its bound test must actually call it and assert.
+ * Static only: this stops a record being bound to an unrelated test, not a wrong expected value
+ * (S3's runner census / a record-driven runner is the binding proof).
+ */
+function ruleBodyExercisesSubject(source: string, kind: ts.ScriptKind, testName: string, subject: string): boolean {
+  const fn = subject.split(".").pop()!;
+  const sf = ts.createSourceFile("t.ts", source, ts.ScriptTarget.Latest, true, kind);
+  let called = false;
+  let asserted = false;
+  let mocked = false;
+  const calleeName = (e: ts.Expression): string | undefined =>
+    ts.isIdentifier(e) ? e.text : ts.isPropertyAccessExpression(e) ? e.name.text : undefined;
+  const scan = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const name = calleeName(node.expression);
+      if (name === fn) called = true;
+      if (name === "expect") asserted = true;
+    }
+    ts.forEachChild(node, scan);
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const head = ts.isPropertyAccessExpression(callee) ? callee.expression : callee;
+      if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(head) && head.text === "vi" && /^(?:mock|doMock)$/.test(callee.name.text)) {
+        // Only a mock aimed at the subject's own module defeats the check; unrelated mocks (rateLimit) are normal.
+        const target = node.arguments[0];
+        if (target && ts.isStringLiteralLike(target) && target.text.toLowerCase().includes(fn.toLowerCase())) mocked = true;
+      }
+      const first = node.arguments[0];
+      if (ts.isIdentifier(head) && /^(?:test|it)$/.test(head.text) && first && ts.isStringLiteralLike(first) && first.text === testName) {
+        node.arguments.slice(1).forEach(scan);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return called && asserted && !mocked;
+}
+
 function scriptKindFor(file: string): ts.ScriptKind {
   if (file.endsWith(".tsx")) return ts.ScriptKind.TSX;
   if (file.endsWith(".mjs") || file.endsWith(".js")) return ts.ScriptKind.JS;
@@ -452,6 +493,8 @@ export function validateLibrary(
         const named = listActiveTestRegistrations(forHelper, scriptKindFor(rel)).filter((t) => t.title === r.impl!.testName);
         if (named.length !== 1 || named[0].parameterized || CTX_SKIP.test(text) || ANY_SKIP.test(text) || SKIP_CALL.test(text) || SKIP_OPTION.test(text)) {
           add("skip", `${rel} has no single active test named "${r.impl.testName}" (skipped, conditional, duplicated or absent): a skip is a failure in the library (R4)`);
+        } else if (r.kind === "rule" && typeof r.subject === "string" && !ruleBodyExercisesSubject(forHelper, scriptKindFor(rel), r.impl.testName, r.subject)) {
+          add("impl", `${rel} test "${r.impl.testName}" must call ${r.subject}(...) and assert on it (and ${rel} must not vi.mock a module named for it): a rule record is only as true as the check it names`);
         }
       }
     }

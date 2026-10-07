@@ -26,3 +26,9 @@ Never put ruling text or customer data here. Format, validators and rules live i
 ## Pilot records (S2b)
 
 Three `rule` records bind exact titles in `convex/consignmentEconomics.test.ts` and cite SCRUM-407#c21031 (financed DIRECT sourced sale: approved-basis, not sale-price). Their `matrixRow` (`SCRUM-41-direct`) is a descriptive label of the originating bug group, not a joined SCRUM-486 row id: the matrix is not machine-readable yet. Permission and tenancy records are deferred until the schema has a non-comment ruling source (description / invariant) form.
+
+### Known limits (S2 review)
+
+- A `rule` record's bound test must call its `subject` and assert (static check). The expected VALUES are not compared to the test body; a record-driven runner (S3) is the binding proof.
+- The ruling digest normalises whitespace only (no Unicode NFC) and the `date` is the refresh date; both are operator conventions, tracked for S3.
+- The fail-closed (withhold) expectations of the pilot records come from SCRUM-41 / SCRUM-49 Lane 4; c21031 governs the approved-basis record directly.

@@ -482,7 +482,7 @@ describe("kind: rule (pure-function checks, SCRUM-761 S1.5)", () => {
       status: "active",
       kind: "rule",
       source: { hunter: "scripted", runId: "run-1", firstSeen: "2026-10-07" },
-      subject: "saleEconomics",
+      subject: "fixtureSubject",
       inputs: { salePrice: 100000, externallyFinanced: true, recordedSupplierGrossReceipt: 0 },
       expected: [{ observable: "economics.dealershipMargin", value: null }],
       rulings: [{ id: RULING, digest: DIGEST }],
@@ -527,7 +527,25 @@ describe("kind: rule (pure-function checks, SCRUM-761 S1.5)", () => {
     expect(rules([rule({ impl: { ...IMPL, testName: "no such test" } })])).toContain("skip");
   });
 
-  test("identity is subject + inputs: same rule de-dups, different inputs do not, and a scenario never collides with a rule", () => {
+  test("a rule bound to a test that never calls its subject is refused (F1)", () => {
+    expect(rules([rule({ subject: "otherFunction" })])).toContain("impl");
+    expect(rules([rule({ subject: "pkg.fixtureSubject" })])).toEqual([]);
+  });
+
+  test("a rule bound to a test with no assertion, or in a file that mocks, is refused (F1)", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "rule-body-"));
+    mkdirSync(path.join(dir, "t"));
+    const write = (body: string) => writeFileSync(path.join(dir, "t/x.test.ts"), `import { test, expect, vi } from "vitest";\n${body}`);
+    const check = () => validateLibrary([rule({ impl: { file: "t/x.test.ts", testName: "named case" } })], { rulings: RULINGS, repoRoot: dir }).map((p) => p.rule);
+    write(`test("named case", () => { fixtureSubject(1); });`);
+    expect(check()).toContain("impl");
+    write(`vi.mock("./fixtureSubject");\ntest("named case", () => { expect(fixtureSubject(1)).toBe(2); });`);
+    expect(check()).toContain("impl");
+    write(`test("named case", () => { expect(fixtureSubject(1)).toBe(2); });`);
+    expect(check()).toEqual([]);
+  });
+
+  test("identity is subject + inputs + expected: same rule de-dups, different inputs do not, and a scenario never collides with a rule", () => {
     const a = rule();
     expect(rules([a, rule({ id: "sale-economics-copy" })])).toContain("duplicate");
     const other = rule({ id: "sale-economics-other", inputs: { salePrice: 100001, externallyFinanced: true, recordedSupplierGrossReceipt: 0 }, impl: { ...IMPL, testName: "second fixture check runs" } });
