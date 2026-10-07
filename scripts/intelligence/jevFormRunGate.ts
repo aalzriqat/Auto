@@ -23,8 +23,9 @@ export type ExplorerRunState = {
 };
 
 /**
- * Attempts that reached the form's Save. A record whose setup failed (form did
- * not open, picker or fill failed) pressed nothing, so it is not an attempt.
+ * Attempts whose own Save was pressed. A record whose setup failed (form did
+ * not open, picker or fill failed) is not counted, even when a dup-variant
+ * seed before it was saved; that only makes the gate stricter.
  */
 export function submittedAttempts(records: readonly { verdict: { check: string } }[]): number {
   return records.filter((r) => r.verdict.check !== "setup").length;
@@ -38,7 +39,7 @@ export function explorerDidNotRun(s: ExplorerRunState): string | undefined {
   }
   // A budget of 0 is an explicit discovery-only run; anything else must attack.
   if (s.maxAttempts !== undefined && s.maxAttempts > 0 && (s.attempts ?? 0) === 0) {
-    return "no attempt was made: every form was unreachable or no field had a rule to try";
+    return "no attempt was made: every form was unreachable, no field had a rule to try, or every attempt failed its own setup";
   }
   return undefined;
 }

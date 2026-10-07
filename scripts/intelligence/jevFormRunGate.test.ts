@@ -40,6 +40,8 @@ describe("explorerDidNotRun (SCRUM-771: an opted-in explorer that cannot explore
     expect(spec).toContain("explorerDidNotRun({ refusal: attestation.refusal })");
     expect(spec).toContain("explorerDidNotRun({ openedOrgId: orgId, attestedOrgId: attestation.orgId })");
     expect(spec).toContain("explorerDidNotRun({ maxAttempts: MAX_ATTEMPTS, attempts: submittedAttempts(records) })");
+    // L2: submittedAttempts keys on this exact marker; renaming it would reopen N1.
+    expect(spec).toContain('check: "setup"');
     // N3: all three exits go through a helper that really throws.
     expect(spec.match(/stopIfDidNotRun\(explorerDidNotRun\(/g)).toHaveLength(3);
     expect(spec).toMatch(/function stopIfDidNotRun\(why: string \| undefined\): void \{\s*if \(why\) throw new Error\(/);
