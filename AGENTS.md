@@ -12,6 +12,36 @@ Convex agent skills for common tasks can be installed by running
 
 <!-- convex-ai-end -->
 
+## Pilot release gate (owner standard, 2026-10-07)
+
+The pilot release, which happens before the repository transfer, is gated by Jira epic
+**SCRUM-760**. Read it before release, deploy, merge-policy or CI/test-infrastructure work.
+Jira holds the live state; this section records the standard so that every agent sees it.
+
+1. Ship only a not-broken, fully correct and truthful Accounting and Unified Deal.
+2. All three bug hunters run at every change: scripted E2E, the screen audit (roles × EN/AR ×
+   phone/desktop) and the unscripted explorer swarm.
+3. Every unique scenario any hunter runs becomes a permanent check on future changes
+   (SCRUM-761). Each scenario is recorded with its steps, inputs, expected outcome and the
+   owner ruling it checks, then converted to the lowest test level that catches it:
+   - money or permissions → a backend test and a certification-matrix row (SCRUM-486);
+   - screen-only behaviour → a browser replay.
+
+   **When each runs:**
+   - pull requests: the money and permission scenarios plus the replays for affected screens;
+   - nightly: the full library and a fresh hunt;
+   - each release: the full library, executed against a real backend (SCRUM-762).
+
+   **Keeping the library truthful:**
+   - A ruling change updates its scenarios in the same change.
+   - A scenario that cannot run is a failure, never a skip.
+   - A red scenario is fixed or retired with a recorded reason.
+
+Until SCRUM-760 is Done, none of the following is evidence of correctness:
+- a definition-only rehearsal;
+- the pull-request visual Playwright gate;
+- a swarm run that never reached its attack workers.
+
 ## Deploying the Convex backend to production
 
 Production is deployed by running the **Deploy production** workflow from the

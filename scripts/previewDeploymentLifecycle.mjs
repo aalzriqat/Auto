@@ -32,7 +32,9 @@
 // Convex's default expiry. Nothing here can name it safely without the URL.
 //
 // Both commands only ever warn: a cleanup problem must not fail the tests it
-// follows. Messages carry fixed literals and deployment names, never key bytes.
+// follows. The exception is `--strict` (SCRUM-768), used by the hunt preview,
+// whose pin and teardown are its own dispatches: there a refusal fails the run.
+// Messages carry fixed literals and deployment names, never key bytes.
 import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -236,9 +238,48 @@ export async function deletePreview({ env = process.env, fetchImpl = fetch } = {
   return { deploymentName: inputs.deploymentName, deleted: true };
 }
 
+/**
+ * SCRUM-768: the hunt preview's teardown is its own dispatch, not a cleanup
+ * step after tests, so a refusal there is a failure, never a warning. A name
+ * that is not found is a failure too: the operator typed it, and "already gone"
+ * is indistinguishable from a typo that leaves the real preview alive. After
+ * the delete it re-reads the deployment and fails unless it is gone.
+ */
+export async function deletePreviewStrict({ env = process.env, fetchImpl = fetch } = {}) {
+  const result = await deletePreview({ env, fetchImpl });
+  if (!result.deleted) {
+    refuse(
+      "Deployment " + result.deploymentName +
+        " was not found, so nothing was deleted. Check the name printed by create; an earlier delete may already have removed it.",
+    );
+  }
+  const inputs = readInputs(env);
+  const still = await readOwnPreview({ ...inputs, fetchImpl });
+  if (still) refuse("Deployment " + inputs.deploymentName + " still exists after the delete call.");
+  return result;
+}
+
 export async function main(argv = process.argv.slice(2), options = {}) {
   const write = options.write ?? ((line) => process.stdout.write(line + "\n"));
-  const [command] = argv;
+  const [command, flag] = argv;
+  if (flag === "--strict" && (command === "delete" || command === "pin")) {
+    try {
+      if (command === "pin") {
+        const r = await pinPreview(options);
+        write("Pinned preview " + r.deploymentName + ": created " + r.createdAt + ", expires " + new Date(r.expiresAt).toISOString() + ".");
+      } else {
+        const r = await deletePreviewStrict(options);
+        write("Deleted preview " + r.deploymentName + ".");
+      }
+      return 0;
+    } catch (error) {
+      write(
+        "::error::Preview " + (command === "pin" ? "pin" : "teardown") + " failed: " +
+          (error instanceof Error ? error.message : "unexpected failure"),
+      );
+      return 1;
+    }
+  }
   try {
     if (command === "pin") {
       const r = await pinPreview(options);
