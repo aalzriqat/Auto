@@ -17,7 +17,8 @@ test.describe("expenses", () => {
     // (today / OTHER / PAID / CASH) — only title and amount are required.
     const title = `Playwright test expense ${testDataSuffix()}`;
     await dialog.getByLabel("Title / Description").fill(title);
-    await dialog.getByLabel("Amount ($)").fill("42");
+    // The label carries the org currency ("Amount (JOD)"), so match the prefix.
+    await dialog.getByLabel(/^Amount \(/).fill("42");
 
     await dialog
       .getByRole("button", { name: "Record Expense", exact: true })
