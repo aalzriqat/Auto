@@ -13,6 +13,7 @@ import {
   summariseLibrary,
   validateLibrary,
   validateRulingSnapshot,
+  validateTransitions,
   type RulingSnapshotEntry,
   type ScenarioRecord,
 } from "./scenarioRecord";
@@ -248,5 +249,46 @@ describe("review round 1 (Opus seat, PR #500): failing-first regressions", () =>
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("review round 2 (Codex seat, PR #500): failing-first regressions", () => {
+  test("C1: ruling text cannot ride in a ruling ref, actor, source, invariant or glob field", () => {
+    const b = base();
+    expect(rules([{ ...b, rulings: [{ ...b.rulings[0], text: "full owner ruling" }] } as never])).toContain("schema");
+    expect(rules([{ ...b, steps: [{ ...b.steps[0], actor: { ...b.steps[0].actor, note: "x" } }] } as never])).toContain("schema");
+    expect(rules([{ ...b, source: { ...b.source, note: "x" } } as never])).toContain("schema");
+    expect(rules([{ ...b, source: { ...b.source, runId: "the owner ruled that the dealership pays Ahmed 5,000" } } as never])).toContain("schema");
+    expect(rules([{ ...b, invariantIds: ["a long free text sentence that is not an invariant id at all"] } as never])).toContain("schema");
+    expect(rules([{ ...b, rulings: [{ id: RULING, digest: "not-a-digest" }] } as never])).toContain("schema");
+    expect(rules([{ ...b, sourceGlobs: ["a free text sentence with spaces"] } as never])).toContain("schema");
+    expect(rules([{ ...b, sourceGlobs: ["convex/**/*.ts"], invariantIds: ["ECON-1"] } as never])).toEqual([]);
+  });
+
+  test("C2: only files a configured runner collects count as the executable check", () => {
+    const run = (file: string) => {
+      const dir = mkdtempSync(path.join(tmpdir(), "regression-"));
+      try {
+        mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+        writeFileSync(path.join(dir, file), `test("named case", () => {});`);
+        return validateLibrary([base({ impl: { file, testName: "named case" } })], { rulings: RULINGS, repoRoot: dir }).map((p) => p.rule);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+    expect(run("scripts/example.spec.ts")).toContain("impl");
+    expect(run("scripts/example.test.mjs")).toContain("impl");
+    expect(run("playwright/scenarios/example.spec.ts")).toEqual([]);
+    expect(run("convex/example.test.ts")).toEqual([]);
+  });
+
+  test("C3: an active scenario cannot be demoted or deleted between base and head", () => {
+    const active = base();
+    const demoted = base({ status: "candidate", impl: undefined, candidateReason: "parked", candidateIssue: "SCRUM-770" });
+    expect(validateTransitions([active], [demoted]).map((p) => p.rule)).toContain("transition");
+    expect(validateTransitions([active], []).map((p) => p.rule)).toContain("transition");
+    const retired = base({ status: "retired", retiredReason: "superseded", retiredByRuling: RULING });
+    expect(validateTransitions([active], [retired])).toEqual([]);
+    expect(validateTransitions([demoted], [active])).toEqual([]);
   });
 });

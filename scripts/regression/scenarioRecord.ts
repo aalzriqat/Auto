@@ -166,12 +166,18 @@ export interface ValidateLibraryOptions {
 const CTX_SKIP = /\b(?:ctx|context|t)\.skip\s*\(/;
 // Conservative, file-wide: any skip/conditional/todo/fails marker anywhere in the check file fails the record.
 const ANY_SKIP = /\b(?:it|test|describe|suite)(?:\.\w+)*\.(?:skip|skipIf|runIf|todo|fails|fixme)\b|\bx(?:it|describe)\(/;
-const RUNNER_FILE = /\.(?:test|spec)\.(?:ts|tsx|mjs|js)$/;
+// What a configured runner actually collects: root vitest includes **/*.test.ts(x); the browser
+// replays live under playwright/ as *.spec.ts. Anything else exists but is never run.
+const RUNNER_FILE = /(?:^playwright\/(?:.*\/)?[^/]+\.spec\.ts$)|(?:\.test\.tsx?$)/;
 const NOT_RUN_DIRS = /^(?:apps|packages|node_modules|\.claude)\//;
 const MATRIX_ROW = /^[A-Za-z0-9][A-Za-z0-9._-]{1,40}$/;
 const EMAIL = /[\w.+-]+@[\w-]+\.[\w.-]+/;
 const PHONE = /(?:\+|\b00|\b0)\d[\d\s-]{7,}\d/;
 const MAX_TEXT = 300;
+const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
+const INVARIANT_ID = /^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$/;
+const GLOB = /^[\w./*{}\[\],-]{1,120}$/;
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 const RECORD_KEYS = new Set([
   "id", "fingerprint", "domain", "level", "status", "source", "steps", "expected", "rulings",
@@ -179,6 +185,8 @@ const RECORD_KEYS = new Set([
   "retiredByRuling", "invariantIds", "sourceGlobs",
 ]);
 const STEP_KEYS = new Set(["actor", "action", "input"]);
+const ACTOR_KEYS = new Set(["role", "org"]);
+const RULING_REF_KEYS = new Set(["id", "digest"]);
 const EXPECTED_KEYS = new Set(["observable", "value"]);
 const SOURCE_KEYS = new Set(["hunter", "runId", "firstSeen"]);
 const IMPL_KEYS = new Set(["file", "testName"]);
@@ -246,11 +254,29 @@ function schemaProblems(r: unknown): string[] {
     ...unknownKeys(r, RECORD_KEYS),
     ...(Array.isArray(r.steps) ? r.steps.flatMap((s) => unknownKeys(s, STEP_KEYS)) : []),
     ...(Array.isArray(r.expected) ? r.expected.flatMap((e) => unknownKeys(e, EXPECTED_KEYS)) : []),
+    ...(Array.isArray(r.steps) ? r.steps.flatMap((s) => unknownKeys(isObject(s) ? s.actor : undefined, ACTOR_KEYS)) : []),
+    ...(Array.isArray(r.rulings) ? r.rulings.flatMap((x) => unknownKeys(x, RULING_REF_KEYS)) : []),
     ...unknownKeys(r.source, SOURCE_KEYS),
     ...unknownKeys(r.impl, IMPL_KEYS),
     ...unknownKeys(r.bugRef, BUGREF_KEYS),
   ];
   if (extra.length > 0) out.push(`unknown field(s) ${[...new Set(extra)].join(", ")}: records are a closed schema (no free-form notes)`);
+  // Closed VALUE formats for every metadata field a public record carries.
+  if (Array.isArray(r.rulings) && r.rulings.some((x) => isObject(x) && (!RULING_ID.test(String(x.id)) || !SHA256.test(String(x.digest))))) {
+    out.push("ruling refs must be {id: SCRUM-n#cN, digest: sha256 hex}");
+  }
+  if (Array.isArray(r.steps) && r.steps.some((s) => isObject(s) && isObject(s.actor) && (!TOKEN.test(String(s.actor.role)) || !TOKEN.test(String(s.actor.org))))) {
+    out.push("actor role/org must be short identifier tokens");
+  }
+  if (isObject(r.source) && (!TOKEN.test(String(r.source.runId)) || !DATE.test(String(r.source.firstSeen)))) {
+    out.push("source.runId must be an identifier token and source.firstSeen a YYYY-MM-DD date");
+  }
+  if (r.invariantIds !== undefined && (!Array.isArray(r.invariantIds) || r.invariantIds.some((v) => !INVARIANT_ID.test(String(v))))) {
+    out.push("invariantIds must be invariant ids such as ECON-1");
+  }
+  if (r.sourceGlobs !== undefined && (!Array.isArray(r.sourceGlobs) || r.sourceGlobs.some((v) => !GLOB.test(String(v))))) {
+    out.push("sourceGlobs must be path globs without spaces");
+  }
   for (const text of [r.retiredReason, r.candidateReason]) {
     if (typeof text === "string" && text.length > MAX_TEXT) out.push(`reason text is capped at ${MAX_TEXT} characters`);
   }
@@ -352,6 +378,27 @@ export function validateLibrary(
   }
   return problems;
 }
+/**
+ * Diff rule between the merge-base library and the head library (wired into a PR
+ * job in S3): an active scenario may only leave `active` by being retired with
+ * a reason and a ruling. Demoting it to candidate, or deleting its record, would
+ * turn a red library green without anyone ruling on it (R4).
+ */
+export function validateTransitions(base: ScenarioRecord[], head: ScenarioRecord[]): LibraryProblem[] {
+  const problems: LibraryProblem[] = [];
+  const headById = new Map(head.map((r) => [r.id, r]));
+  for (const before of base) {
+    if (before.status !== "active") continue;
+    const after = headById.get(before.id);
+    if (after === undefined) {
+      problems.push({ scenario: before.id, rule: "transition", message: "an active scenario was deleted; retire it with a reason and a ruling instead" });
+    } else if (after.status === "candidate") {
+      problems.push({ scenario: before.id, rule: "transition", message: "an active scenario was demoted to candidate; only retirement (reason + ruling) may remove it from execution" });
+    }
+  }
+  return problems;
+}
+
 export interface LibraryReport {
   total: number;
   byDomainLevelStatus: Record<string, number>;
