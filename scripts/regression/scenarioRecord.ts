@@ -173,9 +173,13 @@ const CTX_SKIP = /\b(?:ctx|context|t)\.skip\s*\(/;
 const ANY_SKIP = /\b(?:it|test|describe|suite)(?:\.\w+)*\.(?:skip|skipIf|runIf|todo|fails|fixme)\b|\bx(?:it|describe)\(|\{\s*(?:skip|todo|fails|fixme)\s*:\s*(?!false\b)/;
 // What a configured runner actually collects: root vitest includes **/*.test.ts(x); the browser
 // replays live under playwright/ as *.spec.ts. Anything else exists but is never run.
-// Playwright collects only the configured testDirs (tests, scenarios); fixtures/visual are not replays.
+// Playwright testDirs: tests (PR-cadence config) and scenarios (the manual scenarios config); fixtures/visual are not replays.
 const RUNNER_FILE = /(?:^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$)|(?:\.test\.tsx?$)/;
 // Mirrors vitest.config.ts `exclude`: those trees are never collected by the root run.
+// Receiver-agnostic skip/expected-fail calls, `{ skip }` option keys (quoted, shorthand, any position), `.only`.
+// Static analysis is best-effort: indirection (options in a variable) can still beat it; the S3 runner census is the binding proof.
+const SKIP_CALL = /\.\s*(?:skip|fixme|fail|fails|todo|skipIf|runIf|only)\s*\(|\bskip\s*\(/;
+const SKIP_OPTION = /[{,]\s*["']?(?:skip|todo|fails|fail|fixme)["']?\s*(?::\s*(?!false\b)|[,}])/;
 const PLAYWRIGHT_SPEC = /^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$/;
 const NOT_RUN_DIRS = /^(?:apps|packages|\.next|out|build)\/|(?:^|\/)(?:node_modules|\.claude)\//;
 const MATRIX_ROW = /^[A-Za-z0-9][A-Za-z0-9._-]{1,40}$/;
@@ -184,6 +188,8 @@ const PHONE = /(?:\+|\b00|\b0)\d[\d\s-]{7,}\d/;
 const MAX_TEXT = 300;
 const MAX_PATH = 200;
 const TOKEN_PATH = /^[A-Za-z][A-Za-z0-9_.:-]{0,59}$/;
+const KEY_TOKEN = /^[A-Za-z_][\w.:-]{0,59}$/;
+const IMPL_PATH = /^[\w./-]{1,200}$/;
 const VALUE_TOKEN = /^[\w.:+\/@#-]{1,60}$/;
 const SCRUM_KEY = /^SCRUM-\d+$/;
 const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
@@ -210,6 +216,11 @@ const isText = (v: unknown): v is string => typeof v === "string" && v.trim().le
 
 function unknownKeys(value: unknown, allowed: Set<string>): string[] {
   return isObject(value) ? Object.keys(value).filter((k) => !allowed.has(k)) : [];
+}
+
+function* keysIn(value: unknown): Generator<string> {
+  if (Array.isArray(value)) for (const v of value) yield* keysIn(v);
+  else if (isObject(value)) for (const [k, v] of Object.entries(value)) { yield k; yield* keysIn(v); }
 }
 
 function* stringsIn(value: unknown): Generator<string> {
@@ -296,6 +307,7 @@ function schemaProblems(r: unknown): string[] {
   if (isObject(r.impl) && ((r.impl.file !== undefined && (typeof r.impl.file !== "string" || r.impl.file.length > MAX_PATH)) || (r.impl.testName !== undefined && (typeof r.impl.testName !== "string" || r.impl.testName.length > MAX_TEXT)))) {
     out.push(`impl.file is capped at ${MAX_PATH} and impl.testName at ${MAX_TEXT} characters`);
   }
+  if (isObject(r.impl) && typeof r.impl.file === "string" && !IMPL_PATH.test(r.impl.file)) out.push("impl.file must be a plain repo path");
   for (const text of [r.retiredReason, r.candidateReason]) {
     if (text !== undefined && typeof text !== "string") out.push("reasons must be text");
     if (typeof text === "string" && text.length > MAX_TEXT) out.push(`reason text is capped at ${MAX_TEXT} characters`);
@@ -303,14 +315,14 @@ function schemaProblems(r: unknown): string[] {
   // Public repository: names, actions and observables are tokens, and any string inside input/value is a
   // short space-free token. Prose cannot ride in a step. (Not a guarantee a token is not a name: a human
   // reviews the PR; see regression/README.md.)
-  if (Array.isArray(r.steps) && r.steps.some((s) => isObject(s) && (!TOKEN_PATH.test(String(s.action)) || [...stringsIn(s.input)].some((v) => !VALUE_TOKEN.test(v))))) {
+  if (Array.isArray(r.steps) && r.steps.some((s) => isObject(s) && (!TOKEN_PATH.test(String(s.action)) || [...stringsIn(s.input)].some((v) => !VALUE_TOKEN.test(v)) || [...keysIn(s.input)].some((k) => !KEY_TOKEN.test(k))))) {
     out.push("step action must be a dotted token (deals.approve) and input strings short space-free tokens; no prose");
   }
-  if (Array.isArray(r.expected) && r.expected.some((e) => isObject(e) && (!TOKEN_PATH.test(String(e.observable)) || [...stringsIn(e.value)].some((v) => !VALUE_TOKEN.test(v))))) {
+  if (Array.isArray(r.expected) && r.expected.some((e) => isObject(e) && (!TOKEN_PATH.test(String(e.observable)) || [...stringsIn(e.value)].some((v) => !VALUE_TOKEN.test(v)) || [...keysIn(e.value)].some((k) => !KEY_TOKEN.test(k))))) {
     out.push("expected observable must be a dotted token (deal.status) and value strings short space-free tokens; no prose");
   }
   // Heuristic only (not a guarantee): obvious emails / phone numbers in any text field.
-  for (const s of stringsIn([r.steps, r.expected, r.retiredReason, r.candidateReason])) {
+  for (const s of stringsIn([r.steps, r.expected, r.retiredReason, r.candidateReason, isObject(r.impl) ? r.impl.testName : undefined])) {
     if (EMAIL.test(s) || PHONE.test(s)) {
       out.push("a text value looks like an email address or phone number; the repository is public");
       break;
@@ -327,6 +339,7 @@ export function validateLibrary(
   const rulingById = new Map(rulings.filter(isObject).map((r) => [r.id, r]));
   const ids = new Set<string>();
   const fingerprints = new Map<string, string>();
+  const bindings = new Map<string, string>();
 
   for (const r of records) {
     const label = isObject(r) && typeof r.id === "string" ? r.id : "<no id>";
@@ -381,8 +394,9 @@ export function validateLibrary(
     }
 
     // active: every level, browser replays included, must name the check that runs it.
+    if (r.level === "cloud") add("level", "no cloud runner exists yet (SCRUM-762): park it as a candidate with that issue instead of counting it active");
     if (r.level === "browser" && r.domain !== "screen") add("level", "only screen scenarios convert to a browser replay (R2)");
-    if (!r.impl?.file || !r.impl?.testName) {
+    if (!r.impl?.file || !r.impl?.testName?.trim()) {
       add("impl", "an active scenario must name its executable check (impl.file + impl.testName)");
     } else {
       const abs = path.resolve(repoRoot, r.impl.file.replace(/\\/g, "/"));
@@ -399,8 +413,12 @@ export function validateLibrary(
         // Playwright groups with test.describe(...); the shared AST helper only knows describe(...).
         const forHelper = text.replace(/\b(?:test|it)\.describe(?:\.(?:serial|parallel))?(?=\s*\()/g, "describe");
         // Exactly one active, NON-parameterized registration: test.each([]) names a case that never runs.
+        const bindKey = `${rel}::${r.impl.testName}`;
+        const sharedWith = bindings.get(bindKey);
+        if (sharedWith !== undefined) add("impl", `same impl.file + testName as ${sharedWith}: one check cannot stand for two scenarios`);
+        else bindings.set(bindKey, r.id);
         const named = listActiveTestRegistrations(forHelper, scriptKindFor(rel)).filter((t) => t.title.includes(r.impl!.testName));
-        if (named.length !== 1 || named[0].parameterized || CTX_SKIP.test(text) || ANY_SKIP.test(text)) {
+        if (named.length !== 1 || named[0].parameterized || CTX_SKIP.test(text) || ANY_SKIP.test(text) || SKIP_CALL.test(text) || SKIP_OPTION.test(text)) {
           add("skip", `${rel} has no single active test named "${r.impl.testName}" (skipped, conditional, duplicated or absent): a skip is a failure in the library (R4)`);
         }
       }

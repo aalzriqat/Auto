@@ -404,3 +404,48 @@ describe("review round 4 (Codex seat, PR #500): failing-first regressions", () =
     expect(() => validateLibrary([base({ status: "candidate", candidateReason: {} as never, candidateIssue: "SCRUM-1" })], { rulings: RULINGS, repoRoot: REPO_ROOT })).not.toThrow();
   });
 });
+describe("review round 5 (Opus closure #2, PR #500): failing-first regressions", () => {
+  const run = (body: string, over: Partial<ScenarioRecord> = {}, file = "x.test.ts") => {
+    const dir = mkdtempSync(path.join(tmpdir(), "regression-"));
+    try {
+      mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+      writeFileSync(path.join(dir, file), body);
+      return validateLibrary([base({ impl: { file, testName: "named case" }, ...over })], { rulings: RULINGS, repoRoot: dir }).map((p) => p.rule);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("M1: more skip / expected-failure spellings are refused (static check is best-effort; S3 census is the proof)", () => {
+    for (const body of [
+      `test("named case", { timeout: 5000, skip: true }, () => {});`,
+      `const skip = true; test("named case", { skip }, () => {});`,
+      `test("named case", { "skip": true }, () => {});`,
+      `test("named case", ({ skip }) => { skip(); });`,
+      `test("named case", (c) => { c.skip(); });`,
+      `test("named case", async ({ page }, testInfo) => { testInfo.skip(); });`,
+      `test("named case", async () => { test.fail(); });`,
+      `test("named case", async () => { test.info().skip(); });`,
+      `test.only("named case", () => {});`,
+    ]) expect(run(body)).toContain("skip");
+    expect(run(`test("named case", { timeout: 5000 }, () => {});`)).toEqual([]);
+  });
+
+  test("M2: an active cloud record cannot be certified until a cloud runner exists", () => {
+    expect(rules([base({ level: "cloud" })])).toContain("level");
+    expect(rules([base({ level: "cloud", status: "candidate", impl: undefined, candidateReason: "no runner yet", candidateIssue: "SCRUM-762" })])).toEqual([]);
+  });
+
+  test("M3: prose keys and prose impl fields are refused whatever the status", () => {
+    const keyed = { "customer Ahmed Ali 25 King Street owes 5,000 JOD": true };
+    expect(rules([base({ steps: [{ actor: { role: "sales", org: "A" }, action: "deals.approve", input: keyed }] })])).toContain("schema");
+    expect(rules([base({ status: "candidate", candidateReason: "x", candidateIssue: "SCRUM-770", impl: { file: "customer Ahmed Ali 25 King Street.test.ts", testName: "x" } })])).toContain("schema");
+  });
+
+  test("M4: a blank or shared testName cannot bind records to one check", () => {
+    expect(rules([base({ impl: { file: IMPL.file, testName: " " } })])).toContain("impl");
+    const a = base({ id: "scn-a", steps: [{ actor: { role: "sales", org: "A" }, action: "a.one", input: {} }] });
+    const b = base({ id: "scn-b", steps: [{ actor: { role: "sales", org: "A" }, action: "b.two", input: {} }] });
+    expect(rules([a, b])).toContain("impl");
+  });
+});
