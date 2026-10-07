@@ -188,7 +188,7 @@ function localUses(workflow: Workflow): string[] {
 // sha256 of each workflow that can reach a Convex credential.
 const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   "browser-attack-swarm.yml":
-    "f88fc750eda3cf953b6a092c80fcb67624f19ea539d3dedb16cfb3cc141d1f25",
+    "0ebe76990eff7714a3051040bcba3db160f21d515bda330fb2744861fe13f138",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":

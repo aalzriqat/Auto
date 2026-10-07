@@ -674,6 +674,27 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(stopRun).toContain('docker network rm "$CANDIDATE_NETWORK"');
   });
 
+  it("keeps a failed candidate runtime observable instead of destroying its logs (SCRUM-376)", () => {
+    // `docker run --rm` deleted a crashed candidate along with its stderr, so
+    // two different boot failures were diagnosed blind. The container must
+    // survive its own death, and the step must print exit state plus logs.
+    for (const jobName of ["trusted-e2e", "attack-worker"] as const) {
+      const run = String(
+        step(jobName, "Start verified exact-SHA candidate frontend artifact")
+          .run ?? "",
+      );
+      const dockerRun = run.split("\n").find((line) => /docker run /.test(line));
+      expect(dockerRun, jobName).toBeDefined();
+      expect(run, jobName).not.toMatch(/docker run[^\n]*--rm/);
+      expect(run, jobName).toContain("docker inspect --format");
+      expect(run, jobName).toMatch(/docker logs --tail \d+ "\$CANDIDATE_CONTAINER"/);
+      const stopRun = (workflow.jobs?.[jobName]?.steps ?? [])
+        .map((entry) => String(entry.run ?? ""))
+        .join("\n");
+      expect(stopRun, jobName).toContain('docker rm --force "$CANDIDATE_CONTAINER"');
+    }
+  });
+
   it("grants privileged workflow permissions only to the trusted jobs that need them", () => {
     expect(workflow.permissions).toEqual({
       contents: "read",
