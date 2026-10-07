@@ -15,6 +15,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
+import ts from "typescript";
+import { sourceHasActiveTestMarker } from "../autoflowInvariantCatalog";
 
 export const SCENARIO_DOMAINS = ["money", "permission", "tenancy", "screen"] as const;
 export const SCENARIO_LEVELS = ["backend", "cloud", "browser"] as const;
@@ -59,6 +61,8 @@ export interface ScenarioRecord {
   /** SCRUM-486 certification-matrix row, for money scenarios. */
   matrixRow?: string;
   bugRef?: { key: string; failingFirst: string };
+  candidateReason?: string;
+  candidateIssue?: string;
   retiredReason?: string;
   retiredByRuling?: string;
   invariantIds?: string[];
@@ -81,14 +85,19 @@ const SLUG = /^[a-z0-9][a-z0-9._-]{2,80}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const RULING_ID = /^SCRUM-\d+#c\d+$/;
-const ID_TOKEN = /^(?:[a-z0-9]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
-const ISO_TS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
-const RUN_SUFFIX = /-\d{6,}$/;
+const ID_TOKEN = /^(?:[a-z0-9]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|user_[A-Za-z0-9]{6,}|org_[A-Za-z0-9]{6,})$/;
+const ISO_TS = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}.*$/;
+// Epoch-style per-run suffix only (10+ digits): cheque/invoice numbers and amounts stay significant.
+const RUN_SUFFIX = /(?<=[A-Za-z])-\d{10,}$/;
+const NUMERIC = /^-?\d+(?:\.\d+)?$/;
 
 function normaliseValue(value: unknown): unknown {
   if (typeof value === "string") {
     if (ID_TOKEN.test(value)) return "<id>";
-    if (ISO_TS.test(value)) return "<ts>";
+    // Keep the DATE (a period boundary matters); drop only the time of day.
+    if (ISO_TS.test(value)) return value.replace(ISO_TS, "$1T<time>");
+    // "12000" and 12000 are the same input.
+    if (NUMERIC.test(value)) return Number(value);
     return value.replace(RUN_SUFFIX, "");
   }
   if (Array.isArray(value)) return value.map(normaliseValue);
@@ -112,7 +121,14 @@ export function scenarioFingerprint(
   record: Pick<ScenarioRecord, "domain" | "steps" | "expected">,
 ): string {
   const canonical = JSON.stringify(
-    normaliseValue({ domain: record.domain, steps: record.steps, expected: record.expected }),
+    normaliseValue({
+      domain: record.domain,
+      steps: record.steps,
+      // Assertion order is not part of the scenario.
+      expected: [...record.expected]
+        .map((e) => normaliseValue(e))
+        .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+    }),
   );
   return createHash("sha256").update(canonical).digest("hex");
 }
@@ -147,7 +163,106 @@ export interface ValidateLibraryOptions {
   repoRoot: string;
 }
 
-const SKIP_MARKER = /\b(?:it|test|describe)\.(?:skip|fixme|todo)\b|\bxit\(|\bxdescribe\(/;
+const CTX_SKIP = /\b(?:ctx|context|t)\.skip\s*\(/;
+// Conservative, file-wide: any skip/conditional/todo/fails marker anywhere in the check file fails the record.
+const ANY_SKIP = /\b(?:it|test|describe|suite)(?:\.\w+)*\.(?:skip|skipIf|runIf|todo|fails|fixme)\b|\bx(?:it|describe)\(/;
+const RUNNER_FILE = /\.(?:test|spec)\.(?:ts|tsx|mjs|js)$/;
+const NOT_RUN_DIRS = /^(?:apps|packages|node_modules|\.claude)\//;
+const MATRIX_ROW = /^[A-Za-z0-9][A-Za-z0-9._-]{1,40}$/;
+const EMAIL = /[\w.+-]+@[\w-]+\.[\w.-]+/;
+const PHONE = /(?:\+|\b00|\b0)\d[\d\s-]{7,}\d/;
+const MAX_TEXT = 300;
+
+const RECORD_KEYS = new Set([
+  "id", "fingerprint", "domain", "level", "status", "source", "steps", "expected", "rulings",
+  "impl", "matrixRow", "bugRef", "candidateReason", "candidateIssue", "retiredReason",
+  "retiredByRuling", "invariantIds", "sourceGlobs",
+]);
+const STEP_KEYS = new Set(["actor", "action", "input"]);
+const EXPECTED_KEYS = new Set(["observable", "value"]);
+const SOURCE_KEYS = new Set(["hunter", "runId", "firstSeen"]);
+const IMPL_KEYS = new Set(["file", "testName"]);
+const BUGREF_KEYS = new Set(["key", "failingFirst"]);
+
+const isObject = (v: unknown): v is Record<string, unknown> =>
+  v !== null && typeof v === "object" && !Array.isArray(v);
+const isText = (v: unknown): v is string => typeof v === "string" && v.trim().length > 0;
+
+function unknownKeys(value: unknown, allowed: Set<string>): string[] {
+  return isObject(value) ? Object.keys(value).filter((k) => !allowed.has(k)) : [];
+}
+
+function* stringsIn(value: unknown): Generator<string> {
+  if (typeof value === "string") yield value;
+  else if (Array.isArray(value)) for (const v of value) yield* stringsIn(v);
+  else if (isObject(value)) for (const v of Object.values(value)) yield* stringsIn(v);
+}
+
+function scriptKindFor(file: string): ts.ScriptKind {
+  if (file.endsWith(".tsx")) return ts.ScriptKind.TSX;
+  if (file.endsWith(".mjs") || file.endsWith(".js")) return ts.ScriptKind.JS;
+  return ts.ScriptKind.TS;
+}
+
+/**
+ * Shape problems only; returns an empty list when the record is safe to hand to
+ * the semantic rules. Never throws on a malformed record.
+ */
+function schemaProblems(r: unknown): string[] {
+  if (!isObject(r)) return ["record must be an object"];
+  const out: string[] = [];
+  if (typeof r.id !== "string" || !SLUG.test(r.id)) out.push("id must be a lowercase slug");
+  if (!SCENARIO_DOMAINS.includes(r.domain as ScenarioDomain)) out.push(`domain must be one of ${SCENARIO_DOMAINS.join("|")}`);
+  if (!SCENARIO_LEVELS.includes(r.level as ScenarioLevel)) out.push(`level must be one of ${SCENARIO_LEVELS.join("|")}`);
+  if (!SCENARIO_STATUSES.includes(r.status as ScenarioStatus)) out.push(`status must be one of ${SCENARIO_STATUSES.join("|")}`);
+  if (!isObject(r.source) || !(SCENARIO_HUNTERS as readonly string[]).includes(String(r.source.hunter))) {
+    out.push("source.hunter must be scripted|audit|explorer");
+  }
+  if (!Array.isArray(r.steps) || r.steps.length === 0) out.push("steps must be a non-empty array");
+  else {
+    for (const s of r.steps) {
+      if (!isObject(s) || !isObject(s.actor) || !isText(s.actor.role) || !isText(s.actor.org) || !isText(s.action) || !isObject(s.input)) {
+        out.push("every step needs actor{role,org}, action and input");
+        break;
+      }
+    }
+  }
+  if (!Array.isArray(r.expected) || r.expected.length === 0) out.push("expected must be a non-empty array");
+  else {
+    for (const e of r.expected) {
+      if (!isObject(e) || !isText(e.observable) || !("value" in e)) {
+        out.push("every expectation needs a non-empty observable and a value");
+        break;
+      }
+    }
+  }
+  if (!Array.isArray(r.rulings) || r.rulings.length === 0) {
+    out.push("a scenario must cite the owner ruling or business rule it checks (R4)");
+  } else if (r.rulings.some((x) => !isObject(x) || !isText(x.id) || !isText(x.digest))) {
+    out.push("every ruling ref needs id and digest");
+  }
+  // Closed schema: the public repo must not collect free-form notes (ruling text, customer data).
+  const extra = [
+    ...unknownKeys(r, RECORD_KEYS),
+    ...(Array.isArray(r.steps) ? r.steps.flatMap((s) => unknownKeys(s, STEP_KEYS)) : []),
+    ...(Array.isArray(r.expected) ? r.expected.flatMap((e) => unknownKeys(e, EXPECTED_KEYS)) : []),
+    ...unknownKeys(r.source, SOURCE_KEYS),
+    ...unknownKeys(r.impl, IMPL_KEYS),
+    ...unknownKeys(r.bugRef, BUGREF_KEYS),
+  ];
+  if (extra.length > 0) out.push(`unknown field(s) ${[...new Set(extra)].join(", ")}: records are a closed schema (no free-form notes)`);
+  for (const text of [r.retiredReason, r.candidateReason]) {
+    if (typeof text === "string" && text.length > MAX_TEXT) out.push(`reason text is capped at ${MAX_TEXT} characters`);
+  }
+  // Heuristic only (not a guarantee): obvious emails / phone numbers in any text field.
+  for (const s of stringsIn([r.steps, r.expected, r.retiredReason, r.candidateReason])) {
+    if (EMAIL.test(s) || PHONE.test(s)) {
+      out.push("a text value looks like an email address or phone number; the repository is public");
+      break;
+    }
+  }
+  return out;
+}
 
 export function validateLibrary(
   records: ScenarioRecord[],
@@ -159,21 +274,14 @@ export function validateLibrary(
   const fingerprints = new Map<string, string>();
 
   for (const r of records) {
-    const add = (rule: string, message: string) => problems.push({ scenario: r.id ?? "<no id>", rule, message });
+    const label = isObject(r) && typeof r.id === "string" ? r.id : "<no id>";
+    const add = (rule: string, message: string) => problems.push({ scenario: label, rule, message });
 
-    if (typeof r.id !== "string" || !SLUG.test(r.id)) add("schema", "id must be a lowercase slug");
+    const shape = schemaProblems(r);
+    for (const message of shape) add("schema", message);
+    if (shape.length > 0) continue;
     if (ids.has(r.id)) add("schema", "duplicate scenario id");
     ids.add(r.id);
-    if (!SCENARIO_DOMAINS.includes(r.domain)) add("schema", `domain must be one of ${SCENARIO_DOMAINS.join("|")}`);
-    if (!SCENARIO_LEVELS.includes(r.level)) add("schema", `level must be one of ${SCENARIO_LEVELS.join("|")}`);
-    if (!SCENARIO_STATUSES.includes(r.status)) add("schema", `status must be one of ${SCENARIO_STATUSES.join("|")}`);
-    if (!SCENARIO_HUNTERS.includes(r.source?.hunter)) add("schema", "source.hunter must be scripted|audit|explorer");
-    if (!Array.isArray(r.steps) || r.steps.length === 0) add("schema", "steps must be a non-empty array");
-    if (!Array.isArray(r.expected) || r.expected.length === 0) add("schema", "expected must be a non-empty array");
-    if (!Array.isArray(r.rulings) || r.rulings.length === 0) {
-      add("ruling", "a scenario must cite the owner ruling or business rule it checks (R4)");
-    }
-    if (problems.some((p) => p.scenario === r.id && p.rule === "schema")) continue;
 
     // R1 de-duplication: stored fingerprint must be the real one, and unique.
     const actual = scenarioFingerprint(r);
@@ -184,13 +292,13 @@ export function validateLibrary(
 
     // A bare HTTP status is not an economic observable.
     for (const e of r.expected) {
-      if (/^(?:http\s*)?(?:status)(?:\s*code)?$|^http$/i.test(String(e.observable).trim())) {
+      if (/^(?:(?:response|res|http)[._ ]?)?status(?:[._ ]?code)?$|^http(?:\s*\d{3})?$/i.test(String(e.observable).trim())) {
         add("expected", "expected observable is a bare HTTP status; assert the stored state instead");
       }
     }
 
     // R4 ruling drift: every cited ruling must exist in the snapshot at the digest recorded.
-    for (const ref of r.rulings ?? []) {
+    for (const ref of r.rulings) {
       const snap = rulingById.get(ref.id);
       if (!snap) add("ruling", `ruling ${ref.id} is not in regression/rulings.json`);
       else if (snap.digest !== ref.digest) {
@@ -198,39 +306,52 @@ export function validateLibrary(
       }
     }
 
-    if (r.status === "retired") {
-      if (!r.retiredReason?.trim()) add("retired", "a retired scenario needs retiredReason (R4: never left red and ignored)");
-      if (!r.retiredByRuling || !RULING_ID.test(r.retiredByRuling)) add("retired", "a retired scenario needs retiredByRuling");
-      continue;
-    }
-
     if (r.bugRef) {
       if (!COMMIT_SHA.test(r.bugRef.failingFirst ?? "")) add("bug", "bugRef.failingFirst must be the 40-char sha where the test was red");
       if (!/^SCRUM-\d+$/.test(r.bugRef.key ?? "")) add("bug", "bugRef.key must be a SCRUM key");
     }
 
-    if (r.status !== "active") continue; // candidate: counted and reported, not yet executable
+    if (r.status === "retired") {
+      if (!r.retiredReason?.trim()) add("retired", "a retired scenario needs retiredReason (R4: never left red and ignored)");
+      if (!r.retiredByRuling || !RULING_ID.test(r.retiredByRuling)) add("retired", "a retired scenario needs retiredByRuling");
+      else if (!rulingById.has(r.retiredByRuling)) add("retired", `retiredByRuling ${r.retiredByRuling} is not in regression/rulings.json`);
+      continue;
+    }
 
-    if (r.level === "browser") {
-      if (r.domain !== "screen") add("level", "only screen scenarios convert to a browser replay (R2)");
+    if (r.status === "candidate") {
+      // Demoting a red scenario to candidate must not be a free way to turn the library green.
+      if (!r.candidateReason?.trim()) add("candidate", "a candidate needs candidateReason");
+      if (!r.candidateIssue || !/^SCRUM-\d+$/.test(r.candidateIssue)) add("candidate", "a candidate needs candidateIssue (the SCRUM key tracking its promotion)");
+      continue; // reported and counted, not yet executable
+    }
+
+    // active: every level, browser replays included, must name the check that runs it.
+    if (r.level === "browser" && r.domain !== "screen") add("level", "only screen scenarios convert to a browser replay (R2)");
+    if (!r.impl?.file || !r.impl?.testName) {
+      add("impl", "an active scenario must name its executable check (impl.file + impl.testName)");
     } else {
-      if (!r.impl?.file || !r.impl?.testName) {
-        add("impl", "an active backend/cloud scenario must name its executable check (impl.file + impl.testName)");
-      } else {
-        const abs = path.join(repoRoot, r.impl.file);
-        if (!existsSync(abs)) add("impl", `impl.file ${r.impl.file} does not exist: cannot-run is a failure`);
-        else {
-          const text = readFileSync(abs, "utf8");
-          if (!text.includes(r.impl.testName)) add("impl", `impl.testName not found in ${r.impl.file}`);
-          if (SKIP_MARKER.test(text)) add("skip", `${r.impl.file} contains a skipped/fixme/todo test: a skip is a failure in the library (R4)`);
+      const rel = r.impl.file.replace(/\\/g, "/");
+      const abs = path.resolve(repoRoot, rel);
+      if (!abs.startsWith(path.resolve(repoRoot) + path.sep)) add("impl", "impl.file must stay inside the repository");
+      else if (!RUNNER_FILE.test(rel) || NOT_RUN_DIRS.test(rel)) {
+        add("impl", `impl.file ${rel} is not a test/spec file a runner executes`);
+      } else if (!existsSync(abs)) add("impl", `impl.file ${rel} does not exist: cannot-run is a failure`);
+      else {
+        const text = readFileSync(abs, "utf8");
+        // Same AST rules as the invariant proof markers: exactly one ACTIVE it/test whose title
+        // names the scenario; skip/skipIf/runIf/todo/only/fails or a skipped parent describe all fail.
+        if (!sourceHasActiveTestMarker(text, r.impl.testName, scriptKindFor(rel)) || CTX_SKIP.test(text) || ANY_SKIP.test(text)) {
+          add("skip", `${rel} has no single active test named "${r.impl.testName}" (skipped, conditional, duplicated or absent): a skip is a failure in the library (R4)`);
         }
       }
     }
-    if (r.domain === "money" && !r.matrixRow) add("matrix", "an active money scenario needs a SCRUM-486 matrixRow (R2)");
+    if (r.domain === "money") {
+      if (!r.matrixRow) add("matrix", "an active money scenario needs a SCRUM-486 matrixRow (R2)");
+      else if (!MATRIX_ROW.test(r.matrixRow)) add("matrix", "matrixRow has an invalid format");
+    }
   }
   return problems;
 }
-
 export interface LibraryReport {
   total: number;
   byDomainLevelStatus: Record<string, number>;
@@ -251,13 +372,14 @@ export function summariseLibrary(records: ScenarioRecord[]): LibraryReport {
   };
 }
 
-function collectScenarioFiles(dir: string): string[] {
+function collectScenarioFiles(dir: string, stray: string[]): string[] {
   if (!existsSync(dir)) return [];
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
     const full = path.join(dir, name);
-    if (statSync(full).isDirectory()) out.push(...collectScenarioFiles(full));
+    if (statSync(full).isDirectory()) out.push(...collectScenarioFiles(full, stray));
     else if (name.endsWith(".scenario.json")) out.push(full);
+    else if (name !== ".gitkeep") stray.push(full);
   }
   return out.sort();
 }
@@ -278,7 +400,12 @@ export function loadLibrary(repoRoot: string): {
     if (Array.isArray(parsed)) rulings = parsed as RulingSnapshotEntry[];
   }
   const records: ScenarioRecord[] = [];
-  for (const file of collectScenarioFiles(path.join(repoRoot, "regression", "scenarios"))) {
+  const stray: string[] = [];
+  const files = collectScenarioFiles(path.join(repoRoot, "regression", "scenarios"), stray);
+  for (const file of stray) {
+    problems.push({ scenario: path.relative(repoRoot, file), rule: "schema", message: "not a *.scenario.json file: it would be neither validated nor run" });
+  }
+  for (const file of files) {
     try {
       records.push(JSON.parse(readFileSync(file, "utf8")) as ScenarioRecord);
     } catch {
