@@ -26,7 +26,11 @@ jobs:
   reconcile:
     # Not the check name it publishes: one writer per check name.
     name: reconcile review evidence
-    if: github.ref == 'refs/heads/main'
+    # A workflow_run from a fork is never audited here; the push trigger covers main.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name != 'workflow_run' ||
+      github.event.workflow_run.head_repository.full_name == github.repository)
     permissions:
       checks: write
       contents: read

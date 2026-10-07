@@ -13,13 +13,14 @@ import { extractCanonicalInvariants } from "./jevImpact.mjs";
 import { AUDIT_ARTIFACT_NAME } from "./reviewAuditAuthority.mjs";
 import { createGithubClient, runController } from "./reviewAuditController.mjs";
 import { isCommitSha } from "./reviewEvidence.mjs";
+import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 
 const SHA = /^[0-9a-f]{40}$/;
 
 /** @param {string[]} args @param {{allowFailure?: boolean, cwd?: string}} [options] */
 function git(args, { allowFailure = false, cwd = undefined } = {}) {
   try {
-    return execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+    return execFileSync(resolveTrustedGitExecutable(), args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
   } catch (error) {
     if (allowFailure) return null;
     throw error;

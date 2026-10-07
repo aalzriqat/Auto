@@ -501,7 +501,11 @@ describe("SCRUM-644 S3b-2 workflow structure", () => {
       push: { branches: ["main"] },
       workflow_run: { workflows: ["Invariant Governance"], types: ["completed"] },
     });
-    expect(workflow.jobs.reconcile.if).toBe("github.ref == 'refs/heads/main'");
+    // The fork guard only COMPARES head_repository.full_name; nothing from the
+    // run's payload is interpolated into a step or a shell.
+    expect(String(workflow.jobs.reconcile.if).replace(/\s+/g, " ")).toBe(
+      "github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || github.event.workflow_run.head_repository.full_name == github.repository)",
+    );
     expect(workflow.concurrency).toEqual({ group: "tre-reconcile", "cancel-in-progress": false });
   });
 
@@ -533,7 +537,7 @@ describe("SCRUM-644 S3b-2 workflow structure", () => {
       expect(source).not.toMatch(/\beval\(|new Function|\bimport\(|\brequire\(|\bspawn(Sync)?\(|\bexec\(|\bexecSync\(/);
     }
     expect(controller).not.toContain("child_process");
-    expect([...cli.matchAll(/execFileSync\(([^,]+),/g)].map((match) => match[1])).toEqual(['"git"']);
+    expect([...cli.matchAll(/execFileSync\(([^,]+),/g)].map((match) => match[1])).toEqual(["resolveTrustedGitExecutable()"]);
   });
 
   test("report-only: the check name collides with no release-gated check or waiver", () => {
@@ -562,7 +566,9 @@ describe("SCRUM-644 S3b-2 workflow structure", () => {
     expect(steps[1].run).toContain('"$main_tip" != "$GITHUB_WORKFLOW_SHA"');
     expect(steps[1].run).toContain('"$checkout" != "$GITHUB_WORKFLOW_SHA"');
     expect(steps.some((step: { run?: string }) => step.run === "pnpm install --frozen-lockfile --ignore-scripts")).toBe(true);
-    expect(text).not.toMatch(/github\.event\.(pull_request|workflow_run)|head_branch|head\.ref|cache:/);
+    // The one permitted payload read is the job-level fork guard's comparison.
+    const withoutForkGuard = text.replace("github.event.workflow_run.head_repository.full_name == github.repository", "");
+    expect(withoutForkGuard).not.toMatch(/github\.event\.(pull_request|workflow_run)|head_branch|head\.ref|cache:/);
   });
 
   test("no other workflow uses the controller's name, artifact or check name", () => {
