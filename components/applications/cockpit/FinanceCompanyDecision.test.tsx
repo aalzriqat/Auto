@@ -698,8 +698,29 @@ describe("the derived figures", () => {
     );
 
     expect(screen.getByText("10,000 USD")).toBeTruthy();
-    expect(screen.getByText("2,000 USD")).toBeTruthy();
+    const row = document.querySelector('[data-row-kind="unfinanced"] dd');
+    expect(row?.textContent).toBe("2,000 USD");
     expect(screen.queryByText("1,200 USD")).toBeNull();
+  });
+
+  test("falls back to the stored unfinanced slice when the approved amount is not visible", () => {
+    renderCockpit(
+      wiring({
+        currency: "USD",
+        facts: {
+          approvedPurchaseRecorded: true,
+          approvedPurchaseAmountMinor: null,
+          submittedQuotationMinor: null,
+          financeCompanyFundedPortionMinor: 10_000 * 100,
+          unfinancedPortionMinor: 1_200 * 100,
+          dealerContributionMinor: 0,
+          appliedLtvPercent: 90,
+          closed: false,
+        },
+      })
+    );
+
+    expect(document.querySelector('[data-row-kind="unfinanced"] dd')?.textContent).toBe("1,200 USD");
   });
 
   test("CONTROL — an ordinary deal still shows the stored unfinanced slice, which equals approved − funded", () => {

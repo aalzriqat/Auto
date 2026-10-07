@@ -13,7 +13,9 @@ import { Separator } from "@/components/ui/separator";
  * the separator is arithmetic the backend already did on them, rendered
  * read-only: the funding split, the unfinanced portion and the dealership's own
  * contribution have exactly one author, `recomputeAndPatchEconomics`, and an
- * editable copy of any of them would be a second one.
+ * editable copy of any of them would be a second one. The one exception is the
+ * "Not financed" row, shown as approved − funded so it reconciles with the funded
+ * row when the first payment exceeds the stored slice (SCRUM-613 F-19).
  *
  * It lives beside the stage rail rather than inside the money panel, and that
  * placement is load-bearing. The money panel is gated on `view:finance`, which
