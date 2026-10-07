@@ -33,7 +33,7 @@ export function SettingsModule({
     timezone: "",
     approvalThresholdEnabled: "false",
     approvalMinProfitPercent: "",
-    commissionMode: "AUTO_MEMBER",
+    commissionMode: "MANUAL",
     generatedLeadAutoAssignmentEnabled: "false",
     reservationHoldDays: "",
   });
@@ -54,7 +54,7 @@ export function SettingsModule({
       timezone: next.timezone ?? "",
       approvalThresholdEnabled: next.approvalThresholdEnabled ? "true" : "false",
       approvalMinProfitPercent: next.approvalMinProfitPercent != null ? String(next.approvalMinProfitPercent) : "",
-      commissionMode: next.commissionMode ?? "AUTO_MEMBER",
+      commissionMode: next.commissionMode ?? "MANUAL",
       generatedLeadAutoAssignmentEnabled: next.generatedLeadAutoAssignmentEnabled ? "true" : "false",
       reservationHoldDays: next.reservationHoldDays != null ? String(next.reservationHoldDays) : "",
     });

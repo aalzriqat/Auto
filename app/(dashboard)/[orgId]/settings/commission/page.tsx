@@ -14,6 +14,7 @@ import { toast } from "@/components/ui/sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Info, Plus, Trash2, Zap, PenLine, Users } from "lucide-react";
 import { getErrorMessage } from "@/lib/errors";
+import { effectiveCommissionMode } from "@/convex/utils/commissionMode";
 
 interface Tier {
   minProfitAmount: number;
@@ -30,7 +31,8 @@ export default function CommissionSettingsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isSavingMode, setIsSavingMode] = useState(false);
 
-  const commissionMode = (settings?.commissionMode ?? "AUTO_MEMBER") as "AUTO_TIERS" | "AUTO_MEMBER" | "MANUAL";
+  // SCRUM-778: shows the mode the ledger actually runs — MANUAL until one is chosen.
+  const commissionMode = effectiveCommissionMode(settings);
 
   useEffect(() => {
     if (settings?.commissionTiers) {

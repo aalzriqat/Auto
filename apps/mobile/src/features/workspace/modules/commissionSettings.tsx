@@ -14,13 +14,13 @@ export function CommissionSettingsModule({ orgId }: { orgId: string }) {
   const settings = useQuery(api.orgSettings.get, { orgId });
   const upsertSettings = useMutation(api.orgSettings.upsert);
   const [saving, setSaving] = useState(false);
-  const [mode, setMode] = useState<MobileOrgSettings["commissionMode"]>("AUTO_MEMBER");
+  const [mode, setMode] = useState<MobileOrgSettings["commissionMode"]>("MANUAL");
   const [tiersText, setTiersText] = useState("");
   const [sampleProfit, setSampleProfit] = useState("1000");
 
   useEffect(() => {
     if (!settings) return;
-    setMode(settings.commissionMode ?? "AUTO_MEMBER");
+    setMode(settings.commissionMode ?? "MANUAL");
     setTiersText((settings.commissionTiers ?? [])
       .slice()
       .sort((a, b) => a.minProfitAmount - b.minProfitAmount)
@@ -66,7 +66,7 @@ export function CommissionSettingsModule({ orgId }: { orgId: string }) {
     <ModuleScroll>
       <SelectField
         label={locale === "ar" ? "نظام العمولة" : "Commission mode"}
-        value={mode ?? "AUTO_MEMBER"}
+        value={mode ?? "MANUAL"}
         options={[
           { label: "AUTO_MEMBER", value: "AUTO_MEMBER" },
           { label: "AUTO_TIERS", value: "AUTO_TIERS" },

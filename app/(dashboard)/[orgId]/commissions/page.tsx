@@ -36,6 +36,7 @@ import { useTableControls } from "@/hooks/useTableControls";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { getErrorMessage, getLocalizedErrorMessage, GENERIC_ERROR_MESSAGE } from "@/lib/errors";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
+import { effectiveCommissionMode } from "@/convex/utils/commissionMode";
 
 type CommissionStatus = "NOT_SET" | "NO_COMMISSION" | "UNPAID" | "PAID" | "VOID" | "PENDING_SALE";
 
@@ -91,7 +92,9 @@ export default function CommissionsPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const orgSettings = useOrgSettings();
-  const isManualMode = orgSettings?.commissionMode === "MANUAL";
+  // SCRUM-778: an org that never chose a mode runs MANUAL, exactly as the
+  // backend does. `undefined` is still loading — no queue banner until known.
+  const isManualMode = orgSettings !== undefined && effectiveCommissionMode(orgSettings) === "MANUAL";
 
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const canManage = myMembership?.permissions.includes("manage:commissions") ?? false;
