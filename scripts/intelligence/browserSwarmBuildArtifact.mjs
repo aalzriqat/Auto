@@ -207,6 +207,13 @@ async function materializeEntry({
 }
 
 /**
+ * Explicit UTF-16 code-unit comparator (Sonar S2871). Deliberately not
+ * localeCompare: that reorders mixed-case names relative to the default sort
+ * this replaced, which would change the pnpm hoist copy order.
+ */
+export const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
  * pnpm's node_modules holds symlinks, and each real package keeps its own
  * dependencies as siblings inside the virtual store. Materializing the links as
  * copies strands those siblings, so `node server.js` dies on its first require
@@ -235,11 +242,11 @@ async function hoistPnpmVirtualStore({
       budget,
     });
   };
-  for (const name of names.sort()) {
+  for (const name of names.sort(byCodeUnit)) {
     if (name.startsWith(".")) continue;
     if (name.startsWith("@")) {
       const scoped = await readdir(path.join(hoistRoot, name)).catch(() => []);
-      for (const child of scoped.sort()) await copyIfMissing(path.join(name, child));
+      for (const child of scoped.sort(byCodeUnit)) await copyIfMissing(path.join(name, child));
       continue;
     }
     await copyIfMissing(name);
