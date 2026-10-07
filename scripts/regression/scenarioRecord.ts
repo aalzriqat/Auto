@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
-import { sourceHasActiveTestMarker } from "../autoflowInvariantCatalog";
+import { listActiveTestRegistrations } from "../autoflowInvariantCatalog";
 
 export const SCENARIO_DOMAINS = ["money", "permission", "tenancy", "screen"] as const;
 export const SCENARIO_LEVELS = ["backend", "cloud", "browser"] as const;
@@ -89,7 +89,8 @@ const ID_TOKEN = /^(?:[a-z0-9]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-
 const ISO_TS = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}.*$/;
 // Epoch-style per-run suffix only (10+ digits): cheque/invoice numbers and amounts stay significant.
 const RUN_SUFFIX = /(?<=[A-Za-z])-\d{10,}$/;
-const NUMERIC = /^-?\d+(?:\.\d+)?$/;
+// A leading zero ("000123") is an identifier, not an amount: it must not collapse into 123.
+const NUMERIC = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
 
 function normaliseValue(value: unknown): unknown {
   if (typeof value === "string") {
@@ -175,12 +176,15 @@ const ANY_SKIP = /\b(?:it|test|describe|suite)(?:\.\w+)*\.(?:skip|skipIf|runIf|t
 // Playwright collects only the configured testDirs (tests, scenarios); fixtures/visual are not replays.
 const RUNNER_FILE = /(?:^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$)|(?:\.test\.tsx?$)/;
 // Mirrors vitest.config.ts `exclude`: those trees are never collected by the root run.
+const PLAYWRIGHT_SPEC = /^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$/;
 const NOT_RUN_DIRS = /^(?:apps|packages|\.next|out|build)\/|(?:^|\/)(?:node_modules|\.claude)\//;
 const MATRIX_ROW = /^[A-Za-z0-9][A-Za-z0-9._-]{1,40}$/;
 const EMAIL = /[\w.+-]+@[\w-]+\.[\w.-]+/;
 const PHONE = /(?:\+|\b00|\b0)\d[\d\s-]{7,}\d/;
 const MAX_TEXT = 300;
 const MAX_PATH = 200;
+const TOKEN_PATH = /^[A-Za-z][A-Za-z0-9_.:-]{0,59}$/;
+const VALUE_TOKEN = /^[\w.:+\/@#-]{1,60}$/;
 const SCRUM_KEY = /^SCRUM-\d+$/;
 const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
 const INVARIANT_ID = /^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$/;
@@ -293,7 +297,17 @@ function schemaProblems(r: unknown): string[] {
     out.push(`impl.file is capped at ${MAX_PATH} and impl.testName at ${MAX_TEXT} characters`);
   }
   for (const text of [r.retiredReason, r.candidateReason]) {
+    if (text !== undefined && typeof text !== "string") out.push("reasons must be text");
     if (typeof text === "string" && text.length > MAX_TEXT) out.push(`reason text is capped at ${MAX_TEXT} characters`);
+  }
+  // Public repository: names, actions and observables are tokens, and any string inside input/value is a
+  // short space-free token. Prose cannot ride in a step. (Not a guarantee a token is not a name: a human
+  // reviews the PR; see regression/README.md.)
+  if (Array.isArray(r.steps) && r.steps.some((s) => isObject(s) && (!TOKEN_PATH.test(String(s.action)) || [...stringsIn(s.input)].some((v) => !VALUE_TOKEN.test(v))))) {
+    out.push("step action must be a dotted token (deals.approve) and input strings short space-free tokens; no prose");
+  }
+  if (Array.isArray(r.expected) && r.expected.some((e) => isObject(e) && (!TOKEN_PATH.test(String(e.observable)) || [...stringsIn(e.value)].some((v) => !VALUE_TOKEN.test(v))))) {
+    out.push("expected observable must be a dotted token (deal.status) and value strings short space-free tokens; no prose");
   }
   // Heuristic only (not a guarantee): obvious emails / phone numbers in any text field.
   for (const s of stringsIn([r.steps, r.expected, r.retiredReason, r.candidateReason])) {
@@ -310,7 +324,7 @@ export function validateLibrary(
   { rulings, repoRoot }: ValidateLibraryOptions,
 ): LibraryProblem[] {
   const problems: LibraryProblem[] = [];
-  const rulingById = new Map(rulings.map((r) => [r.id, r]));
+  const rulingById = new Map(rulings.filter(isObject).map((r) => [r.id, r]));
   const ids = new Set<string>();
   const fingerprints = new Map<string, string>();
 
@@ -375,7 +389,7 @@ export function validateLibrary(
       // Classify the NORMALISED repo-relative path: "scripts/../apps/x.test.ts" is apps/.
       const rel = path.relative(path.resolve(repoRoot), abs).replace(/\\/g, "/");
       if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) add("impl", "impl.file must stay inside the repository");
-      else if (!RUNNER_FILE.test(rel) || NOT_RUN_DIRS.test(rel)) {
+      else if (!RUNNER_FILE.test(rel) || NOT_RUN_DIRS.test(rel) || PLAYWRIGHT_SPEC.test(rel) !== (r.level === "browser")) {
         add("impl", `impl.file ${rel} is not a test/spec file a runner executes`);
       } else if (!existsSync(abs)) add("impl", `impl.file ${rel} does not exist: cannot-run is a failure`);
       else {
@@ -384,14 +398,15 @@ export function validateLibrary(
         // names the scenario; skip/skipIf/runIf/todo/only/fails or a skipped parent describe all fail.
         // Playwright groups with test.describe(...); the shared AST helper only knows describe(...).
         const forHelper = text.replace(/\b(?:test|it)\.describe(?:\.(?:serial|parallel))?(?=\s*\()/g, "describe");
-        if (!sourceHasActiveTestMarker(forHelper, r.impl.testName, scriptKindFor(rel)) || CTX_SKIP.test(text) || ANY_SKIP.test(text)) {
+        // Exactly one active, NON-parameterized registration: test.each([]) names a case that never runs.
+        const named = listActiveTestRegistrations(forHelper, scriptKindFor(rel)).filter((t) => t.title.includes(r.impl!.testName));
+        if (named.length !== 1 || named[0].parameterized || CTX_SKIP.test(text) || ANY_SKIP.test(text)) {
           add("skip", `${rel} has no single active test named "${r.impl.testName}" (skipped, conditional, duplicated or absent): a skip is a failure in the library (R4)`);
         }
       }
     }
-    if (r.domain === "money") {
-      if (!r.matrixRow) add("matrix", "an active money scenario needs a SCRUM-486 matrixRow (R2)");
-      else if (!MATRIX_ROW.test(r.matrixRow)) add("matrix", "matrixRow has an invalid format");
+    if (r.domain !== "screen" && !r.matrixRow) {
+      add("matrix", `an active ${r.domain} scenario needs a SCRUM-486 matrixRow (R2)`);
     }
   }
   return problems;

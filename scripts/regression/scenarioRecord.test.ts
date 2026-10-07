@@ -37,6 +37,7 @@ function base(over: Partial<ScenarioRecord> = {}): ScenarioRecord {
     expected: [{ observable: "deal.status", value: "forbidden" }],
     rulings: [{ id: RULING, digest: DIGEST }],
     impl: IMPL,
+    matrixRow: "ROW-1",
     ...over,
   };
   r.fingerprint = over.fingerprint ?? scenarioFingerprint(r);
@@ -83,7 +84,8 @@ describe("scenario record validators", () => {
   });
 
   test("a bare HTTP status is not an observable", () => {
-    expect(rules([base({ expected: [{ observable: "HTTP status", value: 200 }] })])).toContain("expected");
+    expect(rules([base({ expected: [{ observable: "http.status", value: 200 }] })])).toContain("expected");
+    expect(rules([base({ expected: [{ observable: "HTTP status", value: 200 }] })]).length).toBeGreaterThan(0);
   });
 
   test("retired needs a reason and a ruling; red is never silently parked", () => {
@@ -112,7 +114,7 @@ describe("scenario record validators", () => {
   });
 
   test("a money scenario needs a SCRUM-486 matrix row", () => {
-    expect(rules([base({ domain: "money" })])).toContain("matrix");
+    expect(rules([base({ domain: "money", matrixRow: undefined })])).toContain("matrix");
     expect(rules([base({ domain: "money", matrixRow: "M-12" })])).toEqual([]);
   });
 
@@ -235,7 +237,8 @@ describe("review round 1 (Opus seat, PR #500): failing-first regressions", () =>
       rmSync(parent, { recursive: true, force: true });
     }
     for (const o of ["response.status", "res.status", "http_status", "HTTP 200"]) {
-      expect(rules([base({ expected: [{ observable: o, value: 200 }] })])).toContain("expected");
+      // bare tokens reach the "expected" rule; spaced spellings are refused earlier by the token schema
+      expect(rules([base({ expected: [{ observable: o, value: 200 }] })]).length).toBeGreaterThan(0);
     }
   });
 
@@ -271,7 +274,7 @@ describe("review round 2 (Codex seat, PR #500): failing-first regressions", () =
       try {
         mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
         writeFileSync(path.join(dir, file), `test("named case", () => {});`);
-        return validateLibrary([base({ impl: { file, testName: "named case" } })], { rulings: RULINGS, repoRoot: dir }).map((p) => p.rule);
+        return validateLibrary([base({ impl: { file, testName: "named case" }, ...(file.startsWith("playwright/") ? { domain: "screen" as const, level: "browser" as const, matrixRow: undefined } : {}) })], { rulings: RULINGS, repoRoot: dir }).map((p) => p.rule);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
@@ -298,7 +301,7 @@ describe("review round 3 (Opus closure, PR #500): failing-first regressions", ()
     try {
       mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
       writeFileSync(path.join(dir, file), body);
-      return validateLibrary([base({ impl: { file: repoFile, testName: "named case" } })], { rulings: RULINGS, repoRoot: dir }).map((p) => p.rule);
+      return validateLibrary([base({ impl: { file: repoFile, testName: "named case" }, ...(repoFile.startsWith("playwright/") ? { domain: "screen" as const, level: "browser" as const, matrixRow: undefined } : {}) })], { rulings: RULINGS, repoRoot: dir }).map((p) => p.rule);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -344,5 +347,60 @@ describe("review round 3 (Opus closure, PR #500): failing-first regressions", ()
     const noRun = base();
     delete (noRun.source as Partial<typeof noRun.source>).runId;
     expect(rules([noRun])).toContain("schema");
+  });
+});
+
+describe("review round 4 (Codex seat, PR #500): failing-first regressions", () => {
+  const withFile = (body: string, file: string, over: Partial<ScenarioRecord>) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "regression-"));
+    try {
+      mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+      writeFileSync(path.join(dir, file), body);
+      return validateLibrary([base({ impl: { file, testName: "named case" }, ...over })], { rulings: RULINGS, repoRoot: dir }).map((p) => p.rule);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("F1: an empty or parameterized named test is not a check that runs", () => {
+    expect(withFile(`test.each([])("named case", () => {});`, "x.test.ts", {})).toContain("skip");
+    expect(withFile(`describe.each([[1]])("g", () => { test("named case", () => {}); });`, "x.test.ts", {})).toContain("skip");
+    expect(withFile(`test("named case", () => {});`, "x.test.ts", {})).toEqual([]);
+  });
+
+  test("F2: the named check must run at the record's declared level", () => {
+    const spec = `test("named case", async () => {});`;
+    expect(rules([base({ domain: "screen", level: "browser", matrixRow: undefined })])).toContain("impl");
+    expect(withFile(spec, "playwright/scenarios/a.spec.ts", { domain: "screen", level: "browser", matrixRow: undefined })).toEqual([]);
+    expect(withFile(spec, "playwright/scenarios/a.spec.ts", { level: "backend" })).toContain("impl");
+  });
+
+  test("F3: prose in action, observable or input values is refused", () => {
+    const step = (action: string, input: Record<string, unknown>) => [{ actor: { role: "sales", org: "A" }, action, input }];
+    expect(rules([base({ steps: step("Ahmed paid 5000 at King Street 25", {}) })])).toContain("schema");
+    expect(rules([base({ steps: step("deals.approve", { note: "Ahmed from King Street" }) })])).toContain("schema");
+    expect(rules([base({ expected: [{ observable: "the customer Ahmed owes money", value: 1 }] })])).toContain("schema");
+    expect(rules([base({ expected: [{ observable: "deal.status", value: "free text about a customer" }] })])).toContain("schema");
+    expect(rules([base({ steps: step("deals.approve", { amount: 12000, method: "cheque", at: "2026-10-07T10:00:00Z" }) })])).toEqual([]);
+  });
+
+  test("F4: leading-zero identifiers stay distinct; amounts still equate", () => {
+    const withRef = (ref: string) => base({ steps: [{ actor: { role: "sales", org: "A" }, action: "x", input: { chequeNumber: ref } }] });
+    expect(scenarioFingerprint(withRef("000123"))).not.toBe(scenarioFingerprint(withRef("123")));
+    expect(scenarioFingerprint(withRef("12000"))).toBe(scenarioFingerprint(base({ steps: [{ actor: { role: "sales", org: "A" }, action: "x", input: { chequeNumber: 12000 } }] })));
+  });
+
+  test("F5: a permission or tenancy scenario also needs a matrix row", () => {
+    expect(rules([base({ matrixRow: undefined })])).toContain("matrix");
+    expect(rules([base({ domain: "tenancy", matrixRow: undefined })])).toContain("matrix");
+    expect(rules([base({ domain: "screen", level: "browser", matrixRow: undefined, impl: undefined })])).not.toContain("matrix");
+  });
+
+  test("F6: malformed snapshot entries and non-string reasons are reported, not thrown", () => {
+    expect(() => validateLibrary([base()], { rulings: [null as never, 5 as never], repoRoot: REPO_ROOT })).not.toThrow();
+    const out = () => validateLibrary([base({ status: "retired", retiredReason: 42 as never, retiredByRuling: RULING })], { rulings: RULINGS, repoRoot: REPO_ROOT });
+    expect(out).not.toThrow();
+    expect(out().map((p) => p.rule)).toContain("schema");
+    expect(() => validateLibrary([base({ status: "candidate", candidateReason: {} as never, candidateIssue: "SCRUM-1" })], { rulings: RULINGS, repoRoot: REPO_ROOT })).not.toThrow();
   });
 });
