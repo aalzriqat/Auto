@@ -704,7 +704,6 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
     for (const sentinel of [
       ...QUOTATION_SENTINELS,
       ...APPROVAL_SENTINELS,
-      ...GAP_ALLOCATION_SENTINELS,
       ...DISBURSEMENT_SENTINELS,
     ]) {
       expect(`MANAGER sees ${sentinel}: ${serialized.includes(sentinel)}`).toBe(
@@ -714,8 +713,10 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
     // RULED ACCEPTED, stated as an assertion rather than left implicit.
     expect(SENTINEL.quotation - SENTINEL.approved).toBe(SENTINEL.rawGap);
 
-    // The accounting economics remain shut for the same caller.
-    expect(scan(doors, FINANCE_ONLY_SENTINELS)).toEqual([]);
+    // The accounting economics remain shut for the same caller - and, since
+    // SCRUM-766 (ruling 8), so do the shortfall shares and how they are paid:
+    // they split the NET shortfall, which is an accounting figure.
+    expect(scan(doors, [...FINANCE_ONLY_SENTINELS, ...GAP_ALLOCATION_SENTINELS])).toEqual([]);
   });
 
   /**
@@ -857,6 +858,7 @@ describe("the finance-application read boundary (SCRUM-117)", () => {
         "targetNetProceedsMinor",
         "companyRuleSnapshot",
         "quotationCalculationSnapshot",
+        "quoteFirstPaymentCorrectedMinor",
         "approvedPurchaseNotes",
         "supplierDisbursedAmountMinor",
         "supplierDisbursementReference",

@@ -574,6 +574,10 @@ describe("SCRUM-27 OR-12 - the shortfall (sale price minus the letter) is settle
     await enterLetter(s, applicationId, { approvedAmountMinor: G - GAP }, NO_DEPOSIT);
     const after = await read();
     expect(after?.rawAppraisalGapMinor).toBe(GAP);
+    // SCRUM-766: a manual letter has no quote-time LTV to measure against, so the
+    // gross rule applies and says so (GROSS_MANUAL), never presented as a net figure.
+    expect(after?.netShortfallMethod).toBe("GROSS_MANUAL");
+    expect(after?.netShortfallMinor).toBe(GAP);
     expect(after?.gapResolution).toBe("PENDING_NEGOTIATION");
   });
 

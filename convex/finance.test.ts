@@ -116,6 +116,43 @@ describe("finance companies", () => {
     ).toHaveLength(0);
   });
 
+  test.each(["INDEPENDENT_APPRAISAL", "LOWER_OF_APPRAISAL_AND_QUOTATION"] as const)(
+    "a company cannot be saved on the retired %s LTV basis (SCRUM-766: the approved amount is the only money authority)",
+    async (ltvBasis) => {
+      const { t, orgId, asOwner } = await setupFinanceOrg();
+      const base = {
+        orgId,
+        name: "Appraisal Finance",
+        profitRate: 5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        isActive: true,
+      };
+      await expect(
+        asOwner.mutation(api.finance.createCompany, { ...base, ltvBasis })
+      ).rejects.toThrow(/retired/i);
+
+      const companyId = await asOwner.mutation(api.finance.createCompany, base);
+      await expect(
+        asOwner.mutation(api.finance.updateCompany, {
+          ...base,
+          id: companyId,
+          expectedEditRevision: 1,
+          ltvBasis,
+        })
+      ).rejects.toThrow(/retired/i);
+      expect((await t.run((ctx) => ctx.db.get(companyId)))?.ltvBasis).toBeUndefined();
+
+      // The approved amount stays savable.
+      await asOwner.mutation(api.finance.updateCompany, {
+        ...base,
+        id: companyId,
+        expectedEditRevision: 1,
+        ltvBasis: "APPROVED_PURCHASE_AMOUNT",
+      });
+    }
+  );
+
   test("fee template configuration is rejected on updateCompany as retired authority", async () => {
     const { t, orgId, asOwner } = await setupFinanceOrg();
     const companyId = await asOwner.mutation(api.finance.createCompany, {
