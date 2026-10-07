@@ -919,6 +919,10 @@ describe("the appraisal-gap stage", () => {
     expect(within(block).queryByRole("button", { name: "ResolveGapAction" })).toBeNull();
     expect(within(block).getByText("GapShortfallUnavailable")).toBeTruthy();
     expect(within(block).queryByText("GapResolutionNeedsDealFigures")).toBeNull();
+    // The parties note must not read "None" for a shortfall nobody could measure
+    // (review F4): it says the figure is unavailable.
+    expect(screen.getByText(/AppraisalGapUnavailable/)).toBeTruthy();
+    expect(screen.queryByText(/NoAppraisalGap/)).toBeNull();
   });
 
   test("the server's refusal is shown in the dialog, which stays open", async () => {

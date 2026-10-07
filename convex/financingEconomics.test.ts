@@ -7,6 +7,7 @@ import { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { PERMISSIONS } from "./utils/permissions";
 import { economicsStamp } from "./utils/financingEconomics";
+import { recomputeEconomicsForApplication } from "./financingEconomics";
 import {
   FIRST_PAYMENT_CORRECTION_REFUSALS,
   FIRST_PAYMENT_NOT_RECORDED_REASON,
@@ -6427,5 +6428,116 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
     expect(after.customerGapShareMinor).toBeUndefined();
     expect(after.customerGapCashToDealerMinor).toBeUndefined();
     expect(after.gapResolvedAt).toBeUndefined();
+  });
+
+  // Review F1/R1 (Opus + Codex, both blocking): withdrawing the approval left the
+  // NET fields behind, so `shortfallState` kept reporting a total for a deal with
+  // no approval and the resolver would split it. Invariant: the persisted net
+  // shortfall exists only while the approval it was measured against exists.
+  const NET_FIELDS = [
+    "netShortfallMethod",
+    "netShortfallMinor",
+    "valuationShortfallMinor",
+    "financingTermsShortfallMinor",
+  ] as const;
+
+  test("reopening the approval clears the whole net shortfall and the resolver refuses without an approval", async () => {
+    const { seed, applicationId } = await approvedWith({ approvedMajor: 11_500 });
+    expect((await readApp(seed, applicationId)).netShortfallMinor).toBe(jod(850));
+
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "Company withdrew its offer.",
+    });
+
+    const reopened = await readApp(seed, applicationId);
+    for (const field of NET_FIELDS) expect(reopened[field], field).toBeUndefined();
+
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await servedStamp(seed, applicationId),
+        ...allocation(850, 0, { cash: 850 }),
+      })
+    ).rejects.toThrow();
+    expect((await readApp(seed, applicationId)).gapResolution).toBeUndefined();
+  });
+
+  test("recording a superseding appraisal clears the whole net shortfall too", async () => {
+    const { seed, applicationId } = await approvedWith({ approvedMajor: 11_500 });
+    expect((await readApp(seed, applicationId)).netShortfallMinor).toBe(jod(850));
+
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_000),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+      reappraisalReason: "Company re-inspected the vehicle.",
+    });
+
+    const after = await readApp(seed, applicationId);
+    expect(after.approvedDealerPurchaseAmountMinor).toBeUndefined();
+    for (const field of NET_FIELDS) expect(after[field], field).toBeUndefined();
+  });
+
+  // Review F2 (Opus): the shared recompute re-ran the approval-time transition,
+  // which treats FAILED as "reopen". A cost recorded on a rejected/cancelled deal
+  // would flip "negotiation failed" back to PENDING_NEGOTIATION with nothing moved.
+  test("a recompute that moves nothing leaves a FAILED negotiation FAILED", async () => {
+    const { seed, applicationId } = await approvedWith({ approvedMajor: 11_500 });
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { gapResolution: "FAILED" }));
+
+    await seed.t.run((ctx) => recomputeEconomicsForApplication(ctx, applicationId));
+
+    const after = await readApp(seed, applicationId);
+    expect(after.netShortfallMinor).toBe(jod(850));
+    expect(after.gapResolution).toBe("FAILED");
+  });
+
+  // Review F3 (Opus): two reasons raised by one recompute must both survive.
+  test("an unknown remittance and an unavailable shortfall are both kept in the reconciliation reason", async () => {
+    const { seed, applicationId } = await approvedWith({
+      withoutQuotationSnapshot: true,
+      approvedMajor: 11_500,
+    });
+    // The company keeps the customer's payment, and nothing records where it went.
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { customerContributionSettlement: "RETAINED_BY_COMPANY" })
+    );
+    await seed.t.run((ctx) => recomputeEconomicsForApplication(ctx, applicationId));
+    const app = await readApp(seed, applicationId);
+    expect(app.netShortfallMethod).toBe("UNAVAILABLE");
+    expect(app.needsFinancingReconciliation).toBe(true);
+    expect(app.financingReconciliationReason ?? "").toMatch(/keeps the customer/i);
+    expect(app.financingReconciliationReason ?? "").toMatch(/quotation/i);
+  });
+
+  test("a stale split never survives a reopen-and-reapprove at the same total", async () => {
+    const { seed, applicationId } = await approvedWith({ approvedMajor: 11_500 });
+    await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      ...allocation(850, 0, { cash: 850 }),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "Company withdrew its offer.",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+    const after = await readApp(seed, applicationId);
+    expect(after.netShortfallMinor).toBe(jod(850));
+    // The earlier agreement belonged to the withdrawn approval.
+    expect(after.gapResolution).toBe("PENDING_NEGOTIATION");
+    expect(after.customerGapShareMinor).toBeUndefined();
   });
 });

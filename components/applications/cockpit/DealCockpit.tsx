@@ -4461,16 +4461,22 @@ function CustomerInvoiceFact({
  */
 function AppraisalGapNote({
   amountMinor,
+  unavailable,
   money,
   t,
 }: Readonly<{
   amountMinor: number | undefined;
+  /** The shortfall could not be measured: say so, never "None" (SCRUM-766). */
+  unavailable: boolean;
   money: (minor: number) => string;
   t: (key: string) => string;
 }>) {
+  let value: React.ReactNode = t("NoAppraisalGap");
+  if (unavailable) value = t("AppraisalGapUnavailable");
+  else if (amountMinor) value = <Money>{money(amountMinor)}</Money>;
   return (
     <p className="text-xs text-muted-foreground">
-      {t("AppraisalGapLabel")}: {amountMinor ? <Money>{money(amountMinor)}</Money> : t("NoAppraisalGap")}
+      {t("AppraisalGapLabel")}: {value}
     </p>
   );
 }
@@ -4550,7 +4556,7 @@ function MoneyPanel({
    */
   parties: Readonly<{
     items: DealMoney["parties"];
-    appraisalGap: Readonly<{ amountMinor: number | undefined }> | null;
+    appraisalGap: Readonly<{ amountMinor: number | undefined; unavailable: boolean }> | null;
     onSettleSupplier: (() => void) | undefined;
     supplierGuidance: string | undefined;
   }> | null;
@@ -4624,7 +4630,12 @@ function MoneyPanel({
               t={t}
             />
             {parties.appraisalGap && (
-              <AppraisalGapNote amountMinor={parties.appraisalGap.amountMinor} money={money} t={t} />
+              <AppraisalGapNote
+                amountMinor={parties.appraisalGap.amountMinor}
+                unavailable={parties.appraisalGap.unavailable}
+                money={money}
+                t={t}
+              />
             )}
           </div>
         )}
@@ -6029,7 +6040,10 @@ export function DealCockpitView({
                         items: deal.money.parties,
                         appraisalGap:
                           deal.applicationId !== null
-                            ? { amountMinor: deal.money.shortfall?.totalMinor }
+                            ? {
+                                amountMinor: deal.money.shortfall?.totalMinor,
+                                unavailable: deal.money.shortfall?.method === "UNAVAILABLE",
+                              }
                             : null,
                         onSettleSupplier: canSettleSupplier ? () => setSettlingSupplier(true) : undefined,
                         supplierGuidance,

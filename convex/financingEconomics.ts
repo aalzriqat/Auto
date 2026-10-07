@@ -322,6 +322,9 @@ async function recomputeAndPatchEconomics(
     if (nextShortfall.method === "UNAVAILABLE") {
       return shortfallMoved ? { gapResolution: undefined, ...GAP_RESOLUTION_CLEARED } : {};
     }
+    // A recompute that moved nothing must not re-open a FAILED negotiation: that
+    // reopening belongs to the approval writers, which own the lifecycle.
+    if (!shortfallMoved && app.gapResolution !== undefined) return {};
     return (
       gapResolutionTransition(
         nextShortfall.totalMinor ?? 0,
@@ -339,6 +342,18 @@ async function recomputeAndPatchEconomics(
       : sealed && shortfallMoved
         ? "The shortfall changed after the vehicle was handed over, so what was agreed about it can no longer be revisited automatically. Reconcile it before closing the deal."
         : undefined;
+
+  const remittanceReason = remittanceIsKnowable
+    ? app.financingReconciliationReason
+    : appendReconciliationReason(
+        app.financingReconciliationReason,
+        `${snapshot.companyName} keeps the customer's payment rather than passing it through, and how much reached them has not been recorded. The expected dealer remittance cannot be determined until it is.`
+      );
+  const reconcileReason = shortfallReconcileReason
+    ? appendReconciliationReason(remittanceReason, shortfallReconcileReason)
+    : remittanceIsKnowable
+      ? undefined
+      : remittanceReason;
 
   await ctx.db.patch(app._id, {
     economicsCurrency: currency,
@@ -361,23 +376,10 @@ async function recomputeAndPatchEconomics(
     // so for a company that retains customer funds this is not a transient
     // gap — it is every deal, permanently — and an unflagged blank reads
     // downstream exactly like agreement.
-    ...(remittanceIsKnowable
-      ? {}
-      : {
-          needsFinancingReconciliation: true,
-          financingReconciliationReason: appendReconciliationReason(
-            app.financingReconciliationReason,
-            `${snapshot.companyName} keeps the customer's payment rather than passing it through, and how much reached them has not been recorded. The expected dealer remittance cannot be determined until it is.`
-          ),
-        }),
-    ...(shortfallReconcileReason
-      ? {
-          needsFinancingReconciliation: true,
-          financingReconciliationReason: appendReconciliationReason(
-            app.financingReconciliationReason,
-            shortfallReconcileReason
-          ),
-        }
+    // One spread, reasons chained: two separate spreads let the later one drop
+    // the earlier reason (review F3).
+    ...(reconcileReason
+      ? { needsFinancingReconciliation: true, financingReconciliationReason: reconcileReason }
       : {}),
     updatedAt: Date.now(),
   });
@@ -2201,6 +2203,8 @@ export const recordAppraisal = mutation({
             dealerContributionMinor: undefined,
             expectedDealerRemittanceMinor: undefined,
             rawAppraisalGapMinor: undefined,
+            // The NET shortfall was measured against this approval (SCRUM-766).
+            ...shortfallFieldsFor(undefined),
             gapResolution: undefined,
             // Includes the note, which says things like "customer agreed to absorb the
             // full 1,000" — it cannot outlive the 1,000.
@@ -2768,6 +2772,8 @@ export const reopenApproval = mutation({
       dealerContributionMinor: undefined,
       expectedDealerRemittanceMinor: undefined,
       rawAppraisalGapMinor: undefined,
+      // The NET shortfall was measured against this approval (SCRUM-766).
+      ...shortfallFieldsFor(undefined),
       gapResolution: undefined,
       ...GAP_RESOLUTION_CLEARED,
       // Only when there was one. A MANUAL approval needs no appraisal, and
@@ -3057,6 +3063,17 @@ export const resolveAppraisalGap = mutation({
     if (args.economicsStamp !== economicsStamp(app)) {
       throw new ConvexError(
         "This deal's figures changed while you were agreeing the split. Re-check the appraisal gap before recording how it is settled."
+      );
+    }
+
+    // The shortfall is measured against an approval; with none standing there is
+    // nothing to split, whatever a stale field might still say (SCRUM-766 review).
+    const hasStandingApproval = isManualFinanceApplication(app)
+      ? app.manualApproval !== undefined
+      : app.approvedDealerPurchaseAmountMinor !== undefined;
+    if (!hasStandingApproval) {
+      throw new ConvexError(
+        "This deal has no standing finance-company approval, so there is no shortfall to settle. Record the approval first."
       );
     }
 

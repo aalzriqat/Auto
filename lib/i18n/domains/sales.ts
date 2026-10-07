@@ -2987,6 +2987,7 @@ export const salesEn = {
   CustomerInvoiceStateOpen: "The customer's invoice is still open",
   AppraisalGapLabel: "Shortfall",
   NoAppraisalGap: "None",
+  AppraisalGapUnavailable: "Cannot be worked out yet",
   RouteUnknownWarning:
     "The sale behind this deal could not be loaded, so which way it settles cannot be established. The figures that depend on it are withheld.",
 
@@ -4073,6 +4074,7 @@ export const salesAr = {
   CustomerInvoiceStateOpen: "فاتورة العميل لا تزال مفتوحة",
   AppraisalGapLabel: "العجز",
   NoAppraisalGap: "لا يوجد",
+  AppraisalGapUnavailable: "لا يمكن احتسابه بعد",
   RouteUnknownWarning:
     "تعذّر تحميل عملية البيع المرتبطة بهذه الصفقة، فلا يمكن تحديد طريقة التسوية. الأرقام المعتمدة عليها محجوبة.",
 
