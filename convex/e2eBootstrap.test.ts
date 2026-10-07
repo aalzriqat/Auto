@@ -2,11 +2,12 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { internal } from "./_generated/api";
 import schema from "./schema";
-import { PERMISSIONS } from "./utils/permissions";
+import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS } from "./utils/permissions";
 import {
   E2E_APPROVER_ROLE_NAME,
   E2E_ORGANIZATION_NAME,
   E2E_PRIMARY_ROLE_NAME,
+  HUNT_SEAT_ROLES,
 } from "./e2eBootstrap";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -951,5 +952,168 @@ describe("SCRUM-143 — the deployment class is re-proved, never remembered", ()
     });
     expect(preflight.orgName).toBe(E2E_ORGANIZATION_NAME);
     expect(preflight.deploymentClass).toBe("VERIFIED — declared preview");
+  });
+});
+
+describe("setHuntSeatRole — SCRUM-768 hunt seat re-roling", () => {
+  async function seeded() {
+    const t = await markedDeployment();
+    await bootstrap(t);
+    return t;
+  }
+
+  async function seatState(t: ReturnType<typeof newDeployment>, clerkUserId: string) {
+    return await t.run(async (ctx) => {
+      const user = await ctx.db
+        .query("users")
+        .withIndex("by_clerkId", (q) => q.eq("clerkId", clerkUserId))
+        .unique();
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_user", (q) => q.eq("userId", user!._id))
+        .unique();
+      const role = await ctx.db.get(membership!.roleId);
+      const agent = await ctx.db
+        .query("supportAgents")
+        .withIndex("by_userId", (q) => q.eq("userId", user!._id))
+        .unique();
+      return { roleName: role!.name, permissions: role!.permissions as string[], agent };
+    });
+  }
+
+  test("covers exactly the dealership roles: never super-admin, never support agent", () => {
+    expect(HUNT_SEAT_ROLES).toEqual(DEFAULT_ROLE_TEMPLATES.map((r) => r.name));
+    expect(HUNT_SEAT_ROLES).not.toContain("SUPER_ADMIN");
+    expect(HUNT_SEAT_ROLES).not.toContain("SUPPORT_AGENT");
+  });
+
+  test.each(DEFAULT_ROLE_TEMPLATES.map((r) => r.name))(
+    "moves the primary seat to %s with exactly the template's permissions",
+    async (roleName) => {
+      const t = await seeded();
+
+      const result = await t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+        seat: "primary",
+        clerkUserId: PRIMARY.clerkUserId,
+        role: roleName,
+        expectedCloudUrl: CLOUD_URL,
+      });
+
+      expect(result.role).toBe(roleName);
+      const state = await seatState(t, PRIMARY.clerkUserId);
+      const template = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === roleName)!;
+      expect(state.roleName).toBe(roleName);
+      expect([...state.permissions].sort()).toEqual([...template.permissions].sort());
+    },
+  );
+
+  test("resets the bootstrap's widened approver role to the MANAGER template", async () => {
+    const t = await seeded();
+    const template = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === "MANAGER")!;
+    const before = await seatState(t, APPROVER.clerkUserId);
+    const widened = before.permissions.some((p) => !(template.permissions as string[]).includes(p));
+
+    const result = await t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+      seat: "approver",
+      clerkUserId: APPROVER.clerkUserId,
+      role: "MANAGER",
+      expectedCloudUrl: CLOUD_URL,
+    });
+
+    expect(result.permissionsResetToTemplate).toBe(widened);
+    const after = await seatState(t, APPROVER.clerkUserId);
+    expect([...after.permissions].sort()).toEqual([...template.permissions].sort());
+  });
+
+  // A seat that kept its OWNER membership and gained a support-agent row would
+  // hold both authorities at once — not what any real support agent holds.
+  test("refuses SUPPORT_AGENT and never grants a support-agent row", async () => {
+    const t = await seeded();
+    await expect(
+      t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+        seat: "primary",
+        clerkUserId: PRIMARY.clerkUserId,
+        role: "SUPPORT_AGENT",
+        expectedCloudUrl: CLOUD_URL,
+      }),
+    ).rejects.toThrow(/not a hunt role/);
+    const state = await seatState(t, PRIMARY.clerkUserId);
+    expect(state.roleName).toBe("OWNER");
+    expect(state.agent).toBeNull();
+  });
+
+  test("refuses a role outside the hunt list", async () => {
+    const t = await seeded();
+    await expect(
+      t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+        seat: "primary",
+        clerkUserId: PRIMARY.clerkUserId,
+        role: "SUPER_ADMIN",
+        expectedCloudUrl: CLOUD_URL,
+      }),
+    ).rejects.toThrow(/not a hunt role/);
+  });
+
+  test("refuses a deployment other than the one the workflow named", async () => {
+    const t = await seeded();
+    await expect(
+      t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+        seat: "primary",
+        clerkUserId: PRIMARY.clerkUserId,
+        role: "SALES",
+        expectedCloudUrl: "https://kindly-hound-172.convex.cloud",
+      }),
+    ).rejects.toThrow(/aimed at deployment/);
+    expect((await seatState(t, PRIMARY.clerkUserId)).roleName).toBe(E2E_PRIMARY_ROLE_NAME);
+  });
+
+  test("refuses a deployment configured like a real one (SUPER_ADMIN_EMAILS set)", async () => {
+    const t = await seeded();
+    vi.stubEnv("SUPER_ADMIN_EMAILS", "someone@example.com");
+    await expect(
+      t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+        seat: "primary",
+        clerkUserId: PRIMARY.clerkUserId,
+        role: "SALES",
+        expectedCloudUrl: CLOUD_URL,
+      }),
+    ).rejects.toThrow(/configured production or dev deployment/);
+  });
+
+  test("refuses a deployment that does not declare itself a preview", async () => {
+    const t = await seeded();
+    vi.stubEnv("AUTOFLOW_DEPLOYMENT_CLASS", "");
+    await expect(
+      t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+        seat: "primary",
+        clerkUserId: PRIMARY.clerkUserId,
+        role: "SALES",
+        expectedCloudUrl: CLOUD_URL,
+      }),
+    ).rejects.toThrow(/declares no class/);
+  });
+
+  test("refuses a marked preview that was never seeded", async () => {
+    const t = await markedDeployment();
+    await expect(
+      t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+        seat: "primary",
+        clerkUserId: PRIMARY.clerkUserId,
+        role: "SALES",
+        expectedCloudUrl: CLOUD_URL,
+      }),
+    ).rejects.toThrow(/never seeded/);
+  });
+
+  test("refuses a Clerk user that is not a seated hunt identity", async () => {
+    const t = await seeded();
+    await expect(
+      t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+        seat: "primary",
+        clerkUserId: "user_someone_else",
+        role: "SALES",
+        expectedCloudUrl: CLOUD_URL,
+      }),
+    ).rejects.toThrow(/no user row/);
   });
 });
