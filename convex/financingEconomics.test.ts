@@ -6497,6 +6497,54 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
     expect(after.gapResolution).toBe("FAILED");
   });
 
+  // CodeRabbit #2 (validated): applyQuoteFirstPayment corrects a recorded-as-zero
+  // first payment to the quote's down payment. The zero was a recording error, not
+  // a quoted figure, so the frozen quote-side baseline must carry the corrected
+  // value too - else the correction itself reads as a financing-term change and
+  // shifts the shortfall by the first-payment delta (350 instead of 850 here).
+  test("correcting a zeroed first payment moves both sides of the shortfall together", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      if (!app) throw new Error("fixture: application vanished");
+      await ctx.db.patch(app.quoteId, { downPayment: 500 });
+    });
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      customerFirstPaymentMinor: 0,
+    });
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.applyQuoteFirstPayment, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      reason: "Dealer ruling: first payment is the quote's down payment",
+    });
+    const app = await readApp(seed, applicationId);
+    expect(app.customerFirstPaymentMinor).toBe(jod(500));
+    expect(app.quotationCalculationSnapshot?.customerFirstPaymentMinor).toBe(jod(500));
+    // Same as a deal quoted with a 500 first payment and approved at 11,500.
+    expect(app.netShortfallMinor).toBe(jod(850));
+  });
+
   // Opus L1: the resolver's own guard, independent of the clearing writers. A stale
   // NET total with no standing approval must still be refused, by that message.
   test("the resolver refuses a stale net shortfall when no approval stands", async () => {

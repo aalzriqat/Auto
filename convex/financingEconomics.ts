@@ -2862,6 +2862,19 @@ export const applyQuoteFirstPayment = mutation({
     );
     await ctx.db.patch(app._id, {
       customerFirstPaymentMinor: firstPaymentMinor,
+      // The recorded zero was an error, not a quoted figure (the dealer ruled the
+      // quote's down payment was the first payment all along), so the frozen
+      // quote-side baseline carries the corrected value as well. Otherwise the
+      // correction itself reads as a financing-term change and moves the
+      // shortfall by the first-payment delta (SCRUM-766, CodeRabbit).
+      ...(app.quotationCalculationSnapshot
+        ? {
+            quotationCalculationSnapshot: {
+              ...app.quotationCalculationSnapshot,
+              customerFirstPaymentMinor: firstPaymentMinor,
+            },
+          }
+        : {}),
       // See `economicsRevision` in the schema.
       economicsRevision: (app.economicsRevision ?? 0) + 1,
       ...(retireReason

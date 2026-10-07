@@ -4473,7 +4473,7 @@ function AppraisalGapNote({
 }>) {
   let value: React.ReactNode = t("NoAppraisalGap");
   if (unavailable) value = t("AppraisalGapUnavailable");
-  else if (amountMinor) value = <Money>{money(amountMinor)}</Money>;
+  else if (amountMinor !== undefined && amountMinor > 0) value = <Money>{money(amountMinor)}</Money>;
   return (
     <p className="text-xs text-muted-foreground">
       {t("AppraisalGapLabel")}: {value}

@@ -925,6 +925,26 @@ describe("the appraisal-gap stage", () => {
     expect(screen.queryByText(/NoAppraisalGap/)).toBeNull();
   });
 
+  // CodeRabbit #1: the NET total is unfloored; a negative one (showroom better off)
+  // must read "None" like the server's NOT_REQUIRED, never as a negative amount.
+  test("a negative net shortfall reads None in the parties note", () => {
+    grantTheWholeTail();
+    permissions.add(PERMISSIONS.VIEW_FINANCE);
+    queryResults.set(
+      COCKPIT_QUERY,
+      gapDeal({
+        money: {
+          ...GAP_MONEY,
+          shortfall: { method: "NET", totalMinor: -200_000, valuationMinor: -200_000, termsMinor: 0 },
+        },
+      })
+    );
+
+    renderCockpit();
+
+    expect(screen.getByText(/NoAppraisalGap/)).toBeTruthy();
+  });
+
   test("the server's refusal is shown in the dialog, which stays open", async () => {
     grantTheWholeTail();
     permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
