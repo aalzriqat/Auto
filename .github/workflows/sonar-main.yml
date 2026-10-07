@@ -12,9 +12,11 @@ jobs:
   scan:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # SCRUM-384: coverage + scan need ~20 min, and a cancelled run leaves no
-    # SonarCloud result, which refuses the production release (no waiver).
-    timeout-minutes: 45
+    # SCRUM-384: a cancelled run leaves no SonarCloud result, which refuses the
+    # production release (no waiver). SCRUM-763: coverage + scan now take ~45 min
+    # (three runs were cancelled at the old 45-minute budget), so 75 leaves headroom
+    # until the coverage step is split or sped up.
+    timeout-minutes: 75
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
