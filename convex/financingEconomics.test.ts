@@ -6597,6 +6597,17 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
     const app = await readApp(seed, applicationId);
     expect(app.quotationCalculationSnapshot?.customerFirstPaymentMinor).toBe(jod(500));
     expect(app.quoteFirstPaymentCorrectedMinor).toBeUndefined();
+    // Codex R5: the re-record's change trace names the retired correction instead
+    // of two identical sides and an empty "changed:" list.
+    const trace = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("financeApplicationOverrides").collect()).filter(
+        (row) => row.applicationId === applicationId && row.field === "submittedQuotationMinor"
+      )
+    );
+    const last = trace[trace.length - 1];
+    expect(last).toBeDefined();
+    expect(last.previousValue).not.toBe(last.newValue);
+    expect(last.reason).toMatch(/quote baseline first payment/);
   });
 
   // Codex R1 (validated): a SYSTEM_CALCULATED quotation IS the solver's output at

@@ -1760,6 +1760,16 @@ export async function applySubmittedQuotation(
     noteMove("buffer", app.quotationBufferMinor, bufferForSolver);
     noteMove("first payment", app.customerFirstPaymentMinor, customerFirstPaymentMinor);
     noteMove("LTV", app.appliedLtvPercent, appliedLtvPercent);
+    // The retired first-payment correction. The row's own figures can all match
+    // the new recording, which would leave this trace empty while the snapshot
+    // baseline is replaced and the correction dropped.
+    if (correctionSuperseded) {
+      movedInputs.push([
+        "quote baseline first payment",
+        `${app.quotationCalculationSnapshot?.customerFirstPaymentMinor ?? "unset"} (corrected to ${app.quoteFirstPaymentCorrectedMinor})`,
+        customerFirstPaymentMinor,
+      ]);
+    }
 
     const describe = (
       amountMinor: number | undefined,
