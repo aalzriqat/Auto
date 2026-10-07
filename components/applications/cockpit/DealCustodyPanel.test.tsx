@@ -280,6 +280,18 @@ describe("DealCustodyPanel", () => {
       expect(a.onMove).not.toHaveBeenCalled();
     });
 
+    test("more decimals than the currency holds is refused and named, never rounded (SCRUM-606)", () => {
+      const a = actions();
+      renderPanel(wiring({ actions: a, accounting: { ready: true } }));
+      fireEvent.click(screen.getByRole("button", { name: salesEn.CustodyRecordReturn }));
+      const dialog = screen.getByTestId("custody-returned-dialog");
+      const input = within(dialog).getByLabelText(/Amount/) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "100.1234" } });
+      expect(within(dialog).getByRole("alert").textContent).toBe(salesEn.AmountTooPrecise);
+      expect((within(dialog).getByTestId("custody-returned-submit") as HTMLButtonElement).disabled).toBe(true);
+      expect(a.onMove).not.toHaveBeenCalled();
+    });
+
     test("closing an unbalanced record needs a write-off reason; the write-off names the exact residual", () => {
       const a = actions();
       renderPanel(wiring({ actions: a, accounting: { ready: true } }));

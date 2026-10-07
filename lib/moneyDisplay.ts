@@ -14,6 +14,7 @@
  * Dependency-free so it is directly unit-testable.
  */
 import { supportedCurrencyScale } from "@/convex/utils/money";
+import { parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
 
 export type MoneyLocale = "ar" | "en";
 
@@ -55,22 +56,16 @@ export function formatMoneyAmount(amount: number, currency: string, scale = mone
 }
 
 /**
- * A minor-unit figure (fils, cents) as a number under the display policy. The
- * scale comes from the factor the caller already derived from the currency, so
- * 316_500 fils reads "316.500" and 25_000_000 reads "25,000".
+ * A typed major amount as an exact minor-unit integer (SCRUM-606). Parsed from
+ * the text, never through a float, so 12.3456 JOD is refused with `tooPrecise`
+ * instead of being rounded to a figure nobody typed. One grammar for every
+ * money-entry dialog: the string parser the other cockpit dialogs already use.
  */
-/**
- * A typed major amount as an exact minor-unit integer, or null when it carries
- * more decimals than the currency holds (SCRUM-606). `Math.round` would
- * silently turn 12.3456 JOD into 12.346 and record a figure nobody typed.
- */
-export function exactMinorFromMajor(major: number, scale: number): number | null {
-  if (!Number.isFinite(major)) return null;
-  const scaled = major * Math.pow(10, scale);
-  const minor = Math.round(scaled);
-  // Tolerance absorbs binary noise only (1.005 * 1000 = 1004.9999999999999).
-  if (Math.abs(scaled - minor) > 1e-6 + Math.abs(scaled) * 1e-12) return null;
-  return Number.isSafeInteger(minor) ? minor : null;
+export function parseTypedAmount(text: string, scale: number): { minor: number | null; tooPrecise: boolean } {
+  const parsed = parseMajorToMinor(text, scale);
+  return parsed.ok
+    ? { minor: parsed.minor, tooPrecise: false }
+    : { minor: null, tooPrecise: parsed.problem === "TOO_PRECISE" };
 }
 
 /**

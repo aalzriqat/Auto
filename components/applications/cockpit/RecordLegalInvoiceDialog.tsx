@@ -20,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { exactMinorFromMajor } from "@/lib/moneyDisplay";
+import { parseTypedAmount } from "@/lib/moneyDisplay";
 import {
   economicDateInputToMs,
   economicTodayDateInput,
@@ -29,11 +29,8 @@ import {
 } from "@/lib/dateInput";
 
 function parseMajor(value: string, scale: number): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed) || parsed <= 0) return null;
-  return exactMinorFromMajor(parsed, scale);
+  const { minor } = parseTypedAmount(value, scale);
+  return minor !== null && minor > 0 ? minor : null;
 }
 
 /**
@@ -215,7 +212,13 @@ export function RecordLegalInvoiceDialog({
               onChange={(e) => setAmount(e.target.value)}
               placeholder="0.00"
               required
+              aria-invalid={amount.trim() !== "" && amountMinor === null}
             />
+            {amount.trim() !== "" && amountMinor === null && (
+              <p role="alert" className="text-xs font-medium text-destructive">
+                {t(parseTypedAmount(amount, scale).tooPrecise ? "AmountTooPrecise" : "CustodyAmountInvalid")}
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">

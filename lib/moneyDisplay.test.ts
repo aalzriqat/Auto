@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { exactMinorFromMajor, formatMinorAmount,formatMoneyAmount, formatMoneyDisplay, moneyDisplayLabel, moneyDisplayScale } from "./moneyDisplay";
+import { formatMinorAmount, formatMoneyAmount, formatMoneyDisplay, moneyDisplayLabel, moneyDisplayScale, parseTypedAmount } from "./moneyDisplay";
 
 const NBSP = " ";
 
@@ -110,19 +110,24 @@ describe("formatMinorAmount (cockpit minor-unit figures, SCRUM-366)", () => {
   });
 });
 
-describe("exactMinorFromMajor (typed amounts recorded exactly or refused, SCRUM-606)", () => {
-  test("exact amounts convert, absorbing binary noise", () => {
-    expect(exactMinorFromMajor(1.005, 3)).toBe(1005);
-    expect(exactMinorFromMajor(316.854, 3)).toBe(316_854);
-    expect(exactMinorFromMajor(25, 2)).toBe(2500);
+describe("parseTypedAmount (typed amounts recorded exactly or refused, SCRUM-606)", () => {
+  test("exact amounts convert without float noise", () => {
+    expect(parseTypedAmount("1.005", 3)).toEqual({ minor: 1005, tooPrecise: false });
+    expect(parseTypedAmount("316.854", 3).minor).toBe(316_854);
+    expect(parseTypedAmount("25", 2).minor).toBe(2500);
+    expect(parseTypedAmount("1.50000", 3).minor).toBe(1500);
   });
-  test("more decimals than the currency holds is refused, never rounded", () => {
-    expect(exactMinorFromMajor(12.3456, 3)).toBeNull();
-    expect(exactMinorFromMajor(10.005, 2)).toBeNull();
-    expect(exactMinorFromMajor(1.5, 0)).toBeNull();
+  test("more decimals than the currency holds is refused and flagged, never rounded", () => {
+    expect(parseTypedAmount("12.3456", 3)).toEqual({ minor: null, tooPrecise: true });
+    expect(parseTypedAmount("10.005", 2)).toEqual({ minor: null, tooPrecise: true });
+    expect(parseTypedAmount("5.0000000001", 3)).toEqual({ minor: null, tooPrecise: true });
+    expect(parseTypedAmount("1.5", 0)).toEqual({ minor: null, tooPrecise: true });
   });
-  test("non-finite is refused", () => {
-    expect(exactMinorFromMajor(Number.NaN, 2)).toBeNull();
+  test("non-amounts are refused without the precision flag; Arabic-Indic digits parse", () => {
+    expect(parseTypedAmount("abc", 2)).toEqual({ minor: null, tooPrecise: false });
+    expect(parseTypedAmount("-5", 2)).toEqual({ minor: null, tooPrecise: false });
+    expect(parseTypedAmount("0x10", 2)).toEqual({ minor: null, tooPrecise: false });
+    expect(parseTypedAmount("١٢٫٥", 3).minor).toBe(12_500);
   });
 });
 
