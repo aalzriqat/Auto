@@ -1,6 +1,7 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { NOTIFICATION_TYPES } from "../../lib/notifications/types";
 import { ACTION_EXPECTATIONS, UNMODELLED_TYPES } from "./sideEffectExpectations";
 import { fingerprintEffect, judgeEffects, recipients, type Member } from "./sideEffectOracle";
 
@@ -59,38 +60,43 @@ describe("sideEffectOracle", () => {
   });
 });
 
-describe("expectation table vs the code (enumerated by tool)", () => {
-  const walk = (dir: string): string[] =>
-    readdirSync(dir).flatMap((n) => {
-      const p = join(dir, n);
-      if (n === "_generated" || n === "node_modules") return [];
-      return statSync(p).isDirectory() ? walk(p) : /\.ts$/.test(n) && !/\.test\.ts$/.test(n) ? [p] : [];
-    });
-  const root = join(__dirname, "..", "..");
-  const dispatched = new Set<string>();
-  for (const file of walk(join(root, "convex"))) {
-    const text = readFileSync(file, "utf8");
-    for (const m of text.matchAll(/\b(?:notifyUser|notifyManagers|notifyByPermission|notifyAllMembers|notifyOwner)\(\s*ctx,[^"`)]*?"([a-z]+\.[a-z_.]+)"/g)) {
-      dispatched.add(m[1]);
-    }
-  }
-  const modelled = new Set(ACTION_EXPECTATIONS.flatMap((a) => a.effects.map((e) => e.type)));
-  const byName = (a: string, b: string) => a.localeCompare(b);
+describe("short delivery", () => {
+  it("flags a row expected twice but delivered once", () => {
+    const exp = [
+      { type: "lead.updated", audience: { kind: "user", userId: "mgr" } },
+      { type: "lead.updated", audience: { kind: "managers", excludeActor: false } },
+    ] as const;
+    const fs = judgeEffects([...exp], [{ userId: "mgr", type: "lead.updated" }, { userId: "owner", type: "lead.updated" }], members, "owner");
+    expect(fs.map((f) => f.kind)).toEqual(["missing"]);
+  });
+});
 
-  it("every dispatched type is modelled or deliberately listed as unmodelled (no silent gaps)", () => {
-    const gap = [...dispatched].filter((t) => !modelled.has(t)).sort(byName);
+describe("expectation table vs the code  (enumerated by tool)", () => {
+  const root = join(__dirname, "..", "..");
+  const byName = (a: string, b: string) => a.localeCompare(b);
+  const modelled = new Set(ACTION_EXPECTATIONS.flatMap((a) => a.effects.map((e) => e.type)));
+  const registry = Object.keys(NOTIFICATION_TYPES);
+
+  it("every registered type is modelled or deliberately listed as unmodelled (no silent gaps)", () => {
+    const gap = registry.filter((t) => !modelled.has(t)).sort(byName);
     expect(gap).toEqual([...UNMODELLED_TYPES].sort(byName));
   });
 
-  it("a modelled type is never also listed unmodelled, and every modelled type is really dispatched", () => {
+  it("a modelled type is never also listed unmodelled, and every modelled type is registered", () => {
     for (const t of UNMODELLED_TYPES) expect(modelled.has(t)).toBe(false);
-    for (const t of modelled) expect(dispatched.has(t)).toBe(true);
+    for (const t of modelled) expect(registry).toContain(t);
   });
 
-  it("every row's source file really dispatches each type the row promises", () => {
+  it("every row's cited lines really call a notify helper for the type the row promises", () => {
     for (const a of ACTION_EXPECTATIONS) {
-      const text = readFileSync(join(root, a.source.split(":")[0]), "utf8");
-      for (const e of a.effects) expect(text).toContain(`"${e.type}"`);
+      const [file, lines] = a.source.split(":");
+      const text = readFileSync(join(root, file), "utf8").split("\n");
+      const cited = lines.split(",").map((n) => Number(n));
+      // A notify call spans a few lines: the type must appear within the call that starts at the cited line.
+      const calls = cited.map((n) => text.slice(n - 1, n + 6).join("\n"));
+      for (const e of a.effects) {
+        expect(calls.some((c) => /notify\w+\(/.test(c) && c.includes(`"${e.type}"`))).toBe(true);
+      }
     }
   });
 });

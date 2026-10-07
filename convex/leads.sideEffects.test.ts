@@ -107,6 +107,16 @@ describe("lead actions produce exactly the notifications they promise (SCRUM-620
     expect(judge(c, "lead.update", observed)).toEqual([]);
   });
 
+  test("re-saving with the SAME assignee does not notify the assignee again", async () => {
+    const c = await setup();
+    const leadId = await c.asActor.mutation(api.leads.create, { orgId: c.orgId, customerId: c.customerId, source: "Walk-in", assignedUserId: c.sales1 });
+    // The edit dialog resubmits every field on every save, assignee included.
+    const observed = await observe(c, () =>
+      c.asActor.mutation(api.leads.update, { orgId: c.orgId, leadId, assignedUserId: c.sales1, notes: "resaved" }),
+    );
+    expect(judge(c, "lead.update", observed)).toEqual([]);
+  });
+
   test("lead.reassign notifies managers and the NEW assignee only", async () => {
     const c = await setup();
     const leadId = await c.asActor.mutation(api.leads.create, { orgId: c.orgId, customerId: c.customerId, source: "Walk-in", assignedUserId: c.sales1 });

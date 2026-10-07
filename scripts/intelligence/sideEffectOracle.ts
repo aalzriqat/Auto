@@ -77,7 +77,7 @@ export function judgeEffects(
   for (const [k, n] of want) {
     const [type, userId] = k.split("\u0000");
     const have = got.get(k) ?? 0;
-    if (have === 0) findings.push({ kind: "missing", type, userId });
+    if (have < n) findings.push({ kind: "missing", type, userId });
     else if (have > n) findings.push({ kind: "duplicate", type, userId, count: have });
   }
   for (const [k] of got) {
