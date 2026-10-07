@@ -600,6 +600,9 @@ describe("the appraisal-gap stage", () => {
     // The shortfall travels with the other AMOUNTS, under the same gate as the
     // rest of the money — the stage rail is deliberately qualitative.
     appraisalGapMinor: 1_000_000,
+    // SCRUM-766: what is SETTLED is the NET shortfall (12,500 -> 11,500 at 85%
+    // lends 850 less), not the gross 1,000 above.
+    shortfall: { method: "NET", totalMinor: 850_000, valuationMinor: 850_000, termsMinor: 0 },
   };
   const GAP_STAGES = [
     { key: "APPRAISAL", state: "COMPLETE" },
@@ -811,16 +814,16 @@ describe("the appraisal-gap stage", () => {
     const figures = within(dialog).getByTestId("gap-figures");
     expect(figures.textContent).toContain("12,500");
     expect(figures.textContent).toContain("11,500");
-    expect(within(dialog).getByTestId("gap-amount").textContent).toContain("1,000");
+    expect(within(dialog).getByTestId("gap-amount").textContent).toContain("850");
+    expect(within(dialog).getByTestId("gap-amount").textContent).not.toContain("1,000");
 
-    // Customer absorbs (default): nothing to type for the share; the three
+    // Customer absorbs (default): nothing to type for the share; both
     // destinations must each be decided — blank is not zero.
     const submit = within(dialog).getByRole("button", { name: "ResolveGapAction" }) as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
     expect(within(dialog).getByTestId("gap-readiness").textContent).toBe("GapDestinationsIncomplete");
     fireEvent.change(within(dialog).getByLabelText("GapCashToDealer"), { target: { value: "700" } });
-    fireEvent.change(within(dialog).getByLabelText("GapInstallmentsToDealer"), { target: { value: "0" } });
-    fireEvent.change(within(dialog).getByLabelText("GapToFinanceCompany"), { target: { value: "300" } });
+    fireEvent.change(within(dialog).getByLabelText("GapInstallmentsToDealer"), { target: { value: "150" } });
     expect(within(dialog).getByTestId("gap-readiness").textContent).toBe("GapAllocationComplete");
     expect(submit.disabled).toBe(false);
     fireEvent.click(submit);
@@ -830,11 +833,11 @@ describe("the appraisal-gap stage", () => {
       orgId: ORG,
       applicationId: APP,
       economicsStamp: "v2|7",
-      customerGapShareMinor: 1_000_000,
+      customerGapShareMinor: 850_000,
       dealerGapShareMinor: 0,
       customerGapCashToDealerMinor: 700_000,
-      customerGapInstallmentToDealerMinor: 0,
-      customerGapToFinanceCompanyMinor: 300_000,
+      customerGapInstallmentToDealerMinor: 150_000,
+      customerGapToFinanceCompanyMinor: 0,
       notes: undefined,
     });
   });
@@ -857,7 +860,7 @@ describe("the appraisal-gap stage", () => {
     await waitFor(() => expect(mutationCalls.get(GAP_MUTATION)).toHaveLength(1));
     expect(mutationCalls.get(GAP_MUTATION)?.[0]).toMatchObject({
       customerGapShareMinor: 0,
-      dealerGapShareMinor: 1_000_000,
+      dealerGapShareMinor: 850_000,
       customerGapCashToDealerMinor: 0,
       customerGapInstallmentToDealerMinor: 0,
       customerGapToFinanceCompanyMinor: 0,
@@ -874,13 +877,12 @@ describe("the appraisal-gap stage", () => {
     fireEvent.click(within(nextStepBlock()).getByRole("button", { name: "ResolveGapAction" }));
     const dialog = screen.getByRole("dialog");
     fireEvent.click(within(dialog).getByRole("radio", { name: /^GapSplit/ }));
-    fireEvent.change(within(dialog).getByLabelText("GapCustomerShare"), { target: { value: "600" } });
+    fireEvent.change(within(dialog).getByLabelText("GapCustomerShare"), { target: { value: "450" } });
     expect(within(dialog).getByText("GapDealerShare").parentElement?.textContent).toContain("400");
-    fireEvent.change(within(dialog).getByLabelText("GapCashToDealer"), { target: { value: "500" } });
+    fireEvent.change(within(dialog).getByLabelText("GapCashToDealer"), { target: { value: "350" } });
     fireEvent.change(within(dialog).getByLabelText("GapInstallmentsToDealer"), { target: { value: "0" } });
-    fireEvent.change(within(dialog).getByLabelText("GapToFinanceCompany"), { target: { value: "0" } });
     const submit = within(dialog).getByRole("button", { name: "ResolveGapAction" }) as HTMLButtonElement;
-    // 500 ≠ 600: the shared identity refuses, and the reason is named.
+    // 350 ≠ 450: the shared identity refuses, and the reason is named.
     expect(submit.disabled).toBe(true);
     expect(within(dialog).getByTestId("gap-readiness").textContent).toBe("GapAllocationMismatch");
     fireEvent.change(within(dialog).getByLabelText("GapInstallmentsToDealer"), { target: { value: "100" } });
@@ -889,12 +891,34 @@ describe("the appraisal-gap stage", () => {
 
     await waitFor(() => expect(mutationCalls.get(GAP_MUTATION)).toHaveLength(1));
     expect(mutationCalls.get(GAP_MUTATION)?.[0]).toMatchObject({
-      customerGapShareMinor: 600_000,
+      customerGapShareMinor: 450_000,
       dealerGapShareMinor: 400_000,
-      customerGapCashToDealerMinor: 500_000,
+      customerGapCashToDealerMinor: 350_000,
       customerGapInstallmentToDealerMinor: 100_000,
       customerGapToFinanceCompanyMinor: 0,
     });
+  });
+
+  test("an UNAVAILABLE shortfall offers no dialog and says why instead of showing 0", () => {
+    grantTheWholeTail();
+    permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+    permissions.add(PERMISSIONS.VIEW_FINANCE);
+    queryResults.set(
+      COCKPIT_QUERY,
+      gapDeal({
+        money: {
+          ...GAP_MONEY,
+          shortfall: { method: "UNAVAILABLE", totalMinor: undefined, valuationMinor: undefined, termsMinor: undefined },
+        },
+      })
+    );
+
+    renderCockpit();
+
+    const block = nextStepBlock();
+    expect(within(block).queryByRole("button", { name: "ResolveGapAction" })).toBeNull();
+    expect(within(block).getByText("GapShortfallUnavailable")).toBeTruthy();
+    expect(within(block).queryByText("GapResolutionNeedsDealFigures")).toBeNull();
   });
 
   test("the server's refusal is shown in the dialog, which stays open", async () => {

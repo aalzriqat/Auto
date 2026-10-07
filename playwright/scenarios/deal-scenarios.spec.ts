@@ -562,9 +562,10 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
     ...BASE,
     approved: 12_000,
     legalInvoice: 13_000,
-    gap: { mode: "CUSTOMER_ABSORBS", cash: 1_000, installments: 0, toFinanceCompany: 0 },
+    gap: { mode: "CUSTOMER_ABSORBS", cash: 1_000, installments: 0 },
     expectedPayment: "BANK_TRANSFER",
-    // funded = min(10,800, 9,000) = 9,000; contribution 0.
+    // funded = min(10,800, 9,000) = 9,000; contribution 0. Net shortfall (SCRUM-766)
+    // = showroom remainder 13,000 at quote − 12,000 actual = 1,000 (same LTV/first payment).
     expect: {
       close: {
         "1210": { dr: jod(12_000) },
@@ -577,15 +578,16 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
   },
   {
     id: "F23",
-    title: "LTV 70, approved 12,000 of 13,000: gap split, customer 400 by instalments, dealer 600",
+    title: "LTV 70, approved 12,000 of 13,000: net shortfall 700 split, customer 400 by instalments, dealer 300",
     company: LTV70,
     ...BASE,
     approved: 12_000,
     legalInvoice: 12_400,
-    gap: { mode: "SPLIT", customerShare: 400, cash: 0, installments: 400, toFinanceCompany: 0 },
+    gap: { mode: "SPLIT", customerShare: 400, cash: 0, installments: 400 },
     expectedPayment: "BANK_TRANSFER",
     forwardMethod: "BANK_TRANSFER",
-    // contribution = 12,000 − 8,400 − 3,000 = 600 (as F18); the dealer's 600 gap share is forgone revenue.
+    // contribution = 12,000 − 8,400 − 3,000 = 600 (as F18). Net shortfall = remainder at quote
+    // 12,100 (contribution 900) − actual 11,400 = 700 (SCRUM-766), not the gross 1,000.
     expect: {
       close: {
         "1210": { dr: jod(12_000) },
@@ -599,33 +601,23 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
       disbursement: { "1110": { dr: jod(12_000) }, "1210": { cr: jod(12_000) } },
     },
   },
-  {
-    id: "F24",
-    title: "LTV 90, approved 12,000 of 13,000: the customer pays the gap to the finance company",
-    company: LTV90,
-    ...BASE,
-    approved: 12_000,
-    legalInvoice: 12_000,
-    gap: { mode: "CUSTOMER_ABSORBS", cash: 0, installments: 0, toFinanceCompany: 1_000 },
-    expectedPayment: "BANK_TRANSFER",
-    // Not dealership money: the books read exactly as F17.
-    expect: {
-      close: { "1210": { dr: jod(12_000) }, "4100": { cr: jod(12_000) }, ...COST_OF_SALE },
-      disbursement: { "1110": { dr: jod(12_000) }, "1210": { cr: jod(12_000) } },
-    },
-  },
+  // F24 (customer pays the gap to the finance company) is RETIRED by SCRUM-766: that
+  // destination is refused until PR-B (customer-pays-FC reduces the showroom
+  // contribution). It returns, re-ruled, with PR-B; the refusal itself is pinned by
+  // convex/financingEconomics.test.ts.
   {
     id: "F25",
-    title: "LTV 90, 400 cash deposit, gap paid 300 cash + 200 instalments to dealer + 500 to the company",
+    title: "LTV 90, 400 cash deposit, net shortfall 900: customer 500 (300 cash + 200 instalments), dealer 400",
     company: LTV90,
     ...BASE,
     approved: 12_000,
     legalInvoice: 12_500,
     deposit: { amount: 400, method: "CASH" },
-    gap: { mode: "CUSTOMER_ABSORBS", cash: 300, installments: 200, toFinanceCompany: 500 },
+    gap: { mode: "SPLIT", customerShare: 500, cash: 300, installments: 200 },
     expectedPayment: "CHEQUE",
     forwardMethod: "CASH",
-    // contribution 0; forward = deposit 400. Customer receivable = 300 + 200.
+    // contribution 0; forward = deposit 400. Customer receivable = 300 + 200. Net shortfall =
+    // remainder at quote 12,100 (400 first payment) − actual 11,200 = 900 (SCRUM-766).
     expect: {
       deposit: { "1100": { dr: jod(400) }, "2100": { cr: jod(400) } },
       close: {
@@ -1009,7 +1001,7 @@ const CANCEL_SCENARIOS: CancelScenario[] = [
     ...BASE,
     approved: 12_000,
     legalInvoice: 13_000,
-    gap: { mode: "CUSTOMER_ABSORBS", cash: 1_000, installments: 0, toFinanceCompany: 0 },
+    gap: { mode: "CUSTOMER_ABSORBS", cash: 1_000, installments: 0 },
     expectedPayment: "BANK_TRANSFER",
     cancelAfterClose: true,
     expect: {

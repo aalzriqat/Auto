@@ -2071,7 +2071,11 @@ export function DealCockpit({
     // CUSTOMER_ABSORBS / DEALER_ABSORBS / SPLIT, and the rail hands both
     // blockers to the dealership for exactly this action.
     if (liveStage?.blocker === "GapUnresolved" || liveStage?.blocker === "GapNegotiationFailed") {
-      const gapVisible = typeof deal.money?.appraisalGapMinor === "number";
+      // The amount to settle is the server's NET shortfall (SCRUM-766). An
+      // UNAVAILABLE one has no amount to settle: say so instead of offering a
+      // dialog that would allocate nothing.
+      const shortfallUnavailable = deal.money?.shortfall?.method === "UNAVAILABLE";
+      const gapVisible = typeof deal.money?.shortfall?.totalMinor === "number";
       const handedOverAt = app?.vehicleHandoverAt;
       // `>=`, as the mutation compares: equal timestamps are ambiguous (two
       // writes can share a millisecond) and are deliberately admitted.
@@ -2095,9 +2099,11 @@ export function DealCockpit({
             ? "GapResolutionNeedsPermission"
             : ownDeal
               ? "GapResolutionSelfDeal"
-              : gapVisible
-                ? undefined
-                : "GapResolutionNeedsDealFigures",
+              : shortfallUnavailable
+                ? "GapShortfallUnavailable"
+                : gapVisible
+                  ? undefined
+                  : "GapResolutionNeedsDealFigures",
       };
     }
 
@@ -6023,7 +6029,7 @@ export function DealCockpitView({
                         items: deal.money.parties,
                         appraisalGap:
                           deal.applicationId !== null
-                            ? { amountMinor: deal.money.appraisalGapMinor }
+                            ? { amountMinor: deal.money.shortfall?.totalMinor }
                             : null,
                         onSettleSupplier: canSettleSupplier ? () => setSettlingSupplier(true) : undefined,
                         supplierGuidance,
@@ -7224,11 +7230,22 @@ export function DealCockpitView({
           derives it, because a locally computed gap could disagree with the one
           the mutation reconciles against and reject the operator's arithmetic
           for being right. */}
-      {gapResolution && typeof deal?.money?.appraisalGapMinor === "number" && (
+      {gapResolution && typeof deal?.money?.shortfall?.totalMinor === "number" && (
         <ResolveGapDialog
           open={gapResolution.resolving}
           submitting={gapResolution.submitting}
-          rawAppraisalGapMinor={deal.money.appraisalGapMinor}
+          shortfallMinor={deal.money.shortfall.totalMinor}
+          breakdown={
+            deal.money.shortfall.method === "NET" &&
+            typeof deal.money.shortfall.valuationMinor === "number" &&
+            typeof deal.money.shortfall.termsMinor === "number"
+              ? {
+                  valuationMinor: deal.money.shortfall.valuationMinor,
+                  termsMinor: deal.money.shortfall.termsMinor,
+                }
+              : null
+          }
+          grossLabel={deal.money.shortfall.method !== "NET"}
           submittedQuotationMinor={gapResolution.submittedQuotationMinor}
           approvedPurchaseAmountMinor={gapResolution.approvedPurchaseAmountMinor}
           economicsStamp={"economicsStamp" in deal ? deal.economicsStamp : undefined}

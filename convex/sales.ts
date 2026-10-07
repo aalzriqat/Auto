@@ -3121,6 +3121,15 @@ export const dealCockpit = query({
           obligation: supplierObligation,
         }),
         appraisalGapMinor: undefined as number | undefined,
+        // SCRUM-766: a sale-keyed cash read has no application, so no shortfall.
+        shortfall: undefined as
+          | {
+              method: "NET" | "GROSS_MANUAL" | "UNAVAILABLE" | "LEGACY_GROSS" | "NONE";
+              totalMinor: number | undefined;
+              valuationMinor: number | undefined;
+              termsMinor: number | undefined;
+            }
+          | undefined,
       },
     };
   },
