@@ -2939,6 +2939,11 @@ export default defineSchema({
     // Mode, inputs, solver result, rule version and override, frozen at the
     // moment the quotation was recorded.
     quotationCalculationSnapshot: v.optional(quotationCalculationSnapshotValidator),
+    // The quote-side first payment after `applyQuoteFirstPayment` corrected a
+    // recorded-as-zero one (SCRUM-766). The snapshot above stays exactly as the
+    // solver and the dealer saw it; the NET shortfall reads this ahead of the
+    // snapshot's first payment. Cleared when a quotation is re-recorded.
+    quoteFirstPaymentCorrectedMinor: v.optional(v.number()),
     estimatedDealerBorneExpensesMinor: v.optional(v.number()),
     quotationBufferMinor: v.optional(v.number()),
     submittedQuotationAt: v.optional(v.number()),
@@ -3146,6 +3151,18 @@ export default defineSchema({
     // difference against the submitted quotation, not the change in the
     // company's funded portion.
     rawAppraisalGapMinor: v.optional(v.number()),
+    // SCRUM-766: the amount customer, showroom and supplier actually split is the
+    // owner's NET shortfall (how much less remained for the showroom than the
+    // quotation promised), not the gross quotation - approved above. FINANCE tier:
+    // unlike the gross gap it embeds the LTV. Signed and unfloored; the two
+    // components sum to it exactly. Absent method on a row with a gross gap is a
+    // pre-766 row, read as gross by `shortfallState`.
+    netShortfallMethod: v.optional(
+      v.union(v.literal("NET"), v.literal("GROSS_MANUAL"), v.literal("UNAVAILABLE"))
+    ),
+    netShortfallMinor: v.optional(v.number()),
+    valuationShortfallMinor: v.optional(v.number()),
+    financingTermsShortfallMinor: v.optional(v.number()),
     customerGapShareMinor: v.optional(v.number()),
     dealerGapShareMinor: v.optional(v.number()),
     customerGapCashToDealerMinor: v.optional(v.number()),
