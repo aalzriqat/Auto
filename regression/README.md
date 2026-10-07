@@ -14,3 +14,4 @@ Never put ruling text or customer data here. Format, validators and rules live i
 - An active cloud-level record is refused until a cloud runner exists (SCRUM-762); park it as a candidate.
 - Free-text reasons (retiredReason/candidateReason, 300 chars) and impl.testName are only heuristically screened; reviewers check them for public-data hygiene.
 - Records may not share one impl.file + testName; the title is not yet required to carry the scenario id (follow-up).
+- impl.testName must equal the registered test title exactly (no substring binding).

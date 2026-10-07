@@ -449,3 +449,26 @@ describe("review round 5 (Opus closure #2, PR #500): failing-first regressions",
     expect(rules([a, b])).toContain("impl");
   });
 });
+describe("review round 6 (Codex closure, PR #500): failing-first regressions", () => {
+  const run = (body: string, testName = "named case", over: Partial<ScenarioRecord> = {}) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "regression-"));
+    try {
+      writeFileSync(path.join(dir, "x.test.ts"), body);
+      return validateLibrary([base({ impl: { file: "x.test.ts", testName }, ...over })], { rulings: RULINGS, repoRoot: dir }).map((p) => p.rule);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("SR-1: the binding is the exact registered title, not a substring", () => {
+    expect(run(`test("named case here", () => {});`, "case here")).toContain("skip");
+    expect(run(`test("named case", () => {});`, "named case")).toEqual([]);
+  });
+
+  test("SR-2: an unrelated .fail()/.only() on a non-runner receiver is not a skip", () => {
+    expect(run(`test("named case", () => { expect(result.fail()).toBe(false); });`)).toEqual([]);
+    expect(run(`test("named case", () => { expect(flags.only(3)).toBe(3); });`)).toEqual([]);
+    expect(run(`test("named case", async () => { test.fail(); });`)).toContain("skip");
+    expect(run(`test.only("named case", () => {});`)).toContain("skip");
+  });
+});

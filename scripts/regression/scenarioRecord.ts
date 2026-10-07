@@ -178,7 +178,9 @@ const RUNNER_FILE = /(?:^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.
 // Mirrors vitest.config.ts `exclude`: those trees are never collected by the root run.
 // Receiver-agnostic skip/expected-fail calls, `{ skip }` option keys (quoted, shorthand, any position), `.only`.
 // Static analysis is best-effort: indirection (options in a variable) can still beat it; the S3 runner census is the binding proof.
-const SKIP_CALL = /\.\s*(?:skip|fixme|fail|fails|todo|skipIf|runIf|only)\s*\(|\bskip\s*\(/;
+// skip/fixme/todo/skipIf/runIf are specific enough for any receiver; fail/fails/only only on runner receivers
+// (an unrelated result.fail() or flags.only(3) is not a skipped test).
+const SKIP_CALL = /\.\s*(?:skip|fixme|todo|skipIf|runIf)\s*\(|\bskip\s*\(|\b(?:test|it|describe|suite|ctx|context|testInfo|t|c)(?:\.\w+)*\.(?:fail|fails|only)\b|\binfo\(\)\s*\.\s*(?:fail|fixme|skip)\s*\(/;
 const SKIP_OPTION = /[{,]\s*["']?(?:skip|todo|fails|fail|fixme)["']?\s*(?::\s*(?!false\b)|[,}])/;
 const PLAYWRIGHT_SPEC = /^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$/;
 const NOT_RUN_DIRS = /^(?:apps|packages|\.next|out|build)\/|(?:^|\/)(?:node_modules|\.claude)\//;
@@ -417,7 +419,7 @@ export function validateLibrary(
         const sharedWith = bindings.get(bindKey);
         if (sharedWith !== undefined) add("impl", `same impl.file + testName as ${sharedWith}: one check cannot stand for two scenarios`);
         else bindings.set(bindKey, r.id);
-        const named = listActiveTestRegistrations(forHelper, scriptKindFor(rel)).filter((t) => t.title.includes(r.impl!.testName));
+        const named = listActiveTestRegistrations(forHelper, scriptKindFor(rel)).filter((t) => t.title === r.impl!.testName);
         if (named.length !== 1 || named[0].parameterized || CTX_SKIP.test(text) || ANY_SKIP.test(text) || SKIP_CALL.test(text) || SKIP_OPTION.test(text)) {
           add("skip", `${rel} has no single active test named "${r.impl.testName}" (skipped, conditional, duplicated or absent): a skip is a failure in the library (R4)`);
         }
