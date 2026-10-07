@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { explorerDidNotRun } from "./jevFormRunGate";
+import { explorerDidNotRun, submittedAttempts } from "./jevFormRunGate";
 
 describe("explorerDidNotRun (SCRUM-771: an opted-in explorer that cannot explore fails)", () => {
   it("fails on an attestation refusal", () => {
@@ -23,6 +23,14 @@ describe("explorerDidNotRun (SCRUM-771: an opted-in explorer that cannot explore
     expect(explorerDidNotRun({ maxAttempts: 0, attempts: 0 })).toBeUndefined();
   });
 
+  // Opus re-review N1: an attempt whose setup failed never pressed Save.
+  it("counts only attempts that reached Save, so a run of setup failures still fails", () => {
+    const setup = { verdict: { check: "setup" } };
+    expect(submittedAttempts(Array.from({ length: 30 }, () => setup))).toBe(0);
+    expect(explorerDidNotRun({ maxAttempts: 30, attempts: submittedAttempts(Array.from({ length: 30 }, () => setup)) })).toMatch(/no attempt was made/);
+    expect(submittedAttempts([setup, { verdict: { check: "raw-error" } }, { verdict: { check: "accepted" } }])).toBe(2);
+  });
+
   // The gate only works if the spec routes every "did not explore" exit through it.
   it("the spec throws on every such exit instead of skipping or passing empty", () => {
     const spec = readFileSync(path.join(process.cwd(), "playwright", "scenarios", "jev-form-explorer.spec.ts"), "utf8");
@@ -31,7 +39,10 @@ describe("explorerDidNotRun (SCRUM-771: an opted-in explorer that cannot explore
     expect(spec).toContain('test.skip(process.env.JEV_FORM_EXPLORER !== "1"');
     expect(spec).toContain("explorerDidNotRun({ refusal: attestation.refusal })");
     expect(spec).toContain("explorerDidNotRun({ openedOrgId: orgId, attestedOrgId: attestation.orgId })");
-    expect(spec).toContain("explorerDidNotRun({ maxAttempts: MAX_ATTEMPTS, attempts: records.length })");
+    expect(spec).toContain("explorerDidNotRun({ maxAttempts: MAX_ATTEMPTS, attempts: submittedAttempts(records) })");
+    // N3: all three exits go through a helper that really throws.
+    expect(spec.match(/stopIfDidNotRun\(explorerDidNotRun\(/g)).toHaveLength(3);
+    expect(spec).toMatch(/function stopIfDidNotRun\(why: string \| undefined\): void \{\s*if \(why\) throw new Error\(/);
     // Bounded at one 30-minute attempt so the GL library after it always gets its time.
     expect(spec).toContain("test.describe.configure({ timeout: 1_800_000, retries: 0 })");
   });

@@ -37,8 +37,10 @@ describe("deal-scenarios-e2e runs the form explorer (SCRUM-771)", () => {
   });
 
   it("leaves room for the library plus one 30-minute explorer attempt", () => {
-    const job = WF.jobs.scenarios as unknown as { "timeout-minutes": number };
+    const job = WF.jobs.scenarios as unknown as { "timeout-minutes": number; "continue-on-error"?: unknown };
     expect(job["timeout-minutes"]).toBeGreaterThanOrEqual(10 + 45 + 30);
+    // N5: a job-level continue-on-error would also turn a failed explorer green.
+    expect(job["continue-on-error"]).toBeUndefined();
   });
 
   it("the scheduled path is still scheduled and needs no input", () => {

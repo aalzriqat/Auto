@@ -22,6 +22,14 @@ export type ExplorerRunState = {
   attempts?: number;
 };
 
+/**
+ * Attempts that reached the form's Save. A record whose setup failed (form did
+ * not open, picker or fill failed) pressed nothing, so it is not an attempt.
+ */
+export function submittedAttempts(records: readonly { verdict: { check: string } }[]): number {
+  return records.filter((r) => r.verdict.check !== "setup").length;
+}
+
 /** Why an opted-in run did not explore, or undefined when it may go on / did explore. */
 export function explorerDidNotRun(s: ExplorerRunState): string | undefined {
   if (s.refusal) return `the preview attestation refused: ${s.refusal}`;
