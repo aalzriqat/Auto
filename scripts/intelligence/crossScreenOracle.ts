@@ -75,7 +75,7 @@ export const FACTS: Fact[] = [
     description: "Unread notifications: the bell badge equals the unread rows among the newest 50 non-archived rows of the Notifications page.",
     relation: { kind: "equal" },
     surfaces: [
-      { id: "nav.bellBadge", route: "/dashboard", reads: "bell badge (0 when absent)" },
+      { id: "nav.bellBadge", route: "/notifications", reads: "bell badge (0 when absent)" },
       { id: "notifications.unreadRows", route: "/notifications", reads: "rows still showing the mark-as-read control, among the first 50 rows after Load more is exhausted" },
     ],
     caveat: "The bell reads notifications.list: the newest 75 rows with archived ones dropped, then cut to 50 (convex/notifications.ts:19-25). The page pages through all non-archived rows, so only its newest 50 are comparable; if more than 25 of an account\u0027s newest 75 are archived the bell sees fewer than 50 and a mismatch is a design limit, not a defect.",
