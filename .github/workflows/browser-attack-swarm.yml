@@ -364,6 +364,17 @@ jobs:
           } >> "$GITHUB_ENV"
           rm -f "$JWT_KEY_PATH"
 
+      # SCRUM-376 F1: the build container must be able to write its mount, and
+      # actions/checkout runs git on the checkout when the job cleans up. A
+      # candidate that could write .git (config or an index fsmonitor entry) would
+      # get a command run on the runner host. So the writable mount is a copy
+      # that never contains .git, and the checkout itself stays untouched.
+      - name: Copy candidate source without git metadata for the writable build
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/candidate-build-src"
+          rsync -a --exclude=/.git "$GITHUB_WORKSPACE/candidate/" "$RUNNER_TEMP/candidate-build-src/"
+
       - name: Build exact tested candidate once in isolated container
         env:
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
@@ -380,7 +391,7 @@ jobs:
             --cap-drop ALL \
             --security-opt no-new-privileges \
             --user "$(id -u):$(id -g)" \
-            --volume "$GITHUB_WORKSPACE/candidate:/app" \
+            --volume "$RUNNER_TEMP/candidate-build-src:/app" \
             --workdir /app \
             --env HOME=/tmp/home \
             --env NEXT_PUBLIC_CONVEX_URL \
@@ -396,7 +407,7 @@ jobs:
       - name: Stage and hash exact-SHA candidate runtime artifact
         run: node trusted/scripts/intelligence/browserSwarmBuildArtifact.mjs create
         env:
-          CANDIDATE_ROOT: ${{ github.workspace }}/candidate
+          CANDIDATE_ROOT: ${{ runner.temp }}/candidate-build-src
           BROWSER_SWARM_BUILD_ARTIFACT_ROOT: ${{ runner.temp }}/browser-swarm-candidate-build
           BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
           HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}

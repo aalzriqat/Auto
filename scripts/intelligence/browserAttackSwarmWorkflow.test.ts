@@ -339,7 +339,11 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(buildRun).toContain(
       "node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
     );
-    expect(buildRun).toContain("$GITHUB_WORKSPACE/candidate:/app");
+    // SCRUM-376 F1: the build container is the only writer of its mount, and
+    // actions/checkout later runs git on the checkout at job cleanup. The
+    // writable mount must therefore be a copy WITHOUT .git, never the checkout.
+    expect(buildRun).toContain("$RUNNER_TEMP/candidate-build-src:/app");
+    expect(buildRun).not.toContain("$GITHUB_WORKSPACE/candidate");
     expect(buildRun).toContain("--cap-drop ALL");
     expect(buildRun).toContain("--security-opt no-new-privileges");
     // SCRUM-376: --cap-drop ALL removes CAP_DAC_OVERRIDE, so a root container
@@ -354,9 +358,22 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       .filter((line) => !line.trimStart().startsWith("#"))
       .join("\n")
       .replace(/\\\n/g, " ")
-      .split(/\s+node:22\./)[0];
-    const userFlags = dockerOptions.match(/--user\s+("[^"]*"|\S+)/g) ?? [];
-    expect(userFlags).toEqual(['--user "$(id -u):$(id -g)"']);
+      .split(/\s+node:22\./);
+    // The image token must exist, or the position guard silently covers nothing.
+    expect(dockerOptions.length).toBe(2);
+    // docker takes the LAST user flag, so the short form counts too.
+    const userFlags = dockerOptions[0].match(/(?:^|\s)(?:--user|-u)(?:=|\s+)("[^"]*"|\S+)/g) ?? [];
+    expect(userFlags.map((flag) => flag.trim())).toEqual(['--user "$(id -u):$(id -g)"']);
+    const copy = step(
+      "candidate-build",
+      "Copy candidate source without git metadata for the writable build",
+    );
+    expect(String(copy.run ?? "")).toContain("rsync -a --exclude=/.git");
+    const artifact = step(
+      "candidate-build",
+      "Stage and hash exact-SHA candidate runtime artifact",
+    );
+    expect(artifact.env?.CANDIDATE_ROOT).toBe("${{ runner.temp }}/candidate-build-src");
     expect(buildRun).toContain('corepack enable --install-directory "$HOME/bin"');
     expect(buildRun).not.toMatch(/corepack enable\s*(&&|;|\n)/);
     expect(buildRun).not.toContain("/var/run/docker.sock");

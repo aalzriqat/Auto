@@ -149,6 +149,8 @@ function executesCandidate(step: Step): boolean {
       volume.includes("/candidate:") ||
       volume.includes("/candidate\"") ||
       volume.includes("candidate-build/runtime") ||
+      // The git-free writable copy the one build runs in (SCRUM-376 F1).
+      volume.includes("candidate-build-src") ||
       volume.includes("candidate-backend"),
   );
 }
@@ -186,7 +188,7 @@ function localUses(workflow: Workflow): string[] {
 // sha256 of each workflow that can reach a Convex credential.
 const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   "browser-attack-swarm.yml":
-    "b840b52ee8cbbe6c6e2836faae6a6500940044775d2f64fb1ab1d0c294deb8a3",
+    "f88fc750eda3cf953b6a092c80fcb67624f19ea539d3dedb16cfb3cc141d1f25",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":
