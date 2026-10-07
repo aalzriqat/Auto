@@ -342,6 +342,23 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(buildRun).toContain("$GITHUB_WORKSPACE/candidate:/app");
     expect(buildRun).toContain("--cap-drop ALL");
     expect(buildRun).toContain("--security-opt no-new-privileges");
+    // SCRUM-376: --cap-drop ALL removes CAP_DAC_OVERRIDE, so a root container
+    // cannot write the runner-owned (uid 1001, 755) bind mount and pnpm dies
+    // with EACCES on /app/_tmp_* (exit 243). The build must run as the owner
+    // of the mount, and corepack must not write shims into /usr/local/bin.
+    // Position and comments matter: a --user after the image name is a
+    // container argument, and a comment is not a flag. Inspect only the
+    // uncommented docker options that precede the image.
+    const dockerOptions = buildRun
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("#"))
+      .join("\n")
+      .replace(/\\\n/g, " ")
+      .split(/\s+node:22\./)[0];
+    const userFlags = dockerOptions.match(/--user\s+("[^"]*"|\S+)/g) ?? [];
+    expect(userFlags).toEqual(['--user "$(id -u):$(id -g)"']);
+    expect(buildRun).toContain('corepack enable --install-directory "$HOME/bin"');
+    expect(buildRun).not.toMatch(/corepack enable\s*(&&|;|\n)/);
     expect(buildRun).not.toContain("/var/run/docker.sock");
     expect(buildRun).not.toContain("$GITHUB_WORKSPACE/trusted");
 

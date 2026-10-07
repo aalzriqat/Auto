@@ -379,6 +379,7 @@ jobs:
             --network bridge \
             --cap-drop ALL \
             --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" \
             --volume "$GITHUB_WORKSPACE/candidate:/app" \
             --workdir /app \
             --env HOME=/tmp/home \
@@ -390,7 +391,7 @@ jobs:
             --env VERCEL_GIT_COMMIT_SHA \
             --env AUTOFLOW_SWARM_STANDALONE \
             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
-            sh -lc 'corepack enable && corepack prepare pnpm@11.13.0 --activate && pnpm install --frozen-lockfile --ignore-scripts && pnpm build'
+            sh -lc 'mkdir -p "$HOME/bin" && corepack enable --install-directory "$HOME/bin" && export PATH="$HOME/bin:$PATH" && corepack prepare pnpm@11.13.0 --activate && pnpm install --frozen-lockfile --ignore-scripts && pnpm build'
 
       - name: Stage and hash exact-SHA candidate runtime artifact
         run: node trusted/scripts/intelligence/browserSwarmBuildArtifact.mjs create
