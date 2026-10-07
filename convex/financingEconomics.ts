@@ -317,17 +317,28 @@ async function recomputeAndPatchEconomics(
   const sealed =
     (app.vehicleHandoverAt !== undefined || app.finalizedSaleId !== undefined) &&
     app.gapResolution !== undefined;
-  const shortfallResolutionPatch = sealed
-    ? {}
-    : nextShortfall.method === "UNAVAILABLE"
-      ? shortfallMoved
-        ? { gapResolution: undefined, ...GAP_RESOLUTION_CLEARED }
-        : {}
-      : (gapResolutionTransition(
-          nextShortfall.totalMinor ?? 0,
-          previousShortfall.totalMinor ?? 0,
-          app.gapResolution
-        ) ?? {});
+  const shortfallResolutionPatch = (() => {
+    if (sealed) return {};
+    if (nextShortfall.method === "UNAVAILABLE") {
+      return shortfallMoved ? { gapResolution: undefined, ...GAP_RESOLUTION_CLEARED } : {};
+    }
+    return (
+      gapResolutionTransition(
+        nextShortfall.totalMinor ?? 0,
+        previousShortfall.totalMinor ?? 0,
+        app.gapResolution
+      ) ?? {}
+    );
+  })();
+  // A shortfall that cannot be measured is a reconciliation item, not a zero.
+  // Once the vehicle is handed over the agreement cannot be voided here, so a
+  // MOVED shortfall on a sealed deal is flagged for a human instead.
+  const shortfallReconcileReason =
+    derived.shortfall.method === "UNAVAILABLE"
+      ? derived.shortfall.reason
+      : sealed && shortfallMoved
+        ? "The shortfall changed after the vehicle was handed over, so what was agreed about it can no longer be revisited automatically. Reconcile it before closing the deal."
+        : undefined;
 
   await ctx.db.patch(app._id, {
     economicsCurrency: currency,
@@ -359,26 +370,15 @@ async function recomputeAndPatchEconomics(
             `${snapshot.companyName} keeps the customer's payment rather than passing it through, and how much reached them has not been recorded. The expected dealer remittance cannot be determined until it is.`
           ),
         }),
-    // A shortfall that cannot be measured is a reconciliation item, not a zero.
-    // Once the vehicle is handed over the agreement cannot be voided here, so a
-    // MOVED shortfall on a sealed deal is flagged for a human instead.
-    ...(derived.shortfall.method === "UNAVAILABLE"
+    ...(shortfallReconcileReason
       ? {
           needsFinancingReconciliation: true,
           financingReconciliationReason: appendReconciliationReason(
             app.financingReconciliationReason,
-            derived.shortfall.reason
+            shortfallReconcileReason
           ),
         }
-      : sealed && shortfallMoved
-        ? {
-            needsFinancingReconciliation: true,
-            financingReconciliationReason: appendReconciliationReason(
-              app.financingReconciliationReason,
-              "The shortfall changed after the vehicle was handed over, so what was agreed about it can no longer be revisited automatically. Reconcile it before closing the deal."
-            ),
-          }
-        : {}),
+      : {}),
     updatedAt: Date.now(),
   });
   return true;

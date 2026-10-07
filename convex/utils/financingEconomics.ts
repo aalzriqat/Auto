@@ -1147,6 +1147,12 @@ export interface ShortfallState {
   requiresResolution: boolean;
 }
 
+/** The shortfall as the cockpit money block carries it (shared by both cockpit queries). */
+export type CockpitShortfall = Pick<ShortfallState, "method" | "totalMinor"> & {
+  valuationMinor: number | undefined;
+  termsMinor: number | undefined;
+};
+
 export function shortfallState(app: {
   netShortfallMethod?: ShortfallMethod;
   netShortfallMinor?: number;

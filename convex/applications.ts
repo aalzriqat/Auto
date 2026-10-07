@@ -1583,6 +1583,7 @@ async function buildCockpitMoney(
       currency,
       fullySettled,
     });
+  const cockpitShortfall = shortfallState(app);
 
   return {
     currency,
@@ -1641,8 +1642,8 @@ async function buildCockpitMoney(
      * an UNAVAILABLE shortfall, which the screen must say instead of showing 0.
      */
     shortfall: {
-      method: shortfallState(app).method,
-      totalMinor: shortfallState(app).totalMinor,
+      method: cockpitShortfall.method,
+      totalMinor: cockpitShortfall.totalMinor,
       valuationMinor: app.valuationShortfallMinor,
       termsMinor: app.financingTermsShortfallMinor,
     },
