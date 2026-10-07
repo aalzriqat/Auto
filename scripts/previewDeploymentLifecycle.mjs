@@ -236,9 +236,32 @@ export async function deletePreview({ env = process.env, fetchImpl = fetch } = {
   return { deploymentName: inputs.deploymentName, deleted: true };
 }
 
+/**
+ * SCRUM-768: the hunt preview's teardown is its own dispatch, not a cleanup
+ * step after tests, so a refusal there is a failure, never a warning. After the
+ * delete it re-reads the deployment and fails unless it is gone.
+ */
+export async function deletePreviewStrict({ env = process.env, fetchImpl = fetch } = {}) {
+  const result = await deletePreview({ env, fetchImpl });
+  const inputs = readInputs(env);
+  const still = await readOwnPreview({ ...inputs, fetchImpl });
+  if (still) refuse("Deployment " + inputs.deploymentName + " still exists after the delete call.");
+  return result;
+}
+
 export async function main(argv = process.argv.slice(2), options = {}) {
   const write = options.write ?? ((line) => process.stdout.write(line + "\n"));
-  const [command] = argv;
+  const [command, flag] = argv;
+  if (command === "delete" && flag === "--strict") {
+    try {
+      const r = await deletePreviewStrict(options);
+      write(r.deleted ? "Deleted preview " + r.deploymentName + "." : "Preview " + r.deploymentName + " " + r.reason + ".");
+      return 0;
+    } catch (error) {
+      write("::error::Preview teardown failed: " + (error instanceof Error ? error.message : "unexpected failure"));
+      return 1;
+    }
+  }
   try {
     if (command === "pin") {
       const r = await pinPreview(options);

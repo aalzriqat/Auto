@@ -23,8 +23,11 @@ import {
   runConvex,
   safeForLog,
   sanitizePreviewName,
+  setHuntSeatRole,
   toVerifiedClerkUserId,
+  HUNT_SEAT_ROLES,
 } from "./e2ePreviewBootstrap.mjs";
+import { DEFAULT_ROLE_TEMPLATES } from "../convex/utils/permissions";
 
 /**
  * The token half of a deploy key, ASSEMBLED rather than written out.
@@ -738,5 +741,74 @@ describe("resolveClerkUserId — the response body is not trusted", () => {
     await expect(
       resolveClerkUserId({ email: "qa@example.com", secretKey: "sk_test_x", fetchImpl }),
     ).rejects.toThrow(/not shaped like a user id/);
+  });
+});
+
+describe("setHuntSeatRole (SCRUM-768)", () => {
+  const ENV = {
+    CONVEX_DEPLOY_KEY: PREVIEW_KEY,
+    CONVEX_PREVIEW_NAME: "scrum-760-hunt",
+    NEXT_PUBLIC_CONVEX_URL: "https://happy-otter-123.convex.cloud",
+    CLERK_SECRET_KEY: "sk_test_x",
+    E2E_LOGIN_USER: "primary-secret@example.com",
+    E2E_APPROVER_USER: "approver-secret@example.com",
+  };
+
+  function deps() {
+    const calls: { fn: string; args: string[] }[] = [];
+    const logs: string[] = [];
+    return {
+      calls,
+      logs,
+      run: vi.fn((args: string[], label: string) => {
+        calls.push({ fn: label, args });
+      }),
+      resolveClerkUserId: vi.fn(async ({ email }: { email: string }) =>
+        email.startsWith("primary") ? "user_primary" : "user_approver",
+      ),
+      log: vi.fn((m: string) => logs.push(m)),
+    };
+  }
+
+  test.each([
+    ["primary", "user_primary"],
+    ["approver", "user_approver"],
+  ])("re-roles the %s seat on the named preview with its own Clerk id", async (seat, clerkUserId) => {
+    const d = deps();
+    await setHuntSeatRole(seat, "SALES", ENV, d);
+    expect(d.calls).toHaveLength(1);
+    const call = d.calls[0]!;
+    expect(call.fn).toBe("e2eBootstrap:setHuntSeatRole");
+    expect(call.args[call.args.indexOf("--preview-name") + 1]).toBe("scrum-760-hunt");
+    expect(JSON.parse(call.args[4]!)).toEqual({
+      seat,
+      clerkUserId,
+      role: "SALES",
+      expectedCloudUrl: ENV.NEXT_PUBLIC_CONVEX_URL,
+    });
+    expect(d.logs.join("\n")).not.toContain("secret@example.com");
+  });
+
+  test.each([
+    ["an unknown seat", "nobody", "SALES", /Unknown hunt seat/],
+    ["an unknown role", "primary", "SUPER_ADMIN", /Unknown hunt role/],
+    ["a missing role", "primary", undefined, /Unknown hunt role/],
+  ])("refuses %s before contacting Clerk or Convex", async (_label, seat, role, message) => {
+    const d = deps();
+    await expect(setHuntSeatRole(seat, role, ENV, d)).rejects.toThrow(message);
+    expect(d.resolveClerkUserId).not.toHaveBeenCalled();
+    expect(d.run).not.toHaveBeenCalled();
+  });
+
+  test("refuses a production deploy key", async () => {
+    const d = deps();
+    await expect(
+      setHuntSeatRole("primary", "SALES", { ...ENV, CONVEX_DEPLOY_KEY: "prod:kindly-hound-172|x" }, d),
+    ).rejects.toThrow(/not a PREVIEW deploy key/);
+    expect(d.run).not.toHaveBeenCalled();
+  });
+
+  test("mirrors the backend's hunt role list exactly", () => {
+    expect(HUNT_SEAT_ROLES).toEqual([...DEFAULT_ROLE_TEMPLATES.map((r) => r.name), "SUPPORT_AGENT"]);
   });
 });

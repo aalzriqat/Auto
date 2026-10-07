@@ -383,12 +383,19 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
     expect(creators.map((w) => w.file).sort()).toEqual([
       "browser-attack-swarm.yml",
       "deal-scenarios-e2e.yml",
+      "hunt-preview.yml",
       "trusted-accounting-rehearsal.yml",
       "trusted-main-e2e.yml",
     ]);
   });
 
-  it.each(creators.map((w) => [w.file, w.text]))("%s pins what it created and deletes last", (_file, text) => {
+  // SCRUM-768: the hunt preview exists to OUTLIVE its run (a person hunts on
+  // it for hours), so "delete at the end of the same run" cannot hold for it.
+  // Its contract — pin right after create, 12 h expiry backstop, one strict
+  // teardown dispatch — is pinned in scripts/huntPreviewWorkflow.test.ts.
+  const RUN_SCOPED_EXEMPT = new Set(["hunt-preview.yml"]);
+
+  it.each(creators.filter((w) => !RUN_SCOPED_EXEMPT.has(w.file)).map((w) => [w.file, w.text]))("%s pins what it created and deletes last", (_file, text) => {
     const jobs = (parse(text) as { jobs: Record<string, Job> }).jobs;
     const steps = Object.entries(jobs).flatMap(([id, job]) => (job.steps ?? []).map((s) => ({ id, s })));
     // Shell comments do not execute, and neither do the arguments of the `:`
@@ -486,5 +493,61 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
         CONVEX_PREVIEW_CREATED_AT: `\${{ ${from}.cleanup_preview_created_at }}`,
       });
     }
+  });
+});
+
+describe("SCRUM-768 strict teardown (delete --strict)", () => {
+  /** GET answers the preview until a delete POST lands, then 404 if `honour`. */
+  function deletingApi(honour: boolean) {
+    const calls: Call[] = [];
+    let gone = false;
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      calls.push({ method: String(init.method), url });
+      if (init.method === "GET") {
+        return gone ? new Response("not found", { status: 404 }) : new Response(JSON.stringify(preview()), { status: 200 });
+      }
+      if (honour) gone = true;
+      return new Response("", { status: 200 });
+    };
+    return { calls, fetchImpl: fetchImpl as unknown as typeof fetch };
+  }
+
+  it("exits 0 when the preview is deleted and re-reads as gone", async () => {
+    const { calls, fetchImpl } = deletingApi(true);
+    const lines: string[] = [];
+    await expect(main(["delete", "--strict"], { env: env(), fetchImpl, write: (l: string) => lines.push(l) })).resolves.toBe(0);
+    expect(lines).toEqual(["Deleted preview " + DEPLOYMENT + "."]);
+    expect(calls.map((c) => c.method)).toEqual(["GET", "POST", "GET"]);
+  });
+
+  it("exits 1 when the deployment still exists after the delete call", async () => {
+    const { fetchImpl } = deletingApi(false);
+    const lines: string[] = [];
+    await expect(main(["delete", "--strict"], { env: env(), fetchImpl, write: (l: string) => lines.push(l) })).resolves.toBe(1);
+    expect(lines[0]).toMatch(/^::error::Preview teardown failed: .*still exists/);
+  });
+
+  it("exits 1 on a refusal the warn-only path would swallow (createTime mismatch)", async () => {
+    const { calls, fetchImpl } = api(preview({ createTime: CREATED_AT + 1 }));
+    const lines: string[] = [];
+    await expect(main(["delete", "--strict"], { env: env(), fetchImpl, write: (l: string) => lines.push(l) })).resolves.toBe(1);
+    expect(writes(calls)).toEqual([]);
+    expect(lines[0]).toMatch(/^::error::/);
+    // The same refusal stays a warning without --strict.
+    await expect(main(["delete"], { env: env(), fetchImpl, write: () => {} })).resolves.toBe(0);
+  });
+
+  it("exits 1 and never calls the API for the production deployment", async () => {
+    const { calls, fetchImpl } = api(preview());
+    const lines: string[] = [];
+    await expect(
+      main(["delete", "--strict"], {
+        env: env({ CONVEX_PREVIEW_URL: "https://kindly-hound-172.convex.cloud" }),
+        fetchImpl,
+        write: (l: string) => lines.push(l),
+      }),
+    ).resolves.toBe(1);
+    expect(calls).toEqual([]);
+    expect(lines.join("\n")).not.toContain(SECRET);
   });
 });

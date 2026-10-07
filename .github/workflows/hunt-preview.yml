@@ -1,0 +1,180 @@
+name: Hunt preview (manual bug hunt)
+
+# SCRUM-768 (SCRUM-760 G8-C). One disposable Convex PREVIEW for the manual,
+# localhost bug hunt: `create` deploys, pins (12 h expiry backstop) and seeds it
+# and prints only its deployment name and createTime; `set-role` moves a seeded
+# seat to another role; `delete` tears it down and FAILS unless it is gone.
+#
+# Invariant: this workflow can only ever touch a preview deployment carrying the
+# fixed identifier `scrum-760-hunt`, from main, with the preview deploy key.
+# Production is out of reach by construction (the key is preview-scoped), and
+# `previewDeploymentLifecycle.mjs` and `e2eBootstrap` refuse it again locally.
+#
+# ⚠️ This repository is public, and so is this log. Inputs reach shell steps
+# only through `env:`, never `${{ }}` inside `run:`; nothing prints a secret,
+# an unmasked address, or tenant data (the preview holds only the QA dealership).
+#
+# Before every hunt session the hunter checks the browser's network tab: the
+# only Convex host is <deployment>.convex.cloud / .convex.site and never
+# kindly-hound-172. Vercel preview URLs are NOT used for hunting (SCRUM-767).
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "create | set-role | delete"
+        required: true
+        type: choice
+        options: [create, set-role, delete]
+      deployment:
+        description: "set-role / delete: the deployment name printed by create (e.g. happy-otter-123)"
+        required: false
+        type: string
+      created_at:
+        description: "delete: the createTime printed by create"
+        required: false
+        type: string
+      seat:
+        description: "set-role: which seeded identity to move"
+        required: false
+        type: choice
+        options: [primary, approver]
+      role:
+        description: "set-role: the role to move it to"
+        required: false
+        type: choice
+        options: [OWNER, MANAGER, SALES, RECEPTION, ACCOUNTANT, SENIOR_ACCOUNTANT, SUPPORT_AGENT]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hunt-preview
+  cancel-in-progress: false
+
+env:
+  CONVEX_PREVIEW_NAME: scrum-760-hunt
+
+jobs:
+  hunt-preview:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Validate inputs
+        env:
+          ACTION: ${{ inputs.action }}
+          DEPLOYMENT: ${{ inputs.deployment }}
+          CREATED_AT: ${{ inputs.created_at }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTION" = "set-role" ] || [ "$ACTION" = "delete" ]; then
+            if ! printf '%s' "$DEPLOYMENT" | grep -Eq '^[a-z]+-[a-z]+-[0-9]+$'; then
+              echo "::error::deployment must be the name printed by create (word-word-number)."; exit 1
+            fi
+            if [ "$DEPLOYMENT" = "kindly-hound-172" ]; then
+              echo "::error::Refusing the production deployment."; exit 1
+            fi
+            echo "HUNT_CONVEX_URL=https://${DEPLOYMENT}.convex.cloud" >> "$GITHUB_ENV"
+          fi
+          if [ "$ACTION" = "delete" ] && ! printf '%s' "$CREATED_AT" | grep -Eq '^[0-9]{1,16}$'; then
+            echo "::error::created_at must be the createTime printed by create."; exit 1
+          fi
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # ── create ────────────────────────────────────────────────────────────
+      # `--preview-create` with this fixed identifier replaces any earlier hunt
+      # preview, so at most one exists at a time.
+      - name: Create the hunt preview
+        if: inputs.action == 'create'
+        run: |
+          set -euo pipefail
+          pnpm exec convex deploy \
+            --typecheck enable \
+            --preview-create "$CONVEX_PREVIEW_NAME" \
+            --preview-run e2eBootstrap:markPreviewDeployment \
+            --cmd 'echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"; echo "CONVEX_PREVIEW_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"' \
+            --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
+      - name: Pin the hunt preview (12 h expiry backstop)
+        if: always() && env.CONVEX_PREVIEW_URL != ''
+        run: node scripts/previewDeploymentLifecycle.mjs pin
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
+      - name: Seed the QA dealership
+        if: inputs.action == 'create'
+        run: node scripts/e2ePreviewBootstrap.mjs
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
+      - name: Report the hunt preview
+        if: inputs.action == 'create' && success()
+        run: |
+          set -euo pipefail
+          NAME="${CONVEX_PREVIEW_URL#https://}"
+          NAME="${NAME%.convex.cloud}"
+          if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]; then
+            echo "::error::The preview was not pinned, so it has no recorded createTime and could not be torn down by delete."; exit 1
+          fi
+          {
+            echo "### Hunt preview ready"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| deployment | \`$NAME\` |"
+            echo "| created_at (for delete) | \`$CONVEX_PREVIEW_CREATED_AT\` |"
+            echo "| NEXT_PUBLIC_CONVEX_URL | \`https://$NAME.convex.cloud\` |"
+            echo "| NEXT_PUBLIC_CONVEX_SITE_URL | \`https://$NAME.convex.site\` |"
+            echo ""
+            echo "Seats: primary = OWNER, approver = MANAGER. Re-role with action=set-role."
+            echo "Tear down with action=delete, deployment=$NAME, created_at=$CONVEX_PREVIEW_CREATED_AT."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # A create that fails after the pin is not deleted here: its 12 h expiry
+      # still stands, and the next create replaces it under the same identifier.
+
+      # ── set-role ──────────────────────────────────────────────────────────
+      - name: Re-role a hunt seat
+        if: inputs.action == 'set-role'
+        run: node scripts/e2ePreviewBootstrap.mjs --set-role "$SEAT" "$ROLE"
+        env:
+          SEAT: ${{ inputs.seat }}
+          ROLE: ${{ inputs.role }}
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.HUNT_CONVEX_URL }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
+      # ── delete ────────────────────────────────────────────────────────────
+      - name: Tear down the hunt preview
+        if: inputs.action == 'delete'
+        run: node scripts/previewDeploymentLifecycle.mjs delete --strict
+        env:
+          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_URL: ${{ env.HUNT_CONVEX_URL }}
+          CONVEX_PREVIEW_CREATED_AT: ${{ inputs.created_at }}
