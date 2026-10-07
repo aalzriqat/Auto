@@ -127,7 +127,11 @@ export function scenarioFingerprint(
       // Assertion order is not part of the scenario.
       expected: [...record.expected]
         .map((e) => normaliseValue(e))
-        .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+        .sort((a, b) => {
+          const x = JSON.stringify(a);
+          const y = JSON.stringify(b);
+          return x < y ? -1 : x > y ? 1 : 0; // code-point order: locale-independent
+        }),
     }),
   );
   return createHash("sha256").update(canonical).digest("hex");
@@ -165,15 +169,19 @@ export interface ValidateLibraryOptions {
 
 const CTX_SKIP = /\b(?:ctx|context|t)\.skip\s*\(/;
 // Conservative, file-wide: any skip/conditional/todo/fails marker anywhere in the check file fails the record.
-const ANY_SKIP = /\b(?:it|test|describe|suite)(?:\.\w+)*\.(?:skip|skipIf|runIf|todo|fails|fixme)\b|\bx(?:it|describe)\(/;
+const ANY_SKIP = /\b(?:it|test|describe|suite)(?:\.\w+)*\.(?:skip|skipIf|runIf|todo|fails|fixme)\b|\bx(?:it|describe)\(|\{\s*(?:skip|todo|fails|fixme)\s*:\s*(?!false\b)/;
 // What a configured runner actually collects: root vitest includes **/*.test.ts(x); the browser
 // replays live under playwright/ as *.spec.ts. Anything else exists but is never run.
-const RUNNER_FILE = /(?:^playwright\/(?:.*\/)?[^/]+\.spec\.ts$)|(?:\.test\.tsx?$)/;
-const NOT_RUN_DIRS = /^(?:apps|packages|node_modules|\.claude)\//;
+// Playwright collects only the configured testDirs (tests, scenarios); fixtures/visual are not replays.
+const RUNNER_FILE = /(?:^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$)|(?:\.test\.tsx?$)/;
+// Mirrors vitest.config.ts `exclude`: those trees are never collected by the root run.
+const NOT_RUN_DIRS = /^(?:apps|packages|\.next|out|build)\/|(?:^|\/)(?:node_modules|\.claude)\//;
 const MATRIX_ROW = /^[A-Za-z0-9][A-Za-z0-9._-]{1,40}$/;
 const EMAIL = /[\w.+-]+@[\w-]+\.[\w.-]+/;
 const PHONE = /(?:\+|\b00|\b0)\d[\d\s-]{7,}\d/;
 const MAX_TEXT = 300;
+const MAX_PATH = 200;
+const SCRUM_KEY = /^SCRUM-\d+$/;
 const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
 const INVARIANT_ID = /^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$/;
 const GLOB = /^[\w./*{}\[\],-]{1,120}$/;
@@ -268,7 +276,7 @@ function schemaProblems(r: unknown): string[] {
   if (Array.isArray(r.steps) && r.steps.some((s) => isObject(s) && isObject(s.actor) && (!TOKEN.test(String(s.actor.role)) || !TOKEN.test(String(s.actor.org))))) {
     out.push("actor role/org must be short identifier tokens");
   }
-  if (isObject(r.source) && (!TOKEN.test(String(r.source.runId)) || !DATE.test(String(r.source.firstSeen)))) {
+  if (isObject(r.source) && (typeof r.source.runId !== "string" || !TOKEN.test(r.source.runId) || typeof r.source.firstSeen !== "string" || !DATE.test(r.source.firstSeen))) {
     out.push("source.runId must be an identifier token and source.firstSeen a YYYY-MM-DD date");
   }
   if (r.invariantIds !== undefined && (!Array.isArray(r.invariantIds) || r.invariantIds.some((v) => !INVARIANT_ID.test(String(v))))) {
@@ -276,6 +284,13 @@ function schemaProblems(r: unknown): string[] {
   }
   if (r.sourceGlobs !== undefined && (!Array.isArray(r.sourceGlobs) || r.sourceGlobs.some((v) => !GLOB.test(String(v))))) {
     out.push("sourceGlobs must be path globs without spaces");
+  }
+  // Metadata formats hold whatever the status: a malformed value must not wait for a status flip to be seen.
+  if (r.matrixRow !== undefined && (typeof r.matrixRow !== "string" || !MATRIX_ROW.test(r.matrixRow))) out.push("matrixRow has an invalid format");
+  if (r.candidateIssue !== undefined && (typeof r.candidateIssue !== "string" || !SCRUM_KEY.test(r.candidateIssue))) out.push("candidateIssue must be a SCRUM key");
+  if (r.retiredByRuling !== undefined && (typeof r.retiredByRuling !== "string" || !RULING_ID.test(r.retiredByRuling))) out.push("retiredByRuling must look like SCRUM-123#c4567");
+  if (isObject(r.impl) && ((r.impl.file !== undefined && (typeof r.impl.file !== "string" || r.impl.file.length > MAX_PATH)) || (r.impl.testName !== undefined && (typeof r.impl.testName !== "string" || r.impl.testName.length > MAX_TEXT)))) {
+    out.push(`impl.file is capped at ${MAX_PATH} and impl.testName at ${MAX_TEXT} characters`);
   }
   for (const text of [r.retiredReason, r.candidateReason]) {
     if (typeof text === "string" && text.length > MAX_TEXT) out.push(`reason text is capped at ${MAX_TEXT} characters`);
@@ -356,9 +371,10 @@ export function validateLibrary(
     if (!r.impl?.file || !r.impl?.testName) {
       add("impl", "an active scenario must name its executable check (impl.file + impl.testName)");
     } else {
-      const rel = r.impl.file.replace(/\\/g, "/");
-      const abs = path.resolve(repoRoot, rel);
-      if (!abs.startsWith(path.resolve(repoRoot) + path.sep)) add("impl", "impl.file must stay inside the repository");
+      const abs = path.resolve(repoRoot, r.impl.file.replace(/\\/g, "/"));
+      // Classify the NORMALISED repo-relative path: "scripts/../apps/x.test.ts" is apps/.
+      const rel = path.relative(path.resolve(repoRoot), abs).replace(/\\/g, "/");
+      if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) add("impl", "impl.file must stay inside the repository");
       else if (!RUNNER_FILE.test(rel) || NOT_RUN_DIRS.test(rel)) {
         add("impl", `impl.file ${rel} is not a test/spec file a runner executes`);
       } else if (!existsSync(abs)) add("impl", `impl.file ${rel} does not exist: cannot-run is a failure`);
@@ -366,7 +382,9 @@ export function validateLibrary(
         const text = readFileSync(abs, "utf8");
         // Same AST rules as the invariant proof markers: exactly one ACTIVE it/test whose title
         // names the scenario; skip/skipIf/runIf/todo/only/fails or a skipped parent describe all fail.
-        if (!sourceHasActiveTestMarker(text, r.impl.testName, scriptKindFor(rel)) || CTX_SKIP.test(text) || ANY_SKIP.test(text)) {
+        // Playwright groups with test.describe(...); the shared AST helper only knows describe(...).
+        const forHelper = text.replace(/\b(?:test|it)\.describe(?:\.(?:serial|parallel))?(?=\s*\()/g, "describe");
+        if (!sourceHasActiveTestMarker(forHelper, r.impl.testName, scriptKindFor(rel)) || CTX_SKIP.test(text) || ANY_SKIP.test(text)) {
           add("skip", `${rel} has no single active test named "${r.impl.testName}" (skipped, conditional, duplicated or absent): a skip is a failure in the library (R4)`);
         }
       }
@@ -386,9 +404,9 @@ export function validateLibrary(
  */
 export function validateTransitions(base: ScenarioRecord[], head: ScenarioRecord[]): LibraryProblem[] {
   const problems: LibraryProblem[] = [];
-  const headById = new Map(head.map((r) => [r.id, r]));
+  const headById = new Map(head.filter(isObject).map((r) => [r.id, r]));
   for (const before of base) {
-    if (before.status !== "active") continue;
+    if (!isObject(before) || before.status !== "active") continue;
     const after = headById.get(before.id);
     if (after === undefined) {
       problems.push({ scenario: before.id, rule: "transition", message: "an active scenario was deleted; retire it with a reason and a ruling instead" });

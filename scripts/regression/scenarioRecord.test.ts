@@ -292,3 +292,57 @@ describe("review round 2 (Codex seat, PR #500): failing-first regressions", () =
     expect(validateTransitions([demoted], [active])).toEqual([]);
   });
 });
+describe("review round 3 (Opus closure, PR #500): failing-first regressions", () => {
+  const withBody = (body: string, file = "x.test.ts", repoFile = file) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "regression-"));
+    try {
+      mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+      writeFileSync(path.join(dir, file), body);
+      return validateLibrary([base({ impl: { file: repoFile, testName: "named case" } })], { rulings: RULINGS, repoRoot: dir }).map((p) => p.rule);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("R1: options-object and Playwright skip forms are not an executable check", () => {
+    expect(withBody(`test("named case", { fails: true }, () => {});`)).toContain("skip");
+    expect(withBody(`test("named case", { skip: true }, () => {});`)).toContain("skip");
+    expect(withBody(`test("named case", { todo: true });`)).toContain("skip");
+    expect(withBody(`test.fixme("named case", async () => {});`, "playwright/scenarios/a.spec.ts")).toContain("skip");
+    expect(withBody(`test.describe.skip("g", () => { test("named case", async () => {}); });`, "playwright/scenarios/a.spec.ts")).toContain("skip");
+    expect(withBody(`test("named case", async ({ page }) => { test.skip(true, "later"); });`, "playwright/scenarios/a.spec.ts")).toContain("skip");
+    expect(withBody(`test("named case", { timeout: 5000 }, () => {});`)).toEqual([]);
+  });
+
+  test("R4: a test nested in test.describe is an active check; a lone wrapper-named one is not a pass", () => {
+    expect(withBody(`test.describe("group", () => { test("named case", async () => {}); });`, "playwright/scenarios/a.spec.ts")).toEqual([]);
+    expect(withBody(`test.describe("named case", () => {});`, "playwright/scenarios/a.spec.ts")).toContain("skip");
+  });
+
+  test("R3: the runner check uses the normalised path, not the spelling", () => {
+    expect(withBody(`test("named case", () => {});`, "apps/mobile/x.test.ts", "scripts/../apps/mobile/x.test.ts")).toContain("impl");
+    expect(withBody(`test("named case", () => {});`, "playwright/fixtures/x.spec.ts")).toContain("impl");
+    expect(withBody(`test("named case", () => {});`, "build/x.test.ts")).toContain("impl");
+    expect(withBody(`test("named case", () => {});`, "playwright/tests/x.spec.ts")).toEqual([]);
+  });
+
+  test("R2: metadata formats are checked whatever the status", () => {
+    expect(rules([base({ domain: "money", matrixRow: "a b c; free text" })])).toContain("schema");
+    expect(rules([base({ candidateIssue: "not a key" })])).toContain("schema");
+    expect(rules([base({ retiredByRuling: "free text" })])).toContain("schema");
+    expect(rules([base({ impl: { file: "x".repeat(400), testName: "named case" } })])).toContain("schema");
+    expect(rules([base({ impl: { file: IMPL.file, testName: "t".repeat(400) } })])).toContain("schema");
+    expect(rules([base({ domain: "money", matrixRow: "ROW-1" })])).toEqual([]);
+  });
+
+  test("L1/L2/L3: code-point order, malformed ruling snapshot and runId", () => {
+    const upper = base({ expected: [{ observable: "a", value: 1 }, { observable: "B", value: 1 }] });
+    const lower = base({ expected: [{ observable: "B", value: 1 }, { observable: "a", value: 1 }] });
+    expect(scenarioFingerprint(upper)).toBe(scenarioFingerprint(lower));
+    expect(() => validateRulingSnapshot([null, 5, "x"] as never)).not.toThrow();
+    expect(() => validateTransitions([null as never, base()], [undefined as never])).not.toThrow();
+    const noRun = base();
+    delete (noRun.source as Partial<typeof noRun.source>).runId;
+    expect(rules([noRun])).toContain("schema");
+  });
+});
