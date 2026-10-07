@@ -176,8 +176,10 @@ jobs:
             echo "Tear down with action=delete, deployment=$NAME, created_at=$CONVEX_PREVIEW_CREATED_AT."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # A create that fails after the pin is not deleted here: its 12 h expiry
-      # still stands, and the next create replaces it under the same identifier.
+      # A create that fails is not deleted here; the next create replaces it
+      # under the same identifier. If the pin succeeded, its 12 h expiry stands
+      # and the pin's log line carries the createTime for delete. If the pin
+      # itself failed, the preview keeps Convex's default expiry until replaced.
 
       # ── set-role ──────────────────────────────────────────────────────────
       - name: Re-role a hunt seat
