@@ -190,7 +190,7 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":
-    "b6504237de8819f9d408d178fd7b933f4822868b524e859f13a2df8ce0245bee",
+    "091a2bd7f5756b78933b89d3bf3e9063626db478ea7fe2ce310a873ae5507a29",
   "prune-convex-previews.yml":
     "a47a5289bc35c018cbb378d68d7b0d389f3f78774272d4ada03f64eb4197f54d",
   "convex-preview-key-diagnostic.yml":
