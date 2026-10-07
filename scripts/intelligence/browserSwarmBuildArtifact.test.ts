@@ -301,7 +301,18 @@ describe("byCodeUnit", () => {
   // not a locale-aware order.
   it("orders exactly like the default sort for mixed-case and scoped names", () => {
     const names = ["zod", "Zod", "@swc", "@Types", "@types", "a-b", "A-B", "ab", "＠scope", "@scope"];
-    expect([...names].sort(byCodeUnit)).toEqual([...names].sort());
+    expect([...names].sort(byCodeUnit)).toEqual([
+      "@Types",
+      "@scope",
+      "@swc",
+      "@types",
+      "A-B",
+      "Zod",
+      "a-b",
+      "ab",
+      "zod",
+      "＠scope",
+    ]);
   });
 
   it("is not locale-aware: upper case sorts before lower case", () => {
