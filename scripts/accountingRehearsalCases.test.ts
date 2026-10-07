@@ -1258,7 +1258,12 @@ function makeBackend(defects: Defects = {}) {
         if (!app) return { ok: false as const, error: "Application not found." };
         if (app.status === "CLOSED") return { ok: true as const, value: app.saleId };
         const gross = Math.round((quotePrice.get(app.quoteId) ?? 0) * MINOR_SCALE);
-        const net = gross - app.withheldMinor;
+        // SCRUM-435: the finance company transfers the full approved amount, so a
+        // cost deducted from its transfer is refused (mirrors the product guard).
+        if (app.withheldMinor > 0) {
+          return { ok: false as const, error: "The finance company transfers the full approved amount, so a cost cannot be deducted from its transfer. Record the cost as a normal deal cost and finalize again." };
+        }
+        const net = gross;
         app.status = "CLOSED";
         app.financedSaleNetReceivableMinor = net;
         app.saleId = id("sale");
@@ -1873,10 +1878,10 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
   });
 
   // ── FD1 — the finance-company receipt (SCRUM-241) ──
-  test("FD1 catches a receipt that clips the customer's principal to the outstanding net instead of refusing it", async () => {
+  test("FD1 catches a short receipt (net of the dealer's own cost) accepted instead of refused", async () => {
     const results = await runAgainst({ financeReceiptClipsToOutstanding: true });
     expect(statusOf(results, "FD1")).toBe("FAIL");
-    expect(detail(results, "FD1")).toMatch(/PRINCIPAL was accepted/);
+    expect(detail(results, "FD1")).toMatch(/SHORT receipt .* was accepted/);
   });
 
   test("FD1 catches a cash-receipt journal posted for a different amount than the payment and allocation", async () => {
