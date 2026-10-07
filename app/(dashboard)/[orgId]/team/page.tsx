@@ -43,7 +43,6 @@ import { RoleGuard } from "@/components/auth/RoleGuard";
 import { useTableControls } from "@/hooks/useTableControls";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 import { getErrorMessage } from "@/lib/errors";
-import { effectiveCommissionMode } from "@/convex/utils/commissionMode";
 
 // lastSeenAt is throttled to a write at most every few minutes (see
 // memberships.touchLastSeen), so "active now" below lines up with that
@@ -73,10 +72,10 @@ export default function TeamPage() {
 
   const { results: memberships, status: membershipsStatus, loadMore: loadMoreMemberships } = usePaginatedQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const orgSettings = useQuery(api.orgSettings.get, activeOrgId ? { orgId: activeOrgId } : "skip");
   const roles = useQuery(api.roles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
-  // SCRUM-778: an org that never chose a mode runs MANUAL, as the backend does.
-  const commissionMode = effectiveCommissionMode(orgSettings);
+  // SCRUM-778: the mode the ledger runs (MANUAL until chosen), readable without
+  // VIEW_SETTINGS. Loading or no access shows no mode as active.
+  const commissionMode = useQuery(api.orgSettings.getCommissionMode, activeOrgId ? { orgId: activeOrgId } : "skip");
 
   const removeMember = useAction(api.memberships.remove);
   const updateCommissionRate = useMutation(api.memberships.updateCommissionRate);

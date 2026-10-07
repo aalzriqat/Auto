@@ -4,6 +4,7 @@ import { Alert, Text } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileOrgSettings } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
+import { saveResultMessage, saveSettingsThenCommissionMode } from "./commissionModeSave";
 import { money, parseOptionalNumber, splitLinesOrCommas, useGenericError, PrimaryButton, FormField, SelectField, RecordCard, ModuleScroll } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
@@ -46,13 +47,15 @@ export function CommissionSettingsModule({ orgId }: { orgId: string }) {
   async function save() {
     setSaving(true);
     try {
-      // SCRUM-778: the mode changes only through its own door, and only when
-      // the owner actually picked a different one.
-      if (mode && mode !== (settings?.commissionMode ?? "MANUAL")) {
-        await setCommissionMode({ orgId, commissionMode: mode });
-      }
-      await upsertSettings({ orgId, commissionTiers: parsedTiers });
-      Alert.alert("AutoFlow", locale === "ar" ? "تم الحفظ" : "Saved");
+      // SCRUM-778: the mode changes only through its own door, after the tiers
+      // are accepted, so a refused save never switches it.
+      const result = await saveSettingsThenCommissionMode({
+        currentMode: settings?.commissionMode,
+        selectedMode: mode ?? "MANUAL",
+        setCommissionMode: (commissionMode) => setCommissionMode({ orgId, commissionMode }),
+        saveSettings: () => upsertSettings({ orgId, commissionTiers: parsedTiers }),
+      });
+      Alert.alert("AutoFlow", saveResultMessage(result, locale));
     } catch (error) {
       reportError("Mobile commission settings save failed", error);
     } finally {

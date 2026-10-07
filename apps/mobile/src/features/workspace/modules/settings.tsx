@@ -4,6 +4,7 @@ import { Alert, Text, View } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileMyMembership, type MobileOrgSummary, type MobileOrgSettings } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
+import { saveResultMessage, saveSettingsThenCommissionMode, type MobileCommissionModeValue } from "./commissionModeSave";
 import { maybeText, parseOptionalNumber, splitLinesOrCommas, joinList, useGenericError, PrimaryButton, FormField, SelectField, RecordCard, ModuleScroll } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
@@ -64,32 +65,31 @@ export function SettingsModule({
   async function save() {
     setSaving(true);
     try {
-      // SCRUM-778: the commission mode changes only through its own door, and
-      // only when the owner actually picked a different one here.
-      if (form.commissionMode !== (settings?.commissionMode ?? "MANUAL")) {
-        await setCommissionMode({
+      // SCRUM-778: the commission mode changes only through its own door, after
+      // the other settings are accepted, so a refused save never switches it.
+      const result = await saveSettingsThenCommissionMode({
+        currentMode: settings?.commissionMode,
+        selectedMode: form.commissionMode as MobileCommissionModeValue,
+        setCommissionMode: (commissionMode) => setCommissionMode({ orgId: org._id, commissionMode }),
+        saveSettings: () => upsertSettings({
           orgId: org._id,
-          commissionMode: form.commissionMode as "AUTO_TIERS" | "AUTO_MEMBER" | "MANUAL",
-        });
-      }
-      await upsertSettings({
-        orgId: org._id,
-        dealershipName: maybeText(form.dealershipName),
-        legalCompanyName: maybeText(form.legalCompanyName),
-        dealershipAddress: maybeText(form.dealershipAddress),
-        dealershipPhone: maybeText(form.dealershipPhone),
-        dealershipPhones: splitLinesOrCommas(form.dealershipPhones),
-        currency: maybeText(form.currency),
-        currencySymbol: maybeText(form.currencySymbol),
-        vatRate: parseOptionalNumber(form.vatRate),
-        country: maybeText(form.country),
-        timezone: maybeText(form.timezone),
-        approvalThresholdEnabled: form.approvalThresholdEnabled === "true",
-        approvalMinProfitPercent: parseOptionalNumber(form.approvalMinProfitPercent),
-        generatedLeadAutoAssignmentEnabled: form.generatedLeadAutoAssignmentEnabled === "true",
-        reservationHoldDays: parseOptionalNumber(form.reservationHoldDays),
+          dealershipName: maybeText(form.dealershipName),
+          legalCompanyName: maybeText(form.legalCompanyName),
+          dealershipAddress: maybeText(form.dealershipAddress),
+          dealershipPhone: maybeText(form.dealershipPhone),
+          dealershipPhones: splitLinesOrCommas(form.dealershipPhones),
+          currency: maybeText(form.currency),
+          currencySymbol: maybeText(form.currencySymbol),
+          vatRate: parseOptionalNumber(form.vatRate),
+          country: maybeText(form.country),
+          timezone: maybeText(form.timezone),
+          approvalThresholdEnabled: form.approvalThresholdEnabled === "true",
+          approvalMinProfitPercent: parseOptionalNumber(form.approvalMinProfitPercent),
+          generatedLeadAutoAssignmentEnabled: form.generatedLeadAutoAssignmentEnabled === "true",
+          reservationHoldDays: parseOptionalNumber(form.reservationHoldDays),
+        }),
       });
-      Alert.alert("AutoFlow", locale === "ar" ? "تم الحفظ" : "Saved");
+      Alert.alert("AutoFlow", saveResultMessage(result, locale));
     } catch (error) {
       reportError("Mobile settings save failed", error);
     } finally {
