@@ -110,7 +110,7 @@ export function judge(fact: Fact, readings: Reading[]): Verdict {
 
 /** A stable fingerprint so repeat findings merge (SCRUM-760 R1). */
 export function fingerprint(v: Verdict): string {
-  const extra = v.result === "UNREADABLE" ? [...v.missing].sort().join("+") : v.result === "DISAGREE" ? v.observed.map((o) => o.surface).sort().join("+") : "";
+  const extra = v.result === "UNREADABLE" ? [...v.missing].sort((a, b) => a.localeCompare(b)).join("+") : v.result === "DISAGREE" ? v.observed.map((o) => o.surface).sort((a, b) => a.localeCompare(b)).join("+") : "";
   return `cross-screen:${v.fact}:${v.result}:${extra}`;
 }
 
