@@ -622,6 +622,77 @@ export async function main(
   );
 }
 
+/**
+ * SCRUM-768: the roles a hunt seat can be moved to. Mirrors `HUNT_SEAT_ROLES`
+ * in convex/e2eBootstrap.ts, which refuses anything else on its own; this copy
+ * only lets a typo fail before Clerk or Convex is contacted.
+ */
+export const HUNT_SEAT_ROLES = [
+  "OWNER",
+  "MANAGER",
+  "SALES",
+  "RECEPTION",
+  "ACCOUNTANT",
+  "SENIOR_ACCOUNTANT",
+];
+const HUNT_SEATS = ["primary", "approver"];
+
+/**
+ * Moves one seeded seat of the disposable hunt preview to another role.
+ *
+ * @param {string | undefined} seat "primary" | "approver"
+ * @param {string | undefined} role one of HUNT_SEAT_ROLES
+ * @param {Record<string, string | undefined>} [env]
+ * @param {{
+ *   run?: (args: string[], label: string) => void,
+ *   resolveClerkUserId?: (options: { email: string, secretKey: string | undefined }) => Promise<string>,
+ *   log?: (message: string) => void,
+ * }} [deps]
+ */
+export async function setHuntSeatRole(
+  seat,
+  role,
+  env = /** @type {Record<string, string | undefined>} */ (process.env),
+  deps = {},
+) {
+  const {
+    run = runConvex,
+    resolveClerkUserId: resolveId = resolveClerkUserId,
+    log = console.log,
+  } = deps;
+  if (!HUNT_SEATS.includes(String(seat))) {
+    throw new PreviewTargetingError(`Unknown hunt seat. Allowed: ${HUNT_SEATS.join(", ")}.`);
+  }
+  if (!HUNT_SEAT_ROLES.includes(String(role))) {
+    throw new PreviewTargetingError(`Unknown hunt role. Allowed: ${HUNT_SEAT_ROLES.join(", ")}.`);
+  }
+
+  const { deployKey, previewName, primaryClerkUserId, approverClerkUserId, expectedCloudUrl } =
+    await resolveE2EPreviewContext(env, {
+      resolveId,
+      identityError: "E2E_LOGIN_USER and E2E_APPROVER_USER must both be set before a hunt seat can be re-roled.",
+      missingUrlError:
+        "NEXT_PUBLIC_CONVEX_URL is not set, so the hunt preview being re-roled cannot be checked against the one the browser drives.",
+    });
+
+  log(`Re-roling hunt seat ${seat} on preview "${safeForLog(previewName)}" to ${role}.`);
+  run(
+    buildConvexRunArgs({
+      functionName: "e2eBootstrap:setHuntSeatRole",
+      argsJson: JSON.stringify({
+        seat,
+        clerkUserId: seat === "primary" ? primaryClerkUserId : approverClerkUserId,
+        role,
+        expectedCloudUrl,
+      }),
+      previewName,
+      deployKey,
+      env,
+    }),
+    "e2eBootstrap:setHuntSeatRole",
+  );
+}
+
 const invokedDirectly =
   Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
 
@@ -640,6 +711,9 @@ if (invokedDirectly) {
     };
   } else if (mode === "--assert-only") {
     run = () => assertExistingE2EPreview();
+  } else if (mode === "--set-role") {
+    // Here `ref` and `prNumber` carry the seat and the role.
+    run = () => setHuntSeatRole(ref, prNumber);
   } else {
     run = () => main();
   }
