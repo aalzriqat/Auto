@@ -342,11 +342,20 @@ export function FinanceCompanyDecisionCard({
       value: money(facts.financeCompanyFundedPortionMinor),
     });
   }
-  if (facts.unfinancedPortionMinor !== null) {
+  // SCRUM-613 F-19 (owner option أ, 2026-10-07): when the first payment exceeds
+  // the stored unfinanced slice the finance company lends less, so what is not
+  // financed is approved − funded (the first payment plus any contribution).
+  // The stored slice (approved − max fundable) is unchanged and still drives the
+  // first-payment correction guard; only this display reconciles to approved.
+  const notFinancedMinor =
+    facts.approvedPurchaseAmountMinor !== null && facts.financeCompanyFundedPortionMinor !== null
+      ? facts.approvedPurchaseAmountMinor - facts.financeCompanyFundedPortionMinor
+      : facts.unfinancedPortionMinor;
+  if (notFinancedMinor !== null) {
     derived.push({
       key: "unfinanced",
       label: t("DerivedUnfinancedPortion"),
-      value: money(facts.unfinancedPortionMinor),
+      value: money(notFinancedMinor),
     });
   }
   if (facts.dealerContributionMinor !== null) {
