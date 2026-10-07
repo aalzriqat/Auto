@@ -43,6 +43,7 @@ import { ConvexError } from "convex/values";
 import { assertAcquisitionTargetLive } from "./utils/vehicleLiveness";
 import {
   hasActiveDepositHold,
+  hasActiveDepositHoldExact,
   resolveHoldTargetStatus,
   syncVehicleHoldStatus,
 } from "./utils/depositHelpers";
@@ -66,6 +67,10 @@ import {
   stampAcquisitionPointer,
 } from "./utils/commitmentSources";
 import { IN_FLIGHT_FINANCE_STATUSES as FINANCE_IN_FLIGHT } from "./utils/financeStatuses";
+import {
+  hasPendingDisposition,
+  hasPendingDispositionExceptSale,
+} from "./utils/depositCancellationPending";
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 
@@ -75,6 +80,13 @@ import { MutationCtx, QueryCtx } from "./_generated/server";
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const COMMITMENT_MESSAGES = {
+  /**
+   * SCRUM-712 — a cancelled sale's deposit share on this car has no refund or
+   * forfeit recorded yet. Applies to EVERY customer, including the one whose
+   * deposit it is (Sol 6 ruling c22231, option A).
+   */
+  pendingDepositDisposition:
+    "A deposit from a cancelled sale on this vehicle still needs a refund or forfeiture decision. Complete that decision before the vehicle can be committed, sold or made available again.",
   heldByAnotherDeal:
     "This vehicle is already committed to another deal. Release that commitment before starting a new one.",
   heldByAnotherDealSale:
@@ -344,6 +356,17 @@ export async function resolveActingRoot(
   // `vehicles.createReservation`), where there is no cache to bound; the query
   // context exists for tests and read-only callers.
   const decisionNow = Date.now();
+
+  // ⚠️ SCRUM-712: BEFORE ownership, JOIN, adoption or OPEN_NEW. An undecided
+  // cancelled-sale deposit share locks the car for everybody, the cancelled
+  // customer included, and for every authority version: this reads the
+  // disposition table, not the V1 kernel, so a LEGACY organization is covered.
+  // `acquireVehicle`, `assertAcquirable` and `assertSaleMayCompleteForVehicle`
+  // all reach this function, so they inherit the refusal.
+  if (await hasPendingDisposition(ctx, args.orgId, args.vehicleId)) {
+    return { decision: "REFUSE", message: COMMITMENT_MESSAGES.pendingDepositDisposition };
+  }
+
   const ownership = await resolveOwnership(ctx, args.orgId, args.vehicleId);
 
   if (ownership.kind === "AMBIGUOUS") {
@@ -1576,6 +1599,25 @@ export async function resolveRestorationDecision(
 }
 
 /**
+ * SCRUM-712 — may a restoration proceed past the car's undecided deposit shares?
+ * The cancellation's own restoration (SALE_CANCELLED) is exempt from the shares
+ * of the sale it is restoring — every instalment of it, not just the deposit being
+ * restored; a share of any OTHER sale refuses. Evaluated BEFORE the first write of
+ * a restoration: a refusal after `makeSourceLive` would commit a live deposit with
+ * no root and report it as lawful (F1).
+ */
+async function pendingBlocksRestoration(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">,
+  intent: RestorationIntent
+): Promise<boolean> {
+  return intent.kind === "SALE_CANCELLED"
+    ? await hasPendingDispositionExceptSale(ctx, orgId, vehicleId, intent.saleId)
+    : await hasPendingDisposition(ctx, orgId, vehicleId);
+}
+
+/**
  * SCRUM-208 — THE RESTORATION DOOR. Decide, then execute through `acquireVehicle`.
  *
  * ⚠️ IT DOES NOT OPEN A ROOT ITSELF. Execution goes through `acquireVehicle`,
@@ -1595,6 +1637,21 @@ export async function restoreCommitment(
     createdBy: Id<"users">;
   }
 ): Promise<RestorationOutcome> {
+  // ⚠️ SCRUM-712: this door reaches `executeAcquisition` WITHOUT going through
+  // `resolveActingRoot`, so it needs its own gate. The one thing it may do is
+  // restore the hold of the deposit whose own share is pending (the
+  // cancellation's authority restoration, synchronous or deferred); a share of
+  // any OTHER sale on the car still refuses.
+  const pendingElsewhere = await pendingBlocksRestoration(
+    ctx,
+    args.decision.orgId,
+    args.vehicleId,
+    args.intent
+  );
+  if (pendingElsewhere) {
+    return { decision: "REFUSE", reason: COMMITMENT_MESSAGES.pendingDepositDisposition };
+  }
+
   const resolved = await resolveRestorationDecision(ctx, {
     decision: args.decision,
     source: args.source,
@@ -1918,10 +1975,23 @@ export async function hasLiveCommitmentBasis(
      * did.
      */
     decision?: AuthorityDecisionContext;
+    /**
+     * SCRUM-712 Q34 — read the LEGACY deposit basis exactly instead of through the
+     * 50-row reader. Set only by a door that has just cleared a cancelled-sale
+     * share, where the legacy reader's false "no hold" would free the car. Ignored
+     * under a canonical decision, which already reads exact ranges.
+     */
+    exactDepositReader?: boolean;
   }
 ): Promise<boolean> {
   const skip = (kind: "DEPOSIT" | "RESERVATION" | "FINANCE") =>
     args.excludeKinds !== undefined && args.excludeKinds.includes(kind);
+
+  // ⚠️ SCRUM-712: AN INDEPENDENT BLOCK, evaluated before and regardless of
+  // `excludeKinds`. A caller that excludes the DEPOSIT kind to ask "does
+  // anything ELSE hold this car?" must still be told that an undecided
+  // cancelled-sale share does.
+  if (await hasPendingDisposition(ctx, args.orgId, args.vehicleId)) return true;
 
   // ⚠️ ONE CLOCK, OR NONE. A decision carrying a different instant from the one
   // this call was told to judge against would silently answer a second
@@ -1942,7 +2012,9 @@ export async function hasLiveCommitmentBasis(
   if (!skip("DEPOSIT")) {
     const held = canonical
       ? await hasCanonicalDepositHold(ctx, canonical, args.vehicleId)
-      : await hasActiveDepositHold(ctx, args.vehicleId);
+      : args.exactDepositReader
+        ? await hasActiveDepositHoldExact(ctx, args.vehicleId)
+        : await hasActiveDepositHold(ctx, args.vehicleId);
     if (held) return true;
   }
 
@@ -2444,6 +2516,22 @@ export async function restoreAuthorityAfterReversal(
     return { outcome: "ACCOUNTING_REVERSED_AUTHORITY_BLOCKED_INCONSISTENT", detail: probe.reason };
   }
 
+  // ⚠️ SCRUM-712 F1: the pending-share gate is evaluated HERE, before anything is
+  // written. `restoreCommitment` repeats it, but by then `makeSourceLive` has
+  // already made the deposit live, and a refusal at that point returned a
+  // false-lawful outcome with the write committed.
+  if (
+    await pendingBlocksRestoration(ctx, args.orgId, args.vehicleId, {
+      kind: "SALE_CANCELLED",
+      saleId: args.saleId,
+    })
+  ) {
+    return {
+      outcome: "ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS",
+      detail: COMMITMENT_MESSAGES.pendingDepositDisposition,
+    };
+  }
+
   // ⚠️ DECIDE BEFORE MAKING THE SOURCE LIVE, AND LET THE RESOLVER OWN THE
   // JUDGMENT. It writes nothing, and it is the only thing that can tell a
   // rival's root apart from a later generation of this deal's own lineage.
@@ -2653,6 +2741,8 @@ export async function releaseRootIfNoLiveBasis(
     decisionNow: number;
     /** Canonical orgs read the exact ranges. See `hasLiveCommitmentBasis`. */
     decision?: AuthorityDecisionContext;
+    /** See hasLiveCommitmentBasis: only after a cancelled-sale share has cleared. */
+    exactDepositReader?: boolean;
   }
 ): Promise<void> {
   const root = await openRootForFinalization(ctx, args.orgId, args.vehicleId);
@@ -2664,6 +2754,7 @@ export async function releaseRootIfNoLiveBasis(
       vehicleId: args.vehicleId,
       decisionNow: args.decisionNow,
       ...(args.decision ? { decision: args.decision } : {}),
+      ...(args.exactDepositReader ? { exactDepositReader: true } : {}),
     })
   ) {
     return;

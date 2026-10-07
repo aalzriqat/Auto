@@ -9,6 +9,10 @@ import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { auditLog } from "./financialAudit";
 import { requireFeature } from "./subscriptions";
 import {
+  SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
+  SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
+} from "./utils/closeWarnings";
+import {
   computeSubledgerReconciliation,
   SubledgerReconciliationResult,
   computeVehicleInventoryReconciliation,
@@ -18,6 +22,7 @@ import {
   computeCommissionRecognitionDivergence,
   computePrepaidRecognitionShortfall,
   GlVsSubledgerResult,
+  SupplierPayablesReconciliationResult,
 } from "./accountingReports";
 
 const periodStatusValidator = v.union(
@@ -84,21 +89,39 @@ export function assertValidAccountingDate(value: number, label: string): void {
   }
 }
 
+/**
+ * The first period (in startDate order) that starts on or before
+ * `startAtOrBefore` and satisfies `accept`.
+ *
+ * startDate is an index range; endDate / status are checked in memory over the
+ * stream, which stops at the first match. An org has few periods.
+ */
+async function findFirstPeriodStartingBy(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  startAtOrBefore: number,
+  accept: (period: Doc<"accountingPeriods">) => boolean
+): Promise<Doc<"accountingPeriods"> | null> {
+  const stream = ctx.db
+    .query("accountingPeriods")
+    .withIndex("by_org_startDate", (q) => q.eq("orgId", orgId).lte("startDate", startAtOrBefore));
+  for await (const period of stream) {
+    if (accept(period)) return period;
+  }
+  return null;
+}
+
 export async function checkPostingAllowed(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   accountingDate: number
 ): Promise<PostingAllowed> {
-  const period = await ctx.db
-    .query("accountingPeriods")
-    .withIndex("by_org_startDate", (q) => q.eq("orgId", orgId))
-    .filter((q) =>
-      q.and(
-        q.lte(q.field("startDate"), accountingDate),
-        q.gte(q.field("endDate"), accountingDate)
-      )
-    )
-    .first();
+  const period = await findFirstPeriodStartingBy(
+    ctx,
+    orgId,
+    accountingDate,
+    (p) => p.endDate >= accountingDate
+  );
 
   if (!period) {
     return {
@@ -142,17 +165,12 @@ export async function getOpenPeriodForDate(
   orgId: Id<"organizations">,
   date: number
 ): Promise<{ _id: Id<"accountingPeriods">; fiscalYear: number; periodNumber: number } | null> {
-  const period = await ctx.db
-    .query("accountingPeriods")
-    .withIndex("by_org_startDate", (q) => q.eq("orgId", orgId))
-    .filter((q) =>
-      q.and(
-        q.lte(q.field("startDate"), date),
-        q.gte(q.field("endDate"), date),
-        q.eq(q.field("status"), "OPEN")
-      )
-    )
-    .first();
+  const period = await findFirstPeriodStartingBy(
+    ctx,
+    orgId,
+    date,
+    (p) => p.endDate >= date && p.status === "OPEN"
+  );
   if (!period) return null;
   return { _id: period._id, fiscalYear: period.fiscalYear, periodNumber: period.periodNumber };
 }
@@ -202,13 +220,16 @@ export const currentOpenPeriod = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
     const now = Date.now();
-    return ctx.db
+    // OPEN periods only (index), in insertion order; the date window is checked
+    // in memory over that small set and the first match is returned, as the
+    // former `.filter(...).first()` did.
+    const openPeriods = ctx.db
       .query("accountingPeriods")
-      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "OPEN"))
-      .filter((q) =>
-        q.and(q.lte(q.field("startDate"), now), q.gte(q.field("endDate"), now))
-      )
-      .first();
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "OPEN"));
+    for await (const period of openPeriods) {
+      if (period.startDate <= now && period.endDate >= now) return period;
+    }
+    return null;
   },
 });
 
@@ -256,16 +277,12 @@ export const create = mutation({
     }
 
     // Reject overlapping date ranges
-    const overlap = await ctx.db
-      .query("accountingPeriods")
-      .withIndex("by_org_startDate", (q) => q.eq("orgId", args.orgId))
-      .filter((q) =>
-        q.and(
-          q.lte(q.field("startDate"), args.endDate),
-          q.gte(q.field("endDate"), args.startDate)
-        )
-      )
-      .first();
+    const overlap = await findFirstPeriodStartingBy(
+      ctx,
+      args.orgId,
+      args.endDate,
+      (p) => p.endDate >= args.startDate
+    );
     if (overlap) {
       throw new ConvexError(
         `Period dates overlap with ${overlap.fiscalYear}-${String(overlap.periodNumber).padStart(2, "0")}.`
@@ -343,7 +360,7 @@ export type CloseChecklistResult = {
   prepaidRecognitionShortfallScheduleCount: number;
   arReconciliation: SubledgerReconciliationResult;
   vehicleInventoryReconciliation: GlVsSubledgerResult;
-  supplierPayablesReconciliation: GlVsSubledgerResult;
+  supplierPayablesReconciliation: SupplierPayablesReconciliationResult;
   customerDepositsReconciliation: GlVsSubledgerResult;
   commissionPayableReconciliation: GlVsSubledgerResult;
 };
@@ -423,7 +440,9 @@ async function computeCloseChecklist(
     await Promise.all([
       computeSubledgerReconciliation(ctx, orgId, period.endDate),
       computeVehicleInventoryReconciliation(ctx, orgId, period.endDate),
-      computeSupplierPayablesReconciliation(ctx, orgId, period.endDate),
+      computeSupplierPayablesReconciliation(ctx, orgId, period.endDate, {
+        outboxEvents: [...allPendingOutbox, ...allFailedOutbox],
+      }),
       computeCustomerDepositsReconciliation(ctx, orgId, period.endDate),
       computeCommissionPayableReconciliation(ctx, orgId, period.endDate, { sales: allSales }),
       computePrepaidRecognitionShortfall(ctx, orgId, period.endDate),
@@ -473,7 +492,16 @@ async function computeCloseChecklist(
     const badCurrencies = vehicleInventoryRecon.currencies.filter((c) => !vehicleInventoryRecon.byCurrency[c].isReconciled);
     warnings.push(`Vehicle Inventory subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
   }
-  if (!supplierPayablesRecon.isReconciled) {
+  if (supplierPayablesRecon.status === "UNAVAILABLE") {
+    // Could not see everything (too many rows to read, or AP-affecting postings
+    // still in flight): never report that as reconciled, and never as a
+    // difference in an empty list of currencies either.
+    warnings.push(
+      supplierPayablesRecon.unavailableReason === "PENDING_POSTINGS"
+        ? SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING
+        : SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING
+    );
+  } else if (!supplierPayablesRecon.isReconciled) {
     const badCurrencies = supplierPayablesRecon.currencies.filter((c) => !supplierPayablesRecon.byCurrency[c].isReconciled);
     warnings.push(`Supplier payables subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
   }

@@ -10,6 +10,7 @@
  * whole design is shaped around.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { seedSaleInvoice } from "../test-utils/saleInvoiceFixtures";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -551,6 +552,13 @@ describe("the cash rail is shorter, and never permanently grey", () => {
     const s = await seed("done");
     const vehicleId = await ownedVehicle(s, "CASHDONE00000001");
     const saleId = await insertSale(s, vehicleId);
+    // SCRUM-571 D-43: finished also means the customer's invoice is paid and its posting stands.
+    await s.t.run((ctx) =>
+      seedSaleInvoice(ctx, {
+        orgId: s.orgId, saleId, userId: s.userId, customerId: s.customerId,
+        originalMinor: OWNED_PRICE * SCALE, posting: "POSTED",
+      })
+    );
 
     const deal = await s.asUser.query(api.sales.dealCockpit, { orgId: s.orgId, saleId });
 
@@ -705,6 +713,10 @@ describe("a consigned cash deal's supplier row, and UNKNOWN never reading as set
         amountDue: MARGIN, amountReceived: MARGIN, currency: "JOD", status: "PAID",
         createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
       })
+    );
+    // A DIRECT_TO_SUPPLIER sale bills the customer nothing for the car: a zero-value, paid invoice.
+    await s.t.run((ctx) =>
+      seedSaleInvoice(ctx, { orgId: s.orgId, saleId, userId: s.userId, customerId: s.customerId, originalMinor: 0 })
     );
 
     const deal = await s.asUser.query(api.sales.dealCockpit, { orgId: s.orgId, saleId });

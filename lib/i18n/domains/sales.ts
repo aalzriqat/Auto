@@ -2854,7 +2854,11 @@ export const salesEn = {
   NoVehiclesMatchSearch: "No vehicles match your search",
   ReservedPendingDeal: "Reserved — pending deal",
   ReservedQuoteWarning:
-    "This car is reserved, possibly by another deal. You can quote it, but a deposit or finance application will be refused unless it belongs to the deal holding the car.",
+    "This car is held for a deal, possibly another one. You can quote it, but a deposit or finance application will be refused unless it belongs to the deal holding the car.",
+  // SCRUM-636 (ruling c22077): the picker's advisory badge, from the server.
+  PickerHeldForDeal: "Held for a deal",
+  PickerAvailabilityUnverified: "Availability unverified",
+  PickerAvailabilityNote: "You can quote this car; availability is checked when the sale completes.",
   Sourced: "Sourced",
   VINPendingLabel: "VIN pending",
   SourceVehicleForCustomer: "Source a vehicle for this customer",
@@ -2959,6 +2963,9 @@ export const salesEn = {
   PositionSettled: "Settled",
   PositionNotInvolved: "Nothing outstanding",
   PositionUnknown: "Cannot be determined",
+  CustomerInvoiceBalance: "Customer invoice balance",
+  CustomerInvoiceUnproven: "Not confirmed yet",
+  CustomerInvoiceStateOpen: "The customer's invoice is still open",
   AppraisalGapLabel: "Appraisal gap",
   NoAppraisalGap: "None",
   RouteUnknownWarning:
@@ -3942,7 +3949,10 @@ export const salesAr = {
   NoVehiclesMatchSearch: "لا توجد مركبات تطابق بحثك",
   ReservedPendingDeal: "محجوزة — صفقة قيد الإنجاز",
   ReservedQuoteWarning:
-    "هذه السيارة محجوزة، وقد تكون لصفقة أخرى. يمكنك إعداد عرض سعر لها، لكن سيُرفض العربون أو طلب التمويل ما لم يكن ضمن الصفقة الحاجزة للسيارة.",
+    "هذه السيارة محجوزة لصفقة، وقد تكون صفقة أخرى. يمكنك إعداد عرض سعر لها، لكن سيُرفض العربون أو طلب التمويل ما لم يكن ضمن الصفقة الحاجزة للسيارة.",
+  PickerHeldForDeal: "محجوزة لصفقة",
+  PickerAvailabilityUnverified: "تعذّر التحقق من إتاحتها",
+  PickerAvailabilityNote: "يمكنك إعداد عرض سعر لهذه السيارة؛ تُتحقّق إتاحتها عند إتمام البيع.",
   Sourced: "مورَّدة",
   VINPendingLabel: "رقم الهيكل قيد الانتظار",
   SourceVehicleForCustomer: "توريد مركبة لهذا العميل",
@@ -4039,6 +4049,9 @@ export const salesAr = {
   PositionSettled: "مسوَّاة",
   PositionNotInvolved: "لا يوجد",
   PositionUnknown: "غير محدَّد",
+  CustomerInvoiceBalance: "المتبقي على فاتورة العميل",
+  CustomerInvoiceUnproven: "لم يُتحقَّق منه بعد",
+  CustomerInvoiceStateOpen: "فاتورة العميل لا تزال مفتوحة",
   AppraisalGapLabel: "فرق تخمين",
   NoAppraisalGap: "لا يوجد",
   RouteUnknownWarning:

@@ -1,3 +1,4 @@
+import { recordPendingDisposition } from "./utils/depositCancellationPending";
 /**
  * SCRUM-208 — A CAR COMES BACK ONLY AFTER ITS REVERSING JOURNAL EXISTS.
  *
@@ -385,6 +386,25 @@ describe("when the reversing journal finally posts", () => {
     expect(await seed.t.run((ctx) => ctx.db.query("deposits").collect())).toEqual(before);
   });
 
+  test("SCRUM-712: a share of ANOTHER sale refuses the restoration BEFORE anything is written", async () => {
+    const seed = await seedDealer("q3pend");
+    const f = await deferredDirectCancellation(seed);
+    const sources = await completion(seed, f.reversalKey);
+    await seed.t.run(async (ctx) => {
+      const sale = (await ctx.db.get(f.saleId))!;
+      const { _id, _creationTime, ...saleCopy } = sale;
+      const otherSale = await ctx.db.insert("sales", { ...saleCopy });
+      const app = (await ctx.db.query("depositApplications").collect())[0];
+      await ctx.db.insert("depositCancellationPendings", {
+        orgId: seed.orgId, depositId: f.depositId, vehicleId: f.vehicleId, saleId: otherSale,
+        applicationId: app._id, amountMinor: 1, currency: app.currency, status: "PENDING",
+        createdAt: Date.now(), createdBy: seed.userId,
+      });
+    });
+    expect((await settle(seed, sources))?.outcome).toBe("ACCOUNTING_REVERSED_NO_RESTORABLE_BASIS");
+    // The refusal came before makeSourceLive: the deposit was never made live.
+    expect((await seed.t.run((ctx) => ctx.db.get(f.depositId)))?.holdActive).toBe(false);
+  });
   test("a rival holding the car keeps it; the money still comes back to the customer", async () => {
     const seed = await seedDealer("q4");
     const f = await deferredDirectCancellation(seed);
@@ -670,6 +690,16 @@ describe("a deal paid in instalments", () => {
 
     const first = await instalment("one");
     const second = await instalment("two");
+    // SCRUM-712 F1: the cancellation records one pending share per instalment; restoration must still be all-or-nothing.
+    {
+      await seed.t.run(async (c) => {
+        const r = c.db.query("depositApplications");
+        for (const a of await r.collect()) {
+          await recordPendingDisposition(c, { orgId: seed.orgId, applicationId: a._id, actorId: seed.userId, now: 1 });
+        }
+      });
+    }
+
 
     // The REAL finalization writer: it patches the ROOT and nothing else.
     await seed.t.run((ctx) =>

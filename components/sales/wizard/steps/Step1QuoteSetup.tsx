@@ -23,6 +23,7 @@ import { ArrowRight, Banknote, CreditCard, TrendingUp, ShieldAlert, CheckCircle2
 import { cn } from "@/lib/utils";
 import VehiclePicker from "../components/VehiclePicker";
 import { VehicleLineItemsPicker } from "../components/VehicleLineItemsPicker";
+import { usePickerAvailability } from "../hooks/usePickerAvailability";
 import type { VehicleLineItem } from "../types";
 import { FinancePanel } from "../components/FinancePanel";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -147,6 +148,9 @@ export default function Step1QuoteSetup({
     () => [...(availableVehicles ?? []), ...(sourcingVehicles ?? [])],
     [availableVehicles, sourcingVehicles]
   );
+  // SCRUM-636: the hold badge comes from the server, never from vehicle.status.
+  const pickerVehicleIds = useMemo(() => allPickerVehicles.map((v) => String(v._id)), [allPickerVehicles]);
+  const pickerAvailability = usePickerAvailability(activeOrgId, pickerVehicleIds);
   const nonSelectableVehicles = useMemo(() => {
     const pickerIds = new Set(allPickerVehicles.map((v) => v._id));
     return (otherStatusVehicles ?? []).filter((v) => !pickerIds.has(v._id));
@@ -223,6 +227,7 @@ export default function Step1QuoteSetup({
     vehicleId: watchedVehicleId as Id<"vehicles"> | undefined,
     salePrice: quotedPrice,
     enabled: !isCash,
+    livenessOnly: isCash,
   });
   const profitVerdict = profitApproval.verdict?.status === "INVALID" ? undefined : profitApproval.verdict;
   const isBlockedByProfit = profitApproval.blocked;
@@ -446,6 +451,7 @@ export default function Step1QuoteSetup({
                 {isCash ? (
                   <VehicleLineItemsPicker
                     vehicles={allPickerVehicles}
+                    availability={pickerAvailability}
                     nonSelectableVehicles={nonSelectableVehicles}
                     items={vehicleItems}
                     onChange={handleVehicleItemsChange}
@@ -458,6 +464,7 @@ export default function Step1QuoteSetup({
                 ) : (
                   <VehiclePicker
                     vehicles={allPickerVehicles}
+                    availability={pickerAvailability}
                     nonSelectableVehicles={nonSelectableVehicles}
                     value={field.value}
                     onChange={(id, price) => {

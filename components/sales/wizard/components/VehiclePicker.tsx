@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { ChevronDown, Search, Check, Truck, Loader2 } from "lucide-react";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
+import { availabilityOf, type PickerAvailability } from "../hooks/usePickerAvailability";
 
 export type SourceVehicleData = {
   make: string;
@@ -46,6 +47,29 @@ function getOtherStatusLabel(status: string, t: (key: any) => string) {
   }
 }
 
+/**
+ * SCRUM-636 (ruling c22077): the server's advisory verdict, never the car's
+ * status. Both badges are neutral — selection stays enabled — and FREE shows
+ * nothing.
+ */
+function AvailabilityBadge({ availability, t }: { availability: PickerAvailability; t: (key: any) => string }) {
+  if (availability === "FREE") return null;
+  return (
+    <span
+      data-testid="vehicle-picker-availability-badge"
+      data-availability={availability}
+      className={cn(
+        "rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap",
+        availability === "HELD"
+          ? "border-foreground/20 bg-muted text-foreground"
+          : "border-dashed border-muted-foreground/40 text-muted-foreground"
+      )}
+    >
+      {t(availability === "HELD" ? "PickerHeldForDeal" : "PickerAvailabilityUnverified")}
+    </span>
+  );
+}
+
 function matchesVehicleSearch(v: any, q: string) {
   return (
     v.make.toLowerCase().includes(q) ||
@@ -63,8 +87,11 @@ export default function VehiclePicker({
   onChange,
   onSourceVehicle,
   initialSourceData,
+  availability,
 }: {
   vehicles: any[] | undefined;
+  /** Server verdict per car (usePickerAvailability). A car it does not cover reads UNCERTAIN, never FREE. */
+  availability?: ReadonlyMap<string, PickerAvailability>;
   /** Vehicles in a status that can't be picked for a new sale (SOLD, IN_INSPECTION, IN_REPAIR, ARCHIVED) — surfaced as search matches with a "source another like this" action instead of a dead-end search. */
   nonSelectableVehicles?: any[];
   value: string;
@@ -96,6 +123,7 @@ export default function VehiclePicker({
   }, [initialSourceData]);
 
   const selected = vehicles?.find((v) => v._id === value);
+  const selectedAvailability = selected ? availabilityOf(availability, selected._id) : undefined;
 
   const filtered = useMemo(() => {
     if (!vehicles) return [];
@@ -171,15 +199,11 @@ export default function VehiclePicker({
           open ? "border-indigo-500 ring-1 ring-indigo-500/30" : "border-border hover:border-muted-foreground/60"
         )}
       >
-        <span className={cn("flex items-center gap-2", selected ? "text-foreground" : "text-muted-foreground")}>
+        <span className={cn("flex flex-wrap items-center gap-x-2 gap-y-1 text-start", selected ? "text-foreground" : "text-muted-foreground")}>
           {selected
             ? `${selected.year} ${selected.make} ${selected.model}${selected.sourceType === "SOURCED" ? ` · ${t("Sourced" as any)}` : selected.vin ? ` — ${selected.vin}` : ""}`
             : t("SelectAvailableVehicle" as any)}
-          {selected?.status === "RESERVED" && (
-            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-500">
-              {t("ReservedPendingDeal" as any)}
-            </span>
-          )}
+          {selectedAvailability && <AvailabilityBadge availability={selectedAvailability} t={t} />}
           {selected?.sourceType === "SOURCED" && (
             <span className="rounded-full bg-orange-500/15 px-2 py-0.5 text-xs font-medium text-orange-500">
               {t("Sourced" as any)}
@@ -188,14 +212,16 @@ export default function VehiclePicker({
         </span>
         <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform", open && "rotate-180")} />
       </button>
-      {/* SCRUM-629 F-27: quotable, but say what the server will refuse next. */}
-      {selected?.status === "RESERVED" && (
+      {/* SCRUM-629 F-27 / SCRUM-636: quotable either way. A held car says what
+          the server will refuse next; an unverified one says when it is checked. */}
+      {selectedAvailability && selectedAvailability !== "FREE" && (
         <p
           role="status"
-          data-testid="vehicle-picker-reserved-note"
-          className="mt-1.5 text-xs text-amber-700 dark:text-amber-400"
+          data-testid="vehicle-picker-availability-note"
+          data-availability={selectedAvailability}
+          className="mt-1.5 text-xs text-muted-foreground"
         >
-          {t("ReservedQuoteWarning" as any)}
+          {t(selectedAvailability === "HELD" ? "ReservedQuoteWarning" : "PickerAvailabilityNote")}
         </p>
       )}
 
@@ -241,14 +267,10 @@ export default function VehiclePicker({
                           )}
                         >
                           <div>
-                            <p className="font-medium flex items-center gap-2">
+                            <p className="font-medium flex flex-wrap items-center gap-x-2 gap-y-1">
                               {v.year} {v.make} {v.model}
                               {v.trim ? ` ${v.trim}` : ""}
-                              {v.status === "RESERVED" && (
-                                <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-500">
-                                  {t("ReservedPendingDeal" as any)}
-                                </span>
-                              )}
+                              <AvailabilityBadge availability={availabilityOf(availability, v._id)} t={t} />
                               {v.sourceType === "SOURCED" && (
                                 <span className="rounded-full bg-orange-500/15 px-2 py-0.5 text-xs font-medium text-orange-500">
                                   {t("Sourced" as any)}

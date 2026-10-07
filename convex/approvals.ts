@@ -213,6 +213,10 @@ export const profitApprovalStatus = query({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
     salePrice: v.number(),
+    // SCRUM-659: a CASH deal has no profit rule but still cannot proceed on a
+    // deleted car. True answers only the liveness question: VEHICLE_DELETED, or
+    // NOT_REQUIRED, and never REQUIRED/PENDING/REJECTED.
+    livenessOnly: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
@@ -232,7 +236,7 @@ export const profitApprovalStatus = query({
       margin: fromMinorUnits(decision.marginMinor, currency),
       minimumProfit: fromMinorUnits(decision.minimumProfitMinor, currency),
     };
-    if (!decision.required) return { status: "NOT_REQUIRED" as const, ...figures };
+    if (!decision.required || args.livenessOnly === true) return { status: "NOT_REQUIRED" as const, ...figures };
 
     const matching = await requestsForTerms(ctx, args.orgId, vehicle._id, decision);
     if (matching.some((request) => request.status === "APPROVED")) {
