@@ -20,6 +20,7 @@ import * as applicationsModule from "./applications";
 import * as financingEconomicsModule from "./financingEconomics";
 import { convexTestWithComponents, recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
+import { payInvoice, seedSaleCompletedPosting } from "../test-utils/saleInvoiceFixtures";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -75,7 +76,10 @@ type Route = "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
  * finance company. `sourceType: SOURCED` is what makes the car legally the
  * supplier's; `sourceCost` is his entitlement.
  */
-async function seedDealership(tag: string, opts: { sourceType?: "STOCK" | "SOURCED" } = {}) {
+async function seedDealership(
+  tag: string,
+  opts: { sourceType?: "STOCK" | "SOURCED"; /** false: a Free/Starter org that never initialized a chart. */ chart?: boolean } = {}
+) {
   const t = convexTestWithComponents(schema, MODULES);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Financed ${tag}`, createdAt: Date.now() })
@@ -105,16 +109,18 @@ async function seedDealership(tag: string, opts: { sourceType?: "STOCK" | "SOURC
   const asUser = t.withIdentity({ subject: `${tag}_user`, clerkId: `${tag}_user` });
   const asApprover = t.withIdentity({ subject: `${tag}_appr`, clerkId: `${tag}_appr` });
 
-  await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
-  const fiscalYear = new Date().getUTCFullYear();
-  await asUser.mutation(api.accountingPeriods.create, {
-    orgId,
-    startDate: Date.UTC(fiscalYear, 0, 1),
-    endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
-    fiscalYear, periodNumber: 1,
-  });
-  const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
-  await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+  if (opts.chart !== false) {
+    await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+    const fiscalYear = new Date().getUTCFullYear();
+    await asUser.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(fiscalYear, 0, 1),
+      endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+      fiscalYear, periodNumber: 1,
+    });
+    const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
+    await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+  }
 
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag })
@@ -2750,6 +2756,91 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
     const view = await cockpitOf(s, applicationId);
     expect(stageOf(view, "SETTLEMENT")).toBe("COMPLETE");
     expect(supplierRow(view).position).toBe("NOT_INVOLVED");
+  });
+
+  /**
+   * SCRUM-571 D-43: the direct route has no settlement plan and so no gap, but the
+   * customer can still owe the dealership its own charges on the canonical invoice.
+   * That balance holds the deal open; paying it, with the sale's journal POSTED,
+   * releases it.
+   */
+  test("a direct-route deal is not settled while the customer's invoice is open (SCRUM-571 D-43)", async () => {
+    const s = await seedDealership("directCustomerOwes");
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.vehicleId as never, { sourceCost: VEHICLE_PRICE });
+    });
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+        dealerContributionMinor: 0,
+      });
+    });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+    expect(stageOf(await cockpitOf(s, applicationId), "SETTLEMENT")).toBe("COMPLETE"); // control
+
+    // The customer owes 50 on the sale's invoice, and the sale's journal is POSTED.
+    const owed = 50 * SCALE;
+    const receivableId = await s.t.run(async (ctx) => {
+      const app = (await ctx.db.get(applicationId))!;
+      const sale = (await ctx.db.get(app.finalizedSaleId!))!;
+      await ctx.db.patch(sale.canonicalReceivableDocumentId!, { originalAmountMinor: owed, status: "OPEN" });
+      await seedSaleCompletedPosting(ctx, { orgId: s.orgId, saleId: sale._id, userId: s.userId });
+      return sale.canonicalReceivableDocumentId!;
+    });
+    expect(stageOf(await cockpitOf(s, applicationId), "SETTLEMENT")).not.toBe("COMPLETE");
+
+    await s.t.run((ctx) => payInvoice(ctx, { orgId: s.orgId, userId: s.userId, receivableId, amountMinor: owed }));
+    expect(stageOf(await cockpitOf(s, applicationId), "SETTLEMENT")).toBe("COMPLETE");
+  });
+
+  /**
+   * SCRUM-571 D-48, end to end through the REAL `finalizeDeal`: an organization with
+   * NO chart of accounts (Free/Starter) can never post its SALE_COMPLETED, so the
+   * sale snapshots `glPostingRequired: false` and the customer's paid invoice must
+   * read CLOSED — not UNKNOWN for want of a posting that cannot exist.
+   */
+  test("a no-chart organization's financed deal reads its paid customer invoice CLOSED (SCRUM-571 D-48)", async () => {
+    const s = await seedDealership("noChartFinalize", { chart: false });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.vehicleId as never, { sourceCost: VEHICLE_PRICE });
+    });
+    const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(applicationId, {
+        approvedDealerPurchaseAmountMinor: VEHICLE_PRICE * SCALE,
+        dealerContributionMinor: 0,
+      });
+    });
+    await s.asUser.mutation(api.applications.confirmSupplierDisbursement, { idempotencyKey: crypto.randomUUID(),
+      orgId: s.orgId,
+      applicationId,
+      disbursedAmountMinor: VEHICLE_PRICE * SCALE,
+    });
+
+    // The premise: no chart, so the sale was completed with no ledger to post to.
+    const owed = 50 * SCALE;
+    const receivableId = await s.t.run(async (ctx) => {
+      const app = (await ctx.db.get(applicationId))!;
+      const sale = (await ctx.db.get(app.finalizedSaleId!))!;
+      expect(sale.glPostingRequired).toBe(false);
+      // A dealer charge, so the invoice is non-zero and the posting proof would matter.
+      await ctx.db.patch(sale.canonicalReceivableDocumentId!, { originalAmountMinor: owed, status: "OPEN" });
+      return sale.canonicalReceivableDocumentId!;
+    });
+    const open = await cockpitOf(s, applicationId);
+    expect(open!.customerInvoiceState).toBe("OPEN");
+    expect(stageOf(open, "SETTLEMENT")).not.toBe("COMPLETE");
+
+    await s.t.run((ctx) => payInvoice(ctx, { orgId: s.orgId, userId: s.userId, receivableId, amountMinor: owed }));
+    const paid = await cockpitOf(s, applicationId);
+    expect(paid!.customerInvoiceState).toBe("CLOSED");
+    expect(paid!.money!.customerInvoice).toEqual({ state: "CLOSED", outstandingMinor: 0, currency: "JOD" });
+    expect(stageOf(paid, "SETTLEMENT")).toBe("COMPLETE");
   });
 
   /**

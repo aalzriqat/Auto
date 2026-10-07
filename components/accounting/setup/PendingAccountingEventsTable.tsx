@@ -1,5 +1,6 @@
 import { Loader2, RotateCw } from "lucide-react";
 import type { Id } from "@/convex/_generated/dataModel";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AccountingEmptyRow, AccountingTableFrame } from "../AccountingTabShared";
@@ -13,6 +14,9 @@ type PendingAccountingEventsTableProps = {
   busyAction?: string | null;
   t: Translate;
   onRetry?: (eventId: Id<"pendingAccountingEvents">) => void;
+  /** Present only while more FAILED rows can be paged in. */
+  onLoadMoreFailed?: () => void;
+  loadingMoreFailed?: boolean;
 };
 
 function eventLabel(event: PendingEventSummary): string {
@@ -26,6 +30,8 @@ export function PendingAccountingEventsTable({
   busyAction,
   t,
   onRetry,
+  onLoadMoreFailed,
+  loadingMoreFailed,
 }: Readonly<PendingAccountingEventsTableProps>) {
   return (
     <div className="space-y-3">
@@ -47,11 +53,21 @@ export function PendingAccountingEventsTable({
               <AccountingEmptyRow colSpan={canManageFinance && onRetry ? 6 : 5} label={t("NoPendingAccountingEvents")} />
             ) : (
               events.map((event) => {
-                const isFailed = event.status === "FAILED" || event.attempts > 0;
+                // Only a dead-lettered row can be retried; a PENDING row with
+                // attempts is still in flight and the server refuses it. A
+                // FAILED row for a retired posting is refused too, and the
+                // server says so via `retryable`.
+                const isFailed = event.status === "FAILED";
+                const canRetry = isFailed && event.retryable === true;
                 const busy = busyAction === `retry_${event._id}`;
                 return (
                   <TableRow key={event._id}>
-                    <TableCell className="font-medium">{eventLabel(event)}</TableCell>
+                    <TableCell className="font-medium">
+                      {eventLabel(event)}{" "}
+                      <Badge variant={isFailed ? "destructive" : "outline"} className="ms-1">
+                        {isFailed ? t("AccountingEventStatusFailed" as any) : t("AccountingEventStatusPending" as any)}
+                      </Badge>
+                    </TableCell>
                     <TableCell>
                       {event.sourceType}: {event.sourceId}
                     </TableCell>
@@ -62,13 +78,13 @@ export function PendingAccountingEventsTable({
                     </TableCell>
                     {canManageFinance && onRetry && (
                       <TableCell className="text-right">
-                        {isFailed && (
+                        {canRetry && (
                           <Button
                             size="sm"
                             variant="outline"
                             disabled={busy}
                             onClick={() => {
-                              if (window.confirm(t("ConfirmRetryOutbox" as any))) {
+                              if (window.confirm(t("ConfirmRetryFailedOutbox" as any))) {
                                 onRetry(event._id);
                               }
                             }}
@@ -86,6 +102,12 @@ export function PendingAccountingEventsTable({
           </TableBody>
         </Table>
       </AccountingTableFrame>
+      {onLoadMoreFailed && (
+        <Button size="sm" variant="outline" disabled={loadingMoreFailed} onClick={onLoadMoreFailed}>
+          {loadingMoreFailed && <Loader2 className="h-4 w-4 animate-spin" />}
+          {t("LoadMore")}
+        </Button>
+      )}
       {hasMore && <p className="text-xs text-muted-foreground">{t("MorePendingAccountingEvents")}</p>}
     </div>
   );

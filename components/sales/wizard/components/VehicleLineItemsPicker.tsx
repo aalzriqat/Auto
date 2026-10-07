@@ -5,10 +5,12 @@ import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import VehiclePicker, { type SourceVehicleData } from "./VehiclePicker";
+import type { PickerAvailability } from "../hooks/usePickerAvailability";
 import type { VehicleLineItem } from "../types";
 
 interface VehicleLineItemsPickerProps {
   vehicles: any[] | undefined;
+  availability?: ReadonlyMap<string, PickerAvailability>;
   nonSelectableVehicles?: any[];
   items: VehicleLineItem[];
   onChange: (items: VehicleLineItem[]) => void;
@@ -24,6 +26,7 @@ interface VehicleLineItemsPickerProps {
  */
 export function VehicleLineItemsPicker({
   vehicles,
+  availability,
   nonSelectableVehicles,
   items,
   onChange,
@@ -52,6 +55,7 @@ export function VehicleLineItemsPicker({
           <div className="flex-1">
             <VehiclePicker
               vehicles={vehicles?.filter((v) => !selectedIds.has(v._id) || v._id === item.vehicleId)}
+              availability={availability}
               nonSelectableVehicles={nonSelectableVehicles}
               value={item.vehicleId}
               onChange={(id, price) => updateItem(index, id, price)}

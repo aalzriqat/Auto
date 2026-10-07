@@ -8,6 +8,7 @@ import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socia
 import { notifyManagers, notifyUser, getActorName } from "./utils/notifications";
 import { assertDirectVehicleStatusTransition } from "./utils/vehicleStatusGuards";
 import { syncVehicleHoldStatus } from "./utils/depositHelpers";
+import { assertNoPendingBeforeAvailable } from "./utils/depositCancellationPending";
 
 const vehicleStatus = v.union(
   v.literal("AVAILABLE"),
@@ -51,6 +52,13 @@ export const create = mutation({
       throw new ConvexError(`Vehicle is already marked as ${args.requestedStatus}.`);
     }
     assertDirectVehicleStatusTransition(vehicle.status, args.requestedStatus);
+    // SCRUM-712: refuse a move to AVAILABLE while a cancelled-sale deposit share is undecided.
+    await assertNoPendingBeforeAvailable(ctx, {
+      orgId: args.orgId,
+      vehicleId: vehicle._id,
+      currentStatus: vehicle.status,
+      nextStatus: args.requestedStatus,
+    });
 
     // Check if there's already a pending request for this vehicle by this user
     const existing = await ctx.db
@@ -143,6 +151,12 @@ export const resolve = mutation({
         throw new ConvexError("Vehicle not found in this organization.");
       }
       assertDirectVehicleStatusTransition(vehicleToUpdate.status, request.requestedStatus);
+      await assertNoPendingBeforeAvailable(ctx, {
+        orgId: args.orgId,
+        vehicleId: vehicleToUpdate._id,
+        currentStatus: vehicleToUpdate.status,
+        nextStatus: request.requestedStatus,
+      });
     }
 
     await ctx.db.patch(args.requestId, {

@@ -34,6 +34,7 @@ import {
   commissionAccountingDate,
 } from "../accounting/workflowHooks";
 import { computeResoldProductMargin, type FinancedSalePlanPayload } from "../accounting/postingRules";
+import { isChartInitialized } from "../chartOfAccounts";
 import { toMinorUnits, fromMinorUnits, denominationOf, isValidMinorAmount, addMinor } from "./money";
 import { assertProfitApproved, saleRequiresMinimumProfit } from "./profitApproval";
 import { assertVehicleNotDeleted, assertVehicleReadyForSale } from "./vehicleLiveness";
@@ -1762,6 +1763,11 @@ async function applySaleCompletionSideEffects(
       })()
     : undefined;
 
+  // SCRUM-571 (D-48): snapshot, BEFORE the hook runs, whether the books were owed this
+  // sale. The chart only, not the open period: a chart-ready org whose sale-date period
+  // is closed still owes the posting and stays unproven until the queued event posts.
+  const glPostingRequired = await isChartInitialized(ctx, args.orgId);
+
   await hookSaleCompleted(ctx, {
     orgId: args.orgId,
     saleId,
@@ -1830,7 +1836,7 @@ async function applySaleCompletionSideEffects(
     dueDate: args.saleDate,
     actorId: args.actorId,
   });
-  await ctx.db.patch(saleId, { canonicalReceivableDocumentId: saleReceivableId });
+  await ctx.db.patch(saleId, { canonicalReceivableDocumentId: saleReceivableId, glPostingRequired });
 
   // Skipped entirely when a settlement plan governs the sale. There the deposit is
   // consideration for a car invoiced to the financing company, so there is no
