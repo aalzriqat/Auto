@@ -51,8 +51,16 @@ vi.mock("convex/react", async () => {
     useMutation: () => (...args: unknown[]) => stubs.mutation(...args),
   };
 });
-vi.mock("../components/VehiclePicker", () => ({ default: () => null }));
-vi.mock("../components/VehicleLineItemsPicker", () => ({ VehicleLineItemsPicker: () => null }));
+vi.mock("../components/VehiclePicker", () => ({
+  default: ({ initialSourceData }: { initialSourceData?: { make: string } }) => (
+    <div data-testid="single-picker" data-source-make={initialSourceData?.make ?? ""} />
+  ),
+}));
+vi.mock("../components/VehicleLineItemsPicker", () => ({
+  VehicleLineItemsPicker: ({ initialSourceData }: { initialSourceData?: { make: string } }) => (
+    <div data-testid="line-items-picker" data-source-make={initialSourceData?.make ?? ""} />
+  ),
+}));
 vi.mock("../components/FinancePanel", () => ({ FinancePanel: () => null }));
 vi.mock("../components/VehicleCostBar", () => ({ VehicleCostBar: () => null }));
 
@@ -236,5 +244,34 @@ describe("SCRUM-682: the approval-request failure toast is localized", () => {
       fireEvent.click(screen.getByRole("button", { name: dictionaries[locale].WizardProfitApprovalRequestAction as string }));
     });
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(FAILED[locale]);
+  });
+});
+
+/** SCRUM-746: "source another like this" must reach the picker on both payment types. */
+describe("SCRUM-746: the source-like seed reaches the vehicle picker", () => {
+  const SEED = { make: "Kia", model: "K5", year: 2022, color: "White", fuelType: "PETROL", transmission: "AUTOMATIC" };
+  const renderWith = (paymentType: "CASH" | "INSTALLMENT", seed?: typeof SEED) =>
+    render(
+      <Step1QuoteSetup
+        paymentType={paymentType}
+        initialData={{ vehicleId: "", vehiclePrice: 0, desiredProfit: 0, downPayment: 0, termMonths: 84 } as never}
+        initialSourceData={seed}
+        onNext={vi.fn()}
+      />
+    );
+
+  test("installment: the single picker receives the seed", () => {
+    renderWith("INSTALLMENT", SEED);
+    expect(screen.getByTestId("single-picker").getAttribute("data-source-make")).toBe("Kia");
+  });
+
+  test("cash: the line-items picker receives the seed", () => {
+    renderWith("CASH", SEED);
+    expect(screen.getByTestId("line-items-picker").getAttribute("data-source-make")).toBe("Kia");
+  });
+
+  test("control: no seed, no auto-open data", () => {
+    renderWith("CASH");
+    expect(screen.getByTestId("line-items-picker").getAttribute("data-source-make")).toBe("");
   });
 });
