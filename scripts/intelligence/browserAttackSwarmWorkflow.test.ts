@@ -375,7 +375,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(dockerOptions[0].match(/--volume\s+("[^"]*"|\S+)|(?:^|\s)-v\s+("[^"]*"|\S+)/g)?.map((v) => v.replace(/^\s*(--volume|-v)\s+/, ""))).toEqual([
       '"$RUNNER_TEMP/candidate-build-src:/app"',
     ]);
-    const buildSteps = workflow.jobs["candidate-build"].steps ?? [];
+    const buildSteps = workflow.jobs?.["candidate-build"]?.steps ?? [];
     expect(buildSteps.indexOf(copy)).toBeGreaterThanOrEqual(0);
     expect(buildSteps.indexOf(copy)).toBeLessThan(buildSteps.indexOf(build));
     const artifact = step(
