@@ -761,9 +761,14 @@ jobs:
             sleep 2
           done
           # The container receives only public NEXT_PUBLIC_* values, so its output
-          # is safe to print; the tail is bounded because the candidate controls it.
-          docker inspect --format 'state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}}' "$CANDIDATE_CONTAINER" >&2 || true
-          docker logs --tail 200 "$CANDIDATE_CONTAINER" 2>&1 | head -c 20000 >&2 || true
+          # is safe to print. It is still candidate-controlled text: bound it to
+          # its LAST 20000 bytes (the boot error is at the end) and fence it with
+          # a random stop-commands token so it cannot be read as runner commands.
+          LOG_FENCE="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::$LOG_FENCE"
+          docker inspect --format 'state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}}' "$CANDIDATE_CONTAINER" 2>&1 || true
+          docker logs --tail 200 "$CANDIDATE_CONTAINER" 2>&1 | tail -c 20000 || true
+          echo "::$LOG_FENCE::"
           exit 1
 
       - name: Run full trusted E2E suite against exact candidate
@@ -948,13 +953,22 @@ jobs:
             if curl --fail --silent --show-error               http://127.0.0.1:3000/api/health > /dev/null; then
               exit 0
             fi
+            if [ "$(docker inspect --format '{{.State.Running}}' "$CANDIDATE_CONTAINER" 2>/dev/null || echo false)" != "true" ]; then
+              echo "::error::Candidate container exited before answering /api/health"
+              break
+            fi
             sleep 2
           done
 
           # No --rm above: keep a dead candidate's exit code and stderr readable.
-          # Only public NEXT_PUBLIC_* values reach the container; tail is bounded.
-          docker inspect --format 'state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}}' "$CANDIDATE_CONTAINER" >&2 || true
-          docker logs --tail 200 "$CANDIDATE_CONTAINER" 2>&1 | head -c 20000 >&2 || true
+          # Only public NEXT_PUBLIC_* values reach the container; the text is still
+          # candidate-controlled, so print its last 20000 bytes inside a random
+          # stop-commands fence so it cannot be read as runner commands.
+          LOG_FENCE="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::$LOG_FENCE"
+          docker inspect --format 'state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}}' "$CANDIDATE_CONTAINER" 2>&1 || true
+          docker logs --tail 200 "$CANDIDATE_CONTAINER" 2>&1 | tail -c 20000 || true
+          echo "::$LOG_FENCE::"
           echo "Exact candidate frontend did not become healthy on isolated loopback." >&2
           exit 1
         env:

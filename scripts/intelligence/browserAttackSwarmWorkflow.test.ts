@@ -683,11 +683,25 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
         step(jobName, "Start verified exact-SHA candidate frontend artifact")
           .run ?? "",
       );
-      const dockerRun = run.split("\n").find((line) => /docker run /.test(line));
+      // Join backslash continuations so a flag on any line of the command counts.
+      const joined = run.replace(/\\\r?\n\s*/g, " ");
+      const dockerRun = joined.split("\n").find((line) => /docker run /.test(line));
       expect(dockerRun, jobName).toBeDefined();
-      expect(run, jobName).not.toMatch(/docker run[^\n]*--rm/);
-      expect(run, jobName).toContain("docker inspect --format");
-      expect(run, jobName).toMatch(/docker logs --tail \d+ "\$CANDIDATE_CONTAINER"/);
+      expect(dockerRun, jobName).not.toMatch(/(^|\s)--rm(\s|$)/);
+      // A stopped candidate must stop the wait loop immediately.
+      expect(run, jobName).toContain("{{.State.Running}}");
+      // Diagnostics: exit state, then the LAST bytes of the log (the boot error
+      // is at the end), fenced so candidate text cannot be read as runner commands.
+      const stop = run.indexOf('echo "::stop-commands::$LOG_FENCE"');
+      const inspect = run.indexOf("docker inspect --format 'state=");
+      const logs = run.search(/docker logs --tail \d+ "\$CANDIDATE_CONTAINER" 2>&1 \| tail -c \d+/);
+      const resume = run.indexOf('echo "::$LOG_FENCE::"');
+      expect(run, jobName).toContain("od -An -N16 -tx1 /dev/urandom");
+      expect(stop, jobName).toBeGreaterThan(-1);
+      expect(stop, jobName).toBeLessThan(inspect);
+      expect(inspect, jobName).toBeLessThan(logs);
+      expect(logs, jobName).toBeLessThan(resume);
+      expect(run, jobName).not.toMatch(/head -c/);
       const stopRun = (workflow.jobs?.[jobName]?.steps ?? [])
         .map((entry) => String(entry.run ?? ""))
         .join("\n");
