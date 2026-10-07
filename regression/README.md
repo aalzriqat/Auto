@@ -22,3 +22,7 @@ Never put ruling text or customer data here. Format, validators and rules live i
 - `rule` (owner ruling 2026-10-07): a pure-function money/permission rule (e.g. `saleEconomics`) described by `subject` + `inputs` instead of steps. Backend level, non-screen domain; still needs a ruling, a matrixRow and an exact `impl.testName`. Identity (de-dup) is subject + inputs + expected.
 - SCRUM-595 loop-generated cases are one record per case, parked as `candidate` until the S3 runner census can bind generated titles (owner ruling 2026-10-07).
 
+
+## Pilot records (S2b)
+
+Three `rule` records bind exact titles in `convex/consignmentEconomics.test.ts` and cite SCRUM-407#c21031 (financed DIRECT sourced sale: approved-basis, not sale-price). Their `matrixRow` (`SCRUM-41-direct`) is a descriptive label of the originating bug group, not a joined SCRUM-486 row id: the matrix is not machine-readable yet. Permission and tenancy records are deferred until the schema has a non-comment ruling source (description / invariant) form.
