@@ -6212,3 +6212,192 @@ describe("applying the quote's down payment to an approved zero first payment (S
     });
   }
 });
+
+// ---------------------------------------------------------------------------
+// SCRUM-766 PR-A — the NET shortfall: frozen quote baseline, each side's own
+// first payment, and the fail-closed UNAVAILABLE state (owner rulings c22413)
+// ---------------------------------------------------------------------------
+
+describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
+  /** Quote at `quotationMajor`, optionally move the first payment, then approve `approvedMajor`. */
+  async function approvedWith(options: {
+    companyRules?: Parameters<typeof seedDealer>[0];
+    quotationMajor?: number;
+    firstPaymentAtApprovalMajor?: number;
+    approvedMajor: number;
+    appliedLtvPercent?: number;
+  }) {
+    const seed = await seedDealer(options.companyRules ?? {});
+    const applicationId = await createApplication(seed);
+    if (options.quotationMajor === undefined) {
+      await recordBaselineQuotation(seed, applicationId);
+    } else {
+      await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(options.quotationMajor),
+        source: "MANUAL_ENTRY",
+        targetSellingAmountMinor: jod(DEAL.targetSelling),
+        estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+        customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+      });
+    }
+    if (options.firstPaymentAtApprovalMajor !== undefined) {
+      await seed.t.run((ctx) =>
+        ctx.db.patch(applicationId, {
+          customerFirstPaymentMinor: jod(options.firstPaymentAtApprovalMajor as number),
+        })
+      );
+    }
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(options.approvedMajor),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(options.approvedMajor),
+      basis: "APPRAISAL",
+      ...(options.appliedLtvPercent !== undefined
+        ? { appliedLtvPercent: options.appliedLtvPercent }
+        : {}),
+    });
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { status: "APPROVED", creditDecision: "APPROVED" })
+    );
+    return { seed, applicationId };
+  }
+
+  test("85% quoted, approved at 80%: a 1,425 total, 850 valuation + 575 financing terms", async () => {
+    const { seed, applicationId } = await approvedWith({ approvedMajor: 11_500, appliedLtvPercent: 80 });
+    const app = await readApp(seed, applicationId);
+    expect(app.netShortfallMethod).toBe("NET");
+    expect(app.netShortfallMinor).toBe(jod(1_425));
+    expect(app.valuationShortfallMinor).toBe(jod(850));
+    expect(app.financingTermsShortfallMinor).toBe(jod(575));
+    // The breakdown always adds up to the figure the parties split.
+    expect(app.valuationShortfallMinor! + app.financingTermsShortfallMinor!).toBe(app.netShortfallMinor);
+    // …and the gross figure the display keeps is a different, larger-or-equal number.
+    expect(app.rawAppraisalGapMinor).toBe(jod(1_000));
+  });
+
+  test("the quote-time LTV is the one frozen in the quotation, not whatever the company default is now", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    // The company changes its default AFTER the quotation was frozen at 85%.
+    await seed.t.run((ctx) => ctx.db.patch(seed.companyId, { defaultLtvPercent: 70 }));
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+      appliedLtvPercent: 80,
+    });
+    const app = await readApp(seed, applicationId);
+    expect(app.quotationCalculationSnapshot?.appliedLtvPercent).toBe(85);
+    expect(app.netShortfallMinor).toBe(jod(1_425));
+  });
+
+  test("each side uses its OWN first payment: 500 at the quote, 800 at the approval is a 550 shortfall", async () => {
+    const { seed, applicationId } = await approvedWith({
+      approvedMajor: 11_500,
+      firstPaymentAtApprovalMajor: 800,
+    });
+    const app = await readApp(seed, applicationId);
+    expect(app.netShortfallMethod).toBe("NET");
+    expect(app.netShortfallMinor).toBe(jod(550));
+  });
+
+  test("a binding first payment caps what is financed: 12,000 -> 11,000 at 90%, first payment 500 -> 1,500 is 300", async () => {
+    const { seed, applicationId } = await approvedWith({
+      companyRules: { defaultLtvPercent: 90, maxFinancingLTV: 90 },
+      quotationMajor: 12_000,
+      firstPaymentAtApprovalMajor: 1_500,
+      approvedMajor: 11_000,
+    });
+    const app = await readApp(seed, applicationId);
+    expect(app.netShortfallMethod).toBe("NET");
+    expect(app.netShortfallMinor).toBe(jod(300));
+  });
+
+  test("a company that lends against the appraisal has an UNAVAILABLE shortfall: fails closed at the gate, the resolver and the cockpit", async () => {
+    const { seed, applicationId } = await approvedWith({
+      companyRules: { ltvBasis: "INDEPENDENT_APPRAISAL" },
+      approvedMajor: 11_500,
+    });
+    const app = await readApp(seed, applicationId);
+    expect(app.netShortfallMethod).toBe("UNAVAILABLE");
+    expect(app.netShortfallMinor).toBeUndefined();
+    expect(app.valuationShortfallMinor).toBeUndefined();
+
+    // The handover gate: an unmeasurable shortfall is not a zero one.
+    await expect(
+      seed.asUser.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: (await seed.asUser.query(api.applications.handoverStamp, {
+          orgId: seed.orgId,
+          applicationId,
+        })) as string,
+      })
+    ).rejects.toThrow(/could not be worked out/i);
+    expect((await readApp(seed, applicationId)).vehicleHandoverAt).toBeUndefined();
+
+    // The resolver cannot be driven against an unknown total either.
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await servedStamp(seed, applicationId),
+        ...allocation(850, 0, { cash: 850 }),
+      })
+    ).rejects.toThrow();
+    expect((await readApp(seed, applicationId)).gapResolution).not.toBe("CUSTOMER_ABSORBS");
+
+    // The screen is told it is unavailable, not given a zero.
+    const cockpit = await seed.asApprover.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(cockpit?.money?.shortfall?.method).toBe("UNAVAILABLE");
+    expect(cockpit?.money?.shortfall?.totalMinor).toBeUndefined();
+    expect(cockpit?.stages.find((s) => s.key === "APPROVED_PURCHASE")?.state).toBe("BLOCKED");
+  });
+
+  test("re-approving before handover clears a settled split and reopens the negotiation against the NEW shortfall", async () => {
+    const { seed, applicationId } = await approvedWith({ approvedMajor: 11_500 });
+    await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      ...allocation(850, 0, { cash: 850 }),
+    });
+    expect((await readApp(seed, applicationId)).gapResolution).toBe("CUSTOMER_ABSORBS");
+
+    // Re-approving with a different term is a supported path before handover.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+      appliedLtvPercent: 80,
+    });
+    const after = await readApp(seed, applicationId);
+    expect(after.netShortfallMinor).toBe(jod(1_425));
+    expect(after.gapResolution).toBe("PENDING_NEGOTIATION");
+    expect(after.customerGapShareMinor).toBeUndefined();
+    expect(after.customerGapCashToDealerMinor).toBeUndefined();
+    expect(after.gapResolvedAt).toBeUndefined();
+  });
+});
