@@ -126,4 +126,32 @@ describe("SCRUM-773 special orders: supplier payable settlement", () => {
     expect(payable?.paymentAccountId).toBeUndefined();
     expect(await settlementEvents(t, orgId, payableId)).toHaveLength(0);
   });
+
+  // Control for the test above: the ownership check refuses only a foreign
+  // account. The org's own bank account still pays, through both doors.
+  test("both payment doors accept the organization's own payment account", async () => {
+    const t = newTest();
+    const { orgId, userId, as } = await seedOrg(t, "ctl");
+    const { payableId } = await seedSourcedPayable(t, orgId, userId);
+    const ownBank = await t.run((ctx) =>
+      ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", "BANK_ACCOUNT"))
+        .unique()
+    );
+    expect(ownBank).not.toBeNull();
+
+    await as.mutation(api.sourcingPayables.recordPartialPayment, {
+      idempotencyKey: crypto.randomUUID(), orgId, payableId, amount: 1000, paymentMethod: "BANK_TRANSFER", paymentAccountId: ownBank!._id,
+    });
+    await as.mutation(api.sourcingPayables.markPaid, {
+      idempotencyKey: crypto.randomUUID(), orgId, payableId, paymentMethod: "BANK_TRANSFER", paymentAccountId: ownBank!._id,
+    });
+
+    const payable = await t.run((ctx) => ctx.db.get(payableId));
+    expect(payable?.status).toBe("PAID");
+    expect(payable?.amountPaid).toBe(18000);
+    expect(payable?.paymentAccountId).toBe(ownBank!._id);
+    expect(await settlementEvents(t, orgId, payableId)).toHaveLength(2);
+  });
 });
