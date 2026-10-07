@@ -23,6 +23,8 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
 }));
 
+vi.mock("@/hooks/useOrgSettings", () => ({ useOrgSettings: () => ({ currency: "JOD" }) }));
+
 // Keyed on the function's path — `api` is a proxy handing back a fresh
 // reference per property access, so an identity map misses every lookup.
 const stubs = vi.hoisted(() => ({ queryResults: new Map<string, unknown>() }));

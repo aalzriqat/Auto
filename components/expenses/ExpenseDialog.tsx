@@ -9,6 +9,7 @@ import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { toast } from "@/components/ui/sonner";
 import {
   Dialog,
@@ -55,6 +56,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
   }, [open, commandId]);
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const money = useMoneyDisplay();
 
   const availableVehicles = useQuery(
     api.vehicles.listAll,
@@ -272,7 +274,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                 name="amount"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t("AmountUSD" as any)} <span className="text-red-500">*</span></FormLabel>
+                    <FormLabel>{t("Amount" as any)} ({money.label}) <span className="text-red-500">*</span></FormLabel>
                     <FormControl>
                       <Input type="number" step="0.01" placeholder="250" {...field} />
                     </FormControl>

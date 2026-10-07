@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { parseTypedAmount } from "@/lib/moneyDisplay";
 import { Separator } from "@/components/ui/separator";
 import { economicDateInputToMs, economicTodayDateInput } from "@/lib/dateInput";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
@@ -464,9 +465,17 @@ function isHandoverType(feeType: string): feeType is HandoverFeeType {
 function parseMajor(value: string, scale: number): number | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
-  const major = Number(trimmed);
-  if (!Number.isFinite(major) || major < 0) return null;
-  return Math.round(major * Math.pow(10, scale));
+  return parseTypedAmount(trimmed, scale).minor;
+}
+
+/** Why a typed amount is refused, in place: more decimals than the currency holds, or not an amount. */
+function AmountRefusal({ amount, scale, t }: { amount: string; scale: number; t: (key: string) => string }) {
+  if (amount.trim() === "" || parseMajor(amount, scale) !== null) return null;
+  return (
+    <p role="alert" className="text-xs font-medium text-destructive">
+      {t(parseTypedAmount(amount, scale).tooPrecise ? "AmountTooPrecise" : "CostAmountRequired")}
+    </p>
+  );
 }
 
 const selectClass =
@@ -1730,6 +1739,7 @@ function AddForm({
             aria-invalid={amountInvalid}
             onChange={(event) => setAmount(event.target.value)}
           />
+          <AmountRefusal amount={amount} scale={scale} t={t} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="handover-cost-paid-on">{t("CostPaidOnLabel")}</Label>
@@ -2103,6 +2113,7 @@ function TemplateActualForm({
             aria-invalid={amountInvalid}
             onChange={(event) => setAmount(event.target.value)}
           />
+          <AmountRefusal amount={amount} scale={scale} t={t} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor={`${fieldId}-paid-on`}>{t("CostPaidOnLabel")}</Label>
@@ -2217,8 +2228,10 @@ function ActualForm({
             inputMode="decimal"
             className="tabular-nums"
             value={amount}
+            aria-invalid={amount.trim() !== "" && amountMinor === null}
             onChange={(event) => setAmount(event.target.value)}
           />
+          <AmountRefusal amount={amount} scale={scale} t={t} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor={`actual-paid-on-${line._id}`}>{t("CostPaidOnLabel")}</Label>

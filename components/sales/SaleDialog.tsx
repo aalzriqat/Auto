@@ -12,6 +12,7 @@ import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { consignedTaxRefusal } from "@/lib/consignedTaxGuard";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { toast } from "@/components/ui/sonner";
 import {
   Dialog,
@@ -49,6 +50,7 @@ import { ProfitApprovalNotice, useProfitApproval } from "./ProfitApprovalNotice"
 export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const money = useMoneyDisplay();
 
   // Queries for dropdowns
   const { results: customers } = usePaginatedQuery(
@@ -383,7 +385,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                                 options={availableVehicles?.map((v: Doc<"vehicles">) => ({
                                   value: v._id,
                                   label: `${v.year} ${v.make} ${v.model}`,
-                                  subLabel: `${v.vin} · ${v.sellingPrice.toLocaleString()} JOD`,
+                                  subLabel: `${v.vin} · ${money.format(v.sellingPrice)}`,
                                 })) ?? []}
                               />
                             </FormControl>
@@ -671,7 +673,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                 </div>
                 <div className="mt-4 flex items-center justify-between border-t pt-4 border-primary/20">
                   <span className="font-semibold text-lg">{t("EstMonthlyPayment" as any)}</span>
-                  <span className="font-bold text-2xl text-primary">{estimatedPayment.toFixed(2)} JOD / mo</span>
+                  <span className="font-bold text-2xl text-primary">{money.amount(estimatedPayment)} {money.label} / mo</span>
                 </div>
               </div>
             )}

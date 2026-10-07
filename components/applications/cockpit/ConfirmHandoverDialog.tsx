@@ -5,6 +5,7 @@ import { Loader2, Truck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { formatMinorAmount } from "@/lib/moneyDisplay";
 import {
   Dialog,
   DialogContent,
@@ -136,7 +137,7 @@ export function ConfirmHandoverDialog({
    */
   const money = (minor: number) =>
     shown.currency
-      ? `${(minor / Math.pow(10, shown.currency.scale)).toLocaleString()} ${shown.currency.code}`
+      ? `${formatMinorAmount(minor, Math.pow(10, shown.currency.scale))} ${shown.currency.code}`
       : "";
   // Figures exist but nobody can say what they are denominated in: refuse
   // rather than spell them in a currency nobody verified.

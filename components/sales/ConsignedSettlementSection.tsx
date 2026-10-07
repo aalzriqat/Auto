@@ -5,6 +5,7 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { cn } from "@/lib/utils";
 import { ArrowRight, AlertTriangle } from "lucide-react";
 
@@ -70,6 +71,7 @@ export function ConsignedSettlementSection({
   onApplicable,
 }: Props) {
   const { t, isRtl } = useLanguage();
+  const moneyDisplay = useMoneyDisplay();
 
   // Both routes are available on every consigned deal, financed or not. The
   // direct route used to be refused on a financed deal because the finance
@@ -123,7 +125,7 @@ export function ConsignedSettlementSection({
   // honest way to render that. Never `?? 0` here — a zero margin and an unknown
   // one are different answers and the operator has to be able to tell them apart.
   const money = (n: number | null) =>
-    n === null ? "—" : n.toLocaleString(isRtl ? "ar-JO" : "en-JO", { maximumFractionDigits: 2 });
+    n === null ? "—" : moneyDisplay.amount(n);
 
   const directToSupplier = preview.settlementRoute === "DIRECT_TO_SUPPLIER";
   const supplier = preview.supplierName || t("TheSupplier" as any);

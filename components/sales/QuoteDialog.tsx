@@ -9,6 +9,7 @@ import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { toast } from "@/components/ui/sonner";
 import {
   Dialog,
@@ -45,6 +46,7 @@ import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
 export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCustomerId }: QuoteDialogProps) {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
+  const money = useMoneyDisplay();
 
   const { results: customers } = usePaginatedQuery(
     api.customers.list,
@@ -293,7 +295,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                         options={availableVehicles?.map((v: Doc<"vehicles">) => ({
                           value: v._id,
                           label: `${v.year} ${v.make} ${v.model}`,
-                          subLabel: `${v.sellingPrice.toLocaleString()} JOD`,
+                          subLabel: money.format(v.sellingPrice),
                         })) ?? []}
                       />
                     </FormControl>
@@ -407,34 +409,34 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                       {result.isCash ? (
                         <div className="flex justify-between text-sm">
                           <span className="text-muted-foreground">{t("TotalToPay" as any)}:</span>
-                          <span className="font-semibold">{result.totalFinancedAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</span>
+                          <span className="font-semibold">{money.format(result.totalFinancedAmount)}</span>
                         </div>
                       ) : result.feesConfigured ? (
                         <>
                           <div className="flex justify-between text-sm border-b pb-1">
                             <span className="text-muted-foreground">{t("FinancedAmount" as any)}:</span>
-                            <span className="font-medium">{result.totalFinancedAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                            <span className="font-medium">{money.format(result.totalFinancedAmount)}</span>
                           </div>
                           <div className="flex justify-between text-sm border-b pb-1">
                             <span className="text-muted-foreground">{t("TotalProfit" as any)}:</span>
-                            <span className="font-medium">{result.totalProfit.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                            <span className="font-medium">{money.format(result.totalProfit)}</span>
                           </div>
                           {result.takafulAmount > 0 && (
                             <div className="flex justify-between text-sm border-b pb-1">
                               <span className="text-muted-foreground">{t("Takaful" as any)}:</span>
-                              <span className="font-medium">{result.takafulAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                              <span className="font-medium">{money.format(result.takafulAmount)}</span>
                             </div>
                           )}
                           <div className="flex justify-between text-sm border-b pb-1">
                             <span className="text-muted-foreground">{t("FinanceCompanyValuation" as any)}:</span>
-                            <span className="font-medium">{result.actualValuation > 0 ? result.actualValuation.toLocaleString(undefined, { minimumFractionDigits: 2 }) : (t("NotSet" as any))}</span>
+                            <span className="font-medium">{result.actualValuation > 0 ? money.format(result.actualValuation) : (t("NotSet" as any))}</span>
                           </div>
 
                           {result.exceedsValuation && (
                             <div className="bg-red-50 text-red-600 p-2 rounded text-xs mt-2 space-y-1">
                               <p className="font-semibold">{t("ExceedsLimit" as any)}</p>
-                              <p>{t("MaxFinancing" as any)}: {result.maxFinancingAllowed.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</p>
-                              <p>{t("MinDownPayment" as any)}: {result.minimumDownPayment.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</p>
+                              <p>{t("MaxFinancing" as any)}: {money.format(result.maxFinancingAllowed)}</p>
+                              <p>{t("MinDownPayment" as any)}: {money.format(result.minimumDownPayment)}</p>
                             </div>
                           )}
 
@@ -458,8 +460,8 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                         <div className="text-2xl font-bold text-primary">
                           {result.feesConfigured && result.monthlyInstallment !== undefined ? (
                             <>
-                              {result.monthlyInstallment.toLocaleString(undefined, { minimumFractionDigits: 2 })}{" "}
-                              <span className="text-sm font-normal">JOD</span>
+                              {money.amount(result.monthlyInstallment)}{" "}
+                              <span className="text-sm font-normal">{money.label}</span>
                             </>
                           ) : (
                             <span className="text-amber-500 text-sm">{t("FeesNotConfigured" as any) || "Fees Not Configured"}</span>
