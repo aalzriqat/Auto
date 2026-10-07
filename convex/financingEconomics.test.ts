@@ -6497,6 +6497,37 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
     expect(after.gapResolution).toBe("FAILED");
   });
 
+  // Opus L1: the resolver's own guard, independent of the clearing writers. A stale
+  // NET total with no standing approval must still be refused, by that message.
+  test("the resolver refuses a stale net shortfall when no approval stands", async () => {
+    const { seed, applicationId } = await approvedWith({ approvedMajor: 11_500 });
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { approvedDealerPurchaseAmountMinor: undefined })
+    );
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await servedStamp(seed, applicationId),
+        ...allocation(850, 0, { cash: 850 }),
+      })
+    ).rejects.toThrow(/no standing finance-company approval/i);
+    expect((await readApp(seed, applicationId)).gapResolution).not.toBe("CUSTOMER_ABSORBS");
+  });
+
+  // Opus L2: re-approving is now the only path that reopens a FAILED negotiation.
+  test("re-approving a FAILED negotiation reopens it", async () => {
+    const { seed, applicationId } = await approvedWith({ approvedMajor: 11_500 });
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { gapResolution: "FAILED" }));
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+    expect((await readApp(seed, applicationId)).gapResolution).toBe("PENDING_NEGOTIATION");
+  });
+
   // Review F3 (Opus): two reasons raised by one recompute must both survive.
   test("an unknown remittance and an unavailable shortfall are both kept in the reconciliation reason", async () => {
     const { seed, applicationId } = await approvedWith({
