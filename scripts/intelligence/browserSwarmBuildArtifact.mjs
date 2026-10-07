@@ -206,6 +206,46 @@ async function materializeEntry({
   await chmod(destinationPath, info.mode & 0o777);
 }
 
+/**
+ * pnpm's node_modules holds symlinks, and each real package keeps its own
+ * dependencies as siblings inside the virtual store. Materializing the links as
+ * copies strands those siblings, so `node server.js` dies on its first require
+ * (a real run failed on @swc/helpers). pnpm lists every package that was not
+ * linked at the top under node_modules/.pnpm/node_modules; copy each one that
+ * has no top-level counterpart so ordinary resolution finds it. Existing
+ * top-level packages are never replaced, and every copy goes through the same
+ * boundary and budget checks as the rest of the tree.
+ */
+async function hoistPnpmVirtualStore({
+  standaloneRoot,
+  runtimeRoot,
+  candidateBoundary,
+  budget,
+}) {
+  const hoistRoot = path.join(standaloneRoot, "node_modules", ".pnpm", "node_modules");
+  const names = await readdir(hoistRoot).catch(() => []);
+  const copyIfMissing = async (relative) => {
+    const destinationPath = path.join(runtimeRoot, "node_modules", relative);
+    if (await lstat(destinationPath).catch(() => null)) return;
+    await materializeEntry({
+      sourcePath: path.join(hoistRoot, relative),
+      destinationPath,
+      candidateBoundary,
+      ancestry: new Set(),
+      budget,
+    });
+  };
+  for (const name of names.sort()) {
+    if (name.startsWith(".")) continue;
+    if (name.startsWith("@")) {
+      const scoped = await readdir(path.join(hoistRoot, name)).catch(() => []);
+      for (const child of scoped.sort()) await copyIfMissing(path.join(name, child));
+      continue;
+    }
+    await copyIfMissing(name);
+  }
+}
+
 async function hashFile(filePath) {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(filePath)) {
@@ -451,6 +491,7 @@ export async function createBrowserSwarmBuildArtifact({
     ancestry: new Set(),
     budget,
   });
+  await hoistPnpmVirtualStore({ standaloneRoot, runtimeRoot, candidateBoundary, budget });
 
   await rm(path.join(runtimeRoot, ".next", "static"), {
     recursive: true,
