@@ -234,7 +234,10 @@ function financedDeal(): FinancedDealCockpitData {
       supplierReceipt: { actionable: false, reason: "NOT_DIRECT_ROUTE" },
       appraisalGapMinor: 300 * SCALE,
       forward: { dueMinor: 0, depositMinor: 0, contributionMinor: 0, onBooksMinor: 0 },
+      // No invoice yet: renders no tile, so the committed visual frames are unchanged.
+      customerInvoice: { state: "NONE", outstandingMinor: null, currency: "JOD" },
     },
+    customerInvoiceState: "NONE",
     handoverEvidence: {
       approvedPurchaseAmountMinor: 12_500 * SCALE,
       financeCompanyFundedPortionMinor: 12_000 * SCALE,

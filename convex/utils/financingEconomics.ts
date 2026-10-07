@@ -1900,12 +1900,14 @@ export interface SettlementObligations {
   financier: ObligationState;
   /** What is owed to the supplier, or by him for the dealership's margin. */
   supplier: ObligationState;
+  /** What the customer still owes on the sale's canonical invoice (SCRUM-571 D-43). */
+  customer: ObligationState;
 }
 
 /** Every obligation proven finished, or proven never to have existed. */
 export function settlementIsComplete(obligations: SettlementObligations): boolean {
   const done = (state: ObligationState) => state === "CLOSED" || state === "NONE";
-  return done(obligations.financier) && done(obligations.supplier);
+  return done(obligations.financier) && done(obligations.supplier) && done(obligations.customer);
 }
 
 /**

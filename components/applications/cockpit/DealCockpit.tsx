@@ -190,6 +190,7 @@ import { DealClosingReadinessList, closingReasonText, type ClosingReadinessView 
 import { useClosingReadiness } from "./useClosingReadiness";
 import { closingReadinessRefusalOf } from "@/lib/closingReadinessReasonCodes";
 import { ProfitApprovalNotice, useProfitApproval } from "@/components/sales/ProfitApprovalNotice";
+import { formatMinorAmount, formatMoneyAmount } from "@/lib/moneyDisplay";
 
 /**
  * The financed-deal cockpit.
@@ -1344,7 +1345,7 @@ export function DealCockpit({
     isConsignedDeal && app?.supplierSettlementRoute === "DIRECT_TO_SUPPLIER";
   const supplierName = app?.vehicle?.sourcedFromName ?? undefined;
   const formatEconomics = (minor: number) => {
-    return `${(minor / economicsFactor).toLocaleString()} ${
+    return `${formatMinorAmount(minor, economicsFactor)} ${
       economicsCurrencyCode === orgCurrency.code ? currencyMarker(economicsCurrencyCode) : economicsCurrencyCode
     }`;
   };
@@ -1473,7 +1474,7 @@ export function DealCockpit({
           denomination: { code: dealCosts?.currency ?? economicsCurrencyCode },
           scaleOf: (cur: string) => safeScaleForCurrency(cur, 2),
           money: (minor: number, currency: string) =>
-            `${(minor / Math.pow(10, safeScaleForCurrency(currency, 2))).toLocaleString()} ${
+            `${formatMinorAmount(minor, Math.pow(10, safeScaleForCurrency(currency, 2)))} ${
               currency === orgCurrency.code ? currencyMarker(currency) : currency
             }`,
           // Frozen once the sale is recognized (`economicsFrozen`): the server
@@ -1741,9 +1742,7 @@ export function DealCockpit({
       : undefined;
   const formatPlanMajor = (major: number, currency: string) => {
     const scale = safeScaleForCurrency(currency, 2);
-    return `${major.toLocaleString(undefined, {
-      maximumFractionDigits: scale,
-    })} ${
+    return `${formatMoneyAmount(major, currency, scale)} ${
       currency === orgCurrency.code ? currencyMarker(currency) : currency
     }`;
   };
@@ -2508,6 +2507,12 @@ export function DealCockpit({
       hasPermission(PERMISSIONS.VIEW_VEHICLES) &&
       !!app?.quote &&
       app.quote.mode !== "CASH",
+    // SCRUM-659: a CASH deal still cannot close on a deleted car.
+    livenessOnly:
+      canCloseDeal &&
+      hasPermission(PERMISSIONS.VIEW_VEHICLES) &&
+      !!app?.quote &&
+      app.quote.mode === "CASH",
     loading: permissionsLoading || app === undefined,
   });
 
@@ -2677,7 +2682,7 @@ export function DealCockpit({
    * is a new command rather than a silent replay of the first.
    */
   const custodyMoney = (minor: number, currency: string) =>
-    `${(minor / Math.pow(10, safeScaleForCurrency(currency, 2))).toLocaleString()} ${
+    `${formatMinorAmount(minor, Math.pow(10, safeScaleForCurrency(currency, 2)))} ${
       currency === orgCurrency.code ? currencyMarker(currency) : currency
     }`;
   // One intent per dialog attempt. The deal, record and kind are named for
@@ -4400,6 +4405,48 @@ function DealPartyFacts({
   );
 }
 
+/** The note under the invoice balance: an OPEN invoice is owed, a CLOSED one is settled; unproven states say nothing. */
+const INVOICE_NOTE_KEY: Record<string, string | undefined> = {
+  OPEN: POSITION_LABEL.OWED_TO_DEALERSHIP,
+  CLOSED: POSITION_LABEL.SETTLED,
+};
+
+/**
+ * SCRUM-571 (D-48): what the customer still owes on the deal's invoice, as its own
+ * tile and NOT a party row. The CUSTOMER party row states the held deposit; this
+ * is the invoice debt the settlement stage is waiting on, so the two never share
+ * a figure. Served, not derived: the state and the amount come from the same
+ * server read the stage was judged on. Nothing is shown before an invoice exists
+ * (`NONE`), and an unproven invoice states no amount rather than a zero.
+ */
+function CustomerInvoiceFact({
+  invoice,
+  money,
+  t,
+}: Readonly<{
+  /** Optional at runtime: a payload from a backend that predates the field renders no tile. */
+  invoice: DealMoney["customerInvoice"] | undefined;
+  money: (minor: number) => string;
+  t: (key: string) => string;
+}>) {
+  if (!invoice || invoice.state === "NONE") return null;
+  const noteKey = INVOICE_NOTE_KEY[invoice.state];
+  return (
+    <div
+      className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2"
+      data-testid="deal-customer-invoice"
+    >
+      <MoneyFact
+        label={t("CustomerInvoiceBalance")}
+        value={invoice.outstandingMinor !== null ? money(invoice.outstandingMinor) : null}
+        unavailableKey="CustomerInvoiceUnproven"
+        note={noteKey ? t(noteKey) : undefined}
+        t={t}
+      />
+    </div>
+  );
+}
+
 /**
  * Only where an APPLICATION exists. `فرق تخمين` is the difference between the
  * finance company's appraisal and the price — a cash deal has no appraisal, so
@@ -4472,6 +4519,7 @@ function MoneyPanel({
   summary,
   parties,
   overview,
+  customerInvoice,
   t,
 }: Readonly<{
   money: (minor: number) => string;
@@ -4500,6 +4548,8 @@ function MoneyPanel({
     onSettleSupplier: (() => void) | undefined;
     supplierGuidance: string | undefined;
   }> | null;
+  /** The customer's invoice debt (SCRUM-571 D-48), separate from the deposit on the party row. */
+  customerInvoice: DealMoney["customerInvoice"];
   t: (key: string) => string;
 }>) {
   /**
@@ -4572,6 +4622,7 @@ function MoneyPanel({
             )}
           </div>
         )}
+        <CustomerInvoiceFact invoice={customerInvoice} money={money} t={t} />
         {typeof canonicalProfit !== "string" && <ProfitBreakdown profit={canonicalProfit} money={money} t={t} />}
         {overview?.data?.vehicleCostBasis && (
           <VehicleCostBasisSection
@@ -5427,7 +5478,7 @@ export function DealCockpitView({
   // a different one it would label the amount as something it is not.
   const marker =
     locale === "ar" && dealCurrency === currency.code ? currency.symbol : dealCurrency;
-  const money = (minor: number) => `${(minor / factor).toLocaleString()} ${marker}`;
+  const money = (minor: number) => `${formatMinorAmount(minor, factor)} ${marker}`;
 
   // The discrepancy's own figures.
   //
@@ -5465,7 +5516,7 @@ export function DealCockpitView({
   const discrepancyMarker =
     locale === "ar" && discrepancyCurrency === currency.code ? currency.symbol : discrepancyCurrency;
   const discrepancyMoney = (minor: number) =>
-    `${(minor / discrepancyFactor).toLocaleString()} ${discrepancyMarker}`;
+    `${formatMinorAmount(minor, discrepancyFactor)} ${discrepancyMarker}`;
 
   // The economics block is denominated in the APPLICATION's pinned currency,
   // which the money block need not even be present to establish — a MANAGER
@@ -5502,14 +5553,14 @@ export function DealCockpitView({
     if (denominationUnusable || served === null) return null;
     const servedMarker =
       locale === "ar" && served.code === currency.code ? currency.symbol : served.code;
-    return `${(minor / Math.pow(10, served.scale)).toLocaleString()} ${servedMarker}`;
+    return `${formatMinorAmount(minor, Math.pow(10, served.scale))} ${servedMarker}`;
   };
   // Withheld outright rather than approximated: a figure the operator cannot
   // tell is wrong is worse than a visible blank beside the restatement notice.
   const decisionMoney = (minor: number) =>
     denominationUnusable
       ? "—"
-      : `${(minor / decisionFactor).toLocaleString()} ${decisionMarker}`;
+      : `${formatMinorAmount(minor, decisionFactor)} ${decisionMarker}`;
   const adviceRecordedLabel =
     discrepancy?.recordedMinor != null ? discrepancyMoney(discrepancy.recordedMinor) : t("Unknown");
   const adviceApprovedLabel =
@@ -5916,6 +5967,14 @@ export function DealCockpitView({
               <CardContent className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
                 <Lock className="h-4 w-4" />
                 {t("MoneyPanelHidden")}
+                {/* SCRUM-571 (D-48): the QUALITATIVE state only. The amount is
+                    finance-tier and was never sent to this caller. */}
+                {deal.customerInvoiceState === "OPEN" && (
+                  <span data-testid="deal-customer-invoice-state">
+                    {" · "}
+                    {t("CustomerInvoiceStateOpen")}
+                  </span>
+                )}
               </CardContent>
             </Card>
           ) : (
@@ -5971,6 +6030,7 @@ export function DealCockpitView({
                       }
                     : null
                 }
+                customerInvoice={deal.money.customerInvoice}
                 t={t}
               />
 

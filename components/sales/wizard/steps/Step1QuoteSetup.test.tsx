@@ -47,11 +47,20 @@ vi.mock("convex/react", async () => {
       if (name === "vehicles:listAll") return [];
       return null;
     },
+    useQueries: () => ({}),
     useMutation: () => (...args: unknown[]) => stubs.mutation(...args),
   };
 });
-vi.mock("../components/VehiclePicker", () => ({ default: () => null }));
-vi.mock("../components/VehicleLineItemsPicker", () => ({ VehicleLineItemsPicker: () => null }));
+vi.mock("../components/VehiclePicker", () => ({
+  default: ({ initialSourceData }: { initialSourceData?: { make: string } }) => (
+    <div data-testid="single-picker" data-source-make={initialSourceData?.make ?? ""} />
+  ),
+}));
+vi.mock("../components/VehicleLineItemsPicker", () => ({
+  VehicleLineItemsPicker: ({ initialSourceData }: { initialSourceData?: { make: string } }) => (
+    <div data-testid="line-items-picker" data-source-make={initialSourceData?.make ?? ""} />
+  ),
+}));
 vi.mock("../components/FinancePanel", () => ({ FinancePanel: () => null }));
 vi.mock("../components/VehicleCostBar", () => ({ VehicleCostBar: () => null }));
 
@@ -88,6 +97,32 @@ describe("SCRUM-641 R2-F1: the wizard explains a deleted-vehicle block", () => {
   test("control: an ordinary verdict shows no deleted-vehicle message and Next is enabled", () => {
     stubs.verdict = { status: "NOT_REQUIRED", margin: 1, minimumProfit: 0 };
     renderStep();
+    expect(screen.queryByText(EN_DELETED)).toBeNull();
+    expect(screen.getByRole("button", { name: dictionaries.en.Next as string }).hasAttribute("disabled")).toBe(false);
+  });
+});
+
+/** SCRUM-659: a CASH quote has no profit rule but still cannot proceed on a deleted car. */
+describe("SCRUM-659: CASH quotes block on a deleted vehicle", () => {
+  const renderCash = () =>
+    render(
+      <Step1QuoteSetup
+        paymentType="CASH"
+        initialData={{ vehicleId: VEHICLE, vehiclePrice: 11_100, desiredProfit: 0 } as never}
+        onNext={vi.fn()}
+      />
+    );
+
+  test("a VEHICLE_DELETED verdict disables Next and explains why", () => {
+    stubs.verdict = { status: "VEHICLE_DELETED" };
+    renderCash();
+    expect(screen.getByRole("button", { name: dictionaries.en.Next as string }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText(EN_DELETED)).toBeTruthy();
+  });
+
+  test("control: a NOT_REQUIRED verdict does not block a CASH quote", () => {
+    stubs.verdict = { status: "NOT_REQUIRED", margin: 1, minimumProfit: 0 };
+    renderCash();
     expect(screen.queryByText(EN_DELETED)).toBeNull();
     expect(screen.getByRole("button", { name: dictionaries.en.Next as string }).hasAttribute("disabled")).toBe(false);
   });
@@ -185,5 +220,58 @@ describe("SCRUM-656: profit-approval alerts follow the language", () => {
       expect(container.textContent).not.toMatch(/Approval|Approved|Requesting|Management|pending|rejected/);
       cleanup();
     }
+  });
+});
+
+/** SCRUM-682: a failed approval request is reported in the user's language. */
+describe("SCRUM-682: the approval-request failure toast is localized", () => {
+  const FAILED = {
+    en: "Could not send the approval request. Please try again.",
+    ar: "تعذّر إرسال طلب الاعتماد. يرجى المحاولة مرة أخرى.",
+  } as const;
+
+  test.each(["en", "ar"] as const)("%s: an unexpected failure shows the translated fallback", async (locale) => {
+    const { toast } = await import("@/components/ui/sonner");
+    vi.mocked(toast.error).mockClear();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    stubs.locale = locale;
+    stubs.verdict = { status: "REQUIRED", margin: 100, minimumProfit: 5000 };
+    stubs.mutation = async () => {
+      throw new Error("[CONVEX M(approvals:requestProfitApproval)] ArgumentValidationError: field vehicleId");
+    };
+    renderStep();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: dictionaries[locale].WizardProfitApprovalRequestAction as string }));
+    });
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(FAILED[locale]);
+  });
+});
+
+/** SCRUM-746: "source another like this" must reach the picker on both payment types. */
+describe("SCRUM-746: the source-like seed reaches the vehicle picker", () => {
+  const SEED = { make: "Kia", model: "K5", year: 2022, color: "White", fuelType: "PETROL", transmission: "AUTOMATIC" };
+  const renderWith = (paymentType: "CASH" | "INSTALLMENT", seed?: typeof SEED) =>
+    render(
+      <Step1QuoteSetup
+        paymentType={paymentType}
+        initialData={{ vehicleId: "", vehiclePrice: 0, desiredProfit: 0, downPayment: 0, termMonths: 84 } as never}
+        initialSourceData={seed}
+        onNext={vi.fn()}
+      />
+    );
+
+  test("installment: the single picker receives the seed", () => {
+    renderWith("INSTALLMENT", SEED);
+    expect(screen.getByTestId("single-picker").getAttribute("data-source-make")).toBe("Kia");
+  });
+
+  test("cash: the line-items picker receives the seed", () => {
+    renderWith("CASH", SEED);
+    expect(screen.getByTestId("line-items-picker").getAttribute("data-source-make")).toBe("Kia");
+  });
+
+  test("control: no seed, no auto-open data", () => {
+    renderWith("CASH");
+    expect(screen.getByTestId("line-items-picker").getAttribute("data-source-make")).toBe("");
   });
 });

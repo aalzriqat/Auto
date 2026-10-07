@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { formatMoneyAmount, formatMoneyDisplay, moneyDisplayLabel, moneyDisplayScale } from "./moneyDisplay";
+import { formatMinorAmount, formatMoneyAmount, formatMoneyDisplay, moneyDisplayLabel, moneyDisplayScale, parseTypedAmount } from "./moneyDisplay";
 
 const NBSP = " ";
 
@@ -94,6 +94,83 @@ describe("wizard money formatting goes through one policy", () => {
       expect(offenders).toEqual([]);
     });
   }
+});
+
+describe("formatMinorAmount (cockpit minor-unit figures, SCRUM-366)", () => {
+  test("JOD fils keep the full scale unless whole", () => {
+    expect(formatMinorAmount(316_500, 1000)).toBe("316.500");
+    expect(formatMinorAmount(25_000_000, 1000)).toBe("25,000");
+  });
+  test("a 2-decimal currency uses its own scale", () => {
+    expect(formatMinorAmount(123_456, 100)).toBe("1,234.56");
+    expect(formatMinorAmount(1_500_000, 100)).toBe("15,000");
+  });
+  test("a 0-decimal currency shows no decimals", () => {
+    expect(formatMinorAmount(5000, 1)).toBe("5,000");
+  });
+});
+
+describe("parseTypedAmount (typed amounts recorded exactly or refused, SCRUM-606)", () => {
+  test("exact amounts convert without float noise", () => {
+    expect(parseTypedAmount("1.005", 3)).toEqual({ minor: 1005, tooPrecise: false });
+    expect(parseTypedAmount("316.854", 3).minor).toBe(316_854);
+    expect(parseTypedAmount("25", 2).minor).toBe(2500);
+    expect(parseTypedAmount("1.50000", 3).minor).toBe(1500);
+  });
+  test("more decimals than the currency holds is refused and flagged, never rounded", () => {
+    expect(parseTypedAmount("12.3456", 3)).toEqual({ minor: null, tooPrecise: true });
+    expect(parseTypedAmount("10.005", 2)).toEqual({ minor: null, tooPrecise: true });
+    expect(parseTypedAmount("5.0000000001", 3)).toEqual({ minor: null, tooPrecise: true });
+    expect(parseTypedAmount("1.5", 0)).toEqual({ minor: null, tooPrecise: true });
+  });
+  test("non-amounts are refused without the precision flag; Arabic-Indic digits parse", () => {
+    expect(parseTypedAmount("abc", 2)).toEqual({ minor: null, tooPrecise: false });
+    expect(parseTypedAmount("-5", 2)).toEqual({ minor: null, tooPrecise: false });
+    expect(parseTypedAmount("0x10", 2)).toEqual({ minor: null, tooPrecise: false });
+    expect(parseTypedAmount("١٢٫٥", 3).minor).toBe(12_500);
+  });
+});
+
+describe("cockpit minor-unit figures never use raw toLocaleString", () => {
+  const root = join(__dirname, "..");
+  for (const f of ["components/applications/cockpit/DealCockpit.tsx", "components/applications/cockpit/ConfirmHandoverDialog.tsx"]) {
+    test(f, () => {
+      const hits = readFileSync(join(root, f), "utf8")
+        .split("\n")
+        .filter((l) => /\/ .*\)\.toLocaleString\(|major\.toLocaleString\(/.test(l));
+      expect(hits).toEqual([]);
+    });
+  }
+});
+
+/**
+ * SCRUM-685/675: the quote/sale dialogs, the consigned settlement preview and the
+ * expense form once hard-coded "JOD" / a fixed locale / a "$" label next to a
+ * number. They now take the org's currency from useMoneyDisplay.
+ */
+describe("dialog money display is currency-derived", () => {
+  const root = join(__dirname, "..");
+  const files = [
+    "components/sales/QuoteDialog.tsx",
+    "components/sales/SaleDialog.tsx",
+    "components/sales/ConsignedSettlementSection.tsx",
+    "components/expenses/ExpenseDialog.tsx",
+  ];
+  const banned: Array<[string, RegExp]> = [
+    ["raw toLocaleString", /\.toLocaleString\(/],
+    ["a hard-coded JOD suffix", /\}\s*JOD\b|>\s*JOD\s*</],
+    ["the USD amount label", /AmountUSD/],
+  ];
+  for (const [label, pattern] of banned) {
+    test(`no ${label}`, () => {
+      const offenders = files.filter((f) => pattern.test(readFileSync(join(root, f), "utf8")));
+      expect(offenders).toEqual([]);
+    });
+  }
+  test("each file uses useMoneyDisplay", () => {
+    const missing = files.filter((f) => !readFileSync(join(root, f), "utf8").includes("useMoneyDisplay"));
+    expect(missing).toEqual([]);
+  });
 });
 
 function walk(dir: string): string[] {

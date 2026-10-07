@@ -102,7 +102,9 @@ export async function createCostedVehicle(
     purchasePrice: opts.cost,
     purchasePaymentMethod: opts.costPaidBy,
     // Bought on account, the payable needs someone to owe.
-    ...(opts.costPaidBy === "ON_ACCOUNT" ? { sourcedFromName: "QA TEST Supplier" } : {}),
+    // SCRUM-717: the creditor of an owned purchase is `purchaseSupplierName`;
+    // `sourcedFromName` is consignment-only and is refused on an owned car.
+    ...(opts.costPaidBy === "ON_ACCOUNT" ? { purchaseSupplierName: "QA TEST Supplier" } : {}),
     sourceType: "STOCK",
     status: "AVAILABLE",
     notes: "QA TEST — SCRUM-595 scenario matrix",

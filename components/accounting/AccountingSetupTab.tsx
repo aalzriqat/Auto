@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { AlertTriangle } from "lucide-react";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { PERMISSIONS } from "@/convex/utils/permissions";
@@ -27,6 +27,8 @@ import {
   type PeriodSummary,
 } from "./setup/types";
 
+const FAILED_PAGE_SIZE = 10;
+
 type SetupActionMessage<T> = (outcome: T) => string;
 
 export type AccountingSetupView = "all" | "settings" | "close";
@@ -34,7 +36,7 @@ export type AccountingSetupView = "all" | "settings" | "close";
 export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: AccountingSetupView }> = {}) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const { hasPermission, isOwner, isLoading: permissionsLoading } = usePermissions();
+  const { hasPermission, isOwner, permissions, isLoading: permissionsLoading } = usePermissions();
   const [periodDialogOpen, setPeriodDialogOpen] = useState(false);
   const [periodForm, setPeriodForm] = useState<PeriodFormState>(defaultPeriodForm);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -57,6 +59,22 @@ export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: Accountin
   // Locking a period can never be undone in-product, so it needs the same
   // narrow grant reopening does rather than plain finance management.
   const canLockPeriod = canManageFinance && hasPermission(PERMISSIONS.REOPEN_PERIODS);
+
+  // SCRUM-226-1: FAILED rows are paged, not sampled, so an old revivable row is
+  // never hidden behind newer terminal ones. Skipped for callers who cannot
+  // retry (the query is MANAGE_FINANCE-gated) and on the "settings" view.
+  const {
+    results: failedEvents,
+    status: failedStatus,
+    loadMore: loadMoreFailed,
+  } = usePaginatedQuery(
+    api.accountingSetup.listFailedEvents,
+    // SCRUM-226-2: gate on the server-resolved list, not hasPermission (true for any role NAMED "OWNER").
+    activeOrgId && permissions.includes(PERMISSIONS.MANAGE_FINANCE) && view !== "settings"
+      ? { orgId: activeOrgId }
+      : "skip",
+    { initialNumItems: FAILED_PAGE_SIZE }
+  );
 
   async function runSetupAction<T>(
     actionName: string,
@@ -259,8 +277,10 @@ export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: Accountin
 
       {showClose && (
       <PendingAccountingEventsTable
-        events={setupStatus.pendingEvents}
+        events={[...failedEvents, ...setupStatus.pendingEvents]}
         hasMore={setupStatus.hasMorePendingEvents}
+        onLoadMoreFailed={failedStatus === "CanLoadMore" ? () => loadMoreFailed(FAILED_PAGE_SIZE) : undefined}
+        loadingMoreFailed={failedStatus === "LoadingMore"}
         canManageFinance={canManageFinance}
         busyAction={busyAction}
         t={t}

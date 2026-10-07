@@ -394,9 +394,11 @@ describe("SCRUM-704 (iii) a closed period: the reversal cannot post today", () =
     await d.cancel();
     const after = await outcome(d);
 
-    // CANCELLED immediately, the car handed back, the commission amount kept...
+    // CANCELLED immediately, the commission amount kept... and (SCRUM-712) the car
+    // stays locked RESERVED, because the customer's deposit share is PENDING a
+    // refund-or-forfeit decision, not free to be sold on.
     expect(after.sale.status).toBe("CANCELLED");
-    expect(after.vehicle).toEqual({ status: "AVAILABLE", soldBySaleId: undefined, preHoldStatus: undefined });
+    expect(after.vehicle).toEqual({ status: "RESERVED", soldBySaleId: undefined, preHoldStatus: "AVAILABLE" });
     // ...but the books still carry the sale, the commission AND the deposit application: three queued reversals.
     expect(after.saleEvents).toEqual(["POSTED"]);
     expect(after.commissionEvents).toEqual(["POSTED"]);
@@ -494,7 +496,10 @@ describe("SCRUM-704 (iii) a closed period: the reversal cannot post today", () =
     expect(reference.deposits).toEqual([expect.objectContaining({ status: "HELD", holdActive: true })]);
     expect(reference.vehicle).toMatchObject({ status: "RESERVED", preHoldStatus: "AVAILABLE" });
     expect(drained.deposits).toEqual([expect.objectContaining({ status: "HELD", holdActive: false })]);
-    expect(drained.vehicle.status).toBe("AVAILABLE");
+    // SCRUM-712 closes the car-protection half of F3: the deposit hold is still
+    // off, but the PENDING share written by the cancellation keeps the car locked
+    // on both paths until it is decided.
+    expect(drained.vehicle.status).toBe("RESERVED");
     expect(drained.vehicle.soldBySaleId).toBeUndefined();
   });
 });
@@ -537,9 +542,11 @@ describe("SCRUM-704 (i) replaying a cancellation after it succeeded", () => {
     await a.cancel("second");
     const after = await snapshot(a.s);
 
-    expect(changedTables(before, after).sort()).toEqual(["commandIdempotency", "deposits", "vehicles"]);
+    // SCRUM-712: the second call still drops the deposit hold, but the PENDING
+    // share keeps the car locked, so the vehicle row no longer changes.
+    expect(changedTables(before, after).sort()).toEqual(["commandIdempotency", "deposits"]);
     const afterSecond = await outcome(a);
-    expect(afterSecond.vehicle.status).toBe("AVAILABLE");
+    expect(afterSecond.vehicle.status).toBe("RESERVED");
     expect(afterSecond.deposits).toEqual([expect.objectContaining({ status: "HELD", holdActive: false })]);
     // The books and the sale did not move; only the hold did.
     expect(await netByAccount(a.s)).toEqual(books);

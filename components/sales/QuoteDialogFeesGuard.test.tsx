@@ -138,7 +138,7 @@ describe("QuoteDialog execution-fee fail-closed rendering", () => {
     fireEvent.click(screen.getByRole("checkbox"));
 
     await waitFor(() => {
-      expect(screen.getByText(/MinDownPayment/).textContent).toContain("5,000.00 JOD");
+      expect(screen.getByText(/MinDownPayment/).textContent).toContain("5,000 JOD");
     });
   });
 });

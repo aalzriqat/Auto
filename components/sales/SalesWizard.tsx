@@ -75,6 +75,12 @@ export function SalesWizard({
       leadId: initialDraft?.leadId,
     };
   });
+  // SCRUM-746: the "source another like this" seed is a one-shot UI hint, kept out
+  // of wizardData (the saved-draft validator is strict) and consumed on Next so
+  // Back to step 1 does not reopen the form.
+  const [pendingSourceLike, setPendingSourceLike] = useState(
+    resumeDraft ? undefined : initialDraft?.sourceLikeVehicle
+  );
   const [selectedCustomer, setSelectedCustomer] = useState<Doc<"customers"> | null>(
     resumeDraft ? null : initialCustomer ?? null
   );
@@ -238,7 +244,9 @@ export function SalesWizard({
           <Step1QuoteSetup
             paymentType={paymentType}
             initialData={wizardData}
+            initialSourceData={pendingSourceLike}
             onNext={(data) => {
+              setPendingSourceLike(undefined);
               setWizardData(data);
               setCurrentStep(2);
             }}

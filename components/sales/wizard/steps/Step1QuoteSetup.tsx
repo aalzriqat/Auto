@@ -5,7 +5,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useQuery, useMutation } from "convex/react";
-import { ConvexError } from "convex/values";
+import { GENERIC_ERROR_MESSAGE, getLocalizedErrorMessage } from "@/lib/errors";
 import { toast } from "@/components/ui/sonner";
 import { api } from "@/convex/_generated/api";
 import { Id, Doc } from "@/convex/_generated/dataModel";
@@ -23,6 +23,7 @@ import { ArrowRight, Banknote, CreditCard, TrendingUp, ShieldAlert, CheckCircle2
 import { cn } from "@/lib/utils";
 import VehiclePicker from "../components/VehiclePicker";
 import { VehicleLineItemsPicker } from "../components/VehicleLineItemsPicker";
+import { usePickerAvailability } from "../hooks/usePickerAvailability";
 import type { VehicleLineItem } from "../types";
 import { FinancePanel } from "../components/FinancePanel";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -50,6 +51,8 @@ const COMPANY_REQUIRED_ERROR = "companyRequired";
 interface Step1QuoteSetupProps {
   paymentType: PaymentType;
   initialData: WizardData;
+  /** SCRUM-746: opens the picker's "source a vehicle" form pre-filled (the "source another like this" launch). Not part of the persisted draft. */
+  initialSourceData?: WizardData["sourceLikeVehicle"];
   onNext: (data: WizardData) => void;
 }
 
@@ -60,6 +63,7 @@ interface Step1QuoteSetupProps {
 export default function Step1QuoteSetup({
   paymentType,
   initialData,
+  initialSourceData,
   onNext,
 }: Step1QuoteSetupProps) {
   const { activeOrgId } = useOrg();
@@ -144,6 +148,9 @@ export default function Step1QuoteSetup({
     () => [...(availableVehicles ?? []), ...(sourcingVehicles ?? [])],
     [availableVehicles, sourcingVehicles]
   );
+  // SCRUM-636: the hold badge comes from the server, never from vehicle.status.
+  const pickerVehicleIds = useMemo(() => allPickerVehicles.map((v) => String(v._id)), [allPickerVehicles]);
+  const pickerAvailability = usePickerAvailability(activeOrgId, pickerVehicleIds);
   const nonSelectableVehicles = useMemo(() => {
     const pickerIds = new Set(allPickerVehicles.map((v) => v._id));
     return (otherStatusVehicles ?? []).filter((v) => !pickerIds.has(v._id));
@@ -220,6 +227,7 @@ export default function Step1QuoteSetup({
     vehicleId: watchedVehicleId as Id<"vehicles"> | undefined,
     salePrice: quotedPrice,
     enabled: !isCash,
+    livenessOnly: isCash,
   });
   const profitVerdict = profitApproval.verdict?.status === "INVALID" ? undefined : profitApproval.verdict;
   const isBlockedByProfit = profitApproval.blocked;
@@ -255,11 +263,11 @@ export default function Step1QuoteSetup({
       // indication the request had not been sent. Three E2E specs failed on
       // exactly that and could not report why.
       console.error("requestProfitApproval failed", error);
-      toast.error(
-        error instanceof ConvexError && typeof error.data === "string"
-          ? error.data
-          : "Could not send the approval request. Please try again."
-      );
+      // SCRUM-682: coded refusals are translated and transport/validation noise
+      // collapses to a translated, request-specific fallback. A plain-string
+      // server refusal is still shown as the server wrote it (follow-up: code it).
+      const message = getLocalizedErrorMessage(error, t);
+      toast.error(message === GENERIC_ERROR_MESSAGE ? t("WizardProfitApprovalRequestFailed") : message);
     } finally {
       setIsRequesting(false);
     }
@@ -443,6 +451,7 @@ export default function Step1QuoteSetup({
                 {isCash ? (
                   <VehicleLineItemsPicker
                     vehicles={allPickerVehicles}
+                    availability={pickerAvailability}
                     nonSelectableVehicles={nonSelectableVehicles}
                     items={vehicleItems}
                     onChange={handleVehicleItemsChange}
@@ -450,10 +459,12 @@ export default function Step1QuoteSetup({
                       if (!activeOrgId) throw new Error("No org selected");
                       return await createSourced({ orgId: activeOrgId, ...data });
                     }}
+                    initialSourceData={initialSourceData}
                   />
                 ) : (
                   <VehiclePicker
                     vehicles={allPickerVehicles}
+                    availability={pickerAvailability}
                     nonSelectableVehicles={nonSelectableVehicles}
                     value={field.value}
                     onChange={(id, price) => {
@@ -469,7 +480,7 @@ export default function Step1QuoteSetup({
                       });
                       return newId;
                     }}
-                    initialSourceData={initialData.sourceLikeVehicle}
+                    initialSourceData={initialSourceData}
                   />
                 )}
               </FormControl>

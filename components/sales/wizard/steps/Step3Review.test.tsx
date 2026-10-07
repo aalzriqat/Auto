@@ -35,7 +35,8 @@ vi.mock("convex/react", async () => {
       if (args === "skip") return undefined;
       const name = getFunctionName(reference);
       if (name === "vehicles:listAll") {
-        return (args as { status?: string }).status === "AVAILABLE"
+        // SCRUM-689: the car lives only in the unfiltered list (as a held/sold car would).
+        return (args as { status?: string }).status === undefined
           ? [{ _id: VEHICLE, orgId: ORG, make: "Kia", model: "K5", year: 2022, sellingPrice: 11_100 }]
           : [];
       }
@@ -62,7 +63,9 @@ vi.mock("convex/react", async () => {
     useMutation: () => stubs.saveQuote,
   };
 });
-vi.mock("../components/ReviewVehicleCard", () => ({ default: () => null }));
+vi.mock("../components/ReviewVehicleCard", () => ({
+  default: ({ vehicle }: { vehicle: { make: string } }) => <div data-testid="review-vehicle">{vehicle.make}</div>,
+}));
 vi.mock("../components/ReviewVehicleListCard", () => ({ default: () => null }));
 vi.mock("../components/ReviewCustomerCard", () => ({ default: () => null }));
 
@@ -118,6 +121,13 @@ describe("Step3Review — committed deal terms (SCRUM-609 F-03)", () => {
     const terms = screen.getByTestId("review-deal-terms");
     expect(within(terms).getAllByText(/SAR/)).toHaveLength(2);
     expect(screen.queryByText(/JOD/)).toBeNull();
+  });
+});
+
+describe("Step3Review — vehicle lookup (SCRUM-689)", () => {
+  test("resolves the quoted car from the whole stock, not a per-status list", () => {
+    renderReview(3_000);
+    expect(screen.getByTestId("review-vehicle").textContent).toBe("Kia");
   });
 });
 

@@ -93,6 +93,13 @@ const sharedCoverageArgs = [
   `--exclude=${authorityTest}`,
 ];
 
+// The blob reporter alone prints nothing, so a subprocess that exits 1 left only
+// "blob report written ... status=1" — a teardown race, an unhandled error and a
+// real failing test looked identical (SCRUM-140). `dot` prints the Tests and
+// Errors counts and every failure. The output file is bound to the blob
+// reporter by name so no other reporter can claim it.
+const reporterArgs = (blobPath) => ["--reporter=blob", "--reporter=dot", `--outputFile.blob=${blobPath}`];
+
 function runVitest(args, diagnosticFiles = []) {
   const result = spawnSync(process.execPath, [vitestBin, ...args], {
     cwd: root,
@@ -213,8 +220,7 @@ if (phase !== "merge" && ownsWorkUnit(1)) {
   runVitest([
     "run",
     authorityTest,
-    "--reporter=blob",
-    `--outputFile=${path.join(blobDir, authorityBlob)}`,
+    ...reporterArgs(path.join(blobDir, authorityBlob)),
     "--coverage",
     coverageReportsArg,
     "--maxWorkers=1",
@@ -238,8 +244,7 @@ if (phase === "merge") {
       [
         "run",
         ...batchFiles,
-        "--reporter=blob",
-        `--outputFile=${path.join(blobDir, `unit-batch-${batch}.json`)}`,
+        ...reporterArgs(path.join(blobDir, `unit-batch-${batch}.json`)),
         ...sharedCoverageArgs,
         coverageReportsArg,
         ...thresholdZeroArgs,
@@ -255,8 +260,7 @@ if (phase === "merge") {
       "convex",
       "scripts",
       `--shard=${shard}/${shardCount}`,
-      "--reporter=blob",
-      `--outputFile=${path.join(blobDir, `sonar-${shard}.json`)}`,
+      ...reporterArgs(path.join(blobDir, `sonar-${shard}.json`)),
       ...sharedCoverageArgs,
       coverageReportsArg,
       ...sonarCoverageArgs,

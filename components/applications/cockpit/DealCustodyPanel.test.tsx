@@ -280,6 +280,18 @@ describe("DealCustodyPanel", () => {
       expect(a.onMove).not.toHaveBeenCalled();
     });
 
+    test("more decimals than the currency holds is refused and named, never rounded (SCRUM-606)", () => {
+      const a = actions();
+      renderPanel(wiring({ actions: a, accounting: { ready: true } }));
+      fireEvent.click(screen.getByRole("button", { name: salesEn.CustodyRecordReturn }));
+      const dialog = screen.getByTestId("custody-returned-dialog");
+      const input = within(dialog).getByLabelText(/Amount/) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "100.1234" } });
+      expect(within(dialog).getByRole("alert").textContent).toBe(salesEn.AmountTooPrecise);
+      expect((within(dialog).getByTestId("custody-returned-submit") as HTMLButtonElement).disabled).toBe(true);
+      expect(a.onMove).not.toHaveBeenCalled();
+    });
+
     test("closing an unbalanced record needs a write-off reason; the write-off names the exact residual", () => {
       const a = actions();
       renderPanel(wiring({ actions: a, accounting: { ready: true } }));
@@ -425,6 +437,16 @@ describe("DealCustodyPanel", () => {
       cleanup();
       renderPanel(wiring({ actions: actions(), accounting: { ready: true }, records: [], recommended: { recommendedMinor: null, reason: "NOT_CONFIGURED", outstandingCount: 0 } }));
       expect(screen.getByTestId("custody-recommended").textContent).toBe(salesEn.CustodyRecommendedNotConfigured);
+    });
+
+    test("SCRUM-440: with no fee templates the panel gives neutral guidance, never 'no configured fees', and invents no amount (EN/AR)", () => {
+      renderPanel(wiring({ actions: actions(), accounting: { ready: true }, records: [], recommended: { recommendedMinor: null, reason: "NOT_CONFIGURED", outstandingCount: 0 } }));
+      const note = screen.getByTestId("custody-recommended");
+      expect(note.textContent).toBe("No amount is suggested for this deal. Enter the planned handover amount.");
+      expect(note.textContent).not.toMatch(/No configured fees/i);
+      expect(note.textContent).not.toMatch(/\d/);
+      expect(salesAr.CustodyRecommendedNotConfigured).toBe("لا يوجد مبلغ مقترح لهذه الصفقة. أدخل مبلغ التسليم المخطط.");
+      expect(salesAr.CustodyRecommendedNotConfigured).not.toBe(salesEn.CustodyRecommendedNotConfigured);
     });
 
     test("when the ledger cannot take a posting every money button is dead and the reason is the server's", () => {

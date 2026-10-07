@@ -13,6 +13,7 @@ import { isChosenMethod } from "@/components/payments/paymentMethod";
 import { busyCloseGuard } from "@/components/ui/busyCloseGuard";
 import type { Id } from "@/convex/_generated/dataModel";
 import { economicDateInputToMs, economicTodayDateInput } from "@/lib/dateInput";
+import { parseTypedAmount } from "@/lib/moneyDisplay";
 import {
   Dialog,
   DialogContent,
@@ -72,10 +73,8 @@ export type CustodyMovementValues = Readonly<{
 
 /** Major-unit text → minor integer, or null when it is not a positive finite figure. */
 export function parseMajorToMinor(text: string, scale: number): number | null {
-  const parsed = Number(text);
-  if (text.trim() === "" || !Number.isFinite(parsed) || !(parsed > 0)) return null;
-  const minor = Math.round(parsed * Math.pow(10, scale));
-  return Number.isSafeInteger(minor) && minor > 0 ? minor : null;
+  const { minor } = parseTypedAmount(text, scale);
+  return minor !== null && minor > 0 ? minor : null;
 }
 
 /**
@@ -161,6 +160,7 @@ export function CustodyMovementDialog({
   const minor = parseMajorToMinor(amount, scale);
   const entered = amount.trim() !== "";
   const invalid = entered && minor === null;
+  const tooPrecise = parseTypedAmount(amount, scale).tooPrecise;
   const exceeds = minor !== null && maxMinor !== undefined && minor > maxMinor;
   const needsPerson = members !== undefined;
   // The recipient is the served row the selection names; an id that is not
@@ -218,7 +218,9 @@ export function CustodyMovementDialog({
               dir="ltr"
             />
             {invalid && (
-              <p role="alert" className="text-xs font-medium text-destructive">{t("CustodyAmountInvalid")}</p>
+              <p role="alert" className="text-xs font-medium text-destructive">
+                {t(tooPrecise ? "AmountTooPrecise" : "CustodyAmountInvalid")}
+              </p>
             )}
             {exceeds && maxMinor !== undefined && (
               <p role="alert" className="text-xs font-medium text-destructive">
@@ -332,6 +334,7 @@ export function CustodyPlanDialog({
   });
   const minor = parseMajorToMinor(amount, scale);
   const invalid = amount.trim() !== "" && minor === null;
+  const tooPrecise = parseTypedAmount(amount, scale).tooPrecise;
   const handler = members.find((member) => member.userId === userId);
   const canSubmit = handler !== undefined && !invalid && !busy;
   const guard = busyCloseGuard(busy, onOpenChange);
@@ -364,7 +367,11 @@ export function CustodyPlanDialog({
               {t("CustodyPlannedAmount")} <span className="text-muted-foreground">({currency})</span>
             </Label>
             <Input id="custody-plan-amount" inputMode="decimal" value={amount} aria-invalid={invalid} onChange={(e) => setAmount(e.target.value)} className="tabular-nums" dir="ltr" />
-            {invalid && <p role="alert" className="text-xs font-medium text-destructive">{t("CustodyAmountInvalid")}</p>}
+            {invalid && (
+              <p role="alert" className="text-xs font-medium text-destructive">
+                {t(tooPrecise ? "AmountTooPrecise" : "CustodyAmountInvalid")}
+              </p>
+            )}
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="custody-plan-note">{t("CustodyPlanNote")}</Label>

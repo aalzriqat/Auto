@@ -36,7 +36,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import {
+  ACQUISITION_PAYMENT_METHODS,
+  PaymentMethodSelect,
+  type AcquisitionPaymentMethod,
+} from "@/components/payments/PaymentMethodSelect";
+import { ownershipGaps, type OwnershipGapReason } from "@/lib/vehicles/ownershipGaps";
 
 import { vehicleSchema, VehicleFormValues, VehicleDialogProps } from "./vehicle.schema";
 import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
@@ -52,6 +57,34 @@ const VEHICLE_WIZARD_STEPS = [
   "Photos",
   "VehicleWizardAvailability",
 ] as const satisfies readonly TranslationKey[];
+
+// The message shown for each unanswered ownership question.
+const OWNERSHIP_GAP_MESSAGE_KEYS = {
+  CHOICE_REQUIRED: "VehicleOwnershipChoiceRequired",
+  SUPPLIER_REQUIRED: "SourceDealerRequired",
+  COST_REQUIRED: "SupplierCostRequired",
+  BUYOUT_TERMS: "VehicleBuyoutTermsRequired",
+  PAYMENT_METHOD: "PurchasePaymentMethodRequired",
+  CREDITOR_REQUIRED: "PurchaseSupplierNameRequired",
+} as const satisfies Record<OwnershipGapReason, TranslationKey>;
+
+/**
+ * Why the ownership toggle is disabled for a saved car, or null when it is free.
+ * The server refuses a type change through an approval request, and refuses
+ * owned -> consignment once the purchase has any accounting exposure; the toggle
+ * says so instead of inviting the click.
+ */
+function getOwnershipChangeBlock(args: {
+  hasVehicle: boolean;
+  canEdit: boolean;
+  storedSourceType: "STOCK" | "SOURCED" | undefined;
+  costLocked: boolean;
+}): "NEEDS_FINANCE" | "POSTED" | null {
+  if (!args.hasVehicle) return null;
+  if (!args.canEdit) return "NEEDS_FINANCE";
+  if (args.storedSourceType === "STOCK" && args.costLocked) return "POSTED";
+  return null;
+}
 
 function getWizardStepIndicatorClass(stepIndex: number, currentStep: number): string {
   if (stepIndex < currentStep) return "border-primary bg-primary text-primary-foreground";
@@ -108,10 +141,12 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
       transmission: "Automatic",
       purchasePrice: 0,
       purchasePaymentMethod: undefined,
+      purchaseSupplierName: "",
       minimumProfit: 0,
       sellingPrice: 0,
       status: "AVAILABLE",
-      sourceType: "STOCK",
+      // SCRUM-717 (D-45): no default. The dealer chooses consignment or owned.
+      sourceType: undefined,
       sourcedFromName: "",
       sourceCost: 0,
       notes: "",
@@ -137,6 +172,8 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         fuelType: vehicle.fuelType,
         transmission: vehicle.transmission,
         purchasePrice: vehicle.purchasePrice,
+        purchasePaymentMethod: undefined,
+        purchaseSupplierName: "",
         minimumProfit: vehicle.minimumProfit,
         sellingPrice: vehicle.sellingPrice,
         status: vehicle.status,
@@ -165,10 +202,11 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         transmission: "Automatic",
         purchasePrice: 0,
         purchasePaymentMethod: undefined,
+        purchaseSupplierName: "",
         minimumProfit: 0,
         sellingPrice: 0,
         status: "AVAILABLE",
-        sourceType: "STOCK",
+        sourceType: undefined,
         sourcedFromName: "",
         sourceCost: 0,
         notes: "",
@@ -188,6 +226,15 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
   const watchedVin = form.watch("vin");
   const watchedSourceType = form.watch("sourceType");
   const isSourced = watchedSourceType === "SOURCED";
+  const isOwned = watchedSourceType === "STOCK";
+  const watchedPaymentMethod = form.watch("purchasePaymentMethod");
+  // SCRUM-717 (D-45): the type a saved vehicle already has. An absent type is legacy owned stock.
+  const storedSourceType: "STOCK" | "SOURCED" | undefined = vehicle ? vehicle.sourceType ?? "STOCK" : undefined;
+  // SOURCED -> STOCK on a saved car is a buy-out: it needs the agreed price and how it was paid.
+  const isBuyout = storedSourceType === "SOURCED" && isOwned;
+  // Settlement fields are asked at creation and for a buy-out, never for an ordinary edit.
+  const asksSettlement = isOwned && (!vehicle || isBuyout);
+  const ownershipChangeBlocked = getOwnershipChangeBlock({ hasVehicle: !!vehicle, canEdit, storedSourceType, costLocked });
   const showVinChecksumWarning = (watchedVin?.length ?? 0) === 17 && !validateVinChecksum(watchedVin ?? "");
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -301,30 +348,64 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
     }
   };
 
+  /**
+   * SCRUM-717 (D-45): the ownership decision must be complete before anything is
+   * sent. The server refuses the same cases with coded errors; this only keeps the
+   * dealer from a round trip. Returns true when the decision is complete.
+   */
+  const validateOwnership = (values: VehicleFormValues): boolean => {
+    const gap = ownershipGaps(values, {
+      typeRequired: !vehicle,
+      costRequired: !(vehicle && costLocked),
+      purchaseTerms: !asksSettlement ? "none" : isBuyout ? "required" : "ifPriced",
+    });
+    if (!gap) return true;
+    form.setError(gap.field, { message: t(OWNERSHIP_GAP_MESSAGE_KEYS[gap.reason]) });
+    return false;
+  };
+
   const onSubmit = async (values: VehicleFormValues) => {
     if (!activeOrgId) return;
-
-    // Only relevant when creating a new vehicle — update()/requestUpdate()
-    // don't accept this field at all (purchasePrice locks once GL-posted).
-    if (
-      !vehicle &&
-      values.sourceType !== "SOURCED" &&
-      (values.purchasePrice ?? 0) > 0 &&
-      !values.purchasePaymentMethod
-    ) {
-      form.setError("purchasePaymentMethod", {
-        message: t("PurchasePaymentMethodRequired" as any) || "Payment method is required when a purchase price is entered",
-      });
-      return;
-    }
+    if (!validateOwnership(values)) return;
 
     setIsSubmitting(true);
     try {
-      const { imageIds: _formImageIds, inspectionStatus, purchasePaymentMethod, ...allValues } = values;
+      const {
+        imageIds: _formImageIds,
+        inspectionStatus,
+        purchasePaymentMethod,
+        purchaseSupplierName,
+        purchasePrice,
+        sourcedFromName,
+        sourceCost,
+        ...baseValues
+      } = values;
       // A posted vehicle's cost fields are never submitted: the backend lock refuses
       // any purchasePrice/sourceCost key in the patch, even an unchanged one.
-      const { purchasePrice: _lockedPrice, sourceCost: _lockedSourceCost, ...unlockedValues } = allValues;
-      const restValues = vehicle && costLocked ? unlockedValues : allValues;
+      const costsUnlocked = !vehicle || !costLocked;
+      // The two ownership shapes are mutually exclusive on the wire, whatever the form
+      // still holds from an earlier choice: an owned car never sends consignment fields
+      // (the server refuses them); a consignment intake has no purchase (nothing is paid
+      // and nothing is posted), so its purchasePrice travels only with an edit.
+      const ownershipFields =
+        values.sourceType === "STOCK"
+          ? { ...(costsUnlocked ? { purchasePrice } : {}) }
+          : {
+              sourcedFromName,
+              ...(costsUnlocked ? { sourceCost } : {}),
+              ...(vehicle && costsUnlocked ? { purchasePrice } : {}),
+            };
+      const restValues = { ...baseValues, ...ownershipFields };
+      // The settlement travels only when it is being decided now (creation or a buy-out).
+      const settlement =
+        values.sourceType === "STOCK" && asksSettlement
+          ? {
+              purchasePaymentMethod,
+              ...(purchasePaymentMethod === "ON_ACCOUNT"
+                ? { purchaseSupplierName: purchaseSupplierName?.trim() }
+                : {}),
+            }
+          : {};
       // PARTNER_VERIFIED is display-only here (locked Select) — none of the
       // backend mutations accept it, so never resubmit it as-is.
       const trustPassportFields =
@@ -336,6 +417,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
             orgId: activeOrgId,
             vehicleId: vehicle._id,
             ...restValues,
+            ...settlement,
             ...trustPassportFields,
             imageIds: imageIds as Id<"_storage">[],
           });
@@ -360,7 +442,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
             idempotencyKey: createVehicleKeyRef.current,
             orgId: activeOrgId,
             ...restValues,
-            purchasePaymentMethod,
+            ...settlement,
             ...trustPassportFields,
             imageIds: imageIds as Id<"_storage">[],
           });
@@ -373,7 +455,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
             orgId: activeOrgId,
             payload: {
               ...restValues,
-              purchasePaymentMethod,
+              ...settlement,
               ...trustPassportFields,
               imageIds: imageIds as Id<"_storage">[],
             },
@@ -401,17 +483,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
     const stepIsValid = await form.trigger(fields);
     if (!stepIsValid) return;
 
-    if (wizardStep === 2) {
-      const values = form.getValues();
-      if (values.sourceType === "SOURCED" && !values.sourcedFromName?.trim()) {
-        form.setError("sourcedFromName", { message: t("SourceDealerRequired") });
-        return;
-      }
-      if (values.sourceType !== "SOURCED" && (values.purchasePrice ?? 0) > 0 && !values.purchasePaymentMethod) {
-        form.setError("purchasePaymentMethod", { message: t("PurchasePaymentMethodRequired") });
-        return;
-      }
-    }
+    if (wizardStep === 2 && !validateOwnership(form.getValues())) return;
 
     setWizardStep((currentStep) => Math.min(currentStep + 1, VEHICLE_WIZARD_STEPS.length - 1));
   };
@@ -473,35 +545,63 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 <FormItem>
                   <FormLabel>{t("VehicleSource" as any)}</FormLabel>
                   <FormControl>
-                    <div className="flex rounded-md border overflow-hidden">
+                    <div className="flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x rtl:sm:divide-x-reverse rounded-md border overflow-hidden" role="group" aria-label={t("VehicleSource" as any)}>
                       {(["STOCK", "SOURCED"] as const).map((type) => (
                         <button
                           key={type}
                           type="button"
+                          aria-pressed={field.value === type}
+                          disabled={!!vehicle && type !== storedSourceType && !!ownershipChangeBlocked}
                           onClick={() => {
                             field.onChange(type);
+                            // A saved SOURCED car's stored purchasePrice is its
+                            // consignment-cost mirror, not a purchase. Buying it out
+                            // starts from no price, so the agreed amount must be typed;
+                            // choosing consignment again restores the stored mirror.
+                            if (vehicle && storedSourceType === "SOURCED") {
+                              form.setValue("purchasePrice", type === "STOCK" ? 0 : vehicle.purchasePrice);
+                            }
                             if (type === "SOURCED") {
                               form.setValue("status", "SOURCING");
                             } else if (form.getValues("status") === "SOURCING") {
                               form.setValue("status", "AVAILABLE");
                             }
                           }}
-                          className={`flex-1 py-2 text-sm font-medium transition-colors ${
+                          className={`flex-1 px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                             field.value === type
                               ? "bg-primary text-primary-foreground"
                               : "bg-background text-muted-foreground hover:bg-muted"
                           }`}
                         >
-                          {type === "STOCK" ? t("OwnedStock" as any) : t("SourcedFromDealer" as any)}
+                          {type === "STOCK" ? t("VehicleOwnershipOwned") : t("VehicleOwnershipConsignment")}
                         </button>
                       ))}
                     </div>
                   </FormControl>
-                  {isSourced && (
-                    <p className="text-xs text-muted-foreground">
-                      {t("SourcedVehicleHint" as any)}
+                  {/* Nothing is pre-selected on a new vehicle: the dealer states who owns the car. */}
+                  {!vehicle && !watchedSourceType && (
+                    <p className="text-xs text-muted-foreground" role="status">
+                      {t("VehicleOwnershipChoiceRequired")}
                     </p>
                   )}
+                  {isSourced && (
+                    <p className="text-xs text-muted-foreground">
+                      {t("VehicleOwnershipConsignmentHint")} {t("SourcedVehicleHint" as any)}
+                    </p>
+                  )}
+                  {isOwned && !isBuyout && !vehicle && (
+                    <p className="text-xs text-muted-foreground">{t("VehicleOwnershipOwnedHint")}</p>
+                  )}
+                  {isBuyout && (
+                    <p className="text-xs text-muted-foreground">{t("VehicleBuyoutTermsHint")}</p>
+                  )}
+                  {ownershipChangeBlocked === "NEEDS_FINANCE" && (
+                    <p className="text-xs text-muted-foreground">{t("VehicleOwnershipChangeNeedsFinance")}</p>
+                  )}
+                  {ownershipChangeBlocked === "POSTED" && !costLockLoading && (
+                    <p className="text-xs text-muted-foreground">{t("VehicleOwnershipPostedLocked")}</p>
+                  )}
+                  <FormMessage />
                 </FormItem>
               )}
             />
@@ -728,7 +828,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
               </div>
               <div className={vehicle || wizardStep === 2 ? "contents" : "hidden"}>
               {/* For owned vehicles, show purchasePrice directly; for sourced, sourceCost is used (shown in the sourcing section above). */}
-              {!isSourced && (
+              {isOwned && (
                 <FormField
                   control={form.control}
                   name="purchasePrice"
@@ -749,7 +849,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
               {/* Only meaningful at creation — drives the one-time acquisition GL
                   posting; editing an existing vehicle's purchasePrice (before it's
                   posted) doesn't repost anything, so there's nothing for this to drive. */}
-              {!isSourced && !vehicle && (
+              {asksSettlement && (
                 <FormField
                   control={form.control}
                   name="purchasePaymentMethod"
@@ -757,11 +857,29 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                     <FormItem>
                       <FormLabel>{t("PaymentMethodLabel" as any)}</FormLabel>
                       <FormControl>
-                        <PaymentMethodSelect
+                        <PaymentMethodSelect<AcquisitionPaymentMethod>
                           t={t as any}
-                          value={field.value as PaymentMethod}
+                          value={field.value as AcquisitionPaymentMethod | undefined}
                           onValueChange={field.onChange}
+                          methods={ACQUISITION_PAYMENT_METHODS}
                         />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
+              {/* An OWNED purchase bought on account owes someone. The creditor is its own field:
+                  it is never the consignment supplier and never lands on the vehicle row. */}
+              {asksSettlement && watchedPaymentMethod === "ON_ACCOUNT" && (
+                <FormField
+                  control={form.control}
+                  name="purchaseSupplierName"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("PurchaseSupplierName")} *</FormLabel>
+                      <FormControl>
+                        <Input placeholder={t("SourceDealerPlaceholder" as any)} {...field} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>

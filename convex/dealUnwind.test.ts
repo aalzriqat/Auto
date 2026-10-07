@@ -22,6 +22,8 @@ import { syncVehicleHoldStatus } from "./utils/depositHelpers";
 import { deriveForwardState } from "./utils/financeCompanyForward";
 import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
+import { mayReadFinanceEconomics } from "./utils/financeApplicationProjection";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -53,15 +55,17 @@ const SALES_PERMS = ALL_PERMS.filter(
 );
 /** Can refund (disbursement + finance view) but not cancel a closed deal. */
 const CASHIER_PERMS = ALL_PERMS.filter((p) => p !== "cancel:closed_deal");
+/** The seeded MANAGER role template exactly as shipped: no VIEW_FINANCE (SCRUM-713). */
+const TEMPLATE_MANAGER_PERMS = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === "MANAGER")!.permissions as string[];
 const FORWARD = H + C;
 const MANUAL_CORRECTION = /manual accounting correction/;
 
 async function seed(tag: string, sourced = false) {
   const s = await seedFinancedDealership(tag, {
     modules: MODULES, ownerPerms: ALL_PERMS, label: "S693", vinPrefix: "VIN693", sourced,
-    actors: { sales: SALES_PERMS, cashier: CASHIER_PERMS, manager: ["manage:users"] },
+    actors: { sales: SALES_PERMS, cashier: CASHIER_PERMS, manager: ["manage:users"], templateManager: TEMPLATE_MANAGER_PERMS, confirmOnly: ["view:sales", "view:finance_applications", "confirm:finance_disbursement"], cancelOnly: ["view:sales", "view:finance_applications", "cancel:closed_deal"] },
   });
-  return { ...s, sales: s.actors.sales, cashier: s.actors.cashier, manager: s.actors.manager };
+  return { ...s, sales: s.actors.sales, cashier: s.actors.cashier, manager: s.actors.manager, templateManager: s.actors.templateManager, confirmOnly: s.actors.confirmOnly, cancelOnly: s.actors.cancelOnly };
 }
 type Seeded = Awaited<ReturnType<typeof seed>>;
 
@@ -295,6 +299,22 @@ describe("SCRUM-693 ruling B - a refusal in the closing step leaves every row as
       },
     },
     {
+      // SCRUM-651 (D-42): a PART-paid payable refuses too - money already left, and the label alone
+      // (PARTIALLY_PAID) is not what decides; the recorded paid amount is.
+      name: "the supplier payable is PARTIALLY_PAID",
+      message: /supplier payable has been paid/,
+      async apply(s: Seeded, saleId: Id<"sales">) {
+        const now = Date.now();
+        const id = await s.t.run((ctx) =>
+          ctx.db.insert("vehicleSupplierPayables", {
+            orgId: s.orgId, vehicleId: s.vehicleId, saleId, sourcedFromName: "Amman Importer Co", amountDue: 9_000,
+            amountPaid: 3_000, currency: "JOD", status: "PARTIALLY_PAID", createdBy: s.owner.userId, createdAt: now, updatedAt: now,
+          })
+        );
+        return () => s.t.run((ctx) => ctx.db.delete(id));
+      },
+    },
+    {
       name: "the trade-in has been resold",
       message: /trade-in vehicle has already been resold/,
       async apply(s: Seeded, saleId: Id<"sales">) {
@@ -406,6 +426,23 @@ describe("SCRUM-693 ruling B - a refusal in the closing step leaves every row as
     expect((await statusOf()).eligibility.canFinish).toBe(true);
     await finish(s, unwindId);
     expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+  });
+
+  test("SCRUM-651: an unpaid DISPUTED supplier payable does not block the close and is cancelled with the deal", async () => {
+    const { s, applicationId } = await paidDeal("rb_disputed_unpaid");
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    const saleId = (await s.t.run((ctx) => ctx.db.get(applicationId)))!.finalizedSaleId!;
+    const now = Date.now();
+    const payableId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId: s.orgId, vehicleId: s.vehicleId, saleId, sourcedFromName: "Amman Importer Co", amountDue: 9_000,
+        currency: "JOD", status: "DISPUTED", disputeReason: "Wrong figure", createdBy: s.owner.userId, createdAt: now, updatedAt: now,
+      })
+    );
+    await finish(s, unwindId);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+    expect((await s.t.run((ctx) => ctx.db.get(payableId)))?.status).toBe("CANCELLED");
   });
 
   test("after a refused close the unwind can still be abandoned, and the still-paid deal keeps pointing at it", async () => {
@@ -927,5 +964,134 @@ describe("SCRUM-693 D6 - unwindStatus and the deals-list badge (Sol c22134 Q12)"
     await abandon(s, unwindId);
     expect(await badge(s, [applicationId])).toEqual([]);
     await expect(badge(s, Array.from({ length: UNWIND_BADGE_BATCH_MAX + 1 }, () => applicationId))).rejects.toThrow();
+  });
+});
+describe("SCRUM-713 - the default MANAGER role can unwind a paid deal without reading finance economics", () => {
+  const status = (s: Seeded, applicationId: Id<"financeApplications">, as = s.owner.as) =>
+    as.query(api.dealUnwind.unwindStatus, { orgId: s.orgId, applicationId });
+
+  test("the shipped MANAGER template lacks VIEW_FINANCE (premise)", () => {
+    expect(TEMPLATE_MANAGER_PERMS).not.toContain("view:finance");
+    expect(TEMPLATE_MANAGER_PERMS).toContain("cancel:closed_deal");
+    expect(TEMPLATE_MANAGER_PERMS).toContain("confirm:finance_disbursement");
+  });
+
+  test("a template MANAGER is offered Start, starts, records the forward return and finishes", async () => {
+    const { s, applicationId } = await paidDeal("m713_full");
+    const as = s.templateManager.as;
+    expect(await status(s, applicationId, as)).toMatchObject({ eligibility: { canStart: true } });
+    const unwindId = await start(s, applicationId, crypto.randomUUID(), as);
+    expect(await status(s, applicationId, as)).toMatchObject({
+      eligibility: { canForwardReturn: true, canAbandon: true },
+    });
+    await as.mutation(api.dealUnwind.recordDealUnwindForwardReturn, {
+      orgId: s.orgId, unwindId, returnedAt: Date.now(), reference: "FC-RET-1", idempotencyKey: crypto.randomUUID(),
+    });
+    expect(await status(s, applicationId, as)).toMatchObject({ eligibility: { canFinish: true } });
+    await finish(s, unwindId, "BANK_TRANSFER", as);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+  });
+
+  test("the unwind actor sees the refund, rail, step and posting proof - and no protected figure, at any step", async () => {
+    const { s, applicationId } = await paidDeal("m713_evidence");
+    const as = s.templateManager.as;
+    const unwindId = await start(s, applicationId);
+    const seenAt: unknown[] = [await status(s, applicationId, as)];
+    expect(seenAt[0]).toMatchObject({
+      evidence: { remittanceMinor: G, remittanceMethod: "BANK_TRANSFER", forwardDueMinor: null, reason: null },
+    });
+    await forwardReturn(s, unwindId);
+    seenAt.push(await status(s, applicationId, as));
+    await finish(s, unwindId);
+    const done = await status(s, applicationId, as);
+    seenAt.push(done);
+    expect(done).toMatchObject({
+      evidence: { remittanceRefund: { amountMinor: G, receiptReversal: "REVERSED" }, completion: { vehicleReturnNote: null } },
+    });
+    // Reconstruction attack: derive deposit + dealer contribution from the COMBINATION of every response.
+    const everything = JSON.stringify(seenAt);
+    for (const protectedFigure of [FORWARD, H, C]) expect(everything).not.toContain(String(protectedFigure));
+    expect(everything).not.toContain("Customer returned the car.");
+    expect(everything).not.toContain("FC-RET-1");
+    expect(everything).not.toContain("Returned to the lot.");
+    // A finance reader still sees the full tier.
+    expect(await status(s, applicationId)).toMatchObject({ evidence: { forwardDueMinor: FORWARD, reason: "Customer returned the car." } });
+    // The finance-economics tier stays closed to this role: the unwind did not need it.
+    expect(mayReadFinanceEconomics({ permissions: TEMPLATE_MANAGER_PERMS } as never)).toBe(false);
+  });
+  const MISSING_CONFIRM = /confirm:finance_disbursement/;
+  const MISSING_CANCEL = /cancel:closed_deal/;
+  test("START needs BOTH authorities: neither a cancel-only nor a confirm-only role can open an unwind (none exists yet)", async () => {
+    const { s, applicationId } = await paidDeal("m713_partial_start");
+    await expect(start(s, applicationId, crypto.randomUUID(), s.cancelOnly.as)).rejects.toThrow(MISSING_CONFIRM);
+    await expect(start(s, applicationId, crypto.randomUUID(), s.confirmOnly.as)).rejects.toThrow(MISSING_CANCEL);
+    for (const role of [s.confirmOnly, s.cancelOnly]) {
+      expect((await status(s, applicationId, role.as)).eligibility.canStart).toBe(false);
+    }
+    expect(await s.t.run((ctx) => ctx.db.query("dealUnwinds").collect())).toEqual([]);
+  });
+  test("a one-authority role gains no step power on an ACTIVE unwind (forward return, finish, status flags)", async () => {
+    const { s, applicationId } = await paidDeal("m713_partial_steps");
+    const unwindId = await start(s, applicationId);
+    for (const role of [s.confirmOnly, s.cancelOnly]) {
+      expect(await status(s, applicationId, role.as)).toMatchObject({
+        eligibility: { canStart: false, canForwardReturn: false, canFinish: false },
+      });
+    }
+    const forward = (role: typeof s.confirmOnly) =>
+      role.as.mutation(api.dealUnwind.recordDealUnwindForwardReturn, {
+        orgId: s.orgId, unwindId, returnedAt: Date.now(), reference: "X-1", idempotencyKey: crypto.randomUUID(),
+      });
+    await expect(forward(s.confirmOnly)).rejects.toThrow();
+    await expect(forward(s.cancelOnly)).rejects.toThrow(MISSING_CONFIRM);
+    // The owner records the forward return, so the unwind sits at AWAITING_FINISH: a finish
+    // refusal here can only be the permission list, never a state refusal.
+    await forwardReturn(s, unwindId);
+    await expect(finish(s, unwindId, "BANK_TRANSFER", s.cancelOnly.as)).rejects.toThrow(MISSING_CONFIRM);
+    await expect(finish(s, unwindId, "BANK_TRANSFER", s.confirmOnly.as)).rejects.toThrow(MISSING_CANCEL);
+    for (const role of [s.confirmOnly, s.cancelOnly]) {
+      expect((await status(s, applicationId, role.as)).eligibility.canFinish).toBe(false);
+    }
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
+  });
+
+  test("SCRUM-719: ABANDON needs BOTH authorities - a one-authority role cannot abandon an active unwind", async () => {
+    const { s, applicationId } = await paidDeal("m713_partial_abandon");
+    const unwindId = await start(s, applicationId);
+    const abandonAs = (role: typeof s.confirmOnly) =>
+      role.as.mutation(api.dealUnwind.abandonDealUnwind, {
+        orgId: s.orgId, unwindId, reason: "Customer kept the car.", idempotencyKey: crypto.randomUUID(),
+      });
+    await expect(abandonAs(s.cancelOnly)).rejects.toThrow(MISSING_CONFIRM);
+    await expect(abandonAs(s.confirmOnly)).rejects.toThrow(MISSING_CANCEL);
+    for (const role of [s.confirmOnly, s.cancelOnly]) {
+      expect((await status(s, applicationId, role.as)).eligibility.canAbandon).toBe(false);
+    }
+    expect((await s.t.run((ctx) => ctx.db.get(unwindId)))?.status).toBe("ACTIVE");
+    // The default MANAGER holds both, so the same unwind it can start it can also walk away from.
+    expect(await status(s, applicationId, s.templateManager.as)).toMatchObject({ eligibility: { canAbandon: true } });
+    await abandonAs(s.templateManager);
+    const abandoned = await s.t.run((ctx) => ctx.db.get(unwindId));
+    expect(abandoned?.status).toBe("ABANDONED");
+    expect(abandoned?.abandonment?.abandonedBy).toBe(s.templateManager.userId);
+  });
+
+  test("the permission refusal has an Arabic and an English translation key", async () => {
+    const { salesEn, salesAr } = await import("../lib/i18n/domains/sales");
+    expect((salesEn as Record<string, string>).ServerError_DEAL_UNWIND_PERMISSION).toBeTruthy();
+    expect((salesAr as Record<string, string>).ServerError_DEAL_UNWIND_PERMISSION).toBeTruthy();
+  });
+  test("a role without CANCEL_CLOSED_DEAL is told WHY it cannot start, not given silence", async () => {
+    const { s, applicationId } = await paidDeal("m713_reason");
+    const seen = await status(s, applicationId, s.cashier.as);
+    expect(seen.eligibility.canStart).toBe(false);
+    expect(seen.refusals.start).toMatchObject({ code: "DEAL_UNWIND_PERMISSION" });
+  });
+
+  test("a role holding neither authority is still refused every mutation", async () => {
+    const { s, applicationId } = await paidDeal("m713_sales");
+    expect(await refusalMessageOf(start(s, applicationId, crypto.randomUUID(), s.sales.as))).toBeTruthy();
+    const unwindId = await start(s, applicationId);
+    await expect(finish(s, unwindId, "BANK_TRANSFER", s.sales.as)).rejects.toThrow();
   });
 });

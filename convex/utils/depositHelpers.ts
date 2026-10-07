@@ -10,6 +10,12 @@ import { normalizeCurrency, amountToMinorOrThrow, type DepositMethod } from "./d
 import { fromMinorUnits } from "./money";
 import { liveAppliedMinorForDeposit } from "./depositApplications";
 import { assertQuoteDepositConservation } from "./depositAllocation";
+import {
+  clearPendingDisposition,
+  hasPendingDisposition,
+  hasPendingDispositionForDeposit,
+  PENDING_EXIT_MESSAGE,
+} from "./depositCancellationPending";
 import { createCanonicalPayment } from "../subledger";
 import {
   getOrgCurrency,
@@ -215,6 +221,45 @@ export async function getActiveDepositHolds(
   return Array.from(byId.values());
 }
 
+/**
+ * SCRUM-712 Q34 — "does a deposit still hold this car?", answered EXACTLY.
+ *
+ * `getActiveDepositHolds` `.take(50)`s each index range and post-filters, so fifty
+ * stale `holdActive: true` rows hide a live hold behind them and the answer is a
+ * false "no". That is tolerable for the legacy doors that have always used it, but
+ * not for the decision made when a cancelled-sale share has just been cleared: the
+ * pending row was the last thing proving the car is not free, and a false "no"
+ * here frees a car somebody has paid to hold.
+ *
+ * Same predicate as `getActiveDepositHolds` (a HELD, live, undeleted deposit; a
+ * direct row only counts while it carries no hold rows of its own), read by
+ * streaming each range to the first live row instead of a fixed page.
+ */
+export async function hasActiveDepositHoldExact(
+  ctx: QueryCtx | MutationCtx,
+  vehicleId: Id<"vehicles">
+): Promise<boolean> {
+  for await (const deposit of ctx.db
+    .query("deposits")
+    .withIndex("by_vehicle_hold", (q) => q.eq("vehicleId", vehicleId).eq("holdActive", true))) {
+    if (deposit.isDeleted === true || deposit.status !== "HELD") continue;
+    const carriesHoldRows = await ctx.db
+      .query("depositVehicleHolds")
+      .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
+      .first();
+    if (!carriesHoldRows) return true;
+  }
+  for await (const hold of ctx.db
+    .query("depositVehicleHolds")
+    .withIndex("by_vehicle_active", (q) => q.eq("vehicleId", vehicleId).eq("active", true))) {
+    const deposit = await ctx.db.get(hold.depositId);
+    if (deposit && deposit.isDeleted !== true && deposit.status === "HELD" && deposit.holdActive === true) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Exported for saleCancellation.ts's trade-in-reversal safety guard, in addition to internal use by syncVehicleHoldStatus below. */
 export async function hasActiveDepositHold(
   ctx: QueryCtx | MutationCtx,
@@ -281,16 +326,32 @@ export async function syncVehicleHoldStatus(
    * alternative — a second function that decides a vehicle's status — is the
    * duplicated-writer shape this phase exists to remove.
    */
-  options: { hasHold?: boolean } = {},
+  options: {
+    hasHold?: boolean;
+    /**
+     * SCRUM-712 Q34: read the deposit basis through the exact reader. Set only by
+     * a door that has just CLEARED a cancelled-sale share, where the 50-row legacy
+     * reader's false "no" would free a car the cleared share was the last thing
+     * protecting. Every other caller keeps the legacy reader unchanged.
+     */
+    exactDepositReader?: boolean;
+  } = {},
 ): Promise<void> {
   const vehicle = await ctx.db.get(vehicleId);
   if (!vehicle || vehicle.isDeleted) return;
   if (vehicle.status === "SOLD" || vehicle.status === "ARCHIVED") return;
 
+  // SCRUM-712: a cancelled sale's undecided deposit share holds the car like any
+  // other basis, whichever door asked and whatever the caller already computed.
+  // Asked LAST: it only matters when nothing else holds the car, and skipping it
+  // otherwise keeps a 100-car deposit under the per-function index-range limit.
   const hasHold =
-    options.hasHold ??
-    ((await hasActiveDepositHold(ctx, vehicleId)) ||
-      (await hasActiveReservationHold(ctx, { orgId: vehicle.orgId, vehicleId })));
+    (options.hasHold ??
+      ((await (options.exactDepositReader
+        ? hasActiveDepositHoldExact(ctx, vehicleId)
+        : hasActiveDepositHold(ctx, vehicleId))) ||
+        (await hasActiveReservationHold(ctx, { orgId: vehicle.orgId, vehicleId })))) ||
+    (await hasPendingDisposition(ctx, vehicle.orgId, vehicleId));
 
   // One resolver decides the target for both this function and the
   // reconcileVehicleHolds migration, so a dry-run preview cannot disagree with
@@ -338,9 +399,10 @@ export async function syncVehicleHoldStatus(
  */
 export async function maybeReleaseVehicleHold(
   ctx: MutationCtx,
-  vehicleId: Id<"vehicles">
+  vehicleId: Id<"vehicles">,
+  options: { exactDepositReader?: boolean } = {}
 ): Promise<void> {
-  await syncVehicleHoldStatus(ctx, vehicleId);
+  await syncVehicleHoldStatus(ctx, vehicleId, undefined, options);
 }
 
 /**
@@ -351,9 +413,10 @@ export async function maybeReleaseVehicleHold(
  */
 export async function releaseAllVehiclesForDeposit(
   ctx: MutationCtx,
-  deposit: Doc<"deposits">
+  deposit: Doc<"deposits">,
+  options: { exactDepositReader?: boolean } = {}
 ): Promise<void> {
-  await maybeReleaseVehicleHold(ctx, deposit.vehicleId);
+  await maybeReleaseVehicleHold(ctx, deposit.vehicleId, options);
 
   const secondaryHolds = await ctx.db
     .query("depositVehicleHolds")
@@ -363,7 +426,7 @@ export async function releaseAllVehiclesForDeposit(
   for (const hold of secondaryHolds) {
     if (!hold.active) continue;
     await ctx.db.patch(hold._id, { active: false });
-    await maybeReleaseVehicleHold(ctx, hold.vehicleId);
+    await maybeReleaseVehicleHold(ctx, hold.vehicleId, options);
   }
 }
 
@@ -678,6 +741,10 @@ export async function recordUnpostedDepositTreatment(
   for (const deposit of deposits) {
     if (!deposit.holdActive) continue;
     if (deposit.vehicleId !== args.vehicleId) continue;
+    // SCRUM-712: "OTHER" is not a decision about a cancelled sale's share.
+    if (await hasPendingDispositionForDeposit(ctx, deposit.orgId, deposit._id)) {
+      throw new ConvexError(PENDING_EXIT_MESSAGE);
+    }
     await ctx.db.patch(deposit._id, {
       // status deliberately untouched — the money is still held.
       holdActive: false,
@@ -1071,7 +1138,24 @@ export async function releaseHeldDeposit(
     ...(args.treatment ? { resolutionTreatment: args.treatment } : {}),
     ...(args.saleId ? { resolutionSaleId: args.saleId } : {}),
   });
-  if (closesTheRow) await releaseAllVehiclesForDeposit(ctx, deposit);
+  // SCRUM-712: paying out the free part of a reinstated whole-row deposit decides
+  // that deposit's cancelled-sale share (the one with no hold of its own) — and
+  // only that one. Cleared BEFORE the cars are released, so the car lock lifts
+  // in the same transaction as the decision, never earlier.
+  const clearedShare = await clearPendingDisposition(ctx, {
+    orgId: args.orgId,
+    depositId: args.depositId,
+    resolution: args.resolution,
+    paidMinor: amountMinor,
+    actorId: args.actorId,
+    now,
+    reference: `deposits.release ${args.depositId} #${releaseSeq}`,
+  });
+  // Only a row that carried a cancelled-sale share needs the exact liveness
+  // reader; a row without one releases its cars exactly as it always did.
+  if (closesTheRow) {
+    await releaseAllVehiclesForDeposit(ctx, deposit, { exactDepositReader: clearedShare });
+  }
   const amountMajor = fromMinorUnits(amountMinor, currency);
 
   if (args.resolution === "REFUNDED") {
