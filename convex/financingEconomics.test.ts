@@ -6547,6 +6547,58 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
     expect(app.netShortfallMinor).toBe(jod(850));
   });
 
+  // Codex R4 (validated): a quotation recorded after a first-payment correction is a
+  // new snapshot, even when the amount, source and reason match the old one. The
+  // correction belonged to the previous snapshot and must not outlive it.
+  test("re-recording the quotation after a correction supersedes the corrected baseline", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      if (!app) throw new Error("fixture: application vanished");
+      await ctx.db.patch(app.quoteId, { downPayment: 500 });
+    });
+    const record = (customerFirstPaymentMinor: number) =>
+      seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(DEAL.quotation),
+        source: "MANUAL_ENTRY",
+        targetSellingAmountMinor: jod(DEAL.targetSelling),
+        estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+        customerFirstPaymentMinor,
+      });
+    await record(0);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.applyQuoteFirstPayment, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      reason: "Dealer ruling: first payment is the quote's down payment",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "Company withdrew its offer; resubmitting.",
+    });
+    await record(jod(500));
+    const app = await readApp(seed, applicationId);
+    expect(app.quotationCalculationSnapshot?.customerFirstPaymentMinor).toBe(jod(500));
+    expect(app.quoteFirstPaymentCorrectedMinor).toBeUndefined();
+  });
+
   // Codex R1 (validated): a SYSTEM_CALCULATED quotation IS the solver's output at
   // the first payment it was recorded with. Rewriting that input afterwards would
   // leave a snapshot claiming a first payment the calculated figure never used, so
@@ -6597,6 +6649,61 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
     });
     const app = await readApp(seed, applicationId);
     expect(app.customerFirstPaymentMinor).toBe(jod(500));
+    expect(app.quotationCalculationSnapshot?.customerFirstPaymentMinor).toBe(0);
+    expect(app.quoteFirstPaymentCorrectedMinor).toBeUndefined();
+    // The only money behaviour this mode changes: the first-payment delta stays in
+    // the shortfall (solver quote at 0 vs 9,775 + 500 actually funded) - Opus F1.
+    expect(app.netShortfallMinor).toBe(jod(350));
+  });
+
+  // Opus F2: an explicit re-record at zero after a correction clears it, so the
+  // quote side matches the snapshot and the application again.
+  test("re-recording at zero after a correction clears the corrected baseline", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      if (!app) throw new Error("fixture: application vanished");
+      await ctx.db.patch(app.quoteId, { downPayment: 500 });
+    });
+    const record = () =>
+      seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(DEAL.quotation),
+        source: "MANUAL_ENTRY",
+        targetSellingAmountMinor: jod(DEAL.targetSelling),
+        estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+        customerFirstPaymentMinor: 0,
+      });
+    await record();
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.applyQuoteFirstPayment, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      reason: "Dealer ruling: first payment is the quote's down payment",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "Company withdrew its offer; resubmitting.",
+    });
+    await record();
+    const app = await readApp(seed, applicationId);
+    expect(app.customerFirstPaymentMinor).toBe(0);
     expect(app.quotationCalculationSnapshot?.customerFirstPaymentMinor).toBe(0);
     expect(app.quoteFirstPaymentCorrectedMinor).toBeUndefined();
   });

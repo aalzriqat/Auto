@@ -1724,8 +1724,17 @@ export async function applySubmittedQuotation(
         args.quotationBufferMinor !== app.quotationBufferMinor) ||
       customerFirstPaymentMinor !== app.customerFirstPaymentMinor ||
       appliedLtvPercent !== app.appliedLtvPercent);
+  // A first-payment correction belonged to the snapshot it corrected: recording
+  // again after one is a new quotation even when every figure matches the row.
+  const correctionSuperseded =
+    quotationPreviouslyRecorded && app.quoteFirstPaymentCorrectedMinor !== undefined;
   const materiallyChanged =
-    amountChanged || sourceChanged || reasonChanged || recorderChanged || inputsChanged;
+    amountChanged ||
+    sourceChanged ||
+    reasonChanged ||
+    recorderChanged ||
+    inputsChanged ||
+    correctionSuperseded;
   if (quotationPreviouslyRecorded && materiallyChanged) {
     /**
      * Every input that MOVED, on both sides — not just the headline four.
