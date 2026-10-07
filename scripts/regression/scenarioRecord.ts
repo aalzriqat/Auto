@@ -92,6 +92,9 @@ const RUN_SUFFIX = /(?<=[A-Za-z])-\d{10,}$/;
 // A leading zero ("000123") is an identifier, not an amount: it must not collapse into 123.
 const NUMERIC = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
 
+/** Code-point order: locale-independent, so fingerprints are stable across machines. */
+const codePointCompare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
 function normaliseValue(value: unknown): unknown {
   if (typeof value === "string") {
     if (ID_TOKEN.test(value)) return "<id>";
@@ -104,7 +107,7 @@ function normaliseValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(normaliseValue);
   if (value !== null && typeof value === "object") {
     const out: Record<string, unknown> = {};
-    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+    for (const key of Object.keys(value as Record<string, unknown>).sort(codePointCompare)) {
       out[key] = normaliseValue((value as Record<string, unknown>)[key]);
     }
     return out;
@@ -183,7 +186,7 @@ const RUNNER_FILE = /(?:^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.
 const SKIP_CALL = /\.\s*(?:skip|fixme|todo|skipIf|runIf)\s*\(|\bskip\s*\(|\b(?:test|it|describe|suite|ctx|context|testInfo|t|c)(?:\.\w+)*\.(?:fail|fails|only)\b|\binfo\(\)\s*\.\s*(?:fail|fixme|skip)\s*\(/;
 const SKIP_OPTION = /[{,]\s*["']?(?:skip|todo|fails|fail|fixme)["']?\s*(?::\s*(?!false\b)|[,}])/;
 const PLAYWRIGHT_SPEC = /^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$/;
-const NOT_RUN_DIRS = /^(?:apps|packages|\.next|out|build)\/|(?:^|\/)(?:node_modules|\.claude)\//;
+const NOT_RUN_DIRS = /^(?:(?:apps|packages|\.next|out|build)\/|(?:.*\/)?(?:node_modules|\.claude)\/)/;
 const MATRIX_ROW = /^[A-Za-z0-9][A-Za-z0-9._-]{1,40}$/;
 const EMAIL = /[\w.+-]+@[\w-]+\.[\w.-]+/;
 const PHONE = /(?:\+|\b00|\b0)\d[\d\s-]{7,}\d/;
@@ -192,11 +195,11 @@ const MAX_PATH = 200;
 const TOKEN_PATH = /^[A-Za-z][A-Za-z0-9_.:-]{0,59}$/;
 const KEY_TOKEN = /^[A-Za-z_][\w.:-]{0,59}$/;
 const IMPL_PATH = /^[\w./-]{1,200}$/;
-const VALUE_TOKEN = /^[\w.:+\/@#-]{1,60}$/;
+const VALUE_TOKEN = /^[\w.:+/@#-]{1,60}$/;
 const SCRUM_KEY = /^SCRUM-\d+$/;
 const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
 const INVARIANT_ID = /^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$/;
-const GLOB = /^[\w./*{}\[\],-]{1,120}$/;
+const GLOB = /^[\w./*{}[\],-]{1,120}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 const RECORD_KEYS = new Set([
@@ -481,7 +484,7 @@ function collectScenarioFiles(dir: string, stray: string[]): string[] {
     else if (name.endsWith(".scenario.json")) out.push(full);
     else if (name !== ".gitkeep") stray.push(full);
   }
-  return out.sort();
+  return out.sort(codePointCompare);
 }
 
 export function loadLibrary(repoRoot: string): {
