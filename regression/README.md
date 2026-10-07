@@ -15,3 +15,10 @@ Never put ruling text or customer data here. Format, validators and rules live i
 - Free-text reasons (retiredReason/candidateReason, 300 chars) and impl.testName are only heuristically screened; reviewers check them for public-data hygiene.
 - Records may not share one impl.file + testName; the title is not yet required to carry the scenario id (follow-up).
 - impl.testName must equal the registered test title exactly (no substring binding).
+
+## Record kinds
+
+- `scenario` (default): actor + public-API steps.
+- `rule` (owner ruling 2026-10-07): a pure-function money/permission rule (e.g. `saleEconomics`) described by `subject` + `inputs` instead of steps. Backend level, non-screen domain; still needs a ruling, a matrixRow and an exact `impl.testName`. Identity (de-dup) is subject + inputs + expected.
+- SCRUM-595 loop-generated cases are one record per case, parked as `candidate` until the S3 runner census can bind generated titles (owner ruling 2026-10-07).
+

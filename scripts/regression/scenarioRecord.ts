@@ -53,7 +53,16 @@ export interface ScenarioRecord {
   level: ScenarioLevel;
   status: ScenarioStatus;
   source: { hunter: (typeof SCENARIO_HUNTERS)[number]; runId: string; firstSeen: string };
-  steps: ScenarioStep[];
+  /**
+   * `scenario` (default): actor + public-API steps. `rule`: a pure-function money/permission rule
+   * checked directly (no actor, no API path), described by `subject` + `inputs` instead of `steps`.
+   */
+  kind?: "scenario" | "rule";
+  steps?: ScenarioStep[];
+  /** kind "rule" only: the exported function under test, as a dotted token (e.g. saleEconomics). */
+  subject?: string;
+  /** kind "rule" only: literal inputs, same token rules as a step input. */
+  inputs?: Record<string, unknown>;
   expected: ScenarioExpectation[];
   rulings: RulingRef[];
   /** Executable check for backend/cloud scenarios. Browser records ARE the test. */
@@ -122,12 +131,18 @@ function normaliseValue(value: unknown): unknown {
  * (amounts, roles, methods) stay different.
  */
 export function scenarioFingerprint(
-  record: Pick<ScenarioRecord, "domain" | "steps" | "expected">,
+  record: Pick<ScenarioRecord, "domain" | "steps" | "expected" | "kind" | "subject" | "inputs">,
 ): string {
+  // A rule's identity is its subject + inputs; the scenario canonical form is unchanged so existing
+  // fingerprints stay valid.
+  const identity =
+    record.kind === "rule"
+      ? { kind: "rule", subject: record.subject, inputs: record.inputs }
+      : { steps: record.steps };
   const canonical = JSON.stringify(
     normaliseValue({
       domain: record.domain,
-      steps: record.steps,
+      ...identity,
       // Assertion order is not part of the scenario.
       expected: [...record.expected]
         .map((e) => normaliseValue(e))
@@ -203,7 +218,7 @@ const GLOB = /^[\w./*{}[\],-]{1,120}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 const RECORD_KEYS = new Set([
-  "id", "fingerprint", "domain", "level", "status", "source", "steps", "expected", "rulings",
+  "id", "fingerprint", "domain", "level", "status", "source", "kind", "steps", "subject", "inputs", "expected", "rulings",
   "impl", "matrixRow", "bugRef", "candidateReason", "candidateIssue", "retiredReason",
   "retiredByRuling", "invariantIds", "sourceGlobs",
 ]);
@@ -254,8 +269,19 @@ function schemaProblems(r: unknown): string[] {
   if (!isObject(r.source) || !(SCENARIO_HUNTERS as readonly string[]).includes(String(r.source.hunter))) {
     out.push("source.hunter must be scripted|audit|explorer");
   }
-  if (!Array.isArray(r.steps) || r.steps.length === 0) out.push("steps must be a non-empty array");
-  else {
+  if (r.kind !== undefined && r.kind !== "scenario" && r.kind !== "rule") out.push('kind must be "scenario" or "rule"');
+  if (r.kind === "rule") {
+    if (r.steps !== undefined) out.push("a rule has no steps: describe it with subject + inputs");
+    if (typeof r.subject !== "string" || !TOKEN_PATH.test(r.subject)) out.push("a rule needs subject, the function under test as a dotted token");
+    if (!isObject(r.inputs)) out.push("a rule needs inputs (an object of literal values)");
+    else if ([...stringsIn(r.inputs)].some((v) => !VALUE_TOKEN.test(v)) || [...keysIn(r.inputs)].some((k) => !KEY_TOKEN.test(k))) {
+      out.push("rule input strings must be short space-free tokens; no prose");
+    }
+  } else {
+    if (r.subject !== undefined || r.inputs !== undefined) out.push('subject/inputs belong to kind "rule" only');
+  }
+  if (r.kind !== "rule" && (!Array.isArray(r.steps) || r.steps.length === 0)) out.push("steps must be a non-empty array");
+  else if (r.kind !== "rule" && Array.isArray(r.steps)) {
     for (const s of r.steps) {
       if (!isObject(s) || !isObject(s.actor) || !isText(s.actor.role) || !isText(s.actor.org) || !isText(s.action) || !isObject(s.input)) {
         out.push("every step needs actor{role,org}, action and input");
@@ -327,7 +353,7 @@ function schemaProblems(r: unknown): string[] {
     out.push("expected observable must be a dotted token (deal.status) and value strings short space-free tokens; no prose");
   }
   // Heuristic only (not a guarantee): obvious emails / phone numbers in any text field.
-  for (const s of stringsIn([r.steps, r.expected, r.retiredReason, r.candidateReason, isObject(r.impl) ? r.impl.testName : undefined])) {
+  for (const s of stringsIn([r.steps, r.inputs, r.expected, r.retiredReason, r.candidateReason, isObject(r.impl) ? r.impl.testName : undefined])) {
     if (EMAIL.test(s) || PHONE.test(s)) {
       out.push("a text value looks like an email address or phone number; the repository is public");
       break;
@@ -400,6 +426,7 @@ export function validateLibrary(
 
     // active: every level, browser replays included, must name the check that runs it.
     if (r.level === "cloud") add("level", "no cloud runner exists yet (SCRUM-762): park it as a candidate with that issue instead of counting it active");
+    if (r.kind === "rule" && (r.level !== "backend" || r.domain === "screen")) add("level", "a rule is a pure-function check: backend level, money|permission|tenancy domain");
     if (r.level === "browser" && r.domain !== "screen") add("level", "only screen scenarios convert to a browser replay (R2)");
     if (!r.impl?.file || !r.impl?.testName?.trim()) {
       add("impl", "an active scenario must name its executable check (impl.file + impl.testName)");
