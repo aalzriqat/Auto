@@ -23,6 +23,12 @@ import {
 } from "../../scripts/intelligence/jevFormOracle";
 import { resolveOrgId } from "../utils";
 import { attest, servedDeployments, convexDeploymentOf } from "./formExplorer/attestedPreview";
+import { explorerDidNotRun } from "../../scripts/intelligence/jevFormRunGate";
+
+/** Fails the opted-in run with the reason it could not explore. */
+function stopIfDidNotRun(why: string | undefined): void {
+  if (why) throw new Error(`Jev form explorer is opted in (JEV_FORM_EXPLORER=1) but did not explore: ${why}.`);
+}
 
 /**
  * The Jev form explorer (SCRUM-614). Where jev-explorer.spec.ts only clicks
@@ -283,7 +289,9 @@ async function jevPick(cands: Candidate[]): Promise<number | undefined> {
 }
 
 test.describe("Jev form explorer (advisory, writes to the preview)", () => {
-  test.describe.configure({ timeout: 1_800_000 });
+  // One 30-minute attempt, no retry: it runs before the GL library on the one
+  // worker, and a retry could eat the time the ledger checks need (SCRUM-771).
+  test.describe.configure({ timeout: 1_800_000, retries: 0 });
   // No single action may wait forever: a stuck locator becomes an error.
   test.use({ actionTimeout: 15_000, navigationTimeout: 45_000 });
 
@@ -348,7 +356,8 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       });
     });
     const attestation = await attest(page, baseURL, sockets);
-    test.skip(Boolean(attestation.refusal), attestation.refusal ?? "");
+    // Opted in, so "cannot explore" fails the run (SCRUM-771). Nothing has been written yet.
+    stopIfDidNotRun(explorerDidNotRun({ refusal: attestation.refusal }));
     const expected = convexDeploymentOf(process.env.NEXT_PUBLIC_CONVEX_URL);
     const appOrigin = new URL(page.url()).origin;
 
@@ -359,7 +368,7 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
     // Every write must land in the organization the backend attested as the
     // seeded QA org, not whichever org the dashboard opens first (Codex F614-01).
     const orgId = await resolveOrgId(page);
-    test.skip(orgId !== attestation.orgId, `The app opened organization ${orgId}, not the attested QA organization; not exploring.`);
+    stopIfDidNotRun(explorerDidNotRun({ openedOrgId: orgId, attestedOrgId: attestation.orgId }));
 
     /** Stops the run the moment any frame talks to another backend. */
     const assertBackend = () => {
@@ -848,5 +857,7 @@ test.describe("Jev form explorer (advisory, writes to the preview)", () => {
       test.info().annotations.push({ type: `${r.verdict.kind}:${r.verdict.check}`, description: `#${r.n} ${r.form} — ${r.verdict.reason}` });
     }
     await test.info().attach("jev-form-explorer.json", { body: report(), contentType: "application/json" });
+    // Attached first, so a run that never attacked still leaves its discovery evidence.
+    stopIfDidNotRun(explorerDidNotRun({ maxAttempts: MAX_ATTEMPTS, attempts: records.length }));
   });
 });

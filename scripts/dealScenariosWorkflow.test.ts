@@ -31,6 +31,14 @@ describe("deal-scenarios-e2e runs the form explorer (SCRUM-771)", () => {
     expect(playwright).toHaveLength(1);
     expect(playwright[0]!.run).toBe("pnpm exec playwright test -c playwright.scenarios.config.ts");
     expect(playwright[0]!.env?.JEV_FORM_EXPLORER).toBe(EXPLORER_ENV);
+    // Nothing may turn the step off or let its failure pass.
+    expect(playwright[0]!.if).toBeUndefined();
+    expect((playwright[0] as Record<string, unknown>)["continue-on-error"]).toBeUndefined();
+  });
+
+  it("leaves room for the library plus one 30-minute explorer attempt", () => {
+    const job = WF.jobs.scenarios as unknown as { "timeout-minutes": number };
+    expect(job["timeout-minutes"]).toBeGreaterThanOrEqual(10 + 45 + 30);
   });
 
   it("the scheduled path is still scheduled and needs no input", () => {
