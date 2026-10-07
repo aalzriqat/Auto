@@ -50,10 +50,13 @@ import {
   economicsStamp,
   evaluateQuotationException,
   GAP_RESOLUTION_CLEARED,
+  GAP_TO_FINANCE_COMPANY_NOT_AVAILABLE_REFUSAL,
   gapResolutionTransition,
   requireCustomerGapToDealer,
   resolveAppliedLtv,
   selectActiveAppraisal,
+  shortfallFieldsFor,
+  shortfallState,
   type FinanceCompanyRuleSnapshot,
 } from "./utils/financingEconomics";
 import {
@@ -238,6 +241,18 @@ async function recomputeAndPatchEconomics(
     // partially-recorded settlement.
     feeDeductionsMinor: await settlementDeductedTotalMinor(ctx, app._id, currency),
     customerDirectToDealerMinor: customerGapToDealer,
+    // The baseline the net shortfall is measured against: the quotation's OWN
+    // frozen LTV and first payment, never the row's `appliedLtvPercent` (which
+    // the approval overwrites) or its current first payment.
+    quoteSide:
+      app.quotationCalculationSnapshot?.appliedLtvPercent !== undefined &&
+      app.quotationCalculationSnapshot.customerFirstPaymentMinor !== undefined
+        ? {
+            appliedLtvPercent: app.quotationCalculationSnapshot.appliedLtvPercent,
+            customerFirstPaymentMinor:
+              app.quotationCalculationSnapshot.customerFirstPaymentMinor,
+          }
+        : undefined,
     dealerBorneExpensesMinor:
       app.actualClosingExpensesMinor ?? app.estimatedClosingExpensesMinor ?? 0,
     // The profit figures are not stored yet, so the vehicle's cost is not read
@@ -260,6 +275,7 @@ async function recomputeAndPatchEconomics(
       dealerContributionMinor: undefined,
       expectedDealerRemittanceMinor: undefined,
       rawAppraisalGapMinor: undefined,
+      ...shortfallFieldsFor(undefined),
       needsFinancingReconciliation: true,
       financingReconciliationReason: appendReconciliationReason(
         app.financingReconciliationReason,
@@ -282,6 +298,37 @@ async function recomputeAndPatchEconomics(
       "PASSED_THROUGH") === "PASSED_THROUGH" ||
     app.customerContributionToFinanceCompanyMinor !== undefined;
 
+  // SCRUM-766: the amount the parties split is the NET shortfall. Written with
+  // its breakdown as one unit, and a moved total voids whatever was agreed
+  // against the old one - here, not only in the approval, because the quotation
+  // first payment, the LTV and the contribution routing all recompute this too.
+  const shortfallFields = shortfallFieldsFor(derived.shortfall);
+  const previousShortfall = shortfallState(app);
+  const nextShortfall = shortfallState({
+    ...shortfallFields,
+    rawAppraisalGapMinor: derived.gap.rawAppraisalGapMinor,
+  });
+  const shortfallMoved =
+    previousShortfall.method !== nextShortfall.method ||
+    previousShortfall.totalMinor !== nextShortfall.totalMinor;
+  // Sealed only matters when something was already AGREED: a first approval
+  // recorded after handover has no settlement to void, and the finalize gate
+  // simply sees the new unresolved shortfall.
+  const sealed =
+    (app.vehicleHandoverAt !== undefined || app.finalizedSaleId !== undefined) &&
+    app.gapResolution !== undefined;
+  const shortfallResolutionPatch = sealed
+    ? {}
+    : nextShortfall.method === "UNAVAILABLE"
+      ? shortfallMoved
+        ? { gapResolution: undefined, ...GAP_RESOLUTION_CLEARED }
+        : {}
+      : (gapResolutionTransition(
+          nextShortfall.totalMinor ?? 0,
+          previousShortfall.totalMinor ?? 0,
+          app.gapResolution
+        ) ?? {});
+
   await ctx.db.patch(app._id, {
     economicsCurrency: currency,
     // The shared recompute — the writer the first pass at this missed, and the
@@ -296,6 +343,8 @@ async function recomputeAndPatchEconomics(
       ? derived.remittance.expectedDealerRemittanceMinor
       : undefined,
     rawAppraisalGapMinor: derived.gap.rawAppraisalGapMinor,
+    ...shortfallFields,
+    ...shortfallResolutionPatch,
     // Blanking the remittance silently would be worse than the assumption it
     // replaced. Nothing writes customerContributionToFinanceCompanyMinor yet,
     // so for a company that retains customer funds this is not a transient
@@ -310,6 +359,26 @@ async function recomputeAndPatchEconomics(
             `${snapshot.companyName} keeps the customer's payment rather than passing it through, and how much reached them has not been recorded. The expected dealer remittance cannot be determined until it is.`
           ),
         }),
+    // A shortfall that cannot be measured is a reconciliation item, not a zero.
+    // Once the vehicle is handed over the agreement cannot be voided here, so a
+    // MOVED shortfall on a sealed deal is flagged for a human instead.
+    ...(derived.shortfall.method === "UNAVAILABLE"
+      ? {
+          needsFinancingReconciliation: true,
+          financingReconciliationReason: appendReconciliationReason(
+            app.financingReconciliationReason,
+            derived.shortfall.reason
+          ),
+        }
+      : sealed && shortfallMoved
+        ? {
+            needsFinancingReconciliation: true,
+            financingReconciliationReason: appendReconciliationReason(
+              app.financingReconciliationReason,
+              "The shortfall changed after the vehicle was handed over, so what was agreed about it can no longer be revisited automatically. Reconcile it before closing the deal."
+            ),
+          }
+        : {}),
     updatedAt: Date.now(),
   });
   return true;
@@ -2465,7 +2534,7 @@ export const approveDealerPurchaseAmount = mutation({
     }
 
     const now = Date.now();
-    const previousRawGapMinor = app.rawAppraisalGapMinor ?? 0;
+    const previousShortfallMinor = shortfallState(app).totalMinor ?? 0;
     // Any material change, not only the amount. Narrowing this to the amount
     // meant re-approving 11,500 on the MANUAL basis instead of APPRAISAL
     // silently replaced the basis, the approver, the timestamp and the notes —
@@ -2595,14 +2664,18 @@ export const approveDealerPurchaseAmount = mutation({
       return args.applicationId;
     }
 
-    const rawGapMinor = refreshed.rawAppraisalGapMinor ?? 0;
-    const transition = gapResolutionTransition(
-      rawGapMinor,
-      previousRawGapMinor,
-      refreshed.gapResolution
-    );
-    if (transition !== null) {
-      await ctx.db.patch(args.applicationId, transition);
+    // An UNMEASURABLE shortfall was already cleared and flagged by the recompute;
+    // there is no total to transition on, and the gate fails closed on it.
+    const shortfall = shortfallState(refreshed);
+    if (shortfall.method !== "UNAVAILABLE") {
+      const transition = gapResolutionTransition(
+        shortfall.totalMinor ?? 0,
+        previousShortfallMinor,
+        refreshed.gapResolution
+      );
+      if (transition !== null) {
+        await ctx.db.patch(args.applicationId, transition);
+      }
     }
     return args.applicationId;
   },
@@ -2987,13 +3060,21 @@ export const resolveAppraisalGap = mutation({
       );
     }
 
-    const rawAppraisalGapMinor = app.rawAppraisalGapMinor;
-    if (rawAppraisalGapMinor === undefined) {
+    // The NET shortfall is what is split (SCRUM-766), asked of the same helper
+    // the gate and the rail ask.
+    const shortfall = shortfallState(app);
+    if (shortfall.method === "UNAVAILABLE") {
       throw new ConvexError(
-        "This deal's appraisal gap has not been worked out yet, so there is nothing to settle. Record the missing economics first."
+        "The shortfall on this deal could not be worked out from its recorded quotation, so it cannot be split. Re-record the quotation and the approval first."
       );
     }
-    if (rawAppraisalGapMinor <= 0) {
+    const shortfallMinor = shortfall.totalMinor;
+    if (shortfallMinor === undefined) {
+      throw new ConvexError(
+        "This deal's shortfall has not been worked out yet, so there is nothing to settle. Record the missing economics first."
+      );
+    }
+    if (shortfallMinor <= 0) {
       // `approveDealerPurchaseAmount` already wrote NOT_REQUIRED for this deal;
       // there is no split to record and nothing here to correct.
       throw new ConvexError(
@@ -3028,6 +3109,14 @@ export const resolveAppraisalGap = mutation({
     if (isManualFinanceApplication(app) && args.customerGapToFinanceCompanyMinor > 0) {
       throw new ConvexError(MANUAL_GAP_TO_FINANCIER_REFUSAL);
     }
+    // SCRUM-766 DA2-12: money the customer pays the finance company is not booked
+    // as a reduction of the showroom contribution yet (that is the follow-up
+    // change). Recording it now would leave the allocation, the remittance and the
+    // ledger saying three different things, so it is refused for every company
+    // until that change lands, before any write.
+    if (args.customerGapToFinanceCompanyMinor > 0) {
+      throw new ConvexError(GAP_TO_FINANCE_COMPANY_NOT_AVAILABLE_REFUSAL);
+    }
 
     const settlement = {
       customerGapShareMinor: args.customerGapShareMinor,
@@ -3039,10 +3128,10 @@ export const resolveAppraisalGap = mutation({
     // The SHARED assertion — every violation named, and the mutation refuses
     // outright. Not a local re-implementation: a second copy of the two
     // identities is how the destination fields get dropped.
-    assertGapResolutionValid(rawAppraisalGapMinor, settlement);
+    assertGapResolutionValid(shortfallMinor, settlement);
 
     const resolution = classifyGapResolution(
-      rawAppraisalGapMinor,
+      shortfallMinor,
       args.customerGapShareMinor,
       args.dealerGapShareMinor
     );
@@ -3079,7 +3168,7 @@ export const resolveAppraisalGap = mutation({
       applicationId: args.applicationId,
       field: "gapResolution",
       previousValue: app.gapResolution,
-      newValue: `${resolution} (customer ${args.customerGapShareMinor}, dealer ${args.dealerGapShareMinor}; customer share as cash ${args.customerGapCashToDealerMinor}, installments ${args.customerGapInstallmentToDealerMinor}, to the finance company ${args.customerGapToFinanceCompanyMinor}; against a raw gap of ${rawAppraisalGapMinor})`,
+      newValue: `${resolution} (customer ${args.customerGapShareMinor}, dealer ${args.dealerGapShareMinor}; customer share as cash ${args.customerGapCashToDealerMinor}, installments ${args.customerGapInstallmentToDealerMinor}, to the finance company ${args.customerGapToFinanceCompanyMinor}; against a ${shortfall.method === "GROSS_MANUAL" ? "gross" : "net"} shortfall of ${shortfallMinor})`,
       // `notes ? notes : …`, NOT `??`: a whitespace-only note trims to "", which
       // is defined, so nullish coalescing would write an EMPTY reason onto the
       // one audit row that explains why money moved.
@@ -3336,12 +3425,18 @@ export const recordManualFinanceApproval = mutation({
     }).rawAppraisalGapMinor;
     const transition = gapResolutionTransition(
       gapMinor,
-      app.rawAppraisalGapMinor ?? 0,
+      shortfallState(app).totalMinor ?? 0,
       app.gapResolution
     );
 
     await ctx.db.patch(args.applicationId, {
       rawAppraisalGapMinor: gapMinor,
+      // SCRUM-766 Q3: a manual company has no configured LTV rule to measure a
+      // net shortfall with, so the total is the GROSS rule, labelled as such.
+      netShortfallMethod: "GROSS_MANUAL",
+      netShortfallMinor: gapMinor,
+      valuationShortfallMinor: undefined,
+      financingTermsShortfallMinor: undefined,
       ...(transition ?? {}),
       economicsRevision: (app.economicsRevision ?? 0) + 1,
       manualApproval: {

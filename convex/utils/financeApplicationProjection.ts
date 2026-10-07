@@ -287,14 +287,21 @@ const FIELD_VISIBILITY: Record<
   // --- The appraisal gap: the amount, its allocation and its metadata ------
   /** Ruling #2: an approval fact for the roles that approve and disburse. */
   rawAppraisalGapMinor: "APPROVAL_WORKFLOW",
-  customerGapShareMinor: "GAP_ALLOCATION",
-  dealerGapShareMinor: "GAP_ALLOCATION",
-  customerGapCashToDealerMinor: "GAP_ALLOCATION",
-  customerGapInstallmentToDealerMinor: "GAP_ALLOCATION",
-  customerGapToFinanceCompanyMinor: "GAP_ALLOCATION",
-  gapResolvedAt: "GAP_ALLOCATION",
-  gapResolvedBy: "GAP_ALLOCATION",
-  gapResolutionNotes: "GAP_ALLOCATION",
+  // SCRUM-766 (owner, batch 2): the NET shortfall embeds the LTV, so it and the
+  // shares that split it are FINANCE. Settling a gap already demands VIEW_FINANCE
+  // (`resolveAppraisalGap`), so no role that acts on it loses sight of it.
+  netShortfallMethod: "FINANCE",
+  netShortfallMinor: "FINANCE",
+  valuationShortfallMinor: "FINANCE",
+  financingTermsShortfallMinor: "FINANCE",
+  customerGapShareMinor: "FINANCE",
+  dealerGapShareMinor: "FINANCE",
+  customerGapCashToDealerMinor: "FINANCE",
+  customerGapInstallmentToDealerMinor: "FINANCE",
+  customerGapToFinanceCompanyMinor: "FINANCE",
+  gapResolvedAt: "FINANCE",
+  gapResolvedBy: "FINANCE",
+  gapResolutionNotes: "FINANCE",
 
   // --- Settlement evidence: tier 1, unchanged ------------------------------
   supplierDisbursedAmountMinor: "FINANCE",

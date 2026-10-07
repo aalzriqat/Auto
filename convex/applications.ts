@@ -95,6 +95,7 @@ import {
   deriveDealStages,
   deriveManagementProfit,
   feeResponsibilityValidator,
+  shortfallState,
   financingFailureReasonValidator,
   handoverStatusForFacts,
   obligationFromRow,
@@ -1634,6 +1635,17 @@ async function buildCockpitMoney(
     }),
     /** `فرق تخمين` — a read of what was recorded, never a fresh computation. */
     appraisalGapMinor: app.rawAppraisalGapMinor,
+    /**
+     * SCRUM-766: the amount customer, showroom and supplier actually split - the
+     * NET shortfall, never the gross figure above. `totalMinor` is undefined for
+     * an UNAVAILABLE shortfall, which the screen must say instead of showing 0.
+     */
+    shortfall: {
+      method: shortfallState(app).method,
+      totalMinor: shortfallState(app).totalMinor,
+      valuationMinor: app.valuationShortfallMinor,
+      termsMinor: app.financingTermsShortfallMinor,
+    },
   };
 }
 
@@ -2231,6 +2243,8 @@ export const dealCockpit = query({
       settlementStatus: app.settlementStatus,
       handoverStatus: app.handoverStatus,
       rawAppraisalGapMinor: app.rawAppraisalGapMinor,
+      netShortfallMethod: app.netShortfallMethod,
+      netShortfallMinor: app.netShortfallMinor,
       approvedDealerPurchaseAmountMinor: app.approvedDealerPurchaseAmountMinor,
       // Without the BASIS the rail cannot tell an approval that rests on
       // appraisal evidence from one the company named directly — and went on

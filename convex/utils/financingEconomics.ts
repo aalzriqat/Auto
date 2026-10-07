@@ -13,6 +13,7 @@ import {
   computeDealerProceeds,
   computeExpectedRemittance,
   computeFundingComposition,
+  computeNetShortfall,
   resolveLtvBaseMinor,
   validateGapShares,
   type CustomerContributionSettlement,
@@ -991,6 +992,13 @@ export function deriveEconomics(args: {
   dealerBorneExpensesMinor: number;
   /** Only needed for the profit figures, which nothing stores yet. */
   vehicleCostMinor?: number;
+  /**
+   * The quote-time side of the net shortfall, read ONLY from the frozen
+   * `quotationCalculationSnapshot` (SCRUM-766 DA2-02: `appliedLtvPercent` on the
+   * row is overwritten by the approval, so it cannot be the baseline).
+   * Absent means the baseline was never frozen, and the shortfall is UNAVAILABLE.
+   */
+  quoteSide?: { appliedLtvPercent: number; customerFirstPaymentMinor: number };
 }) {
   // The snapshotted basis has to reach the arithmetic, not just sit in the
   // snapshot: at 85% on a 12,500 approval against an 11,500 appraisal, an
@@ -1039,7 +1047,150 @@ export function deriveEconomics(args: {
     vehicleCostMinor: args.vehicleCostMinor ?? 0,
   });
 
-  return { composition, gap, remittance, proceeds };
+  return {
+    composition,
+    gap,
+    remittance,
+    proceeds,
+    shortfall: deriveNetShortfallFor(args, ltvBaseMinor),
+  };
+}
+
+export type NetShortfallDerivation =
+  | {
+      method: "NET";
+      totalMinor: number;
+      valuationMinor: number;
+      termsMinor: number;
+    }
+  | { method: "UNAVAILABLE"; reason: string };
+
+/**
+ * The owner's net shortfall for a configured company (SCRUM-766), or the reason
+ * it cannot be worked out. UNAVAILABLE is never guessed:
+ *
+ * - no frozen quote-time LTV / first payment (the quotation snapshot): the
+ *   baseline the shortfall is measured against does not exist;
+ * - a company that lends against the independent appraisal (alone or "lower
+ *   of"): the quote-time side needs the EXPECTED appraisal, which the quotation
+ *   does not freeze yet. Substituting the quotation would price the baseline on a
+ *   base the company never used.
+ */
+function deriveNetShortfallFor(
+  args: {
+    ltvBasis?: LtvBasis;
+    approvedDealerPurchaseAmountMinor: number;
+    appliedLtvPercent: number;
+    customerFirstPaymentMinor: number;
+    submittedQuotationMinor: number;
+    quoteSide?: { appliedLtvPercent: number; customerFirstPaymentMinor: number };
+  },
+  actualLtvBaseMinor: number
+): NetShortfallDerivation {
+  if (args.quoteSide === undefined) {
+    return {
+      method: "UNAVAILABLE",
+      reason:
+        "The quotation's own LTV and first payment were never frozen on this deal, so the shortfall cannot be measured against what the quotation promised.",
+    };
+  }
+  if (
+    args.ltvBasis === "INDEPENDENT_APPRAISAL" ||
+    args.ltvBasis === "LOWER_OF_APPRAISAL_AND_QUOTATION"
+  ) {
+    return {
+      method: "UNAVAILABLE",
+      reason:
+        "This finance company lends against the appraisal, and the appraisal the quotation expected was not frozen, so the shortfall cannot be measured.",
+    };
+  }
+  const result = computeNetShortfall({
+    quote: {
+      quotationMinor: args.submittedQuotationMinor,
+      appliedLtvPercent: args.quoteSide.appliedLtvPercent,
+      customerFirstPaymentMinor: args.quoteSide.customerFirstPaymentMinor,
+    },
+    actual: {
+      approvedPurchaseAmountMinor: args.approvedDealerPurchaseAmountMinor,
+      appliedLtvPercent: args.appliedLtvPercent,
+      customerFirstPaymentMinor: args.customerFirstPaymentMinor,
+      ltvBaseMinor: actualLtvBaseMinor,
+    },
+  });
+  return {
+    method: "NET",
+    totalMinor: result.totalNetShortfallMinor,
+    valuationMinor: result.valuationShortfallMinor,
+    termsMinor: result.financingTermsShortfallMinor,
+  };
+}
+
+export type ShortfallMethod = "NET" | "GROSS_MANUAL" | "UNAVAILABLE";
+
+/**
+ * THE shortfall question, asked once (SCRUM-766 DA2-01). The gate, the stage
+ * rail, the resolve guard, the resolution transition and the share validator all
+ * read this, so they cannot disagree about whether a deal has a gap or how big
+ * it is.
+ *
+ * - `NET` / `GROSS_MANUAL`: the persisted total.
+ * - `UNAVAILABLE`: nobody can say how big it is, so it fails CLOSED -
+ *   `requiresResolution` is true and `totalMinor` is undefined.
+ * - no method recorded: a row that predates SCRUM-766, read as its gross gap.
+ *   Prod data is wiped at go-live; this exists so a row with only the gross gap
+ *   is not silently treated as gap-free.
+ * - no gap recorded at all: not yet worked out, which is not zero.
+ */
+export interface ShortfallState {
+  method: ShortfallMethod | "LEGACY_GROSS" | "NONE";
+  totalMinor: number | undefined;
+  requiresResolution: boolean;
+}
+
+export function shortfallState(app: {
+  netShortfallMethod?: ShortfallMethod;
+  netShortfallMinor?: number;
+  rawAppraisalGapMinor?: number;
+}): ShortfallState {
+  if (app.netShortfallMethod === "UNAVAILABLE") {
+    return { method: "UNAVAILABLE", totalMinor: undefined, requiresResolution: true };
+  }
+  if (app.netShortfallMethod !== undefined && app.netShortfallMinor !== undefined) {
+    return {
+      method: app.netShortfallMethod,
+      totalMinor: app.netShortfallMinor,
+      requiresResolution: app.netShortfallMinor > 0,
+    };
+  }
+  if (app.rawAppraisalGapMinor === undefined) {
+    return { method: "NONE", totalMinor: undefined, requiresResolution: false };
+  }
+  return {
+    method: "LEGACY_GROSS",
+    totalMinor: app.rawAppraisalGapMinor,
+    requiresResolution: app.rawAppraisalGapMinor > 0,
+  };
+}
+
+/**
+ * The persisted shape of a shortfall derivation, or the cleared shape. Written
+ * as a whole so the method, total and breakdown can never disagree.
+ */
+export function shortfallFieldsFor(derivation: NetShortfallDerivation | undefined) {
+  if (derivation === undefined || derivation.method === "UNAVAILABLE") {
+    return {
+      netShortfallMethod: derivation === undefined ? undefined : ("UNAVAILABLE" as const),
+      netShortfallMinor: undefined,
+      valuationShortfallMinor: undefined,
+      financingTermsShortfallMinor: undefined,
+    };
+  }
+  return {
+    netShortfallMethod: "NET" as const,
+    netShortfallMinor: derivation.totalMinor,
+    valuationShortfallMinor: derivation.valuationMinor,
+    financingTermsShortfallMinor: derivation.termsMinor,
+  };
 }
 
 /**
@@ -1105,11 +1256,24 @@ export function appraisalGapIsSettled(gapResolution: GapResolution): boolean {
  * a rule. The message names the step that unblocks it.
  */
 export function assertAppraisalGapSettledToAdvance(
-  app: { rawAppraisalGapMinor?: number; gapResolution?: GapResolution },
+  app: {
+    rawAppraisalGapMinor?: number;
+    netShortfallMethod?: ShortfallMethod;
+    netShortfallMinor?: number;
+    gapResolution?: GapResolution;
+  },
   action: string
 ): void {
-  const gap = app.rawAppraisalGapMinor;
-  if (gap === undefined || !(gap > 0)) return;
+  // The shortfall, not the gross gap (SCRUM-766): the gate, the rail and the
+  // resolve guard all ask `shortfallState`, so they cannot disagree.
+  const shortfall = shortfallState(app);
+  if (shortfall.method === "UNAVAILABLE") {
+    // Fails closed: an unmeasurable shortfall is not a zero one.
+    throw new ConvexError(
+      `The shortfall on this deal could not be worked out from its recorded quotation, so who covers any difference cannot be agreed. Re-record the quotation and the approval before ${action}.`
+    );
+  }
+  if (!shortfall.requiresResolution) return;
   if (appraisalGapIsSettled(app.gapResolution)) return;
   // No figure in the message. The gap is a FINANCE-class field under the
   // SCRUM-117 projection and `register:vehicle_handover` is held by roles the
@@ -1119,6 +1283,14 @@ export function assertAppraisalGapSettledToAdvance(
   );
 }
 
+
+/**
+ * SCRUM-766 DA2-12: refused until the customer-pays-the-finance-company
+ * mechanism (the shortfall's option 1) exists. One message, one enforcement
+ * point.
+ */
+export const GAP_TO_FINANCE_COMPANY_NOT_AVAILABLE_REFUSAL =
+  "Recording part of the shortfall as paid by the customer to the finance company is not available yet. Record it as paid to the dealership, or as absorbed by the dealership.";
 
 /** Every field a settled appraisal-gap split writes; clearing them voids the split. */
 export const GAP_RESOLUTION_CLEARED = Object.freeze({
@@ -1501,6 +1673,9 @@ export interface DealStageFacts extends LifecycleFacts {
   settlementStatus?: SettlementStatus;
   handoverStatus?: HandoverStatus;
   rawAppraisalGapMinor?: number;
+  /** SCRUM-766: with the gross gap, what `shortfallState` reads. */
+  netShortfallMethod?: ShortfallMethod;
+  netShortfallMinor?: number;
   approvedDealerPurchaseAmountMinor?: number;
   /**
    * What the approved amount was based on.
@@ -1618,7 +1793,9 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
   // supplier claim, while the application keeps its own status.
   const stopped = credit === "REJECTED" || credit === "CANCELLED" || facts.dealCancelled === true;
   // A gap of zero is not a gap, and `undefined` means none was ever recorded.
-  const hasGap = (facts.rawAppraisalGapMinor ?? 0) !== 0;
+  const shortfall = shortfallState(facts);
+  // An unmeasurable shortfall is an open gap, never a clear one.
+  const hasGap = shortfall.method === "UNAVAILABLE" || (shortfall.totalMinor ?? 0) !== 0;
   // A POSITIVE gap is settled by exactly the resolutions the mutation gate
   // (`assertAppraisalGapSettledToAdvance`) accepts — `appraisalGapIsSettled`,
   // shared so the rail cannot show a step complete that the writers refuse.
@@ -1626,7 +1803,7 @@ export function deriveDealStages(facts: DealStageFacts): DealStage[] {
   // row contradicting itself, and the rail reads a contradiction as unsettled.
   // A non-positive gap keeps its recorded resolution, or none if there was
   // never a gap to resolve.
-  const positiveGap = (facts.rawAppraisalGapMinor ?? 0) > 0;
+  const positiveGap = shortfall.requiresResolution;
   const gapResolved = positiveGap
     ? appraisalGapIsSettled(gap)
     : gap === "NOT_REQUIRED" || appraisalGapIsSettled(gap) || (gap === undefined && !hasGap);

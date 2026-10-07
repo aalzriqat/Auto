@@ -789,7 +789,7 @@ export interface GapShareViolation {
  * Checks the two gap invariants the dealer confirmed.
  *
  * ```
- * customerGapShare + dealerGapShare = rawAppraisalGap
+ * customerGapShare + dealerGapShare = shortfall (the net shortfall, SCRUM-766)
  * customerCash + customerInstallments + customerToFinanceCompany = customerGapShare
  * ```
  *
@@ -800,13 +800,13 @@ export interface GapShareViolation {
  * destination is exactly how that error gets made.
  */
 export function validateGapShares(
-  rawAppraisalGapMinor: number,
+  shortfallMinor: number,
   settlement: GapShareSettlement
 ): GapShareViolation[] {
   const violations: GapShareViolation[] = [];
 
   const amounts: Array<[number, string]> = [
-    [rawAppraisalGapMinor, "Raw appraisal gap"],
+    [shortfallMinor, "Shortfall"],
     [settlement.customerGapShareMinor, "Customer gap share"],
     [settlement.dealerGapShareMinor, "Dealer gap share"],
     [settlement.customerGapCashToDealerMinor, "Customer gap cash to dealer"],
@@ -824,10 +824,10 @@ export function validateGapShares(
   if (violations.length > 0) return violations;
 
   const sharesTotal = settlement.customerGapShareMinor + settlement.dealerGapShareMinor;
-  if (sharesTotal !== rawAppraisalGapMinor) {
+  if (sharesTotal !== shortfallMinor) {
     violations.push({
       code: "SHARES_DO_NOT_SUM_TO_GAP",
-      message: `Customer share (${settlement.customerGapShareMinor}) plus dealer share (${settlement.dealerGapShareMinor}) is ${sharesTotal}, which must equal the raw appraisal gap of ${rawAppraisalGapMinor}.`,
+      message: `Customer share (${settlement.customerGapShareMinor}) plus dealer share (${settlement.dealerGapShareMinor}) is ${sharesTotal}, which must equal the shortfall of ${shortfallMinor}.`,
     });
   }
 
