@@ -24,6 +24,14 @@ describe("refreshRulings (snapshot upsert)", () => {
     expect(c[1].digest).toBe(digestRulingText("b changed"));
   });
 
+  test("accepts an issue-description ruling id, and the validator agrees", () => {
+    const next = upsertRuling([], { id: "SCRUM-413#description", text: "scope text", date: "2026-10-08" });
+    expect(next[0].id).toBe("SCRUM-413#description");
+    expect(validateRulingSnapshot(next)).toEqual([]);
+    expect(() => upsertRuling([], { id: "SCRUM-413#descr", text: "x", date: "2026-10-08" })).toThrow(/ruling id/);
+    expect(validateRulingSnapshot([{ id: "SCRUM-413#descr", digest: next[0].digest, date: "2026-10-08" }])).not.toEqual([]);
+  });
+
   test("refuses a malformed id, bad date or empty text", () => {
     expect(() => upsertRuling([], { id: "407-c21031", text: "x", date: "2026-10-07" })).toThrow(/ruling id/);
     expect(() => upsertRuling([], { id: "SCRUM-1#c1", text: "x", date: "today" })).toThrow(/date/);

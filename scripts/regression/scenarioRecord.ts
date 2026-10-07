@@ -93,7 +93,8 @@ export interface LibraryProblem {
 const SLUG = /^[a-z0-9][a-z0-9._-]{2,80}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
-const RULING_ID = /^SCRUM-\d+#c\d+$/;
+// A ruling lives in a Jira comment (#c4567) or in the issue description itself (#description).
+const RULING_ID = /^SCRUM-\d+#(?:c\d+|description)$/;
 const ID_TOKEN = /^(?:[a-z0-9]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|user_[A-Za-z0-9]{6,}|org_[A-Za-z0-9]{6,})$/;
 const ISO_TS = /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}.*$/;
 // Epoch-style per-run suffix only (10+ digits): cheque/invoice numbers and amounts stay significant.
@@ -168,7 +169,7 @@ export function validateRulingSnapshot(snapshot: unknown): LibraryProblem[] {
   const seen = new Set<string>();
   for (const entry of snapshot as Record<string, unknown>[]) {
     const id = String(entry?.id);
-    if (typeof entry?.id !== "string" || !RULING_ID.test(entry.id)) add(id, "id must look like SCRUM-123#c4567");
+    if (typeof entry?.id !== "string" || !RULING_ID.test(entry.id)) add(id, "id must look like SCRUM-123#c4567 or SCRUM-123#description");
     if (seen.has(id)) add(id, "duplicate ruling id");
     seen.add(id);
     if (typeof entry?.digest !== "string" || !SHA256.test(entry.digest)) add(id, "digest must be a sha256 hex string");
@@ -375,7 +376,7 @@ function schemaProblems(r: unknown): string[] {
   // Metadata formats hold whatever the status: a malformed value must not wait for a status flip to be seen.
   if (r.matrixRow !== undefined && (typeof r.matrixRow !== "string" || !MATRIX_ROW.test(r.matrixRow))) out.push("matrixRow has an invalid format");
   if (r.candidateIssue !== undefined && (typeof r.candidateIssue !== "string" || !SCRUM_KEY.test(r.candidateIssue))) out.push("candidateIssue must be a SCRUM key");
-  if (r.retiredByRuling !== undefined && (typeof r.retiredByRuling !== "string" || !RULING_ID.test(r.retiredByRuling))) out.push("retiredByRuling must look like SCRUM-123#c4567");
+  if (r.retiredByRuling !== undefined && (typeof r.retiredByRuling !== "string" || !RULING_ID.test(r.retiredByRuling))) out.push("retiredByRuling must look like SCRUM-123#c4567 or SCRUM-123#description");
   if (isObject(r.impl) && ((r.impl.file !== undefined && (typeof r.impl.file !== "string" || r.impl.file.length > MAX_PATH)) || (r.impl.testName !== undefined && (typeof r.impl.testName !== "string" || r.impl.testName.length > MAX_TEXT)))) {
     out.push(`impl.file is capped at ${MAX_PATH} and impl.testName at ${MAX_TEXT} characters`);
   }

@@ -32,3 +32,6 @@ Three `rule` records bind exact titles in `convex/consignmentEconomics.test.ts` 
 - A `rule` record's bound test must call its `subject` and assert (static check). The expected VALUES are not compared to the test body; a record-driven runner (S3) is the binding proof.
 - The ruling digest normalises whitespace only (no Unicode NFC) and the `date` is the refresh date; both are operator conventions, tracked for S3.
 - The fail-closed (withhold) expectations of the pilot records come from SCRUM-41 / SCRUM-49 Lane 4; c21031 governs the approved-basis record directly.
+
+- Ruling ids are `SCRUM-n#cN` (a comment) or `SCRUM-n#description` (the issue description). A non-owner invariant source (e.g. the tenant write guard) has no form yet; tenancy records stay deferred.
+- Permission records need a located test that already asserts the refusal; none has been bound yet.
