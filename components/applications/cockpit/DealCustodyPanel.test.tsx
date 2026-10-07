@@ -427,6 +427,16 @@ describe("DealCustodyPanel", () => {
       expect(screen.getByTestId("custody-recommended").textContent).toBe(salesEn.CustodyRecommendedNotConfigured);
     });
 
+    test("SCRUM-440: with no fee templates the panel gives neutral guidance, never 'no configured fees', and invents no amount (EN/AR)", () => {
+      renderPanel(wiring({ actions: actions(), accounting: { ready: true }, records: [], recommended: { recommendedMinor: null, reason: "NOT_CONFIGURED", outstandingCount: 0 } }));
+      const note = screen.getByTestId("custody-recommended");
+      expect(note.textContent).toBe("No amount is suggested for this deal. Enter the planned handover amount.");
+      expect(note.textContent).not.toMatch(/No configured fees/i);
+      expect(note.textContent).not.toMatch(/\d/);
+      expect(salesAr.CustodyRecommendedNotConfigured).toBe("لا يوجد مبلغ مقترح لهذه الصفقة. أدخل مبلغ التسليم المخطط.");
+      expect(salesAr.CustodyRecommendedNotConfigured).not.toBe(salesEn.CustodyRecommendedNotConfigured);
+    });
+
     test("when the ledger cannot take a posting every money button is dead and the reason is the server's", () => {
       const a = actions();
       renderPanel(wiring({ actions: a, records: [], accounting: { ready: false, reason: "CHART_NOT_INITIALIZED" } }));

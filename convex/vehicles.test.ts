@@ -53,6 +53,8 @@ const baseVehicle = {
   transmission: "Automatic",
   sellingPrice: 20000,
   status: "AVAILABLE" as const,
+  // SCRUM-717 (D-45): a new vehicle carries an explicit ownership decision.
+  sourceType: "STOCK" as const,
 };
 
 describe("vehicles.create", () => {
@@ -1328,10 +1330,12 @@ const baseImportRow = {
   transmission: "Automatic",
   sellingPrice: 18000,
   purchasePrice: 14000,
+  // SCRUM-717 (D-45): a row states its ownership; a blank type is refused.
+  sourceType: "STOCK",
 };
 
 describe("vehicles.importBulk — owned stock vs sourced", () => {
-  test("lands owned stock as AVAILABLE (STOCK) by default", async () => {
+  test("lands owned stock as AVAILABLE when the row says STOCK", async () => {
     const { orgId, asUser, t } = await setup();
 
     const result = await asUser.mutation(api.vehicles.importBulk, {

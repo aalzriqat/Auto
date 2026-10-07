@@ -80,7 +80,44 @@ const stockRow = {
   sellingPrice: "15000",
   purchasePrice: "10000",
   sourcedFrom: "Atiwi Motors",
+  // SCRUM-717 (D-45): ownership is explicit; a row with no Type is an error.
+  sourceType: "Stock",
 };
+
+describe("SCRUM-717 - import ownership is explicit", () => {
+  const errorsFor = (raw: Record<string, any>) => validateVehicleRow(deriveVehicleRow(raw));
+  const { sourceType: _t, ...untyped } = stockRow;
+
+  test("a blank Type is a row error, never defaulted to owned stock", () => {
+    expect(deriveVehicleRow(untyped).sourceType).toBeUndefined();
+    expect(errorsFor(untyped).join(" ")).toMatch(/Ownership type is missing or not recognized/);
+    expect(errorsFor({ ...untyped, sourceType: "   " }).join(" ")).toMatch(/Ownership type/);
+  });
+
+  test("an unrecognized Type is a row error, not owned stock", () => {
+    expect(deriveVehicleRow({ ...stockRow, sourceType: "banana" }).sourceType).toBeUndefined();
+    expect(errorsFor({ ...stockRow, sourceType: "banana" }).join(" ")).toMatch(/Ownership type/);
+  });
+
+  test.each(["Stock", "OWNED", "مخزون", "مملوكة"])("%s reads as owned", (cell) => {
+    expect(deriveVehicleRow({ ...stockRow, sourceType: cell }).sourceType).toBe("STOCK");
+    expect(errorsFor({ ...stockRow, sourceType: cell })).toEqual([]);
+  });
+
+  test.each(["Sourced", "Consignment", "برسم البيع", "مصدر"])("%s reads as consignment", (cell) => {
+    const row = deriveVehicleRow({ ...stockRow, sourceType: cell });
+    expect(row.sourceType).toBe("SOURCED");
+    expect(row.sourcedFromName).toBe("Atiwi Motors");
+    expect(row.purchaseSupplierName).toBeUndefined();
+  });
+
+  test("an owned row sends its supplier as the creditor, never as sourcedFromName", () => {
+    const row = deriveVehicleRow(stockRow);
+    expect(row.purchaseSupplierName).toBe("Atiwi Motors");
+    expect(row.sourcedFromName).toBeUndefined();
+    expect(row.sourceCost).toBeUndefined();
+  });
+});
 
 describe("deriveVehicleRow — the supplier a purchase on account is owed to", () => {
   test("keeps the supplier on an OWNED row, which is the only kind that capitalizes", () => {
@@ -90,13 +127,14 @@ describe("deriveVehicleRow — the supplier a purchase on account is owed to", (
     expect(row.sourceType).not.toBe("SOURCED");
     // The defect: this was `undefined` for every non-SOURCED row, so an
     // ON_ACCOUNT import could never name who it owed and was blocked forever —
-    // even from a spreadsheet that gave the supplier on every line.
-    expect(row.sourcedFromName).toBe("Atiwi Motors");
+    // even from a spreadsheet that gave the supplier on every line. It now
+    // travels as `purchaseSupplierName` (SCRUM-717), not `sourcedFromName`.
+    expect(row.purchaseSupplierName).toBe("Atiwi Motors");
   });
 
   test("still leaves it undefined when the sheet names no supplier", () => {
     const { sourcedFrom: _omitted, ...noSupplier } = stockRow;
-    expect(deriveVehicleRow(noSupplier).sourcedFromName).toBeUndefined();
+    expect(deriveVehicleRow(noSupplier).purchaseSupplierName).toBeUndefined();
   });
 
   test("does not put a supplier cost on an owned row", () => {

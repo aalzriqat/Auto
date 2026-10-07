@@ -20,6 +20,7 @@ import {
 } from "./postingEngine";
 import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting, expensePostedKey, simplePayloadHash, RECEIPT_CREDIT_APPLIED_EVENT_TYPE, RECEIPT_CREDIT_APPLIED_SOURCE_TYPE, type FinancedSalePlanPayload, financeReceiptAccountKey, type FinanceReceiptMethod } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
+import { saleCompletedKey } from "./postingRules";
 import { handoverDirectPostKey, handoverDirectReversalKey } from "../utils/handoverCostPayment";
 import { forwardPostKey, forwardReversalKey } from "../utils/financeCompanyForward";
 import { financeDisbursementKeys } from "../utils/financeDisbursementKeys";
@@ -1233,7 +1234,7 @@ export async function hookSaleCompleted(
     eventType: "SALE_COMPLETED",
     sourceType: "sales",
     sourceId: args.saleId.toString(),
-    idempotencyKey: `sale_completed_${args.saleId}`,
+    idempotencyKey: saleCompletedKey(args.saleId),
     currency: args.currency,
     occurredAt: args.occurredAt,
     actorId: args.actorId,

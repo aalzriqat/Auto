@@ -726,6 +726,22 @@ describe("7. profit-approval authority", () => {
     expect(await profitStatus(seed, sold)).toEqual({ status: "VEHICLE_DELETED" });
   });
 
+  test("SCRUM-659: livenessOnly (CASH) reports a deleted car but never applies the profit rule", async () => {
+    const { seed, v } = await profitSeed();
+    const livenessOnly = () =>
+      seed.asUser.query(api.approvals.profitApprovalStatus, {
+        orgId: seed.orgId,
+        vehicleId: v,
+        salePrice: PRICE,
+        livenessOnly: true,
+      });
+    // Control: the same live car is REQUIRED under the profit rule, but a CASH read must not block on it.
+    expect(await profitStatus(seed, v)).toMatchObject({ status: "REQUIRED" });
+    expect(await livenessOnly()).toMatchObject({ status: "NOT_REQUIRED" });
+    await softDelete(seed, v);
+    expect(await livenessOnly()).toEqual({ status: "VEHICLE_DELETED" });
+  });
+
   test("R2-F1 control: a foreign-org car is still null (never reported deleted)", async () => {
     const seed = await seedDealer();
     const foreign = await foreignDeletedVehicle(seed, "SC641FOREIGN0004");

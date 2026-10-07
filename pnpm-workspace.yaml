@@ -19,7 +19,13 @@ overrides:
   # changing production image behaviour. Pinned exact so lockfile
   # regeneration cannot drift onto a release younger than the pnpm 11
   # minimumReleaseAge (<24h) supply-chain gate.
-  sharp: 0.35.4
+  #
+  # SCRUM-754: GHSA-wq5f-xc86-pv6w (HIGH). Vulnerable <0.35.5, patched floor
+  # 0.35.5, published 2026-09-27. Resolved 0.35.4 before this bump; 0.35.5 is a
+  # patch bump in the same 0.35 line and older than the 24h gate. Still ONE
+  # copy in the graph, so the plain key suffices. NOT added to
+  # auditConfig.ignoreGhsas: a patched, compatible release exists.
+  sharp: 0.35.5
   # Pinned exact (not a range) so it can't drift onto a release that trips the
   # CI minimumReleaseAge (<24h) supply-chain gate; 8.5.22 is patched (>=8.5.18).
   postcss: 8.5.22
@@ -218,6 +224,29 @@ overrides:
   #
   # NOT added to auditConfig.ignoreGhsas: a patched, compatible release exists.
   compression: 1.8.2
+  # SCRUM-754: two further advisories published with no dependency change broke
+  # the required dependency-audit check again. Each resolves to exactly ONE
+  # version in the lockfile, so plain keys suffice; both patched releases are in
+  # the same major line as the copy they replace, and both are older than the
+  # pnpm 11 minimumReleaseAge (<24h) gate.
+  #
+  # shell-quote: GHSA-pqg4-j6r4-53mv (CRITICAL, quote() command injection).
+  # Vulnerable >=1.8.4 <1.11.0, patched floor 1.11.0, published 2026-09-29.
+  # Resolved 1.10.0. Reached transitively via
+  #   apps/mobile > @clerk/expo > ... > react-native > react-devtools-core
+  # Pinned exact so lockfile regeneration cannot drift onto a release younger
+  # than the minimumReleaseAge gate.
+  #
+  # NOT added to auditConfig.ignoreGhsas: a patched, compatible release exists.
+  shell-quote: 1.11.0
+  # @modelcontextprotocol/sdk: GHSA-6qxp-vccf-f47h (HIGH). Vulnerable
+  # >=1.12.0 <1.31.0, patched floor 1.31.0, published 2026-09-28. Resolved
+  # 1.29.0. Reached via shadcn. Pinned to the lowest patched release rather
+  # than 1.32.x (published 2026-10-02/05) to stay the smallest step off the
+  # resolved 1.29 line and well clear of the age gate.
+  #
+  # NOT added to auditConfig.ignoreGhsas: a patched, compatible release exists.
+  "@modelcontextprotocol/sdk": 1.31.0
 # GHSA-mh99 (brace-expansion unbounded-expansion DoS) is patched by the pins
 # above. Separate per-major overrides remain necessary because minimatch@3's
 # old-API CommonJS consumers are incompatible with the 5.x export shape.

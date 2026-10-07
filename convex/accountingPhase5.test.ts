@@ -456,7 +456,11 @@ describe("Phase 5 — supplier payables reconciliation", () => {
     expect(recon.isReconciled).toBe(true);
   });
 
-  test("a PAID payable no longer counts toward the subledger side", async () => {
+  // SCRUM-651 (D-42): the subledger is now the signed open balance (amountDue - paid) of every
+  // non-CANCELLED row, not "PENDING rows only". This legacy PAID row (no amountPaid) is read as fully
+  // paid by settlementView, so it still contributes 0 - the assertion is unchanged; the name now says
+  // why (it used to claim PAID rows are simply skipped), and the new status field is asserted.
+  test("a fully-paid (legacy PAID) payable contributes a zero open balance to the subledger side", async () => {
     const { t, orgId, userId, asUser } = await seedReportingDealer();
     const now = Date.now();
     const vehicleId = await t.run((ctx) =>
@@ -475,6 +479,7 @@ describe("Phase 5 — supplier payables reconciliation", () => {
 
     const recon = await asUser.query(api.accountingReports.supplierPayablesReconciliation, { orgId });
     expect(recon.currencies).toEqual([]);
+    expect(recon.status).toBe("AVAILABLE");
   });
 });
 
