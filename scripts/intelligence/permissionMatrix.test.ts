@@ -3,34 +3,72 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { PERMISSIONS } from "../../convex/utils/permissions";
 import { extractGuards, fnId, type FnGuard, type Guard } from "./permissionMatrix";
-import { INLINE_ALLOWLIST, MEMBER_ONLY_ALLOWLIST, NO_GUARD_ALLOWLIST, type AllowEntry } from "./permissionMatrixAllowlist";
+import { AUTHED_ONLY_ALLOWLIST, INLINE_ALLOWLIST, MEMBER_ONLY_ALLOWLIST, NO_GUARD_ALLOWLIST, type AllowEntry } from "./permissionMatrixAllowlist";
 
 const convexDir = join(__dirname, "..", "..", "convex");
 
-function scan(): FnGuard[] {
-  return readdirSync(convexDir)
+const sources = () =>
+  readdirSync(convexDir)
     .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && !f.startsWith("_") && f !== "schema.ts")
     .sort((a, b) => a.localeCompare(b))
-    .flatMap((f) => extractGuards(`convex/${f}`, readFileSync(join(convexDir, f), "utf8")));
-}
+    .map((f) => ({ file: `convex/${f}`, text: readFileSync(join(convexDir, f), "utf8") }));
+
+const scan = (): FnGuard[] => sources().flatMap((s) => extractGuards(s.file, s.text));
 
 describe("extractGuards", () => {
+  const classes = (src: string) => extractGuards("convex/x.ts", src).map((g) => [g.name, g.kind, g.guard, g.permissions]);
+
   it("classifies each guard shape", () => {
-    const src = `
+    expect(
+      classes(`
 export const a = mutation({ handler: async (ctx, args) => { await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_LEADS, PERMISSIONS.VIEW_LEADS]); } });
 export const b = query({ handler: async (ctx, args) => { await requireTenantAuth(ctx, args.orgId); } });
 export const c = query({ handler: async (ctx, args) => { await requireSuperAdmin(ctx); } });
 export const d = query({ handler: async (ctx) => { return []; } });
 export const e = mutation({ handler: async (ctx, args) => { await requireTenantAuth(ctx, args.orgId, NEEDS_FORWARD_PERMS); } });
 export const f = mutation({ handler: async (ctx, args) => { await requireTenantAuth(ctx, args.orgId); if (!role.permissions.includes(PERMISSIONS.MANAGE_FINANCE)) throw 1; } });
-`;
-    expect(extractGuards("convex/x.ts", src).map((g) => [g.name, g.guard, g.permissions])).toEqual([
-      ["a", "permission", ["EDIT_LEADS", "VIEW_LEADS"]],
-      ["b", "member", []],
-      ["c", "other", []],
-      ["d", "none", []],
-      ["e", "permission", ["$NEEDS_FORWARD_PERMS"]],
-      ["f", "inline", []],
+export const g = mutation({ handler: async (ctx) => { await requireAuth(ctx); } });
+export const h = action({ handler: async (ctx) => { await ctx.runMutation(internal.x.y, {}); } });
+export const i =
+  mutation({ handler: async () => {} });
+`),
+    ).toEqual([
+      ["a", "mutation", "permission", ["EDIT_LEADS", "VIEW_LEADS"]],
+      ["b", "query", "member", []],
+      ["c", "query", "platform", []],
+      ["d", "query", "none", []],
+      ["e", "mutation", "permission", ["$NEEDS_FORWARD_PERMS"]],
+      ["f", "mutation", "inline", []],
+      ["g", "mutation", "authed", []],
+      ["h", "action", "none", []],
+      ["i", "mutation", "none", []],
+    ]);
+  });
+
+  it("a guarded neighbour, internal function or trailing helper never lends its guard (PR #512 F1)", () => {
+    expect(
+      classes(`
+export const open = mutation({ handler: async () => {} });
+export const hidden = internalMutation({ handler: async (ctx, a) => { await requireTenantAuth(ctx, a.orgId, [PERMISSIONS.MANAGE_USERS]); } });
+export const last = query({ handler: async () => [] });
+async function helper(ctx, a) { await requireSuperAdmin(ctx); await requireTenantAuth(ctx, a.orgId, [PERMISSIONS.MANAGE_USERS]); }
+`),
+    ).toEqual([
+      ["open", "mutation", "none", []],
+      ["last", "query", "none", []],
+    ]);
+  });
+
+  it("validation helpers and comments are not guards (PR #512 F2)", () => {
+    expect(
+      classes(`
+export const a = mutation({ handler: async (ctx, args) => { assertFiniteNumber(args.n); await requireFeature(ctx, args.orgId, "x"); await requireOwnedRow(ctx, args.orgId, "t", args.id); } });
+// requireTenantAuth(ctx, orgId, [PERMISSIONS.EDIT_LEADS])
+export const b = mutation({ handler: async () => { /* requireSuperAdmin(ctx); PERMISSIONS.MANAGE_USERS */ } });
+`),
+    ).toEqual([
+      ["a", "mutation", "none", []],
+      ["b", "mutation", "none", []],
     ]);
   });
 });
@@ -38,8 +76,10 @@ export const f = mutation({ handler: async (ctx, args) => { await requireTenantA
 describe("permission matrix of the real convex/ directory (SCRUM-616)", () => {
   const all = scan();
 
-  it("finds the exports (guards against the scanner going blind)", () => {
-    expect(all.length).toBeGreaterThan(500);
+  it("sees every export a plain text search sees (the scanner cannot go blind)", () => {
+    const broad = sources().reduce((n, s) => n + [...s.text.matchAll(/^export const \w+\s*=\s*(query|mutation|action)\(/gm)].length, 0);
+    expect(all.length).toBe(broad);
+    expect(all.length).toBeGreaterThan(600);
   });
 
   it("every PERMISSIONS key a guard names exists in the catalogue", () => {
@@ -54,13 +94,18 @@ describe("permission matrix of the real convex/ directory (SCRUM-616)", () => {
     for (const e of list) expect(e.reason.trim().length, e.id).toBeGreaterThan(10);
   };
 
-  it("every export with no recognisable guard is listed on purpose", () => exact("none", NO_GUARD_ALLOWLIST));
+  it("every export with no recognised guard is listed on purpose", () => exact("none", NO_GUARD_ALLOWLIST));
   it("every member-only export (any active member passes) is listed on purpose", () => exact("member", MEMBER_ONLY_ALLOWLIST));
-  it("every export that checks permissions inline is listed on purpose", () => exact("inline", INLINE_ALLOWLIST));
+  it("every export that reads PERMISSIONS inline is listed on purpose", () => exact("inline", INLINE_ALLOWLIST));
+  it("every export open to any signed-in user of any org is listed on purpose", () => exact("authed", AUTHED_ONLY_ALLOWLIST));
 
-  it("no mutation that moves money is member-only or unguarded", () => {
-    const money = /payment|refund|deposit|forward|settle|commission|ledger|journal|invoice|receipt|cheque|unwind|cost|price|payroll/i;
-    const offenders = all.filter((g) => g.kind === "mutation" && (g.guard === "none" || g.guard === "member") && money.test(g.name));
-    expect(offenders.map(fnId)).toEqual([]);
+  it("every mutation in a money file carries a permission or platform guard, apart from the retired stubs", () => {
+    const moneyFile =
+      /^convex\/(accounting\w*|ledger\w*|glPosting|financeCompanyForward|financingEconomics|dealUnwind|deposits?\w*|payments?\w*|collections?\w*|payroll\w*|commissions?\w*|cashDrawer|expenses|transactions|settlement\w*|refunds?\w*|invoices?\w*|receipts?\w*)\.ts$/;
+    const money = all.filter((g) => g.kind === "mutation" && moneyFile.test(g.file));
+    expect(money.length).toBeGreaterThan(20);
+    const stubs = new Set(["convex/transactions.ts:add", "convex/transactions.ts:update", "convex/transactions.ts:remove", "convex/accountingMigration.ts:migrateUnpostedTransactions"]);
+    const offenders = money.filter((g) => g.guard !== "permission" && g.guard !== "platform" && !stubs.has(fnId(g)));
+    expect(offenders.map((g) => `${fnId(g)} (${g.guard})`)).toEqual([]);
   });
 });

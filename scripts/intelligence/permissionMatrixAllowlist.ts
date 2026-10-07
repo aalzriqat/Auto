@@ -1,105 +1,194 @@
 /**
- * Public Convex queries/mutations whose source shows NO permission argument
- * (SCRUM-616). Each entry says why that is acceptable TODAY. This is the
- * current state of the code, not an owner ruling about who SHOULD be allowed:
- * entries marked UNRULED are open questions, not approvals.
+ * Public Convex queries / mutations / actions whose OWN handler shows no
+ * permission argument (SCRUM-616). Each entry says why that is acceptable
+ * TODAY. This is the current state of the code, not an owner ruling about who
+ * SHOULD be allowed: entries marked UNRULED are open questions, not approvals.
  *
- * The ratchet in permissionMatrix.test.ts keeps this list exact: a new export
- * with no permission argument fails until it is listed here with a reason, and
- * an entry whose function gained a permission (or was deleted) must be removed.
- * The list may only shrink in meaning, never grow silently.
+ * Reasons say how much was actually checked. "NOT individually read" means the
+ * reason is inferred from the name or file and nobody has opened the body.
+ *
+ * permissionMatrix.test.ts keeps every list exact: a new export with no
+ * permission argument fails until it is listed here with a reason, and an entry
+ * whose function gained a permission (or was deleted) must be removed.
  */
 export type AllowEntry = { id: string; reason: string };
 
+const entries = (reason: string, ids: string[]): AllowEntry[] => ids.map((id) => ({ id, reason }));
+
 const SELF = "inferred self-scoped from the function name; body NOT individually read";
-const PUBLIC = "inferred public/anonymous marketplace surface from the file name; body NOT individually read";
-const STUB = "retired stub that throws/refuses before touching data";
+const PUBLIC = "inferred public/anonymous marketplace or website surface from the file name; body NOT individually read";
+const ACTION = "action: any guard runs in the function it calls via ctx.run*; body NOT individually read";
+const STUB = "retired stub that refuses before touching data (read)";
 const ORG_READ = "UNRULED: org-wide read open to any active member (no permission argument)";
 
-/** guard === "none": nothing in the function text looks like an auth guard. */
+/** guard === "none": nothing in the function's own handler looks like an auth guard. */
 export const NO_GUARD_ALLOWLIST: AllowEntry[] = [
-  { id: "convex/accountingMigration.ts:migrateUnpostedTransactions", reason: STUB },
-  { id: "convex/marketplaceAffordability.ts:getAffordabilityRange", reason: PUBLIC },
-  { id: "convex/marketplaceBrowse.ts:search", reason: PUBLIC },
-  { id: "convex/marketplaceBuyerPush.ts:registerBuyerPushToken", reason: PUBLIC },
-  { id: "convex/marketplaceDealers.ts:listPublicDirectory", reason: PUBLIC },
-  { id: "convex/marketplaceListings.ts:getMyListings", reason: "inline ctx.auth identity check, seller-scoped (read in body)" },
-  { id: "convex/marketplaceListings.ts:getListingById", reason: "LIVE listings are public; non-LIVE only to owner/super-admin (read in body)" },
-  { id: "convex/marketplaceRequests.ts:getStatusForBuyer", reason: PUBLIC },
-  { id: "convex/marketplaceRequests.ts:getStatusForBuyerByPublicId", reason: PUBLIC },
-  { id: "convex/marketplaceRequests.ts:getBuyerOffers", reason: PUBLIC },
-  { id: "convex/marketplaceTradeIns.ts:getStatusForBuyer", reason: PUBLIC },
-  { id: "convex/marketplaceTradeIns.ts:getStatusForBuyerByPublicId", reason: PUBLIC },
-  { id: "convex/marketplaceTradeIns.ts:acceptOffer", reason: PUBLIC },
-  { id: "convex/marketplaceTradeIns.ts:declineOffer", reason: PUBLIC },
-  { id: "convex/marketplaceTradeIns.ts:acceptOfferByPublicId", reason: PUBLIC },
-  { id: "convex/marketplaceTradeIns.ts:declineOfferByPublicId", reason: PUBLIC },
-  { id: "convex/mobileReleases.ts:getLatestRelease", reason: PUBLIC },
+  ...entries(STUB, [
+    "convex/accountingMigration.ts:migrateUnpostedTransactions",
+    "convex/transactions.ts:add",
+    "convex/transactions.ts:update",
+    "convex/transactions.ts:remove",
+  ]),
+  ...entries(PUBLIC, [
+    "convex/marketplaceAffordability.ts:getAffordabilityRange",
+    "convex/marketplaceBrowse.ts:search",
+    "convex/marketplaceBuyerPush.ts:registerBuyerPushToken",
+    "convex/marketplaceDealers.ts:listPublicDirectory",
+    "convex/marketplaceRequests.ts:getStatusForBuyer",
+    "convex/marketplaceRequests.ts:getStatusForBuyerByPublicId",
+    "convex/marketplaceRequests.ts:getBuyerOffers",
+    "convex/marketplaceRequests.ts:submitRequest",
+    "convex/marketplaceTradeIns.ts:getStatusForBuyer",
+    "convex/marketplaceTradeIns.ts:getStatusForBuyerByPublicId",
+    "convex/marketplaceTradeIns.ts:declineOffer",
+    "convex/marketplaceTradeIns.ts:acceptOfferByPublicId",
+    "convex/marketplaceTradeIns.ts:declineOfferByPublicId",
+    "convex/marketplaceTradeIns.ts:submitTradeInRequest",
+    "convex/mobileReleases.ts:getLatestRelease",
+    "convex/subscriptions.ts:getPlans",
+    "convex/support.ts:submitContactMessage",
+    "convex/websites.ts:resolveDomain",
+    "convex/websites.ts:submitPublicLead",
+  ]),
+  ...entries("inferred public buyer-side live chat from the function name; body NOT individually read", [
+    "convex/liveChat.ts:startOrGetLeadThread",
+    "convex/liveChat.ts:getLeadThread",
+    "convex/liveChat.ts:getLeadThreadMessages",
+    "convex/liveChat.ts:sendLeadMessage",
+    "convex/liveChat.ts:markLeadThreadRead",
+    "convex/liveChat.ts:setLeadTyping",
+    "convex/liveChat.ts:updateLeadPresence",
+    "convex/liveChat.ts:endThreadByLead",
+  ]),
+  ...entries(ACTION, [
+    "convex/adminUsers.ts:deleteUser",
+    "convex/facebookEngagement.ts:replyToFacebookComment",
+    "convex/facebookEngagement.ts:sendFacebookDirectMessage",
+    "convex/facebookEngagement.ts:fetchFbConversationHistory",
+    "convex/facebookIntegrations.ts:selectFacebookPage",
+    "convex/instagramEngagement.ts:replyToInstagramComment",
+    "convex/instagramEngagement.ts:sendInstagramDirectMessage",
+    "convex/memberships.ts:remove",
+    "convex/memberships.ts:createAccount",
+    "convex/memberships.ts:checkEmailExists",
+    "convex/socialEngagement.ts:refreshEngagement",
+    "convex/socialEngagement.ts:listComments",
+    "convex/socialEngagement.ts:replyToComment",
+    "convex/socialEngagement.ts:setCommentHidden",
+    "convex/socialInboxBackfill.ts:resyncEvents",
+    "convex/socialInboxBackfill.ts:resyncContactNames",
+    "convex/support.ts:sendReply",
+  ]),
+  { id: "convex/prepaidExpenses.ts:runAmortizationNow", reason: "action delegating to listActiveForManualRun, which requires MANAGE_FINANCE (read by the PR #512 reviewer, prepaidExpenses.ts:556)" },
+  { id: "convex/subscriptions.ts:requestUpgrade", reason: "action delegating to _requireMemberOrg (read by the PR #512 reviewer)" },
   { id: "convex/organizations.ts:listMine", reason: SELF },
-  { id: "convex/sales.ts:listCommissionsPaginated", reason: "delegates to commissionPage(), which calls requireTenantAuth with VIEW_COMMISSIONS (convex/sales.ts:1308)" },
-  { id: "convex/subscriptions.ts:getPlans", reason: PUBLIC },
-  { id: "convex/support.ts:submitContactMessage", reason: PUBLIC },
-  { id: "convex/transactions.ts:add", reason: STUB },
-  { id: "convex/transactions.ts:update", reason: STUB },
-  { id: "convex/transactions.ts:remove", reason: STUB },
-  { id: "convex/websites.ts:resolveDomain", reason: PUBLIC },
+  { id: "convex/marketplaceListings.ts:getMyListings", reason: "inline ctx.auth identity check, seller-scoped (read)" },
+  { id: "convex/marketplaceListings.ts:getListingById", reason: "LIVE listings are public; non-LIVE only to the owner or a super-admin (read)" },
+  { id: "convex/marketplaceTradeIns.ts:acceptOffer", reason: "gated by offer id plus buyer phone, no login (read by the reviewer)" },
+  { id: "convex/sales.ts:listCommissionsPaginated", reason: "delegates to commissionPage(), which calls requireTenantAuth with VIEW_COMMISSIONS (convex/sales.ts:1308, read)" },
+  { id: "convex/dealWorkspace.ts:financedDealCockpit", reason: "authorization delegated to api.applications.dealCockpit through ctx.runQuery (documented at dealWorkspace.ts:124), plus its own requireOwnedRow (read)" },
+  { id: "convex/subscriptions.ts:getShowPricing", reason: "no guard at all; returns a global display flag (reviewer-read). Harmless today, listed so it cannot grow silently" },
+  ...entries("UNRULED: unauthenticated mutation gated only by a public id; allowContact and acceptOffer create a lead in a dealer's pipeline (reviewer-read, marketplaceBuyerActions.ts:126-179)", [
+    "convex/marketplaceBuyerActions.ts:shortlistOffer",
+    "convex/marketplaceBuyerActions.ts:declineOffer",
+    "convex/marketplaceBuyerActions.ts:allowContact",
+    "convex/marketplaceBuyerActions.ts:acceptOffer",
+  ]),
 ];
 
 /** guard === "member": requireTenantAuth(ctx, org) only — any active member passes. */
 export const MEMBER_ONLY_ALLOWLIST: AllowEntry[] = [
-  { id: "convex/directMessages.ts:listConversations", reason: SELF },
-  { id: "convex/directMessages.ts:getUnreadCount", reason: SELF },
-  { id: "convex/directMessages.ts:getOrgMembers", reason: ORG_READ },
-  { id: "convex/directMessages.ts:getOrCreateDm", reason: SELF },
-  { id: "convex/directMessages.ts:createGroup", reason: SELF },
-  { id: "convex/feedback.ts:submit", reason: SELF },
-  { id: "convex/feedback.ts:myList", reason: SELF },
-  { id: "convex/liveChat.ts:startOrGetMyThread", reason: SELF },
-  { id: "convex/liveChat.ts:getMyThread", reason: SELF },
-  { id: "convex/liveChat.ts:sendDealerMessage", reason: "thread must belong to the caller (dealerUserId check, read in body)" },
-  { id: "convex/liveChat.ts:markThreadReadByDealer", reason: SELF },
-  { id: "convex/liveChat.ts:setDealerTyping", reason: SELF },
-  { id: "convex/liveChat.ts:updateDealerPresence", reason: SELF },
-  { id: "convex/liveChat.ts:endThreadByDealer", reason: SELF },
-  { id: "convex/liveChat.ts:getActiveOrgAccessGrant", reason: SELF },
-  { id: "convex/liveChat.ts:getThreadMessages", reason: SELF },
-  { id: "convex/memberships.ts:getMyMembership", reason: SELF },
-  { id: "convex/memberships.ts:touchLastSeen", reason: SELF },
-  { id: "convex/notificationPreferences.ts:getMyPreferences", reason: SELF },
-  { id: "convex/notificationPreferences.ts:setPreference", reason: SELF },
-  { id: "convex/notifications.ts:list", reason: SELF },
-  { id: "convex/notifications.ts:unreadCount", reason: SELF },
-  { id: "convex/notifications.ts:listPage", reason: SELF },
-  { id: "convex/notifications.ts:markAsRead", reason: SELF },
-  { id: "convex/notifications.ts:markAllAsRead", reason: SELF },
-  { id: "convex/notifications.ts:archive", reason: SELF },
-  { id: "convex/orgCustomFields.ts:list", reason: ORG_READ },
-  { id: "convex/orgCustomFields.ts:getValues", reason: ORG_READ },
-  { id: "convex/orgCustomFields.ts:setValues", reason: "UNRULED, reproduced: a view-only member can write custom-field values — SCRUM-790" },
-  { id: "convex/orgPipelineStages.ts:list", reason: ORG_READ },
-  { id: "convex/organizations.ts:get", reason: ORG_READ },
-  { id: "convex/pushSubscriptions.ts:subscribe", reason: SELF },
-  { id: "convex/pushSubscriptions.ts:unsubscribe", reason: SELF },
-  { id: "convex/pushSubscriptions.ts:listMyDevices", reason: SELF },
-  { id: "convex/pushSubscriptions.ts:disableDevice", reason: SELF },
-  { id: "convex/subscriptions.ts:getMySubscription", reason: ORG_READ },
-  { id: "convex/subscriptions.ts:getUsageStats", reason: ORG_READ },
-  { id: "convex/subscriptions.ts:getShowPricing", reason: ORG_READ },
-  { id: "convex/vehicleEdits.ts:getHistory", reason: ORG_READ },
-  { id: "convex/wizardDrafts.ts:getMyDraft", reason: SELF },
-  { id: "convex/wizardDrafts.ts:saveDraft", reason: SELF },
-  { id: "convex/wizardDrafts.ts:clearDraft", reason: SELF },
+  ...entries(SELF, [
+    "convex/directMessages.ts:listConversations",
+    "convex/directMessages.ts:getUnreadCount",
+    "convex/directMessages.ts:getOrCreateDm",
+    "convex/feedback.ts:submit",
+    "convex/feedback.ts:myList",
+    "convex/liveChat.ts:startOrGetMyThread",
+    "convex/liveChat.ts:getMyThread",
+    "convex/liveChat.ts:markThreadReadByDealer",
+    "convex/liveChat.ts:setDealerTyping",
+    "convex/liveChat.ts:updateDealerPresence",
+    "convex/liveChat.ts:endThreadByDealer",
+    "convex/liveChat.ts:getActiveOrgAccessGrant",
+    "convex/memberships.ts:getMyMembership",
+    "convex/memberships.ts:touchLastSeen",
+    "convex/notificationPreferences.ts:getMyPreferences",
+    "convex/notificationPreferences.ts:setPreference",
+    "convex/notifications.ts:list",
+    "convex/notifications.ts:unreadCount",
+    "convex/notifications.ts:listPage",
+    "convex/notifications.ts:markAsRead",
+    "convex/notifications.ts:markAllAsRead",
+    "convex/notifications.ts:archive",
+    "convex/pushSubscriptions.ts:subscribe",
+    "convex/pushSubscriptions.ts:unsubscribe",
+    "convex/pushSubscriptions.ts:listMyDevices",
+    "convex/pushSubscriptions.ts:disableDevice",
+    "convex/wizardDrafts.ts:getMyDraft",
+    "convex/wizardDrafts.ts:saveDraft",
+    "convex/wizardDrafts.ts:clearDraft",
+  ]),
+  { id: "convex/directMessages.ts:createGroup", reason: "creator-scoped group chat (read by the reviewer)" },
+  { id: "convex/liveChat.ts:sendDealerMessage", reason: "thread must belong to the caller (dealerUserId check, read)" },
+  { id: "convex/memberships.ts:leave", reason: "self-service leave: member-only by design (reviewer read memberships.ts:919)" },
+  ...entries(ORG_READ, [
+    "convex/directMessages.ts:getOrgMembers",
+    "convex/orgCustomFields.ts:list",
+    "convex/orgCustomFields.ts:getValues",
+    "convex/orgPipelineStages.ts:list",
+    "convex/organizations.ts:get",
+    "convex/subscriptions.ts:getMySubscription",
+    "convex/subscriptions.ts:getUsageStats",
+    "convex/vehicleEdits.ts:getHistory",
+  ]),
+  { id: "convex/orgCustomFields.ts:setValues", reason: "UNRULED, defect candidate: a view-only member can write custom-field values — SCRUM-790 (reproduced with convex-test on origin/main)" },
 ];
 
-/** guard === "inline": no permission argument, but the function names PERMISSIONS.* itself. */
+/** guard === "inline": no permission argument, but the handler reads PERMISSIONS.* itself. */
 export const INLINE_ALLOWLIST: AllowEntry[] = [
-  { id: "convex/applications.ts:registerExpectedPayment", reason: "body references REGISTER_EXPECTED_PAYMENT / MANAGE_FINANCE (seen in a grep); the check itself NOT individually read" },
-  { id: "convex/dashboard.ts:stats", reason: "PERMISSIONS.* referenced in the body; filtering NOT individually read" },
-  { id: "convex/dashboard.ts:dataQualityStats", reason: "PERMISSIONS.* referenced in the body; filtering NOT individually read" },
-  { id: "convex/documents.ts:listRules", reason: "PERMISSIONS.* is referenced in the body; the check itself NOT individually read" },
-  { id: "convex/documents.ts:ensureApplicationDocument", reason: "PERMISSIONS.* is referenced in the body; the check itself NOT individually read" },
-  { id: "convex/documents.ts:generateUploadUrl", reason: "PERMISSIONS.* is referenced in the body; the check itself NOT individually read" },
-  { id: "convex/documents.ts:saveDocumentFile", reason: "PERMISSIONS.* is referenced in the body; the check itself NOT individually read" },
-  { id: "convex/facebookIntegrations.ts:disconnect", reason: "PERMISSIONS.* is referenced in the body; the check itself NOT individually read" },
-  { id: "convex/search.ts:globalSearch", reason: "PERMISSIONS.* referenced in the body; filtering NOT individually read" },
+  { id: "convex/applications.ts:registerExpectedPayment", reason: "reads REGISTER_EXPECTED_PAYMENT / MANAGE_FINANCE after auth (inline check at applications.ts:163, read by the reviewer)" },
+  ...entries("PERMISSIONS.* is read inside the handler; the check itself NOT individually read", [
+    "convex/dashboard.ts:stats",
+    "convex/dashboard.ts:dataQualityStats",
+    "convex/documents.ts:listRules",
+    "convex/documents.ts:ensureApplicationDocument",
+    "convex/documents.ts:generateUploadUrl",
+    "convex/documents.ts:saveDocumentFile",
+    "convex/search.ts:globalSearch",
+  ]),
+];
+
+/** guard === "authed": any signed-in user of ANY organization passes (requireAuth only). */
+export const AUTHED_ONLY_ALLOWLIST: AllowEntry[] = [
+  ...entries("inferred public/product-wide content from the name; body NOT individually read", [
+    "convex/changelog.ts:list",
+    "convex/changelog.ts:getLatestPublishedAt",
+  ]),
+  ...entries("conversation-participant scoped per the reviewer; whether offboarding removes a user from their conversations is UNRESOLVED", [
+    "convex/directMessages.ts:listMessages",
+    "convex/directMessages.ts:getConversation",
+    "convex/directMessages.ts:sendMessage",
+    "convex/directMessages.ts:markDelivered",
+    "convex/directMessages.ts:markRead",
+    "convex/directMessages.ts:setTyping",
+    "convex/directMessages.ts:setMuted",
+  ]),
+  ...entries("marketplace seller surface (not tenant data); seller-scoping inferred, body NOT individually read", [
+    "convex/marketplaceListings.ts:generateListingImageUploadUrl",
+    "convex/marketplaceListings.ts:confirmListingImageUpload",
+    "convex/marketplaceListings.ts:createListing",
+    "convex/marketplaceListings.ts:updateListing",
+    "convex/marketplaceListings.ts:softDeleteListing",
+    "convex/marketplaceListings.ts:markListingSold",
+  ]),
+  ...entries(SELF, [
+    "convex/mobilePushTokens.ts:register",
+    "convex/mobilePushTokens.ts:remove",
+    "convex/users.ts:getMe",
+    "convex/users.ts:updateMyNotificationProfile",
+    "convex/memberships.ts:acceptInvitation",
+    "convex/organizations.ts:create",
+  ]),
+  { id: "convex/users.ts:getUser", reason: "UNRULED, low: any signed-in user of any org can read any user's display name by id (read, users.ts:25-33); returns the name only" },
 ];

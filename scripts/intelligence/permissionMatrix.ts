@@ -1,76 +1,100 @@
+import ts from "typescript";
+
 /**
  * Tool-enumerated permission matrix (SCRUM-616, SCRUM-760 gate G6): for every
- * public Convex query/mutation, which guard its source calls. Read from the
- * source, never typed from memory, so a reviewer can trust the list is complete
- * for the exports it can see. Pure: callers pass file text in.
+ * public Convex query / mutation / action, which guard its OWN handler calls.
+ * Read from the TypeScript syntax tree, never typed from memory. Pure: callers
+ * pass file text in.
  *
- * Classification is by what the handler's own text contains:
- *  - "permission": requireTenantAuth(ctx, org, <permissions>) — gated; a literal list yields PERMISSIONS keys, a named constant yields "$NAME"
- *  - "member":     requireTenantAuth(ctx, org) with no permission argument and no PERMISSIONS reference — any active member
- *  - "inline":     requireTenantAuth(ctx, org) with no permission argument, but the function names PERMISSIONS.X itself (checked by hand; verify)
- *  - "other":      another requireX / assertX guard but no requireTenantAuth
- *  - "none":       no recognisable guard in the function text
- * "none" is NOT a defect by itself (public marketplace reads, webhooks); the
- * checked-in allowlist records each one on purpose and may only shrink.
+ * Only the exported builder call's own subtree is inspected, so a neighbouring
+ * export, an internal function or a comment can never lend it a guard.
+ *
+ *  - "permission": requireTenantAuth(ctx, org, <permissions>) — a literal list yields
+ *                  PERMISSIONS keys, a named constant yields "$NAME"
+ *  - "platform":   requireSuperAdmin / requireSupportAgent / requireOwner / requireRealOwner
+ *  - "member":     requireTenantAuth(ctx, org) with no permission argument, no PERMISSIONS reference
+ *  - "inline":     requireTenantAuth(ctx, org) with no permission argument, but the handler reads
+ *                  PERMISSIONS.X itself (the check is not proven by this scanner)
+ *  - "authed":     requireAuth / requireOrCreateAuthenticatedUser only: any signed-in user of ANY org
+ *  - "none":       no recognised guard. Not a defect by itself (public marketplace, stubs,
+ *                  guards delegated to a helper); the allowlist records each on purpose.
+ * Validation helpers (assertX, requireFeature, requireOwnedRow ...) are NOT guards.
  */
 
-export type Guard = "permission" | "member" | "inline" | "other" | "none";
+export type Guard = "permission" | "platform" | "member" | "inline" | "authed" | "none";
+export type Kind = "query" | "mutation" | "action";
 
 export type FnGuard = {
   file: string;
   name: string;
-  kind: "query" | "mutation";
+  kind: Kind;
   guard: Guard;
-  permissions: string[]; // PERMISSIONS keys, e.g. VIEW_LEADS
+  permissions: string[]; // PERMISSIONS keys, e.g. VIEW_LEADS, or "$CONSTANT"
 };
 
-const EXPORT_RE = /export const (\w+)\s*=\s*(query|mutation)\(/g;
+const BUILDERS = new Set<string>(["query", "mutation", "action"]);
+const PLATFORM = new Set(["requireSuperAdmin", "requireSupportAgent", "requireOwner", "requireRealOwner"]);
+const AUTHED = new Set(["requireAuth", "requireOrCreateAuthenticatedUser"]);
 
-/** Split a call's argument text on commas that are not inside brackets/parens/braces. */
-function topLevelArgs(text: string): string[] {
-  const out: string[] = [];
-  let depth = 0;
-  let cur = "";
-  for (const ch of text) {
-    if ("([{".includes(ch)) depth++;
-    else if (")]}".includes(ch)) depth--;
-    if (ch === "," && depth === 0) {
-      out.push(cur.trim());
-      cur = "";
-    } else cur += ch;
-  }
-  if (cur.trim()) out.push(cur.trim());
-  return out;
+const calleeName = (call: ts.CallExpression): string | undefined =>
+  ts.isIdentifier(call.expression) ? call.expression.text : undefined;
+
+function classify(node: ts.Node, sf: ts.SourceFile): { guard: Guard; permissions: string[] } {
+  const permissions = new Set<string>();
+  let permissionCall = false;
+  let tenantCall = false;
+  let platform = false;
+  let authed = false;
+  let inlinePermission = false;
+
+  const visit = (n: ts.Node) => {
+    if (ts.isCallExpression(n)) {
+      const name = calleeName(n);
+      if (name === "requireTenantAuth") {
+        const arg = n.arguments[2];
+        if (arg) {
+          permissionCall = true;
+          const keys: string[] = [];
+          const collect = (x: ts.Node) => {
+            if (ts.isPropertyAccessExpression(x) && ts.isIdentifier(x.expression) && x.expression.text === "PERMISSIONS") keys.push(x.name.text);
+            ts.forEachChild(x, collect);
+          };
+          collect(arg);
+          if (keys.length > 0) keys.forEach((k) => permissions.add(k));
+          else permissions.add(`$${arg.getText(sf).replace(/^\[?\s*\.\.\./, "").replace(/\]$/, "").trim()}`);
+        } else tenantCall = true;
+      } else if (name && PLATFORM.has(name)) platform = true;
+      else if (name && AUTHED.has(name)) authed = true;
+    }
+    if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "PERMISSIONS") inlinePermission = true;
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+
+  const sorted = [...permissions].sort((a, b) => a.localeCompare(b));
+  if (permissionCall) return { guard: "permission", permissions: sorted };
+  if (platform) return { guard: "platform", permissions: [] };
+  if (tenantCall) return { guard: inlinePermission ? "inline" : "member", permissions: [] };
+  if (authed) return { guard: "authed", permissions: [] };
+  return { guard: "none", permissions: [] };
 }
 
 export function extractGuards(file: string, source: string): FnGuard[] {
-  const starts = [...source.matchAll(EXPORT_RE)];
-  return starts.map((m, i) => {
-    const body = source.slice(m.index ?? 0, i + 1 < starts.length ? starts[i + 1].index : source.length);
-    const calls = [...body.matchAll(/requireTenantAuth\(([^;]*?)\);/gs)];
-    const withPerms = calls.filter((c) => topLevelArgs(c[1]).length >= 3);
-    const permissions = [
-      ...new Set(
-        withPerms.flatMap((c) => {
-          const arg = topLevelArgs(c[1])[2];
-          const keys = [...arg.matchAll(/PERMISSIONS\.(\w+)/g)].map((p) => p[1]);
-          return keys.length > 0 ? keys : [`$${arg.replace(/^\[?\.\.\./, "").replace(/\]$/, "").trim()}`];
-        }),
-      ),
-    ].sort();
-    const guard: Guard =
-      withPerms.length > 0
-        ? "permission"
-        : calls.length > 0
-          ? /PERMISSIONS\./.test(body)
-            ? "inline"
-            : "member"
-          : /\b(require|assert)[A-Z]\w*\(/.test(body)
-            ? "other"
-            : "none";
-    return { file, name: m[1], kind: m[2] as "query" | "mutation", guard, permissions };
-  });
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const out: FnGuard[] = [];
+  for (const stmt of sf.statements) {
+    if (!ts.isVariableStatement(stmt)) continue;
+    if (!stmt.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) continue;
+    for (const decl of stmt.declarationList.declarations) {
+      const init = decl.initializer;
+      if (!init || !ts.isCallExpression(init) || !ts.isIdentifier(decl.name)) continue;
+      const builder = calleeName(init);
+      if (!builder || !BUILDERS.has(builder)) continue;
+      out.push({ file, name: decl.name.text, kind: builder as Kind, ...classify(init, sf) });
+    }
+  }
+  return out;
 }
 
-/** Stable id used by the allowlist and in findings. */
+/** Stable id used by the allowlists and in findings. */
 export const fnId = (g: Pick<FnGuard, "file" | "name">) => `${g.file}:${g.name}`;
