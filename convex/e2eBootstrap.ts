@@ -1211,20 +1211,21 @@ export const assertE2EBootstrap = internalQuery({
 // ─── Hunt seat re-roling (SCRUM-768, SCRUM-760 G8-C) ─────────────────────────
 
 /**
- * The roles a hunt seat can be moved to: every org role the product seeds,
- * plus the platform support-agent role.
+ * The roles a hunt seat can be moved to: exactly the dealership roles the
+ * product seeds.
  *
  * ⚠️ SUPER-ADMIN IS DELIBERATELY ABSENT. It is granted only by the
  * deployment's `SUPER_ADMIN_EMAILS`, which `REAL_DEPLOYMENT_ENV_MARKERS` names
  * as a sign of a real deployment. Setting it on the hunt preview would make
- * every guard in this module refuse that preview. The /admin surface needs its
- * own hunt arrangement; it is reported as a gap, not worked around here.
+ * every guard in this module refuse that preview (SCRUM-769).
+ *
+ * ⚠️ SUPPORT AGENT IS DELIBERATELY ABSENT. A real support agent holds ZERO org
+ * memberships (the dashboard routes to /support only then), and a seeded seat
+ * cannot shed its membership without deleting a row other rows may reference.
+ * Granting the agent row on top of a dealership role stacks both authorities
+ * and would record false access facts, so support needs its own identity.
  */
-export const HUNT_SUPPORT_AGENT_ROLE = "SUPPORT_AGENT";
-export const HUNT_SEAT_ROLES: string[] = [
-  ...DEFAULT_ROLE_TEMPLATES.map((template) => template.name),
-  HUNT_SUPPORT_AGENT_ROLE,
-];
+export const HUNT_SEAT_ROLES: string[] = DEFAULT_ROLE_TEMPLATES.map((template) => template.name);
 
 /**
  * Moves one already-seeded hunt seat to another role on the disposable preview,
@@ -1237,9 +1238,6 @@ export const HUNT_SEAT_ROLES: string[] = [
  * permissions a real dealership's role has, so the role is reset here. The QA
  * dealership's roles are preview-only rows; nothing outside this preview reads
  * them.
- *
- * A support-agent seat keeps its dealership membership and gains an active
- * `supportAgents` row; any other role deactivates that row so roles never stack.
  *
  * Same gates as the bootstrap: the deployment's identity matches the URL the
  * workflow named, it declares itself a preview, it carries none of a real
@@ -1280,27 +1278,6 @@ export const setHuntSeatRole = internalMutation({
       );
     }
 
-    const agent = await ctx.db
-      .query("supportAgents")
-      .withIndex("by_userId", (q) => q.eq("userId", user._id))
-      .unique();
-
-    if (args.role === HUNT_SUPPORT_AGENT_ROLE) {
-      if (agent) {
-        if (!agent.isActive) await ctx.db.patch(agent._id, { isActive: true });
-      } else {
-        await ctx.db.insert("supportAgents", { userId: user._id, email: user.email, isActive: true });
-      }
-      const current = await ctx.db.get(membership.roleId);
-      return {
-        deploymentIdentity,
-        seat,
-        role: HUNT_SUPPORT_AGENT_ROLE,
-        membershipRole: current?.name ?? null,
-        permissionsResetToTemplate: false,
-      };
-    }
-
     const template = DEFAULT_ROLE_TEMPLATES.find((t) => t.name === args.role);
     const role = await findRoleByName(ctx, marker.orgId, args.role);
     if (!template || !role) {
@@ -1316,14 +1293,10 @@ export const setHuntSeatRole = internalMutation({
     if (membership.roleId !== role._id) {
       await ctx.db.patch(membership._id, { roleId: role._id });
     }
-    if (agent?.isActive) {
-      await ctx.db.patch(agent._id, { isActive: false });
-    }
     return {
       deploymentIdentity,
       seat,
       role: role.name,
-      membershipRole: role.name,
       permissionsResetToTemplate: differs,
     };
   },

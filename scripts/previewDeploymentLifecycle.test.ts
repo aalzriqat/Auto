@@ -537,6 +537,39 @@ describe("SCRUM-768 strict teardown (delete --strict)", () => {
     await expect(main(["delete"], { env: env(), fetchImpl, write: () => {} })).resolves.toBe(0);
   });
 
+  // A mistyped but well-formed name reads 404; "already gone" would report
+  // success while the real hunt preview stayed alive.
+  it("exits 1 and deletes nothing when the named deployment is not found", async () => {
+    const { calls, fetchImpl } = api(null);
+    const lines: string[] = [];
+    await expect(main(["delete", "--strict"], { env: env(), fetchImpl, write: (l: string) => lines.push(l) })).resolves.toBe(1);
+    expect(writes(calls)).toEqual([]);
+    expect(lines[0]).toMatch(/^::error::Preview teardown failed: .*was not found, so nothing was deleted/);
+    // The warn-only path keeps treating it as already gone.
+    await expect(main(["delete"], { env: env(), fetchImpl, write: () => {} })).resolves.toBe(0);
+  });
+
+  it("pin --strict exits 1 when shortening the expiry fails; plain pin only warns", async () => {
+    const { fetchImpl } = api(preview(), 500);
+    const now = () => CREATED_AT;
+    const lines: string[] = [];
+    await expect(main(["pin", "--strict"], { env: env(), fetchImpl, now, write: (l: string) => lines.push(l) })).resolves.toBe(1);
+    expect(lines[0]).toMatch(/^::error::Preview pin failed: Shortening the expiry .* failed with HTTP 500/);
+    const warned: string[] = [];
+    await expect(main(["pin"], { env: env(), fetchImpl, now, write: (l: string) => warned.push(l) })).resolves.toBe(0);
+    expect(warned[0]).toMatch(/^::warning::/);
+  });
+
+  it("pin --strict exits 0 and reports the 12 h expiry when the PATCH succeeds", async () => {
+    const { calls, fetchImpl } = api(preview());
+    const lines: string[] = [];
+    await expect(
+      main(["pin", "--strict"], { env: env(), fetchImpl, now: () => CREATED_AT, write: (l: string) => lines.push(l) }),
+    ).resolves.toBe(0);
+    expect(writes(calls).map((c) => c.method)).toEqual(["PATCH"]);
+    expect(lines[0]).toMatch(/^Pinned preview /);
+  });
+
   it("exits 1 and never calls the API for the production deployment", async () => {
     const { calls, fetchImpl } = api(preview());
     const lines: string[] = [];

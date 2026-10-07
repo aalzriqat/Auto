@@ -981,12 +981,10 @@ describe("setHuntSeatRole — SCRUM-768 hunt seat re-roling", () => {
     });
   }
 
-  test("covers every product role plus support agent, and never super-admin", () => {
-    expect(HUNT_SEAT_ROLES).toEqual([
-      ...DEFAULT_ROLE_TEMPLATES.map((r) => r.name),
-      "SUPPORT_AGENT",
-    ]);
+  test("covers exactly the dealership roles: never super-admin, never support agent", () => {
+    expect(HUNT_SEAT_ROLES).toEqual(DEFAULT_ROLE_TEMPLATES.map((r) => r.name));
     expect(HUNT_SEAT_ROLES).not.toContain("SUPER_ADMIN");
+    expect(HUNT_SEAT_ROLES).not.toContain("SUPPORT_AGENT");
   });
 
   test.each(DEFAULT_ROLE_TEMPLATES.map((r) => r.name))(
@@ -1027,17 +1025,21 @@ describe("setHuntSeatRole — SCRUM-768 hunt seat re-roling", () => {
     expect([...after.permissions].sort()).toEqual([...template.permissions].sort());
   });
 
-  test("SUPPORT_AGENT adds an active support-agent row; another role deactivates it", async () => {
+  // A seat that kept its OWNER membership and gained a support-agent row would
+  // hold both authorities at once — not what any real support agent holds.
+  test("refuses SUPPORT_AGENT and never grants a support-agent row", async () => {
     const t = await seeded();
-    const args = { seat: "primary" as const, clerkUserId: PRIMARY.clerkUserId, expectedCloudUrl: CLOUD_URL };
-
-    await t.mutation(internal.e2eBootstrap.setHuntSeatRole, { ...args, role: "SUPPORT_AGENT" });
-    expect((await seatState(t, PRIMARY.clerkUserId)).agent?.isActive).toBe(true);
-
-    await t.mutation(internal.e2eBootstrap.setHuntSeatRole, { ...args, role: "SALES" });
+    await expect(
+      t.mutation(internal.e2eBootstrap.setHuntSeatRole, {
+        seat: "primary",
+        clerkUserId: PRIMARY.clerkUserId,
+        role: "SUPPORT_AGENT",
+        expectedCloudUrl: CLOUD_URL,
+      }),
+    ).rejects.toThrow(/not a hunt role/);
     const state = await seatState(t, PRIMARY.clerkUserId);
-    expect(state.roleName).toBe("SALES");
-    expect(state.agent?.isActive).toBe(false);
+    expect(state.roleName).toBe("OWNER");
+    expect(state.agent).toBeNull();
   });
 
   test("refuses a role outside the hunt list", async () => {

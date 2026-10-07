@@ -809,6 +809,6 @@ describe("setHuntSeatRole (SCRUM-768)", () => {
   });
 
   test("mirrors the backend's hunt role list exactly", () => {
-    expect(HUNT_SEAT_ROLES).toEqual([...DEFAULT_ROLE_TEMPLATES.map((r) => r.name), "SUPPORT_AGENT"]);
+    expect(HUNT_SEAT_ROLES).toEqual(DEFAULT_ROLE_TEMPLATES.map((r) => r.name));
   });
 });

@@ -11,8 +11,13 @@ name: Hunt preview (manual bug hunt)
 # `previewDeploymentLifecycle.mjs` and `e2eBootstrap` refuse it again locally.
 #
 # ⚠️ This repository is public, and so is this log. Inputs reach shell steps
-# only through `env:`, never `${{ }}` inside `run:`; nothing prints a secret,
-# an unmasked address, or tenant data (the preview holds only the QA dealership).
+# only through `env:`, never `${{ }}` inside `run:`. Nothing prints a secret, an
+# unmasked address, or production or dealership data: the preview holds only the
+# synthetic QA dealership. The log DOES carry what every E2E workflow on this
+# repository already prints for the same two QA identities: their Clerk user ids,
+# the disposable preview's document ids returned by the Convex CLI, and the
+# preview's deployment name and createTime. The job summary carries only the last
+# two.
 #
 # Before every hunt session the hunter checks the browser's network tab: the
 # only Convex host is <deployment>.convex.cloud / .convex.site and never
@@ -43,7 +48,7 @@ on:
         description: "set-role: the role to move it to"
         required: false
         type: choice
-        options: [OWNER, MANAGER, SALES, RECEPTION, ACCOUNTANT, SENIOR_ACCOUNTANT, SUPPORT_AGENT]
+        options: [OWNER, MANAGER, SALES, RECEPTION, ACCOUNTANT, SENIOR_ACCOUNTANT]
 
 permissions:
   contents: read
@@ -69,8 +74,10 @@ jobs:
           CREATED_AT: ${{ inputs.created_at }}
         run: |
           set -euo pipefail
+          # Whole-string matches: `grep` tests line by line, so a value carrying a
+          # newline would pass it and write a second line into GITHUB_ENV.
           if [ "$ACTION" = "set-role" ] || [ "$ACTION" = "delete" ]; then
-            if ! printf '%s' "$DEPLOYMENT" | grep -Eq '^[a-z]+-[a-z]+-[0-9]+$'; then
+            if ! [[ "$DEPLOYMENT" =~ ^[a-z]+-[a-z]+-[0-9]+$ ]]; then
               echo "::error::deployment must be the name printed by create (word-word-number)."; exit 1
             fi
             if [ "$DEPLOYMENT" = "kindly-hound-172" ]; then
@@ -78,7 +85,7 @@ jobs:
             fi
             echo "HUNT_CONVEX_URL=https://${DEPLOYMENT}.convex.cloud" >> "$GITHUB_ENV"
           fi
-          if [ "$ACTION" = "delete" ] && ! printf '%s' "$CREATED_AT" | grep -Eq '^[0-9]{1,16}$'; then
+          if [ "$ACTION" = "delete" ] && ! [[ "$CREATED_AT" =~ ^[0-9]{1,16}$ ]]; then
             echo "::error::created_at must be the createTime printed by create."; exit 1
           fi
 
@@ -115,15 +122,30 @@ jobs:
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
 
+      # Strict: a preview whose 12 h expiry could not be set fails the create, so
+      # a "ready" report always means the backstop is in place.
       - name: Pin the hunt preview (12 h expiry backstop)
         if: always() && env.CONVEX_PREVIEW_URL != ''
-        run: node scripts/previewDeploymentLifecycle.mjs pin
+        run: node scripts/previewDeploymentLifecycle.mjs pin --strict
         env:
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
 
       - name: Seed the QA dealership
         if: inputs.action == 'create'
         run: node scripts/e2ePreviewBootstrap.mjs
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
+      # The seed widens the approver's MANAGER role with the scripted suite's
+      # finance permissions. A hunt must see what a real manager holds, so the
+      # role is reset to its product template before the preview is reported.
+      - name: Reset the approver seat to the MANAGER template
+        if: inputs.action == 'create'
+        run: node scripts/e2ePreviewBootstrap.mjs --set-role approver MANAGER
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
           NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
@@ -150,7 +172,7 @@ jobs:
             echo "| NEXT_PUBLIC_CONVEX_URL | \`https://$NAME.convex.cloud\` |"
             echo "| NEXT_PUBLIC_CONVEX_SITE_URL | \`https://$NAME.convex.site\` |"
             echo ""
-            echo "Seats: primary = OWNER, approver = MANAGER. Re-role with action=set-role."
+            echo "Seats: primary = OWNER, approver = MANAGER (product templates). Re-role with action=set-role."
             echo "Tear down with action=delete, deployment=$NAME, created_at=$CONVEX_PREVIEW_CREATED_AT."
           } >> "$GITHUB_STEP_SUMMARY"
 

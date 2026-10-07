@@ -634,7 +634,6 @@ export const HUNT_SEAT_ROLES = [
   "RECEPTION",
   "ACCOUNTANT",
   "SENIOR_ACCOUNTANT",
-  "SUPPORT_AGENT",
 ];
 const HUNT_SEATS = ["primary", "approver"];
 
