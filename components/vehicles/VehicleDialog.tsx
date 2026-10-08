@@ -892,7 +892,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 name="minimumProfit"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t("MinimumProfit" as any) || "Minimum Price Uplift"} (JOD)</FormLabel>
+                    <FormLabel>{t("MinimumPriceUplift" as any) || "Minimum Price Uplift"} (JOD)</FormLabel>
                     <FormControl>
                       <Input type="number" {...field} />
                     </FormControl>

@@ -1,3 +1,10 @@
+import { defineBilingualMessages } from "../defineBilingualMessages";
+
+// SCRUM-260: kept as one pair so the EN and AR wording of the renamed approval stay side by side.
+const approvalRequestedMessages = defineBilingualMessages({
+  Notif_ApprovalRequested_Message: ["{actorName} requested approval for {saleLabel} (below the minimum price uplift).", "طلب {actorName} الموافقة على {saleLabel} (أقل من الحد الأدنى للزيادة فوق سعر القائمة)."],
+});
+
 // Bilingual templates for every typed notification in lib/notifications/types.ts.
 // Two consumers: the Settings/Notifications UI (via useLanguage()/t(), for
 // static labels) AND lib/notifications/render.ts, which imports these raw
@@ -6,6 +13,7 @@
 // action nor an email/WhatsApp send can use the React t() hook.
 // Keys follow Notif_<PascalCase type>_Title / _Message.
 export const notificationsEn = {
+  ...approvalRequestedMessages.en,
   Notif_CustomerCreated_Title: "New Customer Added",
   Notif_CustomerCreated_Message: "{actorName} added a new customer: {customerName}",
   Notif_CustomerUpdated_Title: "Customer Updated",
@@ -240,6 +248,7 @@ export const notificationsEn = {
 };
 
 export const notificationsAr = {
+  ...approvalRequestedMessages.ar,
   Notif_CustomerCreated_Title: "تمت إضافة عميل جديد",
   Notif_CustomerCreated_Message: "أضاف {actorName} عميلاً جديداً: {customerName}",
   Notif_CustomerUpdated_Title: "تم تحديث بيانات العميل",
