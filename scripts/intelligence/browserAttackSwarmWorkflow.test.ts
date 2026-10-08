@@ -674,6 +674,41 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(stopRun).toContain('docker network rm "$CANDIDATE_NETWORK"');
   });
 
+  it("keeps a failed candidate runtime observable instead of destroying its logs (SCRUM-376)", () => {
+    // `docker run --rm` deleted a crashed candidate along with its stderr, so
+    // two different boot failures were diagnosed blind. The container must
+    // survive its own death, and the step must print exit state plus logs.
+    for (const jobName of ["trusted-e2e", "attack-worker"] as const) {
+      const run = String(
+        step(jobName, "Start verified exact-SHA candidate frontend artifact")
+          .run ?? "",
+      );
+      // Join backslash continuations so a flag on any line of the command counts.
+      const joined = run.replace(/\\\r?\n\s*/g, " ");
+      const dockerRun = joined.split("\n").find((line) => /docker run /.test(line));
+      expect(dockerRun, jobName).toBeDefined();
+      expect(dockerRun, jobName).not.toMatch(/(^|\s)--rm(\s|$)/);
+      // A stopped candidate must stop the wait loop immediately.
+      expect(run, jobName).toContain("{{.State.Running}}");
+      // Diagnostics: exit state, then the LAST bytes of the log (the boot error
+      // is at the end), fenced so candidate text cannot be read as runner commands.
+      const stop = run.indexOf('echo "::stop-commands::$LOG_FENCE"');
+      const inspect = run.indexOf("docker inspect --format 'state=");
+      const logs = run.search(/docker logs --tail \d+ "\$CANDIDATE_CONTAINER" 2>&1 \| tail -c \d+/);
+      const resume = run.indexOf('echo "::$LOG_FENCE::"');
+      expect(run, jobName).toContain("od -An -N16 -tx1 /dev/urandom");
+      expect(stop, jobName).toBeGreaterThan(-1);
+      expect(stop, jobName).toBeLessThan(inspect);
+      expect(inspect, jobName).toBeLessThan(logs);
+      expect(logs, jobName).toBeLessThan(resume);
+      expect(run, jobName).not.toMatch(/head -c/);
+      const stopRun = (workflow.jobs?.[jobName]?.steps ?? [])
+        .map((entry) => String(entry.run ?? ""))
+        .join("\n");
+      expect(stopRun, jobName).toContain('docker rm --force "$CANDIDATE_CONTAINER"');
+    }
+  });
+
   it("grants privileged workflow permissions only to the trusted jobs that need them", () => {
     expect(workflow.permissions).toEqual({
       contents: "read",

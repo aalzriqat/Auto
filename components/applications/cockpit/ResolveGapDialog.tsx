@@ -42,7 +42,9 @@ export type GapMode = "CUSTOMER_ABSORBS" | "SPLIT" | "DEALER_ABSORBS";
  * figure below comes from the snapshot.
  */
 type Attempt = {
-  rawAppraisalGapMinor: number;
+  shortfallMinor: number;
+  breakdown: { valuationMinor: number; termsMinor: number } | null;
+  grossLabel: boolean;
   submittedQuotationMinor: number | null;
   approvedPurchaseAmountMinor: number | null;
   economicsStamp: string | undefined;
@@ -54,7 +56,6 @@ type Draft = {
   customerShare: string;
   cash: string;
   installments: string;
-  toFinanceCompany: string;
   notes: string;
 };
 
@@ -63,7 +64,6 @@ const EMPTY: Draft = {
   customerShare: "",
   cash: "",
   installments: "",
-  toFinanceCompany: "",
   notes: "",
 };
 
@@ -112,7 +112,9 @@ function isTooPrecise(value: string, factor: number): boolean {
 export function ResolveGapDialog({
   open,
   submitting,
-  rawAppraisalGapMinor,
+  shortfallMinor,
+  breakdown,
+  grossLabel,
   submittedQuotationMinor,
   approvedPurchaseAmountMinor,
   economicsStamp,
@@ -124,8 +126,12 @@ export function ResolveGapDialog({
 }: Readonly<{
   open: boolean;
   submitting: boolean;
-  /** The shortfall being settled, as the server currently states it. */
-  rawAppraisalGapMinor: number;
+  /** The NET shortfall being settled, as the server currently states it (SCRUM-766). */
+  shortfallMinor: number;
+  /** The two causes of the total; null when the server has none (manual approval). */
+  breakdown: { valuationMinor: number; termsMinor: number } | null;
+  /** True when the figure is the gross quotation-minus-approval, not a net one. */
+  grossLabel: boolean;
   /** The quotation sent to the company — shown for context; null when withheld from this caller. */
   submittedQuotationMinor: number | null;
   /** What the company approved — shown for context; null when withheld from this caller. */
@@ -142,6 +148,7 @@ export function ResolveGapDialog({
     dealerGapShareMinor: number;
     customerGapCashToDealerMinor: number;
     customerGapInstallmentToDealerMinor: number;
+    /** Always 0 until a customer-pays-the-finance-company route exists (SCRUM-766 PR-B). */
     customerGapToFinanceCompanyMinor: number;
     notes: string;
     economicsStamp: string | undefined;
@@ -162,22 +169,26 @@ export function ResolveGapDialog({
     setDraft(EMPTY);
     setError(null);
     setAttempt({
-      rawAppraisalGapMinor,
+      shortfallMinor,
+      breakdown,
+      grossLabel,
       submittedQuotationMinor,
       approvedPurchaseAmountMinor,
       economicsStamp,
     });
-  }, [open, rawAppraisalGapMinor, submittedQuotationMinor, approvedPurchaseAmountMinor, economicsStamp]);
+  }, [open, shortfallMinor, breakdown, grossLabel, submittedQuotationMinor, approvedPurchaseAmountMinor, economicsStamp]);
 
   // Before the first open there is no snapshot yet, and the live values are
   // correct in that window because nothing has been typed against them.
   const live: Attempt = attempt ?? {
-    rawAppraisalGapMinor,
+    shortfallMinor,
+    breakdown,
+    grossLabel,
     submittedQuotationMinor,
     approvedPurchaseAmountMinor,
     economicsStamp,
   };
-  const gapMinor = live.rawAppraisalGapMinor;
+  const gapMinor = live.shortfallMinor;
 
   const set = (patch: Partial<Draft>) => setDraft((current) => ({ ...current, ...patch }));
 
@@ -211,15 +222,16 @@ export function ResolveGapDialog({
   const noCustomerPart = draft.mode === "DEALER_ABSORBS";
   const cashMinor = noCustomerPart ? 0 : toMinor(draft.cash, factor);
   const installmentsMinor = noCustomerPart ? 0 : toMinor(draft.installments, factor);
-  const toFinanceCompanyMinor = noCustomerPart ? 0 : toMinor(draft.toFinanceCompany, factor);
+  // Not a choice any more: recording the customer's part as paid to the finance
+  // company is refused by the server until its own route exists (SCRUM-766 PR-B).
+  const toFinanceCompanyMinor = 0;
 
-  const destinationsDecided =
-    cashMinor !== null && installmentsMinor !== null && toFinanceCompanyMinor !== null;
+  const destinationsDecided = cashMinor !== null && installmentsMinor !== null;
   // Only the boxes this mode actually reads.
   const shareTooPrecise = draft.mode === "SPLIT" && isTooPrecise(draft.customerShare, factor);
   const destinationTooPrecise =
     !noCustomerPart &&
-    [draft.cash, draft.installments, draft.toFinanceCompany].some((v) => isTooPrecise(v, factor));
+    [draft.cash, draft.installments].some((v) => isTooPrecise(v, factor));
 
   /**
    * ONE readiness verdict, consumed by both the message and the button.
@@ -289,8 +301,7 @@ export function ResolveGapDialog({
       customerShareMinor === null ||
       dealerShareMinor === null ||
       cashMinor === null ||
-      installmentsMinor === null ||
-      toFinanceCompanyMinor === null
+      installmentsMinor === null
     ) {
       return;
     }
@@ -354,7 +365,30 @@ export function ResolveGapDialog({
             <dd className="text-end font-semibold tabular-nums">
               <bdi data-testid="gap-amount">{money(gapMinor)}</bdi>
             </dd>
+            {/* The two causes, which always add up to the total above. Rows at
+                0 are left out: a cause that contributed nothing is noise. */}
+            {live.breakdown && live.breakdown.valuationMinor !== 0 && (
+              <>
+                <dt className="ps-3 text-muted-foreground">{t("GapShortfallFromValuation")}</dt>
+                <dd className="text-end tabular-nums text-muted-foreground">
+                  <bdi data-testid="gap-valuation">{money(live.breakdown.valuationMinor)}</bdi>
+                </dd>
+              </>
+            )}
+            {live.breakdown && live.breakdown.termsMinor !== 0 && (
+              <>
+                <dt className="ps-3 text-muted-foreground">{t("GapShortfallFromTerms")}</dt>
+                <dd className="text-end tabular-nums text-muted-foreground">
+                  <bdi data-testid="gap-terms">{money(live.breakdown.termsMinor)}</bdi>
+                </dd>
+              </>
+            )}
           </dl>
+          {live.grossLabel && (
+            <p className="text-xs text-muted-foreground" data-testid="gap-gross-note">
+              {t("GapShortfallGrossManual")}
+            </p>
+          )}
 
           <RadioCardGroup
             ariaLabel={t("ResolveGapWhoAbsorbs")}
@@ -412,7 +446,7 @@ export function ResolveGapDialog({
               <legend className="text-sm font-medium">{t("GapWhereCustomerPays")}</legend>
               <p className="text-xs text-muted-foreground">{t("GapWhereCustomerPaysHint")}</p>
 
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label htmlFor="gap-cash" className="text-xs">
                     {t("GapCashToDealer")}
@@ -434,18 +468,6 @@ export function ResolveGapDialog({
                     inputMode="decimal"
                     value={draft.installments}
                     onChange={(event) => set({ installments: event.target.value })}
-                    className="tabular-nums"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="gap-financier" className="text-xs">
-                    {t("GapToFinanceCompany")}
-                  </Label>
-                  <Input
-                    id="gap-financier"
-                    inputMode="decimal"
-                    value={draft.toFinanceCompany}
-                    onChange={(event) => set({ toFinanceCompany: event.target.value })}
                     className="tabular-nums"
                   />
                 </div>

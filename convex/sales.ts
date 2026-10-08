@@ -29,6 +29,7 @@ import {
   supplierReceiptActionability,
   pricingSnapshotsEqual,
   settlementIsComplete,
+  type CockpitShortfall,
   type ObligationState,
   type SupplierClaimStatus,
 } from "./utils/financingEconomics";
@@ -3121,6 +3122,8 @@ export const dealCockpit = query({
           obligation: supplierObligation,
         }),
         appraisalGapMinor: undefined as number | undefined,
+        // SCRUM-766: a sale-keyed cash read has no application, so no shortfall.
+        shortfall: undefined as CockpitShortfall | undefined,
       },
     };
   },

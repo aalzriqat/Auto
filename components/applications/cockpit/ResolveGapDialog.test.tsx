@@ -1,5 +1,7 @@
 /**
- * The appraisal-gap dialog on its own (SCRUM-83).
+ * The shortfall dialog on its own (SCRUM-83, reframed by SCRUM-766: the amount
+ * settled is the NET shortfall, 850 on the 12,500 -> 11,500 at 85% worked case,
+ * never the gross 1,000).
  *
  * What these pin, and why each matters to the money:
  *
@@ -33,7 +35,7 @@ afterEach(() => cleanup());
 
 /** JOD: three minor units per major, which is where a scale bug would show. */
 const FACTOR = 1_000;
-const GAP_MAJOR = 1_000;
+const GAP_MAJOR = 850;
 const GAP_MINOR = GAP_MAJOR * FACTOR;
 
 type Props = React.ComponentProps<typeof ResolveGapDialog>;
@@ -43,7 +45,9 @@ function props(overrides: Partial<Props> = {}): Props {
   return {
     open: true,
     submitting: false,
-    rawAppraisalGapMinor: GAP_MINOR,
+    shortfallMinor: GAP_MINOR,
+    breakdown: { valuationMinor: GAP_MINOR, termsMinor: 0 },
+    grossLabel: false,
     submittedQuotationMinor: 12_500 * FACTOR,
     approvedPurchaseAmountMinor: 11_500 * FACTOR,
     economicsStamp: "v2|3",
@@ -74,7 +78,31 @@ describe("the figures the agreement is about", () => {
     expect(figures).toContain("12,500 JOD");
     expect(figures).toContain("GapApprovedAmount");
     expect(figures).toContain("11,500 JOD");
+    expect(screen.getByTestId("gap-amount").textContent).toBe("850 JOD");
+  });
+
+  test("a NET shortfall shows its two causes, which add up to the total; a zero cause is left out", () => {
+    renderDialog({ shortfallMinor: 1_425 * FACTOR, breakdown: { valuationMinor: 850 * FACTOR, termsMinor: 575 * FACTOR } });
+    expect(screen.getByTestId("gap-amount").textContent).toBe("1,425 JOD");
+    expect(screen.getByTestId("gap-valuation").textContent).toBe("850 JOD");
+    expect(screen.getByTestId("gap-terms").textContent).toBe("575 JOD");
+    expect(screen.queryByTestId("gap-gross-note")).toBeNull();
+    cleanup();
+    renderDialog();
+    expect(screen.getByTestId("gap-valuation").textContent).toBe("850 JOD");
+    expect(screen.queryByTestId("gap-terms")).toBeNull();
+  });
+
+  test("a manual approval's gross figure carries no breakdown and says it is gross", () => {
+    renderDialog({ shortfallMinor: 1_000 * FACTOR, breakdown: null, grossLabel: true });
     expect(screen.getByTestId("gap-amount").textContent).toBe("1,000 JOD");
+    expect(screen.queryByTestId("gap-valuation")).toBeNull();
+    expect(screen.getByTestId("gap-gross-note").textContent).toBe("GapShortfallGrossManual");
+  });
+
+  test("there is no way to record the customer's part as paid to the finance company", () => {
+    renderDialog();
+    expect(screen.queryByLabelText("GapToFinanceCompany")).toBeNull();
   });
 
   test("withholds the context figures with a dash when the caller cannot see them — the gap itself still shows", () => {
@@ -82,7 +110,7 @@ describe("the figures the agreement is about", () => {
     const figures = screen.getByTestId("gap-figures").textContent ?? "";
     expect(figures).toContain("—");
     expect(figures).not.toContain("12,500");
-    expect(screen.getByTestId("gap-amount").textContent).toBe("1,000 JOD");
+    expect(screen.getByTestId("gap-amount").textContent).toBe("850 JOD");
   });
 });
 
@@ -104,7 +132,6 @@ describe("the dialog never invents a destination the operator left blank", () =>
     renderDialog({ onSubmit });
     fireEvent.change(input("GapCashToDealer"), { target: { value: String(GAP_MAJOR) } });
     fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
-    fireEvent.change(input("GapToFinanceCompany"), { target: { value: "0" } });
     expect(readiness()).toBe("GapAllocationComplete");
     fireEvent.click(confirmButton());
     expect(onSubmit).toHaveBeenCalledWith({
@@ -118,18 +145,14 @@ describe("the dialog never invents a destination the operator left blank", () =>
     });
   });
 
-  test("the whole share paid to the financier is recorded as exactly that — never as dealer money", () => {
+  test("money placed nowhere does not reconcile: with no finance-company box, 0 + 0 is a mismatch, not a submission", () => {
     const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
     renderDialog({ onSubmit });
     fireEvent.change(input("GapCashToDealer"), { target: { value: "0" } });
     fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
-    fireEvent.change(input("GapToFinanceCompany"), { target: { value: String(GAP_MAJOR) } });
+    expect(readiness()).toBe("GapAllocationMismatch");
     fireEvent.click(confirmButton());
-    expect(onSubmit.mock.calls[0][0]).toMatchObject({
-      customerGapCashToDealerMinor: 0,
-      customerGapInstallmentToDealerMinor: 0,
-      customerGapToFinanceCompanyMinor: GAP_MINOR,
-    });
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   test("a destination with more decimals than the currency holds is not a decision — never rounded into a reconciling figure (SCRUM-605)", () => {
@@ -138,7 +161,6 @@ describe("the dialog never invents a destination the operator left blank", () =>
     // Rounded to fils this is exactly the gap, and used to submit as such.
     fireEvent.change(input("GapCashToDealer"), { target: { value: `${GAP_MAJOR}.0004` } });
     fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
-    fireEvent.change(input("GapToFinanceCompany"), { target: { value: "0" } });
     expect(confirmButton().disabled).toBe(true);
     // Every box is filled, so "incomplete" would send the operator hunting for
     // a blank that is not there; the message names the actual problem.
@@ -158,7 +180,6 @@ describe("the dialog never invents a destination the operator left blank", () =>
     renderDialog();
     fireEvent.change(input("GapCashToDealer"), { target: { value: "600" } });
     fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
-    fireEvent.change(input("GapToFinanceCompany"), { target: { value: "300" } });
     expect(confirmButton().disabled).toBe(true);
     expect(readiness()).toBe("GapAllocationMismatch");
   });
@@ -193,14 +214,13 @@ describe("who covers it", () => {
     const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
     renderDialog({ onSubmit });
     fireEvent.click(radio(/^GapSplit/));
-    fireEvent.change(input("GapCustomerShare"), { target: { value: "600" } });
+    fireEvent.change(input("GapCustomerShare"), { target: { value: "450" } });
     expect(screen.getByText("GapDealerShare").parentElement?.textContent).toContain("400 JOD");
-    fireEvent.change(input("GapCashToDealer"), { target: { value: "600" } });
+    fireEvent.change(input("GapCashToDealer"), { target: { value: "450" } });
     fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
-    fireEvent.change(input("GapToFinanceCompany"), { target: { value: "0" } });
     fireEvent.click(confirmButton());
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
-      customerGapShareMinor: 600 * FACTOR,
+      customerGapShareMinor: 450 * FACTOR,
       dealerGapShareMinor: 400 * FACTOR,
     });
   });
@@ -244,13 +264,12 @@ describe("the figures are a snapshot", () => {
     const view = renderDialog({ onSubmit });
     view.rerender(
       <ResolveGapDialog
-        {...props({ onSubmit, rawAppraisalGapMinor: GAP_MINOR * 2, economicsStamp: "v2|4" })}
+        {...props({ onSubmit, shortfallMinor: GAP_MINOR * 2, economicsStamp: "v2|4" })}
       />
     );
-    expect(screen.getByTestId("gap-amount").textContent).toBe("1,000 JOD");
+    expect(screen.getByTestId("gap-amount").textContent).toBe("850 JOD");
     fireEvent.change(input("GapCashToDealer"), { target: { value: String(GAP_MAJOR) } });
     fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
-    fireEvent.change(input("GapToFinanceCompany"), { target: { value: "0" } });
     fireEvent.click(confirmButton());
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
       economicsStamp: "v2|3",
@@ -263,7 +282,7 @@ describe("the figures are a snapshot", () => {
     fireEvent.change(input("GapCashToDealer"), { target: { value: "700" } });
     view.rerender(<ResolveGapDialog {...props({ open: false })} />);
     view.rerender(
-      <ResolveGapDialog {...props({ rawAppraisalGapMinor: 1_500 * FACTOR, economicsStamp: "v2|5" })} />
+      <ResolveGapDialog {...props({ shortfallMinor: 1_500 * FACTOR, economicsStamp: "v2|5" })} />
     );
     expect(screen.getByTestId("gap-amount").textContent).toBe("1,500 JOD");
     expect(input("GapCashToDealer").value).toBe("");
@@ -271,13 +290,13 @@ describe("the figures are a snapshot", () => {
 
   test("the server's refusal is shown in the dialog and the entry is kept", async () => {
     const onSubmit = vi.fn(async () => {
-      throw new Error("Customer share (1000000) plus dealer share (0) is 1000000, which must equal the raw appraisal gap of 1500000.");
+      throw new Error("Customer share (1000000) plus dealer share (0) is 1000000, which must equal the shortfall of 1500000.");
     });
     renderDialog({ onSubmit });
     fireEvent.click(radio(/GapDealerAbsorbs/));
     fireEvent.click(confirmButton());
     expect(await screen.findByRole("alert")).toBeTruthy();
-    expect(screen.getByRole("alert").textContent).toContain("must equal the raw appraisal gap");
+    expect(screen.getByRole("alert").textContent).toContain("must equal the shortfall");
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
 });
@@ -300,10 +319,10 @@ describe("Arabic, right-to-left", () => {
       expect(screen.getByRole("radio", { name: /ع:GapDealerAbsorbs/ })).toBeTruthy();
       expect(screen.getByLabelText("ع:GapCashToDealer")).toBeTruthy();
       // Figures stay isolated from the surrounding direction: the amount is a
-      // <bdi>, so "1,000 JOD" reads the same way in either.
+      // <bdi>, so "850 JOD" reads the same way in either.
       const amount = screen.getByTestId("gap-amount");
       expect(amount.tagName).toBe("BDI");
-      expect(amount.textContent).toBe("1,000 JOD");
+      expect(amount.textContent).toBe("850 JOD");
     } finally {
       language.rtl = false;
     }
