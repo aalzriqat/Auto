@@ -884,6 +884,56 @@ async function seedAccountingBaseline(
   }
 }
 
+/** Fixed idempotency key of the seeded legacy draft; the trusted E2E finds it by memo. */
+export const E2E_LEGACY_MANUAL_JOURNAL_KEY = "e2e-scrum795-legacy-pending-draft";
+export const E2E_LEGACY_MANUAL_JOURNAL_MEMO = "E2E legacy pending draft (SCRUM-795)";
+
+/**
+ * Stands in for a manual-journal draft written BEFORE the pilot switch, so the
+ * trusted E2E can prove on a REAL backend that `approveManualJournal` is refused
+ * (owner verification requirement, SCRUM-795 c22479). It runs only under the
+ * preview marker the bootstrap already requires, and is idempotent: the fixed
+ * key is looked up first and nothing is inserted when it already exists.
+ */
+async function seedLegacyManualJournalDraft(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  ownerUserId: Id<"users">
+): Promise<void> {
+  const existing = await ctx.db
+    .query("manualJournalDrafts")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", orgId).eq("idempotencyKey", E2E_LEGACY_MANUAL_JOURNAL_KEY)
+    )
+    .first();
+  if (existing) return;
+
+  const accounts = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .take(500);
+  const manual = accounts.filter((a) => a.active && a.allowManualPosting === true);
+  if (manual.length < 2) {
+    throw new ConvexError(
+      `${ERR}: the seeded chart has fewer than two active manual-posting accounts, so the SCRUM-795 legacy draft cannot be seeded.`
+    );
+  }
+
+  await ctx.db.insert("manualJournalDrafts", {
+    orgId,
+    status: "PENDING_APPROVAL",
+    memo: E2E_LEGACY_MANUAL_JOURNAL_MEMO,
+    lines: [
+      { accountId: manual[0]._id, debitMinor: 10_000, creditMinor: 0 },
+      { accountId: manual[1]._id, debitMinor: 0, creditMinor: 10_000 },
+    ],
+    accountingDate: Date.UTC(2026, 7, 15),
+    idempotencyKey: E2E_LEGACY_MANUAL_JOURNAL_KEY,
+    createdBy: ownerUserId,
+    createdAt: Date.now(),
+  });
+}
+
 // ─── The bootstrap ───────────────────────────────────────────────────────────
 
 /**
@@ -984,6 +1034,7 @@ export const bootstrapE2EOrganization = internalMutation({
 
     await seedOrgBaseline(ctx, orgId);
     await seedAccountingBaseline(ctx, orgId, primaryUser._id);
+    await seedLegacyManualJournalDraft(ctx, orgId, primaryUser._id);
 
     await ctx.db.patch(marker._id, { orgId, bootstrappedAt: Date.now() });
 

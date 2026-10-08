@@ -46,14 +46,17 @@ describe("SCRUM-795 — manual journals are off in the shipped build", () => {
 
   test("a replay of an existing create key is refused too (the refusal precedes the idempotent lookup)", async () => {
     const w = await seedManualJournalWorld(MODULE_GLOB, "off_replay");
+    // Resend the seeded draft's EXACT content, read back from the database.
+    const seeded = await w.t.run((ctx) => ctx.db.get(w.legacyDraftId));
+    expect(seeded).not.toBeNull();
     const before = await dbSnapshot(w.t, ALL_TABLES);
     await expectAppError(
       w.asPoster.mutation(api.financialAudit.createManualJournal, {
         orgId: w.orgId,
-        memo: "Legacy pending draft",
-        lines: w.lines,
-        idempotencyKey: "off_replay_legacy",
-        accountingDate: Date.now(),
+        memo: seeded!.memo,
+        lines: seeded!.lines,
+        idempotencyKey: seeded!.idempotencyKey,
+        accountingDate: seeded!.accountingDate,
       }),
       CODE,
       MANUAL_JOURNALS_DISABLED_MESSAGE

@@ -12,7 +12,7 @@ import { api } from "./_generated/api";
 import { seedManualJournalWorld } from "../test-utils/manualJournalPilotFixture";
 import { MANUAL_JOURNALS_PILOT_DISABLED } from "./utils/pilotSwitches";
 
-vi.mock("./utils/pilotSwitches", () => ({ MANUAL_JOURNALS_PILOT_DISABLED: false }));
+vi.mock("./utils/pilotSwitches", async (importOriginal) => ({ ...(await importOriginal<typeof import("./utils/pilotSwitches")>()), MANUAL_JOURNALS_PILOT_DISABLED: false }));
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -50,6 +50,20 @@ describe("SCRUM-795 control — the same fixtures succeed when the switch is off
     expect(draft?.status).toBe("POSTED");
     const entries = await w.t.run((ctx) => ctx.db.query("journalEntries").take(50));
     expect(entries.length).toBeGreaterThan(0);
+  });
+
+  test("the exact call that the default build refuses returns alreadyCreated with the seeded legacy draft", async () => {
+    const w = await seedManualJournalWorld(MODULE_GLOB, "on_true_replay");
+    const seeded = await w.t.run((ctx) => ctx.db.get(w.legacyDraftId));
+    const replay = await w.asPoster.mutation(api.financialAudit.createManualJournal, {
+      orgId: w.orgId,
+      memo: seeded!.memo,
+      lines: seeded!.lines,
+      idempotencyKey: seeded!.idempotencyKey,
+      accountingDate: seeded!.accountingDate,
+    });
+    expect(replay.alreadyCreated).toBe(true);
+    expect(replay.draftId).toEqual(w.legacyDraftId);
   });
 
   test("an idempotent replay returns the existing draft", async () => {

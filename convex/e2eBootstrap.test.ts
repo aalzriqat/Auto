@@ -402,6 +402,37 @@ describe("bootstrapE2EOrganization — seating both identities", () => {
     expect(baseline.accounts.some((a) => a.allowManualPosting)).toBe(true);
   });
 
+  /**
+   * SCRUM-795 c22479: the trusted E2E must prove approve is refused on a REAL
+   * backend, which needs a pending draft that predates the pilot switch.
+   */
+  test("seeds exactly one legacy pending manual-journal draft, and a second run adds none", async () => {
+    const t = await markedDeployment();
+    const first = await bootstrap(t);
+    await bootstrap(t);
+
+    const drafts = await t.run((ctx) =>
+      ctx.db
+        .query("manualJournalDrafts")
+        .withIndex("by_org_status", (q) => q.eq("orgId", first.orgId).eq("status", "PENDING_APPROVAL"))
+        .take(10)
+    );
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].idempotencyKey).toBe("e2e-scrum795-legacy-pending-draft");
+    expect(drafts[0].memo).toBe("E2E legacy pending draft (SCRUM-795)");
+    expect(drafts[0].lines).toHaveLength(2);
+    expect(drafts[0].lines.reduce((s, l) => s + l.debitMinor, 0)).toBe(
+      drafts[0].lines.reduce((s, l) => s + l.creditMinor, 0)
+    );
+    expect(drafts[0].accountingDate).toBeDefined();
+    const accounts = await Promise.all(drafts[0].lines.map((l) => t.run((ctx) => ctx.db.get(l.accountId))));
+    for (const a of accounts) {
+      expect(a?.orgId).toBe(first.orgId);
+      expect(a?.allowManualPosting).toBe(true);
+      expect(a?.active).toBe(true);
+    }
+  });
+
   /** Failing-first case 6: idempotency. */
   test("running it twice changes nothing", async () => {
     const t = await markedDeployment();
