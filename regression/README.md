@@ -35,3 +35,4 @@ Three `rule` records bind exact titles in `convex/consignmentEconomics.test.ts` 
 
 - Ruling ids are `SCRUM-n#cN` (a comment) or `SCRUM-n#description` (the issue description). A non-owner invariant source (e.g. the tenant write guard) has no form yet; tenancy records stay deferred.
 - Permission records need a located test that already asserts the refusal. Next candidate: the refusal list in convex/scrum413bDealDoors.test.ts (needs a SCRUM-413#description digest).
+- SCRUM-760#c22465 holds two standing rulings (R-CONSISTENCY, R-PERMISSION; Sol 6, owner away, subject to owner override). One comment id, one digest: the digested text is the two quoted ruling sentences, each prefixed with its label (R-CONSISTENCY: / R-PERMISSION:) and joined by a newline, whitespace-normalised. A record cites the comment id and names the rule in its invariant text; there is no per-rule id form.
