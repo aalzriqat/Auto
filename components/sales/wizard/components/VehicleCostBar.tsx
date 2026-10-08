@@ -16,7 +16,7 @@ interface VehicleCostBarProps {
   purchasePrice: number | null | undefined;
 }
 
-export function VehicleCostBar({ vehicleId, purchasePrice }: VehicleCostBarProps) {
+export function VehicleCostBar({ vehicleId, purchasePrice }: Readonly<VehicleCostBarProps>) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { format: formatCurrency } = useMoneyDisplay();
@@ -63,7 +63,7 @@ export function VehicleCostBar({ vehicleId, purchasePrice }: VehicleCostBarProps
       <div className="flex items-center justify-between gap-1.5 mb-2">
         <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider">
           <Info className="h-3.5 w-3.5" />
-          {t("VehicleCostBreakdown" as any)}
+          {t("RecordedCostInputs" as any)}
         </div>
         <button
           type="button"

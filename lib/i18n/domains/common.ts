@@ -2,6 +2,7 @@ import { defineBilingualMessages } from "../defineBilingualMessages";
 
 const workspaceMessages = defineBilingualMessages({
   Call: ["Call", "اتصال"],
+  RecordedCostInputs: ["Recorded cost inputs", "مدخلات التكلفة المسجلة"],
   NewLead: ["New lead", "عميل محتمل جديد"],
   NewQuote: ["New quote", "عرض سعر جديد"],
   ResultsCount: ["{count} results", "{count} نتيجة"],
@@ -1428,7 +1429,7 @@ export const commonEn = {
   FailedToProcessApproval: "Failed to process approval",
 
   // Vehicle cost breakdown in wizard
-  VehicleCostBreakdown: "Recorded cost inputs",
+  VehicleCostBreakdown: "Vehicle Cost",
   PurchasePrice: "Purchase Price",
   TotalExpenses: "Total Expenses",
   TotalCost: "Total Cost",
@@ -2421,7 +2422,7 @@ export const commonAr = {
   FailedToProcessApproval: "فشل في معالجة الموافقة",
 
   // Vehicle cost breakdown in wizard
-  VehicleCostBreakdown: "مدخلات التكلفة المسجلة",
+  VehicleCostBreakdown: "تكلفة المركبة",
   PurchasePrice: "سعر الشراء",
   TotalExpenses: "إجمالي المصروفات",
   TotalCost: "التكلفة الإجمالية",

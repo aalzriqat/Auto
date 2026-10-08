@@ -61,7 +61,7 @@ describe("VehicleCostBar — no layout shift (SCRUM-628 F-06)", () => {
     stubs.total = 500;
     renderBar();
     expect(screen.queryByTestId("vehicle-cost-bar-loading")).toBeNull();
-    expect(screen.getByText("VehicleCostBreakdown")).toBeTruthy();
+    expect(screen.getByText("RecordedCostInputs")).toBeTruthy();
   });
 
   test("a viewer without the expense permission gets nothing, not a placeholder", () => {
