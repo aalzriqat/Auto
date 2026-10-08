@@ -10,6 +10,12 @@ on:
   schedule:
     - cron: "0 1 * * *"
   workflow_dispatch:
+    inputs:
+      form_explorer:
+        description: "Run the Jev form explorer (writes QA TEST records to the disposable preview)"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -22,7 +28,8 @@ jobs:
   scenarios:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # ~10 min setup + ~45 min library + up to 30 min form explorer (no retry).
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -101,6 +108,13 @@ jobs:
           # navigates; it trusts no "already attested" variable (Codex AF-430-03).
           CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          # SCRUM-771 (SCRUM-760 rulings 2-3): the nightly always runs the form
+          # explorer; a dispatch runs it unless form_explorer is turned off. It
+          # writes only to this run's preview, and an opted-in explorer that
+          # cannot explore fails the run. No TYPESAFE_API_KEY here, so it picks
+          # in seeded random order, not by Jev (sending screen text to Jev needs
+          # an owner decision).
+          JEV_FORM_EXPLORER: ${{ (github.event_name == 'schedule' || inputs.form_explorer) && '1' || '0' }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}

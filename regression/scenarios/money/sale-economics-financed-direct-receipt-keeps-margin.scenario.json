@@ -1,0 +1,50 @@
+{
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "kind": "rule",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum761-s2b-backfill",
+    "firstSeen": "2026-10-07"
+  },
+  "subject": "saleEconomics",
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "matrixRow": "SCRUM-41-direct",
+  "id": "sale-economics-financed-direct-receipt-keeps-margin",
+  "fingerprint": "f1b9230f0d2e407a22efd306aeb68c22ac4dbc187ce8736edbd949d025fba63b",
+  "inputs": {
+    "salePrice": 12500,
+    "vehicleSourceType": "SOURCED",
+    "capitalizedCost": 9500,
+    "supplierSettlementRoute": "DIRECT_TO_SUPPLIER",
+    "externallyFinanced": true,
+    "recordedSupplierEntitlement": 9500,
+    "recordedMargin": 1500,
+    "recordedSupplierGrossReceipt": 11000,
+    "hasFinancingApplication": true
+  },
+  "expected": [
+    {
+      "observable": "economics.dealershipMargin",
+      "value": 1500
+    },
+    {
+      "observable": "economics.recognizedRevenue",
+      "value": 1500
+    },
+    {
+      "observable": "economics.supplierSettlement",
+      "value": 9500
+    }
+  ],
+  "impl": {
+    "file": "convex/consignmentEconomics.test.ts",
+    "testName": "the same row WITH its frozen receipt keeps the margin the ledger posted"
+  }
+}
