@@ -16,7 +16,7 @@
  * it can be nothing at all. So the treatment has to be stated.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { SYSTEM_KEYS, DEFAULT_CHART } from "./utils/defaultChart";
@@ -27,6 +27,21 @@ vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
+
+// SCRUM-801: the OTHER treatment is switched off for the pilot. The switch reads
+// the real constant (true) unless a block below turns it off to pin what OTHER
+// does once the pilot ends. The callers read it at the call site, so this
+// getter reaches every door.
+const pilot = vi.hoisted(() => ({ otherDisabled: true }));
+vi.mock("./utils/depositOtherContainment", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./utils/depositOtherContainment")>();
+  return {
+    ...actual,
+    get DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED() {
+      return pilot.otherDisabled;
+    },
+  };
+});
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -1052,7 +1067,111 @@ describe("REFUND_TO_CUSTOMER and FORFEITED keep every control they carry elsewhe
   });
 });
 
-describe("OTHER", () => {
+/** Every row of every schema table, so a refusal can be shown to have written nothing. */
+async function snapshotAllTables(t: ReturnType<typeof convexTestWithComponents>) {
+  return await t.run(async (ctx) => {
+    const out: Record<string, unknown[]> = {};
+    for (const name of Object.keys(schema.tables)) {
+      out[name] = await ctx.db.query(name as any).collect();
+    }
+    return out;
+  });
+}
+
+describe("SCRUM-801: the OTHER treatment is refused while the pilot switch is on", () => {
+  test("the shipped switch is on", async () => {
+    const actual = await vi.importActual<typeof import("./utils/depositOtherContainment")>(
+      "./utils/depositOtherContainment"
+    );
+    expect(actual.DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED).toBe(true);
+  });
+
+  test("sales.create refuses OTHER with the pilot code and writes nothing", async () => {
+    const s = await seed("p801create");
+    const before = await snapshotAllTables(s.t);
+    await expect(
+      completeWith(s, "THROUGH_DEALERSHIP", {
+        treatment: "OTHER",
+        reason: "Transferred to a replacement deal per manager approval #114",
+      })
+    ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+    expect(await snapshotAllTables(s.t)).toEqual(before);
+  });
+
+  test("sales.completeFromQuote refuses OTHER with the pilot code and writes nothing", async () => {
+    const s = await seed("p801quote");
+    const before = await snapshotAllTables(s.t);
+    await expect(
+      s.asUser.mutation(api.sales.completeFromQuote, {
+        idempotencyKey: crypto.randomUUID(),
+        orgId: s.orgId,
+        quoteId: s.quoteId,
+        supplierSettlementRoute: "THROUGH_DEALERSHIP",
+        depositResolution: { treatment: "OTHER", reason: "Transferred to a replacement deal" },
+      })
+    ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+    expect(await snapshotAllTables(s.t)).toEqual(before);
+  });
+
+  test("the pilot refusal comes ahead of the missing-reason refusal", async () => {
+    const s = await seed("p801noReason");
+    await expect(
+      completeWith(s, "THROUGH_DEALERSHIP", { treatment: "OTHER" })
+    ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+  });
+
+  test("after OTHER is refused, a second approver can still refund the deposit", async () => {
+    const s = await seed("p801thenRefund");
+    await expect(
+      completeAs(s.asManager, s, "THROUGH_DEALERSHIP", {
+        treatment: "OTHER",
+        reason: "Transferred to a replacement deal",
+      })
+    ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+
+    await completeAs(s.asManager, s, "THROUGH_DEALERSHIP", {
+      treatment: "REFUND_TO_CUSTOMER",
+      refundMethod: "CASH",
+    });
+    const deposit = await s.t.run((ctx) => ctx.db.get(s.depositId));
+    expect(deposit?.status).toBe("REFUNDED");
+    const posted = await postedBySystemKey(s.t, s.orgId);
+    expect(posted[SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY]).toBe(DEPOSIT * SCALE);
+  });
+
+  test("a deal with no deposit that states OTHER still completes, because nothing is resolved", async () => {
+    const s = await seed("p801noDeposit", { instalments: [] });
+    await expect(
+      completeWith(s, "THROUGH_DEALERSHIP", { treatment: "OTHER", reason: "Nothing held" })
+    ).resolves.toBeDefined();
+    const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
+    expect(sales).toHaveLength(1);
+  });
+
+  test("an unapplied deposit's message no longer offers the other treatment", async () => {
+    const s = await seed("p801message");
+    const attempt = completeWith(s, "THROUGH_DEALERSHIP", undefined, { salePriceOverride: BELOW_DEPOSIT });
+    await expect(attempt).rejects.toThrow(/larger than what the dealership billed the customer/i);
+    await expect(attempt).rejects.not.toThrow(/other treatment/i);
+  });
+});
+
+// The behaviour OTHER keeps for when the pilot switch is turned off.
+describe("OTHER, with the SCRUM-801 pilot switch off", () => {
+  beforeEach(() => {
+    pilot.otherDisabled = false;
+  });
+  afterEach(() => {
+    pilot.otherDisabled = true;
+  });
+
+  test("an unapplied deposit's message offers the other treatment", async () => {
+    const s = await seed("p801messageOff");
+    await expect(
+      completeWith(s, "THROUGH_DEALERSHIP", undefined, { salePriceOverride: BELOW_DEPOSIT })
+    ).rejects.toThrow(/an approved other treatment with a reason/i);
+  });
+
   test("requires a reason", async () => {
     const s = await seed("otherNoReason");
     await expect(
