@@ -9,15 +9,14 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useMoneyDisplay } from "@/hooks/useMoneyDisplay";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
-import { Info, TrendingUp, TrendingDown, Eye, EyeOff } from "lucide-react";
+import { Info, Eye, EyeOff } from "lucide-react";
 
 interface VehicleCostBarProps {
   vehicleId: string;
   purchasePrice: number | null | undefined;
-  salePrice: number;
 }
 
-export function VehicleCostBar({ vehicleId, purchasePrice, salePrice }: VehicleCostBarProps) {
+export function VehicleCostBar({ vehicleId, purchasePrice }: VehicleCostBarProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { format: formatCurrency } = useMoneyDisplay();
@@ -54,9 +53,10 @@ export function VehicleCostBar({ vehicleId, purchasePrice, salePrice }: VehicleC
     );
   }
 
+  // SCRUM-55: this panel shows the two stored inputs only. It used to add them up as "Total Cost" and subtract from the sale price as "Profit", but `totalByVehicle` is every vehicle expense at its gross amount, while the books cost the vehicle from landed cost plus only the capitalized net expenses. A second profit formula in the client disagreed with the ledger (owner 2026-10-08, SCRUM-795 c22479); the authoritative margin lives in accounting, not here.
   const hasCostData = purchasePrice != null;
-  const totalCost = hasCostData ? purchasePrice + totalExpenses : null;
-  const grossProfit = hasCostData && totalCost != null ? salePrice - totalCost : null;
+
+
 
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50 dark:bg-slate-900/30 dark:border-slate-700 p-3 text-sm">
@@ -91,25 +91,6 @@ export function VehicleCostBar({ vehicleId, purchasePrice, salePrice }: VehicleC
                   {totalExpenses > 0 ? `+ ${formatCurrency(totalExpenses)}` : formatCurrency(0)}
                 </span>
               </div>
-              <div className="flex justify-between border-t pt-1 mt-1">
-                <span className="font-semibold">{t("TotalCost" as any)}</span>
-                <span className="tabular-nums font-semibold">{formatCurrency(totalCost!)}</span>
-              </div>
-              {grossProfit != null && (
-                <div className="flex justify-between pt-0.5">
-                  <span className="text-muted-foreground">{t("Profit" as any)}</span>
-                  <span
-                    className={`tabular-nums font-semibold flex items-center gap-1 ${
-                      grossProfit >= 0 ? "text-emerald-600" : "text-rose-600"
-                    }`}
-                  >
-                    {grossProfit >= 0
-                      ? <TrendingUp className="h-3 w-3" />
-                      : <TrendingDown className="h-3 w-3" />}
-                    {formatCurrency(Math.abs(grossProfit))}
-                  </span>
-                </div>
-              )}
             </>
           ) : (
             <div className="flex justify-between">
