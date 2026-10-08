@@ -290,6 +290,15 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Payment links are not available yet. Nothing has been changed.",
     "روابط الدفع غير متاحة حاليًا. لم يتم تغيير أي شيء.",
   ],
+  // SCRUM-795 (SCRUM-50): manual journals are off for the pilot.
+  ServerError_MANUAL_JOURNALS_DISABLED: [
+    "Manual journal entries are turned off during the pilot. Nothing has been changed.",
+    "القيود اليدوية متوقفة خلال فترة التجربة. لم يتم تغيير أي شيء.",
+  ],
+  ManualJournalsPilotOffNotice: [
+    "Manual journals are turned off for the pilot, so new ones cannot be created or approved. Drafts that were already pending can still be rejected. If a pending draft blocks closing a period and no second finance user can reject it, the owner can close the period with the audited close override.",
+    "القيود اليدوية متوقفة خلال فترة التجربة، لذا لا يمكن إنشاء قيود جديدة أو الموافقة عليها. ما زال بالإمكان رفض المسودات المعلّقة السابقة. وإذا كانت مسودة معلّقة تمنع إغلاق فترة ولم يتوفر مستخدم مالي ثانٍ لرفضها، يمكن للمالك إغلاق الفترة عبر تجاوز الإغلاق المدقَّق.",
+  ],
   ServerError_ORG_FINANCIAL_RESET_IN_PROGRESS: [
     "This organization's financial reset has not finished. It cannot be returned to service until the reset completes.",
     "لم تكتمل إعادة ضبط البيانات المالية لهذه المنشأة. لا يمكن إعادتها إلى الخدمة قبل اكتمال إعادة الضبط.",
