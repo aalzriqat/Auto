@@ -389,6 +389,7 @@ export default function DashboardPage() {
 
         {/* Leads Card */}
         <motion.div
+          data-testid="dashboard-leads-card"
           initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
           className="rounded-2xl bg-[#ffedd5] p-5 shadow-sm border border-[#fed7aa]/50 relative flex justify-between"
         >
