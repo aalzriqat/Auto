@@ -41,3 +41,6 @@ Plus, from earlier PRs: three `saleEconomics` rule records and the financed-fina
 - It cites SCRUM-760#c22465 (R-PERMISSION); SCRUM-760 c22474 is not in the snapshot, so it is not cited as a ruling id.
 - AF-98's template pin (PR #518, convex/utils/permissions.test.ts) is not bound yet; bind it once merged.
 - Items 1 (manual journals) and 2 (refund payout) await their PRs.
+
+- Added (AF-98 verified, I re-read both bodies): sales-member-cannot-confirm-a-deposit-request (depositRequests.confirm; refusal + no money rows) and sales-member-cannot-allocate-or-release-a-deposit-hold (the test calls allocateToVehicles, releaseVehicleAllocation and resolveReleasedAllocation x2; the record's single step names allocateToVehicles as the representative and claims only that the hold row is unchanged, NOT the money tables).
+- vehicles.createReservation with a deposit stays a GAP: its test (DA-01) uses a custom-permission editor, not the SALES template, so it proves 'lacking confirm:finance_disbursement is refused', not 'SALES is refused'. The SALES half needs PR #518's template pin.
