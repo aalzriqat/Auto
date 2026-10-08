@@ -103,6 +103,7 @@ jobs:
       - name: Run full Playwright suite
         run: pnpm exec playwright test
         env:
+          E2E_SEED_LEGACY_MANUAL_JOURNAL: "1"
           NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
