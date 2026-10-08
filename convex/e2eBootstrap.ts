@@ -987,6 +987,12 @@ export const bootstrapE2EOrganization = internalMutation({
     approver: identityValidator,
     /** The URL the browser will drive. Evidence, checked against this deployment's own. */
     expectedCloudUrl: v.optional(v.string()),
+    /**
+     * SCRUM-795: opt-in. Seeds one legacy PENDING_APPROVAL manual-journal draft.
+     * Absent/false seeds nothing, because a pending draft blocks period close
+     * and the accounting rehearsal must not inherit one.
+     */
+    seedLegacyManualJournalDraft: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const deploymentIdentity = checkDeploymentIdentity(args.expectedCloudUrl);
@@ -1034,7 +1040,9 @@ export const bootstrapE2EOrganization = internalMutation({
 
     await seedOrgBaseline(ctx, orgId);
     await seedAccountingBaseline(ctx, orgId, primaryUser._id);
-    await seedLegacyManualJournalDraft(ctx, orgId, primaryUser._id);
+    if (args.seedLegacyManualJournalDraft === true) {
+      await seedLegacyManualJournalDraft(ctx, orgId, primaryUser._id);
+    }
 
     await ctx.db.patch(marker._id, { orgId, bootstrappedAt: Date.now() });
 

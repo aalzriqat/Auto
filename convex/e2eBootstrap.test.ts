@@ -36,11 +36,15 @@ async function markedDeployment() {
   return t;
 }
 
-async function bootstrap(t: ReturnType<typeof newDeployment>) {
+async function bootstrap(
+  t: ReturnType<typeof newDeployment>,
+  opts: { seedLegacyManualJournalDraft?: boolean } = {}
+) {
   return await t.mutation(internal.e2eBootstrap.bootstrapE2EOrganization, {
     primary: PRIMARY,
     approver: APPROVER,
     expectedCloudUrl: CLOUD_URL,
+    ...opts,
   });
 }
 
@@ -406,10 +410,20 @@ describe("bootstrapE2EOrganization — seating both identities", () => {
    * SCRUM-795 c22479: the trusted E2E must prove approve is refused on a REAL
    * backend, which needs a pending draft that predates the pilot switch.
    */
-  test("seeds exactly one legacy pending manual-journal draft, and a second run adds none", async () => {
+  test("the DEFAULT bootstrap seeds no manual-journal draft (a pending draft blocks period close, rehearsal case P1)", async () => {
     const t = await markedDeployment();
-    const first = await bootstrap(t);
     await bootstrap(t);
+    await bootstrap(t);
+    await bootstrap(t, { seedLegacyManualJournalDraft: false });
+
+    const drafts = await t.run((ctx) => ctx.db.query("manualJournalDrafts").take(10));
+    expect(drafts).toHaveLength(0);
+  });
+
+  test("with the opt-in flag, seeds exactly one legacy pending manual-journal draft, and a second run adds none", async () => {
+    const t = await markedDeployment();
+    const first = await bootstrap(t, { seedLegacyManualJournalDraft: true });
+    await bootstrap(t, { seedLegacyManualJournalDraft: true });
 
     const drafts = await t.run((ctx) =>
       ctx.db

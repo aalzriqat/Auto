@@ -13,8 +13,13 @@ import type { Id } from "../../convex/_generated/dataModel";
  *        and the seeded legacy draft is still pending afterwards.
  *
  * The legacy pending draft is seeded by the E2E bootstrap
- * (convex/e2eBootstrap.ts, seedLegacyManualJournalDraft). If it is missing this
- * spec FAILS; it never skips the approve check.
+ * (convex/e2eBootstrap.ts, seedLegacyManualJournalDraft) ONLY when the bootstrap
+ * runs with E2E_SEED_LEGACY_MANUAL_JOURNAL=1. The accounting rehearsal preview is
+ * deliberately UNSEEDED: a pending manual draft blocks the period-close
+ * checklist, which would turn its case P1 (close the only open period) UNPROVEN.
+ * If the draft is missing this spec FAILS; it never skips the approve check.
+ * The approve refusal is sent as the approver seat (a different user from the
+ * draft's creator), so it is the pilot switch and not separation of duties.
  *
  * RETIRED (SCRUM-795 switch): the former 10-step lifecycle. Steps 1-6 (browser
  * create, second-identity approve) and steps 7-10 (the GL register row, date,
@@ -39,7 +44,7 @@ function refusalCode(error: unknown): string | undefined {
     : undefined;
 }
 
-type Pending = Array<{ _id: Id<"manualJournalDrafts">; memo: string }>;
+type Pending = Array<{ _id: Id<"manualJournalDrafts">; memo: string; createdBy: Id<"users"> }>;
 
 test.describe("accounting workspace", () => {
   test("manual journals are off for the pilot: notice in the UI, refusal from the backend", async ({
@@ -61,6 +66,9 @@ test.describe("accounting workspace", () => {
     // (i) UI as the creator: notice, New disabled, at least one Approve and all disabled.
     await expect(page.getByTestId("manual-journals-pilot-off-notice")).toBeVisible();
     await expect(page.getByTestId("new-manual-journal-btn")).toBeDisabled();
+    await expect(
+      page.locator(`[data-testid='manual-journal-draft-card'][data-memo='${LEGACY_MEMO}']`)
+    ).toBeVisible();
     const approveButtons = await page.getByTestId("approve-draft-btn").all();
     expect(approveButtons.length, "expected the seeded legacy draft's Approve button").toBeGreaterThanOrEqual(1);
     for (const approve of approveButtons) {
@@ -93,36 +101,45 @@ test.describe("accounting workspace", () => {
     expect(refusalCode(createError)).toBe(REFUSAL_CODE);
 
     // (ii-b) approve of the seeded legacy draft is refused. MANDATORY, never skipped.
-    const pending = (await client.query(api.financialAudit.listPendingManualJournals, {
-      orgId,
-    })) as Pending;
-    const seeded = pending.find((d) => d.memo === LEGACY_MEMO);
-    if (!seeded) {
-      throw new Error(
-        "fixture missing: e2e bootstrap did not seed the SCRUM-795 legacy draft"
-      );
-    }
-    const approveError = await client
-      .mutation(api.financialAudit.approveManualJournal, { orgId, draftId: seeded._id })
-      .then(
-        () => undefined,
-        (e: unknown) => e
-      );
-    expect(approveError, "approve must be refused").toBeDefined();
-    expect(refusalCode(approveError)).toBe(REFUSAL_CODE);
-
-    // Nothing posted: the draft is still pending.
-    const after = (await client.query(api.financialAudit.listPendingManualJournals, {
-      orgId,
-    })) as Pending;
-    expect(after.some((d) => d._id === seeded._id)).toBe(true);
-
-    // (i-b) Reject stays enabled for a second finance user (the creator cannot
-    // reject their own draft). Looked at, not clicked.
+    // Sent as the AUTHORIZED, DISTINCT reviewer (the approver seat), not as the
+    // draft's creator, so the refusal is the pilot switch and nothing else.
     const approverContext = await browser.newContext({ storageState: APPROVER_AUTH_FILE });
     try {
       const approverPage = await approverContext.newPage();
       await gotoOrgRoute(approverPage, "accounting");
+      const approverClient = await authenticatedConvexClient(approverPage);
+
+      const pending = (await approverClient.query(api.financialAudit.listPendingManualJournals, {
+        orgId,
+      })) as Pending;
+      const seeded = pending.find((d) => d.memo === LEGACY_MEMO);
+      if (!seeded) {
+        throw new Error(
+          "fixture missing: e2e bootstrap did not seed the SCRUM-795 legacy draft (run the bootstrap with E2E_SEED_LEGACY_MANUAL_JOURNAL=1)"
+        );
+      }
+      const approverMe = (await approverClient.query(api.users.getMe, {})) as { _id: Id<"users"> };
+      expect(approverMe._id, "the approver must be a different user from the draft's creator").not.toBe(
+        seeded.createdBy
+      );
+
+      const approveError = await approverClient
+        .mutation(api.financialAudit.approveManualJournal, { orgId, draftId: seeded._id })
+        .then(
+          () => undefined,
+          (e: unknown) => e
+        );
+      expect(approveError, "approve must be refused").toBeDefined();
+      expect(refusalCode(approveError)).toBe(REFUSAL_CODE);
+
+      // Nothing posted: the draft is still pending.
+      const after = (await approverClient.query(api.financialAudit.listPendingManualJournals, {
+        orgId,
+      })) as Pending;
+      expect(after.some((d) => d._id === seeded._id)).toBe(true);
+
+      // (i-b) Reject stays enabled for a second finance user (the creator cannot
+      // reject their own draft). Looked at, not clicked.
       await approverPage.getByRole("tab", { name: /journal/i }).first().click();
       await approverPage.getByRole("tab", { name: /manual journal/i }).first().click();
       const card = approverPage.locator(
