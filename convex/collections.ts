@@ -1794,6 +1794,11 @@ export async function registerChequeCore(
   // registration via applications.registerExpectedPayment passes none). No
   // write has happened yet.
   assertReceivableNotSaleLinked(null, args.saleId);
+  // SCRUM-802: a customer cheque is customer money too — park nothing against an open sale invoice. A finance
+  // company's cheque is the financier's money, not the customer's, so that drawer is exempt.
+  if (args.drawerType !== "FINANCE_COMPANY") {
+    await assertNoOpenSaleInvoiceForUnlinkedReceipt(ctx, args.orgId, { receivableId: args.receivableId, customerId: args.customerId });
+  }
 
   let receivable: Doc<"receivables"> | null = null;
   if (args.receivableId) {

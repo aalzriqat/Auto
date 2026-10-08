@@ -93,6 +93,13 @@ async function footprint(s: Seeded) {
   }));
 }
 
+describe("SCRUM-802 switch", () => {
+  test("the production constant is ON, so the pilot containment cannot silently ship disabled", async () => {
+    const real = await vi.importActual<typeof import("./utils/saleDebtContainment")>("./utils/saleDebtContainment");
+    expect(real.CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED).toBe(true);
+  });
+});
+
 describe("SCRUM-802 item 1: a CASH completion refuses while its invoice would stay outstanding", () => {
   test("completeFromQuote with NO deposit is refused with the AR/EN reason and nothing is written", async () => {
     const s = await seedDealer("nodep");
@@ -248,6 +255,48 @@ describe("SCRUM-802 item 2: an UNLINKED customer receipt is refused while the cu
     const otherCustomer = await other.t.run((ctx) => ctx.db.insert("customers", { orgId: other.orgId, firstName: "Other", lastName: "Buyer" }));
     await openInvoice(other, jod(20_000));
     await expect(unlinked(other, otherCustomer)).resolves.toBeDefined();
+  });
+
+  test("a FINANCED sale's open gap invoice does NOT block an unlinked receipt (the cash must stay recordable)", async () => {
+    const s = await seedDealer("rpfin");
+    await s.t.run(async (ctx) => {
+      const now = Date.now();
+      const saleId = await ctx.db.insert("sales", {
+        orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId, salePrice: 20_000, saleDate: now,
+        status: "COMPLETED", financingType: "FINANCED",
+      } as never);
+      await ctx.db.insert("receivableDocuments", {
+        orgId: s.orgId, documentType: "INVOICE", documentNumber: `INV-${crypto.randomUUID()}`, payerType: "CUSTOMER", customerId: s.customerId,
+        sourceType: "sales", sourceId: String(saleId), originalAmountMinor: jod(2_000), currency: "JOD", scale: 3,
+        issueDate: now, dueDate: now, status: "OPEN", createdAt: now, createdBy: s.userId,
+      });
+    });
+    await expect(unlinked(s)).resolves.toBeDefined();
+  });
+
+  test("the release rehearsal keeps the real switch (certification files must not run with the containment off)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync("convex/accountingReleaseRehearsal.test.ts", "utf8");
+    expect(src).toContain('vi.mock("./utils/saleDebtContainment", async (importOriginal) => await importOriginal())');
+  });
+
+  const cheque = (s: Seeded) =>
+    s.asUser.mutation(api.collections.registerCheque, {
+      orgId: s.orgId, customerId: s.customerId, bank: "Bank", chequeNumber: `CH-${crypto.randomUUID()}`, chequeDate: Date.now(), amount: 100,
+    });
+
+  test("a customer cheque is refused while the customer's sale invoice has a balance, and allowed once it is paid or for a customer with none", async () => {
+    const open = await seedDealer("chopen");
+    await openInvoice(open, jod(15_000));
+    await expect(cheque(open)).rejects.toThrow(/UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED/);
+    expect(await open.t.run(async (ctx) => (await ctx.db.query("postDatedCheques").take(5)).length)).toBe(0);
+
+    const paid = await seedDealer("chpaid");
+    await openInvoice(paid, 0);
+    await expect(cheque(paid)).resolves.toBeDefined();
+
+    const none = await seedDealer("chnone");
+    await expect(cheque(none)).resolves.toBeDefined();
   });
 
   test("a payment that names the sale is still refused by the SCRUM-571 containment, not by this rule", async () => {

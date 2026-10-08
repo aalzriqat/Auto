@@ -48,6 +48,12 @@ export async function assertCashSaleInvoiceFullyPaid(
 async function isOpenSaleInvoice(ctx: QueryCtx | MutationCtx, doc: Doc<"receivableDocuments">): Promise<boolean> {
   if (doc.sourceType !== "sales" || doc.payerType !== "CUSTOMER") return false;
   if (doc.status === "CANCELLED" || doc.status === "REVERSED" || doc.status === "WRITTEN_OFF" || doc.status === "PAID") return false;
+  // A FINANCED/LEASE sale's invoice is the customer's gap to the dealer, which still stays open after finalize and
+  // is paid in cash with no sale-linked door yet. Refusing there would leave handed-over cash unrecordable, so only
+  // CASH sale invoices block (a sale that cannot be resolved is treated as cash: fail closed).
+  const saleId = doc.sourceId ? ctx.db.normalizeId("sales", doc.sourceId) : null;
+  const sale = saleId ? await ctx.db.get(saleId) : null;
+  if (sale && (sale.financingType === "FINANCED" || sale.financingType === "LEASE")) return false;
   return (await outstandingFromReceivableDoc(ctx, doc)) > 0;
 }
 
