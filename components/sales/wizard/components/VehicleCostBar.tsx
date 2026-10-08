@@ -88,7 +88,7 @@ export function VehicleCostBar({ vehicleId, purchasePrice }: VehicleCostBarProps
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t("TotalExpenses" as any)}</span>
                 <span className="tabular-nums font-medium text-amber-600">
-                  {totalExpenses > 0 ? `+ ${formatCurrency(totalExpenses)}` : formatCurrency(0)}
+                  {formatCurrency(totalExpenses)}
                 </span>
               </div>
             </>
@@ -96,7 +96,7 @@ export function VehicleCostBar({ vehicleId, purchasePrice }: VehicleCostBarProps
             <div className="flex justify-between">
               <span className="text-muted-foreground">{t("TotalExpenses" as any)}</span>
               <span className="tabular-nums font-medium text-amber-600">
-                {totalExpenses > 0 ? `+ ${formatCurrency(totalExpenses)}` : formatCurrency(0)}
+                {formatCurrency(totalExpenses)}
               </span>
             </div>
           )}

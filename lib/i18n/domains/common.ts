@@ -1428,7 +1428,7 @@ export const commonEn = {
   FailedToProcessApproval: "Failed to process approval",
 
   // Vehicle cost breakdown in wizard
-  VehicleCostBreakdown: "Vehicle Cost",
+  VehicleCostBreakdown: "Recorded cost inputs",
   PurchasePrice: "Purchase Price",
   TotalExpenses: "Total Expenses",
   TotalCost: "Total Cost",
@@ -2421,7 +2421,7 @@ export const commonAr = {
   FailedToProcessApproval: "فشل في معالجة الموافقة",
 
   // Vehicle cost breakdown in wizard
-  VehicleCostBreakdown: "تكلفة المركبة",
+  VehicleCostBreakdown: "مدخلات التكلفة المسجلة",
   PurchasePrice: "سعر الشراء",
   TotalExpenses: "إجمالي المصروفات",
   TotalCost: "التكلفة الإجمالية",

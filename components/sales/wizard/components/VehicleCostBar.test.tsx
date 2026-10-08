@@ -89,5 +89,7 @@ describe("VehicleCostBar — shows no derived cost or profit (SCRUM-55)", () => 
     expect(screen.getByText("TotalExpenses")).toBeTruthy();
     expect(screen.queryByText("TotalCost")).toBeNull();
     expect(screen.queryByText("Profit")).toBeNull();
+    // Not presented as an addition that a reader totals into "the cost".
+    expect(screen.queryByText(/^\+/)).toBeNull();
   });
 });
