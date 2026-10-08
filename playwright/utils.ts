@@ -318,7 +318,7 @@ export async function createVehicle(
   // otherwise so no other spec accidentally trips the approval gate.
   if (opts?.minimumProfit !== undefined) {
     await dialog
-      .getByLabel("Minimum Profit (JOD)")
+      .getByLabel("Minimum Price Uplift (JOD)")
       .fill(String(opts.minimumProfit));
   }
   await advanceVehicleWizard(dialog, 4, "Photos");

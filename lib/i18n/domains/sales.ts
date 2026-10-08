@@ -18,10 +18,10 @@ import { defineBilingualMessages } from "../defineBilingualMessages";
  * message names the price rather than a profit figure.
  */
 const profitApprovalMessages = defineBilingualMessages({
-  ProfitApprovalRequiredTitle: ["Below the vehicle's minimum profit", "أقل من الحد الأدنى لربح المركبة"],
+  ProfitApprovalRequiredTitle: ["Below the Minimum Price Uplift", "أقل من الحد الأدنى للزيادة فوق سعر القائمة"],
   ProfitApprovalRequiredBody: [
-    "At this price the profit over the list price is {margin}; this vehicle requires {minimum}. A manager must approve this exact price before the sale can be completed.",
-    "الربح عند هذا السعر فوق سعر القائمة هو {margin}، والحد الأدنى لهذه المركبة {minimum}. يجب أن يعتمد مدير هذا السعر بعينه قبل إتمام البيع.",
+    "At this price the uplift over the list price is {margin}; this vehicle's Minimum Price Uplift is {minimum}. A manager must approve this exact price before the sale can be completed. This check does not prevent a loss-making sale.",
+    "الزيادة عند هذا السعر فوق سعر القائمة هي {margin}، والحد الأدنى للزيادة فوق سعر القائمة لهذه المركبة {minimum}. يجب أن يعتمد مدير هذا السعر بعينه قبل إتمام البيع. هذا الفحص لا يمنع بيعاً بخسارة.",
   ],
   ProfitApprovalRequestAction: ["Request approval for this price", "طلب اعتماد هذا السعر"],
   ProfitApprovalRequesting: ["Requesting…", "جارٍ الإرسال…"],
@@ -2191,27 +2191,27 @@ const quoteWizardQaMessages = defineBilingualMessages({
   // bound by playwright/tests/profit-approval.spec.ts — keep it.
   WizardProfitApprovalRequiredTitle: ["Approval Required", "مطلوب اعتماد"],
   WizardProfitApprovalRequiredBody: [
-    "At this price the profit over the list price ({margin}) is below the minimum required profit for this vehicle ({minimum}).",
-    "عند هذا السعر، الربح فوق سعر القائمة ({margin}) أقل من الحد الأدنى المطلوب لربح هذه المركبة ({minimum}).",
+    "At this price the uplift over the list price ({margin}) is below this vehicle's Minimum Price Uplift ({minimum}). This check does not prevent a loss-making sale.",
+    "عند هذا السعر، الزيادة فوق سعر القائمة ({margin}) أقل من الحد الأدنى للزيادة فوق سعر القائمة لهذه المركبة ({minimum}). هذا الفحص لا يمنع بيعاً بخسارة.",
   ],
   WizardProfitApprovalPending: [
     "Approval request is currently pending. Please wait for a manager.",
     "طلب الاعتماد قيد الانتظار. يرجى انتظار قرار المدير.",
   ],
   WizardProfitApprovalRejected: [
-    "Your request for this profit amount was rejected. Please increase the profit or request again.",
-    "رُفض طلبك لمبلغ الربح هذا. يرجى زيادة الربح أو إعادة الطلب.",
+    "Your request for this price was rejected. Please raise the price or request again.",
+    "رُفض طلبك لهذا السعر. يرجى رفع السعر أو إعادة الطلب.",
   ],
-  WizardProfitApprovalRequestAction: ["Request Profit Approval", "طلب اعتماد الربح"],
+  WizardProfitApprovalRequestAction: ["Request Price Uplift Approval", "طلب اعتماد الزيادة فوق سعر القائمة"],
   WizardProfitApprovalRequesting: ["Requesting...", "جارٍ الإرسال…"],
   WizardProfitApprovalRequestFailed: [
     "Could not send the approval request. Please try again.",
     "تعذّر إرسال طلب الاعتماد. يرجى المحاولة مرة أخرى.",
   ],
-  WizardProfitApprovedTitle: ["Profit Approved", "تم اعتماد الربح"],
+  WizardProfitApprovedTitle: ["Price Uplift Approved", "تم اعتماد الزيادة فوق سعر القائمة"],
   WizardProfitApprovedBody: [
-    "Management approved this sale price (profit over the list price: {margin}). You may proceed.",
-    "اعتمدت الإدارة سعر البيع هذا (الربح فوق سعر القائمة: {margin}). يمكنك المتابعة.",
+    "Management approved this sale price (uplift over the list price: {margin}). You may proceed.",
+    "اعتمدت الإدارة سعر البيع هذا (الزيادة فوق سعر القائمة: {margin}). يمكنك المتابعة.",
   ],
 });
 /**
