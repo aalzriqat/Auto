@@ -720,6 +720,7 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_date", ["orgId", "accountingDate"])
     .index("by_org_period", ["orgId", "periodId"])
+    .index("by_org_period_date", ["orgId", "periodId", "accountingDate"])
     .index("by_org_source", ["orgId", "sourceType", "sourceId"])
     .index("by_accounting_event", ["accountingEventId"])
     // SCRUM-555 lane-B: getPostedLines reads POSTED and REVERSED entries.

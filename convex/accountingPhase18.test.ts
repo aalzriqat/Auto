@@ -14,7 +14,9 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { reverseAccountingEvent } from "./accounting/reversals";
+import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import { postLegacyTransactionEvent } from "../test-utils/legacyMigrationSeed";
+import { fromMinorUnits } from "./utils/money";
 
 const MODULE_GLOB = import.meta.glob("./**/*.ts");
 
@@ -345,5 +347,137 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
         ],
       })
     ).rejects.toThrow(/not found in this organization/i);
+  });
+});
+
+type Balance = {
+  accountId: Id<"chartOfAccounts">;
+  currency: string;
+  debitMinor: number;
+  creditMinor: number;
+};
+
+// Pre-SCRUM-807 containing-period scan, retained as the parity oracle.
+// Closed periods still read snapshots (ACC-2).
+async function oldCumulativeBalances(ctx: Ctx, orgId: Id<"organizations">, asOfDate: number): Promise<Balance[]> {
+  return ctx.t.run(async (dbCtx) => {
+    const periods = await dbCtx.db.query("accountingPeriods")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
+    const totals = new Map<string, Balance>();
+    const add = (accountId: Id<"chartOfAccounts">, currency: string, debitMinor: number, creditMinor: number) => {
+      const key = `${accountId}__${currency}`;
+      const row = totals.get(key) ?? { accountId, currency, debitMinor: 0, creditMinor: 0 };
+      row.debitMinor += debitMinor;
+      row.creditMinor += creditMinor;
+      totals.set(key, row);
+    };
+    for (const period of periods.filter((p) => p.endDate <= asOfDate)) {
+      const snapshots = await dbCtx.db.query("accountBalanceSnapshots")
+        .withIndex("by_org_period", (q) => q.eq("orgId", orgId).eq("periodId", period._id)).collect();
+      for (const row of snapshots) add(row.accountId, row.currency, row.runningDebitMinor, row.runningCreditMinor);
+    }
+    const containing = periods.find((p) => p.startDate <= asOfDate && asOfDate < p.endDate);
+    if (containing) {
+      const entries = (await dbCtx.db.query("journalEntries")
+        .withIndex("by_org_period", (q) => q.eq("orgId", orgId).eq("periodId", containing._id)).collect())
+        .filter((entry) => (entry.status === "POSTED" || entry.status === "REVERSED") && entry.accountingDate <= asOfDate);
+      for (const entry of entries) {
+        const lines = await dbCtx.db.query("journalLines")
+          .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id)).collect();
+        for (const line of lines) add(line.accountId, line.currency, line.debitMinor, line.creditMinor);
+      }
+    }
+    return [...totals.values()];
+  });
+}
+
+function sortedBalances(rows: Balance[]) {
+  return [...rows].sort((a, b) => String(a.accountId).localeCompare(String(b.accountId)) || a.currency.localeCompare(b.currency));
+}
+
+describe("SCRUM-807 — trial balance snapshot fast-path parity", () => {
+  test("matches the old scan across periods, future postings, reversal, and two orgs", async () => {
+    const ctx = await seedSnapshotDealer();
+    const dates = [Date.UTC(2025, 1, 1), Date.UTC(2025, 7, 1), Date.UTC(2025, 10, 1)] as const;
+    for (const [index, date] of dates.entries()) {
+      const transactionId = await ctx.t.run((c) => c.db.insert("transactions", {
+        orgId: ctx.orgId, type: "OUT", amount: (index + 1) * 25,
+        date, category: "EXPENSE", description: `Parity ${index}`,
+      }));
+      await ctx.t.run((c) => postLegacyTransactionEvent(c, { orgId: ctx.orgId, transactionId, actorId: ctx.userId }));
+    }
+    const event = await ctx.t.run((c) =>
+      c.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", ctx.orgId))
+        .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED")).first()
+    );
+    expect(event).toBeTruthy();
+    await ctx.t.run((c) => reverseAccountingEvent(c, {
+      orgId: ctx.orgId, originalEventId: event!._id, reversalDate: Date.UTC(2025, 2, 1),
+      reason: "Parity reversal", actorId: ctx.userId, idempotencyKey: "scrum807-parity-reversal",
+    }));
+
+    const otherOrgId = await ctx.t.run((c) =>
+      c.db.insert("organizations", { name: "Other dealer", createdAt: Date.now() })
+    );
+    await ctx.t.run((c) => c.db.insert("subscriptions", {
+      orgId: otherOrgId, plan: "professional", status: "active",
+      createdAt: Date.now(), updatedAt: Date.now(),
+    }));
+    const otherRoleId = await ctx.t.run((c) => c.db.insert("roles", {
+      orgId: otherOrgId, name: "Owner", permissions: ["view:finance", "manage:finance"], isSystemOwnerRole: true,
+    }));
+    await ctx.t.run((c) => c.db.insert("memberships", { orgId: otherOrgId, userId: ctx.userId, roleId: otherRoleId }));
+    await ctx.t.run((c) => c.db.insert("orgSettings", {
+      orgId: otherOrgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"],
+    }));
+    await ctx.asOwner.mutation(api.chartOfAccounts.initialize, { orgId: otherOrgId });
+    await ctx.asOwner.mutation(api.accountingPeriods.create, {
+      orgId: otherOrgId, startDate: Date.UTC(2025, 6, 1), endDate: Date.UTC(2025, 11, 31, 23, 59, 59, 999),
+      fiscalYear: 2025, periodNumber: 2,
+    });
+    const otherPeriod = (await ctx.asOwner.query(api.accountingPeriods.list, { orgId: otherOrgId }))[0];
+    await ctx.asOwner.mutation(api.accountingPeriods.open, { orgId: otherOrgId, periodId: otherPeriod._id });
+    const otherTransactionId = await ctx.t.run((c) => c.db.insert("transactions", {
+      orgId: otherOrgId, type: "OUT", amount: 200, date: Date.UTC(2025, 7, 1),
+      category: "EXPENSE", description: "Other org posting",
+    }));
+    await ctx.t.run((c) => postLegacyTransactionEvent(c, {
+      orgId: otherOrgId, transactionId: otherTransactionId, actorId: ctx.userId,
+    }));
+
+    for (const date of [Date.UTC(2025, 8, 1), Date.UTC(2025, 11, 1), Date.UTC(2025, 11, 31, 23, 59)]) {
+      for (const orgId of [ctx.orgId, otherOrgId]) {
+        const oldRows = sortedBalances(await oldCumulativeBalances(ctx, orgId, date));
+        const newRows = sortedBalances(await ctx.t.run((c) => getCumulativeBalancesAsOf(c, orgId, date)));
+        expect(newRows).toEqual(oldRows);
+        const trial = await ctx.asOwner.query(api.accountingReports.trialBalance, { orgId, toDate: date });
+        const accounts = await ctx.t.run((c) => c.db.query("chartOfAccounts")
+          .withIndex("by_org", (q) => q.eq("orgId", orgId)).collect());
+        const accountMap = new Map(accounts.map((account) => [account._id, account]));
+        const expectedRows = oldRows.flatMap((balance) => {
+          const account = accountMap.get(balance.accountId);
+          if (!account || (balance.debitMinor === 0 && balance.creditMinor === 0)) return [];
+          const netMinor = account.normalBalance === "DEBIT"
+            ? balance.debitMinor - balance.creditMinor
+            : balance.creditMinor - balance.debitMinor;
+          return [{
+            accountId: account._id, code: account.code, name: account.name, nameAr: account.nameAr,
+            type: account.type, normalBalance: account.normalBalance,
+            debitMinor: balance.debitMinor, creditMinor: balance.creditMinor, netMinor,
+            currency: balance.currency, netDisplay: fromMinorUnits(netMinor, balance.currency),
+            translatedNetMinor: undefined,
+          }];
+        }).sort((a, b) => a.code.localeCompare(b.code) || a.currency.localeCompare(b.currency));
+        const totalDebits = expectedRows.reduce((sum, row) => sum + row.debitMinor, 0);
+        const totalCredits = expectedRows.reduce((sum, row) => sum + row.creditMinor, 0);
+        expect(trial).toEqual({
+          rows: expectedRows, totalDebits, totalCredits, isBalanced: totalDebits === totalCredits,
+          currency: "JOD", totalsByCurrency: expectedRows.length
+            ? [{ currency: "JOD", totalDebits, totalCredits, isBalanced: totalDebits === totalCredits }]
+            : [],
+          reportingCurrency: null, missingRates: [],
+        });
+      }
+    }
   });
 });
