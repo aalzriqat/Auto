@@ -165,13 +165,13 @@ describe("SCRUM-761 financed deal: the customer's own share (deposit H = 200) th
     expect(await invoiceOf(s, saleId)).toMatchObject({ original: 0, outstanding: 0 });
   });
 
-  test("(c) the finance company's part settles: forward + confirmDisbursement clear both finance-company accounts; the cockpit is SETTLEMENT COMPLETE (and was already COMPLETE after finalize)", async () => {
+  test("(c) the finance company's part settles: forward + confirmDisbursement clear both finance-company accounts; SETTLEMENT is not COMPLETE until the transfer is confirmed (SCRUM-803)", async () => {
     const s = await seed("finc");
     const { applicationId } = await dealWithRealDeposit(s);
     await finalizeAsOwner(s, applicationId);
     const saleId = (await saleOf(s, applicationId))!;
     // Observation: the financed cockpit judges the customer's invoice, so SETTLEMENT is COMPLETE before the transfer.
-    expect(await stageState(s, saleId, "SETTLEMENT")).toBe("COMPLETE");
+    expect(await stageState(s, saleId, "SETTLEMENT")).not.toBe("COMPLETE");
 
     await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
       orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(), expectedAmountMinor: H + C, idempotencyKey: crypto.randomUUID(),
