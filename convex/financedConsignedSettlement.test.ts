@@ -207,7 +207,8 @@ async function legacyCancelSaleThroughSalesDoor(s: Seeded, saleId: unknown) {
  */
 async function settleShortfallAsDealerAbsorbs(s: Seeded, applicationId: Id<"financeApplications">) {
   const app = await s.t.run((ctx) => ctx.db.get(applicationId));
-  const gap = app?.rawAppraisalGapMinor;
+  // SCRUM-766: the amount to allocate is the NET shortfall, not the gross gap.
+  const gap = app?.netShortfallMinor ?? app?.rawAppraisalGapMinor;
   if (app === null || gap === undefined || !(gap > 0)) return;
   if (
     app.gapResolution === "CUSTOMER_ABSORBS" ||

@@ -9,6 +9,7 @@ import {
   computeFundingComposition,
   computeSubmittedQuotation,
   computeGapOutcome,
+  computeNetShortfall,
   describeQuotationResidual,
   evaluateQuotationException,
   resolveLtvBaseMinor,
@@ -550,6 +551,126 @@ describe("computeAppraisalGap", () => {
     });
     expect(gap.rawAppraisalGapMinor).toBe(0);
     expect(gap.fundingReductionMinor).toBe(0);
+  });
+});
+
+/**
+ * SCRUM-766 — the amount customer, showroom and supplier split is the owner's
+ * TOTAL NET SHORTFALL: how much LESS actually remained for the showroom than the
+ * quotation promised, each side with its OWN first payment
+ * (SCRUM-407 c21031 rule 7; SCRUM-766 c22413 and the batch-2 rulings).
+ *
+ *   (quotation − quote-time showroom contribution)
+ *     − (approved − actual showroom contribution)
+ *
+ * Every figure below is the owner's own arithmetic.
+ */
+describe("computeNetShortfall", () => {
+  const quote = (over: Partial<Parameters<typeof computeNetShortfall>[0]["quote"]> = {}) => ({
+    quotationMinor: jod(12_500),
+    appliedLtvPercent: 85,
+    customerFirstPaymentMinor: jod(500),
+    ...over,
+  });
+  const actual = (over: Partial<Parameters<typeof computeNetShortfall>[0]["actual"]> = {}) => ({
+    approvedPurchaseAmountMinor: jod(11_500),
+    appliedLtvPercent: 85,
+    customerFirstPaymentMinor: jod(500),
+    ...over,
+  });
+
+  it("is 850 — not the gross 1,000 — for the owner's 12,500 → 11,500 at 85%", () => {
+    const result = computeNetShortfall({ quote: quote(), actual: actual() });
+    expect(result.totalNetShortfallMinor).toBe(jod(850));
+    expect(result.valuationShortfallMinor).toBe(jod(850));
+    expect(result.financingTermsShortfallMinor).toBe(0);
+    expect(result.requiresResolution).toBe(true);
+  });
+
+  it("is 1,425 when the LTV also falls 85% → 80% (850 valuation + 575 terms)", () => {
+    const result = computeNetShortfall({
+      quote: quote(),
+      actual: actual({ appliedLtvPercent: 80 }),
+    });
+    expect(result.totalNetShortfallMinor).toBe(jod(1_425));
+    expect(result.valuationShortfallMinor).toBe(jod(850));
+    expect(result.financingTermsShortfallMinor).toBe(jod(575));
+  });
+
+  it("is 550 when the first payment also moves 500 → 800 (uncapped)", () => {
+    const result = computeNetShortfall({
+      quote: quote(),
+      actual: actual({ customerFirstPaymentMinor: jod(800) }),
+    });
+    expect(result.totalNetShortfallMinor).toBe(jod(550));
+  });
+
+  it("is 300 in the capped case (90%, 12,000 → 11,000, first payment 500 → 1,500)", () => {
+    const result = computeNetShortfall({
+      quote: quote({
+        quotationMinor: jod(12_000),
+        appliedLtvPercent: 90,
+        customerFirstPaymentMinor: jod(500),
+      }),
+      actual: actual({
+        approvedPurchaseAmountMinor: jod(11_000),
+        appliedLtvPercent: 90,
+        customerFirstPaymentMinor: jod(1_500),
+      }),
+    });
+    expect(result.totalNetShortfallMinor).toBe(jod(300));
+  });
+
+  it("splits the total exactly into its two components, whatever the sign", () => {
+    for (const ltv of [70, 80, 85, 90, 100]) {
+      for (const fp of [0, 500, 3_000, 12_500]) {
+        const result = computeNetShortfall({
+          quote: quote({ customerFirstPaymentMinor: jod(fp) }),
+          actual: actual({ appliedLtvPercent: ltv, customerFirstPaymentMinor: jod(fp) }),
+        });
+        expect(result.valuationShortfallMinor + result.financingTermsShortfallMinor).toBe(
+          result.totalNetShortfallMinor
+        );
+      }
+    }
+  });
+
+  it("reports a negative total when the showroom ends up better off, and requires no resolution", () => {
+    const result = computeNetShortfall({
+      quote: quote(),
+      actual: actual({ approvedPurchaseAmountMinor: jod(13_000), appliedLtvPercent: 90 }),
+    });
+    expect(result.totalNetShortfallMinor).toBeLessThan(0);
+    expect(result.requiresResolution).toBe(false);
+  });
+
+  it("charges a lower LTV on an unchanged approval (gross gap 0, net 625)", () => {
+    const result = computeNetShortfall({
+      quote: quote(),
+      actual: actual({ approvedPurchaseAmountMinor: jod(12_500), appliedLtvPercent: 80 }),
+    });
+    expect(result.totalNetShortfallMinor).toBe(jod(625));
+    expect(result.requiresResolution).toBe(true);
+  });
+
+  it("has no shortfall when the company funds the quotation as quoted (exception)", () => {
+    const result = computeNetShortfall({
+      quote: quote(),
+      actual: actual({ approvedPurchaseAmountMinor: jod(12_500) }),
+    });
+    expect(result.totalNetShortfallMinor).toBe(0);
+    expect(result.requiresResolution).toBe(false);
+  });
+
+  it("honours an LTV base that is not the approved amount, on both sides", () => {
+    // A quotation-basis company: the base stays at the 12,500 quotation on both
+    // sides, clamped to the approved amount, so only the LTV change is a shortfall.
+    const result = computeNetShortfall({
+      quote: quote({ ltvBaseMinor: jod(12_500) }),
+      actual: actual({ appliedLtvPercent: 80, ltvBaseMinor: jod(12_500) }),
+    });
+    expect(result.totalNetShortfallMinor).toBe(jod(625));
+    expect(result.valuationShortfallMinor + result.financingTermsShortfallMinor).toBe(jod(625));
   });
 });
 

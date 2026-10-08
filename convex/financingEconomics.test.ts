@@ -7,6 +7,7 @@ import { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { PERMISSIONS } from "./utils/permissions";
 import { economicsStamp } from "./utils/financingEconomics";
+import { recomputeEconomicsForApplication } from "./financingEconomics";
 import {
   FIRST_PAYMENT_CORRECTION_REFUSALS,
   FIRST_PAYMENT_NOT_RECORDED_REASON,
@@ -170,11 +171,16 @@ async function seedDealer(
     ...(companyRules.lowerAppraisalTolerancePercent !== undefined
       ? { lowerAppraisalTolerancePercent: companyRules.lowerAppraisalTolerancePercent }
       : {}),
-    ...(companyRules.ltvBasis !== undefined ? { ltvBasis: companyRules.ltvBasis } : {}),
     ...(companyRules.minimumCustomerFirstPaymentMinor !== undefined
       ? { minimumCustomerFirstPaymentMinor: companyRules.minimumCustomerFirstPaymentMinor }
       : {}),
   });
+
+  // SCRUM-766: createCompany/updateCompany now refuse the retired appraisal
+  // bases, so the legacy row shape these tests exercise is written directly.
+  if (companyRules.ltvBasis !== undefined) {
+    await t.run((ctx) => ctx.db.patch(companyId, { ltvBasis: companyRules.ltvBasis }));
+  }
 
   return {
     t,
@@ -188,6 +194,14 @@ async function seedDealer(
     asUser,
     asApprover,
   };
+}
+
+/** Writes a retired LTV basis straight onto the company row (the API now refuses it). */
+async function setLegacyLtvBasis(
+  seed: Seed,
+  ltvBasis: "INDEPENDENT_APPRAISAL" | "LOWER_OF_APPRAISAL_AND_QUOTATION"
+): Promise<void> {
+  await seed.t.run((ctx) => ctx.db.patch(seed.companyId, { ltvBasis }));
 }
 
 /** Creates the quote and the application the economics hang off. */
@@ -853,8 +867,8 @@ describe("a manually named approval", () => {
       maxFinancingLTV: 85,
       defaultLtvPercent: 85,
       customerFirstPaymentOffsetsUnfinancedShare: true,
-      ltvBasis: "INDEPENDENT_APPRAISAL",
     });
+    await setLegacyLtvBasis(seed, "INDEPENDENT_APPRAISAL");
 
     const applicationId = await createApplication(seed);
     await recordBaselineQuotation(seed, applicationId);
@@ -880,7 +894,10 @@ describe("a manually named approval", () => {
     // ...and the funding split is still computable, because the company's rule
     // needs the appraisal as its base and one is on file.
     expect(after.financeCompanyFundedPortionMinor).not.toBeUndefined();
-    expect(after.needsFinancingReconciliation).not.toBe(true);
+    // SCRUM-766 (owner c22425): the appraisal is not a second money authority -
+    // the shortfall is measured on the approved amount like any other company's.
+    expect(after.netShortfallMethod).toBe("NET");
+    expect(after.financingReconciliationReason ?? "").not.toContain("lends against the appraisal");
 
     const appraisals = await seed.t.run((ctx) =>
       ctx.db
@@ -1186,8 +1203,8 @@ describe("incomplete economics", () => {
       isActive: true,
       maxFinancingLTV: 85,
       defaultLtvPercent: 85,
-      ltvBasis: "INDEPENDENT_APPRAISAL",
     });
+    await setLegacyLtvBasis(seed, "INDEPENDENT_APPRAISAL");
 
     const applicationId = await createApplication(seed);
     await recordBaselineQuotation(seed, applicationId);
@@ -1224,8 +1241,8 @@ describe("incomplete economics", () => {
       isActive: true,
       maxFinancingLTV: 85,
       defaultLtvPercent: 85,
-      ltvBasis: "INDEPENDENT_APPRAISAL",
     });
+    await setLegacyLtvBasis(seed, "INDEPENDENT_APPRAISAL");
     const applicationId = await createApplication(seed);
     await recordBaselineQuotation(seed, applicationId);
     await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
@@ -2096,10 +2113,10 @@ describe("LTV configuration", () => {
       isActive: true,
       maxFinancingLTV: 85,
       defaultLtvPercent: 85,
-      ltvBasis: "INDEPENDENT_APPRAISAL",
       allowsQuotationAboveAppraisal: true,
       lowerAppraisalTolerancePercent: 10,
     });
+    await setLegacyLtvBasis(seed, "INDEPENDENT_APPRAISAL");
 
     const applicationId = await createApplication(seed);
     await recordBaselineQuotation(seed, applicationId);
@@ -4060,7 +4077,7 @@ describe("handover seals the approved amount, and the amount that was verified",
       orgId: seed.orgId,
       applicationId,
       economicsStamp: await servedStamp(seed, applicationId),
-      ...allocation(1_000, 0, { cash: 1_000 }),
+      ...allocation(850, 0, { cash: 850 }),
     });
     return { seed, applicationId };
   }
@@ -4747,6 +4764,8 @@ async function gapFields(seed: Seed, applicationId: Id<"financeApplications">) {
   return {
     gapResolution: app.gapResolution,
     rawAppraisalGapMinor: app.rawAppraisalGapMinor,
+    netShortfallMethod: app.netShortfallMethod,
+    netShortfallMinor: app.netShortfallMinor,
     customerGapShareMinor: app.customerGapShareMinor,
     dealerGapShareMinor: app.dealerGapShareMinor,
     customerGapCashToDealerMinor: app.customerGapCashToDealerMinor,
@@ -4788,10 +4807,16 @@ describe("resolving the appraisal gap", () => {
     expect(await servedStamp(seed, applicationId)).toBe(economicsStamp(app));
   });
 
-  test("12,500 quoted / 11,500 approved is a 1,000 gap the rail is blocked on", async () => {
+  test("12,500 quoted / 11,500 approved at 85% is an 850 NET shortfall (gross 1,000) the rail is blocked on", async () => {
     const { seed, applicationId } = await seedGappedDeal();
     const before = await gapFields(seed, applicationId);
+    // The gross figure stays for display/audit; the NET shortfall is what is split.
     expect(before.rawAppraisalGapMinor).toBe(jod(1_000));
+    const row = await readApp(seed, applicationId);
+    expect(row.netShortfallMethod).toBe("NET");
+    expect(row.netShortfallMinor).toBe(jod(850));
+    expect(row.valuationShortfallMinor).toBe(jod(850));
+    expect(row.financingTermsShortfallMinor).toBe(0);
     expect(before.gapResolution).toBe("PENDING_NEGOTIATION");
     const cockpit = await seed.asApprover.query(api.applications.dealCockpit, {
       orgId: seed.orgId,
@@ -4849,13 +4874,13 @@ describe("resolving the appraisal gap", () => {
       orgId: seed.orgId,
       applicationId,
       economicsStamp: await servedStamp(seed, applicationId),
-      ...allocation(1_000, 0, { cash: 600, installments: 300, financeCompany: 100 }),
+      ...allocation(850, 0, { cash: 550, installments: 300 }),
     });
 
     const after = await profitOf();
-    expect(after.amountMinor - before.amountMinor).toBe(jod(900));
+    expect(after.amountMinor - before.amountMinor).toBe(jod(850));
     const directLine = after.lines.find((line) => line.key === "CUSTOMER_PLANNED_TO_DEALER");
-    expect(directLine?.amountMinor).toBe(jod(900));
+    expect(directLine?.amountMinor).toBe(jod(850));
     expect(before.lines.find((line) => line.key === "CUSTOMER_PLANNED_TO_DEALER")?.amountMinor).toBe(0);
   });
 
@@ -4866,13 +4891,13 @@ describe("resolving the appraisal gap", () => {
       orgId: seed.orgId,
       applicationId,
       economicsStamp: stamp,
-      ...allocation(1_000, 0, { cash: 1_000 }),
+      ...allocation(850, 0, { cash: 850 }),
     });
     const after = await gapFields(seed, applicationId);
     expect(after.gapResolution).toBe("CUSTOMER_ABSORBS");
-    expect(after.customerGapShareMinor).toBe(jod(1_000));
+    expect(after.customerGapShareMinor).toBe(jod(850));
     expect(after.dealerGapShareMinor).toBe(0);
-    expect(after.customerGapCashToDealerMinor).toBe(jod(1_000));
+    expect(after.customerGapCashToDealerMinor).toBe(jod(850));
     expect(after.customerGapInstallmentToDealerMinor).toBe(0);
     expect(after.customerGapToFinanceCompanyMinor).toBe(0);
     expect(after.gapResolvedBy).toBe(seed.approverId);
@@ -4882,7 +4907,7 @@ describe("resolving the appraisal gap", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].previousValue).toBe("PENDING_NEGOTIATION");
     expect(rows[0].newValue).toContain("CUSTOMER_ABSORBS");
-    expect(rows[0].newValue).toContain(`against a raw gap of ${jod(1_000)}`);
+    expect(rows[0].newValue).toContain(`against a net shortfall of ${jod(850)}`);
     // The stage advances: no longer the blocked step.
     const cockpit = await seed.asApprover.query(api.applications.dealCockpit, {
       orgId: seed.orgId,
@@ -4897,12 +4922,12 @@ describe("resolving the appraisal gap", () => {
       orgId: seed.orgId,
       applicationId,
       economicsStamp: await servedStamp(seed, applicationId),
-      ...allocation(0, 1_000),
+      ...allocation(0, 850),
     });
     const after = await gapFields(seed, applicationId);
     expect(after.gapResolution).toBe("DEALER_ABSORBS");
     expect(after.customerGapShareMinor).toBe(0);
-    expect(after.dealerGapShareMinor).toBe(jod(1_000));
+    expect(after.dealerGapShareMinor).toBe(jod(850));
     expect(after.customerGapCashToDealerMinor).toBe(0);
   });
 
@@ -4912,40 +4937,59 @@ describe("resolving the appraisal gap", () => {
       orgId: seed.orgId,
       applicationId,
       economicsStamp: await servedStamp(seed, applicationId),
-      ...allocation(600, 400, { installments: 600 }),
+      ...allocation(500, 350, { installments: 500 }),
       notes: "  agreed by phone  ",
     });
     const after = await gapFields(seed, applicationId);
     expect(after.gapResolution).toBe("SPLIT");
-    expect(after.customerGapShareMinor).toBe(jod(600));
-    expect(after.dealerGapShareMinor).toBe(jod(400));
-    expect(after.customerGapInstallmentToDealerMinor).toBe(jod(600));
+    expect(after.customerGapShareMinor).toBe(jod(500));
+    expect(after.dealerGapShareMinor).toBe(jod(350));
+    expect(after.customerGapInstallmentToDealerMinor).toBe(jod(500));
     expect(after.gapResolutionNotes).toBe("agreed by phone");
     expect((await overrideRows(seed, applicationId))[0].reason).toBe("agreed by phone");
   });
 
-  test("the customer's part can be split across all three destinations, and each is kept distinct", async () => {
+  test("the customer's part can be split across cash and instalments to the dealership, each kept distinct", async () => {
     const { seed, applicationId } = await seedGappedDeal();
     await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
       orgId: seed.orgId,
       applicationId,
       economicsStamp: await servedStamp(seed, applicationId),
-      ...allocation(1_000, 0, { cash: 300, installments: 500, financeCompany: 200 }),
+      ...allocation(850, 0, { cash: 300, installments: 550 }),
     });
     const after = await gapFields(seed, applicationId);
     expect(after.gapResolution).toBe("CUSTOMER_ABSORBS");
     expect(after.customerGapCashToDealerMinor).toBe(jod(300));
-    expect(after.customerGapInstallmentToDealerMinor).toBe(jod(500));
-    expect(after.customerGapToFinanceCompanyMinor).toBe(jod(200));
+    expect(after.customerGapInstallmentToDealerMinor).toBe(jod(550));
+    expect(after.customerGapToFinanceCompanyMinor).toBe(0);
+  });
+
+  // SCRUM-766 DA2-12 — failing-first. Until the customer-pays-the-finance-company
+  // mechanism exists, a destination to the finance company is refused for EVERY
+  // company, before any write: recording it would leave the allocation, the
+  // remittance and the ledger saying three different things.
+  test("a share routed to the finance company is refused with nothing persisted", async () => {
+    const { seed, applicationId } = await seedGappedDeal();
+    const before = await gapFields(seed, applicationId);
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await servedStamp(seed, applicationId),
+        ...allocation(850, 0, { cash: 650, financeCompany: 200 }),
+      })
+    ).rejects.toThrow(/not available yet/i);
+    expect(await gapFields(seed, applicationId)).toEqual(before);
+    expect(await overrideRows(seed, applicationId)).toHaveLength(0);
   });
 
   test.each([
-    ["shares short of the gap", allocation(500, 400, { cash: 500 }), /must equal the raw appraisal gap/i],
-    ["shares over the gap", allocation(700, 400, { cash: 700 }), /must equal the raw appraisal gap/i],
-    ["destinations short of the customer's part", allocation(1_000, 0, { cash: 900 }), /must equal the customer's gap share/i],
-    ["destinations over the customer's part", allocation(1_000, 0, { cash: 900, financeCompany: 200 }), /must equal the customer's gap share/i],
+    ["shares short of the gap", allocation(500, 300, { cash: 500 }), /must equal the shortfall/i],
+    ["shares over the gap", allocation(700, 400, { cash: 700 }), /must equal the shortfall/i],
+    ["destinations short of the customer's part", allocation(850, 0, { cash: 750 }), /must equal the customer's gap share/i],
+    ["destinations over the customer's part", allocation(850, 0, { cash: 700, installments: 250 }), /must equal the customer's gap share/i],
     ["a negative amount", allocation(1_200, -200, { cash: 1_200 }), /non-negative integer/i],
-    ["a fractional amount", { ...allocation(1_000, 0, { cash: 1_000 }), customerGapCashToDealerMinor: jod(1_000) + 0.5 }, /non-negative integer/i],
+    ["a fractional amount", { ...allocation(850, 0, { cash: 850 }), customerGapCashToDealerMinor: jod(850) + 0.5 }, /non-negative integer/i],
   ])("%s is refused with nothing persisted", async (_label, alloc, message) => {
     const { seed, applicationId } = await seedGappedDeal();
     const before = await gapFields(seed, applicationId);
@@ -4970,7 +5014,7 @@ describe("resolving the appraisal gap", () => {
         orgId: seed.orgId,
         applicationId,
         economicsStamp: "v2|999",
-        ...allocation(1_000, 0, { cash: 1_000 }),
+        ...allocation(850, 0, { cash: 850 }),
       })
     ).rejects.toThrow(/figures changed/i);
     expect(await gapFields(seed, applicationId)).toEqual(before);
@@ -5014,7 +5058,7 @@ describe("resolving the appraisal gap", () => {
       orgId: seed.orgId,
       applicationId,
       economicsStamp: await servedStamp(seed, applicationId),
-      ...allocation(1_000, 0, { cash: 1_000 }),
+      ...allocation(850, 0, { cash: 850 }),
     });
     const settled = await gapFields(seed, applicationId);
     await expect(
@@ -5022,7 +5066,7 @@ describe("resolving the appraisal gap", () => {
         orgId: seed.orgId,
         applicationId,
         economicsStamp: await servedStamp(seed, applicationId),
-        ...allocation(0, 1_000),
+        ...allocation(0, 850),
       })
     ).rejects.toThrow(/already been agreed/i);
     expect(await gapFields(seed, applicationId)).toEqual(settled);
@@ -5034,7 +5078,7 @@ describe("resolving the appraisal gap", () => {
       orgId: seed.orgId,
       applicationId,
       economicsStamp: await servedStamp(seed, applicationId),
-      ...allocation(1_000, 0, { cash: 1_000 }),
+      ...allocation(850, 0, { cash: 850 }),
     });
     const staleStamp = await servedStamp(seed, applicationId);
 
@@ -5058,7 +5102,10 @@ describe("resolving the appraisal gap", () => {
     );
 
     const reopened = await gapFields(seed, applicationId);
+    // Gross 1,500 on the screen; the amount the parties split is the NET 1,275
+    // (12,500 → 11,000 at 85% lending).
     expect(reopened.rawAppraisalGapMinor).toBe(jod(1_500));
+    expect(reopened.netShortfallMinor).toBe(jod(1_275));
     expect(reopened.gapResolution).toBe("PENDING_NEGOTIATION");
     expect(reopened.customerGapShareMinor).toBeUndefined();
     expect(reopened.customerGapCashToDealerMinor).toBeUndefined();
@@ -5070,15 +5117,15 @@ describe("resolving the appraisal gap", () => {
         orgId: seed.orgId,
         applicationId,
         economicsStamp: staleStamp,
-        ...allocation(1_500, 0, { cash: 1_500 }),
+        ...allocation(1_275, 0, { cash: 1_275 }),
       })
     ).rejects.toThrow(/figures changed/i);
-    // …a fresh one does, against the NEW gap.
+    // …a fresh one does, against the NEW shortfall.
     await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
       orgId: seed.orgId,
       applicationId,
       economicsStamp: await servedStamp(seed, applicationId),
-      ...allocation(500, 1_000, { cash: 500 }),
+      ...allocation(500, 775, { cash: 500 }),
     });
     expect((await gapFields(seed, applicationId)).gapResolution).toBe("SPLIT");
   });
@@ -5093,7 +5140,7 @@ describe("resolving the appraisal gap", () => {
         orgId: seed.orgId,
         applicationId,
         economicsStamp: await servedStamp(seed, applicationId),
-        ...allocation(1_000, 0, { cash: 1_000 }),
+        ...allocation(850, 0, { cash: 850 }),
       })
     ).rejects.toThrow(/your own application/i);
   });
@@ -5121,7 +5168,7 @@ describe("resolving the appraisal gap", () => {
         orgId: seed.orgId,
         applicationId,
         economicsStamp: stamp,
-        ...allocation(1_000, 0, { cash: 1_000 }),
+        ...allocation(850, 0, { cash: 850 }),
       })
     ).rejects.toThrow();
     expect((await gapFields(seed, applicationId)).gapResolution).toBe("PENDING_NEGOTIATION");
@@ -5135,7 +5182,7 @@ describe("resolving the appraisal gap", () => {
         orgId: other.orgId,
         applicationId,
         economicsStamp: "v2|1",
-        ...allocation(1_000, 0, { cash: 1_000 }),
+        ...allocation(850, 0, { cash: 850 }),
       })
     ).rejects.toThrow();
     expect((await gapFields(seed, applicationId)).gapResolution).toBe("PENDING_NEGOTIATION");
@@ -5207,7 +5254,7 @@ describe("resolving the appraisal gap", () => {
       orgId: seed.orgId,
       applicationId,
       economicsStamp: await servedStamp(seed, applicationId),
-      ...allocation(0, 1_000),
+      ...allocation(0, 850),
     });
     expect((await gapFields(seed, applicationId)).gapResolution).toBe("DEALER_ABSORBS");
 
@@ -5249,7 +5296,7 @@ describe("resolving the appraisal gap", () => {
       orgId: seed.orgId,
       applicationId,
       economicsStamp: await servedStamp(seed, applicationId),
-      ...allocation(0, 1_000),
+      ...allocation(0, 850),
     });
     expect((await gapFields(seed, applicationId)).gapResolution).toBe("DEALER_ABSORBS");
   });
@@ -5271,7 +5318,7 @@ describe("resolving the appraisal gap", () => {
         orgId: seed.orgId,
         applicationId,
         economicsStamp: await servedStamp(seed, applicationId),
-        ...allocation(1_000, 0, { cash: 1_000 }),
+        ...allocation(850, 0, { cash: 850 }),
       })
     ).rejects.toThrow(/sealed/i);
     expect((await gapFields(seed, applicationId)).gapResolution).toBe("PENDING_NEGOTIATION");
@@ -5283,7 +5330,7 @@ describe("resolving the appraisal gap", () => {
       orgId: seed.orgId,
       applicationId,
       economicsStamp: await servedStamp(seed, applicationId),
-      ...allocation(1_000, 0, { cash: 1_000 }),
+      ...allocation(850, 0, { cash: 850 }),
     });
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
       orgId: seed.orgId,
@@ -5301,7 +5348,7 @@ describe("resolving the appraisal gap", () => {
         orgId: seed.orgId,
         applicationId,
         economicsStamp: await servedStamp(seed, applicationId),
-        ...allocation(0, 1_000),
+        ...allocation(0, 850),
       })
     ).rejects.toThrow(/sealed|already been agreed/i);
     expect((await gapFields(seed, applicationId)).gapResolution).toBe("CUSTOMER_ABSORBS");
@@ -5329,7 +5376,7 @@ describe("resolving the appraisal gap", () => {
         orgId: seed.orgId,
         applicationId,
         economicsStamp: await servedStamp(seed, applicationId),
-        ...allocation(1_000, 0, { cash: 1_000 }),
+        ...allocation(850, 0, { cash: 850 }),
       })
     ).rejects.toThrow(/closed/i);
     expect((await gapFields(seed, applicationId)).gapResolution).toBe("PENDING_NEGOTIATION");
@@ -5343,7 +5390,7 @@ describe("resolving the appraisal gap", () => {
         orgId: seed.orgId,
         applicationId,
         economicsStamp: await servedStamp(seed, applicationId),
-        ...allocation(1_000, 0, { cash: 1_000 }),
+        ...allocation(850, 0, { cash: 850 }),
       })
     ).rejects.toThrow(/approved application/i);
     expect((await gapFields(seed, applicationId)).gapResolution).toBe("PENDING_NEGOTIATION");
@@ -5431,9 +5478,9 @@ describe("advancing a deal whose appraisal gap is unsettled (SCRUM-116)", () => 
   });
 
   test.each([
-    { resolution: "CUSTOMER_ABSORBS", split: allocation(1_000, 0, { cash: 1_000 }) },
-    { resolution: "DEALER_ABSORBS", split: allocation(0, 1_000) },
-    { resolution: "SPLIT", split: allocation(600, 400, { cash: 100, installments: 500 }) },
+    { resolution: "CUSTOMER_ABSORBS", split: allocation(850, 0, { cash: 850 }) },
+    { resolution: "DEALER_ABSORBS", split: allocation(0, 850) },
+    { resolution: "SPLIT", split: allocation(450, 400, { cash: 100, installments: 350 }) },
   ])("once the gap is settled as $resolution, handover proceeds", async ({ resolution, split }) => {
     const { seed, applicationId } = await seedGappedDeal();
     await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
@@ -5490,7 +5537,14 @@ describe("advancing a deal whose appraisal gap is unsettled (SCRUM-116)", () => 
     // worked out and no resolution was ever written. The gate has nothing to
     // refuse on and must not invent a shortfall.
     await seed.t.run((ctx) =>
-      ctx.db.patch(applicationId, { rawAppraisalGapMinor: undefined, gapResolution: undefined })
+      ctx.db.patch(applicationId, {
+        rawAppraisalGapMinor: undefined,
+        netShortfallMethod: undefined,
+        netShortfallMinor: undefined,
+        valuationShortfallMinor: undefined,
+        financingTermsShortfallMinor: undefined,
+        gapResolution: undefined,
+      })
     );
 
     await seed.asUser.mutation(api.applications.registerVehicleHandover, {
@@ -6169,4 +6223,574 @@ describe("applying the quote's down payment to an approved zero first payment (S
       expect(await moneyRowCounts(seed)).toEqual(counts);
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// SCRUM-766 PR-A — the NET shortfall: frozen quote baseline, each side's own
+// first payment, and the fail-closed UNAVAILABLE state (owner rulings c22413)
+// ---------------------------------------------------------------------------
+
+describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
+  /** Quote at `quotationMajor`, optionally move the first payment, then approve `approvedMajor`. */
+  async function approvedWith(options: {
+    companyRules?: Parameters<typeof seedDealer>[0];
+    quotationMajor?: number;
+    firstPaymentAtApprovalMajor?: number;
+    approvedMajor: number;
+    appliedLtvPercent?: number;
+    /** A deal whose quotation terms were never frozen (nothing to measure against). */
+    withoutQuotationSnapshot?: boolean;
+  }) {
+    const seed = await seedDealer(options.companyRules ?? {});
+    const applicationId = await createApplication(seed);
+    if (options.quotationMajor === undefined) {
+      await recordBaselineQuotation(seed, applicationId);
+    } else {
+      await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(options.quotationMajor),
+        source: "MANUAL_ENTRY",
+        targetSellingAmountMinor: jod(DEAL.targetSelling),
+        estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+        customerFirstPaymentMinor: jod(DEAL.customerFirstPayment),
+      });
+    }
+    if (options.firstPaymentAtApprovalMajor !== undefined) {
+      await seed.t.run((ctx) =>
+        ctx.db.patch(applicationId, {
+          customerFirstPaymentMinor: jod(options.firstPaymentAtApprovalMajor as number),
+        })
+      );
+    }
+    if (options.withoutQuotationSnapshot) {
+      await seed.t.run((ctx) =>
+        ctx.db.patch(applicationId, { quotationCalculationSnapshot: undefined })
+      );
+    }
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(options.approvedMajor),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(options.approvedMajor),
+      basis: "APPRAISAL",
+      ...(options.appliedLtvPercent !== undefined
+        ? { appliedLtvPercent: options.appliedLtvPercent }
+        : {}),
+    });
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { status: "APPROVED", creditDecision: "APPROVED" })
+    );
+    return { seed, applicationId };
+  }
+
+  test("85% quoted, approved at 80%: a 1,425 total, 850 valuation + 575 financing terms", async () => {
+    const { seed, applicationId } = await approvedWith({ approvedMajor: 11_500, appliedLtvPercent: 80 });
+    const app = await readApp(seed, applicationId);
+    expect(app.netShortfallMethod).toBe("NET");
+    expect(app.netShortfallMinor).toBe(jod(1_425));
+    expect(app.valuationShortfallMinor).toBe(jod(850));
+    expect(app.financingTermsShortfallMinor).toBe(jod(575));
+    // The breakdown always adds up to the figure the parties split.
+    expect(app.valuationShortfallMinor! + app.financingTermsShortfallMinor!).toBe(app.netShortfallMinor);
+    // …and the gross figure the display keeps is a different, larger-or-equal number.
+    expect(app.rawAppraisalGapMinor).toBe(jod(1_000));
+  });
+
+  test("the quote-time LTV is the one frozen in the quotation, not whatever the company default is now", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await recordBaselineQuotation(seed, applicationId);
+    // The company changes its default AFTER the quotation was frozen at 85%.
+    await seed.t.run((ctx) => ctx.db.patch(seed.companyId, { defaultLtvPercent: 70 }));
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+      appliedLtvPercent: 80,
+    });
+    const app = await readApp(seed, applicationId);
+    expect(app.quotationCalculationSnapshot?.appliedLtvPercent).toBe(85);
+    expect(app.netShortfallMinor).toBe(jod(1_425));
+  });
+
+  test("each side uses its OWN first payment: 500 at the quote, 800 at the approval is a 550 shortfall", async () => {
+    const { seed, applicationId } = await approvedWith({
+      approvedMajor: 11_500,
+      firstPaymentAtApprovalMajor: 800,
+    });
+    const app = await readApp(seed, applicationId);
+    expect(app.netShortfallMethod).toBe("NET");
+    expect(app.netShortfallMinor).toBe(jod(550));
+  });
+
+  test("a binding first payment caps what is financed: 12,000 -> 11,000 at 90%, first payment 500 -> 1,500 is 300", async () => {
+    const { seed, applicationId } = await approvedWith({
+      companyRules: { defaultLtvPercent: 90, maxFinancingLTV: 90 },
+      quotationMajor: 12_000,
+      firstPaymentAtApprovalMajor: 1_500,
+      approvedMajor: 11_000,
+    });
+    const app = await readApp(seed, applicationId);
+    expect(app.netShortfallMethod).toBe("NET");
+    expect(app.netShortfallMinor).toBe(jod(300));
+  });
+
+  test("an appraisal-basis company is measured on the approved amount like any other: 12,500 -> 11,500 at 85% is 850, not UNAVAILABLE (owner c22425)", async () => {
+    const { seed, applicationId } = await approvedWith({
+      companyRules: { ltvBasis: "INDEPENDENT_APPRAISAL" },
+      approvedMajor: 11_500,
+    });
+    const app = await readApp(seed, applicationId);
+    expect(app.netShortfallMethod).toBe("NET");
+    expect(app.netShortfallMinor).toBe(jod(850));
+  });
+
+  test("a deal whose quotation terms were never frozen has an UNAVAILABLE shortfall: fails closed at the gate, the resolver and the cockpit", async () => {
+    const { seed, applicationId } = await approvedWith({
+      withoutQuotationSnapshot: true,
+      approvedMajor: 11_500,
+    });
+    const app = await readApp(seed, applicationId);
+    expect(app.netShortfallMethod).toBe("UNAVAILABLE");
+    expect(app.netShortfallMinor).toBeUndefined();
+    expect(app.valuationShortfallMinor).toBeUndefined();
+
+    // The handover gate: an unmeasurable shortfall is not a zero one.
+    await expect(
+      seed.asUser.mutation(api.applications.registerVehicleHandover, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: (await seed.asUser.query(api.applications.handoverStamp, {
+          orgId: seed.orgId,
+          applicationId,
+        })) as string,
+      })
+    ).rejects.toThrow(/could not be worked out/i);
+    expect((await readApp(seed, applicationId)).vehicleHandoverAt).toBeUndefined();
+
+    // The resolver cannot be driven against an unknown total either.
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await servedStamp(seed, applicationId),
+        ...allocation(850, 0, { cash: 850 }),
+      })
+    ).rejects.toThrow();
+    expect((await readApp(seed, applicationId)).gapResolution).not.toBe("CUSTOMER_ABSORBS");
+
+    // The screen is told it is unavailable, not given a zero.
+    const cockpit = await seed.asApprover.query(api.applications.dealCockpit, {
+      orgId: seed.orgId,
+      applicationId,
+    });
+    expect(cockpit?.money?.shortfall?.method).toBe("UNAVAILABLE");
+    expect(cockpit?.money?.shortfall?.totalMinor).toBeUndefined();
+    expect(cockpit?.stages.find((s) => s.key === "APPROVED_PURCHASE")?.state).toBe("BLOCKED");
+  });
+
+  test("re-approving before handover clears a settled split and reopens the negotiation against the NEW shortfall", async () => {
+    const { seed, applicationId } = await approvedWith({ approvedMajor: 11_500 });
+    await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      ...allocation(850, 0, { cash: 850 }),
+    });
+    expect((await readApp(seed, applicationId)).gapResolution).toBe("CUSTOMER_ABSORBS");
+
+    // Re-approving with a different term is a supported path before handover.
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+      appliedLtvPercent: 80,
+    });
+    const after = await readApp(seed, applicationId);
+    expect(after.netShortfallMinor).toBe(jod(1_425));
+    expect(after.gapResolution).toBe("PENDING_NEGOTIATION");
+    expect(after.customerGapShareMinor).toBeUndefined();
+    expect(after.customerGapCashToDealerMinor).toBeUndefined();
+    expect(after.gapResolvedAt).toBeUndefined();
+  });
+
+  // Review F1/R1 (Opus + Codex, both blocking): withdrawing the approval left the
+  // NET fields behind, so `shortfallState` kept reporting a total for a deal with
+  // no approval and the resolver would split it. Invariant: the persisted net
+  // shortfall exists only while the approval it was measured against exists.
+  const NET_FIELDS = [
+    "netShortfallMethod",
+    "netShortfallMinor",
+    "valuationShortfallMinor",
+    "financingTermsShortfallMinor",
+  ] as const;
+
+  test("reopening the approval clears the whole net shortfall and the resolver refuses without an approval", async () => {
+    const { seed, applicationId } = await approvedWith({ approvedMajor: 11_500 });
+    expect((await readApp(seed, applicationId)).netShortfallMinor).toBe(jod(850));
+
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "Company withdrew its offer.",
+    });
+
+    const reopened = await readApp(seed, applicationId);
+    for (const field of NET_FIELDS) expect(reopened[field], field).toBeUndefined();
+
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await servedStamp(seed, applicationId),
+        ...allocation(850, 0, { cash: 850 }),
+      })
+    ).rejects.toThrow();
+    expect((await readApp(seed, applicationId)).gapResolution).toBeUndefined();
+  });
+
+  test("recording a superseding appraisal clears the whole net shortfall too", async () => {
+    const { seed, applicationId } = await approvedWith({ approvedMajor: 11_500 });
+    expect((await readApp(seed, applicationId)).netShortfallMinor).toBe(jod(850));
+
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_000),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+      reappraisalReason: "Company re-inspected the vehicle.",
+    });
+
+    const after = await readApp(seed, applicationId);
+    expect(after.approvedDealerPurchaseAmountMinor).toBeUndefined();
+    for (const field of NET_FIELDS) expect(after[field], field).toBeUndefined();
+  });
+
+  // Review F2 (Opus): the shared recompute re-ran the approval-time transition,
+  // which treats FAILED as "reopen". A cost recorded on a rejected/cancelled deal
+  // would flip "negotiation failed" back to PENDING_NEGOTIATION with nothing moved.
+  test("a recompute that moves nothing leaves a FAILED negotiation FAILED", async () => {
+    const { seed, applicationId } = await approvedWith({ approvedMajor: 11_500 });
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { gapResolution: "FAILED" }));
+
+    await seed.t.run((ctx) => recomputeEconomicsForApplication(ctx, applicationId));
+
+    const after = await readApp(seed, applicationId);
+    expect(after.netShortfallMinor).toBe(jod(850));
+    expect(after.gapResolution).toBe("FAILED");
+  });
+
+  // CodeRabbit #2 (validated): applyQuoteFirstPayment corrects a recorded-as-zero
+  // first payment to the quote's down payment. The zero was a recording error, not
+  // a quoted figure, so the frozen quote-side baseline must carry the corrected
+  // value too - else the correction itself reads as a financing-term change and
+  // shifts the shortfall by the first-payment delta (350 instead of 850 here).
+  test("correcting a zeroed first payment moves both sides of the shortfall together", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      if (!app) throw new Error("fixture: application vanished");
+      await ctx.db.patch(app.quoteId, { downPayment: 500 });
+    });
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      customerFirstPaymentMinor: 0,
+    });
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.applyQuoteFirstPayment, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      reason: "Dealer ruling: first payment is the quote's down payment",
+    });
+    const app = await readApp(seed, applicationId);
+    expect(app.customerFirstPaymentMinor).toBe(jod(500));
+    // The snapshot stays as the quotation was priced; the correction is its own field.
+    expect(app.quotationCalculationSnapshot?.customerFirstPaymentMinor).toBe(0);
+    expect(app.quoteFirstPaymentCorrectedMinor).toBe(jod(500));
+    // Same as a deal quoted with a 500 first payment and approved at 11,500.
+    expect(app.netShortfallMinor).toBe(jod(850));
+  });
+
+  // Codex R4 (validated): a quotation recorded after a first-payment correction is a
+  // new snapshot, even when the amount, source and reason match the old one. The
+  // correction belonged to the previous snapshot and must not outlive it.
+  test("re-recording the quotation after a correction supersedes the corrected baseline", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      if (!app) throw new Error("fixture: application vanished");
+      await ctx.db.patch(app.quoteId, { downPayment: 500 });
+    });
+    const record = (customerFirstPaymentMinor: number) =>
+      seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(DEAL.quotation),
+        source: "MANUAL_ENTRY",
+        targetSellingAmountMinor: jod(DEAL.targetSelling),
+        estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+        customerFirstPaymentMinor,
+      });
+    await record(0);
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.applyQuoteFirstPayment, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      reason: "Dealer ruling: first payment is the quote's down payment",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "Company withdrew its offer; resubmitting.",
+    });
+    await record(jod(500));
+    const app = await readApp(seed, applicationId);
+    expect(app.quotationCalculationSnapshot?.customerFirstPaymentMinor).toBe(jod(500));
+    expect(app.quoteFirstPaymentCorrectedMinor).toBeUndefined();
+    // Codex R5: the re-record's change trace names the retired correction instead
+    // of two identical sides and an empty "changed:" list.
+    const trace = await seed.t.run(async (ctx) =>
+      (await ctx.db.query("financeApplicationOverrides").collect()).filter(
+        (row) => row.applicationId === applicationId && row.field === "submittedQuotationMinor"
+      )
+    );
+    const last = trace[trace.length - 1];
+    expect(last).toBeDefined();
+    expect(last.previousValue).not.toBe(last.newValue);
+    expect(last.reason).toMatch(/quote baseline first payment/);
+  });
+
+  // Codex R1 (validated): a SYSTEM_CALCULATED quotation IS the solver's output at
+  // the first payment it was recorded with. Rewriting that input afterwards would
+  // leave a snapshot claiming a first payment the calculated figure never used, so
+  // the baseline is left as priced and the first-payment delta stays a visible term.
+  test("correcting a zeroed first payment leaves a system-calculated baseline as priced", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      if (!app) throw new Error("fixture: application vanished");
+      await ctx.db.patch(app.quoteId, { downPayment: 500 });
+    });
+    await seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: seed.orgId,
+      applicationId,
+      submittedQuotationMinor: jod(DEAL.quotation),
+      source: "MANUAL_ENTRY",
+      targetSellingAmountMinor: jod(DEAL.targetSelling),
+      estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+      customerFirstPaymentMinor: 0,
+    });
+    // Stand-in for a quotation the solver produced at first payment 0.
+    await seed.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      if (!app?.quotationCalculationSnapshot) throw new Error("fixture: no snapshot");
+      await ctx.db.patch(applicationId, {
+        quotationCalculationSnapshot: { ...app.quotationCalculationSnapshot, mode: "SYSTEM_CALCULATED" },
+      });
+    });
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.applyQuoteFirstPayment, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      reason: "Dealer ruling: first payment is the quote's down payment",
+    });
+    const app = await readApp(seed, applicationId);
+    expect(app.customerFirstPaymentMinor).toBe(jod(500));
+    expect(app.quotationCalculationSnapshot?.customerFirstPaymentMinor).toBe(0);
+    expect(app.quoteFirstPaymentCorrectedMinor).toBeUndefined();
+    // The only money behaviour this mode changes: the first-payment delta stays in
+    // the shortfall (solver quote at 0 vs 9,775 + 500 actually funded) - Opus F1.
+    expect(app.netShortfallMinor).toBe(jod(350));
+  });
+
+  // Opus F2: an explicit re-record at zero after a correction clears it, so the
+  // quote side matches the snapshot and the application again.
+  test("re-recording at zero after a correction clears the corrected baseline", async () => {
+    const seed = await seedDealer();
+    const applicationId = await createApplication(seed);
+    await seed.t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      if (!app) throw new Error("fixture: application vanished");
+      await ctx.db.patch(app.quoteId, { downPayment: 500 });
+    });
+    const record = () =>
+      seed.asUser.mutation(api.financingEconomics.recordSubmittedQuotation, {
+        orgId: seed.orgId,
+        applicationId,
+        submittedQuotationMinor: jod(DEAL.quotation),
+        source: "MANUAL_ENTRY",
+        targetSellingAmountMinor: jod(DEAL.targetSelling),
+        estimatedDealerBorneExpensesMinor: jod(DEAL.exampleDealerBorneExpenses),
+        customerFirstPaymentMinor: 0,
+      });
+    await record();
+    await seed.asUser.mutation(api.financingEconomics.recordAppraisal, {
+      orgId: seed.orgId,
+      applicationId,
+      appraisalAmountMinor: jod(11_500),
+      providerType: "FINANCE_COMPANY",
+      appraisedAt: Date.now(),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.applyQuoteFirstPayment, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      reason: "Dealer ruling: first payment is the quote's down payment",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "Company withdrew its offer; resubmitting.",
+    });
+    await record();
+    const app = await readApp(seed, applicationId);
+    expect(app.customerFirstPaymentMinor).toBe(0);
+    expect(app.quotationCalculationSnapshot?.customerFirstPaymentMinor).toBe(0);
+    expect(app.quoteFirstPaymentCorrectedMinor).toBeUndefined();
+  });
+
+  // Opus L1: the resolver's own guard, independent of the clearing writers. A stale
+  // NET total with no standing approval must still be refused, by that message.
+  test("the resolver refuses a stale net shortfall when no approval stands", async () => {
+    const { seed, applicationId } = await approvedWith({ approvedMajor: 11_500 });
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { approvedDealerPurchaseAmountMinor: undefined })
+    );
+    await expect(
+      seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await servedStamp(seed, applicationId),
+        ...allocation(850, 0, { cash: 850 }),
+      })
+    ).rejects.toThrow(/no standing finance-company approval/i);
+    expect((await readApp(seed, applicationId)).gapResolution).not.toBe("CUSTOMER_ABSORBS");
+  });
+
+  // Opus L2: re-approving is now the only path that reopens a FAILED negotiation.
+  test("re-approving a FAILED negotiation reopens it", async () => {
+    const { seed, applicationId } = await approvedWith({ approvedMajor: 11_500 });
+    await seed.t.run((ctx) => ctx.db.patch(applicationId, { gapResolution: "FAILED" }));
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+    expect((await readApp(seed, applicationId)).gapResolution).toBe("PENDING_NEGOTIATION");
+  });
+
+  // Review F3 (Opus): two reasons raised by one recompute must both survive.
+  test("an unknown remittance and an unavailable shortfall are both kept in the reconciliation reason", async () => {
+    const { seed, applicationId } = await approvedWith({
+      withoutQuotationSnapshot: true,
+      approvedMajor: 11_500,
+    });
+    // The company keeps the customer's payment, and nothing records where it went.
+    await seed.t.run((ctx) =>
+      ctx.db.patch(applicationId, { customerContributionSettlement: "RETAINED_BY_COMPANY" })
+    );
+    await seed.t.run((ctx) => recomputeEconomicsForApplication(ctx, applicationId));
+    const app = await readApp(seed, applicationId);
+    expect(app.netShortfallMethod).toBe("UNAVAILABLE");
+    expect(app.needsFinancingReconciliation).toBe(true);
+    expect(app.financingReconciliationReason ?? "").toMatch(/keeps the customer/i);
+    expect(app.financingReconciliationReason ?? "").toMatch(/quotation/i);
+  });
+
+  test("a stale split never survives a reopen-and-reapprove at the same total", async () => {
+    const { seed, applicationId } = await approvedWith({ approvedMajor: 11_500 });
+    await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+      orgId: seed.orgId,
+      applicationId,
+      economicsStamp: await servedStamp(seed, applicationId),
+      ...allocation(850, 0, { cash: 850 }),
+    });
+    await seed.asApprover.mutation(api.financingEconomics.reopenApproval, {
+      orgId: seed.orgId,
+      applicationId,
+      reason: "Company withdrew its offer.",
+    });
+    await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: seed.orgId,
+      applicationId,
+      approvedAmountMinor: jod(11_500),
+      basis: "APPRAISAL",
+    });
+    const after = await readApp(seed, applicationId);
+    expect(after.netShortfallMinor).toBe(jod(850));
+    // The earlier agreement belonged to the withdrawn approval.
+    expect(after.gapResolution).toBe("PENDING_NEGOTIATION");
+    expect(after.customerGapShareMinor).toBeUndefined();
+  });
 });
