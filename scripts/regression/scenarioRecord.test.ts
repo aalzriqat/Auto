@@ -259,7 +259,7 @@ describe("review round 2 (Codex seat, PR #500): failing-first regressions", () =
   test("C1: ruling text cannot ride in a ruling ref, actor, source, invariant or glob field", () => {
     const b = base();
     expect(rules([{ ...b, rulings: [{ ...b.rulings[0], text: "full owner ruling" }] } as never])).toContain("schema");
-    expect(rules([{ ...b, steps: [{ ...b.steps[0], actor: { ...b.steps[0].actor, note: "x" } }] } as never])).toContain("schema");
+    expect(rules([{ ...b, steps: [{ ...b.steps![0], actor: { ...b.steps![0].actor, note: "x" } }] } as never])).toContain("schema");
     expect(rules([{ ...b, source: { ...b.source, note: "x" } } as never])).toContain("schema");
     expect(rules([{ ...b, source: { ...b.source, runId: "the owner ruled that the dealership pays Ahmed 5,000" } } as never])).toContain("schema");
     expect(rules([{ ...b, invariantIds: ["a long free text sentence that is not an invariant id at all"] } as never])).toContain("schema");
@@ -470,5 +470,91 @@ describe("review round 6 (Codex closure, PR #500): failing-first regressions", (
     expect(run(`test("named case", () => { expect(flags.only(3)).toBe(3); });`)).toEqual([]);
     expect(run(`test("named case", async () => { test.fail(); });`)).toContain("skip");
     expect(run(`test.only("named case", () => {});`)).toContain("skip");
+  });
+});
+describe("kind: rule (pure-function checks, SCRUM-761 S1.5)", () => {
+  function rule(over: Partial<ScenarioRecord> = {}): ScenarioRecord {
+    const r: ScenarioRecord = {
+      id: "sale-economics-financed-direct",
+      fingerprint: "",
+      domain: "money",
+      level: "backend",
+      status: "active",
+      kind: "rule",
+      source: { hunter: "scripted", runId: "run-1", firstSeen: "2026-10-07" },
+      subject: "fixtureSubject",
+      inputs: { salePrice: 100000, externallyFinanced: true, recordedSupplierGrossReceipt: 0 },
+      expected: [{ observable: "economics.dealershipMargin", value: null }],
+      rulings: [{ id: RULING, digest: DIGEST }],
+      impl: IMPL,
+      matrixRow: "ROW-2",
+      ...over,
+    };
+    r.fingerprint = over.fingerprint ?? scenarioFingerprint(r);
+    return r;
+  }
+
+  test("a well-formed rule passes without any actor or steps", () => {
+    expect(rules([rule()])).toEqual([]);
+  });
+
+  test("a rule may not carry steps, and a scenario may not carry subject/inputs", () => {
+    const withSteps = rule({ steps: [{ actor: { role: "owner", org: "A" }, action: "x.y", input: {} }] });
+    expect(rules([withSteps])).toContain("schema");
+    const scenarioWithSubject = base({ subject: "saleEconomics" });
+    expect(rules([scenarioWithSubject])).toContain("schema");
+  });
+
+  test("a rule needs a dotted-token subject and token-only inputs (no prose)", () => {
+    expect(rules([rule({ subject: "sale economics" })])).toContain("schema");
+    expect(rules([rule({ subject: undefined })])).toContain("schema");
+    expect(rules([rule({ inputs: undefined })])).toContain("schema");
+    expect(rules([rule({ inputs: { note: "the customer paid in full late" } })])).toContain("schema");
+  });
+
+  test("an unknown kind is refused", () => {
+    expect(rules([rule({ kind: "other" as never })])).toContain("schema");
+  });
+
+  test("a rule is backend level and non-screen", () => {
+    expect(rules([rule({ level: "browser" })])).toContain("level");
+    expect(rules([rule({ domain: "screen" })])).toContain("level");
+  });
+
+  test("a rule still needs a matrix row, a ruling and an exact bound test", () => {
+    expect(rules([rule({ matrixRow: undefined })])).toContain("matrix");
+    expect(rules([rule({ rulings: [] })])).toContain("schema");
+    expect(rules([rule({ impl: { ...IMPL, testName: "no such test" } })])).toContain("skip");
+  });
+
+  test("a rule bound to a test that never calls its subject is refused (F1)", () => {
+    expect(rules([rule({ subject: "otherFunction" })])).toContain("impl");
+    expect(rules([rule({ subject: "pkg.fixtureSubject" })])).toEqual([]);
+  });
+
+  test("a rule bound to a test with no assertion, or in a file that mocks, is refused (F1)", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "rule-body-"));
+    mkdirSync(path.join(dir, "t"));
+    const write = (body: string) => writeFileSync(path.join(dir, "t/x.test.ts"), `import { test, expect, vi } from "vitest";\n${body}`);
+    const check = () => validateLibrary([rule({ impl: { file: "t/x.test.ts", testName: "named case" } })], { rulings: RULINGS, repoRoot: dir }).map((p) => p.rule);
+    write(`test("named case", () => { fixtureSubject(1); });`);
+    expect(check()).toContain("impl");
+    write(`vi.mock("./fixtureSubject");\ntest("named case", () => { expect(fixtureSubject(1)).toBe(2); });`);
+    expect(check()).toContain("impl");
+    write(`test("named case", () => { expect(fixtureSubject(1)).toBe(2); });`);
+    expect(check()).toEqual([]);
+  });
+
+  test("identity is subject + inputs + expected: same rule de-dups, different inputs do not, and a scenario never collides with a rule", () => {
+    const a = rule();
+    expect(rules([a, rule({ id: "sale-economics-copy" })])).toContain("duplicate");
+    const other = rule({ id: "sale-economics-other", inputs: { salePrice: 100001, externallyFinanced: true, recordedSupplierGrossReceipt: 0 }, impl: { ...IMPL, testName: "second fixture check runs" } });
+    expect(scenarioFingerprint(a)).not.toBe(scenarioFingerprint(other));
+    expect(scenarioFingerprint(a)).not.toBe(scenarioFingerprint(base()));
+  });
+
+  test("existing scenario fingerprints are unchanged by the rule kind", () => {
+    const s = base();
+    expect(scenarioFingerprint({ domain: s.domain, steps: s.steps, expected: s.expected })).toBe(s.fingerprint);
   });
 });
