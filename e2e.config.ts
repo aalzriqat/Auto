@@ -16,22 +16,24 @@ if (appHost !== 'localhost' && appHost !== '127.0.0.1') {
   throw new Error('Agentic e2e requires a local app URL.');
 }
 
-if (!process.env.NEXT_PUBLIC_CONVEX_URL) {
+const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
+if (!convexUrl) {
   throw new Error('Agentic e2e requires the vibrant-cat-418 dev Convex URL.');
 }
-const convexHost = new URL(process.env.NEXT_PUBLIC_CONVEX_URL).hostname;
+const convexHost = new URL(convexUrl).hostname;
 if (!/^vibrant-cat-418(?:\.[a-z0-9-]+)?\.convex\.cloud$/.test(convexHost)) {
   throw new Error('Agentic e2e requires the vibrant-cat-418 dev Convex deployment.');
 }
 
-if (process.env.NEXT_PUBLIC_CONVEX_SITE_URL) {
-  const siteHost = new URL(process.env.NEXT_PUBLIC_CONVEX_SITE_URL).hostname;
+const convexSiteUrl = process.env.NEXT_PUBLIC_CONVEX_SITE_URL;
+if (convexSiteUrl) {
+  const siteHost = new URL(convexSiteUrl).hostname;
   if (!/^vibrant-cat-418(?:\.[a-z0-9-]+)?\.convex\.site$/.test(siteHost)) {
     throw new Error('Agentic e2e requires the vibrant-cat-418 dev Convex site.');
   }
 }
 
-// Runs against LOCAL Next only, which reads .env.local (dev Convex). Never point APP_URL at a
+// Runs against LOCAL Next only. Never point APP_URL at a
 // Vercel preview: those read the PRODUCTION backend. `pnpm dev` / `convex dev` are deliberately
 // not used: they push functions to the shared dev deployment.
 export default {
@@ -57,7 +59,16 @@ export default {
       app: {
         url: appUrl,
         // `node` + Next's own CLI: spawning `pnpm` without a shell fails on Windows (ENOENT).
-        command: { executable: 'node', args: ['node_modules/next/dist/bin/next', 'dev'] },
+        command: {
+          executable: 'node',
+          args: ['node_modules/next/dist/bin/next', 'dev'],
+          // e2e spawns commands with a filtered environment. Pass the checked URLs through so
+          // Next cannot pick a different deployment from .env.local.
+          env: {
+            NEXT_PUBLIC_CONVEX_URL: convexUrl,
+            ...(convexSiteUrl ? { NEXT_PUBLIC_CONVEX_SITE_URL: convexSiteUrl } : {}),
+          },
+        },
       },
     },
   ],
