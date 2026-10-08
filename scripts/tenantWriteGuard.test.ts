@@ -668,10 +668,13 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // SCRUM-768: + e2eBootstrap.setHuntSeatRole - 519 -> 520 total, 157 -> 158 skippedNoOrgId (re-measured FROM
   // THE ANALYSER). An internalMutation with no public entry point and no `orgId` arg: its organization is the
   // preview marker's `orgId`, and it patches only rows it looked up itself (role, membership).
+  // SCRUM-778: + orgSettings.setCommissionMode - 520 -> 521 total, 347 -> 348 analysed (re-measured FROM THE
+  // ANALYSER). Takes `orgId`, owner-only via `requireOwner`, and patches only the settings row it looked up by
+  // that org's `by_org` index (or inserts one for that org); the unguarded-write audit stays empty. Skipped counts unchanged.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 520,
-      analysed: 347,
+      totalMutations: 521,
+      analysed: 348,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 158,
     });
