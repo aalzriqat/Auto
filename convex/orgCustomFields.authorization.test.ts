@@ -56,7 +56,7 @@ async function seed(t: T) {
 }
 
 const values = (t: T, orgId: string) =>
-  t.run(async (ctx) => (await ctx.db.query("orgCustomFieldValues").collect()).filter((r) => r.orgId === orgId));
+  t.run(async (ctx) => (await ctx.db.query("orgCustomFieldValues").take(100)).filter((r) => r.orgId === orgId));
 
 describe("orgCustomFields.setValues authorization (SCRUM-790)", () => {
   test("a view-only member cannot write a vehicle custom-field value", async () => {
@@ -68,7 +68,7 @@ describe("orgCustomFields.setValues authorization (SCRUM-790)", () => {
         orgId: s.orgId, entityType: "vehicle", entityId: s.vehicleId,
         values: [{ fieldId: s.vehicleFieldId, value: "tampered" }],
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/edit:vehicles/);
     expect(await values(t, s.orgId)).toHaveLength(0);
   });
 
@@ -85,7 +85,7 @@ describe("orgCustomFields.setValues authorization (SCRUM-790)", () => {
         orgId: s.orgId, entityType: "vehicle", entityId: s.vehicleId,
         values: [{ fieldId: s.vehicleFieldId, value: "" }],
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/edit:vehicles/);
     expect((await values(t, s.orgId)).map((r) => r.value)).toEqual(["keep"]);
   });
 
@@ -98,8 +98,77 @@ describe("orgCustomFields.setValues authorization (SCRUM-790)", () => {
         orgId: s.orgId, entityType: "customer", entityId: s.customerId,
         values: [{ fieldId: s.customerFieldId, value: "x" }],
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/edit:customers/);
     expect(await values(t, s.orgId)).toHaveLength(0);
+  });
+
+  test("the request-only permission edit:vehicles:request does not authorize a direct write", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const s = await seed(t);
+    const requester = await s.member("requester_790", [PERMISSIONS.EDIT_VEHICLES_REQUEST]);
+    await expect(
+      requester.mutation(api.orgCustomFields.setValues, {
+        orgId: s.orgId, entityType: "vehicle", entityId: s.vehicleId,
+        values: [{ fieldId: s.vehicleFieldId, value: "x" }],
+      }),
+    ).rejects.toThrow(/edit:vehicles/);
+  });
+
+  test("customer and lead writes follow their own edit permission (positive and negative)", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const s = await seed(t);
+    const leadId = await t.run(async (ctx) =>
+      ctx.db.insert("leads", { orgId: s.orgId, customerId: s.customerId, source: "WEBSITE", stage: "NEW" } as never),
+    );
+    const leadFieldId = await s.asOwner.mutation(api.orgCustomFields.create, {
+      orgId: s.orgId, entityType: "lead", fieldName: "Src", fieldKey: "src", fieldType: "text",
+    });
+    const custEditor = await s.member("cust_editor_790", [PERMISSIONS.EDIT_CUSTOMERS]);
+    await custEditor.mutation(api.orgCustomFields.setValues, {
+      orgId: s.orgId, entityType: "customer", entityId: s.customerId,
+      values: [{ fieldId: s.customerFieldId, value: "JO" }],
+    });
+    await expect(
+      custEditor.mutation(api.orgCustomFields.setValues, {
+        orgId: s.orgId, entityType: "lead", entityId: leadId,
+        values: [{ fieldId: leadFieldId, value: "x" }],
+      }),
+    ).rejects.toThrow(/edit:leads/);
+    const leadEditor = await s.member("lead_editor_790", [PERMISSIONS.EDIT_LEADS]);
+    await leadEditor.mutation(api.orgCustomFields.setValues, {
+      orgId: s.orgId, entityType: "lead", entityId: leadId,
+      values: [{ fieldId: leadFieldId, value: "web" }],
+    });
+    expect((await values(t, s.orgId)).map((r) => r.value).sort()).toEqual(["JO", "web"]);
+  });
+
+  test("an offboarding member with the edit permission is refused", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const s = await seed(t);
+    const editor = await s.member("leaving_790", [PERMISSIONS.EDIT_VEHICLES]);
+    await t.run(async (ctx) => {
+      const user = await ctx.db.query("users").withIndex("by_clerkId", (q) => q.eq("clerkId", "leaving_790")).unique();
+      const m = await ctx.db.query("memberships").withIndex("by_org_user", (q) => q.eq("orgId", s.orgId).eq("userId", user!._id)).unique();
+      await ctx.db.patch(m!._id, { offboardingStatus: "PENDING_EXTERNAL_REMOVAL" });
+    });
+    await expect(
+      editor.mutation(api.orgCustomFields.setValues, {
+        orgId: s.orgId, entityType: "vehicle", entityId: s.vehicleId,
+        values: [{ fieldId: s.vehicleFieldId, value: "x" }],
+      }),
+    ).rejects.toThrow(/no longer active/);
+  });
+
+  test("a soft-deleted record is treated as not found", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const s = await seed(t);
+    await t.run(async (ctx) => ctx.db.patch(s.customerId, { isDeleted: true } as never));
+    await expect(
+      s.asOwner.mutation(api.orgCustomFields.setValues, {
+        orgId: s.orgId, entityType: "customer", entityId: s.customerId,
+        values: [{ fieldId: s.customerFieldId, value: "x" }],
+      }),
+    ).rejects.toThrow(/not found/i);
   });
 
   test("the matching edit permission still writes (positive control)", async () => {

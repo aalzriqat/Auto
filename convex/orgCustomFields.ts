@@ -170,7 +170,8 @@ export const setValues = mutation({
     const entityId = ctx.db.normalizeId(target.table, args.entityId);
     if (!entityId) throw new ConvexError(ENTITY_NOT_FOUND);
     const entity = await ctx.db.get(entityId);
-    if (!entity || (entity as { orgId?: Id<"organizations"> }).orgId !== args.orgId) {
+    // An archived record is "not found" to every sibling update path.
+    if (!entity || (entity as { isDeleted?: boolean }).isDeleted || (entity as { orgId?: Id<"organizations"> }).orgId !== args.orgId) {
       throw new ConvexError(ENTITY_NOT_FOUND);
     }
 
@@ -179,7 +180,7 @@ export const setValues = mutation({
     const existing = await ctx.db
       .query("orgCustomFieldValues")
       .withIndex("by_org_entity", (q) =>
-        q.eq("orgId", args.orgId).eq("entityType", args.entityType).eq("entityId", args.entityId)
+        q.eq("orgId", args.orgId).eq("entityType", args.entityType).eq("entityId", entityId)
       )
       .collect();
 
@@ -195,7 +196,7 @@ export const setValues = mutation({
         await ctx.db.insert("orgCustomFieldValues", {
           orgId: args.orgId,
           entityType: args.entityType,
-          entityId: args.entityId,
+          entityId,
           fieldId,
           value,
         });
