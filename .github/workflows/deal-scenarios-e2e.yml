@@ -134,6 +134,16 @@ jobs:
           path: playwright-report/
           retention-days: 14
 
+      # SCRUM-799: capture only a request ID, error class and public source
+      # location while the failed run's disposable backend still exists.
+      # Raw Convex logs can contain tenant data and must never enter public CI logs.
+      - name: Diagnose preview attestation before cleanup
+        if: failure() && env.CONVEX_PREVIEW_CREATED_AT != ''
+        run: node scripts/previewAttestationDiagnostic.mjs
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+
       - name: Delete the disposable preview
         if: always() && env.CONVEX_PREVIEW_CREATED_AT != ''
         run: node scripts/previewDeploymentLifecycle.mjs delete
