@@ -1,0 +1,54 @@
+{
+  "id": "complete-from-quote-refuses-deposit-other-during-pilot",
+  "fingerprint": "7e77b92e4a34d5e2d84edb381a24f926945dd6f7f5e11faec0f6eb26d1731946",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum801-pilot-other",
+    "firstSeen": "2026-10-08"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "approver",
+        "org": "A"
+      },
+      "action": "sales.completeFromQuote",
+      "input": {
+        "depositResolution": "OTHER",
+        "reason": "present"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "DEPOSIT_OTHER_TREATMENT_DISABLED"
+    },
+    {
+      "observable": "step1.moneyRows",
+      "value": 0
+    },
+    {
+      "observable": "deposit.status",
+      "value": "HELD"
+    },
+    {
+      "observable": "sales.count",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-795#c22485",
+      "digest": "bd755080a878c8ff3d11c74259c7d36a7395cf1d926274131ca7927f65135378"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedDepositResolution.test.ts",
+    "testName": "sales.completeFromQuote refuses OTHER with the pilot code and writes nothing"
+  },
+  "matrixRow": "SCRUM-801-deposit-other"
+}

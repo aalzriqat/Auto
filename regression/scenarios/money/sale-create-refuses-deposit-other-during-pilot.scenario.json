@@ -1,0 +1,54 @@
+{
+  "id": "sale-create-refuses-deposit-other-during-pilot",
+  "fingerprint": "f35d06c470ba35a0f0f77db71399b588bca32d6dea6028bbf7756656505d2125",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum801-pilot-other",
+    "firstSeen": "2026-10-08"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "approver",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "depositResolution": "OTHER",
+        "reason": "present"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "DEPOSIT_OTHER_TREATMENT_DISABLED"
+    },
+    {
+      "observable": "step1.moneyRows",
+      "value": 0
+    },
+    {
+      "observable": "deposit.status",
+      "value": "HELD"
+    },
+    {
+      "observable": "sales.count",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-795#c22485",
+      "digest": "bd755080a878c8ff3d11c74259c7d36a7395cf1d926274131ca7927f65135378"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedDepositResolution.test.ts",
+    "testName": "sales.create refuses OTHER with the pilot code and writes nothing"
+  },
+  "matrixRow": "SCRUM-801-deposit-other"
+}
