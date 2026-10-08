@@ -697,7 +697,19 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       // The forwarder starts after the container exists and before the health wait.
       expect(run.indexOf("docker run")).toBeLessThan(run.indexOf("CANDIDATE_IP="));
       expect(run.indexOf("browserSwarmLoopbackForward.mjs")).toBeLessThan(run.indexOf("for attempt in"));
-      expect(run, jobName).toContain('echo "LOOPBACK_FORWARD_PID=$!" >> "$GITHUB_ENV"');
+      expect(run, jobName).toContain('echo "LOOPBACK_FORWARD_PID=$LOOPBACK_FORWARD_PID" >> "$GITHUB_ENV"');
+      // A green /api/health must prove the request went through THIS forwarder:
+      // refuse a pre-occupied port, wait for the bind-ready line, and keep
+      // checking the forwarder is alive while waiting for health.
+      expect(run.indexOf("Port 3000 is already in use"), jobName).toBeGreaterThan(-1);
+      expect(run.indexOf("Port 3000 is already in use")).toBeLessThan(run.indexOf("browserSwarmLoopbackForward.mjs"));
+      expect(run, jobName).toContain("'^loopback forward 127.0.0.1:3000 -> '");
+      expect(run.indexOf("^loopback forward 127.0.0.1:3000")).toBeLessThan(run.indexOf("for attempt in"));
+      expect(run, jobName).toContain("did not bind 127.0.0.1:3000");
+      expect(run, jobName).toContain("Loopback forwarder exited before the candidate answered");
+      // Control + log on the failure path.
+      expect(run, jobName).toContain('"http://$CANDIDATE_IP:3000/api/health"');
+      expect(run, jobName).toContain('cat "$FORWARD_LOG"');
       const allRuns = (workflow.jobs?.[jobName]?.steps ?? [])
         .map((entry) => String(entry.run ?? ""))
         .join("\n");

@@ -1,7 +1,10 @@
+import { spawn, spawnSync } from "node:child_process";
 import net from "node:net";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isPrivateIpv4, startLoopbackForward } from "./browserSwarmLoopbackForward.mjs";
 
+const cliPath = path.resolve(__dirname, "browserSwarmLoopbackForward.mjs");
 const servers: net.Server[] = [];
 
 afterEach(async () => {
@@ -89,6 +92,51 @@ describe("SCRUM-376 loopback forwarder for the internal-network candidate", () =
       await expect(
         startLoopbackForward({ listenPort: 0, targetHost: host, targetPort: 3000 }),
       ).rejects.toThrow(/private IPv4/);
+    }
+  });
+
+  it("CLI exits 1 with an error when the port is already taken (no silent half-start)", async () => {
+    const occupant = net.createServer();
+    const port = await listen(occupant);
+    const result = spawnSync(
+      process.execPath,
+      [cliPath, "--listen-port", String(port), "--target-host", "10.255.255.1", "--target-port", "3000"],
+      { encoding: "utf8", timeout: 20000 },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stdout).not.toContain("loopback forward");
+    expect(result.stderr).toMatch(/EADDRINUSE/);
+  });
+
+  it("CLI prints the ready line only after binding, and rejects an empty target", async () => {
+    const empty = spawnSync(
+      process.execPath,
+      [cliPath, "--listen-port", "39127", "--target-host", "", "--target-port", "3000"],
+      { encoding: "utf8", timeout: 20000 },
+    );
+    expect(empty.status).toBe(1);
+    expect(empty.stdout).toBe("");
+
+    const child = spawn(
+      process.execPath,
+      [cliPath, "--listen-port", "39128", "--target-host", "10.255.255.1", "--target-port", "3000"],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    try {
+      const line = await new Promise<string>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("no ready line")), 15000);
+        child.stdout.once("data", (chunk) => {
+          clearTimeout(timer);
+          resolve(String(chunk));
+        });
+        child.once("exit", () => {
+          clearTimeout(timer);
+          reject(new Error("forwarder exited before ready"));
+        });
+      });
+      expect(line).toMatch(/^loopback forward 127\.0\.0\.1:39128 -> 10\.255\.255\.1:3000/);
+    } finally {
+      child.kill();
     }
   });
 
