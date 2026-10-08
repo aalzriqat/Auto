@@ -6,7 +6,6 @@ import { requireTenantAuth, requireSuperAdmin } from "./utils/tenancy";
 import { logAdminAction } from "./adminAudit";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
-import { LIVE, OWN_STOCK, SOURCED, vehiclesByOrg } from "./aggregates";
 
 // ─── Plan catalogue ──────────────────────────────────────────────────────────
 
@@ -514,28 +513,20 @@ export const canAddVehicle = internalQuery({
     const plan = PLANS[planId];
     if (plan.maxVehicles === -1) return { allowed: true };
 
-    // The existing aggregate key starts with deletedFlag, then sourcedFlag.
-    // This one range counts both stock kinds at every status without loading
-    // whole vehicle rows. Keep the old maxVehicles + 1 ceiling on "current"
-    // in the rejection payload, even when the exact aggregate count is higher.
-    const activeCount = await vehiclesByOrg.count(ctx, {
-      namespace: args.orgId,
-      bounds: {
-        lower: {
-          key: [LIVE, OWN_STOCK, "", Number.MIN_SAFE_INTEGER] as [number, number, string, number],
-          inclusive: true,
-        },
-        upper: {
-          key: [LIVE, SOURCED, "￿", Number.MAX_SAFE_INTEGER] as [number, number, string, number],
-          inclusive: true,
-        },
-      },
-    });
+    // Count non-deleted vehicles — filter before take so deleted rows do not
+    // consume the prefix and cause the limit check to undercount.
+    const vehicles = await ctx.db
+      .query("vehicles")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.neq(q.field("isDeleted"), true))
+      .take(plan.maxVehicles + 1);
+
+    const activeCount = vehicles.length;
     if (activeCount >= plan.maxVehicles) {
       return {
         allowed: false,
         limit: plan.maxVehicles,
-        current: Math.min(activeCount, plan.maxVehicles + 1),
+        current: activeCount,
         upgradeRequired: planId as PlanId,
       };
     }

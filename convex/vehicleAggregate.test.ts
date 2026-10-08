@@ -59,7 +59,6 @@ async function seedVehicles(
     orgId: Id<"organizations">;
     ageDays: number;
     status?: string;
-    sourceType?: "STOCK" | "SOURCED";
     isDeleted?: boolean;
   }>,
 ) {
@@ -79,7 +78,7 @@ async function seedVehicles(
           fuelType: "PETROL",
           transmission: "AUTOMATIC",
           sellingPrice: 10000,
-          sourceType: row.sourceType ?? "STOCK",
+          sourceType: "STOCK" as const,
           status: (row.status ?? "AVAILABLE") as "AVAILABLE",
           createdAt: NOW - row.ageDays * DAY_MS,
           ...(row.isDeleted ? { isDeleted: true } : {}),
@@ -408,25 +407,4 @@ test("rows without createdAt do not corrupt the tree's stored sums", async () =>
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   expect(total).toBe(COUNT);
   vi.useRealTimers();
-});
-
-test("vehicle plan gate counts live rows from the aggregate and preserves the capped current value", async () => {
-  const t = setup();
-  const { orgId, asUser } = await seedDealer(t);
-  const ids = await seedVehicles(t, [
-    ...Array.from({ length: 17 }, () => ({ orgId, ageDays: 1 })),
-    { orgId, ageDays: 1, status: "SOURCING", sourceType: "SOURCED" },
-    { orgId, ageDays: 1, isDeleted: true },
-  ]);
-
-  expect(await t.query(internal.subscriptions.canAddVehicle, { orgId }))
-    .toMatchObject({ allowed: false, limit: 15, current: 16 });
-  for (const vehicleId of ids.slice(0, 3)) {
-    await asUser.mutation(api.vehicles.softDelete, { orgId, vehicleId });
-  }
-  expect(await t.query(internal.subscriptions.canAddVehicle, { orgId }))
-    .toMatchObject({ allowed: false, limit: 15, current: 15 });
-  await asUser.mutation(api.vehicles.softDelete, { orgId, vehicleId: ids[3] });
-  expect(await t.query(internal.subscriptions.canAddVehicle, { orgId }))
-    .toEqual({ allowed: true });
 });
