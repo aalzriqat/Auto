@@ -734,7 +734,6 @@ jobs:
           docker run --detach \
             --name "$CANDIDATE_CONTAINER" \
             --network "$CANDIDATE_NETWORK" \
-            --publish 127.0.0.1:3000:3000 \
             --cap-drop ALL \
             --security-opt no-new-privileges \
             --volume "$RUNNER_TEMP/browser-swarm-candidate-build/runtime:/app:ro" \
@@ -749,6 +748,16 @@ jobs:
             --env NEXT_PUBLIC_APP_URL \
             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
             node server.js
+
+          # Docker does not forward --publish ports for a container whose only
+          # network is --internal, so the host could never reach a healthy server.
+          # Keep the candidate without a route out and relay loopback to its
+          # address on the internal network instead.
+          CANDIDATE_IP="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CANDIDATE_CONTAINER")"
+          nohup node trusted/scripts/intelligence/browserSwarmLoopbackForward.mjs \
+            --listen-port 3000 --target-host "$CANDIDATE_IP" --target-port 3000 \
+            > "$RUNNER_TEMP/loopback-forward.log" 2>&1 &
+          echo "LOOPBACK_FORWARD_PID=$!" >> "$GITHUB_ENV"
 
           for attempt in $(seq 1 60); do
             if curl --fail --silent --show-error http://127.0.0.1:3000/api/health > /dev/null; then
@@ -785,6 +794,9 @@ jobs:
       - name: Stop isolated trusted E2E candidate frontend
         if: always()
         run: |
+          if [ -n "${LOOPBACK_FORWARD_PID:-}" ]; then
+            kill "$LOOPBACK_FORWARD_PID" >/dev/null 2>&1 || true
+          fi
           if [ -n "${CANDIDATE_CONTAINER:-}" ]; then
             docker rm --force "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
           fi
@@ -943,11 +955,19 @@ jobs:
           echo "CANDIDATE_CONTAINER=$CANDIDATE_CONTAINER" >> "$GITHUB_ENV"
           echo "CANDIDATE_NETWORK=$CANDIDATE_NETWORK" >> "$GITHUB_ENV"
 
-          # Runtime candidate code gets no default route to the Internet. The
-          # trusted host can still reach its published loopback port.
+          # Runtime candidate code gets no default route to the Internet. Docker
+          # does not forward --publish ports for a container whose only network is
+          # --internal, so the trusted host relays loopback to the container's
+          # address on that network instead.
           docker network create --internal "$CANDIDATE_NETWORK" >/dev/null
 
-          docker run --detach             --name "$CANDIDATE_CONTAINER"             --network "$CANDIDATE_NETWORK"             --publish 127.0.0.1:3000:3000             --cap-drop ALL             --security-opt no-new-privileges             --volume "$RUNNER_TEMP/browser-swarm-candidate-build/runtime:/app:ro"             --workdir /app             --env HOME=/tmp/home             --env HOSTNAME=0.0.0.0             --env PORT=3000             --env NEXT_PUBLIC_CONVEX_URL             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY             --env CLERK_JWT_KEY             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY             --env NEXT_PUBLIC_APP_URL             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5             node server.js
+          docker run --detach             --name "$CANDIDATE_CONTAINER"             --network "$CANDIDATE_NETWORK"             --cap-drop ALL            --security-opt no-new-privileges             --volume "$RUNNER_TEMP/browser-swarm-candidate-build/runtime:/app:ro"             --workdir /app             --env HOME=/tmp/home             --env HOSTNAME=0.0.0.0             --env PORT=3000             --env NEXT_PUBLIC_CONVEX_URL             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY             --env CLERK_JWT_KEY             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY             --env NEXT_PUBLIC_APP_URL             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5             node server.js
+
+          CANDIDATE_IP="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CANDIDATE_CONTAINER")"
+          nohup node trusted/scripts/intelligence/browserSwarmLoopbackForward.mjs \
+            --listen-port 3000 --target-host "$CANDIDATE_IP" --target-port 3000 \
+            > "$RUNNER_TEMP/loopback-forward.log" 2>&1 &
+          echo "LOOPBACK_FORWARD_PID=$!" >> "$GITHUB_ENV"
 
           for attempt in $(seq 1 60); do
             if curl --fail --silent --show-error               http://127.0.0.1:3000/api/health > /dev/null; then
@@ -998,6 +1018,9 @@ jobs:
       - name: Stop isolated candidate frontend
         if: always()
         run: |
+          if [ -n "${LOOPBACK_FORWARD_PID:-}" ]; then
+            kill "$LOOPBACK_FORWARD_PID" >/dev/null 2>&1 || true
+          fi
           if [ -n "${CANDIDATE_CONTAINER:-}" ]; then
             docker rm --force "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
           fi
