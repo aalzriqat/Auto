@@ -762,6 +762,7 @@ jobs:
           fi
           CANDIDATE_IP="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CANDIDATE_CONTAINER")"
           FORWARD_LOG="$RUNNER_TEMP/loopback-forward.log"
+          rm -f "$FORWARD_LOG"
           nohup node trusted/scripts/intelligence/browserSwarmLoopbackForward.mjs \
             --listen-port 3000 --target-host "$CANDIDATE_IP" --target-port 3000 \
             > "$FORWARD_LOG" 2>&1 &
@@ -781,12 +782,20 @@ jobs:
           if [ "$forward_ready" != "true" ]; then
             echo "::error::Loopback forwarder did not bind 127.0.0.1:3000"
             cat "$FORWARD_LOG" || true
-            exit 1
           fi
+          # Not ready: skip the health wait and fall through to the fenced
+          # container diagnostics so a crashed candidate stays observable.
+          HEALTH_ATTEMPTS=60
+          [ "$forward_ready" = "true" ] || HEALTH_ATTEMPTS=0
 
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 "$HEALTH_ATTEMPTS"); do
             if curl --fail --silent --show-error http://127.0.0.1:3000/api/health > /dev/null; then
-              exit 0
+              # Health only counts if THIS forwarder is still the thing answering.
+              if kill -0 "$LOOPBACK_FORWARD_PID" 2>/dev/null; then
+                exit 0
+              fi
+              echo "::error::Loopback forwarder died; refusing a health answer from a replacement listener"
+              break
             fi
             if [ "$(docker inspect --format '{{.State.Running}}' "$CANDIDATE_CONTAINER" 2>/dev/null || echo false)" != "true" ]; then
               echo "::error::Candidate container exited before answering /api/health"
@@ -1006,6 +1015,7 @@ jobs:
           fi
           CANDIDATE_IP="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CANDIDATE_CONTAINER")"
           FORWARD_LOG="$RUNNER_TEMP/loopback-forward.log"
+          rm -f "$FORWARD_LOG"
           nohup node trusted/scripts/intelligence/browserSwarmLoopbackForward.mjs \
             --listen-port 3000 --target-host "$CANDIDATE_IP" --target-port 3000 \
             > "$FORWARD_LOG" 2>&1 &
@@ -1025,12 +1035,20 @@ jobs:
           if [ "$forward_ready" != "true" ]; then
             echo "::error::Loopback forwarder did not bind 127.0.0.1:3000"
             cat "$FORWARD_LOG" || true
-            exit 1
           fi
+          # Not ready: skip the health wait and fall through to the fenced
+          # container diagnostics so a crashed candidate stays observable.
+          HEALTH_ATTEMPTS=60
+          [ "$forward_ready" = "true" ] || HEALTH_ATTEMPTS=0
 
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 "$HEALTH_ATTEMPTS"); do
             if curl --fail --silent --show-error               http://127.0.0.1:3000/api/health > /dev/null; then
-              exit 0
+              # Health only counts if THIS forwarder is still the thing answering.
+              if kill -0 "$LOOPBACK_FORWARD_PID" 2>/dev/null; then
+                exit 0
+              fi
+              echo "::error::Loopback forwarder died; refusing a health answer from a replacement listener"
+              break
             fi
             if [ "$(docker inspect --format '{{.State.Running}}' "$CANDIDATE_CONTAINER" 2>/dev/null || echo false)" != "true" ]; then
               echo "::error::Candidate container exited before answering /api/health"

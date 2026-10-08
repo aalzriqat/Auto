@@ -707,6 +707,20 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       expect(run.indexOf("^loopback forward 127.0.0.1:3000")).toBeLessThan(run.indexOf("for attempt in"));
       expect(run, jobName).toContain("did not bind 127.0.0.1:3000");
       expect(run, jobName).toContain("Loopback forwarder exited before the candidate answered");
+      // Success is only reported while this forwarder is alive (no replacement listener).
+      const okIndex = run.indexOf("exit 0");
+      expect(okIndex, jobName).toBeGreaterThan(-1);
+      expect(run.lastIndexOf('kill -0 "$LOOPBACK_FORWARD_PID"', okIndex), jobName).toBeGreaterThan(
+        run.indexOf("curl --fail"),
+      );
+      expect(run, jobName).toContain("refusing a health answer from a replacement listener");
+      // A forwarder that never binds skips the health wait but still reaches the
+      // fenced container diagnostics instead of exiting before them.
+      expect(run, jobName).toContain('seq 1 "$HEALTH_ATTEMPTS"');
+      expect(run, jobName).toContain('[ "$forward_ready" = "true" ] || HEALTH_ATTEMPTS=0');
+      const notReady = run.slice(run.indexOf("did not bind 127.0.0.1:3000"), run.indexOf("HEALTH_ATTEMPTS=60"));
+      expect(notReady, jobName).not.toContain("exit 1");
+      expect(run, jobName).toContain('rm -f "$FORWARD_LOG"');
       // Control + log on the failure path.
       expect(run, jobName).toContain('"http://$CANDIDATE_IP:3000/api/health"');
       expect(run, jobName).toContain('cat "$FORWARD_LOG"');
