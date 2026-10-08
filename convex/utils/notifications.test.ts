@@ -34,7 +34,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function seedOrg(t: ReturnType<typeof convexTestWithComponents>) {
+async function seedOrg(t: ReturnType<typeof convexTestWithComponents<typeof schema>>) {
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() }));
 
   const ownerRoleId = await t.run((ctx) =>
@@ -55,7 +55,7 @@ async function seedOrg(t: ReturnType<typeof convexTestWithComponents>) {
 }
 
 /** Owner + accountant (holds manage:finance) + sales (doesn't) — for notifyFinanceManagers tests. */
-async function seedFinanceOrg(t: ReturnType<typeof convexTestWithComponents>) {
+async function seedFinanceOrg(t: ReturnType<typeof convexTestWithComponents<typeof schema>>) {
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Finance Org", createdAt: Date.now() }));
 
   const ownerRoleId = await t.run((ctx) =>
@@ -453,7 +453,7 @@ describe("dispatch helpers", () => {
 // other three did not, so an offboarding manager still received deal links and
 // amounts through them.
 describe("offboarding members receive no routine notifications (SCRUM-789)", () => {
-  async function offboard(t: ReturnType<typeof convexTestWithComponents>, userId: string, orgId: string) {
+  async function offboard(t: ReturnType<typeof convexTestWithComponents<typeof schema>>, userId: string, orgId: string) {
     await t.run(async (ctx) => {
       const m = await ctx.db
         .query("memberships")
@@ -462,7 +462,7 @@ describe("offboarding members receive no routine notifications (SCRUM-789)", () 
       await ctx.db.patch(m!._id, { offboardingStatus: "PENDING_EXTERNAL_REMOVAL" });
     });
   }
-  const rowsFor = (t: ReturnType<typeof convexTestWithComponents>, userId: string) =>
+  const rowsFor = (t: ReturnType<typeof convexTestWithComponents<typeof schema>>, userId: string) =>
     t.run((ctx) => ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", userId as never)).collect());
 
   test("notifyManagers skips an offboarding manager but still notifies active ones", async () => {
