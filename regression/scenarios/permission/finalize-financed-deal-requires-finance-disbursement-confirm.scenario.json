@@ -1,0 +1,45 @@
+{
+  "id": "finalize-financed-deal-requires-finance-disbursement-confirm",
+  "fingerprint": "42716ea1df2853c1ad512ec2e65ada7885b9c7bc34d5354aa694a2d0d9a885d4",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum761-s2b-backfill",
+    "firstSeen": "2026-10-08"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "sales",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "route": "THROUGH_DEALERSHIP"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "confirm:finance_disbursement"
+    },
+    {
+      "observable": "step1.salesRows",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/financedConsignedSettlement.test.ts",
+    "testName": "a SALES-template member cannot finalize a financed deal; an ACCOUNTANT-template member can"
+  },
+  "matrixRow": "SCRUM-407-finalize-auth"
+}
