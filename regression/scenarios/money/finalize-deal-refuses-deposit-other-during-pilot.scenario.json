@@ -1,6 +1,6 @@
 {
   "id": "finalize-deal-refuses-deposit-other-during-pilot",
-  "fingerprint": "099119ff33d40e48b2c6471c96c0c8774602ccfb49ee817a764ea8ac25f02a7c",
+  "fingerprint": "512805a078b6704a13a84a362af06b632f0c7577ef8eaa15f33366a8baa1837d",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -15,7 +15,7 @@
         "role": "approver",
         "org": "A"
       },
-      "action": "deals.finalizeDeal",
+      "action": "applications.finalizeDeal",
       "input": {
         "route": "THROUGH_DEALERSHIP",
         "deposit": 3000,

@@ -1,6 +1,6 @@
 {
   "id": "sale-create-refuses-deposit-other-during-pilot",
-  "fingerprint": "f35d06c470ba35a0f0f77db71399b588bca32d6dea6028bbf7756656505d2125",
+  "fingerprint": "347bcecacd5956ba08f55825e9bdae57b43d82b79916490134f9433aa3b50a4b",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -12,7 +12,7 @@
   "steps": [
     {
       "actor": {
-        "role": "approver",
+        "role": "owner",
         "org": "A"
       },
       "action": "sales.create",

@@ -1,6 +1,6 @@
 {
   "id": "released-share-other-refused-during-pilot",
-  "fingerprint": "d19280f14925125add05dc5718b3e93c5b5e016548506b3dd53b70c56fb2e60c",
+  "fingerprint": "1d3fa0182066c1cfbbbe6cadd20fdd20614ee3f9b07477ef8f71f1e82244041f",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -12,7 +12,7 @@
   "steps": [
     {
       "actor": {
-        "role": "approver",
+        "role": "manager",
         "org": "A"
       },
       "action": "deposits.resolveReleasedAllocation",

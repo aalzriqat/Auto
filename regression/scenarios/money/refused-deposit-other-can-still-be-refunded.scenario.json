@@ -1,6 +1,6 @@
 {
   "id": "refused-deposit-other-can-still-be-refunded",
-  "fingerprint": "7f905fdc77e98d5fd550600a1371e0b8de8d7d27710a28437081f33bceced915",
+  "fingerprint": "608af6ef3c47ddc3cee171ee988cfc710b6a889656042b7ebacc56003f5c7974",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -12,7 +12,7 @@
   "steps": [
     {
       "actor": {
-        "role": "approver",
+        "role": "manager",
         "org": "A"
       },
       "action": "sales.create",

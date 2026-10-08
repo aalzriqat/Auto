@@ -1,6 +1,6 @@
 {
   "id": "complete-from-quote-refuses-deposit-other-during-pilot",
-  "fingerprint": "7e77b92e4a34d5e2d84edb381a24f926945dd6f7f5e11faec0f6eb26d1731946",
+  "fingerprint": "1cca48af6b4d34792faedbdc7f45971d455b5a9218cc1a4acba989b57a84a0f0",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -12,7 +12,7 @@
   "steps": [
     {
       "actor": {
-        "role": "approver",
+        "role": "owner",
         "org": "A"
       },
       "action": "sales.completeFromQuote",
