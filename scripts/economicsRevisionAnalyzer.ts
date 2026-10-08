@@ -36,6 +36,10 @@ export const ECONOMICS_FIELDS = [
   "customerFirstPaymentMinor",
   // Nested inside `manualApproval`; moved post-handover by the manual approval.
   "dealerSendsMinor",
+  // SCRUM-766: the amount the parties split. A held confirmation or an open
+  // resolution dialog is stale the moment it moves.
+  "netShortfallMinor",
+  "netShortfallMethod",
 ];
 
 export type Offence = { file: string; snippet: string };

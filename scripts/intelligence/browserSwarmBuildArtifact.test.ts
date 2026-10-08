@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   BUILD_MANIFEST_FILE,
+  byCodeUnit,
   createBrowserSwarmBuildArtifact,
   verifyBrowserSwarmBuildArtifact,
 } from "./browserSwarmBuildArtifact.mjs";
@@ -74,6 +75,42 @@ describe("SCRUM-350 immutable candidate build artifact", () => {
         prNumber: identity.prNumber,
         runId: identity.runId,
       });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("hoists pnpm's virtual-store dependencies so the materialized tree can resolve them (SCRUM-376)", async () => {
+    // Materializing pnpm's symlinked node_modules turns node_modules/next into a
+    // real copy whose sibling dependencies (e.g. @swc/helpers) are no longer
+    // reachable by Node's resolution, so `node server.js` died on require. A
+    // real run failed exactly this way. The dependencies live under
+    // node_modules/.pnpm/node_modules and must be reachable from node_modules.
+    const f = await fixture();
+    try {
+      const nm = path.join(f.candidateRoot, ".next/standalone/node_modules");
+      await mkdir(path.join(nm, "next"), { recursive: true });
+      await mkdir(path.join(nm, ".pnpm/node_modules/@swc/helpers"), { recursive: true });
+      await mkdir(path.join(nm, ".pnpm/node_modules/styled-jsx"), { recursive: true });
+      await mkdir(path.join(nm, ".pnpm/node_modules/next"), { recursive: true });
+      await writeFile(path.join(nm, "next/index.js"), "top-level next\n", "utf8");
+      await writeFile(path.join(nm, ".pnpm/node_modules/next/index.js"), "virtual next\n", "utf8");
+      await writeFile(path.join(nm, ".pnpm/node_modules/@swc/helpers/index.js"), "swc\n", "utf8");
+      await writeFile(path.join(nm, ".pnpm/node_modules/styled-jsx/index.js"), "sjx\n", "utf8");
+
+      await createBrowserSwarmBuildArtifact({
+        candidateRoot: f.candidateRoot,
+        artifactRoot: f.artifactRoot,
+        identity,
+      });
+      const runtimeNm = path.join(f.artifactRoot, "runtime/node_modules");
+      expect(await readFile(path.join(runtimeNm, "@swc/helpers/index.js"), "utf8")).toBe("swc\n");
+      expect(await readFile(path.join(runtimeNm, "styled-jsx/index.js"), "utf8")).toBe("sjx\n");
+      // An existing top-level package is never replaced by the virtual-store one.
+      expect(await readFile(path.join(runtimeNm, "next/index.js"), "utf8")).toBe("top-level next\n");
+      await expect(
+        verifyBrowserSwarmBuildArtifact({ artifactRoot: f.artifactRoot, expected: identity }),
+      ).resolves.toMatchObject({ testedSha: identity.testedSha });
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -254,5 +291,35 @@ describe("SCRUM-350 immutable candidate build artifact", () => {
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("byCodeUnit", () => {
+  // The pnpm hoist copies packages in sorted order. Sonar S2871 requires an
+  // explicit comparator, but it must keep the UTF-16 code-unit order that the
+  // default Array#sort gave (upper case before lower case, "@" scopes first),
+  // not a locale-aware order.
+  it("orders exactly like the default sort for mixed-case and scoped names", () => {
+    const names = ["zod", "Zod", "@swc", "@Types", "@types", "a-b", "A-B", "ab", "＠scope", "@scope"];
+    expect([...names].sort(byCodeUnit)).toEqual([
+      "@Types",
+      "@scope",
+      "@swc",
+      "@types",
+      "A-B",
+      "Zod",
+      "a-b",
+      "ab",
+      "zod",
+      "＠scope",
+    ]);
+  });
+
+  it("is not locale-aware: upper case sorts before lower case", () => {
+    expect(["a", "B"].sort(byCodeUnit)).toEqual(["B", "a"]);
+  });
+
+  it("returns 0 for equal names", () => {
+    expect(byCodeUnit("x", "x")).toBe(0);
   });
 });

@@ -360,6 +360,7 @@ describe("G4 — a failed gap negotiation is not a dead end", () => {
             expenses: { lines: [], actualTotalMinor: 0, awaitingActuals: 0 },
             parties: [],
             appraisalGapMinor: 500 * JOD,
+            shortfall: { method: "NET", totalMinor: 425 * JOD, valuationMinor: 425 * JOD, termsMinor: 0 },
           },
         }
       )

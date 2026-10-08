@@ -652,6 +652,119 @@ export function computeAppraisalGap(input: AppraisalGapInput): AppraisalGap {
   };
 }
 
+/** The quote-time side of the net shortfall: what the quotation promised. */
+export interface NetShortfallQuoteSide {
+  quotationMinor: number;
+  /** The LTV the quotation was solved with (frozen at quote time, never the approval's). */
+  appliedLtvPercent: number;
+  customerFirstPaymentMinor: number;
+  /** Defaults to the quotation. */
+  ltvBaseMinor?: number;
+}
+
+/** The outcome side of the net shortfall: what the finance company actually approved. */
+export interface NetShortfallActualSide {
+  approvedPurchaseAmountMinor: number;
+  appliedLtvPercent: number;
+  customerFirstPaymentMinor: number;
+  /** Defaults to the approved amount. */
+  ltvBaseMinor?: number;
+}
+
+export interface NetShortfall {
+  /**
+   * How much LESS actually remained for the showroom than the quotation
+   * promised. Signed and unfloored: negative means the showroom ended up
+   * better off. This is the whole amount customer, showroom and supplier split.
+   */
+  totalNetShortfallMinor: number;
+  /**
+   * The part caused by the vehicle being valued below the quotation, at the
+   * quote-time LTV. The effect of a changed first payment lands here too.
+   */
+  valuationShortfallMinor: number;
+  /** The part caused by the finance company's LTV differing from the quote-time LTV. */
+  financingTermsShortfallMinor: number;
+  requiresResolution: boolean;
+}
+
+/**
+ * What the showroom is paid out of a purchase, i.e. approved − its own
+ * contribution: the finance company's funded portion plus the customer's
+ * applied first payment.
+ */
+function showroomRemainderMinor(
+  purchaseAmountMinor: number,
+  appliedLtvPercent: number,
+  customerFirstPaymentMinor: number,
+  ltvBaseMinor: number | undefined
+): number {
+  const composition = computeFundingComposition({
+    approvedPurchaseAmountMinor: purchaseAmountMinor,
+    appliedLtvPercent,
+    customerFirstPaymentMinor,
+    ltvBaseMinor,
+  });
+  return purchaseAmountMinor - composition.dealerContributionMinor;
+}
+
+/**
+ * The owner's NET shortfall (SCRUM-407 c21031 rule 7; SCRUM-766 c22413 and the
+ * batch-2 first-payment ruling):
+ *
+ *   (quotation − quote-time showroom contribution)
+ *     − (approved − actual showroom contribution)
+ *
+ * each side with its OWN first payment, LTV and LTV base. The quote-time side is
+ * the frozen baseline; an approval at the quotation therefore has no shortfall
+ * unless the terms moved. 12,500 → 11,500 at 85% is 850 (not the gross 1,000).
+ *
+ * The breakdown telescopes through the intermediate "actual amount at the
+ * quote-time LTV", so the two components always sum to the total exactly.
+ * Whether the LTV base was knowable is the caller's question: a missing
+ * quote-time operand is UNAVAILABLE there, never guessed here.
+ */
+export function computeNetShortfall(input: {
+  quote: NetShortfallQuoteSide;
+  actual: NetShortfallActualSide;
+}): NetShortfall {
+  const { quote, actual } = input;
+  assertNonNegativeMinor(quote.quotationMinor, "Submitted quotation");
+  assertNonNegativeMinor(actual.approvedPurchaseAmountMinor, "Approved purchase amount");
+  assertLtvPercent(quote.appliedLtvPercent);
+  assertLtvPercent(actual.appliedLtvPercent);
+
+  const quoted = showroomRemainderMinor(
+    quote.quotationMinor,
+    quote.appliedLtvPercent,
+    quote.customerFirstPaymentMinor,
+    quote.ltvBaseMinor
+  );
+  const approvedAtQuoteLtv = showroomRemainderMinor(
+    actual.approvedPurchaseAmountMinor,
+    quote.appliedLtvPercent,
+    actual.customerFirstPaymentMinor,
+    actual.ltvBaseMinor
+  );
+  const approvedAtActualLtv = showroomRemainderMinor(
+    actual.approvedPurchaseAmountMinor,
+    actual.appliedLtvPercent,
+    actual.customerFirstPaymentMinor,
+    actual.ltvBaseMinor
+  );
+
+  const valuationShortfallMinor = quoted - approvedAtQuoteLtv;
+  const financingTermsShortfallMinor = approvedAtQuoteLtv - approvedAtActualLtv;
+  const totalNetShortfallMinor = valuationShortfallMinor + financingTermsShortfallMinor;
+
+  return {
+    totalNetShortfallMinor,
+    valuationShortfallMinor,
+    financingTermsShortfallMinor,
+    requiresResolution: totalNetShortfallMinor > 0,
+  };
+}
+
 /** Where a customer's share of the gap is actually paid. */
 export interface GapShareSettlement {
   customerGapShareMinor: number;
@@ -676,7 +789,7 @@ export interface GapShareViolation {
  * Checks the two gap invariants the dealer confirmed.
  *
  * ```
- * customerGapShare + dealerGapShare = rawAppraisalGap
+ * customerGapShare + dealerGapShare = shortfall (the net shortfall, SCRUM-766)
  * customerCash + customerInstallments + customerToFinanceCompany = customerGapShare
  * ```
  *
@@ -687,13 +800,13 @@ export interface GapShareViolation {
  * destination is exactly how that error gets made.
  */
 export function validateGapShares(
-  rawAppraisalGapMinor: number,
+  shortfallMinor: number,
   settlement: GapShareSettlement
 ): GapShareViolation[] {
   const violations: GapShareViolation[] = [];
 
   const amounts: Array<[number, string]> = [
-    [rawAppraisalGapMinor, "Raw appraisal gap"],
+    [shortfallMinor, "Shortfall"],
     [settlement.customerGapShareMinor, "Customer gap share"],
     [settlement.dealerGapShareMinor, "Dealer gap share"],
     [settlement.customerGapCashToDealerMinor, "Customer gap cash to dealer"],
@@ -711,10 +824,10 @@ export function validateGapShares(
   if (violations.length > 0) return violations;
 
   const sharesTotal = settlement.customerGapShareMinor + settlement.dealerGapShareMinor;
-  if (sharesTotal !== rawAppraisalGapMinor) {
+  if (sharesTotal !== shortfallMinor) {
     violations.push({
       code: "SHARES_DO_NOT_SUM_TO_GAP",
-      message: `Customer share (${settlement.customerGapShareMinor}) plus dealer share (${settlement.dealerGapShareMinor}) is ${sharesTotal}, which must equal the raw appraisal gap of ${rawAppraisalGapMinor}.`,
+      message: `Customer share (${settlement.customerGapShareMinor}) plus dealer share (${settlement.dealerGapShareMinor}) is ${sharesTotal}, which must equal the shortfall of ${shortfallMinor}.`,
     });
   }
 
