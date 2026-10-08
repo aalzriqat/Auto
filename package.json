@@ -44,7 +44,8 @@
     "browser-swarm:prepare-trusted-run": "node scripts/intelligence/prepareTrustedBrowserSwarmRun.mjs",
     "browser-swarm:jev-exploration": "node scripts/intelligence/trustedBrowserJevSuggestions.mjs",
     "browser-swarm:build-artifact": "node scripts/intelligence/browserSwarmBuildArtifact.mjs",
-    "test:unified-deal-authority": "vitest run convex/unifiedDealFeeAuthority.test.ts"
+    "test:unified-deal-authority": "vitest run convex/unifiedDealFeeAuthority.test.ts",
+    "test:e2e": "e2e run"
   },
   "dependencies": {
     "@autoflow/shared": "workspace:*",
@@ -99,7 +100,9 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@ai-sdk/openai": "^4.0.89",
     "@convex-dev/eslint-plugin": "^1.2.2",
+    "@e2e-dev/web": "^0.13.0",
     "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4.2.2",
     "@testing-library/react": "^16.3.2",
@@ -108,7 +111,9 @@
     "@types/react-dom": "^19.2.3",
     "@types/web-push": "^3.6.4",
     "@vitest/coverage-v8": "^4.1.9",
+    "ai": "^7.0.0",
     "convex-test": "^0.0.53",
+    "e2e": "^0.18.0",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.2.4",
     "jsdom": "^29.1.1",
