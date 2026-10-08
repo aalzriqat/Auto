@@ -1,0 +1,55 @@
+{
+  "id": "financed-appraisal-gap-is-net-shortfall-and-blocks-the-rail",
+  "steps": [
+    {
+      "actor": {
+        "role": "approver",
+        "org": "A"
+      },
+      "action": "applications.dealCockpit",
+      "input": {
+        "quotedMinor": 12500000,
+        "approvedMinor": 11500000,
+        "financedPercent": 85
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "application.rawAppraisalGapMinor",
+      "value": 1000000
+    },
+    {
+      "observable": "application.netShortfallMinor",
+      "value": 850000
+    },
+    {
+      "observable": "application.gapResolution",
+      "value": "PENDING_NEGOTIATION"
+    },
+    {
+      "observable": "cockpit.approvedPurchaseStage.blocker",
+      "value": "GapUnresolved"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/financingEconomics.test.ts",
+    "testName": "12,500 quoted / 11,500 approved at 85% is an 850 NET shortfall (gross 1,000) the rail is blocked on"
+  },
+  "matrixRow": "pilot-financed-gap-net",
+  "fingerprint": "2ddef567344aebea44d589489a9b821fff82fdc1a102e88a8bfe63149f617245",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum761-pilot-path",
+    "firstSeen": "2026-10-08"
+  }
+}
