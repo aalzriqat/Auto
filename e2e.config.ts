@@ -62,6 +62,8 @@ export default {
         command: {
           executable: 'node',
           args: ['node_modules/next/dist/bin/next', 'dev'],
+          startupTimeout: 120_000,
+          log: '.e2e/artifacts/app.log',
           // e2e spawns commands with a filtered environment. Pass the checked URLs through so
           // Next cannot pick a different deployment from .env.local.
           env: {

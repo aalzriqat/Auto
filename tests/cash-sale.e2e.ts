@@ -73,6 +73,6 @@ test('a salesperson completes a cash sale and lands on the deal', { session: 'sa
   await expect(screen.getByText('Status history')).toBeVisible();
   await expect(screen.getByText(`Toyota ${model} 2022`)).toBeVisible();
   await expect(screen.getByText(vin)).toBeVisible();
-  await expect(screen.getByText(`Agentic ${lastName}`)).toBeVisible();
+  await expect(screen.getByText(`Agentic ${lastName}`).first()).toBeVisible();
   await agent.assert(`This deal page is for the Toyota "${model}" and the customer "Agentic ${lastName}".`);
 });
