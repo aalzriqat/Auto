@@ -206,6 +206,67 @@ async function materializeEntry({
   await chmod(destinationPath, info.mode & 0o777);
 }
 
+/**
+ * Explicit UTF-16 code-unit comparator (Sonar S2871). Deliberately not
+ * localeCompare: that reorders mixed-case names relative to the default sort
+ * this replaced, which would change the pnpm hoist copy order.
+ */
+export const byCodeUnit = (a, b) => {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+};
+
+/**
+ * pnpm's node_modules holds symlinks, and each real package keeps its own
+ * dependencies as siblings inside the virtual store. Materializing the links as
+ * copies strands those siblings, so `node server.js` dies on its first require
+ * (a real run failed on @swc/helpers). pnpm lists every package that was not
+ * linked at the top under node_modules/.pnpm/node_modules; copy each one that
+ * has no top-level counterpart so ordinary resolution finds it. Existing
+ * top-level packages are never replaced, and every copy goes through the same
+ * boundary and budget checks as the rest of the tree.
+ */
+async function hoistPnpmVirtualStore({
+  standaloneRoot,
+  runtimeRoot,
+  candidateBoundary,
+  budget,
+}) {
+  const hoistRoot = path.join(standaloneRoot, "node_modules", ".pnpm", "node_modules");
+  const names = await readdir(hoistRoot).catch(() => []);
+  const copyIfMissing = async (relative) => {
+    const destinationPath = path.join(runtimeRoot, "node_modules", relative);
+    if (await lstat(destinationPath).catch(() => null)) return;
+    await materializeEntry({
+      sourcePath: path.join(hoistRoot, relative),
+      destinationPath,
+      candidateBoundary,
+      ancestry: new Set(),
+      budget,
+    });
+  };
+  // Expand each scope directory in place so the copy order stays: sorted
+  // top-level names, with a scope's sorted children at the scope's position.
+  const expand = async (name) => {
+    if (!name.startsWith("@")) return [name];
+    const scoped = await readdir(path.join(hoistRoot, name)).catch(() => []);
+    return scoped.sort(byCodeUnit).map((child) => path.join(name, child));
+  };
+  const relatives = (
+    await Promise.all(
+      names
+        .filter((name) => !name.startsWith("."))
+        .sort(byCodeUnit)
+        .map(expand),
+    )
+  ).flat();
+  // Copies share one budget, so they must run one at a time and in order.
+  await relatives.reduce(
+    (previous, relative) => previous.then(() => copyIfMissing(relative)),
+    Promise.resolve(),
+  );
+}
+
 async function hashFile(filePath) {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(filePath)) {
@@ -451,6 +512,7 @@ export async function createBrowserSwarmBuildArtifact({
     ancestry: new Set(),
     budget,
   });
+  await hoistPnpmVirtualStore({ standaloneRoot, runtimeRoot, candidateBoundary, budget });
 
   await rm(path.join(runtimeRoot, ".next", "static"), {
     recursive: true,

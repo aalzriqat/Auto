@@ -339,9 +339,52 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(buildRun).toContain(
       "node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5",
     );
-    expect(buildRun).toContain("$GITHUB_WORKSPACE/candidate:/app");
+    // SCRUM-376 F1: the build container is the only writer of its mount, and
+    // actions/checkout later runs git on the checkout at job cleanup. The
+    // writable mount must therefore be a copy WITHOUT .git, never the checkout.
+    expect(buildRun).toContain("$RUNNER_TEMP/candidate-build-src:/app");
+    expect(buildRun).not.toContain("$GITHUB_WORKSPACE/candidate");
     expect(buildRun).toContain("--cap-drop ALL");
     expect(buildRun).toContain("--security-opt no-new-privileges");
+    // SCRUM-376: --cap-drop ALL removes CAP_DAC_OVERRIDE, so a root container
+    // cannot write the runner-owned (uid 1001, 755) bind mount and pnpm dies
+    // with EACCES on /app/_tmp_* (exit 243). The build must run as the owner
+    // of the mount, and corepack must not write shims into /usr/local/bin.
+    // Position and comments matter: a --user after the image name is a
+    // container argument, and a comment is not a flag. Inspect only the
+    // uncommented docker options that precede the image.
+    const dockerOptions = buildRun
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("#"))
+      .join("\n")
+      .replace(/\\\n/g, " ")
+      .split(/\s+node:22\./);
+    // The image token must exist, or the position guard silently covers nothing.
+    expect(dockerOptions.length).toBe(2);
+    // docker takes the LAST user flag, so the short form counts too.
+    const userFlags = dockerOptions[0].match(/(?:^|\s)(?:--user|-u)(?:=|\s+)("[^"]*"|\S+)/g) ?? [];
+    expect(userFlags.map((flag) => flag.trim())).toEqual(['--user "$(id -u):$(id -g)"']);
+    const copy = step(
+      "candidate-build",
+      "Copy candidate source without git metadata for the writable build",
+    );
+    expect(String(copy.run ?? "")).toContain("rsync -a --exclude=/.git");
+    // Opus L2: the copy must share no inode with the checkout, the only mount
+    // is the copy, and the copy happens before the build that writes to it.
+    expect(String(copy.run ?? "")).not.toMatch(/--link-dest|--hard-links|--copy-links|--inplace|\s-[a-zA-Z]*[HL]/);
+    expect(dockerOptions[0].match(/--volume\s+("[^"]*"|\S+)|(?:^|\s)-v\s+("[^"]*"|\S+)/g)?.map((v) => v.replace(/^\s*(--volume|-v)\s+/, ""))).toEqual([
+      '"$RUNNER_TEMP/candidate-build-src:/app"',
+    ]);
+    const buildSteps = workflow.jobs?.["candidate-build"]?.steps ?? [];
+    expect(buildSteps.indexOf(copy)).toBeGreaterThanOrEqual(0);
+    expect(buildSteps.indexOf(copy)).toBeLessThan(buildSteps.indexOf(build));
+    const artifact = step(
+      "candidate-build",
+      "Stage and hash exact-SHA candidate runtime artifact",
+    );
+    expect(artifact.env?.CANDIDATE_ROOT).toBe("${{ runner.temp }}/candidate-build-src");
+    expect(buildRun).toContain('corepack enable --install-directory "$HOME/bin"');
+    expect(buildRun).not.toMatch(/corepack enable\s*(&&|;|\n)/);
     expect(buildRun).not.toContain("/var/run/docker.sock");
     expect(buildRun).not.toContain("$GITHUB_WORKSPACE/trusted");
 
@@ -629,6 +672,41 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       step("attack-worker", "Stop isolated candidate frontend").run ?? "",
     );
     expect(stopRun).toContain('docker network rm "$CANDIDATE_NETWORK"');
+  });
+
+  it("keeps a failed candidate runtime observable instead of destroying its logs (SCRUM-376)", () => {
+    // `docker run --rm` deleted a crashed candidate along with its stderr, so
+    // two different boot failures were diagnosed blind. The container must
+    // survive its own death, and the step must print exit state plus logs.
+    for (const jobName of ["trusted-e2e", "attack-worker"] as const) {
+      const run = String(
+        step(jobName, "Start verified exact-SHA candidate frontend artifact")
+          .run ?? "",
+      );
+      // Join backslash continuations so a flag on any line of the command counts.
+      const joined = run.replace(/\\\r?\n\s*/g, " ");
+      const dockerRun = joined.split("\n").find((line) => /docker run /.test(line));
+      expect(dockerRun, jobName).toBeDefined();
+      expect(dockerRun, jobName).not.toMatch(/(^|\s)--rm(\s|$)/);
+      // A stopped candidate must stop the wait loop immediately.
+      expect(run, jobName).toContain("{{.State.Running}}");
+      // Diagnostics: exit state, then the LAST bytes of the log (the boot error
+      // is at the end), fenced so candidate text cannot be read as runner commands.
+      const stop = run.indexOf('echo "::stop-commands::$LOG_FENCE"');
+      const inspect = run.indexOf("docker inspect --format 'state=");
+      const logs = run.search(/docker logs --tail \d+ "\$CANDIDATE_CONTAINER" 2>&1 \| tail -c \d+/);
+      const resume = run.indexOf('echo "::$LOG_FENCE::"');
+      expect(run, jobName).toContain("od -An -N16 -tx1 /dev/urandom");
+      expect(stop, jobName).toBeGreaterThan(-1);
+      expect(stop, jobName).toBeLessThan(inspect);
+      expect(inspect, jobName).toBeLessThan(logs);
+      expect(logs, jobName).toBeLessThan(resume);
+      expect(run, jobName).not.toMatch(/head -c/);
+      const stopRun = (workflow.jobs?.[jobName]?.steps ?? [])
+        .map((entry) => String(entry.run ?? ""))
+        .join("\n");
+      expect(stopRun, jobName).toContain('docker rm --force "$CANDIDATE_CONTAINER"');
+    }
   });
 
   it("grants privileged workflow permissions only to the trusted jobs that need them", () => {

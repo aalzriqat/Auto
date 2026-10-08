@@ -2071,7 +2071,11 @@ export function DealCockpit({
     // CUSTOMER_ABSORBS / DEALER_ABSORBS / SPLIT, and the rail hands both
     // blockers to the dealership for exactly this action.
     if (liveStage?.blocker === "GapUnresolved" || liveStage?.blocker === "GapNegotiationFailed") {
-      const gapVisible = typeof deal.money?.appraisalGapMinor === "number";
+      // The amount to settle is the server's NET shortfall (SCRUM-766). An
+      // UNAVAILABLE one has no amount to settle: say so instead of offering a
+      // dialog that would allocate nothing.
+      const shortfallUnavailable = deal.money?.shortfall?.method === "UNAVAILABLE";
+      const gapVisible = typeof deal.money?.shortfall?.totalMinor === "number";
       const handedOverAt = app?.vehicleHandoverAt;
       // `>=`, as the mutation compares: equal timestamps are ambiguous (two
       // writes can share a millisecond) and are deliberately admitted.
@@ -2095,9 +2099,11 @@ export function DealCockpit({
             ? "GapResolutionNeedsPermission"
             : ownDeal
               ? "GapResolutionSelfDeal"
-              : gapVisible
-                ? undefined
-                : "GapResolutionNeedsDealFigures",
+              : shortfallUnavailable
+                ? "GapShortfallUnavailable"
+                : gapVisible
+                  ? undefined
+                  : "GapResolutionNeedsDealFigures",
       };
     }
 
@@ -4455,16 +4461,22 @@ function CustomerInvoiceFact({
  */
 function AppraisalGapNote({
   amountMinor,
+  unavailable,
   money,
   t,
 }: Readonly<{
   amountMinor: number | undefined;
+  /** The shortfall could not be measured: say so, never "None" (SCRUM-766). */
+  unavailable: boolean;
   money: (minor: number) => string;
   t: (key: string) => string;
 }>) {
+  let value: React.ReactNode = t("NoAppraisalGap");
+  if (unavailable) value = t("AppraisalGapUnavailable");
+  else if (amountMinor !== undefined && amountMinor > 0) value = <Money>{money(amountMinor)}</Money>;
   return (
     <p className="text-xs text-muted-foreground">
-      {t("AppraisalGapLabel")}: {amountMinor ? <Money>{money(amountMinor)}</Money> : t("NoAppraisalGap")}
+      {t("AppraisalGapLabel")}: {value}
     </p>
   );
 }
@@ -4544,7 +4556,7 @@ function MoneyPanel({
    */
   parties: Readonly<{
     items: DealMoney["parties"];
-    appraisalGap: Readonly<{ amountMinor: number | undefined }> | null;
+    appraisalGap: Readonly<{ amountMinor: number | undefined; unavailable: boolean }> | null;
     onSettleSupplier: (() => void) | undefined;
     supplierGuidance: string | undefined;
   }> | null;
@@ -4618,7 +4630,12 @@ function MoneyPanel({
               t={t}
             />
             {parties.appraisalGap && (
-              <AppraisalGapNote amountMinor={parties.appraisalGap.amountMinor} money={money} t={t} />
+              <AppraisalGapNote
+                amountMinor={parties.appraisalGap.amountMinor}
+                unavailable={parties.appraisalGap.unavailable}
+                money={money}
+                t={t}
+              />
             )}
           </div>
         )}
@@ -6023,7 +6040,10 @@ export function DealCockpitView({
                         items: deal.money.parties,
                         appraisalGap:
                           deal.applicationId !== null
-                            ? { amountMinor: deal.money.appraisalGapMinor }
+                            ? {
+                                amountMinor: deal.money.shortfall?.totalMinor,
+                                unavailable: deal.money.shortfall?.method === "UNAVAILABLE",
+                              }
                             : null,
                         onSettleSupplier: canSettleSupplier ? () => setSettlingSupplier(true) : undefined,
                         supplierGuidance,
@@ -7224,11 +7244,22 @@ export function DealCockpitView({
           derives it, because a locally computed gap could disagree with the one
           the mutation reconciles against and reject the operator's arithmetic
           for being right. */}
-      {gapResolution && typeof deal?.money?.appraisalGapMinor === "number" && (
+      {gapResolution && typeof deal?.money?.shortfall?.totalMinor === "number" && (
         <ResolveGapDialog
           open={gapResolution.resolving}
           submitting={gapResolution.submitting}
-          rawAppraisalGapMinor={deal.money.appraisalGapMinor}
+          shortfallMinor={deal.money.shortfall.totalMinor}
+          breakdown={
+            deal.money.shortfall.method === "NET" &&
+            typeof deal.money.shortfall.valuationMinor === "number" &&
+            typeof deal.money.shortfall.termsMinor === "number"
+              ? {
+                  valuationMinor: deal.money.shortfall.valuationMinor,
+                  termsMinor: deal.money.shortfall.termsMinor,
+                }
+              : null
+          }
+          grossLabel={deal.money.shortfall.method !== "NET"}
           submittedQuotationMinor={gapResolution.submittedQuotationMinor}
           approvedPurchaseAmountMinor={gapResolution.approvedPurchaseAmountMinor}
           economicsStamp={"economicsStamp" in deal ? deal.economicsStamp : undefined}

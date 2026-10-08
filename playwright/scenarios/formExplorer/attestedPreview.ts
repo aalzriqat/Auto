@@ -54,7 +54,7 @@ export function attestedPreview(): { url: string | undefined; orgId: string | un
   const reason = (lines.find((l) => /Error/.test(l)) ?? lines.at(-1))?.trim() ?? `exit ${res.status}`;
   console.warn(`Preview attestation failed: ${reason}`);
   if (process.env.GITHUB_ACTIONS === "true") {
-    console.log(`::warning title=Jev form explorer skipped::Preview attestation failed (${reason}); the explorer did not run.`);
+    console.log(`::error title=Jev form explorer could not run::Preview attestation failed (${reason}); the opted-in explorer fails.`);
   }
   return undefined;
 }

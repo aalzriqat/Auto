@@ -62,6 +62,19 @@ type DealerRuleArgs = {
  * v.number() accepts NaN and Infinity, and NaN defeats every range comparison
  * (NaN > 100 is false), so each check is written to reject rather than accept.
  */
+/**
+ * SCRUM-766 (owner ruling c22425): the approved purchase amount is the only
+ * money authority. The two appraisal bases are legacy - no company uses one -
+ * and are refused on save until the enum values are retired (follow-up issue).
+ */
+function assertLtvBasisSavable(ltvBasis: string | undefined): void {
+  if (ltvBasis === "INDEPENDENT_APPRAISAL" || ltvBasis === "LOWER_OF_APPRAISAL_AND_QUOTATION") {
+    throw new ConvexError(
+      "This LTV basis is retired. A finance company's funding is worked out from the approved purchase amount; the appraisal is kept only as the reason for an approval."
+    );
+  }
+}
+
 function assertDealerRulesValid(rules: DealerRuleArgs, currency?: string): void {
   if (rules.adminFees !== undefined) {
     if (!Number.isFinite(rules.adminFees) || rules.adminFees < 0) {
@@ -264,6 +277,7 @@ export const createCompany = mutation({
     const orgCurrency = await getOrgCurrency(ctx, args.orgId);
     assertCustomerLoanTermsValid(company, orgCurrency);
     assertDealerRulesValid(company, orgCurrency);
+    assertLtvBasisSavable(args.ltvBasis);
     const acceptedStatuses = await sanitizeAcceptedStatuses(ctx, args.orgId, args.acceptedStatuses);
     const lostConfiguredStatusScope =
       (args.acceptedStatuses?.length ?? 0) > 0 &&
@@ -397,6 +411,7 @@ export const updateCompany = mutation({
     };
     assertCustomerLoanTermsValid(effectiveTerms, orgCurrency);
     assertDealerRulesValid(effectiveRules, orgCurrency);
+    assertLtvBasisSavable(args.ltvBasis);
 
     const needsInitialVersion = existing.ruleVersion === undefined;
 
