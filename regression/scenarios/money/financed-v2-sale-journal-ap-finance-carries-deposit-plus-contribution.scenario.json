@@ -1,0 +1,55 @@
+{
+  "id": "financed-v2-sale-journal-ap-finance-carries-deposit-plus-contribution",
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "approvedMinor": 12500000,
+        "depositMinor": 200000,
+        "contributionMinor": 1375000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "saleJournal.financeReceivableNetMinor",
+      "value": 12500000
+    },
+    {
+      "observable": "saleJournal.considerationReductionsNetMinor",
+      "value": 1375000
+    },
+    {
+      "observable": "saleJournal.financePayableNetMinor",
+      "value": -1575000
+    },
+    {
+      "observable": "saleJournal.totalNetMinor",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/financeCompanyForward.test.ts",
+    "testName": "the sale journal balances and AP-Finance carries exactly H + C owed onward"
+  },
+  "matrixRow": "pilot-financed-v2-journal",
+  "fingerprint": "148ba66f1b8e4b1a5dd69cb826c41c00e8d7f81ab56c0ee5daf1a0401e876353",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum761-pilot-path",
+    "firstSeen": "2026-10-08"
+  }
+}
