@@ -17,37 +17,39 @@ export type ActionExpectation = {
   effects: { type: string; audience: AudienceTemplate }[];
 };
 
+const MANAGERS: Audience = { kind: "managers", excludeActor: false };
+
 export const ACTION_EXPECTATIONS: ActionExpectation[] = [
   {
     action: "lead.create",
     source: "convex/leads.ts:371",
-    effects: [{ type: "lead.created", audience: { kind: "managers", excludeActor: false } }],
+    effects: [{ type: "lead.created", audience: MANAGERS }],
   },
   {
     action: "lead.create+assign",
     source: "convex/leads.ts:371,380",
     effects: [
-      { type: "lead.created", audience: { kind: "managers", excludeActor: false } },
+      { type: "lead.created", audience: MANAGERS },
       { type: "lead.assigned", audience: { kind: "assignee" } },
     ],
   },
   {
     action: "lead.update",
     source: "convex/leads.ts:473",
-    effects: [{ type: "lead.updated", audience: { kind: "managers", excludeActor: false } }],
+    effects: [{ type: "lead.updated", audience: MANAGERS }],
   },
   {
     action: "lead.reassign",
     source: "convex/leads.ts:473,483",
     effects: [
-      { type: "lead.updated", audience: { kind: "managers", excludeActor: false } },
+      { type: "lead.updated", audience: MANAGERS },
       { type: "lead.assigned", audience: { kind: "assignee" } },
     ],
   },
   {
     action: "lead.delete",
     source: "convex/leads.ts:585",
-    effects: [{ type: "lead.deleted", audience: { kind: "managers", excludeActor: false } }],
+    effects: [{ type: "lead.deleted", audience: MANAGERS }],
   },
 ];
 

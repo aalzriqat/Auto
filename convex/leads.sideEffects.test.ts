@@ -68,6 +68,12 @@ async function observe(c: Ctx, action: () => Promise<unknown>): Promise<Effect[]
   return after.filter((n) => !before.has(n._id)).map((n) => ({ userId: n.userId, type: n.type ?? "" }));
 }
 
+/** The three mutations every test drives, so the arguments are written once. */
+const createLead = (c: Ctx, extra: { assignedUserId?: Id<"users">; notes?: string } = {}) =>
+  c.asActor.mutation(api.leads.create, { orgId: c.orgId, customerId: c.customerId, source: "Walk-in", ...extra });
+const updateLead = (c: Ctx, leadId: Id<"leads">, extra: { assignedUserId?: Id<"users">; notes?: string }) =>
+  c.asActor.mutation(api.leads.update, { orgId: c.orgId, leadId, ...extra });
+
 /** The table's row for an action, with the assignee template resolved. */
 function expectationsFor(action: string, assignee?: Id<"users">): Expectation[] {
   const row = ACTION_EXPECTATIONS.find((a) => a.action === action);
@@ -88,60 +94,58 @@ const judge = (c: Ctx, action: string, observed: Effect[], assignee?: Id<"users"
 describe("lead actions produce exactly the notifications they promise (SCRUM-620)", () => {
   test("lead.create notifies every manager once, and nobody else", async () => {
     const c = await setup();
-    const observed = await observe(c, () => c.asActor.mutation(api.leads.create, { orgId: c.orgId, customerId: c.customerId, source: "Walk-in" }));
+    const observed = await observe(c, () => createLead(c));
     expect(judge(c, "lead.create", observed)).toEqual([]);
   });
 
   test("lead.create with an assignee also notifies that assignee once", async () => {
     const c = await setup();
     const observed = await observe(c, () =>
-      c.asActor.mutation(api.leads.create, { orgId: c.orgId, customerId: c.customerId, source: "Walk-in", assignedUserId: c.sales1 }),
+      createLead(c, { assignedUserId: c.sales1 }),
     );
     expect(judge(c, "lead.create+assign", observed, c.sales1)).toEqual([]);
   });
 
   test("lead.update notifies managers, not the assignee, when nothing is reassigned", async () => {
     const c = await setup();
-    const leadId = await c.asActor.mutation(api.leads.create, { orgId: c.orgId, customerId: c.customerId, source: "Walk-in", assignedUserId: c.sales1 });
-    const observed = await observe(c, () => c.asActor.mutation(api.leads.update, { orgId: c.orgId, leadId, notes: "called back" }));
+    const leadId = await createLead(c, { assignedUserId: c.sales1 });
+    const observed = await observe(c, () => updateLead(c, leadId, { notes: "called back" }));
     expect(judge(c, "lead.update", observed)).toEqual([]);
   });
 
   test("re-saving with the SAME assignee does not notify the assignee again", async () => {
     const c = await setup();
-    const leadId = await c.asActor.mutation(api.leads.create, { orgId: c.orgId, customerId: c.customerId, source: "Walk-in", assignedUserId: c.sales1 });
+    const leadId = await createLead(c, { assignedUserId: c.sales1 });
     // The edit dialog resubmits every field on every save, assignee included.
-    const observed = await observe(c, () =>
-      c.asActor.mutation(api.leads.update, { orgId: c.orgId, leadId, assignedUserId: c.sales1, notes: "resaved" }),
-    );
+    const observed = await observe(c, () => updateLead(c, leadId, { assignedUserId: c.sales1, notes: "resaved" }));
     expect(judge(c, "lead.update", observed)).toEqual([]);
   });
 
   test("lead.reassign notifies managers and the NEW assignee only", async () => {
     const c = await setup();
-    const leadId = await c.asActor.mutation(api.leads.create, { orgId: c.orgId, customerId: c.customerId, source: "Walk-in", assignedUserId: c.sales1 });
-    const observed = await observe(c, () => c.asActor.mutation(api.leads.update, { orgId: c.orgId, leadId, assignedUserId: c.sales2 }));
+    const leadId = await createLead(c, { assignedUserId: c.sales1 });
+    const observed = await observe(c, () => updateLead(c, leadId, { assignedUserId: c.sales2 }));
     expect(judge(c, "lead.reassign", observed, c.sales2)).toEqual([]);
   });
 
   test("a no-op save notifies nobody", async () => {
     const c = await setup();
-    const leadId = await c.asActor.mutation(api.leads.create, { orgId: c.orgId, customerId: c.customerId, source: "Walk-in", notes: "same" });
-    const observed = await observe(c, () => c.asActor.mutation(api.leads.update, { orgId: c.orgId, leadId, notes: "same" }));
+    const leadId = await createLead(c, { notes: "same" });
+    const observed = await observe(c, () => updateLead(c, leadId, { notes: "same" }));
     expect(judgeEffects([{ type: "lead.updated", audience: { kind: "none" } }], observed, c.members, c.actor, ["lead.updated", "lead.assigned"])).toEqual([]);
     expect(observed).toEqual([]);
   });
 
   test("lead.delete notifies every manager once", async () => {
     const c = await setup();
-    const leadId = await c.asActor.mutation(api.leads.create, { orgId: c.orgId, customerId: c.customerId, source: "Walk-in" });
+    const leadId = await createLead(c);
     const observed = await observe(c, () => c.asActor.mutation(api.leads.softDelete, { orgId: c.orgId, leadId }));
     expect(judge(c, "lead.delete", observed)).toEqual([]);
   });
 
   test("the oracle flags a duplicate, a missing recipient, and a leak to another organization", async () => {
     const c = await setup();
-    const real = await observe(c, () => c.asActor.mutation(api.leads.create, { orgId: c.orgId, customerId: c.customerId, source: "Walk-in" }));
+    const real = await observe(c, () => createLead(c));
     const foreign = await c.t.run(async (ctx) => (await ctx.db.query("users").take(1000)).find((u) => u.clerkId === "user_foreign")!._id);
     const doubled = judge(c, "lead.create", [...real, real[0]]);
     expect(doubled.map((f) => f.kind)).toEqual(["duplicate"]);
