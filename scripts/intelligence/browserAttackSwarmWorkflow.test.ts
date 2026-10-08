@@ -722,7 +722,10 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       expect(notReady, jobName).not.toContain("exit 1");
       expect(run, jobName).toContain('rm -f "$FORWARD_LOG"');
       // Control + log on the failure path.
-      expect(run, jobName).toContain('"http://$CANDIDATE_IP:3000/api/health"');
+      // TCP-level control (no clear-text http:// literal: Sonar S5332).
+      expect(run, jobName).toContain(`'exec 3<>"/dev/tcp/$1/3000"' _ "$CANDIDATE_IP"`);
+      expect(run, jobName).toContain("direct-ip tcp:3000 NOT reachable");
+      expect(run, jobName).not.toMatch(/http:\/\/\$CANDIDATE_IP/);
       expect(run, jobName).toContain('cat "$FORWARD_LOG"');
       const allRuns = (workflow.jobs?.[jobName]?.steps ?? [])
         .map((entry) => String(entry.run ?? ""))

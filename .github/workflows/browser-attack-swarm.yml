@@ -809,7 +809,11 @@ jobs:
           done
           # Control: separate "host cannot reach the internal-network IP" from
           # "forwarder broken". Prints the status code only, never a body.
-          curl --silent --max-time 5 --output /dev/null --write-out 'direct-ip http=%{http_code}\n' "http://$CANDIDATE_IP:3000/api/health" || echo "direct-ip curl failed"
+          if timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/3000"' _ "$CANDIDATE_IP" 2>/dev/null; then
+            echo "direct-ip tcp:3000 reachable"
+          else
+            echo "direct-ip tcp:3000 NOT reachable"
+          fi
           echo "--- loopback forwarder log ---"
           cat "$FORWARD_LOG" || true
           # The container receives only public NEXT_PUBLIC_* values, so its output
@@ -1062,7 +1066,11 @@ jobs:
           done
           # Control: separate "host cannot reach the internal-network IP" from
           # "forwarder broken". Prints the status code only, never a body.
-          curl --silent --max-time 5 --output /dev/null --write-out 'direct-ip http=%{http_code}\n' "http://$CANDIDATE_IP:3000/api/health" || echo "direct-ip curl failed"
+          if timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/3000"' _ "$CANDIDATE_IP" 2>/dev/null; then
+            echo "direct-ip tcp:3000 reachable"
+          else
+            echo "direct-ip tcp:3000 NOT reachable"
+          fi
           echo "--- loopback forwarder log ---"
           cat "$FORWARD_LOG" || true
 

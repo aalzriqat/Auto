@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { isPrivateIpv4, startLoopbackForward } from "./browserSwarmLoopbackForward.mjs";
+import { isPrivateIpv4, parseArgs, runCli, startLoopbackForward } from "./browserSwarmLoopbackForward.mjs";
 
 const cliPath = path.resolve(__dirname, "browserSwarmLoopbackForward.mjs");
 const servers: net.Server[] = [];
@@ -87,6 +87,11 @@ describe("SCRUM-376 loopback forwarder for the internal-network candidate", () =
       "172.32.0.1",
       "example.com",
       "10.0.0.1.evil.test",
+      "10.01.0.1",
+      "172.15.0.1",
+      "192.169.0.1",
+      "10.0.0",
+      "",
     ]) {
       expect(isPrivateIpv4(host), host).toBe(false);
       await expect(
@@ -138,6 +143,53 @@ describe("SCRUM-376 loopback forwarder for the internal-network candidate", () =
     } finally {
       child.kill();
     }
+  });
+
+  it("parseArgs accepts exactly the three options and rejects anything else", () => {
+    expect(
+      parseArgs(["--listen-port", "3000", "--target-host", "10.0.0.2", "--target-port", "3000"]),
+    ).toEqual({ listenPort: 3000, targetHost: "10.0.0.2", targetPort: 3000 });
+    expect(() => parseArgs(["--listen-port", "3000"])).toThrow(/missing --target-host/);
+    expect(() => parseArgs(["listen-port", "3000"])).toThrow(/unexpected argument/);
+    expect(() => parseArgs(["--listen-port"])).toThrow(/unexpected argument/);
+    expect(() =>
+      parseArgs(["--listen-port", "0", "--target-host", "10.0.0.2", "--target-port", "3000"]),
+    ).toThrow(/listen port/);
+  });
+
+  it("runCli reports the ready line only after binding and code 1 on any failure", async () => {
+    const probe = net.createServer();
+    const port = await listen(probe);
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    servers.splice(servers.indexOf(probe), 1);
+
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const io = { log: (line: string) => logs.push(line), error: (line: string) => errors.push(line) };
+    const ok = await runCli(
+      ["--listen-port", String(port), "--target-host", "10.255.255.1", "--target-port", "3000"],
+      io,
+    );
+    expect(ok.code).toBe(0);
+    expect(logs).toEqual([`loopback forward 127.0.0.1:${port} -> 10.255.255.1:3000`]);
+    expect(errors).toEqual([]);
+    servers.push(ok.server as net.Server);
+
+    // Same port again: EADDRINUSE must surface as code 1 with NO ready line.
+    const clash = await runCli(
+      ["--listen-port", String(port), "--target-host", "10.255.255.1", "--target-port", "3000"],
+      io,
+    );
+    expect(clash.code).toBe(1);
+    expect(logs).toHaveLength(1);
+    expect(errors.join("\n")).toMatch(/EADDRINUSE/);
+
+    const publicTarget = await runCli(
+      ["--listen-port", "39130", "--target-host", "8.8.8.8", "--target-port", "3000"],
+      io,
+    );
+    expect(publicTarget.code).toBe(1);
+    expect(errors.join("\n")).toMatch(/private IPv4/);
   });
 
   it("rejects invalid target ports and listens on loopback only", async () => {

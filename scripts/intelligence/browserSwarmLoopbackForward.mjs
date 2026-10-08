@@ -14,8 +14,7 @@
 import net from "node:net";
 import { pathToFileURL } from "node:url";
 
-const PRIVATE_IPV4 =
-  /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})$/;
+const OCTET = /^(0|[1-9]\d{0,2})$/;
 
 function parsePort(value, label) {
   const port = Number(value);
@@ -25,8 +24,14 @@ function parsePort(value, label) {
   return port;
 }
 
+// RFC1918 only: 10/8, 172.16/12, 192.168/16. Canonical dotted-quad (no leading zeros).
 export function isPrivateIpv4(host) {
-  return PRIVATE_IPV4.test(host) && host.split(".").every((part) => Number(part) <= 255);
+  if (typeof host !== "string") return false;
+  const parts = host.split(".");
+  if (parts.length !== 4 || !parts.every((part) => OCTET.test(part))) return false;
+  const [a, b, c, d] = parts.map(Number);
+  if ([a, b, c, d].some((octet) => octet > 255)) return false;
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
 
 // `targetGuard` exists so a test can relay to a loopback echo server; the CLI
@@ -63,7 +68,7 @@ export async function startLoopbackForward(
   });
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const values = new Map();
   for (let index = 0; index < argv.length; index += 2) {
     const key = argv[index];
@@ -82,15 +87,21 @@ function parseArgs(argv) {
   };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+// The ready line is printed only after the bind succeeded: the workflow waits for
+// it, so a forwarder that failed to bind can never look started.
+export async function runCli(argv, { log = console.log, error = console.error } = {}) {
   try {
-    const options = parseArgs(process.argv.slice(2));
-    await startLoopbackForward(options);
-    console.log(
-      `loopback forward 127.0.0.1:${options.listenPort} -> ${options.targetHost}:${options.targetPort}`,
-    );
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : "loopback forward failed");
-    process.exit(1);
+    const options = parseArgs(argv);
+    const server = await startLoopbackForward(options);
+    log(`loopback forward 127.0.0.1:${options.listenPort} -> ${options.targetHost}:${options.targetPort}`);
+    return { code: 0, server };
+  } catch (failure) {
+    error(failure instanceof Error ? failure.message : "loopback forward failed");
+    return { code: 1, server: null };
   }
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const { code } = await runCli(process.argv.slice(2));
+  if (code !== 0) process.exit(code);
 }
