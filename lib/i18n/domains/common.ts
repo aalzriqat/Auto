@@ -290,6 +290,11 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Payment links are not available yet. Nothing has been changed.",
     "روابط الدفع غير متاحة حاليًا. لم يتم تغيير أي شيء.",
   ],
+  // SCRUM-801 (owner, SCRUM-795 c22485): convex/utils/depositOtherContainment.ts.
+  ServerError_DEPOSIT_OTHER_TREATMENT_DISABLED: [
+    "The 'other' deposit treatment is not available yet. Refund or forfeit the deposit instead. Nothing has been changed.",
+    "معالجة العربون «أخرى» غير متاحة حاليًا. يمكنك إعادة العربون إلى العميل أو مصادرته بدلًا من ذلك. لم يتم تغيير أي شيء.",
+  ],
   ServerError_ORG_FINANCIAL_RESET_IN_PROGRESS: [
     "This organization's financial reset has not finished. It cannot be returned to service until the reset completes.",
     "لم تكتمل إعادة ضبط البيانات المالية لهذه المنشأة. لا يمكن إعادتها إلى الخدمة قبل اكتمال إعادة الضبط.",
