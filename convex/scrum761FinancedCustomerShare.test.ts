@@ -165,13 +165,13 @@ describe("SCRUM-761 financed deal: the customer's own share (deposit H = 200) th
     expect(await invoiceOf(s, saleId)).toMatchObject({ original: 0, outstanding: 0 });
   });
 
-  test("(c) the finance company's part settles: forward + confirmDisbursement clear both finance-company accounts; the cockpit is SETTLEMENT COMPLETE (and was already COMPLETE after finalize)", async () => {
+  test("(c) the finance company's part settles: forward + confirmDisbursement clear both finance-company accounts; SETTLEMENT is not COMPLETE until the transfer is confirmed (SCRUM-803)", async () => {
     const s = await seed("finc");
     const { applicationId } = await dealWithRealDeposit(s);
     await finalizeAsOwner(s, applicationId);
     const saleId = (await saleOf(s, applicationId))!;
-    // Observation: the financed cockpit judges the customer's invoice, so SETTLEMENT is COMPLETE before the transfer.
-    expect(await stageState(s, saleId, "SETTLEMENT")).toBe("COMPLETE");
+    // SETTLEMENT must NOT be COMPLETE before the finance company's transfer is confirmed.
+    expect(await stageState(s, saleId, "SETTLEMENT")).not.toBe("COMPLETE");
 
     await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
       orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(), expectedAmountMinor: H + C, idempotencyKey: crypto.randomUUID(),
@@ -187,6 +187,63 @@ describe("SCRUM-761 financed deal: the customer's own share (deposit H = 200) th
     expect(gl.BANK_ACCOUNT).toBe(G - (H + C));
     expect(gl.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY).toBeUndefined();
     expect(await stageState(s, saleId, "SETTLEMENT")).toBe("COMPLETE");
+  });
+
+  test("SCRUM-803: a settled application for S2 cannot complete S1's settlement", async () => {
+    const s = await seed("link");
+    const { applicationId: firstApplicationId } = await dealWithRealDeposit(s);
+    await finalizeAsOwner(s, firstApplicationId);
+    const firstSaleId = (await saleOf(s, firstApplicationId))!;
+
+    const secondVehicleId = await s.t.run(async (ctx) => {
+      const vehicle = (await ctx.db.get(s.vehicleId))!;
+      const { _id, _creationTime, ...vehicleFields } = vehicle;
+      return await ctx.db.insert("vehicles", { ...vehicleFields, vin: "VIN761Flink2", status: "AVAILABLE" });
+    });
+    const secondDeal = { ...s, vehicleId: secondVehicleId };
+    const { applicationId: secondApplicationId } = await dealWithRealDeposit(secondDeal);
+    await finalizeAsOwner(secondDeal, secondApplicationId);
+    const secondSaleId = (await saleOf(s, secondApplicationId))!;
+    await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
+      orgId: s.orgId, applicationId: secondApplicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
+      expectedAmountMinor: H + C, idempotencyKey: crypto.randomUUID(),
+    });
+    await s.owner.as.mutation(api.applications.confirmDisbursement, {
+      orgId: s.orgId, applicationId: secondApplicationId, disbursedAmountMinor: G,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(await stageState(s, secondSaleId, "SETTLEMENT")).toBe("COMPLETE");
+    expect(await stageState(s, firstSaleId, "SETTLEMENT")).not.toBe("COMPLETE");
+
+    await s.t.run((ctx) => ctx.db.patch(firstSaleId, { applicationId: secondApplicationId }));
+    expect(await stageState(s, firstSaleId, "SETTLEMENT")).not.toBe("COMPLETE");
+  });
+
+  test("SCRUM-803: dangling and foreign-org applications cannot complete a sale's settlement", async () => {
+    const s = await seed("invalidlink");
+    const { applicationId } = await dealWithRealDeposit(s);
+    await finalizeAsOwner(s, applicationId);
+    const saleId = (await saleOf(s, applicationId))!;
+    await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
+      expectedAmountMinor: H + C, idempotencyKey: crypto.randomUUID(),
+    });
+    await s.owner.as.mutation(api.applications.confirmDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: G, idempotencyKey: crypto.randomUUID(),
+    });
+    expect(await stageState(s, saleId, "SETTLEMENT")).toBe("COMPLETE");
+
+    const foreignApplicationId = await s.t.run(async (ctx) => {
+      const application = (await ctx.db.get(applicationId))!;
+      const foreignOrgId = await ctx.db.insert("organizations", { name: "Foreign org", createdAt: Date.now() });
+      const { _id, _creationTime, ...applicationFields } = application;
+      return await ctx.db.insert("financeApplications", { ...applicationFields, orgId: foreignOrgId });
+    });
+    await s.t.run((ctx) => ctx.db.delete(applicationId));
+    expect(await stageState(s, saleId, "SETTLEMENT")).not.toBe("COMPLETE");
+
+    await s.t.run((ctx) => ctx.db.patch(saleId, { applicationId: foreignApplicationId }));
+    expect(await stageState(s, saleId, "SETTLEMENT")).not.toBe("COMPLETE");
   });
 
   test("(d) cancelling BEFORE finalize with a held deposit: the car is freed, the deposit stays HELD as a liability, and deposits.release REFUNDED clears it", async () => {

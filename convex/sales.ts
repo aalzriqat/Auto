@@ -59,7 +59,7 @@ import {
   outstandingMinorFromMajor,
 } from "./utils/money";
 import { allocatedDepositForVehicle } from "./utils/depositAllocation";
-import { pendingDepositResolution } from "./applications";
+import { pendingDepositResolution, resolveSettlement } from "./applications";
 import { planDepositSettlementApplication } from "./utils/depositSettlementPlan";
 import { checkPostingAllowed } from "./accountingPeriods";
 import { applicationProvesFinancing, hasVerifiedFinancingApplication } from "./utils/financingProvenance";
@@ -2772,9 +2772,19 @@ export const dealCockpit = query({
       sale.status === "COMPLETED"
         ? await resolveCustomerInvoicePosition(ctx, sale, { orgId: args.orgId, currency })
         : { state: "NONE", outstandingMinor: null };
-    const settlementComplete =
-      dealCancelled ||
-      settlementIsComplete({ financier: "NONE", supplier: supplierObligation, customer: customerPosition.state });
+    let settlementComplete: boolean;
+    if (sale.applicationId) {
+      const app = await ctx.db.get(sale.applicationId);
+      settlementComplete =
+        applicationProvesFinancing(app, sale) &&
+        app !== null &&
+        sale.status === "COMPLETED" &&
+        (await resolveSettlement(ctx, app)).moneySettled;
+    } else {
+      settlementComplete =
+        dealCancelled ||
+        settlementIsComplete({ financier: "NONE", supplier: supplierObligation, customer: customerPosition.state });
+    }
 
     const stages = deriveCashDealStages({
       saleStatus: sale.status,
