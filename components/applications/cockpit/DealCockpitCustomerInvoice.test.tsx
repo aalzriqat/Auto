@@ -126,6 +126,7 @@ function ownedCashDeal(invoice: Invoice, withMoney = true): CashDealCockpitData 
           customerInvoice: invoice,
           supplierReceipt: { actionable: false, reason: "NOT_DIRECT_ROUTE" },
           appraisalGapMinor: undefined,
+          shortfall: undefined,
         }
       : null,
   } satisfies CashDealCockpitData;

@@ -98,6 +98,13 @@ const ORG = "org1" as Id<"organizations">;
 const SALE = "sale_7731" as Id<"sales">;
 const APP = "app_2048" as Id<"financeApplications">;
 const SCALE = 1_000;
+/** SCRUM-766: a deal with no shortfall, as the server's money block states it. */
+const NO_SHORTFALL = {
+  method: "NONE" as const,
+  totalMinor: undefined,
+  valuationMinor: undefined,
+  termsMinor: undefined,
+};
 
 /** A supplier the dealership must collect the margin FROM: the settle-able position. */
 const SUPPLIER_OWES_MARGIN = {
@@ -163,6 +170,7 @@ function financedDirectDeal(): FinancedDealCockpitData {
       customerInvoice: { state: "NONE", outstandingMinor: null, currency: "JOD" },
       supplierReceipt: { actionable: true },
       appraisalGapMinor: undefined,
+      shortfall: NO_SHORTFALL,
       forward: { dueMinor: 0, depositMinor: 0, contributionMinor: 0, onBooksMinor: 0 },
     },
     customerInvoiceState: "NONE",
@@ -245,6 +253,7 @@ function cashDirectDeal(): CashDealCockpitData {
       customerInvoice: { state: "NONE", outstandingMinor: null, currency: "JOD" },
       supplierReceipt: { actionable: true },
       appraisalGapMinor: undefined,
+      shortfall: undefined,
     },
     customerInvoiceState: "NONE",
   } satisfies CashDealCockpitData;

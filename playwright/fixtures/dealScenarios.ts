@@ -273,12 +273,13 @@ export async function recordApproved(managerPage: Page, dealUrl: string, amount:
 }
 
 /**
- * Who covers an appraisal gap, in major units. The customer's part is placed
- * on three destinations that must add up to it (ResolveGapDialog): cash to the
- * dealership, instalments to the dealership, or paid to the finance company.
- * Only the dealership-bound part becomes a customer receivable (1200) at close
- * and is billed on the legal invoice (financedSalePostingPlan v2: legal invoice
- * = approved + customer's dealership-bound part).
+ * Who covers the net shortfall (SCRUM-766), in major units. The customer's part
+ * is placed on the dealership-bound destinations that must add up to it
+ * (ResolveGapDialog): cash or instalments. Paying the finance company is refused
+ * until SCRUM-766 PR-B, so it is not a scenario input. The dealership-bound part
+ * becomes a customer receivable (1200) at close and is billed on the legal
+ * invoice (financedSalePostingPlan v2: legal invoice = approved + customer's
+ * dealership-bound part).
  */
 export type GapAgreement =
   | { mode: "DEALER_ABSORBS" }
@@ -288,7 +289,6 @@ export type GapAgreement =
       customerShare?: number;
       cash: number;
       installments: number;
-      toFinanceCompany: number;
     };
 
 const GAP_MODE_LABEL = {
@@ -298,8 +298,9 @@ const GAP_MODE_LABEL = {
 } as const;
 
 /**
- * An approved amount below the submitted quotation opens an appraisal gap
- * that blocks handover until someone decides who covers it. Manager only: the
+ * An approved amount (or LTV) that leaves the showroom short of the quote-time
+ * economics opens a net shortfall that blocks handover until someone decides who
+ * covers it. Manager only: the
  * salesperson may not resolve the gap on their own deal.
  */
 export async function resolveAppraisalGap(
@@ -310,9 +311,9 @@ export async function resolveAppraisalGap(
   await managerPage.goto(dealUrl);
   await dismissOverlays(managerPage);
   await hideFloatingButtons(managerPage);
-  await managerPage.getByRole("button", { name: "Resolve appraisal gap" }).first().click();
+  await managerPage.getByRole("button", { name: "Resolve the shortfall" }).first().click();
   const dialog = managerPage.getByRole("dialog");
-  await expect(dialog.getByText("Resolve the appraisal gap")).toBeVisible();
+  await expect(dialog.getByText("Resolve the shortfall").first()).toBeVisible();
   await dialog.getByRole("radio", { name: GAP_MODE_LABEL[agreement.mode] }).click();
   if (agreement.mode !== "DEALER_ABSORBS") {
     if (agreement.mode === "SPLIT") {
@@ -320,10 +321,9 @@ export async function resolveAppraisalGap(
     }
     await dialog.locator("#gap-cash").fill(String(agreement.cash));
     await dialog.locator("#gap-installments").fill(String(agreement.installments));
-    await dialog.locator("#gap-financier").fill(String(agreement.toFinanceCompany));
   }
-  await dialog.locator("#gap-notes").fill(`QA TEST: appraisal gap settled as ${agreement.mode}.`);
-  await dialog.getByRole("button", { name: "Resolve appraisal gap" }).click();
+  await dialog.locator("#gap-notes").fill(`QA TEST: net shortfall settled as ${agreement.mode}.`);
+  await dialog.getByRole("button", { name: "Resolve the shortfall" }).click();
   await expect(dialog).not.toBeVisible();
 }
 
