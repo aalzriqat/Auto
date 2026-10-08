@@ -1,0 +1,55 @@
+{
+  "id": "financed-v2-finalize-freezes-forward-due-and-full-receivable",
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "approvedMinor": 12500000,
+        "depositMinor": 200000,
+        "contributionMinor": 1375000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "application.status",
+      "value": "CLOSED"
+    },
+    {
+      "observable": "application.financedSalePlanVersion",
+      "value": 2
+    },
+    {
+      "observable": "application.forwardDueMinor",
+      "value": 1575000
+    },
+    {
+      "observable": "application.netReceivableMinor",
+      "value": 12500000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/financeCompanyForward.test.ts",
+    "testName": "finalize freezes v2: due = deposit + contribution, the receivable is the FULL approved amount"
+  },
+  "matrixRow": "pilot-financed-v2-finalize",
+  "fingerprint": "448b64ea97c91e3c27ce4b2a6c0802ea1b76df76f61c810e919128625d807ca6",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum761-pilot-path",
+    "firstSeen": "2026-10-08"
+  }
+}
