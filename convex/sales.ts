@@ -2776,9 +2776,10 @@ export const dealCockpit = query({
     if (sale.applicationId) {
       const app = await ctx.db.get(sale.applicationId);
       settlementComplete =
-        app?.orgId === args.orgId &&
-        (dealCancelled ||
-          (sale.status === "COMPLETED" && (await resolveSettlement(ctx, app)).moneySettled));
+        applicationProvesFinancing(app, sale) &&
+        app !== null &&
+        sale.status === "COMPLETED" &&
+        (await resolveSettlement(ctx, app)).moneySettled;
     } else {
       settlementComplete =
         dealCancelled ||
