@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   BUILD_MANIFEST_FILE,
+  byCodeUnit,
   createBrowserSwarmBuildArtifact,
   verifyBrowserSwarmBuildArtifact,
 } from "./browserSwarmBuildArtifact.mjs";
@@ -290,5 +291,35 @@ describe("SCRUM-350 immutable candidate build artifact", () => {
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("byCodeUnit", () => {
+  // The pnpm hoist copies packages in sorted order. Sonar S2871 requires an
+  // explicit comparator, but it must keep the UTF-16 code-unit order that the
+  // default Array#sort gave (upper case before lower case, "@" scopes first),
+  // not a locale-aware order.
+  it("orders exactly like the default sort for mixed-case and scoped names", () => {
+    const names = ["zod", "Zod", "@swc", "@Types", "@types", "a-b", "A-B", "ab", "＠scope", "@scope"];
+    expect([...names].sort(byCodeUnit)).toEqual([
+      "@Types",
+      "@scope",
+      "@swc",
+      "@types",
+      "A-B",
+      "Zod",
+      "a-b",
+      "ab",
+      "zod",
+      "＠scope",
+    ]);
+  });
+
+  it("is not locale-aware: upper case sorts before lower case", () => {
+    expect(["a", "B"].sort(byCodeUnit)).toEqual(["B", "a"]);
+  });
+
+  it("returns 0 for equal names", () => {
+    expect(byCodeUnit("x", "x")).toBe(0);
   });
 });

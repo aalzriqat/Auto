@@ -729,7 +729,9 @@ jobs:
           echo "CANDIDATE_CONTAINER=$CANDIDATE_CONTAINER" >> "$GITHUB_ENV"
           echo "CANDIDATE_NETWORK=$CANDIDATE_NETWORK" >> "$GITHUB_ENV"
           docker network create --internal "$CANDIDATE_NETWORK" >/dev/null
-          docker run --detach --rm \
+          # No --rm: a candidate that dies must leave its stderr and exit code
+          # behind to read. The always() stop step below removes the container.
+          docker run --detach \
             --name "$CANDIDATE_CONTAINER" \
             --network "$CANDIDATE_NETWORK" \
             --publish 127.0.0.1:3000:3000 \
@@ -752,9 +754,21 @@ jobs:
             if curl --fail --silent --show-error http://127.0.0.1:3000/api/health > /dev/null; then
               exit 0
             fi
+            if [ "$(docker inspect --format '{{.State.Running}}' "$CANDIDATE_CONTAINER" 2>/dev/null || echo false)" != "true" ]; then
+              echo "::error::Candidate container exited before answering /api/health"
+              break
+            fi
             sleep 2
           done
-          docker logs "$CANDIDATE_CONTAINER" >&2 || true
+          # The container receives only public NEXT_PUBLIC_* values, so its output
+          # is safe to print. It is still candidate-controlled text: bound it to
+          # its LAST 20000 bytes (the boot error is at the end) and fence it with
+          # a random stop-commands token so it cannot be read as runner commands.
+          LOG_FENCE="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::$LOG_FENCE"
+          docker inspect --format 'state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}}' "$CANDIDATE_CONTAINER" 2>&1 || true
+          docker logs --tail 200 "$CANDIDATE_CONTAINER" 2>&1 | tail -c 20000 || true
+          echo "::$LOG_FENCE::"
           exit 1
 
       - name: Run full trusted E2E suite against exact candidate
@@ -933,16 +947,28 @@ jobs:
           # trusted host can still reach its published loopback port.
           docker network create --internal "$CANDIDATE_NETWORK" >/dev/null
 
-          docker run --detach --rm             --name "$CANDIDATE_CONTAINER"             --network "$CANDIDATE_NETWORK"             --publish 127.0.0.1:3000:3000             --cap-drop ALL             --security-opt no-new-privileges             --volume "$RUNNER_TEMP/browser-swarm-candidate-build/runtime:/app:ro"             --workdir /app             --env HOME=/tmp/home             --env HOSTNAME=0.0.0.0             --env PORT=3000             --env NEXT_PUBLIC_CONVEX_URL             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY             --env CLERK_JWT_KEY             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY             --env NEXT_PUBLIC_APP_URL             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5             node server.js
+          docker run --detach             --name "$CANDIDATE_CONTAINER"             --network "$CANDIDATE_NETWORK"             --publish 127.0.0.1:3000:3000             --cap-drop ALL             --security-opt no-new-privileges             --volume "$RUNNER_TEMP/browser-swarm-candidate-build/runtime:/app:ro"             --workdir /app             --env HOME=/tmp/home             --env HOSTNAME=0.0.0.0             --env PORT=3000             --env NEXT_PUBLIC_CONVEX_URL             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY             --env CLERK_JWT_KEY             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY             --env NEXT_PUBLIC_APP_URL             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5             node server.js
 
           for attempt in $(seq 1 60); do
             if curl --fail --silent --show-error               http://127.0.0.1:3000/api/health > /dev/null; then
               exit 0
             fi
+            if [ "$(docker inspect --format '{{.State.Running}}' "$CANDIDATE_CONTAINER" 2>/dev/null || echo false)" != "true" ]; then
+              echo "::error::Candidate container exited before answering /api/health"
+              break
+            fi
             sleep 2
           done
 
-          docker logs "$CANDIDATE_CONTAINER" >&2 || true
+          # No --rm above: keep a dead candidate's exit code and stderr readable.
+          # Only public NEXT_PUBLIC_* values reach the container; the text is still
+          # candidate-controlled, so print its last 20000 bytes inside a random
+          # stop-commands fence so it cannot be read as runner commands.
+          LOG_FENCE="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::$LOG_FENCE"
+          docker inspect --format 'state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}}' "$CANDIDATE_CONTAINER" 2>&1 || true
+          docker logs --tail 200 "$CANDIDATE_CONTAINER" 2>&1 | tail -c 20000 || true
+          echo "::$LOG_FENCE::"
           echo "Exact candidate frontend did not become healthy on isolated loopback." >&2
           exit 1
         env:
