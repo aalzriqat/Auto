@@ -34,3 +34,10 @@ Plus, from earlier PRs: three `saleEconomics` rule records and the financed-fina
 - SCRUM-795 off-switches (manual journal approval, refund payout, salesperson cash receipt): each refusal gets a permission record once it lands, with its failing-first test.
 - SCRUM-413b refusal list: needs a SCRUM-413#description digest; deferred behind this.
 - Parameterized tests (SCRUM-704 matrix, SCRUM-27 `describe.each`) need per-case titles or the S3 census.
+
+## SCRUM-795 item 3 (no salesperson cash receipts)
+
+- Record sales-member-cannot-post-a-deposit is bound to convex/depositRequests.test.ts (failing-first under #364). It claims ONLY deposits.create: that test does not assert deposits.allocateToVehicles, releaseVehicleAllocation, depositRequests.confirm or vehicles.createReservation, so those doors have no record yet (gap).
+- It cites SCRUM-760#c22465 (R-PERMISSION); SCRUM-760 c22474 is not in the snapshot, so it is not cited as a ruling id.
+- AF-98's template pin (PR #518, convex/utils/permissions.test.ts) is not bound yet; bind it once merged.
+- Items 1 (manual journals) and 2 (refund payout) await their PRs.
