@@ -44,6 +44,17 @@ export async function dispatch(
 ) {
   const def = NOTIFICATION_TYPES[type];
 
+  // SCRUM-789: the single choke point every helper and every direct notifyUser
+  // call goes through, so an offboarding member is refused on every channel
+  // (in-app row, email, WhatsApp, push) no matter which caller named them. Only
+  // a membership that EXISTS and is offboarding is refused; a user with no
+  // membership keeps today's behaviour (cross-org and pre-membership notices).
+  const membership = await ctx.db
+    .query("memberships")
+    .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+    .unique();
+  if (membership?.offboardingStatus) return;
+
   await ctx.db.insert("notifications", {
     orgId,
     userId,

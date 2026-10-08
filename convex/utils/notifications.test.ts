@@ -485,15 +485,30 @@ describe("offboarding members receive no routine notifications (SCRUM-789)", () 
     expect(notified).toBe(2);
   });
 
-  test("notifyOwner skips an offboarding owner", async () => {
+  test("notifyOwner skips an offboarding owner but still reaches an active co-owner", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, ownerId } = await seedOrg(t);
+    const coOwnerRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "OWNER2", permissions: [], isSystemOwnerRole: true }),
+    );
+    const coOwnerId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "coowner_789", email: "co@test.com" }));
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: coOwnerId, roleId: coOwnerRoleId }));
     await offboard(t, ownerId, orgId);
     await t.run((ctx) => notifyOwner(ctx, orgId, "role.changed", { actorName: "Carol", roleName: "SALES" }));
     expect(await rowsFor(t, ownerId)).toHaveLength(0);
+    expect(await rowsFor(t, coOwnerId)).toHaveLength(1);
   });
 
-  test("notifyFinanceManagers (built on the owner fallback) skips an offboarding owner", async () => {
+  test("notifyFinanceManagers skips an offboarding accountant and still reaches the owner", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, ownerId, accountantId } = await seedFinanceOrg(t);
+    await offboard(t, accountantId, orgId);
+    await t.run((ctx) => notifyFinanceManagers(ctx, orgId, "system.announcement", { title: "T", message: "M" }));
+    expect(await rowsFor(t, accountantId)).toHaveLength(0);
+    expect(await rowsFor(t, ownerId)).toHaveLength(1);
+  });
+
+  test("notifyFinanceManagers skips an offboarding owner too", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
     const { orgId, ownerId, accountantId } = await seedFinanceOrg(t);
     await offboard(t, ownerId, orgId);
@@ -501,6 +516,25 @@ describe("offboarding members receive no routine notifications (SCRUM-789)", () 
     await t.run((ctx) => notifyFinanceManagers(ctx, orgId, "system.announcement", { title: "T", message: "M" }));
     expect(await rowsFor(t, ownerId)).toHaveLength(0);
     expect(await rowsFor(t, accountantId)).toHaveLength(0);
+  });
+
+  test("notifyUser (the direct path, e.g. an approval response) never reaches an offboarding member on any channel", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, salesId } = await seedOrg(t);
+    await offboard(t, salesId, orgId);
+    await t.run((ctx) => notifyUser(ctx, orgId, salesId, "collection.approval_responded", { status: "APPROVED", amount: "500" }));
+    expect(await rowsFor(t, salesId)).toHaveLength(0);
+    expect(await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect())).toHaveLength(0);
+  });
+
+  test("notifyUser still reaches an active member and a user with no membership (behaviour preserved)", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, salesId } = await seedOrg(t);
+    const strangerId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "stranger_789", email: "s@test.com" }));
+    await t.run((ctx) => notifyUser(ctx, orgId, salesId, "lead.assigned", { actorName: "A" }));
+    await t.run((ctx) => notifyUser(ctx, orgId, strangerId, "lead.assigned", { actorName: "A" }));
+    expect(await rowsFor(t, salesId)).toHaveLength(1);
+    expect(await rowsFor(t, strangerId)).toHaveLength(1);
   });
 
   test("notifyByPermission still skips them (unchanged)", async () => {
