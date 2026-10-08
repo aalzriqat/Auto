@@ -204,7 +204,7 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   "trusted-accounting-rehearsal.yml":
     "2114a2d133fb1468b98806b796dcc53eba00f44a40cffcd5045cd91ed96a3a1d",
   "trusted-main-e2e.yml":
-    "ba0277012803ed365c944dbad5ecef410036c5773e6b401a7021a0b37855d9f4",
+    "8994750444ebe142b8e905f8426048ea6a264fe73a7bdd9674048415ff66c86a",
 };
 
 function everyJob(): Array<{ label: string; workflow: Workflow; job: Job }> {
