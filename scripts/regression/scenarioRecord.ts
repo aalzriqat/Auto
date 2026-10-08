@@ -261,8 +261,10 @@ function ruleBodyExercisesSubject(source: string, kind: ts.ScriptKind, testName:
   let called = false;
   let asserted = false;
   let mocked = false;
-  const calleeName = (e: ts.Expression): string | undefined =>
-    ts.isIdentifier(e) ? e.text : ts.isPropertyAccessExpression(e) ? e.name.text : undefined;
+  const calleeName = (e: ts.Expression): string | undefined => {
+    if (ts.isIdentifier(e)) return e.text;
+    return ts.isPropertyAccessExpression(e) ? e.name.text : undefined;
+  };
   const scan = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
       const name = calleeName(node.expression);
@@ -319,8 +321,8 @@ function schemaProblems(r: unknown): string[] {
     else if ([...stringsIn(r.inputs)].some((v) => !VALUE_TOKEN.test(v)) || [...keysIn(r.inputs)].some((k) => !KEY_TOKEN.test(k))) {
       out.push("rule input strings must be short space-free tokens; no prose");
     }
-  } else {
-    if (r.subject !== undefined || r.inputs !== undefined) out.push('subject/inputs belong to kind "rule" only');
+  } else if (r.subject !== undefined || r.inputs !== undefined) {
+    out.push('subject/inputs belong to kind "rule" only');
   }
   if (r.kind !== "rule" && (!Array.isArray(r.steps) || r.steps.length === 0)) out.push("steps must be a non-empty array");
   else if (r.kind !== "rule" && Array.isArray(r.steps)) {
