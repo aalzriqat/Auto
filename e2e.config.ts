@@ -7,7 +7,28 @@ import { chatgpt } from 'e2e/oauth/chatgpt';
 try {
   process.loadEnvFile('.env.local');
 } catch {
-  // No .env.local: tests that need the `sales` session fail at sign-in, the rest still run.
+  // The deployment check below fails closed if no dev Convex URL is available.
+}
+
+const appUrl = process.env.APP_URL ?? 'http://localhost:3000';
+const appHost = new URL(appUrl).hostname;
+if (appHost !== 'localhost' && appHost !== '127.0.0.1') {
+  throw new Error('Agentic e2e requires a local app URL.');
+}
+
+if (!process.env.NEXT_PUBLIC_CONVEX_URL) {
+  throw new Error('Agentic e2e requires the vibrant-cat-418 dev Convex URL.');
+}
+const convexHost = new URL(process.env.NEXT_PUBLIC_CONVEX_URL).hostname;
+if (!/^vibrant-cat-418(?:\.[a-z0-9-]+)?\.convex\.cloud$/.test(convexHost)) {
+  throw new Error('Agentic e2e requires the vibrant-cat-418 dev Convex deployment.');
+}
+
+if (process.env.NEXT_PUBLIC_CONVEX_SITE_URL) {
+  const siteHost = new URL(process.env.NEXT_PUBLIC_CONVEX_SITE_URL).hostname;
+  if (!/^vibrant-cat-418(?:\.[a-z0-9-]+)?\.convex\.site$/.test(siteHost)) {
+    throw new Error('Agentic e2e requires the vibrant-cat-418 dev Convex site.');
+  }
 }
 
 // Runs against LOCAL Next only, which reads .env.local (dev Convex). Never point APP_URL at a
@@ -34,7 +55,7 @@ export default {
     {
       engine: web(),
       app: {
-        url: process.env.APP_URL ?? 'http://localhost:3000',
+        url: appUrl,
         // `node` + Next's own CLI: spawning `pnpm` without a shell fails on Windows (ENOENT).
         command: { executable: 'node', args: ['node_modules/next/dist/bin/next', 'dev'] },
       },
