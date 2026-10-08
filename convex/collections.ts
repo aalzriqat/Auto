@@ -28,6 +28,7 @@ import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
 import { isFcLineage, parseFaceAmountMinor, dealChequeCurrency, FC_CHEQUE_DEAL_NEXT_STEP, FC_RETURN_MESSAGES } from "./utils/fcCheque";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
+import { assertNoOpenSaleInvoiceForUnlinkedReceipt } from "./utils/cashSalePilotGate";
 import {
   assertNoSaleIdOnNewReceivable,
   assertReceiptTargetNotSaleLinked,
@@ -1280,6 +1281,13 @@ export const recordPayment = mutation({
     await assertReceiptTargetNotSaleLinked(ctx, args.orgId, {
       receivableId: args.receivableId,
       saleId: args.saleId,
+    });
+    // SCRUM-802: an UNLINKED receipt (no receivable, no sale) from a customer who
+    // owes a sale invoice would park as unapplied while the invoice stays open;
+    // the pilot procedure is a deposit. Same pre-wrapper placement as above.
+    await assertNoOpenSaleInvoiceForUnlinkedReceipt(ctx, args.orgId, {
+      receivableId: args.receivableId,
+      customerId: args.customerId,
     });
     return await runWithIdempotency(
       ctx,
