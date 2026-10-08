@@ -187,14 +187,14 @@ importers:
         version: 3.25.76
     devDependencies:
       '@ai-sdk/openai':
-        specifier: ^4.0.89
-        version: 4.0.89(zod@3.25.76)
+        specifier: 4.0.87
+        version: 4.0.87(zod@3.25.76)
       '@convex-dev/eslint-plugin':
         specifier: ^1.2.2
         version: 1.2.2(convex@1.42.1(@clerk/react@6.12.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6))(eslint@9.39.4(jiti@2.7.0))(typescript@6.0.3)
       '@e2e-dev/web':
         specifier: ^0.13.0
-        version: 0.13.0(e2e@0.18.0(@ai-sdk/openai@4.0.89(zod@3.25.76))(ai@7.0.133(zod@3.25.76)))
+        version: 0.13.0(e2e@0.18.0(@ai-sdk/openai@4.0.87(zod@3.25.76))(ai@7.0.131(zod@3.25.76)))
       '@playwright/test':
         specifier: ^1.61.1
         version: 1.61.1
@@ -220,14 +220,14 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(vitest@4.1.9)
       ai:
-        specifier: ^7.0.0
-        version: 7.0.133(zod@3.25.76)
+        specifier: 7.0.131
+        version: 7.0.131(zod@3.25.76)
       convex-test:
         specifier: ^0.0.53
         version: 0.0.53(convex@1.42.1(@clerk/react@6.12.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(bufferutil@4.1.0)(react@19.2.7)(utf-8-validate@6.0.6))
       e2e:
         specifier: ^0.18.0
-        version: 0.18.0(@ai-sdk/openai@4.0.89(zod@3.25.76))(ai@7.0.133(zod@3.25.76))
+        version: 0.18.0(@ai-sdk/openai@4.0.87(zod@3.25.76))(ai@7.0.131(zod@3.25.76))
       eslint:
         specifier: ^9.39.4
         version: 9.39.4(jiti@2.7.0)
@@ -421,20 +421,20 @@ packages:
   '@adraffy/ens-normalize@1.11.1':
     resolution: {integrity: sha512-nhCBV3quEgesuf7c7KYfperqSS14T8bYuvJ8PcLJp6znkZpFc0AuW4qBtr8eKVyPPe/8RSr7sglCWPU5eaxwKQ==}
 
-  '@ai-sdk/gateway@4.0.108':
-    resolution: {integrity: sha512-UgtnyyuIpMSzhha89MAK6c2pTeQW8s9jLSmDeYI92NzqDsoyEYFZ/lYAXTXLUQxA25j5iTWPEnzGVl5adIy+8w==}
+  '@ai-sdk/gateway@4.0.107':
+    resolution: {integrity: sha512-Z/e4lbywscQ86JHi+vgIE7paPzvCSypJFIQugADWpWZXGkQ3iZ6M08rqkjDNhj3y6Gi7O3A/sSL/Ib3LoVZv6w==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
-  '@ai-sdk/openai@4.0.89':
-    resolution: {integrity: sha512-Lmg/77zyVaSHTiqCis24JS79AC6zb5eqvZs1uAEAWckMlyz9E1GgMxr1J5l1OigDdAOg0brdV2S9UsDfZlaxvQ==}
+  '@ai-sdk/openai@4.0.87':
+    resolution: {integrity: sha512-dfadBgux+npOoaPmIP3GGaHtGT6ZpYxBmBQK1TkIkjt/yuEtLxJ0Oklsrm88FTJrTW51qGfLSLeVP7bMUPeMCQ==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
-  '@ai-sdk/provider-utils@5.0.57':
-    resolution: {integrity: sha512-giQ9mNwVzYUbahU2DG1FWEjXkDU8D8Hitz7Rk4AlRGtqh8Ss48msQ9+wEAXquWs/GYOETzxMMFsgcHK0i7TbUQ==}
+  '@ai-sdk/provider-utils@5.0.56':
+    resolution: {integrity: sha512-F7/U1YpVXEfSxRHbxScm0PVdr9lN6GaUWHnt8ws2UjuGeuxWHqCkV25dGpHAkpDHkuIXoC+aak/OqSylKSJmHw==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -443,8 +443,8 @@ packages:
     resolution: {integrity: sha512-UpbC9C1oht8dhfKPbVXSLRZS3DI8uk8n5v2uMjBPNIYGsC2kL045ywq7D8Hh9KgnH9rP5W/GxQdYtWScRouqlA==}
     engines: {node: '>=22'}
 
-  '@ai-sdk/provider@4.0.25':
-    resolution: {integrity: sha512-vG0l7MUavfhn6c5+Z0y1/E6lKUrzecsLtFkuIknnHjAGAIiuwFDucafzebJuFVTZcLyhf8qhYYU2zeKP55Mymw==}
+  '@ai-sdk/provider@4.0.24':
+    resolution: {integrity: sha512-iztFqJTdxNN0ZzqZAAnVPMhRMaL1bfQFa3GIPAffWQ0+dP2FXIkyMD8kHeEI7EpB/C6TR45cqOkrS7YZZ1sATA==}
     engines: {node: '>=22'}
 
   '@alloc/quick-lru@5.2.0':
@@ -4590,8 +4590,8 @@ packages:
     resolution: {integrity: sha512-kja8j7PjmncONqaTsB8fQ+wE2mSU2DJ9D4XKoJ5PFWIdRMa6SLSN1ff4mOr4jCbfRSsxR4keIiySJU0N9T5hIQ==}
     engines: {node: '>= 8.0.0'}
 
-  ai@7.0.133:
-    resolution: {integrity: sha512-OjyVMdsDp4ORPSrRB9hiYGic4bzeiOtaOzBPxOM7jiavz6tSXuMrqLwd1eILGhN669VD0G/+jxaiweRqfVulYg==}
+  ai@7.0.131:
+    resolution: {integrity: sha512-lOv32sfZ4T6yeFLvc9YyIBbaJH4lAhX4jYvRn6AmU7EePpL5VX3I7jgLFuX56lWaiKFi07rQ0I8+Jb2t0B0olg==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -9813,22 +9813,22 @@ snapshots:
 
   '@adraffy/ens-normalize@1.11.1': {}
 
-  '@ai-sdk/gateway@4.0.108(zod@3.25.76)':
+  '@ai-sdk/gateway@4.0.107(zod@3.25.76)':
     dependencies:
-      '@ai-sdk/provider': 4.0.25
-      '@ai-sdk/provider-utils': 5.0.57(zod@3.25.76)
+      '@ai-sdk/provider': 4.0.24
+      '@ai-sdk/provider-utils': 5.0.56(zod@3.25.76)
       '@vercel/oidc': 3.2.0
       zod: 3.25.76
 
-  '@ai-sdk/openai@4.0.89(zod@3.25.76)':
+  '@ai-sdk/openai@4.0.87(zod@3.25.76)':
     dependencies:
-      '@ai-sdk/provider': 4.0.25
-      '@ai-sdk/provider-utils': 5.0.57(zod@3.25.76)
+      '@ai-sdk/provider': 4.0.24
+      '@ai-sdk/provider-utils': 5.0.56(zod@3.25.76)
       zod: 3.25.76
 
-  '@ai-sdk/provider-utils@5.0.57(zod@3.25.76)':
+  '@ai-sdk/provider-utils@5.0.56(zod@3.25.76)':
     dependencies:
-      '@ai-sdk/provider': 4.0.25
+      '@ai-sdk/provider': 4.0.24
       '@standard-schema/spec': 1.1.0
       '@workflow/serde': 4.1.0
       eventsource-parser: 3.1.0
@@ -9839,7 +9839,7 @@ snapshots:
     dependencies:
       json-schema: 0.4.0
 
-  '@ai-sdk/provider@4.0.25':
+  '@ai-sdk/provider@4.0.24':
     dependencies:
       json-schema: 0.4.0
 
@@ -10707,9 +10707,9 @@ snapshots:
       which: 4.0.0
       yocto-spinner: 1.2.0
 
-  '@e2e-dev/web@0.13.0(e2e@0.18.0(@ai-sdk/openai@4.0.89(zod@3.25.76))(ai@7.0.133(zod@3.25.76)))':
+  '@e2e-dev/web@0.13.0(e2e@0.18.0(@ai-sdk/openai@4.0.87(zod@3.25.76))(ai@7.0.131(zod@3.25.76)))':
     dependencies:
-      e2e: 0.18.0(@ai-sdk/openai@4.0.89(zod@3.25.76))(ai@7.0.133(zod@3.25.76))
+      e2e: 0.18.0(@ai-sdk/openai@4.0.87(zod@3.25.76))(ai@7.0.131(zod@3.25.76))
       playwright-core: 1.63.0
 
   '@ecies/ciphers@0.2.6(@noble/ciphers@1.3.0)':
@@ -14585,11 +14585,11 @@ snapshots:
     dependencies:
       humanize-ms: 1.2.1
 
-  ai@7.0.133(zod@3.25.76):
+  ai@7.0.131(zod@3.25.76):
     dependencies:
-      '@ai-sdk/gateway': 4.0.108(zod@3.25.76)
-      '@ai-sdk/provider': 4.0.25
-      '@ai-sdk/provider-utils': 5.0.57(zod@3.25.76)
+      '@ai-sdk/gateway': 4.0.107(zod@3.25.76)
+      '@ai-sdk/provider': 4.0.24
+      '@ai-sdk/provider-utils': 5.0.56(zod@3.25.76)
       zod: 3.25.76
 
   ajv-formats@2.1.1(ajv@8.20.0):
@@ -15694,7 +15694,7 @@ snapshots:
     dependencies:
       readable-stream: 2.3.8
 
-  e2e@0.18.0(@ai-sdk/openai@4.0.89(zod@3.25.76))(ai@7.0.133(zod@3.25.76)):
+  e2e@0.18.0(@ai-sdk/openai@4.0.87(zod@3.25.76))(ai@7.0.131(zod@3.25.76)):
     dependencies:
       '@ai-sdk/provider': 4.0.21
       '@clack/prompts': 1.8.1
@@ -15710,8 +15710,8 @@ snapshots:
       pngjs: 7.0.0
       zod: 4.6.1
     optionalDependencies:
-      '@ai-sdk/openai': 4.0.89(zod@3.25.76)
-      ai: 7.0.133(zod@3.25.76)
+      '@ai-sdk/openai': 4.0.87(zod@3.25.76)
+      ai: 7.0.131(zod@3.25.76)
 
   ecdsa-sig-formatter@1.0.11:
     dependencies:

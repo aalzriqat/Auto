@@ -100,7 +100,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@ai-sdk/openai": "^4.0.89",
+    "@ai-sdk/openai": "4.0.87",
     "@convex-dev/eslint-plugin": "^1.2.2",
     "@e2e-dev/web": "^0.13.0",
     "@playwright/test": "^1.61.1",
@@ -111,7 +111,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/web-push": "^3.6.4",
     "@vitest/coverage-v8": "^4.1.9",
-    "ai": "^7.0.0",
+    "ai": "7.0.131",
     "convex-test": "^0.0.53",
     "e2e": "^0.18.0",
     "eslint": "^9.39.4",
