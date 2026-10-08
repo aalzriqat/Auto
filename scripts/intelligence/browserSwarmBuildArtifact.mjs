@@ -211,7 +211,10 @@ async function materializeEntry({
  * localeCompare: that reorders mixed-case names relative to the default sort
  * this replaced, which would change the pnpm hoist copy order.
  */
-export const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+export const byCodeUnit = (a, b) => {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+};
 
 /**
  * pnpm's node_modules holds symlinks, and each real package keeps its own
@@ -242,15 +245,26 @@ async function hoistPnpmVirtualStore({
       budget,
     });
   };
-  for (const name of names.sort(byCodeUnit)) {
-    if (name.startsWith(".")) continue;
-    if (name.startsWith("@")) {
-      const scoped = await readdir(path.join(hoistRoot, name)).catch(() => []);
-      for (const child of scoped.sort(byCodeUnit)) await copyIfMissing(path.join(name, child));
-      continue;
-    }
-    await copyIfMissing(name);
-  }
+  // Expand each scope directory in place so the copy order stays: sorted
+  // top-level names, with a scope's sorted children at the scope's position.
+  const expand = async (name) => {
+    if (!name.startsWith("@")) return [name];
+    const scoped = await readdir(path.join(hoistRoot, name)).catch(() => []);
+    return scoped.sort(byCodeUnit).map((child) => path.join(name, child));
+  };
+  const relatives = (
+    await Promise.all(
+      names
+        .filter((name) => !name.startsWith("."))
+        .sort(byCodeUnit)
+        .map(expand),
+    )
+  ).flat();
+  // Copies share one budget, so they must run one at a time and in order.
+  await relatives.reduce(
+    (previous, relative) => previous.then(() => copyIfMissing(relative)),
+    Promise.resolve(),
+  );
 }
 
 async function hashFile(filePath) {
