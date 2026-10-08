@@ -1,6 +1,6 @@
 {
   "id": "finalize-financed-deal-requires-finance-disbursement-confirm",
-  "fingerprint": "7a4e21a535c8698376ca17099eb7c52bffedc7af2a9832d0738d293ec150b2b0",
+  "fingerprint": "42716ea1df2853c1ad512ec2e65ada7885b9c7bc34d5354aa694a2d0d9a885d4",
   "domain": "permission",
   "level": "backend",
   "status": "active",
@@ -19,16 +19,6 @@
       "input": {
         "route": "THROUGH_DEALERSHIP"
       }
-    },
-    {
-      "actor": {
-        "role": "accountant",
-        "org": "A"
-      },
-      "action": "applications.finalizeDeal",
-      "input": {
-        "route": "THROUGH_DEALERSHIP"
-      }
     }
   ],
   "expected": [
@@ -39,10 +29,6 @@
     {
       "observable": "step1.salesRows",
       "value": 0
-    },
-    {
-      "observable": "step2.salesRows",
-      "value": 1
     }
   ],
   "rulings": [

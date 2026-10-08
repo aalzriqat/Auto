@@ -361,7 +361,7 @@ function schemaProblems(r: unknown): string[] {
   if (extra.length > 0) out.push(`unknown field(s) ${[...new Set(extra)].join(", ")}: records are a closed schema (no free-form notes)`);
   // Closed VALUE formats for every metadata field a public record carries.
   if (Array.isArray(r.rulings) && r.rulings.some((x) => isObject(x) && (!RULING_ID.test(String(x.id)) || !SHA256.test(String(x.digest))))) {
-    out.push("ruling refs must be {id: SCRUM-n#cN, digest: sha256 hex}");
+    out.push("ruling refs must be {id: SCRUM-n#cN or SCRUM-n#description, digest: sha256 hex}");
   }
   if (Array.isArray(r.steps) && r.steps.some((s) => isObject(s) && isObject(s.actor) && (!TOKEN.test(String(s.actor.role)) || !TOKEN.test(String(s.actor.org))))) {
     out.push("actor role/org must be short identifier tokens");

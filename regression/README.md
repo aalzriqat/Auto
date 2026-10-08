@@ -25,7 +25,7 @@ Never put ruling text or customer data here. Format, validators and rules live i
 
 ## Pilot records (S2b)
 
-Three `rule` records bind exact titles in `convex/consignmentEconomics.test.ts` and cite SCRUM-407#c21031 (financed DIRECT sourced sale: approved-basis, not sale-price). Their `matrixRow` (`SCRUM-41-direct`) is a descriptive label of the originating bug group, not a joined SCRUM-486 row id: the matrix is not machine-readable yet. Permission and tenancy records are deferred until the schema has a non-comment ruling source (description / invariant) form.
+Three `rule` records bind exact titles in `convex/consignmentEconomics.test.ts` and cite SCRUM-407#c21031 (financed DIRECT sourced sale: approved-basis, not sale-price). Their `matrixRow` (`SCRUM-41-direct`) is a descriptive label of the originating bug group, not a joined SCRUM-486 row id: the matrix is not machine-readable yet. One `permission` scenario (financed finalize refused without confirm:finance_disbursement, SCRUM-407#c21031) is bound to its existing test; it claims only the refusal half because that test's accountant step is not asserted at its own step. Tenancy records stay deferred until the schema has an invariant ruling-source form.
 
 ### Known limits (S2 review)
 
@@ -34,4 +34,4 @@ Three `rule` records bind exact titles in `convex/consignmentEconomics.test.ts` 
 - The fail-closed (withhold) expectations of the pilot records come from SCRUM-41 / SCRUM-49 Lane 4; c21031 governs the approved-basis record directly.
 
 - Ruling ids are `SCRUM-n#cN` (a comment) or `SCRUM-n#description` (the issue description). A non-owner invariant source (e.g. the tenant write guard) has no form yet; tenancy records stay deferred.
-- Permission records need a located test that already asserts the refusal; none has been bound yet.
+- Permission records need a located test that already asserts the refusal. Next candidate: the refusal list in convex/scrum413bDealDoors.test.ts (needs a SCRUM-413#description digest).
