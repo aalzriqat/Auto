@@ -7,6 +7,7 @@ import { deploymentNameFromUrl } from "./previewDeploymentLifecycle.mjs";
 
 const ATTESTATION_QUERY = "e2eBootstrap:assertE2EBootstrap";
 const SCENARIO_LOG = "deal-scenarios-output.log";
+const APPROVER_PERMISSIONS_ERROR = /E2E_BOOTSTRAP: E2E_APPROVER_USER holds role "[^"\r\n]{1,128}", which is missing [^\r\n]{1,256}\. The approval E2E path cannot be driven without it\./;
 
 /** Only the bounded tail is needed: the form explorer runs near the end. */
 function readScenarioTail(runnerTemp) {
@@ -44,7 +45,9 @@ export function summarizeAttestationLogs(jsonl, requestIds) {
     const requestId = event.requestId;
     const errorClass = /\b(ConvexError|TypeError|RangeError|ReferenceError|SyntaxError|Error)\b/.exec(event.error)?.[1] ?? "UnknownError";
     let category = "unclassified";
-    if (/fetch failed|network|ECONNRESET|ETIMEDOUT/i.test(event.error)) {
+    if (APPROVER_PERMISSIONS_ERROR.test(event.error)) {
+      category = "qa-approver-permissions";
+    } else if (/fetch failed|network|ECONNRESET|ETIMEDOUT/i.test(event.error)) {
       category = "network";
     } else if (/too many bytes|read limit|too many documents|time limit|timed out/i.test(event.error)) {
       category = "resource-limit";
