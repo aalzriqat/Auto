@@ -384,6 +384,7 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
       "browser-attack-swarm.yml",
       "deal-scenarios-e2e.yml",
       "hunt-preview.yml",
+      "preview-attestation-fault-probe.yml",
       "trusted-accounting-rehearsal.yml",
       "trusted-main-e2e.yml",
     ]);
