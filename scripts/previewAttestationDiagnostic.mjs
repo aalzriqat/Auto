@@ -24,7 +24,7 @@ function readScenarioTail(runnerTemp) {
 
 export function failedAttestationRequestIds(scenarioLog) {
   return [...new Set(
-    [...scenarioLog.matchAll(/Preview attestation failed:\s*ConvexError:?\s*\[Request ID: ([a-f0-9]{8,64})\]/gi)]
+    [...scenarioLog.matchAll(/Preview attestation failed:[^\r\n]*?\[Request ID: ([a-f0-9]{8,64})\]/gi)]
       .map((match) => match[1]),
   )].slice(-3);
 }

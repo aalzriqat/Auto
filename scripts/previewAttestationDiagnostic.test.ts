@@ -31,6 +31,17 @@ test("rejects tenant-shaped source text in a backend error", () => {
   ]);
 });
 
+test("correlates a request ID when Convex prefixes the attestation error line", () => {
+  assert.deepEqual(
+    failedAttestationRequestIds("Preview attestation failed: [CONVEX M(e2eBootstrap:assertE2EBootstrap)] [Request ID: 42e39a239aecaeb1] Server Error"),
+    ["42e39a239aecaeb1"],
+  );
+  assert.deepEqual(
+    failedAttestationRequestIds("Preview attestation failed: Error\n[Request ID: 42e39a239aecaeb1] Server Error"),
+    [],
+  );
+});
+
 test("classifies a matching resource-limit completion without leaking its raw error", () => {
   const raw = JSON.stringify({
     kind: "Completion", identifier: "e2eBootstrap:assertE2EBootstrap", requestId: "42e39a239aecaeb1",
