@@ -215,6 +215,10 @@ export default defineSchema({
 
   accountingPeriods: defineTable({
     orgId: v.id("organizations"),
+    // Set only when this period was created with synchronous snapshot writers.
+    // Older retained periods have no certificate and use journal lines for
+    // containing-period reports until their snapshots are reconciled.
+    snapshotFastPathEligible: v.optional(v.boolean()),
     startDate: v.number(),
     endDate: v.number(),
     fiscalYear: v.number(),
@@ -720,6 +724,7 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_date", ["orgId", "accountingDate"])
     .index("by_org_period", ["orgId", "periodId"])
+    .index("by_org_period_date", ["orgId", "periodId", "accountingDate"])
     .index("by_org_source", ["orgId", "sourceType", "sourceId"])
     .index("by_accounting_event", ["accountingEventId"])
     // SCRUM-555 lane-B: getPostedLines reads POSTED and REVERSED entries.

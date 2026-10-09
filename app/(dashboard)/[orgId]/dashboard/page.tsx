@@ -55,49 +55,50 @@ export default function DashboardPage() {
   const [filterStatus, setFilterStatus] = useState<string>("ALL");
   const itemsPerPage = 4;
 
-  const stats = useQuery(
-    api.dashboard.stats,
-    // This screen renders no period-over-period delta anywhere, so it declines
-    // the comparison window rather than having the backend measure a second
-    // full accounting period and discard it on every load. Mobile, the only
-    // consumer of `previousPeriod`, is unaffected: the argument defaults to true.
-    activeOrgId ? { orgId: activeOrgId, timeRange, includePreviousPeriod: false } : "skip"
-  );
-
-  const dataQuality = useQuery(
-    api.dashboard.dataQualityStats,
-    activeOrgId ? { orgId: activeOrgId } : "skip"
-  );
-
-  const agingBuckets = useQuery(
-    api.vehicles.getAgingBuckets,
-    activeOrgId ? { orgId: activeOrgId } : "skip"
-  );
-
-  const { results: leads } = usePaginatedQuery(
-    api.leads.list,
-    activeOrgId ? { orgId: activeOrgId } : "skip",
-    { initialNumItems: 100 }
-  );
-
   const myMembership = useQuery(
     api.memberships.getMyMembership,
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
+  const role = myMembership?.roleName?.toUpperCase();
+  const redirectPath = activeOrgId
+    ? role === "SALES" || role === "SALESPERSON"
+      ? `/${activeOrgId}/sales`
+      : role === "RECEPTION"
+        ? `/${activeOrgId}/leads`
+        : role === "ACCOUNTANT" || role === "SENIOR_ACCOUNTANT"
+          ? `/${activeOrgId}/accounting`
+          : null
+    : null;
+  // Membership is needed before starting live dashboard reads: these roles
+  // leave this route immediately and never use its expensive subscriptions.
+  const showDashboard = Boolean(activeOrgId && myMembership !== undefined && !redirectPath);
+
+  const stats = useQuery(
+    api.dashboard.stats,
+    showDashboard && activeOrgId
+      ? { orgId: activeOrgId, timeRange, includePreviousPeriod: false }
+      : "skip"
+  );
+
+  const dataQuality = useQuery(
+    api.dashboard.dataQualityStats,
+    showDashboard && activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
+
+  const agingBuckets = useQuery(
+    api.vehicles.getAgingBuckets,
+    showDashboard && activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
+
+  const { results: leads } = usePaginatedQuery(
+    api.leads.list,
+    showDashboard && activeOrgId ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 100 }
+  );
 
   useEffect(() => {
-    if (myMembership && activeOrgId) {
-      const role = myMembership.roleName?.toUpperCase();
-      if (role === "SALES" || role === "SALESPERSON") {
-        router.replace(`/${activeOrgId}/sales`);
-      } else if (role === "RECEPTION") {
-        router.replace(`/${activeOrgId}/leads`);
-      } else if (role === "ACCOUNTANT" || role === "SENIOR_ACCOUNTANT") {
-        router.replace(`/${activeOrgId}/accounting`);
-      }
-    }
-  }, [myMembership, activeOrgId, router]);
-
+    if (redirectPath) router.replace(redirectPath);
+  }, [redirectPath, router]);
   if (stats === undefined || leads === undefined || myMembership === undefined) {
     return (
       <RoleGuard permissions={[]}>

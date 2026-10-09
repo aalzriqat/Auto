@@ -407,6 +407,13 @@ export const financedDealOverview = query({
     // TEN-1: this handler takes an orgId and a caller-supplied id, so it proves
     // ownership of the row it reads LOCALLY, whatever the cockpit just proved.
     const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId);
+    const owner = isSystemOwnerRole(role);
+    const mayReadCost = owner || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
+    // Neither branch of this response is visible to this role. Return after
+    // the existing authorization and ownership checks, before reading costs.
+    if (cockpit.money === null && !mayReadCost) {
+      return { financialSummary: null, vehicleCostBasis: null, dealerPreparation: null };
+    }
     const orgCurrency = await getOrgCurrency(ctx, args.orgId);
     const dealCurrency = app.economicsCurrency ?? orgCurrency;
     const vehicleRow = await ctx.db.get(app.vehicleId);
@@ -572,8 +579,6 @@ export const financedDealOverview = query({
 
     let vehicleCostBasis: ServedVehicleCostBasis | null = null;
     let dealerPreparation: ServedDealerPreparation | null = null;
-    const owner = isSystemOwnerRole(role);
-    const mayReadCost = owner || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
     // The LINES are the expense ledger, gated as `expenses.listExpenses` gates it.
     const mayReadLines = owner || role.permissions.includes(PERMISSIONS.VIEW_EXPENSES);
     if (mayReadCost) {
