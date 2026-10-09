@@ -52,6 +52,18 @@ test("classifies a matching resource-limit completion without leaking its raw er
   ]);
 });
 
+test("names the QA approver permission mismatch without exposing the role or grants", () => {
+  const raw = JSON.stringify({
+    kind: "Completion", identifier: "e2eBootstrap:assertE2EBootstrap", requestId: "42e39a239aecaeb1",
+    error: 'ConvexError: E2E_BOOTSTRAP: E2E_APPROVER_USER holds role "private-customer@example.test", which is missing view:finance, manage:finance. The approval E2E path cannot be driven without it.',
+  });
+  const summary = summarizeAttestationLogs(raw, ["42e39a239aecaeb1"]);
+  assert.deepEqual(summary, [
+    "request=42e39a239aecaeb1 class=ConvexError category=qa-approver-permissions location=unavailable",
+  ]);
+  assert.doesNotMatch(summary.join(" "), /private-customer|view:finance|manage:finance/);
+});
+
 test("refuses a non-preview key before invoking the log command", () => {
   let invoked = false;
   const result = diagnosePreviewAttestation(
