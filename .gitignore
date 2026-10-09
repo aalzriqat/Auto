@@ -106,4 +106,5 @@ packages/shared/coverage-sonar/
 .e2e/summary.md
 .e2e/failures/
 .e2e/logs/
+playwright/agentic/.e2e/
 .e2e/videos/

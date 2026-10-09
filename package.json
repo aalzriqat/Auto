@@ -45,7 +45,7 @@
     "browser-swarm:jev-exploration": "node scripts/intelligence/trustedBrowserJevSuggestions.mjs",
     "browser-swarm:build-artifact": "node scripts/intelligence/browserSwarmBuildArtifact.mjs",
     "test:unified-deal-authority": "vitest run convex/unifiedDealFeeAuthority.test.ts",
-    "test:e2e": "e2e run"
+    "test:e2e": "e2e run --config playwright/agentic/e2e.config.ts"
   },
   "dependencies": {
     "@autoflow/shared": "workspace:*",

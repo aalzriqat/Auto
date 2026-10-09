@@ -4,7 +4,9 @@
       "command": "npx",
       "args": [
         "e2e",
-        "mcp"
+        "mcp",
+        "--config",
+        "playwright/agentic/e2e.config.ts"
       ]
     }
   }

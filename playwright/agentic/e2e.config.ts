@@ -37,6 +37,7 @@ if (convexSiteUrl) {
 // Vercel preview: those read the PRODUCTION backend. `pnpm dev` / `convex dev` are deliberately
 // not used: they push functions to the shared dev deployment.
 export default {
+  tests: '*.e2e.ts',
   agents: {
     default: {
       model: chatgpt('gpt-6-luna'),
@@ -60,6 +61,7 @@ export default {
         url: appUrl,
         // `node` + Next's own CLI: spawning `pnpm` without a shell fails on Windows (ENOENT).
         command: {
+          cwd: '../..',
           executable: 'node',
           args: ['node_modules/next/dist/bin/next', 'dev'],
           startupTimeout: 120_000,
