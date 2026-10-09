@@ -142,6 +142,7 @@ describe("vatReport.generateVatSummary", () => {
     const { t, orgId, salesTaxPayable, seedLine } = await seedDealer();
     const date = Date.UTC(2025, 4, 10);
     const sentinelId = await seedLine(salesTaxPayable._id, 0, 1, -1);
+    const preEpochId = await seedLine(salesTaxPayable._id, 0, 2, -100_000);
     const postedId = await seedLine(salesTaxPayable._id, 0, 50_000, date);
     await t.run(async (ctx) => {
       for (let lineNumber = 3; lineNumber <= 129; lineNumber++) {
@@ -166,7 +167,7 @@ describe("vatReport.generateVatSummary", () => {
       return { rows, queriedTables };
     });
 
-    expect(rows.map((row) => row.journalEntryId)).toEqual([postedId, postedId]);
+    expect(rows.map((row) => row.journalEntryId)).toEqual([preEpochId, preEpochId, postedId, postedId]);
     expect(queriedTables).not.toContain("journalEntries");
   });
 

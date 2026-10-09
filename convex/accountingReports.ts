@@ -107,10 +107,34 @@ export async function getPostedLines(
   // Large or unbounded windows retain the original bulk-read path so this
   // optimization cannot turn a report into thousands of point queries.
   const hasDateBound = fromDate !== undefined || toDate !== undefined;
-  const targetedQuery = excludeSentinel
-    ? lineQuery().filter((q) => q.neq(q.field("accountingDate"), NO_ACCOUNTING_DATE_SENTINEL))
-    : lineQuery();
-  const targetedLines = hasDateBound ? await targetedQuery.take(maxTargetedLines + 1) : null;
+  let targetedLines: Doc<"journalLines">[] | null = null;
+  if (hasDateBound) {
+    const sentinelWithinBound = excludeSentinel
+      && (fromDate === undefined || fromDate <= NO_ACCOUNTING_DATE_SENTINEL)
+      && (toDate === undefined || toDate >= NO_ACCOUNTING_DATE_SENTINEL);
+    if (sentinelWithinBound) {
+      // Two index ranges retain valid pre-1970 dates without scanning the
+      // excluded -1 sentinel rows merely to decide the read path.
+      const beforeSentinel = fromDate !== undefined && fromDate >= NO_ACCOUNTING_DATE_SENTINEL
+        ? []
+        : await ctx.db.query("journalLines").withIndex("by_org_date", (q) => {
+          const scoped = q.eq("orgId", orgId);
+          return fromDate === undefined
+            ? scoped.lt("accountingDate", NO_ACCOUNTING_DATE_SENTINEL)
+            : scoped.gte("accountingDate", fromDate).lt("accountingDate", NO_ACCOUNTING_DATE_SENTINEL);
+        }).take(maxTargetedLines + 1);
+      const afterSentinel = beforeSentinel.length > maxTargetedLines
+        || (toDate !== undefined && toDate <= NO_ACCOUNTING_DATE_SENTINEL)
+        ? []
+        : await ctx.db.query("journalLines").withIndex("by_org_date", (q) => {
+          const scoped = q.eq("orgId", orgId).gt("accountingDate", NO_ACCOUNTING_DATE_SENTINEL);
+          return toDate === undefined ? scoped : scoped.lte("accountingDate", toDate);
+        }).take(maxTargetedLines + 1 - beforeSentinel.length);
+      targetedLines = [...beforeSentinel, ...afterSentinel];
+    } else {
+      targetedLines = await lineQuery().take(maxTargetedLines + 1);
+    }
+  }
   if (targetedLines !== null && targetedLines.length <= maxTargetedLines) {
     const parentIds = [...new Set(targetedLines.map((line) => line.journalEntryId))];
     const parents = await Promise.all(parentIds.map((id) => ctx.db.get("journalEntries", id)));
