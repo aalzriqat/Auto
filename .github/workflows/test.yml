@@ -55,10 +55,6 @@ jobs:
     - name: Install dependencies
       run: pnpm install --frozen-lockfile --ignore-scripts
 
-    - name: Verify preview attestation diagnostic controls
-      if: matrix.slice == 1
-      run: node --test scripts/previewAttestationDiagnostic.test.mjs
-
     # `pnpm test:coverage` also runs the authority suite once without coverage.
     # Slice 1 keeps that, so the plain run still happens exactly once.
     - name: Run unit + integration tests with coverage

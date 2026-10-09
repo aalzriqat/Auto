@@ -43,11 +43,12 @@ export function summarizeAttestationLogs(jsonl, requestIds) {
     if (event?.kind !== "Completion" || event.identifier !== ATTESTATION_QUERY || typeof event.error !== "string" || !wanted.has(event.requestId)) continue;
     const requestId = event.requestId;
     const errorClass = /\b(ConvexError|TypeError|RangeError|ReferenceError|SyntaxError|Error)\b/.exec(event.error)?.[1] ?? "UnknownError";
-    const category = /fetch failed|network|ECONNRESET|ETIMEDOUT/i.test(event.error)
-      ? "network"
-      : /too many bytes|read limit|too many documents|time limit|timed out/i.test(event.error)
-        ? "resource-limit"
-        : "unclassified";
+    let category = "unclassified";
+    if (/fetch failed|network|ECONNRESET|ETIMEDOUT/i.test(event.error)) {
+      category = "network";
+    } else if (/too many bytes|read limit|too many documents|time limit|timed out/i.test(event.error)) {
+      category = "resource-limit";
+    }
     const locationMatch = /\bconvex\/e2eBootstrap\.ts:(\d{1,6}):(\d{1,4})\b/.exec(event.error);
     const location = locationMatch ? `convex/e2eBootstrap.ts:${locationMatch[1]}:${locationMatch[2]}` : "unavailable";
     summaries.push(`request=${requestId} class=${errorClass} category=${category} location=${location}`);
@@ -56,6 +57,9 @@ export function summarizeAttestationLogs(jsonl, requestIds) {
 }
 
 /** Run only after the scenario job fails, before its disposable preview is deleted. */
+/** @param {NodeJS.ProcessEnv} [env]
+ * @param {(command: string, args: string[], options: import("node:child_process").SpawnSyncOptionsWithStringEncoding) => { status: number | null, stdout: string, stderr?: string, error?: { code?: string } }} [spawn]
+ */
 export function diagnosePreviewAttestation(env = process.env, spawn = spawnSync) {
   const previewName = env.CONVEX_PREVIEW_NAME;
   try {
