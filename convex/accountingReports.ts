@@ -107,7 +107,10 @@ export async function getPostedLines(
   // Large or unbounded windows retain the original bulk-read path so this
   // optimization cannot turn a report into thousands of point queries.
   const hasDateBound = fromDate !== undefined || toDate !== undefined;
-  const targetedLines = hasDateBound ? await lineQuery().take(maxTargetedLines + 1) : null;
+  const targetedQuery = excludeSentinel
+    ? lineQuery().filter((q) => q.neq(q.field("accountingDate"), NO_ACCOUNTING_DATE_SENTINEL))
+    : lineQuery();
+  const targetedLines = hasDateBound ? await targetedQuery.take(maxTargetedLines + 1) : null;
   if (targetedLines !== null && targetedLines.length <= maxTargetedLines) {
     const parentIds = [...new Set(targetedLines.map((line) => line.journalEntryId))];
     const parents = await Promise.all(parentIds.map((id) => ctx.db.get("journalEntries", id)));

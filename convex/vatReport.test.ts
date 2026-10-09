@@ -97,10 +97,11 @@ describe("vatReport.generateVatSummary", () => {
   test("bounded ledger reads select only dated lines' authorized parent entries", async () => {
     const { t, orgId, userId, salesTaxPayable, seedLine } = await seedDealer();
     const date = Date.UTC(2025, 4, 10);
+    const earlierDate = date - 86_400_000;
     const outside = Date.UTC(2024, 4, 10);
     await seedLine(salesTaxPayable._id, 0, 900_000, outside);
     const postedId = await seedLine(salesTaxPayable._id, 0, 50_000, date);
-    const reversedId = await seedLine(salesTaxPayable._id, 10_000, 0, date);
+    const reversedId = await seedLine(salesTaxPayable._id, 10_000, 0, earlierDate);
     const draftId = await seedLine(salesTaxPayable._id, 0, 700_000, date);
     await t.run(async (ctx) => {
       await ctx.db.patch(reversedId, { status: "REVERSED", accountingDate: outside });
@@ -129,12 +130,43 @@ describe("vatReport.generateVatSummary", () => {
           return originalQuery(table);
         },
       } as typeof ctx.db;
-      const rows = await getPostedLines({ ...ctx, db }, orgId, date, date);
+      const rows = await getPostedLines({ ...ctx, db }, orgId, earlierDate, date);
       return { rows, queriedTables };
     });
 
-    expect(new Set(rows.map((row) => row.journalEntryId))).toEqual(new Set([postedId, reversedId]));
-    expect(rows).toHaveLength(4);
+    expect(rows.map((row) => row.journalEntryId)).toEqual([postedId, postedId, reversedId, reversedId]);
+    expect(queriedTables).not.toContain("journalEntries");
+  });
+
+  test("open upper bound ignores sentinel lines when choosing targeted parent reads", async () => {
+    const { t, orgId, salesTaxPayable, seedLine } = await seedDealer();
+    const date = Date.UTC(2025, 4, 10);
+    const sentinelId = await seedLine(salesTaxPayable._id, 0, 1, -1);
+    const postedId = await seedLine(salesTaxPayable._id, 0, 50_000, date);
+    await t.run(async (ctx) => {
+      for (let lineNumber = 3; lineNumber <= 129; lineNumber++) {
+        await ctx.db.insert("journalLines", {
+          orgId, journalEntryId: sentinelId, lineNumber, accountId: salesTaxPayable._id,
+          debitMinor: 0, creditMinor: 1, currency: "JOD", scale: 3, accountingDate: -1,
+        });
+      }
+    });
+
+    const { rows, queriedTables } = await t.run(async (ctx) => {
+      const queriedTables: string[] = [];
+      const originalQuery = ctx.db.query.bind(ctx.db);
+      const db = {
+        get: ctx.db.get.bind(ctx.db),
+        query: (table: Parameters<typeof ctx.db.query>[0]) => {
+          queriedTables.push(table);
+          return originalQuery(table);
+        },
+      } as typeof ctx.db;
+      const rows = await getPostedLines({ ...ctx, db }, orgId, undefined, date);
+      return { rows, queriedTables };
+    });
+
+    expect(rows.map((row) => row.journalEntryId)).toEqual([postedId, postedId]);
     expect(queriedTables).not.toContain("journalEntries");
   });
 
