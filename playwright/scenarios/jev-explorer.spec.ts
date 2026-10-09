@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { callJev } from "../../scripts/intelligence/jevImpact.mjs";
 import { resolveOrgId } from "../utils";
+import { isCommitActionName } from "./jevExplorerActions";
 
 /**
  * A random explorer (SCRUM-595): walk the dashboard by clicking what is on
@@ -29,8 +30,6 @@ const PRODUCTION_DEPLOYMENT = "kindly-hound-172";
 const STEPS = Number(process.env.JEV_EXPLORER_STEPS ?? 40);
 const SEED = Number(process.env.JEV_EXPLORER_SEED ?? Date.now() % 100_000);
 
-const COMMIT_WORDS =
-  /delete|remove|cancel|void|revers|refund|forfeit|post|close|approve|reject|confirm|submit|save|send|sign ?out|log ?out|archive|pay|transfer|disburse|finali[sz]e|record|import|upload|invite|حذف|إلغاء|تأكيد|حفظ|إرسال|خروج|اعتماد|رفض|ترحيل|دفع|تسجيل/i;
 /**
  * Screens that write just by being looked at: opening a conversation marks it
  * read (ChatThread / FloatingChatWindow → directMessages.markRead), opening an
@@ -152,7 +151,7 @@ async function candidates(page: Page): Promise<Array<{ el: Locator; name: string
     const name = ((await el.getAttribute("aria-label")) || (await el.innerText().catch(() => "")))
       .trim()
       .slice(0, 80);
-    if (!name || COMMIT_WORDS.test(name)) continue;
+    if (!name || isCommitActionName(name)) continue;
     const href = await el.getAttribute("href").catch(() => null);
     if (href && WRITES_ON_VIEW.test(href)) continue;
     const key = `${name}\u0000${href ?? ""}`;
