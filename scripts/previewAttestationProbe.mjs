@@ -3,10 +3,17 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { assertExistingE2EPreview, runConvex } from "./e2ePreviewBootstrap.mjs";
-import { diagnosePreviewAttestation } from "./previewAttestationDiagnostic.mjs";
+import { diagnosePreviewAttestation, failedAttestationRequestIds } from "./previewAttestationDiagnostic.mjs";
 
-const REQUEST_ID = /\[Request ID: ([a-f0-9]{8,64})\]/i;
 const CATEGORY = "qa-approver-permissions";
+
+// Keep this selection aligned with attestedPreview.ts, the real form explorer's
+// failure-line producer. A split-line Request ID must fail this probe too.
+export function scenarioFailureLine(stderr, errorMessage, status) {
+  const lines = (stderr || errorMessage || "").split("\n").filter((line) => line.trim());
+  const reason = (lines.find((line) => /Error/.test(line)) ?? lines.at(-1))?.trim() ?? `exit ${status}`;
+  return `Preview attestation failed: ${reason}`;
+}
 
 /**
  * Exercise the expected attestation refusal after the disposable preview's
@@ -25,7 +32,7 @@ export async function probePreviewAttestation(env = process.env, deps = {}) {
   if (!env.RUNNER_TEMP) throw new Error("Probe unavailable: RUNNER_TEMP is missing.");
   let attempted = false;
   let refused = false;
-  let raw = "";
+  let failureLine = "";
 
   try {
     await assertPreview(env, {
@@ -38,7 +45,7 @@ export async function probePreviewAttestation(env = process.env, deps = {}) {
             timeout: 30_000,
             maxBuffer: 1024 * 1024,
           });
-          raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+          failureLine = scenarioFailureLine(result.stderr, result.error?.message, result.status);
           return { status: result.status, error: result.error };
         });
       },
@@ -50,15 +57,14 @@ export async function probePreviewAttestation(env = process.env, deps = {}) {
   if (!attempted) throw new Error("Probe unavailable: preview attestation was not invoked.");
   if (!refused) throw new Error("Probe failed: attestation unexpectedly accepted the reset manager role.");
 
-  const requestId = REQUEST_ID.exec(raw)?.[1]?.toLowerCase();
-  raw = "";
+  const requestId = failedAttestationRequestIds(failureLine)[0];
   if (!requestId) throw new Error("Probe failed closed, but no backend request ID was captured.");
 
-  // The existing diagnostic reads this bounded scenario-log format. It never
-  // sees the unredacted CLI output, and the file contains only the request ID.
+  // The scenario log is runner-local and is never uploaded or printed. The
+  // public job log receives only the diagnostic's fixed redacted fields.
   write(
     join(env.RUNNER_TEMP, "deal-scenarios-output.log"),
-    `Preview attestation failed: ConvexError: [Request ID: ${requestId}] Server Error\n`,
+    `${failureLine}\n`,
   );
 
   let diagnostic = "";

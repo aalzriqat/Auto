@@ -40,7 +40,7 @@ describe("SCRUM-799 disposable-preview failure probe", () => {
     let written = "";
     const message = await probePreviewAttestation(env, {
       assertPreview: invoke,
-      spawn: () => ({ status: 1, stdout: `[Request ID: ${ID}] Server Error`, stderr: "sensitive raw backend detail" }),
+      spawn: () => ({ status: 1, stdout: "", stderr: `ConvexError: [Request ID: ${ID}] Server Error\nsensitive raw backend detail` }),
       write: (_path: string, contents: string) => { written = contents; },
       diagnose: () => `Attestation backend failures: request=${ID} class=ConvexError category=qa-approver-permissions location=convex/e2eBootstrap.ts:1:1`,
     });
@@ -61,6 +61,18 @@ describe("SCRUM-799 disposable-preview failure probe", () => {
       assertPreview: invoke,
       spawn: () => ({ status: 1, stderr: "sensitive raw backend detail" }),
     })).rejects.toThrow(/no backend request ID/);
+  });
+
+  it("fails when the request ID is on another line or only stdout, as the real explorer would", async () => {
+    for (const output of [
+      { status: 1, stderr: `ConvexError: Server Error\n[Request ID: ${ID}]`, stdout: "" },
+      { status: 1, stderr: "ConvexError: Server Error", stdout: `[Request ID: ${ID}]` },
+    ]) {
+      await expect(probePreviewAttestation(env, {
+        assertPreview: invoke,
+        spawn: () => output,
+      })).rejects.toThrow(/no backend request ID/);
+    }
   });
 
   it("fails closed when the request's backend reason is not the fixed category", async () => {
