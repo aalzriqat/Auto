@@ -74,6 +74,41 @@ describe("SCRUM-799 disposable-preview failure probe", () => {
     })).rejects.toThrow(/unexpectedly accepted/);
   });
 
+  it("does not treat a CLI launch failure as an attestation refusal", async () => {
+    await expect(probePreviewAttestation(env, {
+      assertPreview: invoke,
+      spawn: () => ({ status: null, error: new Error("launch failed"), stderr: `Error: [Request ID: ${ID}] Server Error` }),
+      write: () => {},
+      diagnose: () => `Attestation backend failures: request=${ID} class=ConvexError category=qa-approver-permissions location=convex/e2eBootstrap.ts:1:1`,
+    })).rejects.toThrow(/attestation refusal was not confirmed/);
+  });
+
+  it("rejects a diagnostic with a category prefix or unrelated request", async () => {
+    for (const diagnostic of [
+      `request=${ID} class=ConvexError category=qa-approver-permissions location=convex/e2eBootstrap.ts:1:1`,
+      `Attestation backend failures: request=${ID} class=ConvexError category=qa-approver-permissions-other location=convex/e2eBootstrap.ts:1:1`,
+      `Attestation backend failures: request=ffffffffffffffff class=ConvexError category=qa-approver-permissions location=convex/e2eBootstrap.ts:1:1`,
+    ]) {
+      await expect(probePreviewAttestation(env, {
+        assertPreview: invoke,
+        spawn: () => ({ status: 1, stderr: `ConvexError: [Request ID: ${ID}] Server Error` }),
+        write: () => {},
+        diagnose: () => diagnostic,
+      })).rejects.toThrow(/matching redacted backend reason was unavailable/);
+    }
+  });
+
+  it("returns only the matching request's redacted diagnostic", async () => {
+    const message = await probePreviewAttestation(env, {
+      assertPreview: invoke,
+      spawn: () => ({ status: 1, stderr: `ConvexError: [Request ID: ${ID}] Server Error` }),
+      write: () => {},
+      diagnose: () => `Attestation backend failures: request=ffffffffffffffff class=Error category=unclassified location=unavailable; request=${ID} class=ConvexError category=qa-approver-permissions location=convex/e2eBootstrap.ts:1:1`,
+    });
+    expect(message).toContain(`request=${ID}`);
+    expect(message).not.toContain("request=ffffffffffffffff");
+  });
+
   it("fails closed when the backend request ID is missing", async () => {
     await expect(probePreviewAttestation(env, {
       assertPreview: invoke,

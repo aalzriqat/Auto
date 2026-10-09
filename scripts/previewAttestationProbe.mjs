@@ -6,6 +6,17 @@ import { assertExistingE2EPreview, runConvex } from "./e2ePreviewBootstrap.mjs";
 import { diagnosePreviewAttestation, failedAttestationRequestIds } from "./previewAttestationDiagnostic.mjs";
 
 const CATEGORY = "qa-approver-permissions";
+const REDACTED_ENTRY = /^request=([a-f0-9]{8,64}) class=(?:ConvexError|TypeError|RangeError|ReferenceError|SyntaxError|Error|UnknownError) category=([a-z-]+) location=(?:convex\/e2eBootstrap\.ts:\d{1,6}:\d{1,4}|unavailable)$/;
+
+function matchingRedactedEntry(diagnostic, requestId) {
+  const prefix = "Attestation backend failures: ";
+  if (!diagnostic.startsWith(prefix)) return null;
+  for (const part of diagnostic.slice(prefix.length).split("; ")) {
+    const fields = REDACTED_ENTRY.exec(part);
+    if (fields?.[1] === requestId && fields[2] === CATEGORY) return part;
+  }
+  return null;
+}
 
 // Keep this selection aligned with attestedPreview.ts, the real form explorer's
 // failure-line producer. A split-line Request ID must fail this probe too.
@@ -31,7 +42,8 @@ export async function probePreviewAttestation(env = process.env, deps = {}) {
 
   if (!env.RUNNER_TEMP) throw new Error("Probe unavailable: RUNNER_TEMP is missing.");
   let attempted = false;
-  let refused = false;
+  let exitStatus = null;
+  let launchError = false;
   let failureLine = "";
 
   try {
@@ -46,17 +58,20 @@ export async function probePreviewAttestation(env = process.env, deps = {}) {
             timeout: 180_000,
             maxBuffer: 1024 * 1024,
           });
+          exitStatus = result.status;
+          launchError = Boolean(result.error);
           failureLine = scenarioFailureLine(result.stderr, result.error?.message, result.status);
           return { status: result.status, error: result.error };
         });
       },
     });
-  } catch {
-    refused = attempted;
-  }
+  } catch {}
 
   if (!attempted) throw new Error("Probe unavailable: preview attestation was not invoked.");
-  if (!refused) throw new Error("Probe failed: attestation unexpectedly accepted the reset manager role.");
+  if (exitStatus === 0 && !launchError) throw new Error("Probe failed: attestation unexpectedly accepted the reset manager role.");
+  if (!Number.isInteger(exitStatus) || exitStatus <= 0 || launchError) {
+    throw new Error("Probe failed: attestation refusal was not confirmed.");
+  }
 
   const requestId = failedAttestationRequestIds(failureLine)[0];
   if (!requestId) throw new Error("Probe failed closed, but no backend request ID was captured.");
@@ -71,11 +86,9 @@ export async function probePreviewAttestation(env = process.env, deps = {}) {
   let diagnostic = "";
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     diagnostic = diagnose(env);
-    const matchingFailure = diagnostic.split("; ").some((entry) =>
-      entry.includes(`request=${requestId} `) && entry.includes(`category=${CATEGORY}`),
-    );
+    const matchingFailure = matchingRedactedEntry(diagnostic, requestId);
     if (matchingFailure) {
-      return `Controlled preview attestation refused as expected. ${diagnostic}`;
+      return `Controlled preview attestation refused as expected. Attestation backend failure: ${matchingFailure}`;
     }
   }
   throw new Error("Probe failed closed, but a matching redacted backend reason was unavailable.");

@@ -93,8 +93,18 @@ test("a failed log command reports unavailable without printing its raw error", 
     });
     assert.match(result, /diagnostic unavailable/);
     assert.doesNotMatch(result, /private-customer|secret-value/);
+    const failedWithOutput = diagnosePreviewAttestation(env, () => ({
+      status: 1,
+      stdout: JSON.stringify({
+        kind: "Completion", identifier: "e2eBootstrap:assertE2EBootstrap", requestId: "42e39a239aecaeb1",
+        error: 'ConvexError: E2E_BOOTSTRAP: E2E_APPROVER_USER holds role "MANAGER", which is missing manage:finance. The approval E2E path cannot be driven without it.',
+      }),
+      stderr: "failed to finish reading logs",
+    }));
+    assert.match(failedWithOutput, /diagnostic unavailable/);
+    assert.doesNotMatch(failedWithOutput, /qa-approver-permissions/);
     const timedOut = diagnosePreviewAttestation(env, () => ({ status: null, stdout: "", error: { code: "ETIMEDOUT" } }));
-    assert.match(timedOut, /no matching completion/);
+    assert.match(timedOut, /diagnostic unavailable/);
   } finally {
     if (resolve(dir).startsWith(resolve(tmpdir()) + sep)) rmSync(dir, { recursive: true, force: true });
   }
