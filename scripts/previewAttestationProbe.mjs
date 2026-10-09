@@ -42,7 +42,8 @@ export async function probePreviewAttestation(env = process.env, deps = {}) {
           const result = spawn(command, argv, {
             env,
             encoding: "utf8",
-            timeout: 30_000,
+            // Match the real form explorer's attestation deadline.
+            timeout: 180_000,
             maxBuffer: 1024 * 1024,
           });
           failureLine = scenarioFailureLine(result.stderr, result.error?.message, result.status);
@@ -81,10 +82,10 @@ export async function probePreviewAttestation(env = process.env, deps = {}) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  probePreviewAttestation()
-    .then((message) => console.log(message))
-    .catch((error) => {
-      console.error(error instanceof Error ? error.message : "Controlled preview probe failed.");
-      process.exitCode = 1;
-    });
+  try {
+    console.log(await probePreviewAttestation());
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "Controlled preview probe failed.");
+    process.exitCode = 1;
+  }
 }

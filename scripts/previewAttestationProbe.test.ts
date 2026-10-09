@@ -51,6 +51,22 @@ describe("SCRUM-799 disposable-preview failure probe", () => {
     expect(message + written).not.toContain("sensitive raw backend detail");
   });
 
+  it("allows the same attestation deadline as the real form explorer", async () => {
+    const explorer = readFileSync("playwright/scenarios/formExplorer/attestedPreview.ts", "utf8");
+    expect(explorer).toMatch(/timeout:\s*180_000/);
+    let timeout: number | undefined;
+    await probePreviewAttestation(env, {
+      assertPreview: invoke,
+      spawn: (_command: string, _args: string[], options: { timeout?: number }) => {
+        timeout = options.timeout;
+        return { status: 1, stderr: `ConvexError: [Request ID: ${ID}] Server Error` };
+      },
+      write: () => {},
+      diagnose: () => `Attestation backend failures: request=${ID} class=ConvexError category=qa-approver-permissions location=convex/e2eBootstrap.ts:1:1`,
+    });
+    expect(timeout).toBe(180_000);
+  });
+
   it("rejects an attestation that unexpectedly succeeds", async () => {
     await expect(probePreviewAttestation(env, {
       assertPreview: invoke,
