@@ -11,14 +11,16 @@ const invoke = async (_env: unknown, { run }: { run: (args: string[], label: str
 );
 
 describe("SCRUM-799 disposable-preview failure probe", () => {
-  it("can only dispatch on main and pins, probes, and deletes its own preview", () => {
+  it("dispatches only trusted default-branch code, then pins, probes, and deletes its preview", () => {
     const workflow = parse(readFileSync(".github/workflows/preview-attestation-fault-probe.yml", "utf8")) as {
       on: Record<string, unknown>;
       permissions: Record<string, string>;
       jobs: Record<string, { if: string; steps: { run?: string; if?: string; env?: Record<string, string> }[] }>;
     };
     const job = workflow.jobs.probe!;
-    expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
+    expect(workflow.on).toEqual({
+      repository_dispatch: { types: ["scrum799-preview-attestation-fault-probe"] },
+    });
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(job.if).toBe("github.ref == 'refs/heads/main'");
     const deploys = job.steps.filter((step) => step.run?.includes("convex deploy"));

@@ -1,10 +1,13 @@
 name: Preview Attestation Fault Probe
 
-# SCRUM-799: main-only, explicitly dispatched, disposable-preview proof that
+# SCRUM-799: default-branch-only, explicitly dispatched, disposable-preview proof that
 # losing the QA approver's extra grants fails attestation closed and yields a
 # request-correlated redacted reason before cleanup. No browser or Vercel URL.
 on:
-  workflow_dispatch:
+  # repository_dispatch executes the default-branch workflow and checkout.
+  # workflow_dispatch can select a branch copy that removes the job guard.
+  repository_dispatch:
+    types: [scrum799-preview-attestation-fault-probe]
 
 permissions:
   contents: read
