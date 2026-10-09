@@ -138,7 +138,7 @@ describe("vatReport.generateVatSummary", () => {
     expect(queriedTables).not.toContain("journalEntries");
   });
 
-  test("open upper bound ignores sentinel lines when choosing targeted parent reads", async () => {
+  test("open upper bound preserves sentinel exclusion on the bulk path", async () => {
     const { t, orgId, salesTaxPayable, seedLine } = await seedDealer();
     const date = Date.UTC(2025, 4, 10);
     const sentinelId = await seedLine(salesTaxPayable._id, 0, 1, -1);
@@ -168,7 +168,8 @@ describe("vatReport.generateVatSummary", () => {
     });
 
     expect(rows.map((row) => row.journalEntryId)).toEqual([preEpochId, preEpochId, postedId, postedId]);
-    expect(queriedTables).not.toContain("journalEntries");
+    expect(queriedTables).toContain("journalEntries");
+    expect(queriedTables.filter((table) => table === "journalLines")).toHaveLength(1);
   });
 
   test("large dated ledger windows return every line beyond the targeted-read limit", async () => {
