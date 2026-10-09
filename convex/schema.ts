@@ -215,6 +215,10 @@ export default defineSchema({
 
   accountingPeriods: defineTable({
     orgId: v.id("organizations"),
+    // Set only when this period was created with synchronous snapshot writers.
+    // Older retained periods have no certificate and use journal lines for
+    // containing-period reports until their snapshots are reconciled.
+    snapshotFastPathEligible: v.optional(v.boolean()),
     startDate: v.number(),
     endDate: v.number(),
     fiscalYear: v.number(),

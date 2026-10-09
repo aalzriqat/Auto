@@ -396,6 +396,36 @@ function sortedBalances(rows: Balance[]) {
 }
 
 describe("SCRUM-807 — trial balance snapshot fast-path parity", () => {
+  test("keeps legacy containing-period journal lines when snapshots are missing", async () => {
+    const ctx = await seedSnapshotDealer();
+    const createdPeriod = await ctx.t.run((c) => c.db.get(ctx.periodA._id));
+    expect(createdPeriod?.snapshotFastPathEligible).toBe(true);
+    const exposedPeriod = await ctx.asOwner.query(api.accountingPeriods.get, {
+      orgId: ctx.orgId, periodId: ctx.periodA._id,
+    });
+    expect(exposedPeriod).not.toHaveProperty("snapshotFastPathEligible");
+    const transactionId = await ctx.t.run((c) => c.db.insert("transactions", {
+      orgId: ctx.orgId, type: "OUT", amount: 100,
+      date: Date.UTC(2025, 1, 1), category: "EXPENSE", description: "Legacy snapshot gap",
+    }));
+    await ctx.t.run((c) => postLegacyTransactionEvent(c, {
+      orgId: ctx.orgId, transactionId, actorId: ctx.userId,
+    }));
+    await ctx.t.run(async (c) => {
+      await c.db.patch(ctx.periodA._id, { snapshotFastPathEligible: undefined });
+      const snapshots = await c.db.query("accountBalanceSnapshots")
+        .withIndex("by_org_period", (q) => q.eq("orgId", ctx.orgId).eq("periodId", ctx.periodA._id)).collect();
+      for (const snapshot of snapshots) await c.db.delete(snapshot._id);
+    });
+
+    const date = Date.UTC(2025, 2, 15);
+    const oldRows = sortedBalances(await oldCumulativeBalances(ctx, ctx.orgId, date));
+    expect(oldRows.some((row) => row.debitMinor > 0)).toBe(true);
+    expect(oldRows.some((row) => row.creditMinor > 0)).toBe(true);
+    const newRows = sortedBalances(await ctx.t.run((c) => getCumulativeBalancesAsOf(c, ctx.orgId, date)));
+    expect(newRows).toEqual(oldRows);
+  });
+
   test("matches the old scan across periods, future postings, reversal, and two orgs", async () => {
     const ctx = await seedSnapshotDealer();
     const dates = [Date.UTC(2025, 1, 1), Date.UTC(2025, 7, 1), Date.UTC(2025, 10, 1)] as const;
@@ -445,7 +475,10 @@ describe("SCRUM-807 — trial balance snapshot fast-path parity", () => {
       orgId: otherOrgId, transactionId: otherTransactionId, actorId: ctx.userId,
     }));
 
-    for (const date of [Date.UTC(2025, 8, 1), Date.UTC(2025, 11, 1), Date.UTC(2025, 11, 31, 23, 59)]) {
+    for (const date of [
+      Date.UTC(2025, 1, 15), Date.UTC(2025, 2, 15),
+      Date.UTC(2025, 8, 1), Date.UTC(2025, 11, 1), Date.UTC(2025, 11, 31, 23, 59),
+    ]) {
       for (const orgId of [ctx.orgId, otherOrgId]) {
         const oldRows = sortedBalances(await oldCumulativeBalances(ctx, orgId, date));
         const newRows = sortedBalances(await ctx.t.run((c) => getCumulativeBalancesAsOf(c, orgId, date)));

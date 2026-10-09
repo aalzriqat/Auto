@@ -125,25 +125,29 @@ export async function getCumulativeBalancesAsOf(
   }
 
   if (containingPeriod) {
-    // A period snapshot is exact as of this date when no entry in the period
-    // is dated later. The indexed probe reads at most one entry; this avoids
-    // reloading every entry and its lines on the common current-day report.
-    // If a future-dated entry exists, keep the original partial-period path.
-    const futureEntry = await ctx.db
-      .query("journalEntries")
-      .withIndex("by_org_period_date", (q) =>
-        q.eq("orgId", orgId).eq("periodId", containingPeriod._id).gt("accountingDate", asOfDate)
-      )
-      .first();
-    if (!futureEntry) {
-      const snapshots = await ctx.db
-        .query("accountBalanceSnapshots")
-        .withIndex("by_org_period", (q) => q.eq("orgId", orgId).eq("periodId", containingPeriod._id))
-        .collect();
-      for (const s of snapshots) {
-        addTo(s.accountId, s.currency, s.runningDebitMinor, s.runningCreditMinor);
+    // Retained periods lack a snapshot-completeness certificate. Keep their
+    // journal-line path; absence of a future entry says nothing about older
+    // lines missing from snapshots. Newly created periods start empty and
+    // every posting path updates their snapshots in the same mutation.
+    if (containingPeriod.snapshotFastPathEligible) {
+      // The indexed probe reads at most one entry. A future-dated posting
+      // requires the original date-bounded journal-line calculation.
+      const futureEntry = await ctx.db
+        .query("journalEntries")
+        .withIndex("by_org_period_date", (q) =>
+          q.eq("orgId", orgId).eq("periodId", containingPeriod._id).gt("accountingDate", asOfDate)
+        )
+        .first();
+      if (!futureEntry) {
+        const snapshots = await ctx.db
+          .query("accountBalanceSnapshots")
+          .withIndex("by_org_period", (q) => q.eq("orgId", orgId).eq("periodId", containingPeriod._id))
+          .collect();
+        for (const s of snapshots) {
+          addTo(s.accountId, s.currency, s.runningDebitMinor, s.runningCreditMinor);
+        }
+        return Array.from(totals.values());
       }
-      return Array.from(totals.values());
     }
 
     // On a partial-period read, narrow the range by accounting date before
