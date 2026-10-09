@@ -88,6 +88,42 @@ export async function getPostedLines(
   fromDate?: number,
   toDate?: number
 ) {
+  const maxTargetedLines = 128;
+  const excludeSentinel = fromDate === undefined || toDate === undefined;
+  const lineQuery = () => ctx.db
+    .query("journalLines")
+    .withIndex("by_org_date", (q) => {
+      const scoped = q.eq("orgId", orgId);
+      if (fromDate !== undefined && toDate !== undefined) {
+        return scoped.gte("accountingDate", fromDate).lte("accountingDate", toDate);
+      }
+      if (fromDate !== undefined) return scoped.gte("accountingDate", fromDate);
+      if (toDate !== undefined) return scoped.lte("accountingDate", toDate);
+      return scoped;
+    });
+
+  // A narrow date window should not subscribe to every posted entry in the
+  // organization. Inspect only the parent entries of its matching lines.
+  // Large or unbounded windows retain the original bulk-read path so this
+  // optimization cannot turn a report into thousands of point queries.
+  const hasDateBound = fromDate !== undefined || toDate !== undefined;
+  const targetedLines = hasDateBound ? await lineQuery().take(maxTargetedLines + 1) : null;
+  if (targetedLines !== null && targetedLines.length <= maxTargetedLines) {
+    const parentIds = [...new Set(targetedLines.map((line) => line.journalEntryId))];
+    const parents = await Promise.all(parentIds.map((id) => ctx.db.get("journalEntries", id)));
+    const allowedIds = new Set<Id<"journalEntries">>();
+    for (const parent of parents) {
+      if (parent?.orgId === orgId && (parent.status === "POSTED" || parent.status === "REVERSED")) {
+        allowedIds.add(parent._id);
+      }
+    }
+    return mergeByCreation([
+      targetedLines.filter(
+        (line) => (!excludeSentinel || line.accountingDate !== NO_ACCOUNTING_DATE_SENTINEL) && allowedIds.has(line.journalEntryId)
+      ),
+    ]);
+  }
+
   // Include REVERSED entries too, not just POSTED ones: a reversed entry's
   // own lines are still real, immutable historical postings — its status
   // just means a *separate*, independently-posted reversal entry later
@@ -106,21 +142,9 @@ export async function getPostedLines(
   for (const e of postedEntries) entryIds.add(e._id);
   for (const e of reversedEntries) entryIds.add(e._id);
 
-  const inRange = await ctx.db
-    .query("journalLines")
-    .withIndex("by_org_date", (q) => {
-      const scoped = q.eq("orgId", orgId);
-      if (fromDate !== undefined && toDate !== undefined) {
-        return scoped.gte("accountingDate", fromDate).lte("accountingDate", toDate);
-      }
-      if (fromDate !== undefined) return scoped.gte("accountingDate", fromDate);
-      if (toDate !== undefined) return scoped.lte("accountingDate", toDate);
-      return scoped;
-    })
-    .collect();
+  const inRange = await lineQuery().collect();
 
   // With an open bound, a line carrying the -1 sentinel date stays excluded.
-  const excludeSentinel = fromDate === undefined || toDate === undefined;
   // Callers expect insertion order; the date index returns accountingDate order.
   return mergeByCreation([
     inRange.filter(
