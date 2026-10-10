@@ -614,6 +614,51 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     },
   );
 
+  test("owned CASH × foreign quote/deposit IDs: authorized second tenant cannot move either tenant's money", async () => {
+    const { s, quoteId } = await cashQuote("s486foreignids");
+    const depositId = await s.owner.as.mutation(api.deposits.create, {
+      orgId: s.orgId, quoteId, amount: 200, method: "CASH",
+      idempotencyKey: "s486-foreign-source-deposit",
+    });
+    const otherClerkId = "s486foreignids_other_owner";
+    const otherOrgId = await s.t.run(async (ctx) => {
+      const orgId = await ctx.db.insert("organizations", {
+        name: "Certification other tenant", createdAt: Date.now(),
+      });
+      await ctx.db.insert("subscriptions", {
+        orgId, plan: "professional", status: "active",
+        createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      await ctx.db.insert("orgSettings", {
+        orgId, currency: "JOD", currencySymbol: "JD",
+        enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
+      });
+      const userId = await ctx.db.insert("users", {
+        clerkId: otherClerkId, email: "s486foreignids.other@example.com", name: "Other owner",
+      });
+      const roleId = await ctx.db.insert("roles", {
+        orgId, name: "OWNER", permissions: [...OWNER_PERMS], isSystemOwnerRole: true,
+      });
+      await ctx.db.insert("memberships", { orgId, userId, roleId });
+      return orgId;
+    });
+    const otherOwner = s.t.withIdentity({ subject: otherClerkId, clerkId: otherClerkId });
+    const before = await dbSnapshot(s.t, Object.keys(schema.tables));
+
+    await expect(otherOwner.mutation(api.deposits.create, {
+      orgId: otherOrgId, quoteId, amount: 200, method: "CASH",
+      idempotencyKey: "s486-foreign-quote-denied",
+    })).rejects.toThrow(/Quote not found in this organization/);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
+
+    await expect(otherOwner.mutation(api.deposits.release, {
+      orgId: otherOrgId, depositId, resolution: "REFUNDED", refundMethod: "CASH",
+      idempotencyKey: "s486-foreign-deposit-denied",
+    })).rejects.toThrow(/Deposit not found in this organization/);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
+    expect(netByAccount(await journalRows(s))).toEqual({ "1100|JOD": 200_000, "2100|JOD": -200_000 });
+  });
+
   test.each(["LEASE", "INTERNAL_INSTALLMENT"] as const)(
     "retired %s quote route refuses before any row changes",
     async (mode) => {
