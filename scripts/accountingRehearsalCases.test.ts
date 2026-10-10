@@ -183,6 +183,12 @@ type Defects = {
   cashSaleInvoiceWrongCustomer?: boolean;
   /** The sale's AR journal belongs to a different customer. */
   cashSaleWrongJournalCustomer?: boolean;
+  /** The revenue line belongs to a different customer while AR is correct. */
+  cashSaleWrongRevenueCustomer?: boolean;
+  /** The sale journals a different vehicle while monetary totals remain correct. */
+  cashSaleWrongJournalVehicle?: boolean;
+  /** AR and revenue carry a different salesperson from the completed sale. */
+  cashSaleWrongJournalSalesperson?: boolean;
   /** The chart's public revenue code is wrong while its system key is right. */
   cashSaleWrongAccountCode?: boolean;
   /** The P&L total is right, but its vehicle revenue row is absent. */
@@ -358,7 +364,7 @@ function makeBackend(defects: Defects = {}) {
   let seq = 0;
   const id = (p: string) => `${p}_${++seq}`;
 
-  type Line = { key: string; debitMinor?: number; creditMinor?: number; customerId?: string };
+  type Line = { key: string; debitMinor?: number; creditMinor?: number; customerId?: string; vehicleId?: string; salespersonId?: string };
   /** One economic occurrence: an event, its entry, its lines — all linked. */
   function post(
     eventType: string,
@@ -401,6 +407,8 @@ function makeBackend(defects: Defects = {}) {
         currency: ORG_CURRENCY,
         scale: LINE_SCALE,
         customerId: l.customerId,
+        vehicleId: l.vehicleId,
+        salespersonId: l.salespersonId,
       }))
     );
     return { eventId, entryId };
@@ -420,6 +428,8 @@ function makeBackend(defects: Defects = {}) {
         debitMinor: Math.round(l.creditMinor * factor),
         creditMinor: Math.round(l.debitMinor * factor),
         customerId: l.customerId,
+        vehicleId: l.vehicleId,
+        salespersonId: l.salespersonId,
       })),
       { category: "REVERSAL" }
     );
@@ -942,11 +952,18 @@ function makeBackend(defects: Defects = {}) {
             : [
                 // Owned basis — WRONG for a consigned car, and it balances.
                 { key: args.quoteId ? "ACCOUNTS_RECEIVABLE_CUSTOMERS" : "CASH_ON_HAND", debitMinor: priceMinor,
-                  customerId: args.quoteId && defects.cashSaleWrongJournalCustomer ? "other-customer" : String(args.customerId) },
+                  customerId: args.quoteId && defects.cashSaleWrongJournalCustomer ? "other-customer" : String(args.customerId),
+                  vehicleId: args.quoteId && defects.cashSaleWrongJournalVehicle ? "other-vehicle" : String(args.vehicleId),
+                  salespersonId: args.quoteId && defects.cashSaleWrongJournalSalesperson ? "other-salesperson" : String(args.salespersonId) },
                 { key: args.quoteId && defects.cashSaleWrongRevenueAccount ? "MISCELLANEOUS_INCOME" : "SALES_REVENUE",
-                  creditMinor: priceMinor, customerId: String(args.customerId) },
-                { key: "COST_OF_VEHICLES_SOLD", debitMinor: costMinor },
-                { key: "VEHICLE_INVENTORY", creditMinor: costMinor },
+                  creditMinor: priceMinor,
+                  customerId: args.quoteId && defects.cashSaleWrongRevenueCustomer ? "other-customer" : String(args.customerId),
+                  vehicleId: args.quoteId && defects.cashSaleWrongJournalVehicle ? "other-vehicle" : String(args.vehicleId),
+                  salespersonId: args.quoteId && defects.cashSaleWrongJournalSalesperson ? "other-salesperson" : String(args.salespersonId) },
+                { key: "COST_OF_VEHICLES_SOLD", debitMinor: costMinor,
+                  vehicleId: args.quoteId && defects.cashSaleWrongJournalVehicle ? "other-vehicle" : String(args.vehicleId) },
+                { key: "VEHICLE_INVENTORY", creditMinor: costMinor,
+                  vehicleId: args.quoteId && defects.cashSaleWrongJournalVehicle ? "other-vehicle" : String(args.vehicleId) },
               ],
           { payload: { saleAmountMinor: priceMinor } }
         );
@@ -1856,6 +1873,9 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["cashSaleOtherPayerDuplicateInvoice", /invoice|receivable/i],
     ["cashSaleInvoiceWrongCustomer", /invoice|receivable/i],
     ["cashSaleWrongJournalCustomer", /customer dimension/i],
+    ["cashSaleWrongRevenueCustomer", /customer dimension/i],
+    ["cashSaleWrongJournalVehicle", /vehicle dimension/i],
+    ["cashSaleWrongJournalSalesperson", /salesperson dimension/i],
     ["cashSaleWrongAccountCode", /code/i],
     ["cashSaleReportMissingRevenueRow", /revenue row/i],
   ] as const)("M486C1 rejects %s", async (defect, diagnostic) => {

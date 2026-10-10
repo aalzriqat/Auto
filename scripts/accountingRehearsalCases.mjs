@@ -1765,6 +1765,14 @@ export async function runRehearsalCases(ctx) {
     for (const key of ["ACCOUNTS_RECEIVABLE_CUSTOMERS", "SALES_REVENUE"]) {
       const line = posted.lines.find((l) => keyOf.get(String(l.accountId)) === key);
       expectEqual(String(line?.customerId), String(customerId), `M486C1 ${key} customer dimension`);
+      expectEqual(String(line?.salespersonId), String(me._id), `M486C1 ${key} salesperson dimension`);
+    }
+    for (const key of [
+      "ACCOUNTS_RECEIVABLE_CUSTOMERS", "SALES_REVENUE",
+      "COST_OF_VEHICLES_SOLD", "VEHICLE_INVENTORY",
+    ]) {
+      const line = posted.lines.find((l) => keyOf.get(String(l.accountId)) === key);
+      expectEqual(String(line?.vehicleId), String(vehicleId), `M486C1 ${key} vehicle dimension`);
     }
     const afterBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const afterIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
