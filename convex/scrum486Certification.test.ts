@@ -638,6 +638,48 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(income.cogsRows).toEqual([]);
   });
 
+  test("SOURCED configured financier × through dealership × cancellation before receipt reverses both debts", async () => {
+    const { s, applicationId } = await sourcedFinancedOpening("s486sourcedthroughcancel", "THROUGH_DEALERSHIP");
+    const application = await s.t.run((ctx) => ctx.db.get(applicationId));
+    const saleId = application?.finalizedSaleId;
+    expect(saleId).toBeDefined();
+    const supplierPayable = await s.t.run((ctx) => ctx.db.query("vehicleSupplierPayables")
+      .withIndex("by_sale", (q) => q.eq("saleId", saleId!)).unique());
+    expect(supplierPayable).toMatchObject({ amountDue: 10_000, status: "PENDING" });
+    expect(await eventStatuses(s, "SALE_COMPLETED", saleId!)).toEqual(["POSTED"]);
+
+    await s.owner.as.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId, applicationId, reason: "Certification before company and supplier payment",
+      idempotencyKey: "s486-sourced-through-before-payment-cancel",
+    });
+
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+    expect((await s.t.run((ctx) => ctx.db.get(saleId!)))?.status).toBe("CANCELLED");
+    expect((await s.t.run((ctx) => ctx.db.get(supplierPayable!._id)))?.status).toBe("CANCELLED");
+    const invoice = await s.t.run((ctx) => ctx.db.query("receivableDocuments")
+      .withIndex("by_org_source", (q) => q.eq("orgId", s.orgId)
+        .eq("sourceType", "finance_application").eq("sourceId", applicationId))
+      .unique());
+    expect(invoice).toMatchObject({
+      payerType: "FINANCE_COMPANY", originalAmountMinor: 12_500_000, status: "CANCELLED",
+    });
+    expect(await eventStatuses(s, "SALE_COMPLETED", saleId!)).toEqual(["REVERSED"]);
+    const rows = await journalRows(s);
+    expectLiteralRows(rows, [
+      { account: "1210", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "REVERSED" },
+      { account: "2400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "REVERSED" },
+      { account: "4170", currency: "JOD", debit: 0, credit: 2_500_000, entryStatus: "REVERSED" },
+      { account: "1210", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
+      { account: "2400", currency: "JOD", debit: 10_000_000, credit: 0, entryStatus: "POSTED" },
+      { account: "4170", currency: "JOD", debit: 2_500_000, credit: 0, entryStatus: "POSTED" },
+    ]);
+    expectBalanced(rows);
+    expect(await trialBalanceNormalBalance(s)).toEqual({});
+    expect(await publicIncomeStatement(s)).toMatchObject({
+      totalRevenue: 0, totalCogs: 0, grossProfit: 0, netIncome: 0,
+    });
+  });
+
   test("SOURCED configured financier × direct supplier payment: only the supplier owes the agent margin", async () => {
     const { s, applicationId } = await sourcedFinancedOpening("s486sourceddirect", "DIRECT_TO_SUPPLIER");
     const application = await s.t.run((ctx) => ctx.db.get(applicationId));
