@@ -628,6 +628,48 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(income.cogsRows).toEqual([]);
   });
 
+  test("SOURCED direct settlement × supplier receipt: claim clears, duplicate and premature cancellation refuse", async () => {
+    const { s, applicationId } = await sourcedFinancedOpening("s486directreceipt", "DIRECT_TO_SUPPLIER");
+    const application = await s.t.run((ctx) => ctx.db.get(applicationId));
+    const saleId = application?.finalizedSaleId;
+    expect(saleId).toBeDefined();
+    const claim = await s.t.run((ctx) => ctx.db.query("vehicleSupplierReceivables")
+      .withIndex("by_sale", (q) => q.eq("saleId", saleId!)).unique());
+    expect(claim).toMatchObject({ amountDue: 2_500, status: "OPEN" });
+    const receiptArgs = {
+      orgId: s.orgId, receivableId: claim!._id, amount: 2_500,
+      receiptMethod: "BANK_TRANSFER" as const,
+      idempotencyKey: "s486-direct-supplier-receipt",
+    };
+    expect(await s.owner.as.mutation(api.supplierReceivables.recordReceipt, receiptArgs)).toEqual({
+      amountReceived: 2_500, remainingAmount: 0, status: "PAID",
+    });
+    const paidClaim = await s.t.run((ctx) => ctx.db.get(claim!._id));
+    expect(paidClaim).toMatchObject({ amountReceived: 2_500, status: "PAID", receiptSeq: 1 });
+    const rows = await journalRows(s);
+    expectLiteralRows(rows, [
+      { account: "1240", currency: "JOD", debit: 2_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "4170", currency: "JOD", debit: 0, credit: 2_500_000, entryStatus: "POSTED" },
+      { account: "1110", currency: "JOD", debit: 2_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1240", currency: "JOD", debit: 0, credit: 2_500_000, entryStatus: "POSTED" },
+    ]);
+    expectBalanced(rows);
+    expect(await trialBalanceNormalBalance(s)).toEqual({
+      "1110|JOD": 2_500_000, "4170|JOD": 2_500_000,
+    });
+    const beforeRetry = await dbSnapshot(s.t, Object.keys(schema.tables));
+    expect(await s.owner.as.mutation(api.supplierReceivables.recordReceipt, receiptArgs)).toEqual({
+      amountReceived: 2_500, remainingAmount: 0, status: "PAID",
+    });
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(beforeRetry);
+    await expect(s.owner.as.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId, applicationId, reason: "Certification cancellation after supplier receipt",
+      idempotencyKey: "s486-direct-after-supplier-receipt-cancel",
+    })).rejects.toThrow(/supplier has paid against its commission claim/i);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(beforeRetry);
+    expect((await s.t.run((ctx) => ctx.db.get(saleId!)))?.status).toBe("COMPLETED");
+  });
+
   test("owned CASH × no deposit: sale recognizes literal receivable, revenue, COGS and inventory", async () => {
     const { s, quoteId } = await cashQuote("s486cashnone");
     const saleId = await completeCashSale(s, quoteId, "no-deposit");
