@@ -37,6 +37,7 @@ vi.mock("@/hooks/useCurrency", () => ({
 
 const stubs = vi.hoisted(() => ({
   queryResults: new Map<string, unknown>(),
+  queryCalls: [] as string[],
   permissions: new Set<string>(),
   mutationCalls: new Map<string, unknown[]>(),
   mutationFailures: new Map<string, string>(),
@@ -66,8 +67,17 @@ vi.mock("convex/react", async () => {
       Object.fromEntries(
         Object.entries(queries).map(([key, { query }]) => [key, stubs.queryResults.get(getFunctionName(query))])
       ),
-    useQuery: (reference: never, args: unknown) =>
-      args === "skip" ? undefined : stubs.queryResults.get(getFunctionName(reference)),
+    useQuery: (reference: never, args: unknown) => {
+      const name = getFunctionName(reference);
+      stubs.queryCalls.push(name);
+      if (args === "skip") return undefined;
+      if (name === "documents:getPanelForApplication") {
+        const active = stubs.queryResults.get("documents:getForApplication");
+        const history = stubs.queryResults.get("documents:getHistoryForApplication");
+        return active === undefined && history === undefined ? undefined : { active: active ?? [], history: history ?? [] };
+      }
+      return stubs.queryResults.get(name);
+    },
     useMutation: (reference: never) => {
       const name = getFunctionName(reference);
       return async (args: unknown) => {
@@ -118,6 +128,7 @@ const APP = "app_2048" as Id<"financeApplications">;
 const COCKPIT_QUERY = "dealWorkspace:financedDealCockpit";
 const GET_QUERY = "applications:get";
 const DOCUMENTS_QUERY = "documents:getForApplication";
+const PANEL_QUERY = "documents:getPanelForApplication";
 const ALLOCATION_QUERY = "deposits:quoteAllocation";
 
 /** `deposits.quoteAllocation`'s summary: nothing committed, nothing paid out unless a case says so. */
@@ -223,6 +234,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   queryResults.clear();
+  stubs.queryCalls.length = 0;
   permissions.clear();
   mutationCalls.clear();
   stubs.membershipUserId = "user_manager";
@@ -247,6 +259,24 @@ function renderCockpit() {
 }
 
 const focusRow = () => screen.getByTestId("deal-next-step");
+
+test("document panel subscribes once for active and historical rows", () => {
+  permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+  queryResults.set(COCKPIT_QUERY, cockpit());
+  queryResults.set(GET_QUERY, application());
+  queryResults.set(DOCUMENTS_QUERY, [
+    { _id: "doc_active", ruleId: "r1", ruleName: "National ID", status: "MISSING", isRequired: true, fileUrl: null },
+  ]);
+  queryResults.set("documents:getHistoryForApplication", [
+    { _id: "doc_old", ruleId: "r_gone", status: "UPLOADED", ruleName: "Old letter", uploadedAt: null, fileUrl: "https://files/old-letter.pdf" },
+  ]);
+
+  renderCockpit();
+
+  expect(screen.getByTestId("deal-document-doc_active")).toBeDefined();
+  expect(screen.getByTestId("deal-document-history-doc_old")).toBeDefined();
+  expect(new Set(stubs.queryCalls.filter((name) => name.startsWith("documents:")))).toEqual(new Set([PANEL_QUERY]));
+});
 
 describe("credit decision — applications.updateStatus, from the CREDIT_DECISION stage", () => {
   test("PENDING_DOCS: 'mark under review' is the one recommended action and calls updateStatus(UNDER_REVIEW)", async () => {

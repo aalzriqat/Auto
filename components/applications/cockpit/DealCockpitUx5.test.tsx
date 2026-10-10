@@ -95,7 +95,7 @@ const ORG = "org1" as Id<"organizations">;
 const APP = "app_2048" as Id<"financeApplications">;
 const COCKPIT = "dealWorkspace:financedDealCockpit";
 const GET = "applications:get";
-const DOCUMENTS = "documents:getForApplication";
+const DOCUMENTS = "documents:getPanelForApplication";
 
 const facts = (overrides: Partial<DealStageFacts>): DealStageFacts => ({
   status: "APPROVED",
@@ -236,7 +236,7 @@ describe("S7 -- the success line waits for the read model", () => {
       { _id: "doc_2", ruleId: "r2", ruleName: "Salary slip", status: "MISSING", fileUrl: null },
     ];
     setDeal({ status: "APPROVED" }, { documents: dealDocs("UPLOADED") });
-    queryResults.set(DOCUMENTS, rows("UPLOADED"));
+    queryResults.set(DOCUMENTS, { active: rows("UPLOADED"), history: [] });
     const view = render(ui());
     const toggle = screen.queryByTestId("deal-details-toggle");
     if (toggle?.getAttribute("aria-expanded") === "false") fireEvent.click(toggle);
@@ -246,7 +246,7 @@ describe("S7 -- the success line waits for the read model", () => {
     expect(document.activeElement).not.toBe(screen.getByTestId("deal-document-doc_2"));
 
     setDeal({ status: "APPROVED" }, { documents: dealDocs("VERIFIED") });
-    queryResults.set(DOCUMENTS, rows("VERIFIED"));
+    queryResults.set(DOCUMENTS, { active: rows("VERIFIED"), history: [] });
     view.rerender(ui());
     await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("deal-document-doc_2")));
     expect(screen.getByTestId("deal-document-doc_2").getAttribute("data-rule-id")).toBe("r2");
@@ -264,7 +264,7 @@ describe("S7 -- the success line waits for the read model", () => {
       { _id: "doc_2", ruleId: "r2", ruleName: "Salary slip", status: second, fileUrl: "https://files/y.pdf" },
     ];
     setDeal({ status: "APPROVED" }, { documents: dealDocs("UPLOADED", "UPLOADED") });
-    queryResults.set(DOCUMENTS, rows("UPLOADED", "UPLOADED"));
+    queryResults.set(DOCUMENTS, { active: rows("UPLOADED", "UPLOADED"), history: [] });
     const view = render(ui());
     const toggle = screen.queryByTestId("deal-details-toggle");
     if (toggle?.getAttribute("aria-expanded") === "false") fireEvent.click(toggle);
@@ -274,12 +274,12 @@ describe("S7 -- the success line waits for the read model", () => {
 
     // Someone else verifies the OTHER document: the read model moved, our fact did not.
     setDeal({ status: "APPROVED" }, { documents: dealDocs("UPLOADED", "VERIFIED") });
-    queryResults.set(DOCUMENTS, rows("UPLOADED", "VERIFIED"));
+    queryResults.set(DOCUMENTS, { active: rows("UPLOADED", "VERIFIED"), history: [] });
     view.rerender(ui());
     expect(line()).toBeNull();
 
     setDeal({ status: "APPROVED" }, { documents: dealDocs("VERIFIED", "VERIFIED") });
-    queryResults.set(DOCUMENTS, rows("VERIFIED", "VERIFIED"));
+    queryResults.set(DOCUMENTS, { active: rows("VERIFIED", "VERIFIED"), history: [] });
     view.rerender(ui());
     expect(line()).not.toBeNull();
   });

@@ -602,13 +602,13 @@ describe("W1 — the documents step matches what this caller can do to the outst
 /**
  * Round 2 (Codex S417-R2-1 = Sol R2-1): the DESTINATION, not just the button.
  * A custom role may hold an upload or verify permission without
- * `view:finance_applications`. `documents.getForApplication` needs that read,
+ * `view:finance_applications`. `documents.getPanelForApplication` needs that read,
  * so for this role the documents pane is the read-only checklist — the step
  * must say so instead of sending them there. With the read, clicking the step
  * lands on a panel that carries the control.
  */
 describe("W1 round 2 — the documents step lands on a panel with a control this caller can use", () => {
-  const DOCUMENTS_QUERY = "documents:getForApplication";
+  const DOCUMENTS_QUERY = "documents:getPanelForApplication";
   const MISSING_DOC = { _id: "doc_1", ruleId: "r1", ruleName: "National ID", status: "MISSING", fileUrl: null };
 
   function atStage(stage: "CREDIT" | "DELIVERY") {
@@ -650,7 +650,7 @@ describe("W1 round 2 — the documents step lands on a panel with a control this
     grant(stage, role);
     queryResults.set(COCKPIT_QUERY, atStage(stage));
     // Served if asked — the real hook would never hand it to a skipped read.
-    queryResults.set(DOCUMENTS_QUERY, [MISSING_DOC]);
+    queryResults.set(DOCUMENTS_QUERY, { active: [MISSING_DOC], history: [] });
     renderCockpit();
 
     expect(stepButton()).toBeNull();
@@ -672,7 +672,7 @@ describe("W1 round 2 — the documents step lands on a panel with a control this
     grant(stage, role);
     permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     queryResults.set(COCKPIT_QUERY, atStage(stage));
-    queryResults.set(DOCUMENTS_QUERY, [MISSING_DOC]);
+    queryResults.set(DOCUMENTS_QUERY, { active: [MISSING_DOC], history: [] });
     renderCockpit();
 
     const documentsKey = stage === "CREDIT" ? "CompleteDocumentsFirstAction" : "CompleteDocumentsAction";
