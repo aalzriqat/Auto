@@ -411,7 +411,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     const s = await seedFinancedDealership(tag, {
       modules: MODULES,
       ownerPerms: OWNER_PERMS,
-      actors: {},
+      actors: { salesperson: ["view:sales", "edit:sales", "view:finance_applications", "create:finance_application"] },
       label: "Certification",
       vinPrefix: "V486",
     });
@@ -499,6 +499,14 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     const application = await s.t.run((ctx) => ctx.db.get(applicationId));
     const saleId = application?.finalizedSaleId;
     expect(saleId).toBeDefined();
+    expect(await eventStatuses(s, "SALE_COMPLETED", saleId!)).toEqual(["POSTED"]);
+
+    const beforeDeniedCancel = await dbSnapshot(s.t, Object.keys(schema.tables));
+    await expect(s.actors.salesperson.as.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId, applicationId, reason: "Salesperson cannot reverse a financed sale",
+      idempotencyKey: "s486-finance-salesperson-cancel-denied",
+    })).rejects.toThrow(/cancel:closed_deal/);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(beforeDeniedCancel);
     expect(await eventStatuses(s, "SALE_COMPLETED", saleId!)).toEqual(["POSTED"]);
 
     await s.owner.as.mutation(api.applications.cancelApplication, {
