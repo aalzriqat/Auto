@@ -178,6 +178,61 @@ async function assertDocumentRowIsActive(
   }
 }
 
+type ApplicationDocumentScope = NonNullable<Awaited<ReturnType<typeof loadApplicationDocumentScope>>>;
+
+async function projectActiveDocuments(ctx: QueryCtx, scope: ApplicationDocumentScope) {
+  const { application, applicableRules, applicableById, docs } = scope;
+  // SCRUM-421: the panel lists exactly the rules the approval guard still
+  // enforces. A removed or no-longer-applicable row stays in storage, but
+  // offering Upload or Verify on it would act on a requirement the guard ignores.
+  const activeDocs = docs.filter((doc) => applicableById.has(doc.ruleId));
+  const materialized = await Promise.all(
+    activeDocs.map(async (doc) => {
+      const rule = applicableById.get(doc.ruleId);
+      const fileUrl = doc.fileId ? await ctx.storage.getUrl(doc.fileId) : null;
+      return {
+        ...doc,
+        ruleName: rule?.documentName || "Unknown Document",
+        isRequired: rule?.isRequired || false,
+        fileUrl,
+      };
+    })
+  );
+  // A rule added after application creation has no row yet. Show it as MISSING
+  // only while ensureApplicationDocument can materialize it; settled deals
+  // cannot accept a new row (SCRUM-417 round 2, S417-R2-1).
+  if (!IN_FLIGHT_FINANCE_STATUSES.includes(application.status)) return materialized;
+  const materializedRuleIds = new Set(docs.map((doc) => doc.ruleId));
+  const unmaterialized = applicableRules
+    .filter((rule) => !materializedRuleIds.has(rule._id))
+    .map((rule) => ({
+      _id: null,
+      ruleId: rule._id,
+      status: "MISSING" as const,
+      ruleName: rule.documentName,
+      isRequired: rule.isRequired,
+      fileUrl: null,
+    }));
+  return [...materialized, ...unmaterialized];
+}
+
+async function projectHistoryDocuments(ctx: QueryCtx, scope: ApplicationDocumentScope) {
+  const { rulesById, applicableById, docs } = scope;
+  const history = await Promise.all(
+    docs
+      .filter((doc) => !applicableById.has(doc.ruleId) && doc.fileId !== undefined)
+      .map(async (doc) => ({
+        _id: doc._id,
+        ruleId: doc.ruleId,
+        status: doc.status,
+        ruleName: rulesById.get(doc.ruleId)?.documentName ?? null,
+        uploadedAt: doc.uploadedAt ?? null,
+        fileUrl: doc.fileId ? await ctx.storage.getUrl(doc.fileId) : null,
+      }))
+  );
+  return history.filter((row) => row.fileUrl !== null);
+}
+
 export const getForApplication = query({
   args: {
     orgId: v.id("organizations"),
@@ -188,56 +243,7 @@ export const getForApplication = query({
 
     const scope = await loadApplicationDocumentScope(ctx, args.orgId, args.applicationId);
     if (!scope) return [];
-    const { application, applicableRules, applicableById, docs } = scope;
-
-    /**
-     * SCRUM-421: the panel lists EXACTLY the rules that currently apply to this
-     * deal. A stored row whose rule was removed (or no longer applies) is left
-     * in storage untouched but is not listed here: an Upload or Verify control
-     * on it would act on a requirement the guard no longer enforces (SCRUM-417
-     * round 2, S421-R2-3/R2-4). Its file stays reachable, view-only, through
-     * `getHistoryForApplication` (round 3, Codex S417-R3-1).
-     */
-    const activeDocs = docs.filter((doc) => applicableById.has(doc.ruleId));
-
-    const materialized = await Promise.all(
-      activeDocs.map(async (doc) => {
-        const rule = applicableById.get(doc.ruleId);
-        const fileUrl = doc.fileId ? await ctx.storage.getUrl(doc.fileId) : null;
-        return {
-          ...doc,
-          ruleName: rule?.documentName || "Unknown Document",
-          isRequired: rule?.isRequired || false,
-          fileUrl,
-        };
-      })
-    );
-
-    /**
-     * SCRUM-421: a rule added AFTER the application was created has no row —
-     * `createFromQuote` materializes rows only at creation — yet the approval
-     * gate reads live rules and counts it MISSING. It is listed here, row-less
-     * (`_id: null`), so the checklist can offer its upload; the row itself is
-     * created on first use by `ensureApplicationDocument`.
-     *
-     * Only while the deal is still in the finance pipeline: that mutation
-     * refuses anything else (S417-R2-1), so a row-less line on a cancelled,
-     * closed or rejected deal would be a control guaranteed to fail.
-     */
-    if (!IN_FLIGHT_FINANCE_STATUSES.includes(application.status)) return materialized;
-    const materializedRuleIds = new Set(docs.map((doc) => doc.ruleId));
-    const unmaterialized = applicableRules
-      .filter((rule) => !materializedRuleIds.has(rule._id))
-      .map((rule) => ({
-        _id: null,
-        ruleId: rule._id,
-        status: "MISSING" as const,
-        ruleName: rule.documentName,
-        isRequired: rule.isRequired,
-        fileUrl: null,
-      }));
-
-    return [...materialized, ...unmaterialized];
+    return await projectActiveDocuments(ctx, scope);
   },
 });
 
@@ -264,22 +270,28 @@ export const getHistoryForApplication = query({
 
     const scope = await loadApplicationDocumentScope(ctx, args.orgId, args.applicationId);
     if (!scope) return [];
-    const { rulesById, applicableById, docs } = scope;
+    return await projectHistoryDocuments(ctx, scope);
+  },
+});
 
-    const history = await Promise.all(
-      docs
-        .filter((doc) => !applicableById.has(doc.ruleId) && doc.fileId !== undefined)
-        .map(async (doc) => ({
-          _id: doc._id,
-          ruleId: doc.ruleId,
-          status: doc.status,
-          ruleName: rulesById.get(doc.ruleId)?.documentName ?? null,
-          uploadedAt: doc.uploadedAt ?? null,
-          fileUrl: doc.fileId ? await ctx.storage.getUrl(doc.fileId) : null,
-        }))
-    );
-    // A storage object that is gone has nothing to show.
-    return history.filter((row) => row.fileUrl !== null);
+/**
+ * The financed-deal screen currently subscribes to the active list and history
+ * separately, reading the same application, quote, rules and rows twice. This
+ * serves both from one snapshot. Keep the old endpoints for backend-first rollout.
+ */
+export const getPanelForApplication = query({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+    const scope = await loadApplicationDocumentScope(ctx, args.orgId, args.applicationId);
+    if (!scope) return { active: [], history: [] };
+    return {
+      active: await projectActiveDocuments(ctx, scope),
+      history: await projectHistoryDocuments(ctx, scope),
+    };
   },
 });
 
