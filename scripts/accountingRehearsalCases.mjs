@@ -1682,7 +1682,9 @@ export async function runRehearsalCases(ctx) {
   // quote path and uses the same literal facts as the harness matrix row.
   // The preview readbacks make this one row real-backend evidence only; the
   // remaining matrix rows still require their own cloud execution.
-  await recordCase(results, "M486C1", "owned cash sale without deposit posts and reports the literal 12,500 / 10,000 JOD economics", async () => {
+  // SCRUM-486 owner rulings c21356, c21360 and c21364: owned stock uses the
+  // full sale price as revenue and releases its capitalized acquisition cost.
+  await recordCase(results, "M486C1", "SCRUM-486 c21356/c21360/c21364: owned cash sale without deposit posts and reports the literal 12,500 / 10,000 JOD economics", async () => {
     const denom = await orgDenomination({ orgId, ownerMust });
     if (denom.currency !== "JOD" || denom.decimals !== 3) {
       unproven("M486C1 requires the certified JOD denomination and three minor-unit decimals");
