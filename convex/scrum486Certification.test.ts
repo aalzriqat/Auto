@@ -286,41 +286,52 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expectBalanced(rows);
   });
 
-  test("owned CASH × held deposit: sales-viewer cannot refund and every tenant row stays unchanged", async () => {
-    const { s, quoteId } = await cashQuote("s486viewerrefund");
-    const depositId = await s.owner.as.mutation(api.deposits.create, {
-      orgId: s.orgId,
-      quoteId,
-      amount: 200,
-      method: "CASH",
-      idempotencyKey: "scrum486-viewer-hold",
-    });
-    const clerkId = "s486viewerrefund_viewer";
-    await s.t.run(async (ctx) => {
-      const userId = await ctx.db.insert("users", {
-        clerkId,
-        email: "s486viewerrefund.viewer@example.com",
-        name: "viewer",
-      });
-      const roleId = await ctx.db.insert("roles", {
+  test.each(["REFUNDED", "FORFEITED"] as const)(
+    "owned CASH × held deposit: salesperson cannot record or %s money and every row stays unchanged",
+    async (resolution) => {
+      const { s, quoteId } = await cashQuote(`s486seller${resolution.toLowerCase()}`);
+      const depositId = await s.owner.as.mutation(api.deposits.create, {
         orgId: s.orgId,
-        name: "SALES_VIEWER",
-        permissions: ["view:sales"],
+        quoteId,
+        amount: 200,
+        method: "CASH",
+        idempotencyKey: `scrum486-${resolution.toLowerCase()}-hold`,
       });
-      await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
-    });
-    const viewer = s.t.withIdentity({ subject: clerkId, clerkId });
-    const before = await dbSnapshot(s.t, Object.keys(schema.tables));
-    await expect(viewer.mutation(api.deposits.release, {
-      orgId: s.orgId,
-      depositId,
-      resolution: "REFUNDED",
-      refundMethod: "CASH",
-      idempotencyKey: "scrum486-viewer-denied",
-    })).rejects.toThrow();
-    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
-    expect(netByAccount(await journalRows(s))).toEqual({ "1100|JOD": 200_000, "2100|JOD": -200_000 });
-  });
+      const clerkId = `s486seller${resolution.toLowerCase()}_salesperson`;
+      await s.t.run(async (ctx) => {
+        const userId = await ctx.db.insert("users", {
+          clerkId,
+          email: `${clerkId}@example.com`,
+          name: "salesperson",
+        });
+        const roleId = await ctx.db.insert("roles", {
+          orgId: s.orgId,
+          name: "SALESPERSON",
+          permissions: ["view:sales", "create:sales"],
+        });
+        await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+      });
+      const salesperson = s.t.withIdentity({ subject: clerkId, clerkId });
+      const before = await dbSnapshot(s.t, Object.keys(schema.tables));
+      await expect(salesperson.mutation(api.deposits.create, {
+        orgId: s.orgId,
+        quoteId,
+        amount: 200,
+        method: "CASH",
+        idempotencyKey: "scrum486-salesperson-create-denied",
+      })).rejects.toThrow();
+      expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
+      await expect(salesperson.mutation(api.deposits.release, {
+        orgId: s.orgId,
+        depositId,
+        resolution,
+        ...(resolution === "REFUNDED" ? { refundMethod: "CASH" as const } : {}),
+        idempotencyKey: `scrum486-salesperson-${resolution.toLowerCase()}-denied`,
+      })).rejects.toThrow();
+      expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
+      expect(netByAccount(await journalRows(s))).toEqual({ "1100|JOD": 200_000, "2100|JOD": -200_000 });
+    },
+  );
 
   test.each(["LEASE", "INTERNAL_INSTALLMENT"] as const)(
     "retired %s quote route refuses before any row changes",
