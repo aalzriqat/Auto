@@ -221,6 +221,10 @@ type Defects = {
   financeDirectPaymentPostingSkipped?: boolean;
   /** The full-transfer route incorrectly accepts a fee withheld by the finance company. */
   financeDeductedFeeAccepted?: boolean;
+  /** A refused deducted-cost close still changes the application to CLOSED. */
+  financeDeductedCloseMutatesThenRefuses?: boolean;
+  /** A short finance-company receipt is refused for an unrelated reason. */
+  financeReceiptWrongRefusalReason?: boolean;
   // ── FD2 — deal costs denominated once (SCRUM-319) ──
   /** A cost entered in a foreign currency is recorded anyway — the integer lands at the wrong scale. */
   feeAcceptsForeignCurrency?: boolean;
@@ -1311,6 +1315,7 @@ function makeBackend(defects: Defects = {}) {
         // SCRUM-435: the finance company transfers the full approved amount, so a
         // cost deducted from its transfer is refused (mirrors the product guard).
         if (app.withheldMinor > 0 && !defects.financeDeductedFeeAccepted) {
+          if (defects.financeDeductedCloseMutatesThenRefuses) app.status = "CLOSED";
           return { ok: false as const, error: "The finance company transfers the full approved amount, so a cost cannot be deducted from its transfer. Record the cost as a normal deal cost and finalize again." };
         }
         const unpaid = [...financeDealFees.values()].some((fee) =>
@@ -1375,6 +1380,9 @@ function makeBackend(defects: Defects = {}) {
         const net = app.financedSaleNetReceivableMinor;
         let amount = Number(args.disbursedAmountMinor);
         if (amount !== net) {
+          if (defects.financeReceiptWrongRefusalReason) {
+            return { ok: false as const, error: "A receipt was refused for an unrelated reason." };
+          }
           if (!defects.financeReceiptClipsToOutstanding) {
             return {
               ok: false as const,
@@ -1940,6 +1948,12 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     expect(detail(results, "FD1")).toMatch(/SHORT receipt .* was accepted/);
   });
 
+  test("FD1 catches a short receipt refused for the wrong reason", async () => {
+    const results = await runAgainst({ financeReceiptWrongRefusalReason: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/short receipt was refused for the wrong reason/);
+  });
+
   test("FD1 catches a cash-receipt journal posted for a different amount than the payment and allocation", async () => {
     const results = await runAgainst({ financeReceiptPostsWrongAmount: true });
     expect(statusOf(results, "FD1")).toBe("FAIL");
@@ -2001,6 +2015,12 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     const results = await runAgainst({ financeDeductedFeeAccepted: true });
     expect(statusOf(results, "FD1")).toBe("FAIL");
     expect(detail(results, "FD1")).toMatch(/deducted from the finance company's full transfer was not refused/);
+  });
+
+  test("FD1 catches a refused deducted-cost close that still closes the application", async () => {
+    const results = await runAgainst({ financeDeductedCloseMutatesThenRefuses: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/refused deducted-cost close still closed the application/);
   });
 
   test("FD1 catches a direct payment marked paid without its journal posting", async () => {
