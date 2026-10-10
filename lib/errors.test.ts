@@ -281,6 +281,19 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     }
   });
 
+  it("SCRUM-795 MANUAL_JOURNALS_DISABLED resolves to Arabic in ar and the server text in en", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { MANUAL_JOURNALS_DISABLED_MESSAGE } = await import("../convex/utils/manualJournalContainment");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const error = new ConvexError({ code: "MANUAL_JOURNALS_DISABLED", message: MANUAL_JOURNALS_DISABLED_MESSAGE });
+    const arText = getLocalizedErrorMessage(error, ar);
+    expect(arText).toMatch(/[؀-ۿ]/);
+    expect(arText).not.toBe(MANUAL_JOURNALS_DISABLED_MESSAGE);
+    expect(arText).toBe((dictionaries.ar as Record<string, string>)["ServerError_MANUAL_JOURNALS_DISABLED"]);
+    expect(getLocalizedErrorMessage(error, en)).toBe(MANUAL_JOURNALS_DISABLED_MESSAGE);
+  });
+
   it("SCRUM-650 purchase-cost correction refusals resolve to Arabic in ar and the server text in en", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     const { AppErrorCode } = await import("../convex/utils/errors");
