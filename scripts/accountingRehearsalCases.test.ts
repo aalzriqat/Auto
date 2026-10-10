@@ -218,6 +218,8 @@ type Defects = {
   cashDepositSaleAllocatesNewPayment?: boolean;
   /** The receipt payment is already allocated before the deposit is applied. */
   cashDepositPaymentPreallocated?: boolean;
+  /** The sale allocates more than the held payment across two invoices. */
+  cashDepositSaleOverallocatesPayment?: boolean;
   /** The public trial balance drops the deposit receipt while journals retain it. */
   cashDepositReportOmitsReceipt?: boolean;
   /** An extra balanced posting treats held cash as earned revenue and creates AR. */
@@ -1035,6 +1037,11 @@ function makeBackend(defects: Defects = {}) {
               }
               allocations.push({ orgId: String(args.orgId), paymentId: allocationPaymentId, receivableDocumentId: invoiceId,
                 amountMinor: 200_000, currency: ORG_CURRENCY, scale: 3, status: "ACTIVE" });
+              if (defects.cashDepositSaleOverallocatesPayment) allocations.push({
+                orgId: String(args.orgId), paymentId: deposit.canonicalPaymentId,
+                receivableDocumentId: "other-invoice", amountMinor: 1_000,
+                currency: ORG_CURRENCY, scale: 3, status: "ACTIVE",
+              });
               const invoice = financeReceivables.get(invoiceId);
               if (invoice) invoice.status = "PARTIALLY_PAID";
             }
@@ -1605,11 +1612,22 @@ function makeBackend(defects: Defects = {}) {
           .reduce((n, a) => n + a.amountMinor, 0);
         return { ok: true as const, value: { doc, outstandingMinor: Math.max(0, doc.originalAmountMinor - allocated) } };
       }
-      case "subledger:listAllocations":
-        return {
-          ok: true as const,
-          value: allocations.filter((a) => a.receivableDocumentId === String(args.receivableDocumentId)),
-        };
+      case "subledger:listAllocations": {
+        const orgId = String(args.orgId);
+        if (args.receivableDocumentId) {
+          const receivableId = String(args.receivableDocumentId);
+          const receivable = financeReceivables.get(receivableId);
+          return { ok: true as const, value: receivable?.orgId === orgId
+            ? allocations.filter((a) => a.orgId === orgId && a.receivableDocumentId === receivableId) : [] };
+        }
+        if (args.paymentId) {
+          const paymentId = String(args.paymentId);
+          const payment = canonicalPayments.get(paymentId);
+          return { ok: true as const, value: payment?.orgId === orgId
+            ? allocations.filter((a) => a.orgId === orgId && a.paymentId === paymentId) : [] };
+        }
+        return { ok: true as const, value: [] };
+      }
       case "applications:confirmDisbursement": {
         const app = financeApps.get(String(args.applicationId));
         if (!app) return { ok: false as const, error: "Application not found." };
@@ -1648,8 +1666,8 @@ function makeBackend(defects: Defects = {}) {
           { key: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", creditMinor: posted },
         ]);
         const paymentId = id("cpay");
-        canonicalPayments.set(paymentId, { _id: paymentId, payerType: "FINANCE_COMPANY", amountMinor: amount, currency, scale: 3, status: "SETTLED" });
-        allocations.push({ _id: id("alloc"), paymentId, receivableDocumentId: receivable._id, amountMinor: amount, currency, status: "ACTIVE" });
+        canonicalPayments.set(paymentId, { _id: paymentId, orgId: String(args.orgId), payerType: "FINANCE_COMPANY", amountMinor: amount, currency, scale: 3, status: "SETTLED" });
+        allocations.push({ _id: id("alloc"), orgId: String(args.orgId), paymentId, receivableDocumentId: receivable._id, amountMinor: amount, currency, status: "ACTIVE" });
         if (!defects.financeReceivableNotSettled) receivable.status = amount >= receivable.originalAmountMinor ? "PAID" : "PARTIALLY_PAID";
         return { ok: true as const, value: null };
       }
@@ -2042,7 +2060,8 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["cashDepositPaymentWrongAmount", /canonical payment amountMinor/i],
     ["cashDepositPaymentWrongMethod", /canonical payment method/i],
     ["cashDepositSaleAllocatesNewPayment", /sale allocation consumes held deposit payment/i],
-    ["cashDepositPaymentPreallocated", /held payment remains unapplied/i],
+    ["cashDepositPaymentPreallocated", /held payment has no allocations/i],
+    ["cashDepositSaleOverallocatesPayment", /held payment has exactly one sale allocation/i],
     ["cashDepositReportOmitsReceipt", /deposit receipt|public cash|public liability/i],
     ["cashDepositRecognizedAsRevenue", /held deposit|public revenue|public receivable/i],
     ["cashDepositRecognizedAsOtherIncome", /held deposit|public income|public expense/i],

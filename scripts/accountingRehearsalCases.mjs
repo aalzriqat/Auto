@@ -1886,6 +1886,10 @@ export async function runRehearsalCases(ctx) {
       ["externalReference", `Deposit ${depositId}`],
     ]) expectEqual(field.endsWith("Id") ? String(heldPayment[field]) : heldPayment[field], expected,
       `M486C2 held canonical payment ${field}`);
+    const heldPaymentAllocations = await ownerMust("query", "subledger:listAllocations", {
+      orgId, paymentId: held.canonicalPaymentId,
+    });
+    expectEqual(heldPaymentAllocations?.length, 0, "M486C2 held payment has no allocations");
     expectEqual(heldPaymentBalance.unappliedMinor, 200_000, "M486C2 held payment remains unapplied");
     const me = await ownerMust("query", "users:getMe", {});
     if (!me?._id) unproven("M486C2 has no authenticated salesperson identity");
@@ -1940,6 +1944,18 @@ export async function runRehearsalCases(ctx) {
     if (!allocation.paymentId) fail("M486C2 payment allocation has no canonical payment");
     expectEqual(String(allocation.paymentId), String(held.canonicalPaymentId),
       "M486C2 sale allocation consumes held deposit payment");
+    const paymentAllocations = await ownerMust("query", "subledger:listAllocations", {
+      orgId, paymentId: held.canonicalPaymentId,
+    });
+    expectEqual(paymentAllocations?.length, 1, "M486C2 held payment has exactly one sale allocation");
+    const paymentAllocation = paymentAllocations[0];
+    expectEqual(paymentAllocation.status, "ACTIVE", "M486C2 held payment allocation is active");
+    expectEqual(String(paymentAllocation.paymentId), String(held.canonicalPaymentId),
+      "M486C2 payment-side allocation belongs to held payment");
+    expectEqual(String(paymentAllocation.receivableDocumentId), String(invoice._id),
+      "M486C2 payment-side allocation belongs to sale invoice");
+    expectEqual(paymentAllocation.amountMinor, 200_000,
+      "M486C2 payment-side allocation consumes exactly the deposit");
     const paymentBalance = await ownerMust("query", "subledger:getPaymentBalance", {
       orgId, paymentId: allocation.paymentId,
     });
