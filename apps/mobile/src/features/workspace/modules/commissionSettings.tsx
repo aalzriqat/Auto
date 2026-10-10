@@ -4,6 +4,7 @@ import { Alert, Text } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileOrgSettings } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
+import { saveResultMessage, saveSettingsThenCommissionMode } from "./commissionModeSave";
 import { money, parseOptionalNumber, splitLinesOrCommas, useGenericError, PrimaryButton, FormField, SelectField, RecordCard, ModuleScroll } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
@@ -13,14 +14,15 @@ export function CommissionSettingsModule({ orgId }: { orgId: string }) {
   const reportError = useGenericError();
   const settings = useQuery(api.orgSettings.get, { orgId });
   const upsertSettings = useMutation(api.orgSettings.upsert);
+  const setCommissionMode = useMutation(api.orgSettings.setCommissionMode);
   const [saving, setSaving] = useState(false);
-  const [mode, setMode] = useState<MobileOrgSettings["commissionMode"]>("AUTO_MEMBER");
+  const [mode, setMode] = useState<MobileOrgSettings["commissionMode"]>("MANUAL");
   const [tiersText, setTiersText] = useState("");
   const [sampleProfit, setSampleProfit] = useState("1000");
 
   useEffect(() => {
     if (!settings) return;
-    setMode(settings.commissionMode ?? "AUTO_MEMBER");
+    setMode(settings.commissionMode ?? "MANUAL");
     setTiersText((settings.commissionTiers ?? [])
       .slice()
       .sort((a, b) => a.minProfitAmount - b.minProfitAmount)
@@ -45,12 +47,15 @@ export function CommissionSettingsModule({ orgId }: { orgId: string }) {
   async function save() {
     setSaving(true);
     try {
-      await upsertSettings({
-        orgId,
-        commissionMode: mode,
-        commissionTiers: parsedTiers,
+      // SCRUM-778: the mode changes only through its own door, after the tiers
+      // are accepted, so a refused save never switches it.
+      const result = await saveSettingsThenCommissionMode({
+        currentMode: settings?.commissionMode,
+        selectedMode: mode ?? "MANUAL",
+        setCommissionMode: (commissionMode) => setCommissionMode({ orgId, commissionMode }),
+        saveSettings: () => upsertSettings({ orgId, commissionTiers: parsedTiers }),
       });
-      Alert.alert("AutoFlow", locale === "ar" ? "تم الحفظ" : "Saved");
+      Alert.alert("AutoFlow", saveResultMessage(result, locale));
     } catch (error) {
       reportError("Mobile commission settings save failed", error);
     } finally {
@@ -66,7 +71,7 @@ export function CommissionSettingsModule({ orgId }: { orgId: string }) {
     <ModuleScroll>
       <SelectField
         label={locale === "ar" ? "نظام العمولة" : "Commission mode"}
-        value={mode ?? "AUTO_MEMBER"}
+        value={mode ?? "MANUAL"}
         options={[
           { label: "AUTO_MEMBER", value: "AUTO_MEMBER" },
           { label: "AUTO_TIERS", value: "AUTO_TIERS" },

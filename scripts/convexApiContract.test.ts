@@ -36,7 +36,9 @@ const CONTRACT = path.join(REPO_ROOT, "apps", "mobile", "src", "convexApi.ts");
 // checked against the backend, with nothing dropped from the extraction.
 // 195 -> 196: `depositRequests:request`, the salesperson's deposit request on the
 // mobile sales wizard (SCRUM-444). A real reference, checked against the backend.
-const EXPECTED_REFERENCE_COUNT = 196;
+// 196 -> 197: `orgSettings:setCommissionMode`, the only door that changes the
+// commission mode (SCRUM-778). A real reference, checked against the backend.
+const EXPECTED_REFERENCE_COUNT = 197;
 
 describe("mobile convexApi contract extraction", () => {
   test("reads the reference out of a multi-line declaration with nested generics", () => {

@@ -57,6 +57,8 @@ async function seedDealer(tag = "p8") {
   await t.run((ctx) =>
     ctx.db.insert("orgSettings", {
       orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"],
+      // Automatic commission opted into explicitly: since SCRUM-778 an unset mode is MANUAL.
+      commissionMode: "AUTO_MEMBER",
     })
   );
 

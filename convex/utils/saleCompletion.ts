@@ -36,6 +36,7 @@ import {
 import { computeResoldProductMargin, type FinancedSalePlanPayload } from "../accounting/postingRules";
 import { isChartInitialized } from "../chartOfAccounts";
 import { toMinorUnits, fromMinorUnits, denominationOf, isValidMinorAmount, addMinor } from "./money";
+import { effectiveCommissionMode } from "./commissionMode";
 import { assertProfitApproved, saleRequiresMinimumProfit } from "./profitApproval";
 import { assertVehicleNotDeleted, assertVehicleReadyForSale } from "./vehicleLiveness";
 import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
@@ -549,7 +550,8 @@ async function prepareSaleCompletion(
     .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
     .unique();
 
-  const commissionMode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
+  // SCRUM-778: never chosen means MANUAL — nothing accrues until a manager decides.
+  const commissionMode = effectiveCommissionMode(orgSettings);
 
   let commissionAmount: number | undefined;
   // Commission expense is recognized once the obligation is both probable (the

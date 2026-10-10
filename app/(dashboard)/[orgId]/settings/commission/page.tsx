@@ -14,6 +14,7 @@ import { toast } from "@/components/ui/sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Info, Plus, Trash2, Zap, PenLine, Users } from "lucide-react";
 import { getErrorMessage } from "@/lib/errors";
+import { effectiveCommissionMode } from "@/convex/utils/commissionMode";
 
 interface Tier {
   minProfitAmount: number;
@@ -25,12 +26,17 @@ export default function CommissionSettingsPage() {
   const { t } = useLanguage();
   const settings = useOrgSettings();
   const upsert = useMutation(api.orgSettings.upsert);
+  const setCommissionMode = useMutation(api.orgSettings.setCommissionMode);
 
   const [tiers, setTiers] = useState<Tier[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isSavingMode, setIsSavingMode] = useState(false);
 
-  const commissionMode = (settings?.commissionMode ?? "AUTO_MEMBER") as "AUTO_TIERS" | "AUTO_MEMBER" | "MANUAL";
+  // SCRUM-778: shows the mode the ledger actually runs — MANUAL until one is
+  // chosen. While settings load (`undefined`) no mode is shown as active and
+  // none can be clicked: a loading screen is not a known configuration.
+  const settingsLoaded = settings !== undefined;
+  const commissionMode = settingsLoaded ? effectiveCommissionMode(settings) : null;
 
   useEffect(() => {
     if (settings?.commissionTiers) {
@@ -42,7 +48,7 @@ export default function CommissionSettingsPage() {
     if (!activeOrgId) return;
     setIsSavingMode(true);
     try {
-      await upsert({ orgId: activeOrgId, commissionMode: mode });
+      await setCommissionMode({ orgId: activeOrgId, commissionMode: mode });
       toast.success(t("CommissionModeSaved" as any));
     } catch (error) {
       toast.error(getErrorMessage(error));
@@ -136,7 +142,7 @@ export default function CommissionSettingsPage() {
               return (
                 <button
                   key={mode}
-                  disabled={isSavingMode}
+                  disabled={isSavingMode || !settingsLoaded}
                   onClick={() => handleSaveMode(mode)}
                   className={`relative flex items-start gap-3 rounded-lg border-2 p-4 text-start transition-colors ${
                     isActive
