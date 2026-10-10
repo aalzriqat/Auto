@@ -127,6 +127,18 @@ function netByAccount(rows: JournalRow[]) {
   return Object.fromEntries([...net].filter(([, amount]) => amount !== 0).sort());
 }
 
+/** Read public trial-balance normal-sign nets (liabilities and income are credit-positive). */
+async function trialBalanceNormalBalance(s: CashSeed) {
+  const periods = await s.owner.as.query(api.accountingPeriods.list, { orgId: s.orgId });
+  const toDate = Math.max(...periods.map((period) => period.endDate));
+  const report = await s.owner.as.query(api.accountingReports.trialBalance, { orgId: s.orgId, toDate });
+  expect(report.isBalanced).toBe(true);
+  return Object.fromEntries(report.rows
+    .filter((row) => row.netMinor !== 0)
+    .map((row) => [`${row.code}|${row.currency}`, row.netMinor] as const)
+    .sort(([a], [b]) => a.localeCompare(b)));
+}
+
 describe("SCRUM-486 literal certification matrix (harness only)", () => {
   test("owned CASH × no deposit: sale recognizes literal receivable, revenue, COGS and inventory", async () => {
     const { s, quoteId } = await cashQuote("s486cashnone");
@@ -142,6 +154,12 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       { account: "1400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
     ]);
     expectBalanced(rows);
+    expect(await trialBalanceNormalBalance(s)).toEqual({
+      "1200|JOD": 12_500_000,
+      "1400|JOD": -10_000_000,
+      "4100|JOD": 12_500_000,
+      "5100|JOD": 10_000_000,
+    });
   });
 
   test("owned CASH × held/applied deposit: 200,000 liability reduces the invoice receivable, not revenue", async () => {
@@ -212,6 +230,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     const cancellationRows = await journalRows(s);
     expect(netByAccount(cancellationRows)).toEqual({ "1100|JOD": 200_000, "2100|JOD": -200_000 });
     expectBalanced(cancellationRows);
+    expect(await trialBalanceNormalBalance(s)).toEqual({ "1100|JOD": 200_000, "2100|JOD": 200_000 });
 
     await s.approver.as.mutation(api.deposits.release, {
       orgId: s.orgId,
@@ -226,6 +245,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(await eventStatuses(s, "DEPOSIT_REFUNDED", depositId)).toEqual(["POSTED"]);
     expect(netByAccount(finalRows)).toEqual({});
     expectBalanced(finalRows);
+    expect(await trialBalanceNormalBalance(s)).toEqual({});
   });
 
   test.each([
