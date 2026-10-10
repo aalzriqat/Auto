@@ -243,6 +243,12 @@ type Defects = {
   cashRefundHidesDuplicateOnPage21?: boolean;
   cashRefundEventPayloadWrongAmount?: boolean;
   cashHeldReportHasUnrelatedBalance?: boolean;
+  cashRefundAddsCashMethodDuplicate?: boolean;
+  cashRefundCorruptsIncomingIdentity?: boolean;
+  cashRefundEventPayloadWrongDeposit?: boolean;
+  cashReceiptEventPayloadMissing?: boolean;
+  cashRefundAllocatesOutbound?: boolean;
+  cashDepositMissesCollectionMirror?: boolean;
   cashDepositLeavesVehicleAvailable?: boolean;
   cashRefundLeavesVehicleReserved?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
@@ -625,6 +631,15 @@ function makeBackend(defects: Defects = {}) {
       const incoming = canonicalPayments.get(deposit.canonicalPaymentId);
       if (incoming) incoming.status = "VOIDED";
     }
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundCorruptsIncomingIdentity &&
+        deposit.canonicalPaymentId) {
+      const incoming = canonicalPayments.get(deposit.canonicalPaymentId);
+      if (incoming) {
+        incoming.customerId = "other-customer";
+        incoming.payerType = "OTHER";
+        incoming.method = "OTHER";
+      }
+    }
     return { ok: true as const, value: null };
   };
 
@@ -641,9 +656,12 @@ function makeBackend(defects: Defects = {}) {
         // An unbalanced entry is a GL that does not add up — B2's whole subject.
         { key: creditKey, creditMinor: defects.unbalancedJournal ? payable - 1 : creditAmount, customerId: deposit.customerId },
       ],
-      { unlinked: defects.refundEventUnlinked, payload: { depositId: deposit._id,
+      { unlinked: defects.refundEventUnlinked, payload: { depositId:
+        deposit._id === certifiedCashRefundDepositId && defects.cashRefundEventPayloadWrongDeposit
+          ? "other-deposit" : deposit._id,
         amountMinor: deposit._id === certifiedCashRefundDepositId &&
-          defects.cashRefundEventPayloadWrongAmount ? payable - 1_000 : payable } }
+          defects.cashRefundEventPayloadWrongAmount ? payable - 1_000 : payable,
+        currency: ORG_CURRENCY, customerId: deposit.customerId, paymentMethod: "CASH" } }
     );
     if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundRecognizedAsRevenue) {
       post("REFUND_REVENUE_ERROR", "deposits", deposit._id, [
@@ -687,6 +705,11 @@ function makeBackend(defects: Defects = {}) {
         externalReference: `Deposit refund ${deposit._id}`,
       });
     }
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundAllocatesOutbound) {
+      allocations.push({ orgId: "org_1", paymentId: canonicalId,
+        receivableDocumentId: "unrelated-invoice", amountMinor: payable,
+        currency: ORG_CURRENCY, scale: 3, status: "ACTIVE" });
+    }
     collectionPayments.push({
       _id: id("colp"),
       vehicleId: deposit.vehicleId,
@@ -700,6 +723,10 @@ function makeBackend(defects: Defects = {}) {
       status: "POSTED",
       canonicalPaymentId: defects.noCanonicalPayment ? undefined : canonicalId,
     });
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundAddsCashMethodDuplicate) {
+      const refund = collectionPayments[collectionPayments.length - 1];
+      collectionPayments.push({ ...refund, _id: id("colp"), method: "CASH" });
+    }
   }
 
   /** A customer receipt: cash in, against AR (allocated) or 2110 (on account). */
@@ -1242,6 +1269,12 @@ function makeBackend(defects: Defects = {}) {
           type: "IN", category: "DEPOSIT", amount: Number(args.amount),
           date: Date.now(), excludedFromRevenue: true, depositId,
         });
+        if (depositId === certifiedCashRefundDepositId && !defects.cashDepositMissesCollectionMirror) {
+          collectionPayments.push({ _id: id("colp"), orgId: String(args.orgId),
+            vehicleId: quoteVehicle.get(String(args.quoteId)), customerId: depositCustomerId,
+            reference: `Deposit ${depositId}`, direction: "IN", method: "CASH",
+            amount: Number(args.amount), status: "POSTED", canonicalPaymentId: paymentId });
+        }
         if (paymentId && defects.cashDepositPaymentPreallocated) allocations.push({
           orgId: String(args.orgId), paymentId, receivableDocumentId: "earlier-invoice",
           amountMinor: 1_000, currency: ORG_CURRENCY, scale: 3, status: "ACTIVE",
@@ -1250,7 +1283,11 @@ function makeBackend(defects: Defects = {}) {
           post("DEPOSIT_RECEIVED", "deposits", depositId, [
             { key: "CASH_ON_HAND", debitMinor: amountMinor, customerId: depositCustomerId },
             { key: "CUSTOMER_DEPOSITS_LIABILITY", creditMinor: amountMinor, customerId: depositCustomerId },
-          ]);
+          ], { payload: depositId === certifiedCashRefundDepositId &&
+            defects.cashReceiptEventPayloadMissing ? {} : {
+            depositId, amountMinor, currency: ORG_CURRENCY,
+            customerId: depositCustomerId, paymentMethod: "CASH",
+          } });
           if (defects.cashDepositRecognizedAsRevenue && certifiedCashDepositId === depositId) {
             post("DEPOSIT_REVENUE_ERROR", "deposits", depositId, [
               { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", debitMinor: amountMinor, customerId: depositCustomerId },
@@ -2201,11 +2238,17 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["cashRefundAllocatesIncoming", /refund does not allocate|refund creates no incoming payment allocation/],
     ["cashRefundCollectionWrongAmount", /refund collection payment major amount/],
     ["cashRefundPostsStrayBalanceEntry", /exactly the receipt and refund events|returns every account\/currency/],
-    ["cashRefundVoidsIncomingPayment", /incoming payment stays settled after refund/],
+    ["cashRefundVoidsIncomingPayment", /incoming payment status/],
     ["cashRefundAddsUnexcludedDepositTransaction", /operational profit report/],
     ["cashRefundPostsCompensatingJournals", /unexpected journal entries/],
     ["cashRefundEventPayloadWrongAmount", /refund event payload amount/],
     ["cashHeldReportHasUnrelatedBalance", /held account\/currency balances/],
+    ["cashRefundAddsCashMethodDuplicate", /collection payment census/],
+    ["cashRefundCorruptsIncomingIdentity", /incoming payment (payerType|customerId|method)/],
+    ["cashRefundEventPayloadWrongDeposit", /refund event payload deposit/],
+    ["cashReceiptEventPayloadMissing", /receipt event payload deposit/],
+    ["cashRefundAllocatesOutbound", /outbound payment has no allocations/],
+    ["cashDepositMissesCollectionMirror", /collection payment census/],
     ["cashDepositLeavesVehicleAvailable", /held deposit reserves the owned car/],
     ["cashRefundLeavesVehicleReserved", /refund restores available stock/],
     ["cashDepositPaymentWrongCustomer", /incoming payment customer/],
