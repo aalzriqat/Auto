@@ -1750,7 +1750,7 @@ export async function runRehearsalCases(ctx) {
     const keyOf = new Map((chart ?? []).map((a) => [String(a._id), a.systemKey ?? a.code ?? "?"]));
     const codeOf = new Map((chart ?? []).map((a) => [a.systemKey, a.code]));
     const expectedCodes = [
-      ["CASH_ON_HAND", "1000"],
+      ["CASH_ON_HAND", "1100"],
       ["ACCOUNTS_RECEIVABLE_CUSTOMERS", "1200"], ["SALES_REVENUE", "4100"],
       ["COST_OF_VEHICLES_SOLD", "5100"], ["VEHICLE_INVENTORY", "1400"],
     ];

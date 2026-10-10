@@ -173,6 +173,8 @@ type Defects = {
   cashSaleAcquisitionMissingPosting?: boolean;
   /** Vehicle acquisition posts a balanced but understated inventory amount. */
   cashSaleAcquisitionWrongAmount?: boolean;
+  /** The chart exposes the wrong dealer-facing cash code. */
+  cashSaleWrongCashAccountCode?: boolean;
   /** The sale balances, but the public inventory control retains one minor unit. */
   cashSaleInventoryReportNotCleared?: boolean;
   /** The sale posts AR but has no collectible canonical customer invoice. */
@@ -318,7 +320,7 @@ function makeBackend(defects: Defects = {}) {
   let certifiedCashSalePosted = false;
   /** The chart, keyed the way the product keys it, so lines resolve to system keys. */
   const CHART = [
-    { _id: "acct_cash", code: "1000", type: "ASSET", name: "Cash", systemKey: "CASH_ON_HAND", normalBalance: "DEBIT" },
+    { _id: "acct_cash", code: defects.cashSaleWrongCashAccountCode ? "1000" : "1100", type: "ASSET", name: "Cash", systemKey: "CASH_ON_HAND", normalBalance: "DEBIT" },
     { _id: "acct_bank", code: "1010", type: "ASSET", name: "Bank", systemKey: "BANK_ACCOUNT", normalBalance: "DEBIT" },
     { _id: "acct_ar", code: "1200", type: "ASSET", name: "AR Customers", systemKey: "ACCOUNTS_RECEIVABLE_CUSTOMERS", normalBalance: "DEBIT" },
     { _id: "acct_2110", code: "2110", type: "LIABILITY", name: "Unapplied Customer Receipts", systemKey: "UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY", normalBalance: "CREDIT" },
@@ -1902,6 +1904,7 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["cashSaleWrongJournalVehicle", /vehicle dimension/i],
     ["cashSaleWrongJournalSalesperson", /salesperson dimension/i],
     ["cashSaleWrongAccountCode", /code/i],
+    ["cashSaleWrongCashAccountCode", /chart code CASH_ON_HAND/i],
     ["cashSaleReportMissingRevenueRow", /revenue row/i],
   ] as const)("M486C1 rejects %s", async (defect, diagnostic) => {
     const results = await runAgainst({ [defect]: true });

@@ -196,6 +196,7 @@ function netByAccount(rows: JournalRow[]) {
 /** Read public trial-balance normal-sign nets (liabilities and income are credit-positive). */
 async function trialBalanceNormalBalance(s: CashSeed) {
   const periods = await s.owner.as.query(api.accountingPeriods.list, { orgId: s.orgId });
+  expect(periods.length, "trial-balance check requires at least one fiscal period").toBeGreaterThan(0);
   const toDate = Math.max(...periods.map((period) => period.endDate));
   const report = await s.owner.as.query(api.accountingReports.trialBalance, { orgId: s.orgId, toDate });
   expect(report.isBalanced).toBe(true);
