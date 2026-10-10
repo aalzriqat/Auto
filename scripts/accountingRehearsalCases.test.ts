@@ -237,6 +237,10 @@ type Defects = {
   cashRefundAllocatesIncoming?: boolean;
   cashRefundCollectionWrongAmount?: boolean;
   cashRefundPostsStrayBalanceEntry?: boolean;
+  cashRefundVoidsIncomingPayment?: boolean;
+  cashRefundAddsUnexcludedDepositTransaction?: boolean;
+  cashRefundPostsCompensatingJournals?: boolean;
+  cashRefundHidesDuplicateOnPage21?: boolean;
   cashDepositLeavesVehicleAvailable?: boolean;
   cashRefundLeavesVehicleReserved?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
@@ -332,6 +336,7 @@ function makeBackend(defects: Defects = {}) {
   const journalEntries: Array<Record<string, any>> = [];
   const journalLines = new Map<string, Array<Record<string, any>>>();
   const collectionPayments: Array<Record<string, any>> = [];
+  const operationalTransactions: Array<Record<string, any>> = [];
   const canonicalPayments = new Map<string, Record<string, any>>();
   const pendingEvents: Array<Record<string, any>> = [];
   const retained = new Map<string, { receiptMovementId: string; customerId: string; remainingUnappliedMinor: number; receiptPosted: boolean; applications: number }>();
@@ -591,6 +596,13 @@ function makeBackend(defects: Defects = {}) {
     if (periodStatus === "OPEN") {
       postRefundToTheBooks(deposit, payable, false);
       if (deposit._id === certifiedCashRefundDepositId &&
+          defects.cashRefundAddsUnexcludedDepositTransaction) {
+        operationalTransactions.push({
+          type: "IN", category: "DEPOSIT", amount: payable / MINOR_SCALE,
+          date: Date.now(), excludedFromRevenue: false,
+        });
+      }
+      if (deposit._id === certifiedCashRefundDepositId &&
           defects.cashRefundAllocatesIncoming && deposit.canonicalPaymentId) {
         allocations.push({
           orgId: "org_1", paymentId: deposit.canonicalPaymentId,
@@ -605,6 +617,11 @@ function makeBackend(defects: Defects = {}) {
       if (!defects.loseThePostingWhileClosed) {
         pendingEvents.push({ _id: id("pev"), status: "PENDING", eventType: "DEPOSIT_REFUNDED" });
       }
+    }
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundVoidsIncomingPayment &&
+        deposit.canonicalPaymentId) {
+      const incoming = canonicalPayments.get(deposit.canonicalPaymentId);
+      if (incoming) incoming.status = "VOIDED";
     }
     return { ok: true as const, value: null };
   };
@@ -634,6 +651,16 @@ function makeBackend(defects: Defects = {}) {
       post("REFUND_BALANCE_ERROR", "deposits", deposit._id, [
         { key: "BANK_ACCOUNT", debitMinor: payable, customerId: deposit.customerId },
         { key: "UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY", creditMinor: payable, customerId: deposit.customerId },
+      ]);
+    }
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundPostsCompensatingJournals) {
+      post("PHANTOM_RECEIPT", "collectionPayments", id("phantom"), [
+        { key: "CASH_ON_HAND", debitMinor: payable, customerId: deposit.customerId },
+        { key: "CUSTOMER_DEPOSITS_LIABILITY", creditMinor: payable, customerId: deposit.customerId },
+      ]);
+      post("PHANTOM_PAYOUT", "collectionPayments", id("phantom"), [
+        { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: payable, customerId: deposit.customerId },
+        { key: "CASH_ON_HAND", creditMinor: payable, customerId: deposit.customerId },
       ]);
     }
     if (defects.duplicateRefundJournal && !isReplayDuplicate) {
@@ -807,6 +834,16 @@ function makeBackend(defects: Defects = {}) {
           totalOtherIncome, totalOtherExpenses: 0,
           netIncome: grossProfit - totalExpenses + totalOtherIncome -
             (defects.cashSaleReportMisstatesProfit && certifiedCashSalePosted ? 1 : 0) } };
+      }
+      case "reports:getProfitAndLoss": {
+        const inWindow = operationalTransactions.filter((tx) =>
+          tx.date >= Number(args.startDate) && tx.date <= Number(args.endDate));
+        const totalRevenue = inWindow.filter((tx) => tx.type === "IN" &&
+          ["VEHICLE_SALE", "DEPOSIT"].includes(tx.category) && tx.excludedFromRevenue !== true)
+          .reduce((total, tx) => total + Number(tx.amount), 0);
+        return { ok: true as const, value: { totalRevenue, costOfGoodsSold: 0,
+          grossProfit: totalRevenue, operatingExpenses: 0, netProfit: totalRevenue,
+          grossTransactionValue: 0, transactions: inWindow } };
       }
       case "accountingPeriods:create":
         if (defects.clockRolloverAfterBookOpen) {
@@ -1195,6 +1232,10 @@ function makeBackend(defects: Defects = {}) {
           status: defects.cashDepositPaymentWrongStatus ? "DRAFT" : "SETTLED",
           idempotencyKey: `deposit_received_${depositId}`, externalReference: `Deposit ${depositId}`,
         });
+        if (depositId === certifiedCashRefundDepositId) operationalTransactions.push({
+          type: "IN", category: "DEPOSIT", amount: Number(args.amount),
+          date: Date.now(), excludedFromRevenue: true, depositId,
+        });
         if (paymentId && defects.cashDepositPaymentPreallocated) allocations.push({
           orgId: String(args.orgId), paymentId, receivableDocumentId: "earlier-invoice",
           amountMinor: 1_000, currency: ORG_CURRENCY, scale: 3, status: "ACTIVE",
@@ -1429,11 +1470,28 @@ function makeBackend(defects: Defects = {}) {
                 : []
               : [...pendingEvents],
         };
-      case "collections:listPayments":
+      case "collections:listPayments": {
+        if (defects.cashRefundHidesDuplicateOnPage21 && certifiedCashRefundDepositId) {
+          const refund = collectionPayments.find((row) =>
+            String(row.reference ?? "").includes(String(certifiedCashRefundDepositId)) && row.direction === "OUT");
+          if (refund) {
+            const filler = Array.from({ length: 1999 }, (_, index) => ({
+              _id: `filler-${index}`, direction: "IN", method: "CASH", amount: 1,
+            }));
+            const all = [refund, ...filler, { ...refund, _id: "hidden-duplicate-refund" }];
+            const cursor = Number(args.paginationOpts?.cursor ?? 0);
+            const page = all.slice(cursor, cursor + 100);
+            const nextCursor = cursor + page.length;
+            return { ok: true as const, value: {
+              page, isDone: nextCursor >= all.length, continueCursor: String(nextCursor),
+            } };
+          }
+        }
         return {
           ok: true as const,
           value: { page: [...collectionPayments], isDone: true, continueCursor: null },
         };
+      }
       case "subledger:getPaymentBalance": {
         const payment = canonicalPayments.get(args.paymentId);
         const activeAllocatedMinor = allocations.filter((row) => row.paymentId === args.paymentId && row.status === "ACTIVE")
@@ -2137,6 +2195,9 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["cashRefundAllocatesIncoming", /refund does not allocate|refund creates no incoming payment allocation/],
     ["cashRefundCollectionWrongAmount", /refund collection payment major amount/],
     ["cashRefundPostsStrayBalanceEntry", /exactly the receipt and refund events|returns every account\/currency/],
+    ["cashRefundVoidsIncomingPayment", /incoming payment stays settled after refund/],
+    ["cashRefundAddsUnexcludedDepositTransaction", /operational profit report/],
+    ["cashRefundPostsCompensatingJournals", /unexpected journal entries/],
     ["cashDepositLeavesVehicleAvailable", /held deposit reserves the owned car/],
     ["cashRefundLeavesVehicleReserved", /refund restores available stock/],
     ["cashDepositPaymentWrongCustomer", /incoming payment customer/],
@@ -2146,6 +2207,13 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     const results = await runAgainst({ [defect]: true });
     expect(statusOf(results, "M486C3")).toBe("FAIL");
     expect(String(results.find((row) => row.id === "M486C3")?.detail)).toMatch(diagnostic);
+  });
+
+  test("M486C3 marks a truncated refund-payment census unavailable", async () => {
+    const results = await runAgainst({ cashRefundHidesDuplicateOnPage21: true });
+    expect(statusOf(results, "M486C3")).toBe("UNPROVEN");
+    expect(String(results.find((row) => row.id === "M486C3")?.detail))
+      .toMatch(/collection payment listing exceeds the rehearsal page cap/);
   });
 
   test.each([

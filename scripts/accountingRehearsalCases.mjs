@@ -2073,6 +2073,9 @@ export async function runRehearsalCases(ctx) {
     ], { currency: "JOD", decimals: 3, what: "M486C3 owned vehicle acquisition" });
     const openingBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const openingIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const operationalArgs = { orgId, startDate: fromDate, endDate: toDate };
+    const openingOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
+    const openingEntries = await allJournalEntries({ orgId, ownerMust });
     const beforeReceivables = await ownerMust("query", "subledger:listReceivables", { orgId, limit: 200 });
     if (!Array.isArray(beforeReceivables) || beforeReceivables.length >= 200) {
       unproven("M486C3 tenant invoice listing is absent or truncated before refund");
@@ -2111,6 +2114,8 @@ export async function runRehearsalCases(ctx) {
     expectEqual(heldVehicle?.preHoldStatus, "AVAILABLE", "M486C3 hold remembers available stock");
     const heldBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const heldIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const heldOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
+    expectSameOperationalProfit(openingOperational, heldOperational, "M486C3 held deposit");
     if (![openingBalance, heldBalance].every((report) => Array.isArray(report?.rows))) {
       fail("M486C3 public trial balance is unavailable before refund");
     }
@@ -2132,6 +2137,8 @@ export async function runRehearsalCases(ctx) {
       0, "M486C3 refused creator cannot post a refund event");
     const refusedBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const refusedIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const refusedOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
+    expectSameOperationalProfit(heldOperational, refusedOperational, "M486C3 refused creator");
     if (!Array.isArray(refusedBalance?.rows)) fail("M486C3 public balance unavailable after refused creator");
     for (const key of ["CASH_ON_HAND", "CUSTOMER_DEPOSITS_LIABILITY",
       "ACCOUNTS_RECEIVABLE_CUSTOMERS", "SALES_REVENUE", "COST_OF_VEHICLES_SOLD"]) {
@@ -2162,6 +2169,8 @@ export async function runRehearsalCases(ctx) {
     const incomingAfterRefund = await ownerMust("query", "subledger:getPaymentBalance", {
       orgId, paymentId: held.canonicalPaymentId,
     });
+    expectEqual(incomingAfterRefund?.payment?.status, "SETTLED",
+      "M486C3 incoming payment stays settled after refund");
     expectEqual(incomingAfterRefund?.unappliedMinor, 200_000,
       "M486C3 refund does not allocate the incoming deposit payment");
     const refundAllocations = await ownerMust("query", "subledger:listAllocations", {
@@ -2192,6 +2201,9 @@ export async function runRehearsalCases(ctx) {
     expectEqual(JSON.stringify(depositEvents.map((event) => event.eventType).sort()),
       JSON.stringify(["DEPOSIT_RECEIVED", "DEPOSIT_REFUNDED"]),
       "M486C3 exactly the receipt and refund events, with no extra deposit posting");
+    const finalEntries = await allJournalEntries({ orgId, ownerMust });
+    expectOnlyJournalEntriesAdded(openingEntries, finalEntries,
+      [received.entry._id, refund.entry._id], "M486C3 unexpected journal entries");
     const payments = await listCollectionPayments({ orgId, ownerMust });
     const outbound = payments.filter((p) => p.direction === "OUT" && p.method === "REFUND" &&
       String(p.reference ?? "").includes(String(depositId)));
@@ -2218,6 +2230,8 @@ export async function runRehearsalCases(ctx) {
       expected, `M486C3 outbound canonical payment ${field}`);
     const afterBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const afterIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const afterOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
+    expectSameOperationalProfit(openingOperational, afterOperational, "M486C3 operational profit report");
     if (!Array.isArray(afterBalance?.rows)) fail("M486C3 public balance unavailable after refund");
     expectSameAccountBalances(openingBalance, afterBalance,
       "M486C3 refund returns every account/currency to its post-acquisition balance");
@@ -2245,7 +2259,8 @@ export async function runRehearsalCases(ctx) {
     return { depositId: String(depositId), refundedMinor: 200_000,
       commandsExercised: ["quotes.saveQuote", "deposits.create", "deposits.release"],
       reportsRead: ["accountingReports.trialBalance", "accountingReports.incomeStatement",
-        "subledger.getPaymentBalance", "subledger.listReceivables"] };
+        "reports.getProfitAndLoss", "subledger.getPaymentBalance", "subledger.listReceivables",
+        "accountingLedger.listJournalEntries"] };
   });
 
   // ── FD1 — the financed deal's cash receipt settles the exact recorded debt ──
@@ -3039,11 +3054,15 @@ async function listCollectionPayments({ orgId, ownerMust }) {
       orgId,
       paginationOpts: { numItems: 100, cursor },
     });
-    rows.push(...(result?.page ?? []));
-    if (result?.isDone || !result?.continueCursor) break;
+    if (!Array.isArray(result?.page)) unproven("collection payment listing has no page");
+    rows.push(...result.page);
+    if (result.isDone) return rows;
+    if (!result.continueCursor || result.continueCursor === cursor) {
+      unproven("collection payment listing has no advancing cursor");
+    }
     cursor = result.continueCursor;
   }
-  return rows;
+  unproven("collection payment listing exceeds the rehearsal page cap");
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -3111,11 +3130,15 @@ async function allJournalEntries({ orgId, ownerMust, periodId, accountId }) {
       ...(accountId ? { accountId } : {}),
       paginationOpts: { numItems: 100, cursor },
     });
-    rows.push(...(result?.page ?? []));
-    if (result?.isDone || !result?.continueCursor) break;
+    if (!Array.isArray(result?.page)) unproven("journal entry listing has no page");
+    rows.push(...result.page);
+    if (result.isDone) return rows;
+    if (!result.continueCursor || result.continueCursor === cursor) {
+      unproven("journal entry listing has no advancing cursor");
+    }
     cursor = result.continueCursor;
   }
-  return rows;
+  unproven("journal entry listing exceeds the rehearsal page cap");
 }
 
 /**
@@ -3191,6 +3214,36 @@ function expectSameAccountBalances(before, after, what) {
   for (const key of new Set([...beforeRows.keys(), ...afterRows.keys()])) {
     expectEqual(afterRows.get(key) ?? 0, beforeRows.get(key) ?? 0, `${what}: ${key}`);
   }
+}
+
+/** Compare the public operational P&L, which is sourced from transactions rather than the GL. */
+function expectSameOperationalProfit(before, after, what) {
+  for (const field of ["totalRevenue", "costOfGoodsSold", "grossProfit",
+    "operatingExpenses", "netProfit", "grossTransactionValue"]) {
+    if (![before?.[field], after?.[field]].every(Number.isFinite)) {
+      unproven(`${what}: operational profit report ${field} is unavailable`);
+    }
+    expectEqual(after[field], before[field], `${what}: operational profit report ${field}`);
+  }
+}
+
+/** Require only the two named refund-cycle postings in the org-wide journal census. */
+function expectOnlyJournalEntriesAdded(before, after, expectedIds, what) {
+  const ids = (entries) => {
+    const values = entries.map((entry) => String(entry?._id ?? ""));
+    if (values.some((id) => !id) || new Set(values).size !== values.length) {
+      unproven(`${what}: journal census has missing or duplicate ids`);
+    }
+    return new Set(values);
+  };
+  const original = ids(before);
+  const final = ids(after);
+  for (const id of original) {
+    if (!final.has(id)) fail(`${what}: an existing journal entry disappeared`);
+  }
+  const added = [...final].filter((id) => !original.has(id)).sort();
+  const expected = expectedIds.map(String).sort();
+  expectEqual(JSON.stringify(added), JSON.stringify(expected), what);
 }
 
 /** account id → system key, and system key → account id, from the org's real chart. */
