@@ -179,7 +179,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     const s = await seedFinancedDealership("s486financedheld", {
       modules: MODULES,
       ownerPerms: OWNER_PERMS,
-      actors: {},
+      actors: { salesperson: ["view:sales", "edit:sales", "view:finance"] },
       label: "Certification",
       vinPrefix: "V486",
     });
@@ -301,6 +301,12 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       expectedAmountMinor: 1_575_000, reference: "CERT-FORWARD",
       idempotencyKey: "s486-financed-held-forward",
     };
+    const beforeForward = await dbSnapshot(s.t, Object.keys(schema.tables));
+    await expect(s.actors.salesperson.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
+      ...forwardArgs,
+      idempotencyKey: "s486-financed-held-forward-salesperson-denied",
+    })).rejects.toThrow(/confirm:finance_disbursement/);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(beforeForward);
     await s.approver.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, forwardArgs);
     const afterForward = await journalRows(s);
     expectAdditionalRows(rows, afterForward, [
@@ -333,6 +339,11 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       orgId: s.orgId, applicationId, disbursedAmountMinor: 12_500_000,
       idempotencyKey: "s486-financed-held-receipt",
     };
+    await expect(s.actors.salesperson.as.mutation(api.applications.confirmDisbursement, {
+      ...receiptArgs,
+      idempotencyKey: "s486-financed-held-receipt-salesperson-denied",
+    })).rejects.toThrow(/confirm:finance_disbursement/);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(afterForwardSnapshot);
     await s.approver.as.mutation(api.applications.confirmDisbursement, receiptArgs);
     const afterReceipt = await journalRows(s);
     expectAdditionalRows(afterForward, afterReceipt, [
