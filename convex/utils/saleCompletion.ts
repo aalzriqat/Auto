@@ -17,6 +17,7 @@ import {
 } from "./depositHelpers";
 import type { DepositMethod } from "./depositRecording";
 import { throwAppError, AppErrorCode } from "./errors";
+import { assertCashSaleInvoiceFullyPaid } from "./cashSalePilotGate";
 import { requireOrgMember } from "./tenancy";
 import { assertNoSaleLinkedLegacyReceivable } from "./saleDebtContainment";
 import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
@@ -1941,6 +1942,14 @@ async function applySaleCompletionSideEffects(
     // computeVehicleCapitalizedCost picks it up correctly if/when it's later resold.
     await ctx.db.patch(args.tradeInVehicleId, { purchasePrice: args.tradeInValue });
   }
+
+  // SCRUM-802: until the invoice receipt resolver exists, a cash sale completes
+  // only when deposits and trade-in have already paid its invoice in full.
+  await assertCashSaleInvoiceFullyPaid(ctx, {
+    financingType: args.financingType,
+    financedSalePlan: args.financedSalePlan,
+    saleReceivableId,
+  });
 
   // For sourced vehicles the dealership owes the supplier his entitlement out
   // of the gross it collected — but only on the route where it actually

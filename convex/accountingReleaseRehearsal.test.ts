@@ -34,11 +34,33 @@
  * NOT claimed here.
  */
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+
+// SCRUM-802: a rehearsal drives the production path, so it runs with the real pilot containment ON
+// (vitest.setup.ts turns it off for the rest of the suite). A CASH sale here is completed the pilot way:
+// the customer's full payment is recorded as a deposit, then the quote is completed.
+vi.mock("./utils/saleDebtContainment", async (importOriginal) => await importOriginal());
+
+/** The pilot cash-sale procedure: record the full payment as a deposit, then complete the quote. */
+async function completePaidCashSale(
+  asAdmin: Awaited<ReturnType<typeof rehearseFreshDealership>>["asAdmin"],
+  a: { orgId: Id<"organizations">; customerId: Id<"customers">; vehicleId: Id<"vehicles">; price: number }
+): Promise<Id<"sales">> {
+  const quoteId = await asAdmin.mutation(api.quotes.saveQuote, {
+    orgId: a.orgId, customerId: a.customerId, vehicleId: a.vehicleId, vehiclePrice: a.price, downPayment: 0, termMonths: 0,
+  });
+  await asAdmin.mutation(api.deposits.create, {
+    method: "CASH", idempotencyKey: crypto.randomUUID(), orgId: a.orgId, quoteId, amount: a.price,
+  });
+  const saleIds = await asAdmin.mutation(api.sales.completeFromQuote, {
+    orgId: a.orgId, quoteId, idempotencyKey: crypto.randomUUID(), depositResolution: { treatment: "APPLY_TO_DEALER_AMOUNT" },
+  });
+  return saleIds[0] as Id<"sales">;
+}
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -585,12 +607,8 @@ describe("R8 — sourced (consigned) vehicle economics", () => {
       })
     );
 
-    const saleId = await asAdmin.mutation(api.sales.create, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId, vehicleId, customerId, salespersonId: userId,
-      salePrice: 24_000, saleDate: Date.now(),
-      status: "COMPLETED", financingType: "CASH",
-    });
+    const saleId = await completePaidCashSale(asAdmin, { orgId, customerId, vehicleId, price: 24_000 });
+    void userId;
 
     // The dealership never owned this car, so the supplier is owed its cost.
     const payable = await t.run((ctx) =>
@@ -619,16 +637,24 @@ describe("R8 — sourced (consigned) vehicle economics", () => {
     // proving 0 !== 2,400,000. A filter on a key that matches nothing always
     // reads as "that account was never touched" — the false negative this whole
     // rehearsal is supposed to catch, so the entry is pinned exactly instead.
-    expect(
-      lines.map((l) => ({ key: l.systemKey, code: l.code, debit: l.debitMinor, credit: l.creditMinor }))
-    ).toEqual([
-      // The customer owes the whole ticket price...
-      { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", code: "1200", debit: 2_400_000, credit: 0 },
+    // SCRUM-802: the pilot cash procedure records the customer's full payment as a deposit first, so the entry is
+    // pinned as the NET effect per account (order-independent) rather than as three raw lines.
+    const netByKey = new Map<string, number>();
+    for (const l of lines) {
+      const key = `${l.systemKey}/${l.code}`;
+      netByKey.set(key, (netByKey.get(key) ?? 0) + l.debitMinor - l.creditMinor);
+    }
+    expect(Object.fromEntries([...netByKey].filter(([, n]) => n !== 0))).toEqual({
+      // The customer paid the whole ticket price in cash...
+      "CASH_ON_HAND/1100": 2_400_000,
       // ...of which the supplier's cost is OWED ONWARD, never the dealership's...
-      { key: "ACCOUNTS_PAYABLE_SUPPLIERS", code: "2400", debit: 0, credit: 1_900_000 },
+      "ACCOUNTS_PAYABLE_SUPPLIERS/2400": -1_900_000,
       // ...leaving the 5,000 margin as the only thing the dealership EARNED.
-      { key: "CONSIGNMENT_COMMISSION_REVENUE", code: "4170", debit: 0, credit: 500_000 },
-    ]);
+      "CONSIGNMENT_COMMISSION_REVENUE/4170": -500_000,
+    });
+    // The receivable was recognised and fully settled by the deposit.
+    expect(netOn(lines, "ACCOUNTS_RECEIVABLE_CUSTOMERS")).toBe(0);
+    expect(netOn(lines, "CUSTOMER_DEPOSITS_LIABILITY")).toBe(0);
 
     // ACC-1 restated as the thing that must NOT be true: the dealership never
     // owned this car, so none of the sale price is its own sales revenue.
@@ -775,11 +801,8 @@ describe("R9 — receivable creation under retry", () => {
         sellingPrice: 20_000, sourceType: "STOCK", purchasePrice: 15_000, status: "AVAILABLE",
       })
     );
-    const saleId = await asAdmin.mutation(api.sales.create, {
-      idempotencyKey: crypto.randomUUID(),
-      orgId, vehicleId, customerId, salespersonId: userId,
-      salePrice: 20_000, saleDate: Date.now(), status: "COMPLETED", financingType: "CASH",
-    });
+    const saleId = await completePaidCashSale(asAdmin, { orgId, customerId, vehicleId, price: 20_000 });
+    void userId;
 
     const arBefore = netOn(await ledgerLines(t, orgId), "ACCOUNTS_RECEIVABLE_CUSTOMERS");
 

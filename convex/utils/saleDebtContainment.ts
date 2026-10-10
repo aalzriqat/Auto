@@ -21,6 +21,17 @@ import { AppErrorCode, throwAppError } from "./errors";
  */
 export const PAYMENT_LINKS_PILOT_DISABLED = true as const;
 
+/**
+ * SCRUM-802 (owner ruling 2026-10-08, «إجراء + منع»): until the invoice receipt
+ * resolver (SCRUM-722) exists no door applies a customer's payment to a cash
+ * sale's invoice, so the pilot procedure is "record the FULL payment as a
+ * deposit, then complete the sale". While this is on, a CASH completion that
+ * would leave its invoice outstanding refuses, and an unlinked customer receipt
+ * refuses while that customer owes a sale invoice. Reverse by flipping this to
+ * `false` when SCRUM-722 ships; a code change reviewed on its own, never an env var.
+ */
+export const CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED = true as const;
+
 // English text equals `ServerError_<code>` in lib/i18n/domains/common.ts.
 export const SALE_DEBT_CONTAINMENT_REFUSALS = {
   SALE_DEBT_COMPETING_RECEIVABLE_REFUSED:
@@ -30,6 +41,10 @@ export const SALE_DEBT_CONTAINMENT_REFUSALS = {
   SALE_DEBT_RECEIPT_REFUSED:
     "Payments, credits and cheques for a sale cannot be recorded against a separate receivable. Nothing has been changed.",
   PAYMENT_LINKS_DISABLED: "Payment links are not available yet. Nothing has been changed.",
+  CASH_SALE_BALANCE_UNPAID_REFUSED:
+    "A cash sale can only be completed once the customer's full payment is recorded as a deposit. Record the remaining payment as a deposit first. Nothing has been changed.",
+  UNLINKED_RECEIPT_OPEN_SALE_INVOICE_REFUSED:
+    "This customer has a sale invoice that is not fully paid. A payment cannot be recorded without linking it to a sale yet. Record the payment as a deposit instead. Nothing has been changed.",
 } as const satisfies Record<string, string>;
 
 export function refuseSaleDebt(code: keyof typeof SALE_DEBT_CONTAINMENT_REFUSALS): never {
