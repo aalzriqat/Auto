@@ -1460,7 +1460,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         amount: 200,
         method: "CASH",
         idempotencyKey: "scrum486-salesperson-create-denied",
-      })).rejects.toThrow();
+      })).rejects.toThrow(/Missing required permissions: confirm:finance_disbursement/);
       expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
       await expect(salesperson.mutation(api.deposits.release, {
         orgId: s.orgId,
@@ -1468,7 +1468,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         resolution,
         ...(resolution === "REFUNDED" ? { refundMethod: "CASH" as const } : {}),
         idempotencyKey: `scrum486-salesperson-${resolution.toLowerCase()}-denied`,
-      })).rejects.toThrow();
+      })).rejects.toThrow(/Missing required permissions: approve:requests/);
       expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
       expect(netByAccount(await journalRows(s))).toEqual({ "1100|JOD": 200_000, "2100|JOD": -200_000 });
     },
