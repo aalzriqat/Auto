@@ -443,6 +443,57 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     });
   });
 
+  test("SOURCED CASH × no deposit: agent margin only, full customer AR and supplier liability", async () => {
+    const s = await seedFinancedDealership("s486sourcedcash", {
+      modules: MODULES,
+      ownerPerms: OWNER_PERMS,
+      actors: {},
+      label: "Certification",
+      vinPrefix: "V486",
+      sourced: true,
+    });
+    // Opening supplier entitlement, before the dealer accepts customer money.
+    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { sourceCost: 10_000 }));
+    const quoteId = await s.owner.as.mutation(api.quotes.saveQuote, {
+      orgId: s.orgId,
+      customerId: s.customerId,
+      vehicleId: s.vehicleId,
+      mode: "CASH",
+      vehiclePrice: 12_500,
+      downPayment: 0,
+      termMonths: 0,
+    });
+    const saleId = await completeCashSale(s, quoteId, "sourced-no-deposit");
+
+    expect((await s.t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("COMPLETED");
+    const supplierPayables = await s.t.run((ctx) =>
+      ctx.db.query("vehicleSupplierPayables")
+        .withIndex("by_sale", (q) => q.eq("saleId", saleId))
+        .collect()
+    );
+    expect(supplierPayables).toHaveLength(1);
+    expect(supplierPayables[0]).toMatchObject({
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      saleId,
+      amountDue: 10_000,
+      currency: "JOD",
+      status: "PENDING",
+    });
+    const rows = await journalRows(s);
+    expectLiteralRows(rows, [
+      { account: "1200", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "2400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
+      { account: "4170", currency: "JOD", debit: 0, credit: 2_500_000, entryStatus: "POSTED" },
+    ]);
+    expectBalanced(rows);
+    expect(await trialBalanceNormalBalance(s)).toEqual({
+      "1200|JOD": 12_500_000,
+      "2400|JOD": 10_000_000,
+      "4170|JOD": 2_500_000,
+    });
+  });
+
   test("owned CASH × held/applied deposit: 200,000 liability reduces the invoice receivable, not revenue", async () => {
     const { s, quoteId } = await cashQuote("s486cashapplied");
     const depositId = await s.owner.as.mutation(api.deposits.create, {
