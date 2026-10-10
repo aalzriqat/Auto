@@ -131,7 +131,9 @@ export const listJournalEntries = query({
         if (!lines) {
           lines = await ctx.db
             .query("journalLines")
-            .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", line.journalEntryId))
+            .withIndex("by_journal_entry_account", (q) =>
+              q.eq("journalEntryId", line.journalEntryId).eq("accountId", args.accountId!)
+            )
             .collect();
           entryLinesCache.set(line.journalEntryId, lines);
         }

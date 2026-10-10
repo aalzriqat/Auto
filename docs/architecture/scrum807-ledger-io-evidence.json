@@ -1,0 +1,40 @@
+{
+  "task": "SCRUM-807",
+  "measuredAt": "2026-10-10T13:25:07.861Z",
+  "baseSha": "01a4ccae07c688978df6a6771e856f6d934b40b9",
+  "workload": {
+    "postedBalancedEntries": 50,
+    "journalLines": 1100,
+    "requestedAccountLines": 50,
+    "requestedPageSize": 50,
+    "normalizedEntryResultsEqual": true
+  },
+  "platformCompletions": [
+    {
+      "label": "main",
+      "timestamp": 1791638794.67,
+      "usageStats": {
+        "databaseIoReadBytes": 467438,
+        "databaseReadBytes": 467438,
+        "databaseReadDocuments": 1206
+      },
+      "executionTimeSeconds": 0.48328476
+    },
+    {
+      "label": "candidate",
+      "timestamp": 1791638880.86,
+      "usageStats": {
+        "databaseIoReadBytes": 62788,
+        "databaseReadBytes": 62788,
+        "databaseReadDocuments": 156
+      },
+      "executionTimeSeconds": 0.211303051
+    }
+  ],
+  "databaseQueries": "unavailable from platform completion logs",
+  "cleanup": {
+    "bothPreviewDeploymentsDeleted": true,
+    "previewOnlyKeyDeleted": true
+  },
+  "scope": "one synthetic authenticated invocation per isolated disposable preview; no production inference"
+}

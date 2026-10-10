@@ -148,6 +148,70 @@ async function walkAllPages(
 }
 
 describe("General Ledger pagination — AF-318-01 regression (>100 entries reachable)", () => {
+  test("account-filtered entry pagination reads only that account's lines for each parent", async () => {
+    const ctx = await seedDealer("Narrow Ledger Dealer", "glnarrow");
+    const entryId = await insertJournalEntry(ctx, {
+      index: 900,
+      accountingDate: ctx.currentPeriod.startDate + 10_000,
+      periodId: ctx.currentPeriod._id,
+      accountId: ctx.revenue._id,
+      memo: "many unrelated lines",
+    });
+    await ctx.t.run(async (dbCtx) => {
+      for (let lineNumber = 3; lineNumber <= 22; lineNumber++) {
+        await dbCtx.db.insert("journalLines", {
+          orgId: ctx.orgId, journalEntryId: entryId, lineNumber, accountId: ctx.cash._id,
+          debitMinor: lineNumber % 2 === 1 ? 1 : 0,
+          creditMinor: lineNumber % 2 === 0 ? 1 : 0,
+          currency: "JOD", scale: 3,
+          accountingDate: ctx.currentPeriod.startDate + 10_000,
+        });
+      }
+    });
+
+    const { page, lineIndexes } = await ctx.asOwner.run(async (runCtx) => {
+      const lineIndexes: string[] = [];
+      const originalQuery = runCtx.db.query.bind(runCtx.db);
+      const db = {
+        ...runCtx.db,
+        query: (table: Parameters<typeof runCtx.db.query>[0]) => {
+          const builder = originalQuery(table);
+          if (table !== "journalLines") return builder;
+          return new Proxy(builder, {
+            get(target, property) {
+              if (property === "withIndex") {
+                return (index: string, range: unknown) => {
+                  lineIndexes.push(index);
+                  return target.withIndex(index as never, range as never);
+                };
+              }
+              return Reflect.get(target, property);
+            },
+          });
+        },
+      } as typeof runCtx.db;
+      const handler = (listJournalEntries as unknown as {
+        _handler: (
+          handlerCtx: typeof runCtx,
+          args: {
+            orgId: Id<"organizations">;
+            accountId: Id<"chartOfAccounts">;
+            paginationOpts: { numItems: number; cursor: string | null };
+          }
+        ) => Promise<{ page: Array<{ _id: Id<"journalEntries"> }> }>;
+      })._handler;
+      const result = await handler({ ...runCtx, db }, {
+        orgId: ctx.orgId,
+        accountId: ctx.revenue._id,
+        paginationOpts: { numItems: 1, cursor: null },
+      });
+      return { page: result.page, lineIndexes };
+    });
+
+    expect(page.map((entry) => entry._id)).toEqual([entryId]);
+    expect(lineIndexes).toEqual(["by_org_account_date", "by_journal_entry_account"]);
+  });
+
   test("account-filtered entries invoke paginate only once with duplicate account lines", async () => {
     const ctx = await seedDealer("Single Paginate Dealer", "glsinglepage");
     const date = ctx.currentPeriod.startDate + 10_000;

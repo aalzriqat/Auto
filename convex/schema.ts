@@ -755,6 +755,7 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_journal_entry", ["journalEntryId"])
+    .index("by_journal_entry_account", ["journalEntryId", "accountId"])
     .index("by_org_account", ["orgId", "accountId"])
     .index("by_org_account_date", ["orgId", "accountId", "accountingDate"])
     .index("by_org_customer", ["orgId", "customerId"])
