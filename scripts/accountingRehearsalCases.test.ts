@@ -236,6 +236,9 @@ type Defects = {
   cashRefundRecognizedAsRevenue?: boolean;
   cashRefundAllocatesIncoming?: boolean;
   cashRefundCollectionWrongAmount?: boolean;
+  cashRefundPostsStrayBalanceEntry?: boolean;
+  cashDepositLeavesVehicleAvailable?: boolean;
+  cashRefundLeavesVehicleReserved?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
   eraseOnChequeReturn?: boolean;
   /** A returned cheque posts nothing at all — the books still say money arrived. */
@@ -578,6 +581,13 @@ function makeBackend(defects: Defects = {}) {
     deposit.refundedAmountMinor += payable;
     deposit.releaseCount += 1;
     if (deposit.freeMinor === 0 && deposit.committedMinor === 0) deposit.status = args.resolution;
+    if (deposit._id === certifiedCashRefundDepositId && !defects.cashRefundLeavesVehicleReserved) {
+      const vehicle = vehicles.get(deposit.vehicleId);
+      if (vehicle) {
+        vehicle.status = "AVAILABLE";
+        vehicle.preHoldStatus = undefined;
+      }
+    }
     if (periodStatus === "OPEN") {
       postRefundToTheBooks(deposit, payable, false);
       if (deposit._id === certifiedCashRefundDepositId &&
@@ -618,6 +628,12 @@ function makeBackend(defects: Defects = {}) {
       post("REFUND_REVENUE_ERROR", "deposits", deposit._id, [
         { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", debitMinor: payable, customerId: deposit.customerId },
         { key: "SALES_REVENUE", creditMinor: payable, customerId: deposit.customerId },
+      ]);
+    }
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundPostsStrayBalanceEntry) {
+      post("REFUND_BALANCE_ERROR", "deposits", deposit._id, [
+        { key: "BANK_ACCOUNT", debitMinor: payable, customerId: deposit.customerId },
+        { key: "UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY", creditMinor: payable, customerId: deposit.customerId },
       ]);
     }
     if (defects.duplicateRefundJournal && !isReplayDuplicate) {
@@ -1129,6 +1145,7 @@ function makeBackend(defects: Defects = {}) {
         if (madeVehicle.ok) {
           vehicles.set(String(madeVehicle.value), {
             sourceType: args.sourceType,
+            status: args.status,
             purchasePrice: Number(args.sourceType === "SOURCED" ? args.sourceCost : (args.purchasePrice ?? 0)),
           });
           if (/^rehearsal-m486c[123]-vehicle-/.test(String(args.idempotencyKey ?? "")) &&
@@ -1141,6 +1158,8 @@ function makeBackend(defects: Defects = {}) {
           }
         }
         return madeVehicle;
+      case "vehicles:get":
+        return { ok: true as const, value: vehicles.get(String(args.vehicleId)) ?? null };
       case "quotes:saveQuote": {
         const quoteId = id("quote");
         quoteVehicle.set(quoteId, String(args.vehicleId ?? ""));
@@ -1211,6 +1230,13 @@ function makeBackend(defects: Defects = {}) {
           status: "HELD",
           amountMinor,
         });
+        if (depositId === certifiedCashRefundDepositId && !defects.cashDepositLeavesVehicleAvailable) {
+          const vehicle = vehicles.get(quoteVehicle.get(String(args.quoteId)) ?? "");
+          if (vehicle) {
+            vehicle.preHoldStatus = vehicle.status;
+            vehicle.status = "RESERVED";
+          }
+        }
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, depositId);
         return { ok: true as const, value: depositId };
       }
@@ -2107,9 +2133,14 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
 
   test.each([
     ["cashRefundAllowsCreator", /creator was not refused/],
-    ["cashRefundRecognizedAsRevenue", /refunded (balance|income)/],
+    ["cashRefundRecognizedAsRevenue", /exactly the receipt and refund events|refunded (balance|income)/],
     ["cashRefundAllocatesIncoming", /refund does not allocate|refund creates no incoming payment allocation/],
     ["cashRefundCollectionWrongAmount", /refund collection payment major amount/],
+    ["cashRefundPostsStrayBalanceEntry", /exactly the receipt and refund events|returns every account\/currency/],
+    ["cashDepositLeavesVehicleAvailable", /held deposit reserves the owned car/],
+    ["cashRefundLeavesVehicleReserved", /refund restores available stock/],
+    ["cashDepositPaymentWrongCustomer", /incoming payment customer/],
+    ["cashDepositPaymentWrongMethod", /incoming payment method/],
     ["refundPostsWrongAccount", /cash refund|journal lines are not exactly/i],
   ] as const)("M486C3 rejects %s in an owned cash quote refund", async (defect, diagnostic) => {
     const results = await runAgainst({ [defect]: true });

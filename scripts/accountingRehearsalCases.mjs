@@ -2091,11 +2091,24 @@ export async function runRehearsalCases(ctx) {
     expectEqual(incoming?.payment?.direction, "IN", "M486C3 incoming payment direction");
     expectEqual(incoming?.payment?.status, "SETTLED", "M486C3 incoming payment status");
     expectEqual(incoming?.payment?.amountMinor, 200_000, "M486C3 incoming payment amount");
+    expectEqual(String(incoming?.payment?.orgId), String(orgId), "M486C3 incoming payment tenant");
+    expectEqual(incoming?.payment?.payerType, "CUSTOMER", "M486C3 incoming payment payer");
+    expectEqual(String(incoming?.payment?.customerId), String(customerId), "M486C3 incoming payment customer");
+    expectEqual(incoming?.payment?.method, "CASH", "M486C3 incoming payment method");
+    expectEqual(incoming?.payment?.currency, "JOD", "M486C3 incoming payment currency");
+    expectEqual(incoming?.payment?.scale, 3, "M486C3 incoming payment scale");
+    expectEqual(incoming?.payment?.idempotencyKey, `deposit_received_${depositId}`,
+      "M486C3 incoming payment idempotency identity");
+    expectEqual(incoming?.payment?.externalReference, `Deposit ${depositId}`,
+      "M486C3 incoming payment source reference");
     expectEqual(incoming?.unappliedMinor, 200_000, "M486C3 held payment remains unapplied");
     const heldAllocations = await ownerMust("query", "subledger:listAllocations", {
       orgId, paymentId: held.canonicalPaymentId,
     });
     expectEqual(heldAllocations?.length, 0, "M486C3 held payment has no invoice allocation");
+    const heldVehicle = await ownerMust("query", "vehicles:get", { orgId, vehicleId });
+    expectEqual(heldVehicle?.status, "RESERVED", "M486C3 held deposit reserves the owned car");
+    expectEqual(heldVehicle?.preHoldStatus, "AVAILABLE", "M486C3 hold remembers available stock");
     const heldBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const heldIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
     if (![openingBalance, heldBalance].every((report) => Array.isArray(report?.rows))) {
@@ -2141,6 +2154,11 @@ export async function runRehearsalCases(ctx) {
     expectEqual(refunded.releasedAmountMinor, 200_000, "M486C3 released amount");
     expectEqual(refunded.refundedAmountMinor, 200_000, "M486C3 refunded amount");
     expectEqual(refunded.releaseCount, 1, "M486C3 one refund decision");
+    const refundedVehicle = await ownerMust("query", "vehicles:get", { orgId, vehicleId });
+    expectEqual(refundedVehicle?.status, "AVAILABLE", "M486C3 refund restores available stock");
+    if (refundedVehicle?.preHoldStatus != null) {
+      fail("M486C3 refund left a stale vehicle pre-hold status");
+    }
     const incomingAfterRefund = await ownerMust("query", "subledger:getPaymentBalance", {
       orgId, paymentId: held.canonicalPaymentId,
     });
@@ -2165,6 +2183,15 @@ export async function runRehearsalCases(ctx) {
       { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: 200_000 },
       { key: "CASH_ON_HAND", creditMinor: 200_000 },
     ], { currency: "JOD", decimals: 3, what: "M486C3 cash refund", customerId });
+    const depositEvents = await ownerMust("query", "accountingLedger:listAccountingEvents", {
+      orgId, sourceType: "deposits", sourceId: String(depositId), limit: 200,
+    });
+    if (!Array.isArray(depositEvents) || depositEvents.length >= 200) {
+      unproven("M486C3 deposit event listing is absent or truncated");
+    }
+    expectEqual(JSON.stringify(depositEvents.map((event) => event.eventType).sort()),
+      JSON.stringify(["DEPOSIT_RECEIVED", "DEPOSIT_REFUNDED"]),
+      "M486C3 exactly the receipt and refund events, with no extra deposit posting");
     const payments = await listCollectionPayments({ orgId, ownerMust });
     const outbound = payments.filter((p) => p.direction === "OUT" && p.method === "REFUND" &&
       String(p.reference ?? "").includes(String(depositId)));
@@ -2192,6 +2219,8 @@ export async function runRehearsalCases(ctx) {
     const afterBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const afterIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
     if (!Array.isArray(afterBalance?.rows)) fail("M486C3 public balance unavailable after refund");
+    expectSameAccountBalances(openingBalance, afterBalance,
+      "M486C3 refund returns every account/currency to its post-acquisition balance");
     for (const [key, heldDelta] of [
       ["CASH_ON_HAND", 200_000], ["CUSTOMER_DEPOSITS_LIABILITY", 200_000],
       ["ACCOUNTS_RECEIVABLE_CUSTOMERS", 0], ["SALES_REVENUE", 0], ["COST_OF_VEHICLES_SOLD", 0],
@@ -3140,6 +3169,28 @@ async function ownedCashJodWindow({ caseId, orgId, ownerMust }) {
   const fromDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth(), 1);
   const toDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0, 23, 59, 59, 999);
   return { fromDate, toDate, reportArgs: { orgId, fromDate, toDate } };
+}
+
+/** Compare every consumer-visible account/currency balance, including accounts absent when zero. */
+function expectSameAccountBalances(before, after, what) {
+  const balances = (report) => {
+    if (!Array.isArray(report?.rows)) fail(`${what}: trial-balance rows are unavailable`);
+    const byAccount = new Map();
+    for (const row of report.rows) {
+      if (!row.accountId || typeof row.currency !== "string" || !Number.isFinite(row.netMinor)) {
+        fail(`${what}: trial-balance account, currency or net amount is unavailable`);
+      }
+      const key = JSON.stringify([String(row.accountId), row.currency]);
+      if (byAccount.has(key)) fail(`${what}: duplicate account/currency row`);
+      byAccount.set(key, row.netMinor);
+    }
+    return byAccount;
+  };
+  const beforeRows = balances(before);
+  const afterRows = balances(after);
+  for (const key of new Set([...beforeRows.keys(), ...afterRows.keys()])) {
+    expectEqual(afterRows.get(key) ?? 0, beforeRows.get(key) ?? 0, `${what}: ${key}`);
+  }
 }
 
 /** account id → system key, and system key → account id, from the org's real chart. */
