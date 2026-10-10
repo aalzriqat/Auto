@@ -173,8 +173,16 @@ type Defects = {
   cashSaleMissingInvoice?: boolean;
   /** The sale has two invoices for the same source. */
   cashSaleDuplicateInvoice?: boolean;
+  /** Another customer's invoice claims the same sale source. */
+  cashSaleCrossCustomerDuplicateInvoice?: boolean;
+  /** A financier receivable also claims the cash-sale source. */
+  cashSaleOtherPayerDuplicateInvoice?: boolean;
+  /** The tenant-wide public page could conceal another sale invoice. */
+  cashSaleInvoiceListingTruncated?: boolean;
   /** The invoice belongs to a different customer. */
   cashSaleInvoiceWrongCustomer?: boolean;
+  /** The sale's AR journal belongs to a different customer. */
+  cashSaleWrongJournalCustomer?: boolean;
   /** The chart's public revenue code is wrong while its system key is right. */
   cashSaleWrongAccountCode?: boolean;
   /** The P&L total is right, but its vehicle revenue row is absent. */
@@ -894,6 +902,19 @@ function makeBackend(defects: Defects = {}) {
             const duplicateId = id("rdoc");
             financeReceivables.set(duplicateId, { ...financeReceivables.get(invoiceId), _id: duplicateId });
           }
+          if (defects.cashSaleCrossCustomerDuplicateInvoice) {
+            const duplicateId = id("rdoc");
+            financeReceivables.set(duplicateId, {
+              ...financeReceivables.get(invoiceId), _id: duplicateId, customerId: "other-customer",
+            });
+          }
+          if (defects.cashSaleOtherPayerDuplicateInvoice) {
+            const duplicateId = id("rdoc");
+            financeReceivables.set(duplicateId, {
+              ...financeReceivables.get(invoiceId), _id: duplicateId,
+              customerId: undefined, payerType: "FINANCE_COMPANY",
+            });
+          }
         }
         if (args.quoteId && Number(args.salePrice) === 12_500) certifiedCashSalePosted = true;
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, saleId);
@@ -913,14 +934,17 @@ function makeBackend(defects: Defects = {}) {
             ? [
                 // Agent basis: gross arrives, the supplier's share is a
                 // liability from the instant it lands, the spread is commission.
-                { key: args.quoteId ? "ACCOUNTS_RECEIVABLE_CUSTOMERS" : "CASH_ON_HAND", debitMinor: priceMinor },
+                { key: args.quoteId ? "ACCOUNTS_RECEIVABLE_CUSTOMERS" : "CASH_ON_HAND", debitMinor: priceMinor,
+                  customerId: args.quoteId && defects.cashSaleWrongJournalCustomer ? "other-customer" : String(args.customerId) },
                 { key: "ACCOUNTS_PAYABLE_SUPPLIERS", creditMinor: costMinor },
                 { key: "CONSIGNMENT_COMMISSION_REVENUE", creditMinor: priceMinor - costMinor },
               ]
             : [
                 // Owned basis — WRONG for a consigned car, and it balances.
-                { key: args.quoteId ? "ACCOUNTS_RECEIVABLE_CUSTOMERS" : "CASH_ON_HAND", debitMinor: priceMinor },
-                { key: args.quoteId && defects.cashSaleWrongRevenueAccount ? "MISCELLANEOUS_INCOME" : "SALES_REVENUE", creditMinor: priceMinor },
+                { key: args.quoteId ? "ACCOUNTS_RECEIVABLE_CUSTOMERS" : "CASH_ON_HAND", debitMinor: priceMinor,
+                  customerId: args.quoteId && defects.cashSaleWrongJournalCustomer ? "other-customer" : String(args.customerId) },
+                { key: args.quoteId && defects.cashSaleWrongRevenueAccount ? "MISCELLANEOUS_INCOME" : "SALES_REVENUE",
+                  creditMinor: priceMinor, customerId: String(args.customerId) },
                 { key: "COST_OF_VEHICLES_SOLD", debitMinor: costMinor },
                 { key: "VEHICLE_INVENTORY", creditMinor: costMinor },
               ],
@@ -1413,6 +1437,7 @@ function makeBackend(defects: Defects = {}) {
         const rid = id("rdoc");
         financeReceivables.set(rid, {
           _id: rid,
+          orgId: app.orgId,
           sourceType: "finance_application",
           sourceId: app._id,
           payerType: "FINANCE_COMPANY",
@@ -1429,9 +1454,13 @@ function makeBackend(defects: Defects = {}) {
       case "applications:get":
         return { ok: true as const, value: financeApps.get(String(args.applicationId)) ?? null };
       case "subledger:listReceivables":
+        if (defects.cashSaleInvoiceListingTruncated && !args.customerId) {
+          return { ok: true as const, value: Array.from({ length: 200 }, (_, index) => ({ _id: `other-${index}` })) };
+        }
         return {
           ok: true as const,
-          value: [...financeReceivables.values()].filter((r) => !args.customerId || r.customerId === String(args.customerId))
+          value: [...financeReceivables.values()].filter((r) => r.orgId === String(args.orgId) &&
+            (!args.customerId || r.customerId === String(args.customerId)))
             .slice(0, Number(args.limit ?? 50)),
         };
       case "subledger:getReceivableBalance": {
@@ -1823,13 +1852,22 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
   test.each([
     ["cashSaleMissingInvoice", /invoice|receivable/i],
     ["cashSaleDuplicateInvoice", /invoice|receivable/i],
+    ["cashSaleCrossCustomerDuplicateInvoice", /invoice|receivable/i],
+    ["cashSaleOtherPayerDuplicateInvoice", /invoice|receivable/i],
     ["cashSaleInvoiceWrongCustomer", /invoice|receivable/i],
+    ["cashSaleWrongJournalCustomer", /customer dimension/i],
     ["cashSaleWrongAccountCode", /code/i],
     ["cashSaleReportMissingRevenueRow", /revenue row/i],
   ] as const)("M486C1 rejects %s", async (defect, diagnostic) => {
     const results = await runAgainst({ [defect]: true });
     expect(statusOf(results, "M486C1")).toBe("FAIL");
     expect(String(results.find((r) => r.id === "M486C1")?.detail)).toMatch(diagnostic);
+  });
+
+  test("M486C1 stays UNPROVEN when the tenant invoice listing hits its public cap", async () => {
+    const results = await runAgainst({ cashSaleInvoiceListingTruncated: true });
+    expect(statusOf(results, "M486C1")).toBe("UNPROVEN");
+    expect(String(results.find((r) => r.id === "M486C1")?.detail)).toMatch(/tenant invoice listing is absent or truncated/);
   });
 
   test("C1/C2 do not PASS when one worker never reached the backend (RG-01)", async () => {

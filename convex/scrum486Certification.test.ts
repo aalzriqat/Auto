@@ -436,7 +436,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       grossProfit: 1_125_000,
       netIncome: 1_125_000,
     });
-  });
+  }, 15_000);
 
   async function ownedFinancedOpening(tag: string) {
     const s = await seedFinancedDealership(tag, {

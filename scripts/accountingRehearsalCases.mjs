@@ -1719,9 +1719,11 @@ export async function runRehearsalCases(ctx) {
     const sale = await ownerMust("query", "sales:get", { orgId, saleId });
     expectEqual(sale?.status, "COMPLETED", "M486C1 public sale state");
     if (!sale?.canonicalReceivableDocumentId) fail("M486C1 sale has no canonical customer invoice");
-    const receivables = await ownerMust("query", "subledger:listReceivables", { orgId, customerId, limit: 200 });
+    // Search the tenant, not just this customer: a second invoice for the
+    // same sale under another customer is still a double collection claim.
+    const receivables = await ownerMust("query", "subledger:listReceivables", { orgId, limit: 200 });
     if (!Array.isArray(receivables) || receivables.length >= 200) {
-      unproven("M486C1 customer invoice listing is absent or truncated");
+      unproven("M486C1 tenant invoice listing is absent or truncated");
     }
     const invoices = receivables.filter((r) => r.sourceType === "sales" && String(r.sourceId) === String(saleId));
     expectEqual(invoices.length, 1, "M486C1 exactly one customer invoice for this sale");
@@ -1757,6 +1759,13 @@ export async function runRehearsalCases(ctx) {
       { key: "COST_OF_VEHICLES_SOLD", debitMinor: 10_000_000 },
       { key: "VEHICLE_INVENTORY", creditMinor: 10_000_000 },
     ], { currency: "JOD", decimals: 3, what: "M486C1 owned cash journal" });
+    // The posting rule gives the customer dimension to AR and revenue. COGS
+    // and inventory carry vehicleId instead, so checking every line would
+    // reject a valid product posting.
+    for (const key of ["ACCOUNTS_RECEIVABLE_CUSTOMERS", "SALES_REVENUE"]) {
+      const line = posted.lines.find((l) => keyOf.get(String(l.accountId)) === key);
+      expectEqual(String(line?.customerId), String(customerId), `M486C1 ${key} customer dimension`);
+    }
     const afterBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const afterIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
     const byKey = (report) => new Map((report?.rows ?? []).filter((r) => r.currency === "JOD")
