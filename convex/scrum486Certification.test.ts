@@ -97,6 +97,32 @@ async function completeCashSale(s: CashSeed, quoteId: Id<"quotes">, suffix: stri
   })) as Id<"sales">;
 }
 
+async function authorizedOtherTenant(s: CashSeed, tag: string) {
+  const clerkId = `${tag}_other_owner`;
+  const orgId = await s.t.run(async (ctx) => {
+    const otherOrgId = await ctx.db.insert("organizations", {
+      name: "Certification other tenant", createdAt: Date.now(),
+    });
+    await ctx.db.insert("subscriptions", {
+      orgId: otherOrgId, plan: "professional", status: "active",
+      createdAt: Date.now(), updatedAt: Date.now(),
+    });
+    await ctx.db.insert("orgSettings", {
+      orgId: otherOrgId, currency: "JOD", currencySymbol: "JD",
+      enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
+    });
+    const userId = await ctx.db.insert("users", {
+      clerkId, email: `${tag}.other@example.com`, name: "Other owner",
+    });
+    const roleId = await ctx.db.insert("roles", {
+      orgId: otherOrgId, name: "OWNER", permissions: [...OWNER_PERMS], isSystemOwnerRole: true,
+    });
+    await ctx.db.insert("memberships", { orgId: otherOrgId, userId, roleId });
+    return otherOrgId;
+  });
+  return { orgId, owner: s.t.withIdentity({ subject: clerkId, clerkId }) };
+}
+
 async function journalRows(s: CashSeed) {
   return await s.t.run(async (ctx) => {
     const entries = await ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect();
@@ -457,6 +483,30 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     });
     return { s, applicationId };
   }
+
+  test("owned configured financier × foreign application ID: neither tenant's forward or receipt changes", async () => {
+    const { s, applicationId } = await ownedFinancedOpening("s486foreignfinanced");
+    const other = await authorizedOtherTenant(s, "s486foreignfinanced");
+    const before = await dbSnapshot(s.t, Object.keys(schema.tables));
+
+    await expect(other.owner.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
+      orgId: other.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
+      expectedAmountMinor: 0, idempotencyKey: "s486-foreign-forward-denied",
+    })).rejects.toThrow(/Finance application not found in this organization/);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
+
+    await expect(other.owner.mutation(api.applications.confirmDisbursement, {
+      orgId: other.orgId, applicationId, disbursedAmountMinor: 12_500_000,
+      idempotencyKey: "s486-foreign-financier-receipt-denied",
+    })).rejects.toThrow(/Application not found/);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
+    expect(await trialBalanceNormalBalance(s)).toEqual({
+      "1210|JOD": 12_500_000,
+      "1400|JOD": -10_000_000,
+      "4100|JOD": 12_500_000,
+      "5100|JOD": 10_000_000,
+    });
+  });
 
   test("owned configured financier × no deposit: full approved amount is company AR, not customer AR", async () => {
     const { s, applicationId } = await ownedFinancedOpening("s486financednone");
@@ -1430,39 +1480,17 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       orgId: s.orgId, quoteId, amount: 200, method: "CASH",
       idempotencyKey: "s486-foreign-source-deposit",
     });
-    const otherClerkId = "s486foreignids_other_owner";
-    const otherOrgId = await s.t.run(async (ctx) => {
-      const orgId = await ctx.db.insert("organizations", {
-        name: "Certification other tenant", createdAt: Date.now(),
-      });
-      await ctx.db.insert("subscriptions", {
-        orgId, plan: "professional", status: "active",
-        createdAt: Date.now(), updatedAt: Date.now(),
-      });
-      await ctx.db.insert("orgSettings", {
-        orgId, currency: "JOD", currencySymbol: "JD",
-        enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
-      });
-      const userId = await ctx.db.insert("users", {
-        clerkId: otherClerkId, email: "s486foreignids.other@example.com", name: "Other owner",
-      });
-      const roleId = await ctx.db.insert("roles", {
-        orgId, name: "OWNER", permissions: [...OWNER_PERMS], isSystemOwnerRole: true,
-      });
-      await ctx.db.insert("memberships", { orgId, userId, roleId });
-      return orgId;
-    });
-    const otherOwner = s.t.withIdentity({ subject: otherClerkId, clerkId: otherClerkId });
+    const other = await authorizedOtherTenant(s, "s486foreignids");
     const before = await dbSnapshot(s.t, Object.keys(schema.tables));
 
-    await expect(otherOwner.mutation(api.deposits.create, {
-      orgId: otherOrgId, quoteId, amount: 200, method: "CASH",
+    await expect(other.owner.mutation(api.deposits.create, {
+      orgId: other.orgId, quoteId, amount: 200, method: "CASH",
       idempotencyKey: "s486-foreign-quote-denied",
     })).rejects.toThrow(/Quote not found in this organization/);
     expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
 
-    await expect(otherOwner.mutation(api.deposits.release, {
-      orgId: otherOrgId, depositId, resolution: "REFUNDED", refundMethod: "CASH",
+    await expect(other.owner.mutation(api.deposits.release, {
+      orgId: other.orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH",
       idempotencyKey: "s486-foreign-deposit-denied",
     })).rejects.toThrow(/Deposit not found in this organization/);
     expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
@@ -1470,8 +1498,8 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
 
     const saleId = await completeCashSale(s, quoteId, "foreign-sale-denial");
     const completedSale = await dbSnapshot(s.t, Object.keys(schema.tables));
-    await expect(otherOwner.mutation(api.sales.update, {
-      orgId: otherOrgId, saleId, status: "CANCELLED",
+    await expect(other.owner.mutation(api.sales.update, {
+      orgId: other.orgId, saleId, status: "CANCELLED",
     })).rejects.toThrow(/Sale not found in this organization/);
     expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(completedSale);
     expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["POSTED"]);
