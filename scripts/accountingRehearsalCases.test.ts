@@ -201,6 +201,12 @@ type Defects = {
   cashSaleWrongAccountCode?: boolean;
   /** The P&L total is right, but its vehicle revenue row is absent. */
   cashSaleReportMissingRevenueRow?: boolean;
+  /** The deposit stays held although the sale completes. */
+  cashDepositNotApplied?: boolean;
+  /** The deposit is marked applied but its liability never moves to AR. */
+  cashDepositApplicationMissingPosting?: boolean;
+  /** The GL application posts, but the collectible invoice remains at full price. */
+  cashDepositInvoiceNotReduced?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
   eraseOnChequeReturn?: boolean;
   /** A returned cheque posts nothing at all — the books still say money arrived. */
@@ -324,10 +330,10 @@ function makeBackend(defects: Defects = {}) {
     { _id: "acct_bank", code: "1010", type: "ASSET", name: "Bank", systemKey: "BANK_ACCOUNT", normalBalance: "DEBIT" },
     { _id: "acct_ar", code: "1200", type: "ASSET", name: "AR Customers", systemKey: "ACCOUNTS_RECEIVABLE_CUSTOMERS", normalBalance: "DEBIT" },
     { _id: "acct_2110", code: "2110", type: "LIABILITY", name: "Unapplied Customer Receipts", systemKey: "UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY", normalBalance: "CREDIT" },
-    { _id: "acct_depl", code: "2120", type: "LIABILITY", name: "Customer Deposits", systemKey: "CUSTOMER_DEPOSITS_LIABILITY", normalBalance: "CREDIT" },
+    { _id: "acct_depl", code: "2100", type: "LIABILITY", name: "Customer Deposits", systemKey: "CUSTOMER_DEPOSITS_LIABILITY", normalBalance: "CREDIT" },
     { _id: "acct_comm", code: "4200", type: "REVENUE", name: "Consignment Commission", systemKey: "CONSIGNMENT_COMMISSION_REVENUE", normalBalance: "CREDIT" },
     { _id: "acct_misc", code: "4900", type: "REVENUE", name: "Misc Income", systemKey: "MISCELLANEOUS_INCOME", normalBalance: "CREDIT" },
-    { _id: "acct_ap", code: "2100", type: "LIABILITY", name: "AP Suppliers", systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS", normalBalance: "CREDIT" },
+    { _id: "acct_ap", code: "2400", type: "LIABILITY", name: "AP Suppliers", systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS", normalBalance: "CREDIT" },
     { _id: "acct_rev", code: defects.cashSaleWrongAccountCode ? "4000" : "4100", type: "REVENUE", name: "Sales Revenue", systemKey: "SALES_REVENUE", normalBalance: "CREDIT" },
     { _id: "acct_cogs", code: "5100", type: "COGS", name: "COGS", systemKey: "COST_OF_VEHICLES_SOLD", normalBalance: "DEBIT" },
     { _id: "acct_inv", code: "1400", type: "ASSET", name: "Vehicle Inventory", systemKey: "VEHICLE_INVENTORY", normalBalance: "DEBIT" },
@@ -976,6 +982,23 @@ function makeBackend(defects: Defects = {}) {
               ],
           { payload: { saleAmountMinor: priceMinor } }
         );
+        if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c2-sale-")) {
+          const deposit = [...deposits.values()].find((row) => row.vehicleId === String(args.vehicleId) &&
+            row.customerId === String(args.customerId) && row.status === "HELD" && row.amountMinor === 200_000);
+          if (deposit && !defects.cashDepositNotApplied) {
+            deposit.status = "APPLIED";
+            deposit.freeMinor = 0;
+            if (!defects.cashDepositApplicationMissingPosting) {
+              post("DEPOSIT_APPLIED", "depositApplications", `${deposit._id}:${args.vehicleId}`, [
+                { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: 200_000, customerId: String(args.customerId) },
+                { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", creditMinor: 200_000, customerId: String(args.customerId) },
+              ]);
+            }
+            if (invoiceId && !defects.cashDepositInvoiceNotReduced) {
+              allocations.push({ receivableDocumentId: invoiceId, amountMinor: 200_000, status: "ACTIVE" });
+            }
+          }
+        }
         return { ok: true as const, value: saleId };
       }
       case "sales:get":
@@ -1021,7 +1044,7 @@ function makeBackend(defects: Defects = {}) {
             sourceType: args.sourceType,
             purchasePrice: Number(args.sourceType === "SOURCED" ? args.sourceCost : (args.purchasePrice ?? 0)),
           });
-          if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c1-vehicle-") &&
+          if (/^rehearsal-m486c[12]-vehicle-/.test(String(args.idempotencyKey ?? "")) &&
               !defects.cashSaleAcquisitionMissingPosting) {
             const costMinor = defects.cashSaleAcquisitionWrongAmount ? 9_000_000 : 10_000_000;
             post("VEHICLE_ACQUIRED", "vehicles", String(madeVehicle.value), [
@@ -1049,10 +1072,11 @@ function makeBackend(defects: Defects = {}) {
         // postings made while the books were shut. The fake did not post on
         // create, so nothing here could reproduce it. It does now.
         const amountMinor = Math.round(Number(args.amount) * MINOR_SCALE);
+        const depositCustomerId = String(args.customerId ?? quoteCustomer.get(String(args.quoteId)) ?? "");
         if (periodStatus === "OPEN") {
           post("DEPOSIT_RECEIVED", "deposits", depositId, [
-            { key: "CASH_ON_HAND", debitMinor: amountMinor, customerId: String(args.customerId ?? "") },
-            { key: "CUSTOMER_DEPOSITS_LIABILITY", creditMinor: amountMinor, customerId: String(args.customerId ?? "") },
+            { key: "CASH_ON_HAND", debitMinor: amountMinor, customerId: depositCustomerId },
+            { key: "CUSTOMER_DEPOSITS_LIABILITY", creditMinor: amountMinor, customerId: depositCustomerId },
           ]);
         }
         deposits.set(depositId, {
@@ -1060,11 +1084,12 @@ function makeBackend(defects: Defects = {}) {
           releasedAmountMinor: 0,
           refundedAmountMinor: 0,
           releaseCount: 0,
-          freeMinor: 2_000_000,
-          committedMinor: 1_000_000,
+          freeMinor: String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c2-deposit-") ? amountMinor : 2_000_000,
+          committedMinor: String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c2-deposit-") ? 0 : 1_000_000,
           vehicleId: quoteVehicle.get(String(args.quoteId)) ?? String(args.vehicleId ?? ""),
-          customerId: String(args.customerId ?? quoteCustomer.get(String(args.quoteId)) ?? ""),
+          customerId: depositCustomerId,
           status: "HELD",
+          amountMinor,
         });
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, depositId);
         return { ok: true as const, value: depositId };
@@ -1710,7 +1735,7 @@ describe("the rehearsal passes against a backend that behaves", () => {
     expect(declined.map((d) => `${d.id}: ${d.detail}`)).toEqual([]);
     // And it actually ran the cases rather than finding nothing to do.
     expect(results.map((r) => r.id).sort()).toEqual([...REQUIRED_REHEARSAL_CASE_IDS].sort());
-    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "FD1", "FD2", "C1", "C2"]) {
+    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "FD1", "FD2", "C1", "C2"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
   });
@@ -1916,6 +1941,23 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     const results = await runAgainst({ cashSaleInvoiceListingTruncated: true });
     expect(statusOf(results, "M486C1")).toBe("UNPROVEN");
     expect(String(results.find((r) => r.id === "M486C1")?.detail)).toMatch(/tenant invoice listing is absent or truncated/);
+  });
+
+  test.each([
+    ["cashDepositNotApplied", /deposit applied to sale/],
+    ["cashDepositApplicationMissingPosting", /DEPOSIT_APPLIED|journal/i],
+    ["cashDepositInvoiceNotReduced", /invoice outstanding after deposit/],
+    ["cashSaleWrongRevenueAccount", /journal lines are not exactly/],
+  ] as const)("M486C2 rejects %s", async (defect, diagnostic) => {
+    const results = await runAgainst({ [defect]: true });
+    expect(statusOf(results, "M486C2")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "M486C2")?.detail)).toMatch(diagnostic);
+  });
+
+  test("M486C2 stays UNPROVEN when the tenant invoice listing reaches its public cap", async () => {
+    const results = await runAgainst({ cashSaleInvoiceListingTruncated: true });
+    expect(statusOf(results, "M486C2")).toBe("UNPROVEN");
+    expect(String(results.find((r) => r.id === "M486C2")?.detail)).toMatch(/tenant invoice listing is absent or truncated/);
   });
 
   test("C1/C2 do not PASS when one worker never reached the backend (RG-01)", async () => {
