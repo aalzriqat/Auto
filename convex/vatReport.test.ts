@@ -235,6 +235,44 @@ describe("vatReport.generateVatSummary", () => {
     expect(queriedTables.filter((table) => table === "journalLines")).toHaveLength(1);
   });
 
+  test("more than 512 distinct dated parents select the bulk path without rereading lines", async () => {
+    const { t, orgId, userId, salesTaxPayable } = await seedDealer();
+    const date = Date.UTC(2025, 4, 10);
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 513; index++) {
+        const journalEntryId = await ctx.db.insert("journalEntries", {
+          orgId, journalNumber: `FALLBACK-${index}`, accountingDate: date,
+          sourceType: "test", sourceId: `fallback-${index}`, category: "SYSTEM",
+          memo: "Bulk fallback boundary", status: "POSTED", currency: "JOD",
+          postedBy: userId, postedAt: date, createdAt: date + index,
+        });
+        await ctx.db.insert("journalLines", {
+          orgId, journalEntryId, lineNumber: 1, accountId: salesTaxPayable._id,
+          debitMinor: 0, creditMinor: 1, currency: "JOD", scale: 3,
+          accountingDate: date,
+        });
+      }
+    });
+
+    const { rows, queriedTables } = await t.run(async (ctx) => {
+      const queriedTables: string[] = [];
+      const originalQuery = ctx.db.query.bind(ctx.db);
+      const db = {
+        get: ctx.db.get.bind(ctx.db),
+        query: (table: Parameters<typeof ctx.db.query>[0]) => {
+          queriedTables.push(table);
+          return originalQuery(table);
+        },
+      } as typeof ctx.db;
+      const rows = await getPostedLines({ ...ctx, db }, orgId, date, date);
+      return { rows, queriedTables };
+    });
+
+    expect(rows).toHaveLength(513);
+    expect(queriedTables.filter((table) => table === "journalLines")).toHaveLength(1);
+    expect(queriedTables.filter((table) => table === "journalEntries")).toHaveLength(2);
+  });
+
   test("exactly 128 dated lines retain sentinel and creation-order parity on the targeted path", async () => {
     const { t, orgId, salesTaxPayable, seedLine } = await seedDealer();
     const date = Date.UTC(2025, 4, 10);
