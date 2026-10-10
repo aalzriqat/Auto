@@ -628,6 +628,38 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(income.cogsRows).toEqual([]);
   });
 
+  test("SOURCED direct settlement × cancellation before supplier receipt reverses the claim", async () => {
+    const { s, applicationId } = await sourcedFinancedOpening("s486directcancel", "DIRECT_TO_SUPPLIER");
+    const application = await s.t.run((ctx) => ctx.db.get(applicationId));
+    const saleId = application?.finalizedSaleId;
+    expect(saleId).toBeDefined();
+    const claim = await s.t.run((ctx) => ctx.db.query("vehicleSupplierReceivables")
+      .withIndex("by_sale", (q) => q.eq("saleId", saleId!)).unique());
+    expect(claim).toMatchObject({ amountDue: 2_500, status: "OPEN" });
+    expect(await eventStatuses(s, "SALE_COMPLETED", saleId!)).toEqual(["POSTED"]);
+
+    await s.owner.as.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId, applicationId, reason: "Certification before supplier collection",
+      idempotencyKey: "s486-direct-before-supplier-receipt-cancel",
+    });
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+    expect((await s.t.run((ctx) => ctx.db.get(saleId!)))?.status).toBe("CANCELLED");
+    expect((await s.t.run((ctx) => ctx.db.get(claim!._id)))?.status).toBe("CANCELLED");
+    expect(await eventStatuses(s, "SALE_COMPLETED", saleId!)).toEqual(["REVERSED"]);
+    const rows = await journalRows(s);
+    expectLiteralRows(rows, [
+      { account: "1240", currency: "JOD", debit: 2_500_000, credit: 0, entryStatus: "REVERSED" },
+      { account: "4170", currency: "JOD", debit: 0, credit: 2_500_000, entryStatus: "REVERSED" },
+      { account: "1240", currency: "JOD", debit: 0, credit: 2_500_000, entryStatus: "POSTED" },
+      { account: "4170", currency: "JOD", debit: 2_500_000, credit: 0, entryStatus: "POSTED" },
+    ]);
+    expectBalanced(rows);
+    expect(await trialBalanceNormalBalance(s)).toEqual({});
+    expect(await publicIncomeStatement(s)).toMatchObject({
+      totalRevenue: 0, totalCogs: 0, grossProfit: 0, netIncome: 0,
+    });
+  });
+
   test("SOURCED direct settlement × supplier receipt: claim clears, duplicate and premature cancellation refuse", async () => {
     const { s, applicationId } = await sourcedFinancedOpening("s486directreceipt", "DIRECT_TO_SUPPLIER");
     const application = await s.t.run((ctx) => ctx.db.get(applicationId));
