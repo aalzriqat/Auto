@@ -407,8 +407,8 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     });
   });
 
-  test("owned configured financier × no deposit: full approved amount is company AR, not customer AR", async () => {
-    const s = await seedFinancedDealership("s486financednone", {
+  async function ownedFinancedOpening(tag: string) {
+    const s = await seedFinancedDealership(tag, {
       modules: MODULES,
       ownerPerms: OWNER_PERMS,
       actors: {},
@@ -439,7 +439,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       legalInvoiceNumber: `CERT-${applicationId}`, legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
     });
     const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
-      expectedCurrency: "JOD", idempotencyKey: "s486-financed-zero-fee", orgId: s.orgId, applicationId,
+      expectedCurrency: "JOD", idempotencyKey: `${tag}-zero-fee`, orgId: s.orgId, applicationId,
       feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER",
       accountingTreatment: "SELLING_EXPENSE", deductedFromSettlement: false,
       actualAmountMinor: 0, description: "No closing costs.",
@@ -448,8 +448,13 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       orgId: s.orgId, feeId, notes: "No fee to settle.",
     });
     await s.owner.as.mutation(api.applications.finalizeDeal, {
-      idempotencyKey: "s486-financed-finalize", orgId: s.orgId, applicationId,
+      idempotencyKey: `${tag}-finalize`, orgId: s.orgId, applicationId,
     });
+    return { s, applicationId };
+  }
+
+  test("owned configured financier × no deposit: full approved amount is company AR, not customer AR", async () => {
+    const { s, applicationId } = await ownedFinancedOpening("s486financednone");
 
     const application = await s.t.run((ctx) => ctx.db.get(applicationId));
     expect(application?.status).toBe("CLOSED");
@@ -486,6 +491,46 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       totalCogs: 10_000_000,
       grossProfit: 2_500_000,
       netIncome: 2_500_000,
+    });
+  });
+
+  test("owned configured financier × no deposit × cancellation before receipt: finance AR and sale reverse", async () => {
+    const { s, applicationId } = await ownedFinancedOpening("s486financecancel");
+    const application = await s.t.run((ctx) => ctx.db.get(applicationId));
+    const saleId = application?.finalizedSaleId;
+    expect(saleId).toBeDefined();
+    expect(await eventStatuses(s, "SALE_COMPLETED", saleId!)).toEqual(["POSTED"]);
+
+    await s.owner.as.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId, applicationId, reason: "Certification before financier receipt",
+      idempotencyKey: "s486-finance-before-receipt-cancel",
+    });
+
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+    expect((await s.t.run((ctx) => ctx.db.get(saleId!)))?.status).toBe("CANCELLED");
+    expect(await eventStatuses(s, "SALE_COMPLETED", saleId!)).toEqual(["REVERSED"]);
+    const invoice = await s.t.run((ctx) => ctx.db.query("receivableDocuments")
+      .withIndex("by_org_source", (q) => q.eq("orgId", s.orgId)
+        .eq("sourceType", "finance_application").eq("sourceId", applicationId))
+      .unique());
+    expect(invoice).toMatchObject({
+      payerType: "FINANCE_COMPANY", originalAmountMinor: 12_500_000, status: "CANCELLED",
+    });
+    const rows = await journalRows(s);
+    expectLiteralRows(rows, [
+      { account: "1210", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "REVERSED" },
+      { account: "4100", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "REVERSED" },
+      { account: "5100", currency: "JOD", debit: 10_000_000, credit: 0, entryStatus: "REVERSED" },
+      { account: "1400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "REVERSED" },
+      { account: "1210", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
+      { account: "4100", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "5100", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
+      { account: "1400", currency: "JOD", debit: 10_000_000, credit: 0, entryStatus: "POSTED" },
+    ]);
+    expectBalanced(rows);
+    expect(await trialBalanceNormalBalance(s)).toEqual({});
+    expect(await publicIncomeStatement(s)).toMatchObject({
+      totalRevenue: 0, totalCogs: 0, grossProfit: 0, netIncome: 0,
     });
   });
 
