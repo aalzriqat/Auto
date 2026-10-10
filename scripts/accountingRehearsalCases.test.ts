@@ -165,6 +165,42 @@ type Defects = {
   postConsignedAsOwned?: boolean;
   /** The consigned sale posts no journal at all. */
   silentConsignedSale?: boolean;
+  /** A quoted owned cash sale credits unrelated income instead of vehicle revenue. */
+  cashSaleWrongRevenueAccount?: boolean;
+  /** The public income statement understates the certified sale by one minor unit. */
+  cashSaleReportMisstatesProfit?: boolean;
+  /** Vehicle creation records a cost but never capitalizes inventory. */
+  cashSaleAcquisitionMissingPosting?: boolean;
+  /** Vehicle acquisition posts a balanced but understated inventory amount. */
+  cashSaleAcquisitionWrongAmount?: boolean;
+  /** The chart exposes the wrong dealer-facing cash code. */
+  cashSaleWrongCashAccountCode?: boolean;
+  /** The sale balances, but the public inventory control retains one minor unit. */
+  cashSaleInventoryReportNotCleared?: boolean;
+  /** The sale posts AR but has no collectible canonical customer invoice. */
+  cashSaleMissingInvoice?: boolean;
+  /** The sale has two invoices for the same source. */
+  cashSaleDuplicateInvoice?: boolean;
+  /** Another customer's invoice claims the same sale source. */
+  cashSaleCrossCustomerDuplicateInvoice?: boolean;
+  /** A financier receivable also claims the cash-sale source. */
+  cashSaleOtherPayerDuplicateInvoice?: boolean;
+  /** The tenant-wide public page could conceal another sale invoice. */
+  cashSaleInvoiceListingTruncated?: boolean;
+  /** The invoice belongs to a different customer. */
+  cashSaleInvoiceWrongCustomer?: boolean;
+  /** The sale's AR journal belongs to a different customer. */
+  cashSaleWrongJournalCustomer?: boolean;
+  /** The revenue line belongs to a different customer while AR is correct. */
+  cashSaleWrongRevenueCustomer?: boolean;
+  /** The sale journals a different vehicle while monetary totals remain correct. */
+  cashSaleWrongJournalVehicle?: boolean;
+  /** AR and revenue carry a different salesperson from the completed sale. */
+  cashSaleWrongJournalSalesperson?: boolean;
+  /** The chart's public revenue code is wrong while its system key is right. */
+  cashSaleWrongAccountCode?: boolean;
+  /** The P&L total is right, but its vehicle revenue row is absent. */
+  cashSaleReportMissingRevenueRow?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
   eraseOnChequeReturn?: boolean;
   /** A returned cheque posts nothing at all — the books still say money arrived. */
@@ -280,9 +316,11 @@ function makeBackend(defects: Defects = {}) {
   const MINOR_SCALE = 1000;
   const LINE_SCALE = defects.linesAtWrongScale ? 2 : 3;
   const vehicles = new Map<string, Record<string, any>>();
+  const sales = new Map<string, Record<string, any>>();
+  let certifiedCashSalePosted = false;
   /** The chart, keyed the way the product keys it, so lines resolve to system keys. */
   const CHART = [
-    { _id: "acct_cash", code: "1000", type: "ASSET", name: "Cash", systemKey: "CASH_ON_HAND", normalBalance: "DEBIT" },
+    { _id: "acct_cash", code: defects.cashSaleWrongCashAccountCode ? "1000" : "1100", type: "ASSET", name: "Cash", systemKey: "CASH_ON_HAND", normalBalance: "DEBIT" },
     { _id: "acct_bank", code: "1010", type: "ASSET", name: "Bank", systemKey: "BANK_ACCOUNT", normalBalance: "DEBIT" },
     { _id: "acct_ar", code: "1200", type: "ASSET", name: "AR Customers", systemKey: "ACCOUNTS_RECEIVABLE_CUSTOMERS", normalBalance: "DEBIT" },
     { _id: "acct_2110", code: "2110", type: "LIABILITY", name: "Unapplied Customer Receipts", systemKey: "UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY", normalBalance: "CREDIT" },
@@ -290,9 +328,9 @@ function makeBackend(defects: Defects = {}) {
     { _id: "acct_comm", code: "4200", type: "REVENUE", name: "Consignment Commission", systemKey: "CONSIGNMENT_COMMISSION_REVENUE", normalBalance: "CREDIT" },
     { _id: "acct_misc", code: "4900", type: "REVENUE", name: "Misc Income", systemKey: "MISCELLANEOUS_INCOME", normalBalance: "CREDIT" },
     { _id: "acct_ap", code: "2100", type: "LIABILITY", name: "AP Suppliers", systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS", normalBalance: "CREDIT" },
-    { _id: "acct_rev", code: "4000", type: "REVENUE", name: "Sales Revenue", systemKey: "SALES_REVENUE", normalBalance: "CREDIT" },
-    { _id: "acct_cogs", code: "5000", type: "EXPENSE", name: "COGS", systemKey: "COST_OF_VEHICLES_SOLD", normalBalance: "DEBIT" },
-    { _id: "acct_inv", code: "1300", type: "ASSET", name: "Vehicle Inventory", systemKey: "VEHICLE_INVENTORY", normalBalance: "DEBIT" },
+    { _id: "acct_rev", code: defects.cashSaleWrongAccountCode ? "4000" : "4100", type: "REVENUE", name: "Sales Revenue", systemKey: "SALES_REVENUE", normalBalance: "CREDIT" },
+    { _id: "acct_cogs", code: "5100", type: "COGS", name: "COGS", systemKey: "COST_OF_VEHICLES_SOLD", normalBalance: "DEBIT" },
+    { _id: "acct_inv", code: "1400", type: "ASSET", name: "Vehicle Inventory", systemKey: "VEHICLE_INVENTORY", normalBalance: "DEBIT" },
     { _id: "acct_fa", code: "1500", type: "ASSET", name: "Fixed Assets", systemKey: "FIXED_ASSETS", normalBalance: "DEBIT" },
     { _id: "acct_cap", code: "3000", type: "EQUITY", name: "Partner Capital", systemKey: "PARTNER_CAPITAL", normalBalance: "CREDIT" },
     { _id: "acct_draw", code: "3100", type: "EQUITY", name: "Partner Drawings", systemKey: "PARTNER_DRAWINGS", normalBalance: "DEBIT" },
@@ -334,7 +372,7 @@ function makeBackend(defects: Defects = {}) {
   let seq = 0;
   const id = (p: string) => `${p}_${++seq}`;
 
-  type Line = { key: string; debitMinor?: number; creditMinor?: number; customerId?: string };
+  type Line = { key: string; debitMinor?: number; creditMinor?: number; customerId?: string; vehicleId?: string; salespersonId?: string };
   /** One economic occurrence: an event, its entry, its lines — all linked. */
   function post(
     eventType: string,
@@ -371,11 +409,14 @@ function makeBackend(defects: Defects = {}) {
         journalEntryId: entryId,
         lineNumber: i + 1,
         accountId: accountIdOf(l.key),
+        accountingDate: Date.now(),
         debitMinor: l.debitMinor ?? 0,
         creditMinor: l.creditMinor ?? 0,
         currency: ORG_CURRENCY,
         scale: LINE_SCALE,
         customerId: l.customerId,
+        vehicleId: l.vehicleId,
+        salespersonId: l.salespersonId,
       }))
     );
     return { eventId, entryId };
@@ -395,6 +436,8 @@ function makeBackend(defects: Defects = {}) {
         debitMinor: Math.round(l.creditMinor * factor),
         creditMinor: Math.round(l.debitMinor * factor),
         customerId: l.customerId,
+        vehicleId: l.vehicleId,
+        salespersonId: l.salespersonId,
       })),
       { category: "REVERSAL" }
     );
@@ -641,6 +684,39 @@ function makeBackend(defects: Defects = {}) {
           ok: true as const,
           value: defects.noUnappliedLiability ? CHART.filter((a) => a.code !== "2110") : CHART,
         };
+      case "accountingReports:trialBalance": {
+        const rows = CHART.flatMap((account) => {
+          const lines = [...journalLines.values()].flat().filter((line) =>
+            line.accountId === account._id && line.accountingDate <= Number(args.toDate ?? Infinity));
+          if (lines.length === 0) return [];
+          const debitMinor = lines.reduce((sum, line) => sum + line.debitMinor, 0);
+          const creditMinor = lines.reduce((sum, line) => sum + line.creditMinor, 0);
+          return [{ accountId: account._id, code: account.code, currency: ORG_CURRENCY,
+            netMinor: (account.normalBalance === "DEBIT" ? debitMinor - creditMinor : creditMinor - debitMinor) +
+              (defects.cashSaleInventoryReportNotCleared && certifiedCashSalePosted && account.systemKey === "VEHICLE_INVENTORY" ? 1 : 0) }];
+        });
+        return { ok: true as const, value: { rows } };
+      }
+      case "accountingReports:incomeStatement": {
+        const net = (key: string) => [...journalLines.values()].flat()
+          .filter((line) => line.accountId === accountIdOf(key) &&
+            line.accountingDate >= Number(args.fromDate) && line.accountingDate <= Number(args.toDate))
+          .reduce((sum, line) => sum + (key === "COST_OF_VEHICLES_SOLD"
+            ? line.debitMinor - line.creditMinor : line.creditMinor - line.debitMinor), 0);
+        const totalRevenue = net("SALES_REVENUE") + net("CONSIGNMENT_COMMISSION_REVENUE");
+        const totalCogs = net("COST_OF_VEHICLES_SOLD");
+        const grossProfit = totalRevenue - totalCogs;
+        const row = (key: string, amount: number) => {
+          const account = CHART.find((a) => a.systemKey === key)!;
+          return { accountId: account._id, code: account.code, currency: ORG_CURRENCY, netMinor: amount };
+        };
+        return { ok: true as const, value: { currency: ORG_CURRENCY,
+          revenueRows: defects.cashSaleReportMissingRevenueRow && certifiedCashSalePosted
+            ? [] : [row("SALES_REVENUE", net("SALES_REVENUE"))],
+          cogsRows: [row("COST_OF_VEHICLES_SOLD", totalCogs)],
+          totalRevenue, totalCogs, grossProfit,
+          netIncome: grossProfit - (defects.cashSaleReportMisstatesProfit && certifiedCashSalePosted ? 1 : 0) } };
+      }
       case "accountingPeriods:create":
         if (defects.clockRolloverAfterBookOpen) {
           openedPeriodEndDate = Number(args.endDate);
@@ -830,6 +906,36 @@ function makeBackend(defects: Defects = {}) {
         const made = replayableCreate("sale", args, true);
         if (made) return made;
         const saleId = id("sale");
+        const cashInvoice = Boolean(args.quoteId && Number(args.salePrice) === 12_500);
+        const invoiceId = cashInvoice && !defects.cashSaleMissingInvoice ? id("rdoc") : undefined;
+        sales.set(saleId, { _id: saleId, orgId: args.orgId, status: args.status,
+          canonicalReceivableDocumentId: invoiceId });
+        if (invoiceId) {
+          financeReceivables.set(invoiceId, {
+            _id: invoiceId, orgId: args.orgId, documentType: "INVOICE",
+            payerType: "CUSTOMER", customerId: defects.cashSaleInvoiceWrongCustomer ? "other-customer" : String(args.customerId),
+            sourceType: "sales", sourceId: saleId, originalAmountMinor: 12_500_000,
+            currency: ORG_CURRENCY, scale: 3, status: "OPEN",
+          });
+          if (defects.cashSaleDuplicateInvoice) {
+            const duplicateId = id("rdoc");
+            financeReceivables.set(duplicateId, { ...financeReceivables.get(invoiceId), _id: duplicateId });
+          }
+          if (defects.cashSaleCrossCustomerDuplicateInvoice) {
+            const duplicateId = id("rdoc");
+            financeReceivables.set(duplicateId, {
+              ...financeReceivables.get(invoiceId), _id: duplicateId, customerId: "other-customer",
+            });
+          }
+          if (defects.cashSaleOtherPayerDuplicateInvoice) {
+            const duplicateId = id("rdoc");
+            financeReceivables.set(duplicateId, {
+              ...financeReceivables.get(invoiceId), _id: duplicateId,
+              customerId: undefined, payerType: "FINANCE_COMPANY",
+            });
+          }
+        }
+        if (args.quoteId && Number(args.salePrice) === 12_500) certifiedCashSalePosted = true;
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, saleId);
         const vehicle = vehicles.get(String(args.vehicleId));
         const priceMinor = Math.round(Number(args.salePrice) * MINOR_SCALE);
@@ -847,21 +953,33 @@ function makeBackend(defects: Defects = {}) {
             ? [
                 // Agent basis: gross arrives, the supplier's share is a
                 // liability from the instant it lands, the spread is commission.
-                { key: "CASH_ON_HAND", debitMinor: priceMinor },
+                { key: args.quoteId ? "ACCOUNTS_RECEIVABLE_CUSTOMERS" : "CASH_ON_HAND", debitMinor: priceMinor,
+                  customerId: args.quoteId && defects.cashSaleWrongJournalCustomer ? "other-customer" : String(args.customerId) },
                 { key: "ACCOUNTS_PAYABLE_SUPPLIERS", creditMinor: costMinor },
                 { key: "CONSIGNMENT_COMMISSION_REVENUE", creditMinor: priceMinor - costMinor },
               ]
             : [
                 // Owned basis — WRONG for a consigned car, and it balances.
-                { key: "CASH_ON_HAND", debitMinor: priceMinor },
-                { key: "SALES_REVENUE", creditMinor: priceMinor },
-                { key: "COST_OF_VEHICLES_SOLD", debitMinor: costMinor },
-                { key: "VEHICLE_INVENTORY", creditMinor: costMinor },
+                { key: args.quoteId ? "ACCOUNTS_RECEIVABLE_CUSTOMERS" : "CASH_ON_HAND", debitMinor: priceMinor,
+                  customerId: args.quoteId && defects.cashSaleWrongJournalCustomer ? "other-customer" : String(args.customerId),
+                  vehicleId: args.quoteId && defects.cashSaleWrongJournalVehicle ? "other-vehicle" : String(args.vehicleId),
+                  salespersonId: args.quoteId && defects.cashSaleWrongJournalSalesperson ? "other-salesperson" : String(args.salespersonId) },
+                { key: args.quoteId && defects.cashSaleWrongRevenueAccount ? "MISCELLANEOUS_INCOME" : "SALES_REVENUE",
+                  creditMinor: priceMinor,
+                  customerId: args.quoteId && defects.cashSaleWrongRevenueCustomer ? "other-customer" : String(args.customerId),
+                  vehicleId: args.quoteId && defects.cashSaleWrongJournalVehicle ? "other-vehicle" : String(args.vehicleId),
+                  salespersonId: args.quoteId && defects.cashSaleWrongJournalSalesperson ? "other-salesperson" : String(args.salespersonId) },
+                { key: "COST_OF_VEHICLES_SOLD", debitMinor: costMinor,
+                  vehicleId: args.quoteId && defects.cashSaleWrongJournalVehicle ? "other-vehicle" : String(args.vehicleId) },
+                { key: "VEHICLE_INVENTORY", creditMinor: costMinor,
+                  vehicleId: args.quoteId && defects.cashSaleWrongJournalVehicle ? "other-vehicle" : String(args.vehicleId) },
               ],
           { payload: { saleAmountMinor: priceMinor } }
         );
         return { ok: true as const, value: saleId };
       }
+      case "sales:get":
+        return { ok: true as const, value: sales.get(String(args.saleId)) ?? null };
       case "organizations:create": {
         // A genuinely different organization the caller owns — what the TEN case
         // needs in order to test OWNERSHIP rather than id syntax.
@@ -903,6 +1021,14 @@ function makeBackend(defects: Defects = {}) {
             sourceType: args.sourceType,
             purchasePrice: Number(args.sourceType === "SOURCED" ? args.sourceCost : (args.purchasePrice ?? 0)),
           });
+          if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c1-vehicle-") &&
+              !defects.cashSaleAcquisitionMissingPosting) {
+            const costMinor = defects.cashSaleAcquisitionWrongAmount ? 9_000_000 : 10_000_000;
+            post("VEHICLE_ACQUIRED", "vehicles", String(madeVehicle.value), [
+              { key: "VEHICLE_INVENTORY", debitMinor: costMinor, vehicleId: String(madeVehicle.value) },
+              { key: "CASH_ON_HAND", creditMinor: costMinor, vehicleId: String(madeVehicle.value) },
+            ]);
+          }
         }
         return madeVehicle;
       case "quotes:saveQuote": {
@@ -1345,6 +1471,7 @@ function makeBackend(defects: Defects = {}) {
         const rid = id("rdoc");
         financeReceivables.set(rid, {
           _id: rid,
+          orgId: app.orgId,
           sourceType: "finance_application",
           sourceId: app._id,
           payerType: "FINANCE_COMPANY",
@@ -1361,9 +1488,14 @@ function makeBackend(defects: Defects = {}) {
       case "applications:get":
         return { ok: true as const, value: financeApps.get(String(args.applicationId)) ?? null };
       case "subledger:listReceivables":
+        if (defects.cashSaleInvoiceListingTruncated && !args.customerId) {
+          return { ok: true as const, value: Array.from({ length: 200 }, (_, index) => ({ _id: `other-${index}` })) };
+        }
         return {
           ok: true as const,
-          value: [...financeReceivables.values()].filter((r) => !args.customerId || r.customerId === String(args.customerId)),
+          value: [...financeReceivables.values()].filter((r) => r.orgId === String(args.orgId) &&
+            (!args.customerId || r.customerId === String(args.customerId)))
+            .slice(0, Number(args.limit ?? 50)),
         };
       case "subledger:getReceivableBalance": {
         const doc = financeReceivables.get(String(args.receivableDocumentId));
@@ -1578,7 +1710,7 @@ describe("the rehearsal passes against a backend that behaves", () => {
     expect(declined.map((d) => `${d.id}: ${d.detail}`)).toEqual([]);
     // And it actually ran the cases rather than finding nothing to do.
     expect(results.map((r) => r.id).sort()).toEqual([...REQUIRED_REHEARSAL_CASE_IDS].sort());
-    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "FD1", "FD2", "C1", "C2"]) {
+    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "FD1", "FD2", "C1", "C2"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
   });
@@ -1737,6 +1869,53 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     const results = await runAgainst({ silentConsignedSale: true });
     expect(statusOf(results, "SR1")).toBe("FAIL");
     expect(String(results.find((r) => r.id === "SR1")?.detail)).toMatch(/NO journal entry/);
+  });
+
+  test("M486C1 rejects a balanced owned cash sale credited to the wrong revenue account", async () => {
+    const results = await runAgainst({ cashSaleWrongRevenueAccount: true });
+    expect(statusOf(results, "M486C1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "M486C1")?.detail)).toMatch(/journal lines are not exactly/);
+  });
+
+  test("M486C1 rejects a one-minor-unit public report drift despite correct journals", async () => {
+    const results = await runAgainst({ cashSaleReportMisstatesProfit: true });
+    expect(statusOf(results, "M486C1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "M486C1")?.detail)).toMatch(/public income netIncome/);
+  });
+
+  test.each([
+    ["cashSaleAcquisitionMissingPosting", /VEHICLE_ACQUIRED|inventory/i],
+    ["cashSaleAcquisitionWrongAmount", /acquisition|inventory/i],
+    ["cashSaleInventoryReportNotCleared", /inventory cleared/i],
+  ] as const)("M486C1 rejects %s", async (defect, diagnostic) => {
+    const results = await runAgainst({ [defect]: true });
+    expect(statusOf(results, "M486C1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "M486C1")?.detail)).toMatch(diagnostic);
+  });
+
+  test.each([
+    ["cashSaleMissingInvoice", /invoice|receivable/i],
+    ["cashSaleDuplicateInvoice", /invoice|receivable/i],
+    ["cashSaleCrossCustomerDuplicateInvoice", /invoice|receivable/i],
+    ["cashSaleOtherPayerDuplicateInvoice", /invoice|receivable/i],
+    ["cashSaleInvoiceWrongCustomer", /invoice|receivable/i],
+    ["cashSaleWrongJournalCustomer", /customer dimension/i],
+    ["cashSaleWrongRevenueCustomer", /customer dimension/i],
+    ["cashSaleWrongJournalVehicle", /vehicle dimension/i],
+    ["cashSaleWrongJournalSalesperson", /salesperson dimension/i],
+    ["cashSaleWrongAccountCode", /code/i],
+    ["cashSaleWrongCashAccountCode", /chart code CASH_ON_HAND/i],
+    ["cashSaleReportMissingRevenueRow", /revenue row/i],
+  ] as const)("M486C1 rejects %s", async (defect, diagnostic) => {
+    const results = await runAgainst({ [defect]: true });
+    expect(statusOf(results, "M486C1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "M486C1")?.detail)).toMatch(diagnostic);
+  });
+
+  test("M486C1 stays UNPROVEN when the tenant invoice listing hits its public cap", async () => {
+    const results = await runAgainst({ cashSaleInvoiceListingTruncated: true });
+    expect(statusOf(results, "M486C1")).toBe("UNPROVEN");
+    expect(String(results.find((r) => r.id === "M486C1")?.detail)).toMatch(/tenant invoice listing is absent or truncated/);
   });
 
   test("C1/C2 do not PASS when one worker never reached the backend (RG-01)", async () => {

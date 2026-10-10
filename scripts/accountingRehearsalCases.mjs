@@ -24,7 +24,7 @@
 // executed IDs, and the real-preview validator uses the same list.
 export const REQUIRED_REHEARSAL_CASE_IDS = Object.freeze([
   "A1", "A2", "D1", "D2", "D3", "D4", "C1", "C2", "UNAUTH", "TEN", "A3",
-  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "FD1", "FD2", "P1", "SETUP",
+  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "FD1", "FD2", "P1", "SETUP",
 ]);
 
 function fail(message) {
@@ -1678,6 +1678,163 @@ export async function runRehearsalCases(ctx) {
     }
   );
 
+  // SCRUM-486 owned CASH / no deposit. Unlike SR1 this follows the public
+  // quote path and uses the same literal facts as the harness matrix row.
+  // The preview readbacks make this one row real-backend evidence only; the
+  // remaining matrix rows still require their own cloud execution.
+  // SCRUM-486 owner rulings c21356, c21360 and c21364: owned stock uses the
+  // full sale price as revenue and releases its capitalized acquisition cost.
+  await recordCase(results, "M486C1", "SCRUM-486 c21356/c21360/c21364: owned cash sale without deposit posts and reports the literal 12,500 / 10,000 JOD economics", async () => {
+    const denom = await orgDenomination({ orgId, ownerMust });
+    if (denom.currency !== "JOD" || denom.decimals !== 3) {
+      unproven("M486C1 requires the certified JOD denomination and three minor-unit decimals");
+    }
+    const monthStart = new Date();
+    const fromDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth(), 1);
+    const toDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0, 23, 59, 59, 999);
+    const reportArgs = { orgId, fromDate, toDate };
+    const openingBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    const stamp = `${Date.now().toString(36)}-${uuid().slice(0, 8)}`;
+    const vin = `RHS486${uuid().replace(/-/g, "").slice(0, 11)}`.toUpperCase();
+    const customerId = await ownerMust("mutation", "customers:create", {
+      orgId, firstName: "Certification", lastName: `cash-${stamp}`,
+    });
+    const vehicleId = await createVehicleForRehearsal(ownerMust, {
+      orgId, vin, make: "Toyota", model: "Camry-486", year: 2022,
+      mileage: 800, color: "Blue", fuelType: "Gasoline", transmission: "Automatic",
+      sellingPrice: 12_500, sourceType: "STOCK", status: "AVAILABLE",
+      purchasePrice: 10_000, purchasePaymentMethod: "CASH",
+      idempotencyKey: `rehearsal-m486c1-vehicle-${stamp}`,
+    });
+    const quoteId = await ownerMust("mutation", "quotes:saveQuote", {
+      orgId, customerId, vehicleId, mode: "CASH", vehiclePrice: 12_500,
+      downPayment: 0, termMonths: 0,
+    });
+    const me = await ownerMust("query", "users:getMe", {});
+    if (!me?._id) unproven("M486C1 has no authenticated salesperson identity");
+    const beforeBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    const beforeIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const saleId = await ownerMust("mutation", "sales:create", {
+      orgId, quoteId, vehicleId, customerId, salespersonId: me._id,
+      salePrice: 12_500, saleDate: Date.now(), status: "COMPLETED",
+      idempotencyKey: `rehearsal-m486c1-sale-${stamp}`,
+    });
+    if (Date.now() > toDate || Date.now() < fromDate) {
+      unproven("M486C1 crossed its UTC accounting month during acquisition and sale");
+    }
+    const sale = await ownerMust("query", "sales:get", { orgId, saleId });
+    expectEqual(sale?.status, "COMPLETED", "M486C1 public sale state");
+    if (!sale?.canonicalReceivableDocumentId) fail("M486C1 sale has no canonical customer invoice");
+    // Search the tenant, not just this customer: a second invoice for the
+    // same sale under another customer is still a double collection claim.
+    const receivables = await ownerMust("query", "subledger:listReceivables", { orgId, limit: 200 });
+    if (!Array.isArray(receivables) || receivables.length >= 200) {
+      unproven("M486C1 tenant invoice listing is absent or truncated");
+    }
+    const invoices = receivables.filter((r) => r.sourceType === "sales" && String(r.sourceId) === String(saleId));
+    expectEqual(invoices.length, 1, "M486C1 exactly one customer invoice for this sale");
+    const invoice = invoices[0];
+    expectEqual(String(invoice._id), String(sale.canonicalReceivableDocumentId), "M486C1 sale invoice pointer");
+    for (const [field, expected] of [
+      ["orgId", String(orgId)], ["customerId", String(customerId)],
+      ["documentType", "INVOICE"], ["payerType", "CUSTOMER"],
+      ["currency", "JOD"], ["scale", 3], ["status", "OPEN"],
+      ["originalAmountMinor", 12_500_000],
+    ]) {
+      expectEqual(field.endsWith("Id") ? String(invoice[field]) : invoice[field], expected, `M486C1 customer invoice ${field}`);
+    }
+    const invoiceBalance = await ownerMust("query", "subledger:getReceivableBalance", {
+      orgId, receivableDocumentId: invoice._id,
+    });
+    expectEqual(String(invoiceBalance?.doc?._id), String(invoice._id), "M486C1 collectible customer invoice identity");
+    expectEqual(invoiceBalance?.outstandingMinor, 12_500_000, "M486C1 collectible customer invoice outstanding");
+    const chart = await ownerMust("query", "chartOfAccounts:list", { orgId });
+    const keyOf = new Map((chart ?? []).map((a) => [String(a._id), a.systemKey ?? a.code ?? "?"]));
+    const codeOf = new Map((chart ?? []).map((a) => [a.systemKey, a.code]));
+    const expectedCodes = [
+      ["CASH_ON_HAND", "1100"],
+      ["ACCOUNTS_RECEIVABLE_CUSTOMERS", "1200"], ["SALES_REVENUE", "4100"],
+      ["COST_OF_VEHICLES_SOLD", "5100"], ["VEHICLE_INVENTORY", "1400"],
+    ];
+    for (const [key, code] of expectedCodes) expectEqual(codeOf.get(key), code, `M486C1 chart code ${key}`);
+    const acquisition = await eventAndJournal({
+      orgId, ownerMust, sourceType: "vehicles", sourceId: vehicleId, eventType: "VEHICLE_ACQUIRED",
+    });
+    expectExactLines(acquisition.lines, keyOf, [
+      { key: "VEHICLE_INVENTORY", debitMinor: 10_000_000 },
+      { key: "CASH_ON_HAND", creditMinor: 10_000_000 },
+    ], { currency: "JOD", decimals: 3, what: "M486C1 owned vehicle acquisition" });
+    for (const line of acquisition.lines) {
+      expectEqual(String(line.vehicleId), String(vehicleId), "M486C1 acquisition vehicle dimension");
+    }
+    const posted = await eventAndJournal({
+      orgId, ownerMust, sourceType: "sales", sourceId: saleId, eventType: "SALE_COMPLETED",
+    });
+    expectExactLines(posted.lines, keyOf, [
+      { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", debitMinor: 12_500_000 },
+      { key: "SALES_REVENUE", creditMinor: 12_500_000 },
+      { key: "COST_OF_VEHICLES_SOLD", debitMinor: 10_000_000 },
+      { key: "VEHICLE_INVENTORY", creditMinor: 10_000_000 },
+    ], { currency: "JOD", decimals: 3, what: "M486C1 owned cash journal" });
+    // The posting rule gives the customer dimension to AR and revenue. COGS
+    // and inventory carry vehicleId instead, so checking every line would
+    // reject a valid product posting.
+    for (const key of ["ACCOUNTS_RECEIVABLE_CUSTOMERS", "SALES_REVENUE"]) {
+      const line = posted.lines.find((l) => keyOf.get(String(l.accountId)) === key);
+      expectEqual(String(line?.customerId), String(customerId), `M486C1 ${key} customer dimension`);
+      expectEqual(String(line?.salespersonId), String(me._id), `M486C1 ${key} salesperson dimension`);
+    }
+    for (const key of [
+      "ACCOUNTS_RECEIVABLE_CUSTOMERS", "SALES_REVENUE",
+      "COST_OF_VEHICLES_SOLD", "VEHICLE_INVENTORY",
+    ]) {
+      const line = posted.lines.find((l) => keyOf.get(String(l.accountId)) === key);
+      expectEqual(String(line?.vehicleId), String(vehicleId), `M486C1 ${key} vehicle dimension`);
+    }
+    const afterBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    const afterIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const byKey = (report) => new Map((report?.rows ?? []).filter((r) => r.currency === "JOD")
+      .map((r) => [keyOf.get(String(r.accountId)), r.netMinor]));
+    const before = byKey(beforeBalance);
+    const after = byKey(afterBalance);
+    const opening = byKey(openingBalance);
+    expectEqual((before.get("VEHICLE_INVENTORY") ?? 0) - (opening.get("VEHICLE_INVENTORY") ?? 0),
+      10_000_000, "M486C1 public inventory capitalized before sale");
+    expectEqual((after.get("VEHICLE_INVENTORY") ?? 0) - (opening.get("VEHICLE_INVENTORY") ?? 0),
+      0, "M486C1 public inventory cleared after sale");
+    for (const [key, delta] of [
+      ["ACCOUNTS_RECEIVABLE_CUSTOMERS", 12_500_000],
+      ["SALES_REVENUE", 12_500_000],
+      ["COST_OF_VEHICLES_SOLD", 10_000_000],
+      ["VEHICLE_INVENTORY", -10_000_000],
+    ]) {
+      expectEqual((after.get(key) ?? 0) - (before.get(key) ?? 0), delta, `M486C1 public trial balance ${key}`);
+      const row = (afterBalance?.rows ?? []).find((r) => keyOf.get(String(r.accountId)) === key && r.currency === "JOD");
+      expectEqual(row?.code, codeOf.get(key), `M486C1 public trial balance code ${key}`);
+    }
+    const incomeRowTotal = (report, rows, code) => (report?.[rows] ?? [])
+      .filter((r) => r.currency === "JOD" && r.code === code)
+      .reduce((sum, r) => sum + r.netMinor, 0);
+    expectEqual(
+      incomeRowTotal(afterIncome, "revenueRows", "4100") - incomeRowTotal(beforeIncome, "revenueRows", "4100"),
+      12_500_000, "M486C1 public income revenue row 4100",
+    );
+    expectEqual(
+      incomeRowTotal(afterIncome, "cogsRows", "5100") - incomeRowTotal(beforeIncome, "cogsRows", "5100"),
+      10_000_000, "M486C1 public income COGS row 5100",
+    );
+    for (const [field, delta] of [
+      ["totalRevenue", 12_500_000], ["totalCogs", 10_000_000],
+      ["grossProfit", 2_500_000], ["netIncome", 2_500_000],
+    ]) {
+      expectEqual(afterIncome?.[field] - beforeIncome?.[field], delta, `M486C1 public income ${field}`);
+    }
+    return { saleId: String(saleId), currency: "JOD", saleMinor: 12_500_000,
+      costMinor: 10_000_000, grossProfitMinor: 2_500_000,
+      journalEntryId: String(posted.entry._id), commandsExercised: ["quotes.saveQuote", "sales.create"],
+      reportsRead: ["accountingReports.trialBalance", "accountingReports.incomeStatement"] };
+  });
+
   // ── FD1 — the financed deal's cash receipt settles the exact recorded debt ──
   //
   // SCRUM-241's supported-path confirmation on a real deployment (owner-proxy
@@ -2713,7 +2870,7 @@ async function findReceivable({ orgId, ownerMust, receivableId }) {
 async function makeVehicle({ orgId, ownerMust, label }) {
   const stamp = Date.now().toString(36);
   const vin = `RHS${label}${stamp}`.replace(/[ioq]/gi, "z").toUpperCase().padEnd(17, "0").slice(0, 17);
-  return ownerMust("mutation", "vehicles:create", {
+  return createVehicleForRehearsal(ownerMust, {
     orgId,
     vin,
     make: "Toyota",
