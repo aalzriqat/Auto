@@ -622,7 +622,7 @@ const CASH_STAGE_ACTION: Readonly<Partial<Record<string, WorkflowAction>>> = {
  * checklist disagree; the capability alone decides, as it did before.
  *
  * Round 2 (Codex S417-R2-1 = Sol R2-1): the controls live on the rows
- * `documents.getForApplication` serves, and that read takes
+ * `documents.getPanelForApplication` serves, and that read takes
  * `view:finance_applications` — a separate permission a custom role can omit.
  * Without it the pane is the read-only checklist, so a caller who COULD
  * advance a document is told the read is what is missing (`canRead`), on both
@@ -963,7 +963,7 @@ export function DealCockpit({
    * It carries the workflow facts the stage rail does not: the recorded
    * settlement route and whether the direct route is available, the
    * disbursement evidence, the deal's deposits, and the pinned economics
-   * currency the disbursement figures are denominated in. `documents.getForApplication`
+   * currency the disbursement figures are denominated in. `documents.getPanelForApplication`
    * requires `view:finance_applications` and THROWS otherwise, so it is
    * skipped for a caller without it — the same discipline as `getEconomics`.
    *
@@ -971,16 +971,15 @@ export function DealCockpit({
    * the authority did not. No new economic command exists on this screen.
    */
   const app = useQuery(api.applications.get, { orgId, applicationId });
-  const documents = useQuery(
-    api.documents.getForApplication,
+  // Active requirements and removed-requirement history share one authorized
+  // snapshot. Keep the permission gate: this endpoint throws without finance
+  // application visibility, even when the cockpit itself is readable.
+  const documentPanel = useQuery(
+    api.documents.getPanelForApplication,
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
-  // Round 3 (S417-R3-1): files kept for requirements removed after the upload,
-  // view only — the same permission and the same skip as the active list.
-  const documentHistory = useQuery(
-    api.documents.getHistoryForApplication,
-    canViewApplications && deal ? { orgId, applicationId } : "skip"
-  );
+  const documents = documentPanel?.active;
+  const documentHistory = documentPanel?.history;
   // The deal's cost lines, same permission as the document rows; skipped rather
   // than thrown for a caller without it.
   const dealCosts = useQuery(
@@ -2021,7 +2020,7 @@ export function DealCockpit({
     ),
     canUpload: canCreateApplication || canVerifyDocuments,
     canVerify: canVerifyDocuments,
-    // The exact predicate the `getForApplication` subscription above is gated on.
+    // The exact predicate the document-panel subscription above is gated on.
     canRead: canViewApplications,
     // A closed deal still derives DELIVERY_ACTIONS from the live rules, so a
     // rule added after closing can re-open the stage (SCRUM-422 R1 follow-up).
@@ -4878,7 +4877,7 @@ export function DealCockpitView({
   };
   /**
    * The document checklist with its controls. `items` is undefined while
-   * loading or when the caller may not read `documents.getForApplication`,
+   * loading or when the caller may not read `documents.getPanelForApplication`,
    * in which case the panel shows the cockpit payload's read-only checklist.
    */
   documents?: {

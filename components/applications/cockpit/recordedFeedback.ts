@@ -32,7 +32,7 @@ export type RecordedModel = Readonly<{
       }>
     | null
     | undefined;
-  /** The documents list the panel reads (`documents.getForApplication`), when the caller may. */
+  /** The active documents from the panel read (`documents.getPanelForApplication`), when the caller may. */
   documents?: ReadonlyArray<
     Readonly<{
       _id?: string | null;
