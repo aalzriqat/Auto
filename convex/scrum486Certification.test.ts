@@ -151,7 +151,7 @@ async function trialBalanceNormalBalance(s: CashSeed) {
 }
 
 describe("SCRUM-486 literal certification matrix (harness only)", () => {
-  test("owned configured financier × held 200 first payment: literal contribution, forward and full receipt", async () => {
+  test("owned configured financier × held 200 first payment: contribution, forward, partial refusal and full receipt", async () => {
     const s = await seedFinancedDealership("s486financedheld", {
       modules: MODULES,
       ownerPerms: OWNER_PERMS,
@@ -294,6 +294,15 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     });
     const afterForwardSnapshot = await dbSnapshot(s.t, Object.keys(schema.tables));
     await s.approver.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, forwardArgs);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(afterForwardSnapshot);
+
+    // The current public confirmation door accepts only the full financier
+    // receivable. This pins fail-closed behavior; it does not certify the
+    // separate owner-required partial-receipt lifecycle.
+    await expect(s.approver.as.mutation(api.applications.confirmDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: 5_000_000,
+      idempotencyKey: "s486-financed-held-partial-refusal",
+    })).rejects.toThrow(/not what this financing company owes/);
     expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(afterForwardSnapshot);
 
     const receiptArgs = {
