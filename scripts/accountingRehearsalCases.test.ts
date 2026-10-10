@@ -241,6 +241,8 @@ type Defects = {
   cashRefundAddsUnexcludedDepositTransaction?: boolean;
   cashRefundPostsCompensatingJournals?: boolean;
   cashRefundHidesDuplicateOnPage21?: boolean;
+  cashRefundEventPayloadWrongAmount?: boolean;
+  cashHeldReportHasUnrelatedBalance?: boolean;
   cashDepositLeavesVehicleAvailable?: boolean;
   cashRefundLeavesVehicleReserved?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
@@ -639,7 +641,9 @@ function makeBackend(defects: Defects = {}) {
         // An unbalanced entry is a GL that does not add up — B2's whole subject.
         { key: creditKey, creditMinor: defects.unbalancedJournal ? payable - 1 : creditAmount, customerId: deposit.customerId },
       ],
-      { unlinked: defects.refundEventUnlinked, payload: { depositId: deposit._id, amountMinor: payable } }
+      { unlinked: defects.refundEventUnlinked, payload: { depositId: deposit._id,
+        amountMinor: deposit._id === certifiedCashRefundDepositId &&
+          defects.cashRefundEventPayloadWrongAmount ? payable - 1_000 : payable } }
     );
     if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundRecognizedAsRevenue) {
       post("REFUND_REVENUE_ERROR", "deposits", deposit._id, [
@@ -804,6 +808,8 @@ function makeBackend(defects: Defects = {}) {
           const creditMinor = lines.reduce((sum, line) => sum + line.creditMinor, 0);
           return [{ accountId: account._id, code: account.code, currency: ORG_CURRENCY,
             netMinor: (account.normalBalance === "DEBIT" ? debitMinor - creditMinor : creditMinor - debitMinor) +
+              (defects.cashHeldReportHasUnrelatedBalance && account.systemKey === "BANK_ACCOUNT" &&
+                deposits.get(certifiedCashRefundDepositId ?? "")?.status === "HELD" ? 200_000 : 0) +
               (defects.cashSaleInventoryReportNotCleared && certifiedCashSalePosted && account.systemKey === "VEHICLE_INVENTORY" ? 1 : 0) }];
         });
         return { ok: true as const, value: { rows } };
@@ -2198,6 +2204,8 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["cashRefundVoidsIncomingPayment", /incoming payment stays settled after refund/],
     ["cashRefundAddsUnexcludedDepositTransaction", /operational profit report/],
     ["cashRefundPostsCompensatingJournals", /unexpected journal entries/],
+    ["cashRefundEventPayloadWrongAmount", /refund event payload amount/],
+    ["cashHeldReportHasUnrelatedBalance", /held account\/currency balances/],
     ["cashDepositLeavesVehicleAvailable", /held deposit reserves the owned car/],
     ["cashRefundLeavesVehicleReserved", /refund restores available stock/],
     ["cashDepositPaymentWrongCustomer", /incoming payment customer/],

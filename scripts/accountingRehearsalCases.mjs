@@ -2119,6 +2119,8 @@ export async function runRehearsalCases(ctx) {
     if (![openingBalance, heldBalance].every((report) => Array.isArray(report?.rows))) {
       fail("M486C3 public trial balance is unavailable before refund");
     }
+    expectHeldDepositAccountDeltas(openingBalance, heldBalance, keyOf,
+      "M486C3 held account/currency balances");
     const releaseArgs = {
       orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH",
       idempotencyKey: `rehearsal-m486c3-refund-${stamp}`,
@@ -2192,6 +2194,7 @@ export async function runRehearsalCases(ctx) {
       { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: 200_000 },
       { key: "CASH_ON_HAND", creditMinor: 200_000 },
     ], { currency: "JOD", decimals: 3, what: "M486C3 cash refund", customerId });
+    expectEqual(refund.event.payload?.amountMinor, 200_000, "M486C3 refund event payload amount");
     const depositEvents = await ownerMust("query", "accountingLedger:listAccountingEvents", {
       orgId, sourceType: "deposits", sourceId: String(depositId), limit: 200,
     });
@@ -3195,7 +3198,7 @@ async function ownedCashJodWindow({ caseId, orgId, ownerMust }) {
 }
 
 /** Compare every consumer-visible account/currency balance, including accounts absent when zero. */
-function expectSameAccountBalances(before, after, what) {
+function expectSameAccountBalances(before, after, what, expectedDeltas = new Map()) {
   const balances = (report) => {
     if (!Array.isArray(report?.rows)) fail(`${what}: trial-balance rows are unavailable`);
     const byAccount = new Map();
@@ -3212,8 +3215,21 @@ function expectSameAccountBalances(before, after, what) {
   const beforeRows = balances(before);
   const afterRows = balances(after);
   for (const key of new Set([...beforeRows.keys(), ...afterRows.keys()])) {
-    expectEqual(afterRows.get(key) ?? 0, beforeRows.get(key) ?? 0, `${what}: ${key}`);
+    expectEqual(afterRows.get(key) ?? 0, (beforeRows.get(key) ?? 0) + (expectedDeltas.get(key) ?? 0),
+      `${what}: ${key}`);
   }
+}
+
+/** A held CASH deposit changes only cash and the deposit liability across the whole chart. */
+function expectHeldDepositAccountDeltas(before, after, keyOf, what) {
+  const expectedDeltas = new Map();
+  for (const [accountId, systemKey] of keyOf) {
+    if (["CASH_ON_HAND", "CUSTOMER_DEPOSITS_LIABILITY"].includes(systemKey)) {
+      expectedDeltas.set(JSON.stringify([accountId, "JOD"]), 200_000);
+    }
+  }
+  if (expectedDeltas.size !== 2) unproven(`${what}: required chart accounts are unavailable`);
+  expectSameAccountBalances(before, after, what, expectedDeltas);
 }
 
 /** Compare the public operational P&L, which is sourced from transactions rather than the GL. */
