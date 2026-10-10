@@ -1008,6 +1008,14 @@ describe("dashboard.stats previous-period totals", () => {
     await seedExpenseAt(t, orgId, { daysAgo: 40, amount: 300 });
     const reversedExpenseId = await seedExpenseAt(t, orgId, { daysAgo: 40, amount: 7_000 });
     await t.run((ctx) => ctx.db.patch(reversedExpenseId, { isDeleted: true, reversedAt: NOW - 2 * DAY_MS }));
+    // A deleted expense may have no reversal timestamp (including legacy rows).
+    // The remaining post-index deletion filter must exclude it in both windows.
+    const deletedCurrentExpenseId = await seedExpenseAt(t, orgId, { daysAgo: 5, amount: 8_000 });
+    const deletedPreviousExpenseId = await seedExpenseAt(t, orgId, { daysAgo: 40, amount: 9_000 });
+    await t.run(async (ctx) => {
+      await ctx.db.patch(deletedCurrentExpenseId, { isDeleted: true });
+      await ctx.db.patch(deletedPreviousExpenseId, { isDeleted: true });
+    });
 
     const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "MONTH" });
     expect(result.salesVolumeThisMonth).toBe(20_000);
