@@ -10,6 +10,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { getBookBalance } from "./bankAccounts";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -211,5 +212,26 @@ describe("bankAccounts.getBookBalance", () => {
     const balance = await asOwner.query(api.bankAccounts.getBookBalance, { orgId });
     expect(balance).not.toBeNull();
     expect(balance!.balanceMinor).toBe(1_200_000);
+
+    const queriedTables = await asOwner.run(async (ctx) => {
+      const tables: string[] = [];
+      const originalQuery = ctx.db.query.bind(ctx.db);
+      const db = {
+        ...ctx.db,
+        query: (table: Parameters<typeof ctx.db.query>[0]) => {
+          tables.push(table);
+          return originalQuery(table);
+        },
+      } as typeof ctx.db;
+      // Convex exposes the registered handler at runtime for a query-path
+      // assertion, but the app's generated RegisteredQuery type omits it.
+      const handler = (getBookBalance as unknown as {
+        _handler: (queryCtx: typeof ctx, args: { orgId: typeof orgId }) => Promise<unknown>;
+      })._handler;
+      await handler({ ...ctx, db }, { orgId });
+      return tables;
+    });
+    expect(queriedTables.filter((table) => table === "journalLines")).toHaveLength(1);
+    expect(queriedTables.filter((table) => table === "journalEntries")).toHaveLength(2);
   });
 });
