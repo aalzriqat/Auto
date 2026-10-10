@@ -957,7 +957,17 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         const lines = entryId ? await ctx.db.query("journalLines")
           .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entryId))
           .collect() : [];
-        return { event, entry, lineCount: lines.length };
+        const rows = await Promise.all(lines.map(async (line) => {
+          const account = await ctx.db.get(line.accountId);
+          return {
+            account: account?.code,
+            currency: line.currency,
+            debit: line.debitMinor,
+            credit: line.creditMinor,
+            entryStatus: entry?.status,
+          };
+        }));
+        return { event, entry, rows };
       }));
     });
     expect(saleBindings).toHaveLength(2);
@@ -967,7 +977,6 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       accountingEventId: originalBinding?.event._id,
       sourceType: "sales", sourceId: saleId, status: "REVERSED",
     });
-    expect(originalBinding?.lineCount).toBe(4);
     expect(reversalBinding?.event).toMatchObject({
       status: "POSTED", reversalOfEventId: originalBinding?.event._id,
     });
@@ -976,18 +985,22 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       sourceType: "sales", sourceId: saleId, category: "REVERSAL",
       reversalOfJournalEntryId: originalBinding?.entry?._id,
     });
-    expect(reversalBinding?.lineCount).toBe(4);
-    const rows = await journalRows(s);
-    expectLiteralRows(rows, [
+    const originalRows: JournalRow[] = [
       { account: "1200", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "REVERSED" },
       { account: "4100", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "REVERSED" },
       { account: "5100", currency: "JOD", debit: 10_000_000, credit: 0, entryStatus: "REVERSED" },
       { account: "1400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "REVERSED" },
+    ];
+    const reversalRows: JournalRow[] = [
       { account: "1200", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
       { account: "4100", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
       { account: "5100", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
       { account: "1400", currency: "JOD", debit: 10_000_000, credit: 0, entryStatus: "POSTED" },
-    ]);
+    ];
+    expectLiteralRows(originalBinding?.rows ?? [], originalRows);
+    expectLiteralRows(reversalBinding?.rows ?? [], reversalRows);
+    const rows = await journalRows(s);
+    expectLiteralRows(rows, [...originalRows, ...reversalRows]);
     expectBalanced(rows);
     expect(netByAccount(rows)).toEqual({});
     expect(await trialBalanceNormalBalance(s)).toEqual({});
