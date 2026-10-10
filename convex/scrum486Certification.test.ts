@@ -467,6 +467,40 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     });
   });
 
+  test("owned CASH × no deposit × cancellation: sale journals reverse without a customer credit", async () => {
+    const { s, quoteId } = await cashQuote("s486ownedcancel");
+    const saleId = await completeCashSale(s, quoteId, "owned-no-deposit-cancel");
+    expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["POSTED"]);
+    expect(netByAccount(await journalRows(s))).toEqual({
+      "1200|JOD": 12_500_000,
+      "1400|JOD": -10_000_000,
+      "4100|JOD": -12_500_000,
+      "5100|JOD": 10_000_000,
+    });
+
+    await s.approver.as.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId,
+      status: "CANCELLED",
+    });
+    expect((await s.t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("CANCELLED");
+    expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["REVERSED"]);
+    const rows = await journalRows(s);
+    expectLiteralRows(rows, [
+      { account: "1200", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "REVERSED" },
+      { account: "4100", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "REVERSED" },
+      { account: "5100", currency: "JOD", debit: 10_000_000, credit: 0, entryStatus: "REVERSED" },
+      { account: "1400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "REVERSED" },
+      { account: "1200", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
+      { account: "4100", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "5100", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
+      { account: "1400", currency: "JOD", debit: 10_000_000, credit: 0, entryStatus: "POSTED" },
+    ]);
+    expectBalanced(rows);
+    expect(netByAccount(rows)).toEqual({});
+    expect(await trialBalanceNormalBalance(s)).toEqual({});
+  });
+
   test("SOURCED CASH × no deposit: agent margin only, full customer AR and supplier liability", async () => {
     const { s, quoteId } = await sourcedCashQuote("s486sourcedcash");
     const saleId = await completeCashSale(s, quoteId, "sourced-no-deposit");
