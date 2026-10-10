@@ -56,19 +56,19 @@ async function seedDealerWithPayable(amountDue = 5000) {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Jane", lastName: "Doe" })
   );
-  // saleId matters now: it's how markPaid tells a sale-originated payable
-  // (VAT reclass hits COST_OF_VEHICLES_SOLD) apart from an acquisition-time
-  // ON_ACCOUNT payable (VAT reclass hits VEHICLE_INVENTORY instead) — see
-  // sourcingPayables.markPaid's costOrigin derivation.
-  const saleId = await t.run((ctx) =>
+  await t.run((ctx) =>
     ctx.db.insert("sales", {
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 20000, saleDate: Date.now(), status: "COMPLETED",
     })
   );
+  // An OWNED car bought on account (no saleId on the payable) that has since
+  // sold, so the VAT reclass follows its cost into COST_OF_VEHICLES_SOLD.
+  // SCRUM-781: a sale-linked payable is only ever a consigned car's, and a
+  // consigned settlement takes no VAT at all — consignedPayableVat.scrum781.test.ts.
   const payableId = await t.run((ctx) =>
     ctx.db.insert("vehicleSupplierPayables", {
-      orgId, vehicleId, saleId, sourcedFromName: "Sister Dealer Co", amountDue, currency: "JOD",
+      orgId, vehicleId, sourcedFromName: "Sister Dealer Co", amountDue, currency: "JOD",
       status: "PENDING", createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
     })
   );
