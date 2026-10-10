@@ -122,7 +122,7 @@ export const listJournalEntries = query({
             : base;
         })
         .order("desc")
-        .paginate({ numItems: targetItems, cursor: initialLineCursor });
+        .paginate({ ...args.paginationOpts, numItems: targetItems, cursor: initialLineCursor });
 
       const entryLinesCache = new Map<string, Doc<"journalLines">[]>();
 
@@ -147,12 +147,9 @@ export const listJournalEntries = query({
         entries.push(entry);
       }
 
-      const continueCursor = linePage.isDone || !linePage.continueCursor ? "" : linePage.continueCursor;
-
       return {
+        ...linePage,
         page: entries,
-        isDone: linePage.isDone,
-        continueCursor,
       };
     }
 

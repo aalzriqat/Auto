@@ -214,8 +214,8 @@ describe("General Ledger pagination — AF-318-01 regression (>100 entries reach
       return { result, paginateCalls };
     });
 
-    expect(result.page.map((entry) => entry._id)).toEqual([entryId]);
     expect(paginateCalls).toBe(1);
+    expect(result.page.map((entry) => entry._id)).toEqual([entryId]);
     expect(result.isDone).toBe(false);
     const next = await ctx.asOwner.query(api.accountingLedger.listJournalEntries, {
       orgId: ctx.orgId,
@@ -223,6 +223,41 @@ describe("General Ledger pagination — AF-318-01 regression (>100 entries reach
       paginationOpts: { numItems: 2, cursor: result.continueCursor },
     });
     expect(next.page.map((entry) => entry._id)).toEqual([olderEntryId]);
+  });
+
+  test("account-filtered entries honor the requested endCursor range", async () => {
+    const ctx = await seedDealer("Bounded Ledger Dealer", "glbounded");
+    const date = ctx.currentPeriod.startDate + 10_000;
+    const newestId = await insertJournalEntry(ctx, {
+      index: 910, accountingDate: date + 2_000, periodId: ctx.currentPeriod._id,
+      accountId: ctx.revenue._id, memo: "newest",
+    });
+    await insertJournalEntry(ctx, {
+      index: 911, accountingDate: date + 1_000, periodId: ctx.currentPeriod._id,
+      accountId: ctx.revenue._id, memo: "middle",
+    });
+    await insertJournalEntry(ctx, {
+      index: 912, accountingDate: date, periodId: ctx.currentPeriod._id,
+      accountId: ctx.revenue._id, memo: "oldest",
+    });
+
+    const first = await ctx.asOwner.query(api.accountingLedger.listJournalEntries, {
+      orgId: ctx.orgId, accountId: ctx.revenue._id,
+      paginationOpts: { numItems: 1, cursor: null },
+    });
+    expect(first.page.map((entry) => entry._id)).toEqual([newestId]);
+    const bounded = await ctx.asOwner.query(api.accountingLedger.listJournalEntries, {
+      orgId: ctx.orgId, accountId: ctx.revenue._id,
+      paginationOpts: { numItems: 10, cursor: null, endCursor: first.continueCursor },
+    });
+    expect(bounded.page.map((entry) => entry._id)).toEqual([newestId]);
+
+    const limited = await ctx.asOwner.query(api.accountingLedger.listJournalEntries, {
+      orgId: ctx.orgId, accountId: ctx.revenue._id,
+      paginationOpts: { numItems: 10, cursor: null, maximumRowsRead: 2 },
+    });
+    expect(limited.page).toHaveLength(2);
+    expect(limited.pageStatus).toBe("SplitRequired");
   });
 
   test("125 seeded entries: bounded first page, a planted OLD entry is off page 1, pagination reaches it, no duplicates, deterministic order", async () => {
