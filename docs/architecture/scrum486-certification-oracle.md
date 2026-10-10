@@ -1,0 +1,97 @@
+# SCRUM-486 deal accounting certification oracle — design, not a PASS
+
+This is the independent expected-value design for the required ownership × deal-route × deposit × lifecycle suite. It is derived from the owner's SCRUM-486 rulings (comments 21356, 21360 and 21364), not from the application's posting helpers. The numbers below are **JOD minor units** (1 JOD = 1,000 minor units). No row is certified merely because it appears here. A cell becomes certified only when a required CI test drives its public mutations, checks the literal values at each step, and the same scenario passes on a disposable Convex preview.
+
+## Fixed owned-vehicle example
+
+| Fact | JOD | Minor units |
+| --- | ---: | ---: |
+| Vehicle price / approved finance-company amount | 12,500 | 12,500,000 |
+| Owned vehicle cost | 10,000 | 10,000,000 |
+| Customer deposit held in cash | 200 | 200,000 |
+| Dealer contribution | 1,375 | 1,375,000 |
+| Custody issued / spent / returned | 300 / 150 / 150 | 300,000 / 150,000 / 150,000 |
+| Direct handover cost paid from bank | 100 | 100,000 |
+
+The advance itself is not an expense. Actual handover expense is 150,000 + 100,000 = **250,000**. A cancelled deal retains this actual expense; it does not create a second cancellation loss. The configured-finance **commissionable vehicle margin** is 12,500,000 − 1,375,000 − 10,000,000 = **1,125,000** and a separately configured 10% percentage policy would compute **112,500**. This is a *calculation-path* expectation, separate from the requirement to preserve an approved manual commission verbatim. Supplying 112,500 manually and reading it back cannot certify the percentage rule. Automatic percentage commissions must not be silently enabled.
+
+### Required literal journals (owned vehicle)
+
+Each line is a separate debit or credit; a scenario must assert account code, currency, amount and journal/event identity, not only a net balance. Account codes identify the chart visible to the dealer. The row order below is business order, not an assertion about asynchronous posting order.
+
+| Step | Debit | Credit | Amount |
+| --- | --- | --- | ---: |
+| Hold customer deposit | 1100 cash | 2100 deposit liability | 200,000 |
+| Issue employee custody | 1250 custody clearing | 1100 cash | 300,000 |
+| Consume custody for non-refundable service | 6890 ownership transfer expense | 1250 custody clearing | 150,000 |
+| Return unused custody | 1100 cash | 1250 custody clearing | 150,000 |
+| Pay direct service cost | 6890 ownership transfer expense | 1110 bank | 100,000 |
+| Recognize owned vehicle sale | 1210 finance-company AR (or 1200 customer AR for CASH) | 4100 vehicle revenue | 12,500,000 |
+| Release owned vehicle cost | 5100 COGS | 1400 inventory | 10,000,000 |
+| Recognize financed dealer contribution | 4180 contra-revenue | 2220 finance-company AP | 1,375,000 |
+| Forward deposit obligation to financier | 2100 deposit liability | 2220 finance-company AP | 200,000 |
+| Forward contribution plus deposit | 2220 finance-company AP | 1110 bank | 1,575,000 |
+| Receive full approved amount from financier | 1110 bank | 1210 finance-company AR | 12,500,000 |
+| Accrue a 112,500 commission after the independent policy calculation | 6100 commission expense | 2300 commission payable | 112,500 |
+
+For the configured financier's completed example, **net vehicle revenue is 11,125,000**, gross vehicle margin **1,125,000**, handover expense **250,000**, commission expense **112,500**, and net deal profit **762,500**. The 200,000 deposit is forwarded customer money, not a reduction to the 12,500,000 receivable or to revenue. The company must pay the full approved amount. Manual-financier and purchasing-lessor cases have the same debtor and gross receivable under OR-1/OR-2 when those routes are supported; a mere lender to the customer is not that debtor.
+
+For CASH with the same owned vehicle, the 200,000 held deposit applied to the invoice is Dr 2100 / Cr 1200. The remaining customer receipt is Dr cash/bank 12,300,000 / Cr 1200. Vehicle revenue is 12,500,000, COGS 10,000,000, and the customer receivable is zero after payment. Under a separately configured 10% percentage policy on the 2,500,000 vehicle margin, commission is 250,000 and final profit is 2,000,000. An approved manual commission is preserved independently. **SCRUM-455 remains open:** the cash handover-cost path cannot be certified as available until its public writer exists.
+
+### Separate consigned-agent example
+
+Direct settlement is only a valid route for a **SOURCED** vehicle sold as the supplier's agent. The owned example above must never be reused for it: choosing a supplier route for owned stock is refused. For a simple sourced vehicle with approved amount 12,500,000, supplier entitlement 10,000,000 and **no dealer contribution or deposit**, the dealer's agency margin is **2,500,000**. When the finance company pays the supplier directly, the dealership's literal posting is Dr **1240 supplier receivable 2,500,000** / Cr **4170 consignment commission revenue 2,500,000**. There is no dealership vehicle revenue on 4100, no 5100 COGS, no 1400 inventory release, no customer or finance-company vehicle-price AR, and no 2200 supplier payable for the gross price. The claim remains due from the supplier until collected. A sourced deal with a dealer contribution needs its own owner-rule derivation and independently reviewed journal before certification; this simple row does not cover it.
+
+### Deposit endings and cancellations
+
+| Path | Literal expectation |
+| --- | --- |
+| Held then refunded before sale | Dr 2100 / Cr 1100 for 200,000; deposit liability zero; vehicle revenue zero. |
+| Held then forfeited before sale | Dr 2100 / Cr 4200 other income for 200,000; vehicle revenue zero. |
+| Applied sale then cancelled | First reverse the recognized sale through its public door; deposit returns to held liability. Refund or forfeit only through a separate authorized release. |
+| Paid/disbursed sale cancellation attempted | Refuse before changing any row until receipt, financier forward, disbursement and paid-commission prerequisites are unwound through their public doors. |
+
+Every refusal must compare full before/after tenant-owned table content, including journals, events, deposit applications, receivables and snapshots. A caught exception can commit a Convex mutation; an error response alone is insufficient evidence of rollback. A foreign-ID attempt must leave both organizations unchanged.
+
+### Intermediate states that must become literal rows
+
+| Transition | Expected state to pin before advancing |
+| --- | --- |
+| Financed owned sale recognized, before any forward or receipt | 1210 AR 12,500,000; 2220 AP 1,575,000; 2100 deposit liability zero; 4180 debit 1,375,000. Neither bank movement has occurred. |
+| Forward contribution and deposit | 2220 AP zero; bank decreases 1,575,000; 1210 AR still 12,500,000. A retry must not transfer again. |
+| Receive 5,000,000 of the financier's approved amount | 1210 AR remains 7,500,000; bank increases 5,000,000. A repeated idempotency key must not produce a second receipt. |
+| Receive the remaining 7,500,000 | 1210 AR zero; total financier receipts 12,500,000. A returned or voided receipt must restore only the affected receivable and reverse its own bank movement. |
+| Abandon before sale after custody 300,000 / spend 150,000 / return 150,000 and direct spend 100,000 | 1250 custody clearing zero; expense debit 250,000; cash net decrease 150,000; bank decrease 100,000; vehicle sale revenue, COGS and commission zero. No second cancellation loss. |
+| Deposit applied, then sale reversed | Sale-side 4100/5100/1400/AR and commission postings reverse; customer deposit returns to 2100 liability 200,000. Only a later authorized release may refund or forfeit it. |
+
+The implementation must add separate literal transition rows for partial/repeated customer receipts, financier cheque return, forwarded amount void/replacement, disbursement reversal, commission adjustment/payment, closed-period queued posting and reversal, and a refused premature cancellation. Each row names the public door, expected event key/status, affected receivable/payable and untouched rows. Until those literal rows exist and execute, those transitions are **UNAVAILABLE**. A closed-period row must assert the trial balance as the consumer reads stored snapshots before and after a later reversal; current-period journal sums cannot substitute.
+
+OR-4 also requires distinct abandonment rows for: (1) non-refundable consumed expense, (2) substantiated refundable service tracked as a recoverable rather than cash before repayment, (3) qualifying preparation retained in vehicle inventory subject to recoverability, (4) an estimate never incurred or committed cancelled without a posting, and (5) a received but unpaid service whose expense and payable survive cancellation. The 250,000 example covers only (1). For each other classification, first verify a supported public classification/correction door; an absent door is a named product gap, never a fabricated test-row PASS.
+
+## Matrix scope and current disposition
+
+| Route | No deposit | Held/applied | Refunded | Forfeited | Current constraint |
+| --- | --- | --- | --- | --- | --- |
+| Owned CASH | Required | Required | Required | Required | Handover costs lack public writer (SCRUM-455, In Progress). |
+| Owned, configured financier | Required | Required | Required | Required | Exercise both full receipt and pending/returned payment states. Supplier-route selection must refuse without writes. |
+| Sourced agent, configured financier, through dealership | Required | Required | Required | Required | Agency economics use supplier payable, not owned vehicle revenue/COGS. |
+| Sourced agent, configured financier, direct to supplier | Required | Public guard/refusal if held | Required | Required | Supplier, not dealer, receives approved amount; assert 1240 supplier claim and 4170 agency revenue for the no-contribution example. |
+| Owned or sourced, named manual finance company | Required | Required | Required | Required | Financier debtor/settlement gap SCRUM-27, In Progress; no fake customer AR pass. |
+| LEASE newly quoted | Required refusal | Required refusal | Required refusal | Required refusal | Current backend retires the mode under SCRUM-495; assert public quote/finalize refusals and unchanged state. Historical lease rows need a separately named migration/support contract. |
+| INTERNAL_INSTALLMENT newly quoted | Required refusal | Required refusal | Required refusal | Required refusal | Owner says dealer never self-finances; assert public refusal and unchanged state. Historical rows are separate. |
+
+The suite must expand each applicable cell across quote, deposit, approval, handover cost, finalization, receipt/disbursement, settlement and allowed cancellation. At each checkpoint it must assert literal account/currency/minor-unit lines and balanced journals; party-specific AR/AP and cash/bank; sale and application state; commission base. The owned configured-finance reference row separately expects ledger P&L net vehicle revenue **11,125,000**, gross vehicle margin **1,125,000**, handover expenses **250,000**, commission expenses **112,500**, and net profit **762,500**; dashboard deal profit **762,500** and collections **12,500,000 due before receipt / zero after full receipt** are distinct consumer expectations, not values copied from the ledger query. Trial balance and balance sheet must each have their own literal account balances and zero difference. Existing SCRUM-487 tracks a likely dashboard divergence; the cell must remain red with that Jira key until corrected. Money-moving mutations also need default-role and custom-role permission denial checks. Existing SCRUM-761 permission work is a separate lane; this suite must consume its contract rather than edit it.
+
+## Gate and evidence contract
+
+1. Define expected rows as literal data in a file importing no production money helper. Drive setup and transitions through public mutations. Direct inserts may seed identity, organizations and opening vehicle facts only; they must not fabricate deposits, approvals, economic classifications or postings.
+2. An independent reviewer attacks the literal oracle before tests are compared with production code. Deliberately mutating the contribution account (4180 to expense) or netting 200,000 from the 1210 receivable must turn a covered cell red.
+3. Each known failing cell cites a validated open Jira defect and fails explicitly; a skipped or unmeasured cell is **UNAVAILABLE**, not PASS. The required CI aggregate must consume the matrix.
+4. Replay the same cases through the trusted real-backend disposable-preview rehearsal, with exact-SHA evidence, parsed scenario counts and preview deletion. `convex-test` proves harness behavior only; it does not prove Convex platform concurrency or retained production-data parity.
+5. The full 30-day no-code receipt application, retained credit/refund and correction path chosen in SCRUM-813 is an independent release gate. Passing a dealer sale cell does not satisfy it.
+
+This document is a proposed oracle and coverage ledger. It does **not** mark SCRUM-486 or SCRUM-760 Done.
+
+## Implementation ledger on this branch
+
+`convex/scrum486Certification.test.ts` currently contains six passing **harness-only** rows: owned CASH no-deposit sale recognition; held/applied deposit at recognition; held deposit refunded before sale; held deposit forfeited before sale; new LEASE quote refusal with full-row no-change; and new INTERNAL_INSTALLMENT quote refusal with full-row no-change. The CASH rows assert literal account-code/JOD-minor-unit debits and credits, POSTED entry status and balance. They do not yet prove final collection, handover cost, commission, P&L/dashboard/collections parity, cancellation, role denial or foreign-tenant refusal. They do not satisfy the required matrix or real-backend release gate. The two retired-mode rows test the current product refusal, not historical lease/installment records.
