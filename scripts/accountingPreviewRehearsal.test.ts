@@ -353,6 +353,10 @@ describe("case recording keeps a failure as evidence", () => {
     // the two distinct because they invite different responses.
     const base = { total: 3, passed: 3, failed: 0, failedIds: [], unproven: 0, unprovenIds: [], complete: true };
     expect(exitCodeForSummary(base)).toBe(0);
+    const empty = summarize([]);
+    expect(empty.complete).toBe(false);
+    expect(exitCodeForSummary(empty)).toBe(1);
+    expect(bannerForSummary(empty)).toMatch(/INCOMPLETE — NOT CERTIFIED.*no cloud cases executed/);
     expect(exitCodeForSummary({ ...base, passed: 2, failed: 1, failedIds: ["D2"], complete: false })).toBe(1);
     expect(exitCodeForSummary({ ...base, passed: 2, unproven: 1, unprovenIds: ["P1"], complete: false })).toBe(1);
     // Distinguishable in the banner, identical at the process boundary.

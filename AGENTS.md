@@ -42,6 +42,30 @@ Until SCRUM-760 is Done, none of the following is evidence of correctness:
 - the pull-request visual Playwright gate;
 - a swarm run that never reached its attack workers.
 
+**Owner ruling SCRUM-813 c22622 (2026-10-10):** the pilot retains the original
+30-day no-code lifecycle. Customer invoice receipt application, unwind/refund
+and operator correction must work and be certified before launch. The current
+narrowed CASH + configured FINANCED controls remain disabled until their broader
+routes have been implemented, reviewed, deployed and certified. A green test of
+only the narrowed path does not satisfy SCRUM-714 or SCRUM-760.
+
+### Exact-SHA cloud rehearsal before a release
+
+`Accounting Cloud Rehearsal` validates case definitions. The release operator
+also dispatches the typed `autoflow-release-accounting-rehearsal` repository
+event with `client_payload.commit_sha` equal to main's full current SHA. GitHub
+loads `Trusted Accounting Cloud Rehearsal` from the default branch; that
+controller refuses if the requested SHA, live main, workflow SHA and event SHA
+differ. It creates a disposable Convex preview with `--preview-create`, stages
+the backend at that SHA as data, runs the public API cases and deletes the
+preview. The result is the producer-bound
+`github-actions/trusted-accounting-release-verdict` check at that exact SHA.
+The release gate requires it in addition to the definition check. Missing,
+zero-case, skipped, failed, mismatched-preview, wrong-SHA, or duplicate
+same-SHA attempts refuse the release. Inspect the run's uploaded evidence and
+cleanup step; a green unit harness or PR rehearsal does not replace them.
+SCRUM-759's FD1 failure currently prevents this cloud gate from passing.
+
 ## Deploying the Convex backend to production
 
 Production is deployed by running the **Deploy production** workflow from the

@@ -416,6 +416,30 @@ describe("CI must be green at the exact commit, and waivers expire", () => {
       expect(policy.waivers.map(id)).toEqual([]);
     });
 
+    test("a definition-only rehearsal cannot replace exact-SHA cloud execution (SCRUM-762)", async () => {
+      const policy = await loadPolicy();
+      const name = "trusted-accounting-release-verdict";
+      expect(policy.required.map(id)).toContain(`github-actions/${name}`);
+      expect(policy.waivers.map(id)).not.toContain(`github-actions/${name}`);
+      for (const [label, results] of [
+        ["absent", observeAll(policy.required, {}, [name])],
+        ["skipped", observeAll(policy.required, { [name]: { conclusion: "skipped" } })],
+        ["red", observeAll(policy.required, { [name]: { conclusion: "failure" } })],
+        ["wrong producer", [
+          ...observeAll(policy.required, {}, [name]),
+          { producer: "commit-status", name, status: "completed", conclusion: "success" },
+        ]],
+        ["ambiguous retry", [
+          ...observeAll(policy.required),
+          { producer: "github-actions", name, status: "completed", conclusion: "failure" },
+        ]],
+      ] as const) {
+        const verdict = evaluateRequiredChecks({ required: policy.required, results: [...results], waivers: policy.waivers, now: NOW });
+        expect(verdict.ok, label).toBe(false);
+        expect(verdict.failures.join("\n"), label).toContain(`github-actions/${name}`);
+      }
+    });
+
     for (const [label, over] of [
       ["FAILED", { conclusion: "failure" }],
       ["SKIPPED", { conclusion: "skipped" }],

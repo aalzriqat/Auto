@@ -4,22 +4,31 @@ on:
   workflow_run:
     workflows: ["Accounting Cloud Rehearsal"]
     types: [completed]
+  # repository_dispatch loads this workflow from the default branch. A
+  # branch-selectable workflow_dispatch would let candidate YAML reach the
+  # project-wide preview credential.
+  repository_dispatch:
+    types: [autoflow-release-accounting-rehearsal]
 
 permissions:
   contents: read
 
 concurrency:
-  group: trusted-accounting-rehearsal-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'repository_dispatch' && 'trusted-accounting-release' || format('trusted-accounting-pr-{0}', github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id) }}
+  cancel-in-progress: ${{ github.event_name != 'repository_dispatch' }}
 
 jobs:
   rehearsal:
     name: trusted-accounting-rehearsal
     if: >-
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_repository.full_name == github.repository &&
-      github.event.workflow_run.pull_requests[0].number != null
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.pull_requests[0].number != null) ||
+      (github.event_name == 'repository_dispatch' &&
+       github.event.action == 'autoflow-release-accounting-rehearsal' &&
+       github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -32,6 +41,10 @@ jobs:
     env:
       PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
       HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+      RELEASE_INPUT_SHA: ${{ github.event.client_payload.commit_sha }}
+      EVENT_NAME: ${{ github.event_name }}
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+      EVENT_SHA: ${{ github.sha }}
       GH_TOKEN: ${{ github.token }}
 
     steps:
@@ -48,6 +61,25 @@ jobs:
         working-directory: trusted
         run: |
           set -euo pipefail
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            if ! [[ "$RELEASE_INPUT_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "Release rehearsal requires an exact 40-character SHA." >&2
+              exit 1
+            fi
+            git fetch --no-tags origin "+refs/heads/main:refs/autoflow/accounting-main"
+            MAIN_SHA="$(git rev-parse refs/autoflow/accounting-main)"
+            if [ "$MAIN_SHA" != "$RELEASE_INPUT_SHA" ] ||
+               [ "$WORKFLOW_SHA" != "$RELEASE_INPUT_SHA" ] ||
+               [ "$EVENT_SHA" != "$RELEASE_INPUT_SHA" ]; then
+              echo "Release SHA, live main, trusted workflow and event commit differ." >&2
+              exit 1
+            fi
+            echo "TESTED_SHA=$MAIN_SHA" >> "$GITHUB_ENV"
+            echo "tested_sha=$MAIN_SHA" >> "$GITHUB_OUTPUT"
+            echo "preview_ref=refs/heads/main" >> "$GITHUB_OUTPUT"
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
             echo "workflow_run did not provide a valid PR number" >&2
             exit 1
@@ -99,10 +131,11 @@ jobs:
           echo "TESTED_SHA=$FETCHED_MERGE" >> "$GITHUB_ENV"
           echo "base_sha=$FIRST_PARENT" >> "$GITHUB_OUTPUT"
           echo "tested_sha=$FETCHED_MERGE" >> "$GITHUB_OUTPUT"
+          echo "preview_ref=refs/pull/${PR_NUMBER}/merge" >> "$GITHUB_OUTPUT"
           echo "stale=false" >> "$GITHUB_OUTPUT"
 
       - name: Mark trusted accounting rehearsal pending
-        if: steps.provenance.outputs.stale == 'false'
+        if: github.event_name == 'workflow_run' && steps.provenance.outputs.stale == 'false'
         env:
           TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
         run: |
@@ -151,9 +184,10 @@ jobs:
         working-directory: trusted
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          PREVIEW_REF: ${{ steps.provenance.outputs.preview_ref }}
         run: |
           set -euo pipefail
-          SCOPED="$(node -e 'import("./scripts/accountingPreviewRehearsal.mjs").then(m => process.stdout.write(m.rehearsalRefScope(process.argv[1])))' "refs/pull/${PR_NUMBER}/merge")"
+          SCOPED="$(node -e 'import("./scripts/accountingPreviewRehearsal.mjs").then(m => process.stdout.write(m.rehearsalRefScope(process.argv[1])))' "$PREVIEW_REF")"
           PREVIEW_NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "$SCOPED" "$PR_NUMBER")"
           if [ -z "$PREVIEW_NAME" ]; then
             echo "Trusted rehearsal refused an empty preview name." >&2
@@ -384,6 +418,15 @@ jobs:
           E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
 
+      - name: Refuse incomplete or wrong-target cloud evidence
+        if: steps.provenance.outputs.stale == 'false'
+        working-directory: trusted
+        run: node scripts/validateAccountingReleaseEvidence.mjs rehearsal-evidence.json
+        env:
+          EXPECTED_TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
+          EXPECTED_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+          EXPECTED_PREVIEW_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+
       - name: Upload trusted rehearsal evidence
         if: always() && steps.provenance.outputs.stale == 'false'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -441,5 +484,26 @@ jobs:
             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$TESTED_SHA" \
             --data "$payload" >/dev/null
           if [ "$state" != "success" ]; then
+            exit 1
+          fi
+
+  release_verdict:
+    name: trusted-accounting-release-verdict
+    needs: rehearsal
+    if: always() && github.event_name == 'repository_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Refuse unless exact-SHA cloud rehearsal passed
+        env:
+          REHEARSAL_RESULT: ${{ needs.rehearsal.result }}
+          TESTED_SHA: ${{ needs.rehearsal.outputs.tested_sha }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$REHEARSAL_RESULT" != success ] || [ "$TESTED_SHA" != "$EXPECTED_SHA" ]; then
+            echo "Trusted release rehearsal did not pass at this exact main SHA." >&2
             exit 1
           fi
