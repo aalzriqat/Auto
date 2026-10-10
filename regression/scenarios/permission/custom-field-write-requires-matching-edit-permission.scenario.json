@@ -1,0 +1,18 @@
+{
+  "id": "custom-field-write-requires-matching-edit-permission",
+  "fingerprint": "743b73367e58d44d318c6b4cf3c01725c75f115522c34300f758d022bc000550",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": { "hunter": "scripted", "runId": "scrum790-pr516", "firstSeen": "2026-10-08" },
+  "steps": [
+    { "actor": { "role": "viewer", "org": "A" }, "action": "orgCustomFields.setValues", "input": { "entityType": "vehicle" } }
+  ],
+  "expected": [
+    { "observable": "step1.refusal", "value": "edit:vehicles" },
+    { "observable": "step1.valueRows", "value": 0 }
+  ],
+  "rulings": [ { "id": "SCRUM-790#c22466", "digest": "e9ca1601bc3401dc5c6cb659ab3fa826c5e40d9e867b3a8a6044ca0be2558dc0" } ],
+  "impl": { "file": "convex/orgCustomFields.authorization.test.ts", "testName": "a view-only member cannot write a vehicle custom-field value" },
+  "matrixRow": "SCRUM-790-setValues-auth"
+}

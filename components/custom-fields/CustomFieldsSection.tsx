@@ -15,8 +15,17 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { useEffect, useState } from "react";
 import { toast } from "@/components/ui/sonner";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 
 type EntityType = "vehicle" | "customer" | "lead";
+
+/** Mirrors WRITE_TARGETS in convex/orgCustomFields.ts, which is the authority. */
+const EDIT_PERMISSION: Record<EntityType, string> = {
+  vehicle: PERMISSIONS.EDIT_VEHICLES,
+  customer: PERMISSIONS.EDIT_CUSTOMERS,
+  lead: PERMISSIONS.EDIT_LEADS,
+};
 
 interface Props {
   orgId: string;
@@ -39,6 +48,7 @@ export function CustomFieldsSection({ orgId, entityType, entityId, onChange }: P
       : "skip"
   );
 
+  const { hasPermission, isLoading } = usePermissions();
   const [values, setValues] = useState<Record<string, string>>({});
 
   // Load existing values when editing
@@ -58,6 +68,10 @@ export function CustomFieldsSection({ orgId, entityType, entityId, onChange }: P
   }, [values]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const activeFields = fields?.filter((f: Doc<"orgCustomFields">) => f.isActive) ?? [];
+  // SCRUM-790: the backend refuses a value write without the matching edit
+  // permission, so a caller who cannot edit never sees inputs whose typed values
+  // would be lost to an error toast after the record is created.
+  if (isLoading || !hasPermission(EDIT_PERMISSION[entityType])) return null;
   if (activeFields.length === 0) return null;
 
   const handleChange = (fieldId: string, value: string) => {
