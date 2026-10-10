@@ -1687,6 +1687,11 @@ export async function runRehearsalCases(ctx) {
     if (denom.currency !== "JOD" || denom.decimals !== 3) {
       unproven("M486C1 requires the certified JOD denomination and three minor-unit decimals");
     }
+    const monthStart = new Date();
+    const fromDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth(), 1);
+    const toDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0, 23, 59, 59, 999);
+    const reportArgs = { orgId, fromDate, toDate };
+    const openingBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const stamp = `${Date.now().toString(36)}-${uuid().slice(0, 8)}`;
     const vin = `RHS486${uuid().replace(/-/g, "").slice(0, 11)}`.toUpperCase();
     const customerId = await ownerMust("mutation", "customers:create", {
@@ -1705,10 +1710,6 @@ export async function runRehearsalCases(ctx) {
     });
     const me = await ownerMust("query", "users:getMe", {});
     if (!me?._id) unproven("M486C1 has no authenticated salesperson identity");
-    const monthStart = new Date();
-    const fromDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth(), 1);
-    const toDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0, 23, 59, 59, 999);
-    const reportArgs = { orgId, fromDate, toDate };
     const beforeBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const beforeIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
     const saleId = await ownerMust("mutation", "sales:create", {
@@ -1716,6 +1717,9 @@ export async function runRehearsalCases(ctx) {
       salePrice: 12_500, saleDate: Date.now(), status: "COMPLETED",
       idempotencyKey: `rehearsal-m486c1-sale-${stamp}`,
     });
+    if (Date.now() > toDate || Date.now() < fromDate) {
+      unproven("M486C1 crossed its UTC accounting month during acquisition and sale");
+    }
     const sale = await ownerMust("query", "sales:get", { orgId, saleId });
     expectEqual(sale?.status, "COMPLETED", "M486C1 public sale state");
     if (!sale?.canonicalReceivableDocumentId) fail("M486C1 sale has no canonical customer invoice");
@@ -1746,10 +1750,21 @@ export async function runRehearsalCases(ctx) {
     const keyOf = new Map((chart ?? []).map((a) => [String(a._id), a.systemKey ?? a.code ?? "?"]));
     const codeOf = new Map((chart ?? []).map((a) => [a.systemKey, a.code]));
     const expectedCodes = [
+      ["CASH_ON_HAND", "1000"],
       ["ACCOUNTS_RECEIVABLE_CUSTOMERS", "1200"], ["SALES_REVENUE", "4100"],
       ["COST_OF_VEHICLES_SOLD", "5100"], ["VEHICLE_INVENTORY", "1400"],
     ];
     for (const [key, code] of expectedCodes) expectEqual(codeOf.get(key), code, `M486C1 chart code ${key}`);
+    const acquisition = await eventAndJournal({
+      orgId, ownerMust, sourceType: "vehicles", sourceId: vehicleId, eventType: "VEHICLE_ACQUIRED",
+    });
+    expectExactLines(acquisition.lines, keyOf, [
+      { key: "VEHICLE_INVENTORY", debitMinor: 10_000_000 },
+      { key: "CASH_ON_HAND", creditMinor: 10_000_000 },
+    ], { currency: "JOD", decimals: 3, what: "M486C1 owned vehicle acquisition" });
+    for (const line of acquisition.lines) {
+      expectEqual(String(line.vehicleId), String(vehicleId), "M486C1 acquisition vehicle dimension");
+    }
     const posted = await eventAndJournal({
       orgId, ownerMust, sourceType: "sales", sourceId: saleId, eventType: "SALE_COMPLETED",
     });
@@ -1780,6 +1795,11 @@ export async function runRehearsalCases(ctx) {
       .map((r) => [keyOf.get(String(r.accountId)), r.netMinor]));
     const before = byKey(beforeBalance);
     const after = byKey(afterBalance);
+    const opening = byKey(openingBalance);
+    expectEqual((before.get("VEHICLE_INVENTORY") ?? 0) - (opening.get("VEHICLE_INVENTORY") ?? 0),
+      10_000_000, "M486C1 public inventory capitalized before sale");
+    expectEqual((after.get("VEHICLE_INVENTORY") ?? 0) - (opening.get("VEHICLE_INVENTORY") ?? 0),
+      0, "M486C1 public inventory cleared after sale");
     for (const [key, delta] of [
       ["ACCOUNTS_RECEIVABLE_CUSTOMERS", 12_500_000],
       ["SALES_REVENUE", 12_500_000],
@@ -2848,7 +2868,7 @@ async function findReceivable({ orgId, ownerMust, receivableId }) {
 async function makeVehicle({ orgId, ownerMust, label }) {
   const stamp = Date.now().toString(36);
   const vin = `RHS${label}${stamp}`.replace(/[ioq]/gi, "z").toUpperCase().padEnd(17, "0").slice(0, 17);
-  return ownerMust("mutation", "vehicles:create", {
+  return createVehicleForRehearsal(ownerMust, {
     orgId,
     vin,
     make: "Toyota",

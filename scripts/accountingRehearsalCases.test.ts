@@ -169,6 +169,12 @@ type Defects = {
   cashSaleWrongRevenueAccount?: boolean;
   /** The public income statement understates the certified sale by one minor unit. */
   cashSaleReportMisstatesProfit?: boolean;
+  /** Vehicle creation records a cost but never capitalizes inventory. */
+  cashSaleAcquisitionMissingPosting?: boolean;
+  /** Vehicle acquisition posts a balanced but understated inventory amount. */
+  cashSaleAcquisitionWrongAmount?: boolean;
+  /** The sale balances, but the public inventory control retains one minor unit. */
+  cashSaleInventoryReportNotCleared?: boolean;
   /** The sale posts AR but has no collectible canonical customer invoice. */
   cashSaleMissingInvoice?: boolean;
   /** The sale has two invoices for the same source. */
@@ -684,7 +690,8 @@ function makeBackend(defects: Defects = {}) {
           const debitMinor = lines.reduce((sum, line) => sum + line.debitMinor, 0);
           const creditMinor = lines.reduce((sum, line) => sum + line.creditMinor, 0);
           return [{ accountId: account._id, code: account.code, currency: ORG_CURRENCY,
-            netMinor: account.normalBalance === "DEBIT" ? debitMinor - creditMinor : creditMinor - debitMinor }];
+            netMinor: (account.normalBalance === "DEBIT" ? debitMinor - creditMinor : creditMinor - debitMinor) +
+              (defects.cashSaleInventoryReportNotCleared && certifiedCashSalePosted && account.systemKey === "VEHICLE_INVENTORY" ? 1 : 0) }];
         });
         return { ok: true as const, value: { rows } };
       }
@@ -1012,6 +1019,14 @@ function makeBackend(defects: Defects = {}) {
             sourceType: args.sourceType,
             purchasePrice: Number(args.sourceType === "SOURCED" ? args.sourceCost : (args.purchasePrice ?? 0)),
           });
+          if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c1-vehicle-") &&
+              !defects.cashSaleAcquisitionMissingPosting) {
+            const costMinor = defects.cashSaleAcquisitionWrongAmount ? 9_000_000 : 10_000_000;
+            post("VEHICLE_ACQUIRED", "vehicles", String(madeVehicle.value), [
+              { key: "VEHICLE_INVENTORY", debitMinor: costMinor, vehicleId: String(madeVehicle.value) },
+              { key: "CASH_ON_HAND", creditMinor: costMinor, vehicleId: String(madeVehicle.value) },
+            ]);
+          }
         }
         return madeVehicle;
       case "quotes:saveQuote": {
@@ -1864,6 +1879,16 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     const results = await runAgainst({ cashSaleReportMisstatesProfit: true });
     expect(statusOf(results, "M486C1")).toBe("FAIL");
     expect(String(results.find((r) => r.id === "M486C1")?.detail)).toMatch(/public income netIncome/);
+  });
+
+  test.each([
+    ["cashSaleAcquisitionMissingPosting", /VEHICLE_ACQUIRED|inventory/i],
+    ["cashSaleAcquisitionWrongAmount", /acquisition|inventory/i],
+    ["cashSaleInventoryReportNotCleared", /inventory cleared/i],
+  ] as const)("M486C1 rejects %s", async (defect, diagnostic) => {
+    const results = await runAgainst({ [defect]: true });
+    expect(statusOf(results, "M486C1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "M486C1")?.detail)).toMatch(diagnostic);
   });
 
   test.each([
