@@ -92,6 +92,14 @@ The suite must expand each applicable cell across quote, deposit, approval, hand
 
 This document is a proposed oracle and coverage ledger. It does **not** mark SCRUM-486 or SCRUM-760 Done.
 
+### Phase 2 trusted-preview execution boundary
+
+The existing `trusted-accounting-rehearsal.yml` checks out its controller at the trusted workflow SHA. For a PR, it stages the exact PR merge's `convex/` backend as **data**, audits that stage and deploys it only to a disposable preview with `--preview-create`. The credentialed step then executes `scripts/accountingPreviewRehearsal.mjs` from the trusted checkout. That script does not import this PR's `convex/scrum486Certification.test.ts`. A green accounting rehearsal on this draft PR therefore proves the existing main-owned scenarios ran against its candidate backend; it measures **zero** of the new SCRUM-486 cells.
+
+The Phase 2 implementation must put a bounded, independently reviewed certification runner and literal oracle in the trusted controller before it can count these cells. It must call the public mutations with preview-only identities, record a stable ID and owner-ruling reference for every attempted cell, compare journals/subledgers and public report consumers with literal account/currency/minor-unit expectations, and fail closed on a missing, skipped, unparseable or unexpected cell. The required release verdict must bind the scenario evidence to the exact main SHA and the preview's create/pin/seed/delete lifecycle. Candidate PR scripts must never execute with preview credentials. A PR rehearsal may validate a candidate backend using already trusted matrix code; newly added matrix code becomes trusted only after normal review and merge, followed by a fresh main-only release run.
+
+This is an execution contract, not a claim that such a runner or preview proof exists. The current 26 rows remain harness-only. Fully elapsed periods need consumer-facing snapshot assertions, and the eventual release run still cannot prove retained production-data parity without separate reconciliation.
+
 ## Implementation ledger on this branch
 
 The owned configured-financier no-deposit cancellation row drives the public cancellation door before any financier receipt. It checks a CANCELLED finance-company invoice and sale, a REVERSED sale event, literal inverse 1210/4100/5100/1400 journal lines, and zero public open-period trial balance and income. A salesperson with ordinary sales and finance-application access but without `cancel:closed_deal` is refused before the reversal, with all schema tables unchanged. It does not cover cancellation after financier payment or a closed-period reversal.
