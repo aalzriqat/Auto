@@ -214,6 +214,10 @@ type Defects = {
   cashDepositPaymentWrongStatus?: boolean;
   cashDepositPaymentWrongAmount?: boolean;
   cashDepositPaymentWrongMethod?: boolean;
+  /** Sale allocates a different payment while the held receipt stays unapplied. */
+  cashDepositSaleAllocatesNewPayment?: boolean;
+  /** The receipt payment is already allocated before the deposit is applied. */
+  cashDepositPaymentPreallocated?: boolean;
   /** The public trial balance drops the deposit receipt while journals retain it. */
   cashDepositReportOmitsReceipt?: boolean;
   /** An extra balanced posting treats held cash as earned revenue and creates AR. */
@@ -1020,7 +1024,16 @@ function makeBackend(defects: Defects = {}) {
               ]);
             }
             if (invoiceId && !defects.cashDepositInvoiceNotReduced) {
-              allocations.push({ orgId: String(args.orgId), paymentId: deposit.canonicalPaymentId, receivableDocumentId: invoiceId,
+              let allocationPaymentId = deposit.canonicalPaymentId;
+              if (defects.cashDepositSaleAllocatesNewPayment && allocationPaymentId) {
+                const receiptPayment = canonicalPayments.get(allocationPaymentId);
+                if (receiptPayment) {
+                  allocationPaymentId = id("cpay");
+                  canonicalPayments.set(allocationPaymentId, { ...receiptPayment, _id: allocationPaymentId,
+                    idempotencyKey: `sale_duplicate_${deposit._id}` });
+                }
+              }
+              allocations.push({ orgId: String(args.orgId), paymentId: allocationPaymentId, receivableDocumentId: invoiceId,
                 amountMinor: 200_000, currency: ORG_CURRENCY, scale: 3, status: "ACTIVE" });
               const invoice = financeReceivables.get(invoiceId);
               if (invoice) invoice.status = "PARTIALLY_PAID";
@@ -1113,6 +1126,10 @@ function makeBackend(defects: Defects = {}) {
           method: defects.cashDepositPaymentWrongMethod ? "OTHER" : String(args.method),
           status: defects.cashDepositPaymentWrongStatus ? "DRAFT" : "SETTLED",
           idempotencyKey: `deposit_received_${depositId}`, externalReference: `Deposit ${depositId}`,
+        });
+        if (paymentId && defects.cashDepositPaymentPreallocated) allocations.push({
+          orgId: String(args.orgId), paymentId, receivableDocumentId: "earlier-invoice",
+          amountMinor: 1_000, currency: ORG_CURRENCY, scale: 3, status: "ACTIVE",
         });
         if (periodStatus === "OPEN") {
           post("DEPOSIT_RECEIVED", "deposits", depositId, [
@@ -2024,6 +2041,8 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["cashDepositPaymentWrongStatus", /canonical payment status/i],
     ["cashDepositPaymentWrongAmount", /canonical payment amountMinor/i],
     ["cashDepositPaymentWrongMethod", /canonical payment method/i],
+    ["cashDepositSaleAllocatesNewPayment", /sale allocation consumes held deposit payment/i],
+    ["cashDepositPaymentPreallocated", /held payment remains unapplied/i],
     ["cashDepositReportOmitsReceipt", /deposit receipt|public cash|public liability/i],
     ["cashDepositRecognizedAsRevenue", /held deposit|public revenue|public receivable/i],
     ["cashDepositRecognizedAsOtherIncome", /held deposit|public income|public expense/i],
