@@ -298,7 +298,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
 
     // The current public confirmation door accepts only the full financier
     // receivable. This pins fail-closed behavior; it does not certify the
-    // separate owner-required partial-receipt lifecycle.
+    // separate owner-required partial-receipt lifecycle (SCRUM-814).
     await expect(s.approver.as.mutation(api.applications.confirmDisbursement, {
       orgId: s.orgId, applicationId, disbursedAmountMinor: 5_000_000,
       idempotencyKey: "s486-financed-held-partial-refusal",
