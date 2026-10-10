@@ -474,7 +474,7 @@ export function summarize(results) {
     // The run is only "complete" when nothing was skipped. A green exit code
     // beside a non-empty unproven list is how a partial rehearsal gets quoted
     // as a full one.
-    complete: failed.length === 0 && unprovenCases.length === 0,
+    complete: results.length > 0 && failed.length === 0 && unprovenCases.length === 0,
   };
 }
 
@@ -487,6 +487,7 @@ export async function main(env = process.env) {
     convexUrl: config.convexUrl,
     deploymentType: "preview",
     workflowRunId: env.GITHUB_RUN_ID ?? null,
+    workflowRunAttempt: env.GITHUB_RUN_ATTEMPT ?? null,
     workflowJob: env.GITHUB_JOB ?? null,
     cases: [],
   };
@@ -595,12 +596,14 @@ export async function main(env = process.env) {
  * Pure, so it can be unit-tested for every branch without running a rehearsal.
  */
 export function exitCodeForSummary(summary) {
+  if (!Number.isSafeInteger(summary.total) || summary.total === 0 || summary.complete !== true) return 1;
   if (summary.failed > 0) return 1;
   if (summary.unproven > 0) return 1;
   return 0;
 }
 
 export function bannerForSummary(summary) {
+  if (summary.total === 0) return "\nREHEARSAL INCOMPLETE — NOT CERTIFIED: no cloud cases executed.";
   if (summary.failed > 0) {
     const unprovenTail =
       summary.unproven > 0 ? `; ${summary.unproven} UNPROVEN (${summary.unprovenIds.join(", ")})` : "";

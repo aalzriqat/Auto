@@ -15,7 +15,7 @@
 import { describe, expect, test } from "vitest";
 import { readCheckResults } from "./releaseChecks.mjs";
 
-type Run = { name: string; app?: { slug: string }; status: string; conclusion: string | null };
+type Run = { id?: number; name: string; app?: { slug: string }; status: string; conclusion: string | null };
 
 const run = (name: string, over: Partial<Run> = {}): Run => ({
   name,
@@ -37,14 +37,17 @@ function fakeApi(options: {
   reportedTotal?: number;
   failCheckRuns?: number;
   failStatuses?: number;
+  failReleaseJob?: number;
+  releaseWorkflow?: { path?: string; event?: string; head_sha?: string; head_branch?: string };
 }) {
-  const calls: { path: string; page?: number; perPage?: number }[] = [];
+  const calls: { path: string; page?: number; perPage?: number; filter?: string }[] = [];
 
   const api = async (path: string, query?: Record<string, unknown>) => {
     calls.push({
       path,
       page: query?.page as number | undefined,
       perPage: query?.per_page as number | undefined,
+      filter: query?.filter as string | undefined,
     });
 
     if (path.endsWith("/check-runs")) {
@@ -58,13 +61,32 @@ function fakeApi(options: {
       // invisible. A mock that is more generous than the service it stands in
       // for tests nothing.
       const perPage = Number(query?.per_page ?? 30);
-      const slice = options.runs.slice((page - 1) * perPage, page * perPage);
+      const visibleRuns = query?.filter === "all"
+        ? options.runs
+        : options.runs.filter((r, index) => !options.runs.some((later, next) =>
+          next > index && later.name === r.name && later.app?.slug === r.app?.slug));
+      const slice = visibleRuns.slice((page - 1) * perPage, page * perPage);
       return {
         status: 200,
-        body: { total_count: options.reportedTotal ?? options.runs.length, check_runs: slice },
+        body: { total_count: options.reportedTotal ?? visibleRuns.length, check_runs: slice },
       };
     }
 
+    if (path.startsWith("/actions/jobs/")) {
+      if (options.failReleaseJob) return { status: options.failReleaseJob, body: null };
+      const id = Number(path.split("/").at(-1));
+      return { status: 200, body: {
+        id, name: "trusted-accounting-release-verdict", head_sha: "a".repeat(40),
+        run_id: 54321, check_run_url: `https://api.github.com/repos/aalzriqat/Auto/check-runs/${id}`,
+      } };
+    }
+    if (path.startsWith("/actions/runs/")) {
+      return { status: 200, body: {
+        id: 54321, path: ".github/workflows/trusted-accounting-rehearsal.yml",
+        event: "repository_dispatch", head_sha: "a".repeat(40), head_branch: "main",
+        ...options.releaseWorkflow,
+      } };
+    }
     if (options.failStatuses) return { status: options.failStatuses, body: null };
     return { status: 200, body: { statuses: options.statuses ?? [] } };
   };
@@ -91,11 +113,63 @@ describe("every check at a commit is read, across every page", () => {
     expect(found.some((r) => r.name === "lint")).toBe(true);
 
     const checkRunCalls = calls.filter((c) => c.path.endsWith("/check-runs"));
-    expect(checkRunCalls.map((c) => c.page)).toEqual([1, 2]);
+    expect(checkRunCalls.map((c) => c.page)).toEqual([1, 2, 1, 2]);
     // The page size must be REQUESTED, not assumed. Without it GitHub serves
     // 30, and the reader's `runs.length < PER_PAGE` test would end the walk on
     // the first page while believing it had reached the end.
-    expect(checkRunCalls.map((c) => c.perPage)).toEqual([100, 100]);
+    expect(checkRunCalls.map((c) => c.perPage)).toEqual([100, 100, 100, 100]);
+    expect(checkRunCalls.map((c) => c.filter)).toEqual(["latest", "latest", "all", "all"]);
+  });
+
+  test("an earlier failed check remains visible after a green same-name rerun", async () => {
+    const { api, calls } = fakeApi({ runs: [
+      run("trusted-accounting-release-verdict", { id: 1234, conclusion: "failure" }),
+      run("trusted-accounting-release-verdict", { id: 1235, conclusion: "success" }),
+    ] });
+    const result = await readCheckResults(api, "a".repeat(40));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect((result.results ?? []).filter((r) => r.name === "trusted-accounting-release-verdict").map((r) => r.conclusion))
+      .toEqual(["failure", "success"]);
+    expect(calls.filter((c) => c.path.endsWith("/check-runs")).map((c) => c.filter))
+      .toEqual(["latest", "all"]);
+  });
+
+  test("ordinary required checks retain latest-attempt recovery", async () => {
+    const { api } = fakeApi({ runs: [
+      run("unit-and-integration", { conclusion: "failure" }),
+      run("unit-and-integration", { conclusion: "success" }),
+    ] });
+    const result = await readCheckResults(api, "a".repeat(40));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect((result.results ?? []).filter((r) => r.name === "unit-and-integration").map((r) => r.conclusion))
+      .toEqual(["success"]);
+  });
+
+  test.each([403, 404])("a release verdict whose Actions job cannot be verified (%i) is refused", async (status) => {
+    const result = await readCheckResults(fakeApi({
+      runs: [run("trusted-accounting-release-verdict", { id: 1234 })],
+      failReleaseJob: status,
+    }).api, "a".repeat(40));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/Actions job/);
+  });
+
+  test.each([
+    { path: ".github/workflows/untrusted.yml" },
+    { event: "pull_request" },
+    { head_sha: "b".repeat(40) },
+    { head_branch: "candidate" },
+  ])("a release verdict from the wrong workflow provenance is refused: %j", async (releaseWorkflow) => {
+    const result = await readCheckResults(fakeApi({
+      runs: [run("trusted-accounting-release-verdict", { id: 1234 })],
+      releaseWorkflow,
+    }).api, "a".repeat(40));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(/trusted main-only dispatch/);
   });
 
   test("a LYING total_count does not end the walk early", async () => {
@@ -121,7 +195,7 @@ describe("every check at a commit is read, across every page", () => {
     const result = await readCheckResults(api, "a".repeat(40));
 
     expect(result.ok).toBe(true);
-    expect(calls.filter((c) => c.path.endsWith("/check-runs"))).toHaveLength(1);
+    expect(calls.filter((c) => c.path.endsWith("/check-runs"))).toHaveLength(2);
   });
 
   test("an implausible number of checks refuses rather than paging forever", async () => {

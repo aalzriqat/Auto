@@ -85,6 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      actions: read
       contents: read
       checks: read
       statuses: read
@@ -124,6 +125,7 @@ jobs:
     timeout-minutes: 90
     # Read-only, and enough to re-derive the CI verdict after approval.
     permissions:
+      actions: read
       checks: read
       contents: read
       statuses: read
