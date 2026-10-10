@@ -15,7 +15,7 @@
  * cannot interleave anything. Real interleaving is exactly what the cloud run
  * exists for, and nothing here substitutes for it.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -225,6 +225,8 @@ type Defects = {
   financeDeductedCloseMutatesThenRefuses?: boolean;
   /** A short finance-company receipt is refused for an unrelated reason. */
   financeReceiptWrongRefusalReason?: boolean;
+  /** The clock crosses UTC month-end after the accounting period opens. */
+  clockRolloverAfterBookOpen?: boolean;
   // ── FD2 — deal costs denominated once (SCRUM-319) ──
   /** A cost entered in a foreign currency is recorded anyway — the integer lands at the wrong scale. */
   feeAcceptsForeignCurrency?: boolean;
@@ -326,6 +328,7 @@ function makeBackend(defects: Defects = {}) {
   const quoteVehicle = new Map<string, string>();
   const quoteCustomer = new Map<string, string>();
   let periodStatus = "OPEN";
+  let openedPeriodEndDate: number | null = null;
   let seq = 0;
   const id = (p: string) => `${p}_${++seq}`;
 
@@ -637,6 +640,10 @@ function makeBackend(defects: Defects = {}) {
           value: defects.noUnappliedLiability ? CHART.filter((a) => a.code !== "2110") : CHART,
         };
       case "accountingPeriods:create":
+        if (defects.clockRolloverAfterBookOpen) {
+          openedPeriodEndDate = Number(args.endDate);
+          vi.setSystemTime(Date.UTC(2026, 1, 1, 0, 0, 30));
+        }
         return { ok: true as const, value: id("period") };
       case "accountingPeriods:list":
         return { ok: true as const, value: [{ _id: "p1", status: periodStatus }] };
@@ -1256,6 +1263,10 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: fee._id };
       }
       case "financeDealCosts:recordDirectFeePayment": {
+        if (defects.clockRolloverAfterBookOpen && openedPeriodEndDate !== null &&
+            Number(args.paidAt) > openedPeriodEndDate) {
+          return { ok: false as const, error: "No open accounting period covers this payment date." };
+        }
         const fee = financeDealFees.get(String(args.feeId));
         if (!fee || fee.voidedAt !== undefined) return { ok: false as const, error: "Deal cost not found in this organization." };
         if (fee.paidBy !== "DEALER" || fee.deductedFromSettlement || fee.directPayment !== undefined ||
@@ -1942,6 +1953,17 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
   });
 
   // ── FD1 — the finance-company receipt (SCRUM-241) ──
+  test("FD1 keeps its direct payment in the opened period across UTC month-end", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.UTC(2026, 0, 31, 23, 59, 30));
+    try {
+      const results = await runAgainst({ clockRolloverAfterBookOpen: true });
+      expect(statusOf(results, "FD1"), detail(results, "FD1")).toBe("PASS");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("FD1 catches a short receipt (net of the dealer's own cost) accepted instead of refused", async () => {
     const results = await runAgainst({ financeReceiptClipsToOutstanding: true });
     expect(statusOf(results, "FD1")).toBe("FAIL");

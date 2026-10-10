@@ -211,7 +211,7 @@ async function openTheBooks({ orgId, ownerCall }) {
     openImmediately: true,
   });
   notes.period = period.ok ? "created and opened" : `already present or refused: ${period.error.slice(0, 120)}`;
-  return notes;
+  return { notes, openedAt: now.getTime() };
 }
 
 /** Keep a backdated direct payment inside the UTC month this rehearsal opens. */
@@ -253,7 +253,7 @@ export async function runRehearsalCases(ctx) {
     id: "SETUP",
     description: "the fresh organization is brought to a chart + OPEN period through public mutations",
     status: "PASS",
-    detail: bookkeeping,
+    detail: bookkeeping.notes,
   });
 
   // ── A1 — the launch chart, on a genuinely fresh cloud deployment ───────────
@@ -1840,7 +1840,7 @@ export async function runRehearsalCases(ctx) {
         orgId,
         feeId,
         method: "BANK_TRANSFER",
-        paidAt: fd1DirectPaymentTime(Date.now()),
+        paidAt: fd1DirectPaymentTime(bookkeeping.openedAt),
         expectedAmountMinor: dealerCost,
         idempotencyKey: `rehearsal-fd1-direct-payment-${stamp}`,
       });
