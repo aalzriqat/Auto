@@ -34,6 +34,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { listJournalEntries } from "./accountingLedger";
 import type { Id } from "./_generated/dataModel";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
@@ -147,6 +148,83 @@ async function walkAllPages(
 }
 
 describe("General Ledger pagination — AF-318-01 regression (>100 entries reachable)", () => {
+  test("account-filtered entries invoke paginate only once with duplicate account lines", async () => {
+    const ctx = await seedDealer("Single Paginate Dealer", "glsinglepage");
+    const date = ctx.currentPeriod.startDate + 10_000;
+    const entryId = await insertJournalEntry(ctx, {
+      index: 901, accountingDate: date, periodId: ctx.currentPeriod._id,
+      accountId: ctx.revenue._id, memo: "duplicate account line",
+    });
+    await ctx.t.run(async (dbCtx) => {
+      await dbCtx.db.insert("journalLines", {
+        orgId: ctx.orgId, journalEntryId: entryId, lineNumber: 3,
+        accountId: ctx.revenue._id, debitMinor: 0, creditMinor: 1,
+        currency: "JOD", scale: 3, accountingDate: date,
+      });
+      await dbCtx.db.insert("journalLines", {
+        orgId: ctx.orgId, journalEntryId: entryId, lineNumber: 4,
+        accountId: ctx.cash._id, debitMinor: 1, creditMinor: 0,
+        currency: "JOD", scale: 3, accountingDate: date,
+      });
+    });
+    const olderEntryId = await insertJournalEntry(ctx, {
+      index: 902, accountingDate: date - 1_000, periodId: ctx.currentPeriod._id,
+      accountId: ctx.revenue._id, memo: "older entry after duplicate lines",
+    });
+
+    const { result, paginateCalls } = await ctx.asOwner.run(async (runCtx) => {
+      let paginateCalls = 0;
+      const originalQuery = runCtx.db.query.bind(runCtx.db);
+      const wrap = (builder: object): object => new Proxy(builder, {
+        get(target, property) {
+          const value: unknown = Reflect.get(target, property);
+          if (property === "paginate") {
+            return (...args: unknown[]) => {
+              paginateCalls++;
+              return (value as (...args: unknown[]) => unknown).apply(target, args);
+            };
+          }
+          if (property === "withIndex" || property === "order") {
+            return (...args: unknown[]) => wrap((value as (...args: unknown[]) => object).apply(target, args));
+          }
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const db = {
+        ...runCtx.db,
+        query: (table: Parameters<typeof runCtx.db.query>[0]) =>
+          table === "journalLines"
+            ? wrap(originalQuery(table)) as ReturnType<typeof runCtx.db.query>
+            : originalQuery(table),
+      } as typeof runCtx.db;
+      const handler = (listJournalEntries as unknown as {
+        _handler: (handlerCtx: typeof runCtx, args: {
+          orgId: Id<"organizations">; accountId: Id<"chartOfAccounts">;
+          paginationOpts: { numItems: number; cursor: string | null };
+        }) => Promise<{
+          page: Array<{ _id: Id<"journalEntries"> }>;
+          isDone: boolean;
+          continueCursor: string;
+        }>;
+      })._handler;
+      const result = await handler({ ...runCtx, db }, {
+        orgId: ctx.orgId, accountId: ctx.revenue._id,
+        paginationOpts: { numItems: 2, cursor: null },
+      });
+      return { result, paginateCalls };
+    });
+
+    expect(result.page.map((entry) => entry._id)).toEqual([entryId]);
+    expect(paginateCalls).toBe(1);
+    expect(result.isDone).toBe(false);
+    const next = await ctx.asOwner.query(api.accountingLedger.listJournalEntries, {
+      orgId: ctx.orgId,
+      accountId: ctx.revenue._id,
+      paginationOpts: { numItems: 2, cursor: result.continueCursor },
+    });
+    expect(next.page.map((entry) => entry._id)).toEqual([olderEntryId]);
+  });
+
   test("125 seeded entries: bounded first page, a planted OLD entry is off page 1, pagination reaches it, no duplicates, deterministic order", async () => {
     const ctx = await seedDealer("GL Pagination Dealer", "glpag");
 

@@ -109,63 +109,49 @@ export const listJournalEntries = query({
       const targetItems = args.paginationOpts.numItems;
       const seen = new Set<string>();
       const entries = [];
-      let currentCursor = initialLineCursor;
-      let isDone = false;
 
-      // Cache journal lines by journalEntryId across fetch rounds in this query
+      // A Convex function may execute only one paginated query. Filtering
+      // duplicate account lines can yield fewer entries than numItems, so the
+      // client follows the line cursor to reach subsequent matching entries.
+      const linePage = await ctx.db
+        .query("journalLines")
+        .withIndex("by_org_account_date", (q) => {
+          const base = q.eq("orgId", args.orgId).eq("accountId", args.accountId!);
+          return period
+            ? base.gte("accountingDate", period.startDate).lte("accountingDate", period.endDate)
+            : base;
+        })
+        .order("desc")
+        .paginate({ numItems: targetItems, cursor: initialLineCursor });
+
       const entryLinesCache = new Map<string, Doc<"journalLines">[]>();
 
-      // Bound fetch rounds to prevent runaway transaction execution
-      const MAX_FETCH_ROUNDS = 10;
-      let rounds = 0;
-
-      while (entries.length < targetItems && !isDone && rounds < MAX_FETCH_ROUNDS) {
-        rounds++;
-        const remaining = targetItems - entries.length;
-        const linePage = await ctx.db
-          .query("journalLines")
-          .withIndex("by_org_account_date", (q) => {
-            const base = q.eq("orgId", args.orgId).eq("accountId", args.accountId!);
-            return period
-              ? base.gte("accountingDate", period.startDate).lte("accountingDate", period.endDate)
-              : base;
-          })
-          .order("desc")
-          .paginate({ numItems: remaining, cursor: currentCursor });
-
-        for (const line of linePage.page) {
-          let lines = entryLinesCache.get(line.journalEntryId);
-          if (!lines) {
-            lines = await ctx.db
-              .query("journalLines")
-              .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", line.journalEntryId))
-              .collect();
-            entryLinesCache.set(line.journalEntryId, lines);
-          }
-
-          if (!isRepresentativeLineForAccount(line, lines, args.accountId)) {
-            continue;
-          }
-
-          if (seen.has(line.journalEntryId)) continue;
-          seen.add(line.journalEntryId);
-
-          const entry = await ctx.db.get(line.journalEntryId);
-          if (!entry || entry.orgId !== args.orgId) continue;
-          if (args.periodId && entry.periodId !== args.periodId) continue;
-
-          entries.push(entry);
+      for (const line of linePage.page) {
+        let lines = entryLinesCache.get(line.journalEntryId);
+        if (!lines) {
+          lines = await ctx.db
+            .query("journalLines")
+            .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", line.journalEntryId))
+            .collect();
+          entryLinesCache.set(line.journalEntryId, lines);
         }
 
-        currentCursor = linePage.continueCursor;
-        isDone = linePage.isDone;
+        if (!isRepresentativeLineForAccount(line, lines, args.accountId)) continue;
+        if (seen.has(line.journalEntryId)) continue;
+        seen.add(line.journalEntryId);
+
+        const entry = await ctx.db.get(line.journalEntryId);
+        if (!entry || entry.orgId !== args.orgId) continue;
+        if (args.periodId && entry.periodId !== args.periodId) continue;
+
+        entries.push(entry);
       }
 
-      const continueCursor = isDone || !currentCursor ? "" : currentCursor;
+      const continueCursor = linePage.isDone || !linePage.continueCursor ? "" : linePage.continueCursor;
 
       return {
         page: entries,
-        isDone,
+        isDone: linePage.isDone,
         continueCursor,
       };
     }
