@@ -89,7 +89,9 @@ export async function getPostedLines(
   toDate?: number,
   options?: { preferBulkRead?: boolean }
 ) {
-  const maxTargetedLines = 128;
+  // Leave headroom under Convex's per-transaction index-range limit for the
+  // rest of the report. Lines sharing a parent require only one point read.
+  const maxTargetedParents = 512;
   const excludeSentinel = fromDate === undefined || toDate === undefined;
   const lineQuery = () => ctx.db
     .query("journalLines")
@@ -103,18 +105,15 @@ export async function getPostedLines(
       return scoped;
     });
 
-  // A two-sided date window may be narrow enough to avoid reading every
-  // posted entry in the organization. Cumulative one-sided reads, including
-  // period-close reconciliations, stay on the original bulk path: on an
-  // established ledger they would usually pay for 129 discarded probe rows.
-  // Long-lived two-sided callers can opt into that same path.
+  // Read the requested lines once. A two-sided window with a bounded number
+  // of parent entries can avoid reading every posted entry in the organization.
+  // Cumulative callers can retain the bulk parent scan.
   const hasDateBound = fromDate !== undefined && toDate !== undefined;
-  let targetedLines: Doc<"journalLines">[] | null = null;
-  if (hasDateBound && !options?.preferBulkRead) {
-    targetedLines = await lineQuery().take(maxTargetedLines + 1);
-  }
-  if (targetedLines !== null && targetedLines.length <= maxTargetedLines) {
-    const parentIds = [...new Set(targetedLines.map((line) => line.journalEntryId))];
+  const inRange = await lineQuery().collect();
+  const parentIds = hasDateBound && !options?.preferBulkRead
+    ? [...new Set(inRange.map((line) => line.journalEntryId))]
+    : [];
+  if (hasDateBound && !options?.preferBulkRead && parentIds.length <= maxTargetedParents) {
     const parents = await Promise.all(parentIds.map((id) => ctx.db.get("journalEntries", id)));
     const allowedIds = new Set<Id<"journalEntries">>();
     for (const parent of parents) {
@@ -123,7 +122,7 @@ export async function getPostedLines(
       }
     }
     return mergeByCreation([
-      targetedLines.filter(
+      inRange.filter(
         (line) => (!excludeSentinel || line.accountingDate !== NO_ACCOUNTING_DATE_SENTINEL) && allowedIds.has(line.journalEntryId)
       ),
     ]);
@@ -146,8 +145,6 @@ export async function getPostedLines(
   const entryIds = new Set<Id<"journalEntries">>();
   for (const e of postedEntries) entryIds.add(e._id);
   for (const e of reversedEntries) entryIds.add(e._id);
-
-  const inRange = await lineQuery().collect();
 
   // With an open bound, a line carrying the -1 sentinel date stays excluded.
   // Callers expect insertion order; the date index returns accountingDate order.

@@ -172,7 +172,7 @@ describe("vatReport.generateVatSummary", () => {
     expect(queriedTables.filter((table) => table === "journalLines")).toHaveLength(1);
   });
 
-  test("large dated ledger windows return every line beyond the targeted-read limit", async () => {
+  test("more than 128 dated lines sharing one parent use one indexed line read", async () => {
     const { t, orgId, userId, salesTaxPayable, seedLine } = await seedDealer();
     const date = Date.UTC(2025, 4, 10);
     const journalId = await seedLine(salesTaxPayable._id, 0, 1, date);
@@ -200,9 +200,23 @@ describe("vatReport.generateVatSummary", () => {
       });
     });
 
-    const rows = await t.run((ctx) => getPostedLines(ctx, orgId, date, date));
+    const { rows, targetedTables } = await t.run(async (ctx) => {
+      const targetedTables: string[] = [];
+      const originalQuery = ctx.db.query.bind(ctx.db);
+      const db = {
+        get: ctx.db.get.bind(ctx.db),
+        query: (table: Parameters<typeof ctx.db.query>[0]) => {
+          targetedTables.push(table);
+          return originalQuery(table);
+        },
+      } as typeof ctx.db;
+      const rows = await getPostedLines({ ...ctx, db }, orgId, date, date);
+      return { rows, targetedTables };
+    });
     expect(rows).toHaveLength(129);
     expect(rows.every((row) => row.journalEntryId === journalId)).toBe(true);
+    expect(targetedTables.filter((table) => table === "journalLines")).toHaveLength(1);
+    expect(targetedTables).not.toContain("journalEntries");
 
     const { bulkRows, queriedTables } = await t.run(async (ctx) => {
       const queriedTables: string[] = [];
