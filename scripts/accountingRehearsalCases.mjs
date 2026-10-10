@@ -1686,6 +1686,9 @@ export async function runRehearsalCases(ctx) {
   // refused with nothing written. The cross-currency refusals themselves are
   // proven in `convex/scrum241FinanceReceiptAuthority.test.ts`; changing this
   // shared organization's currency is not something a rehearsal may do.
+  // With a full transfer, this fixture's quote principal and approved amount
+  // coincide. The distinct frozen-figure-vs-principal refusal is covered by
+  // `convex/scrum241FinanceReceiptAuthority.test.ts`, not by this cloud case.
   await recordCase(
     results,
     "FD1",
@@ -1810,8 +1813,8 @@ export async function runRehearsalCases(ctx) {
         applicationId,
         feeType: "LICENSING",
         paidBy: "DEALER",
-        paidTo: "FINANCE_COMPANY",
-        accountingTreatment: "FINANCE_COMPANY_COMMISSION",
+        paidTo: "GOVERNMENT",
+        accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE",
         deductedFromSettlement: false,
         actualAmountMinor: dealerCost,
         description: "A normal deal cost borne by the dealer.",
@@ -1825,7 +1828,7 @@ export async function runRehearsalCases(ctx) {
         orgId,
         feeId,
         method: "BANK_TRANSFER",
-        paidAt: Date.now() - 1000,
+        paidAt: Date.now() - 60_000,
         expectedAmountMinor: dealerCost,
         idempotencyKey: `rehearsal-fd1-direct-payment-${stamp}`,
       });
@@ -1840,7 +1843,7 @@ export async function runRehearsalCases(ctx) {
         costPayment.lines,
         keyOf,
         [
-          { key: "FINANCE_COMPANY_COMMISSION_EXPENSE", debitMinor: dealerCost },
+          { key: "OWNERSHIP_TRANSFER_EXPENSE", debitMinor: dealerCost },
           { key: "BANK_ACCOUNT", creditMinor: dealerCost },
         ],
         { currency: denom.currency, decimals: denom.decimals, what: "the dealer-paid handover cost posting" }

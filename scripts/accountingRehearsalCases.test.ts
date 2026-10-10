@@ -208,6 +208,8 @@ type Defects = {
   financeReceivableNotSettled?: boolean;
   /** A fake backend accepts the direct-payment command without paying the handover cost. */
   financeDirectPaymentSkipped?: boolean;
+  /** A fee is marked paid but its direct-payment journal is never posted. */
+  financeDirectPaymentPostingSkipped?: boolean;
   /** The full-transfer route incorrectly accepts a fee withheld by the finance company. */
   financeDeductedFeeAccepted?: boolean;
   // ── FD2 — deal costs denominated once (SCRUM-319) ──
@@ -280,6 +282,7 @@ function makeBackend(defects: Defects = {}) {
     { _id: "acct_exp", code: "6000", type: "EXPENSE", name: "General Expense", systemKey: "GENERAL_EXPENSE", normalBalance: "DEBIT" },
     { _id: "acct_arfc", code: "1210", type: "ASSET", name: "AR Finance Companies", systemKey: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", normalBalance: "DEBIT" },
     { _id: "acct_fc_comm", code: "6860", type: "EXPENSE", name: "Finance Company Commission", systemKey: "FINANCE_COMPANY_COMMISSION_EXPENSE", normalBalance: "DEBIT" },
+    { _id: "acct_transfer", code: "6820", type: "EXPENSE", name: "Ownership Transfer", systemKey: "OWNERSHIP_TRANSFER_EXPENSE", normalBalance: "DEBIT" },
   ];
   /** Financed deals, their canonical finance-company receivables and allocations (FD1). */
   const financeApps = new Map<string, Record<string, any>>();
@@ -1244,10 +1247,12 @@ function makeBackend(defects: Defects = {}) {
         if (!defects.financeDirectPaymentSkipped) {
           fee.directPayment = { amountMinor: args.expectedAmountMinor, method: args.method, paidAt: args.paidAt };
         }
-        post("HANDOVER_COST_PAID_DIRECT", "financeDealFees", String(args.feeId), [
-          { key: "FINANCE_COMPANY_COMMISSION_EXPENSE", debitMinor: args.expectedAmountMinor },
-          { key: "BANK_ACCOUNT", creditMinor: args.expectedAmountMinor },
-        ]);
+        if (!defects.financeDirectPaymentPostingSkipped) {
+          post("HANDOVER_COST_PAID_DIRECT", "financeDealFees", String(args.feeId), [
+            { key: "OWNERSHIP_TRANSFER_EXPENSE", debitMinor: args.expectedAmountMinor },
+            { key: "BANK_ACCOUNT", creditMinor: args.expectedAmountMinor },
+          ]);
+        }
         return { ok: true as const, value: fee._id };
       }
       case "financeDealCosts:voidDealFee": {
@@ -1979,6 +1984,12 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     const results = await runAgainst({ financeDeductedFeeAccepted: true });
     expect(statusOf(results, "FD1")).toBe("FAIL");
     expect(detail(results, "FD1")).toMatch(/deducted from the finance company's full transfer was not refused/);
+  });
+
+  test("FD1 catches a direct payment marked paid without its journal posting", async () => {
+    const results = await runAgainst({ financeDirectPaymentPostingSkipped: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/HANDOVER_COST_PAID_DIRECT events .* expected 1, got 0/);
   });
 
   test("RT2 catches a replayed reservation that inserts a second PRIMARY row while returning the same id (Codex A-RT2-RESERVATION)", async () => {
