@@ -232,6 +232,10 @@ type Defects = {
   cashDepositRecognizedAsRevenue?: boolean;
   /** A second balanced deposit-time entry misclassifies the hold as OTHER_INCOME. */
   cashDepositRecognizedAsOtherIncome?: boolean;
+  cashRefundAllowsCreator?: boolean;
+  cashRefundRecognizedAsRevenue?: boolean;
+  cashRefundAllocatesIncoming?: boolean;
+  cashRefundCollectionWrongAmount?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
   eraseOnChequeReturn?: boolean;
   /** A returned cheque posts nothing at all — the books still say money arrived. */
@@ -350,6 +354,7 @@ function makeBackend(defects: Defects = {}) {
   const sales = new Map<string, Record<string, any>>();
   let certifiedCashSalePosted = false;
   let certifiedCashDepositId: string | undefined;
+  let certifiedCashRefundDepositId: string | undefined;
   /** The chart, keyed the way the product keys it, so lines resolve to system keys. */
   const CHART = [
     { _id: "acct_cash", code: defects.cashSaleWrongCashAccountCode ? "1000" : "1100", type: "ASSET", name: "Cash", systemKey: "CASH_ON_HAND", normalBalance: "DEBIT" },
@@ -520,7 +525,7 @@ function makeBackend(defects: Defects = {}) {
         (defects.doubleFootprintOnReplay || (receivableCommand && defects.doubleFootprintReceivablesOnly))
     );
 
-  const release = (args: Record<string, any>, authed: boolean) => {
+  const release = (args: Record<string, any>, authed: boolean, creatorSeat: boolean) => {
     if (!authed && !defects.acceptUnauthenticated) {
       return { ok: false as const, error: "Unauthenticated: You must be logged in." };
     }
@@ -536,6 +541,9 @@ function makeBackend(defects: Defects = {}) {
     }
     const deposit = deposits.get(args.depositId);
     if (!deposit) return { ok: false as const, error: "deposit not found" };
+    if (args.depositId === certifiedCashRefundDepositId && creatorSeat && !defects.cashRefundAllowsCreator) {
+      return { ok: false as const, error: "Deposit creator cannot resolve their own deposit refund or forfeiture." };
+    }
 
     const fingerprint = JSON.stringify([args.depositId, args.resolution, args.refundMethod]);
     if (args.idempotencyKey) {
@@ -572,6 +580,14 @@ function makeBackend(defects: Defects = {}) {
     if (deposit.freeMinor === 0 && deposit.committedMinor === 0) deposit.status = args.resolution;
     if (periodStatus === "OPEN") {
       postRefundToTheBooks(deposit, payable, false);
+      if (deposit._id === certifiedCashRefundDepositId &&
+          defects.cashRefundAllocatesIncoming && deposit.canonicalPaymentId) {
+        allocations.push({
+          orgId: "org_1", paymentId: deposit.canonicalPaymentId,
+          receivableDocumentId: "unrelated-invoice", amountMinor: payable,
+          currency: ORG_CURRENCY, scale: 3, status: "ACTIVE",
+        });
+      }
     } else {
       // No open period is a TEMPORARY HOLD: the decision stands, the posting
       // waits. Writing the journal anyway is the partial-post defect P1 hunts.
@@ -598,6 +614,12 @@ function makeBackend(defects: Defects = {}) {
       ],
       { unlinked: defects.refundEventUnlinked, payload: { depositId: deposit._id, amountMinor: payable } }
     );
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundRecognizedAsRevenue) {
+      post("REFUND_REVENUE_ERROR", "deposits", deposit._id, [
+        { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", debitMinor: payable, customerId: deposit.customerId },
+        { key: "SALES_REVENUE", creditMinor: payable, customerId: deposit.customerId },
+      ]);
+    }
     if (defects.duplicateRefundJournal && !isReplayDuplicate) {
       // A second, perfectly balanced entry for the same refund — B2 passes it.
       const entryId = id("je");
@@ -610,15 +632,25 @@ function makeBackend(defects: Defects = {}) {
     if (isReplayDuplicate) return;
     const canonicalId = id("cp");
     if (!defects.noCanonicalPayment) {
-      canonicalPayments.set(canonicalId, { _id: canonicalId, amountMinor: payable, status: "SETTLED" });
+      canonicalPayments.set(canonicalId, {
+        _id: canonicalId, orgId: "org_1", direction: "OUT", payerType: "CUSTOMER",
+        customerId: deposit.customerId, method: "CASH", amountMinor: payable,
+        currency: ORG_CURRENCY, scale: 3, status: "SETTLED",
+        idempotencyKey: `deposit_refund_${deposit._id}`,
+        externalReference: `Deposit refund ${deposit._id}`,
+      });
     }
     collectionPayments.push({
       _id: id("colp"),
       vehicleId: deposit.vehicleId,
+      customerId: deposit.customerId,
       reference: `Deposit refund ${deposit._id}`,
       direction: "OUT",
       method: "REFUND",
-      amount: payable / MINOR_SCALE,
+      amount: deposit._id === certifiedCashRefundDepositId && defects.cashRefundCollectionWrongAmount
+        ? payable / MINOR_SCALE - 1
+        : payable / MINOR_SCALE,
+      status: "POSTED",
       canonicalPaymentId: defects.noCanonicalPayment ? undefined : canonicalId,
     });
   }
@@ -1099,7 +1131,7 @@ function makeBackend(defects: Defects = {}) {
             sourceType: args.sourceType,
             purchasePrice: Number(args.sourceType === "SOURCED" ? args.sourceCost : (args.purchasePrice ?? 0)),
           });
-          if (/^rehearsal-m486c[12]-vehicle-/.test(String(args.idempotencyKey ?? "")) &&
+          if (/^rehearsal-m486c[123]-vehicle-/.test(String(args.idempotencyKey ?? "")) &&
               !defects.cashSaleAcquisitionMissingPosting) {
             const costMinor = defects.cashSaleAcquisitionWrongAmount ? 9_000_000 : 10_000_000;
             post("VEHICLE_ACQUIRED", "vehicles", String(madeVehicle.value), [
@@ -1121,8 +1153,11 @@ function makeBackend(defects: Defects = {}) {
         const replayed = replayableCreate("dep", args, true);
         if (replayed) return replayed;
         const depositId = id("dep");
-        if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c2-deposit-")) {
+        if (/^rehearsal-m486c[23]-deposit-/.test(String(args.idempotencyKey ?? ""))) {
           certifiedCashDepositId = depositId;
+        }
+        if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c3-deposit-")) {
+          certifiedCashRefundDepositId = depositId;
         }
         // Taking a deposit POSTS. Modelling that is not decoration: P1's first
         // cloud run failed because it measured its journal window from before
@@ -1169,8 +1204,8 @@ function makeBackend(defects: Defects = {}) {
           releasedAmountMinor: 0,
           refundedAmountMinor: 0,
           releaseCount: 0,
-          freeMinor: String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c2-deposit-") ? amountMinor : 2_000_000,
-          committedMinor: String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c2-deposit-") ? 0 : 1_000_000,
+          freeMinor: /^rehearsal-m486c[23]-deposit-/.test(String(args.idempotencyKey ?? "")) ? amountMinor : 2_000_000,
+          committedMinor: /^rehearsal-m486c[23]-deposit-/.test(String(args.idempotencyKey ?? "")) ? 0 : 1_000_000,
           vehicleId: quoteVehicle.get(String(args.quoteId)) ?? String(args.vehicleId ?? ""),
           customerId: depositCustomerId,
           status: "HELD",
@@ -1396,7 +1431,7 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: null };
       }
       case "deposits:release":
-        return release(args, authed);
+        return release(args, authed, canManageFinance);
       case "deposits:listByVehicle":
         // Actually FILTERS. Returning every deposit made RT1's "one row for this
         // vehicle" assertion unsatisfiable against a healthy backend, which
@@ -1845,7 +1880,7 @@ describe("the rehearsal passes against a backend that behaves", () => {
     expect(declined.map((d) => `${d.id}: ${d.detail}`)).toEqual([]);
     // And it actually ran the cases rather than finding nothing to do.
     expect(results.map((r) => r.id).sort()).toEqual([...REQUIRED_REHEARSAL_CASE_IDS].sort());
-    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "FD1", "FD2", "C1", "C2"]) {
+    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "FD1", "FD2", "C1", "C2"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
   });
@@ -2068,6 +2103,18 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     const results = await runAgainst({ cashSaleInvoiceListingTruncated: true });
     expect(statusOf(results, "M486C2")).toBe("UNPROVEN");
     expect(String(results.find((r) => r.id === "M486C2")?.detail)).toMatch(/tenant invoice listing is absent or truncated/);
+  });
+
+  test.each([
+    ["cashRefundAllowsCreator", /creator was not refused/],
+    ["cashRefundRecognizedAsRevenue", /refunded (balance|income)/],
+    ["cashRefundAllocatesIncoming", /refund does not allocate|refund creates no incoming payment allocation/],
+    ["cashRefundCollectionWrongAmount", /refund collection payment major amount/],
+    ["refundPostsWrongAccount", /cash refund|journal lines are not exactly/i],
+  ] as const)("M486C3 rejects %s in an owned cash quote refund", async (defect, diagnostic) => {
+    const results = await runAgainst({ [defect]: true });
+    expect(statusOf(results, "M486C3")).toBe("FAIL");
+    expect(String(results.find((row) => row.id === "M486C3")?.detail)).toMatch(diagnostic);
   });
 
   test.each([
