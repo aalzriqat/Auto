@@ -190,7 +190,9 @@ export const getBookBalance = query({
 
     const bankChartAccountId = await resolveSystemAccount(ctx, args.orgId, SYSTEM_KEYS.BANK_ACCOUNT);
     const asOf = args.asOf ?? Date.now();
-    const lines = await getPostedLines(ctx, args.orgId, target.openingBalanceDate, asOf);
+    // This range accumulates all activity since account opening. Keep the
+    // bulk parent scan until platform measurements justify point reads here.
+    const lines = await getPostedLines(ctx, args.orgId, target.openingBalanceDate, asOf, { preferBulkRead: true });
 
     let netMinor = 0;
     for (const line of lines) {

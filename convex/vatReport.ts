@@ -6,7 +6,8 @@
  * (debited on expenses/supplier payments, per ruleExpensePosted /
  * ruleSupplierPaymentSettled). Follows the exact two-tier pattern already
  * used by convex/accountingReports.ts: a two-sided date range (the normal
- * shape for a VAT return period) does a full scan via getPostedLines; a
+ * shape for a VAT return period) reads the dated lines via getPostedLines,
+ * selecting their parents directly for small windows; a
  * from-inception "as of" query reads the GL Phase 18 running snapshots.
  * This report is a summary for the accountant's own filing process, not a
  * jurisdiction-specific filing form.

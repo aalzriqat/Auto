@@ -11,6 +11,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { getPostedLines } from "./accountingReports";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -86,12 +87,234 @@ async function seedDealer() {
         debitMinor: creditMinor, creditMinor: debitMinor, currency: "JOD", scale: 3, accountingDate,
       })
     );
+    return journalId;
   }
 
-  return { t, orgId, asOwner, salesTaxPayable: salesTaxPayable!, vatReceivable: vatReceivable!, seedLine };
+  return { t, orgId, userId, asOwner, salesTaxPayable: salesTaxPayable!, vatReceivable: vatReceivable!, seedLine };
 }
 
 describe("vatReport.generateVatSummary", () => {
+  test("bounded ledger reads select only dated lines' authorized parent entries", async () => {
+    const { t, orgId, userId, salesTaxPayable, seedLine } = await seedDealer();
+    const date = Date.UTC(2025, 4, 10);
+    const earlierDate = date - 86_400_000;
+    const outside = Date.UTC(2024, 4, 10);
+    await seedLine(salesTaxPayable._id, 0, 900_000, outside);
+    const postedId = await seedLine(salesTaxPayable._id, 0, 50_000, date);
+    const reversedId = await seedLine(salesTaxPayable._id, 10_000, 0, earlierDate);
+    const draftId = await seedLine(salesTaxPayable._id, 0, 700_000, date);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(reversedId, { status: "REVERSED", accountingDate: outside });
+      await ctx.db.patch(draftId, { status: "DRAFT" });
+      const foreignOrgId = await ctx.db.insert("organizations", { name: "Foreign ledger", createdAt: Date.now() });
+      const foreignEntryId = await ctx.db.insert("journalEntries", {
+        orgId: foreignOrgId, journalNumber: "FOREIGN-1", accountingDate: date, sourceType: "test",
+        sourceId: "foreign-1", category: "SYSTEM", memo: "Foreign parent", status: "POSTED",
+        currency: "JOD", postedBy: userId, postedAt: date, createdAt: date,
+      });
+      // A stale cross-tenant parent reference must be excluded just as the
+      // original org-scoped journal-entry scan excluded it.
+      await ctx.db.insert("journalLines", {
+        orgId, journalEntryId: foreignEntryId, lineNumber: 1, accountId: salesTaxPayable._id,
+        debitMinor: 0, creditMinor: 800_000, currency: "JOD", scale: 3, accountingDate: date,
+      });
+    });
+
+    const { rows, queriedTables } = await t.run(async (ctx) => {
+      const queriedTables: string[] = [];
+      const originalQuery = ctx.db.query.bind(ctx.db);
+      const db = {
+        get: ctx.db.get.bind(ctx.db),
+        query: (table: Parameters<typeof ctx.db.query>[0]) => {
+          queriedTables.push(table);
+          return originalQuery(table);
+        },
+      } as typeof ctx.db;
+      const rows = await getPostedLines({ ...ctx, db }, orgId, earlierDate, date);
+      return { rows, queriedTables };
+    });
+
+    expect(rows.map((row) => row.journalEntryId)).toEqual([postedId, postedId, reversedId, reversedId]);
+    expect(queriedTables).not.toContain("journalEntries");
+  });
+
+  test("open upper bound preserves sentinel exclusion on the bulk path", async () => {
+    const { t, orgId, salesTaxPayable, seedLine } = await seedDealer();
+    const date = Date.UTC(2025, 4, 10);
+    const sentinelId = await seedLine(salesTaxPayable._id, 0, 1, -1);
+    const preEpochId = await seedLine(salesTaxPayable._id, 0, 2, -100_000);
+    const postedId = await seedLine(salesTaxPayable._id, 0, 50_000, date);
+    await t.run(async (ctx) => {
+      for (let lineNumber = 3; lineNumber <= 129; lineNumber++) {
+        await ctx.db.insert("journalLines", {
+          orgId, journalEntryId: sentinelId, lineNumber, accountId: salesTaxPayable._id,
+          debitMinor: 0, creditMinor: 1, currency: "JOD", scale: 3, accountingDate: -1,
+        });
+      }
+    });
+
+    const { rows, queriedTables } = await t.run(async (ctx) => {
+      const queriedTables: string[] = [];
+      const originalQuery = ctx.db.query.bind(ctx.db);
+      const db = {
+        get: ctx.db.get.bind(ctx.db),
+        query: (table: Parameters<typeof ctx.db.query>[0]) => {
+          queriedTables.push(table);
+          return originalQuery(table);
+        },
+      } as typeof ctx.db;
+      const rows = await getPostedLines({ ...ctx, db }, orgId, undefined, date);
+      return { rows, queriedTables };
+    });
+
+    expect(rows.map((row) => row.journalEntryId)).toEqual([preEpochId, preEpochId, postedId, postedId]);
+    expect(queriedTables).toContain("journalEntries");
+    expect(queriedTables.filter((table) => table === "journalLines")).toHaveLength(1);
+  });
+
+  test("many dated lines sharing one parent use one indexed line read", async () => {
+    const { t, orgId, userId, salesTaxPayable, seedLine } = await seedDealer();
+    const date = Date.UTC(2025, 4, 10);
+    const journalId = await seedLine(salesTaxPayable._id, 0, 1, date);
+    await t.run(async (ctx) => {
+      for (let lineNumber = 3; lineNumber <= 129; lineNumber++) {
+        await ctx.db.insert("journalLines", {
+          orgId, journalEntryId: journalId, lineNumber, accountId: salesTaxPayable._id,
+          debitMinor: 0, creditMinor: 1, currency: "JOD", scale: 3, accountingDate: date,
+        });
+      }
+    });
+    const draftId = await seedLine(salesTaxPayable._id, 0, 7, date);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(draftId, { status: "DRAFT" });
+      const foreignOrgId = await ctx.db.insert("organizations", { name: "Foreign ledger", createdAt: date });
+      const foreignEntryId = await ctx.db.insert("journalEntries", {
+        orgId: foreignOrgId, journalNumber: "FOREIGN-FALLBACK", accountingDate: date,
+        sourceType: "test", sourceId: "foreign-fallback", category: "SYSTEM",
+        memo: "Foreign parent", status: "POSTED", currency: "JOD",
+        postedBy: userId, postedAt: date, createdAt: date,
+      });
+      await ctx.db.insert("journalLines", {
+        orgId, journalEntryId: foreignEntryId, lineNumber: 1, accountId: salesTaxPayable._id,
+        debitMinor: 0, creditMinor: 8, currency: "JOD", scale: 3, accountingDate: date,
+      });
+    });
+
+    const { rows, targetedTables } = await t.run(async (ctx) => {
+      const targetedTables: string[] = [];
+      const originalQuery = ctx.db.query.bind(ctx.db);
+      const db = {
+        get: ctx.db.get.bind(ctx.db),
+        query: (table: Parameters<typeof ctx.db.query>[0]) => {
+          targetedTables.push(table);
+          return originalQuery(table);
+        },
+      } as typeof ctx.db;
+      const rows = await getPostedLines({ ...ctx, db }, orgId, date, date);
+      return { rows, targetedTables };
+    });
+    expect(rows).toHaveLength(129);
+    expect(rows.every((row) => row.journalEntryId === journalId)).toBe(true);
+    expect(targetedTables.filter((table) => table === "journalLines")).toHaveLength(1);
+    expect(targetedTables).not.toContain("journalEntries");
+
+    const { bulkRows, queriedTables } = await t.run(async (ctx) => {
+      const queriedTables: string[] = [];
+      const originalQuery = ctx.db.query.bind(ctx.db);
+      const db = {
+        get: ctx.db.get.bind(ctx.db),
+        query: (table: Parameters<typeof ctx.db.query>[0]) => {
+          queriedTables.push(table);
+          return originalQuery(table);
+        },
+      } as typeof ctx.db;
+      const bulkRows = await getPostedLines({ ...ctx, db }, orgId, date, date, { preferBulkRead: true });
+      return { bulkRows, queriedTables };
+    });
+    expect(bulkRows.map((row) => row._id)).toEqual(rows.map((row) => row._id));
+    expect(queriedTables.filter((table) => table === "journalLines")).toHaveLength(1);
+    expect(queriedTables.filter((table) => table === "journalEntries")).toHaveLength(2);
+  });
+
+  test("512 distinct parents use targeted reads; 513 select bulk without rereading lines", async () => {
+    const { t, orgId, userId, salesTaxPayable } = await seedDealer();
+    const date = Date.UTC(2025, 4, 10);
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 512; index++) {
+        const journalEntryId = await ctx.db.insert("journalEntries", {
+          orgId, journalNumber: `FALLBACK-${index}`, accountingDate: date,
+          sourceType: "test", sourceId: `fallback-${index}`, category: "SYSTEM",
+          memo: "Bulk fallback boundary", status: "POSTED", currency: "JOD",
+          postedBy: userId, postedAt: date, createdAt: date + index,
+        });
+        await ctx.db.insert("journalLines", {
+          orgId, journalEntryId, lineNumber: 1, accountId: salesTaxPayable._id,
+          debitMinor: 0, creditMinor: 1, currency: "JOD", scale: 3,
+          accountingDate: date,
+        });
+      }
+    });
+
+    const readWithQueryTrace = () => t.run(async (ctx) => {
+      const queriedTables: string[] = [];
+      const originalQuery = ctx.db.query.bind(ctx.db);
+      const db = {
+        get: ctx.db.get.bind(ctx.db),
+        query: (table: Parameters<typeof ctx.db.query>[0]) => {
+          queriedTables.push(table);
+          return originalQuery(table);
+        },
+      } as typeof ctx.db;
+      const rows = await getPostedLines({ ...ctx, db }, orgId, date, date);
+      return { rows, queriedTables };
+    });
+
+    const atLimit = await readWithQueryTrace();
+    expect(atLimit.rows).toHaveLength(512);
+    expect(atLimit.queriedTables.filter((table) => table === "journalLines")).toHaveLength(1);
+    expect(atLimit.queriedTables).not.toContain("journalEntries");
+
+    await t.run(async (ctx) => {
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId, journalNumber: "FALLBACK-512", accountingDate: date,
+        sourceType: "test", sourceId: "fallback-512", category: "SYSTEM",
+        memo: "Bulk fallback boundary", status: "POSTED", currency: "JOD",
+        postedBy: userId, postedAt: date, createdAt: date + 512,
+      });
+      await ctx.db.insert("journalLines", {
+        orgId, journalEntryId, lineNumber: 1, accountId: salesTaxPayable._id,
+        debitMinor: 0, creditMinor: 1, currency: "JOD", scale: 3,
+        accountingDate: date,
+      });
+    });
+    const { rows, queriedTables } = await readWithQueryTrace();
+
+    expect(rows).toHaveLength(513);
+    expect(queriedTables.filter((table) => table === "journalLines")).toHaveLength(1);
+    expect(queriedTables.filter((table) => table === "journalEntries")).toHaveLength(2);
+  });
+
+  test("two-sided sentinel and creation-order parity on the targeted path", async () => {
+    const { t, orgId, salesTaxPayable, seedLine } = await seedDealer();
+    const date = Date.UTC(2025, 4, 10);
+    const sentinelId = await seedLine(salesTaxPayable._id, 0, 1, -1);
+    const datedId = await seedLine(salesTaxPayable._id, 0, 2, date);
+    await t.run(async (ctx) => {
+      for (let lineNumber = 3; lineNumber <= 126; lineNumber++) {
+        await ctx.db.insert("journalLines", {
+          orgId, journalEntryId: datedId, lineNumber, accountId: salesTaxPayable._id,
+          debitMinor: 0, creditMinor: 1, currency: "JOD", scale: 3, accountingDate: date,
+        });
+      }
+    });
+
+    const targetedRows = await t.run((ctx) => getPostedLines(ctx, orgId, -1, date));
+    const bulkRows = await t.run((ctx) => getPostedLines(ctx, orgId, -1, date, { preferBulkRead: true }));
+    expect(targetedRows).toHaveLength(128);
+    expect(targetedRows.slice(0, 2).map((row) => row.journalEntryId)).toEqual([sentinelId, sentinelId]);
+    expect(targetedRows.map((row) => row._id)).toEqual(bulkRows.map((row) => row._id));
+  });
+
   test("computes output VAT, input VAT, and net due for a bounded date range", async () => {
     const { orgId, asOwner, salesTaxPayable, vatReceivable, seedLine } = await seedDealer();
     const inRange = Date.now();
