@@ -6,7 +6,7 @@
  * itself only runs in CI against a live preview and is not simulated here — a
  * mock of a Convex deployment would test the mock.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   assertRehearsalEnv,
   convexCall,
@@ -17,6 +17,7 @@ import {
   mintConvexToken,
   recordCase,
   rehearsalRefScope,
+  runPreviewFunction,
   sanitizeClerkSessionId,
   summarize,
   unproven,
@@ -34,7 +35,75 @@ const VALID = {
   E2E_APPROVER_USER: "approver@example.test",
 };
 
+function captureConsoleOutput() {
+  const spies = [
+    vi.spyOn(console, "log").mockImplementation(() => {}),
+    vi.spyOn(console, "info").mockImplementation(() => {}),
+    vi.spyOn(console, "warn").mockImplementation(() => {}),
+    vi.spyOn(console, "error").mockImplementation(() => {}),
+    vi.spyOn(console, "debug").mockImplementation(() => {}),
+    vi.spyOn(console, "dir").mockImplementation(() => {}),
+    vi.spyOn(console, "table").mockImplementation(() => {}),
+    vi.spyOn(console, "trace").mockImplementation(() => {}),
+  ];
+  return {
+    expectSilent: () => spies.forEach((spy) => expect(spy).not.toHaveBeenCalled()),
+    restore: () => spies.forEach((spy) => spy.mockRestore()),
+  };
+}
+
 describe("the rehearsal refuses rather than degrades", () => {
+  test("preview assertion CLI output cannot prefix the machine-readable release evidence", async () => {
+    const spawnCli = vi.fn((_command: string, _args: string[], _options: object) =>
+      ({ status: 0, stdout: Buffer.from('{"marker":true}\n') }));
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const consoleOutput = captureConsoleOutput();
+    try {
+      await runPreviewFunction({
+        functionName: "e2eBootstrap:assertE2EBootstrap",
+        args: { primaryClerkUserId: "user_a", approverClerkUserId: "user_b", expectedCloudUrl: VALID.NEXT_PUBLIC_CONVEX_URL },
+        previewName: VALID.CONVEX_PREVIEW_NAME,
+        deployKey: VALID.CONVEX_DEPLOY_KEY,
+        env: { ...VALID, NODE_ENV: "test" },
+        spawnCli,
+      });
+      expect(spawnCli).toHaveBeenCalledTimes(1);
+      expect(spawnCli.mock.calls[0]?.[2]).toMatchObject({ stdio: ["inherit", "pipe", "inherit"] });
+      expect(stdoutWrite).not.toHaveBeenCalled();
+      consoleOutput.expectSilent();
+    } finally {
+      consoleOutput.restore();
+      stdoutWrite.mockRestore();
+    }
+  });
+
+  test("failed preview assertion keeps captured stdout out of public logs", async () => {
+    const spawnCli = vi.fn((_command: string, _args: string[], _options: object) =>
+      ({ status: 3, stdout: Buffer.from('{"tenantMarker":true}\n') }));
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const consoleOutput = captureConsoleOutput();
+    try {
+      const rejection = runPreviewFunction({
+        functionName: "e2eBootstrap:assertE2EBootstrap",
+        args: { primaryClerkUserId: "user_a", approverClerkUserId: "user_b", expectedCloudUrl: VALID.NEXT_PUBLIC_CONVEX_URL },
+        previewName: VALID.CONVEX_PREVIEW_NAME,
+        deployKey: VALID.CONVEX_DEPLOY_KEY,
+        env: { ...VALID, NODE_ENV: "test" },
+        spawnCli,
+      });
+      await expect(rejection).rejects.toThrow("failed with exit code 3");
+      await expect(rejection).rejects.not.toThrow("tenantMarker");
+      expect(stdoutWrite).not.toHaveBeenCalled();
+      expect(stderrWrite).not.toHaveBeenCalled();
+      consoleOutput.expectSilent();
+    } finally {
+      consoleOutput.restore();
+      stdoutWrite.mockRestore();
+      stderrWrite.mockRestore();
+    }
+  });
+
   test("it accepts a complete, preview-shaped environment", () => {
     const config = assertRehearsalEnv({ ...VALID });
     expect(config.convexUrl).toBe("https://fine-gerbil-123.convex.cloud");
