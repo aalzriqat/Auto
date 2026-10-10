@@ -111,7 +111,7 @@ describe("every check at a commit is read, across every page", () => {
     const result = await readCheckResults(api, "a".repeat(40));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.results.filter((r) => r.name === "trusted-accounting-release-verdict").map((r) => r.conclusion))
+    expect((result.results ?? []).filter((r) => r.name === "trusted-accounting-release-verdict").map((r) => r.conclusion))
       .toEqual(["failure", "success"]);
     expect(calls.find((c) => c.path.endsWith("/check-runs"))?.filter).toBe("all");
   });
