@@ -147,10 +147,10 @@ describe("every check at a commit is read, across every page", () => {
       .toEqual(["success"]);
   });
 
-  test("a forged release verdict with no Actions job is refused", async () => {
+  test.each([403, 404])("a release verdict whose Actions job cannot be verified (%i) is refused", async (status) => {
     const result = await readCheckResults(fakeApi({
       runs: [run("trusted-accounting-release-verdict", { id: 1234 })],
-      failReleaseJob: 404,
+      failReleaseJob: status,
     }).api, "a".repeat(40));
     expect(result.ok).toBe(false);
     if (result.ok) return;

@@ -200,7 +200,7 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   "convex-preview-key-diagnostic.yml":
     "cb33b1b8f2e26457d00f78f31b6460e14df19b2b6f8254e720ca097a8c66dd8c",
   "deploy-production.yml":
-    "da1f85d00bbd9d7b14d4603dfcab4c831a91307bdac7fae1d40bd88053afdf83",
+    "61789e5b96d2a5e5e9b41be44fcf2afccf9bd372865e3c39a1154cb3788edde2",
   "trusted-accounting-rehearsal.yml":
     "5299fa85b16b3145e74af0db4b2f6f17e0c306b474046afd6ae17777af933729",
   "trusted-main-e2e.yml":

@@ -331,6 +331,9 @@ describe("guarantees that live outside the reach of a normal unit test", () => {
     const deployJob = workflow.slice(workflow.indexOf("\n  deploy:"));
     expect(deployJob).toMatch(/checks: read/);
     expect(deployJob).toMatch(/statuses: read/);
+    const authorizeJob = workflow.slice(workflow.indexOf("\n  authorize:"), workflow.indexOf("\n  deploy:"));
+    expect(authorizeJob).toMatch(/actions: read/);
+    expect(deployJob).toMatch(/actions: read/);
   });
 
   test("the deploy step's own shell REFUSES when main has moved, and deploys when it has not", () => {
