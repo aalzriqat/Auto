@@ -353,6 +353,15 @@ export async function resolveIdentity(email, secretKey) {
  * and the failure it protects against — `convex run` silently resolving an
  * unspecified target to the shared DEV deployment — is exactly the one this
  * rehearsal must never hit.
+ *
+ * @param {{
+ *   functionName: string,
+ *   args: Record<string, unknown>,
+ *   previewName: string,
+ *   deployKey: string,
+ *   env?: Record<string, string | undefined>,
+ *   spawnCli?: (command: string, args: string[], options: object) => { status: number | null, error?: Error },
+ * }} options
  */
 export async function runPreviewFunction({ functionName, args, previewName, deployKey, env = process.env, spawnCli = spawnSync }) {
   const { buildConvexRunArgs, runConvex } = await import("./e2ePreviewBootstrap.mjs");

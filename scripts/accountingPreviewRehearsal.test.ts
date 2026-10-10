@@ -37,13 +37,14 @@ const VALID = {
 
 describe("the rehearsal refuses rather than degrades", () => {
   test("preview assertion CLI output cannot prefix the machine-readable release evidence", async () => {
-    const spawnCli = vi.fn(() => ({ status: 0, stdout: Buffer.from('{"marker":true}\n') }));
+    const spawnCli = vi.fn((_command: string, _args: string[], _options: object) =>
+      ({ status: 0, stdout: Buffer.from('{"marker":true}\n') }));
     await runPreviewFunction({
       functionName: "e2eBootstrap:assertE2EBootstrap",
       args: { primaryClerkUserId: "user_a", approverClerkUserId: "user_b", expectedCloudUrl: VALID.NEXT_PUBLIC_CONVEX_URL },
       previewName: VALID.CONVEX_PREVIEW_NAME,
       deployKey: VALID.CONVEX_DEPLOY_KEY,
-      env: VALID,
+      env: { ...VALID, NODE_ENV: "test" },
       spawnCli,
     });
     expect(spawnCli).toHaveBeenCalledTimes(1);
