@@ -930,6 +930,14 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     })).rejects.toThrow(/Deposit not found in this organization/);
     expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
     expect(netByAccount(await journalRows(s))).toEqual({ "1100|JOD": 200_000, "2100|JOD": -200_000 });
+
+    const saleId = await completeCashSale(s, quoteId, "foreign-sale-denial");
+    const completedSale = await dbSnapshot(s.t, Object.keys(schema.tables));
+    await expect(otherOwner.mutation(api.sales.update, {
+      orgId: otherOrgId, saleId, status: "CANCELLED",
+    })).rejects.toThrow(/Sale not found in this organization/);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(completedSale);
+    expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["POSTED"]);
   });
 
   test.each(["LEASE", "INTERNAL_INSTALLMENT"] as const)(
