@@ -24,7 +24,7 @@
 // executed IDs, and the real-preview validator uses the same list.
 export const REQUIRED_REHEARSAL_CASE_IDS = Object.freeze([
   "A1", "A2", "D1", "D2", "D3", "D4", "C1", "C2", "UNAUTH", "TEN", "A3",
-  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "FD1", "FD2", "P1", "SETUP",
+  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "FD1", "FD2", "P1", "SETUP",
 ]);
 
 function fail(message) {
@@ -1677,6 +1677,82 @@ export async function runRehearsalCases(ctx) {
       };
     }
   );
+
+  // SCRUM-486 owned CASH / no deposit. Unlike SR1 this follows the public
+  // quote path and uses the same literal facts as the harness matrix row.
+  // The preview readbacks make this one row real-backend evidence only; the
+  // remaining matrix rows still require their own cloud execution.
+  await recordCase(results, "M486C1", "owned cash sale without deposit posts and reports the literal 12,500 / 10,000 JOD economics", async () => {
+    const denom = await orgDenomination({ orgId, ownerMust });
+    if (denom.currency !== "JOD" || denom.decimals !== 3) {
+      unproven("M486C1 requires the certified JOD denomination and three minor-unit decimals");
+    }
+    const stamp = `${Date.now().toString(36)}-${uuid().slice(0, 8)}`;
+    const vin = `RHS486${uuid().replace(/-/g, "").slice(0, 11)}`.toUpperCase();
+    const customerId = await ownerMust("mutation", "customers:create", {
+      orgId, firstName: "Certification", lastName: `cash-${stamp}`,
+    });
+    const vehicleId = await createVehicleForRehearsal(ownerMust, {
+      orgId, vin, make: "Toyota", model: "Camry-486", year: 2022,
+      mileage: 800, color: "Blue", fuelType: "Gasoline", transmission: "Automatic",
+      sellingPrice: 12_500, sourceType: "STOCK", status: "AVAILABLE",
+      purchasePrice: 10_000, purchasePaymentMethod: "CASH",
+      idempotencyKey: `rehearsal-m486c1-vehicle-${stamp}`,
+    });
+    const quoteId = await ownerMust("mutation", "quotes:saveQuote", {
+      orgId, customerId, vehicleId, mode: "CASH", vehiclePrice: 12_500,
+      downPayment: 0, termMonths: 0,
+    });
+    const me = await ownerMust("query", "users:getMe", {});
+    if (!me?._id) unproven("M486C1 has no authenticated salesperson identity");
+    const monthStart = new Date();
+    const fromDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth(), 1);
+    const toDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0, 23, 59, 59, 999);
+    const reportArgs = { orgId, fromDate, toDate };
+    const beforeBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    const beforeIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const saleId = await ownerMust("mutation", "sales:create", {
+      orgId, quoteId, vehicleId, customerId, salespersonId: me._id,
+      salePrice: 12_500, saleDate: Date.now(), status: "COMPLETED",
+      idempotencyKey: `rehearsal-m486c1-sale-${stamp}`,
+    });
+    const sale = await ownerMust("query", "sales:get", { orgId, saleId });
+    expectEqual(sale?.status, "COMPLETED", "M486C1 public sale state");
+    const { keyOf } = await chartIndex({ orgId, ownerMust });
+    const posted = await eventAndJournal({
+      orgId, ownerMust, sourceType: "sales", sourceId: saleId, eventType: "SALE_COMPLETED",
+    });
+    expectExactLines(posted.lines, keyOf, [
+      { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", debitMinor: 12_500_000 },
+      { key: "SALES_REVENUE", creditMinor: 12_500_000 },
+      { key: "COST_OF_VEHICLES_SOLD", debitMinor: 10_000_000 },
+      { key: "VEHICLE_INVENTORY", creditMinor: 10_000_000 },
+    ], { currency: "JOD", decimals: 3, what: "M486C1 owned cash journal" });
+    const afterBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    const afterIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const byKey = (report) => new Map((report?.rows ?? []).filter((r) => r.currency === "JOD")
+      .map((r) => [keyOf.get(String(r.accountId)), r.netMinor]));
+    const before = byKey(beforeBalance);
+    const after = byKey(afterBalance);
+    for (const [key, delta] of [
+      ["ACCOUNTS_RECEIVABLE_CUSTOMERS", 12_500_000],
+      ["SALES_REVENUE", 12_500_000],
+      ["COST_OF_VEHICLES_SOLD", 10_000_000],
+      ["VEHICLE_INVENTORY", -10_000_000],
+    ]) {
+      expectEqual((after.get(key) ?? 0) - (before.get(key) ?? 0), delta, `M486C1 public trial balance ${key}`);
+    }
+    for (const [field, delta] of [
+      ["totalRevenue", 12_500_000], ["totalCogs", 10_000_000],
+      ["grossProfit", 2_500_000], ["netIncome", 2_500_000],
+    ]) {
+      expectEqual(afterIncome?.[field] - beforeIncome?.[field], delta, `M486C1 public income ${field}`);
+    }
+    return { saleId: String(saleId), currency: "JOD", saleMinor: 12_500_000,
+      costMinor: 10_000_000, grossProfitMinor: 2_500_000,
+      journalEntryId: String(posted.entry._id), commandsExercised: ["quotes.saveQuote", "sales.create"],
+      reportsRead: ["accountingReports.trialBalance", "accountingReports.incomeStatement"] };
+  });
 
   // ── FD1 — the financed deal's cash receipt settles the exact recorded debt ──
   //

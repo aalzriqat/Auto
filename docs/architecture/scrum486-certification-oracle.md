@@ -2,6 +2,8 @@
 
 This is the independent expected-value design for the required ownership × deal-route × deposit × lifecycle suite. It is derived from the owner's SCRUM-486 rulings (comments 21356, 21360 and 21364), not from the application's posting helpers. The numbers below are **JOD minor units** (1 JOD = 1,000 minor units). No row is certified merely because it appears here. A cell becomes certified only when a required CI test drives its public mutations, checks the literal values at each step, and the same scenario passes on a disposable Convex preview.
 
+Draft case `M486C1` mirrors the owned CASH/no-deposit 12,500 / 10,000 JOD harness row in the existing trusted accounting rehearsal registry. It uses public quote and sale mutations, checks the event-linked journal's four literal lines, and compares public trial-balance and income-statement values before and after. Its in-memory rehearsal tests include wrong-revenue-account and one-minor-unit report-drift negative controls. This is **not** a real-backend PASS until a reviewed main-only rehearsal executes the case at the exact release SHA and the required producer-bound verdict accepts it. It covers one row, not the full matrix, and does not certify customer receipt settlement or cancellation.
+
 ## Fixed owned-vehicle example
 
 | Fact | JOD | Minor units |
