@@ -661,6 +661,32 @@ describe("combined application document read", () => {
       orgId: s.orgId, applicationId,
     })).rejects.toThrow(/permission/i);
   });
+
+  test("settled deal excludes a late rule and a rule for another finance company", async () => {
+    const s = await setup();
+    await addRule(s, "Current ID");
+    const otherCompanyRule = await addRule(s, "Other company form");
+    const { quoteId, applicationId } = await createApplication(s);
+    const [companyA, companyB] = await s.t.run(async (ctx) => {
+      const base = { orgId: s.orgId, profitRate: 6, maxTermMonths: 60, gracePeriodMonths: 0, isActive: true };
+      return [
+        await ctx.db.insert("financeCompanies", { ...base, name: "Company A" }),
+        await ctx.db.insert("financeCompanies", { ...base, name: "Company B" }),
+      ];
+    });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(quoteId, { companyId: companyA });
+      await ctx.db.patch(otherCompanyRule, { companyId: companyB });
+      await ctx.db.patch(applicationId, { status: "CLOSED" });
+    });
+    await addRule(s, "Late requirement");
+
+    const args = { orgId: s.orgId, applicationId };
+    const active = await s.seller.as.query(api.documents.getForApplication, args);
+    const history = await s.seller.as.query(api.documents.getHistoryForApplication, args);
+    expect(active.map((doc) => doc.ruleName)).toEqual(["Current ID"]);
+    expect(await s.seller.as.query(api.documents.getPanelForApplication, args)).toEqual({ active, history });
+  });
 });
 
 /**

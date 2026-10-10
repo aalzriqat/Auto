@@ -180,10 +180,11 @@ async function assertDocumentRowIsActive(
 
 type ApplicationDocumentScope = NonNullable<Awaited<ReturnType<typeof loadApplicationDocumentScope>>>;
 
-// Active work follows the approval gate's live rules; a late rule is row-less
-// only while the deal can still accept a document.
 async function projectActiveDocuments(ctx: QueryCtx, scope: ApplicationDocumentScope) {
   const { application, applicableRules, applicableById, docs } = scope;
+  // SCRUM-421: the panel lists exactly the rules the approval guard still
+  // enforces. A removed or no-longer-applicable row stays in storage, but
+  // offering Upload or Verify on it would act on a requirement the guard ignores.
   const activeDocs = docs.filter((doc) => applicableById.has(doc.ruleId));
   const materialized = await Promise.all(
     activeDocs.map(async (doc) => {
@@ -197,6 +198,9 @@ async function projectActiveDocuments(ctx: QueryCtx, scope: ApplicationDocumentS
       };
     })
   );
+  // A rule added after application creation has no row yet. Show it as MISSING
+  // only while ensureApplicationDocument can materialize it; settled deals
+  // cannot accept a new row (SCRUM-417 round 2, S417-R2-1).
   if (!IN_FLIGHT_FINANCE_STATUSES.includes(application.status)) return materialized;
   const materializedRuleIds = new Set(docs.map((doc) => doc.ruleId));
   const unmaterialized = applicableRules
