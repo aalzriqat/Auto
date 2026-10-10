@@ -495,6 +495,67 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     });
   });
 
+  test("SOURCED CASH × no deposit × cancellation: agency sale and supplier claim reverse", async () => {
+    const s = await seedFinancedDealership("s486sourcedcancel", {
+      modules: MODULES,
+      ownerPerms: OWNER_PERMS,
+      actors: {},
+      label: "Certification",
+      vinPrefix: "V486",
+      sourced: true,
+    });
+    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { sourceCost: 10_000 }));
+    const quoteId = await s.owner.as.mutation(api.quotes.saveQuote, {
+      orgId: s.orgId,
+      customerId: s.customerId,
+      vehicleId: s.vehicleId,
+      mode: "CASH",
+      vehiclePrice: 12_500,
+      downPayment: 0,
+      termMonths: 0,
+    });
+    const saleId = await completeCashSale(s, quoteId, "sourced-cancel");
+    expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["POSTED"]);
+    expect(netByAccount(await journalRows(s))).toEqual({
+      "1200|JOD": 12_500_000,
+      "2400|JOD": -10_000_000,
+      "4170|JOD": -2_500_000,
+    });
+
+    await s.approver.as.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId,
+      status: "CANCELLED",
+    });
+    const { sale, payable } = await s.t.run(async (ctx) => ({
+      sale: await ctx.db.get(saleId),
+      payable: await ctx.db.query("vehicleSupplierPayables")
+        .withIndex("by_sale", (q) => q.eq("saleId", saleId)).first(),
+    }));
+    expect(sale?.status).toBe("CANCELLED");
+    expect(payable).toMatchObject({
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      saleId,
+      amountDue: 10_000,
+      currency: "JOD",
+      status: "CANCELLED",
+    });
+    expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["REVERSED"]);
+    const rows = await journalRows(s);
+    expectLiteralRows(rows, [
+      { account: "1200", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "REVERSED" },
+      { account: "2400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "REVERSED" },
+      { account: "4170", currency: "JOD", debit: 0, credit: 2_500_000, entryStatus: "REVERSED" },
+      { account: "1200", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
+      { account: "2400", currency: "JOD", debit: 10_000_000, credit: 0, entryStatus: "POSTED" },
+      { account: "4170", currency: "JOD", debit: 2_500_000, credit: 0, entryStatus: "POSTED" },
+    ]);
+    expect(netByAccount(rows)).toEqual({});
+    expectBalanced(rows);
+    expect(await trialBalanceNormalBalance(s)).toEqual({});
+  });
+
   test("SOURCED CASH × applied deposit: customer AR falls, supplier entitlement stays whole", async () => {
     const s = await seedFinancedDealership("s486sourcedapplied", {
       modules: MODULES,
