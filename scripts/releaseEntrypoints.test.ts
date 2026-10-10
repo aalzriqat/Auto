@@ -256,6 +256,22 @@ describe("the release scripts run under the interpreter that will run them", () 
  * are the proofs.
  */
 describe("guarantees that live outside the reach of a normal unit test", () => {
+  test("a stale or malformed release dispatch cannot publish the gate's exact check name", () => {
+    const workflow = readRepoFile(".github/workflows/trusted-accounting-rehearsal.yml");
+    const preflight = workflow.slice(workflow.indexOf("\n  dispatch_preflight:"), workflow.indexOf("\n  rehearsal:"));
+    const verdictJob = workflow.slice(workflow.indexOf("\n  release_verdict:"));
+    const name = verdictJob.match(/^    name: (.+)$/m)?.[1] ?? "";
+    expect(name).toMatch(/github\.event_name == 'repository_dispatch'/);
+    expect(name).toMatch(/needs\.dispatch_preflight\.outputs\.exact_sha == 'true'/);
+    expect(name).toContain("trusted-accounting-release-verdict");
+    expect(name).toContain("trusted-accounting-release-not-dispatched");
+    expect(preflight).toMatch(/permissions: \{\}/);
+    expect(preflight).toMatch(/\$RELEASE_INPUT_SHA" =~ \^\[0-9a-f\]\{40\}\$/);
+    expect(preflight).toMatch(/"\$RELEASE_INPUT_SHA" = "\$EVENT_SHA"/);
+    expect(preflight).toContain("exact_sha=true");
+    expect(preflight).toContain("exact_sha=false");
+    expect(verdictJob).toMatch(/needs: \[dispatch_preflight, rehearsal\]/);
+  });
   test("the rollout script has NO path from CLI output to a public message", () => {
     // ⚠️ REGRESSION. `convex()` used to interpolate `result.stderr` into the
     // reason that `fail()` writes to the job log and the run summary — both

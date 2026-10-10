@@ -64,6 +64,8 @@ The release gate requires it in addition to the definition check. Missing,
 zero-case, skipped, failed, mismatched-preview, wrong-SHA, or duplicate
 same-SHA attempts refuse the release. Inspect the run's uploaded evidence and
 cleanup step; a green unit harness or PR rehearsal does not replace them.
+An incorrectly targeted dispatch still fails visibly, but its job uses a
+different check name so it cannot permanently poison the current main tip.
 SCRUM-759's FD1 failure currently prevents this cloud gate from passing.
 
 ## Deploying the Convex backend to production

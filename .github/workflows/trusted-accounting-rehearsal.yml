@@ -18,6 +18,32 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'repository_dispatch' }}
 
 jobs:
+  dispatch_preflight:
+    name: trusted-accounting-release-request
+    if: >-
+      github.event_name == 'repository_dispatch' &&
+      github.event.action == 'autoflow-release-accounting-rehearsal' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      exact_sha: ${{ steps.exact.outputs.exact_sha }}
+    steps:
+      - name: Compare release request to event commit exactly
+        id: exact
+        env:
+          RELEASE_INPUT_SHA: ${{ github.event.client_payload.commit_sha }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_INPUT_SHA" =~ ^[0-9a-f]{40}$ ]] &&
+             [ "$RELEASE_INPUT_SHA" = "$EVENT_SHA" ]; then
+            echo "exact_sha=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exact_sha=false" >> "$GITHUB_OUTPUT"
+          fi
+
   rehearsal:
     name: trusted-accounting-rehearsal
     if: >-
@@ -62,7 +88,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "repository_dispatch" ]; then
-            if ! [[ "$RELEASE_INPUT_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            if ! [[ "$RELEASE_INPUT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
               echo "Release rehearsal requires an exact 40-character SHA." >&2
               exit 1
             fi
@@ -508,8 +534,12 @@ jobs:
   release_verdict:
     # A skipped job still publishes a check run. Give PR-triggered runs a
     # different name so their skipped jobs cannot poison the release gate.
-    name: ${{ github.event_name == 'repository_dispatch' && 'trusted-accounting-release-verdict' || 'trusted-accounting-release-not-dispatched' }}
-    needs: rehearsal
+    # A stale or malformed dispatch also fails visibly under the other name;
+    # it must not burn the current main tip's one allowed release verdict.
+    # GitHub expression string equality ignores case, so the name depends on
+    # the case-sensitive shell preflight rather than a payload/SHA comparison.
+    name: ${{ (github.event_name == 'repository_dispatch' && needs.dispatch_preflight.outputs.exact_sha == 'true') && 'trusted-accounting-release-verdict' || 'trusted-accounting-release-not-dispatched' }}
+    needs: [dispatch_preflight, rehearsal]
     if: always() && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
