@@ -58,6 +58,29 @@ async function cashQuote(tag: string) {
   return { s, quoteId };
 }
 
+async function sourcedCashQuote(tag: string, downPayment = 0) {
+  const s = await seedFinancedDealership(tag, {
+    modules: MODULES,
+    ownerPerms: OWNER_PERMS,
+    actors: {},
+    label: "Certification",
+    vinPrefix: "V486",
+    sourced: true,
+  });
+  // Opening supplier entitlement, before the dealer accepts customer money.
+  await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { sourceCost: 10_000 }));
+  const quoteId = await s.owner.as.mutation(api.quotes.saveQuote, {
+    orgId: s.orgId,
+    customerId: s.customerId,
+    vehicleId: s.vehicleId,
+    mode: "CASH",
+    vehiclePrice: 12_500,
+    downPayment,
+    termMonths: 0,
+  });
+  return { s, quoteId };
+}
+
 type CashSeed = Awaited<ReturnType<typeof cashQuote>>["s"];
 
 async function completeCashSale(s: CashSeed, quoteId: Id<"quotes">, suffix: string) {
@@ -445,25 +468,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
   });
 
   test("SOURCED CASH × no deposit: agent margin only, full customer AR and supplier liability", async () => {
-    const s = await seedFinancedDealership("s486sourcedcash", {
-      modules: MODULES,
-      ownerPerms: OWNER_PERMS,
-      actors: {},
-      label: "Certification",
-      vinPrefix: "V486",
-      sourced: true,
-    });
-    // Opening supplier entitlement, before the dealer accepts customer money.
-    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { sourceCost: 10_000 }));
-    const quoteId = await s.owner.as.mutation(api.quotes.saveQuote, {
-      orgId: s.orgId,
-      customerId: s.customerId,
-      vehicleId: s.vehicleId,
-      mode: "CASH",
-      vehiclePrice: 12_500,
-      downPayment: 0,
-      termMonths: 0,
-    });
+    const { s, quoteId } = await sourcedCashQuote("s486sourcedcash");
     const saleId = await completeCashSale(s, quoteId, "sourced-no-deposit");
 
     expect((await s.t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("COMPLETED");
@@ -496,24 +501,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
   });
 
   test("SOURCED CASH × no deposit × cancellation: agency sale and supplier claim reverse", async () => {
-    const s = await seedFinancedDealership("s486sourcedcancel", {
-      modules: MODULES,
-      ownerPerms: OWNER_PERMS,
-      actors: {},
-      label: "Certification",
-      vinPrefix: "V486",
-      sourced: true,
-    });
-    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { sourceCost: 10_000 }));
-    const quoteId = await s.owner.as.mutation(api.quotes.saveQuote, {
-      orgId: s.orgId,
-      customerId: s.customerId,
-      vehicleId: s.vehicleId,
-      mode: "CASH",
-      vehiclePrice: 12_500,
-      downPayment: 0,
-      termMonths: 0,
-    });
+    const { s, quoteId } = await sourcedCashQuote("s486sourcedcancel");
     const saleId = await completeCashSale(s, quoteId, "sourced-cancel");
     expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["POSTED"]);
     expect(netByAccount(await journalRows(s))).toEqual({
@@ -557,24 +545,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
   });
 
   test("SOURCED CASH × applied deposit: customer AR falls, supplier entitlement stays whole", async () => {
-    const s = await seedFinancedDealership("s486sourcedapplied", {
-      modules: MODULES,
-      ownerPerms: OWNER_PERMS,
-      actors: {},
-      label: "Certification",
-      vinPrefix: "V486",
-      sourced: true,
-    });
-    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { sourceCost: 10_000 }));
-    const quoteId = await s.owner.as.mutation(api.quotes.saveQuote, {
-      orgId: s.orgId,
-      customerId: s.customerId,
-      vehicleId: s.vehicleId,
-      mode: "CASH",
-      vehiclePrice: 12_500,
-      downPayment: 200,
-      termMonths: 0,
-    });
+    const { s, quoteId } = await sourcedCashQuote("s486sourcedapplied", 200);
     const depositId = await s.owner.as.mutation(api.deposits.create, {
       orgId: s.orgId,
       quoteId,
@@ -620,6 +591,62 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       "2400|JOD": 10_000_000,
       "4170|JOD": 2_500_000,
     });
+  });
+
+  test("SOURCED CASH × applied deposit × cancellation × refund: customer money returns without supplier debt", async () => {
+    const { s, quoteId } = await sourcedCashQuote("s486sourcedrefund", 200);
+    const depositId = await s.owner.as.mutation(api.deposits.create, {
+      orgId: s.orgId,
+      quoteId,
+      amount: 200,
+      method: "CASH",
+      idempotencyKey: "scrum486-sourced-refund-hold",
+    });
+    const saleId = await completeCashSale(s, quoteId, "sourced-refund");
+    expect(netByAccount(await journalRows(s))).toEqual({
+      "1100|JOD": 200_000,
+      "1200|JOD": 12_300_000,
+      "2400|JOD": -10_000_000,
+      "4170|JOD": -2_500_000,
+    });
+
+    await s.approver.as.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId,
+      status: "CANCELLED",
+    });
+    const cancelled = await s.t.run(async (ctx) => ({
+      sale: await ctx.db.get(saleId),
+      deposit: await ctx.db.get(depositId),
+      payable: await ctx.db.query("vehicleSupplierPayables")
+        .withIndex("by_sale", (q) => q.eq("saleId", saleId)).first(),
+      applications: await ctx.db.query("depositApplications")
+        .withIndex("by_sale", (q) => q.eq("saleId", saleId)).collect(),
+    }));
+    expect(cancelled.sale?.status).toBe("CANCELLED");
+    expect(cancelled.payable?.status).toBe("CANCELLED");
+    expect(cancelled.deposit).toMatchObject({ status: "HELD", holdActive: true, amountMinor: 200_000 });
+    expect(cancelled.applications.map((application) => application.status)).toEqual(["REVERSED"]);
+    expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["REVERSED"]);
+    expect(await eventStatuses(s, "DEPOSIT_RECEIVED", depositId)).toEqual(["POSTED"]);
+    const cancellationRows = await journalRows(s);
+    expect(netByAccount(cancellationRows)).toEqual({ "1100|JOD": 200_000, "2100|JOD": -200_000 });
+    expectBalanced(cancellationRows);
+    expect(await trialBalanceNormalBalance(s)).toEqual({ "1100|JOD": 200_000, "2100|JOD": 200_000 });
+
+    await s.approver.as.mutation(api.deposits.release, {
+      orgId: s.orgId,
+      depositId,
+      resolution: "REFUNDED",
+      refundMethod: "CASH",
+      idempotencyKey: "scrum486-sourced-refund-release",
+    });
+    expect((await s.t.run((ctx) => ctx.db.get(depositId)))?.status).toBe("REFUNDED");
+    expect(await eventStatuses(s, "DEPOSIT_REFUNDED", depositId)).toEqual(["POSTED"]);
+    const finalRows = await journalRows(s);
+    expect(netByAccount(finalRows)).toEqual({});
+    expectBalanced(finalRows);
+    expect(await trialBalanceNormalBalance(s)).toEqual({});
   });
 
   test("owned CASH × held/applied deposit: 200,000 liability reduces the invoice receivable, not revenue", async () => {
