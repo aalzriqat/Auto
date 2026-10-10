@@ -173,7 +173,7 @@ describe("vatReport.generateVatSummary", () => {
   });
 
   test("large dated ledger windows return every line beyond the targeted-read limit", async () => {
-    const { t, orgId, salesTaxPayable, seedLine } = await seedDealer();
+    const { t, orgId, userId, salesTaxPayable, seedLine } = await seedDealer();
     const date = Date.UTC(2025, 4, 10);
     const journalId = await seedLine(salesTaxPayable._id, 0, 1, date);
     await t.run(async (ctx) => {
@@ -184,10 +184,62 @@ describe("vatReport.generateVatSummary", () => {
         });
       }
     });
+    const draftId = await seedLine(salesTaxPayable._id, 0, 7, date);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(draftId, { status: "DRAFT" });
+      const foreignOrgId = await ctx.db.insert("organizations", { name: "Foreign ledger", createdAt: date });
+      const foreignEntryId = await ctx.db.insert("journalEntries", {
+        orgId: foreignOrgId, journalNumber: "FOREIGN-FALLBACK", accountingDate: date,
+        sourceType: "test", sourceId: "foreign-fallback", category: "SYSTEM",
+        memo: "Foreign parent", status: "POSTED", currency: "JOD",
+        postedBy: userId, postedAt: date, createdAt: date,
+      });
+      await ctx.db.insert("journalLines", {
+        orgId, journalEntryId: foreignEntryId, lineNumber: 1, accountId: salesTaxPayable._id,
+        debitMinor: 0, creditMinor: 8, currency: "JOD", scale: 3, accountingDate: date,
+      });
+    });
 
     const rows = await t.run((ctx) => getPostedLines(ctx, orgId, date, date));
     expect(rows).toHaveLength(129);
     expect(rows.every((row) => row.journalEntryId === journalId)).toBe(true);
+
+    const { bulkRows, queriedTables } = await t.run(async (ctx) => {
+      const queriedTables: string[] = [];
+      const originalQuery = ctx.db.query.bind(ctx.db);
+      const db = {
+        get: ctx.db.get.bind(ctx.db),
+        query: (table: Parameters<typeof ctx.db.query>[0]) => {
+          queriedTables.push(table);
+          return originalQuery(table);
+        },
+      } as typeof ctx.db;
+      const bulkRows = await getPostedLines({ ...ctx, db }, orgId, date, date, { preferBulkRead: true });
+      return { bulkRows, queriedTables };
+    });
+    expect(bulkRows.map((row) => row._id)).toEqual(rows.map((row) => row._id));
+    expect(queriedTables.filter((table) => table === "journalLines")).toHaveLength(1);
+  });
+
+  test("exactly 128 dated lines retain sentinel and creation-order parity on the targeted path", async () => {
+    const { t, orgId, salesTaxPayable, seedLine } = await seedDealer();
+    const date = Date.UTC(2025, 4, 10);
+    const sentinelId = await seedLine(salesTaxPayable._id, 0, 1, -1);
+    const datedId = await seedLine(salesTaxPayable._id, 0, 2, date);
+    await t.run(async (ctx) => {
+      for (let lineNumber = 3; lineNumber <= 126; lineNumber++) {
+        await ctx.db.insert("journalLines", {
+          orgId, journalEntryId: datedId, lineNumber, accountId: salesTaxPayable._id,
+          debitMinor: 0, creditMinor: 1, currency: "JOD", scale: 3, accountingDate: date,
+        });
+      }
+    });
+
+    const targetedRows = await t.run((ctx) => getPostedLines(ctx, orgId, -1, date));
+    const bulkRows = await t.run((ctx) => getPostedLines(ctx, orgId, -1, date, { preferBulkRead: true }));
+    expect(targetedRows).toHaveLength(128);
+    expect(targetedRows.slice(0, 2).map((row) => row.journalEntryId)).toEqual([sentinelId, sentinelId]);
+    expect(targetedRows.map((row) => row._id)).toEqual(bulkRows.map((row) => row._id));
   });
 
   test("computes output VAT, input VAT, and net due for a bounded date range", async () => {

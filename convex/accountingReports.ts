@@ -86,7 +86,8 @@ export async function getPostedLines(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   fromDate?: number,
-  toDate?: number
+  toDate?: number,
+  options?: { preferBulkRead?: boolean }
 ) {
   const maxTargetedLines = 128;
   const excludeSentinel = fromDate === undefined || toDate === undefined;
@@ -106,9 +107,10 @@ export async function getPostedLines(
   // posted entry in the organization. Cumulative one-sided reads, including
   // period-close reconciliations, stay on the original bulk path: on an
   // established ledger they would usually pay for 129 discarded probe rows.
+  // Long-lived two-sided callers can opt into that same path.
   const hasDateBound = fromDate !== undefined && toDate !== undefined;
   let targetedLines: Doc<"journalLines">[] | null = null;
-  if (hasDateBound) {
+  if (hasDateBound && !options?.preferBulkRead) {
     targetedLines = await lineQuery().take(maxTargetedLines + 1);
   }
   if (targetedLines !== null && targetedLines.length <= maxTargetedLines) {
