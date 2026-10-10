@@ -1863,6 +1863,7 @@ export async function runRehearsalCases(ctx) {
       orgId, customerId, vehicleId, mode: "CASH", vehiclePrice: 12_500,
       downPayment: 0, termMonths: 0,
     });
+    const openingBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const depositId = await ownerMust("mutation", "deposits:create", {
       orgId, quoteId, amount: 200, method: "CASH",
       idempotencyKey: `rehearsal-m486c2-deposit-${stamp}`,
@@ -1872,7 +1873,7 @@ export async function runRehearsalCases(ctx) {
     expectEqual(held.amountMinor, 200_000, "M486C2 held deposit amount");
     const me = await ownerMust("query", "users:getMe", {});
     if (!me?._id) unproven("M486C2 has no authenticated salesperson identity");
-    const beforeBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    const heldBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const beforeIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
     const saleId = await ownerMust("mutation", "sales:create", {
       orgId, quoteId, vehicleId, customerId, salespersonId: me._id,
@@ -1898,7 +1899,8 @@ export async function runRehearsalCases(ctx) {
     for (const [field, expected] of [
       ["orgId", String(orgId)], ["customerId", String(customerId)],
       ["documentType", "INVOICE"], ["payerType", "CUSTOMER"],
-      ["currency", "JOD"], ["scale", 3], ["originalAmountMinor", 12_500_000],
+      ["currency", "JOD"], ["scale", 3], ["status", "PARTIALLY_PAID"],
+      ["originalAmountMinor", 12_500_000],
     ]) {
       expectEqual(field.endsWith("Id") ? String(invoice[field]) : invoice[field], expected, `M486C2 invoice ${field}`);
     }
@@ -1907,6 +1909,34 @@ export async function runRehearsalCases(ctx) {
     });
     expectEqual(String(invoiceBalance?.doc?._id), String(invoice._id), "M486C2 collectible invoice identity");
     expectEqual(invoiceBalance?.outstandingMinor, 12_300_000, "M486C2 invoice outstanding after deposit");
+    const allocations = await ownerMust("query", "subledger:listAllocations", {
+      orgId, receivableDocumentId: invoice._id,
+    });
+    expectEqual(allocations?.length, 1, "M486C2 exactly one payment allocation for sale invoice");
+    const activeAllocations = (allocations ?? []).filter((row) => row.status === "ACTIVE");
+    expectEqual(activeAllocations.length, 1, "M486C2 exactly one active payment allocation");
+    const allocation = activeAllocations[0];
+    for (const [field, expected] of [
+      ["orgId", String(orgId)], ["receivableDocumentId", String(invoice._id)],
+      ["amountMinor", 200_000], ["currency", "JOD"], ["scale", 3],
+    ]) expectEqual(field.endsWith("Id") ? String(allocation[field]) : allocation[field], expected,
+      `M486C2 payment allocation ${field}`);
+    if (!allocation.paymentId) fail("M486C2 payment allocation has no canonical payment");
+    const paymentBalance = await ownerMust("query", "subledger:getPaymentBalance", {
+      orgId, paymentId: allocation.paymentId,
+    });
+    const payment = paymentBalance?.payment;
+    if (!payment) fail("M486C2 payment allocation has no canonical payment");
+    expectEqual(String(payment._id), String(allocation.paymentId), "M486C2 allocated canonical payment identity");
+    for (const [field, expected] of [
+      ["orgId", String(orgId)], ["direction", "IN"], ["payerType", "CUSTOMER"],
+      ["customerId", String(customerId)], ["amountMinor", 200_000],
+      ["currency", "JOD"], ["scale", 3], ["method", "OTHER"], ["status", "SETTLED"],
+      ["idempotencyKey", `deposit_received_${depositId}`],
+      ["externalReference", `Deposit ${depositId}`],
+    ]) expectEqual(field.endsWith("Id") ? String(payment[field]) : payment[field], expected,
+      `M486C2 canonical payment ${field}`);
+    expectEqual(paymentBalance.unappliedMinor, 0, "M486C2 canonical payment fully allocated");
     const chart = await ownerMust("query", "chartOfAccounts:list", { orgId });
     const keyOf = new Map((chart ?? []).map((a) => [String(a._id), a.systemKey ?? a.code ?? "?"]));
     const codeOf = new Map((chart ?? []).map((a) => [a.systemKey, a.code]));
@@ -1951,20 +1981,36 @@ export async function runRehearsalCases(ctx) {
     const net = (report, key) => (report?.rows ?? [])
       .filter((r) => r.currency === "JOD" && keyOf.get(String(r.accountId)) === key)
       .reduce((sum, r) => sum + r.netMinor, 0);
+    expectEqual(net(heldBalance, "CASH_ON_HAND") - net(openingBalance, "CASH_ON_HAND"),
+      200_000, "M486C2 public cash includes deposit receipt while held");
+    expectEqual(net(heldBalance, "CUSTOMER_DEPOSITS_LIABILITY") - net(openingBalance, "CUSTOMER_DEPOSITS_LIABILITY"),
+      200_000, "M486C2 public liability includes deposit receipt while held");
+    expectEqual(net(afterBalance, "CASH_ON_HAND") - net(openingBalance, "CASH_ON_HAND"),
+      200_000, "M486C2 public cash remains after deposit application");
+    expectEqual(net(afterBalance, "CUSTOMER_DEPOSITS_LIABILITY") - net(openingBalance, "CUSTOMER_DEPOSITS_LIABILITY"),
+      0, "M486C2 public liability discharged after deposit application");
     for (const [key, delta] of [
       ["CUSTOMER_DEPOSITS_LIABILITY", -200_000],
       ["ACCOUNTS_RECEIVABLE_CUSTOMERS", 12_300_000],
       ["SALES_REVENUE", 12_500_000], ["COST_OF_VEHICLES_SOLD", 10_000_000],
       ["VEHICLE_INVENTORY", -10_000_000],
-    ]) expectEqual(net(afterBalance, key) - net(beforeBalance, key), delta, `M486C2 trial balance ${key}`);
+    ]) expectEqual(net(afterBalance, key) - net(heldBalance, key), delta, `M486C2 trial balance ${key}`);
     for (const [field, delta] of [
       ["totalRevenue", 12_500_000], ["totalCogs", 10_000_000],
       ["grossProfit", 2_500_000], ["netIncome", 2_500_000],
     ]) expectEqual(afterIncome?.[field] - beforeIncome?.[field], delta, `M486C2 public income ${field}`);
+    const incomeRowTotal = (report, rows, code) => (report?.[rows] ?? [])
+      .filter((row) => row.currency === "JOD" && row.code === code)
+      .reduce((sum, row) => sum + row.netMinor, 0);
+    expectEqual(incomeRowTotal(afterIncome, "revenueRows", "4100") - incomeRowTotal(beforeIncome, "revenueRows", "4100"),
+      12_500_000, "M486C2 public income revenue row 4100");
+    expectEqual(incomeRowTotal(afterIncome, "cogsRows", "5100") - incomeRowTotal(beforeIncome, "cogsRows", "5100"),
+      10_000_000, "M486C2 public income COGS row 5100");
     return { saleId: String(saleId), depositId: String(depositId), currency: "JOD",
       appliedMinor: 200_000, outstandingMinor: 12_300_000,
       commandsExercised: ["quotes.saveQuote", "deposits.create", "sales.create"],
-      reportsRead: ["accountingReports.trialBalance", "accountingReports.incomeStatement"] };
+      reportsRead: ["accountingReports.trialBalance", "accountingReports.incomeStatement",
+        "subledger.listAllocations", "subledger.getPaymentBalance"] };
   });
 
   // ── FD1 — the financed deal's cash receipt settles the exact recorded debt ──

@@ -207,6 +207,13 @@ type Defects = {
   cashDepositApplicationMissingPosting?: boolean;
   /** The GL application posts, but the collectible invoice remains at full price. */
   cashDepositInvoiceNotReduced?: boolean;
+  /** An apparent invoice allocation has no settled inbound payment behind it. */
+  cashDepositPaymentMissing?: boolean;
+  cashDepositPaymentWrongCustomer?: boolean;
+  cashDepositPaymentWrongStatus?: boolean;
+  cashDepositPaymentWrongAmount?: boolean;
+  /** The public trial balance drops the deposit receipt while journals retain it. */
+  cashDepositReportOmitsReceipt?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
   eraseOnChequeReturn?: boolean;
   /** A returned cheque posts nothing at all — the books still say money arrived. */
@@ -324,6 +331,7 @@ function makeBackend(defects: Defects = {}) {
   const vehicles = new Map<string, Record<string, any>>();
   const sales = new Map<string, Record<string, any>>();
   let certifiedCashSalePosted = false;
+  let certifiedCashDepositId: string | undefined;
   /** The chart, keyed the way the product keys it, so lines resolve to system keys. */
   const CHART = [
     { _id: "acct_cash", code: defects.cashSaleWrongCashAccountCode ? "1000" : "1100", type: "ASSET", name: "Cash", systemKey: "CASH_ON_HAND", normalBalance: "DEBIT" },
@@ -692,7 +700,11 @@ function makeBackend(defects: Defects = {}) {
         };
       case "accountingReports:trialBalance": {
         const rows = CHART.flatMap((account) => {
-          const lines = [...journalLines.values()].flat().filter((line) =>
+          const lines = [...journalLines.entries()]
+            .filter(([entryId]) => !defects.cashDepositReportOmitsReceipt || !certifiedCashDepositId ||
+              !journalEntries.some((entry) => entry._id === entryId &&
+                entry.sourceType === "deposits" && entry.sourceId === certifiedCashDepositId))
+            .flatMap(([, entryLines]) => entryLines).filter((line) =>
             line.accountId === account._id && line.accountingDate <= Number(args.toDate ?? Infinity));
           if (lines.length === 0) return [];
           const debitMinor = lines.reduce((sum, line) => sum + line.debitMinor, 0);
@@ -995,7 +1007,20 @@ function makeBackend(defects: Defects = {}) {
               ]);
             }
             if (invoiceId && !defects.cashDepositInvoiceNotReduced) {
-              allocations.push({ receivableDocumentId: invoiceId, amountMinor: 200_000, status: "ACTIVE" });
+              const paymentId = defects.cashDepositPaymentMissing ? undefined : id("cpay");
+              if (paymentId) canonicalPayments.set(paymentId, {
+                _id: paymentId, orgId: String(args.orgId), direction: "IN", payerType: "CUSTOMER",
+                customerId: defects.cashDepositPaymentWrongCustomer ? "other-customer" : String(args.customerId),
+                amountMinor: defects.cashDepositPaymentWrongAmount ? 199_000 : 200_000,
+                currency: ORG_CURRENCY, scale: 3, method: "OTHER",
+                status: defects.cashDepositPaymentWrongStatus ? "DRAFT" : "SETTLED",
+                idempotencyKey: `deposit_received_${deposit._id}`,
+                externalReference: `Deposit ${deposit._id}`,
+              });
+              allocations.push({ orgId: String(args.orgId), paymentId, receivableDocumentId: invoiceId,
+                amountMinor: 200_000, currency: ORG_CURRENCY, scale: 3, status: "ACTIVE" });
+              const invoice = financeReceivables.get(invoiceId);
+              if (invoice) invoice.status = "PARTIALLY_PAID";
             }
           }
         }
@@ -1066,6 +1091,9 @@ function makeBackend(defects: Defects = {}) {
         const replayed = replayableCreate("dep", args, true);
         if (replayed) return replayed;
         const depositId = id("dep");
+        if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c2-deposit-")) {
+          certifiedCashDepositId = depositId;
+        }
         // Taking a deposit POSTS. Modelling that is not decoration: P1's first
         // cloud run failed because it measured its journal window from before
         // the fixture, so these ordinary open-period entries were counted as
@@ -1946,7 +1974,7 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
   test.each([
     ["cashDepositNotApplied", /deposit applied to sale/],
     ["cashDepositApplicationMissingPosting", /DEPOSIT_APPLIED|journal/i],
-    ["cashDepositInvoiceNotReduced", /invoice outstanding after deposit/],
+    ["cashDepositInvoiceNotReduced", /invoice status|invoice outstanding after deposit/],
     ["cashSaleWrongRevenueAccount", /journal lines are not exactly/],
   ] as const)("M486C2 rejects %s", async (defect, diagnostic) => {
     const results = await runAgainst({ [defect]: true });
@@ -1958,6 +1986,19 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     const results = await runAgainst({ cashSaleInvoiceListingTruncated: true });
     expect(statusOf(results, "M486C2")).toBe("UNPROVEN");
     expect(String(results.find((r) => r.id === "M486C2")?.detail)).toMatch(/tenant invoice listing is absent or truncated/);
+  });
+
+  test.each([
+    ["cashDepositPaymentMissing", /canonical payment|payment allocation/i],
+    ["cashDepositPaymentWrongCustomer", /canonical payment customerId/i],
+    ["cashDepositPaymentWrongStatus", /canonical payment status/i],
+    ["cashDepositPaymentWrongAmount", /canonical payment amountMinor/i],
+    ["cashDepositReportOmitsReceipt", /deposit receipt|public cash|public liability/i],
+    ["cashSaleReportMissingRevenueRow", /revenue row/i],
+  ] as const)("M486C2 rejects %s despite otherwise correct journals", async (defect, diagnostic) => {
+    const results = await runAgainst({ [defect]: true });
+    expect(statusOf(results, "M486C2")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "M486C2")?.detail)).toMatch(diagnostic);
   });
 
   test("C1/C2 do not PASS when one worker never reached the backend (RG-01)", async () => {
