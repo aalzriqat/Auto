@@ -227,6 +227,8 @@ type Defects = {
   financeReceiptWrongRefusalReason?: boolean;
   /** The clock crosses UTC month-end after the accounting period opens. */
   clockRolloverAfterBookOpen?: boolean;
+  /** Observe the external direct-payment request without claiming every later posting succeeded. */
+  captureDirectPaymentDate?: (paidAt: number) => void;
   // ── FD2 — deal costs denominated once (SCRUM-319) ──
   /** A cost entered in a foreign currency is recorded anyway — the integer lands at the wrong scale. */
   feeAcceptsForeignCurrency?: boolean;
@@ -1263,6 +1265,7 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: fee._id };
       }
       case "financeDealCosts:recordDirectFeePayment": {
+        defects.captureDirectPaymentDate?.(Number(args.paidAt));
         if (defects.clockRolloverAfterBookOpen && openedPeriodEndDate !== null &&
             Number(args.paidAt) > openedPeriodEndDate) {
           return { ok: false as const, error: "No open accounting period covers this payment date." };
@@ -1953,12 +1956,16 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
   });
 
   // ── FD1 — the finance-company receipt (SCRUM-241) ──
-  test("FD1 keeps its direct payment in the opened period across UTC month-end", async () => {
+  test("FD1 sends its direct-payment date inside the opened period across UTC month-end", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.UTC(2026, 0, 31, 23, 59, 30));
+    let paidAt: number | undefined;
     try {
-      const results = await runAgainst({ clockRolloverAfterBookOpen: true });
-      expect(statusOf(results, "FD1"), detail(results, "FD1")).toBe("PASS");
+      await runAgainst({
+        clockRolloverAfterBookOpen: true,
+        captureDirectPaymentDate: (value) => { paidAt = value; },
+      });
+      expect(paidAt).toBe(Date.UTC(2026, 0, 31, 23, 58, 30));
     } finally {
       vi.useRealTimers();
     }
