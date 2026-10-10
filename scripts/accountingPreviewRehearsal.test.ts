@@ -35,11 +35,25 @@ const VALID = {
   E2E_APPROVER_USER: "approver@example.test",
 };
 
+function captureConsoleOutput() {
+  const spies = [
+    vi.spyOn(console, "log").mockImplementation(() => {}),
+    vi.spyOn(console, "info").mockImplementation(() => {}),
+    vi.spyOn(console, "warn").mockImplementation(() => {}),
+    vi.spyOn(console, "error").mockImplementation(() => {}),
+  ];
+  return {
+    expectSilent: () => spies.forEach((spy) => expect(spy).not.toHaveBeenCalled()),
+    restore: () => spies.forEach((spy) => spy.mockRestore()),
+  };
+}
+
 describe("the rehearsal refuses rather than degrades", () => {
   test("preview assertion CLI output cannot prefix the machine-readable release evidence", async () => {
     const spawnCli = vi.fn((_command: string, _args: string[], _options: object) =>
       ({ status: 0, stdout: Buffer.from('{"marker":true}\n') }));
     const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const consoleOutput = captureConsoleOutput();
     try {
       await runPreviewFunction({
         functionName: "e2eBootstrap:assertE2EBootstrap",
@@ -52,7 +66,9 @@ describe("the rehearsal refuses rather than degrades", () => {
       expect(spawnCli).toHaveBeenCalledTimes(1);
       expect(spawnCli.mock.calls[0]?.[2]).toMatchObject({ stdio: ["inherit", "pipe", "inherit"] });
       expect(stdoutWrite).not.toHaveBeenCalled();
+      consoleOutput.expectSilent();
     } finally {
+      consoleOutput.restore();
       stdoutWrite.mockRestore();
     }
   });
@@ -62,6 +78,7 @@ describe("the rehearsal refuses rather than degrades", () => {
       ({ status: 3, stdout: Buffer.from('{"tenantMarker":true}\n') }));
     const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const consoleOutput = captureConsoleOutput();
     try {
       await expect(runPreviewFunction({
         functionName: "e2eBootstrap:assertE2EBootstrap",
@@ -73,7 +90,9 @@ describe("the rehearsal refuses rather than degrades", () => {
       })).rejects.toThrow("failed with exit code 3");
       expect(stdoutWrite).not.toHaveBeenCalled();
       expect(stderrWrite).not.toHaveBeenCalled();
+      consoleOutput.expectSilent();
     } finally {
+      consoleOutput.restore();
       stdoutWrite.mockRestore();
       stderrWrite.mockRestore();
     }
