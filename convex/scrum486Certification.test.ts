@@ -302,6 +302,18 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       "4180|JOD": -1_375_000,
       "5100|JOD": 10_000_000,
     });
+    const income = await publicIncomeStatement(s);
+    expect(income).toMatchObject({
+      currency: "JOD",
+      totalRevenue: 11_125_000,
+      totalCogs: 10_000_000,
+      grossProfit: 1_125_000,
+      netIncome: 1_125_000,
+    });
+    expect(income.revenueRows.map((row) => [row.code, row.netMinor])).toEqual([
+      ["4100", 12_500_000],
+      ["4180", -1_375_000],
+    ]);
 
     const paidAt = Date.now();
     const forwardArgs = {
@@ -387,6 +399,12 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       "4180|JOD": -1_375_000,
       "5100|JOD": 10_000_000,
     });
+    expect(await publicIncomeStatement(s)).toMatchObject({
+      totalRevenue: 11_125_000,
+      totalCogs: 10_000_000,
+      grossProfit: 1_125_000,
+      netIncome: 1_125_000,
+    });
   });
 
   test("owned configured financier × no deposit: full approved amount is company AR, not customer AR", async () => {
@@ -461,6 +479,13 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       "1400|JOD": -10_000_000,
       "4100|JOD": 12_500_000,
       "5100|JOD": 10_000_000,
+    });
+    expect(await publicIncomeStatement(s)).toMatchObject({
+      currency: "JOD",
+      totalRevenue: 12_500_000,
+      totalCogs: 10_000_000,
+      grossProfit: 2_500_000,
+      netIncome: 2_500_000,
     });
   });
 
