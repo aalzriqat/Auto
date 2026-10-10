@@ -101,6 +101,7 @@ describe("vehicle fixture rate-limit retry", () => {
 
 type Deposit = {
   _id: string;
+  canonicalPaymentId?: string;
   releasedAmountMinor: number;
   refundedAmountMinor: number;
   releaseCount: number;
@@ -189,6 +190,12 @@ type Defects = {
   cashSaleInvoiceListingTruncated?: boolean;
   /** The invoice belongs to a different customer. */
   cashSaleInvoiceWrongCustomer?: boolean;
+  /** The sale invoice's original amount differs by one minor unit. */
+  cashSaleInvoiceOriginalAmountWrong?: boolean;
+  /** The balance query returns a different document despite the listing. */
+  cashSaleInvoiceBalanceWrongDocument?: boolean;
+  /** The balance query reports the wrong collectible remainder. */
+  cashSaleInvoiceBalanceWrongOutstanding?: boolean;
   /** The sale's AR journal belongs to a different customer. */
   cashSaleWrongJournalCustomer?: boolean;
   /** The revenue line belongs to a different customer while AR is correct. */
@@ -201,6 +208,30 @@ type Defects = {
   cashSaleWrongAccountCode?: boolean;
   /** The P&L total is right, but its vehicle revenue row is absent. */
   cashSaleReportMissingRevenueRow?: boolean;
+  /** The deposit stays held although the sale completes. */
+  cashDepositNotApplied?: boolean;
+  /** The deposit is marked applied but its liability never moves to AR. */
+  cashDepositApplicationMissingPosting?: boolean;
+  /** The GL application posts, but the collectible invoice remains at full price. */
+  cashDepositInvoiceNotReduced?: boolean;
+  /** An apparent invoice allocation has no settled inbound payment behind it. */
+  cashDepositPaymentMissing?: boolean;
+  cashDepositPaymentWrongCustomer?: boolean;
+  cashDepositPaymentWrongStatus?: boolean;
+  cashDepositPaymentWrongAmount?: boolean;
+  cashDepositPaymentWrongMethod?: boolean;
+  /** Sale allocates a different payment while the held receipt stays unapplied. */
+  cashDepositSaleAllocatesNewPayment?: boolean;
+  /** The receipt payment is already allocated before the deposit is applied. */
+  cashDepositPaymentPreallocated?: boolean;
+  /** The sale allocates more than the held payment across two invoices. */
+  cashDepositSaleOverallocatesPayment?: boolean;
+  /** The public trial balance drops the deposit receipt while journals retain it. */
+  cashDepositReportOmitsReceipt?: boolean;
+  /** An extra balanced posting treats held cash as earned revenue and creates AR. */
+  cashDepositRecognizedAsRevenue?: boolean;
+  /** A second balanced deposit-time entry misclassifies the hold as OTHER_INCOME. */
+  cashDepositRecognizedAsOtherIncome?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
   eraseOnChequeReturn?: boolean;
   /** A returned cheque posts nothing at all — the books still say money arrived. */
@@ -318,16 +349,17 @@ function makeBackend(defects: Defects = {}) {
   const vehicles = new Map<string, Record<string, any>>();
   const sales = new Map<string, Record<string, any>>();
   let certifiedCashSalePosted = false;
+  let certifiedCashDepositId: string | undefined;
   /** The chart, keyed the way the product keys it, so lines resolve to system keys. */
   const CHART = [
     { _id: "acct_cash", code: defects.cashSaleWrongCashAccountCode ? "1000" : "1100", type: "ASSET", name: "Cash", systemKey: "CASH_ON_HAND", normalBalance: "DEBIT" },
     { _id: "acct_bank", code: "1010", type: "ASSET", name: "Bank", systemKey: "BANK_ACCOUNT", normalBalance: "DEBIT" },
     { _id: "acct_ar", code: "1200", type: "ASSET", name: "AR Customers", systemKey: "ACCOUNTS_RECEIVABLE_CUSTOMERS", normalBalance: "DEBIT" },
     { _id: "acct_2110", code: "2110", type: "LIABILITY", name: "Unapplied Customer Receipts", systemKey: "UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY", normalBalance: "CREDIT" },
-    { _id: "acct_depl", code: "2120", type: "LIABILITY", name: "Customer Deposits", systemKey: "CUSTOMER_DEPOSITS_LIABILITY", normalBalance: "CREDIT" },
+    { _id: "acct_depl", code: "2100", type: "LIABILITY", name: "Customer Deposits", systemKey: "CUSTOMER_DEPOSITS_LIABILITY", normalBalance: "CREDIT" },
     { _id: "acct_comm", code: "4200", type: "REVENUE", name: "Consignment Commission", systemKey: "CONSIGNMENT_COMMISSION_REVENUE", normalBalance: "CREDIT" },
-    { _id: "acct_misc", code: "4900", type: "REVENUE", name: "Misc Income", systemKey: "MISCELLANEOUS_INCOME", normalBalance: "CREDIT" },
-    { _id: "acct_ap", code: "2100", type: "LIABILITY", name: "AP Suppliers", systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS", normalBalance: "CREDIT" },
+    { _id: "acct_misc", code: "4400", type: "OTHER_INCOME", name: "Misc Income", systemKey: "MISCELLANEOUS_INCOME", normalBalance: "CREDIT" },
+    { _id: "acct_ap", code: "2400", type: "LIABILITY", name: "AP Suppliers", systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS", normalBalance: "CREDIT" },
     { _id: "acct_rev", code: defects.cashSaleWrongAccountCode ? "4000" : "4100", type: "REVENUE", name: "Sales Revenue", systemKey: "SALES_REVENUE", normalBalance: "CREDIT" },
     { _id: "acct_cogs", code: "5100", type: "COGS", name: "COGS", systemKey: "COST_OF_VEHICLES_SOLD", normalBalance: "DEBIT" },
     { _id: "acct_inv", code: "1400", type: "ASSET", name: "Vehicle Inventory", systemKey: "VEHICLE_INVENTORY", normalBalance: "DEBIT" },
@@ -686,7 +718,11 @@ function makeBackend(defects: Defects = {}) {
         };
       case "accountingReports:trialBalance": {
         const rows = CHART.flatMap((account) => {
-          const lines = [...journalLines.values()].flat().filter((line) =>
+          const lines = [...journalLines.entries()]
+            .filter(([entryId]) => !defects.cashDepositReportOmitsReceipt || !certifiedCashDepositId ||
+              !journalEntries.some((entry) => entry._id === entryId &&
+                entry.sourceType === "deposits" && entry.sourceId === certifiedCashDepositId))
+            .flatMap(([, entryLines]) => entryLines).filter((line) =>
             line.accountId === account._id && line.accountingDate <= Number(args.toDate ?? Infinity));
           if (lines.length === 0) return [];
           const debitMinor = lines.reduce((sum, line) => sum + line.debitMinor, 0);
@@ -701,11 +737,13 @@ function makeBackend(defects: Defects = {}) {
         const net = (key: string) => [...journalLines.values()].flat()
           .filter((line) => line.accountId === accountIdOf(key) &&
             line.accountingDate >= Number(args.fromDate) && line.accountingDate <= Number(args.toDate))
-          .reduce((sum, line) => sum + (key === "COST_OF_VEHICLES_SOLD"
+          .reduce((sum, line) => sum + (["COST_OF_VEHICLES_SOLD", "GENERAL_EXPENSE"].includes(key)
             ? line.debitMinor - line.creditMinor : line.creditMinor - line.debitMinor), 0);
         const totalRevenue = net("SALES_REVENUE") + net("CONSIGNMENT_COMMISSION_REVENUE");
         const totalCogs = net("COST_OF_VEHICLES_SOLD");
         const grossProfit = totalRevenue - totalCogs;
+        const totalExpenses = net("GENERAL_EXPENSE");
+        const totalOtherIncome = net("MISCELLANEOUS_INCOME");
         const row = (key: string, amount: number) => {
           const account = CHART.find((a) => a.systemKey === key)!;
           return { accountId: account._id, code: account.code, currency: ORG_CURRENCY, netMinor: amount };
@@ -714,8 +752,13 @@ function makeBackend(defects: Defects = {}) {
           revenueRows: defects.cashSaleReportMissingRevenueRow && certifiedCashSalePosted
             ? [] : [row("SALES_REVENUE", net("SALES_REVENUE"))],
           cogsRows: [row("COST_OF_VEHICLES_SOLD", totalCogs)],
-          totalRevenue, totalCogs, grossProfit,
-          netIncome: grossProfit - (defects.cashSaleReportMisstatesProfit && certifiedCashSalePosted ? 1 : 0) } };
+          expenseRows: [row("GENERAL_EXPENSE", totalExpenses)],
+          otherIncomeRows: totalOtherIncome === 0 ? [] : [row("MISCELLANEOUS_INCOME", totalOtherIncome)],
+          otherExpenseRows: [],
+          totalRevenue, totalCogs, grossProfit, totalExpenses,
+          totalOtherIncome, totalOtherExpenses: 0,
+          netIncome: grossProfit - totalExpenses + totalOtherIncome -
+            (defects.cashSaleReportMisstatesProfit && certifiedCashSalePosted ? 1 : 0) } };
       }
       case "accountingPeriods:create":
         if (defects.clockRolloverAfterBookOpen) {
@@ -914,7 +957,8 @@ function makeBackend(defects: Defects = {}) {
           financeReceivables.set(invoiceId, {
             _id: invoiceId, orgId: args.orgId, documentType: "INVOICE",
             payerType: "CUSTOMER", customerId: defects.cashSaleInvoiceWrongCustomer ? "other-customer" : String(args.customerId),
-            sourceType: "sales", sourceId: saleId, originalAmountMinor: 12_500_000,
+            sourceType: "sales", sourceId: saleId,
+            originalAmountMinor: defects.cashSaleInvoiceOriginalAmountWrong ? 12_499_999 : 12_500_000,
             currency: ORG_CURRENCY, scale: 3, status: "OPEN",
           });
           if (defects.cashSaleDuplicateInvoice) {
@@ -976,6 +1020,40 @@ function makeBackend(defects: Defects = {}) {
               ],
           { payload: { saleAmountMinor: priceMinor } }
         );
+        if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c2-sale-")) {
+          const deposit = [...deposits.values()].find((row) => row.vehicleId === String(args.vehicleId) &&
+            row.customerId === String(args.customerId) && row.status === "HELD" && row.amountMinor === 200_000);
+          if (deposit && !defects.cashDepositNotApplied) {
+            deposit.status = "APPLIED";
+            deposit.freeMinor = 0;
+            if (!defects.cashDepositApplicationMissingPosting) {
+              post("DEPOSIT_APPLIED", "depositApplications", `${deposit._id}:${args.vehicleId}`, [
+                { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: 200_000, customerId: String(args.customerId) },
+                { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", creditMinor: 200_000, customerId: String(args.customerId) },
+              ]);
+            }
+            if (invoiceId && !defects.cashDepositInvoiceNotReduced) {
+              let allocationPaymentId = deposit.canonicalPaymentId;
+              if (defects.cashDepositSaleAllocatesNewPayment && allocationPaymentId) {
+                const receiptPayment = canonicalPayments.get(allocationPaymentId);
+                if (receiptPayment) {
+                  allocationPaymentId = id("cpay");
+                  canonicalPayments.set(allocationPaymentId, { ...receiptPayment, _id: allocationPaymentId,
+                    idempotencyKey: `sale_duplicate_${deposit._id}` });
+                }
+              }
+              allocations.push({ orgId: String(args.orgId), paymentId: allocationPaymentId, receivableDocumentId: invoiceId,
+                amountMinor: 200_000, currency: ORG_CURRENCY, scale: 3, status: "ACTIVE" });
+              if (defects.cashDepositSaleOverallocatesPayment) allocations.push({
+                orgId: String(args.orgId), paymentId: deposit.canonicalPaymentId,
+                receivableDocumentId: "other-invoice", amountMinor: 1_000,
+                currency: ORG_CURRENCY, scale: 3, status: "ACTIVE",
+              });
+              const invoice = financeReceivables.get(invoiceId);
+              if (invoice) invoice.status = "PARTIALLY_PAID";
+            }
+          }
+        }
         return { ok: true as const, value: saleId };
       }
       case "sales:get":
@@ -1021,7 +1099,7 @@ function makeBackend(defects: Defects = {}) {
             sourceType: args.sourceType,
             purchasePrice: Number(args.sourceType === "SOURCED" ? args.sourceCost : (args.purchasePrice ?? 0)),
           });
-          if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c1-vehicle-") &&
+          if (/^rehearsal-m486c[12]-vehicle-/.test(String(args.idempotencyKey ?? "")) &&
               !defects.cashSaleAcquisitionMissingPosting) {
             const costMinor = defects.cashSaleAcquisitionWrongAmount ? 9_000_000 : 10_000_000;
             post("VEHICLE_ACQUIRED", "vehicles", String(madeVehicle.value), [
@@ -1043,28 +1121,60 @@ function makeBackend(defects: Defects = {}) {
         const replayed = replayableCreate("dep", args, true);
         if (replayed) return replayed;
         const depositId = id("dep");
+        if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c2-deposit-")) {
+          certifiedCashDepositId = depositId;
+        }
         // Taking a deposit POSTS. Modelling that is not decoration: P1's first
         // cloud run failed because it measured its journal window from before
         // the fixture, so these ordinary open-period entries were counted as
         // postings made while the books were shut. The fake did not post on
         // create, so nothing here could reproduce it. It does now.
         const amountMinor = Math.round(Number(args.amount) * MINOR_SCALE);
+        const depositCustomerId = String(args.customerId ?? quoteCustomer.get(String(args.quoteId)) ?? "");
+        const paymentId = defects.cashDepositPaymentMissing || certifiedCashDepositId !== depositId ? undefined : id("cpay");
+        if (paymentId) canonicalPayments.set(paymentId, {
+          _id: paymentId, orgId: String(args.orgId), direction: "IN", payerType: "CUSTOMER",
+          customerId: defects.cashDepositPaymentWrongCustomer ? "other-customer" : depositCustomerId,
+          amountMinor: defects.cashDepositPaymentWrongAmount ? amountMinor - 1_000 : amountMinor,
+          currency: ORG_CURRENCY, scale: 3,
+          method: defects.cashDepositPaymentWrongMethod ? "OTHER" : String(args.method),
+          status: defects.cashDepositPaymentWrongStatus ? "DRAFT" : "SETTLED",
+          idempotencyKey: `deposit_received_${depositId}`, externalReference: `Deposit ${depositId}`,
+        });
+        if (paymentId && defects.cashDepositPaymentPreallocated) allocations.push({
+          orgId: String(args.orgId), paymentId, receivableDocumentId: "earlier-invoice",
+          amountMinor: 1_000, currency: ORG_CURRENCY, scale: 3, status: "ACTIVE",
+        });
         if (periodStatus === "OPEN") {
           post("DEPOSIT_RECEIVED", "deposits", depositId, [
-            { key: "CASH_ON_HAND", debitMinor: amountMinor, customerId: String(args.customerId ?? "") },
-            { key: "CUSTOMER_DEPOSITS_LIABILITY", creditMinor: amountMinor, customerId: String(args.customerId ?? "") },
+            { key: "CASH_ON_HAND", debitMinor: amountMinor, customerId: depositCustomerId },
+            { key: "CUSTOMER_DEPOSITS_LIABILITY", creditMinor: amountMinor, customerId: depositCustomerId },
           ]);
+          if (defects.cashDepositRecognizedAsRevenue && certifiedCashDepositId === depositId) {
+            post("DEPOSIT_REVENUE_ERROR", "deposits", depositId, [
+              { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", debitMinor: amountMinor, customerId: depositCustomerId },
+              { key: "SALES_REVENUE", creditMinor: amountMinor, customerId: depositCustomerId },
+            ]);
+          }
+          if (defects.cashDepositRecognizedAsOtherIncome && certifiedCashDepositId === depositId) {
+            post("DEPOSIT_OTHER_INCOME_ERROR", "deposits", depositId, [
+              { key: "GENERAL_EXPENSE", debitMinor: amountMinor, customerId: depositCustomerId },
+              { key: "MISCELLANEOUS_INCOME", creditMinor: amountMinor, customerId: depositCustomerId },
+            ]);
+          }
         }
         deposits.set(depositId, {
           _id: depositId,
+          canonicalPaymentId: paymentId,
           releasedAmountMinor: 0,
           refundedAmountMinor: 0,
           releaseCount: 0,
-          freeMinor: 2_000_000,
-          committedMinor: 1_000_000,
+          freeMinor: String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c2-deposit-") ? amountMinor : 2_000_000,
+          committedMinor: String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c2-deposit-") ? 0 : 1_000_000,
           vehicleId: quoteVehicle.get(String(args.quoteId)) ?? String(args.vehicleId ?? ""),
-          customerId: String(args.customerId ?? quoteCustomer.get(String(args.quoteId)) ?? ""),
+          customerId: depositCustomerId,
           status: "HELD",
+          amountMinor,
         });
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, depositId);
         return { ok: true as const, value: depositId };
@@ -1265,7 +1375,11 @@ function makeBackend(defects: Defects = {}) {
         };
       case "subledger:getPaymentBalance": {
         const payment = canonicalPayments.get(args.paymentId);
-        return { ok: true as const, value: payment ? { payment, unappliedMinor: 0 } : null };
+        const activeAllocatedMinor = allocations.filter((row) => row.paymentId === args.paymentId && row.status === "ACTIVE")
+          .reduce((total, row) => total + Number(row.amountMinor), 0);
+        return { ok: true as const, value: payment ? {
+          payment, unappliedMinor: Math.max(0, Number(payment.amountMinor) - activeAllocatedMinor),
+        } : null };
       }
       case "deposits:allocateToVehicles": {
         // Re-allocating a car to 0 frees its share — the supported operation the
@@ -1503,13 +1617,34 @@ function makeBackend(defects: Defects = {}) {
         const allocated = allocations
           .filter((a) => a.receivableDocumentId === doc._id && a.status === "ACTIVE")
           .reduce((n, a) => n + a.amountMinor, 0);
-        return { ok: true as const, value: { doc, outstandingMinor: Math.max(0, doc.originalAmountMinor - allocated) } };
+        // Keep the balance otherwise correct when mutating the original
+        // invoice amount, so only that literal assertion can catch the defect.
+        const balanceOriginalMinor = defects.cashSaleInvoiceOriginalAmountWrong && doc.sourceType === "sales"
+          ? 12_500_000 : doc.originalAmountMinor;
+        const outstandingMinor = Math.max(0, balanceOriginalMinor - allocated);
+        return { ok: true as const, value: {
+          doc: defects.cashSaleInvoiceBalanceWrongDocument && doc.sourceType === "sales"
+            ? { ...doc, _id: "different-receivable" } : doc,
+          outstandingMinor: defects.cashSaleInvoiceBalanceWrongOutstanding && doc.sourceType === "sales"
+            ? outstandingMinor + 1 : outstandingMinor,
+        } };
       }
-      case "subledger:listAllocations":
-        return {
-          ok: true as const,
-          value: allocations.filter((a) => a.receivableDocumentId === String(args.receivableDocumentId)),
-        };
+      case "subledger:listAllocations": {
+        const orgId = String(args.orgId);
+        if (args.receivableDocumentId) {
+          const receivableId = String(args.receivableDocumentId);
+          const receivable = financeReceivables.get(receivableId);
+          return { ok: true as const, value: receivable?.orgId === orgId
+            ? allocations.filter((a) => a.orgId === orgId && a.receivableDocumentId === receivableId) : [] };
+        }
+        if (args.paymentId) {
+          const paymentId = String(args.paymentId);
+          const payment = canonicalPayments.get(paymentId);
+          return { ok: true as const, value: payment?.orgId === orgId
+            ? allocations.filter((a) => a.orgId === orgId && a.paymentId === paymentId) : [] };
+        }
+        return { ok: true as const, value: [] };
+      }
       case "applications:confirmDisbursement": {
         const app = financeApps.get(String(args.applicationId));
         if (!app) return { ok: false as const, error: "Application not found." };
@@ -1548,8 +1683,8 @@ function makeBackend(defects: Defects = {}) {
           { key: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", creditMinor: posted },
         ]);
         const paymentId = id("cpay");
-        canonicalPayments.set(paymentId, { _id: paymentId, payerType: "FINANCE_COMPANY", amountMinor: amount, currency, scale: 3, status: "SETTLED" });
-        allocations.push({ _id: id("alloc"), paymentId, receivableDocumentId: receivable._id, amountMinor: amount, currency, status: "ACTIVE" });
+        canonicalPayments.set(paymentId, { _id: paymentId, orgId: String(args.orgId), payerType: "FINANCE_COMPANY", amountMinor: amount, currency, scale: 3, status: "SETTLED" });
+        allocations.push({ _id: id("alloc"), orgId: String(args.orgId), paymentId, receivableDocumentId: receivable._id, amountMinor: amount, currency, status: "ACTIVE" });
         if (!defects.financeReceivableNotSettled) receivable.status = amount >= receivable.originalAmountMinor ? "PAID" : "PARTIALLY_PAID";
         return { ok: true as const, value: null };
       }
@@ -1710,7 +1845,7 @@ describe("the rehearsal passes against a backend that behaves", () => {
     expect(declined.map((d) => `${d.id}: ${d.detail}`)).toEqual([]);
     // And it actually ran the cases rather than finding nothing to do.
     expect(results.map((r) => r.id).sort()).toEqual([...REQUIRED_REHEARSAL_CASE_IDS].sort());
-    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "FD1", "FD2", "C1", "C2"]) {
+    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "FD1", "FD2", "C1", "C2"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
   });
@@ -1916,6 +2051,54 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     const results = await runAgainst({ cashSaleInvoiceListingTruncated: true });
     expect(statusOf(results, "M486C1")).toBe("UNPROVEN");
     expect(String(results.find((r) => r.id === "M486C1")?.detail)).toMatch(/tenant invoice listing is absent or truncated/);
+  });
+
+  test.each([
+    ["cashDepositNotApplied", /deposit applied to sale/],
+    ["cashDepositApplicationMissingPosting", /DEPOSIT_APPLIED|journal/i],
+    ["cashDepositInvoiceNotReduced", /invoice status/],
+    ["cashSaleWrongRevenueAccount", /journal lines are not exactly/],
+  ] as const)("M486C2 rejects %s", async (defect, diagnostic) => {
+    const results = await runAgainst({ [defect]: true });
+    expect(statusOf(results, "M486C2")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "M486C2")?.detail)).toMatch(diagnostic);
+  });
+
+  test("M486C2 stays UNPROVEN when the tenant invoice listing reaches its public cap", async () => {
+    const results = await runAgainst({ cashSaleInvoiceListingTruncated: true });
+    expect(statusOf(results, "M486C2")).toBe("UNPROVEN");
+    expect(String(results.find((r) => r.id === "M486C2")?.detail)).toMatch(/tenant invoice listing is absent or truncated/);
+  });
+
+  test.each([
+    ["cashSaleInvoiceOriginalAmountWrong", /invoice originalAmountMinor/],
+    ["cashSaleInvoiceBalanceWrongDocument", /collectible invoice identity/],
+    ["cashSaleInvoiceBalanceWrongOutstanding", /invoice outstanding/],
+  ] as const)("M486C1 and M486C2 reject %s", async (defect, diagnostic) => {
+    const results = await runAgainst({ [defect]: true });
+    for (const caseId of ["M486C1", "M486C2"]) {
+      expect(statusOf(results, caseId)).toBe("FAIL");
+      expect(String(results.find((row) => row.id === caseId)?.detail)).toMatch(diagnostic);
+    }
+  });
+
+  test.each([
+    ["cashDepositPaymentMissing", /canonical payment|payment allocation/i],
+    ["cashDepositPaymentWrongCustomer", /canonical payment customerId/i],
+    ["cashDepositPaymentWrongStatus", /canonical payment status/i],
+    ["cashDepositPaymentWrongAmount", /canonical payment amountMinor/i],
+    ["cashDepositPaymentWrongMethod", /canonical payment method/i],
+    ["cashDepositSaleAllocatesNewPayment", /sale allocation consumes held deposit payment/i],
+    ["cashDepositPaymentPreallocated", /held payment has no allocations/i],
+    ["cashDepositSaleOverallocatesPayment", /held payment has exactly one sale allocation/i],
+    ["cashDepositReportOmitsReceipt", /deposit receipt|public cash|public liability/i],
+    ["cashDepositRecognizedAsRevenue", /held deposit|public revenue|public receivable/i],
+    ["cashDepositRecognizedAsOtherIncome", /held deposit|public income|public expense/i],
+    ["cashSaleReportMissingRevenueRow", /revenue row/i],
+  ] as const)("M486C2 rejects %s despite otherwise correct journals", async (defect, diagnostic) => {
+    const results = await runAgainst({ [defect]: true });
+    expect(statusOf(results, "M486C2")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "M486C2")?.detail)).toMatch(diagnostic);
   });
 
   test("C1/C2 do not PASS when one worker never reached the backend (RG-01)", async () => {
