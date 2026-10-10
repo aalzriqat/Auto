@@ -1,8 +1,8 @@
 /**
  * SCRUM-486: literal, independent certification rows driven through public money doors.
  *
- * This first row certifies only an owned CASH sale's no-deposit recognition in
- * convex-test. It is not the whole route/deposit/lifecycle matrix and is not
+ * These harness rows cover only selected owned CASH and retired-mode paths.
+ * They are not the whole route/deposit/lifecycle matrix and are not
  * real Convex platform evidence. The owner-ruling derivation lives in
  * docs/architecture/scrum486-certification-oracle.md. Expected amounts are
  * literals here and import no production accounting calculations.
@@ -90,6 +90,14 @@ async function journalRows(s: CashSeed) {
   });
 }
 
+async function eventStatuses(s: CashSeed, eventType: string, sourceId: string) {
+  return await s.t.run(async (ctx) => (
+    await ctx.db.query("accountingEvents").withIndex("by_org_source", (q) =>
+      q.eq("orgId", s.orgId).eq("sourceType", eventType === "SALE_COMPLETED" ? "sales" : "deposits").eq("sourceId", sourceId)
+    ).collect()
+  ).filter((event) => event.eventType === eventType).map((event) => event.status));
+}
+
 function expectBalanced(rows: Awaited<ReturnType<typeof journalRows>>) {
   expect(rows.reduce((total, row) => total + row.debit - row.credit, 0)).toBe(0);
 }
@@ -107,6 +115,16 @@ function expectLiteralRows(actual: JournalRow[], expected: JournalRow[]) {
   ].join("|");
   const order = (a: JournalRow, b: JournalRow) => key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0;
   expect([...actual].sort(order)).toEqual([...expected].sort(order));
+}
+
+/** The ledger consumer counts the original and its reversal, including REVERSED history. */
+function netByAccount(rows: JournalRow[]) {
+  const net = new Map<string, number>();
+  for (const row of rows) {
+    const key = `${row.account}|${row.currency}`;
+    net.set(key, (net.get(key) ?? 0) + row.debit - row.credit);
+  }
+  return Object.fromEntries([...net].filter(([, amount]) => amount !== 0).sort());
 }
 
 describe("SCRUM-486 literal certification matrix (harness only)", () => {
@@ -154,6 +172,60 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       { account: "1400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
     ]);
     expectBalanced(rows);
+  });
+
+  test("owned CASH × applied deposit × cancelled sale × refund: only the held customer money survives the reversal", async () => {
+    const { s, quoteId } = await cashQuote("s486cancelrefund");
+    const depositId = await s.owner.as.mutation(api.deposits.create, {
+      orgId: s.orgId,
+      quoteId,
+      amount: 200,
+      method: "CASH",
+      idempotencyKey: "scrum486-cancel-refund-hold",
+    });
+    const saleId = await completeCashSale(s, quoteId, "cancel-refund");
+    expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["POSTED"]);
+    expect(await eventStatuses(s, "DEPOSIT_RECEIVED", depositId)).toEqual(["POSTED"]);
+    expect(netByAccount(await journalRows(s))).toEqual({
+      "1100|JOD": 200_000,
+      "1200|JOD": 12_300_000,
+      "1400|JOD": -10_000_000,
+      "4100|JOD": -12_500_000,
+      "5100|JOD": 10_000_000,
+    });
+
+    await s.approver.as.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId,
+      status: "CANCELLED",
+    });
+    const cancelled = await s.t.run(async (ctx) => ({
+      sale: await ctx.db.get(saleId),
+      deposit: await ctx.db.get(depositId),
+      applications: await ctx.db.query("depositApplications").withIndex("by_sale", (q) => q.eq("saleId", saleId)).collect(),
+    }));
+    expect(cancelled.sale?.status).toBe("CANCELLED");
+    expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["REVERSED"]);
+    expect(await eventStatuses(s, "DEPOSIT_RECEIVED", depositId)).toEqual(["POSTED"]);
+    expect(cancelled.deposit).toMatchObject({ status: "HELD", holdActive: true, amountMinor: 200_000 });
+    expect(cancelled.applications.map((application) => application.status)).toEqual(["REVERSED"]);
+    const cancellationRows = await journalRows(s);
+    expect(netByAccount(cancellationRows)).toEqual({ "1100|JOD": 200_000, "2100|JOD": -200_000 });
+    expectBalanced(cancellationRows);
+
+    await s.approver.as.mutation(api.deposits.release, {
+      orgId: s.orgId,
+      depositId,
+      resolution: "REFUNDED",
+      refundMethod: "CASH",
+      idempotencyKey: "scrum486-cancel-refund-release",
+    });
+    const refunded = await s.t.run((ctx) => ctx.db.get(depositId));
+    const finalRows = await journalRows(s);
+    expect(refunded?.status).toBe("REFUNDED");
+    expect(await eventStatuses(s, "DEPOSIT_REFUNDED", depositId)).toEqual(["POSTED"]);
+    expect(netByAccount(finalRows)).toEqual({});
+    expectBalanced(finalRows);
   });
 
   test.each([
