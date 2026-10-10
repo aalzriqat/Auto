@@ -5,7 +5,7 @@
  * who will never see it still gets nothing.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 const stubs = vi.hoisted(() => ({
   total: undefined as number | undefined,
@@ -37,7 +37,7 @@ import { VehicleCostBar } from "./VehicleCostBar";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 
 function renderBar() {
-  return render(<VehicleCostBar vehicleId="v1" purchasePrice={10_000} salePrice={11_000} />);
+  return render(<VehicleCostBar vehicleId="v1" purchasePrice={10_000} />);
 }
 
 afterEach(() => {
@@ -61,7 +61,7 @@ describe("VehicleCostBar — no layout shift (SCRUM-628 F-06)", () => {
     stubs.total = 500;
     renderBar();
     expect(screen.queryByTestId("vehicle-cost-bar-loading")).toBeNull();
-    expect(screen.getByText("VehicleCostBreakdown")).toBeTruthy();
+    expect(screen.getByText("RecordedCostInputs")).toBeTruthy();
   });
 
   test("a viewer without the expense permission gets nothing, not a placeholder", () => {
@@ -74,5 +74,22 @@ describe("VehicleCostBar — no layout shift (SCRUM-628 F-06)", () => {
     stubs.orgId = null;
     const { container } = renderBar();
     expect(container.innerHTML).toBe("");
+  });
+});
+
+// SCRUM-55 (owner 2026-10-08, SCRUM-795 c22479): the sale screen must not show a
+// profit that disagrees with accounting. 10,000 purchase + 1,000 landed + a 200
+// marketing expense sold at 12,000 reads 1,800 here but 1,000 in the books.
+describe("VehicleCostBar — shows no derived cost or profit (SCRUM-55)", () => {
+  test("revealed panel lists the stored inputs but no Total Cost and no Profit", () => {
+    stubs.total = 200;
+    renderBar();
+    fireEvent.click(screen.getByRole("button", { name: "ShowCostBreakdown" }));
+    expect(screen.getByText("PurchasePrice")).toBeTruthy();
+    expect(screen.getByText("TotalExpenses")).toBeTruthy();
+    expect(screen.queryByText("TotalCost")).toBeNull();
+    expect(screen.queryByText("Profit")).toBeNull();
+    // Not presented as an addition that a reader totals into "the cost".
+    expect(screen.queryByText(/^\+/)).toBeNull();
   });
 });

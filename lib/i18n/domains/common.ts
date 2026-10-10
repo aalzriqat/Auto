@@ -2,6 +2,7 @@ import { defineBilingualMessages } from "../defineBilingualMessages";
 
 const workspaceMessages = defineBilingualMessages({
   Call: ["Call", "اتصال"],
+  RecordedCostInputs: ["Recorded cost inputs", "مدخلات التكلفة المسجلة"],
   NewLead: ["New lead", "عميل محتمل جديد"],
   NewQuote: ["New quote", "عرض سعر جديد"],
   ResultsCount: ["{count} results", "{count} نتيجة"],
