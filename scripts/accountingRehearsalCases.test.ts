@@ -214,6 +214,8 @@ type Defects = {
   cashDepositPaymentWrongAmount?: boolean;
   /** The public trial balance drops the deposit receipt while journals retain it. */
   cashDepositReportOmitsReceipt?: boolean;
+  /** An extra balanced posting treats held cash as earned revenue and creates AR. */
+  cashDepositRecognizedAsRevenue?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
   eraseOnChequeReturn?: boolean;
   /** A returned cheque posts nothing at all — the books still say money arrived. */
@@ -719,11 +721,12 @@ function makeBackend(defects: Defects = {}) {
         const net = (key: string) => [...journalLines.values()].flat()
           .filter((line) => line.accountId === accountIdOf(key) &&
             line.accountingDate >= Number(args.fromDate) && line.accountingDate <= Number(args.toDate))
-          .reduce((sum, line) => sum + (key === "COST_OF_VEHICLES_SOLD"
+          .reduce((sum, line) => sum + (["COST_OF_VEHICLES_SOLD", "GENERAL_EXPENSE"].includes(key)
             ? line.debitMinor - line.creditMinor : line.creditMinor - line.debitMinor), 0);
-        const totalRevenue = net("SALES_REVENUE") + net("CONSIGNMENT_COMMISSION_REVENUE");
+        const totalRevenue = net("SALES_REVENUE") + net("CONSIGNMENT_COMMISSION_REVENUE") + net("MISCELLANEOUS_INCOME");
         const totalCogs = net("COST_OF_VEHICLES_SOLD");
         const grossProfit = totalRevenue - totalCogs;
+        const totalExpenses = net("GENERAL_EXPENSE");
         const row = (key: string, amount: number) => {
           const account = CHART.find((a) => a.systemKey === key)!;
           return { accountId: account._id, code: account.code, currency: ORG_CURRENCY, netMinor: amount };
@@ -732,8 +735,11 @@ function makeBackend(defects: Defects = {}) {
           revenueRows: defects.cashSaleReportMissingRevenueRow && certifiedCashSalePosted
             ? [] : [row("SALES_REVENUE", net("SALES_REVENUE"))],
           cogsRows: [row("COST_OF_VEHICLES_SOLD", totalCogs)],
-          totalRevenue, totalCogs, grossProfit,
-          netIncome: grossProfit - (defects.cashSaleReportMisstatesProfit && certifiedCashSalePosted ? 1 : 0) } };
+          expenseRows: [row("GENERAL_EXPENSE", totalExpenses)],
+          otherIncomeRows: [], otherExpenseRows: [],
+          totalRevenue, totalCogs, grossProfit, totalExpenses,
+          totalOtherIncome: 0, totalOtherExpenses: 0,
+          netIncome: grossProfit - totalExpenses - (defects.cashSaleReportMisstatesProfit && certifiedCashSalePosted ? 1 : 0) } };
       }
       case "accountingPeriods:create":
         if (defects.clockRolloverAfterBookOpen) {
@@ -1106,6 +1112,12 @@ function makeBackend(defects: Defects = {}) {
             { key: "CASH_ON_HAND", debitMinor: amountMinor, customerId: depositCustomerId },
             { key: "CUSTOMER_DEPOSITS_LIABILITY", creditMinor: amountMinor, customerId: depositCustomerId },
           ]);
+          if (defects.cashDepositRecognizedAsRevenue && certifiedCashDepositId === depositId) {
+            post("DEPOSIT_REVENUE_ERROR", "deposits", depositId, [
+              { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", debitMinor: amountMinor, customerId: depositCustomerId },
+              { key: "SALES_REVENUE", creditMinor: amountMinor, customerId: depositCustomerId },
+            ]);
+          }
         }
         deposits.set(depositId, {
           _id: depositId,
@@ -1994,6 +2006,7 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["cashDepositPaymentWrongStatus", /canonical payment status/i],
     ["cashDepositPaymentWrongAmount", /canonical payment amountMinor/i],
     ["cashDepositReportOmitsReceipt", /deposit receipt|public cash|public liability/i],
+    ["cashDepositRecognizedAsRevenue", /held deposit|public revenue|public receivable/i],
     ["cashSaleReportMissingRevenueRow", /revenue row/i],
   ] as const)("M486C2 rejects %s despite otherwise correct journals", async (defect, diagnostic) => {
     const results = await runAgainst({ [defect]: true });

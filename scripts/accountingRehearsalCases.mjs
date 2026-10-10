@@ -1864,6 +1864,7 @@ export async function runRehearsalCases(ctx) {
       downPayment: 0, termMonths: 0,
     });
     const openingBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    const openingIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
     const depositId = await ownerMust("mutation", "deposits:create", {
       orgId, quoteId, amount: 200, method: "CASH",
       idempotencyKey: `rehearsal-m486c2-deposit-${stamp}`,
@@ -1874,7 +1875,7 @@ export async function runRehearsalCases(ctx) {
     const me = await ownerMust("query", "users:getMe", {});
     if (!me?._id) unproven("M486C2 has no authenticated salesperson identity");
     const heldBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
-    const beforeIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const heldIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
     const saleId = await ownerMust("mutation", "sales:create", {
       orgId, quoteId, vehicleId, customerId, salespersonId: me._id,
       salePrice: 12_500, saleDate: Date.now(), status: "COMPLETED",
@@ -1985,10 +1986,31 @@ export async function runRehearsalCases(ctx) {
       200_000, "M486C2 public cash includes deposit receipt while held");
     expectEqual(net(heldBalance, "CUSTOMER_DEPOSITS_LIABILITY") - net(openingBalance, "CUSTOMER_DEPOSITS_LIABILITY"),
       200_000, "M486C2 public liability includes deposit receipt while held");
+    expectEqual(net(heldBalance, "ACCOUNTS_RECEIVABLE_CUSTOMERS") - net(openingBalance, "ACCOUNTS_RECEIVABLE_CUSTOMERS"),
+      0, "M486C2 public receivable unchanged by held deposit");
     expectEqual(net(afterBalance, "CASH_ON_HAND") - net(openingBalance, "CASH_ON_HAND"),
       200_000, "M486C2 public cash remains after deposit application");
     expectEqual(net(afterBalance, "CUSTOMER_DEPOSITS_LIABILITY") - net(openingBalance, "CUSTOMER_DEPOSITS_LIABILITY"),
       0, "M486C2 public liability discharged after deposit application");
+    expectEqual(net(afterBalance, "ACCOUNTS_RECEIVABLE_CUSTOMERS") - net(openingBalance, "ACCOUNTS_RECEIVABLE_CUSTOMERS"),
+      12_300_000, "M486C2 public receivable after deposit application");
+    for (const field of [
+      "totalRevenue", "totalCogs", "grossProfit", "totalExpenses",
+      "totalOtherIncome", "totalOtherExpenses", "netIncome",
+    ]) {
+      if (!Number.isFinite(openingIncome?.[field]) || !Number.isFinite(heldIncome?.[field])) {
+        fail(`M486C2 public income ${field} is unavailable while deposit is held`);
+      }
+      expectEqual(heldIncome[field], openingIncome[field], `M486C2 held deposit never changes public income ${field}`);
+    }
+    for (const bucket of ["revenueRows", "cogsRows", "expenseRows", "otherIncomeRows", "otherExpenseRows"]) {
+      if (!Array.isArray(openingIncome?.[bucket]) || !Array.isArray(heldIncome?.[bucket])) {
+        fail(`M486C2 public income ${bucket} is unavailable while deposit is held`);
+      }
+      const rows = (report) => JSON.stringify(report[bucket].map((row) =>
+        [String(row.accountId), row.currency, row.netMinor]));
+      expectEqual(rows(heldIncome), rows(openingIncome), `M486C2 held deposit never changes public income ${bucket}`);
+    }
     for (const [key, delta] of [
       ["CUSTOMER_DEPOSITS_LIABILITY", -200_000],
       ["ACCOUNTS_RECEIVABLE_CUSTOMERS", 12_300_000],
@@ -1998,13 +2020,13 @@ export async function runRehearsalCases(ctx) {
     for (const [field, delta] of [
       ["totalRevenue", 12_500_000], ["totalCogs", 10_000_000],
       ["grossProfit", 2_500_000], ["netIncome", 2_500_000],
-    ]) expectEqual(afterIncome?.[field] - beforeIncome?.[field], delta, `M486C2 public income ${field}`);
+    ]) expectEqual(afterIncome?.[field] - heldIncome?.[field], delta, `M486C2 public income ${field}`);
     const incomeRowTotal = (report, rows, code) => (report?.[rows] ?? [])
       .filter((row) => row.currency === "JOD" && row.code === code)
       .reduce((sum, row) => sum + row.netMinor, 0);
-    expectEqual(incomeRowTotal(afterIncome, "revenueRows", "4100") - incomeRowTotal(beforeIncome, "revenueRows", "4100"),
+    expectEqual(incomeRowTotal(afterIncome, "revenueRows", "4100") - incomeRowTotal(heldIncome, "revenueRows", "4100"),
       12_500_000, "M486C2 public income revenue row 4100");
-    expectEqual(incomeRowTotal(afterIncome, "cogsRows", "5100") - incomeRowTotal(beforeIncome, "cogsRows", "5100"),
+    expectEqual(incomeRowTotal(afterIncome, "cogsRows", "5100") - incomeRowTotal(heldIncome, "cogsRows", "5100"),
       10_000_000, "M486C2 public income COGS row 5100");
     return { saleId: String(saleId), depositId: String(depositId), currency: "JOD",
       appliedMinor: 200_000, outstandingMinor: 12_300_000,
