@@ -84,14 +84,16 @@ describe("the rehearsal refuses rather than degrades", () => {
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const consoleOutput = captureConsoleOutput();
     try {
-      await expect(runPreviewFunction({
+      const rejection = runPreviewFunction({
         functionName: "e2eBootstrap:assertE2EBootstrap",
         args: { primaryClerkUserId: "user_a", approverClerkUserId: "user_b", expectedCloudUrl: VALID.NEXT_PUBLIC_CONVEX_URL },
         previewName: VALID.CONVEX_PREVIEW_NAME,
         deployKey: VALID.CONVEX_DEPLOY_KEY,
         env: { ...VALID, NODE_ENV: "test" },
         spawnCli,
-      })).rejects.toThrow("failed with exit code 3");
+      });
+      await expect(rejection).rejects.toThrow("failed with exit code 3");
+      await expect(rejection).rejects.not.toThrow("tenantMarker");
       expect(stdoutWrite).not.toHaveBeenCalled();
       expect(stderrWrite).not.toHaveBeenCalled();
       consoleOutput.expectSilent();
