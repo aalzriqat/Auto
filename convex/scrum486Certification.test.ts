@@ -174,6 +174,14 @@ async function trialBalanceNormalBalance(s: CashSeed) {
     .sort(([a], [b]) => a.localeCompare(b)));
 }
 
+async function publicIncomeStatement(s: CashSeed) {
+  return s.owner.as.query(api.accountingReports.incomeStatement, {
+    orgId: s.orgId,
+    fromDate: Date.UTC(s.fiscalYear, 0, 1),
+    toDate: Date.UTC(s.fiscalYear, 11, 31, 23, 59, 59, 999),
+  });
+}
+
 describe("SCRUM-486 literal certification matrix (harness only)", () => {
   test("owned configured financier × held 200 first payment: contribution, forward, partial refusal and full receipt", async () => {
     const s = await seedFinancedDealership("s486financedheld", {
@@ -476,6 +484,16 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       "4100|JOD": 12_500_000,
       "5100|JOD": 10_000_000,
     });
+    const income = await publicIncomeStatement(s);
+    expect(income).toMatchObject({
+      currency: "JOD",
+      totalRevenue: 12_500_000,
+      totalCogs: 10_000_000,
+      grossProfit: 2_500_000,
+      netIncome: 2_500_000,
+    });
+    expect(income.revenueRows.map((row) => [row.code, row.netMinor])).toEqual([["4100", 12_500_000]]);
+    expect(income.cogsRows.map((row) => [row.code, row.netMinor])).toEqual([["5100", 10_000_000]]);
   });
 
   test("owned CASH × no deposit × cancellation: sale journals reverse without a customer credit", async () => {
@@ -510,6 +528,9 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expectBalanced(rows);
     expect(netByAccount(rows)).toEqual({});
     expect(await trialBalanceNormalBalance(s)).toEqual({});
+    expect(await publicIncomeStatement(s)).toMatchObject({
+      totalRevenue: 0, totalCogs: 0, grossProfit: 0, netIncome: 0,
+    });
   });
 
   test("SOURCED CASH × no deposit: agent margin only, full customer AR and supplier liability", async () => {
@@ -543,6 +564,16 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       "2400|JOD": 10_000_000,
       "4170|JOD": 2_500_000,
     });
+    const income = await publicIncomeStatement(s);
+    expect(income).toMatchObject({
+      currency: "JOD",
+      totalRevenue: 2_500_000,
+      totalCogs: 0,
+      grossProfit: 2_500_000,
+      netIncome: 2_500_000,
+    });
+    expect(income.revenueRows.map((row) => [row.code, row.netMinor])).toEqual([["4170", 2_500_000]]);
+    expect(income.cogsRows).toEqual([]);
   });
 
   test("SOURCED CASH × no deposit × cancellation: agency sale and supplier claim reverse", async () => {
@@ -587,6 +618,9 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(netByAccount(rows)).toEqual({});
     expectBalanced(rows);
     expect(await trialBalanceNormalBalance(s)).toEqual({});
+    expect(await publicIncomeStatement(s)).toMatchObject({
+      totalRevenue: 0, totalCogs: 0, grossProfit: 0, netIncome: 0,
+    });
   });
 
   test.each([
