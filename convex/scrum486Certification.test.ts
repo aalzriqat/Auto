@@ -578,10 +578,30 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(await trialBalanceNormalBalance(s)).toEqual({});
   });
 
-  test("SOURCED CASH × completed sale: salesperson with edit:sales cannot reverse money", async () => {
-    const { s, quoteId } = await sourcedCashQuote("s486sourcedsellerdeny");
-    const saleId = await completeCashSale(s, quoteId, "sourced-seller-deny");
-    const clerkId = "s486sourcedsellerdeny_salesperson";
+  test.each([
+    {
+      route: "owned",
+      quote: cashQuote,
+      expectedNet: {
+        "1200|JOD": 12_500_000,
+        "1400|JOD": -10_000_000,
+        "4100|JOD": -12_500_000,
+        "5100|JOD": 10_000_000,
+      },
+    },
+    {
+      route: "sourced",
+      quote: sourcedCashQuote,
+      expectedNet: {
+        "1200|JOD": 12_500_000,
+        "2400|JOD": -10_000_000,
+        "4170|JOD": -2_500_000,
+      },
+    },
+  ])("$route CASH × completed sale: salesperson with edit:sales cannot reverse money", async ({ route, quote, expectedNet }) => {
+    const { s, quoteId } = await quote(`s486${route}sellerdeny`);
+    const saleId = await completeCashSale(s, quoteId, `${route}-seller-deny`);
+    const clerkId = `s486${route}sellerdeny_salesperson`;
     await s.t.run(async (ctx) => {
       const userId = await ctx.db.insert("users", {
         clerkId,
@@ -604,11 +624,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     })).rejects.toThrow(/approve:requests/);
     expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
     expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["POSTED"]);
-    expect(netByAccount(await journalRows(s))).toEqual({
-      "1200|JOD": 12_500_000,
-      "2400|JOD": -10_000_000,
-      "4170|JOD": -2_500_000,
-    });
+    expect(netByAccount(await journalRows(s))).toEqual(expectedNet);
   });
 
   test("SOURCED CASH × applied deposit: customer AR falls, supplier entitlement stays whole", async () => {
