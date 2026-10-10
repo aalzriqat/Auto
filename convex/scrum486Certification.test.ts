@@ -945,6 +945,38 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     });
     expect((await s.t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("CANCELLED");
     expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["REVERSED"]);
+    // Equal account totals cannot substitute for the event-to-journal binding.
+    const saleBindings = await s.t.run(async (ctx) => {
+      const events = await ctx.db.query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", s.orgId).eq("sourceType", "sales").eq("sourceId", saleId)
+        ).collect();
+      return Promise.all(events.map(async (event) => {
+        const entryId = event.journalEntryId;
+        const entry = entryId ? await ctx.db.get(entryId) : null;
+        const lines = entryId ? await ctx.db.query("journalLines")
+          .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entryId))
+          .collect() : [];
+        return { event, entry, lineCount: lines.length };
+      }));
+    });
+    expect(saleBindings).toHaveLength(2);
+    const originalBinding = saleBindings.find(({ event }) => event.eventType === "SALE_COMPLETED");
+    const reversalBinding = saleBindings.find(({ event }) => event.eventType === "JOURNAL_REVERSAL");
+    expect(originalBinding?.entry).toMatchObject({
+      accountingEventId: originalBinding?.event._id,
+      sourceType: "sales", sourceId: saleId, status: "REVERSED",
+    });
+    expect(originalBinding?.lineCount).toBe(4);
+    expect(reversalBinding?.event).toMatchObject({
+      status: "POSTED", reversalOfEventId: originalBinding?.event._id,
+    });
+    expect(reversalBinding?.entry).toMatchObject({
+      accountingEventId: reversalBinding?.event._id,
+      sourceType: "sales", sourceId: saleId, category: "REVERSAL",
+      reversalOfJournalEntryId: originalBinding?.entry?._id,
+    });
+    expect(reversalBinding?.lineCount).toBe(4);
     const rows = await journalRows(s);
     expectLiteralRows(rows, [
       { account: "1200", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "REVERSED" },
