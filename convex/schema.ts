@@ -2124,6 +2124,8 @@ export default defineSchema({
     // created early but completed later would land in the wrong page.
     .index("by_org_salesperson_saleDate", ["orgId", "salespersonId", "saleDate"])
     .index("by_org_saleDate", ["orgId", "saleDate"])
+    // Dated dashboard totals need completed, non-deleted rows in sale-date order.
+    .index("by_org_status_live_saleDate", ["orgId", "status", "isDeleted", "saleDate"])
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_quote", ["quoteId"])
     .index("by_lead", ["leadId"]),
@@ -2338,6 +2340,9 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_org_date", ["orgId", "date"])
+    // Dashboard ranges skip reversed rows; its remaining deleted-row filter
+    // also covers legacy false values in the optional isDeleted field.
+    .index("by_org_reversedAt_date", ["orgId", "reversedAt", "date"])
     // Finds expenses whose *reversal* lands in a reporting window even though
     // the expense itself is dated long before it — a date-range scan over
     // `by_org_date` would never reach them.

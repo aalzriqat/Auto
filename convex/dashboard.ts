@@ -255,11 +255,9 @@ export const stats = query({
       if (filterStart > 0) {
         periodSales = await ctx.db
           .query("sales")
-          .withIndex("by_org_saleDate", (q) => q.eq("orgId", args.orgId).gte("saleDate", filterStart))
-          .filter(q => q.and(
-            q.eq(q.field("status"), "COMPLETED"),
-            q.neq(q.field("isDeleted"), true)
-          ))
+          .withIndex("by_org_status_live_saleDate", (q) =>
+            q.eq("orgId", args.orgId).eq("status", "COMPLETED").eq("isDeleted", undefined).gte("saleDate", filterStart)
+          )
           .collect();
       } else {
         periodSales = await ctx.db
@@ -369,8 +367,10 @@ export const stats = query({
       if (filterStart > 0) {
         allExpenses = await ctx.db
           .query("expenses")
-          .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId).gte("date", filterStart))
-          .filter((q) => q.and(q.neq(q.field("isDeleted"), true), q.eq(q.field("reversedAt"), undefined)))
+          .withIndex("by_org_reversedAt_date", (q) =>
+            q.eq("orgId", args.orgId).eq("reversedAt", undefined).gte("date", filterStart)
+          )
+          .filter((q) => q.neq(q.field("isDeleted"), true))
           .collect();
       } else {
         allExpenses = await ctx.db
@@ -970,12 +970,9 @@ export const stats = query({
     const previousSales = comparesPeriods && canViewSalesMetrics
       ? await ctx.db
         .query("sales")
-        .withIndex("by_org_saleDate", (q) =>
-          q.eq("orgId", args.orgId).gte("saleDate", previousStart).lt("saleDate", filterStart))
-        .filter(q => q.and(
-          q.eq(q.field("status"), "COMPLETED"),
-          q.neq(q.field("isDeleted"), true)
-        ))
+        .withIndex("by_org_status_live_saleDate", (q) =>
+          q.eq("orgId", args.orgId).eq("status", "COMPLETED").eq("isDeleted", undefined)
+            .gte("saleDate", previousStart).lt("saleDate", filterStart))
         .take(PREVIOUS_PERIOD_CAP)
       : [];
 
@@ -997,9 +994,10 @@ export const stats = query({
     const previousExpenses = comparesPeriods && canViewCostMetrics
       ? await ctx.db
         .query("expenses")
-        .withIndex("by_org_date", (q) =>
-          q.eq("orgId", args.orgId).gte("date", previousStart).lt("date", filterStart))
-        .filter((q) => q.and(q.neq(q.field("isDeleted"), true), q.eq(q.field("reversedAt"), undefined)))
+        .withIndex("by_org_reversedAt_date", (q) =>
+          q.eq("orgId", args.orgId).eq("reversedAt", undefined)
+            .gte("date", previousStart).lt("date", filterStart))
+        .filter((q) => q.neq(q.field("isDeleted"), true))
         .take(PREVIOUS_PERIOD_CAP)
       : [];
 

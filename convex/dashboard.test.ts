@@ -988,6 +988,65 @@ describe("dashboard.stats previous-period totals", () => {
     expect(result.previousPeriod?.expenses).toBe(1_600);
   });
 
+  test("dated windows exclude deleted sales and reversed expenses without changing live totals", async () => {
+    const { t, orgId, asUser } = await setup(FULL_PERMISSIONS);
+    freezeNow();
+
+    await seedSaleAt(t, orgId, { daysAgo: 5, salePrice: 20_000, purchasePrice: 15_000, vin: "LCOC76CA9R4800011" });
+    await seedSaleAt(t, orgId, { daysAgo: 40, salePrice: 30_000, purchasePrice: 22_000, vin: "LCOC76CA9R4800012" });
+    const deletedVehicleId = await seedSaleAt(t, orgId, {
+      daysAgo: 40, salePrice: 90_000, purchasePrice: 40_000, vin: "LCOC76CA9R4800013",
+    });
+    await t.run(async (ctx) => {
+      const sales = await ctx.db.query("sales").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
+      const deletedSale = sales.find((sale) => sale.vehicleId === deletedVehicleId);
+      if (!deletedSale) throw new Error("Missing seeded sale");
+      await ctx.db.patch(deletedSale._id, { isDeleted: true });
+    });
+
+    await seedExpenseAt(t, orgId, { daysAgo: 5, amount: 200 });
+    await seedExpenseAt(t, orgId, { daysAgo: 40, amount: 300 });
+    const reversedExpenseId = await seedExpenseAt(t, orgId, { daysAgo: 40, amount: 7_000 });
+    await t.run((ctx) => ctx.db.patch(reversedExpenseId, { isDeleted: true, reversedAt: NOW - 2 * DAY_MS }));
+    // A deleted expense may have no reversal timestamp (including legacy rows).
+    // The remaining post-index deletion filter must exclude it in both windows.
+    const deletedCurrentExpenseId = await seedExpenseAt(t, orgId, { daysAgo: 5, amount: 8_000 });
+    const deletedPreviousExpenseId = await seedExpenseAt(t, orgId, { daysAgo: 40, amount: 9_000 });
+    await t.run(async (ctx) => {
+      await ctx.db.patch(deletedCurrentExpenseId, { isDeleted: true });
+      await ctx.db.patch(deletedPreviousExpenseId, { isDeleted: true });
+    });
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "MONTH" });
+    expect(result.salesVolumeThisMonth).toBe(20_000);
+    expect(result.previousPeriod?.sales).toBe(30_000);
+    expect(result.salesTrend.reduce((sum, point) => sum + point.Expenses, 0)).toBe(200);
+    expect(result.previousPeriod?.expenses).toBe(300);
+  });
+
+  test("dated totals follow sales entering and leaving the live index range", async () => {
+    const { t, orgId, asUser } = await setup(FULL_PERMISSIONS);
+    freezeNow();
+    const vehicleId = await seedSaleAt(t, orgId, {
+      daysAgo: 5, salePrice: 20_000, purchasePrice: 15_000, vin: "LCOC76CA9R4800014",
+    });
+    const saleId = await t.run(async (ctx) => {
+      const sales = await ctx.db.query("sales").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
+      const sale = sales.find((row) => row.vehicleId === vehicleId);
+      if (!sale) throw new Error("Missing seeded sale");
+      await ctx.db.patch(sale._id, { status: "PENDING" });
+      return sale._id;
+    });
+    const args = { orgId, timeRange: "MONTH" as const, includePreviousPeriod: false };
+    expect((await asUser.query(api.dashboard.stats, args)).salesThisMonth).toBe(0);
+
+    await t.run((ctx) => ctx.db.patch(saleId, { status: "COMPLETED" }));
+    expect((await asUser.query(api.dashboard.stats, args)).salesThisMonth).toBe(1);
+
+    await t.run((ctx) => ctx.db.patch(saleId, { isDeleted: true }));
+    expect((await asUser.query(api.dashboard.stats, args)).salesThisMonth).toBe(0);
+  });
+
   test("computes previous-window profit off the same capitalized cost basis as the current one", async () => {
     const { t, orgId, asUser } = await setup(FULL_PERMISSIONS);
     freezeNow();
