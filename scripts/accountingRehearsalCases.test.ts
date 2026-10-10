@@ -190,6 +190,12 @@ type Defects = {
   cashSaleInvoiceListingTruncated?: boolean;
   /** The invoice belongs to a different customer. */
   cashSaleInvoiceWrongCustomer?: boolean;
+  /** The sale invoice's original amount differs by one minor unit. */
+  cashSaleInvoiceOriginalAmountWrong?: boolean;
+  /** The balance query returns a different document despite the listing. */
+  cashSaleInvoiceBalanceWrongDocument?: boolean;
+  /** The balance query reports the wrong collectible remainder. */
+  cashSaleInvoiceBalanceWrongOutstanding?: boolean;
   /** The sale's AR journal belongs to a different customer. */
   cashSaleWrongJournalCustomer?: boolean;
   /** The revenue line belongs to a different customer while AR is correct. */
@@ -951,7 +957,8 @@ function makeBackend(defects: Defects = {}) {
           financeReceivables.set(invoiceId, {
             _id: invoiceId, orgId: args.orgId, documentType: "INVOICE",
             payerType: "CUSTOMER", customerId: defects.cashSaleInvoiceWrongCustomer ? "other-customer" : String(args.customerId),
-            sourceType: "sales", sourceId: saleId, originalAmountMinor: 12_500_000,
+            sourceType: "sales", sourceId: saleId,
+            originalAmountMinor: defects.cashSaleInvoiceOriginalAmountWrong ? 12_499_999 : 12_500_000,
             currency: ORG_CURRENCY, scale: 3, status: "OPEN",
           });
           if (defects.cashSaleDuplicateInvoice) {
@@ -1610,7 +1617,17 @@ function makeBackend(defects: Defects = {}) {
         const allocated = allocations
           .filter((a) => a.receivableDocumentId === doc._id && a.status === "ACTIVE")
           .reduce((n, a) => n + a.amountMinor, 0);
-        return { ok: true as const, value: { doc, outstandingMinor: Math.max(0, doc.originalAmountMinor - allocated) } };
+        // Keep the balance otherwise correct when mutating the original
+        // invoice amount, so only that literal assertion can catch the defect.
+        const balanceOriginalMinor = defects.cashSaleInvoiceOriginalAmountWrong && doc.sourceType === "sales"
+          ? 12_500_000 : doc.originalAmountMinor;
+        const outstandingMinor = Math.max(0, balanceOriginalMinor - allocated);
+        return { ok: true as const, value: {
+          doc: defects.cashSaleInvoiceBalanceWrongDocument && doc.sourceType === "sales"
+            ? { ...doc, _id: "different-receivable" } : doc,
+          outstandingMinor: defects.cashSaleInvoiceBalanceWrongOutstanding && doc.sourceType === "sales"
+            ? outstandingMinor + 1 : outstandingMinor,
+        } };
       }
       case "subledger:listAllocations": {
         const orgId = String(args.orgId);
@@ -2039,7 +2056,7 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
   test.each([
     ["cashDepositNotApplied", /deposit applied to sale/],
     ["cashDepositApplicationMissingPosting", /DEPOSIT_APPLIED|journal/i],
-    ["cashDepositInvoiceNotReduced", /invoice status|invoice outstanding after deposit/],
+    ["cashDepositInvoiceNotReduced", /invoice status/],
     ["cashSaleWrongRevenueAccount", /journal lines are not exactly/],
   ] as const)("M486C2 rejects %s", async (defect, diagnostic) => {
     const results = await runAgainst({ [defect]: true });
@@ -2051,6 +2068,18 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     const results = await runAgainst({ cashSaleInvoiceListingTruncated: true });
     expect(statusOf(results, "M486C2")).toBe("UNPROVEN");
     expect(String(results.find((r) => r.id === "M486C2")?.detail)).toMatch(/tenant invoice listing is absent or truncated/);
+  });
+
+  test.each([
+    ["cashSaleInvoiceOriginalAmountWrong", /invoice originalAmountMinor/],
+    ["cashSaleInvoiceBalanceWrongDocument", /collectible invoice identity/],
+    ["cashSaleInvoiceBalanceWrongOutstanding", /invoice outstanding/],
+  ] as const)("M486C1 and M486C2 reject %s", async (defect, diagnostic) => {
+    const results = await runAgainst({ [defect]: true });
+    for (const caseId of ["M486C1", "M486C2"]) {
+      expect(statusOf(results, caseId)).toBe("FAIL");
+      expect(String(results.find((row) => row.id === caseId)?.detail)).toMatch(diagnostic);
+    }
   });
 
   test.each([
