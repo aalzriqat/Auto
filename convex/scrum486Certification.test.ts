@@ -626,6 +626,28 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     });
     expect(income.revenueRows.map((row) => [row.code, row.netMinor])).toEqual([["4170", 2_500_000]]);
     expect(income.cogsRows).toEqual([]);
+    await s.owner.as.mutation(api.applications.confirmSupplierDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: 12_500_000,
+      reference: "CERT-SUPPLIER-ADVICE", idempotencyKey: "s486-sourced-direct-advice",
+    });
+    const advised = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(advised).toMatchObject({
+      supplierDisbursedAmountMinor: 12_500_000,
+      supplierDisbursementReference: "CERT-SUPPLIER-ADVICE",
+    });
+    expect(advised?.disbursedAt).toBeUndefined();
+    expect(await journalRows(s)).toEqual(rows);
+    expect((await s.t.run((ctx) => ctx.db.get(supplierReceivables[0]._id)))?.status).toBe("OPEN");
+    const afterAdvice = await dbSnapshot(s.t, Object.keys(schema.tables));
+    await expect(s.owner.as.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId, applicationId, reason: "Certification after external supplier payment",
+      idempotencyKey: "s486-sourced-direct-after-advice-cancel",
+    })).rejects.toThrow(/already paid/i);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(afterAdvice);
+    await expect(s.approver.as.mutation(api.sales.update, {
+      orgId: s.orgId, saleId: saleId!, status: "CANCELLED",
+    })).rejects.toThrow(/already paid the supplier/i);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(afterAdvice);
   });
 
   test("SOURCED direct settlement × cancellation before supplier receipt reverses the claim", async () => {
