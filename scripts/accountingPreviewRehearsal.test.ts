@@ -39,16 +39,44 @@ describe("the rehearsal refuses rather than degrades", () => {
   test("preview assertion CLI output cannot prefix the machine-readable release evidence", async () => {
     const spawnCli = vi.fn((_command: string, _args: string[], _options: object) =>
       ({ status: 0, stdout: Buffer.from('{"marker":true}\n') }));
-    await runPreviewFunction({
-      functionName: "e2eBootstrap:assertE2EBootstrap",
-      args: { primaryClerkUserId: "user_a", approverClerkUserId: "user_b", expectedCloudUrl: VALID.NEXT_PUBLIC_CONVEX_URL },
-      previewName: VALID.CONVEX_PREVIEW_NAME,
-      deployKey: VALID.CONVEX_DEPLOY_KEY,
-      env: { ...VALID, NODE_ENV: "test" },
-      spawnCli,
-    });
-    expect(spawnCli).toHaveBeenCalledTimes(1);
-    expect(spawnCli.mock.calls[0]?.[2]).toMatchObject({ stdio: ["inherit", "pipe", "inherit"] });
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await runPreviewFunction({
+        functionName: "e2eBootstrap:assertE2EBootstrap",
+        args: { primaryClerkUserId: "user_a", approverClerkUserId: "user_b", expectedCloudUrl: VALID.NEXT_PUBLIC_CONVEX_URL },
+        previewName: VALID.CONVEX_PREVIEW_NAME,
+        deployKey: VALID.CONVEX_DEPLOY_KEY,
+        env: { ...VALID, NODE_ENV: "test" },
+        spawnCli,
+      });
+      expect(spawnCli).toHaveBeenCalledTimes(1);
+      expect(spawnCli.mock.calls[0]?.[2]).toMatchObject({ stdio: ["inherit", "pipe", "inherit"] });
+      expect(stdoutWrite).not.toHaveBeenCalled();
+    } finally {
+      stdoutWrite.mockRestore();
+    }
+  });
+
+  test("failed preview assertion keeps captured stdout out of public logs", async () => {
+    const spawnCli = vi.fn((_command: string, _args: string[], _options: object) =>
+      ({ status: 3, stdout: Buffer.from('{"tenantMarker":true}\n') }));
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await expect(runPreviewFunction({
+        functionName: "e2eBootstrap:assertE2EBootstrap",
+        args: { primaryClerkUserId: "user_a", approverClerkUserId: "user_b", expectedCloudUrl: VALID.NEXT_PUBLIC_CONVEX_URL },
+        previewName: VALID.CONVEX_PREVIEW_NAME,
+        deployKey: VALID.CONVEX_DEPLOY_KEY,
+        env: { ...VALID, NODE_ENV: "test" },
+        spawnCli,
+      })).rejects.toThrow("failed with exit code 3");
+      expect(stdoutWrite).not.toHaveBeenCalled();
+      expect(stderrWrite).not.toHaveBeenCalled();
+    } finally {
+      stdoutWrite.mockRestore();
+      stderrWrite.mockRestore();
+    }
   });
 
   test("it accepts a complete, preview-shaped environment", () => {
