@@ -206,6 +206,10 @@ type Defects = {
   financeReceiptDoubleOnReplay?: boolean;
   /** The receipt posts and allocates but the canonical receivable is left OPEN. */
   financeReceivableNotSettled?: boolean;
+  /** A fake backend accepts the direct-payment command without paying the handover cost. */
+  financeDirectPaymentSkipped?: boolean;
+  /** The full-transfer route incorrectly accepts a fee withheld by the finance company. */
+  financeDeductedFeeAccepted?: boolean;
   // ── FD2 — deal costs denominated once (SCRUM-319) ──
   /** A cost entered in a foreign currency is recorded anyway — the integer lands at the wrong scale. */
   feeAcceptsForeignCurrency?: boolean;
@@ -275,6 +279,7 @@ function makeBackend(defects: Defects = {}) {
     { _id: "acct_draw", code: "3100", type: "EQUITY", name: "Partner Drawings", systemKey: "PARTNER_DRAWINGS", normalBalance: "DEBIT" },
     { _id: "acct_exp", code: "6000", type: "EXPENSE", name: "General Expense", systemKey: "GENERAL_EXPENSE", normalBalance: "DEBIT" },
     { _id: "acct_arfc", code: "1210", type: "ASSET", name: "AR Finance Companies", systemKey: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", normalBalance: "DEBIT" },
+    { _id: "acct_fc_comm", code: "6860", type: "EXPENSE", name: "Finance Company Commission", systemKey: "FINANCE_COMPANY_COMMISSION_EXPENSE", normalBalance: "DEBIT" },
   ];
   /** Financed deals, their canonical finance-company receivables and allocations (FD1). */
   const financeApps = new Map<string, Record<string, any>>();
@@ -1212,6 +1217,8 @@ function makeBackend(defects: Defects = {}) {
         financeDealFees.set(feeId, {
           _id: feeId, orgId: app.orgId ?? "org_1", applicationId: String(args.applicationId), currency: dealCurrency,
           estimatedAmountMinor: args.estimatedAmountMinor, actualAmountMinor: args.actualAmountMinor, voidedAt: undefined,
+          paidBy: args.paidBy, deductedFromSettlement: args.deductedFromSettlement ?? false,
+          accountingTreatment: args.accountingTreatment, directPayment: undefined,
         });
         feeByKey.set(key, { id: feeId, fingerprint });
         if (args.deductedFromSettlement) app.withheldMinor += Number(args.actualAmountMinor ?? 0);
@@ -1227,9 +1234,29 @@ function makeBackend(defects: Defects = {}) {
         fee.actualAmountMinor = args.actualAmountMinor;
         return { ok: true as const, value: fee._id };
       }
+      case "financeDealCosts:recordDirectFeePayment": {
+        const fee = financeDealFees.get(String(args.feeId));
+        if (!fee || fee.voidedAt !== undefined) return { ok: false as const, error: "Deal cost not found in this organization." };
+        if (fee.paidBy !== "DEALER" || fee.deductedFromSettlement || fee.directPayment !== undefined ||
+            fee.actualAmountMinor !== args.expectedAmountMinor) {
+          return { ok: false as const, error: "This cost cannot be paid directly." };
+        }
+        if (!defects.financeDirectPaymentSkipped) {
+          fee.directPayment = { amountMinor: args.expectedAmountMinor, method: args.method, paidAt: args.paidAt };
+        }
+        post("HANDOVER_COST_PAID_DIRECT", "financeDealFees", String(args.feeId), [
+          { key: "FINANCE_COMPANY_COMMISSION_EXPENSE", debitMinor: args.expectedAmountMinor },
+          { key: "BANK_ACCOUNT", creditMinor: args.expectedAmountMinor },
+        ]);
+        return { ok: true as const, value: fee._id };
+      }
       case "financeDealCosts:voidDealFee": {
         const fee = financeDealFees.get(String(args.feeId));
         if (!fee) return { ok: false as const, error: "Deal cost not found in this organization." };
+        if (fee.deductedFromSettlement) {
+          const app = financeApps.get(fee.applicationId);
+          if (app) app.withheldMinor -= Number(fee.actualAmountMinor ?? 0);
+        }
         fee.voidedAt = Date.now();
         return { ok: true as const, value: null };
       }
@@ -1261,9 +1288,15 @@ function makeBackend(defects: Defects = {}) {
         const gross = Math.round((quotePrice.get(app.quoteId) ?? 0) * MINOR_SCALE);
         // SCRUM-435: the finance company transfers the full approved amount, so a
         // cost deducted from its transfer is refused (mirrors the product guard).
-        if (app.withheldMinor > 0) {
+        if (app.withheldMinor > 0 && !defects.financeDeductedFeeAccepted) {
           return { ok: false as const, error: "The finance company transfers the full approved amount, so a cost cannot be deducted from its transfer. Record the cost as a normal deal cost and finalize again." };
         }
+        const unpaid = [...financeDealFees.values()].some((fee) =>
+          fee.applicationId === String(args.applicationId) && fee.voidedAt === undefined &&
+          fee.paidBy === "DEALER" && fee.deductedFromSettlement === false &&
+          Number(fee.actualAmountMinor ?? 0) > 0 && fee.directPayment === undefined
+        );
+        if (unpaid) return { ok: false as const, error: "HANDOVER_COSTS_UNPAID" };
         const net = gross;
         app.status = "CLOSED";
         app.financedSaleNetReceivableMinor = net;
@@ -1934,6 +1967,18 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     const results = await runAgainst({ financeReceivableNotSettled: true });
     expect(statusOf(results, "FD1")).toBe("FAIL");
     expect(detail(results, "FD1")).toMatch(/receivable's status after the receipt: expected PAID, got OPEN/);
+  });
+
+  test("FD1 refuses to finalize while the dealer-borne handover cost is unpaid", async () => {
+    const results = await runAgainst({ financeDirectPaymentSkipped: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/HANDOVER_COSTS_UNPAID/);
+  });
+
+  test("FD1 refuses a cost deducted from the finance company's full transfer", async () => {
+    const results = await runAgainst({ financeDeductedFeeAccepted: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/deducted from the finance company's full transfer was not refused/);
   });
 
   test("RT2 catches a replayed reservation that inserts a second PRIMARY row while returning the same id (Codex A-RT2-RESERVATION)", async () => {

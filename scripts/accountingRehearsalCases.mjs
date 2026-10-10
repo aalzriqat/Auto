@@ -1764,10 +1764,46 @@ export async function runRehearsalCases(ctx) {
         legalInvoiceDate: Date.now(),
         issuedTo: "FINANCE_COMPANY",
       });
+      const dealerCost = 375 * m;
+      const deductedFeeId = await ownerMust("mutation", "financeDealCosts:recordDealFee", {
+        idempotencyKey: `rehearsal-fd1-deducted-fee-${stamp}`,
+        orgId,
+        applicationId,
+        feeType: "LICENSING",
+        paidBy: "DEALER",
+        paidTo: "FINANCE_COMPANY",
+        accountingTreatment: "FINANCE_COMPANY_COMMISSION",
+        deductedFromSettlement: true,
+        actualAmountMinor: dealerCost,
+        description: "Intentionally invalid deduction from the full transfer.",
+        expectedCurrency: denom.currency,
+      });
+      const deductedClose = await ownerCall("mutation", "applications:finalizeDeal", {
+        idempotencyKey: `rehearsal-fd1-deducted-close-${stamp}`,
+        orgId,
+        applicationId,
+      });
+      if (deductedClose.ok || !/transfers the full approved amount/i.test(String(deductedClose.error ?? ""))) {
+        fail("a cost deducted from the finance company's full transfer was not refused for that reason");
+      }
+      const afterDeductedRefusal = await ownerMust("query", "applications:get", { orgId, applicationId });
+      if (afterDeductedRefusal?.status === "CLOSED") fail("the refused deducted-cost close still closed the application");
+      const receivablesAfterDeductedRefusal = await ownerMust("query", "subledger:listReceivables", { orgId, customerId, limit: 50 });
+      expectEqual(
+        (receivablesAfterDeductedRefusal ?? []).filter((r) =>
+          r.sourceType === "finance_application" && String(r.sourceId) === String(applicationId)
+        ).length,
+        0,
+        "finance-company receivables after the refused deducted-cost close"
+      );
+      await ownerMust("mutation", "financeDealCosts:voidDealFee", {
+        orgId,
+        feeId: deductedFeeId,
+        reason: "The finance company transfers the full approved amount; record this as a separate dealer payment.",
+      });
       // SCRUM-435 (full transfer): the company remits the FULL approved amount, so a
       // cost can no longer be deducted from its transfer. This is a normal deal
       // cost the dealer bears; it must not change what the company owes.
-      const dealerCost = 375 * m;
       const feeId = await ownerMust("mutation", "financeDealCosts:recordDealFee", {
         idempotencyKey: `rehearsal-fd1-fee-${stamp}`,
         orgId,
@@ -1783,6 +1819,32 @@ export async function runRehearsalCases(ctx) {
         expectedCurrency: denom.currency,
       });
       await ownerMust("mutation", "financeDealCosts:reconcileDealFee", { orgId, feeId, notes: "Matched." });
+      // The full finance-company transfer does not pay this dealer-borne
+      // handover cost. Record its separate bank payment before closing.
+      await ownerMust("mutation", "financeDealCosts:recordDirectFeePayment", {
+        orgId,
+        feeId,
+        method: "BANK_TRANSFER",
+        paidAt: Date.now() - 1000,
+        expectedAmountMinor: dealerCost,
+        idempotencyKey: `rehearsal-fd1-direct-payment-${stamp}`,
+      });
+      const costPayment = await eventAndJournal({
+        orgId,
+        ownerMust,
+        sourceType: "financeDealFees",
+        sourceId: String(feeId),
+        eventType: "HANDOVER_COST_PAID_DIRECT",
+      });
+      expectExactLines(
+        costPayment.lines,
+        keyOf,
+        [
+          { key: "FINANCE_COMPANY_COMMISSION_EXPENSE", debitMinor: dealerCost },
+          { key: "BANK_ACCOUNT", creditMinor: dealerCost },
+        ],
+        { currency: denom.currency, decimals: denom.decimals, what: "the dealer-paid handover cost posting" }
+      );
       // SCRUM-407: no manual classification step — finalizeDeal checks the
       // deal's closing readiness itself.
       const saleId = await ownerMust("mutation", "applications:finalizeDeal", {
@@ -1812,7 +1874,7 @@ export async function runRehearsalCases(ctx) {
       expectEqual(receivable.status, "OPEN", "the receivable's status before the receipt");
 
       // A remittance short by the dealer's own cost is not what the company owes:
-      // refused, and nothing is written — no payment, no allocation, no event.
+      // refused, with no application settlement, allocation or receipt event.
       const wrongAmount = await ownerCall("mutation", "applications:confirmDisbursement", {
         orgId,
         applicationId,
@@ -1902,7 +1964,7 @@ export async function runRehearsalCases(ctx) {
           "finance.createCompany", "quotes.saveQuote", "applications.createFromQuote", "applications.updateStatus",
           "financingEconomics.recordSubmittedQuotation", "financingEconomics.approveDealerPurchaseAmount",
           "applications.registerVehicleHandover", "applications.registerExpectedPayment",
-          "financeDealCosts.recordLegalInvoice", "financeDealCosts.recordDealFee", "financeDealCosts.reconcileDealFee",
+          "financeDealCosts.recordLegalInvoice", "financeDealCosts.recordDealFee", "financeDealCosts.voidDealFee", "financeDealCosts.reconcileDealFee", "financeDealCosts.recordDirectFeePayment",
           "applications.finalizeDeal", "applications.confirmDisbursement",
         ],
       };
