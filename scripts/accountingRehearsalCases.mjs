@@ -1868,14 +1868,7 @@ export async function runRehearsalCases(ctx) {
   // the product's public quote, deposit and sale paths, then checks the
   // original invoice and the actual liability-to-receivable journal.
   await recordCase(results, "M486C2", "SCRUM-486: owned cash sale applies a 200 JOD held deposit to receivable, never revenue", async () => {
-    const denom = await orgDenomination({ orgId, ownerMust });
-    if (denom.currency !== "JOD" || denom.decimals !== 3) {
-      unproven("M486C2 requires the certified JOD denomination and three minor-unit decimals");
-    }
-    const monthStart = new Date();
-    const fromDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth(), 1);
-    const toDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0, 23, 59, 59, 999);
-    const reportArgs = { orgId, fromDate, toDate };
+    const { fromDate, toDate, reportArgs } = await ownedCashJodWindow({ caseId: "M486C2", orgId, ownerMust });
     const { stamp, customerId, vehicleId, quoteId } =
       await createOwnedCashCertificationQuote("M486C2", "applied");
     const openingBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
@@ -2063,14 +2056,7 @@ export async function runRehearsalCases(ctx) {
   // The acquisition is the baseline, so only the deposit movements may
   // change cash or its liability. A separate manager resolves the money.
   await recordCase(results, "M486C3", "SCRUM-486: an owned cash quote's held deposit is refunded without sale income", async () => {
-    const denom = await orgDenomination({ orgId, ownerMust });
-    if (denom.currency !== "JOD" || denom.decimals !== 3) {
-      unproven("M486C3 requires the certified JOD denomination and three minor-unit decimals");
-    }
-    const monthStart = new Date();
-    const fromDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth(), 1);
-    const toDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0, 23, 59, 59, 999);
-    const reportArgs = { orgId, fromDate, toDate };
+    const { fromDate, toDate, reportArgs } = await ownedCashJodWindow({ caseId: "M486C3", orgId, ownerMust });
     const { stamp, customerId, vehicleId, quoteId } =
       await createOwnedCashCertificationQuote("M486C3", "refunded");
     const chart = await ownerMust("query", "chartOfAccounts:list", { orgId });
@@ -3142,6 +3128,18 @@ async function orgDenomination({ orgId, ownerMust }) {
     );
   }
   return { currency, decimals, minorPerMajor: 10 ** decimals, source: explicit ? "orgSettings.currency" : "product default" };
+}
+
+/** The literal JOD accounting month used by the owned CASH certification rows. */
+async function ownedCashJodWindow({ caseId, orgId, ownerMust }) {
+  const denom = await orgDenomination({ orgId, ownerMust });
+  if (denom.currency !== "JOD" || denom.decimals !== 3) {
+    unproven(`${caseId} requires the certified JOD denomination and three minor-unit decimals`);
+  }
+  const monthStart = new Date();
+  const fromDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth(), 1);
+  const toDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0, 23, 59, 59, 999);
+  return { fromDate, toDate, reportArgs: { orgId, fromDate, toDate } };
 }
 
 /** account id → system key, and system key → account id, from the org's real chart. */
