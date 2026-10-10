@@ -6,7 +6,7 @@
  * itself only runs in CI against a live preview and is not simulated here — a
  * mock of a Convex deployment would test the mock.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   assertRehearsalEnv,
   convexCall,
@@ -17,6 +17,7 @@ import {
   mintConvexToken,
   recordCase,
   rehearsalRefScope,
+  runPreviewFunction,
   sanitizeClerkSessionId,
   summarize,
   unproven,
@@ -35,6 +36,20 @@ const VALID = {
 };
 
 describe("the rehearsal refuses rather than degrades", () => {
+  test("preview assertion CLI output cannot prefix the machine-readable release evidence", async () => {
+    const spawnCli = vi.fn(() => ({ status: 0, stdout: Buffer.from('{"marker":true}\n') }));
+    await runPreviewFunction({
+      functionName: "e2eBootstrap:assertE2EBootstrap",
+      args: { primaryClerkUserId: "user_a", approverClerkUserId: "user_b", expectedCloudUrl: VALID.NEXT_PUBLIC_CONVEX_URL },
+      previewName: VALID.CONVEX_PREVIEW_NAME,
+      deployKey: VALID.CONVEX_DEPLOY_KEY,
+      env: VALID,
+      spawnCli,
+    });
+    expect(spawnCli).toHaveBeenCalledTimes(1);
+    expect(spawnCli.mock.calls[0]?.[2]).toMatchObject({ stdio: ["inherit", "pipe", "inherit"] });
+  });
+
   test("it accepts a complete, preview-shaped environment", () => {
     const config = assertRehearsalEnv({ ...VALID });
     expect(config.convexUrl).toBe("https://fine-gerbil-123.convex.cloud");

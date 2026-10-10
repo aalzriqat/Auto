@@ -50,7 +50,7 @@
  * reads the resulting economic state back — released amount, `releaseCount`,
  * canonical payments, ledger effects, remaining balance — and asserts on that.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { isPreviewDeployKey } from "./e2ePreviewBootstrap.mjs";
@@ -354,7 +354,7 @@ export async function resolveIdentity(email, secretKey) {
  * unspecified target to the shared DEV deployment — is exactly the one this
  * rehearsal must never hit.
  */
-export async function runPreviewFunction({ functionName, args, previewName, deployKey, env = process.env }) {
+export async function runPreviewFunction({ functionName, args, previewName, deployKey, env = process.env, spawnCli = spawnSync }) {
   const { buildConvexRunArgs, runConvex } = await import("./e2ePreviewBootstrap.mjs");
   const argv = buildConvexRunArgs({
     functionName,
@@ -363,7 +363,13 @@ export async function runPreviewFunction({ functionName, args, previewName, depl
     deployKey,
     env,
   });
-  runConvex(argv, functionName);
+  // The assertion returns bootstrap JSON on stdout. The release workflow
+  // reserves this process's stdout for its single evidence document; letting
+  // the child inherit it produced two adjacent JSON objects and a red verdict
+  // after all 22 cloud cases passed. Keep stderr visible and retain runConvex's
+  // argument/exit checks while capturing only this child command's stdout.
+  runConvex(argv, functionName, (command, commandArgs, options) =>
+    spawnCli(command, commandArgs, { ...options, stdio: ["inherit", "pipe", "inherit"] }));
 }
 
 /**
