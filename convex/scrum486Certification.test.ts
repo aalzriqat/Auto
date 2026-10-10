@@ -544,6 +544,39 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(await trialBalanceNormalBalance(s)).toEqual({});
   });
 
+  test("SOURCED CASH × completed sale: salesperson with edit:sales cannot reverse money", async () => {
+    const { s, quoteId } = await sourcedCashQuote("s486sourcedsellerdeny");
+    const saleId = await completeCashSale(s, quoteId, "sourced-seller-deny");
+    const clerkId = "s486sourcedsellerdeny_salesperson";
+    await s.t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", {
+        clerkId,
+        email: `${clerkId}@example.com`,
+        name: "salesperson",
+      });
+      const roleId = await ctx.db.insert("roles", {
+        orgId: s.orgId,
+        name: "SALESPERSON",
+        permissions: ["view:sales", "create:sales", "edit:sales"],
+      });
+      await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+    });
+    const salesperson = s.t.withIdentity({ subject: clerkId, clerkId });
+    const before = await dbSnapshot(s.t, Object.keys(schema.tables));
+    await expect(salesperson.mutation(api.sales.update, {
+      orgId: s.orgId,
+      saleId,
+      status: "CANCELLED",
+    })).rejects.toThrow(/approve:requests/);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
+    expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["POSTED"]);
+    expect(netByAccount(await journalRows(s))).toEqual({
+      "1200|JOD": 12_500_000,
+      "2400|JOD": -10_000_000,
+      "4170|JOD": -2_500_000,
+    });
+  });
+
   test("SOURCED CASH × applied deposit: customer AR falls, supplier entitlement stays whole", async () => {
     const { s, quoteId } = await sourcedCashQuote("s486sourcedapplied", 200);
     const depositId = await s.owner.as.mutation(api.deposits.create, {
