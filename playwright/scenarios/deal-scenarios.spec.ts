@@ -49,8 +49,8 @@ import {
  * The two agree while the first payment is at most the unfunded part, the only
  * case the owner has ruled. Scenarios whose first payment is above it (the LTV
  * 90 / 3,000 first-payment ones, contribution 0) pin the CURRENT formula, which
- * lends less than approved × ratio; that case is open on SCRUM-613, and those
- * expectations change with its ruling.
+ * lends less than approved × ratio; the owner ruled this correct (SCRUM-613 F-19,
+ * option أ, c22368), so these expectations stand.
  * Nothing here imports a money helper, so a wrong formula in production cannot
  * certify itself (SCRUM-486 A10).
  *
