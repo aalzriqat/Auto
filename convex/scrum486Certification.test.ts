@@ -489,6 +489,97 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     });
   });
 
+  test("SOURCED configured financier × no deposit: company AR funds supplier liability and agent margin", async () => {
+    const s = await seedFinancedDealership("s486sourcedfinance", {
+      modules: MODULES,
+      ownerPerms: [...OWNER_PERMS, "manage:supplier_settlement"],
+      actors: {},
+      label: "Certification",
+      vinPrefix: "V486",
+      sourced: true,
+    });
+    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { sourceCost: 10_000 }));
+    const { applicationId } = await newApplication(s);
+    await s.owner.as.mutation(api.applications.updateStatus, {
+      orgId: s.orgId, applicationId, status: "UNDER_REVIEW",
+    });
+    await s.approver.as.mutation(api.applications.updateStatus, {
+      orgId: s.orgId, applicationId, status: "APPROVED",
+    });
+    await s.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId, applicationId, submittedQuotationMinor: 12_500_000, source: "MANUAL_ENTRY",
+    });
+    await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId, applicationId, approvedAmountMinor: 12_500_000, basis: "MANUAL",
+      notes: "Certification approval of the full vehicle price.",
+    });
+    await registerHandover(s.owner.as, api, s.orgId, applicationId);
+    await s.owner.as.mutation(api.applications.registerExpectedPayment, {
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
+    });
+    await s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId: s.orgId, applicationId, legalInvoiceAmountMinor: 12_500_000,
+      legalInvoiceNumber: `CERT-${applicationId}`, legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
+    });
+    const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
+      expectedCurrency: "JOD", idempotencyKey: "s486-sourced-finance-zero-fee", orgId: s.orgId, applicationId,
+      feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER",
+      accountingTreatment: "SELLING_EXPENSE", deductedFromSettlement: false,
+      actualAmountMinor: 0, description: "No closing costs.",
+    });
+    await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: s.orgId, feeId, notes: "No fee to settle.",
+    });
+    await s.owner.as.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId: s.orgId, applicationId, route: "THROUGH_DEALERSHIP",
+    });
+    await s.owner.as.mutation(api.applications.finalizeDeal, {
+      idempotencyKey: "s486-sourced-finance-finalize", orgId: s.orgId, applicationId,
+    });
+
+    const application = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(application?.status).toBe("CLOSED");
+    const saleId = application?.finalizedSaleId;
+    expect(saleId).toBeDefined();
+    const supplierPayables = await s.t.run((ctx) => ctx.db.query("vehicleSupplierPayables")
+      .withIndex("by_sale", (q) => q.eq("saleId", saleId!)).collect());
+    expect(supplierPayables).toHaveLength(1);
+    expect(supplierPayables[0]).toMatchObject({
+      orgId: s.orgId, vehicleId: s.vehicleId, saleId,
+      amountDue: 10_000, currency: "JOD", status: "PENDING",
+    });
+    const receivable = await s.t.run((ctx) => ctx.db.query("receivableDocuments")
+      .withIndex("by_org_source", (q) => q.eq("orgId", s.orgId)
+        .eq("sourceType", "finance_application").eq("sourceId", applicationId))
+      .unique());
+    expect(receivable).toMatchObject({
+      payerType: "FINANCE_COMPANY",
+      financeCompanyId: s.companyId,
+      originalAmountMinor: 12_500_000,
+      currency: "JOD",
+      status: "OPEN",
+    });
+    const rows = await journalRows(s);
+    expectLiteralRows(rows, [
+      { account: "1210", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "2400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
+      { account: "4170", currency: "JOD", debit: 0, credit: 2_500_000, entryStatus: "POSTED" },
+    ]);
+    expectBalanced(rows);
+    expect(await trialBalanceNormalBalance(s)).toEqual({
+      "1210|JOD": 12_500_000,
+      "2400|JOD": 10_000_000,
+      "4170|JOD": 2_500_000,
+    });
+    const income = await publicIncomeStatement(s);
+    expect(income).toMatchObject({
+      currency: "JOD", totalRevenue: 2_500_000, totalCogs: 0,
+      grossProfit: 2_500_000, netIncome: 2_500_000,
+    });
+    expect(income.revenueRows.map((row) => [row.code, row.netMinor])).toEqual([["4170", 2_500_000]]);
+    expect(income.cogsRows).toEqual([]);
+  });
+
   test("owned CASH × no deposit: sale recognizes literal receivable, revenue, COGS and inventory", async () => {
     const { s, quoteId } = await cashQuote("s486cashnone");
     const saleId = await completeCashSale(s, quoteId, "no-deposit");
