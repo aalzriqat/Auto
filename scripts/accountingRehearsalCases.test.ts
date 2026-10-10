@@ -101,6 +101,7 @@ describe("vehicle fixture rate-limit retry", () => {
 
 type Deposit = {
   _id: string;
+  canonicalPaymentId?: string;
   releasedAmountMinor: number;
   refundedAmountMinor: number;
   releaseCount: number;
@@ -212,6 +213,7 @@ type Defects = {
   cashDepositPaymentWrongCustomer?: boolean;
   cashDepositPaymentWrongStatus?: boolean;
   cashDepositPaymentWrongAmount?: boolean;
+  cashDepositPaymentWrongMethod?: boolean;
   /** The public trial balance drops the deposit receipt while journals retain it. */
   cashDepositReportOmitsReceipt?: boolean;
   /** An extra balanced posting treats held cash as earned revenue and creates AR. */
@@ -1018,17 +1020,7 @@ function makeBackend(defects: Defects = {}) {
               ]);
             }
             if (invoiceId && !defects.cashDepositInvoiceNotReduced) {
-              const paymentId = defects.cashDepositPaymentMissing ? undefined : id("cpay");
-              if (paymentId) canonicalPayments.set(paymentId, {
-                _id: paymentId, orgId: String(args.orgId), direction: "IN", payerType: "CUSTOMER",
-                customerId: defects.cashDepositPaymentWrongCustomer ? "other-customer" : String(args.customerId),
-                amountMinor: defects.cashDepositPaymentWrongAmount ? 199_000 : 200_000,
-                currency: ORG_CURRENCY, scale: 3, method: "OTHER",
-                status: defects.cashDepositPaymentWrongStatus ? "DRAFT" : "SETTLED",
-                idempotencyKey: `deposit_received_${deposit._id}`,
-                externalReference: `Deposit ${deposit._id}`,
-              });
-              allocations.push({ orgId: String(args.orgId), paymentId, receivableDocumentId: invoiceId,
+              allocations.push({ orgId: String(args.orgId), paymentId: deposit.canonicalPaymentId, receivableDocumentId: invoiceId,
                 amountMinor: 200_000, currency: ORG_CURRENCY, scale: 3, status: "ACTIVE" });
               const invoice = financeReceivables.get(invoiceId);
               if (invoice) invoice.status = "PARTIALLY_PAID";
@@ -1112,6 +1104,16 @@ function makeBackend(defects: Defects = {}) {
         // create, so nothing here could reproduce it. It does now.
         const amountMinor = Math.round(Number(args.amount) * MINOR_SCALE);
         const depositCustomerId = String(args.customerId ?? quoteCustomer.get(String(args.quoteId)) ?? "");
+        const paymentId = defects.cashDepositPaymentMissing || certifiedCashDepositId !== depositId ? undefined : id("cpay");
+        if (paymentId) canonicalPayments.set(paymentId, {
+          _id: paymentId, orgId: String(args.orgId), direction: "IN", payerType: "CUSTOMER",
+          customerId: defects.cashDepositPaymentWrongCustomer ? "other-customer" : depositCustomerId,
+          amountMinor: defects.cashDepositPaymentWrongAmount ? amountMinor - 1_000 : amountMinor,
+          currency: ORG_CURRENCY, scale: 3,
+          method: defects.cashDepositPaymentWrongMethod ? "OTHER" : String(args.method),
+          status: defects.cashDepositPaymentWrongStatus ? "DRAFT" : "SETTLED",
+          idempotencyKey: `deposit_received_${depositId}`, externalReference: `Deposit ${depositId}`,
+        });
         if (periodStatus === "OPEN") {
           post("DEPOSIT_RECEIVED", "deposits", depositId, [
             { key: "CASH_ON_HAND", debitMinor: amountMinor, customerId: depositCustomerId },
@@ -1132,6 +1134,7 @@ function makeBackend(defects: Defects = {}) {
         }
         deposits.set(depositId, {
           _id: depositId,
+          canonicalPaymentId: paymentId,
           releasedAmountMinor: 0,
           refundedAmountMinor: 0,
           releaseCount: 0,
@@ -1341,7 +1344,11 @@ function makeBackend(defects: Defects = {}) {
         };
       case "subledger:getPaymentBalance": {
         const payment = canonicalPayments.get(args.paymentId);
-        return { ok: true as const, value: payment ? { payment, unappliedMinor: 0 } : null };
+        const activeAllocatedMinor = allocations.filter((row) => row.paymentId === args.paymentId && row.status === "ACTIVE")
+          .reduce((total, row) => total + Number(row.amountMinor), 0);
+        return { ok: true as const, value: payment ? {
+          payment, unappliedMinor: Math.max(0, Number(payment.amountMinor) - activeAllocatedMinor),
+        } : null };
       }
       case "deposits:allocateToVehicles": {
         // Re-allocating a car to 0 frees its share — the supported operation the
@@ -2016,6 +2023,7 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["cashDepositPaymentWrongCustomer", /canonical payment customerId/i],
     ["cashDepositPaymentWrongStatus", /canonical payment status/i],
     ["cashDepositPaymentWrongAmount", /canonical payment amountMinor/i],
+    ["cashDepositPaymentWrongMethod", /canonical payment method/i],
     ["cashDepositReportOmitsReceipt", /deposit receipt|public cash|public liability/i],
     ["cashDepositRecognizedAsRevenue", /held deposit|public revenue|public receivable/i],
     ["cashDepositRecognizedAsOtherIncome", /held deposit|public income|public expense/i],

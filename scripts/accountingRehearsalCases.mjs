@@ -1872,6 +1872,21 @@ export async function runRehearsalCases(ctx) {
     const held = await readDeposit({ orgId, vehicleId, depositId, ownerMust });
     expectEqual(held.status, "HELD", "M486C2 deposit is held before sale");
     expectEqual(held.amountMinor, 200_000, "M486C2 held deposit amount");
+    if (!held.canonicalPaymentId) fail("M486C2 held deposit has no canonical payment");
+    const heldPaymentBalance = await ownerMust("query", "subledger:getPaymentBalance", {
+      orgId, paymentId: held.canonicalPaymentId,
+    });
+    const heldPayment = heldPaymentBalance?.payment;
+    if (!heldPayment) fail("M486C2 held deposit canonical payment is missing");
+    for (const [field, expected] of [
+      ["orgId", String(orgId)], ["direction", "IN"], ["payerType", "CUSTOMER"],
+      ["customerId", String(customerId)], ["amountMinor", 200_000],
+      ["currency", "JOD"], ["scale", 3], ["method", "CASH"], ["status", "SETTLED"],
+      ["idempotencyKey", `deposit_received_${depositId}`],
+      ["externalReference", `Deposit ${depositId}`],
+    ]) expectEqual(field.endsWith("Id") ? String(heldPayment[field]) : heldPayment[field], expected,
+      `M486C2 held canonical payment ${field}`);
+    expectEqual(heldPaymentBalance.unappliedMinor, 200_000, "M486C2 held payment remains unapplied");
     const me = await ownerMust("query", "users:getMe", {});
     if (!me?._id) unproven("M486C2 has no authenticated salesperson identity");
     const heldBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
@@ -1923,6 +1938,8 @@ export async function runRehearsalCases(ctx) {
     ]) expectEqual(field.endsWith("Id") ? String(allocation[field]) : allocation[field], expected,
       `M486C2 payment allocation ${field}`);
     if (!allocation.paymentId) fail("M486C2 payment allocation has no canonical payment");
+    expectEqual(String(allocation.paymentId), String(held.canonicalPaymentId),
+      "M486C2 sale allocation consumes held deposit payment");
     const paymentBalance = await ownerMust("query", "subledger:getPaymentBalance", {
       orgId, paymentId: allocation.paymentId,
     });
@@ -1932,7 +1949,7 @@ export async function runRehearsalCases(ctx) {
     for (const [field, expected] of [
       ["orgId", String(orgId)], ["direction", "IN"], ["payerType", "CUSTOMER"],
       ["customerId", String(customerId)], ["amountMinor", 200_000],
-      ["currency", "JOD"], ["scale", 3], ["method", "OTHER"], ["status", "SETTLED"],
+      ["currency", "JOD"], ["scale", 3], ["method", "CASH"], ["status", "SETTLED"],
       ["idempotencyKey", `deposit_received_${depositId}`],
       ["externalReference", `Deposit ${depositId}`],
     ]) expectEqual(field.endsWith("Id") ? String(payment[field]) : payment[field], expected,
