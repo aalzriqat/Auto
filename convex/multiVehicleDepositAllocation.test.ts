@@ -37,6 +37,19 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
+// SCRUM-801: OTHER is refused while the pilot switch is on (the shipped value).
+// Tests that pin what OTHER does once the pilot ends turn it off locally.
+const pilot = vi.hoisted(() => ({ otherDisabled: true }));
+vi.mock("./utils/depositOtherContainment", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./utils/depositOtherContainment")>();
+  return {
+    ...actual,
+    get DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED() {
+      return pilot.otherDisabled;
+    },
+  };
+});
+
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 const PERMS = [
@@ -963,15 +976,36 @@ describe("cancelling one car's sale on a shared deposit", () => {
     await cancel(s, saleB);
     const [holdB] = await holdsFor(s, s.vehicleB!);
 
-    for (const treatment of ["RETURN_TO_UNALLOCATED", "OTHER"] as const) {
+    await expect(
+      s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+        orgId: s.orgId,
+        holdId: holdB!._id,
+        treatment: "RETURN_TO_UNALLOCATED",
+        reason: "x",
+      })
+    ).rejects.toThrow(/still has a share from a cancelled sale/);
+    // SCRUM-801: during the pilot OTHER is refused before the pending-share check.
+    await expect(
+      s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+        orgId: s.orgId,
+        holdId: holdB!._id,
+        treatment: "OTHER",
+        reason: "x",
+      })
+    ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+    // With the switch off, the SCRUM-712 refusal still covers OTHER.
+    pilot.otherDisabled = false;
+    try {
       await expect(
         s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
           orgId: s.orgId,
           holdId: holdB!._id,
-          treatment,
+          treatment: "OTHER",
           reason: "x",
         })
       ).rejects.toThrow(/still has a share from a cancelled sale/);
+    } finally {
+      pilot.otherDisabled = true;
     }
     await expect(
       s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
@@ -1647,7 +1681,52 @@ describe("finalizing a share under an approved 'other' treatment", () => {
           treatment: "OTHER" as const,
           reason: "Transferred to another deal by agreement",
         })
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ data: { code: "FORBIDDEN" } });
+  });
+});
+
+describe("SCRUM-801: resolving a released share as OTHER is refused during the pilot", () => {
+  test("an approver is refused with the pilot code and nothing is written", async () => {
+    const s = await seed("p801release");
+    await payDeposit(s);
+    await allocate(s, [
+      { vehicleId: s.vehicleA, amount: 3_000 },
+      { vehicleId: s.vehicleB!, amount: 2_000 },
+    ]);
+    await s.asUser.mutation(api.deposits.releaseVehicleAllocation, {
+      orgId: s.orgId,
+      quoteId: s.quoteId,
+      vehicleId: s.vehicleA,
+    });
+    const [holdA] = await holdsFor(s, s.vehicleA);
+    const snapshot = () =>
+      s.t.run(async (ctx) => {
+        const out: Record<string, unknown[]> = {};
+        for (const name of Object.keys(schema.tables)) {
+          out[name] = await ctx.db.query(name as any).collect();
+        }
+        return out;
+      });
+    const before = await snapshot();
+
+    await expect(
+      s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+        orgId: s.orgId,
+        holdId: holdA!._id,
+        treatment: "OTHER" as const,
+        reason: "Transferred to another deal by agreement",
+      })
+    ).rejects.toMatchObject({ data: { code: "DEPOSIT_OTHER_TREATMENT_DISABLED" } });
+    expect(await snapshot()).toEqual(before);
+
+    // The share is still undecided, so a refund can still settle it.
+    await s.asManager.mutation(api.deposits.resolveReleasedAllocation, {
+      orgId: s.orgId,
+      holdId: holdA!._id,
+      treatment: "REFUND_TO_CUSTOMER" as const,
+      refundMethod: "CASH" as const,
+    });
+    expect(await cashOut(s)).toEqual([3_000]);
   });
 });
 
@@ -2586,6 +2665,16 @@ describe("a deposit with money assigned to no car at all", () => {
   });
 
   test("a treatment the system does not post leaves the liability on the books", async () => {
+    // Pins OTHER's post-pilot behaviour: the SCRUM-801 switch is off for this test.
+    pilot.otherDisabled = false;
+    try {
+      await otherLeavesLiability();
+    } finally {
+      pilot.otherDisabled = true;
+    }
+  });
+
+  async function otherLeavesLiability() {
     // OTHER records a decision and posts nothing, so the GL keeps the credit.
     // Dropping it from the subledger side would leave the two permanently apart
     // — the noise the reconciliation exists to remove.
@@ -2613,7 +2702,7 @@ describe("a deposit with money assigned to no car at all", () => {
     // Nothing has been paid out, so all 5,000 is still owed.
     expect(recon.byCurrency.JOD!.subledgerBalanceMinor).toBe(5_000 * SCALE);
     expect(await cashOut(s)).toEqual([]);
-  });
+  }
 });
 
 /**

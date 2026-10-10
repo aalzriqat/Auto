@@ -243,6 +243,9 @@ export const AppErrorCode = {
   DEAL_UNWIND_ALLOCATION_SHAPE: "DEAL_UNWIND_ALLOCATION_SHAPE",
   DEAL_UNWIND_REVERSAL_UNPROVEN: "DEAL_UNWIND_REVERSAL_UNPROVEN",
   DEAL_UNWIND_DISPOSITION_REQUIRED: "DEAL_UNWIND_DISPOSITION_REQUIRED",
+  // SCRUM-801 (owner, SCRUM-795 c22485): see convex/utils/depositOtherContainment.ts.
+  // Translated under ServerError_<code>.
+  DEPOSIT_OTHER_TREATMENT_DISABLED: "DEPOSIT_OTHER_TREATMENT_DISABLED",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];

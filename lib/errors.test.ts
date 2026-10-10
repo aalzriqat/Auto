@@ -423,6 +423,12 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(enEntry).toContain((dictionaries.en as Record<string, string>).CancelClosedDeal);
   });
 
+  it("SCRUM-801 DEPOSIT_OTHER_TREATMENT_DISABLED resolves in ar and en, and EN equals the backend message", async () => {
+    const { enEntry } = await expectCodedEntry("DEPOSIT_OTHER_TREATMENT_DISABLED");
+    const { DEPOSIT_OTHER_TREATMENT_DISABLED_MESSAGE } = await import("../convex/utils/depositOtherContainment");
+    expect(enEntry).toBe(DEPOSIT_OTHER_TREATMENT_DISABLED_MESSAGE);
+  });
+
   it("SCRUM-413 OWNER_NAMED_ROLE_LOCKED resolves to its dictionary entry in ar and en, and EN equals the roles.ts message", async () => {
     const { enEntry } = await expectCodedEntry("OWNER_NAMED_ROLE_LOCKED");
     expect((await roleMessageConst("OWNER_NAMED_ROLE_LOCKED_MESSAGE")).message).toBe(enEntry);
