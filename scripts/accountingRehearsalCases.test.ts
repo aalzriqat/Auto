@@ -169,6 +169,16 @@ type Defects = {
   cashSaleWrongRevenueAccount?: boolean;
   /** The public income statement understates the certified sale by one minor unit. */
   cashSaleReportMisstatesProfit?: boolean;
+  /** The sale posts AR but has no collectible canonical customer invoice. */
+  cashSaleMissingInvoice?: boolean;
+  /** The sale has two invoices for the same source. */
+  cashSaleDuplicateInvoice?: boolean;
+  /** The invoice belongs to a different customer. */
+  cashSaleInvoiceWrongCustomer?: boolean;
+  /** The chart's public revenue code is wrong while its system key is right. */
+  cashSaleWrongAccountCode?: boolean;
+  /** The P&L total is right, but its vehicle revenue row is absent. */
+  cashSaleReportMissingRevenueRow?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
   eraseOnChequeReturn?: boolean;
   /** A returned cheque posts nothing at all — the books still say money arrived. */
@@ -296,9 +306,9 @@ function makeBackend(defects: Defects = {}) {
     { _id: "acct_comm", code: "4200", type: "REVENUE", name: "Consignment Commission", systemKey: "CONSIGNMENT_COMMISSION_REVENUE", normalBalance: "CREDIT" },
     { _id: "acct_misc", code: "4900", type: "REVENUE", name: "Misc Income", systemKey: "MISCELLANEOUS_INCOME", normalBalance: "CREDIT" },
     { _id: "acct_ap", code: "2100", type: "LIABILITY", name: "AP Suppliers", systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS", normalBalance: "CREDIT" },
-    { _id: "acct_rev", code: "4000", type: "REVENUE", name: "Sales Revenue", systemKey: "SALES_REVENUE", normalBalance: "CREDIT" },
-    { _id: "acct_cogs", code: "5000", type: "COGS", name: "COGS", systemKey: "COST_OF_VEHICLES_SOLD", normalBalance: "DEBIT" },
-    { _id: "acct_inv", code: "1300", type: "ASSET", name: "Vehicle Inventory", systemKey: "VEHICLE_INVENTORY", normalBalance: "DEBIT" },
+    { _id: "acct_rev", code: defects.cashSaleWrongAccountCode ? "4000" : "4100", type: "REVENUE", name: "Sales Revenue", systemKey: "SALES_REVENUE", normalBalance: "CREDIT" },
+    { _id: "acct_cogs", code: "5100", type: "COGS", name: "COGS", systemKey: "COST_OF_VEHICLES_SOLD", normalBalance: "DEBIT" },
+    { _id: "acct_inv", code: "1400", type: "ASSET", name: "Vehicle Inventory", systemKey: "VEHICLE_INVENTORY", normalBalance: "DEBIT" },
     { _id: "acct_fa", code: "1500", type: "ASSET", name: "Fixed Assets", systemKey: "FIXED_ASSETS", normalBalance: "DEBIT" },
     { _id: "acct_cap", code: "3000", type: "EQUITY", name: "Partner Capital", systemKey: "PARTNER_CAPITAL", normalBalance: "CREDIT" },
     { _id: "acct_draw", code: "3100", type: "EQUITY", name: "Partner Drawings", systemKey: "PARTNER_DRAWINGS", normalBalance: "DEBIT" },
@@ -669,7 +679,14 @@ function makeBackend(defects: Defects = {}) {
         const totalRevenue = net("SALES_REVENUE") + net("CONSIGNMENT_COMMISSION_REVENUE");
         const totalCogs = net("COST_OF_VEHICLES_SOLD");
         const grossProfit = totalRevenue - totalCogs;
+        const row = (key: string, amount: number) => {
+          const account = CHART.find((a) => a.systemKey === key)!;
+          return { accountId: account._id, code: account.code, currency: ORG_CURRENCY, netMinor: amount };
+        };
         return { ok: true as const, value: { currency: ORG_CURRENCY,
+          revenueRows: defects.cashSaleReportMissingRevenueRow && certifiedCashSalePosted
+            ? [] : [row("SALES_REVENUE", net("SALES_REVENUE"))],
+          cogsRows: [row("COST_OF_VEHICLES_SOLD", totalCogs)],
           totalRevenue, totalCogs, grossProfit,
           netIncome: grossProfit - (defects.cashSaleReportMisstatesProfit && certifiedCashSalePosted ? 1 : 0) } };
       }
@@ -862,7 +879,22 @@ function makeBackend(defects: Defects = {}) {
         const made = replayableCreate("sale", args, true);
         if (made) return made;
         const saleId = id("sale");
-        sales.set(saleId, { _id: saleId, orgId: args.orgId, status: args.status });
+        const cashInvoice = Boolean(args.quoteId && Number(args.salePrice) === 12_500);
+        const invoiceId = cashInvoice && !defects.cashSaleMissingInvoice ? id("rdoc") : undefined;
+        sales.set(saleId, { _id: saleId, orgId: args.orgId, status: args.status,
+          canonicalReceivableDocumentId: invoiceId });
+        if (invoiceId) {
+          financeReceivables.set(invoiceId, {
+            _id: invoiceId, orgId: args.orgId, documentType: "INVOICE",
+            payerType: "CUSTOMER", customerId: defects.cashSaleInvoiceWrongCustomer ? "other-customer" : String(args.customerId),
+            sourceType: "sales", sourceId: saleId, originalAmountMinor: 12_500_000,
+            currency: ORG_CURRENCY, scale: 3, status: "OPEN",
+          });
+          if (defects.cashSaleDuplicateInvoice) {
+            const duplicateId = id("rdoc");
+            financeReceivables.set(duplicateId, { ...financeReceivables.get(invoiceId), _id: duplicateId });
+          }
+        }
         if (args.quoteId && Number(args.salePrice) === 12_500) certifiedCashSalePosted = true;
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, saleId);
         const vehicle = vehicles.get(String(args.vehicleId));
@@ -1399,7 +1431,8 @@ function makeBackend(defects: Defects = {}) {
       case "subledger:listReceivables":
         return {
           ok: true as const,
-          value: [...financeReceivables.values()].filter((r) => !args.customerId || r.customerId === String(args.customerId)),
+          value: [...financeReceivables.values()].filter((r) => !args.customerId || r.customerId === String(args.customerId))
+            .slice(0, Number(args.limit ?? 50)),
         };
       case "subledger:getReceivableBalance": {
         const doc = financeReceivables.get(String(args.receivableDocumentId));
@@ -1785,6 +1818,18 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     const results = await runAgainst({ cashSaleReportMisstatesProfit: true });
     expect(statusOf(results, "M486C1")).toBe("FAIL");
     expect(String(results.find((r) => r.id === "M486C1")?.detail)).toMatch(/public income netIncome/);
+  });
+
+  test.each([
+    ["cashSaleMissingInvoice", /invoice|receivable/i],
+    ["cashSaleDuplicateInvoice", /invoice|receivable/i],
+    ["cashSaleInvoiceWrongCustomer", /invoice|receivable/i],
+    ["cashSaleWrongAccountCode", /code/i],
+    ["cashSaleReportMissingRevenueRow", /revenue row/i],
+  ] as const)("M486C1 rejects %s", async (defect, diagnostic) => {
+    const results = await runAgainst({ [defect]: true });
+    expect(statusOf(results, "M486C1")).toBe("FAIL");
+    expect(String(results.find((r) => r.id === "M486C1")?.detail)).toMatch(diagnostic);
   });
 
   test("C1/C2 do not PASS when one worker never reached the backend (RG-01)", async () => {

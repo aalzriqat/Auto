@@ -1718,7 +1718,36 @@ export async function runRehearsalCases(ctx) {
     });
     const sale = await ownerMust("query", "sales:get", { orgId, saleId });
     expectEqual(sale?.status, "COMPLETED", "M486C1 public sale state");
-    const { keyOf } = await chartIndex({ orgId, ownerMust });
+    if (!sale?.canonicalReceivableDocumentId) fail("M486C1 sale has no canonical customer invoice");
+    const receivables = await ownerMust("query", "subledger:listReceivables", { orgId, customerId, limit: 200 });
+    if (!Array.isArray(receivables) || receivables.length >= 200) {
+      unproven("M486C1 customer invoice listing is absent or truncated");
+    }
+    const invoices = receivables.filter((r) => r.sourceType === "sales" && String(r.sourceId) === String(saleId));
+    expectEqual(invoices.length, 1, "M486C1 exactly one customer invoice for this sale");
+    const invoice = invoices[0];
+    expectEqual(String(invoice._id), String(sale.canonicalReceivableDocumentId), "M486C1 sale invoice pointer");
+    for (const [field, expected] of [
+      ["orgId", String(orgId)], ["customerId", String(customerId)],
+      ["documentType", "INVOICE"], ["payerType", "CUSTOMER"],
+      ["currency", "JOD"], ["scale", 3], ["status", "OPEN"],
+      ["originalAmountMinor", 12_500_000],
+    ]) {
+      expectEqual(field.endsWith("Id") ? String(invoice[field]) : invoice[field], expected, `M486C1 customer invoice ${field}`);
+    }
+    const invoiceBalance = await ownerMust("query", "subledger:getReceivableBalance", {
+      orgId, receivableDocumentId: invoice._id,
+    });
+    expectEqual(String(invoiceBalance?.doc?._id), String(invoice._id), "M486C1 collectible customer invoice identity");
+    expectEqual(invoiceBalance?.outstandingMinor, 12_500_000, "M486C1 collectible customer invoice outstanding");
+    const chart = await ownerMust("query", "chartOfAccounts:list", { orgId });
+    const keyOf = new Map((chart ?? []).map((a) => [String(a._id), a.systemKey ?? a.code ?? "?"]));
+    const codeOf = new Map((chart ?? []).map((a) => [a.systemKey, a.code]));
+    const expectedCodes = [
+      ["ACCOUNTS_RECEIVABLE_CUSTOMERS", "1200"], ["SALES_REVENUE", "4100"],
+      ["COST_OF_VEHICLES_SOLD", "5100"], ["VEHICLE_INVENTORY", "1400"],
+    ];
+    for (const [key, code] of expectedCodes) expectEqual(codeOf.get(key), code, `M486C1 chart code ${key}`);
     const posted = await eventAndJournal({
       orgId, ownerMust, sourceType: "sales", sourceId: saleId, eventType: "SALE_COMPLETED",
     });
@@ -1741,7 +1770,20 @@ export async function runRehearsalCases(ctx) {
       ["VEHICLE_INVENTORY", -10_000_000],
     ]) {
       expectEqual((after.get(key) ?? 0) - (before.get(key) ?? 0), delta, `M486C1 public trial balance ${key}`);
+      const row = (afterBalance?.rows ?? []).find((r) => keyOf.get(String(r.accountId)) === key && r.currency === "JOD");
+      expectEqual(row?.code, codeOf.get(key), `M486C1 public trial balance code ${key}`);
     }
+    const incomeRowTotal = (report, rows, code) => (report?.[rows] ?? [])
+      .filter((r) => r.currency === "JOD" && r.code === code)
+      .reduce((sum, r) => sum + r.netMinor, 0);
+    expectEqual(
+      incomeRowTotal(afterIncome, "revenueRows", "4100") - incomeRowTotal(beforeIncome, "revenueRows", "4100"),
+      12_500_000, "M486C1 public income revenue row 4100",
+    );
+    expectEqual(
+      incomeRowTotal(afterIncome, "cogsRows", "5100") - incomeRowTotal(beforeIncome, "cogsRows", "5100"),
+      10_000_000, "M486C1 public income COGS row 5100",
+    );
     for (const [field, delta] of [
       ["totalRevenue", 12_500_000], ["totalCogs", 10_000_000],
       ["grossProfit", 2_500_000], ["netIncome", 2_500_000],
