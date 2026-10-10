@@ -35,7 +35,7 @@ import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { listJournalEntries } from "./accountingLedger";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -169,8 +169,9 @@ describe("General Ledger pagination — AF-318-01 regression (>100 entries reach
       }
     });
 
-    const { page, lineIndexes } = await ctx.asOwner.run(async (runCtx) => {
+    const { page, lineIndexes, collectedAccountIds } = await ctx.asOwner.run(async (runCtx) => {
       const lineIndexes: string[] = [];
+      const collectedAccountIds: Id<"chartOfAccounts">[] = [];
       const originalQuery = runCtx.db.query.bind(runCtx.db);
       const db = {
         ...runCtx.db,
@@ -182,7 +183,20 @@ describe("General Ledger pagination — AF-318-01 regression (>100 entries reach
               if (property === "withIndex") {
                 return (index: string, range: unknown) => {
                   lineIndexes.push(index);
-                  return target.withIndex(index as never, range as never);
+                  const indexed = target.withIndex(index as never, range as never);
+                  if (index !== "by_journal_entry_account") return indexed;
+                  return new Proxy(indexed, {
+                    get(indexedTarget, indexedProperty) {
+                      if (indexedProperty === "collect") {
+                        return async () => {
+                          const rows = await indexedTarget.collect() as Doc<"journalLines">[];
+                          collectedAccountIds.push(...rows.map((row) => row.accountId));
+                          return rows;
+                        };
+                      }
+                      return Reflect.get(indexedTarget, indexedProperty);
+                    },
+                  });
                 };
               }
               return Reflect.get(target, property);
@@ -205,11 +219,12 @@ describe("General Ledger pagination — AF-318-01 regression (>100 entries reach
         accountId: ctx.revenue._id,
         paginationOpts: { numItems: 1, cursor: null },
       });
-      return { page: result.page, lineIndexes };
+      return { page: result.page, lineIndexes, collectedAccountIds };
     });
 
     expect(page.map((entry) => entry._id)).toEqual([entryId]);
     expect(lineIndexes).toEqual(["by_org_account_date", "by_journal_entry_account"]);
+    expect(collectedAccountIds).toEqual([ctx.revenue._id]);
   });
 
   test("account-filtered entries invoke paginate only once with duplicate account lines", async () => {
