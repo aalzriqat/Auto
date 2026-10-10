@@ -1759,6 +1759,19 @@ async function assertRequiredApplicationDocumentsComplete(
   }
 }
 
+/** Share point reads within one query execution; each execution starts with a fresh cache. */
+export function memoizePointRead<Key, Value>(read: (key: Key) => Promise<Value>): (key: Key) => Promise<Value> {
+  const pending = new Map<Key, Promise<Value>>();
+  return (key) => {
+    let result = pending.get(key);
+    if (!result) {
+      result = read(key);
+      pending.set(key, result);
+    }
+    return result;
+  };
+}
+
 export const list = query({
   args: {
     orgId: v.id("organizations"),
@@ -1785,14 +1798,23 @@ export const list = query({
         .paginate(args.paginationOpts);
     }
 
+    // A page often contains many deals with the same salesperson or finance
+    // company. Reuse reads only within this execution so reactive dependencies
+    // and concurrent mutations remain governed by Convex's query snapshot.
+    const readCustomer = memoizePointRead((id: Id<"customers">) => ctx.db.get(id));
+    const readVehicle = memoizePointRead((id: Id<"vehicles">) => ctx.db.get(id));
+    const readCompany = memoizePointRead((id: Id<"financeCompanies">) => ctx.db.get(id));
+    const readSalesperson = memoizePointRead((id: Id<"users">) => ctx.db.get(id));
+    const readQuote = memoizePointRead((id: Id<"quotes">) => ctx.db.get(id));
+
     // Enrich
     const page = await Promise.all(
       pageResult.page.map(async (app) => {
-        const customer = await ctx.db.get(app.customerId);
-        const vehicle = await ctx.db.get(app.vehicleId);
-        const company = app.companyId ? await ctx.db.get(app.companyId) : null;
-        const salesperson = await ctx.db.get(app.salespersonId);
-        const quote = await ctx.db.get(app.quoteId);
+        const customer = await readCustomer(app.customerId);
+        const vehicle = await readVehicle(app.vehicleId);
+        const company = app.companyId ? await readCompany(app.companyId) : null;
+        const salesperson = await readSalesperson(app.salespersonId);
+        const quote = await readQuote(app.quoteId);
         const hasPendingDepositResolution = await pendingDepositResolution(ctx, app);
         // Through the shared resolver, not a fourth hand-rolled reading of the
         // same rule — this file has been corrected twice already for exactly
