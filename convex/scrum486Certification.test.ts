@@ -1,7 +1,8 @@
 /**
  * SCRUM-486: literal, independent certification rows driven through public money doors.
  *
- * These harness rows cover only selected owned CASH and retired-mode paths.
+ * These harness rows cover selected owned and sourced CASH, configured-financier,
+ * deposit, tenant-boundary and retired-mode paths.
  * They are not the whole route/deposit/lifecycle matrix and are not
  * real Convex platform evidence. The owner-ruling derivation lives in
  * docs/architecture/scrum486-certification-oracle.md. Expected amounts are
@@ -489,6 +490,72 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expectBalanced(rows);
     expect(await trialBalanceNormalBalance(s)).toEqual({
       "1200|JOD": 12_500_000,
+      "2400|JOD": 10_000_000,
+      "4170|JOD": 2_500_000,
+    });
+  });
+
+  test("SOURCED CASH × applied deposit: customer AR falls, supplier entitlement stays whole", async () => {
+    const s = await seedFinancedDealership("s486sourcedapplied", {
+      modules: MODULES,
+      ownerPerms: OWNER_PERMS,
+      actors: {},
+      label: "Certification",
+      vinPrefix: "V486",
+      sourced: true,
+    });
+    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { sourceCost: 10_000 }));
+    const quoteId = await s.owner.as.mutation(api.quotes.saveQuote, {
+      orgId: s.orgId,
+      customerId: s.customerId,
+      vehicleId: s.vehicleId,
+      mode: "CASH",
+      vehiclePrice: 12_500,
+      downPayment: 200,
+      termMonths: 0,
+    });
+    const depositId = await s.owner.as.mutation(api.deposits.create, {
+      orgId: s.orgId,
+      quoteId,
+      amount: 200,
+      method: "CASH",
+      idempotencyKey: "scrum486-sourced-applied-deposit",
+    });
+    const saleId = await completeCashSale(s, quoteId, "sourced-applied-deposit");
+    const { sale, deposit, payable, applications } = await s.t.run(async (ctx) => ({
+      sale: await ctx.db.get(saleId),
+      deposit: await ctx.db.get(depositId),
+      payable: await ctx.db.query("vehicleSupplierPayables")
+        .withIndex("by_sale", (q) => q.eq("saleId", saleId)).first(),
+      applications: await ctx.db.query("depositApplications")
+        .withIndex("by_deposit", (q) => q.eq("depositId", depositId)).collect(),
+    }));
+    expect(sale?.status).toBe("COMPLETED");
+    expect(deposit?.status).toBe("APPLIED");
+    expect(payable).toMatchObject({
+      orgId: s.orgId,
+      vehicleId: s.vehicleId,
+      saleId,
+      amountDue: 10_000,
+      currency: "JOD",
+      status: "PENDING",
+    });
+    expect(applications).toHaveLength(1);
+    expect(applications[0]).toMatchObject({ treatment: "CUSTOMER_RECEIVABLE", amountMinor: 200_000 });
+    const rows = await journalRows(s);
+    expectLiteralRows(rows, [
+      { account: "1100", currency: "JOD", debit: 200_000, credit: 0, entryStatus: "POSTED" },
+      { account: "2100", currency: "JOD", debit: 0, credit: 200_000, entryStatus: "POSTED" },
+      { account: "2100", currency: "JOD", debit: 200_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1200", currency: "JOD", debit: 0, credit: 200_000, entryStatus: "POSTED" },
+      { account: "1200", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "2400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
+      { account: "4170", currency: "JOD", debit: 0, credit: 2_500_000, entryStatus: "POSTED" },
+    ]);
+    expectBalanced(rows);
+    expect(await trialBalanceNormalBalance(s)).toEqual({
+      "1100|JOD": 200_000,
+      "1200|JOD": 12_300_000,
       "2400|JOD": 10_000_000,
       "4170|JOD": 2_500_000,
     });
