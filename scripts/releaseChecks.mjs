@@ -23,9 +23,57 @@ export function loadReleasePolicy() {
 /** Pages beyond this are a bug, not a busy commit. */
 const MAX_PAGES = 10;
 const PER_PAGE = 100;
+const RELEASE_CHECK = "trusted-accounting-release-verdict";
+const TRUSTED_REHEARSAL_WORKFLOW = ".github/workflows/trusted-accounting-rehearsal.yml";
+
+async function readCheckRuns(api, sha, filter) {
+  const found = [];
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
+    const response = await api(`/commits/${sha}/check-runs`, { per_page: PER_PAGE, page, filter });
+    if (response.status !== 200) {
+      return { ok: false, reason: `Could not read check runs for this commit (HTTP ${response.status}).` };
+    }
+    const runs = response.body.check_runs ?? [];
+    found.push(...runs);
+    // The page length, not total_count, determines whether another page exists.
+    if (runs.length < PER_PAGE) return { ok: true, runs: found };
+    if (page === MAX_PAGES) {
+      return {
+        ok: false,
+        reason: `This commit has ${MAX_PAGES * PER_PAGE} or more check runs, which is not a state this gate understands.`,
+      };
+    }
+  }
+  throw new Error("Check-run pagination ended without a final page.");
+}
+
+async function verifyReleaseCheckOrigin(api, sha, check) {
+  if (!Number.isSafeInteger(check.id) || check.id <= 0) {
+    return "Release verdict has no GitHub Actions job identity.";
+  }
+  const jobResponse = await api(`/actions/jobs/${check.id}`);
+  if (jobResponse.status !== 200) return "Release verdict is not a readable GitHub Actions job.";
+  const job = jobResponse.body;
+  if (job.id !== check.id || job.name !== RELEASE_CHECK || job.head_sha !== sha ||
+      !Number.isSafeInteger(job.run_id) || job.run_id <= 0 ||
+      typeof job.check_run_url !== "string" ||
+      !job.check_run_url.endsWith(`/check-runs/${check.id}`)) {
+    return "Release verdict job identity does not match the check run and release SHA.";
+  }
+  const runResponse = await api(`/actions/runs/${job.run_id}`);
+  if (runResponse.status !== 200) return "Release verdict workflow run is unavailable.";
+  const workflow = runResponse.body;
+  if (workflow.id !== job.run_id || workflow.path !== TRUSTED_REHEARSAL_WORKFLOW ||
+      workflow.event !== "repository_dispatch" || workflow.head_sha !== sha ||
+      workflow.head_branch !== "main") {
+    return "Release verdict did not originate from the trusted main-only dispatch workflow.";
+  }
+  return null;
+}
 
 /**
- * Every check result at one commit, from BOTH surfaces, fully paginated.
+ * Current ordinary check results plus every release-verdict attempt at one
+ * commit, from BOTH surfaces, fully paginated.
  *
  * ⚠️ Pagination is not a nicety here. `/check-runs` defaults to 30 per page and
  * this repository already produces 25 at a single commit, so the gate was one
@@ -40,58 +88,39 @@ const PER_PAGE = 100;
  * which would look like several results for one identity and refuse as
  * ambiguous.
  *
- * `producer` is what makes a result identifiable: a GitHub App slug for a
- * check-run, or `commit-status` for a status, which carries no app identity at
- * all (`creator` is null).
+ * Ordinary checks use the existing GitHub App slug or commit-status identity.
+ * The release verdict also proves the check-run ID belongs to a real Actions
+ * job in this default-branch repository_dispatch workflow; a matching name
+ * and GitHub Actions app slug alone are forgeable.
  */
 export async function readCheckResults(api, sha) {
   const results = [];
-
-  for (let page = 1; page <= MAX_PAGES; page += 1) {
-    // GitHub defaults to filter=latest. That hides an earlier failed attempt
-    // after a green rerun under the same check name, falsely erasing a release
-    // failure. Keep every observed attempt so the duplicate-result guard can
-    // refuse until the failure is adjudicated on a new commit.
-    const response = await api(`/commits/${sha}/check-runs`, { per_page: PER_PAGE, page, filter: "all" });
-    if (response.status !== 200) {
-      return { ok: false, reason: `Could not read check runs for this commit (HTTP ${response.status}).` };
+  // Preserve the established "rerun failed jobs" policy for ordinary checks.
+  // The new release verdict has a stronger rule: every same-SHA attempt counts.
+  const latest = await readCheckRuns(api, sha, "latest");
+  if (!latest.ok) return { ok: false, reason: latest.reason, results: [] };
+  const all = await readCheckRuns(api, sha, "all");
+  if (!all.ok) return { ok: false, reason: all.reason, results: [] };
+  const runs = [
+    ...latest.runs.filter((run) => run.name !== RELEASE_CHECK),
+    ...all.runs.filter((run) => run.name === RELEASE_CHECK),
+  ];
+  for (const run of runs) {
+    if (run.name === RELEASE_CHECK) {
+      const originError = await verifyReleaseCheckOrigin(api, sha, run);
+      if (originError) return { ok: false, reason: originError, results: [] };
     }
-    const runs = response.body.check_runs ?? [];
-    for (const run of runs) {
-      results.push({
-        producer: run.app?.slug ?? "unknown",
-        name: run.name,
-        status: run.status,
-        conclusion: run.conclusion ?? null,
-      });
-    }
-
-    // ⚠️ Termination is decided by the PAGE SIZE, never by `total_count`.
-    // Trusting a server-reported total means a total that is wrong — or that
-    // shrinks mid-walk as a re-run replaces a check — silently ends the walk
-    // early, and a required check on the page never fetched reads as "no result
-    // at this commit". That refuses rather than passes, so it is safe; but it
-    // refuses EVERY release, for a reason nobody would think to look for.
-    if (runs.length < PER_PAGE) break;
-
-    if (page === MAX_PAGES) {
-      // ⚠️ A deliberate runaway cap, and the wording matters. Reaching here
-      // means page `MAX_PAGES` came back FULL, so the true count is at least
-      // `MAX_PAGES * PER_PAGE` and may be more — this cannot tell which, and
-      // does not try. An earlier version said "more than 1000", which is a
-      // false statement at exactly 1000. Refusing is right either way (a
-      // commit with a thousand checks is not a state this gate reasons about);
-      // saying something untrue about it is not.
-      return {
-        ok: false,
-        reason: `This commit has ${MAX_PAGES * PER_PAGE} or more check runs, which is not a state this gate understands.`,
-      };
-    }
+    results.push({
+      producer: run.app?.slug ?? "unknown",
+      name: run.name,
+      status: run.status,
+      conclusion: run.conclusion ?? null,
+    });
   }
 
   const statuses = await api(`/commits/${sha}/status`, { per_page: PER_PAGE });
   if (statuses.status !== 200) {
-    return { ok: false, reason: `Could not read commit statuses (HTTP ${statuses.status}).` };
+    return { ok: false, reason: `Could not read commit statuses (HTTP ${statuses.status}).`, results: [] };
   }
   for (const status of statuses.body.statuses ?? []) {
     results.push({
@@ -104,5 +133,5 @@ export async function readCheckResults(api, sha) {
     });
   }
 
-  return { ok: true, results };
+  return { ok: true, reason: "", results };
 }

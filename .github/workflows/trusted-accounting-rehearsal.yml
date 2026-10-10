@@ -506,7 +506,9 @@ jobs:
           fi
 
   release_verdict:
-    name: trusted-accounting-release-verdict
+    # A skipped job still publishes a check run. Give PR-triggered runs a
+    # different name so their skipped jobs cannot poison the release gate.
+    name: ${{ github.event_name == 'repository_dispatch' && 'trusted-accounting-release-verdict' || 'trusted-accounting-release-not-dispatched' }}
     needs: rehearsal
     if: always() && github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest

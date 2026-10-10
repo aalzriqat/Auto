@@ -202,7 +202,7 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   "deploy-production.yml":
     "da1f85d00bbd9d7b14d4603dfcab4c831a91307bdac7fae1d40bd88053afdf83",
   "trusted-accounting-rehearsal.yml":
-    "d4c22602ddeba03abda8919bf8499175328255cdc121bb588284a99d80ad10ef",
+    "5299fa85b16b3145e74af0db4b2f6f17e0c306b474046afd6ae17777af933729",
   "trusted-main-e2e.yml":
     "ba0277012803ed365c944dbad5ecef410036c5773e6b401a7021a0b37855d9f4",
 };
