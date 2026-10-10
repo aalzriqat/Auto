@@ -34,7 +34,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function seedOrg(t: ReturnType<typeof convexTestWithComponents>) {
+async function seedOrg(t: ReturnType<typeof convexTestWithComponents<typeof schema>>) {
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() }));
 
   const ownerRoleId = await t.run((ctx) =>
@@ -55,7 +55,7 @@ async function seedOrg(t: ReturnType<typeof convexTestWithComponents>) {
 }
 
 /** Owner + accountant (holds manage:finance) + sales (doesn't) — for notifyFinanceManagers tests. */
-async function seedFinanceOrg(t: ReturnType<typeof convexTestWithComponents>) {
+async function seedFinanceOrg(t: ReturnType<typeof convexTestWithComponents<typeof schema>>) {
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Finance Org", createdAt: Date.now() }));
 
   const ownerRoleId = await t.run((ctx) =>
@@ -444,6 +444,105 @@ describe("dispatch helpers", () => {
     expect(salesRows).toHaveLength(0);
     expect(managerRows).toHaveLength(0);
     expect(ghostRows).toHaveLength(0);
+  });
+});
+
+// SCRUM-789, ruled by SCRUM-789 c22467 / SCRUM-760 c22465 (R-PERMISSION): a
+// member who is offboarding gets NO routine notification from any helper, the
+// owner included. notifyByPermission already skipped them (SCRUM-444 F4); the
+// other three did not, so an offboarding manager still received deal links and
+// amounts through them.
+describe("offboarding members receive no routine notifications (SCRUM-789)", () => {
+  async function offboard(t: ReturnType<typeof convexTestWithComponents<typeof schema>>, userId: string, orgId: string) {
+    await t.run(async (ctx) => {
+      const m = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId as never).eq("userId", userId as never))
+        .unique();
+      await ctx.db.patch(m!._id, { offboardingStatus: "PENDING_EXTERNAL_REMOVAL" });
+    });
+  }
+  const rowsFor = (t: ReturnType<typeof convexTestWithComponents<typeof schema>>, userId: string) =>
+    t.run((ctx) => ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", userId as never)).collect());
+
+  test("notifyManagers skips an offboarding manager but still notifies active ones", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, ownerId, managerId } = await seedOrg(t);
+    await offboard(t, managerId, orgId);
+    await t.run((ctx) => notifyManagers(ctx, orgId, "vehicle.created", { actorName: "Bob" }));
+    expect(await rowsFor(t, managerId)).toHaveLength(0);
+    expect(await rowsFor(t, ownerId)).toHaveLength(1);
+  });
+
+  test("notifyAllMembers skips an offboarding member and does not count them", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, managerId, salesId, ownerId } = await seedOrg(t);
+    await offboard(t, salesId, orgId);
+    const notified = await t.run((ctx) => notifyAllMembers(ctx, orgId, "system.announcement", { title: "T", message: "M" }));
+    expect(await rowsFor(t, salesId)).toHaveLength(0);
+    expect(await rowsFor(t, managerId)).toHaveLength(1);
+    expect(await rowsFor(t, ownerId)).toHaveLength(1);
+    expect(notified).toBe(2);
+  });
+
+  test("notifyOwner skips an offboarding owner but still reaches an active co-owner", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, ownerId } = await seedOrg(t);
+    const coOwnerRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "OWNER2", permissions: [], isSystemOwnerRole: true }),
+    );
+    const coOwnerId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "coowner_789", email: "co@test.com" }));
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: coOwnerId, roleId: coOwnerRoleId }));
+    await offboard(t, ownerId, orgId);
+    await t.run((ctx) => notifyOwner(ctx, orgId, "role.changed", { actorName: "Carol", roleName: "SALES" }));
+    expect(await rowsFor(t, ownerId)).toHaveLength(0);
+    expect(await rowsFor(t, coOwnerId)).toHaveLength(1);
+  });
+
+  test("notifyFinanceManagers skips an offboarding accountant and still reaches the owner", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, ownerId, accountantId } = await seedFinanceOrg(t);
+    await offboard(t, accountantId, orgId);
+    await t.run((ctx) => notifyFinanceManagers(ctx, orgId, "system.announcement", { title: "T", message: "M" }));
+    expect(await rowsFor(t, accountantId)).toHaveLength(0);
+    expect(await rowsFor(t, ownerId)).toHaveLength(1);
+  });
+
+  test("notifyFinanceManagers skips an offboarding owner too", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, ownerId, accountantId } = await seedFinanceOrg(t);
+    await offboard(t, ownerId, orgId);
+    await offboard(t, accountantId, orgId);
+    await t.run((ctx) => notifyFinanceManagers(ctx, orgId, "system.announcement", { title: "T", message: "M" }));
+    expect(await rowsFor(t, ownerId)).toHaveLength(0);
+    expect(await rowsFor(t, accountantId)).toHaveLength(0);
+  });
+
+  test("notifyUser (the direct path, e.g. an approval response) never reaches an offboarding member on any channel", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, salesId } = await seedOrg(t);
+    await offboard(t, salesId, orgId);
+    await t.run((ctx) => notifyUser(ctx, orgId, salesId, "collection.approval_responded", { status: "APPROVED", amount: "500" }));
+    expect(await rowsFor(t, salesId)).toHaveLength(0);
+    expect(await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect())).toHaveLength(0);
+  });
+
+  test("notifyUser still reaches an active member and a user with no membership (behaviour preserved)", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, salesId } = await seedOrg(t);
+    const strangerId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "stranger_789", email: "s@test.com" }));
+    await t.run((ctx) => notifyUser(ctx, orgId, salesId, "lead.assigned", { actorName: "A" }));
+    await t.run((ctx) => notifyUser(ctx, orgId, strangerId, "lead.assigned", { actorName: "A" }));
+    expect(await rowsFor(t, salesId)).toHaveLength(1);
+    expect(await rowsFor(t, strangerId)).toHaveLength(1);
+  });
+
+  test("notifyByPermission still skips them (unchanged)", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, managerId } = await seedOrg(t);
+    await offboard(t, managerId, orgId);
+    await t.run((ctx) => notifyByPermission(ctx, orgId, PERMISSIONS.MANAGE_USERS, "vehicle.created", { actorName: "N" }));
+    expect(await rowsFor(t, managerId)).toHaveLength(0);
   });
 });
 
