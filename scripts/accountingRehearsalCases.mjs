@@ -214,6 +214,13 @@ async function openTheBooks({ orgId, ownerCall }) {
   return notes;
 }
 
+/** Keep a backdated direct payment inside the UTC month this rehearsal opens. */
+export function fd1DirectPaymentTime(nowMs) {
+  const now = new Date(nowMs);
+  const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  return Math.max(nowMs - 60_000, monthStart);
+}
+
 let unproven = (reason) => {
   throw new Error(`UNPROVEN (no recorder bound): ${reason}`);
 };
@@ -1781,6 +1788,11 @@ export async function runRehearsalCases(ctx) {
         description: "Intentionally invalid deduction from the full transfer.",
         expectedCurrency: denom.currency,
       });
+      await ownerMust("mutation", "financeDealCosts:reconcileDealFee", {
+        orgId,
+        feeId: deductedFeeId,
+        notes: "Reviewed before testing the forbidden settlement deduction.",
+      });
       const deductedClose = await ownerCall("mutation", "applications:finalizeDeal", {
         idempotencyKey: `rehearsal-fd1-deducted-close-${stamp}`,
         orgId,
@@ -1828,7 +1840,7 @@ export async function runRehearsalCases(ctx) {
         orgId,
         feeId,
         method: "BANK_TRANSFER",
-        paidAt: Date.now() - 60_000,
+        paidAt: fd1DirectPaymentTime(Date.now()),
         expectedAmountMinor: dealerCost,
         idempotencyKey: `rehearsal-fd1-direct-payment-${stamp}`,
       });

@@ -24,8 +24,17 @@ import {
   assertBothAttemptsExecuted,
   createVehicleForRehearsal,
   REQUIRED_REHEARSAL_CASE_IDS,
+  fd1DirectPaymentTime,
   runRehearsalCases,
 } from "./accountingRehearsalCases.mjs";
+
+describe("FD1 direct-payment date", () => {
+  test("stays inside the opened UTC month during its first minute", () => {
+    const start = Date.UTC(2026, 0, 1);
+    expect(fd1DirectPaymentTime(start + 30_000)).toBe(start);
+    expect(fd1DirectPaymentTime(start + 61_000)).toBe(start + 1_000);
+  });
+});
 
 describe("vehicle fixture rate-limit retry", () => {
   test("retries only the known transient vehicles:create rate-limit refusal", async () => {
@@ -1181,8 +1190,13 @@ function makeBackend(defects: Defects = {}) {
       case "applications:registerVehicleHandover":
       case "applications:registerExpectedPayment":
       case "financeDealCosts:recordLegalInvoice":
-      case "financeDealCosts:reconcileDealFee":
         return { ok: true as const, value: null };
+      case "financeDealCosts:reconcileDealFee": {
+        const fee = financeDealFees.get(String(args.feeId));
+        if (!fee || fee.voidedAt !== undefined) return { ok: false as const, error: "Deal cost not found in this organization." };
+        fee.reconciledAt = Date.now();
+        return { ok: true as const, value: fee._id };
+      }
       case "applications:handoverStamp":
         return { ok: true as const, value: { stamp: "economics" } };
       case "financeDealCosts:recordDealFee": {
@@ -1291,6 +1305,9 @@ function makeBackend(defects: Defects = {}) {
         if (!app) return { ok: false as const, error: "Application not found." };
         if (app.status === "CLOSED") return { ok: true as const, value: app.saleId };
         const gross = Math.round((quotePrice.get(app.quoteId) ?? 0) * MINOR_SCALE);
+        if ([...financeDealFees.values()].some((fee) =>
+          fee.applicationId === String(args.applicationId) && fee.voidedAt === undefined && fee.reconciledAt === undefined
+        )) return { ok: false as const, error: "COSTS_AWAITING_RECONCILIATION" };
         // SCRUM-435: the finance company transfers the full approved amount, so a
         // cost deducted from its transfer is refused (mirrors the product guard).
         if (app.withheldMinor > 0 && !defects.financeDeductedFeeAccepted) {
