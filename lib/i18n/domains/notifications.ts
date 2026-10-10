@@ -1,3 +1,10 @@
+import { defineBilingualMessages } from "../defineBilingualMessages";
+
+// SCRUM-260: kept as one pair so the EN and AR wording of the renamed approval stay side by side.
+const approvalRequestedMessages = defineBilingualMessages({
+  Notif_ApprovalRequested_Message: ["{actorName} requested approval for {saleLabel} (below the minimum price uplift).", "طلب {actorName} الموافقة على {saleLabel} (أقل من الحد الأدنى للزيادة فوق سعر القائمة)."],
+});
+
 // Bilingual templates for every typed notification in lib/notifications/types.ts.
 // Two consumers: the Settings/Notifications UI (via useLanguage()/t(), for
 // static labels) AND lib/notifications/render.ts, which imports these raw
@@ -6,6 +13,7 @@
 // action nor an email/WhatsApp send can use the React t() hook.
 // Keys follow Notif_<PascalCase type>_Title / _Message.
 export const notificationsEn = {
+  ...approvalRequestedMessages.en,
   Notif_CustomerCreated_Title: "New Customer Added",
   Notif_CustomerCreated_Message: "{actorName} added a new customer: {customerName}",
   Notif_CustomerUpdated_Title: "Customer Updated",
@@ -110,7 +118,7 @@ export const notificationsEn = {
   Notif_PartnerEquityChanged_Title: "Partner Equity Updated",
   Notif_PartnerEquityChanged_Message: "{actorName} updated a partner equity record.",
   Notif_ApprovalRequested_Title: "Approval Needed",
-  Notif_ApprovalRequested_Message: "{actorName} requested approval for {saleLabel} (below minimum profit).",
+  Notif_ApprovalRequested_Message: "{actorName} requested approval for {saleLabel} (below the minimum price uplift).",
   Notif_ApprovalResponded_Title: "Approval {status}",
   Notif_ApprovalResponded_Message: "Your approval request for {saleLabel} was {status}.",
   Notif_CollectionReceivableCreated_Title: "Receivable Created",
@@ -240,6 +248,7 @@ export const notificationsEn = {
 };
 
 export const notificationsAr = {
+  ...approvalRequestedMessages.ar,
   Notif_CustomerCreated_Title: "تمت إضافة عميل جديد",
   Notif_CustomerCreated_Message: "أضاف {actorName} عميلاً جديداً: {customerName}",
   Notif_CustomerUpdated_Title: "تم تحديث بيانات العميل",
@@ -338,7 +347,7 @@ export const notificationsAr = {
   Notif_PartnerEquityChanged_Title: "تم تحديث حقوق الشريك",
   Notif_PartnerEquityChanged_Message: "قام {actorName} بتحديث سجل حقوق شريك.",
   Notif_ApprovalRequested_Title: "مطلوب موافقة",
-  Notif_ApprovalRequested_Message: "طلب {actorName} الموافقة على {saleLabel} (ربح أقل من الحد الأدنى).",
+  Notif_ApprovalRequested_Message: "طلب {actorName} الموافقة على {saleLabel} (أقل من الحد الأدنى للزيادة فوق سعر القائمة).",
   Notif_ApprovalResponded_Title: "طلب الموافقة {status}",
   Notif_ApprovalResponded_Message: "طلب الموافقة الخاص بك لـ {saleLabel} أصبح {status}.",
   Notif_CollectionReceivableCreated_Title: "تم إنشاء ذمة مدينة",
