@@ -102,11 +102,13 @@ export function diagnosePreviewAttestation(env = process.env, spawn = spawnSync)
   } catch {
     return "Attestation log diagnostic unavailable: Convex log command failed.";
   }
-  const summaries = summarizeAttestationLogs(result.stdout ?? "", requestIds);
-  if (summaries.length > 0) return `Attestation backend failures: ${summaries.join("; ")}`;
-  if ((result.error && result.error.code !== "ETIMEDOUT") || (result.status !== 0 && result.error?.code !== "ETIMEDOUT")) {
+  // A failed or timed-out log command may have produced only a partial stream.
+  // Do not promote that output to a request-correlated backend verdict.
+  if (result.error || result.status !== 0) {
     return "Attestation log diagnostic unavailable: Convex log command failed.";
   }
+  const summaries = summarizeAttestationLogs(result.stdout ?? "", requestIds);
+  if (summaries.length > 0) return `Attestation backend failures: ${summaries.join("; ")}`;
   return "Attestation log diagnostic unavailable: no matching completion arrived before the bounded log read ended.";
 }
 

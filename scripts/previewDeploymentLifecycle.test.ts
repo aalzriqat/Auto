@@ -136,6 +136,14 @@ describe("SCRUM-377 preview deployment lifecycle", () => {
     expect(calls).toEqual([]);
   });
 
+  it("does not guess a deployment when creation failed before URL capture", async () => {
+    const { calls, fetchImpl } = api(preview());
+    const unpinned = env({ CONVEX_PREVIEW_URL: undefined, CONVEX_PREVIEW_CREATED_AT: undefined });
+    await expect(pinPreview({ env: unpinned, fetchImpl })).rejects.toThrow();
+    await expect(deletePreview({ env: unpinned, fetchImpl })).rejects.toThrow();
+    expect(calls).toEqual([]);
+  });
+
   it("treats an already-deleted preview as done", async () => {
     const { calls, fetchImpl } = api(null);
     await expect(deletePreview({ env: env(), fetchImpl })).resolves.toMatchObject({ deleted: false });
@@ -384,6 +392,7 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
       "browser-attack-swarm.yml",
       "deal-scenarios-e2e.yml",
       "hunt-preview.yml",
+      "preview-attestation-fault-probe.yml",
       "trusted-accounting-rehearsal.yml",
       "trusted-main-e2e.yml",
     ]);
