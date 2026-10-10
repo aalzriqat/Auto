@@ -18,6 +18,15 @@
  *      bypassing the behaviour under test proves nothing about that behaviour.
  */
 
+// The trusted controller refuses an otherwise green cloud result if any
+// registered scenario vanished. Keep this list with the case implementation,
+// not in a separate release registry. The harness test compares it with the
+// executed IDs, and the real-preview validator uses the same list.
+export const REQUIRED_REHEARSAL_CASE_IDS = Object.freeze([
+  "A1", "A2", "D1", "D2", "D3", "D4", "C1", "C2", "UNAUTH", "TEN", "A3",
+  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "FD1", "FD2", "P1", "SETUP",
+]);
+
 function fail(message) {
   throw new Error(message);
 }

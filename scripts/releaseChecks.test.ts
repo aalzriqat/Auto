@@ -38,13 +38,14 @@ function fakeApi(options: {
   failCheckRuns?: number;
   failStatuses?: number;
 }) {
-  const calls: { path: string; page?: number; perPage?: number }[] = [];
+  const calls: { path: string; page?: number; perPage?: number; filter?: string }[] = [];
 
   const api = async (path: string, query?: Record<string, unknown>) => {
     calls.push({
       path,
       page: query?.page as number | undefined,
       perPage: query?.per_page as number | undefined,
+      filter: query?.filter as string | undefined,
     });
 
     if (path.endsWith("/check-runs")) {
@@ -58,10 +59,13 @@ function fakeApi(options: {
       // invisible. A mock that is more generous than the service it stands in
       // for tests nothing.
       const perPage = Number(query?.per_page ?? 30);
-      const slice = options.runs.slice((page - 1) * perPage, page * perPage);
+      const visibleRuns = query?.filter === "all"
+        ? options.runs
+        : options.runs.filter((r, index) => !options.runs.some((later, next) => next > index && later.name === r.name));
+      const slice = visibleRuns.slice((page - 1) * perPage, page * perPage);
       return {
         status: 200,
-        body: { total_count: options.reportedTotal ?? options.runs.length, check_runs: slice },
+        body: { total_count: options.reportedTotal ?? visibleRuns.length, check_runs: slice },
       };
     }
 
@@ -96,6 +100,20 @@ describe("every check at a commit is read, across every page", () => {
     // 30, and the reader's `runs.length < PER_PAGE` test would end the walk on
     // the first page while believing it had reached the end.
     expect(checkRunCalls.map((c) => c.perPage)).toEqual([100, 100]);
+    expect(checkRunCalls.map((c) => c.filter)).toEqual(["all", "all"]);
+  });
+
+  test("an earlier failed check remains visible after a green same-name rerun", async () => {
+    const { api, calls } = fakeApi({ runs: [
+      run("trusted-accounting-release-verdict", { conclusion: "failure" }),
+      run("trusted-accounting-release-verdict", { conclusion: "success" }),
+    ] });
+    const result = await readCheckResults(api, "a".repeat(40));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.results.filter((r) => r.name === "trusted-accounting-release-verdict").map((r) => r.conclusion))
+      .toEqual(["failure", "success"]);
+    expect(calls.find((c) => c.path.endsWith("/check-runs"))?.filter).toBe("all");
   });
 
   test("a LYING total_count does not end the walk early", async () => {

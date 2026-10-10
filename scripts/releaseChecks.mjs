@@ -48,7 +48,11 @@ export async function readCheckResults(api, sha) {
   const results = [];
 
   for (let page = 1; page <= MAX_PAGES; page += 1) {
-    const response = await api(`/commits/${sha}/check-runs`, { per_page: PER_PAGE, page });
+    // GitHub defaults to filter=latest. That hides an earlier failed attempt
+    // after a green rerun under the same check name, falsely erasing a release
+    // failure. Keep every observed attempt so the duplicate-result guard can
+    // refuse until the failure is adjudicated on a new commit.
+    const response = await api(`/commits/${sha}/check-runs`, { per_page: PER_PAGE, page, filter: "all" });
     if (response.status !== 200) {
       return { ok: false, reason: `Could not read check runs for this commit (HTTP ${response.status}).` };
     }

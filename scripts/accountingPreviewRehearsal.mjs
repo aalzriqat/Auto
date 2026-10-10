@@ -487,6 +487,7 @@ export async function main(env = process.env) {
     convexUrl: config.convexUrl,
     deploymentType: "preview",
     workflowRunId: env.GITHUB_RUN_ID ?? null,
+    workflowRunAttempt: env.GITHUB_RUN_ATTEMPT ?? null,
     workflowJob: env.GITHUB_JOB ?? null,
     cases: [],
   };

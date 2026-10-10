@@ -3,6 +3,7 @@
 // a release verdict. The candidate checkout never runs this file.
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { REQUIRED_REHEARSAL_CASE_IDS } from "./accountingRehearsalCases.mjs";
 
 const fullSha = /^[0-9a-f]{40}$/;
 
@@ -21,7 +22,8 @@ export function validateAccountingReleaseEvidence(evidence, expected) {
     errors.push("Evidence does not match the created disposable preview.");
   }
   if (evidence.targetVerification !== "assertE2EBootstrap agreed: preview marker present, cloud URL matches" ||
-      String(evidence.workflowRunId ?? "") !== expected.runId) {
+      String(evidence.workflowRunId ?? "") !== expected.runId ||
+      String(evidence.workflowRunAttempt ?? "") !== expected.runAttempt) {
     errors.push("Trusted preview identity or workflow run attestation is absent.");
   }
   const cases = evidence.cases;
@@ -40,6 +42,10 @@ export function validateAccountingReleaseEvidence(evidence, expected) {
       errors.push("At least one required cloud scenario failed or did not execute.");
       break;
     }
+  }
+  const required = expected.caseIds ?? REQUIRED_REHEARSAL_CASE_IDS;
+  if (ids.size !== required.length || required.some((id) => !ids.has(id))) {
+    errors.push("The required cloud scenario set is incomplete or contains an unexpected case.");
   }
   const summary = evidence.summary;
   if (!summary || summary.total !== cases.length || summary.passed !== cases.length ||
@@ -60,6 +66,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       previewName: process.env.EXPECTED_PREVIEW_NAME,
       previewUrl: process.env.EXPECTED_PREVIEW_URL,
       runId: process.env.GITHUB_RUN_ID,
+      runAttempt: process.env.GITHUB_RUN_ATTEMPT,
     });
     if (errors.length > 0) throw new Error(errors.join(" "));
     console.log(`Verified ${evidence.cases.length} executed cloud scenarios at the exact release SHA.`);

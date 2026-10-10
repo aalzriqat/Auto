@@ -220,9 +220,22 @@ jobs:
       - name: Pin the disposable rehearsal preview for cleanup
         if: always() && steps.provenance.outputs.stale == 'false' && env.CONVEX_PREVIEW_URL != ''
         working-directory: trusted
-        run: node scripts/previewDeploymentLifecycle.mjs pin
+        run: |
+          if [ "$EVENT_NAME" = repository_dispatch ]; then
+            node scripts/previewDeploymentLifecycle.mjs pin --strict
+          else
+            node scripts/previewDeploymentLifecycle.mjs pin
+          fi
         env:
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+
+      - name: Refuse release rehearsal without a pinned cleanup identity
+        if: github.event_name == 'repository_dispatch' && steps.provenance.outputs.stale == 'false'
+        run: |
+          if [ -z "$CONVEX_PREVIEW_CREATED_AT" ]; then
+            echo "Release preview has no pinned cleanup identity." >&2
+            exit 1
+          fi
 
       - name: Scrub disposable rehearsal preview environment
         if: steps.provenance.outputs.stale == 'false'
@@ -439,7 +452,12 @@ jobs:
       - name: Delete the disposable rehearsal preview
         if: always() && env.CONVEX_PREVIEW_CREATED_AT != ''
         working-directory: trusted
-        run: node scripts/previewDeploymentLifecycle.mjs delete
+        run: |
+          if [ "$EVENT_NAME" = repository_dispatch ]; then
+            node scripts/previewDeploymentLifecycle.mjs delete --strict
+          else
+            node scripts/previewDeploymentLifecycle.mjs delete
+          fi
         env:
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
 

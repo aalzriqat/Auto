@@ -23,6 +23,7 @@ import {
   DEFAULT_ORG_CURRENCY,
   assertBothAttemptsExecuted,
   createVehicleForRehearsal,
+  REQUIRED_REHEARSAL_CASE_IDS,
   runRehearsalCases,
 } from "./accountingRehearsalCases.mjs";
 
@@ -1494,7 +1495,7 @@ describe("the rehearsal passes against a backend that behaves", () => {
     const declined = results.filter((r) => r.status === "UNPROVEN");
     expect(declined.map((d) => `${d.id}: ${d.detail}`)).toEqual([]);
     // And it actually ran the cases rather than finding nothing to do.
-    expect(results.length).toBeGreaterThanOrEqual(18);
+    expect(results.map((r) => r.id).sort()).toEqual([...REQUIRED_REHEARSAL_CASE_IDS].sort());
     for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "FD1", "FD2", "C1", "C2"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
