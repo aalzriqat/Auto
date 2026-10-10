@@ -118,6 +118,16 @@ function expectLiteralRows(actual: JournalRow[], expected: JournalRow[]) {
   expect([...actual].sort(order)).toEqual([...expected].sort(order));
 }
 
+function expectAdditionalRows(before: JournalRow[], after: JournalRow[], expected: JournalRow[]) {
+  const additions = [...after];
+  for (const old of before) {
+    const index = additions.findIndex((row) => JSON.stringify(row) === JSON.stringify(old));
+    expect(index).toBeGreaterThanOrEqual(0);
+    additions.splice(index, 1);
+  }
+  expectLiteralRows(additions, expected);
+}
+
 /** The ledger consumer counts the original and its reversal, including REVERSED history. */
 function netByAccount(rows: JournalRow[]) {
   const net = new Map<string, number>();
@@ -141,6 +151,192 @@ async function trialBalanceNormalBalance(s: CashSeed) {
 }
 
 describe("SCRUM-486 literal certification matrix (harness only)", () => {
+  test("owned configured financier × held 200 first payment: literal contribution, forward and full receipt", async () => {
+    const s = await seedFinancedDealership("s486financedheld", {
+      modules: MODULES,
+      ownerPerms: OWNER_PERMS,
+      actors: {},
+      label: "Certification",
+      vinPrefix: "V486",
+    });
+    // Opening finance-company policy: 87.4% of 12,500 = 10,925. The 200
+    // customer first payment leaves 1,375 for the dealership to contribute.
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.companyId, { defaultLtvPercent: 87.4 });
+      await ctx.db.patch(s.vehicleId, { purchasePrice: 10_000 });
+    });
+    const quoteId = await s.owner.as.mutation(api.quotes.saveQuote, {
+      orgId: s.orgId,
+      customerId: s.customerId,
+      vehicleId: s.vehicleId,
+      mode: "CONFIGURED_FINANCE_COMPANY",
+      companyId: s.companyId,
+      customerEligibilityStatusIds: [s.customerStatusId],
+      vehiclePrice: 12_500,
+      downPayment: 200,
+      totalFinancedAmount: 12_300,
+      termMonths: 48,
+    });
+    const depositId = await s.owner.as.mutation(api.deposits.create, {
+      orgId: s.orgId, quoteId, amount: 200, method: "CASH",
+      idempotencyKey: "s486-financed-held-deposit",
+    });
+    const applicationId = await s.owner.as.mutation(api.applications.createFromQuote, {
+      orgId: s.orgId, quoteId,
+    });
+    await s.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId, applicationId, submittedQuotationMinor: 12_500_000, source: "MANUAL_ENTRY",
+    });
+    await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId, applicationId, approvedAmountMinor: 12_500_000, basis: "MANUAL",
+      notes: "Independent contribution example.",
+    });
+    const { application, deposit } = await s.t.run(async (ctx) => ({
+      application: await ctx.db.get(applicationId),
+      deposit: await ctx.db.get(depositId),
+    }));
+    expect(application?.customerFirstPaymentMinor).toBe(200_000);
+    expect(application?.financeCompanyFundedPortionMinor).toBe(10_925_000);
+    expect(application?.dealerContributionMinor).toBe(1_375_000);
+    expect(deposit).toMatchObject({ status: "HELD", holdActive: true, amountMinor: 200_000 });
+    expectLiteralRows(await journalRows(s), [
+      { account: "1100", currency: "JOD", debit: 200_000, credit: 0, entryStatus: "POSTED" },
+      { account: "2100", currency: "JOD", debit: 0, credit: 200_000, entryStatus: "POSTED" },
+    ]);
+
+    await s.owner.as.mutation(api.applications.updateStatus, {
+      orgId: s.orgId, applicationId, status: "UNDER_REVIEW",
+    });
+    await s.approver.as.mutation(api.applications.updateStatus, {
+      orgId: s.orgId, applicationId, status: "APPROVED",
+    });
+    await registerHandover(s.owner.as, api, s.orgId, applicationId);
+    await s.owner.as.mutation(api.applications.registerExpectedPayment, {
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
+    });
+    await s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
+      orgId: s.orgId, applicationId, legalInvoiceAmountMinor: 12_500_000,
+      legalInvoiceNumber: `CERT-${applicationId}`, legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
+    });
+    const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
+      expectedCurrency: "JOD", idempotencyKey: "s486-financed-held-zero-fee", orgId: s.orgId, applicationId,
+      feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER",
+      accountingTreatment: "SELLING_EXPENSE", deductedFromSettlement: false,
+      actualAmountMinor: 0, description: "No closing costs.",
+    });
+    await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: s.orgId, feeId, notes: "No fee to settle.",
+    });
+    await s.owner.as.mutation(api.applications.finalizeDeal, {
+      idempotencyKey: "s486-financed-held-finalize", orgId: s.orgId, applicationId,
+    });
+    const finalized = await s.t.run(async (ctx) => ({
+      application: await ctx.db.get(applicationId),
+      deposit: await ctx.db.get(depositId),
+      receivable: await ctx.db.query("receivableDocuments")
+        .withIndex("by_org_source", (q) => q.eq("orgId", s.orgId)
+          .eq("sourceType", "finance_application").eq("sourceId", applicationId))
+        .unique(),
+    }));
+    expect(finalized.application?.status).toBe("CLOSED");
+    expect(finalized.application?.financeCompanyForwardDueMinor).toBe(1_575_000);
+    expect(finalized.deposit?.status).toBe("APPLIED");
+    expect(finalized.receivable).toMatchObject({
+      payerType: "FINANCE_COMPANY",
+      financeCompanyId: s.companyId,
+      originalAmountMinor: 12_500_000,
+      status: "OPEN",
+    });
+    const rows = await journalRows(s);
+    expectLiteralRows(rows, [
+      { account: "1100", currency: "JOD", debit: 200_000, credit: 0, entryStatus: "POSTED" },
+      { account: "2100", currency: "JOD", debit: 0, credit: 200_000, entryStatus: "POSTED" },
+      { account: "1210", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "4100", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
+      { account: "5100", currency: "JOD", debit: 10_000_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
+      { account: "4180", currency: "JOD", debit: 1_375_000, credit: 0, entryStatus: "POSTED" },
+      { account: "2220", currency: "JOD", debit: 0, credit: 1_375_000, entryStatus: "POSTED" },
+      { account: "2100", currency: "JOD", debit: 200_000, credit: 0, entryStatus: "POSTED" },
+      { account: "2220", currency: "JOD", debit: 0, credit: 200_000, entryStatus: "POSTED" },
+    ]);
+    expectBalanced(rows);
+    expect(await trialBalanceNormalBalance(s)).toEqual({
+      "1100|JOD": 200_000,
+      "1210|JOD": 12_500_000,
+      "1400|JOD": -10_000_000,
+      "2220|JOD": 1_575_000,
+      "4100|JOD": 12_500_000,
+      "4180|JOD": -1_375_000,
+      "5100|JOD": 10_000_000,
+    });
+
+    const paidAt = Date.now();
+    const forwardArgs = {
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER" as const, paidAt,
+      expectedAmountMinor: 1_575_000, reference: "CERT-FORWARD",
+      idempotencyKey: "s486-financed-held-forward",
+    };
+    await s.approver.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, forwardArgs);
+    const afterForward = await journalRows(s);
+    expectAdditionalRows(rows, afterForward, [
+      { account: "2220", currency: "JOD", debit: 1_575_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1110", currency: "JOD", debit: 0, credit: 1_575_000, entryStatus: "POSTED" },
+    ]);
+    expect(netByAccount(afterForward)).toEqual({
+      "1100|JOD": 200_000,
+      "1110|JOD": -1_575_000,
+      "1210|JOD": 12_500_000,
+      "1400|JOD": -10_000_000,
+      "4100|JOD": -12_500_000,
+      "4180|JOD": 1_375_000,
+      "5100|JOD": 10_000_000,
+    });
+    const afterForwardSnapshot = await dbSnapshot(s.t, Object.keys(schema.tables));
+    await s.approver.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, forwardArgs);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(afterForwardSnapshot);
+
+    const receiptArgs = {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: 12_500_000,
+      idempotencyKey: "s486-financed-held-receipt",
+    };
+    await s.approver.as.mutation(api.applications.confirmDisbursement, receiptArgs);
+    const afterReceipt = await journalRows(s);
+    expectAdditionalRows(afterForward, afterReceipt, [
+      { account: "1110", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1210", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
+    ]);
+    expect(netByAccount(afterReceipt)).toEqual({
+      "1100|JOD": 200_000,
+      "1110|JOD": 10_925_000,
+      "1400|JOD": -10_000_000,
+      "4100|JOD": -12_500_000,
+      "4180|JOD": 1_375_000,
+      "5100|JOD": 10_000_000,
+    });
+    expectBalanced(afterReceipt);
+    const paid = await s.t.run(async (ctx) => ({
+      application: await ctx.db.get(applicationId),
+      receivable: await ctx.db.query("receivableDocuments")
+        .withIndex("by_org_source", (q) => q.eq("orgId", s.orgId)
+          .eq("sourceType", "finance_application").eq("sourceId", applicationId))
+        .unique(),
+    }));
+    expect(paid.application?.disbursedAmountMinor).toBe(12_500_000);
+    expect(paid.receivable?.status).toBe("PAID");
+    const afterReceiptSnapshot = await dbSnapshot(s.t, Object.keys(schema.tables));
+    await s.approver.as.mutation(api.applications.confirmDisbursement, receiptArgs);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(afterReceiptSnapshot);
+    expect(await trialBalanceNormalBalance(s)).toEqual({
+      "1100|JOD": 200_000,
+      "1110|JOD": 10_925_000,
+      "1400|JOD": -10_000_000,
+      "4100|JOD": 12_500_000,
+      "4180|JOD": -1_375_000,
+      "5100|JOD": 10_000_000,
+    });
+  });
+
   test("owned configured financier × no deposit: full approved amount is company AR, not customer AR", async () => {
     const s = await seedFinancedDealership("s486financednone", {
       modules: MODULES,
