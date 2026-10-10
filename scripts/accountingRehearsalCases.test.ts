@@ -232,6 +232,25 @@ type Defects = {
   cashDepositRecognizedAsRevenue?: boolean;
   /** A second balanced deposit-time entry misclassifies the hold as OTHER_INCOME. */
   cashDepositRecognizedAsOtherIncome?: boolean;
+  cashRefundAllowsCreator?: boolean;
+  cashRefundRecognizedAsRevenue?: boolean;
+  cashRefundAllocatesIncoming?: boolean;
+  cashRefundCollectionWrongAmount?: boolean;
+  cashRefundPostsStrayBalanceEntry?: boolean;
+  cashRefundVoidsIncomingPayment?: boolean;
+  cashRefundAddsUnexcludedDepositTransaction?: boolean;
+  cashRefundPostsCompensatingJournals?: boolean;
+  cashRefundHidesDuplicateOnPage21?: boolean;
+  cashRefundEventPayloadWrongAmount?: boolean;
+  cashHeldReportHasUnrelatedBalance?: boolean;
+  cashRefundAddsCashMethodDuplicate?: boolean;
+  cashRefundCorruptsIncomingIdentity?: boolean;
+  cashRefundEventPayloadWrongDeposit?: boolean;
+  cashReceiptEventPayloadMissing?: boolean;
+  cashRefundAllocatesOutbound?: boolean;
+  cashDepositMissesCollectionMirror?: boolean;
+  cashDepositLeavesVehicleAvailable?: boolean;
+  cashRefundLeavesVehicleReserved?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
   eraseOnChequeReturn?: boolean;
   /** A returned cheque posts nothing at all — the books still say money arrived. */
@@ -325,6 +344,7 @@ function makeBackend(defects: Defects = {}) {
   const journalEntries: Array<Record<string, any>> = [];
   const journalLines = new Map<string, Array<Record<string, any>>>();
   const collectionPayments: Array<Record<string, any>> = [];
+  const operationalTransactions: Array<Record<string, any>> = [];
   const canonicalPayments = new Map<string, Record<string, any>>();
   const pendingEvents: Array<Record<string, any>> = [];
   const retained = new Map<string, { receiptMovementId: string; customerId: string; remainingUnappliedMinor: number; receiptPosted: boolean; applications: number }>();
@@ -350,6 +370,7 @@ function makeBackend(defects: Defects = {}) {
   const sales = new Map<string, Record<string, any>>();
   let certifiedCashSalePosted = false;
   let certifiedCashDepositId: string | undefined;
+  let certifiedCashRefundDepositId: string | undefined;
   /** The chart, keyed the way the product keys it, so lines resolve to system keys. */
   const CHART = [
     { _id: "acct_cash", code: defects.cashSaleWrongCashAccountCode ? "1000" : "1100", type: "ASSET", name: "Cash", systemKey: "CASH_ON_HAND", normalBalance: "DEBIT" },
@@ -520,7 +541,7 @@ function makeBackend(defects: Defects = {}) {
         (defects.doubleFootprintOnReplay || (receivableCommand && defects.doubleFootprintReceivablesOnly))
     );
 
-  const release = (args: Record<string, any>, authed: boolean) => {
+  const release = (args: Record<string, any>, authed: boolean, creatorSeat: boolean) => {
     if (!authed && !defects.acceptUnauthenticated) {
       return { ok: false as const, error: "Unauthenticated: You must be logged in." };
     }
@@ -536,6 +557,9 @@ function makeBackend(defects: Defects = {}) {
     }
     const deposit = deposits.get(args.depositId);
     if (!deposit) return { ok: false as const, error: "deposit not found" };
+    if (args.depositId === certifiedCashRefundDepositId && creatorSeat && !defects.cashRefundAllowsCreator) {
+      return { ok: false as const, error: "Deposit creator cannot resolve their own deposit refund or forfeiture." };
+    }
 
     const fingerprint = JSON.stringify([args.depositId, args.resolution, args.refundMethod]);
     if (args.idempotencyKey) {
@@ -570,14 +594,50 @@ function makeBackend(defects: Defects = {}) {
     deposit.refundedAmountMinor += payable;
     deposit.releaseCount += 1;
     if (deposit.freeMinor === 0 && deposit.committedMinor === 0) deposit.status = args.resolution;
+    if (deposit._id === certifiedCashRefundDepositId && !defects.cashRefundLeavesVehicleReserved) {
+      const vehicle = vehicles.get(deposit.vehicleId);
+      if (vehicle) {
+        vehicle.status = "AVAILABLE";
+        vehicle.preHoldStatus = undefined;
+      }
+    }
     if (periodStatus === "OPEN") {
       postRefundToTheBooks(deposit, payable, false);
+      if (deposit._id === certifiedCashRefundDepositId &&
+          defects.cashRefundAddsUnexcludedDepositTransaction) {
+        operationalTransactions.push({
+          type: "IN", category: "DEPOSIT", amount: payable / MINOR_SCALE,
+          date: Date.now(), excludedFromRevenue: false,
+        });
+      }
+      if (deposit._id === certifiedCashRefundDepositId &&
+          defects.cashRefundAllocatesIncoming && deposit.canonicalPaymentId) {
+        allocations.push({
+          orgId: "org_1", paymentId: deposit.canonicalPaymentId,
+          receivableDocumentId: "unrelated-invoice", amountMinor: payable,
+          currency: ORG_CURRENCY, scale: 3, status: "ACTIVE",
+        });
+      }
     } else {
       // No open period is a TEMPORARY HOLD: the decision stands, the posting
       // waits. Writing the journal anyway is the partial-post defect P1 hunts.
       if (defects.partialGlWhileClosed) postRefundToTheBooks(deposit, payable, false);
       if (!defects.loseThePostingWhileClosed) {
         pendingEvents.push({ _id: id("pev"), status: "PENDING", eventType: "DEPOSIT_REFUNDED" });
+      }
+    }
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundVoidsIncomingPayment &&
+        deposit.canonicalPaymentId) {
+      const incoming = canonicalPayments.get(deposit.canonicalPaymentId);
+      if (incoming) incoming.status = "VOIDED";
+    }
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundCorruptsIncomingIdentity &&
+        deposit.canonicalPaymentId) {
+      const incoming = canonicalPayments.get(deposit.canonicalPaymentId);
+      if (incoming) {
+        incoming.customerId = "other-customer";
+        incoming.payerType = "OTHER";
+        incoming.method = "OTHER";
       }
     }
     return { ok: true as const, value: null };
@@ -596,8 +656,35 @@ function makeBackend(defects: Defects = {}) {
         // An unbalanced entry is a GL that does not add up — B2's whole subject.
         { key: creditKey, creditMinor: defects.unbalancedJournal ? payable - 1 : creditAmount, customerId: deposit.customerId },
       ],
-      { unlinked: defects.refundEventUnlinked, payload: { depositId: deposit._id, amountMinor: payable } }
+      { unlinked: defects.refundEventUnlinked, payload: { depositId:
+        deposit._id === certifiedCashRefundDepositId && defects.cashRefundEventPayloadWrongDeposit
+          ? "other-deposit" : deposit._id,
+        amountMinor: deposit._id === certifiedCashRefundDepositId &&
+          defects.cashRefundEventPayloadWrongAmount ? payable - 1_000 : payable,
+        currency: ORG_CURRENCY, customerId: deposit.customerId, paymentMethod: "CASH" } }
     );
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundRecognizedAsRevenue) {
+      post("REFUND_REVENUE_ERROR", "deposits", deposit._id, [
+        { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", debitMinor: payable, customerId: deposit.customerId },
+        { key: "SALES_REVENUE", creditMinor: payable, customerId: deposit.customerId },
+      ]);
+    }
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundPostsStrayBalanceEntry) {
+      post("REFUND_BALANCE_ERROR", "deposits", deposit._id, [
+        { key: "BANK_ACCOUNT", debitMinor: payable, customerId: deposit.customerId },
+        { key: "UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY", creditMinor: payable, customerId: deposit.customerId },
+      ]);
+    }
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundPostsCompensatingJournals) {
+      post("PHANTOM_RECEIPT", "collectionPayments", id("phantom"), [
+        { key: "CASH_ON_HAND", debitMinor: payable, customerId: deposit.customerId },
+        { key: "CUSTOMER_DEPOSITS_LIABILITY", creditMinor: payable, customerId: deposit.customerId },
+      ]);
+      post("PHANTOM_PAYOUT", "collectionPayments", id("phantom"), [
+        { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: payable, customerId: deposit.customerId },
+        { key: "CASH_ON_HAND", creditMinor: payable, customerId: deposit.customerId },
+      ]);
+    }
     if (defects.duplicateRefundJournal && !isReplayDuplicate) {
       // A second, perfectly balanced entry for the same refund — B2 passes it.
       const entryId = id("je");
@@ -610,17 +697,36 @@ function makeBackend(defects: Defects = {}) {
     if (isReplayDuplicate) return;
     const canonicalId = id("cp");
     if (!defects.noCanonicalPayment) {
-      canonicalPayments.set(canonicalId, { _id: canonicalId, amountMinor: payable, status: "SETTLED" });
+      canonicalPayments.set(canonicalId, {
+        _id: canonicalId, orgId: "org_1", direction: "OUT", payerType: "CUSTOMER",
+        customerId: deposit.customerId, method: "CASH", amountMinor: payable,
+        currency: ORG_CURRENCY, scale: 3, status: "SETTLED",
+        idempotencyKey: `deposit_refund_${deposit._id}`,
+        externalReference: `Deposit refund ${deposit._id}`,
+      });
+    }
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundAllocatesOutbound) {
+      allocations.push({ orgId: "org_1", paymentId: canonicalId,
+        receivableDocumentId: "unrelated-invoice", amountMinor: payable,
+        currency: ORG_CURRENCY, scale: 3, status: "ACTIVE" });
     }
     collectionPayments.push({
       _id: id("colp"),
       vehicleId: deposit.vehicleId,
+      customerId: deposit.customerId,
       reference: `Deposit refund ${deposit._id}`,
       direction: "OUT",
       method: "REFUND",
-      amount: payable / MINOR_SCALE,
+      amount: deposit._id === certifiedCashRefundDepositId && defects.cashRefundCollectionWrongAmount
+        ? payable / MINOR_SCALE - 1
+        : payable / MINOR_SCALE,
+      status: "POSTED",
       canonicalPaymentId: defects.noCanonicalPayment ? undefined : canonicalId,
     });
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundAddsCashMethodDuplicate) {
+      const refund = collectionPayments[collectionPayments.length - 1];
+      collectionPayments.push({ ...refund, _id: id("colp"), method: "CASH" });
+    }
   }
 
   /** A customer receipt: cash in, against AR (allocated) or 2110 (on account). */
@@ -729,6 +835,8 @@ function makeBackend(defects: Defects = {}) {
           const creditMinor = lines.reduce((sum, line) => sum + line.creditMinor, 0);
           return [{ accountId: account._id, code: account.code, currency: ORG_CURRENCY,
             netMinor: (account.normalBalance === "DEBIT" ? debitMinor - creditMinor : creditMinor - debitMinor) +
+              (defects.cashHeldReportHasUnrelatedBalance && account.systemKey === "BANK_ACCOUNT" &&
+                deposits.get(certifiedCashRefundDepositId ?? "")?.status === "HELD" ? 200_000 : 0) +
               (defects.cashSaleInventoryReportNotCleared && certifiedCashSalePosted && account.systemKey === "VEHICLE_INVENTORY" ? 1 : 0) }];
         });
         return { ok: true as const, value: { rows } };
@@ -759,6 +867,16 @@ function makeBackend(defects: Defects = {}) {
           totalOtherIncome, totalOtherExpenses: 0,
           netIncome: grossProfit - totalExpenses + totalOtherIncome -
             (defects.cashSaleReportMisstatesProfit && certifiedCashSalePosted ? 1 : 0) } };
+      }
+      case "reports:getProfitAndLoss": {
+        const inWindow = operationalTransactions.filter((tx) =>
+          tx.date >= Number(args.startDate) && tx.date <= Number(args.endDate));
+        const totalRevenue = inWindow.filter((tx) => tx.type === "IN" &&
+          ["VEHICLE_SALE", "DEPOSIT"].includes(tx.category) && tx.excludedFromRevenue !== true)
+          .reduce((total, tx) => total + Number(tx.amount), 0);
+        return { ok: true as const, value: { totalRevenue, costOfGoodsSold: 0,
+          grossProfit: totalRevenue, operatingExpenses: 0, netProfit: totalRevenue,
+          grossTransactionValue: 0, transactions: inWindow } };
       }
       case "accountingPeriods:create":
         if (defects.clockRolloverAfterBookOpen) {
@@ -1097,9 +1215,10 @@ function makeBackend(defects: Defects = {}) {
         if (madeVehicle.ok) {
           vehicles.set(String(madeVehicle.value), {
             sourceType: args.sourceType,
+            status: args.status,
             purchasePrice: Number(args.sourceType === "SOURCED" ? args.sourceCost : (args.purchasePrice ?? 0)),
           });
-          if (/^rehearsal-m486c[12]-vehicle-/.test(String(args.idempotencyKey ?? "")) &&
+          if (/^rehearsal-m486c[123]-vehicle-/.test(String(args.idempotencyKey ?? "")) &&
               !defects.cashSaleAcquisitionMissingPosting) {
             const costMinor = defects.cashSaleAcquisitionWrongAmount ? 9_000_000 : 10_000_000;
             post("VEHICLE_ACQUIRED", "vehicles", String(madeVehicle.value), [
@@ -1109,6 +1228,8 @@ function makeBackend(defects: Defects = {}) {
           }
         }
         return madeVehicle;
+      case "vehicles:get":
+        return { ok: true as const, value: vehicles.get(String(args.vehicleId)) ?? null };
       case "quotes:saveQuote": {
         const quoteId = id("quote");
         quoteVehicle.set(quoteId, String(args.vehicleId ?? ""));
@@ -1121,8 +1242,11 @@ function makeBackend(defects: Defects = {}) {
         const replayed = replayableCreate("dep", args, true);
         if (replayed) return replayed;
         const depositId = id("dep");
-        if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c2-deposit-")) {
+        if (/^rehearsal-m486c[23]-deposit-/.test(String(args.idempotencyKey ?? ""))) {
           certifiedCashDepositId = depositId;
+        }
+        if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c3-deposit-")) {
+          certifiedCashRefundDepositId = depositId;
         }
         // Taking a deposit POSTS. Modelling that is not decoration: P1's first
         // cloud run failed because it measured its journal window from before
@@ -1141,6 +1265,16 @@ function makeBackend(defects: Defects = {}) {
           status: defects.cashDepositPaymentWrongStatus ? "DRAFT" : "SETTLED",
           idempotencyKey: `deposit_received_${depositId}`, externalReference: `Deposit ${depositId}`,
         });
+        if (depositId === certifiedCashRefundDepositId) operationalTransactions.push({
+          type: "IN", category: "DEPOSIT", amount: Number(args.amount),
+          date: Date.now(), excludedFromRevenue: true, depositId,
+        });
+        if (depositId === certifiedCashRefundDepositId && !defects.cashDepositMissesCollectionMirror) {
+          collectionPayments.push({ _id: id("colp"), orgId: String(args.orgId),
+            vehicleId: quoteVehicle.get(String(args.quoteId)), customerId: depositCustomerId,
+            reference: `Deposit ${depositId}`, direction: "IN", method: "CASH",
+            amount: Number(args.amount), status: "POSTED", canonicalPaymentId: paymentId });
+        }
         if (paymentId && defects.cashDepositPaymentPreallocated) allocations.push({
           orgId: String(args.orgId), paymentId, receivableDocumentId: "earlier-invoice",
           amountMinor: 1_000, currency: ORG_CURRENCY, scale: 3, status: "ACTIVE",
@@ -1149,7 +1283,11 @@ function makeBackend(defects: Defects = {}) {
           post("DEPOSIT_RECEIVED", "deposits", depositId, [
             { key: "CASH_ON_HAND", debitMinor: amountMinor, customerId: depositCustomerId },
             { key: "CUSTOMER_DEPOSITS_LIABILITY", creditMinor: amountMinor, customerId: depositCustomerId },
-          ]);
+          ], { payload: depositId === certifiedCashRefundDepositId &&
+            defects.cashReceiptEventPayloadMissing ? {} : {
+            depositId, amountMinor, currency: ORG_CURRENCY,
+            customerId: depositCustomerId, paymentMethod: "CASH",
+          } });
           if (defects.cashDepositRecognizedAsRevenue && certifiedCashDepositId === depositId) {
             post("DEPOSIT_REVENUE_ERROR", "deposits", depositId, [
               { key: "ACCOUNTS_RECEIVABLE_CUSTOMERS", debitMinor: amountMinor, customerId: depositCustomerId },
@@ -1169,13 +1307,20 @@ function makeBackend(defects: Defects = {}) {
           releasedAmountMinor: 0,
           refundedAmountMinor: 0,
           releaseCount: 0,
-          freeMinor: String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c2-deposit-") ? amountMinor : 2_000_000,
-          committedMinor: String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c2-deposit-") ? 0 : 1_000_000,
+          freeMinor: /^rehearsal-m486c[23]-deposit-/.test(String(args.idempotencyKey ?? "")) ? amountMinor : 2_000_000,
+          committedMinor: /^rehearsal-m486c[23]-deposit-/.test(String(args.idempotencyKey ?? "")) ? 0 : 1_000_000,
           vehicleId: quoteVehicle.get(String(args.quoteId)) ?? String(args.vehicleId ?? ""),
           customerId: depositCustomerId,
           status: "HELD",
           amountMinor,
         });
+        if (depositId === certifiedCashRefundDepositId && !defects.cashDepositLeavesVehicleAvailable) {
+          const vehicle = vehicles.get(quoteVehicle.get(String(args.quoteId)) ?? "");
+          if (vehicle) {
+            vehicle.preHoldStatus = vehicle.status;
+            vehicle.status = "RESERVED";
+          }
+        }
         if (args.idempotencyKey) createdByKey.set(args.idempotencyKey, depositId);
         return { ok: true as const, value: depositId };
       }
@@ -1368,11 +1513,28 @@ function makeBackend(defects: Defects = {}) {
                 : []
               : [...pendingEvents],
         };
-      case "collections:listPayments":
+      case "collections:listPayments": {
+        if (defects.cashRefundHidesDuplicateOnPage21 && certifiedCashRefundDepositId) {
+          const refund = collectionPayments.find((row) =>
+            String(row.reference ?? "").includes(String(certifiedCashRefundDepositId)) && row.direction === "OUT");
+          if (refund) {
+            const filler = Array.from({ length: 1999 }, (_, index) => ({
+              _id: `filler-${index}`, direction: "IN", method: "CASH", amount: 1,
+            }));
+            const all = [refund, ...filler, { ...refund, _id: "hidden-duplicate-refund" }];
+            const cursor = Number(args.paginationOpts?.cursor ?? 0);
+            const page = all.slice(cursor, cursor + 100);
+            const nextCursor = cursor + page.length;
+            return { ok: true as const, value: {
+              page, isDone: nextCursor >= all.length, continueCursor: String(nextCursor),
+            } };
+          }
+        }
         return {
           ok: true as const,
           value: { page: [...collectionPayments], isDone: true, continueCursor: null },
         };
+      }
       case "subledger:getPaymentBalance": {
         const payment = canonicalPayments.get(args.paymentId);
         const activeAllocatedMinor = allocations.filter((row) => row.paymentId === args.paymentId && row.status === "ACTIVE")
@@ -1396,7 +1558,7 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: null };
       }
       case "deposits:release":
-        return release(args, authed);
+        return release(args, authed, canManageFinance);
       case "deposits:listByVehicle":
         // Actually FILTERS. Returning every deposit made RT1's "one row for this
         // vehicle" assertion unsatisfiable against a healthy backend, which
@@ -1845,7 +2007,7 @@ describe("the rehearsal passes against a backend that behaves", () => {
     expect(declined.map((d) => `${d.id}: ${d.detail}`)).toEqual([]);
     // And it actually ran the cases rather than finding nothing to do.
     expect(results.map((r) => r.id).sort()).toEqual([...REQUIRED_REHEARSAL_CASE_IDS].sort());
-    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "FD1", "FD2", "C1", "C2"]) {
+    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "FD1", "FD2", "C1", "C2"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
   });
@@ -2068,6 +2230,41 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     const results = await runAgainst({ cashSaleInvoiceListingTruncated: true });
     expect(statusOf(results, "M486C2")).toBe("UNPROVEN");
     expect(String(results.find((r) => r.id === "M486C2")?.detail)).toMatch(/tenant invoice listing is absent or truncated/);
+  });
+
+  test.each([
+    ["cashRefundAllowsCreator", /creator was not refused/],
+    ["cashRefundRecognizedAsRevenue", /exactly the receipt and refund events|refunded (balance|income)/],
+    ["cashRefundAllocatesIncoming", /refund does not allocate|refund creates no incoming payment allocation/],
+    ["cashRefundCollectionWrongAmount", /refund collection payment major amount/],
+    ["cashRefundPostsStrayBalanceEntry", /exactly the receipt and refund events|returns every account\/currency/],
+    ["cashRefundVoidsIncomingPayment", /incoming payment status/],
+    ["cashRefundAddsUnexcludedDepositTransaction", /operational profit report/],
+    ["cashRefundPostsCompensatingJournals", /unexpected journal entries/],
+    ["cashRefundEventPayloadWrongAmount", /refund event payload amount/],
+    ["cashHeldReportHasUnrelatedBalance", /held account\/currency balances/],
+    ["cashRefundAddsCashMethodDuplicate", /collection payment census/],
+    ["cashRefundCorruptsIncomingIdentity", /incoming payment (payerType|customerId|method)/],
+    ["cashRefundEventPayloadWrongDeposit", /refund event payload deposit/],
+    ["cashReceiptEventPayloadMissing", /receipt event payload deposit/],
+    ["cashRefundAllocatesOutbound", /outbound payment has no allocations/],
+    ["cashDepositMissesCollectionMirror", /collection payment census/],
+    ["cashDepositLeavesVehicleAvailable", /held deposit reserves the owned car/],
+    ["cashRefundLeavesVehicleReserved", /refund restores available stock/],
+    ["cashDepositPaymentWrongCustomer", /incoming payment customer/],
+    ["cashDepositPaymentWrongMethod", /incoming payment method/],
+    ["refundPostsWrongAccount", /cash refund|journal lines are not exactly/i],
+  ] as const)("M486C3 rejects %s in an owned cash quote refund", async (defect, diagnostic) => {
+    const results = await runAgainst({ [defect]: true });
+    expect(statusOf(results, "M486C3")).toBe("FAIL");
+    expect(String(results.find((row) => row.id === "M486C3")?.detail)).toMatch(diagnostic);
+  });
+
+  test("M486C3 marks a truncated refund-payment census unavailable", async () => {
+    const results = await runAgainst({ cashRefundHidesDuplicateOnPage21: true });
+    expect(statusOf(results, "M486C3")).toBe("UNPROVEN");
+    expect(String(results.find((row) => row.id === "M486C3")?.detail))
+      .toMatch(/collection payment listing exceeds the rehearsal page cap/);
   });
 
   test.each([

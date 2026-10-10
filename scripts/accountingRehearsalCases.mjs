@@ -24,7 +24,7 @@
 // executed IDs, and the real-preview validator uses the same list.
 export const REQUIRED_REHEARSAL_CASE_IDS = Object.freeze([
   "A1", "A2", "D1", "D2", "D3", "D4", "C1", "C2", "UNAUTH", "TEN", "A3",
-  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "FD1", "FD2", "P1", "SETUP",
+  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "FD1", "FD2", "P1", "SETUP",
 ]);
 
 function fail(message) {
@@ -1868,14 +1868,7 @@ export async function runRehearsalCases(ctx) {
   // the product's public quote, deposit and sale paths, then checks the
   // original invoice and the actual liability-to-receivable journal.
   await recordCase(results, "M486C2", "SCRUM-486: owned cash sale applies a 200 JOD held deposit to receivable, never revenue", async () => {
-    const denom = await orgDenomination({ orgId, ownerMust });
-    if (denom.currency !== "JOD" || denom.decimals !== 3) {
-      unproven("M486C2 requires the certified JOD denomination and three minor-unit decimals");
-    }
-    const monthStart = new Date();
-    const fromDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth(), 1);
-    const toDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0, 23, 59, 59, 999);
-    const reportArgs = { orgId, fromDate, toDate };
+    const { fromDate, toDate, reportArgs } = await ownedCashJodWindow({ caseId: "M486C2", orgId, ownerMust });
     const { stamp, customerId, vehicleId, quoteId } =
       await createOwnedCashCertificationQuote("M486C2", "applied");
     const openingBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
@@ -2057,6 +2050,228 @@ export async function runRehearsalCases(ctx) {
       commandsExercised: ["quotes.saveQuote", "deposits.create", "sales.create"],
       reportsRead: ["accountingReports.trialBalance", "accountingReports.incomeStatement",
         "subledger.listAllocations", "subledger.getPaymentBalance"] };
+  });
+
+  // SCRUM-486 owned CASH quote: return the held 200 JOD before a sale exists.
+  // The acquisition is the baseline, so only the deposit movements may
+  // change cash or its liability. A separate manager resolves the money.
+  await recordCase(results, "M486C3", "SCRUM-486: an owned cash quote's held deposit is refunded without sale income", async () => {
+    const { fromDate, toDate, reportArgs } = await ownedCashJodWindow({ caseId: "M486C3", orgId, ownerMust });
+    const { stamp, customerId, vehicleId, quoteId } =
+      await createOwnedCashCertificationQuote("M486C3", "refunded");
+    const chart = await ownerMust("query", "chartOfAccounts:list", { orgId });
+    const keyOf = new Map((chart ?? []).map((a) => [String(a._id), a.systemKey ?? a.code ?? "?"]));
+    const net = (report, key) => (report?.rows ?? [])
+      .filter((row) => row.currency === "JOD" && keyOf.get(String(row.accountId)) === key)
+      .reduce((sum, row) => sum + row.netMinor, 0);
+    const acquisition = await eventAndJournal({
+      orgId, ownerMust, sourceType: "vehicles", sourceId: vehicleId, eventType: "VEHICLE_ACQUIRED",
+    });
+    expectExactLines(acquisition.lines, keyOf, [
+      { key: "VEHICLE_INVENTORY", debitMinor: 10_000_000 },
+      { key: "CASH_ON_HAND", creditMinor: 10_000_000 },
+    ], { currency: "JOD", decimals: 3, what: "M486C3 owned vehicle acquisition" });
+    const openingBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    const openingIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const operationalArgs = { orgId, startDate: fromDate, endDate: toDate };
+    const openingOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
+    const openingEntries = await allJournalEntries({ orgId, ownerMust });
+    const openingCollectionPayments = await listCollectionPayments({ orgId, ownerMust });
+    const beforeReceivables = await ownerMust("query", "subledger:listReceivables", { orgId, limit: 200 });
+    if (!Array.isArray(beforeReceivables) || beforeReceivables.length >= 200) {
+      unproven("M486C3 tenant invoice listing is absent or truncated before refund");
+    }
+    const depositId = await ownerMust("mutation", "deposits:create", {
+      orgId, quoteId, amount: 200, method: "CASH",
+      idempotencyKey: `rehearsal-m486c3-deposit-${stamp}`,
+    });
+    const held = await readDeposit({ orgId, vehicleId, depositId, ownerMust });
+    expectEqual(held.status, "HELD", "M486C3 deposit held before refund");
+    expectEqual(held.amountMinor, 200_000, "M486C3 held deposit amount");
+    if (!held.canonicalPaymentId) fail("M486C3 held deposit has no canonical payment");
+    const incoming = await ownerMust("query", "subledger:getPaymentBalance", {
+      orgId, paymentId: held.canonicalPaymentId,
+    });
+    expectC3IncomingPayment(incoming?.payment, { orgId, customerId, depositId,
+      paymentId: held.canonicalPaymentId });
+    expectEqual(incoming?.unappliedMinor, 200_000, "M486C3 held payment remains unapplied");
+    const heldAllocations = await ownerMust("query", "subledger:listAllocations", {
+      orgId, paymentId: held.canonicalPaymentId,
+    });
+    expectEqual(heldAllocations?.length, 0, "M486C3 held payment has no invoice allocation");
+    const heldVehicle = await ownerMust("query", "vehicles:get", { orgId, vehicleId });
+    expectEqual(heldVehicle?.status, "RESERVED", "M486C3 held deposit reserves the owned car");
+    expectEqual(heldVehicle?.preHoldStatus, "AVAILABLE", "M486C3 hold remembers available stock");
+    const heldBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    const heldIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const heldOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
+    expectSameOperationalProfit(openingOperational, heldOperational, "M486C3 held deposit");
+    if (![openingBalance, heldBalance].every((report) => Array.isArray(report?.rows))) {
+      fail("M486C3 public trial balance is unavailable before refund");
+    }
+    expectHeldDepositAccountDeltas(openingBalance, heldBalance, keyOf,
+      "M486C3 held account/currency balances");
+    const releaseArgs = {
+      orgId, depositId, resolution: "REFUNDED", refundMethod: "CASH",
+      idempotencyKey: `rehearsal-m486c3-refund-${stamp}`,
+    };
+    const creatorAttempt = await ownerCall("mutation", "deposits:release", releaseArgs);
+    if (creatorAttempt.ok || !/Deposit creator cannot resolve/i.test(creatorAttempt.error)) {
+      fail("M486C3 deposit creator was not refused by the segregation-of-duties rule");
+    }
+    const afterRefusal = await readDeposit({ orgId, vehicleId, depositId, ownerMust });
+    expectEqual(afterRefusal.status, "HELD", "M486C3 refused creator cannot change deposit status");
+    expectEqual(afterRefusal.releaseCount ?? 0, 0, "M486C3 refused creator cannot count a release");
+    const refusedEvents = await ownerMust("query", "accountingLedger:listAccountingEvents", {
+      orgId, sourceType: "deposits", sourceId: String(depositId), limit: 200,
+    });
+    expectEqual((refusedEvents ?? []).filter((e) => e.eventType === "DEPOSIT_REFUNDED").length,
+      0, "M486C3 refused creator cannot post a refund event");
+    const refusedBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    const refusedIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const refusedOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
+    expectSameOperationalProfit(heldOperational, refusedOperational, "M486C3 refused creator");
+    if (!Array.isArray(refusedBalance?.rows)) fail("M486C3 public balance unavailable after refused creator");
+    for (const key of ["CASH_ON_HAND", "CUSTOMER_DEPOSITS_LIABILITY",
+      "ACCOUNTS_RECEIVABLE_CUSTOMERS", "SALES_REVENUE", "COST_OF_VEHICLES_SOLD"]) {
+      expectEqual(net(refusedBalance, key), net(heldBalance, key),
+        `M486C3 refused creator cannot change ${key}`);
+    }
+    for (const field of ["totalRevenue", "totalCogs", "grossProfit", "totalExpenses",
+      "totalOtherIncome", "totalOtherExpenses", "netIncome"]) {
+      if (![openingIncome?.[field], heldIncome?.[field], refusedIncome?.[field]]
+        .every(Number.isFinite)) fail(`M486C3 public income ${field} is unavailable`);
+      expectEqual(refusedIncome[field], heldIncome[field],
+        `M486C3 refused creator cannot change income ${field}`);
+    }
+    await resolverMust("mutation", "deposits:release", releaseArgs);
+    if (Date.now() > toDate || Date.now() < fromDate) {
+      unproven("M486C3 crossed its UTC accounting month during deposit refund");
+    }
+    const refunded = await readDeposit({ orgId, vehicleId, depositId, ownerMust });
+    expectEqual(refunded.status, "REFUNDED", "M486C3 deposit is refunded");
+    expectEqual(refunded.releasedAmountMinor, 200_000, "M486C3 released amount");
+    expectEqual(refunded.refundedAmountMinor, 200_000, "M486C3 refunded amount");
+    expectEqual(refunded.releaseCount, 1, "M486C3 one refund decision");
+    const refundedVehicle = await ownerMust("query", "vehicles:get", { orgId, vehicleId });
+    expectEqual(refundedVehicle?.status, "AVAILABLE", "M486C3 refund restores available stock");
+    if (refundedVehicle?.preHoldStatus != null) {
+      fail("M486C3 refund left a stale vehicle pre-hold status");
+    }
+    const incomingAfterRefund = await ownerMust("query", "subledger:getPaymentBalance", {
+      orgId, paymentId: held.canonicalPaymentId,
+    });
+    expectC3IncomingPayment(incomingAfterRefund?.payment, { orgId, customerId, depositId,
+      paymentId: held.canonicalPaymentId });
+    expectEqual(incomingAfterRefund?.unappliedMinor, 200_000,
+      "M486C3 refund does not allocate the incoming deposit payment");
+    const refundAllocations = await ownerMust("query", "subledger:listAllocations", {
+      orgId, paymentId: held.canonicalPaymentId,
+    });
+    expectEqual(refundAllocations?.length, 0,
+      "M486C3 refund creates no incoming payment allocation");
+    const received = await eventAndJournal({
+      orgId, ownerMust, sourceType: "deposits", sourceId: depositId, eventType: "DEPOSIT_RECEIVED",
+    });
+    expectExactLines(received.lines, keyOf, [
+      { key: "CASH_ON_HAND", debitMinor: 200_000 },
+      { key: "CUSTOMER_DEPOSITS_LIABILITY", creditMinor: 200_000 },
+    ], { currency: "JOD", decimals: 3, what: "M486C3 deposit receipt", customerId });
+    expectC3DepositEventPayload(received.event, "receipt", { depositId, customerId });
+    const refund = await eventAndJournal({
+      orgId, ownerMust, sourceType: "deposits", sourceId: depositId, eventType: "DEPOSIT_REFUNDED",
+    });
+    expectExactLines(refund.lines, keyOf, [
+      { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: 200_000 },
+      { key: "CASH_ON_HAND", creditMinor: 200_000 },
+    ], { currency: "JOD", decimals: 3, what: "M486C3 cash refund", customerId });
+    expectC3DepositEventPayload(refund.event, "refund", { depositId, customerId });
+    const depositEvents = await ownerMust("query", "accountingLedger:listAccountingEvents", {
+      orgId, sourceType: "deposits", sourceId: String(depositId), limit: 200,
+    });
+    if (!Array.isArray(depositEvents) || depositEvents.length >= 200) {
+      unproven("M486C3 deposit event listing is absent or truncated");
+    }
+    expectEqual(JSON.stringify(depositEvents.map((event) => event.eventType).sort()),
+      JSON.stringify(["DEPOSIT_RECEIVED", "DEPOSIT_REFUNDED"]),
+      "M486C3 exactly the receipt and refund events, with no extra deposit posting");
+    const finalEntries = await allJournalEntries({ orgId, ownerMust });
+    expectOnlyJournalEntriesAdded(openingEntries, finalEntries,
+      [received.entry._id, refund.entry._id], "M486C3 unexpected journal entries");
+    const payments = await listCollectionPayments({ orgId, ownerMust });
+    const { inbound, outbound } = expectC3CollectionPaymentCensus(openingCollectionPayments, payments);
+    expectEqual(String(inbound.customerId), String(customerId),
+      "M486C3 incoming collection payment customer");
+    expectEqual(String(inbound.vehicleId), String(vehicleId),
+      "M486C3 incoming collection payment vehicle");
+    expectEqual(inbound.method, "CASH", "M486C3 incoming collection payment method");
+    expectEqual(inbound.amount, 200, "M486C3 incoming collection payment major amount");
+    expectEqual(inbound.status, "POSTED", "M486C3 incoming collection payment status");
+    expectEqual(inbound.reference, `Deposit ${depositId}`, "M486C3 incoming collection payment reference");
+    expectEqual(String(inbound.canonicalPaymentId), String(held.canonicalPaymentId),
+      "M486C3 incoming collection payment canonical identity");
+    expectEqual(String(outbound.customerId), String(customerId),
+      "M486C3 refund collection payment customer");
+    expectEqual(String(outbound.vehicleId), String(vehicleId),
+      "M486C3 refund collection payment vehicle");
+    expectEqual(outbound.method, "REFUND", "M486C3 refund collection payment method");
+    expectEqual(outbound.reference, `Deposit refund ${depositId}`,
+      "M486C3 refund collection payment reference");
+    expectEqual(outbound.amount, 200, "M486C3 refund collection payment major amount");
+    expectEqual(outbound.status, "POSTED", "M486C3 refund collection payment status");
+    if (!outbound.canonicalPaymentId) fail("M486C3 refund has no canonical payment");
+    const refundPayment = await ownerMust("query", "subledger:getPaymentBalance", {
+      orgId, paymentId: outbound.canonicalPaymentId,
+    });
+    const refundCanonical = refundPayment?.payment;
+    if (!refundCanonical) fail("M486C3 outbound refund canonical payment cannot be read");
+    expectEqual(String(refundCanonical._id), String(outbound.canonicalPaymentId),
+      "M486C3 outbound refund canonical payment identity");
+    for (const [field, expected] of [
+      ["orgId", String(orgId)], ["direction", "OUT"], ["payerType", "CUSTOMER"],
+      ["customerId", String(customerId)], ["method", "CASH"], ["amountMinor", 200_000],
+      ["currency", "JOD"], ["scale", 3], ["status", "SETTLED"],
+      ["idempotencyKey", `deposit_refund_${depositId}`],
+      ["externalReference", `Deposit refund ${depositId}`],
+    ]) expectEqual(field.endsWith("Id") ? String(refundCanonical[field]) : refundCanonical[field],
+      expected, `M486C3 outbound canonical payment ${field}`);
+    const outboundAllocations = await ownerMust("query", "subledger:listAllocations", {
+      orgId, paymentId: outbound.canonicalPaymentId,
+    });
+    expectEqual(outboundAllocations?.length, 0, "M486C3 outbound payment has no allocations");
+    const afterBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    const afterIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const afterOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
+    expectSameOperationalProfit(openingOperational, afterOperational, "M486C3 operational profit report");
+    if (!Array.isArray(afterBalance?.rows)) fail("M486C3 public balance unavailable after refund");
+    expectSameAccountBalances(openingBalance, afterBalance,
+      "M486C3 refund returns every account/currency to its post-acquisition balance");
+    for (const [key, heldDelta] of [
+      ["CASH_ON_HAND", 200_000], ["CUSTOMER_DEPOSITS_LIABILITY", 200_000],
+      ["ACCOUNTS_RECEIVABLE_CUSTOMERS", 0], ["SALES_REVENUE", 0], ["COST_OF_VEHICLES_SOLD", 0],
+    ]) {
+      expectEqual(net(heldBalance, key) - net(openingBalance, key), heldDelta, `M486C3 held balance ${key}`);
+      expectEqual(net(afterBalance, key) - net(openingBalance, key), 0, `M486C3 refunded balance ${key}`);
+    }
+    for (const field of ["totalRevenue", "totalCogs", "grossProfit", "totalExpenses",
+      "totalOtherIncome", "totalOtherExpenses", "netIncome"]) {
+      expectEqual(heldIncome?.[field], openingIncome?.[field], `M486C3 held income ${field}`);
+      expectEqual(afterIncome?.[field], openingIncome?.[field], `M486C3 refunded income ${field}`);
+    }
+    const afterReceivables = await ownerMust("query", "subledger:listReceivables", { orgId, limit: 200 });
+    if (!Array.isArray(afterReceivables) || afterReceivables.length >= 200) {
+      unproven("M486C3 tenant invoice listing is absent or truncated after refund");
+    }
+    const ordered = (rows) => JSON.stringify([...rows].sort((a, b) =>
+      String(a._id).localeCompare(String(b._id))));
+    if (ordered(afterReceivables) !== ordered(beforeReceivables)) {
+      fail("M486C3 refund before sale must not create or modify a tenant receivable");
+    }
+    return { depositId: String(depositId), refundedMinor: 200_000,
+      commandsExercised: ["quotes.saveQuote", "deposits.create", "deposits.release"],
+      reportsRead: ["accountingReports.trialBalance", "accountingReports.incomeStatement",
+        "reports.getProfitAndLoss", "subledger.getPaymentBalance", "subledger.listReceivables",
+        "accountingLedger.listJournalEntries"] };
   });
 
   // ── FD1 — the financed deal's cash receipt settles the exact recorded debt ──
@@ -2850,11 +3065,15 @@ async function listCollectionPayments({ orgId, ownerMust }) {
       orgId,
       paginationOpts: { numItems: 100, cursor },
     });
-    rows.push(...(result?.page ?? []));
-    if (result?.isDone || !result?.continueCursor) break;
+    if (!Array.isArray(result?.page)) unproven("collection payment listing has no page");
+    rows.push(...result.page);
+    if (result.isDone) return rows;
+    if (!result.continueCursor || result.continueCursor === cursor) {
+      unproven("collection payment listing has no advancing cursor");
+    }
     cursor = result.continueCursor;
   }
-  return rows;
+  unproven("collection payment listing exceeds the rehearsal page cap");
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -2922,11 +3141,15 @@ async function allJournalEntries({ orgId, ownerMust, periodId, accountId }) {
       ...(accountId ? { accountId } : {}),
       paginationOpts: { numItems: 100, cursor },
     });
-    rows.push(...(result?.page ?? []));
-    if (result?.isDone || !result?.continueCursor) break;
+    if (!Array.isArray(result?.page)) unproven("journal entry listing has no page");
+    rows.push(...result.page);
+    if (result.isDone) return rows;
+    if (!result.continueCursor || result.continueCursor === cursor) {
+      unproven("journal entry listing has no advancing cursor");
+    }
     cursor = result.continueCursor;
   }
-  return rows;
+  unproven("journal entry listing exceeds the rehearsal page cap");
 }
 
 /**
@@ -2968,6 +3191,135 @@ async function orgDenomination({ orgId, ownerMust }) {
     );
   }
   return { currency, decimals, minorPerMajor: 10 ** decimals, source: explicit ? "orgSettings.currency" : "product default" };
+}
+
+/** The literal JOD accounting month used by the owned CASH certification rows. */
+async function ownedCashJodWindow({ caseId, orgId, ownerMust }) {
+  const denom = await orgDenomination({ orgId, ownerMust });
+  if (denom.currency !== "JOD" || denom.decimals !== 3) {
+    unproven(`${caseId} requires the certified JOD denomination and three minor-unit decimals`);
+  }
+  const monthStart = new Date();
+  const fromDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth(), 1);
+  const toDate = Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0, 23, 59, 59, 999);
+  return { fromDate, toDate, reportArgs: { orgId, fromDate, toDate } };
+}
+
+/** Compare every consumer-visible account/currency balance, including accounts absent when zero. */
+function expectSameAccountBalances(before, after, what, expectedDeltas = new Map()) {
+  const balances = (report) => {
+    if (!Array.isArray(report?.rows)) fail(`${what}: trial-balance rows are unavailable`);
+    const byAccount = new Map();
+    for (const row of report.rows) {
+      if (!row.accountId || typeof row.currency !== "string" || !Number.isFinite(row.netMinor)) {
+        fail(`${what}: trial-balance account, currency or net amount is unavailable`);
+      }
+      const key = JSON.stringify([String(row.accountId), row.currency]);
+      if (byAccount.has(key)) fail(`${what}: duplicate account/currency row`);
+      byAccount.set(key, row.netMinor);
+    }
+    return byAccount;
+  };
+  const beforeRows = balances(before);
+  const afterRows = balances(after);
+  for (const key of new Set([...beforeRows.keys(), ...afterRows.keys()])) {
+    expectEqual(afterRows.get(key) ?? 0, (beforeRows.get(key) ?? 0) + (expectedDeltas.get(key) ?? 0),
+      `${what}: ${key}`);
+  }
+}
+
+/** A held CASH deposit changes only cash and the deposit liability across the whole chart. */
+function expectHeldDepositAccountDeltas(before, after, keyOf, what) {
+  const expectedDeltas = new Map();
+  for (const [accountId, systemKey] of keyOf) {
+    if (["CASH_ON_HAND", "CUSTOMER_DEPOSITS_LIABILITY"].includes(systemKey)) {
+      expectedDeltas.set(JSON.stringify([accountId, "JOD"]), 200_000);
+    }
+  }
+  if (expectedDeltas.size !== 2) unproven(`${what}: required chart accounts are unavailable`);
+  expectSameAccountBalances(before, after, what, expectedDeltas);
+}
+
+/** Bind both reads of the original cash receipt to the same literal identity. */
+function expectC3IncomingPayment(payment, { orgId, customerId, depositId, paymentId }) {
+  for (const [field, expected] of [
+    ["_id", String(paymentId)], ["orgId", String(orgId)], ["direction", "IN"],
+    ["payerType", "CUSTOMER"], ["customerId", String(customerId)],
+    ["method", "CASH"], ["amountMinor", 200_000], ["currency", "JOD"],
+    ["scale", 3], ["status", "SETTLED"],
+    ["idempotencyKey", `deposit_received_${depositId}`],
+    ["externalReference", `Deposit ${depositId}`],
+  ]) {
+    const actual = ["_id", "orgId", "customerId"].includes(field)
+      ? String(payment?.[field]) : payment?.[field];
+    expectEqual(actual, expected, `M486C3 incoming payment ${field}`);
+  }
+}
+
+/** The event carries the economic facts that the posting rule consumed. */
+function expectC3DepositEventPayload(event, phase, { depositId, customerId }) {
+  for (const [field, expected] of [
+    ["depositId", String(depositId)], ["amountMinor", 200_000],
+    ["currency", "JOD"], ["customerId", String(customerId)],
+    ["paymentMethod", "CASH"],
+  ]) {
+    const actual = ["depositId", "customerId"].includes(field)
+      ? String(event?.payload?.[field]) : event?.payload?.[field];
+    expectEqual(actual, expected, `M486C3 ${phase} event payload ${field}`);
+  }
+}
+
+/** Select new collection rows by identity first, then validate their economic fields. */
+function expectC3CollectionPaymentCensus(before, after) {
+  const ids = (rows) => {
+    const values = rows.map((row) => String(row?._id ?? ""));
+    if (values.some((id) => !id) || new Set(values).size !== values.length) {
+      unproven("M486C3 collection payment census has missing or duplicate ids");
+    }
+    return new Set(values);
+  };
+  const original = ids(before);
+  const final = ids(after);
+  for (const id of original) {
+    if (!final.has(id)) fail("M486C3 collection payment census lost an existing row");
+  }
+  const added = after.filter((row) => !original.has(String(row._id)));
+  expectEqual(added.length, 2, "M486C3 collection payment census adds exactly two rows");
+  const incoming = added.filter((row) => row.direction === "IN");
+  const outgoing = added.filter((row) => row.direction === "OUT");
+  expectEqual(incoming.length, 1, "M486C3 collection payment census has one incoming row");
+  expectEqual(outgoing.length, 1, "M486C3 collection payment census has one outbound row");
+  return { inbound: incoming[0], outbound: outgoing[0] };
+}
+
+/** Compare the public operational P&L, which is sourced from transactions rather than the GL. */
+function expectSameOperationalProfit(before, after, what) {
+  for (const field of ["totalRevenue", "costOfGoodsSold", "grossProfit",
+    "operatingExpenses", "netProfit", "grossTransactionValue"]) {
+    if (![before?.[field], after?.[field]].every(Number.isFinite)) {
+      unproven(`${what}: operational profit report ${field} is unavailable`);
+    }
+    expectEqual(after[field], before[field], `${what}: operational profit report ${field}`);
+  }
+}
+
+/** Require only the two named refund-cycle postings in the org-wide journal census. */
+function expectOnlyJournalEntriesAdded(before, after, expectedIds, what) {
+  const ids = (entries) => {
+    const values = entries.map((entry) => String(entry?._id ?? ""));
+    if (values.some((id) => !id) || new Set(values).size !== values.length) {
+      unproven(`${what}: journal census has missing or duplicate ids`);
+    }
+    return new Set(values);
+  };
+  const original = ids(before);
+  const final = ids(after);
+  for (const id of original) {
+    if (!final.has(id)) fail(`${what}: an existing journal entry disappeared`);
+  }
+  const added = [...final].filter((id) => !original.has(id)).sort();
+  const expected = expectedIds.map(String).sort();
+  expectEqual(JSON.stringify(added), JSON.stringify(expected), what);
 }
 
 /** account id → system key, and system key → account id, from the org's real chart. */
