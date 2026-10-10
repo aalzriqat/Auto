@@ -15,7 +15,7 @@
  * cannot interleave anything. Real interleaving is exactly what the cloud run
  * exists for, and nothing here substitutes for it.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -24,8 +24,17 @@ import {
   assertBothAttemptsExecuted,
   createVehicleForRehearsal,
   REQUIRED_REHEARSAL_CASE_IDS,
+  fd1DirectPaymentTime,
   runRehearsalCases,
 } from "./accountingRehearsalCases.mjs";
+
+describe("FD1 direct-payment date", () => {
+  test("stays inside the opened UTC month during its first minute", () => {
+    const start = Date.UTC(2026, 0, 1);
+    expect(fd1DirectPaymentTime(start + 30_000)).toBe(start);
+    expect(fd1DirectPaymentTime(start + 61_000)).toBe(start + 1_000);
+  });
+});
 
 describe("vehicle fixture rate-limit retry", () => {
   test("retries only the known transient vehicles:create rate-limit refusal", async () => {
@@ -206,6 +215,20 @@ type Defects = {
   financeReceiptDoubleOnReplay?: boolean;
   /** The receipt posts and allocates but the canonical receivable is left OPEN. */
   financeReceivableNotSettled?: boolean;
+  /** A fake backend accepts the direct-payment command without paying the handover cost. */
+  financeDirectPaymentSkipped?: boolean;
+  /** A fee is marked paid but its direct-payment journal is never posted. */
+  financeDirectPaymentPostingSkipped?: boolean;
+  /** The full-transfer route incorrectly accepts a fee withheld by the finance company. */
+  financeDeductedFeeAccepted?: boolean;
+  /** A refused deducted-cost close still changes the application to CLOSED. */
+  financeDeductedCloseMutatesThenRefuses?: boolean;
+  /** A short finance-company receipt is refused for an unrelated reason. */
+  financeReceiptWrongRefusalReason?: boolean;
+  /** The clock crosses UTC month-end after the accounting period opens. */
+  clockRolloverAfterBookOpen?: boolean;
+  /** Observe the external direct-payment request without claiming every later posting succeeded. */
+  captureDirectPaymentDate?: (paidAt: number) => void;
   // ── FD2 — deal costs denominated once (SCRUM-319) ──
   /** A cost entered in a foreign currency is recorded anyway — the integer lands at the wrong scale. */
   feeAcceptsForeignCurrency?: boolean;
@@ -275,6 +298,8 @@ function makeBackend(defects: Defects = {}) {
     { _id: "acct_draw", code: "3100", type: "EQUITY", name: "Partner Drawings", systemKey: "PARTNER_DRAWINGS", normalBalance: "DEBIT" },
     { _id: "acct_exp", code: "6000", type: "EXPENSE", name: "General Expense", systemKey: "GENERAL_EXPENSE", normalBalance: "DEBIT" },
     { _id: "acct_arfc", code: "1210", type: "ASSET", name: "AR Finance Companies", systemKey: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", normalBalance: "DEBIT" },
+    { _id: "acct_fc_comm", code: "6860", type: "EXPENSE", name: "Finance Company Commission", systemKey: "FINANCE_COMPANY_COMMISSION_EXPENSE", normalBalance: "DEBIT" },
+    { _id: "acct_transfer", code: "6820", type: "EXPENSE", name: "Ownership Transfer", systemKey: "OWNERSHIP_TRANSFER_EXPENSE", normalBalance: "DEBIT" },
   ];
   /** Financed deals, their canonical finance-company receivables and allocations (FD1). */
   const financeApps = new Map<string, Record<string, any>>();
@@ -305,6 +330,7 @@ function makeBackend(defects: Defects = {}) {
   const quoteVehicle = new Map<string, string>();
   const quoteCustomer = new Map<string, string>();
   let periodStatus = "OPEN";
+  let openedPeriodEndDate: number | null = null;
   let seq = 0;
   const id = (p: string) => `${p}_${++seq}`;
 
@@ -616,6 +642,10 @@ function makeBackend(defects: Defects = {}) {
           value: defects.noUnappliedLiability ? CHART.filter((a) => a.code !== "2110") : CHART,
         };
       case "accountingPeriods:create":
+        if (defects.clockRolloverAfterBookOpen) {
+          openedPeriodEndDate = Number(args.endDate);
+          vi.setSystemTime(Date.UTC(2026, 1, 1, 0, 0, 30));
+        }
         return { ok: true as const, value: id("period") };
       case "accountingPeriods:list":
         return { ok: true as const, value: [{ _id: "p1", status: periodStatus }] };
@@ -1173,8 +1203,13 @@ function makeBackend(defects: Defects = {}) {
       case "applications:registerVehicleHandover":
       case "applications:registerExpectedPayment":
       case "financeDealCosts:recordLegalInvoice":
-      case "financeDealCosts:reconcileDealFee":
         return { ok: true as const, value: null };
+      case "financeDealCosts:reconcileDealFee": {
+        const fee = financeDealFees.get(String(args.feeId));
+        if (!fee || fee.voidedAt !== undefined) return { ok: false as const, error: "Deal cost not found in this organization." };
+        fee.reconciledAt = Date.now();
+        return { ok: true as const, value: fee._id };
+      }
       case "applications:handoverStamp":
         return { ok: true as const, value: { stamp: "economics" } };
       case "financeDealCosts:recordDealFee": {
@@ -1212,6 +1247,8 @@ function makeBackend(defects: Defects = {}) {
         financeDealFees.set(feeId, {
           _id: feeId, orgId: app.orgId ?? "org_1", applicationId: String(args.applicationId), currency: dealCurrency,
           estimatedAmountMinor: args.estimatedAmountMinor, actualAmountMinor: args.actualAmountMinor, voidedAt: undefined,
+          paidBy: args.paidBy, deductedFromSettlement: args.deductedFromSettlement ?? false,
+          accountingTreatment: args.accountingTreatment, directPayment: undefined,
         });
         feeByKey.set(key, { id: feeId, fingerprint });
         if (args.deductedFromSettlement) app.withheldMinor += Number(args.actualAmountMinor ?? 0);
@@ -1227,9 +1264,36 @@ function makeBackend(defects: Defects = {}) {
         fee.actualAmountMinor = args.actualAmountMinor;
         return { ok: true as const, value: fee._id };
       }
+      case "financeDealCosts:recordDirectFeePayment": {
+        defects.captureDirectPaymentDate?.(Number(args.paidAt));
+        if (defects.clockRolloverAfterBookOpen && openedPeriodEndDate !== null &&
+            Number(args.paidAt) > openedPeriodEndDate) {
+          return { ok: false as const, error: "No open accounting period covers this payment date." };
+        }
+        const fee = financeDealFees.get(String(args.feeId));
+        if (!fee || fee.voidedAt !== undefined) return { ok: false as const, error: "Deal cost not found in this organization." };
+        if (fee.paidBy !== "DEALER" || fee.deductedFromSettlement || fee.directPayment !== undefined ||
+            fee.actualAmountMinor !== args.expectedAmountMinor) {
+          return { ok: false as const, error: "This cost cannot be paid directly." };
+        }
+        if (!defects.financeDirectPaymentSkipped) {
+          fee.directPayment = { amountMinor: args.expectedAmountMinor, method: args.method, paidAt: args.paidAt };
+        }
+        if (!defects.financeDirectPaymentPostingSkipped) {
+          post("HANDOVER_COST_PAID_DIRECT", "financeDealFees", String(args.feeId), [
+            { key: "OWNERSHIP_TRANSFER_EXPENSE", debitMinor: args.expectedAmountMinor },
+            { key: "BANK_ACCOUNT", creditMinor: args.expectedAmountMinor },
+          ]);
+        }
+        return { ok: true as const, value: fee._id };
+      }
       case "financeDealCosts:voidDealFee": {
         const fee = financeDealFees.get(String(args.feeId));
         if (!fee) return { ok: false as const, error: "Deal cost not found in this organization." };
+        if (fee.deductedFromSettlement) {
+          const app = financeApps.get(fee.applicationId);
+          if (app) app.withheldMinor -= Number(fee.actualAmountMinor ?? 0);
+        }
         fee.voidedAt = Date.now();
         return { ok: true as const, value: null };
       }
@@ -1259,7 +1323,22 @@ function makeBackend(defects: Defects = {}) {
         if (!app) return { ok: false as const, error: "Application not found." };
         if (app.status === "CLOSED") return { ok: true as const, value: app.saleId };
         const gross = Math.round((quotePrice.get(app.quoteId) ?? 0) * MINOR_SCALE);
-        const net = gross - app.withheldMinor;
+        if ([...financeDealFees.values()].some((fee) =>
+          fee.applicationId === String(args.applicationId) && fee.voidedAt === undefined && fee.reconciledAt === undefined
+        )) return { ok: false as const, error: "COSTS_AWAITING_RECONCILIATION" };
+        // SCRUM-435: the finance company transfers the full approved amount, so a
+        // cost deducted from its transfer is refused (mirrors the product guard).
+        if (app.withheldMinor > 0 && !defects.financeDeductedFeeAccepted) {
+          if (defects.financeDeductedCloseMutatesThenRefuses) app.status = "CLOSED";
+          return { ok: false as const, error: "The finance company transfers the full approved amount, so a cost cannot be deducted from its transfer. Record the cost as a normal deal cost and finalize again." };
+        }
+        const unpaid = [...financeDealFees.values()].some((fee) =>
+          fee.applicationId === String(args.applicationId) && fee.voidedAt === undefined &&
+          fee.paidBy === "DEALER" && fee.deductedFromSettlement === false &&
+          Number(fee.actualAmountMinor ?? 0) > 0 && fee.directPayment === undefined
+        );
+        if (unpaid) return { ok: false as const, error: "HANDOVER_COSTS_UNPAID" };
+        const net = gross;
         app.status = "CLOSED";
         app.financedSaleNetReceivableMinor = net;
         app.saleId = id("sale");
@@ -1315,6 +1394,9 @@ function makeBackend(defects: Defects = {}) {
         const net = app.financedSaleNetReceivableMinor;
         let amount = Number(args.disbursedAmountMinor);
         if (amount !== net) {
+          if (defects.financeReceiptWrongRefusalReason) {
+            return { ok: false as const, error: "A receipt was refused for an unrelated reason." };
+          }
           if (!defects.financeReceiptClipsToOutstanding) {
             return {
               ok: false as const,
@@ -1874,10 +1956,31 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
   });
 
   // ── FD1 — the finance-company receipt (SCRUM-241) ──
-  test("FD1 catches a receipt that clips the customer's principal to the outstanding net instead of refusing it", async () => {
+  test("FD1 sends its direct-payment date inside the opened period across UTC month-end", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.UTC(2026, 0, 31, 23, 59, 30));
+    let paidAt: number | undefined;
+    try {
+      await runAgainst({
+        clockRolloverAfterBookOpen: true,
+        captureDirectPaymentDate: (value) => { paidAt = value; },
+      });
+      expect(paidAt).toBe(Date.UTC(2026, 0, 31, 23, 58, 30));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("FD1 catches a short receipt (net of the dealer's own cost) accepted instead of refused", async () => {
     const results = await runAgainst({ financeReceiptClipsToOutstanding: true });
     expect(statusOf(results, "FD1")).toBe("FAIL");
-    expect(detail(results, "FD1")).toMatch(/PRINCIPAL was accepted/);
+    expect(detail(results, "FD1")).toMatch(/SHORT receipt .* was accepted/);
+  });
+
+  test("FD1 catches a short receipt refused for the wrong reason", async () => {
+    const results = await runAgainst({ financeReceiptWrongRefusalReason: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/short receipt was refused for the wrong reason/);
   });
 
   test("FD1 catches a cash-receipt journal posted for a different amount than the payment and allocation", async () => {
@@ -1929,6 +2032,30 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
     const results = await runAgainst({ financeReceivableNotSettled: true });
     expect(statusOf(results, "FD1")).toBe("FAIL");
     expect(detail(results, "FD1")).toMatch(/receivable's status after the receipt: expected PAID, got OPEN/);
+  });
+
+  test("FD1 refuses to finalize while the dealer-borne handover cost is unpaid", async () => {
+    const results = await runAgainst({ financeDirectPaymentSkipped: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/HANDOVER_COSTS_UNPAID/);
+  });
+
+  test("FD1 refuses a cost deducted from the finance company's full transfer", async () => {
+    const results = await runAgainst({ financeDeductedFeeAccepted: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/deducted from the finance company's full transfer was not refused/);
+  });
+
+  test("FD1 catches a refused deducted-cost close that still closes the application", async () => {
+    const results = await runAgainst({ financeDeductedCloseMutatesThenRefuses: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/refused deducted-cost close still closed the application/);
+  });
+
+  test("FD1 catches a direct payment marked paid without its journal posting", async () => {
+    const results = await runAgainst({ financeDirectPaymentPostingSkipped: true });
+    expect(statusOf(results, "FD1")).toBe("FAIL");
+    expect(detail(results, "FD1")).toMatch(/HANDOVER_COST_PAID_DIRECT events .* expected 1, got 0/);
   });
 
   test("RT2 catches a replayed reservation that inserts a second PRIMARY row while returning the same id (Codex A-RT2-RESERVATION)", async () => {
