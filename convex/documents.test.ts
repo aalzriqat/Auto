@@ -619,6 +619,50 @@ describe("a removed rule's uploaded file stays viewable as history", () => {
   });
 });
 
+describe("combined application document read", () => {
+  test("returns the exact active and history payloads from one snapshot", async () => {
+    const s = await setup();
+    await addRule(s, "Current ID");
+    const removedRule = await addRule(s, "Old Bank Letter");
+    const { applicationId } = await createApplication(s);
+    const removedRow = (await rowsForApplication(s, applicationId)).find((row) => row.ruleId === removedRule)!;
+    await s.seller.as.mutation(api.documents.saveDocumentFile, {
+      orgId: s.orgId,
+      documentId: removedRow._id,
+      fileId: await storePdf(s),
+    });
+    await s.t.run((ctx) => ctx.db.delete(removedRule));
+    await addRule(s, "Late Statement");
+
+    const args = { orgId: s.orgId, applicationId };
+    const active = await s.seller.as.query(api.documents.getForApplication, args);
+    const history = await s.seller.as.query(api.documents.getHistoryForApplication, args);
+    const combined = await s.seller.as.query(api.documents.getPanelForApplication, args);
+    expect(combined).toEqual({ active, history });
+  });
+
+  test("foreign application and missing read permission reveal no document rows", async () => {
+    const s = await setup();
+    await addRule(s, "Private ID");
+    const { applicationId } = await createApplication(s);
+    const otherOrgId = await s.t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() })
+    );
+    const outsider = await s.mk("docs_panel_outsider", FULL, otherOrgId);
+    const noReader = await s.mk("docs_panel_no_read", ["view:sales"]);
+
+    expect(await outsider.as.query(api.documents.getPanelForApplication, {
+      orgId: otherOrgId, applicationId,
+    })).toEqual({ active: [], history: [] });
+    await expect(outsider.as.query(api.documents.getPanelForApplication, {
+      orgId: s.orgId, applicationId,
+    })).rejects.toThrow();
+    await expect(noReader.as.query(api.documents.getPanelForApplication, {
+      orgId: s.orgId, applicationId,
+    })).rejects.toThrow(/permission/i);
+  });
+});
+
 /**
  * SCRUM-417 round 4 — Codex S417-R4-1: the history view (round 3) presents a
  * row whose rule was removed, or no longer applies, as view-only — but the
