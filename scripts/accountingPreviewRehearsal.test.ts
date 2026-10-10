@@ -41,6 +41,10 @@ function captureConsoleOutput() {
     vi.spyOn(console, "info").mockImplementation(() => {}),
     vi.spyOn(console, "warn").mockImplementation(() => {}),
     vi.spyOn(console, "error").mockImplementation(() => {}),
+    vi.spyOn(console, "debug").mockImplementation(() => {}),
+    vi.spyOn(console, "dir").mockImplementation(() => {}),
+    vi.spyOn(console, "table").mockImplementation(() => {}),
+    vi.spyOn(console, "trace").mockImplementation(() => {}),
   ];
   return {
     expectSilent: () => spies.forEach((spy) => expect(spy).not.toHaveBeenCalled()),
