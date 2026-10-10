@@ -115,10 +115,15 @@ async function journalRows(s: CashSeed) {
   });
 }
 
-async function eventStatuses(s: CashSeed, eventType: string, sourceId: string) {
+async function eventStatuses(
+  s: CashSeed,
+  eventType: string,
+  sourceId: string,
+  sourceType = eventType === "SALE_COMPLETED" ? "sales" : "deposits",
+) {
   return await s.t.run(async (ctx) => (
     await ctx.db.query("accountingEvents").withIndex("by_org_source", (q) =>
-      q.eq("orgId", s.orgId).eq("sourceType", eventType === "SALE_COMPLETED" ? "sales" : "deposits").eq("sourceId", sourceId)
+      q.eq("orgId", s.orgId).eq("sourceType", sourceType).eq("sourceId", sourceId)
     ).collect()
   ).filter((event) => event.eventType === eventType).map((event) => event.status));
 }
@@ -817,6 +822,77 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     })).rejects.toThrow(/supplier has paid against its commission claim/i);
     expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(beforeRetry);
     expect((await s.t.run((ctx) => ctx.db.get(saleId!)))?.status).toBe("COMPLETED");
+  });
+
+  test("SOURCED direct settlement × partial supplier receipts: claim and bank move only by money received", async () => {
+    const { s, applicationId } = await sourcedFinancedOpening("s486directpartial", "DIRECT_TO_SUPPLIER");
+    const application = await s.t.run((ctx) => ctx.db.get(applicationId));
+    const saleId = application?.finalizedSaleId;
+    expect(saleId).toBeDefined();
+    const claim = await s.t.run((ctx) => ctx.db.query("vehicleSupplierReceivables")
+      .withIndex("by_sale", (q) => q.eq("saleId", saleId!)).unique());
+    expect(claim).toMatchObject({ amountDue: 2_500, status: "OPEN" });
+    const firstArgs = {
+      orgId: s.orgId, receivableId: claim!._id, amount: 1_000,
+      receiptMethod: "BANK_TRANSFER" as const,
+      idempotencyKey: "s486-direct-supplier-partial-first",
+    };
+    expect(await s.owner.as.mutation(api.supplierReceivables.recordReceipt, firstArgs)).toEqual({
+      amountReceived: 1_000, remainingAmount: 1_500, status: "PARTIALLY_PAID",
+    });
+    expect(await s.t.run((ctx) => ctx.db.get(claim!._id))).toMatchObject({
+      amountReceived: 1_000, receiptSeq: 1, status: "PARTIALLY_PAID",
+    });
+    expect(await eventStatuses(s, "SUPPLIER_RECEIVABLE_COLLECTED", claim!._id, "vehicleSupplierReceivables"))
+      .toEqual(["POSTED"]);
+    expectLiteralRows(await journalRows(s), [
+      { account: "1240", currency: "JOD", debit: 2_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "4170", currency: "JOD", debit: 0, credit: 2_500_000, entryStatus: "POSTED" },
+      { account: "1110", currency: "JOD", debit: 1_000_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1240", currency: "JOD", debit: 0, credit: 1_000_000, entryStatus: "POSTED" },
+    ]);
+    expect(await trialBalanceNormalBalance(s)).toEqual({
+      "1110|JOD": 1_000_000, "1240|JOD": 1_500_000, "4170|JOD": 2_500_000,
+    });
+    const afterFirst = await dbSnapshot(s.t, Object.keys(schema.tables));
+    expect(await s.owner.as.mutation(api.supplierReceivables.recordReceipt, firstArgs)).toEqual({
+      amountReceived: 1_000, remainingAmount: 1_500, status: "PARTIALLY_PAID",
+    });
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(afterFirst);
+    await expect(s.owner.as.mutation(api.supplierReceivables.recordReceipt, {
+      ...firstArgs, amount: 1_501, idempotencyKey: "s486-direct-supplier-overpayment",
+    })).rejects.toThrow(/against .* owed/i);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(afterFirst);
+    await expect(s.owner.as.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId, applicationId, reason: "Partial supplier payment has arrived",
+      idempotencyKey: "s486-direct-partially-paid-cancel-denied",
+    })).rejects.toThrow(/supplier has paid against its commission claim/i);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(afterFirst);
+
+    expect(await s.owner.as.mutation(api.supplierReceivables.recordReceipt, {
+      ...firstArgs, amount: 1_500, idempotencyKey: "s486-direct-supplier-partial-final",
+    })).toEqual({ amountReceived: 2_500, remainingAmount: 0, status: "PAID" });
+    expect(await s.t.run((ctx) => ctx.db.get(claim!._id))).toMatchObject({
+      amountReceived: 2_500, receiptSeq: 2, status: "PAID",
+    });
+    expect(await eventStatuses(s, "SUPPLIER_RECEIVABLE_COLLECTED", claim!._id, "vehicleSupplierReceivables"))
+      .toEqual(["POSTED", "POSTED"]);
+    const rows = await journalRows(s);
+    expectLiteralRows(rows, [
+      { account: "1240", currency: "JOD", debit: 2_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "4170", currency: "JOD", debit: 0, credit: 2_500_000, entryStatus: "POSTED" },
+      { account: "1110", currency: "JOD", debit: 1_000_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1240", currency: "JOD", debit: 0, credit: 1_000_000, entryStatus: "POSTED" },
+      { account: "1110", currency: "JOD", debit: 1_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1240", currency: "JOD", debit: 0, credit: 1_500_000, entryStatus: "POSTED" },
+    ]);
+    expectBalanced(rows);
+    expect(await trialBalanceNormalBalance(s)).toEqual({
+      "1110|JOD": 2_500_000, "4170|JOD": 2_500_000,
+    });
+    expect(await publicIncomeStatement(s)).toMatchObject({
+      totalRevenue: 2_500_000, totalCogs: 0, grossProfit: 2_500_000, netIncome: 2_500_000,
+    });
   });
 
   test("owned CASH × no deposit: sale recognizes literal receivable, revenue, COGS and inventory", async () => {
