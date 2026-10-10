@@ -664,7 +664,6 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     );
     expect(startRun).toContain("docker network create --internal");
     expect(startRun).toContain('--network "$CANDIDATE_NETWORK"');
-    expect(startRun).toContain("--publish 127.0.0.1:3000:3000");
     expect(startRun).toContain("--cap-drop ALL");
     expect(startRun).toContain("--security-opt no-new-privileges");
 
@@ -672,6 +671,67 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       step("attack-worker", "Stop isolated candidate frontend").run ?? "",
     );
     expect(stopRun).toContain('docker network rm "$CANDIDATE_NETWORK"');
+  });
+
+  it("reaches the --internal candidate through a trusted loopback forwarder, never --publish (SCRUM-376)", () => {
+    // Docker does not forward published ports for a container whose only network
+    // is --internal: the candidate booted ("Ready in 0ms", state=running) while
+    // every host curl was refused for two minutes. Keep the candidate without a
+    // route out and relay 127.0.0.1:3000 to its internal-network address.
+    for (const jobName of ["trusted-e2e", "attack-worker"] as const) {
+      const run = String(
+        step(jobName, "Start verified exact-SHA candidate frontend artifact").run ?? "",
+      );
+      const joined = run.replace(/\\\r?\n\s*/g, " ");
+      const dockerRun = joined.split("\n").find((line) => /docker run /.test(line)) ?? "";
+      expect(run, jobName).toContain('docker network create --internal "$CANDIDATE_NETWORK"');
+      expect(dockerRun, jobName).toContain('--network "$CANDIDATE_NETWORK"');
+      expect(dockerRun, jobName).not.toMatch(/--publish|(^|\s)-p\s/);
+      expect(dockerRun, jobName).not.toMatch(/--network[ =](host|bridge)/);
+      const forwardLine = joined
+        .split("\n")
+        .find((line) => line.includes("browserSwarmLoopbackForward.mjs")) ?? "";
+      expect(forwardLine, jobName).toContain("node trusted/scripts/intelligence/browserSwarmLoopbackForward.mjs");
+      expect(forwardLine, jobName).toContain("--listen-port 3000");
+      expect(forwardLine, jobName).toContain('--target-host "$CANDIDATE_IP"');
+      // The forwarder starts after the container exists and before the health wait.
+      expect(run.indexOf("docker run")).toBeLessThan(run.indexOf("CANDIDATE_IP="));
+      expect(run.indexOf("browserSwarmLoopbackForward.mjs")).toBeLessThan(run.indexOf("for attempt in"));
+      expect(run, jobName).toContain('echo "LOOPBACK_FORWARD_PID=$LOOPBACK_FORWARD_PID" >> "$GITHUB_ENV"');
+      // A green /api/health must prove the request went through THIS forwarder:
+      // refuse a pre-occupied port, wait for the bind-ready line, and keep
+      // checking the forwarder is alive while waiting for health.
+      expect(run.indexOf("Port 3000 is already in use"), jobName).toBeGreaterThan(-1);
+      expect(run.indexOf("Port 3000 is already in use")).toBeLessThan(run.indexOf("browserSwarmLoopbackForward.mjs"));
+      expect(run, jobName).toContain("'^loopback forward 127.0.0.1:3000 -> '");
+      expect(run.indexOf("^loopback forward 127.0.0.1:3000")).toBeLessThan(run.indexOf("for attempt in"));
+      expect(run, jobName).toContain("did not bind 127.0.0.1:3000");
+      expect(run, jobName).toContain("Loopback forwarder exited before the candidate answered");
+      // Success is only reported while this forwarder is alive (no replacement listener).
+      const okIndex = run.indexOf("exit 0");
+      expect(okIndex, jobName).toBeGreaterThan(-1);
+      expect(run.lastIndexOf('kill -0 "$LOOPBACK_FORWARD_PID"', okIndex), jobName).toBeGreaterThan(
+        run.indexOf("curl --fail"),
+      );
+      expect(run, jobName).toContain("refusing a health answer from a replacement listener");
+      // A forwarder that never binds skips the health wait but still reaches the
+      // fenced container diagnostics instead of exiting before them.
+      expect(run, jobName).toContain('seq 1 "$HEALTH_ATTEMPTS"');
+      expect(run, jobName).toContain('[ "$forward_ready" = "true" ] || HEALTH_ATTEMPTS=0');
+      const notReady = run.slice(run.indexOf("did not bind 127.0.0.1:3000"), run.indexOf("HEALTH_ATTEMPTS=60"));
+      expect(notReady, jobName).not.toContain("exit 1");
+      expect(run, jobName).toContain('rm -f "$FORWARD_LOG"');
+      // Control + log on the failure path.
+      // TCP-level control (no clear-text http:// literal: Sonar S5332).
+      expect(run, jobName).toContain(`'exec 3<>"/dev/tcp/$1/3000"' _ "$CANDIDATE_IP"`);
+      expect(run, jobName).toContain("direct-ip tcp:3000 NOT reachable");
+      expect(run, jobName).not.toMatch(/http:\/\/\$CANDIDATE_IP/);
+      expect(run, jobName).toContain('cat "$FORWARD_LOG"');
+      const allRuns = (workflow.jobs?.[jobName]?.steps ?? [])
+        .map((entry) => String(entry.run ?? ""))
+        .join("\n");
+      expect(allRuns, jobName).toContain('kill "$LOOPBACK_FORWARD_PID"');
+    }
   });
 
   it("keeps a failed candidate runtime observable instead of destroying its logs (SCRUM-376)", () => {

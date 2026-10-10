@@ -734,7 +734,6 @@ jobs:
           docker run --detach \
             --name "$CANDIDATE_CONTAINER" \
             --network "$CANDIDATE_NETWORK" \
-            --publish 127.0.0.1:3000:3000 \
             --cap-drop ALL \
             --security-opt no-new-privileges \
             --volume "$RUNNER_TEMP/browser-swarm-candidate-build/runtime:/app:ro" \
@@ -750,16 +749,73 @@ jobs:
             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
             node server.js
 
-          for attempt in $(seq 1 60); do
+          # Docker does not forward --publish ports for a container whose only
+          # network is --internal, so the host could never reach a healthy server.
+          # Keep the candidate without a route out and relay loopback to its
+          # address on the internal network instead.
+          # Port 3000 must be free: a stale listener (for example the auth-setup
+          # web server) would answer /api/health and masquerade as the candidate.
+          # Any HTTP answer at all means something is listening.
+          if curl --silent --max-time 2 --output /dev/null http://127.0.0.1:3000/; then
+            echo "::error::Port 3000 is already in use; refusing to certify a stale server as the candidate"
+            exit 1
+          fi
+          CANDIDATE_IP="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CANDIDATE_CONTAINER")"
+          FORWARD_LOG="$RUNNER_TEMP/loopback-forward.log"
+          rm -f "$FORWARD_LOG"
+          nohup node trusted/scripts/intelligence/browserSwarmLoopbackForward.mjs \
+            --listen-port 3000 --target-host "$CANDIDATE_IP" --target-port 3000 \
+            > "$FORWARD_LOG" 2>&1 &
+          LOOPBACK_FORWARD_PID=$!
+          echo "LOOPBACK_FORWARD_PID=$LOOPBACK_FORWARD_PID" >> "$GITHUB_ENV"
+          # The forwarder prints its ready line only after a successful bind.
+          # A forwarder that never binds must fail here, not behind a green health check.
+          forward_ready=false
+          for ready_attempt in $(seq 1 50); do
+            if grep -q '^loopback forward 127.0.0.1:3000 -> ' "$FORWARD_LOG"; then
+              forward_ready=true
+              break
+            fi
+            kill -0 "$LOOPBACK_FORWARD_PID" 2>/dev/null || break
+            sleep 0.2
+          done
+          if [ "$forward_ready" != "true" ]; then
+            echo "::error::Loopback forwarder did not bind 127.0.0.1:3000"
+            cat "$FORWARD_LOG" || true
+          fi
+          # Not ready: skip the health wait and fall through to the fenced
+          # container diagnostics so a crashed candidate stays observable.
+          HEALTH_ATTEMPTS=60
+          [ "$forward_ready" = "true" ] || HEALTH_ATTEMPTS=0
+
+          for attempt in $(seq 1 "$HEALTH_ATTEMPTS"); do
             if curl --fail --silent --show-error http://127.0.0.1:3000/api/health > /dev/null; then
-              exit 0
+              # Health only counts if THIS forwarder is still the thing answering.
+              if kill -0 "$LOOPBACK_FORWARD_PID" 2>/dev/null; then
+                exit 0
+              fi
+              echo "::error::Loopback forwarder died; refusing a health answer from a replacement listener"
+              break
             fi
             if [ "$(docker inspect --format '{{.State.Running}}' "$CANDIDATE_CONTAINER" 2>/dev/null || echo false)" != "true" ]; then
               echo "::error::Candidate container exited before answering /api/health"
               break
             fi
+            if ! kill -0 "$LOOPBACK_FORWARD_PID" 2>/dev/null; then
+              echo "::error::Loopback forwarder exited before the candidate answered"
+              break
+            fi
             sleep 2
           done
+          # Control: separate "host cannot reach the internal-network IP" from
+          # "forwarder broken". Prints the status code only, never a body.
+          if timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/3000"' _ "$CANDIDATE_IP" 2>/dev/null; then
+            echo "direct-ip tcp:3000 reachable"
+          else
+            echo "direct-ip tcp:3000 NOT reachable"
+          fi
+          echo "--- loopback forwarder log ---"
+          cat "$FORWARD_LOG" || true
           # The container receives only public NEXT_PUBLIC_* values, so its output
           # is safe to print. It is still candidate-controlled text: bound it to
           # its LAST 20000 bytes (the boot error is at the end) and fence it with
@@ -785,6 +841,9 @@ jobs:
       - name: Stop isolated trusted E2E candidate frontend
         if: always()
         run: |
+          if [ -n "${LOOPBACK_FORWARD_PID:-}" ]; then
+            kill "$LOOPBACK_FORWARD_PID" >/dev/null 2>&1 || true
+          fi
           if [ -n "${CANDIDATE_CONTAINER:-}" ]; then
             docker rm --force "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
           fi
@@ -943,22 +1002,77 @@ jobs:
           echo "CANDIDATE_CONTAINER=$CANDIDATE_CONTAINER" >> "$GITHUB_ENV"
           echo "CANDIDATE_NETWORK=$CANDIDATE_NETWORK" >> "$GITHUB_ENV"
 
-          # Runtime candidate code gets no default route to the Internet. The
-          # trusted host can still reach its published loopback port.
+          # Runtime candidate code gets no default route to the Internet. Docker
+          # does not forward --publish ports for a container whose only network is
+          # --internal, so the trusted host relays loopback to the container's
+          # address on that network instead.
           docker network create --internal "$CANDIDATE_NETWORK" >/dev/null
 
-          docker run --detach             --name "$CANDIDATE_CONTAINER"             --network "$CANDIDATE_NETWORK"             --publish 127.0.0.1:3000:3000             --cap-drop ALL             --security-opt no-new-privileges             --volume "$RUNNER_TEMP/browser-swarm-candidate-build/runtime:/app:ro"             --workdir /app             --env HOME=/tmp/home             --env HOSTNAME=0.0.0.0             --env PORT=3000             --env NEXT_PUBLIC_CONVEX_URL             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY             --env CLERK_JWT_KEY             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY             --env NEXT_PUBLIC_APP_URL             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5             node server.js
+          docker run --detach             --name "$CANDIDATE_CONTAINER"             --network "$CANDIDATE_NETWORK"             --cap-drop ALL            --security-opt no-new-privileges             --volume "$RUNNER_TEMP/browser-swarm-candidate-build/runtime:/app:ro"             --workdir /app             --env HOME=/tmp/home             --env HOSTNAME=0.0.0.0             --env PORT=3000             --env NEXT_PUBLIC_CONVEX_URL             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY             --env CLERK_JWT_KEY             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY             --env NEXT_PUBLIC_APP_URL             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5             node server.js
 
-          for attempt in $(seq 1 60); do
+          # Port 3000 must be free: a stale listener (for example the auth-setup
+          # web server) would answer /api/health and masquerade as the candidate.
+          # Any HTTP answer at all means something is listening.
+          if curl --silent --max-time 2 --output /dev/null http://127.0.0.1:3000/; then
+            echo "::error::Port 3000 is already in use; refusing to certify a stale server as the candidate"
+            exit 1
+          fi
+          CANDIDATE_IP="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CANDIDATE_CONTAINER")"
+          FORWARD_LOG="$RUNNER_TEMP/loopback-forward.log"
+          rm -f "$FORWARD_LOG"
+          nohup node trusted/scripts/intelligence/browserSwarmLoopbackForward.mjs \
+            --listen-port 3000 --target-host "$CANDIDATE_IP" --target-port 3000 \
+            > "$FORWARD_LOG" 2>&1 &
+          LOOPBACK_FORWARD_PID=$!
+          echo "LOOPBACK_FORWARD_PID=$LOOPBACK_FORWARD_PID" >> "$GITHUB_ENV"
+          # The forwarder prints its ready line only after a successful bind.
+          # A forwarder that never binds must fail here, not behind a green health check.
+          forward_ready=false
+          for ready_attempt in $(seq 1 50); do
+            if grep -q '^loopback forward 127.0.0.1:3000 -> ' "$FORWARD_LOG"; then
+              forward_ready=true
+              break
+            fi
+            kill -0 "$LOOPBACK_FORWARD_PID" 2>/dev/null || break
+            sleep 0.2
+          done
+          if [ "$forward_ready" != "true" ]; then
+            echo "::error::Loopback forwarder did not bind 127.0.0.1:3000"
+            cat "$FORWARD_LOG" || true
+          fi
+          # Not ready: skip the health wait and fall through to the fenced
+          # container diagnostics so a crashed candidate stays observable.
+          HEALTH_ATTEMPTS=60
+          [ "$forward_ready" = "true" ] || HEALTH_ATTEMPTS=0
+
+          for attempt in $(seq 1 "$HEALTH_ATTEMPTS"); do
             if curl --fail --silent --show-error               http://127.0.0.1:3000/api/health > /dev/null; then
-              exit 0
+              # Health only counts if THIS forwarder is still the thing answering.
+              if kill -0 "$LOOPBACK_FORWARD_PID" 2>/dev/null; then
+                exit 0
+              fi
+              echo "::error::Loopback forwarder died; refusing a health answer from a replacement listener"
+              break
             fi
             if [ "$(docker inspect --format '{{.State.Running}}' "$CANDIDATE_CONTAINER" 2>/dev/null || echo false)" != "true" ]; then
               echo "::error::Candidate container exited before answering /api/health"
               break
             fi
+            if ! kill -0 "$LOOPBACK_FORWARD_PID" 2>/dev/null; then
+              echo "::error::Loopback forwarder exited before the candidate answered"
+              break
+            fi
             sleep 2
           done
+          # Control: separate "host cannot reach the internal-network IP" from
+          # "forwarder broken". Prints the status code only, never a body.
+          if timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/3000"' _ "$CANDIDATE_IP" 2>/dev/null; then
+            echo "direct-ip tcp:3000 reachable"
+          else
+            echo "direct-ip tcp:3000 NOT reachable"
+          fi
+          echo "--- loopback forwarder log ---"
+          cat "$FORWARD_LOG" || true
 
           # No --rm above: keep a dead candidate's exit code and stderr readable.
           # Only public NEXT_PUBLIC_* values reach the container; the text is still
@@ -998,6 +1112,9 @@ jobs:
       - name: Stop isolated candidate frontend
         if: always()
         run: |
+          if [ -n "${LOOPBACK_FORWARD_PID:-}" ]; then
+            kill "$LOOPBACK_FORWARD_PID" >/dev/null 2>&1 || true
+          fi
           if [ -n "${CANDIDATE_CONTAINER:-}" ]; then
             docker rm --force "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
           fi
