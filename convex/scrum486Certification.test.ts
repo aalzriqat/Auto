@@ -525,6 +525,24 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       currency: "JOD",
       status: "OPEN",
     });
+    expect(application?.finalizedSaleId).toBeDefined();
+    const customerDocument = await s.t.run((ctx) => ctx.db.query("receivableDocuments")
+      .withIndex("by_org_source", (q) => q.eq("orgId", s.orgId)
+        .eq("sourceType", "sales").eq("sourceId", application!.finalizedSaleId!))
+      .unique());
+    expect(customerDocument).toMatchObject({
+      payerType: "CUSTOMER",
+      customerId: s.customerId,
+      originalAmountMinor: 0,
+      status: "PAID",
+    });
+    const finalizedSale = await s.t.run((ctx) => ctx.db.get(application!.finalizedSaleId!));
+    expect(finalizedSale?.canonicalReceivableDocumentId).toEqual(customerDocument?._id);
+    const allCustomerDocuments = await s.t.run(async (ctx) => (await ctx.db.query("receivableDocuments")
+      .withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect())
+      .filter((doc) => doc.customerId === s.customerId));
+    expect(new Set(allCustomerDocuments.map((doc) => String(doc._id)))).toEqual(
+      new Set([String(customerDocument?._id), String(receivable?._id)]));
     // The customer may remain on the document for deal provenance; payerType and
     // financeCompanyId identify who legally owes this invoice.
     const rows = await journalRows(s);
@@ -534,6 +552,17 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       { account: "5100", currency: "JOD", debit: 10_000_000, credit: 0, entryStatus: "POSTED" },
       { account: "1400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
     ]);
+    const companyArLine = await s.t.run(async (ctx) => {
+      const lines = await ctx.db.query("journalLines")
+        .withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect();
+      const withAccounts = await Promise.all(lines.map(async (line) => ({
+        line,
+        account: await ctx.db.get(line.accountId),
+      })));
+      return withAccounts.filter(({ account }) => account?.code === "1210").map(({ line }) => line);
+    });
+    expect(companyArLine).toHaveLength(1);
+    expect(companyArLine[0].financeCompanyId).toBe(s.companyId);
     expectBalanced(rows);
     expect(await trialBalanceNormalBalance(s)).toEqual({
       "1210|JOD": 12_500_000,
@@ -591,6 +620,17 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       { account: "5100", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
       { account: "1400", currency: "JOD", debit: 10_000_000, credit: 0, entryStatus: "POSTED" },
     ]);
+    const financeArDimensions = await s.t.run(async (ctx) => {
+      const lines = await ctx.db.query("journalLines")
+        .withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect();
+      const withAccounts = await Promise.all(lines.map(async (line) => ({
+        line,
+        account: await ctx.db.get(line.accountId),
+      })));
+      return withAccounts.filter(({ account }) => account?.code === "1210")
+        .map(({ line }) => line.financeCompanyId);
+    });
+    expect(financeArDimensions).toEqual([s.companyId, s.companyId]);
     expectBalanced(rows);
     expect(await trialBalanceNormalBalance(s)).toEqual({});
     expect(await publicIncomeStatement(s)).toMatchObject({
