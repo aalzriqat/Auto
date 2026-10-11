@@ -1,17 +1,16 @@
 import { ConvexError } from "convex/values";
-import type { Id } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getReceivableOutstandingMinor } from "../subledger";
 import { loadRetainedPosition } from "./receiptMovement";
 
 const MAX_PENDING_APPLICATIONS = 500;
 
-/** Reserved credit is still a 2110 liability; it has not paid an invoice. */
-export async function pendingInvoiceReceiptMinor(
+async function pendingReceiptRows(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   receiptMovementId: Id<"receiptMovements">
-): Promise<number> {
+): Promise<Doc<"invoiceReceiptApplications">[]> {
   const rows = await ctx.db
     .query("invoiceReceiptApplications")
     .withIndex("by_org_movement_status", (q) =>
@@ -21,14 +20,24 @@ export async function pendingInvoiceReceiptMinor(
   if (rows.length > MAX_PENDING_APPLICATIONS) {
     throw new ConvexError("This receipt has too many pending applications for a safe balance check.");
   }
+  return rows;
+}
+
+/** Reserved credit is still a 2110 liability; it has not paid an invoice. */
+export async function pendingInvoiceReceiptMinor(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  receiptMovementId: Id<"receiptMovements">
+): Promise<number> {
+  const rows = await pendingReceiptRows(ctx, orgId, receiptMovementId);
   return rows.reduce((sum, row) => sum + row.amountMinor, 0);
 }
 
-async function pendingSaleInvoiceMinor(
+async function pendingSaleRows(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   saleId: Id<"sales">
-): Promise<number> {
+): Promise<Doc<"invoiceReceiptApplications">[]> {
   const rows = await ctx.db
     .query("invoiceReceiptApplications")
     .withIndex("by_org_sale_status", (q) =>
@@ -38,7 +47,7 @@ async function pendingSaleInvoiceMinor(
   if (rows.length > MAX_PENDING_APPLICATIONS) {
     throw new ConvexError("This sale has too many pending applications for a safe balance check.");
   }
-  return rows.reduce((sum, row) => sum + row.amountMinor, 0);
+  return rows;
 }
 
 /**
@@ -88,11 +97,17 @@ export async function reservePendingInvoiceReceipt(
   ) {
     throw new ConvexError("Retained credit position does not match its receipt.");
   }
-  const [reservedMinor, pendingForSaleMinor, outstandingMinor] = await Promise.all([
-    pendingInvoiceReceiptMinor(ctx, args.orgId, movement._id),
-    pendingSaleInvoiceMinor(ctx, args.orgId, sale._id),
+  const [receiptRows, saleRows, outstandingMinor] = await Promise.all([
+    pendingReceiptRows(ctx, args.orgId, movement._id),
+    pendingSaleRows(ctx, args.orgId, sale._id),
     getReceivableOutstandingMinor(ctx, invoice._id),
   ]);
+  // Keep the next claim inside the bound used by read-back and both exits.
+  if (receiptRows.length >= MAX_PENDING_APPLICATIONS || saleRows.length >= MAX_PENDING_APPLICATIONS) {
+    throw new ConvexError("This receipt or sale has too many pending applications for another reservation.");
+  }
+  const reservedMinor = receiptRows.reduce((sum, row) => sum + row.amountMinor, 0);
+  const pendingForSaleMinor = saleRows.reduce((sum, row) => sum + row.amountMinor, 0);
   if (
     args.amountMinor > position.remainingUnappliedMinor - reservedMinor ||
     args.amountMinor > outstandingMinor - pendingForSaleMinor
@@ -140,15 +155,7 @@ export async function cancelPendingInvoiceReceiptsForSale(
   orgId: Id<"organizations">,
   saleId: Id<"sales">
 ): Promise<void> {
-  const rows = await ctx.db
-    .query("invoiceReceiptApplications")
-    .withIndex("by_org_sale_status", (q) =>
-      q.eq("orgId", orgId).eq("saleId", saleId).eq("status", "PENDING")
-    )
-    .take(MAX_PENDING_APPLICATIONS + 1);
-  if (rows.length > MAX_PENDING_APPLICATIONS) {
-    throw new ConvexError("This sale has too many pending applications to cancel safely.");
-  }
+  const rows = await pendingSaleRows(ctx, orgId, saleId);
   for (const row of rows) {
     await cancelPendingInvoiceReceipt(ctx, orgId, row._id);
   }
@@ -160,15 +167,7 @@ export async function cancelPendingInvoiceReceiptsForMovement(
   orgId: Id<"organizations">,
   receiptMovementId: Id<"receiptMovements">
 ): Promise<void> {
-  const rows = await ctx.db
-    .query("invoiceReceiptApplications")
-    .withIndex("by_org_movement_status", (q) =>
-      q.eq("orgId", orgId).eq("receiptMovementId", receiptMovementId).eq("status", "PENDING")
-    )
-    .take(MAX_PENDING_APPLICATIONS + 1);
-  if (rows.length > MAX_PENDING_APPLICATIONS) {
-    throw new ConvexError("This receipt has too many pending applications to revoke safely.");
-  }
+  const rows = await pendingReceiptRows(ctx, orgId, receiptMovementId);
   for (const row of rows) {
     await cancelPendingInvoiceReceipt(ctx, orgId, row._id);
   }

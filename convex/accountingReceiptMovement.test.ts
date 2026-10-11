@@ -554,6 +554,40 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(10000);
   });
 
+  test("SCRUM-722: the 500th pending claim cannot admit a 501st on either receipt or sale", async () => {
+    const { t, asAdmin, orgId, userId, customerId, movement } = await retainedCreditFixture("s722cap");
+    const first = await completedSaleInvoice(t, orgId, userId, customerId, "CAP1");
+    const second = await completedSaleInvoice(t, orgId, userId, customerId, "CAP2");
+    await t.runUnwrapped(async (ctx) => {
+      for (let index = 0; index < 500; index += 1) {
+        await ctx.db.insert("invoiceReceiptApplications", {
+          orgId, receiptMovementId: movement._id, saleId: first.saleId,
+          receivableDocumentId: first.invoiceId, customerId, currency: "USD",
+          amountMinor: 1, status: "PENDING", createdBy: userId, createdAt: Date.now(),
+        });
+      }
+    });
+    const reserve = (receiptMovementId: Id<"receiptMovements">, saleId: Id<"sales">) =>
+      t.run((ctx) => reservePendingInvoiceReceipt(ctx, {
+        orgId, receiptMovementId, saleId, amountMinor: 1, actorId: userId,
+      }));
+    await expect(reserve(movement._id, second.saleId)).rejects.toThrow(/too many pending applications/);
+
+    const secondPaymentId = await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(), orgId, customerId,
+      amount: 100, method: "CASH", paymentDate: Date.now(),
+    });
+    const secondMovement = await movementFor(t, orgId, secondPaymentId);
+    expect(secondMovement).not.toBeNull();
+    await expect(reserve(secondMovement!._id, first.saleId)).rejects.toThrow(/too many pending applications/);
+
+    await t.run((ctx) => cancelPendingInvoiceReceiptsForSale(ctx, orgId, first.saleId));
+    expect(await t.run((ctx) => ctx.db.query("invoiceReceiptApplications")
+      .withIndex("by_org_sale_status", (q) => q.eq("orgId", orgId).eq("saleId", first.saleId).eq("status", "PENDING"))
+      .collect())).toHaveLength(0);
+    await expect(reserve(secondMovement!._id, first.saleId)).resolves.toBeDefined();
+  });
+
   test("transfers 2110 to AR exactly, with no second cash receipt", async () => {
     const { t, asAdmin, orgId, customerId, movement } = await retainedCreditFixture("s4");
     const receivableId = await makeReceivable(asAdmin, orgId, customerId, 30);
