@@ -1537,6 +1537,34 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     }
   });
 
+  test("refund rows do not exhaust the legacy receipt lookup", async () => {
+    const { s } = await cashQuote("s486refundvolume");
+    const year = s.fiscalYear;
+    await s.t.run(async (ctx) => {
+      const creator = await ctx.db.query("users").first();
+      if (!creator) throw new Error("Missing test user");
+      for (let i = 0; i < 129; i++) {
+        const depositId = await ctx.db.insert("deposits", {
+          orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
+          amount: 1, status: "REFUNDED", holdActive: false,
+          createdBy: creator._id, createdAt: Date.UTC(year, 0, 2) + i,
+        });
+        await ctx.db.insert("transactions", {
+          orgId: s.orgId, type: "OUT", amount: 1,
+          date: Date.UTC(year, 0, 3) + i, category: "DEPOSIT",
+          description: "Deposit refund", vehicleId: s.vehicleId, depositId,
+        });
+      }
+    });
+    const report = await s.owner.as.query(api.reports.getProfitAndLoss, {
+      orgId: s.orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+    });
+    expect(report.totalRevenue).toBe(0);
+    expect(report.depositForfeitureIncome).toBe(0);
+  });
+
   test("forfeiture income follows its posted month and each journal reversal month", async () => {
     vi.useFakeTimers();
     try {

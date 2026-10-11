@@ -1252,7 +1252,9 @@ export const getProfitAndLoss = query({
     // it does not make the original cash receipt earned turnover.
     const linkedLegacyReceiptIds = new Set(
       txInDateRange
-        .filter((tx) => !tx.isDeleted && tx.category === "DEPOSIT" && tx.excludedFromRevenue !== true && tx.depositId)
+        .filter((tx) => tx.type === "IN" && !tx.isDeleted && tx.category === "DEPOSIT" &&
+          tx.excludedFromRevenue !== true && tx.depositId &&
+          !legacyDepositsTakenOverBySale.has(tx.depositId))
         .map((tx) => tx.depositId!.toString())
     );
     const legacyDepositsTakenOverByForfeiture = await readLegacyDepositsTakenOverByForfeiture(
