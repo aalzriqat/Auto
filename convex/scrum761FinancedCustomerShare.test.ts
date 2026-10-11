@@ -138,7 +138,7 @@ describe("SCRUM-761 financed deal: the customer's own share (deposit H = 200) th
     expect(gl.ACCOUNTS_RECEIVABLE_CUSTOMERS).toBeUndefined();
     expect(gl.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY).toBeUndefined();
     // The sale invoice was shrunk to nothing: the customer owes the dealership nothing after finalize.
-    expect(await invoiceOf(s, saleId)).toMatchObject({ original: 0, outstanding: 0 });
+    expect(await invoiceOf(s, saleId)).toMatchObject({ status: "PAID", original: 0, outstanding: 0 });
   });
 
   test("(b) a payment AFTER finalize: naming the sale is refused; without the sale it is ACCEPTED and parked as an unapplied liability", async () => {
