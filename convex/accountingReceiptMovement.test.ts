@@ -613,21 +613,56 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     expect(status.invoice?.availableToReserveMinor).toBe(7000);
   });
 
-  test("SCRUM-724: a cancelled sale's intended cheque cannot be deposited or cleared", async () => {
+  test("SCRUM-724: a HELD cheque on a really-cancelled sale is refused; a DEPOSITED one clears into customer credit", async () => {
     const { t, asAdmin, orgId, userId, customerId } = await seedOrg("s724deadcheque");
     registerRateLimiter(t);
-    const { saleId } = await completedSaleInvoice(t, orgId, userId, customerId, "DEAD");
-    const chequeId = await asAdmin.mutation(api.collections.registerSaleInvoiceCheque, {
-      orgId, saleId, bank: "Test Bank", chequeNumber: "S724-DEAD",
-      chequeDate: Date.now(), amountMinor: 3000,
+    const vehicleId = await t.run((ctx) => ctx.db.insert("vehicles", {
+      orgId, vin: "VIN-S724-DEAD", make: "Kia", model: "Rio", year: 2021,
+      mileage: 0, color: "White", fuelType: "Gasoline", transmission: "Automatic",
+      sellingPrice: 100, purchasePrice: 60, status: "AVAILABLE", sourceType: "STOCK",
+    }));
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 100, saleDate: Date.now(), status: "COMPLETED",
+      financingType: "CASH", idempotencyKey: crypto.randomUUID(),
     });
-    await t.run((ctx) => ctx.db.patch(saleId, { status: "CANCELLED" }));
-    await expect(asAdmin.mutation(api.collections.depositCheque, { orgId, chequeId }))
-      .rejects.toThrow(/can no longer be advanced/i);
+    const register = (no: string) => asAdmin.mutation(api.collections.registerSaleInvoiceCheque, {
+      orgId, saleId, bank: "Test Bank", chequeNumber: no, chequeDate: Date.now(), amountMinor: 3000,
+    });
+    const heldId = await register("S724-HELD");
+    const depositedId = await register("S724-DEP");
+    await asAdmin.mutation(api.collections.depositCheque, { orgId, chequeId: depositedId });
+    await t.run(async (ctx) => {
+      const actor = await ctx.db.insert("users", {
+        clerkId: "s724_dead_approver", email: "s724_dead_approver@example.com", name: "Approver",
+      });
+      const roleId = await ctx.db.insert("roles", {
+        orgId, name: "Cancel approver", permissions: ["view:sales", "edit:sales", "approve:requests", "manage:finance"],
+      });
+      await ctx.db.insert("memberships", { orgId, userId: actor, roleId });
+    });
+    const approver = t.withIdentity({ subject: "s724_dead_approver", clerkId: "s724_dead_approver" });
+    await approver.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+    expect((await t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("CANCELLED");
+
+    // HELD: refused on deposit AND clear with the coded error; nothing moves.
+    await expect(asAdmin.mutation(api.collections.depositCheque, { orgId, chequeId: heldId }))
+      .rejects.toThrow(/returned to the customer|return/i);
     await expect(asAdmin.mutation(api.collections.clearCheque, {
-      orgId, chequeId, idempotencyKey: crypto.randomUUID(),
-    })).rejects.toThrow(/can no longer be advanced/i);
-    expect((await t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("HELD");
+      orgId, chequeId: heldId, idempotencyKey: crypto.randomUUID(),
+    })).rejects.toThrow(/returned to the customer|return/i);
+    expect((await t.run((ctx) => ctx.db.get(heldId)))?.status).toBe("HELD");
+
+    // DEPOSITED: clears into unapplied customer credit with lineage.
+    const paymentId = await asAdmin.mutation(api.collections.clearCheque, {
+      orgId, chequeId: depositedId, idempotencyKey: crypto.randomUUID(),
+    });
+    expect((await t.run((ctx) => ctx.db.get(depositedId)))?.status).toBe("CLEARED");
+    const movement = await movementFor(t, orgId, paymentId as Id<"collectionPayments">);
+    const position = await positionFor(t, orgId, movement!._id);
+    expect(position).toMatchObject({
+      remainingUnappliedMinor: 3000, sourceChequeId: depositedId, originatingSaleId: saleId,
+    });
   });
 
   test("SCRUM-723: a completed cash sale cancels with a separate partial customer payout", async () => {
