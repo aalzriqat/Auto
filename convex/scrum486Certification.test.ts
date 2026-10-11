@@ -552,6 +552,17 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       { account: "5100", currency: "JOD", debit: 10_000_000, credit: 0, entryStatus: "POSTED" },
       { account: "1400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
     ]);
+    const companyArLine = await s.t.run(async (ctx) => {
+      const lines = await ctx.db.query("journalLines")
+        .withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect();
+      const withAccounts = await Promise.all(lines.map(async (line) => ({
+        line,
+        account: await ctx.db.get(line.accountId),
+      })));
+      return withAccounts.filter(({ account }) => account?.code === "1210").map(({ line }) => line);
+    });
+    expect(companyArLine).toHaveLength(1);
+    expect(companyArLine[0].financeCompanyId).toBe(s.companyId);
     expectBalanced(rows);
     expect(await trialBalanceNormalBalance(s)).toEqual({
       "1210|JOD": 12_500_000,
