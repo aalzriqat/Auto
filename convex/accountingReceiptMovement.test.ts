@@ -480,6 +480,156 @@ async function completedSaleInvoice(
 }
 
 describe("SCRUM-218-C §4 — applying retained credit", () => {
+  test("SCRUM-724: operator reserves, sees proof status, and activates a posted sale receipt once", async () => {
+    const { t, asAdmin, orgId, userId, customerId, movement } = await retainedCreditFixture("s724operator");
+    const { saleId, invoiceId } = await completedSaleInvoice(t, orgId, userId, customerId, "OPERATOR");
+    const reserveKey = crypto.randomUUID();
+    const reserveArgs = {
+      orgId, saleId, receiptMovementId: movement._id,
+      amountMinor: 3000, idempotencyKey: reserveKey,
+    };
+    const applicationId = await asAdmin.mutation(api.collections.reserveSaleInvoiceReceipt, reserveArgs);
+    expect(await asAdmin.mutation(api.collections.reserveSaleInvoiceReceipt, reserveArgs)).toBe(applicationId);
+    await expect(asAdmin.mutation(api.collections.reserveSaleInvoiceReceipt, {
+      ...reserveArgs, amountMinor: 2000,
+    })).rejects.toThrow();
+    const statusArgs = { orgId, saleId, paginationOpts: { cursor: null, numItems: 20 } };
+    const before = await asAdmin.query(api.collections.saleInvoiceReceiptStatus, statusArgs);
+    expect(before.invoice?.outstandingMinor).toBe(10000);
+    expect(before.invoice?.availableToReserveMinor).toBe(7000);
+    expect(before.page).toMatchObject([{
+      applicationId, readiness: "REVIEW_REQUIRED", reason: "SALE_UNPOSTED", amountMinor: 3000,
+    }]);
+    await t.run(async (ctx) => {
+      const eventId = await ctx.db.insert("accountingEvents", {
+        orgId, eventType: "SALE_COMPLETED", sourceType: "sales", sourceId: String(saleId),
+        eventVersion: 1, idempotencyKey: saleCompletedKey(saleId),
+        occurredAt: Date.now(), accountingDate: Date.now(), currency: "USD",
+        payload: {}, status: "POSTED", createdBy: userId, createdAt: Date.now(),
+      });
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId, accountingEventId: eventId, journalNumber: "S724-OPERATOR",
+        accountingDate: Date.now(), sourceType: "sales", sourceId: String(saleId),
+        category: "SYSTEM", memo: "sale", currency: "USD", status: "POSTED",
+        postedBy: userId, postedAt: Date.now(), createdAt: Date.now(),
+      });
+      await ctx.db.patch(eventId, { journalEntryId });
+    });
+    const ready = await asAdmin.query(api.collections.saleInvoiceReceiptStatus, statusArgs);
+    expect(ready.page).toMatchObject([{ applicationId, readiness: "ORIGINS_VERIFIED" }]);
+    await removeRetainedCreditAccount(t, orgId);
+    expect((await asAdmin.query(api.collections.saleInvoiceReceiptStatus, statusArgs)).page)
+      .toMatchObject([{ applicationId, readiness: "ORIGINS_VERIFIED" }]);
+    const activationArgs = {
+      orgId, applicationId, amountMinor: 3000, idempotencyKey: crypto.randomUUID(),
+    };
+    await expect(asAdmin.mutation(api.collections.activateSaleInvoiceReceipt, activationArgs)).rejects.toThrow();
+    await seedRetainedCreditAccount(t, orgId);
+    const activated = await asAdmin.mutation(api.collections.activateSaleInvoiceReceipt, activationArgs);
+    expect(await asAdmin.mutation(api.collections.activateSaleInvoiceReceipt, activationArgs)).toEqual(activated);
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("ACTIVE");
+    expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(7000);
+    expect(await t.run((ctx) => getReceivableOutstandingMinor(ctx, invoiceId))).toBe(7000);
+    expect((await asAdmin.query(api.collections.saleInvoiceReceiptStatus, statusArgs)).page).toHaveLength(0);
+  });
+
+  test("SCRUM-724: a cancelled reservation cannot replay as a live operator success", async () => {
+    const { t, asAdmin, orgId, userId, customerId, movement } = await retainedCreditFixture("s724cancelreplay");
+    const { saleId } = await completedSaleInvoice(t, orgId, userId, customerId, "REPLAY");
+    const args = { orgId, saleId, receiptMovementId: movement._id,
+      amountMinor: 3000, idempotencyKey: crypto.randomUUID() };
+    const applicationId = await asAdmin.mutation(api.collections.reserveSaleInvoiceReceipt, args);
+    await t.run((ctx) => cancelPendingInvoiceReceipt(ctx, orgId, applicationId));
+    await expect(asAdmin.mutation(api.collections.reserveSaleInvoiceReceipt, args))
+      .rejects.toThrow(/no longer pending/i);
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+    const replacement = await asAdmin.mutation(api.collections.reserveSaleInvoiceReceipt, {
+      ...args, idempotencyKey: crypto.randomUUID(),
+    });
+    expect(replacement).not.toBe(applicationId);
+  });
+
+  test("SCRUM-724: customer cheque is held, deposited, cleared, then becomes posted retained credit", async () => {
+    const { t, asAdmin, orgId, userId, customerId } = await seedOrg("s724cheque");
+    registerRateLimiter(t);
+    await seedRetainedCreditAccount(t, orgId);
+    const { saleId } = await completedSaleInvoice(t, orgId, userId, customerId, "CHEQUE");
+    const statusArgs = { orgId, saleId, paginationOpts: { cursor: null, numItems: 20 } };
+    const status = await asAdmin.query(api.collections.saleInvoiceReceiptStatus, statusArgs);
+    expect(status.invoice?.availableToReserveMinor).toBe(10000);
+    await expect(asAdmin.mutation(api.collections.registerSaleInvoiceCheque, {
+      orgId, saleId, bank: "Test Bank", chequeNumber: "S724-OVER",
+      chequeDate: Date.now(), amountMinor: 10001,
+    })).rejects.toThrow(/available customer invoice amount/i);
+    const chequeId = await asAdmin.mutation(api.collections.registerSaleInvoiceCheque, {
+      orgId, saleId, bank: "Test Bank", chequeNumber: "S724-1",
+      chequeDate: Date.now(), amountMinor: 3000,
+    });
+    const list = () => asAdmin.query(api.collections.listSaleCustomerCheques, statusArgs);
+    expect((await list()).page).toMatchObject([{ chequeId, status: "HELD" }]);
+    await asAdmin.mutation(api.collections.depositCheque, { orgId, chequeId });
+    expect((await list()).page).toMatchObject([{ chequeId, status: "DEPOSITED" }]);
+    const clearArgs = {
+      orgId, chequeId, idempotencyKey: crypto.randomUUID(),
+    };
+    const paymentId = await asAdmin.mutation(api.collections.clearCheque, clearArgs);
+    expect(await asAdmin.mutation(api.collections.clearCheque, clearArgs)).toBe(paymentId);
+    expect((await list()).page).toHaveLength(0);
+    const movement = await movementFor(t, orgId, paymentId);
+    expect(movement?.customerId).toBe(customerId);
+    expect((await t.run((ctx) => ctx.db.get(chequeId)))?.saleId).toBeUndefined();
+    expect((await t.run((ctx) => ctx.db.get(chequeId)))?.invoiceSaleId).toBe(saleId);
+    expect((await positionFor(t, orgId, movement!._id))?.remainingUnappliedMinor).toBe(3000);
+    const credits = await asAdmin.query(api.collections.listRetainedCredits, {
+      orgId, customerId, paginationOpts: { cursor: null, numItems: 20 },
+    });
+    expect(credits.page.find((row) => row.receiptMovementId === movement!._id))
+      .toMatchObject({ receiptPosted: true, reservedForSaleInvoicesMinor: 3000, availableUnappliedMinor: 0 });
+    expect((await asAdmin.query(api.collections.saleInvoiceReceiptStatus, statusArgs)).page)
+      .toMatchObject([{ amountMinor: 3000 }]);
+  });
+
+  test("SCRUM-724: deal-scoped cash receipt reserves its invoice atomically", async () => {
+    const { t, asAdmin, orgId, userId, customerId } = await seedOrg("s724direct");
+    registerRateLimiter(t);
+    await seedRetainedCreditAccount(t, orgId);
+    const { saleId } = await completedSaleInvoice(t, orgId, userId, customerId, "DIRECT");
+    await expect(asAdmin.mutation(api.collections.recordPayment, {
+      orgId, customerId, invoiceSaleId: saleId, amount: 101,
+      method: "CASH", paymentDate: Date.now(), idempotencyKey: crypto.randomUUID(),
+    })).rejects.toThrow(/exceeds the available customer invoice amount/i);
+    const paymentArgs = {
+      orgId, customerId, invoiceSaleId: saleId, amount: 30,
+      method: "CASH", paymentDate: Date.now(), idempotencyKey: crypto.randomUUID(),
+    } as const;
+    const paymentId = await asAdmin.mutation(api.collections.recordPayment, paymentArgs);
+    expect(await asAdmin.mutation(api.collections.recordPayment, paymentArgs)).toBe(paymentId);
+    const movement = await movementFor(t, orgId, paymentId);
+    expect((await positionFor(t, orgId, movement!._id))?.remainingUnappliedMinor).toBe(3000);
+    const status = await asAdmin.query(api.collections.saleInvoiceReceiptStatus, {
+      orgId, saleId, paginationOpts: { cursor: null, numItems: 20 },
+    });
+    expect(status.page).toMatchObject([{ amountMinor: 3000 }]);
+    expect(status.invoice?.availableToReserveMinor).toBe(7000);
+  });
+
+  test("SCRUM-724: a cancelled sale's intended cheque cannot be deposited or cleared", async () => {
+    const { t, asAdmin, orgId, userId, customerId } = await seedOrg("s724deadcheque");
+    registerRateLimiter(t);
+    const { saleId } = await completedSaleInvoice(t, orgId, userId, customerId, "DEAD");
+    const chequeId = await asAdmin.mutation(api.collections.registerSaleInvoiceCheque, {
+      orgId, saleId, bank: "Test Bank", chequeNumber: "S724-DEAD",
+      chequeDate: Date.now(), amountMinor: 3000,
+    });
+    await t.run((ctx) => ctx.db.patch(saleId, { status: "CANCELLED" }));
+    await expect(asAdmin.mutation(api.collections.depositCheque, { orgId, chequeId }))
+      .rejects.toThrow(/can no longer be advanced/i);
+    await expect(asAdmin.mutation(api.collections.clearCheque, {
+      orgId, chequeId, idempotencyKey: crypto.randomUUID(),
+    })).rejects.toThrow(/can no longer be advanced/i);
+    expect((await t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("HELD");
+  });
+
   test("SCRUM-723: a completed cash sale cancels with a separate partial customer payout", async () => {
     const { t, asAdmin, orgId, userId, customerId } = await seedOrg("s723cashcancel");
     registerRateLimiter(t);

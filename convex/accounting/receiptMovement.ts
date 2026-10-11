@@ -40,7 +40,7 @@
  */
 import { ConvexError } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
-import { MutationCtx } from "../_generated/server";
+import { MutationCtx, QueryCtx } from "../_generated/server";
 import { SYSTEM_KEYS } from "../utils/defaultChart";
 import {
   RECEIPT_CREDIT_APPLIED_EVENT_TYPE,
@@ -288,7 +288,7 @@ export function computeApplicableMinor(args: {
  * money, which is an overdraft waiting to happen.
  */
 export async function loadRetainedPosition(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   receiptMovementId: Id<"receiptMovements">
 ): Promise<Doc<"receiptRetainedPositions">> {

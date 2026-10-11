@@ -4764,6 +4764,8 @@ export default defineSchema({
     customerId: v.id("customers"),
     vehicleId: v.optional(v.id("vehicles")),
     saleId: v.optional(v.id("sales")),
+    // Customer invoice intent; legacy saleId remains absent when this cheque clears.
+    invoiceSaleId: v.optional(v.id("sales")),
     // Set when this cheque is the registered expected-payment method for a
     // finance application, ahead of finalizeDeal — see registerExpectedPayment.
     //
