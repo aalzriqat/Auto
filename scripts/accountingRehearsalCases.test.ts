@@ -269,6 +269,7 @@ type Defects = {
   cashRefundIncomeMissingAfterRefund?: boolean;
   cashHeldIncomeDropsRevenueRow?: boolean;
   cashRefusedIncomeDropsRevenueRow?: boolean;
+  cashRefusedReportHasUnrelatedBalance?: boolean;
   cashRefundIncomeDropsRevenueRow?: boolean;
   cashHeldPaymentUnappliedWrong?: boolean;
   cashRefundCrossesUtcMonth?: boolean;
@@ -895,6 +896,9 @@ function makeBackend(defects: Defects = {}) {
             netMinor: (account.normalBalance === "DEBIT" ? debitMinor - creditMinor : creditMinor - debitMinor) +
               (defects.cashHeldReportHasUnrelatedBalance && account.systemKey === "BANK_ACCOUNT" &&
                 deposits.get(certifiedCashRefundDepositId ?? "")?.status === "HELD" ? 200_000 : 0) +
+              (defects.cashRefusedReportHasUnrelatedBalance && cashRefundCreatorRefused &&
+                account.systemKey === "BANK_ACCOUNT" &&
+                deposits.get(certifiedCashRefundDepositId ?? "")?.status === "HELD" ? 1 : 0) +
               (defects.cashSaleInventoryReportNotCleared && certifiedCashSalePosted && account.systemKey === "VEHICLE_INVENTORY" ? 1 : 0) }];
         });
         return { ok: true as const, value: { rows } };
@@ -2342,6 +2346,7 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["cashRefundIncomeMissingAfterRefund", /refunded income netIncome is unavailable/],
     ["cashHeldIncomeDropsRevenueRow", /held income revenueRows/],
     ["cashRefusedIncomeDropsRevenueRow", /refused income revenueRows/],
+    ["cashRefusedReportHasUnrelatedBalance", /refused creator cannot change account\/currency balances/],
     ["cashRefundIncomeDropsRevenueRow", /refunded income revenueRows/],
     ["cashHeldPaymentUnappliedWrong", /held payment remains unapplied/],
   ] as const)("M486C3 rejects %s in an owned cash quote refund", async (defect, diagnostic) => {

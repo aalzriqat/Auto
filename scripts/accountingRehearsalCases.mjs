@@ -2159,12 +2159,8 @@ export async function runRehearsalCases(ctx) {
     expectSameIncomeRows(refusedIncome, heldIncome, "refused");
     const refusedOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
     expectSameOperationalProfit(heldOperational, refusedOperational, "M486C3 refused creator");
-    if (!Array.isArray(refusedBalance?.rows)) fail("M486C3 public balance unavailable after refused creator");
-    for (const key of ["CASH_ON_HAND", "CUSTOMER_DEPOSITS_LIABILITY",
-      "ACCOUNTS_RECEIVABLE_CUSTOMERS", "SALES_REVENUE", "COST_OF_VEHICLES_SOLD"]) {
-      expectEqual(net(refusedBalance, key), net(heldBalance, key),
-        `M486C3 refused creator cannot change ${key}`);
-    }
+    expectSameAccountBalances(heldBalance, refusedBalance,
+      "M486C3 refused creator cannot change account/currency balances");
     for (const field of ["totalRevenue", "totalCogs", "grossProfit", "totalExpenses",
       "totalOtherIncome", "totalOtherExpenses", "netIncome"]) {
       if (![openingIncome?.[field], heldIncome?.[field], refusedIncome?.[field]]
@@ -2305,7 +2301,9 @@ export async function runRehearsalCases(ctx) {
       commandsExercised: ["quotes.saveQuote", "deposits.create", "deposits.release"],
       reportsRead: ["accountingReports.trialBalance", "accountingReports.incomeStatement",
         "reports.getProfitAndLoss", "subledger.getPaymentBalance", "subledger.listReceivables",
-        "accountingLedger.listJournalEntries"] };
+        "subledger.listAllocations", "vehicles.get", "collections.listPayments",
+        "accountingLedger.listAccountingEvents", "accountingLedger.listJournalEntries",
+        "chartOfAccounts.list"] };
   });
 
   // ── FD1 — the financed deal's cash receipt settles the exact recorded debt ──
