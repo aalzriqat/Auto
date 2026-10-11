@@ -8,6 +8,7 @@ import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 import { dateInputToUtcMs, economicDateInputToMs, economicTodayDateInput, todayDateInput } from "@/lib/dateInput";
 import { formatMoneyDisplay, moneyDisplayScale, parseTypedAmount } from "@/lib/moneyDisplay";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,6 +35,7 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   const registerCheque = useMutation(api.collections.registerSaleInvoiceCheque);
   const depositCheque = useMutation(api.collections.depositCheque);
   const clearCheque = useMutation(api.collections.clearCheque);
+  const requestRefund = useMutation(api.retainedCreditRefunds.requestRetainedCreditRefund);
   const [pendingCursor, setPendingCursor] = useState<string | null>(null);
   const status = useQuery(api.collections.saleInvoiceReceiptStatus,
     canView ? { orgId, saleId, paginationOpts: { numItems: 20, cursor: pendingCursor } } : "skip");
@@ -55,6 +57,10 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   const [selectedMovement, setSelectedMovement] = useState("");
   const [paymentAttempt, setPaymentAttempt] = useState<PaymentAttempt | null>(null);
   const [reserveAttempt, setReserveAttempt] = useState<ReserveAttempt | null>(null);
+  const [refundMovement, setRefundMovement] = useState("");
+  const [refundAmount, setRefundAmount] = useState("");
+  const [refundMethod, setRefundMethod] = useState<"BANK_TRANSFER" | "CASH">("BANK_TRANSFER");
+  const [refundReason, setRefundReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -72,6 +78,8 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   const parsedPayment = parseTypedAmount(amount, moneyDisplayScale(currency));
   const parsedReserve = parseTypedAmount(reserveAmount, moneyDisplayScale(currency));
   const parsedCheque = parseTypedAmount(chequeAmount, moneyDisplayScale(currency));
+  const refundCredit = positions.find((position) => position.receiptMovementId === refundMovement);
+  const parsedRefund = parseTypedAmount(refundAmount, moneyDisplayScale(refundCredit?.currency ?? currency));
   const paymentIntent = `sale-receipt:${saleId}`;
   const reserveIntent = `sale-reserve:${saleId}`;
 
@@ -164,6 +172,24 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
     } finally { setBusy(false); }
   }
 
+  async function onRequestRefund() {
+    if (!canManage || busy || !refundCredit || !refundCredit.receiptPosted) return;
+    if (parsedRefund.minor === null || parsedRefund.minor <= 0 ||
+      parsedRefund.minor > refundCredit.availableUnappliedMinor || !refundReason.trim()) {
+      setError(t("DealReceiptEnterValidCredit"));
+      return;
+    }
+    setBusy(true); setError(""); setNotice("");
+    try {
+      await requestRefund({ orgId, receiptMovementId: refundCredit.receiptMovementId,
+        amountMinor: parsedRefund.minor, method: refundMethod, reason: refundReason.trim() });
+      setRefundMovement(""); setRefundAmount(""); setRefundReason("");
+      setNotice(t("RetainedCreditRefundRequested"));
+    } catch (refundError) {
+      setError(getLocalizedErrorMessage(refundError, t));
+    } finally { setBusy(false); }
+  }
+
   async function onAdvanceCheque(chequeId: Id<"postDatedCheques">, state: "HELD" | "DEPOSITED") {
     if (!canManage || busy || status?.saleStatus !== "COMPLETED" ||
       !invoice || invoice.availableToReserveMinor <= 0 || !receiptCurrencyMatches) return;
@@ -247,6 +273,9 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
                   <span><bdi dir="ltr">{cheque.bank} #{cheque.chequeNumber}</bdi></span>
                   <span>{formatMoneyDisplay(cheque.amount, status.receiptCurrency, locale)}</span>
                   <span>{t(cheque.status === "HELD" ? "DealReceiptChequeHeld" : "DealReceiptChequeDeposited")}</span>
+                  {status.saleStatus === "CANCELLED" && <span className="text-muted-foreground">
+                    {t(cheque.status === "HELD" ? "RetainedCreditChequeCancelledHeld"
+                      : "RetainedCreditChequeBecomesCredit")}</span>}
                   {canManage && status.saleStatus === "COMPLETED" &&
                     invoice.availableToReserveMinor > 0 && receiptCurrencyMatches &&
                     <Button size="sm" variant="outline" disabled={busy}
@@ -272,6 +301,17 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
                   </span>}
                   <span className="text-muted-foreground">{position.receiptPosted
                     ? t("DealReceiptPosted") : t("DealReceiptAwaitingPosting")}</span>
+                  {position.sourceChequeLabel && <span className="text-muted-foreground">
+                    {t("RetainedCreditFromCheque")} <bdi dir="ltr">{position.sourceChequeLabel}</bdi>
+                    {" · "}{t(position.originatingSaleStatus === "CANCELLED"
+                      ? "RetainedCreditSaleCancelled" : "RetainedCreditSaleActive")}</span>}
+                  {canManage && position.receiptPosted && position.availableUnappliedMinor > 0 &&
+                    <Button size="sm" variant="outline" disabled={busy}
+                      onClick={() => { setRefundMovement(position.receiptMovementId); setRefundAmount(""); }}>
+                      {t("RetainedCreditRequestRefund")}</Button>}
+                  {position.originatingSaleStatus === "CANCELLED" && position.availableUnappliedMinor > 0 &&
+                    <span className="text-xs text-muted-foreground" title={t("RetainedCreditApplyElsewhereHint")}>
+                      {t("RetainedCreditApplyElsewhere")}: {t("RetainedCreditApplyElsewhereHint")}</span>}
                   {canManage && position.receiptPosted && position.currency === currency &&
                     position.availableUnappliedMinor > 0 && status.saleStatus === "COMPLETED" &&
                     invoice.availableToReserveMinor > 0 &&
@@ -282,6 +322,23 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
               ))}</ul>}
               {credits.status === "CanLoadMore" && <Button variant="outline" size="sm"
                 onClick={() => credits.loadMore(20)}>{t("LoadMore")}</Button>}
+              {canManage && refundCredit && <div className="grid gap-3 sm:grid-cols-2">
+                <div><Label htmlFor="credit-refund-amount">{t("RetainedCreditRefundAmount")}</Label>
+                  <Input id="credit-refund-amount" inputMode="decimal" value={refundAmount} disabled={busy}
+                    onChange={(event) => setRefundAmount(event.target.value)} /></div>
+                <div><Label htmlFor="credit-refund-method">{t("RetainedCreditRefundMethod")}</Label>
+                  <select id="credit-refund-method" className="flex h-10 w-full rounded-md border bg-background px-3"
+                    value={refundMethod} disabled={busy}
+                    onChange={(event) => setRefundMethod(event.target.value as "BANK_TRANSFER" | "CASH")}>
+                    <option value="BANK_TRANSFER">{t("MethodBankTransfer")}</option>
+                    <option value="CASH">{t("MethodCash")}</option>
+                  </select></div>
+                <div className="sm:col-span-2"><Label htmlFor="credit-refund-reason">{t("RetainedCreditRefundReason")}</Label>
+                  <Input id="credit-refund-reason" value={refundReason} disabled={busy}
+                    onChange={(event) => setRefundReason(event.target.value)} /></div>
+                <Button className="w-fit" disabled={busy} onClick={onRequestRefund}>
+                  {t("RetainedCreditRefundSubmit")}</Button>
+              </div>}
               {canManage && (selectedCredit || reserveAttempt) && <div className="flex flex-wrap items-end gap-2">
                 <div><Label htmlFor="sale-reserve-amount">{t("DealReceiptAmount")}</Label>
                   <Input id="sale-reserve-amount" inputMode="decimal" value={reserveAmount}

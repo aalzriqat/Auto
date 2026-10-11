@@ -1,0 +1,103 @@
+"use client";
+
+import { useRef, useState } from "react";
+import { useMutation, useQuery } from "convex/react";
+import { toast } from "sonner";
+import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
+import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useCommandIdentity } from "@/hooks/useCommandIdentity";
+import { getLocalizedErrorMessage } from "@/lib/errors";
+import { formatMoneyDisplay, moneyDisplayScale } from "@/lib/moneyDisplay";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+
+/**
+ * SCRUM-724: standalone customer-credit refunds (cheque cleared after its sale
+ * was cancelled). Listed beside the collection approvals: a different actor
+ * approves, then a finance user records the payout. The server owns every rule;
+ * this only shows the queue and forwards the three commands.
+ */
+export function RetainedCreditRefundsSection({ orgId, canApprove, canManage }: Readonly<{
+  orgId: Id<"organizations">;
+  canApprove: boolean;
+  canManage: boolean;
+}>) {
+  const { t, locale } = useLanguage();
+  const command = useCommandIdentity();
+  const pending = useQuery(api.retainedCreditRefunds.listRetainedCreditRefundRequests,
+    { orgId, status: "PENDING" });
+  const approved = useQuery(api.retainedCreditRefunds.listRetainedCreditRefundRequests,
+    { orgId, status: "APPROVED" });
+  const respond = useMutation(api.retainedCreditRefunds.respondToRetainedCreditRefund);
+  const execute = useMutation(api.retainedCreditRefunds.executeRetainedCreditRefund);
+  const [references, setReferences] = useState<Record<string, string>>({});
+  const paidAtByRequest = useRef<Record<string, number>>({});
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const rows = [...(pending ?? []), ...(approved ?? [])];
+
+  async function onDecide(requestId: Id<"retainedCreditRefundRequests">, status: "APPROVED" | "REJECTED") {
+    if (busyId) return;
+    setBusyId(requestId);
+    const intent = `retained-refund-decide:${requestId}:${status}`;
+    try {
+      await respond({ orgId, requestId, status, idempotencyKey: command.for(intent) });
+      command.retire(intent);
+      toast.success(t(status === "APPROVED" ? "RetainedCreditRefundApproved" : "RetainedCreditRefundRejected"));
+    } catch (error) {
+      toast.error(getLocalizedErrorMessage(error, t));
+    } finally { setBusyId(null); }
+  }
+
+  async function onExecute(requestId: Id<"retainedCreditRefundRequests">) {
+    const reference = (references[requestId] ?? "").trim();
+    if (busyId || !reference) return;
+    setBusyId(requestId);
+    const intent = `retained-refund-execute:${requestId}`;
+    try {
+      // The payout date is part of the command fingerprint, so it is fixed on
+      // the first attempt: a retry replays instead of mismatching the key.
+      const paidAt = paidAtByRequest.current[requestId] ?? (Date.now() - 60_000);
+      paidAtByRequest.current[requestId] = paidAt;
+      await execute({ orgId, requestId, reference, paidAt, idempotencyKey: command.for(intent) });
+      command.retire(intent);
+      delete paidAtByRequest.current[requestId];
+      toast.success(t("RetainedCreditRefundPaid"));
+    } catch (error) {
+      toast.error(getLocalizedErrorMessage(error, t));
+    } finally { setBusyId(null); }
+  }
+
+  return (
+    <section className="mt-4 space-y-2" aria-label={t("RetainedCreditRefundsHeading")}
+      data-testid="retained-credit-refunds">
+      <h3 className="font-medium">{t("RetainedCreditRefundsHeading")}</h3>
+      {rows.length === 0 && <p className="text-sm text-muted-foreground">{t("RetainedCreditRefundsEmpty")}</p>}
+      {rows.map((row) => (
+        <div key={row._id} className="flex flex-wrap items-center gap-2 rounded-md border p-2 text-sm">
+          <span className="font-medium">{row.customerName ?? "-"}</span>
+          <span>{formatMoneyDisplay(row.amountMinor / 10 ** moneyDisplayScale(row.currency), row.currency, locale)}</span>
+          {row.sourceChequeLabel && <span className="text-muted-foreground">
+            {t("RetainedCreditFromCheque")} <bdi dir="ltr">{row.sourceChequeLabel}</bdi>
+            {row.originatingSaleStatus === "CANCELLED" && <> · {t("RetainedCreditSaleCancelled")}</>}</span>}
+          <span className="text-muted-foreground">
+            {t(row.status === "PENDING" ? "RetainedCreditStatusPENDING" : "RetainedCreditStatusAPPROVED")}</span>
+          {row.status === "PENDING" && canApprove && <>
+            <Button size="sm" variant="outline" disabled={!!busyId}
+              onClick={() => onDecide(row._id, "APPROVED")}>{t("Approve")}</Button>
+            <Button size="sm" variant="outline" disabled={!!busyId}
+              onClick={() => onDecide(row._id, "REJECTED")}>{t("Reject")}</Button>
+          </>}
+          {row.status === "APPROVED" && canManage && <>
+            <Input className="w-48" aria-label={t("RetainedCreditPayoutReference")}
+              placeholder={t("RetainedCreditPayoutReference")} value={references[row._id] ?? ""}
+              disabled={!!busyId}
+              onChange={(event) => setReferences((prev) => ({ ...prev, [row._id]: event.target.value }))} />
+            <Button size="sm" disabled={!!busyId || !(references[row._id] ?? "").trim()}
+              onClick={() => onExecute(row._id)}>{t("RetainedCreditExecute")}</Button>
+          </>}
+        </div>
+      ))}
+    </section>
+  );
+}

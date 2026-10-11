@@ -55,6 +55,7 @@ import { InstallmentCalendar } from "./collections/InstallmentCalendar";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
+import { RetainedCreditRefundsSection } from "./RetainedCreditRefundsSection";
 
 type ReceivableRow = Doc<"receivables"> & {
   customerName: string;
@@ -68,6 +69,8 @@ type ChequeRow = Doc<"postDatedCheques"> & {
   /** SCRUM-447: the row has finance-company lineage; the drawer is named or unverified. */
   isFinanceCompanyCheque?: boolean;
   drawerName?: string | null;
+  /** SCRUM-724: status of the sale this cheque was written for. */
+  invoiceSaleStatus?: string;
 };
 
 type ApprovalRow = Doc<"collectionApprovalRequests"> & {
@@ -414,7 +417,14 @@ export function CollectionsTab() {
                       </TableCell>
                       <TableCell>{cheque.bank}</TableCell>
                       <TableCell>{cheque.chequeNumber}</TableCell>
-                      <TableCell><StatusBadge status={cheque.status} /></TableCell>
+                      <TableCell>
+                        <StatusBadge status={cheque.status} />
+                        {cheque.invoiceSaleStatus === "CANCELLED" && (cheque.status === "HELD" || cheque.status === "DEPOSITED") && (
+                          <div className="text-xs text-muted-foreground">
+                            {t(cheque.status === "HELD" ? "RetainedCreditChequeCancelledHeld" : "RetainedCreditChequeBecomesCredit" as any)}
+                          </div>
+                        )}
+                      </TableCell>
                       <TableCell className="text-right font-semibold">{formatCurrency(cheque.amount)}</TableCell>
                       <TableCell className="text-right">
                         {canManage && (() => {
@@ -659,6 +669,7 @@ export function CollectionsTab() {
                 </TableBody>
               </Table>
             </div>
+            <RetainedCreditRefundsSection orgId={activeOrgId} canApprove={canApprove} canManage={canManage} />
           </TabsContent>
         )}
       </Tabs>

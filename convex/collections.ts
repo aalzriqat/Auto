@@ -293,10 +293,11 @@ async function hydrateReceivable(ctx: QueryCtx, receivable: Doc<"receivables">) 
 }
 
 async function hydrateCheque(ctx: QueryCtx, cheque: Doc<"postDatedCheques">) {
-  const [customer, vehicle, receivable] = await Promise.all([
+  const [customer, vehicle, receivable, invoiceSale] = await Promise.all([
     ctx.db.get(cheque.customerId),
     getOptionalVehicle(ctx, cheque.vehicleId),
     cheque.receivableId ? ctx.db.get(cheque.receivableId) : null,
+    cheque.invoiceSaleId ? ctx.db.get(cheque.invoiceSaleId) : null,
   ]);
   const isFinanceCompanyCheque = isFcLineage(cheque);
   let drawerName: string | null = null;
@@ -309,6 +310,9 @@ async function hydrateCheque(ctx: QueryCtx, cheque: Doc<"postDatedCheques">) {
     customerName: customerName(customer),
     vehicleLabel: vehicleLabel(vehicle),
     receivableTitle: receivable?.title,
+    // SCRUM-724: the sale this cheque was written for, so a cheque on a
+    // cancelled sale can say it becomes customer credit when it clears.
+    invoiceSaleStatus: invoiceSale && invoiceSale.orgId === cheque.orgId ? invoiceSale.status : undefined,
     // SCRUM-447 D2/D5: lineage and the named drawer, for the read side. A row
     // with lineage but no recorded drawer is UNVERIFIED (drawerName null).
     isFinanceCompanyCheque,
