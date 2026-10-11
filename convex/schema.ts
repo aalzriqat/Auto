@@ -4534,11 +4534,57 @@ export default defineSchema({
     remainingUnappliedMinor: v.number(),
     /** Legacy receiptApplications sequence counter; invoice claims use their own row id. */
     applicationCount: v.number(),
+    /**
+     * SCRUM-724 lineage, written ONCE at insert and never patched. Present only
+     * on a position created by clearing a customer cheque that was registered
+     * against a sale invoice. "Cancelled" is NOT stored: it is derived from the
+     * sale's status at read time. Rows created before SCRUM-724 carry neither.
+     */
+    sourceChequeId: v.optional(v.id("postDatedCheques")),
+    originatingSaleId: v.optional(v.id("sales")),
     updatedAt: v.number(),
   })
     .index("by_org", ["orgId"])
     .index("by_org_movement", ["orgId", "receiptMovementId"])
     .index("by_org_customer", ["orgId", "customerId"]),
+
+  /**
+   * SCRUM-724: a request to pay retained 2110 customer credit back to the
+   * customer. Keyed to the retained position / movement, NEVER to a receivable
+   * (no receivable exists for credit left by a cancelled sale). One approved
+   * request authorizes exactly one payout: `status` moves
+   * PENDING -> APPROVED -> EXECUTED, and EXECUTED is terminal.
+   */
+  retainedCreditRefundRequests: defineTable({
+    orgId: v.id("organizations"),
+    receiptMovementId: v.id("receiptMovements"),
+    positionId: v.id("receiptRetainedPositions"),
+    customerId: v.id("customers"),
+    currency: v.string(),
+    amountMinor: v.number(),
+    method: v.union(v.literal("BANK_TRANSFER"), v.literal("CASH")),
+    reason: v.string(),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("APPROVED"),
+      v.literal("REJECTED"),
+      v.literal("EXECUTED")
+    ),
+    requestedBy: v.id("users"),
+    decidedBy: v.optional(v.id("users")),
+    decidedAt: v.optional(v.number()),
+    decisionNotes: v.optional(v.string()),
+    responseIdempotencyKey: v.optional(v.string()),
+    executedBy: v.optional(v.id("users")),
+    executedAt: v.optional(v.number()),
+    canonicalPaymentId: v.optional(v.id("canonicalPayments")),
+    accountingEventId: v.optional(v.id("accountingEvents")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_movement", ["orgId", "receiptMovementId"]),
 
   /**
    * SCRUM-722: a pending claim on retained 2110 credit for a completed sale's

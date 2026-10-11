@@ -131,6 +131,7 @@ import type * as pushSubscriptions from "../pushSubscriptions.js";
 import type * as quotes from "../quotes.js";
 import type * as rateLimit from "../rateLimit.js";
 import type * as reports from "../reports.js";
+import type * as retainedCreditRefunds from "../retainedCreditRefunds.js";
 import type * as roles from "../roles.js";
 import type * as sales from "../sales.js";
 import type * as search from "../search.js";
@@ -232,6 +233,7 @@ import type * as utils_prepaidSourceLedger from "../utils/prepaidSourceLedger.js
 import type * as utils_profitApproval from "../utils/profitApproval.js";
 import type * as utils_quoteDepositPosting from "../utils/quoteDepositPosting.js";
 import type * as utils_quoteEconomicsAnchor from "../utils/quoteEconomicsAnchor.js";
+import type * as utils_retainedCreditMessages from "../utils/retainedCreditMessages.js";
 import type * as utils_saleCancellation from "../utils/saleCancellation.js";
 import type * as utils_saleCompletion from "../utils/saleCompletion.js";
 import type * as utils_saleDebtContainment from "../utils/saleDebtContainment.js";
@@ -404,6 +406,7 @@ declare const fullApi: ApiFromModules<{
   quotes: typeof quotes;
   rateLimit: typeof rateLimit;
   reports: typeof reports;
+  retainedCreditRefunds: typeof retainedCreditRefunds;
   roles: typeof roles;
   sales: typeof sales;
   search: typeof search;
@@ -505,6 +508,7 @@ declare const fullApi: ApiFromModules<{
   "utils/profitApproval": typeof utils_profitApproval;
   "utils/quoteDepositPosting": typeof utils_quoteDepositPosting;
   "utils/quoteEconomicsAnchor": typeof utils_quoteEconomicsAnchor;
+  "utils/retainedCreditMessages": typeof utils_retainedCreditMessages;
   "utils/saleCancellation": typeof utils_saleCancellation;
   "utils/saleCompletion": typeof utils_saleCompletion;
   "utils/saleDebtContainment": typeof utils_saleDebtContainment;

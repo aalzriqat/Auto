@@ -136,6 +136,11 @@ export async function sealReceiptMovement(
     currency: string;
     allocationIds: readonly Id<"paymentAllocations">[];
     actorId: Id<"users">;
+    /**
+     * SCRUM-724: immutable lineage copied onto the retained position when the
+     * receipt is a sale-invoice customer cheque. Written once, never patched.
+     */
+    lineage?: { sourceChequeId: Id<"postDatedCheques">; originatingSaleId: Id<"sales"> };
   }
 ): Promise<{ movementId: Id<"receiptMovements">; split: ReceiptSplit }> {
   // The identity must address THIS payment. Without this, a legitimately minted
@@ -220,6 +225,9 @@ export async function sealReceiptMovement(
       initialUnappliedMinor: unappliedMinor,
       remainingUnappliedMinor: unappliedMinor,
       applicationCount: 0,
+      ...(args.lineage
+        ? { sourceChequeId: args.lineage.sourceChequeId, originatingSaleId: args.lineage.originatingSaleId }
+        : {}),
       updatedAt: now,
     });
   }

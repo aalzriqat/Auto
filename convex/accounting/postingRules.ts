@@ -564,7 +564,11 @@ export interface CollectionRefundPayload {
 }
 
 export interface RetainedCreditRefundPayload {
-  applicationId: string;
+  /** A refund of a sale-invoice application names it ... */
+  applicationId?: string;
+  /** ... a standalone refund of retained credit (SCRUM-724) names the position and the approved request. */
+  positionId?: string;
+  refundRequestId?: string;
   paymentId: string;
   amountMinor: number;
   currency: string;

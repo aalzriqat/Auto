@@ -278,6 +278,7 @@ describe("SCRUM-724 cancelled-sale credit: authorized refund", () => {
   async function refundFixture(suffix: string) {
     const s = await seed(suffix);
     const base = await clearAfterCancel(s, `${suffix}-1`);
+    const paidAt = Date.now() - 1000;
     const mutation = (name: "requestRetainedCreditRefund" | "respondToRetainedCreditRefund" | "executeRetainedCreditRefund") =>
       (api as any).retainedCreditRefunds[name];
     const request = (amountMinor = 3000, as = s.asOwner) => as.mutation(mutation("requestRetainedCreditRefund"), {
@@ -289,7 +290,7 @@ describe("SCRUM-724 cancelled-sale credit: authorized refund", () => {
       });
     const execute = (requestId: Id<"retainedCreditRefundRequests">, key = crypto.randomUUID(), as = s.asOwner) =>
       as.mutation(mutation("executeRetainedCreditRefund"), {
-        orgId: s.orgId, requestId, reference: "PV-1", paidAt: Date.now() - 1000, idempotencyKey: key,
+        orgId: s.orgId, requestId, reference: "PV-1", paidAt, idempotencyKey: key,
       }) as Promise<{ paymentId: Id<"canonicalPayments">; eventId: Id<"accountingEvents"> }>;
     return { s, ...base, request, respond, execute };
   }
