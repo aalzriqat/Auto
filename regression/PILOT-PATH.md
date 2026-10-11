@@ -1,6 +1,37 @@
-# Pilot path: coverage map and gaps (SCRUM-761, owner ruling SCRUM-760 c22474)
+# Pilot path: coverage map and gaps (SCRUM-761 / SCRUM-816)
 
-Narrowed pilot: ONE dealer, cash sale + financed sale through delivery. This file is what the pilot go/no-go reads for the regression library. Evidence boundary: static search of `origin/main` test files at c971e6343 plus the library validator; **no test in this list was executed here as a record-driven run** (the S3 runner census is the binding proof). "Absent" means "not found by search", not proven missing.
+**Current owner contract (SCRUM-813 c22752, 2026-10-10): Option B.** The one-dealer 30-day no-code pilot requires customer receipt application, unwind/refund or retained credit, and audited operator correction across enabled CASH and FINANCED routes before launch. Payment links remain outside pilot scope (SCRUM-813 c22798). The narrower SCRUM-795 controls stay in force until the broader actions are deliberately enabled and certified. SCRUM-760 remains open; this document is a coverage map, not a release verdict.
+
+The recorded rows and gaps below are a **historical through-delivery snapshot** from a static search of `origin/main` test files at `c971e6343` plus the library validator. They were not executed here as a record-driven run; "absent" means not found by that search, not proven missing today. In particular, the old through-delivery list cannot certify the Option B lifecycle.
+
+## Current SCRUM-816 journey expansion (source inventory at main `6e2408828`)
+
+The bidirectional source locator in draft PR #551 finds candidate route/API wiring, not enabled actions or runtime proof. SCRUM-816 requires the following scenario and consumer extensions in the existing SCRUM-342 catalog, SCRUM-761 records, SCRUM-486 financial oracle and SCRUM-617 fact checker. Each row remains **UNPROVEN** pending exact-SHA authenticated UI, disposable-backend, persisted-effect and consumer read-back evidence.
+
+| Pilot slice | Candidate operator route | Required consumer and exit evidence |
+| --- | --- | --- |
+| Owned CASH | `/[orgId]/sales`, sale/deal workspace | Quote, deposit, completion, canonical invoice, customer receipt application, collection queue, deal state, GL/AR and reports; refund/retained-credit or unwind and correction where applicable. |
+| Configured FINANCED | `/[orgId]/sales`, `/[orgId]/applications/[applicationId]/deal` | Approved amount/contribution/deposit/forward and settlement, documents, collections, GL and reports; authorized exits and correction, with privileged approved amount withheld from the legal bill of sale. |
+| SOURCED settlement | Deal workspace and `/[orgId]/sourcing` | `THROUGH_DEALERSHIP` supplier payable and AP; `DIRECT_TO_SUPPLIER` dealer margin receivable from supplier and no invented payable or owned gross sale; supplier reads and GL/report parity. Pilot enablement of each route still needs SCRUM-810 classification. |
+| Commission | `/[orgId]/commissions`, deal and payroll surfaces | Earned, approved, posted and paid states; deal, commission list, payroll position and P&L must agree at the correct lifecycle point. |
+| Lead cross-domain witness | `/[orgId]/leads`, `/[orgId]/leads/[leadId]` | Linked customer/deal, assignment, activity/notifications and dashboard/list after navigation and reload, including role and second-org boundaries. |
+
+No existing scenario is promoted to pilot PASS from this table. The source locator measures 38 dashboard routes and 692 public Convex declarations at this SHA, but it does not classify final enablement, dynamic UI state, writes or consumer parity. SCRUM-810's manifest and SCRUM-813's Option B implementation are open dependencies.
+
+### Reverse consumer candidates at this SHA
+
+These are direct generated-API references reachable from a dashboard page's static import closure. They identify screens to replay after the underlying command; the runtime payload and accounting values are still unverified.
+
+| Consumer query | Candidate dashboard route(s) |
+| --- | --- |
+| `sales.dealCockpit`, `dealWorkspace.financedDealCockpit` | Financed deal and sale deal routes |
+| `collections.listReceivables`, `accountingLedger.listJournalEntries`, `accountingReports.incomeStatement` | Accounting route |
+| `sourcingPayables.list`, `sourcingPayables.listPipeline` | Sourcing route |
+| `sales.listCommissionsPaginated` | Commissions route |
+| `payroll.listRuns`, `payroll.listRunItems` | Payroll route |
+| `leads.list`, `dashboard.stats` | Lead/dashboard routes |
+
+The same measured dashboard scope has **no direct page-import route** for `supplierReceivables.list` or `supplierReceivables.outstandingSummary`; `supplierReceivables.recordReceipt` is wired to the financed and sale deal routes. The deal cockpit projects a supplier claim (`convex/sales.ts`), and the container has permission-focused UI tests, so the absent direct list binding alone does not establish a missing operator screen. `sourcingPayables.recordPartialPayment` likewise has no direct dashboard binding in this scope. Classify these under final SCRUM-810 pilot enablement and inspect indirect/mobile callers before deciding whether they are required doors or intentional exclusions.
 
 ## Recorded as library records (active, bound to existing backend tests)
 
