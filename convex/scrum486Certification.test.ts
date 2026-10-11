@@ -13,7 +13,7 @@ import { seedFinancedDealership, newApplication } from "../test-utils/financedDe
 import { registerHandover } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 
@@ -1395,6 +1395,11 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     { ending: "FORFEITED" as const, creditAccount: "4200" },
   ])("owned CASH × held deposit × $ending before sale: only customer money moves", async ({ ending, creditAccount }) => {
     const { s, quoteId } = await cashQuote(`s486${ending.toLowerCase()}`);
+    const beforeOperational = await s.owner.as.query(api.reports.getProfitAndLoss, {
+      orgId: s.orgId,
+      startDate: Date.UTC(s.fiscalYear, 0, 1),
+      endDate: Date.UTC(s.fiscalYear, 11, 31, 23, 59, 59, 999),
+    });
     const depositId = await s.owner.as.mutation(api.deposits.create, {
       orgId: s.orgId,
       quoteId,
@@ -1426,6 +1431,346 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       { account: creditAccount, currency: "JOD", debit: 0, credit: 200_000, entryStatus: "POSTED" },
     ]);
     expectBalanced(rows);
+    if (ending === "FORFEITED") {
+      const income = await publicIncomeStatement(s);
+      const operational = await s.owner.as.query(api.reports.getProfitAndLoss, {
+        orgId: s.orgId,
+        startDate: Date.UTC(s.fiscalYear, 0, 1),
+        endDate: Date.UTC(s.fiscalYear, 11, 31, 23, 59, 59, 999),
+      });
+      expect(income.totalOtherIncome).toBe(200_000);
+      expect(operational.totalRevenue).toBe(beforeOperational.totalRevenue);
+      expect(operational.depositForfeitureIncome).toBe(200);
+      expect(operational.depositForfeitureIncomeByCurrency).toEqual([{ currency: "JOD", amount: 200 }]);
+      expect(operational.netProfit - beforeOperational.netProfit).toBe(200);
+
+      // A chart repair can clear a duplicate's current systemKey after it
+      // received historical postings. Reports must follow the event/journal,
+      // not today's account mapping.
+      await s.t.run(async (ctx) => {
+        const account = await ctx.db.query("chartOfAccounts")
+          .withIndex("by_org_code", (q) => q.eq("orgId", s.orgId).eq("code", "4200"))
+          .unique();
+        if (!account) throw new Error("Missing forfeiture account fixture");
+        await ctx.db.patch(account._id, { systemKey: undefined });
+      });
+      const afterRemap = await s.owner.as.query(api.reports.getProfitAndLoss, {
+        orgId: s.orgId,
+        startDate: Date.UTC(s.fiscalYear, 0, 1),
+        endDate: Date.UTC(s.fiscalYear, 11, 31, 23, 59, 59, 999),
+      });
+      expect(afterRemap.depositForfeitureIncome).toBe(200);
+      expect((await publicIncomeStatement(s)).totalOtherIncome).toBe(200_000);
+
+      await s.t.run(async (ctx) => {
+        const event = await ctx.db.query("accountingEvents")
+          .withIndex("by_org_eventType", (q) => q.eq("orgId", s.orgId).eq("eventType", "DEPOSIT_FORFEITED"))
+          .unique();
+        if (!event) throw new Error("Missing forfeiture event fixture");
+        await ctx.db.patch(event._id, { journalEntryId: undefined });
+      });
+      await expect(s.owner.as.query(api.reports.getProfitAndLoss, {
+        orgId: s.orgId,
+        startDate: Date.UTC(s.fiscalYear, 0, 1),
+        endDate: Date.UTC(s.fiscalYear, 11, 31, 23, 59, 59, 999),
+      })).rejects.toThrow("Financial report is unavailable");
+    }
+  });
+
+  test("a later forfeiture corrects legacy receipt-month turnover without rewriting its journal", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2025-04-15T12:00:00.000Z"));
+      const { s, quoteId } = await cashQuote("s486legacyforfeit");
+      const depositId = await s.owner.as.mutation(api.deposits.create, {
+        orgId: s.orgId, quoteId, amount: 200, method: "CASH",
+        idempotencyKey: "s486legacyforfeit-deposit",
+      });
+      await s.t.run(async (ctx) => {
+        const receipts = (await ctx.db.query("transactions")
+          .withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect())
+          .filter((tx) => tx.category === "DEPOSIT" && tx.depositId === depositId);
+        expect(receipts).toHaveLength(1);
+        await ctx.db.patch(receipts[0]._id, { excludedFromRevenue: undefined });
+      });
+      const april = { orgId: s.orgId, startDate: Date.UTC(2025, 3, 1), endDate: Date.UTC(2025, 4, 1) - 1 };
+      const may = { orgId: s.orgId, startDate: Date.UTC(2025, 4, 1), endDate: Date.UTC(2025, 5, 1) - 1 };
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, april)).totalRevenue).toBe(200);
+      // SCRUM-815 c22806: the old receipt was posted to a liability. Only the
+      // legacy report's mistaken turnover is corrected after forfeiture.
+      const receiptPostingBefore = await s.t.run(async (ctx) => {
+        const events = await ctx.db.query("accountingEvents")
+          .withIndex("by_org_source", (q) =>
+            q.eq("orgId", s.orgId).eq("sourceType", "deposits").eq("sourceId", depositId)
+          ).collect();
+        const event = events.find((row) => row.eventType === "DEPOSIT_RECEIVED");
+        if (!event?.journalEntryId) throw new Error("Missing posted receipt event");
+        const entry = await ctx.db.get(event.journalEntryId);
+        if (!entry) throw new Error("Missing posted receipt journal");
+        const lines = await ctx.db.query("journalLines")
+          .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
+          .collect();
+        const rows = await Promise.all(lines.map(async (line) => ({
+          account: (await ctx.db.get(line.accountId))?.code,
+          debit: line.debitMinor,
+          credit: line.creditMinor,
+        })));
+        return { event, entry, lines, rows };
+      });
+      expect(receiptPostingBefore.entry.status).toBe("POSTED");
+      expect(receiptPostingBefore.rows).toHaveLength(2);
+      expect(receiptPostingBefore.rows).toEqual(expect.arrayContaining([
+        { account: "1100", debit: 200_000, credit: 0 },
+        { account: "2100", debit: 0, credit: 200_000 },
+      ]));
+
+      vi.setSystemTime(new Date("2025-05-15T12:00:00.000Z"));
+      await s.approver.as.mutation(api.deposits.release, {
+        orgId: s.orgId, depositId, resolution: "FORFEITED",
+        idempotencyKey: "s486legacyforfeit-release",
+      });
+      const receiptMonth = await s.owner.as.query(api.reports.getProfitAndLoss, april);
+      const forfeitureMonth = await s.owner.as.query(api.reports.getProfitAndLoss, may);
+      expect(receiptMonth.totalRevenue).toBe(0);
+      expect(receiptMonth.depositForfeitureIncome).toBe(0);
+      expect(forfeitureMonth.totalRevenue).toBe(0);
+      expect(forfeitureMonth.depositForfeitureIncome).toBe(200);
+      expect(forfeitureMonth.netProfit).toBe(200);
+      expect((await publicIncomeStatement(s)).totalOtherIncome).toBe(200_000);
+      const receiptPostingAfter = await s.t.run(async (ctx) => ({
+        event: await ctx.db.get(receiptPostingBefore.event._id),
+        entry: await ctx.db.get(receiptPostingBefore.entry._id),
+        lines: await ctx.db.query("journalLines")
+          .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", receiptPostingBefore.entry._id))
+          .collect(),
+      }));
+      expect(receiptPostingAfter).toEqual({
+        event: receiptPostingBefore.event,
+        entry: receiptPostingBefore.entry,
+        lines: receiptPostingBefore.lines,
+      });
+
+      // A slice resolution identifies the hold rather than the deposit as
+      // its event source. Keep the posted journal fixed while changing only
+      // that source shape, then require the same legacy receipt exclusion.
+      await s.t.run(async (ctx) => {
+        const deposit = await ctx.db.get(depositId);
+        if (!deposit) throw new Error("Missing test deposit");
+        const holdId = await ctx.db.insert("depositVehicleHolds", {
+          orgId: s.orgId, depositId, vehicleId: deposit.vehicleId,
+          active: false, createdAt: Date.now(),
+        });
+        const event = await ctx.db.query("accountingEvents")
+          .withIndex("by_org_eventType", (q) =>
+            q.eq("orgId", s.orgId).eq("eventType", "DEPOSIT_FORFEITED"))
+          .first();
+        if (!event) throw new Error("Missing test forfeiture event");
+        await ctx.db.patch(event._id, {
+          sourceType: "depositVehicleHolds", sourceId: holdId.toString(),
+          payload: { ...(event.payload as Record<string, unknown>), holdId: holdId.toString() },
+        });
+      });
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, april)).totalRevenue).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("refund rows do not exhaust the legacy receipt lookup", async () => {
+    const { s } = await cashQuote("s486refundvolume");
+    const year = s.fiscalYear;
+    await s.t.run(async (ctx) => {
+      const creator = await ctx.db.query("users").first();
+      if (!creator) throw new Error("Missing test user");
+      for (let i = 0; i < 129; i++) {
+        const depositId = await ctx.db.insert("deposits", {
+          orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
+          amount: 1, status: "REFUNDED", holdActive: false,
+          createdBy: creator._id, createdAt: Date.UTC(year, 0, 2) + i,
+        });
+        await ctx.db.insert("transactions", {
+          orgId: s.orgId, type: "OUT", amount: 1,
+          date: Date.UTC(year, 0, 3) + i, category: "DEPOSIT",
+          description: "Deposit refund", vehicleId: s.vehicleId, depositId,
+        });
+      }
+    });
+    const report = await s.owner.as.query(api.reports.getProfitAndLoss, {
+      orgId: s.orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+    });
+    expect(report.totalRevenue).toBe(0);
+    expect(report.depositForfeitureIncome).toBe(0);
+  });
+
+  test("129 historical incoming receipts stay available and an over-cap report fails closed", async () => {
+    const { s } = await cashQuote("s486legacyvolume");
+    const year = s.fiscalYear;
+    await s.t.run(async (ctx) => {
+      const creator = await ctx.db.query("users").first();
+      if (!creator) throw new Error("Missing test user");
+      for (let i = 0; i < 129; i++) {
+        const depositId = await ctx.db.insert("deposits", {
+          orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
+          amount: 1, status: "REFUNDED", holdActive: false,
+          createdBy: creator._id, createdAt: Date.UTC(year, 0, 2) + i,
+        });
+        await ctx.db.insert("transactions", {
+          orgId: s.orgId, type: "IN", amount: 1,
+          date: Date.UTC(year, 0, 3) + i, category: "DEPOSIT",
+          description: "Historical deposit receipt", vehicleId: s.vehicleId, depositId,
+        });
+      }
+    });
+    const report = await s.owner.as.query(api.reports.getProfitAndLoss, {
+      orgId: s.orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+    });
+    expect(report.totalRevenue).toBe(129);
+    expect(report.depositForfeitureIncome).toBe(0);
+
+    await s.t.run(async (ctx) => {
+      const creator = await ctx.db.query("users").first();
+      if (!creator) throw new Error("Missing test user");
+      for (let i = 129; i < 512; i++) {
+        const depositId = await ctx.db.insert("deposits", {
+          orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
+          amount: 1, status: "REFUNDED", holdActive: false,
+          createdBy: creator._id, createdAt: Date.UTC(year, 0, 2) + i,
+        });
+        await ctx.db.insert("transactions", {
+          orgId: s.orgId, type: "IN", amount: 1,
+          date: Date.UTC(year, 0, 3) + i, category: "DEPOSIT",
+          description: "Historical deposit receipt", vehicleId: s.vehicleId, depositId,
+        });
+      }
+    });
+    expect((await s.owner.as.query(api.reports.getProfitAndLoss, {
+      orgId: s.orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+    })).totalRevenue).toBe(512);
+    await s.t.run(async (ctx) => {
+      const creator = await ctx.db.query("users").first();
+      if (!creator) throw new Error("Missing test user");
+      const depositId = await ctx.db.insert("deposits", {
+        orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
+        amount: 1, status: "REFUNDED", holdActive: false,
+        createdBy: creator._id, createdAt: Date.UTC(year, 0, 2) + 512,
+      });
+      await ctx.db.insert("transactions", {
+        orgId: s.orgId, type: "IN", amount: 1,
+        date: Date.UTC(year, 0, 3) + 512, category: "DEPOSIT",
+        description: "Historical deposit receipt", vehicleId: s.vehicleId, depositId,
+      });
+    });
+    await expect(s.owner.as.query(api.reports.getProfitAndLoss, {
+      orgId: s.orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+    })).rejects.toThrow("Financial report is unavailable because legacy receipt history is too large.");
+  });
+
+  test("many historical holds fail closed before source lookups return a partial total", async () => {
+    const { s } = await cashQuote("s486legacyholdsvolume");
+    const year = s.fiscalYear;
+    await s.t.run(async (ctx) => {
+      const creator = await ctx.db.query("users").first();
+      if (!creator) throw new Error("Missing test user");
+      for (let i = 0; i < 200; i++) {
+        const depositId = await ctx.db.insert("deposits", {
+          orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
+          amount: 1, status: "HELD", holdActive: false,
+          createdBy: creator._id, createdAt: Date.UTC(year, 0, 2) + i,
+        });
+        await ctx.db.insert("transactions", {
+          orgId: s.orgId, type: "IN", amount: 1,
+          date: Date.UTC(year, 0, 3) + i, category: "DEPOSIT",
+          description: "Historical deposit receipt", vehicleId: s.vehicleId, depositId,
+        });
+        for (let holdIndex = 0; holdIndex < 9; holdIndex++) {
+          await ctx.db.insert("depositVehicleHolds", {
+            orgId: s.orgId, depositId, vehicleId: s.vehicleId,
+            active: false, createdAt: Date.UTC(year, 0, 4) + i + holdIndex,
+          });
+        }
+      }
+    });
+    await expect(s.owner.as.query(api.reports.getProfitAndLoss, {
+      orgId: s.orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+    })).rejects.toThrow("Financial report is unavailable because legacy receipt history is too large.");
+  });
+
+  test("forfeiture income follows its posted month and each journal reversal month", async () => {
+    vi.useFakeTimers();
+    try {
+      const year = 2026;
+      vi.setSystemTime(Date.UTC(year, 3, 10));
+      const { s, quoteId } = await cashQuote("s486forfeitdates");
+      const depositId = await s.owner.as.mutation(api.deposits.create, {
+        orgId: s.orgId,
+        quoteId,
+        amount: 200,
+        method: "CASH",
+        idempotencyKey: "s486forfeitdates-deposit",
+      });
+      const month = (monthIndex: number) => ({
+        orgId: s.orgId,
+        startDate: Date.UTC(year, monthIndex, 1),
+        endDate: Date.UTC(year, monthIndex + 1, 1) - 1,
+      });
+
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(3))).depositForfeitureIncome).toBe(0);
+      vi.setSystemTime(Date.UTC(year, 4, 10));
+      await s.approver.as.mutation(api.deposits.release, {
+        orgId: s.orgId,
+        depositId,
+        resolution: "FORFEITED",
+        idempotencyKey: "s486forfeitdates-release",
+      });
+      const originalEventId = await s.t.run(async (ctx) => {
+        const event = await ctx.db.query("accountingEvents")
+          .withIndex("by_org_eventType", (q) => q.eq("orgId", s.orgId).eq("eventType", "DEPOSIT_FORFEITED"))
+          .unique();
+        if (!event) throw new Error("Missing forfeiture event fixture");
+        return event._id;
+      });
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(4))).depositForfeitureIncome).toBe(200);
+
+      vi.setSystemTime(Date.UTC(year, 5, 10));
+      const firstReversal = await s.owner.as.mutation(internal.accountingLedger.reverse, {
+        orgId: s.orgId,
+        originalEventId,
+        reversalDate: Date.UTC(year, 5, 10),
+        reason: "Report month parity fixture",
+        idempotencyKey: "s486forfeitdates-reverse-1",
+      });
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(4))).depositForfeitureIncome).toBe(200);
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(5))).depositForfeitureIncome).toBe(-200);
+
+      vi.setSystemTime(Date.UTC(year, 6, 10));
+      await s.owner.as.mutation(internal.accountingLedger.reverse, {
+        orgId: s.orgId,
+        originalEventId: firstReversal.reversalEventId,
+        reversalDate: Date.UTC(year, 6, 10),
+        reason: "Report reversal lineage fixture",
+        idempotencyKey: "s486forfeitdates-reverse-2",
+      });
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(6))).depositForfeitureIncome).toBe(200);
+      const fullYear = await s.owner.as.query(api.reports.getProfitAndLoss, {
+        orgId: s.orgId,
+        startDate: Date.UTC(year, 0, 1),
+        endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+      });
+      expect(fullYear.depositForfeitureIncome).toBe(200);
+      expect((await publicIncomeStatement(s)).totalOtherIncome).toBe(200_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test.each(["REFUNDED", "FORFEITED"] as const)(

@@ -24,7 +24,7 @@
 // executed IDs, and the real-preview validator uses the same list.
 export const REQUIRED_REHEARSAL_CASE_IDS = Object.freeze([
   "A1", "A2", "D1", "D2", "D3", "D4", "C1", "C2", "UNAUTH", "TEN", "A3",
-  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "FD1", "FD2", "P1", "SETUP",
+  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "FD1", "FD2", "P1", "SETUP",
 ]);
 
 function fail(message) {
@@ -2304,6 +2304,140 @@ export async function runRehearsalCases(ctx) {
         "subledger.listAllocations", "vehicles.get", "collections.listPayments",
         "accountingLedger.listAccountingEvents", "accountingLedger.listJournalEntries",
         "chartOfAccounts.list"] };
+  });
+
+  // SCRUM-815 / SCRUM-486: a forfeited held deposit is other income on the
+  // decision's posted journal date, not turnover on the original receipt date.
+  await recordCase(results, "M486C4", "SCRUM-486: owned cash held deposit forfeiture reaches both income APIs", async () => {
+    const { fromDate, toDate, reportArgs } = await ownedCashJodWindow({ caseId: "M486C4", orgId, ownerMust });
+    const { stamp, customerId, vehicleId, quoteId } =
+      await createOwnedCashCertificationQuote("M486C4", "forfeited");
+    const chart = await ownerMust("query", "chartOfAccounts:list", { orgId });
+    const keyOf = new Map((chart ?? []).map((account) =>
+      [String(account._id), account.systemKey ?? account.code ?? "?"]));
+    const openingEntries = await allJournalEntries({ orgId, ownerMust });
+    const openingBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    const openingIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const operationalArgs = { orgId, startDate: fromDate, endDate: toDate };
+    const openingOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
+    const openingCollections = await listCollectionPayments({ orgId, ownerMust });
+    const depositId = await ownerMust("mutation", "deposits:create", {
+      orgId, quoteId, amount: 200, method: "CASH",
+      idempotencyKey: `rehearsal-m486c4-deposit-${stamp}`,
+    });
+    const held = await readDeposit({ orgId, vehicleId, depositId, ownerMust });
+    expectEqual(held?.status, "HELD", "M486C4 receipt remains held");
+    expectEqual(held?.amountMinor, 200_000, "M486C4 literal held amount");
+    const heldBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    expectHeldDepositAccountDeltas(openingBalance, heldBalance, keyOf,
+      "M486C4 held receipt changes cash and liability only");
+    const heldOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
+    expectSameOperationalProfit(openingOperational, heldOperational,
+      "M486C4 held receipt has no income");
+
+    const releaseArgs = {
+      orgId, depositId, resolution: "FORFEITED",
+      idempotencyKey: `rehearsal-m486c4-forfeit-${stamp}`,
+    };
+    const creatorAttempt = await ownerCall("mutation", "deposits:release", releaseArgs);
+    if (creatorAttempt.ok || !/Deposit creator cannot resolve/i.test(creatorAttempt.error)) {
+      fail("M486C4 deposit creator was not refused by separation of duties");
+    }
+    const refused = await readDeposit({ orgId, vehicleId, depositId, ownerMust });
+    expectEqual(refused?.status, "HELD", "M486C4 creator refusal leaves deposit held");
+    expectEqual(refused?.releaseCount ?? 0, 0, "M486C4 creator refusal writes no release");
+    await resolverMust("mutation", "deposits:release", releaseArgs);
+    if (Date.now() < fromDate || Date.now() > toDate) {
+      unproven("M486C4 crossed its UTC accounting month during forfeiture");
+    }
+    const forfeited = await readDeposit({ orgId, vehicleId, depositId, ownerMust });
+    expectEqual(forfeited?.status, "FORFEITED", "M486C4 deposit is forfeited");
+    expectEqual(forfeited?.forfeitedAmountMinor, 200_000, "M486C4 forfeited minor amount");
+    expectEqual(forfeited?.refundedAmountMinor ?? 0, 0, "M486C4 no refund amount");
+    const received = await eventAndJournal({
+      orgId, ownerMust, sourceType: "deposits", sourceId: depositId, eventType: "DEPOSIT_RECEIVED",
+    });
+    expectExactLines(received.lines, keyOf, [
+      { key: "CASH_ON_HAND", debitMinor: 200_000 },
+      { key: "CUSTOMER_DEPOSITS_LIABILITY", creditMinor: 200_000 },
+    ], { currency: "JOD", decimals: 3, what: "M486C4 receipt", customerId });
+    const forfeiture = await eventAndJournal({
+      orgId, ownerMust, sourceType: "deposits", sourceId: depositId, eventType: "DEPOSIT_FORFEITED",
+    });
+    expectExactLines(forfeiture.lines, keyOf, [
+      { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: 200_000 },
+      { key: "DEPOSIT_FORFEITURE_INCOME", creditMinor: 200_000 },
+    ], { currency: "JOD", decimals: 3, what: "M486C4 forfeiture", customerId });
+    const depositEvents = await ownerMust("query", "accountingLedger:listAccountingEvents", {
+      orgId, sourceType: "deposits", sourceId: String(depositId), limit: 200,
+    });
+    if (!Array.isArray(depositEvents) || depositEvents.length >= 200) {
+      unproven("M486C4 deposit event listing is absent or truncated");
+    }
+    expectEqual(JSON.stringify(depositEvents.map((event) => event.eventType)
+      .sort((a, b) => a.localeCompare(b))),
+      JSON.stringify(["DEPOSIT_RECEIVED", "DEPOSIT_FORFEITED"].sort((a, b) => a.localeCompare(b))),
+      "M486C4 exactly the receipt and forfeiture events");
+    const finalEntries = await allJournalEntries({ orgId, ownerMust });
+    expectOnlyJournalEntriesAdded(openingEntries, finalEntries,
+      [received.entry._id, forfeiture.entry._id], "M486C4 unexpected journal entry");
+    const finalBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    const finalIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const finalOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
+    const finalCollections = await listCollectionPayments({ orgId, ownerMust });
+    const priorCollections = new Map(openingCollections.map((row) => [String(row._id), row]));
+    const finalCollectionIds = new Set(finalCollections.map((row) => String(row._id)));
+    for (const id of priorCollections.keys()) {
+      if (!finalCollectionIds.has(id)) fail("M486C4 existing collection payment disappeared");
+    }
+    for (const row of finalCollections) {
+      const prior = priorCollections.get(String(row._id));
+      if (prior && JSON.stringify(prior) !== JSON.stringify(row)) {
+        fail("M486C4 an existing collection payment changed");
+      }
+    }
+    const addedCollections = finalCollections.filter((row) => !priorCollections.has(String(row._id)));
+    expectEqual(addedCollections.length, 1, "M486C4 exactly one new collection receipt");
+    const incoming = addedCollections[0];
+    expectEqual(incoming?.direction, "IN", "M486C4 no outbound collection payment");
+    expectEqual(incoming?.method, "CASH", "M486C4 collection receipt method");
+    expectEqual(incoming?.status, "POSTED", "M486C4 collection receipt status");
+    expectEqual(incoming?.amount, 200, "M486C4 collection receipt amount");
+    expectEqual(String(incoming?.customerId), String(customerId), "M486C4 collection receipt customer");
+    expectEqual(String(incoming?.vehicleId), String(vehicleId), "M486C4 collection receipt vehicle");
+    expectEqual(incoming?.reference, `Deposit ${depositId}`, "M486C4 collection receipt reference");
+    expectEqual(finalIncome?.totalOtherIncome - openingIncome?.totalOtherIncome, 200_000,
+      "M486C4 GL other-income delta");
+    const jodMinor = (value, what) => {
+      if (typeof value !== "number" || !Number.isFinite(value)) unproven(`${what} is unavailable`);
+      return Math.round(value * 1_000);
+    };
+    expectEqual(jodMinor(finalOperational?.depositForfeitureIncome, "M486C4 final forfeiture income") -
+      jodMinor(openingOperational?.depositForfeitureIncome, "M486C4 opening forfeiture income"), 200_000,
+      "M486C4 operational forfeiture-income delta");
+    const beforeJod = openingOperational?.depositForfeitureIncomeByCurrency?.find((row) => row.currency === "JOD")?.amount ?? 0;
+    const afterJod = finalOperational?.depositForfeitureIncomeByCurrency?.find((row) => row.currency === "JOD")?.amount ?? 0;
+    expectEqual(jodMinor(afterJod, "M486C4 final JOD income") -
+      jodMinor(beforeJod, "M486C4 opening JOD income"), 200_000,
+      "M486C4 currency-specific forfeiture-income delta");
+    expectEqual(jodMinor(finalOperational?.netProfit, "M486C4 final net profit") -
+      jodMinor(openingOperational?.netProfit, "M486C4 opening net profit"), 200_000,
+      "M486C4 operational net-profit delta");
+    expectEqual(finalOperational?.totalRevenue, openingOperational?.totalRevenue,
+      "M486C4 forfeiture is not turnover");
+    const delta = new Map();
+    for (const [accountId, key] of keyOf) {
+      if (key === "CASH_ON_HAND") delta.set(JSON.stringify([accountId, "JOD"]), 200_000);
+      if (key === "DEPOSIT_FORFEITURE_INCOME") delta.set(JSON.stringify([accountId, "JOD"]), 200_000);
+    }
+    if (delta.size !== 2) unproven("M486C4 required chart accounts are unavailable");
+    expectSameAccountBalances(openingBalance, finalBalance,
+      "M486C4 liability discharged into other income", delta);
+    return { depositId: String(depositId), forfeitedMinor: 200_000,
+      commandsExercised: ["quotes.saveQuote", "deposits.create", "deposits.release"],
+      reportsRead: ["accountingReports.trialBalance", "accountingReports.incomeStatement",
+        "reports.getProfitAndLoss", "accountingLedger.listJournalEntries",
+        "accountingLedger.listAccountingEvents", "collections.listPayments"] };
   });
 
   // ── FD1 — the financed deal's cash receipt settles the exact recorded debt ──
