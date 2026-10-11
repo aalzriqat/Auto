@@ -192,6 +192,8 @@ type Defects = {
   financedSaleWrongPayer?: boolean;
   /** A second customer invoice claims the same finalized sale. */
   financedSaleDuplicateCustomerInvoice?: boolean;
+  /** A separate unposted CUSTOMER claim is linked to this customer under another source. */
+  financedSaleStrayCustomerClaim?: boolean;
   /** A zero-value customer document is left OPEN and offered for collection. */
   financedSaleZeroCustomerOpen?: boolean;
   /** Compensating extra journals conceal a side effect in the trial balance. */
@@ -1942,6 +1944,14 @@ function makeBackend(defects: Defects = {}) {
             currency: ORG_CURRENCY, scale: 3,
             status: defects.financedSaleZeroCustomerOpen ? "OPEN" : "PAID",
           });
+          if (defects.financedSaleStrayCustomerClaim) {
+            const strayId = id("rdoc");
+            financeReceivables.set(strayId, {
+              _id: strayId, orgId: app.orgId, sourceType: "sales", sourceId: "sale_unrelated",
+              documentType: "INVOICE", payerType: "CUSTOMER", customerId: app.customerId,
+              originalAmountMinor: 1, currency: ORG_CURRENCY, scale: 3, status: "OPEN",
+            });
+          }
           sales.set(app.saleId, {
             _id: app.saleId, orgId: app.orgId, status: "COMPLETED",
             canonicalReceivableDocumentId: defects.financedSaleWrongCanonicalPointer
@@ -2525,6 +2535,7 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["financedSaleWrongAcquisitionVehicleDimension", /acquisition vehicle dimension/],
     ["financedSaleWrongPayer", /invoice payerType/],
     ["financedSaleDuplicateCustomerInvoice", /customer document zero claim/],
+    ["financedSaleStrayCustomerClaim", /no extra customer receivable document/],
     ["financedSaleZeroCustomerOpen", /zero customer document is noncollectible/],
     ["financedSaleExtraBalancedJournals", /unexpected journal entry/],
   ] as const)("M486C5 rejects %s", async (defect, diagnostic) => {

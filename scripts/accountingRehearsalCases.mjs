@@ -2530,6 +2530,14 @@ export async function runRehearsalCases(ctx) {
       r.sourceType === "sales" && String(r.sourceId) === String(saleId));
     expectEqual(customerClaims.length, 1, "M486C5 exactly one canonical customer document");
     const customerDocument = customerClaims[0];
+    const customerRelatedClaims = listed.filter((r) => String(r.customerId) === String(customerId));
+    expectEqual(customerRelatedClaims.length, 2, "M486C5 no extra customer receivable document");
+    for (const doc of customerRelatedClaims) {
+      if (String(doc._id) !== String(customerDocument._id) &&
+          String(doc._id) !== String(companyClaims[0]._id)) {
+        throw new Error("M486C5 unexpected customer receivable document");
+      }
+    }
     expectEqual(customerDocument?.payerType, "CUSTOMER", "M486C5 customer document payerType");
     expectEqual(String(customerDocument?.customerId), String(customerId), "M486C5 customer document customerId");
     expectEqual(customerDocument?.originalAmountMinor, 0, "M486C5 customer document zero claim");
