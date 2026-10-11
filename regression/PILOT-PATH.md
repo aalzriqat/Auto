@@ -18,6 +18,8 @@ The bidirectional source locator in draft PR #551 finds candidate route/API wiri
 
 No existing scenario is promoted to pilot PASS from this table. The source locator measures 38 dashboard routes and 692 public Convex declarations at this SHA, but it does not classify final enablement, dynamic UI state, writes or consumer parity. SCRUM-810's manifest and SCRUM-813's Option B implementation are open dependencies.
 
+The active SCRUM-761 record `lead-creation-consumers-same-org` now binds a backend harness witness in `convex/dashboardAggregates.test.ts`. It creates a lead through the public mutation, then checks the lead list, workspace customer and assignee, dashboard totals, CREATED activity, assignment and creation notifications, and a second organization's empty reads and refusal of the foreign lead. This proves the listed assertions in the serial `convex-test` harness only. Authenticated rendered EN/AR, reload behavior, role combinations, and exact-SHA preview remain **UNPROVEN**.
+
 ### Reverse consumer candidates at this SHA
 
 These are direct generated-API references reachable from a dashboard page's static import closure. They identify screens to replay after the underlying command; the runtime payload and accounting values are still unverified.

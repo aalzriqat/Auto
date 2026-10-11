@@ -1,0 +1,44 @@
+{
+  "id": "lead-creation-consumers-same-org",
+  "fingerprint": "27074ffe62b6cf698b0220c334bbd89aba9f0f4cab09b99b71fabd3cdbd93b66",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum816-lead-witness",
+    "firstSeen": "2026-10-11"
+  },
+  "steps": [
+    {
+      "actor": { "role": "owner", "org": "A" },
+      "action": "leads.create",
+      "input": { "customer": "PilotCustomer", "assignedUser": "self", "source": "Walk-in" }
+    },
+    {
+      "actor": { "role": "owner", "org": "B" },
+      "action": "leads.get",
+      "input": { "leadFrom": "A" }
+    }
+  ],
+  "expected": [
+    { "observable": "orgA.leadsListContainsCreated", "value": true },
+    { "observable": "orgA.workspaceCustomerAndAssignee", "value": "linked" },
+    { "observable": "orgA.dashboardTotalAndActive", "value": 1 },
+    { "observable": "orgA.leadActivity", "value": "CREATED" },
+    { "observable": "orgA.notifications", "value": "created+assigned" },
+    { "observable": "orgB.dashboardAndListCount", "value": 0 },
+    { "observable": "orgB.leadsGet", "value": "refused" }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/dashboardAggregates.test.ts",
+    "testName": "a created lead reaches list, workspace, dashboard, activity and notifications in its own org"
+  },
+  "matrixRow": "SCRUM-816-E-lead-backend-consumers"
+}
