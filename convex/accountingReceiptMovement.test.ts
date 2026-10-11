@@ -1565,6 +1565,25 @@ describe("SCRUM-218-C §10 RM-01 — a bounced cheque cannot silently strand spe
     return { ...seeded, chequeId, movement };
   }
 
+  test("refuses a cleared-cheque return with an ACTIVE invoice claim before any writes", async () => {
+    const { t, asAdmin, orgId, userId, customerId, chequeId, movement } =
+      await clearedChequeWithRetainedCredit("s723active", 100);
+    const { saleId, invoiceId } = await completedSaleInvoice(t, orgId, userId, customerId, "RETURN");
+    const applicationId = await t.run((ctx) => ctx.db.insert("invoiceReceiptApplications", {
+      orgId, receiptMovementId: movement._id, saleId, receivableDocumentId: invoiceId,
+      customerId, currency: movement.currency, amountMinor: 1000, status: "ACTIVE",
+      createdBy: userId, createdAt: Date.now(),
+    }));
+
+    await expect(asAdmin.mutation(api.collections.returnClearedCheque, {
+      idempotencyKey: crypto.randomUUID(), orgId, chequeId,
+    })).rejects.toThrow(/applied invoice credit.*reversed/i);
+    expect((await t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("CLEARED");
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("ACTIVE");
+    expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(10000);
+    expect((await t.run((ctx) => ctx.db.get(movement.canonicalPaymentId)))?.status).toBe("SETTLED");
+  });
+
   /**
    * ⚠️ THIS TEST NOW ASSERTS THE UNWIND, NOT THE REFUSAL — AND THAT IS THE
    * HANDOVER SCRUM-218-C DECLARED, NOT A WEAKENED ASSERTION.
