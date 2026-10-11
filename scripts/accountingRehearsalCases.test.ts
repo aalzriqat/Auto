@@ -267,6 +267,7 @@ type Defects = {
   cashRefundCollectionWrongMethod?: boolean;
   cashRefundAddsReceivable?: boolean;
   cashRefundIncomeMissingAfterRefund?: boolean;
+  cashRefundIncomeDropsRevenueRow?: boolean;
   cashHeldPaymentUnappliedWrong?: boolean;
   cashRefundCrossesUtcMonth?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
@@ -914,7 +915,9 @@ function makeBackend(defects: Defects = {}) {
           return { accountId: account._id, code: account.code, currency: ORG_CURRENCY, netMinor: amount };
         };
         return { ok: true as const, value: { currency: ORG_CURRENCY,
-          revenueRows: defects.cashSaleReportMissingRevenueRow && certifiedCashSalePosted
+          revenueRows: (defects.cashSaleReportMissingRevenueRow && certifiedCashSalePosted) ||
+            (defects.cashRefundIncomeDropsRevenueRow &&
+              deposits.get(certifiedCashRefundDepositId ?? "")?.status === "REFUNDED")
             ? [] : [row("SALES_REVENUE", net("SALES_REVENUE"))],
           cogsRows: [row("COST_OF_VEHICLES_SOLD", totalCogs)],
           expenseRows: [row("GENERAL_EXPENSE", totalExpenses)],
@@ -2329,6 +2332,7 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["cashRefundCollectionWrongMethod", /refund collection payment method/],
     ["cashRefundAddsReceivable", /must not create or modify a tenant receivable/],
     ["cashRefundIncomeMissingAfterRefund", /refunded income netIncome is unavailable/],
+    ["cashRefundIncomeDropsRevenueRow", /refunded income revenueRows/],
     ["cashHeldPaymentUnappliedWrong", /held payment remains unapplied/],
   ] as const)("M486C3 rejects %s in an owned cash quote refund", async (defect, diagnostic) => {
     const results = await runAgainst({ [defect]: true });

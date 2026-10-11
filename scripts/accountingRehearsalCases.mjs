@@ -2074,6 +2074,21 @@ export async function runRehearsalCases(ctx) {
     const openingBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const openingIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
     const operationalArgs = { orgId, startDate: fromDate, endDate: toDate };
+    const expectSameIncomeRows = (actual, baseline, checkpoint) => {
+      for (const bucket of ["revenueRows", "cogsRows", "expenseRows", "otherIncomeRows", "otherExpenseRows"]) {
+        if (!Array.isArray(actual?.[bucket]) || !Array.isArray(baseline?.[bucket])) {
+          fail(`M486C3 public income ${bucket} is unavailable ${checkpoint}`);
+        }
+        const rows = (report) => JSON.stringify(report[bucket].map((row) => {
+          if (!row || row.accountId == null || typeof row.currency !== "string" ||
+              !Number.isFinite(row.netMinor)) {
+            fail(`M486C3 public income ${bucket} has an invalid row ${checkpoint}`);
+          }
+          return [String(row.accountId), row.currency, row.netMinor];
+        }));
+        expectEqual(rows(actual), rows(baseline), `M486C3 ${checkpoint} income ${bucket}`);
+      }
+    };
     const openingOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
     const openingEntries = await allJournalEntries({ orgId, ownerMust });
     const openingCollectionPayments = (await listCollectionPayments({ orgId, ownerMust }))
@@ -2109,6 +2124,7 @@ export async function runRehearsalCases(ctx) {
     expectEqual(heldVehicle?.preHoldStatus, "AVAILABLE", "M486C3 hold remembers available stock");
     const heldBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const heldIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    expectSameIncomeRows(heldIncome, openingIncome, "held");
     const heldOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
     expectSameOperationalProfit(openingOperational, heldOperational, "M486C3 held deposit");
     if (![openingBalance, heldBalance].every((report) => Array.isArray(report?.rows))) {
@@ -2140,6 +2156,7 @@ export async function runRehearsalCases(ctx) {
       0, "M486C3 refused creator cannot post a refund event");
     const refusedBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const refusedIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    expectSameIncomeRows(refusedIncome, heldIncome, "refused");
     const refusedOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
     expectSameOperationalProfit(heldOperational, refusedOperational, "M486C3 refused creator");
     if (!Array.isArray(refusedBalance?.rows)) fail("M486C3 public balance unavailable after refused creator");
@@ -2254,6 +2271,7 @@ export async function runRehearsalCases(ctx) {
     expectEqual(outboundAllocations?.length, 0, "M486C3 outbound payment has no allocations");
     const afterBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const afterIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    expectSameIncomeRows(afterIncome, openingIncome, "refunded");
     const afterOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
     expectSameOperationalProfit(openingOperational, afterOperational, "M486C3 operational profit report");
     if (!Array.isArray(afterBalance?.rows)) fail("M486C3 public balance unavailable after refund");
