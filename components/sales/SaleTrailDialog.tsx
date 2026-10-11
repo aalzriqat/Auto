@@ -7,6 +7,8 @@ import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
+import { supportedCurrencyScale } from "@/convex/utils/money";
+import { formatMoneyDisplay, type MoneyLocale } from "@/lib/moneyDisplay";
 import {
   Dialog,
   DialogContent,
@@ -41,15 +43,26 @@ interface TrailStep {
 }
 
 type SaleTrail = NonNullable<FunctionReturnType<typeof api.sales.getSaleTrail>>;
-type Translate = (key: any) => string;
+type Translate = (key: string) => string;
 type FormatCurrency = (amount: number) => string;
+
+function customerInvoiceDetail(receivable: NonNullable<SaleTrail["receivable"]>,
+  locale: MoneyLocale, t: Translate): string {
+  const scale = supportedCurrencyScale(receivable.currency);
+  const minor = receivable.originalAmountMinor;
+  const amount = scale !== null && Number.isSafeInteger(minor) && minor >= 0
+    ? formatMoneyDisplay(minor / 10 ** scale, receivable.currency, locale, scale)
+    : t("EconomicsCurrencyUnusable");
+  const zeroNote = minor === 0 && scale !== null ? ` — ${t("StepNoCustomerAmountDue")}` : "";
+  return `${receivable.documentNumber} — ${amount}${zeroNote}`;
+}
 
 /**
  * Turns the getSaleTrail query result into an ordered list of timeline steps.
  * Pulled out of the component so the sequence is a plain function to test
  * and doesn't add to the component's render-path complexity.
  */
-function buildTrailSteps(trail: SaleTrail, t: Translate, format: FormatCurrency): TrailStep[] {
+function buildTrailSteps(trail: SaleTrail, t: Translate, format: FormatCurrency, locale: MoneyLocale): TrailStep[] {
   const { sale, vehicle, customer, salespersonName } = trail;
   const vehicleLabel = vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "";
   const customerName = customer ? `${customer.firstName} ${customer.lastName}` : "";
@@ -91,7 +104,7 @@ function buildTrailSteps(trail: SaleTrail, t: Translate, format: FormatCurrency)
     steps.push({
       icon: FileText,
       label: t("StepReceivableCreated"),
-      detail: `${trail.receivable.documentNumber} — ${format(sale.salePrice)}`,
+      detail: customerInvoiceDetail(trail.receivable, locale, t),
       date: trail.receivable.issueDate,
     });
   }
@@ -176,7 +189,7 @@ function buildCommissionSteps(trail: SaleTrail, t: Translate, format: FormatCurr
 
 export function SaleTrailDialog({ open, onOpenChange, saleId }: Readonly<SaleTrailDialogProps>) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const { format } = useCurrency();
   const trail = useQuery(
     api.sales.getSaleTrail,
@@ -184,23 +197,23 @@ export function SaleTrailDialog({ open, onOpenChange, saleId }: Readonly<SaleTra
   );
 
   const dateFormat = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" });
-  const steps = trail ? buildTrailSteps(trail, t, format) : [];
+  const steps = trail ? buildTrailSteps(trail, t, format, locale) : [];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl max-h-[80vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>{t("SaleTrail" as any)}</DialogTitle>
-          <DialogDescription>{t("SaleTrailDesc" as any)}</DialogDescription>
+          <DialogTitle>{t("SaleTrail")}</DialogTitle>
+          <DialogDescription>{t("SaleTrailDesc")}</DialogDescription>
         </DialogHeader>
 
         <ScrollArea className="flex-1 pe-4 -me-4 mt-2">
           {trail === undefined ? (
-            <div className="text-center py-8 text-muted-foreground">{t("Loading" as any)}</div>
+            <div className="text-center py-8 text-muted-foreground">{t("Loading")}</div>
           ) : (
             <div className="space-y-4">
               {trail.sale.status !== "COMPLETED" && (
-                <p className="text-sm text-muted-foreground italic">{t("SaleTrailPendingNote" as any)}</p>
+                <p className="text-sm text-muted-foreground italic">{t("SaleTrailPendingNote")}</p>
               )}
               {steps.map((step, i) => (
                 <div key={i} className="relative ps-6 pb-2 border-s-2 last:border-0 border-muted">
