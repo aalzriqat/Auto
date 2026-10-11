@@ -351,6 +351,13 @@ describe("Sales Mutations", () => {
   test("completed sale financial fields and commission amounts are locked", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "locked_1");
+    // The commission lock is an AUTO-mode rule (MANUAL amounts stay editable);
+    // since SCRUM-778 an unset mode is MANUAL, so AUTO is opted into explicitly.
+    await t.run(async (ctx) => {
+      const settings = await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique();
+      if (settings) await ctx.db.patch(settings._id, { commissionMode: "AUTO_MEMBER" });
+      else await ctx.db.insert("orgSettings", { orgId, currency: "USD", currencySymbol: "$", enabledPaymentTypes: ["CASH"], commissionMode: "AUTO_MEMBER" });
+    });
 
     const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId,

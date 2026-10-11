@@ -103,6 +103,9 @@ async function seedDealership(
   await t.run((ctx) =>
     ctx.db.insert("orgSettings", {
       orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH", "BANK_TRANSFER"],
+      // These scenarios exercise automatic commission; since SCRUM-778 an unset
+      // mode is MANUAL, so the opt-in is explicit.
+      commissionMode: "AUTO_MEMBER",
     })
   );
 

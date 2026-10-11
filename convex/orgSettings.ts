@@ -4,6 +4,9 @@ import { mutation } from "./functions";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
+import { effectiveCommissionMode } from "./utils/commissionMode";
+
+const commissionModeValidator = v.union(v.literal("AUTO_TIERS"), v.literal("AUTO_MEMBER"), v.literal("MANUAL"));
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 
@@ -91,7 +94,8 @@ export const upsert = mutation({
     commissionTiers: v.optional(
       v.array(v.object({ minProfitAmount: v.number(), commissionPct: v.number() }))
     ),
-    commissionMode: v.optional(v.union(v.literal("AUTO_TIERS"), v.literal("AUTO_MEMBER"), v.literal("MANUAL"))),
+    // Accepted for clients built before setCommissionMode; a change is refused below.
+    commissionMode: v.optional(commissionModeValidator),
     generatedLeadAutoAssignmentEnabled: v.optional(v.boolean()),
     reservationHoldDays: v.optional(v.number()),
   },
@@ -226,7 +230,23 @@ export const upsert = mutation({
       }
     }
 
-    const { orgId, ...fields } = args;
+    // SCRUM-778: the commission mode decides whether sales accrue commission
+    // with nobody entering an amount, so it changes only through the
+    // deliberate `setCommissionMode` door. A mobile bundle shipped before this
+    // rule defaults an unset mode to AUTO_MEMBER inside its general settings
+    // form and sends it on every save; accepting a CHANGE here would opt the
+    // dealership into automatic commission without anyone choosing it.
+    // Resending the mode already in force is not a change and still saves.
+    if (
+      args.commissionMode !== undefined &&
+      args.commissionMode !== effectiveCommissionMode(existing)
+    ) {
+      throw new ConvexError(
+        "The commission mode is changed on the Commission settings screen. Update the app and choose it there."
+      );
+    }
+
+    const { orgId, commissionMode: _resentMode, ...fields } = args;
     if (fields.dealershipPhones !== undefined) {
       fields.dealershipPhones = fields.dealershipPhones.map((phone) => phone.trim()).filter(Boolean);
     }
@@ -259,12 +279,68 @@ export const upsert = mutation({
         approvalThresholdEnabled: fields.approvalThresholdEnabled,
         approvalMinProfitPercent: fields.approvalMinProfitPercent,
         commissionTiers: fields.commissionTiers,
-        commissionMode: fields.commissionMode,
         generatedLeadAutoAssignmentEnabled: fields.generatedLeadAutoAssignmentEnabled,
         reservationHoldDays: fields.reservationHoldDays,
       });
       return newId;
     }
+  },
+});
+
+/**
+ * SCRUM-778: the commission mode in force, for anyone who reviews commissions.
+ * `get` is gated on VIEW_SETTINGS and returns null without it, which the
+ * resolver would read as MANUAL — so a commissions reviewer in an automatic
+ * organization was shown the manual work queue. Returns null while signed out
+ * or when the caller may not view commissions.
+ */
+export const getCommissionMode = query({
+  args: { orgId: v.id("organizations") },
+  returns: v.union(commissionModeValidator, v.null()),
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+    try {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COMMISSIONS]);
+    } catch {
+      return null;
+    }
+    const settings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    return effectiveCommissionMode(settings);
+  },
+});
+
+/**
+ * SCRUM-778: the only door that changes the commission mode. Owner-only, and
+ * called solely from the deliberate mode choice on the Commission settings
+ * screens — an automatic mode is an explicit opt-in (owner ruling c22406).
+ */
+export const setCommissionMode = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    commissionMode: commissionModeValidator,
+  },
+  returns: v.id("orgSettings"),
+  handler: async (ctx, args) => {
+    await requireOwner(ctx, args.orgId);
+    const settings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    if (settings) {
+      await ctx.db.patch(settings._id, { commissionMode: args.commissionMode });
+      return settings._id;
+    }
+    return await ctx.db.insert("orgSettings", {
+      orgId: args.orgId,
+      currency: DEFAULT_SETTINGS.currency,
+      currencySymbol: DEFAULT_SETTINGS.currencySymbol,
+      enabledPaymentTypes: DEFAULT_SETTINGS.enabledPaymentTypes,
+      commissionMode: args.commissionMode,
+    });
   },
 });
 

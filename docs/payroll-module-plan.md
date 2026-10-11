@@ -13,7 +13,7 @@ This plan has two parts:
 ## Part 1 — Commission audit ("is it working as intended?")
 
 ### How it works today
-- `orgSettings.commissionMode` ∈ `AUTO_TIERS` | `AUTO_MEMBER` | `MANUAL` (default `AUTO_MEMBER`). Set on the Commission settings page.
+- `orgSettings.commissionMode` ∈ `AUTO_TIERS` | `AUTO_MEMBER` | `MANUAL` (default `MANUAL` when never chosen — SCRUM-778; an automatic mode is an explicit opt-in). Set on the Commission settings page.
 - **Commission base (SCRUM-390, OR-5):** an automatic commission needs a recorded acquisition cost (none recorded means no commission until one is). The base is `commissionableEarnings` in [saleCompletion.ts](../convex/utils/saleCompletion.ts): `max(0, salePrice − cost)` for cash sales, `sales.create` sales, and plan v1 / no plan; the frozen consigned margin for consigned cars. For a dealer-owned sale completed by `applications.finalizeDeal` under a v2 financed-sale plan the base is the **Commissionable vehicle margin** `max(0, approved amount G − showroom contribution C − vehicle cost)`, with G and C frozen on the sale row (`commissionBase*`) and reused by `recalculateCommission`. It never turns on automatic commission in MANUAL mode and never replaces a manual or paid commission.
 - **AUTO_MEMBER:** `commission = grossProfit × membership.commissionRate/100` (rate per person, Team page).
 - **AUTO_TIERS:** `calculateCommissionFromTiers` — the highest tier whose `minProfitAmount ≤ grossProfit` sets a single `%` applied to the **whole** grossProfit (flat-at-bracket, not marginal).
