@@ -2501,6 +2501,16 @@ export async function runRehearsalCases(ctx) {
       legalInvoiceNumber: `CERT-M486C5-${stamp}`, legalInvoiceDate: Date.now(),
       issuedTo: "FINANCE_COMPANY",
     });
+    const zeroFeeId = await ownerMust("mutation", "financeDealCosts:recordDealFee", {
+      expectedCurrency: "JOD", idempotencyKey: `rehearsal-m486c5-zero-fee-${stamp}`,
+      orgId, applicationId, feeType: "OTHER_CLOSING_EXPENSE",
+      paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
+      deductedFromSettlement: false, actualAmountMinor: 0,
+      description: "No closing costs.",
+    });
+    await ownerMust("mutation", "financeDealCosts:reconcileDealFee", {
+      orgId, feeId: zeroFeeId, notes: "No fee to settle.",
+    });
     const beforeBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const beforeIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
     const saleId = await ownerMust("mutation", "applications:finalizeDeal", {
@@ -2524,6 +2534,9 @@ export async function runRehearsalCases(ctx) {
     expectEqual(String(customerDocument?.customerId), String(customerId), "M486C5 customer document customerId");
     expectEqual(customerDocument?.originalAmountMinor, 0, "M486C5 customer document zero claim");
     expectEqual(customerDocument?.status, "PAID", "M486C5 zero customer document is noncollectible");
+    const finalizedSale = await ownerMust("query", "sales:get", { orgId, saleId });
+    expectEqual(String(finalizedSale?.canonicalReceivableDocumentId), String(customerDocument._id),
+      "M486C5 sale canonical customer document pointer");
     const customerBalance = await ownerMust("query", "subledger:getReceivableBalance", {
       orgId, receivableDocumentId: customerDocument._id,
     });
@@ -2552,6 +2565,9 @@ export async function runRehearsalCases(ctx) {
       { key: "VEHICLE_INVENTORY", debitMinor: 10_000_000 },
       { key: "CASH_ON_HAND", creditMinor: 10_000_000 },
     ], { currency: "JOD", decimals: 3, what: "M486C5 owned acquisition" });
+    for (const line of acquisition.lines) {
+      expectEqual(String(line.vehicleId), String(vehicleId), "M486C5 acquisition vehicle dimension");
+    }
     const sale = await eventAndJournal({
       orgId, ownerMust, sourceType: "sales", sourceId: saleId, eventType: "SALE_COMPLETED",
     });
@@ -2611,7 +2627,8 @@ export async function runRehearsalCases(ctx) {
         "applications.createFromQuote", "applications.updateStatus",
         "financingEconomics.recordSubmittedQuotation", "financingEconomics.approveDealerPurchaseAmount",
         "applications.registerVehicleHandover", "applications.registerExpectedPayment",
-        "financeDealCosts.recordLegalInvoice", "applications.finalizeDeal"],
+        "financeDealCosts.recordLegalInvoice", "financeDealCosts.recordDealFee",
+        "financeDealCosts.reconcileDealFee", "applications.finalizeDeal"],
       reportsRead: ["subledger.listReceivables", "subledger.getReceivableBalance",
         "accountingLedger.listAccountingEvents", "accountingLedger.getJournalEntry",
         "accountingReports.trialBalance", "accountingReports.incomeStatement"] };
@@ -3565,7 +3582,7 @@ function expectSameAccountBalances(before, after, what, expectedDeltas = new Map
   };
   const beforeRows = balances(before);
   const afterRows = balances(after);
-  for (const key of new Set([...beforeRows.keys(), ...afterRows.keys()])) {
+  for (const key of new Set([...beforeRows.keys(), ...afterRows.keys(), ...expectedDeltas.keys()])) {
     expectEqual(afterRows.get(key) ?? 0, (beforeRows.get(key) ?? 0) + (expectedDeltas.get(key) ?? 0),
       `${what}: ${key}`);
   }

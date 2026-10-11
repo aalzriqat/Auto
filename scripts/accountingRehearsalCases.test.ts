@@ -182,6 +182,12 @@ type Defects = {
   financedSaleWrongVehicleDimension?: boolean;
   /** A financed sale posts the correct company AR amount against another financier. */
   financedSaleWrongFinanceCompanyDimension?: boolean;
+  /** The sale points at another receivable instead of its zero-value customer document. */
+  financedSaleWrongCanonicalPointer?: boolean;
+  /** Both public trial-balance snapshots omit the finance-company AR account. */
+  financedSaleReportOmitsCompanyAr?: boolean;
+  /** Acquisition lines carry a different vehicle dimension despite correct amounts. */
+  financedSaleWrongAcquisitionVehicleDimension?: boolean;
   /** The financier's invoice is assigned to the customer despite the correct amount. */
   financedSaleWrongPayer?: boolean;
   /** A second customer invoice claims the same finalized sale. */
@@ -416,6 +422,7 @@ function makeBackend(defects: Defects = {}) {
   const vehicles = new Map<string, Record<string, any>>();
   const sales = new Map<string, Record<string, any>>();
   let certifiedCashSalePosted = false;
+  let m486c5ReportStarted = false;
   let certifiedCashDepositId: string | undefined;
   let certifiedCashRefundDepositId: string | undefined;
   let certifiedCashForfeitDepositId: string | undefined;
@@ -935,6 +942,8 @@ function makeBackend(defects: Defects = {}) {
         };
       case "accountingReports:trialBalance": {
         const rows = CHART.flatMap((account) => {
+          if (defects.financedSaleReportOmitsCompanyAr && m486c5ReportStarted &&
+              account.systemKey === "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES") return [];
           const lines = [...journalLines.entries()]
             .filter(([entryId]) => !defects.cashDepositReportOmitsReceipt || !certifiedCashDepositId ||
               !journalEntries.some((entry) => entry._id === entryId &&
@@ -1359,9 +1368,12 @@ function makeBackend(defects: Defects = {}) {
           if (/^rehearsal-m486c[1235]-vehicle-/.test(String(args.idempotencyKey ?? "")) &&
               !defects.cashSaleAcquisitionMissingPosting) {
             const costMinor = defects.cashSaleAcquisitionWrongAmount ? 9_000_000 : 10_000_000;
+            const acquisitionVehicleId = defects.financedSaleWrongAcquisitionVehicleDimension &&
+              String(args.idempotencyKey).startsWith("rehearsal-m486c5-vehicle-")
+              ? "vehicle_wrong" : String(madeVehicle.value);
             post("VEHICLE_ACQUIRED", "vehicles", String(madeVehicle.value), [
-              { key: "VEHICLE_INVENTORY", debitMinor: costMinor, vehicleId: String(madeVehicle.value) },
-              { key: "CASH_ON_HAND", creditMinor: costMinor, vehicleId: String(madeVehicle.value) },
+              { key: "VEHICLE_INVENTORY", debitMinor: costMinor, vehicleId: acquisitionVehicleId },
+              { key: "CASH_ON_HAND", creditMinor: costMinor, vehicleId: acquisitionVehicleId },
             ]);
           }
         }
@@ -1755,6 +1767,7 @@ function makeBackend(defects: Defects = {}) {
       case "applications:registerVehicleHandover":
       case "applications:registerExpectedPayment":
       case "financeDealCosts:recordLegalInvoice":
+        if (String(args.legalInvoiceNumber ?? "").startsWith("CERT-M486C5-")) m486c5ReportStarted = true;
         return { ok: true as const, value: null };
       case "financeDealCosts:reconcileDealFee": {
         const fee = financeDealFees.get(String(args.feeId));
@@ -1874,6 +1887,11 @@ function makeBackend(defects: Defects = {}) {
         const app = financeApps.get(String(args.applicationId));
         if (!app) return { ok: false as const, error: "Application not found." };
         if (app.status === "CLOSED") return { ok: true as const, value: app.saleId };
+        if (String(args.idempotencyKey).startsWith("rehearsal-m486c5-finalize-") &&
+            ![...financeDealFees.values()].some((fee) => fee.applicationId === String(args.applicationId) &&
+              fee.voidedAt === undefined)) {
+          return { ok: false as const, error: "COSTS_NONE" };
+        }
         const gross = Math.round((quotePrice.get(app.quoteId) ?? 0) * MINOR_SCALE);
         if ([...financeDealFees.values()].some((fee) =>
           fee.applicationId === String(args.applicationId) && fee.voidedAt === undefined && fee.reconciledAt === undefined
@@ -1923,6 +1941,11 @@ function makeBackend(defects: Defects = {}) {
             originalAmountMinor: defects.financedSaleDuplicateCustomerInvoice ? net : 0,
             currency: ORG_CURRENCY, scale: 3,
             status: defects.financedSaleZeroCustomerOpen ? "OPEN" : "PAID",
+          });
+          sales.set(app.saleId, {
+            _id: app.saleId, orgId: app.orgId, status: "COMPLETED",
+            canonicalReceivableDocumentId: defects.financedSaleWrongCanonicalPointer
+              ? "rdoc_wrong" : customerInvoiceId,
           });
           const vehicleId = quoteVehicle.get(app.quoteId) ?? "";
           const vehicle = vehicles.get(vehicleId);
@@ -2497,6 +2520,9 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["financedSaleWrongCustomerDimension", /customer dimension/],
     ["financedSaleWrongVehicleDimension", /vehicle dimension/],
     ["financedSaleWrongFinanceCompanyDimension", /finance company dimension/],
+    ["financedSaleWrongCanonicalPointer", /canonical customer document pointer/],
+    ["financedSaleReportOmitsCompanyAr", /full public trial balance/],
+    ["financedSaleWrongAcquisitionVehicleDimension", /acquisition vehicle dimension/],
     ["financedSaleWrongPayer", /invoice payerType/],
     ["financedSaleDuplicateCustomerInvoice", /customer document zero claim/],
     ["financedSaleZeroCustomerOpen", /zero customer document is noncollectible/],

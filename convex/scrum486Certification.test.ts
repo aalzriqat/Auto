@@ -536,6 +536,8 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       originalAmountMinor: 0,
       status: "PAID",
     });
+    const finalizedSale = await s.t.run((ctx) => ctx.db.get(application!.finalizedSaleId!));
+    expect(finalizedSale?.canonicalReceivableDocumentId).toEqual(customerDocument?._id);
     // The customer may remain on the document for deal provenance; payerType and
     // financeCompanyId identify who legally owes this invoice.
     const rows = await journalRows(s);
