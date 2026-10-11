@@ -278,6 +278,8 @@ type Defects = {
   cashForfeitOperationalIncomeMissing?: boolean;
   /** Forfeiture incorrectly pays the customer despite retaining the deposit. */
   cashForfeitCreatesOutbound?: boolean;
+  /** Forfeiture erases an older collection row while adding the expected receipt. */
+  cashForfeitDeletesPriorCollection?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
   eraseOnChequeReturn?: boolean;
   /** A returned cheque posts nothing at all — the books still say money arrived. */
@@ -717,6 +719,9 @@ function makeBackend(defects: Defects = {}) {
       { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: amountMinor, customerId: deposit.customerId },
       { key: "DEPOSIT_FORFEITURE_INCOME", creditMinor: amountMinor, customerId: deposit.customerId },
     ], { payload: { depositId: deposit._id, amountMinor, currency: ORG_CURRENCY, customerId: deposit.customerId } });
+    if (defects.cashForfeitDeletesPriorCollection && deposit._id === certifiedCashForfeitDepositId) {
+      collectionPayments.shift();
+    }
     if (defects.cashForfeitCreatesOutbound && deposit._id === certifiedCashForfeitDepositId) {
       collectionPayments.push({
         _id: id("colp"), vehicleId: deposit.vehicleId, customerId: deposit.customerId,
@@ -2410,6 +2415,7 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
   test.each([
     ["cashForfeitOperationalIncomeMissing", /operational forfeiture-income delta/],
     ["cashForfeitCreatesOutbound", /exactly one new collection receipt/],
+    ["cashForfeitDeletesPriorCollection", /existing collection payment disappeared/],
   ] as const)("M486C4 rejects %s", async (defect, diagnostic) => {
     const results = await runAgainst({ [defect]: true });
     expect(statusOf(results, "M486C4")).toBe("FAIL");

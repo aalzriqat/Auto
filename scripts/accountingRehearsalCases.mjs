@@ -2386,6 +2386,10 @@ export async function runRehearsalCases(ctx) {
     const finalOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
     const finalCollections = await listCollectionPayments({ orgId, ownerMust });
     const priorCollections = new Map(openingCollections.map((row) => [String(row._id), row]));
+    const finalCollectionIds = new Set(finalCollections.map((row) => String(row._id)));
+    for (const id of priorCollections.keys()) {
+      if (!finalCollectionIds.has(id)) fail("M486C4 existing collection payment disappeared");
+    }
     for (const row of finalCollections) {
       const prior = priorCollections.get(String(row._id));
       if (prior && JSON.stringify(prior) !== JSON.stringify(row)) {

@@ -46,8 +46,9 @@ not evidence of a changed screen or a deployed backend.
 - The M486C4 rehearsal checks an owned cash held deposit, creator refusal,
   literal receipt and forfeiture journals, unchanged turnover, 200 JOD other
   income in both report APIs, and one incoming collection with no payout.
-  Local negative controls make it fail if the operational API omits income or
-  an outbound collection appears. This is fake-backend rehearsal evidence;
+  Local negative controls make it fail if the operational API omits income,
+  an outbound collection appears, or an older collection payment disappears.
+  This is fake-backend rehearsal evidence;
   exact-SHA platform execution is still required.
 - Convex typecheck and focused money-report suites must be rerun at the final
   frozen SHA. Exact-head platform, UI, and production evidence remain UNAVAILABLE.
