@@ -1024,6 +1024,63 @@ async function readDepositForfeitureIncome(
   };
 }
 
+/** A posted forfeiture also takes a linked legacy receipt out of turnover. */
+async function readLegacyDepositsTakenOverByForfeiture(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  depositIds: Set<string>
+): Promise<Set<string>> {
+  const takenOver = new Set<string>();
+  if (depositIds.size === 0) return takenOver;
+
+  const scanCap = 8_000;
+  const events = await ctx.db.query("accountingEvents")
+    .withIndex("by_org_eventType", (q) => q.eq("orgId", orgId).eq("eventType", "DEPOSIT_FORFEITED"))
+    .take(scanCap + 1);
+  if (events.length > scanCap) {
+    throw new ConvexError("Financial report is unavailable because forfeiture history is too large.");
+  }
+  for (const event of events) {
+    if (event.status !== "POSTED" && event.status !== "REVERSED") continue;
+    const payload = event.payload as { depositId?: unknown; holdId?: unknown } | null;
+    const depositId = payload?.depositId;
+    if (typeof depositId !== "string" || !depositIds.has(depositId)) continue;
+    const validSource = event.sourceType === "deposits"
+      ? event.sourceId === depositId
+      : event.sourceType === "depositVehicleHolds" && payload?.holdId === event.sourceId;
+    const entry = event.journalEntryId ? await ctx.db.get(event.journalEntryId) : null;
+    if (
+      !validSource || !entry || entry.orgId !== orgId ||
+      entry.accountingEventId !== event._id ||
+      entry.accountingDate !== event.accountingDate ||
+      (entry.status !== "POSTED" && entry.status !== "REVERSED")
+    ) {
+      throw new ConvexError("Financial report is unavailable because forfeiture history is incomplete.");
+    }
+    const lines = await ctx.db.query("journalLines")
+      .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
+      .collect();
+    let hasPostedIncome = false;
+    for (const line of lines) {
+      if (line.orgId !== orgId || line.accountingDate !== event.accountingDate || line.currency !== event.currency) {
+        throw new ConvexError("Financial report is unavailable because forfeiture history is inconsistent.");
+      }
+      const account = await ctx.db.get(line.accountId);
+      if (!account || account.orgId !== orgId) {
+        throw new ConvexError("Financial report is unavailable because a journal account is missing.");
+      }
+      if (account.type === "OTHER_INCOME" && line.creditMinor > line.debitMinor) {
+        hasPostedIncome = true;
+      }
+    }
+    if (!hasPostedIncome) {
+      throw new ConvexError("Financial report is unavailable because forfeiture income was not posted.");
+    }
+    takenOver.add(depositId);
+  }
+  return takenOver;
+}
+
 export const getProfitAndLoss = query({
   args: {
     orgId: v.id("organizations"),
@@ -1119,13 +1176,27 @@ export const getProfitAndLoss = query({
       }
     }
 
+    // A direct forfeiture has no depositApplication row. Its posted journal
+    // takes over the same linked receipt, even when the two dates fall in
+    // different reporting windows. A later reversal restores the liability;
+    // it does not make the original cash receipt earned turnover.
+    const linkedLegacyReceiptIds = new Set(
+      txInDateRange
+        .filter((tx) => !tx.isDeleted && tx.category === "DEPOSIT" && tx.excludedFromRevenue !== true && tx.depositId)
+        .map((tx) => tx.depositId!.toString())
+    );
+    const legacyDepositsTakenOverByForfeiture = await readLegacyDepositsTakenOverByForfeiture(
+      ctx, args.orgId, linkedLegacyReceiptIds
+    );
+
     for (const tx of txInDateRange) {
       if (tx.isDeleted) continue;
       if (
         tx.category === "DEPOSIT" &&
         tx.excludedFromRevenue !== true &&
         tx.depositId !== undefined &&
-        legacyDepositsTakenOverBySale.has(tx.depositId)
+        (legacyDepositsTakenOverBySale.has(tx.depositId) ||
+          legacyDepositsTakenOverByForfeiture.has(tx.depositId))
       ) {
         continue;
       }

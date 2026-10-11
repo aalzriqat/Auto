@@ -1477,6 +1477,44 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     }
   });
 
+  test("a linked legacy deposit receipt is not counted again after forfeiture", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2025-04-15T12:00:00.000Z"));
+      const { s, quoteId } = await cashQuote("s486legacyforfeit");
+      const depositId = await s.owner.as.mutation(api.deposits.create, {
+        orgId: s.orgId, quoteId, amount: 200, method: "CASH",
+        idempotencyKey: "s486legacyforfeit-deposit",
+      });
+      await s.t.run(async (ctx) => {
+        const receipts = (await ctx.db.query("transactions")
+          .withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect())
+          .filter((tx) => tx.category === "DEPOSIT" && tx.depositId === depositId);
+        expect(receipts).toHaveLength(1);
+        await ctx.db.patch(receipts[0]._id, { excludedFromRevenue: undefined });
+      });
+      const april = { orgId: s.orgId, startDate: Date.UTC(2025, 3, 1), endDate: Date.UTC(2025, 4, 1) - 1 };
+      const may = { orgId: s.orgId, startDate: Date.UTC(2025, 4, 1), endDate: Date.UTC(2025, 5, 1) - 1 };
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, april)).totalRevenue).toBe(200);
+
+      vi.setSystemTime(new Date("2025-05-15T12:00:00.000Z"));
+      await s.approver.as.mutation(api.deposits.release, {
+        orgId: s.orgId, depositId, resolution: "FORFEITED",
+        idempotencyKey: "s486legacyforfeit-release",
+      });
+      const receiptMonth = await s.owner.as.query(api.reports.getProfitAndLoss, april);
+      const forfeitureMonth = await s.owner.as.query(api.reports.getProfitAndLoss, may);
+      expect(receiptMonth.totalRevenue).toBe(0);
+      expect(receiptMonth.depositForfeitureIncome).toBe(0);
+      expect(forfeitureMonth.totalRevenue).toBe(0);
+      expect(forfeitureMonth.depositForfeitureIncome).toBe(200);
+      expect(forfeitureMonth.netProfit).toBe(200);
+      expect((await publicIncomeStatement(s)).totalOtherIncome).toBe(200_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("forfeiture income follows its posted month and each journal reversal month", async () => {
     vi.useFakeTimers();
     try {
