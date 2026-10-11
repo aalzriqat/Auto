@@ -1565,6 +1565,75 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(report.depositForfeitureIncome).toBe(0);
   });
 
+  test("129 historical incoming receipts stay available and an over-cap report fails closed", async () => {
+    const { s } = await cashQuote("s486legacyvolume");
+    const year = s.fiscalYear;
+    await s.t.run(async (ctx) => {
+      const creator = await ctx.db.query("users").first();
+      if (!creator) throw new Error("Missing test user");
+      for (let i = 0; i < 129; i++) {
+        const depositId = await ctx.db.insert("deposits", {
+          orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
+          amount: 1, status: "REFUNDED", holdActive: false,
+          createdBy: creator._id, createdAt: Date.UTC(year, 0, 2) + i,
+        });
+        await ctx.db.insert("transactions", {
+          orgId: s.orgId, type: "IN", amount: 1,
+          date: Date.UTC(year, 0, 3) + i, category: "DEPOSIT",
+          description: "Historical deposit receipt", vehicleId: s.vehicleId, depositId,
+        });
+      }
+    });
+    const report = await s.owner.as.query(api.reports.getProfitAndLoss, {
+      orgId: s.orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+    });
+    expect(report.totalRevenue).toBe(129);
+    expect(report.depositForfeitureIncome).toBe(0);
+
+    await s.t.run(async (ctx) => {
+      const creator = await ctx.db.query("users").first();
+      if (!creator) throw new Error("Missing test user");
+      for (let i = 129; i < 512; i++) {
+        const depositId = await ctx.db.insert("deposits", {
+          orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
+          amount: 1, status: "REFUNDED", holdActive: false,
+          createdBy: creator._id, createdAt: Date.UTC(year, 0, 2) + i,
+        });
+        await ctx.db.insert("transactions", {
+          orgId: s.orgId, type: "IN", amount: 1,
+          date: Date.UTC(year, 0, 3) + i, category: "DEPOSIT",
+          description: "Historical deposit receipt", vehicleId: s.vehicleId, depositId,
+        });
+      }
+    });
+    expect((await s.owner.as.query(api.reports.getProfitAndLoss, {
+      orgId: s.orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+    })).totalRevenue).toBe(512);
+    await s.t.run(async (ctx) => {
+      const creator = await ctx.db.query("users").first();
+      if (!creator) throw new Error("Missing test user");
+      const depositId = await ctx.db.insert("deposits", {
+        orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
+        amount: 1, status: "REFUNDED", holdActive: false,
+        createdBy: creator._id, createdAt: Date.UTC(year, 0, 2) + 512,
+      });
+      await ctx.db.insert("transactions", {
+        orgId: s.orgId, type: "IN", amount: 1,
+        date: Date.UTC(year, 0, 3) + 512, category: "DEPOSIT",
+        description: "Historical deposit receipt", vehicleId: s.vehicleId, depositId,
+      });
+    });
+    await expect(s.owner.as.query(api.reports.getProfitAndLoss, {
+      orgId: s.orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+    })).rejects.toThrow("Financial report is unavailable because legacy receipt history is too large.");
+  });
+
   test("forfeiture income follows its posted month and each journal reversal month", async () => {
     vi.useFakeTimers();
     try {

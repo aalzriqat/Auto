@@ -1084,9 +1084,10 @@ async function readLegacyDepositsTakenOverByForfeiture(
   if (depositIds.size === 0) return takenOver;
   // The source index answers only for linked receipts in this window. A
   // whole-org forfeiture scan would grow on every report, even for one old row.
-  // Bounds fail closed before either platform read limit can yield a partial
-  // answer; there is no arbitrary first-page "no event" inference.
-  if (depositIds.size > 128) {
+  // Bounds fail closed before a partial answer. A normal annual report can
+  // contain more than 128 historical receipts even when none was forfeited;
+  // keep that ordinary case available while bounding source lookups.
+  if (depositIds.size > 512) {
     throw new ConvexError("Financial report is unavailable because legacy receipt history is too large.");
   }
   let sourceQueries = 0;
@@ -1097,7 +1098,7 @@ async function readLegacyDepositsTakenOverByForfeiture(
     sourceType: "deposits" | "depositVehicleHolds",
     sourceId: string
   ) => {
-    if (++sourceQueries > 512) {
+    if (++sourceQueries > 2048) {
       throw new ConvexError("Financial report is unavailable because legacy receipt history is too large.");
     }
     const events = await ctx.db.query("accountingEvents")
@@ -1129,7 +1130,7 @@ async function readLegacyDepositsTakenOverByForfeiture(
       takenOver.add(rawId);
       continue;
     }
-    if (++sourceQueries > 512) {
+    if (++sourceQueries > 2048) {
       throw new ConvexError("Financial report is unavailable because legacy receipt history is too large.");
     }
     const holds = await ctx.db.query("depositVehicleHolds")
