@@ -1510,6 +1510,28 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       expect(forfeitureMonth.depositForfeitureIncome).toBe(200);
       expect(forfeitureMonth.netProfit).toBe(200);
       expect((await publicIncomeStatement(s)).totalOtherIncome).toBe(200_000);
+
+      // A slice resolution identifies the hold rather than the deposit as
+      // its event source. Keep the posted journal fixed while changing only
+      // that source shape, then require the same legacy receipt exclusion.
+      await s.t.run(async (ctx) => {
+        const deposit = await ctx.db.get(depositId);
+        if (!deposit) throw new Error("Missing test deposit");
+        const holdId = await ctx.db.insert("depositVehicleHolds", {
+          orgId: s.orgId, depositId, vehicleId: deposit.vehicleId,
+          active: false, createdAt: Date.now(),
+        });
+        const event = await ctx.db.query("accountingEvents")
+          .withIndex("by_org_eventType", (q) =>
+            q.eq("orgId", s.orgId).eq("eventType", "DEPOSIT_FORFEITED"))
+          .first();
+        if (!event) throw new Error("Missing test forfeiture event");
+        await ctx.db.patch(event._id, {
+          sourceType: "depositVehicleHolds", sourceId: holdId.toString(),
+          payload: { ...(event.payload as Record<string, unknown>), holdId: holdId.toString() },
+        });
+      });
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, april)).totalRevenue).toBe(0);
     } finally {
       vi.useRealTimers();
     }

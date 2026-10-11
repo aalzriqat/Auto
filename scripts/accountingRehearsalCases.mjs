@@ -2408,12 +2408,20 @@ export async function runRehearsalCases(ctx) {
     expectEqual(incoming?.reference, `Deposit ${depositId}`, "M486C4 collection receipt reference");
     expectEqual(finalIncome?.totalOtherIncome - openingIncome?.totalOtherIncome, 200_000,
       "M486C4 GL other-income delta");
-    expectEqual(finalOperational?.depositForfeitureIncome - openingOperational?.depositForfeitureIncome, 200,
+    const jodMinor = (value, what) => {
+      if (typeof value !== "number" || !Number.isFinite(value)) unproven(`${what} is unavailable`);
+      return Math.round(value * 1_000);
+    };
+    expectEqual(jodMinor(finalOperational?.depositForfeitureIncome, "M486C4 final forfeiture income") -
+      jodMinor(openingOperational?.depositForfeitureIncome, "M486C4 opening forfeiture income"), 200_000,
       "M486C4 operational forfeiture-income delta");
     const beforeJod = openingOperational?.depositForfeitureIncomeByCurrency?.find((row) => row.currency === "JOD")?.amount ?? 0;
     const afterJod = finalOperational?.depositForfeitureIncomeByCurrency?.find((row) => row.currency === "JOD")?.amount ?? 0;
-    expectEqual(afterJod - beforeJod, 200, "M486C4 currency-specific forfeiture-income delta");
-    expectEqual(finalOperational?.netProfit - openingOperational?.netProfit, 200,
+    expectEqual(jodMinor(afterJod, "M486C4 final JOD income") -
+      jodMinor(beforeJod, "M486C4 opening JOD income"), 200_000,
+      "M486C4 currency-specific forfeiture-income delta");
+    expectEqual(jodMinor(finalOperational?.netProfit, "M486C4 final net profit") -
+      jodMinor(openingOperational?.netProfit, "M486C4 opening net profit"), 200_000,
       "M486C4 operational net-profit delta");
     expectEqual(finalOperational?.totalRevenue, openingOperational?.totalRevenue,
       "M486C4 forfeiture is not turnover");

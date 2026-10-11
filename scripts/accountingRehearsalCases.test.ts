@@ -280,6 +280,8 @@ type Defects = {
   cashForfeitCreatesOutbound?: boolean;
   /** Forfeiture erases an older collection row while adding the expected receipt. */
   cashForfeitDeletesPriorCollection?: boolean;
+  /** Unrelated three-decimal profit must not perturb the forfeiture delta. */
+  cashForfeitUnrelatedFractionalProfit?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
   eraseOnChequeReturn?: boolean;
   /** A returned cheque posts nothing at all — the books still say money arrived. */
@@ -992,7 +994,8 @@ function makeBackend(defects: Defects = {}) {
           depositForfeitureIncome: reportedForfeitureIncome,
           depositForfeitureIncomeByCurrency: reportedForfeitureIncome === 0 ? [] :
             [{ currency: ORG_CURRENCY, amount: reportedForfeitureIncome }],
-          netProfit: totalRevenue + reportedForfeitureIncome,
+          netProfit: totalRevenue + reportedForfeitureIncome +
+            (defects.cashForfeitUnrelatedFractionalProfit ? 56.001 : 0),
           grossTransactionValue: 0, transactions: inWindow } };
       }
       case "accountingPeriods:create":
@@ -2420,6 +2423,11 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     const results = await runAgainst({ [defect]: true });
     expect(statusOf(results, "M486C4")).toBe("FAIL");
     expect(String(results.find((row) => row.id === "M486C4")?.detail)).toMatch(diagnostic);
+  });
+
+  test("M486C4 accepts the same unrelated fractional profit before and after forfeiture", async () => {
+    const results = await runAgainst({ cashForfeitUnrelatedFractionalProfit: true });
+    expect(statusOf(results, "M486C4")).toBe("PASS");
   });
 
   test("M486C3 marks a refund that crosses the UTC accounting month unavailable", async () => {

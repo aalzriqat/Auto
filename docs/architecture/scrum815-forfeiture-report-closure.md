@@ -4,7 +4,10 @@
 
 A posted deposit forfeiture contributes other income on its journal date. A
 posted reversal offsets that income on its own date. A held receipt and a refund
-contribute no forfeiture income. Turnover is unchanged. This change reads money;
+contribute no forfeiture income. Canonical deposit receipts never enter turnover.
+For a linked historical receipt without that flag, a posted forfeiture removes
+the old receipt from turnover so it cannot be counted again as other income.
+This can correct an earlier reported month. This change reads money;
 it does not post, move, or reverse money.
 
 The proven discrepancy is in the legacy public backend
@@ -18,7 +21,7 @@ not evidence of a changed screen or a deployed backend.
 | --- | --- |
 | Writers | `releaseHeldDeposit` and slice resolution call `hookDepositForfeited`; `postDomainEvent` writes `accountingEvents`, journal entries, and lines; `reverseAccountingEvent` writes a linked reversal journal. No writer changes here. |
 | Readers | `reports.getProfitAndLoss` gains forfeiture income; `accountingReports.incomeStatement` remains the GL comparator. Repository-wide source search found no app/component caller of the legacy endpoint. |
-| Historical | Current chart `systemKey` is not stable: `repairMissingSystemAccounts` may clear it on an old account. Read immutable event/journal links and current account type as the GL report does. |
+| Historical | Current chart `systemKey` is not stable: `repairMissingSystemAccounts` may clear it on an old account. Read immutable event/journal links and current account type as the GL report does. A linked unflagged receipt is excluded after a source-linked posted forfeiture, including direct releases with no application row. |
 | Transitions | HELD receipt: zero; FORFEITED with pending/failed accounting event: zero until a posted journal exists; posted forfeiture: positive; posted reversal: negative; reversal of reversal: positive. |
 | Reversal | Follow `reversalOfEventId` with cycle and depth guards. Count each journal on its own `accountingDate`, including original `REVERSED` journals. |
 | Idempotency | The existing posting and reversal writers own event identity. This read-only query counts each persisted posted event once. |
@@ -35,9 +38,13 @@ not evidence of a changed screen or a deployed backend.
 - Before the fix, an owned CASH 200 JOD HELD deposit forfeited through the public
   mutation gave 200 JOD GL other income but a 0 JOD operational profit change:
   focused harness suite 26 pass / 1 fail.
-- The changed harness suite checks the same public path, receipt turnover stays
-  unchanged, and net profit rises 200 JOD. It clears the historical account's
+- The changed harness suite checks the same public path, canonical receipt
+  turnover stays unchanged, and net profit rises 200 JOD. It clears the historical account's
   current system key and requires both reports still to show 200 JOD.
+- A second failing-first case at b94fecec showed a linked historical receipt
+  counted 200 JOD in turnover after its direct forfeiture, on top of 200 JOD
+  other income. The corrected report shows zero receipt-month turnover and
+  200 JOD forfeiture-month income; it also probes the hold-sourced event shape.
 - A separate journal-level test checks the original forfeiture in May, its
   reversal in June, and reversal of that reversal in July. It does not certify
   a no-code business correction flow for a forfeited deposit.
@@ -53,7 +60,7 @@ not evidence of a changed screen or a deployed backend.
 - Convex typecheck and focused money-report suites must be rerun at the final
   frozen SHA. Exact-head platform, UI, and production evidence remain UNAVAILABLE.
 
-## Five ways the fix could be wrong
+## Ways the fix could be wrong
 
 1. A current account mapping could change after posting and erase historical
    income from a report. The event/journal source and remapping regression
@@ -70,6 +77,11 @@ not evidence of a changed screen or a deployed backend.
    The query fails closed for missing/mismatched entry, line, or account. A
    harness missing-journal negative control passes; real-platform proof remains
    UNAVAILABLE.
+6. A direct or sliced forfeiture could leave a linked legacy receipt in turnover
+   and count the same cash twice. The report seeks only that receipt's deposit
+   and hold event sources, then verifies the posted journal before exclusion.
+   The cross-month and hold-source harness checks cover the result; platform
+   evidence remains UNAVAILABLE.
 
 ## Known limits
 
@@ -79,4 +91,10 @@ report. The new forfeiture field exposes amounts by currency and adds only the
 organization-currency amount to its legacy top-level net-profit figure; the GL
 income statement remains the authority for full per-currency reporting. Broad
 windows may hit Convex read limits and must fail rather than return a partial
-total. No measured platform I/O claim is made.
+total. The linked-legacy path uses indexed source lookups rather than scanning
+the organisation's full forfeiture history. It fails closed above 128 distinct
+legacy deposits in the requested window, 64 holds per deposit, 32 events per
+source, 512 source queries, or 256 journals verified. Those are availability
+limits, not a partial financial answer. No measured platform I/O claim is made.
+Reopening a forfeited deposit after a future operator correction needs an
+explicit SCRUM-813 ruling before this historical exclusion can be changed.

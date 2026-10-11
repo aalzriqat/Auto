@@ -1024,6 +1024,56 @@ async function readDepositForfeitureIncome(
   };
 }
 
+async function verifyLegacyForfeitureJournal(
+  ctx: QueryCtx,
+  args: {
+    orgId: Id<"organizations">;
+    depositId: string;
+    sourceType: "deposits" | "depositVehicleHolds";
+    sourceId: string;
+    event: Doc<"accountingEvents">;
+    accountTypes: Map<Id<"chartOfAccounts">, string>;
+  }
+): Promise<void> {
+  const { orgId, depositId, sourceType, sourceId, event, accountTypes } = args;
+  const payload = event.payload as { depositId?: unknown; holdId?: unknown } | null;
+  const validSource = payload?.depositId === depositId &&
+    (sourceType === "deposits" || payload?.holdId === sourceId);
+  const entry = event.journalEntryId ? await ctx.db.get(event.journalEntryId) : null;
+  if (
+    !validSource || !entry || entry.orgId !== orgId ||
+    entry.accountingEventId !== event._id ||
+    entry.accountingDate !== event.accountingDate ||
+    (entry.status !== "POSTED" && entry.status !== "REVERSED")
+  ) {
+    throw new ConvexError("Financial report is unavailable because forfeiture history is incomplete.");
+  }
+  const lines = await ctx.db.query("journalLines")
+    .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
+    .collect();
+  let hasPostedIncome = false;
+  for (const line of lines) {
+    if (line.orgId !== orgId || line.accountingDate !== event.accountingDate || line.currency !== event.currency) {
+      throw new ConvexError("Financial report is unavailable because forfeiture history is inconsistent.");
+    }
+    let accountType = accountTypes.get(line.accountId);
+    if (accountType === undefined) {
+      const account = await ctx.db.get(line.accountId);
+      if (!account || account.orgId !== orgId) {
+        throw new ConvexError("Financial report is unavailable because a journal account is missing.");
+      }
+      accountType = account.type;
+      accountTypes.set(line.accountId, accountType);
+    }
+    if (accountType === "OTHER_INCOME" && line.creditMinor > line.debitMinor) {
+      hasPostedIncome = true;
+    }
+  }
+  if (!hasPostedIncome) {
+    throw new ConvexError("Financial report is unavailable because forfeiture income was not posted.");
+  }
+}
+
 /** A posted forfeiture also takes a linked legacy receipt out of turnover. */
 async function readLegacyDepositsTakenOverByForfeiture(
   ctx: QueryCtx,
@@ -1032,51 +1082,71 @@ async function readLegacyDepositsTakenOverByForfeiture(
 ): Promise<Set<string>> {
   const takenOver = new Set<string>();
   if (depositIds.size === 0) return takenOver;
-
-  const scanCap = 8_000;
-  const events = await ctx.db.query("accountingEvents")
-    .withIndex("by_org_eventType", (q) => q.eq("orgId", orgId).eq("eventType", "DEPOSIT_FORFEITED"))
-    .take(scanCap + 1);
-  if (events.length > scanCap) {
-    throw new ConvexError("Financial report is unavailable because forfeiture history is too large.");
+  // The source index answers only for linked receipts in this window. A
+  // whole-org forfeiture scan would grow on every report, even for one old row.
+  // Bounds fail closed before either platform read limit can yield a partial
+  // answer; there is no arbitrary first-page "no event" inference.
+  if (depositIds.size > 128) {
+    throw new ConvexError("Financial report is unavailable because legacy receipt history is too large.");
   }
-  for (const event of events) {
-    if (event.status !== "POSTED" && event.status !== "REVERSED") continue;
-    const payload = event.payload as { depositId?: unknown; holdId?: unknown } | null;
-    const depositId = payload?.depositId;
-    if (typeof depositId !== "string" || !depositIds.has(depositId)) continue;
-    const validSource = event.sourceType === "deposits"
-      ? event.sourceId === depositId
-      : event.sourceType === "depositVehicleHolds" && payload?.holdId === event.sourceId;
-    const entry = event.journalEntryId ? await ctx.db.get(event.journalEntryId) : null;
-    if (
-      !validSource || !entry || entry.orgId !== orgId ||
-      entry.accountingEventId !== event._id ||
-      entry.accountingDate !== event.accountingDate ||
-      (entry.status !== "POSTED" && entry.status !== "REVERSED")
-    ) {
-      throw new ConvexError("Financial report is unavailable because forfeiture history is incomplete.");
+  let sourceQueries = 0;
+  let verifiedJournals = 0;
+  const accountTypes = new Map<Id<"chartOfAccounts">, string>();
+  const hasPostedForfeiture = async (
+    depositId: string,
+    sourceType: "deposits" | "depositVehicleHolds",
+    sourceId: string
+  ) => {
+    if (++sourceQueries > 512) {
+      throw new ConvexError("Financial report is unavailable because legacy receipt history is too large.");
     }
-    const lines = await ctx.db.query("journalLines")
-      .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
-      .collect();
-    let hasPostedIncome = false;
-    for (const line of lines) {
-      if (line.orgId !== orgId || line.accountingDate !== event.accountingDate || line.currency !== event.currency) {
-        throw new ConvexError("Financial report is unavailable because forfeiture history is inconsistent.");
+    const events = await ctx.db.query("accountingEvents")
+      .withIndex("by_org_event_source_version", (q) =>
+        q.eq("orgId", orgId).eq("eventType", "DEPOSIT_FORFEITED")
+          .eq("sourceType", sourceType).eq("sourceId", sourceId)
+      )
+      .take(33);
+    if (events.length > 32) {
+      throw new ConvexError("Financial report is unavailable because forfeiture history is too large.");
+    }
+    let posted = false;
+    for (const event of events) {
+      if (event.status !== "POSTED" && event.status !== "REVERSED") continue;
+      if (++verifiedJournals > 256) {
+        throw new ConvexError("Financial report is unavailable because forfeiture history is too large.");
       }
-      const account = await ctx.db.get(line.accountId);
-      if (!account || account.orgId !== orgId) {
-        throw new ConvexError("Financial report is unavailable because a journal account is missing.");
+      await verifyLegacyForfeitureJournal(ctx, {
+        orgId, depositId, sourceType, sourceId, event, accountTypes,
+      });
+      posted = true;
+    }
+    return posted;
+  };
+  for (const rawId of depositIds) {
+    const depositId = ctx.db.normalizeId("deposits", rawId);
+    if (!depositId) continue;
+    if (await hasPostedForfeiture(rawId, "deposits", rawId)) {
+      takenOver.add(rawId);
+      continue;
+    }
+    if (++sourceQueries > 512) {
+      throw new ConvexError("Financial report is unavailable because legacy receipt history is too large.");
+    }
+    const holds = await ctx.db.query("depositVehicleHolds")
+      .withIndex("by_deposit", (q) => q.eq("depositId", depositId))
+      .take(65);
+    if (holds.length > 64) {
+      throw new ConvexError("Financial report is unavailable because deposit hold history is too large.");
+    }
+    for (const hold of holds) {
+      if (hold.orgId !== orgId) {
+        throw new ConvexError("Financial report is unavailable because deposit hold history is inconsistent.");
       }
-      if (account.type === "OTHER_INCOME" && line.creditMinor > line.debitMinor) {
-        hasPostedIncome = true;
+      if (await hasPostedForfeiture(rawId, "depositVehicleHolds", hold._id.toString())) {
+        takenOver.add(rawId);
+        break;
       }
     }
-    if (!hasPostedIncome) {
-      throw new ConvexError("Financial report is unavailable because forfeiture income was not posted.");
-    }
-    takenOver.add(depositId);
   }
   return takenOver;
 }
