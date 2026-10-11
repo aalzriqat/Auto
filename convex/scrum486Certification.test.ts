@@ -525,6 +525,17 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       currency: "JOD",
       status: "OPEN",
     });
+    expect(application?.finalizedSaleId).toBeDefined();
+    const customerDocument = await s.t.run((ctx) => ctx.db.query("receivableDocuments")
+      .withIndex("by_org_source", (q) => q.eq("orgId", s.orgId)
+        .eq("sourceType", "sales").eq("sourceId", application!.finalizedSaleId!))
+      .unique());
+    expect(customerDocument).toMatchObject({
+      payerType: "CUSTOMER",
+      customerId: s.customerId,
+      originalAmountMinor: 0,
+      status: "PAID",
+    });
     // The customer may remain on the document for deal provenance; payerType and
     // financeCompanyId identify who legally owes this invoice.
     const rows = await journalRows(s);

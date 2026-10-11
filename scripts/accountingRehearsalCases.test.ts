@@ -180,10 +180,14 @@ type Defects = {
   financedSaleWrongCustomerDimension?: boolean;
   /** A financed sale posts the right amount against the wrong vehicle dimension. */
   financedSaleWrongVehicleDimension?: boolean;
+  /** A financed sale posts the correct company AR amount against another financier. */
+  financedSaleWrongFinanceCompanyDimension?: boolean;
   /** The financier's invoice is assigned to the customer despite the correct amount. */
   financedSaleWrongPayer?: boolean;
   /** A second customer invoice claims the same finalized sale. */
   financedSaleDuplicateCustomerInvoice?: boolean;
+  /** A zero-value customer document is left OPEN and offered for collection. */
+  financedSaleZeroCustomerOpen?: boolean;
   /** Compensating extra journals conceal a side effect in the trial balance. */
   financedSaleExtraBalancedJournals?: boolean;
   /** The public income statement understates the certified sale by one minor unit. */
@@ -471,7 +475,7 @@ function makeBackend(defects: Defects = {}) {
   let seq = 0;
   const id = (p: string) => `${p}_${++seq}`;
 
-  type Line = { key: string; debitMinor?: number; creditMinor?: number; customerId?: string; vehicleId?: string; salespersonId?: string };
+  type Line = { key: string; debitMinor?: number; creditMinor?: number; customerId?: string; vehicleId?: string; financeCompanyId?: string; salespersonId?: string };
   /** One economic occurrence: an event, its entry, its lines — all linked. */
   function post(
     eventType: string,
@@ -515,6 +519,7 @@ function makeBackend(defects: Defects = {}) {
         scale: LINE_SCALE,
         customerId: l.customerId,
         vehicleId: l.vehicleId,
+        financeCompanyId: l.financeCompanyId,
         salespersonId: l.salespersonId,
       }))
     );
@@ -536,6 +541,7 @@ function makeBackend(defects: Defects = {}) {
         creditMinor: Math.round(l.debitMinor * factor),
         customerId: l.customerId,
         vehicleId: l.vehicleId,
+        financeCompanyId: l.financeCompanyId,
         salespersonId: l.salespersonId,
       })),
       { category: "REVERSAL" }
@@ -1908,14 +1914,16 @@ function makeBackend(defects: Defects = {}) {
         });
         app.receivableId = rid;
         if (String(args.idempotencyKey).startsWith("rehearsal-m486c5-finalize-")) {
-          if (defects.financedSaleDuplicateCustomerInvoice) {
-            const duplicateId = id("rdoc");
-            financeReceivables.set(duplicateId, {
-              _id: duplicateId, orgId: app.orgId, sourceType: "sales", sourceId: app.saleId,
-              documentType: "INVOICE", payerType: "CUSTOMER", customerId: app.customerId,
-              originalAmountMinor: net, currency: ORG_CURRENCY, scale: 3, status: "OPEN",
-            });
-          }
+          // completeSale currently creates this zero-amount customer invoice
+          // even when the finance company owes the entire consideration.
+          const customerInvoiceId = id("rdoc");
+          financeReceivables.set(customerInvoiceId, {
+            _id: customerInvoiceId, orgId: app.orgId, sourceType: "sales", sourceId: app.saleId,
+            documentType: "INVOICE", payerType: "CUSTOMER", customerId: app.customerId,
+            originalAmountMinor: defects.financedSaleDuplicateCustomerInvoice ? net : 0,
+            currency: ORG_CURRENCY, scale: 3,
+            status: defects.financedSaleZeroCustomerOpen ? "OPEN" : "PAID",
+          });
           const vehicleId = quoteVehicle.get(app.quoteId) ?? "";
           const vehicle = vehicles.get(vehicleId);
           const costMinor = Math.round(Number(vehicle?.purchasePrice ?? 0) * MINOR_SCALE);
@@ -1925,7 +1933,9 @@ function makeBackend(defects: Defects = {}) {
             ? "vehicle_wrong" : vehicleId;
           post("SALE_COMPLETED", "sales", app.saleId, [
             { key: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", debitMinor: gross,
-              customerId: postedCustomerId, vehicleId: postedVehicleId },
+              customerId: postedCustomerId, vehicleId: postedVehicleId,
+              financeCompanyId: defects.financedSaleWrongFinanceCompanyDimension
+                ? "finance_company_wrong" : app.companyId },
             { key: defects.financedSaleWrongRevenueAccount
               ? "MISCELLANEOUS_INCOME" : "SALES_REVENUE", creditMinor: gross,
               customerId: postedCustomerId, vehicleId: postedVehicleId },
@@ -2486,8 +2496,10 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["financedSaleWrongRevenueAccount", /financed sale: journal lines are not exactly/],
     ["financedSaleWrongCustomerDimension", /customer dimension/],
     ["financedSaleWrongVehicleDimension", /vehicle dimension/],
+    ["financedSaleWrongFinanceCompanyDimension", /finance company dimension/],
     ["financedSaleWrongPayer", /invoice payerType/],
-    ["financedSaleDuplicateCustomerInvoice", /exactly one collectible invoice/],
+    ["financedSaleDuplicateCustomerInvoice", /customer document zero claim/],
+    ["financedSaleZeroCustomerOpen", /zero customer document is noncollectible/],
     ["financedSaleExtraBalancedJournals", /unexpected journal entry/],
   ] as const)("M486C5 rejects %s", async (defect, diagnostic) => {
     const results = await runAgainst({ [defect]: true });

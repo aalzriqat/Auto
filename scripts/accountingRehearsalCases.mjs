@@ -2513,11 +2513,22 @@ export async function runRehearsalCases(ctx) {
     expectEqual(closed?.financedSaleNetReceivableMinor, 12_500_000, "M486C5 full financier debt");
     const listed = await ownerMust("query", "subledger:listReceivables", { orgId, limit: 200 });
     if (!Array.isArray(listed) || listed.length >= 200) unproven("M486C5 tenant receivable listing is absent or truncated");
-    const saleClaims = listed.filter((r) =>
-      (r.sourceType === "finance_application" && String(r.sourceId) === String(applicationId)) ||
-      (r.sourceType === "sales" && String(r.sourceId) === String(saleId)));
-    expectEqual(saleClaims.length, 1, "M486C5 exactly one collectible invoice across application and sale sources");
-    const invoice = saleClaims[0];
+    const companyClaims = listed.filter((r) =>
+      r.sourceType === "finance_application" && String(r.sourceId) === String(applicationId));
+    expectEqual(companyClaims.length, 1, "M486C5 exactly one finance company invoice");
+    const customerClaims = listed.filter((r) =>
+      r.sourceType === "sales" && String(r.sourceId) === String(saleId));
+    expectEqual(customerClaims.length, 1, "M486C5 exactly one canonical customer document");
+    const customerDocument = customerClaims[0];
+    expectEqual(customerDocument?.payerType, "CUSTOMER", "M486C5 customer document payerType");
+    expectEqual(String(customerDocument?.customerId), String(customerId), "M486C5 customer document customerId");
+    expectEqual(customerDocument?.originalAmountMinor, 0, "M486C5 customer document zero claim");
+    expectEqual(customerDocument?.status, "PAID", "M486C5 zero customer document is noncollectible");
+    const customerBalance = await ownerMust("query", "subledger:getReceivableBalance", {
+      orgId, receivableDocumentId: customerDocument._id,
+    });
+    expectEqual(customerBalance?.outstandingMinor, 0, "M486C5 zero customer document outstanding");
+    const invoice = companyClaims[0];
     expectEqual(invoice?.sourceType, "finance_application", "M486C5 invoice sourceType");
     expectEqual(String(invoice?.sourceId), String(applicationId), "M486C5 invoice sourceId");
     for (const [field, expected] of [
@@ -2554,6 +2565,10 @@ export async function runRehearsalCases(ctx) {
       const line = sale.lines.find((l) => keyOf.get(String(l.accountId)) === key);
       expectEqual(String(line?.customerId), String(customerId), `M486C5 ${key} customer dimension`);
     }
+    const companyArLine = sale.lines.find((l) =>
+      keyOf.get(String(l.accountId)) === "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES");
+    expectEqual(String(companyArLine?.financeCompanyId), String(companyId),
+      "M486C5 finance company dimension");
     for (const line of sale.lines) {
       expectEqual(String(line.vehicleId), String(vehicleId), "M486C5 financed sale vehicle dimension");
     }

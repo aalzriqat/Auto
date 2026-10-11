@@ -1836,6 +1836,23 @@ async function applySaleCompletionSideEffects(
     dueDate: args.saleDate,
     actorId: args.actorId,
   });
+  if (customerBillableMinor === 0) {
+    // The finance company can owe the full sale while the sale still needs its
+    // canonical customer document for later lifecycle checks. A zero balance
+    // must not remain an OPEN, collectible customer claim.
+    const customerDocument = await ctx.db.get(saleReceivableId);
+    if (
+      !customerDocument || customerDocument.orgId !== args.orgId ||
+      customerDocument.payerType !== "CUSTOMER" ||
+      customerDocument.originalAmountMinor !== 0 ||
+      (customerDocument.status !== "OPEN" && customerDocument.status !== "PAID")
+    ) {
+      throw new ConvexError("Unable to complete the sale because its customer balance is inconsistent.");
+    }
+    if (customerDocument.status === "OPEN") {
+      await ctx.db.patch(saleReceivableId, { status: "PAID" });
+    }
+  }
   await ctx.db.patch(saleId, { canonicalReceivableDocumentId: saleReceivableId, glPostingRequired });
 
   // Skipped entirely when a settlement plan governs the sale. There the deposit is
