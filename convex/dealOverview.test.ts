@@ -996,6 +996,29 @@ describe("dealOverview.financedDealOverview", () => {
     expect(nestedQuery).not.toHaveBeenCalled();
   });
 
+  test("overview money visibility stays aligned with the authoritative cockpit", async () => {
+    const s = await seed("4parity");
+    const applicationId = await insertApplication(s);
+    const permissionSets = [
+      [PERMISSIONS.VIEW_SALES],
+      [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_FINANCE],
+      [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_COST_PRICE],
+      [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE],
+      [PERMISSIONS.VIEW_SALES, PERMISSIONS.APPROVE_FINANCE_APPLICATION],
+      [PERMISSIONS.VIEW_SALES, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT],
+      [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_FINANCE_APPLICATIONS],
+    ];
+
+    for (const [index, permissions] of permissionSets.entries()) {
+      const caller = await callerWith(s, `parity${index}`, permissions);
+      const cockpit = await caller.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+      const overview = await caller.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+      expect(cockpit).not.toBeNull();
+      expect(overview).not.toBeNull();
+      expect(overview!.financialSummary !== null).toBe(cockpit!.money !== null);
+    }
+  });
+
   test("the cockpit's vehicle card follows view:vehicles, not view:sales (PR #338)", async () => {
     const s = await seed("4v");
     const applicationId = await insertApplication(s);
