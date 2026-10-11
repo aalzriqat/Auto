@@ -1001,12 +1001,8 @@ describe("dealOverview.financedDealOverview", () => {
     const applicationId = await insertApplication(s);
     const permissionSets = [
       [PERMISSIONS.VIEW_SALES],
-      [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_FINANCE],
-      [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_COST_PRICE],
-      [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE],
-      [PERMISSIONS.VIEW_SALES, PERMISSIONS.APPROVE_FINANCE_APPLICATION],
-      [PERMISSIONS.VIEW_SALES, PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT],
-      [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_FINANCE_APPLICATIONS],
+      ...ALL_PERMISSIONS.filter((permission) => permission !== PERMISSIONS.VIEW_SALES)
+        .map((permission) => [PERMISSIONS.VIEW_SALES, permission]),
     ];
 
     for (const [index, permissions] of permissionSets.entries()) {
@@ -1017,6 +1013,21 @@ describe("dealOverview.financedDealOverview", () => {
       expect(overview).not.toBeNull();
       expect(overview!.financialSummary !== null).toBe(cockpit!.money !== null);
     }
+
+    // A system owner is authorized by the role marker even when its stored
+    // permission array is empty; neither query may require VIEW_FINANCE here.
+    await s.t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", s.orgId).eq("userId", s.userId))
+        .unique();
+      if (!membership) throw new Error("Owner membership missing");
+      await ctx.db.patch(membership.roleId, { permissions: [] });
+    });
+    const ownerCockpit = await s.asOwner.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+    const ownerOverview = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+    expect(ownerCockpit?.money ?? null).not.toBeNull();
+    expect(ownerOverview?.financialSummary ?? null).not.toBeNull();
   });
 
   test("the cockpit's vehicle card follows view:vehicles, not view:sales (PR #338)", async () => {
