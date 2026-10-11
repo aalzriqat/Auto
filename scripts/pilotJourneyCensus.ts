@@ -80,7 +80,7 @@ function listSourceFiles(dir: string): string[] {
       !/\.(test|spec)\.[jt]sx?$/.test(entry.name)
     ) found.push(absolute);
   }
-  return found.sort();
+  return found.sort((a, b) => a.localeCompare(b));
 }
 
 function sourceFile(absolute: string): ts.SourceFile {
@@ -138,9 +138,30 @@ function isApiElementAccess(node: ts.ElementAccessExpression, aliases: Set<strin
   return ts.isElementAccessExpression(expression) && isApiElementAccess(expression, aliases);
 }
 
-function parseWebModule(root: string, absolute: string): ParsedModule {
-  const sf = sourceFile(absolute);
-  const file = relative(root, absolute);
+function addGeneratedApiAliases(statement: ts.ImportDeclaration, apiAliases: Set<string>): void {
+  const bindings = statement.importClause?.namedBindings;
+  if (!bindings || !ts.isNamedImports(bindings)) return;
+  for (const element of bindings.elements) {
+    if ((element.propertyName?.text ?? element.name.text) === "api") apiAliases.add(element.name.text);
+  }
+}
+
+function addLocalWebImport(root: string, absolute: string, sf: ts.SourceFile,
+  statement: ts.ImportDeclaration | ts.ExportDeclaration, specifier: string,
+  imports: string[], unknowns: CensusUnknown[]): void {
+  if (specifier.startsWith("@/convex/")) return;
+  if (!specifier.startsWith(".") && !specifier.startsWith("@/")) return;
+  const resolved = resolveLocal(root, absolute, specifier);
+  if (resolved) {
+    if (!relative(root, resolved).startsWith("convex/")) imports.push(resolved);
+  } else if (!path.extname(specifier) || SOURCE_EXTENSIONS.includes(path.extname(specifier))) {
+    unknowns.push({ kind: "missing-local-module", site: { file: relative(root, absolute), line: lineAt(sf, statement) }, detail: specifier });
+  }
+}
+
+function webImports(root: string, absolute: string, sf: ts.SourceFile): {
+  imports: string[]; apiAliases: Set<string>; unknowns: CensusUnknown[];
+} {
   const imports: string[] = [];
   const apiAliases = new Set<string>();
   const unknowns: CensusUnknown[] = [];
@@ -151,61 +172,104 @@ function parseWebModule(root: string, absolute: string): ParsedModule {
     if (!moduleNode || !ts.isStringLiteral(moduleNode)) continue;
     const specifier = moduleNode.text;
     if (ts.isImportDeclaration(statement) && /(?:^|\/)convex\/_generated\/api$/.test(specifier)) {
-      const bindings = statement.importClause?.namedBindings;
-      if (bindings && ts.isNamedImports(bindings)) {
-        for (const element of bindings.elements) {
-          if ((element.propertyName?.text ?? element.name.text) === "api") apiAliases.add(element.name.text);
-        }
-      }
+      addGeneratedApiAliases(statement, apiAliases);
       continue;
     }
-    if (specifier.startsWith("@/convex/")) continue;
-    if (!specifier.startsWith(".") && !specifier.startsWith("@/")) continue;
-    const resolved = resolveLocal(root, absolute, specifier);
-    if (resolved) {
-      if (!relative(root, resolved).startsWith("convex/")) imports.push(resolved);
-    } else if (!path.extname(specifier) || SOURCE_EXTENSIONS.includes(path.extname(specifier))) {
-      unknowns.push({ kind: "missing-local-module", site: { file, line: lineAt(sf, statement) }, detail: specifier });
-    }
+    addLocalWebImport(root, absolute, sf, statement, specifier, imports, unknowns);
   }
 
+  return { imports, apiAliases, unknowns };
+}
+
+function apiUnknown(kind: CensusUnknown["kind"], sf: ts.SourceFile, file: string, node: ts.Node): CensusUnknown {
+  return { kind, site: { file, line: lineAt(sf, node) }, detail: node.getText(sf).slice(0, 120) };
+}
+
+function isUnresolvedImport(node: ts.Node): boolean {
+  if (!ts.isCallExpression(node) || node.expression.kind !== ts.SyntaxKind.ImportKeyword) return false;
+  const moduleName = node.arguments[0];
+  return !moduleName || !ts.isStringLiteral(moduleName) ||
+    moduleName.text.startsWith(".") || moduleName.text.startsWith("@/");
+}
+
+function isDynamicApi(node: ts.Node, aliases: Set<string>): boolean {
+  return ts.isElementAccessExpression(node) && isApiElementAccess(node, aliases) &&
+    !(ts.isElementAccessExpression(node.parent) && node.parent.expression === node);
+}
+
+function isIndirectApi(node: ts.Node, aliases: Set<string>): boolean {
+  return ts.isIdentifier(node) && aliases.has(node.text) &&
+    !ts.isImportSpecifier(node.parent) &&
+    !(ts.isPropertyAccessExpression(node.parent) && node.parent.expression === node) &&
+    !(ts.isElementAccessExpression(node.parent) && node.parent.expression === node) &&
+    !isTypeReference(node);
+}
+
+function apiPropertyChain(node: ts.Node, aliases: Set<string>): string[] | undefined {
+  if (!ts.isPropertyAccessExpression(node) ||
+    (ts.isPropertyAccessExpression(node.parent) && node.parent.expression === node) ||
+    (ts.isElementAccessExpression(node.parent) && node.parent.expression === node) ||
+    isTypeReference(node)) return undefined;
+  const chain = propertyChain(node);
+  return chain && aliases.has(chain[0]!) ? chain : undefined;
+}
+
+function webApiRefs(sf: ts.SourceFile, file: string, apiAliases: Set<string>): {
+  apiRefs: ParsedModule["apiRefs"]; unknowns: CensusUnknown[];
+} {
   const apiRefs: ParsedModule["apiRefs"] = [];
+  const unknowns: CensusUnknown[] = [];
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-      const moduleName = node.arguments[0];
-      if (!moduleName || !ts.isStringLiteral(moduleName) ||
-        moduleName.text.startsWith(".") || moduleName.text.startsWith("@/")) {
-        unknowns.push({ kind: "dynamic-import", site: { file, line: lineAt(sf, node) }, detail: node.getText(sf).slice(0, 120) });
-      }
-    }
-    if (ts.isElementAccessExpression(node) && isApiElementAccess(node, apiAliases) &&
-      !(ts.isElementAccessExpression(node.parent) && node.parent.expression === node)) {
-      unknowns.push({ kind: "dynamic-api", site: { file, line: lineAt(sf, node) }, detail: node.getText(sf).slice(0, 120) });
-    }
-    if (ts.isIdentifier(node) && apiAliases.has(node.text) &&
-      !ts.isImportSpecifier(node.parent) &&
-      !(ts.isPropertyAccessExpression(node.parent) && node.parent.expression === node) &&
-      !(ts.isElementAccessExpression(node.parent) && node.parent.expression === node) &&
-      !isTypeReference(node)) {
-      unknowns.push({ kind: "indirect-api", site: { file, line: lineAt(sf, node) }, detail: node.getText(sf) });
-    }
-    if (ts.isPropertyAccessExpression(node) &&
-      !(ts.isPropertyAccessExpression(node.parent) && node.parent.expression === node) &&
-      !(ts.isElementAccessExpression(node.parent) && node.parent.expression === node) &&
-      !isTypeReference(node)) {
-      const chain = propertyChain(node);
-      if (chain && apiAliases.has(chain[0]!)) {
-        if (chain.length >= 3) {
-          apiRefs.push({ id: chain.slice(1).join("."), site: { file, line: lineAt(sf, node) } });
-        } else {
-          unknowns.push({ kind: "indirect-api", site: { file, line: lineAt(sf, node) }, detail: node.getText(sf) });
-        }
-      }
+    if (isUnresolvedImport(node)) unknowns.push(apiUnknown("dynamic-import", sf, file, node));
+    if (isDynamicApi(node, apiAliases)) unknowns.push(apiUnknown("dynamic-api", sf, file, node));
+    if (isIndirectApi(node, apiAliases)) unknowns.push(apiUnknown("indirect-api", sf, file, node));
+    const chain = apiPropertyChain(node, apiAliases);
+    if (chain && chain.length >= 3) {
+      apiRefs.push({ id: chain.slice(1).join("."), site: { file, line: lineAt(sf, node) } });
+    } else if (chain) {
+      unknowns.push(apiUnknown("indirect-api", sf, file, node));
     }
     ts.forEachChild(node, visit);
   };
   visit(sf);
-  return { imports, apiRefs, unknowns };
+  return { apiRefs, unknowns };
+}
+
+function parseWebModule(root: string, absolute: string): ParsedModule {
+  const sf = sourceFile(absolute);
+  const imports = webImports(root, absolute, sf);
+  const refs = webApiRefs(sf, relative(root, absolute), imports.apiAliases);
+  return { imports: imports.imports, apiRefs: refs.apiRefs,
+    unknowns: [...imports.unknowns, ...refs.unknowns] };
+}
+
+function recordBuilderAliases(bindings: ts.NamedImports, rawServer: boolean,
+  aggregateWrapper: boolean, aliases: Map<string, string>): void {
+  for (const element of bindings.elements) {
+    const original = element.propertyName?.text ?? element.name.text;
+    if (rawServer && BACKEND_BUILDERS.has(original)) aliases.set(element.name.text, original);
+    if (aggregateWrapper && original === "socialBulkMutation") aliases.set(element.name.text, "mutation");
+    if (aggregateWrapper && (original === "mutation" || original === "internalMutation")) {
+      aliases.set(element.name.text, original);
+    }
+  }
+}
+
+function backendBuilderAliases(root: string, absolute: string, sf: ts.SourceFile): Map<string, string> {
+  const aliases = new Map<string, string>();
+  for (const statement of sf.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+    const specifier = statement.moduleSpecifier.text;
+    const rawServer = specifier.endsWith("/_generated/server");
+    const aggregateWrapper = path.resolve(path.dirname(absolute), specifier) ===
+      path.join(root, "convex", "functions");
+    if (!rawServer && !aggregateWrapper) continue;
+    const bindings = statement.importClause?.namedBindings;
+    if (bindings && ts.isNamedImports(bindings)) {
+      recordBuilderAliases(bindings, rawServer, aggregateWrapper, aliases);
+    }
+  }
+  return aliases;
 }
 
 function publicDeclarations(root: string): Map<string, Omit<PublicEndpoint, "webRoutes" | "webSites">> {
@@ -213,26 +277,7 @@ function publicDeclarations(root: string): Map<string, Omit<PublicEndpoint, "web
   for (const absolute of listSourceFiles(path.join(root, "convex"))) {
     const sf = sourceFile(absolute);
     const file = relative(root, absolute);
-    const aliases = new Map<string, string>();
-    for (const statement of sf.statements) {
-      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
-      const specifier = statement.moduleSpecifier.text;
-      const rawServer = specifier.endsWith("/_generated/server");
-      const aggregateWrapper = path.resolve(path.dirname(absolute), specifier) ===
-        path.join(root, "convex", "functions");
-      if (!rawServer && !aggregateWrapper) continue;
-      const bindings = statement.importClause?.namedBindings;
-      if (bindings && ts.isNamedImports(bindings)) {
-        for (const element of bindings.elements) {
-          const original = element.propertyName?.text ?? element.name.text;
-          if (rawServer && BACKEND_BUILDERS.has(original)) aliases.set(element.name.text, original);
-          if (aggregateWrapper && original === "socialBulkMutation") aliases.set(element.name.text, "mutation");
-          if (aggregateWrapper && (original === "mutation" || original === "internalMutation")) {
-            aliases.set(element.name.text, original);
-          }
-        }
-      }
-    }
+    const aliases = backendBuilderAliases(root, absolute, sf);
     for (const statement of sf.statements) {
       if (!ts.isVariableStatement(statement) ||
         !statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) continue;
@@ -257,6 +302,33 @@ function routeName(dashboardRoot: string, page: string): string {
   return "/[orgId]" + (directory === "" ? "" : "/" + directory);
 }
 
+function collectRoute(root: string, dashboardRoot: string, page: string,
+  getModule: (absolute: string) => ParsedModule,
+  sitesByEndpoint: Map<string, Map<string, ApiSite>>,
+  routesByEndpoint: Map<string, Set<string>>): RouteCandidate {
+  const route = routeName(dashboardRoot, page);
+  const pending = [page];
+  const visited = new Set<string>();
+  const apiIds = new Set<string>();
+  while (pending.length > 0) {
+    const absolute = pending.pop()!;
+    if (visited.has(absolute)) continue;
+    visited.add(absolute);
+    const parsedModule = getModule(absolute);
+    pending.push(...parsedModule.imports);
+    for (const ref of parsedModule.apiRefs) {
+      apiIds.add(ref.id);
+      if (!sitesByEndpoint.has(ref.id)) sitesByEndpoint.set(ref.id, new Map());
+      sitesByEndpoint.get(ref.id)!.set(`${ref.site.file}:${ref.site.line}`, ref.site);
+      if (!routesByEndpoint.has(ref.id)) routesByEndpoint.set(ref.id, new Set());
+      routesByEndpoint.get(ref.id)!.add(route);
+    }
+  }
+  return { route, page: relative(root, page),
+    sourceFiles: [...visited].map((file) => relative(root, file)).sort((a, b) => a.localeCompare(b)),
+    apiIds: [...apiIds].sort((a, b) => a.localeCompare(b)) };
+}
+
 /** Returns source candidates only. UNKNOWN is never converted to PASS. */
 export function buildPilotJourneyCensus(root: string): PilotJourneyCensus {
   const repoRoot = path.resolve(root);
@@ -279,27 +351,7 @@ export function buildPilotJourneyCensus(root: string): PilotJourneyCensus {
   };
 
   for (const page of listSourceFiles(dashboardRoot).filter((file) => path.basename(file) === "page.tsx")) {
-    const route = routeName(dashboardRoot, page);
-    const pending = [page];
-    const visited = new Set<string>();
-    const apiIds = new Set<string>();
-    while (pending.length > 0) {
-      const absolute = pending.pop()!;
-      if (visited.has(absolute)) continue;
-      visited.add(absolute);
-      const parsedModule = getModule(absolute);
-      pending.push(...parsedModule.imports);
-      for (const ref of parsedModule.apiRefs) {
-        apiIds.add(ref.id);
-        if (!sitesByEndpoint.has(ref.id)) sitesByEndpoint.set(ref.id, new Map());
-        sitesByEndpoint.get(ref.id)!.set(`${ref.site.file}:${ref.site.line}`, ref.site);
-        if (!routesByEndpoint.has(ref.id)) routesByEndpoint.set(ref.id, new Set());
-        routesByEndpoint.get(ref.id)!.add(route);
-      }
-    }
-    routes.push({ route, page: relative(repoRoot, page),
-      sourceFiles: [...visited].map((file) => relative(repoRoot, file)).sort(),
-      apiIds: [...apiIds].sort() });
+    routes.push(collectRoute(repoRoot, dashboardRoot, page, getModule, sitesByEndpoint, routesByEndpoint));
   }
 
   for (const [id, sites] of sitesByEndpoint) {
@@ -307,15 +359,19 @@ export function buildPilotJourneyCensus(root: string): PilotJourneyCensus {
     for (const site of sites.values()) unknowns.push({ kind: "unresolved-api", site, detail: id });
   }
 
-  return {
-    routes: routes.sort((a, b) => a.route.localeCompare(b.route)),
-    publicEndpoints: [...declarations.values()].map((declaration) => ({
+  const publicEndpoints = [...declarations.values()].map((declaration) => ({
       ...declaration,
-      webRoutes: [...(routesByEndpoint.get(declaration.id) ?? [])].sort(),
+      webRoutes: [...(routesByEndpoint.get(declaration.id) ?? [])].sort((a, b) => a.localeCompare(b)),
       webSites: [...(sitesByEndpoint.get(declaration.id)?.values() ?? [])]
         .sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line),
-    })).sort((a, b) => a.id.localeCompare(b.id)),
-    unknowns: unknowns.sort((a, b) => a.site.file.localeCompare(b.site.file) || a.site.line - b.site.line),
+    }));
+  publicEndpoints.sort((a, b) => a.id.localeCompare(b.id));
+  routes.sort((a, b) => a.route.localeCompare(b.route));
+  unknowns.sort((a, b) => a.site.file.localeCompare(b.site.file) || a.site.line - b.site.line);
+  return {
+    routes,
+    publicEndpoints,
+    unknowns,
     evidenceBoundary:
       "Static web dashboard page-import/API binding locator only; ancestor layouts and dynamic imports require separate review. A reachable binding is not an enabled button; an unreferenced public endpoint may be mobile, webhook, job, integration, or backend-only. No runtime, money, role, tenant, or consumer parity is proved.",
   };
