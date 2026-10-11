@@ -3275,8 +3275,11 @@ function expectC3DepositIdentity(deposit, phase, { orgId, quoteId, vehicleId, cu
   ]) {
     const actual = ["_id", "orgId", "quoteId", "vehicleId", "customerId",
       "canonicalPaymentId"].includes(field) ? String(deposit?.[field]) : deposit?.[field];
-    expectEqual(actual, expected, `M486C3 ${phase} deposit ${field === "canonicalPaymentId"
-      ? "canonical payment identity" : field === "customerId" ? "customer identity" : field}`);
+    const label = {
+      canonicalPaymentId: "canonical payment identity",
+      customerId: "customer identity",
+    }[field] ?? field;
+    expectEqual(actual, expected, `M486C3 ${phase} deposit ${label}`);
   }
 }
 
@@ -3305,7 +3308,8 @@ function expectC3CollectionPaymentCensus(before, after) {
   const original = ids(before);
   const final = ids(after);
   const originalRows = new Map(before.map((row) => [String(row._id), row]));
-  const stableRow = (row) => JSON.stringify(Object.keys(row).sort().map((key) => [key, row[key]]));
+  const stableRow = (row) => JSON.stringify(Object.keys(row)
+    .sort((a, b) => a.localeCompare(b)).map((key) => [key, row[key]]));
   for (const id of original) {
     if (!final.has(id)) fail("M486C3 collection payment census lost an existing row");
     const current = after.find((row) => String(row._id) === id);
@@ -3346,9 +3350,15 @@ function expectOnlyJournalEntriesAdded(before, after, expectedIds, what) {
   for (const id of original) {
     if (!final.has(id)) fail(`${what}: an existing journal entry disappeared`);
   }
-  const added = [...final].filter((id) => !original.has(id)).sort();
-  const expected = expectedIds.map(String).sort();
-  expectEqual(JSON.stringify(added), JSON.stringify(expected), what);
+  const added = [...final].filter((id) => !original.has(id));
+  const expected = expectedIds.map(String);
+  if (new Set(expected).size !== expected.length) {
+    unproven(`${what}: expected journal ids contain a duplicate`);
+  }
+  expectEqual(added.length, expected.length, `${what}: added journal entry count`);
+  for (const id of expected) {
+    if (!added.includes(id)) fail(`${what}: expected journal entry was not added`);
+  }
 }
 
 /** account id → system key, and system key → account id, from the org's real chart. */
