@@ -656,22 +656,26 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
   });
 
   it("runs candidate runtime on an internal Docker network and cleans that network up", () => {
-    const startRun = String(
-      step(
-        "attack-worker",
-        "Start verified exact-SHA candidate frontend artifact",
-      ).run ?? "",
-    );
-    expect(startRun).toContain("docker network create --internal");
-    expect(startRun).toContain('--network "$CANDIDATE_NETWORK"');
-    expect(startRun).toContain("--publish 127.0.0.1:3000:3000");
-    expect(startRun).toContain("--cap-drop ALL");
-    expect(startRun).toContain("--security-opt no-new-privileges");
+    for (const [jobName, stopName] of [
+      ["trusted-e2e", "Stop isolated trusted E2E candidate frontend"],
+      ["attack-worker", "Stop isolated candidate frontend"],
+    ] as const) {
+      const startRun = String(
+        step(jobName, "Start verified exact-SHA candidate frontend artifact").run ?? "",
+      );
+      expect(startRun).toContain("docker network create --internal");
+      expect(startRun).toContain('--network "$CANDIDATE_NETWORK"');
+      expect(startRun).not.toContain("--publish");
+      expect(startRun).toContain("--cap-drop ALL");
+      expect(startRun).toContain("--security-opt no-new-privileges");
+      expect(startRun).toContain("docker inspect --format");
+      expect(startRun).toContain("trusted/scripts/intelligence/browserSwarmLoopbackRelay.mjs");
+      expect(startRun).toContain('CANDIDATE_RELAY_PID=$!');
 
-    const stopRun = String(
-      step("attack-worker", "Stop isolated candidate frontend").run ?? "",
-    );
-    expect(stopRun).toContain('docker network rm "$CANDIDATE_NETWORK"');
+      const stopRun = String(step(jobName, stopName).run ?? "");
+      expect(stopRun).toContain('kill "$CANDIDATE_RELAY_PID"');
+      expect(stopRun).toContain('docker network rm "$CANDIDATE_NETWORK"');
+    }
   });
 
   it("keeps a failed candidate runtime observable instead of destroying its logs (SCRUM-376)", () => {
