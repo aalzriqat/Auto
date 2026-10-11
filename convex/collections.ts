@@ -28,6 +28,7 @@ import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
 import { isFcLineage, parseFaceAmountMinor, dealChequeCurrency, FC_CHEQUE_DEAL_NEXT_STEP, FC_RETURN_MESSAGES } from "./utils/fcCheque";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
+import { assertNoOpenSaleInvoiceForUnlinkedReceipt } from "./utils/cashSalePilotGate";
 import {
   assertNoSaleIdOnNewReceivable,
   assertReceiptTargetNotSaleLinked,
@@ -1281,6 +1282,13 @@ export const recordPayment = mutation({
       receivableId: args.receivableId,
       saleId: args.saleId,
     });
+    // SCRUM-802: an UNLINKED receipt (no receivable, no sale) from a customer who
+    // owes a sale invoice would park as unapplied while the invoice stays open;
+    // the pilot procedure is a deposit. Same pre-wrapper placement as above.
+    await assertNoOpenSaleInvoiceForUnlinkedReceipt(ctx, args.orgId, {
+      receivableId: args.receivableId,
+      customerId: args.customerId,
+    });
     return await runWithIdempotency(
       ctx,
       {
@@ -1786,6 +1794,11 @@ export async function registerChequeCore(
   // registration via applications.registerExpectedPayment passes none). No
   // write has happened yet.
   assertReceivableNotSaleLinked(null, args.saleId);
+  // SCRUM-802: a customer cheque is customer money too — park nothing against an open sale invoice. A finance
+  // company's cheque is the financier's money, not the customer's, so that drawer is exempt.
+  if (args.drawerType !== "FINANCE_COMPANY") {
+    await assertNoOpenSaleInvoiceForUnlinkedReceipt(ctx, args.orgId, { receivableId: args.receivableId, customerId: args.customerId });
+  }
 
   let receivable: Doc<"receivables"> | null = null;
   if (args.receivableId) {
