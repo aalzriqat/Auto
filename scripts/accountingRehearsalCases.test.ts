@@ -101,6 +101,11 @@ describe("vehicle fixture rate-limit retry", () => {
 
 type Deposit = {
   _id: string;
+  orgId?: string;
+  quoteId?: string;
+  amount?: number;
+  currency?: string;
+  method?: string;
   canonicalPaymentId?: string;
   releasedAmountMinor: number;
   refundedAmountMinor: number;
@@ -249,6 +254,9 @@ type Defects = {
   cashReceiptEventPayloadMissing?: boolean;
   cashRefundAllocatesOutbound?: boolean;
   cashDepositMissesCollectionMirror?: boolean;
+  cashRefundMutatesPriorCollectionAmount?: boolean;
+  cashRefundDropsDepositPaymentPointer?: boolean;
+  cashRefundChangesDepositCustomer?: boolean;
   cashDepositLeavesVehicleAvailable?: boolean;
   cashRefundLeavesVehicleReserved?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
@@ -594,6 +602,11 @@ function makeBackend(defects: Defects = {}) {
     deposit.refundedAmountMinor += payable;
     deposit.releaseCount += 1;
     if (deposit.freeMinor === 0 && deposit.committedMinor === 0) deposit.status = args.resolution;
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundMutatesPriorCollectionAmount) {
+      const prior = collectionPayments.find((row) => row.direction === "OUT" && row.amount === 2000);
+      if (!prior) throw new Error("C3 pre-existing collection fixture missing");
+      prior.amount = 2200;
+    }
     if (deposit._id === certifiedCashRefundDepositId && !defects.cashRefundLeavesVehicleReserved) {
       const vehicle = vehicles.get(deposit.vehicleId);
       if (vehicle) {
@@ -639,6 +652,13 @@ function makeBackend(defects: Defects = {}) {
         incoming.payerType = "OTHER";
         incoming.method = "OTHER";
       }
+    }
+    // Corrupt only the terminal deposit row, after the normal posting and mirror writes.
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundDropsDepositPaymentPointer) {
+      deposit.canonicalPaymentId = undefined;
+    }
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundChangesDepositCustomer) {
+      deposit.customerId = "other-customer";
     }
     return { ok: true as const, value: null };
   };
@@ -1303,6 +1323,11 @@ function makeBackend(defects: Defects = {}) {
         }
         deposits.set(depositId, {
           _id: depositId,
+          orgId: String(args.orgId),
+          quoteId: String(args.quoteId),
+          amount: Number(args.amount),
+          currency: ORG_CURRENCY,
+          method: String(args.method),
           canonicalPaymentId: paymentId,
           releasedAmountMinor: 0,
           refundedAmountMinor: 0,
@@ -1870,13 +1895,13 @@ function makeBackend(defects: Defects = {}) {
   const must = async (kind: string, fnPath: string, args: Record<string, any>) => {
     const r = await authedCall(kind, fnPath, args);
     if (!r.ok) throw new Error(`${fnPath} failed: ${r.error}`);
-    return r.value;
+    return structuredClone(r.value);
   };
 
   const approverMust = async (kind: string, fnPath: string, args: Record<string, any>) => {
     const r = await approverCall(kind, fnPath, args);
     if (!r.ok) throw new Error(`${fnPath} failed: ${r.error}`);
-    return r.value;
+    return structuredClone(r.value);
   };
   return { authedCall, approverCall, anonymousCall: call(false), must, approverMust, deposits };
 }
@@ -2249,6 +2274,9 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["cashReceiptEventPayloadMissing", /receipt event payload deposit/],
     ["cashRefundAllocatesOutbound", /outbound payment has no allocations/],
     ["cashDepositMissesCollectionMirror", /collection payment census/],
+    ["cashRefundMutatesPriorCollectionAmount", /existing collection payment changed/],
+    ["cashRefundDropsDepositPaymentPointer", /refunded deposit canonical payment identity/],
+    ["cashRefundChangesDepositCustomer", /refunded deposit customer identity/],
     ["cashDepositLeavesVehicleAvailable", /held deposit reserves the owned car/],
     ["cashRefundLeavesVehicleReserved", /refund restores available stock/],
     ["cashDepositPaymentWrongCustomer", /incoming payment customer/],

@@ -2076,7 +2076,8 @@ export async function runRehearsalCases(ctx) {
     const operationalArgs = { orgId, startDate: fromDate, endDate: toDate };
     const openingOperational = await ownerMust("query", "reports:getProfitAndLoss", operationalArgs);
     const openingEntries = await allJournalEntries({ orgId, ownerMust });
-    const openingCollectionPayments = await listCollectionPayments({ orgId, ownerMust });
+    const openingCollectionPayments = (await listCollectionPayments({ orgId, ownerMust }))
+      .map((row) => ({ ...row }));
     const beforeReceivables = await ownerMust("query", "subledger:listReceivables", { orgId, limit: 200 });
     if (!Array.isArray(beforeReceivables) || beforeReceivables.length >= 200) {
       unproven("M486C3 tenant invoice listing is absent or truncated before refund");
@@ -2089,6 +2090,10 @@ export async function runRehearsalCases(ctx) {
     expectEqual(held.status, "HELD", "M486C3 deposit held before refund");
     expectEqual(held.amountMinor, 200_000, "M486C3 held deposit amount");
     if (!held.canonicalPaymentId) fail("M486C3 held deposit has no canonical payment");
+    const heldPaymentId = String(held.canonicalPaymentId);
+    const depositIdentity = { orgId, quoteId, vehicleId, customerId, depositId,
+      paymentId: heldPaymentId };
+    expectC3DepositIdentity(held, "held", depositIdentity);
     const incoming = await ownerMust("query", "subledger:getPaymentBalance", {
       orgId, paymentId: held.canonicalPaymentId,
     });
@@ -2120,6 +2125,7 @@ export async function runRehearsalCases(ctx) {
       fail("M486C3 deposit creator was not refused by the segregation-of-duties rule");
     }
     const afterRefusal = await readDeposit({ orgId, vehicleId, depositId, ownerMust });
+    expectC3DepositIdentity(afterRefusal, "refused", depositIdentity);
     expectEqual(afterRefusal.status, "HELD", "M486C3 refused creator cannot change deposit status");
     expectEqual(afterRefusal.releaseCount ?? 0, 0, "M486C3 refused creator cannot count a release");
     const refusedEvents = await ownerMust("query", "accountingLedger:listAccountingEvents", {
@@ -2149,6 +2155,7 @@ export async function runRehearsalCases(ctx) {
       unproven("M486C3 crossed its UTC accounting month during deposit refund");
     }
     const refunded = await readDeposit({ orgId, vehicleId, depositId, ownerMust });
+    expectC3DepositIdentity(refunded, "refunded", depositIdentity);
     expectEqual(refunded.status, "REFUNDED", "M486C3 deposit is refunded");
     expectEqual(refunded.releasedAmountMinor, 200_000, "M486C3 released amount");
     expectEqual(refunded.refundedAmountMinor, 200_000, "M486C3 refunded amount");
@@ -3256,6 +3263,23 @@ function expectC3IncomingPayment(payment, { orgId, customerId, depositId, paymen
   }
 }
 
+/** Deposit identity must still name the same customer, quote, car and payment after release. */
+function expectC3DepositIdentity(deposit, phase, { orgId, quoteId, vehicleId, customerId,
+  depositId, paymentId }) {
+  for (const [field, expected] of [
+    ["_id", String(depositId)], ["orgId", String(orgId)],
+    ["quoteId", String(quoteId)], ["vehicleId", String(vehicleId)],
+    ["customerId", String(customerId)], ["amount", 200], ["amountMinor", 200_000],
+    ["currency", "JOD"], ["method", "CASH"],
+    ["canonicalPaymentId", String(paymentId)],
+  ]) {
+    const actual = ["_id", "orgId", "quoteId", "vehicleId", "customerId",
+      "canonicalPaymentId"].includes(field) ? String(deposit?.[field]) : deposit?.[field];
+    expectEqual(actual, expected, `M486C3 ${phase} deposit ${field === "canonicalPaymentId"
+      ? "canonical payment identity" : field === "customerId" ? "customer identity" : field}`);
+  }
+}
+
 /** The event carries the economic facts that the posting rule consumed. */
 function expectC3DepositEventPayload(event, phase, { depositId, customerId }) {
   for (const [field, expected] of [
@@ -3280,8 +3304,13 @@ function expectC3CollectionPaymentCensus(before, after) {
   };
   const original = ids(before);
   const final = ids(after);
+  const originalRows = new Map(before.map((row) => [String(row._id), row]));
+  const stableRow = (row) => JSON.stringify(Object.keys(row).sort().map((key) => [key, row[key]]));
   for (const id of original) {
     if (!final.has(id)) fail("M486C3 collection payment census lost an existing row");
+    const current = after.find((row) => String(row._id) === id);
+    expectEqual(stableRow(current), stableRow(originalRows.get(id)),
+      "M486C3 existing collection payment changed");
   }
   const added = after.filter((row) => !original.has(String(row._id)));
   expectEqual(added.length, 2, "M486C3 collection payment census adds exactly two rows");
