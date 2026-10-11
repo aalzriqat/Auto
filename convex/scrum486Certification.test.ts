@@ -1477,7 +1477,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     }
   });
 
-  test("a linked legacy deposit receipt is not counted again after forfeiture", async () => {
+  test("a later forfeiture corrects legacy receipt-month turnover without rewriting its journal", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2025-04-15T12:00:00.000Z"));
@@ -1496,6 +1496,33 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       const april = { orgId: s.orgId, startDate: Date.UTC(2025, 3, 1), endDate: Date.UTC(2025, 4, 1) - 1 };
       const may = { orgId: s.orgId, startDate: Date.UTC(2025, 4, 1), endDate: Date.UTC(2025, 5, 1) - 1 };
       expect((await s.owner.as.query(api.reports.getProfitAndLoss, april)).totalRevenue).toBe(200);
+      // SCRUM-815 c22806: the old receipt was posted to a liability. Only the
+      // legacy report's mistaken turnover is corrected after forfeiture.
+      const receiptPostingBefore = await s.t.run(async (ctx) => {
+        const events = await ctx.db.query("accountingEvents")
+          .withIndex("by_org_source", (q) =>
+            q.eq("orgId", s.orgId).eq("sourceType", "deposits").eq("sourceId", depositId)
+          ).collect();
+        const event = events.find((row) => row.eventType === "DEPOSIT_RECEIVED");
+        if (!event?.journalEntryId) throw new Error("Missing posted receipt event");
+        const entry = await ctx.db.get(event.journalEntryId);
+        if (!entry) throw new Error("Missing posted receipt journal");
+        const lines = await ctx.db.query("journalLines")
+          .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
+          .collect();
+        const rows = await Promise.all(lines.map(async (line) => ({
+          account: (await ctx.db.get(line.accountId))?.code,
+          debit: line.debitMinor,
+          credit: line.creditMinor,
+        })));
+        return { event, entry, lines, rows };
+      });
+      expect(receiptPostingBefore.entry.status).toBe("POSTED");
+      expect(receiptPostingBefore.rows).toHaveLength(2);
+      expect(receiptPostingBefore.rows).toEqual(expect.arrayContaining([
+        { account: "1100", debit: 200_000, credit: 0 },
+        { account: "2100", debit: 0, credit: 200_000 },
+      ]));
 
       vi.setSystemTime(new Date("2025-05-15T12:00:00.000Z"));
       await s.approver.as.mutation(api.deposits.release, {
@@ -1510,6 +1537,18 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       expect(forfeitureMonth.depositForfeitureIncome).toBe(200);
       expect(forfeitureMonth.netProfit).toBe(200);
       expect((await publicIncomeStatement(s)).totalOtherIncome).toBe(200_000);
+      const receiptPostingAfter = await s.t.run(async (ctx) => ({
+        event: await ctx.db.get(receiptPostingBefore.event._id),
+        entry: await ctx.db.get(receiptPostingBefore.entry._id),
+        lines: await ctx.db.query("journalLines")
+          .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", receiptPostingBefore.entry._id))
+          .collect(),
+      }));
+      expect(receiptPostingAfter).toEqual({
+        event: receiptPostingBefore.event,
+        entry: receiptPostingBefore.entry,
+        lines: receiptPostingBefore.lines,
+      });
 
       // A slice resolution identifies the hold rather than the deposit as
       // its event source. Keep the posted journal fixed while changing only

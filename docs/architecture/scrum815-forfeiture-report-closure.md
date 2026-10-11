@@ -7,8 +7,13 @@ posted reversal offsets that income on its own date. A held receipt and a refund
 contribute no forfeiture income. Canonical deposit receipts never enter turnover.
 For a linked historical receipt without that flag, a posted forfeiture removes
 the old receipt from turnover so it cannot be counted again as other income.
-This can correct an earlier reported month. This change reads money;
-it does not post, move, or reverse money.
+Owner ruling SCRUM-815 c22806 assigns zero revenue to the earlier receipt
+month and other income only to the later forfeiture month. This can correct an
+earlier legacy report, but the receipt's original Dr cash / Cr customer
+liability journal was already correct. This change reads money; it does not
+post, move, or reverse money. If an old GL posting itself was wrong and its
+period is closed, this patch does not repair it: that requires a documented,
+auditable prior-period correction without silently editing posted journals.
 
 The proven discrepancy is in the legacy public backend
 `reports.getProfitAndLoss` endpoint. The visible Accounting income statement
@@ -45,6 +50,9 @@ not evidence of a changed screen or a deployed backend.
   counted 200 JOD in turnover after its direct forfeiture, on top of 200 JOD
   other income. The corrected report shows zero receipt-month turnover and
   200 JOD forfeiture-month income; it also probes the hold-sourced event shape.
+  The owner-ruling regression compares the original receipt event, posted
+  journal and lines before and after the later forfeiture. It does not exercise
+  a closed-period GL error-correction workflow.
 - A separate journal-level test checks the original forfeiture in May, its
   reversal in June, and reversal of that reversal in July. It does not certify
   a no-code business correction flow for a forfeited deposit.
