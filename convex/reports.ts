@@ -27,6 +27,7 @@ import {
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { isShowroomBorne } from "./utils/costBearer";
 import { getOrgCurrency } from "./accounting/workflowHooks";
+import { fromMinorUnits } from "./utils/money";
 import { verifiedFinancingApplicationSaleIds } from "./utils/financingProvenance";
 
 /*
@@ -938,6 +939,91 @@ export const getLeadConversionReport = query({
   },
 });
 
+/** Read forfeiture income from posted journals, including dated reversals. */
+async function readDepositForfeitureIncome(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  startDate: number,
+  endDate: number
+) {
+  const [forfeitures, reversals] = await Promise.all(
+    (["DEPOSIT_FORFEITED", "JOURNAL_REVERSAL"] as const).map((eventType) =>
+      ctx.db.query("accountingEvents")
+        .withIndex("by_org_eventType_date", (q) =>
+          q.eq("orgId", orgId).eq("eventType", eventType)
+            .gte("accountingDate", startDate).lte("accountingDate", endDate)
+        )
+        .collect()
+    )
+  );
+  const accountTypes = new Map<Id<"chartOfAccounts">, string>();
+  const minorByCurrency = new Map<string, number>();
+  for (const event of [...forfeitures, ...reversals]) {
+    if (event.status !== "POSTED" && event.status !== "REVERSED") continue;
+
+    // A reversal of a reversal remains part of the same economic lineage.
+    // Resolve it through immutable event links, not the account's CURRENT
+    // systemKey: chart repair can clear that key on historical account rows.
+    let original = event;
+    const seen = new Set<Id<"accountingEvents">>();
+    for (let depth = 0; original.eventType === "JOURNAL_REVERSAL"; depth++) {
+      if (depth >= 32 || !original.reversalOfEventId || seen.has(original._id)) {
+        throw new ConvexError("Financial report is unavailable because reversal history is incomplete.");
+      }
+      seen.add(original._id);
+      const parent = await ctx.db.get(original.reversalOfEventId);
+      if (!parent || parent.orgId !== orgId) {
+        throw new ConvexError("Financial report is unavailable because reversal history is incomplete.");
+      }
+      original = parent;
+    }
+    if (original.eventType !== "DEPOSIT_FORFEITED") continue;
+
+    const entry = event.journalEntryId ? await ctx.db.get(event.journalEntryId) : null;
+    if (
+      !entry || entry.orgId !== orgId || entry.accountingEventId !== event._id ||
+      entry.accountingDate !== event.accountingDate ||
+      (entry.status !== "POSTED" && entry.status !== "REVERSED")
+    ) {
+      throw new ConvexError("Financial report is unavailable because a posted journal is incomplete.");
+    }
+    const lines = await ctx.db.query("journalLines")
+      .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
+      .collect();
+    let incomeLines = 0;
+    for (const line of lines) {
+      if (line.orgId !== orgId || line.accountingDate !== event.accountingDate || line.currency !== event.currency) {
+        throw new ConvexError("Financial report is unavailable because a posted journal is inconsistent.");
+      }
+      let accountType = accountTypes.get(line.accountId);
+      if (accountType === undefined) {
+        const account = await ctx.db.get(line.accountId);
+        if (!account || account.orgId !== orgId) {
+          throw new ConvexError("Financial report is unavailable because a journal account is missing.");
+        }
+        accountType = account.type;
+        accountTypes.set(line.accountId, accountType);
+      }
+      if (accountType !== "OTHER_INCOME") continue;
+      incomeLines++;
+      minorByCurrency.set(
+        line.currency,
+        (minorByCurrency.get(line.currency) ?? 0) + line.creditMinor - line.debitMinor
+      );
+    }
+    if (incomeLines === 0) {
+      throw new ConvexError("Financial report is unavailable because forfeiture income was not posted.");
+    }
+  }
+  const orgCurrency = await getOrgCurrency(ctx, orgId);
+  return {
+    amount: fromMinorUnits(minorByCurrency.get(orgCurrency) ?? 0, orgCurrency),
+    byCurrency: [...minorByCurrency]
+      .map(([currency, amountMinor]) => ({ currency, amount: fromMinorUnits(amountMinor, currency) }))
+      .sort((a, b) => a.currency.localeCompare(b.currency)),
+  };
+}
+
 export const getProfitAndLoss = query({
   args: {
     orgId: v.id("organizations"),
@@ -1027,17 +1113,8 @@ export const getProfitAndLoss = query({
         // is a liability, a refund is not revenue, and a re-application means
         // that sale recognises its own full revenue.
         //
-        // Forfeiture is the known gap, and is stated here rather than implied.
-        // Forfeited income belongs to the forfeiture event and never to the
-        // original receipt's date — but THIS report does not surface it. The
-        // GL does: `postingRules` credits DEPOSIT_FORFEITURE_INCOME on the
-        // forfeiture date. The forfeiture path in `utils/depositHelpers` writes
-        // no `transactions` row, so a forfeited deposit is revenue in the GL
-        // and absent from this ledger-derived P&L. Before this change it was
-        // revenue on the receipt's date — mis-dated, but present in the annual
-        // total; now the annual total is short by it. Deliberately not fixed
-        // here: inventing a posting inside a read-time compatibility path is
-        // how the original defect happened. Tracked as reporting follow-up.
+        // Forfeiture is dated to its own posted journal below. The deposit
+        // receipt remains excluded from turnover even after disposition.
         legacyDepositsTakenOverBySale.add(app.depositId);
       }
     }
@@ -1102,8 +1179,14 @@ export const getProfitAndLoss = query({
       }
     }
 
+    // Forfeiture is other income on its POSTED journal date, not turnover on
+    // the original deposit receipt date. Include both the original lines and
+    // later reversal lines, exactly as the accounting income statement does.
+    // The legacy transactions ledger has no row for a forfeiture.
+    const forfeitureIncome = await readDepositForfeitureIncome(ctx, args.orgId, args.startDate, args.endDate);
+
     const grossProfit = totalRevenue - costOfGoodsSold;
-    const netProfit = grossProfit - operatingExpenses;
+    const netProfit = grossProfit - operatingExpenses + forfeitureIncome.amount;
 
     return {
       // Accounting turnover. Excludes the gross of every consigned sale, and so
@@ -1112,6 +1195,8 @@ export const getProfitAndLoss = query({
       costOfGoodsSold,
       grossProfit,
       operatingExpenses,
+      depositForfeitureIncome: forfeitureIncome.amount,
+      depositForfeitureIncomeByCurrency: forfeitureIncome.byCurrency,
       netProfit,
       // Operational KPI, explicitly labelled and deliberately outside turnover.
       grossTransactionValue,

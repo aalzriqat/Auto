@@ -109,6 +109,7 @@ type Deposit = {
   canonicalPaymentId?: string;
   releasedAmountMinor: number;
   refundedAmountMinor: number;
+  forfeitedAmountMinor?: number;
   releaseCount: number;
   freeMinor: number;
   committedMinor: number;
@@ -273,6 +274,10 @@ type Defects = {
   cashRefundIncomeDropsRevenueRow?: boolean;
   cashHeldPaymentUnappliedWrong?: boolean;
   cashRefundCrossesUtcMonth?: boolean;
+  /** Forfeiture posts correctly, but the legacy operational API omits it. */
+  cashForfeitOperationalIncomeMissing?: boolean;
+  /** Forfeiture incorrectly pays the customer despite retaining the deposit. */
+  cashForfeitCreatesOutbound?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
   eraseOnChequeReturn?: boolean;
   /** A returned cheque posts nothing at all — the books still say money arrived. */
@@ -393,6 +398,7 @@ function makeBackend(defects: Defects = {}) {
   let certifiedCashSalePosted = false;
   let certifiedCashDepositId: string | undefined;
   let certifiedCashRefundDepositId: string | undefined;
+  let certifiedCashForfeitDepositId: string | undefined;
   let cashRefundCreatorRefused = false;
   /** The chart, keyed the way the product keys it, so lines resolve to system keys. */
   const CHART = [
@@ -403,6 +409,7 @@ function makeBackend(defects: Defects = {}) {
     { _id: "acct_depl", code: "2100", type: "LIABILITY", name: "Customer Deposits", systemKey: "CUSTOMER_DEPOSITS_LIABILITY", normalBalance: "CREDIT" },
     { _id: "acct_comm", code: "4200", type: "REVENUE", name: "Consignment Commission", systemKey: "CONSIGNMENT_COMMISSION_REVENUE", normalBalance: "CREDIT" },
     { _id: "acct_misc", code: "4400", type: "OTHER_INCOME", name: "Misc Income", systemKey: "MISCELLANEOUS_INCOME", normalBalance: "CREDIT" },
+    { _id: "acct_forfeit", code: "4410", type: "OTHER_INCOME", name: "Deposit Forfeiture", systemKey: "DEPOSIT_FORFEITURE_INCOME", normalBalance: "CREDIT" },
     { _id: "acct_ap", code: "2400", type: "LIABILITY", name: "AP Suppliers", systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS", normalBalance: "CREDIT" },
     { _id: "acct_rev", code: defects.cashSaleWrongAccountCode ? "4000" : "4100", type: "REVENUE", name: "Sales Revenue", systemKey: "SALES_REVENUE", normalBalance: "CREDIT" },
     { _id: "acct_cogs", code: "5100", type: "COGS", name: "COGS", systemKey: "COST_OF_VEHICLES_SOLD", normalBalance: "DEBIT" },
@@ -580,7 +587,8 @@ function makeBackend(defects: Defects = {}) {
     }
     const deposit = deposits.get(args.depositId);
     if (!deposit) return { ok: false as const, error: "deposit not found" };
-    if (args.depositId === certifiedCashRefundDepositId && creatorSeat && !defects.cashRefundAllowsCreator) {
+    if ((args.depositId === certifiedCashRefundDepositId || args.depositId === certifiedCashForfeitDepositId) &&
+        creatorSeat && !defects.cashRefundAllowsCreator) {
       cashRefundCreatorRefused = true;
       if (defects.cashRefundCreatorRefusalWrites) deposit.releaseCount += 1;
       if (defects.cashRefundCreatorRefusalClearsVehicleHold) {
@@ -623,7 +631,11 @@ function makeBackend(defects: Defects = {}) {
     if (args.idempotencyKey) commands.set(args.idempotencyKey, fingerprint);
     deposit.freeMinor = defects.doublePayOnDistinctKeys ? deposit.freeMinor : 0;
     deposit.releasedAmountMinor += payable;
-    deposit.refundedAmountMinor += payable;
+    if (args.resolution === "FORFEITED") {
+      deposit.forfeitedAmountMinor = (deposit.forfeitedAmountMinor ?? 0) + payable;
+    } else {
+      deposit.refundedAmountMinor += payable;
+    }
     deposit.releaseCount += 1;
     if (deposit.freeMinor === 0 && deposit.committedMinor === 0) deposit.status = args.resolution;
     if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundLeavesStatusHeld) {
@@ -643,7 +655,8 @@ function makeBackend(defects: Defects = {}) {
       }
     }
     if (periodStatus === "OPEN") {
-      postRefundToTheBooks(deposit, payable, false);
+      if (args.resolution === "FORFEITED") postForfeitureToTheBooks(deposit, payable);
+      else postRefundToTheBooks(deposit, payable, false);
       if (deposit._id === certifiedCashRefundDepositId &&
           defects.cashRefundAddsUnexcludedDepositTransaction) {
         operationalTransactions.push({
@@ -698,6 +711,20 @@ function makeBackend(defects: Defects = {}) {
     }
     return { ok: true as const, value: null };
   };
+
+  function postForfeitureToTheBooks(deposit: Deposit, amountMinor: number) {
+    post("DEPOSIT_FORFEITED", "deposits", deposit._id, [
+      { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: amountMinor, customerId: deposit.customerId },
+      { key: "DEPOSIT_FORFEITURE_INCOME", creditMinor: amountMinor, customerId: deposit.customerId },
+    ], { payload: { depositId: deposit._id, amountMinor, currency: ORG_CURRENCY, customerId: deposit.customerId } });
+    if (defects.cashForfeitCreatesOutbound && deposit._id === certifiedCashForfeitDepositId) {
+      collectionPayments.push({
+        _id: id("colp"), vehicleId: deposit.vehicleId, customerId: deposit.customerId,
+        reference: `Deposit refund ${deposit._id}`, direction: "OUT", method: "REFUND",
+        amount: amountMinor / MINOR_SCALE, status: "POSTED",
+      });
+    }
+  }
 
   /** The ledger side of a refund — what B1 and B2 reconcile the row against. */
   function postRefundToTheBooks(deposit: Deposit, payable: number, isReplayDuplicate: boolean) {
@@ -913,7 +940,7 @@ function makeBackend(defects: Defects = {}) {
         const totalCogs = net("COST_OF_VEHICLES_SOLD");
         const grossProfit = totalRevenue - totalCogs;
         const totalExpenses = net("GENERAL_EXPENSE");
-        const totalOtherIncome = net("MISCELLANEOUS_INCOME");
+        const totalOtherIncome = net("MISCELLANEOUS_INCOME") + net("DEPOSIT_FORFEITURE_INCOME");
         const netIncome = grossProfit - totalExpenses + totalOtherIncome -
           (defects.cashSaleReportMisstatesProfit && certifiedCashSalePosted ? 1 : 0);
         const missingRefundIncome = defects.cashRefundIncomeMissingAfterRefund &&
@@ -933,7 +960,10 @@ function makeBackend(defects: Defects = {}) {
             ? [] : [row("SALES_REVENUE", net("SALES_REVENUE"))],
           cogsRows: [row("COST_OF_VEHICLES_SOLD", totalCogs)],
           expenseRows: [row("GENERAL_EXPENSE", totalExpenses)],
-          otherIncomeRows: totalOtherIncome === 0 ? [] : [row("MISCELLANEOUS_INCOME", totalOtherIncome)],
+          otherIncomeRows: totalOtherIncome === 0 ? [] : [
+            row("MISCELLANEOUS_INCOME", net("MISCELLANEOUS_INCOME")),
+            row("DEPOSIT_FORFEITURE_INCOME", net("DEPOSIT_FORFEITURE_INCOME")),
+          ],
           otherExpenseRows: [],
           totalRevenue, totalCogs, grossProfit, totalExpenses,
           totalOtherIncome, totalOtherExpenses: 0,
@@ -945,8 +975,19 @@ function makeBackend(defects: Defects = {}) {
         const totalRevenue = inWindow.filter((tx) => tx.type === "IN" &&
           ["VEHICLE_SALE", "DEPOSIT"].includes(tx.category) && tx.excludedFromRevenue !== true)
           .reduce((total, tx) => total + Number(tx.amount), 0);
+        const depositForfeitureIncome = events.filter((event) =>
+          event.eventType === "DEPOSIT_FORFEITED" && event.status === "POSTED")
+          .flatMap((event) => journalLines.get(String(event.journalEntryId)) ?? [])
+          .filter((line) => line.accountId === accountIdOf("DEPOSIT_FORFEITURE_INCOME") &&
+            line.accountingDate >= Number(args.startDate) && line.accountingDate <= Number(args.endDate))
+          .reduce((total, line) => total + (line.creditMinor - line.debitMinor) / MINOR_SCALE, 0);
+        const reportedForfeitureIncome = defects.cashForfeitOperationalIncomeMissing ? 0 : depositForfeitureIncome;
         return { ok: true as const, value: { totalRevenue, costOfGoodsSold: 0,
-          grossProfit: totalRevenue, operatingExpenses: 0, netProfit: totalRevenue,
+          grossProfit: totalRevenue, operatingExpenses: 0,
+          depositForfeitureIncome: reportedForfeitureIncome,
+          depositForfeitureIncomeByCurrency: reportedForfeitureIncome === 0 ? [] :
+            [{ currency: ORG_CURRENCY, amount: reportedForfeitureIncome }],
+          netProfit: totalRevenue + reportedForfeitureIncome,
           grossTransactionValue: 0, transactions: inWindow } };
       }
       case "accountingPeriods:create":
@@ -1313,11 +1354,14 @@ function makeBackend(defects: Defects = {}) {
         const replayed = replayableCreate("dep", args, true);
         if (replayed) return replayed;
         const depositId = id("dep");
-        if (/^rehearsal-m486c[23]-deposit-/.test(String(args.idempotencyKey ?? ""))) {
+        if (/^rehearsal-m486c[234]-deposit-/.test(String(args.idempotencyKey ?? ""))) {
           certifiedCashDepositId = depositId;
         }
         if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c3-deposit-")) {
           certifiedCashRefundDepositId = depositId;
+        }
+        if (String(args.idempotencyKey ?? "").startsWith("rehearsal-m486c4-deposit-")) {
+          certifiedCashForfeitDepositId = depositId;
         }
         // Taking a deposit POSTS. Modelling that is not decoration: P1's first
         // cloud run failed because it measured its journal window from before
@@ -1336,11 +1380,12 @@ function makeBackend(defects: Defects = {}) {
           status: defects.cashDepositPaymentWrongStatus ? "DRAFT" : "SETTLED",
           idempotencyKey: `deposit_received_${depositId}`, externalReference: `Deposit ${depositId}`,
         });
-        if (depositId === certifiedCashRefundDepositId) operationalTransactions.push({
+        if (depositId === certifiedCashRefundDepositId || depositId === certifiedCashForfeitDepositId) operationalTransactions.push({
           type: "IN", category: "DEPOSIT", amount: Number(args.amount),
           date: Date.now(), excludedFromRevenue: true, depositId,
         });
-        if (depositId === certifiedCashRefundDepositId && !defects.cashDepositMissesCollectionMirror) {
+        if ((depositId === certifiedCashRefundDepositId || depositId === certifiedCashForfeitDepositId) &&
+            !defects.cashDepositMissesCollectionMirror) {
           collectionPayments.push({ _id: id("colp"), orgId: String(args.orgId),
             vehicleId: quoteVehicle.get(String(args.quoteId)), customerId: depositCustomerId,
             reference: `Deposit ${depositId}`, direction: "IN", method: "CASH",
@@ -1383,8 +1428,8 @@ function makeBackend(defects: Defects = {}) {
           releasedAmountMinor: 0,
           refundedAmountMinor: 0,
           releaseCount: 0,
-          freeMinor: /^rehearsal-m486c[23]-deposit-/.test(String(args.idempotencyKey ?? "")) ? amountMinor : 2_000_000,
-          committedMinor: /^rehearsal-m486c[23]-deposit-/.test(String(args.idempotencyKey ?? "")) ? 0 : 1_000_000,
+          freeMinor: /^rehearsal-m486c[234]-deposit-/.test(String(args.idempotencyKey ?? "")) ? amountMinor : 2_000_000,
+          committedMinor: /^rehearsal-m486c[234]-deposit-/.test(String(args.idempotencyKey ?? "")) ? 0 : 1_000_000,
           vehicleId: quoteVehicle.get(String(args.quoteId)) ?? String(args.vehicleId ?? ""),
           customerId: depositCustomerId,
           status: "HELD",
@@ -2086,7 +2131,7 @@ describe("the rehearsal passes against a backend that behaves", () => {
     expect(declined.map((d) => `${d.id}: ${d.detail}`)).toEqual([]);
     // And it actually ran the cases rather than finding nothing to do.
     expect(results.map((r) => r.id).sort()).toEqual([...REQUIRED_REHEARSAL_CASE_IDS].sort());
-    for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "FD1", "FD2", "C1", "C2"]) {
+  for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "FD1", "FD2", "C1", "C2"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
   });
@@ -2360,6 +2405,15 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     expect(statusOf(results, "M486C3")).toBe("UNPROVEN");
     expect(String(results.find((row) => row.id === "M486C3")?.detail))
       .toMatch(/collection payment listing exceeds the rehearsal page cap/);
+  });
+
+  test.each([
+    ["cashForfeitOperationalIncomeMissing", /operational forfeiture-income delta/],
+    ["cashForfeitCreatesOutbound", /exactly one new collection receipt/],
+  ] as const)("M486C4 rejects %s", async (defect, diagnostic) => {
+    const results = await runAgainst({ [defect]: true });
+    expect(statusOf(results, "M486C4")).toBe("FAIL");
+    expect(String(results.find((row) => row.id === "M486C4")?.detail)).toMatch(diagnostic);
   });
 
   test("M486C3 marks a refund that crosses the UTC accounting month unavailable", async () => {

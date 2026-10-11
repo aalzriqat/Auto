@@ -13,7 +13,7 @@ import { seedFinancedDealership, newApplication } from "../test-utils/financedDe
 import { registerHandover } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { expectRetiredDealMode } from "../test-utils/retiredDealMode";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 
@@ -1395,6 +1395,11 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     { ending: "FORFEITED" as const, creditAccount: "4200" },
   ])("owned CASH × held deposit × $ending before sale: only customer money moves", async ({ ending, creditAccount }) => {
     const { s, quoteId } = await cashQuote(`s486${ending.toLowerCase()}`);
+    const beforeOperational = await s.owner.as.query(api.reports.getProfitAndLoss, {
+      orgId: s.orgId,
+      startDate: Date.UTC(s.fiscalYear, 0, 1),
+      endDate: Date.UTC(s.fiscalYear, 11, 31, 23, 59, 59, 999),
+    });
     const depositId = await s.owner.as.mutation(api.deposits.create, {
       orgId: s.orgId,
       quoteId,
@@ -1426,6 +1431,118 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       { account: creditAccount, currency: "JOD", debit: 0, credit: 200_000, entryStatus: "POSTED" },
     ]);
     expectBalanced(rows);
+    if (ending === "FORFEITED") {
+      const income = await publicIncomeStatement(s);
+      const operational = await s.owner.as.query(api.reports.getProfitAndLoss, {
+        orgId: s.orgId,
+        startDate: Date.UTC(s.fiscalYear, 0, 1),
+        endDate: Date.UTC(s.fiscalYear, 11, 31, 23, 59, 59, 999),
+      });
+      expect(income.totalOtherIncome).toBe(200_000);
+      expect(operational.totalRevenue).toBe(beforeOperational.totalRevenue);
+      expect(operational.depositForfeitureIncome).toBe(200);
+      expect(operational.depositForfeitureIncomeByCurrency).toEqual([{ currency: "JOD", amount: 200 }]);
+      expect(operational.netProfit - beforeOperational.netProfit).toBe(200);
+
+      // A chart repair can clear a duplicate's current systemKey after it
+      // received historical postings. Reports must follow the event/journal,
+      // not today's account mapping.
+      await s.t.run(async (ctx) => {
+        const account = await ctx.db.query("chartOfAccounts")
+          .withIndex("by_org_code", (q) => q.eq("orgId", s.orgId).eq("code", "4200"))
+          .unique();
+        if (!account) throw new Error("Missing forfeiture account fixture");
+        await ctx.db.patch(account._id, { systemKey: undefined });
+      });
+      const afterRemap = await s.owner.as.query(api.reports.getProfitAndLoss, {
+        orgId: s.orgId,
+        startDate: Date.UTC(s.fiscalYear, 0, 1),
+        endDate: Date.UTC(s.fiscalYear, 11, 31, 23, 59, 59, 999),
+      });
+      expect(afterRemap.depositForfeitureIncome).toBe(200);
+      expect((await publicIncomeStatement(s)).totalOtherIncome).toBe(200_000);
+
+      await s.t.run(async (ctx) => {
+        const event = await ctx.db.query("accountingEvents")
+          .withIndex("by_org_eventType", (q) => q.eq("orgId", s.orgId).eq("eventType", "DEPOSIT_FORFEITED"))
+          .unique();
+        if (!event) throw new Error("Missing forfeiture event fixture");
+        await ctx.db.patch(event._id, { journalEntryId: undefined });
+      });
+      await expect(s.owner.as.query(api.reports.getProfitAndLoss, {
+        orgId: s.orgId,
+        startDate: Date.UTC(s.fiscalYear, 0, 1),
+        endDate: Date.UTC(s.fiscalYear, 11, 31, 23, 59, 59, 999),
+      })).rejects.toThrow("Financial report is unavailable");
+    }
+  });
+
+  test("forfeiture income follows its posted month and each journal reversal month", async () => {
+    vi.useFakeTimers();
+    try {
+      const year = 2026;
+      vi.setSystemTime(Date.UTC(year, 3, 10));
+      const { s, quoteId } = await cashQuote("s486forfeitdates");
+      const depositId = await s.owner.as.mutation(api.deposits.create, {
+        orgId: s.orgId,
+        quoteId,
+        amount: 200,
+        method: "CASH",
+        idempotencyKey: "s486forfeitdates-deposit",
+      });
+      const month = (monthIndex: number) => ({
+        orgId: s.orgId,
+        startDate: Date.UTC(year, monthIndex, 1),
+        endDate: Date.UTC(year, monthIndex + 1, 1) - 1,
+      });
+
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(3))).depositForfeitureIncome).toBe(0);
+      vi.setSystemTime(Date.UTC(year, 4, 10));
+      await s.approver.as.mutation(api.deposits.release, {
+        orgId: s.orgId,
+        depositId,
+        resolution: "FORFEITED",
+        idempotencyKey: "s486forfeitdates-release",
+      });
+      const originalEventId = await s.t.run(async (ctx) => {
+        const event = await ctx.db.query("accountingEvents")
+          .withIndex("by_org_eventType", (q) => q.eq("orgId", s.orgId).eq("eventType", "DEPOSIT_FORFEITED"))
+          .unique();
+        if (!event) throw new Error("Missing forfeiture event fixture");
+        return event._id;
+      });
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(4))).depositForfeitureIncome).toBe(200);
+
+      vi.setSystemTime(Date.UTC(year, 5, 10));
+      const firstReversal = await s.owner.as.mutation(internal.accountingLedger.reverse, {
+        orgId: s.orgId,
+        originalEventId,
+        reversalDate: Date.UTC(year, 5, 10),
+        reason: "Report month parity fixture",
+        idempotencyKey: "s486forfeitdates-reverse-1",
+      });
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(4))).depositForfeitureIncome).toBe(200);
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(5))).depositForfeitureIncome).toBe(-200);
+
+      vi.setSystemTime(Date.UTC(year, 6, 10));
+      await s.owner.as.mutation(internal.accountingLedger.reverse, {
+        orgId: s.orgId,
+        originalEventId: firstReversal.reversalEventId,
+        reversalDate: Date.UTC(year, 6, 10),
+        reason: "Report reversal lineage fixture",
+        idempotencyKey: "s486forfeitdates-reverse-2",
+      });
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(6))).depositForfeitureIncome).toBe(200);
+      const fullYear = await s.owner.as.query(api.reports.getProfitAndLoss, {
+        orgId: s.orgId,
+        startDate: Date.UTC(year, 0, 1),
+        endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+      });
+      expect(fullYear.depositForfeitureIncome).toBe(200);
+      expect((await publicIncomeStatement(s)).totalOtherIncome).toBe(200_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test.each(["REFUNDED", "FORFEITED"] as const)(
