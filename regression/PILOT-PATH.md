@@ -39,6 +39,8 @@ For every enabled CASH or FINANCED customer-receipt route that accepts a cleared
 
 No existing scenario is promoted to pilot PASS from this table. The source locator measures 38 dashboard routes and 692 public Convex declarations at this SHA, but it does not classify final enablement, dynamic UI state, writes or consumer parity. SCRUM-810's manifest and SCRUM-813's Option B implementation are open dependencies.
 
+The protected-main Contract skew run [38141260549](https://github.com/aalzriqat/Auto/actions/runs/38141260549) at `e833f0a` failed its `detect` job with `COVERAGE INCOMPLETE` (exit 9): 991 client call sites found, 990 resolved, one unresolved, plus 1,479 differences from the unproven-path baseline. SCRUM-711 tracks the control-health failure. This is not a confirmed production skew or a frontend/backend parity PASS, and generic successful CI jobs cannot fill that evidence gap. The 1,479 differences need review before any baseline change; they are not attributed to PR #552 by this run alone.
+
 The active SCRUM-761 record `lead-creation-consumers-same-org` now binds a backend harness witness in `convex/dashboardAggregates.test.ts`. It creates a lead through the public mutation, then checks the lead list, workspace customer and assignee, dashboard totals, CREATED activity, assignment and creation notifications, and a second organization's empty reads and refusal of the foreign lead. This proves the listed assertions in the serial `convex-test` harness only. Authenticated rendered EN/AR, reload behavior, role combinations, and exact-SHA preview remain **UNPROVEN**.
 
 ### Reverse consumer candidates at this SHA
