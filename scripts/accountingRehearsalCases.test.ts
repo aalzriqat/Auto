@@ -259,6 +259,15 @@ type Defects = {
   cashRefundChangesDepositCustomer?: boolean;
   cashDepositLeavesVehicleAvailable?: boolean;
   cashRefundLeavesVehicleReserved?: boolean;
+  cashRefundCreatorRefusalWrites?: boolean;
+  cashRefundLeavesStatusHeld?: boolean;
+  cashRefundLeavesPreHoldStatus?: boolean;
+  cashRefundCanonicalWrongStatus?: boolean;
+  cashRefundCollectionWrongMethod?: boolean;
+  cashRefundAddsReceivable?: boolean;
+  cashRefundIncomeMissingAfterRefund?: boolean;
+  cashHeldPaymentUnappliedWrong?: boolean;
+  cashRefundCrossesUtcMonth?: boolean;
   /** A returned cheque ERASES its clearing instead of reversing it. */
   eraseOnChequeReturn?: boolean;
   /** A returned cheque posts nothing at all — the books still say money arrived. */
@@ -566,6 +575,7 @@ function makeBackend(defects: Defects = {}) {
     const deposit = deposits.get(args.depositId);
     if (!deposit) return { ok: false as const, error: "deposit not found" };
     if (args.depositId === certifiedCashRefundDepositId && creatorSeat && !defects.cashRefundAllowsCreator) {
+      if (defects.cashRefundCreatorRefusalWrites) deposit.releaseCount += 1;
       return { ok: false as const, error: "Deposit creator cannot resolve their own deposit refund or forfeiture." };
     }
 
@@ -602,6 +612,9 @@ function makeBackend(defects: Defects = {}) {
     deposit.refundedAmountMinor += payable;
     deposit.releaseCount += 1;
     if (deposit.freeMinor === 0 && deposit.committedMinor === 0) deposit.status = args.resolution;
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundLeavesStatusHeld) {
+      deposit.status = "HELD";
+    }
     if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundMutatesPriorCollectionAmount) {
       const prior = collectionPayments.find((row) => row.direction === "OUT" && row.amount === 2000);
       if (!prior) throw new Error("C3 pre-existing collection fixture missing");
@@ -612,6 +625,7 @@ function makeBackend(defects: Defects = {}) {
       if (vehicle) {
         vehicle.status = "AVAILABLE";
         vehicle.preHoldStatus = undefined;
+        if (defects.cashRefundLeavesPreHoldStatus) vehicle.preHoldStatus = "AVAILABLE";
       }
     }
     if (periodStatus === "OPEN") {
@@ -659,6 +673,14 @@ function makeBackend(defects: Defects = {}) {
     }
     if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundChangesDepositCustomer) {
       deposit.customerId = "other-customer";
+    }
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundAddsReceivable) {
+      const receivableId = id("recv");
+      financeReceivables.set(receivableId, { _id: receivableId, orgId: "org_1",
+        customerId: deposit.customerId, originalAmountMinor: 200_000, status: "OPEN" });
+    }
+    if (deposit._id === certifiedCashRefundDepositId && defects.cashRefundCrossesUtcMonth) {
+      vi.setSystemTime(Date.UTC(2026, 10, 1, 0, 0, 1));
     }
     return { ok: true as const, value: null };
   };
@@ -720,7 +742,9 @@ function makeBackend(defects: Defects = {}) {
       canonicalPayments.set(canonicalId, {
         _id: canonicalId, orgId: "org_1", direction: "OUT", payerType: "CUSTOMER",
         customerId: deposit.customerId, method: "CASH", amountMinor: payable,
-        currency: ORG_CURRENCY, scale: 3, status: "SETTLED",
+        currency: ORG_CURRENCY, scale: 3,
+        status: deposit._id === certifiedCashRefundDepositId && defects.cashRefundCanonicalWrongStatus
+          ? "DRAFT" : "SETTLED",
         idempotencyKey: `deposit_refund_${deposit._id}`,
         externalReference: `Deposit refund ${deposit._id}`,
       });
@@ -736,7 +760,8 @@ function makeBackend(defects: Defects = {}) {
       customerId: deposit.customerId,
       reference: `Deposit refund ${deposit._id}`,
       direction: "OUT",
-      method: "REFUND",
+      method: deposit._id === certifiedCashRefundDepositId && defects.cashRefundCollectionWrongMethod
+        ? "OTHER" : "REFUND",
       amount: deposit._id === certifiedCashRefundDepositId && defects.cashRefundCollectionWrongAmount
         ? payable / MINOR_SCALE - 1
         : payable / MINOR_SCALE,
@@ -872,6 +897,10 @@ function makeBackend(defects: Defects = {}) {
         const grossProfit = totalRevenue - totalCogs;
         const totalExpenses = net("GENERAL_EXPENSE");
         const totalOtherIncome = net("MISCELLANEOUS_INCOME");
+        const netIncome = grossProfit - totalExpenses + totalOtherIncome -
+          (defects.cashSaleReportMisstatesProfit && certifiedCashSalePosted ? 1 : 0);
+        const missingRefundIncome = defects.cashRefundIncomeMissingAfterRefund &&
+          deposits.get(certifiedCashRefundDepositId ?? "")?.status === "REFUNDED";
         const row = (key: string, amount: number) => {
           const account = CHART.find((a) => a.systemKey === key)!;
           return { accountId: account._id, code: account.code, currency: ORG_CURRENCY, netMinor: amount };
@@ -885,8 +914,7 @@ function makeBackend(defects: Defects = {}) {
           otherExpenseRows: [],
           totalRevenue, totalCogs, grossProfit, totalExpenses,
           totalOtherIncome, totalOtherExpenses: 0,
-          netIncome: grossProfit - totalExpenses + totalOtherIncome -
-            (defects.cashSaleReportMisstatesProfit && certifiedCashSalePosted ? 1 : 0) } };
+          netIncome: missingRefundIncome ? undefined : netIncome } };
       }
       case "reports:getProfitAndLoss": {
         const inWindow = operationalTransactions.filter((tx) =>
@@ -1564,8 +1592,11 @@ function makeBackend(defects: Defects = {}) {
         const payment = canonicalPayments.get(args.paymentId);
         const activeAllocatedMinor = allocations.filter((row) => row.paymentId === args.paymentId && row.status === "ACTIVE")
           .reduce((total, row) => total + Number(row.amountMinor), 0);
+        const heldRefundPayment = deposits.get(certifiedCashRefundDepositId ?? "");
+        const wrongHeldBalance = defects.cashHeldPaymentUnappliedWrong &&
+          heldRefundPayment?.status === "HELD" && heldRefundPayment.canonicalPaymentId === args.paymentId;
         return { ok: true as const, value: payment ? {
-          payment, unappliedMinor: Math.max(0, Number(payment.amountMinor) - activeAllocatedMinor),
+          payment, unappliedMinor: wrongHeldBalance ? 0 : Math.max(0, Number(payment.amountMinor) - activeAllocatedMinor),
         } : null };
       }
       case "deposits:allocateToVehicles": {
@@ -2282,6 +2313,14 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["cashDepositPaymentWrongCustomer", /incoming payment customer/],
     ["cashDepositPaymentWrongMethod", /incoming payment method/],
     ["refundPostsWrongAccount", /cash refund|journal lines are not exactly/i],
+    ["cashRefundCreatorRefusalWrites", /refused creator cannot count a release/],
+    ["cashRefundLeavesStatusHeld", /deposit is refunded/],
+    ["cashRefundLeavesPreHoldStatus", /stale vehicle pre-hold status/],
+    ["cashRefundCanonicalWrongStatus", /outbound canonical payment status/],
+    ["cashRefundCollectionWrongMethod", /refund collection payment method/],
+    ["cashRefundAddsReceivable", /must not create or modify a tenant receivable/],
+    ["cashRefundIncomeMissingAfterRefund", /refunded income netIncome is unavailable/],
+    ["cashHeldPaymentUnappliedWrong", /held payment remains unapplied/],
   ] as const)("M486C3 rejects %s in an owned cash quote refund", async (defect, diagnostic) => {
     const results = await runAgainst({ [defect]: true });
     expect(statusOf(results, "M486C3")).toBe("FAIL");
@@ -2293,6 +2332,19 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     expect(statusOf(results, "M486C3")).toBe("UNPROVEN");
     expect(String(results.find((row) => row.id === "M486C3")?.detail))
       .toMatch(/collection payment listing exceeds the rehearsal page cap/);
+  });
+
+  test("M486C3 marks a refund that crosses the UTC accounting month unavailable", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.UTC(2026, 9, 31, 23, 59, 30));
+    try {
+      const results = await runAgainst({ cashRefundCrossesUtcMonth: true });
+      expect(statusOf(results, "M486C3")).toBe("UNPROVEN");
+      expect(String(results.find((row) => row.id === "M486C3")?.detail))
+        .toMatch(/crossed its UTC accounting month/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test.each([

@@ -2199,7 +2199,8 @@ export async function runRehearsalCases(ctx) {
     if (!Array.isArray(depositEvents) || depositEvents.length >= 200) {
       unproven("M486C3 deposit event listing is absent or truncated");
     }
-    expectEqual(JSON.stringify(depositEvents.map((event) => event.eventType).sort()),
+    expectEqual(JSON.stringify(depositEvents.map((event) => event.eventType)
+      .sort((a, b) => a.localeCompare(b))),
       JSON.stringify(["DEPOSIT_RECEIVED", "DEPOSIT_REFUNDED"]),
       "M486C3 exactly the receipt and refund events, with no extra deposit posting");
     const finalEntries = await allJournalEntries({ orgId, ownerMust });
@@ -2262,6 +2263,9 @@ export async function runRehearsalCases(ctx) {
     }
     for (const field of ["totalRevenue", "totalCogs", "grossProfit", "totalExpenses",
       "totalOtherIncome", "totalOtherExpenses", "netIncome"]) {
+      if (!Number.isFinite(afterIncome?.[field])) {
+        fail(`M486C3 refunded income ${field} is unavailable`);
+      }
       expectEqual(heldIncome?.[field], openingIncome?.[field], `M486C3 held income ${field}`);
       expectEqual(afterIncome?.[field], openingIncome?.[field], `M486C3 refunded income ${field}`);
     }
