@@ -49,6 +49,10 @@ export function startCliRelay(targetHost, createRelay = createLoopbackRelay) {
     return null;
   } else {
     const { server, stop } = createRelay({ targetHost, targetPort: 3000, listenPort: 3000 });
+    // The workflow waits for exactly this line before it trusts port 3000.
+    server.on("listening", () => {
+      process.stdout.write("relay-listening 127.0.0.1:3000\n");
+    });
     server.on("error", () => {
       process.stderr.write("Could not start isolated candidate relay.\n");
       process.exitCode = 1;

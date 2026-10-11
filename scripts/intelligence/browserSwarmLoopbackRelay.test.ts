@@ -90,6 +90,41 @@ describe("browser swarm loopback relay", () => {
     }
   });
 
+  it("prints the readiness line only after the server is listening", () => {
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const server = net.createServer();
+    try {
+      startCliRelay(privateHost, () => ({ server, stop: vi.fn() }));
+      expect(stdout).not.toHaveBeenCalled();
+      server.emit("error", new Error("bind failed"));
+      expect(stdout).not.toHaveBeenCalled();
+      server.emit("listening");
+      expect(stdout).toHaveBeenCalledWith("relay-listening 127.0.0.1:3000\n");
+    } finally {
+      process.exitCode = undefined;
+      stdout.mockRestore();
+    }
+  });
+
+  it("exits 1 without a readiness line when port 3000 is already occupied", async () => {
+    const impostor = net.createServer();
+    impostor.listen(3000, "127.0.0.1");
+    // If something else already holds 3000 the premise (occupied) holds anyway.
+    await Promise.race([once(impostor, "listening"), once(impostor, "error")]).catch(() => undefined);
+    try {
+      const script = path.resolve(process.cwd(), "scripts/intelligence/browserSwarmLoopbackRelay.mjs");
+      const result = spawnSync(process.execPath, [script], {
+        encoding: "utf8",
+        timeout: 10000,
+        env: { ...process.env, CANDIDATE_DOCKER_IP: privateHost },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stdout).not.toContain("relay-listening");
+    } finally {
+      impostor.close();
+    }
+  });
+
   it("starts the CLI relay only for a private target and handles bind failure", () => {
     const previousExitCode = process.exitCode;
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);

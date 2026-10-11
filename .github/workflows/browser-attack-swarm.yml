@@ -752,21 +752,38 @@ jobs:
           # Docker may silently drop published ports on --internal networks.
           # A trusted host-only byte relay preserves the candidate's no-egress
           # network while keeping the browser origin at 127.0.0.1:3000.
-          CANDIDATE_IP="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CANDIDATE_CONTAINER")"
+          CANDIDATE_IP="$(docker inspect --format "{{(index .NetworkSettings.Networks \"$CANDIDATE_NETWORK\").IPAddress}}" "$CANDIDATE_CONTAINER")"
+
+          # Fail closed if anything already holds port 3000 on loopback: a
+          # non-candidate listener would answer /api/health while the relay
+          # died of EADDRINUSE, and the suite would test the wrong app.
+          if (exec 3<>/dev/tcp/127.0.0.1/3000) 2>/dev/null \
+            || (exec 3<>/dev/tcp/::1/3000) 2>/dev/null \
+            || [ -n "$(ss -Hltn 'sport = :3000' 2>/dev/null)" ]; then
+            echo "::error::Port 3000 is already in use on the runner; refusing to test a non-candidate app"
+            exit 1
+          fi
+
           CANDIDATE_DOCKER_IP="$CANDIDATE_IP" node trusted/scripts/intelligence/browserSwarmLoopbackRelay.mjs > "$RUNNER_TEMP/browser-swarm-relay.log" 2>&1 &
           CANDIDATE_RELAY_PID=$!
           echo "CANDIDATE_RELAY_PID=$CANDIDATE_RELAY_PID" >> "$GITHUB_ENV"
 
+          # The health probe runs only after our own relay process is alive AND has printed
+          # its readiness line from the server 'listening' event.
+          RELAY_READY=0
           for attempt in $(seq 1 60); do
-            if curl --fail --silent --show-error http://127.0.0.1:3000/api/health > /dev/null; then
+            if ! kill -0 "$CANDIDATE_RELAY_PID" 2>/dev/null; then
+              echo "::error::Trusted loopback relay exited before /api/health"
+              break
+            fi
+            if [ "$RELAY_READY" != "1" ] && grep -Fxq 'relay-listening 127.0.0.1:3000' "$RUNNER_TEMP/browser-swarm-relay.log"; then
+              RELAY_READY=1
+            fi
+            if [ "$RELAY_READY" = "1" ] && curl --fail --silent --show-error http://127.0.0.1:3000/api/health > /dev/null; then
               exit 0
             fi
             if [ "$(docker inspect --format '{{.State.Running}}' "$CANDIDATE_CONTAINER" 2>/dev/null || echo false)" != "true" ]; then
               echo "::error::Candidate container exited before answering /api/health"
-              break
-            fi
-            if ! kill -0 "$CANDIDATE_RELAY_PID" 2>/dev/null; then
-              echo "::error::Trusted loopback relay exited before /api/health"
               break
             fi
             sleep 2
@@ -979,21 +996,38 @@ jobs:
             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
             node server.js
 
-          CANDIDATE_IP="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CANDIDATE_CONTAINER")"
+          CANDIDATE_IP="$(docker inspect --format "{{(index .NetworkSettings.Networks \"$CANDIDATE_NETWORK\").IPAddress}}" "$CANDIDATE_CONTAINER")"
+
+          # Fail closed if anything already holds port 3000 on loopback: a
+          # non-candidate listener would answer /api/health while the relay
+          # died of EADDRINUSE, and the swarm would attack the wrong app.
+          if (exec 3<>/dev/tcp/127.0.0.1/3000) 2>/dev/null \
+            || (exec 3<>/dev/tcp/::1/3000) 2>/dev/null \
+            || [ -n "$(ss -Hltn 'sport = :3000' 2>/dev/null)" ]; then
+            echo "::error::Port 3000 is already in use on the runner; refusing to test a non-candidate app"
+            exit 1
+          fi
+
           CANDIDATE_DOCKER_IP="$CANDIDATE_IP" node trusted/scripts/intelligence/browserSwarmLoopbackRelay.mjs > "$RUNNER_TEMP/browser-swarm-relay.log" 2>&1 &
           CANDIDATE_RELAY_PID=$!
           echo "CANDIDATE_RELAY_PID=$CANDIDATE_RELAY_PID" >> "$GITHUB_ENV"
 
+          # The health probe runs only after our own relay process is alive AND has printed
+          # its readiness line from the server 'listening' event.
+          RELAY_READY=0
           for attempt in $(seq 1 60); do
-            if curl --fail --silent --show-error               http://127.0.0.1:3000/api/health > /dev/null; then
+            if ! kill -0 "$CANDIDATE_RELAY_PID" 2>/dev/null; then
+              echo "::error::Trusted loopback relay exited before /api/health"
+              break
+            fi
+            if [ "$RELAY_READY" != "1" ] && grep -Fxq 'relay-listening 127.0.0.1:3000' "$RUNNER_TEMP/browser-swarm-relay.log"; then
+              RELAY_READY=1
+            fi
+            if [ "$RELAY_READY" = "1" ] && curl --fail --silent --show-error http://127.0.0.1:3000/api/health > /dev/null; then
               exit 0
             fi
             if [ "$(docker inspect --format '{{.State.Running}}' "$CANDIDATE_CONTAINER" 2>/dev/null || echo false)" != "true" ]; then
               echo "::error::Candidate container exited before answering /api/health"
-              break
-            fi
-            if ! kill -0 "$CANDIDATE_RELAY_PID" 2>/dev/null; then
-              echo "::error::Trusted loopback relay exited before /api/health"
               break
             fi
             sleep 2
