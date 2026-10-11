@@ -480,6 +480,22 @@ async function completedSaleInvoice(
 }
 
 describe("SCRUM-218-C §4 — applying retained credit", () => {
+  test("SCRUM-486 zero customer invoice is not a collectible receipt target", async () => {
+    const { t, orgId, userId, customerId, movement } = await retainedCreditFixture("s486zero");
+    const { saleId, invoiceId } = await completedSaleInvoice(t, orgId, userId, customerId, "ZERO");
+    await t.run((ctx) => ctx.db.patch(invoiceId, {
+      originalAmountMinor: 0, status: "PAID",
+    }));
+
+    await expect(t.run((ctx) => reservePendingInvoiceReceipt(ctx, {
+      orgId, receiptMovementId: movement._id, saleId, amountMinor: 1, actorId: userId,
+    }))).rejects.toThrow(/same customer credit/i);
+    expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(10000);
+    expect(await t.run((ctx) => ctx.db.query("invoiceReceiptApplications")
+      .withIndex("by_org_sale_status", (q) => q.eq("orgId", orgId).eq("saleId", saleId).eq("status", "PENDING"))
+      .collect())).toHaveLength(0);
+  });
+
   test("SCRUM-722: org deletion drains pending claims before the frozen parent steps", async () => {
     const { t, orgId, userId, customerId, movement } = await retainedCreditFixture("s722delete");
     const { saleId } = await completedSaleInvoice(t, orgId, userId, customerId, "DELETE");
