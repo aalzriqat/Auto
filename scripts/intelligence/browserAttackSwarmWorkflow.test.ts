@@ -706,6 +706,14 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       expect(readyAt, jobName).toBeLessThan(firstCurl);
       expect(liveAt, jobName).toBeGreaterThan(relayAt);
       expect(liveAt, jobName).toBeLessThan(firstCurl);
+      // The only health probe is the readiness-gated one.
+      const gatedProbe =
+        '[ "$RELAY_READY" = "1" ] && curl --fail --silent --show-error http://127.0.0.1:3000/api/health';
+      const gatedAt = startRun.indexOf(gatedProbe);
+      expect(gatedAt, jobName).toBeGreaterThan(-1);
+      expect(startRun.indexOf("/api/health"), jobName).toBeGreaterThan(-1);
+      expect(startRun.slice(0, gatedAt), jobName).not.toMatch(/curl[^\n]*\/api\/health/);
+      expect(startRun.split(gatedProbe).length, jobName).toBe(2);
       expect(startRun, jobName).toContain("seq 1 60");
       expect(startRun, jobName).toContain("sleep 2");
 

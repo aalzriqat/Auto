@@ -91,17 +91,21 @@ describe("browser swarm loopback relay", () => {
   });
 
   it("prints the readiness line only after the server is listening", () => {
+    const previousExitCode = process.exitCode;
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const server = net.createServer();
     try {
       startCliRelay(privateHost, () => ({ server, stop: vi.fn() }));
       expect(stdout).not.toHaveBeenCalled();
       server.emit("error", new Error("bind failed"));
+      expect(stderr).toHaveBeenCalledWith("Could not start isolated candidate relay.\n");
       expect(stdout).not.toHaveBeenCalled();
       server.emit("listening");
       expect(stdout).toHaveBeenCalledWith("relay-listening 127.0.0.1:3000\n");
     } finally {
-      process.exitCode = undefined;
+      process.exitCode = previousExitCode;
+      stderr.mockRestore();
       stdout.mockRestore();
     }
   });
