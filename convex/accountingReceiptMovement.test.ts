@@ -51,7 +51,7 @@ import { describe, expect, test } from "vitest";
 import { readSourceRelativeTo } from "../test-utils/sourceText";
 import { runContinuationBatch } from "../test-utils/orgResetFixtures";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import {
@@ -61,6 +61,11 @@ import {
   occurrenceIdempotencyKey,
   RECEIPT_PAYLOAD_VERSION,
 } from "./accounting/receiptOccurrence";
+import {
+  cancelPendingInvoiceReceipt,
+  cancelPendingInvoiceReceiptsForSale,
+  reservePendingInvoiceReceipt,
+} from "./accounting/invoiceReceiptReservation";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -442,7 +447,113 @@ async function retainedCreditFixture(suffix: string, receiptAmount = 100) {
   return { ...seeded, paymentId, movement };
 }
 
+async function completedSaleInvoice(
+  t: TestHarness,
+  orgId: Id<"organizations">,
+  userId: Id<"users">,
+  customerId: Id<"customers">,
+  suffix: string
+) {
+  return t.run(async (ctx) => {
+    const vehicleId = await ctx.db.insert("vehicles", {
+      orgId, vin: `VIN-S722-${suffix}`, make: "Kia", model: "Rio", year: 2021,
+      mileage: 0, color: "White", fuelType: "Gasoline", transmission: "Automatic",
+      sellingPrice: 100, status: "SOLD", sourceType: "STOCK",
+    });
+    const saleId = await ctx.db.insert("sales", {
+      orgId, vehicleId, customerId, salespersonId: userId, salePrice: 100,
+      saleDate: Date.now(), status: "COMPLETED",
+    });
+    const invoiceId = await ctx.db.insert("receivableDocuments", {
+      orgId, documentType: "INVOICE", documentNumber: `S722-${suffix}`,
+      payerType: "CUSTOMER", customerId, sourceType: "sales", sourceId: String(saleId),
+      originalAmountMinor: 10000, currency: "USD", scale: 2,
+      issueDate: Date.now(), dueDate: Date.now(), status: "OPEN",
+      createdAt: Date.now(), createdBy: userId,
+    });
+    await ctx.db.patch(saleId, { canonicalReceivableDocumentId: invoiceId });
+    return { saleId, invoiceId };
+  });
+}
+
 describe("SCRUM-218-C §4 — applying retained credit", () => {
+  test("SCRUM-722: org deletion drains pending claims before the frozen parent steps", async () => {
+    const { t, orgId, userId, customerId, movement } = await retainedCreditFixture("s722delete");
+    const { saleId } = await completedSaleInvoice(t, orgId, userId, customerId, "DELETE");
+    const applicationId = await t.run((ctx) => reservePendingInvoiceReceipt(ctx, {
+      orgId, receiptMovementId: movement._id, saleId, amountMinor: 3000, actorId: userId,
+    }));
+    const requestId = await t.run((ctx) => ctx.db.insert("organizationDeletionRequests", {
+      orgId, orgName: "Movement s722delete", requestedBy: userId,
+      requestedAt: Date.now(), status: "RUNNING", currentStepIndex: 0,
+    }));
+
+    await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId });
+
+    expect(await t.run((ctx) => ctx.db.get(applicationId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(movement._id))).not.toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(requestId))).toMatchObject({
+      status: "RUNNING", currentStepIndex: 0, deletedCounts: { invoiceReceiptApplications: 1 },
+    });
+  });
+
+  test("SCRUM-722: a pending sale invoice claim cannot be spent on another receivable", async () => {
+    const { t, asAdmin, orgId, userId, customerId, movement } = await retainedCreditFixture("s722reserve");
+    const receivableId = await makeReceivable(asAdmin, orgId, customerId, 100);
+    const { saleId, invoiceId } = await completedSaleInvoice(t, orgId, userId, customerId, "RESERVE");
+    const reservationId = await t.run((ctx) => reservePendingInvoiceReceipt(ctx, {
+      orgId, receiptMovementId: movement._id, saleId, amountMinor: 6000, actorId: userId,
+    }));
+    expect((await t.run((ctx) => ctx.db.get(reservationId)))?.status).toBe("PENDING");
+    expect(await t.run((ctx) => ctx.db.get(invoiceId))).toMatchObject({ status: "OPEN" });
+
+    const result = await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(), orgId, receiptMovementId: movement._id,
+      receivableId, requestedAmount: 100,
+    });
+    expect(result.appliedMinor).toBe(4000);
+    expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(6000);
+    await t.run((ctx) => cancelPendingInvoiceReceiptsForSale(ctx, orgId, saleId));
+    expect((await t.run((ctx) => ctx.db.get(reservationId)))?.status).toBe("CANCELLED");
+    await t.run((ctx) => cancelPendingInvoiceReceipt(ctx, orgId, reservationId));
+    const released = await asAdmin.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(), orgId, receiptMovementId: movement._id,
+      receivableId, requestedAmount: 60,
+    });
+    expect(released.appliedMinor).toBe(6000);
+  });
+
+  test("SCRUM-722: reservation refuses overdraft, wrong tenant and a second claim on the same invoice", async () => {
+    const { t, asAdmin, orgId, userId, customerId, movement } = await retainedCreditFixture("s722bounds");
+    const { saleId } = await completedSaleInvoice(t, orgId, userId, customerId, "BOUNDS");
+    const otherOrgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Other org", createdAt: Date.now() })
+    );
+    const reserve = (amountMinor: number, scope = orgId) => t.run((ctx) =>
+      reservePendingInvoiceReceipt(ctx, {
+        orgId: scope, receiptMovementId: movement._id, saleId, amountMinor, actorId: userId,
+      })
+    );
+    await expect(reserve(1000, otherOrgId)).rejects.toThrow(/not found in this organization/);
+    await expect(reserve(Number.NaN)).rejects.toThrow(/positive minor-unit amount/);
+    await reserve(6000);
+    await expect(reserve(5000)).rejects.toThrow(/insufficient unreserved balance/);
+    const secondPaymentId = await asAdmin.mutation(api.collections.recordPayment, {
+      idempotencyKey: crypto.randomUUID(), orgId, customerId,
+      amount: 100, method: "CASH", paymentDate: Date.now(),
+    });
+    const secondMovement = await movementFor(t, orgId, secondPaymentId);
+    expect(secondMovement).not.toBeNull();
+    await expect(t.run((ctx) => reservePendingInvoiceReceipt(ctx, {
+      orgId, receiptMovementId: secondMovement!._id, saleId, amountMinor: 5000, actorId: userId,
+    }))).rejects.toThrow(/insufficient unreserved balance/);
+    const rows = await t.run((ctx) => ctx.db.query("invoiceReceiptApplications")
+      .withIndex("by_org_sale_status", (q) => q.eq("orgId", orgId).eq("saleId", saleId).eq("status", "PENDING"))
+      .collect());
+    expect(rows).toHaveLength(1);
+    expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(10000);
+  });
+
   test("transfers 2110 to AR exactly, with no second cash receipt", async () => {
     const { t, asAdmin, orgId, customerId, movement } = await retainedCreditFixture("s4");
     const receivableId = await makeReceivable(asAdmin, orgId, customerId, 30);

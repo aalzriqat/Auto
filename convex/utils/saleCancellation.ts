@@ -30,6 +30,7 @@ import { auditLog } from "../financialAudit";
 import { AppErrorCode, throwAppError } from "./errors";
 import { toMinorUnits } from "./money";
 import { settlementView } from "./supplierSettlement";
+import { cancelPendingInvoiceReceiptsForSale } from "../accounting/invoiceReceiptReservation";
 
 async function getActiveReceivableAllocations(
   ctx: QueryCtx | MutationCtx,
@@ -107,6 +108,7 @@ async function cancelSaleReceivableIfSafe(
     reversalDate: number;
   }
 ) {
+  await cancelPendingInvoiceReceiptsForSale(ctx, args.orgId, args.sale._id);
   if (!args.sale.canonicalReceivableDocumentId) return;
   const receivable = await ctx.db.get(args.sale.canonicalReceivableDocumentId);
   if (!receivable || receivable.orgId !== args.orgId || receivable.status === "CANCELLED") return;

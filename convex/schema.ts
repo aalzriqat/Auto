@@ -4532,6 +4532,30 @@ export default defineSchema({
     .index("by_org_customer", ["orgId", "customerId"]),
 
   /**
+   * SCRUM-722: a pending claim on retained 2110 credit for a completed sale's
+   * canonical invoice. PENDING reserves money without calling it applied.
+   * The receipt and invoice journals still have to be POSTED before a future
+   * activation can create an allocation or move 2110 to AR.
+   */
+  invoiceReceiptApplications: defineTable({
+    orgId: v.id("organizations"),
+    receiptMovementId: v.id("receiptMovements"),
+    saleId: v.id("sales"),
+    receivableDocumentId: v.id("receivableDocuments"),
+    customerId: v.id("customers"),
+    currency: v.string(),
+    amountMinor: v.number(),
+    status: v.union(v.literal("PENDING"), v.literal("ACTIVE"), v.literal("REVERSED"), v.literal("CANCELLED")),
+    allocationId: v.optional(v.id("paymentAllocations")),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    cancelledAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_movement_status", ["orgId", "receiptMovementId", "status"])
+    .index("by_org_sale_status", ["orgId", "saleId", "status"]),
+
+  /**
    * One append-only row per later application of retained credit.
    *
    * `sequence` is part of the ACCOUNTING identity, not decoration: applications
