@@ -46,7 +46,7 @@
  * faithful model of it. §3's positive control still proves the identical receipt
  * posts once the account is present, so both directions stay exercised.
  */
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import { readSourceRelativeTo } from "../test-utils/sourceText";
 import { runContinuationBatch } from "../test-utils/orgResetFixtures";
@@ -480,6 +480,110 @@ async function completedSaleInvoice(
 }
 
 describe("SCRUM-218-C §4 — applying retained credit", () => {
+  test("SCRUM-723: a completed cash sale cancels with a separate partial customer payout", async () => {
+    const { t, asAdmin, orgId, userId, customerId } = await seedOrg("s723cashcancel");
+    registerRateLimiter(t);
+    const vehicleId = await t.run((ctx) => ctx.db.insert("vehicles", {
+      orgId, vin: "VIN-S723-CASH-CANCEL", make: "Kia", model: "Rio", year: 2021,
+      mileage: 0, color: "White", fuelType: "Gasoline", transmission: "Automatic",
+      sellingPrice: 100, purchasePrice: 60, status: "AVAILABLE", sourceType: "STOCK",
+    }));
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 100, saleDate: Date.now(), status: "COMPLETED",
+      financingType: "CASH", idempotencyKey: crypto.randomUUID(),
+    });
+    const collectionId = await asAdmin.mutation(api.collections.recordPayment, {
+      orgId, customerId, amount: 50, method: "CASH", paymentDate: Date.now(),
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const movement = (await movementFor(t, orgId, collectionId))!;
+    const applicationId = await t.run((ctx) => reservePendingInvoiceReceipt(ctx, {
+      orgId, receiptMovementId: movement._id, saleId, amountMinor: 3000, actorId: userId,
+    }));
+    await t.run((ctx) => activatePendingInvoiceReceipt(ctx, {
+      orgId, applicationId, amountMinor: 3000, actorId: userId,
+    }));
+    const approverId = await t.run(async (ctx) => {
+      const actor = await ctx.db.insert("users", {
+        clerkId: "s723_cash_approver", email: "s723_cash_approver@example.com", name: "Cash approver",
+      });
+      const roleId = await ctx.db.insert("roles", {
+        orgId, name: "Cash approver", permissions: ["view:sales", "edit:sales", "approve:requests", "manage:finance"],
+      });
+      await ctx.db.insert("memberships", { orgId, userId: actor, roleId });
+      return actor;
+    });
+    const approver = t.withIdentity({ subject: "s723_cash_approver", clerkId: "s723_cash_approver" });
+    expect(approverId).toBeDefined();
+    expect(await approver.query(api.sales.cancellationReceiptStatus, { orgId, saleId })).toMatchObject({
+      customerReceiptMinor: 3000, blocked: false,
+    });
+    await expect(approver.mutation(api.sales.update, {
+      orgId, saleId, status: "CANCELLED", customerPaymentDisposition: "REFUND",
+    })).rejects.toThrow(/customer refund/i);
+    await approver.mutation(api.sales.update, {
+      orgId, saleId, status: "CANCELLED", customerPaymentDisposition: "REFUND",
+      customerRefundAmountMinor: 2000, customerRefundMethod: "CASH",
+      customerRefundReference: "PV-CASH-1", customerRefundedAt: Date.now(),
+    });
+    expect((await t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("CANCELLED");
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("REVERSED");
+    const position = await positionFor(t, orgId, movement._id);
+    expect(position?.remainingUnappliedMinor).toBe(3000);
+    const payments = await t.run((ctx) => ctx.db.query("canonicalPayments")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId)).collect());
+    expect(payments.filter((payment) => payment.direction === "OUT" && payment.customerId === customerId))
+      .toMatchObject([{ amountMinor: 2000, method: "CASH", externalReference: "PV-CASH-1", status: "SETTLED" }]);
+  });
+
+  test("SCRUM-723: sales approval alone cannot pay out an active customer receipt", async () => {
+    const { t, orgId, userId, customerId, movement } = await retainedCreditFixture("s723authority");
+    registerRateLimiter(t);
+    const { saleId } = await completedSaleInvoice(t, orgId, userId, customerId, "AUTH");
+    const applicationId = await t.run((ctx) => reservePendingInvoiceReceipt(ctx, {
+      orgId, receiptMovementId: movement._id, saleId, amountMinor: 3000, actorId: userId,
+    }));
+    await t.run(async (ctx) => {
+      const eventId = await ctx.db.insert("accountingEvents", {
+        orgId, eventType: "SALE_COMPLETED", sourceType: "sales", sourceId: String(saleId),
+        eventVersion: 1, idempotencyKey: saleCompletedKey(saleId),
+        occurredAt: Date.now(), accountingDate: Date.now(), currency: "USD",
+        payload: {}, status: "POSTED", createdBy: userId, createdAt: Date.now(),
+      });
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId, accountingEventId: eventId, journalNumber: "S723-AUTH",
+        accountingDate: Date.now(), sourceType: "sales", sourceId: String(saleId),
+        category: "SYSTEM", memo: "sale", currency: "USD", status: "POSTED",
+        postedBy: userId, postedAt: Date.now(), createdAt: Date.now(),
+      });
+      await ctx.db.patch(eventId, { journalEntryId });
+    });
+    await t.run((ctx) => activatePendingInvoiceReceipt(ctx, {
+      orgId, applicationId, amountMinor: 3000, actorId: userId,
+    }));
+    await t.run(async (ctx) => {
+      const actor = await ctx.db.insert("users", {
+        clerkId: "s723_sales_editor", email: "s723_sales_editor@example.com", name: "Sales editor",
+      });
+      const roleId = await ctx.db.insert("roles", {
+        orgId, name: "Sales approver", permissions: ["edit:sales", "approve:requests"],
+      });
+      await ctx.db.insert("memberships", { orgId, userId: actor, roleId });
+    });
+    const editor = t.withIdentity({ subject: "s723_sales_editor", clerkId: "s723_sales_editor" });
+    await expect(editor.mutation(api.sales.update, {
+      orgId, saleId, status: "CANCELLED", customerPaymentDisposition: "REFUND",
+      customerRefundAmountMinor: 1000, customerRefundMethod: "CASH",
+      customerRefundReference: "PV-AUTH", customerRefundedAt: Date.now(),
+    })).rejects.toThrow(/manage:finance/i);
+    expect((await t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("COMPLETED");
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("ACTIVE");
+    expect(await t.run((ctx) => ctx.db.query("canonicalPayments")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+      .then((rows) => rows.filter((row) => row.direction === "OUT")))).toHaveLength(0);
+  });
+
   test("SCRUM-486 zero customer invoice is not a collectible receipt target", async () => {
     const { t, orgId, userId, customerId, movement } = await retainedCreditFixture("s486zero");
     const { saleId, invoiceId } = await completedSaleInvoice(t, orgId, userId, customerId, "ZERO");

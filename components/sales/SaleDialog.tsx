@@ -44,6 +44,8 @@ import { saleSchema, SaleFormValues, SaleDialogProps } from "./sale.schema";
 import Link from "next/link";
 import { getLocalizedErrorMessage } from "@/lib/errors";
 import { ConsignedSettlementSection } from "./ConsignedSettlementSection";
+import { economicDateInputToMs, economicTodayDateInput } from "@/lib/dateInput";
+import { formatMinorAmount, moneyDisplayScale, parseTypedAmount } from "@/lib/moneyDisplay";
 import { ProfitApprovalNotice, useProfitApproval } from "./ProfitApprovalNotice";
 
 
@@ -73,6 +75,16 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   const createDraftSale = useMutation(api.sales.createDraft);
   const completeDraftSale = useMutation(api.sales.completeDraft);
   const updateSale = useMutation(api.sales.update);
+  const cancellationReceipt = useQuery(
+    api.sales.cancellationReceiptStatus,
+    activeOrgId && sale?.status === "COMPLETED" && !sale.applicationId
+      ? { orgId: activeOrgId, saleId: sale._id } : "skip"
+  );
+  const [cancelDisposition, setCancelDisposition] = useState<"REFUND" | "RETAIN_CREDIT" | "">("");
+  const [cancelRefundAmount, setCancelRefundAmount] = useState("");
+  const [cancelRefundMethod, setCancelRefundMethod] = useState<"BANK_TRANSFER" | "CASH">("BANK_TRANSFER");
+  const [cancelRefundReference, setCancelRefundReference] = useState("");
+  const [cancelRefundDate, setCancelRefundDate] = useState(economicTodayDateInput());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const createSaleIdempotencyKeyRef = useRef<string | null>(null);
   const completeDraftIdempotencyKeyRef = useRef<string | null>(null);
@@ -251,6 +263,42 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
 
       if (sale) {
         // Updating
+        if (sale.status === "COMPLETED" && values.status === "CANCELLED") {
+          if (!cancellationReceipt || cancellationReceipt.blocked) {
+            toast.error("Customer receipt status is unavailable. Please try again later.");
+            return;
+          }
+          const activeMinor = cancellationReceipt.customerReceiptMinor;
+          const parsedRefund = parseTypedAmount(
+            cancelRefundAmount,
+            moneyDisplayScale(cancellationReceipt.currency || "JOD")
+          ).minor;
+          if (activeMinor > 0 && !cancelDisposition) {
+            toast.error("Choose how to handle the customer's invoice credit.");
+            return;
+          }
+          if (activeMinor > 0 && cancelDisposition === "REFUND" &&
+              (parsedRefund === null || parsedRefund <= 0 || parsedRefund > activeMinor ||
+                cancelRefundReference.trim() === "" || cancelRefundDate === "")) {
+            toast.error("Enter the customer payout amount, date and reference.");
+            return;
+          }
+          await updateSale({
+            orgId: activeOrgId,
+            saleId: sale._id,
+            status: "CANCELLED",
+            ...(activeMinor > 0 ? { customerPaymentDisposition: cancelDisposition as "REFUND" | "RETAIN_CREDIT" } : {}),
+            ...(activeMinor > 0 && cancelDisposition === "REFUND" && parsedRefund !== null ? {
+              customerRefundAmountMinor: parsedRefund,
+              customerRefundMethod: cancelRefundMethod,
+              customerRefundReference: cancelRefundReference.trim(),
+              customerRefundedAt: economicDateInputToMs(cancelRefundDate),
+            } : {}),
+          });
+          toast.success(t("SaleUpdatedSuccess" as any));
+          onOpenChange(false);
+          return;
+        }
         const completingDraft = sale.status === "PENDING" && values.status === "COMPLETED";
         await updateSale({
           orgId: activeOrgId,
@@ -488,6 +536,44 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                       </FormItem>
                     )}
                   />
+                  {sale?.status === "COMPLETED" && !sale.applicationId && watchAll.status === "CANCELLED" && (
+                    <div className="md:col-span-2 space-y-3 rounded-md border p-3" data-testid="cash-sale-customer-disposition">
+                      {cancellationReceipt === undefined || cancellationReceipt.blocked ? (
+                        <p className="text-sm">Customer receipt status is unavailable. Please wait or try again later.</p>
+                      ) : cancellationReceipt.customerReceiptMinor > 0 ? (
+                        <>
+                          <p className="text-sm font-medium">
+                            {t("UnwindCustomerCreditLabel" as any)}: {formatMinorAmount(
+                              cancellationReceipt.customerReceiptMinor,
+                              10 ** moneyDisplayScale(cancellationReceipt.currency || "JOD")
+                            )} {cancellationReceipt.currency || ""}
+                          </p>
+                          <Select value={cancelDisposition} onValueChange={(value) => setCancelDisposition(value === "REFUND" || value === "RETAIN_CREDIT" ? value : "")}
+                            disabled={isSubmitting}>
+                            <SelectTrigger aria-label={t("UnwindDispositionLabel" as any)}><SelectValue placeholder={t("UnwindDispositionPlaceholder" as any)} /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="REFUND">{t("UnwindDispositionRefund" as any)}</SelectItem>
+                              <SelectItem value="RETAIN_CREDIT">{t("UnwindDispositionCredit" as any)}</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          {cancelDisposition === "REFUND" && (
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <Input aria-label={t("UnwindCustomerPayoutAmountLabel" as any)} inputMode="decimal" required
+                                value={cancelRefundAmount} onChange={(event) => setCancelRefundAmount(event.target.value)} />
+                              <Select value={cancelRefundMethod} onValueChange={(value) => setCancelRefundMethod(value === "CASH" ? "CASH" : "BANK_TRANSFER")}>
+                                <SelectTrigger aria-label={t("UnwindCustomerPayoutMethodLabel" as any)}><SelectValue /></SelectTrigger>
+                                <SelectContent><SelectItem value="BANK_TRANSFER">{t("UnwindMethodBank" as any)}</SelectItem><SelectItem value="CASH">{t("UnwindMethodCash" as any)}</SelectItem></SelectContent>
+                              </Select>
+                              <Input aria-label={t("UnwindCustomerPayoutReferenceLabel" as any)} maxLength={120} required
+                                value={cancelRefundReference} onChange={(event) => setCancelRefundReference(event.target.value)} />
+                              <Input aria-label={t("UnwindCustomerPayoutDateLabel" as any)} type="date" max={economicTodayDateInput()} required
+                                value={cancelRefundDate} onChange={(event) => setCancelRefundDate(event.target.value)} />
+                            </div>
+                          )}
+                        </>
+                      ) : <p className="text-sm">No active customer invoice credit requires disposition.</p>}
+                    </div>
+                  )}
                 </div>
               </div>
 

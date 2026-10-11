@@ -1,6 +1,6 @@
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
-import type { MutationCtx } from "../_generated/server";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { allocatePaymentToReceivable, getReceivableOutstandingMinor, reverseAllocation } from "../subledger";
 import { postAccountingEvent } from "./postingEngine";
 import { reverseAccountingEvent } from "./reversals";
@@ -98,20 +98,93 @@ type ActivationResult = {
   remainderApplicationId?: Id<"invoiceReceiptApplications">;
 };
 
-type ActiveInvoiceUnwind = {
+export type ActiveInvoiceUnwind = {
   application: Doc<"invoiceReceiptApplications">;
+  movement: Doc<"receiptMovements">;
   allocationId: Id<"paymentAllocations">;
   eventId: Id<"accountingEvents">;
 };
 
+async function validateActiveInvoiceUnwind(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  movement: Doc<"receiptMovements">,
+  application: Doc<"invoiceReceiptApplications">
+): Promise<ActiveInvoiceUnwind> {
+  const [allocation, event, invoice, sale, collection, payment] = await Promise.all([
+    application.allocationId ? ctx.db.get(application.allocationId) : Promise.resolve(null),
+    application.activationEventId ? ctx.db.get(application.activationEventId) : Promise.resolve(null),
+    ctx.db.get(application.receivableDocumentId),
+    ctx.db.get(application.saleId),
+    ctx.db.get(movement.collectionPaymentId),
+    ctx.db.get(movement.canonicalPaymentId),
+  ]);
+  const journal = event?.journalEntryId ? await ctx.db.get(event.journalEntryId) : null;
+  if (
+    movement.orgId !== orgId || application.orgId !== orgId || application.status !== "ACTIVE" ||
+    application.receiptMovementId !== movement._id ||
+    application.customerId !== movement.customerId ||
+    application.currency.toUpperCase() !== movement.currency.toUpperCase() ||
+    movement.liabilityTreatment !== "UNAPPLIED_CUSTOMER_RECEIPTS" ||
+    !Number.isSafeInteger(application.amountMinor) || application.amountMinor <= 0 ||
+    !sale || sale.orgId !== orgId || sale.customerId !== application.customerId ||
+    sale.canonicalReceivableDocumentId !== application.receivableDocumentId ||
+    !allocation || allocation.orgId !== orgId || allocation.status !== "ACTIVE" ||
+    allocation.paymentId !== movement.canonicalPaymentId ||
+    allocation.receivableDocumentId !== application.receivableDocumentId ||
+    allocation.amountMinor !== application.amountMinor ||
+    !invoice || invoice.orgId !== orgId || invoice.customerId !== application.customerId ||
+    invoice.documentType !== "INVOICE" || invoice.payerType !== "CUSTOMER" ||
+    invoice.currency.toUpperCase() !== application.currency.toUpperCase() ||
+    invoice.sourceType !== "sales" || invoice.sourceId !== String(sale._id) ||
+    !collection || collection.orgId !== orgId || collection.status !== "POSTED" ||
+    collection.direction !== "IN" || collection.customerId !== application.customerId ||
+    collection.canonicalPaymentId !== movement.canonicalPaymentId ||
+    !payment || payment.orgId !== orgId || payment.status !== "SETTLED" ||
+    payment.direction !== "IN" || payment.payerType !== "CUSTOMER" ||
+    payment.customerId !== application.customerId ||
+    payment.currency.toUpperCase() !== application.currency.toUpperCase() ||
+    !event || event.orgId !== orgId || event.status !== "POSTED" ||
+    event.eventType !== "RECEIPT_CREDIT_APPLIED" || event.eventVersion !== 1 ||
+    event.sourceType !== "invoiceReceiptApplications" || event.sourceId !== String(application._id) ||
+    !journal || journal.orgId !== orgId || journal.status !== "POSTED" ||
+    journal.accountingEventId !== event._id || journal.sourceType !== event.sourceType ||
+    journal.sourceId !== event.sourceId ||
+    journal.currency?.toUpperCase() !== application.currency.toUpperCase()
+  ) {
+    throw new ConvexError("An active invoice receipt has incomplete return lineage.");
+  }
+  return { application, movement, allocationId: allocation._id, eventId: event._id };
+}
+
 /** Prove the complete ACTIVE invoice lineage before a returned cheque writes anything. */
 export async function planActiveInvoiceReceiptReversal(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   movement: Doc<"receiptMovements">
 ): Promise<{ applications: ActiveInvoiceUnwind[]; totalMinor: number }> {
   if (movement.orgId !== orgId) {
     throw new ConvexError("Receipt movement does not belong to this organization.");
+  }
+  // A sale unwind may already have paid part of this receipt back to the
+  // customer. Returning its original cheque without recovering that payout
+  // would reverse the receipt twice in cash terms. Keep the return closed
+  // until a dedicated recovery workflow can prove that money came back.
+  const reversedRows = await ctx.db.query("invoiceReceiptApplications")
+    .withIndex("by_org_movement_status", (q) => q.eq("orgId", orgId)
+      .eq("receiptMovementId", movement._id).eq("status", "REVERSED"))
+    .take(MAX_REVOCABLE_APPLICATIONS + 1);
+  if (reversedRows.length > MAX_REVOCABLE_APPLICATIONS) {
+    throw new ConvexError("This receipt has too many prior invoice reversals to return safely.");
+  }
+  for (const row of reversedRows) {
+    const refund = await ctx.db.query("accountingEvents")
+      .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId)
+        .eq("idempotencyKey", `retained_credit_refunded_${row._id}`))
+      .unique();
+    if (refund) {
+      throw new ConvexError("This receipt has a customer payout. Recover and reconcile it before returning the original cheque.");
+    }
   }
   const rows = await ctx.db.query("invoiceReceiptApplications")
     .withIndex("by_org_movement_status", (q) => q.eq("orgId", orgId)
@@ -124,36 +197,52 @@ export async function planActiveInvoiceReceiptReversal(
   const applications: ActiveInvoiceUnwind[] = [];
   let totalMinor = 0;
   for (const application of rows) {
-    const [allocation, event, invoice] = await Promise.all([
-      application.allocationId ? ctx.db.get(application.allocationId) : Promise.resolve(null),
-      application.activationEventId ? ctx.db.get(application.activationEventId) : Promise.resolve(null),
-      ctx.db.get(application.receivableDocumentId),
-    ]);
-    const journal = event?.journalEntryId ? await ctx.db.get(event.journalEntryId) : null;
-    if (
-      application.customerId !== movement.customerId ||
-      application.currency.toUpperCase() !== movement.currency.toUpperCase() ||
-      !Number.isSafeInteger(application.amountMinor) || application.amountMinor <= 0 ||
-      !allocation || allocation.orgId !== orgId || allocation.status !== "ACTIVE" ||
-      allocation.paymentId !== movement.canonicalPaymentId ||
-      allocation.receivableDocumentId !== application.receivableDocumentId ||
-      allocation.amountMinor !== application.amountMinor ||
-      !invoice || invoice.orgId !== orgId || invoice.customerId !== application.customerId ||
-      !event || event.orgId !== orgId || event.status !== "POSTED" ||
-      event.eventType !== "RECEIPT_CREDIT_APPLIED" || event.eventVersion !== 1 ||
-      event.sourceType !== "invoiceReceiptApplications" || event.sourceId !== String(application._id) ||
-      !journal || journal.orgId !== orgId || journal.status !== "POSTED" ||
-      journal.accountingEventId !== event._id || journal.sourceType !== event.sourceType ||
-      journal.sourceId !== event.sourceId
-    ) {
-      throw new ConvexError("An active invoice receipt has incomplete return lineage.");
-    }
-    applications.push({ application, allocationId: allocation._id, eventId: event._id });
+    applications.push(await validateActiveInvoiceUnwind(ctx, orgId, movement, application));
     totalMinor += application.amountMinor;
   }
   if (!Number.isSafeInteger(totalMinor) || totalMinor > movement.initialUnappliedMinor) {
     throw new ConvexError("Active invoice credit exceeds the receipt's retained amount.");
   }
+  return { applications, totalMinor };
+}
+
+/** Read-only sale plan shared by the unwind preview and its money mutation. */
+export async function planSaleInvoiceReceiptReversal(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  sale: Doc<"sales">
+): Promise<{ applications: ActiveInvoiceUnwind[]; totalMinor: number }> {
+  if (sale.orgId !== orgId) throw new ConvexError("Sale does not belong to this organization.");
+  const rows = await ctx.db.query("invoiceReceiptApplications")
+    .withIndex("by_org_sale_status", (q) => q.eq("orgId", orgId)
+      .eq("saleId", sale._id).eq("status", "ACTIVE"))
+    .take(MAX_REVOCABLE_APPLICATIONS + 1);
+  if (rows.length > MAX_REVOCABLE_APPLICATIONS) {
+    throw new ConvexError("This sale has too many active invoice applications to unwind in one transaction.");
+  }
+  const applications: ActiveInvoiceUnwind[] = [];
+  let totalMinor = 0;
+  let currency: string | undefined;
+  const movementTotals = new Map<string, number>();
+  for (const row of rows) {
+    const movement = await ctx.db.get(row.receiptMovementId);
+    if (!movement || movement.orgId !== orgId || row.receivableDocumentId !== sale.canonicalReceivableDocumentId) {
+      throw new ConvexError("An active invoice receipt has incomplete sale lineage.");
+    }
+    applications.push(await validateActiveInvoiceUnwind(ctx, orgId, movement, row));
+    totalMinor += row.amountMinor;
+    const rowCurrency = row.currency.toUpperCase();
+    if (currency !== undefined && currency !== rowCurrency) {
+      throw new ConvexError("A sale's active customer receipt applications use different currencies.");
+    }
+    currency = rowCurrency;
+    const movementTotal = (movementTotals.get(String(movement._id)) ?? 0) + row.amountMinor;
+    if (!Number.isSafeInteger(movementTotal) || movementTotal > movement.initialUnappliedMinor) {
+      throw new ConvexError("Active invoice credit exceeds its original receipt.");
+    }
+    movementTotals.set(String(movement._id), movementTotal);
+  }
+  if (!Number.isSafeInteger(totalMinor)) throw new ConvexError("Active invoice amount is invalid.");
   return { applications, totalMinor };
 }
 

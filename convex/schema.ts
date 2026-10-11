@@ -3566,6 +3566,15 @@ export default defineSchema({
         vehicleReturnedAt: v.number(),
         vehicleReturnNote: v.string(),
         customerPaymentDisposition: v.union(v.literal("REFUND"), v.literal("RETAIN_CREDIT")),
+        customerReceiptSettlement: v.optional(v.object({
+          refundedMinor: v.number(),
+          retainedMinor: v.number(),
+          refundPaymentIds: v.array(v.id("canonicalPayments")),
+          refundEventIds: v.array(v.id("accountingEvents")),
+          method: v.optional(v.union(v.literal("BANK_TRANSFER"), v.literal("CASH"))),
+          reference: v.optional(v.string()),
+          paidAt: v.optional(v.number()),
+        })),
         completedBy: v.id("users"),
         completedAt: v.number(),
       })
