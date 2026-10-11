@@ -34,6 +34,12 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { manualJournalSchema, ManualJournalFormValues } from "./manualJournal.schema";
 import { scaleForCurrency } from "./AccountingTabShared";
 import { dateInputToUtcMs, economicTodayDateInput, msToDateInput } from "@/lib/dateInput";
+import { getLocalizedErrorMessage } from "@/lib/errors";
+// Leaf module shared with the backend (SCRUM-795): one constant, no server code.
+import { MANUAL_JOURNALS_PILOT_DISABLED } from "@/convex/utils/pilotSwitches";
+
+// Widened so the pilot-off branches are not statically narrowed away.
+const MANUAL_JOURNALS_OFF: boolean = MANUAL_JOURNALS_PILOT_DISABLED;
 
 function emptyLine() {
   return { id: crypto.randomUUID(), accountId: "", side: "DEBIT" as const, amount: 0 };
@@ -113,7 +119,7 @@ export function ManualJournalTab() {
       setDialogOpen(false);
       resetForm();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setIsSubmitting(false);
     }
@@ -126,7 +132,7 @@ export function ManualJournalTab() {
       await approveDraft({ orgId: activeOrgId, draftId });
       toast.success(t("ManualJournalApproved"));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setActingOnId(null);
     }
@@ -144,7 +150,7 @@ export function ManualJournalTab() {
       toast.success(t("ManualJournalRejected"));
       setRejecting(null);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(getLocalizedErrorMessage(error, t as (key: string) => string));
     } finally {
       setActingOnId(null);
     }
@@ -251,7 +257,7 @@ export function ManualJournalTab() {
                   <Button
                     data-testid="approve-draft-btn"
                     className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
-                    disabled={isOwnDraft || busy || !hasDate}
+                    disabled={MANUAL_JOURNALS_OFF || isOwnDraft || busy || !hasDate}
                     onClick={() => handleApprove(draft._id)}
                   >
                     {busy ? (
@@ -285,7 +291,12 @@ export function ManualJournalTab() {
           }}
         >
           <DialogTrigger asChild>
-            <Button data-testid="new-manual-journal-btn" size="sm" className="gap-2">
+            <Button
+              data-testid="new-manual-journal-btn"
+              size="sm"
+              className="gap-2"
+              disabled={MANUAL_JOURNALS_OFF}
+            >
               <Plus className="w-4 h-4" />
               {t("NewManualJournal")}
             </Button>
@@ -448,6 +459,16 @@ export function ManualJournalTab() {
           </DialogContent>
         </Dialog>
       </div>
+
+      {MANUAL_JOURNALS_OFF && (
+        <div
+          role="status"
+          data-testid="manual-journals-pilot-off-notice"
+          className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+        >
+          {t("ManualJournalsPilotOffNotice" as any)}
+        </div>
+      )}
 
       {pendingSection}
 

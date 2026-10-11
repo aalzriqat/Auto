@@ -12,6 +12,7 @@ import { Id } from "./_generated/dataModel";
 import { MutationCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { assertManualJournalsEnabled } from "./utils/manualJournalContainment";
 import { scaleForCurrency } from "./utils/money";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 
@@ -342,6 +343,8 @@ export const createManualJournal = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // SCRUM-795: off for the pilot. After authentication, before any read or write.
+    assertManualJournalsEnabled();
 
     // FAIL CLOSED, BEFORE ANY WRITE.
     //
@@ -430,6 +433,8 @@ export const approveManualJournal = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // SCRUM-795: off for the pilot. After authentication, before any read or write.
+    assertManualJournalsEnabled();
 
     const draft = await ctx.db.get(args.draftId);
     if (!draft || draft.orgId !== args.orgId) {

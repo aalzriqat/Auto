@@ -36,11 +36,15 @@ async function markedDeployment() {
   return t;
 }
 
-async function bootstrap(t: ReturnType<typeof newDeployment>) {
+async function bootstrap(
+  t: ReturnType<typeof newDeployment>,
+  opts: { seedLegacyManualJournalDraft?: boolean } = {}
+) {
   return await t.mutation(internal.e2eBootstrap.bootstrapE2EOrganization, {
     primary: PRIMARY,
     approver: APPROVER,
     expectedCloudUrl: CLOUD_URL,
+    ...opts,
   });
 }
 
@@ -400,6 +404,47 @@ describe("bootstrapE2EOrganization — seating both identities", () => {
     expect(baseline.stages.length).toBeGreaterThan(0);
     expect(baseline.accounts.length).toBeGreaterThan(0);
     expect(baseline.accounts.some((a) => a.allowManualPosting)).toBe(true);
+  });
+
+  /**
+   * SCRUM-795 c22479: the trusted E2E must prove approve is refused on a REAL
+   * backend, which needs a pending draft that predates the pilot switch.
+   */
+  test("the DEFAULT bootstrap seeds no manual-journal draft (a pending draft blocks period close, rehearsal case P1)", async () => {
+    const t = await markedDeployment();
+    await bootstrap(t);
+    await bootstrap(t);
+    await bootstrap(t, { seedLegacyManualJournalDraft: false });
+
+    const drafts = await t.run((ctx) => ctx.db.query("manualJournalDrafts").take(10));
+    expect(drafts).toHaveLength(0);
+  });
+
+  test("with the opt-in flag, seeds exactly one legacy pending manual-journal draft, and a second run adds none", async () => {
+    const t = await markedDeployment();
+    const first = await bootstrap(t, { seedLegacyManualJournalDraft: true });
+    await bootstrap(t, { seedLegacyManualJournalDraft: true });
+
+    const drafts = await t.run((ctx) =>
+      ctx.db
+        .query("manualJournalDrafts")
+        .withIndex("by_org_status", (q) => q.eq("orgId", first.orgId).eq("status", "PENDING_APPROVAL"))
+        .take(10)
+    );
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].idempotencyKey).toBe("e2e-scrum795-legacy-pending-draft");
+    expect(drafts[0].memo).toBe("E2E legacy pending draft (SCRUM-795)");
+    expect(drafts[0].lines).toHaveLength(2);
+    expect(drafts[0].lines.reduce((s, l) => s + l.debitMinor, 0)).toBe(
+      drafts[0].lines.reduce((s, l) => s + l.creditMinor, 0)
+    );
+    expect(drafts[0].accountingDate).toBeDefined();
+    const accounts = await Promise.all(drafts[0].lines.map((l) => t.run((ctx) => ctx.db.get(l.accountId))));
+    for (const a of accounts) {
+      expect(a?.orgId).toBe(first.orgId);
+      expect(a?.allowManualPosting).toBe(true);
+      expect(a?.active).toBe(true);
+    }
   });
 
   /** Failing-first case 6: idempotency. */

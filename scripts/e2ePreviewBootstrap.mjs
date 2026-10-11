@@ -454,6 +454,9 @@ async function resolveE2EPreviewContext(env, options) {
     secretKey,
   });
   const expectedCloudUrl = env.NEXT_PUBLIC_CONVEX_URL;
+  // SCRUM-795: opt-in only. A pending manual draft blocks every period close,
+  // so the accounting rehearsal preview must stay unseeded.
+  const seedLegacyManualJournalDraft = env.E2E_SEED_LEGACY_MANUAL_JOURNAL === "1";
 
   const resolved = {
     deployKey,
@@ -463,6 +466,7 @@ async function resolveE2EPreviewContext(env, options) {
     primaryClerkUserId,
     approverClerkUserId,
     expectedCloudUrl,
+    seedLegacyManualJournalDraft,
   };
   options.onResolved?.(resolved);
 
@@ -581,6 +585,7 @@ export async function main(
     primaryClerkUserId,
     approverClerkUserId,
     expectedCloudUrl,
+    seedLegacyManualJournalDraft,
   } = context;
 
   run(
@@ -598,6 +603,7 @@ export async function main(
           name: "E2E Manager",
         },
         expectedCloudUrl,
+        ...(seedLegacyManualJournalDraft ? { seedLegacyManualJournalDraft: true } : {}),
       }),
       previewName,
       deployKey,
