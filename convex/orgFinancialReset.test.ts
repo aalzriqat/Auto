@@ -352,7 +352,9 @@ describe("resetOrgFinancialData", () => {
     // 39 -> 40: `invoiceReceiptApplications` (SCRUM-722) reserves retained
     // receipt credit against a sale invoice. Reset must remove the claim before
     // its receipt movement, invoice and sale parents.
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(40);
+    // 40 -> 41: `retainedCreditRefundRequests` (SCRUM-724) names a retained position,
+    // its movement and the canonical payout, all of which the reset clears.
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(41);
   });
 });
 

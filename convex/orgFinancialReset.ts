@@ -118,6 +118,8 @@ const RESET_TABLES = [
   // `orgDeletionCoverage.test.ts` now enforces the ordering half, because a
   // property stated only in a comment is not enforced — which is exactly how
   // this comment came to be wrong twice.
+  // SCRUM-724: a standalone refund request names its position, movement and payment.
+  "retainedCreditRefundRequests",
   "invoiceReceiptApplications",
   "receiptApplications",
   "receiptRetainedPositions",
@@ -242,8 +244,8 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   // said they did, which was an over-correction of an earlier comment saying
   // ordering was the whole story. Both halves are required; the array order is
   // enforced by `orgDeletionCoverage.test.ts`.
-  receiptMovements: ["invoiceReceiptApplications", "receiptApplications", "receiptRetainedPositions"],
-  receiptRetainedPositions: ["invoiceReceiptApplications", "receiptApplications"],
+  receiptMovements: ["retainedCreditRefundRequests", "invoiceReceiptApplications", "receiptApplications", "receiptRetainedPositions"],
+  receiptRetainedPositions: ["retainedCreditRefundRequests", "invoiceReceiptApplications", "receiptApplications"],
   // The rows a receipt movement and its applications POINT AT. Deleting these
   // first would leave live receipt authority referring to payments,
   // allocations and receivables that no longer exist.
@@ -255,7 +257,7 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   // SCRUM-559 (E1). `collectionPayments.canonicalPaymentId`:
   // `collections.returnClearedCheque` patches `clearedPayment.canonicalPaymentId`
   // to VOIDED, and a patch on a deleted row throws.
-  canonicalPayments: ["receiptMovements", "paymentAllocations", "deposits", "collectionPayments"],
+  canonicalPayments: ["receiptMovements", "paymentAllocations", "deposits", "collectionPayments", "retainedCreditRefundRequests"],
   // `receiptMovements.initialAllocationIds[]` is REQUIRED; `collectionPayments.
   // paymentAllocationId` is optional but listed so no payment points at a
   // deleted allocation.
@@ -351,6 +353,7 @@ const RESET_ORG_INDEX: Record<ResetTable, string> = {
   accountBalanceSnapshots: "by_org_period",
   chartOfAccounts: "by_org",
   invoiceReceiptApplications: "by_org",
+  retainedCreditRefundRequests: "by_org",
   receiptApplications: "by_org",
   receiptRetainedPositions: "by_org",
   receiptMovements: "by_org",
