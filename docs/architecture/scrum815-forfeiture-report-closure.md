@@ -92,9 +92,9 @@ organization-currency amount to its legacy top-level net-profit figure; the GL
 income statement remains the authority for full per-currency reporting. Broad
 windows may hit Convex read limits and must fail rather than return a partial
 total. The linked-legacy path uses indexed source lookups rather than scanning
-the organisation's full forfeiture history. It fails closed above 128 distinct
+the organisation's full forfeiture history. It fails closed above 512 distinct
 legacy deposits in the requested window, 64 holds per deposit, 32 events per
-source, 512 source queries, or 256 journals verified. Those are availability
+source, 2,048 source queries, or 256 journals verified. Those are availability
 limits, not a partial financial answer. No measured platform I/O claim is made.
 Reopening a forfeited deposit after a future operator correction needs an
 explicit SCRUM-813 ruling before this historical exclusion can be changed.
