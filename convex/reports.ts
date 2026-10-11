@@ -939,6 +939,41 @@ export const getLeadConversionReport = query({
   },
 });
 
+async function journalAccountType(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  accountId: Id<"chartOfAccounts">,
+  accountTypes: Map<Id<"chartOfAccounts">, string>
+): Promise<string> {
+  const cached = accountTypes.get(accountId);
+  if (cached !== undefined) return cached;
+  const account = await ctx.db.get(accountId);
+  if (!account || account.orgId !== orgId) {
+    throw new ConvexError("Financial report is unavailable because a journal account is missing.");
+  }
+  accountTypes.set(accountId, account.type);
+  return account.type;
+}
+
+async function readForfeitureJournalLines(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  event: Doc<"accountingEvents">,
+  errorMessage: string
+): Promise<Doc<"journalLines">[]> {
+  const entry = event.journalEntryId ? await ctx.db.get(event.journalEntryId) : null;
+  if (
+    !entry || entry.orgId !== orgId || entry.accountingEventId !== event._id ||
+    entry.accountingDate !== event.accountingDate ||
+    (entry.status !== "POSTED" && entry.status !== "REVERSED")
+  ) {
+    throw new ConvexError(errorMessage);
+  }
+  return ctx.db.query("journalLines")
+    .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
+    .collect();
+}
+
 /** Read forfeiture income from posted journals, including dated reversals. */
 async function readDepositForfeitureIncome(
   ctx: QueryCtx,
@@ -966,8 +1001,9 @@ async function readDepositForfeitureIncome(
     // systemKey: chart repair can clear that key on historical account rows.
     let original = event;
     const seen = new Set<Id<"accountingEvents">>();
-    for (let depth = 0; original.eventType === "JOURNAL_REVERSAL"; depth++) {
-      if (depth >= 32 || !original.reversalOfEventId || seen.has(original._id)) {
+    for (let depth = 0; depth < 32; depth++) {
+      if (original.eventType !== "JOURNAL_REVERSAL") break;
+      if (!original.reversalOfEventId || seen.has(original._id)) {
         throw new ConvexError("Financial report is unavailable because reversal history is incomplete.");
       }
       seen.add(original._id);
@@ -977,33 +1013,20 @@ async function readDepositForfeitureIncome(
       }
       original = parent;
     }
+    if (original.eventType === "JOURNAL_REVERSAL") {
+      throw new ConvexError("Financial report is unavailable because reversal history is incomplete.");
+    }
     if (original.eventType !== "DEPOSIT_FORFEITED") continue;
 
-    const entry = event.journalEntryId ? await ctx.db.get(event.journalEntryId) : null;
-    if (
-      !entry || entry.orgId !== orgId || entry.accountingEventId !== event._id ||
-      entry.accountingDate !== event.accountingDate ||
-      (entry.status !== "POSTED" && entry.status !== "REVERSED")
-    ) {
-      throw new ConvexError("Financial report is unavailable because a posted journal is incomplete.");
-    }
-    const lines = await ctx.db.query("journalLines")
-      .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
-      .collect();
+    const lines = await readForfeitureJournalLines(
+      ctx, orgId, event, "Financial report is unavailable because a posted journal is incomplete."
+    );
     let incomeLines = 0;
     for (const line of lines) {
       if (line.orgId !== orgId || line.accountingDate !== event.accountingDate || line.currency !== event.currency) {
         throw new ConvexError("Financial report is unavailable because a posted journal is inconsistent.");
       }
-      let accountType = accountTypes.get(line.accountId);
-      if (accountType === undefined) {
-        const account = await ctx.db.get(line.accountId);
-        if (!account || account.orgId !== orgId) {
-          throw new ConvexError("Financial report is unavailable because a journal account is missing.");
-        }
-        accountType = account.type;
-        accountTypes.set(line.accountId, accountType);
-      }
+      const accountType = await journalAccountType(ctx, orgId, line.accountId, accountTypes);
       if (accountType !== "OTHER_INCOME") continue;
       incomeLines++;
       minorByCurrency.set(
@@ -1039,32 +1062,18 @@ async function verifyLegacyForfeitureJournal(
   const payload = event.payload as { depositId?: unknown; holdId?: unknown } | null;
   const validSource = payload?.depositId === depositId &&
     (sourceType === "deposits" || payload?.holdId === sourceId);
-  const entry = event.journalEntryId ? await ctx.db.get(event.journalEntryId) : null;
-  if (
-    !validSource || !entry || entry.orgId !== orgId ||
-    entry.accountingEventId !== event._id ||
-    entry.accountingDate !== event.accountingDate ||
-    (entry.status !== "POSTED" && entry.status !== "REVERSED")
-  ) {
+  if (!validSource) {
     throw new ConvexError("Financial report is unavailable because forfeiture history is incomplete.");
   }
-  const lines = await ctx.db.query("journalLines")
-    .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
-    .collect();
+  const lines = await readForfeitureJournalLines(
+    ctx, orgId, event, "Financial report is unavailable because forfeiture history is incomplete."
+  );
   let hasPostedIncome = false;
   for (const line of lines) {
     if (line.orgId !== orgId || line.accountingDate !== event.accountingDate || line.currency !== event.currency) {
       throw new ConvexError("Financial report is unavailable because forfeiture history is inconsistent.");
     }
-    let accountType = accountTypes.get(line.accountId);
-    if (accountType === undefined) {
-      const account = await ctx.db.get(line.accountId);
-      if (!account || account.orgId !== orgId) {
-        throw new ConvexError("Financial report is unavailable because a journal account is missing.");
-      }
-      accountType = account.type;
-      accountTypes.set(line.accountId, accountType);
-    }
+    const accountType = await journalAccountType(ctx, orgId, line.accountId, accountTypes);
     if (accountType === "OTHER_INCOME" && line.creditMinor > line.debitMinor) {
       hasPostedIncome = true;
     }

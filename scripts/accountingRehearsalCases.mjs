@@ -2376,7 +2376,7 @@ export async function runRehearsalCases(ctx) {
     }
     expectEqual(JSON.stringify(depositEvents.map((event) => event.eventType)
       .sort((a, b) => a.localeCompare(b))),
-      JSON.stringify(["DEPOSIT_RECEIVED", "DEPOSIT_FORFEITED"].sort()),
+      JSON.stringify(["DEPOSIT_RECEIVED", "DEPOSIT_FORFEITED"].sort((a, b) => a.localeCompare(b))),
       "M486C4 exactly the receipt and forfeiture events");
     const finalEntries = await allJournalEntries({ orgId, ownerMust });
     expectOnlyJournalEntriesAdded(openingEntries, finalEntries,
