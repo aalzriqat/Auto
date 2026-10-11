@@ -753,7 +753,7 @@ jobs:
           # A trusted host-only byte relay preserves the candidate's no-egress
           # network while keeping the browser origin at 127.0.0.1:3000.
           CANDIDATE_IP="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CANDIDATE_CONTAINER")"
-          node trusted/scripts/intelligence/browserSwarmLoopbackRelay.mjs "$CANDIDATE_IP" > "$RUNNER_TEMP/browser-swarm-relay.log" 2>&1 &
+          CANDIDATE_DOCKER_IP="$CANDIDATE_IP" node trusted/scripts/intelligence/browserSwarmLoopbackRelay.mjs > "$RUNNER_TEMP/browser-swarm-relay.log" 2>&1 &
           CANDIDATE_RELAY_PID=$!
           echo "CANDIDATE_RELAY_PID=$CANDIDATE_RELAY_PID" >> "$GITHUB_ENV"
 
@@ -980,7 +980,7 @@ jobs:
             node server.js
 
           CANDIDATE_IP="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CANDIDATE_CONTAINER")"
-          node trusted/scripts/intelligence/browserSwarmLoopbackRelay.mjs "$CANDIDATE_IP" > "$RUNNER_TEMP/browser-swarm-relay.log" 2>&1 &
+          CANDIDATE_DOCKER_IP="$CANDIDATE_IP" node trusted/scripts/intelligence/browserSwarmLoopbackRelay.mjs > "$RUNNER_TEMP/browser-swarm-relay.log" 2>&1 &
           CANDIDATE_RELAY_PID=$!
           echo "CANDIDATE_RELAY_PID=$CANDIDATE_RELAY_PID" >> "$GITHUB_ENV"
 

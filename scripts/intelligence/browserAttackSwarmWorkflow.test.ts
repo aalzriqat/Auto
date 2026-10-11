@@ -669,6 +669,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       expect(startRun).toContain("--cap-drop ALL");
       expect(startRun).toContain("--security-opt no-new-privileges");
       expect(startRun).toContain("docker inspect --format");
+      expect(startRun).toContain('CANDIDATE_DOCKER_IP="$CANDIDATE_IP"');
       expect(startRun).toContain("trusted/scripts/intelligence/browserSwarmLoopbackRelay.mjs");
       expect(startRun).toContain('CANDIDATE_RELAY_PID=$!');
 
