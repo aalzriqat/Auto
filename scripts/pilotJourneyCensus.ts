@@ -272,8 +272,22 @@ function backendBuilderAliases(root: string, absolute: string, sf: ts.SourceFile
   return aliases;
 }
 
-function publicDeclarations(root: string): Map<string, Omit<PublicEndpoint, "webRoutes" | "webSites">> {
-  const found = new Map<string, Omit<PublicEndpoint, "webRoutes" | "webSites">>();
+type PublicDeclaration = Omit<PublicEndpoint, "webRoutes" | "webSites">;
+
+function publicEndpointForDeclaration(file: string, sf: ts.SourceFile,
+  declaration: ts.VariableDeclaration, aliases: Map<string, string>): PublicDeclaration | undefined {
+  if (!ts.isIdentifier(declaration.name) || !declaration.initializer ||
+    !ts.isCallExpression(declaration.initializer) ||
+    !ts.isIdentifier(declaration.initializer.expression)) return undefined;
+  const builder = aliases.get(declaration.initializer.expression.text);
+  if (!builder || !PUBLIC_BUILDERS.has(builder as ApiKind)) return undefined;
+  const modulePath = file.slice("convex/".length).replace(/\.[jt]sx?$/, "");
+  const id = `${modulePath.replaceAll("/", ".")}.${declaration.name.text}`;
+  return { id, kind: builder as ApiKind, declaration: { file, line: lineAt(sf, declaration) } };
+}
+
+function publicDeclarations(root: string): Map<string, PublicDeclaration> {
+  const found = new Map<string, PublicDeclaration>();
   for (const absolute of listSourceFiles(path.join(root, "convex"))) {
     const sf = sourceFile(absolute);
     const file = relative(root, absolute);
@@ -282,15 +296,8 @@ function publicDeclarations(root: string): Map<string, Omit<PublicEndpoint, "web
       if (!ts.isVariableStatement(statement) ||
         !statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) continue;
       for (const declaration of statement.declarationList.declarations) {
-        if (!ts.isIdentifier(declaration.name) || !declaration.initializer ||
-          !ts.isCallExpression(declaration.initializer) ||
-          !ts.isIdentifier(declaration.initializer.expression)) continue;
-        const builder = aliases.get(declaration.initializer.expression.text);
-        if (!builder || !PUBLIC_BUILDERS.has(builder as ApiKind)) continue;
-        const modulePath = file.slice("convex/".length).replace(/\.[jt]sx?$/, "");
-        const id = `${modulePath.replaceAll("/", ".")}.${declaration.name.text}`;
-        found.set(id, { id, kind: builder as ApiKind,
-          declaration: { file, line: lineAt(sf, declaration) } });
+        const endpoint = publicEndpointForDeclaration(file, sf, declaration, aliases);
+        if (endpoint) found.set(endpoint.id, endpoint);
       }
     }
   }
