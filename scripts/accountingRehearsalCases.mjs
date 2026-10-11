@@ -2550,6 +2550,13 @@ export async function runRehearsalCases(ctx) {
       { key: "COST_OF_VEHICLES_SOLD", debitMinor: 10_000_000 },
       { key: "VEHICLE_INVENTORY", creditMinor: 10_000_000 },
     ], { currency: "JOD", decimals: 3, what: "M486C5 financed sale" });
+    for (const key of ["ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", "SALES_REVENUE"]) {
+      const line = sale.lines.find((l) => keyOf.get(String(l.accountId)) === key);
+      expectEqual(String(line?.customerId), String(customerId), `M486C5 ${key} customer dimension`);
+    }
+    for (const line of sale.lines) {
+      expectEqual(String(line.vehicleId), String(vehicleId), "M486C5 financed sale vehicle dimension");
+    }
     const finalEntries = await allJournalEntries({ orgId, ownerMust });
     expectOnlyJournalEntriesAdded(openingEntries, finalEntries,
       [acquisition.entry._id, sale.entry._id], "M486C5 unexpected journal entry");

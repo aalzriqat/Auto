@@ -176,6 +176,10 @@ type Defects = {
   cashSaleWrongRevenueAccount?: boolean;
   /** A financed sale credits unrelated income while its monetary totals balance. */
   financedSaleWrongRevenueAccount?: boolean;
+  /** A financed sale posts the right amount against the wrong customer dimension. */
+  financedSaleWrongCustomerDimension?: boolean;
+  /** A financed sale posts the right amount against the wrong vehicle dimension. */
+  financedSaleWrongVehicleDimension?: boolean;
   /** The financier's invoice is assigned to the customer despite the correct amount. */
   financedSaleWrongPayer?: boolean;
   /** A second customer invoice claims the same finalized sale. */
@@ -1915,14 +1919,18 @@ function makeBackend(defects: Defects = {}) {
           const vehicleId = quoteVehicle.get(app.quoteId) ?? "";
           const vehicle = vehicles.get(vehicleId);
           const costMinor = Math.round(Number(vehicle?.purchasePrice ?? 0) * MINOR_SCALE);
+          const postedCustomerId = defects.financedSaleWrongCustomerDimension
+            ? "customer_wrong" : app.customerId;
+          const postedVehicleId = defects.financedSaleWrongVehicleDimension
+            ? "vehicle_wrong" : vehicleId;
           post("SALE_COMPLETED", "sales", app.saleId, [
             { key: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", debitMinor: gross,
-              customerId: app.customerId, vehicleId },
+              customerId: postedCustomerId, vehicleId: postedVehicleId },
             { key: defects.financedSaleWrongRevenueAccount
               ? "MISCELLANEOUS_INCOME" : "SALES_REVENUE", creditMinor: gross,
-              customerId: app.customerId, vehicleId },
-            { key: "COST_OF_VEHICLES_SOLD", debitMinor: costMinor, vehicleId },
-            { key: "VEHICLE_INVENTORY", creditMinor: costMinor, vehicleId },
+              customerId: postedCustomerId, vehicleId: postedVehicleId },
+            { key: "COST_OF_VEHICLES_SOLD", debitMinor: costMinor, vehicleId: postedVehicleId },
+            { key: "VEHICLE_INVENTORY", creditMinor: costMinor, vehicleId: postedVehicleId },
           ]);
           if (defects.financedSaleExtraBalancedJournals) {
             post("CERTIFICATION_EXTRA", "sales", app.saleId, [
@@ -2476,6 +2484,8 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
 
   test.each([
     ["financedSaleWrongRevenueAccount", /financed sale: journal lines are not exactly/],
+    ["financedSaleWrongCustomerDimension", /customer dimension/],
+    ["financedSaleWrongVehicleDimension", /vehicle dimension/],
     ["financedSaleWrongPayer", /invoice payerType/],
     ["financedSaleDuplicateCustomerInvoice", /exactly one collectible invoice/],
     ["financedSaleExtraBalancedJournals", /unexpected journal entry/],
