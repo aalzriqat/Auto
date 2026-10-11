@@ -66,6 +66,8 @@ import {
   cancelPendingInvoiceReceiptsForSale,
   reservePendingInvoiceReceipt,
 } from "./accounting/invoiceReceiptReservation";
+import { requirePostedInvoiceReceiptOrigins } from "./accounting/invoiceReceiptActivation";
+import { saleCompletedKey } from "./accounting/postingRules";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -586,6 +588,64 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
       .withIndex("by_org_sale_status", (q) => q.eq("orgId", orgId).eq("saleId", first.saleId).eq("status", "PENDING"))
       .collect())).toHaveLength(0);
     await expect(reserve(secondMovement!._id, first.saleId)).resolves.toBeDefined();
+  });
+
+  test("SCRUM-722: activation origins require the exact posted sale and receipt journals", async () => {
+    const { t, orgId, userId, customerId, movement } = await retainedCreditFixture("s722origin");
+    const { saleId } = await completedSaleInvoice(t, orgId, userId, customerId, "ORIGIN");
+    const applicationId = await t.run((ctx) => reservePendingInvoiceReceipt(ctx, {
+      orgId, receiptMovementId: movement._id, saleId, amountMinor: 3000, actorId: userId,
+    }));
+    const requireOrigins = () => t.run((ctx) => requirePostedInvoiceReceiptOrigins(ctx, orgId, applicationId));
+    await expect(requireOrigins()).rejects.toThrow(/sale.*posted/i);
+
+    const eventId = await t.run((ctx) => ctx.db.insert("accountingEvents", {
+      orgId, eventType: "SALE_COMPLETED", sourceType: "sales", sourceId: String(saleId),
+      eventVersion: 1, idempotencyKey: saleCompletedKey(saleId),
+      occurredAt: Date.now(), accountingDate: Date.now(), currency: "USD",
+      payload: {}, status: "PENDING", createdBy: userId, createdAt: Date.now(),
+    }));
+    await expect(requireOrigins()).rejects.toThrow(/sale.*posted/i);
+    const journalId = await t.run(async (ctx) => {
+      const id = await ctx.db.insert("journalEntries", {
+        orgId, accountingEventId: eventId, journalNumber: "S722-ORIGIN", accountingDate: Date.now(),
+        sourceType: "sales", sourceId: String(saleId), category: "SYSTEM", memo: "sale",
+        currency: "USD", status: "DRAFT", postedBy: userId, postedAt: Date.now(), createdAt: Date.now(),
+      });
+      await ctx.db.patch(eventId, { status: "POSTED", journalEntryId: id });
+      return id;
+    });
+    await expect(requireOrigins()).rejects.toThrow(/sale.*posted/i);
+    await t.run((ctx) => ctx.db.patch(journalId, { status: "POSTED" }));
+    await expect(requireOrigins()).resolves.toMatchObject({ application: { status: "PENDING" } });
+
+    await t.run((ctx) => ctx.db.patch(movement.collectionPaymentId, { status: "VOIDED" }));
+    await expect(requireOrigins()).rejects.toThrow(/settled inbound collection/i);
+    await t.run((ctx) => ctx.db.patch(movement.collectionPaymentId, { status: "POSTED" }));
+    await t.run((ctx) => ctx.db.patch(movement.canonicalPaymentId, { status: "VOIDED" }));
+    await expect(requireOrigins()).rejects.toThrow(/settled inbound collection/i);
+    await t.run((ctx) => ctx.db.patch(movement.canonicalPaymentId, { status: "SETTLED" }));
+
+    await t.run((ctx) => ctx.db.patch(eventId, { sourceId: "wrong-sale" }));
+    await expect(requireOrigins()).rejects.toThrow(/sale.*posted/i);
+    await t.run((ctx) => ctx.db.patch(eventId, { sourceId: String(saleId) }));
+
+    const receiptEvent = await t.run((ctx) => ctx.db.query("accountingEvents")
+      .withIndex("by_org_event_source_version", (q) => q.eq("orgId", orgId)
+        .eq("eventType", movement.occurrence.eventType)
+        .eq("sourceType", movement.occurrence.sourceType)
+        .eq("sourceId", movement.occurrence.sourceId)
+        .eq("eventVersion", movement.occurrence.eventVersion))
+      .unique());
+    expect(receiptEvent).not.toBeNull();
+    expect(receiptEvent?.journalEntryId).toBeDefined();
+    await t.run((ctx) => ctx.db.patch(receiptEvent!.journalEntryId!, { status: "DRAFT" }));
+    await expect(requireOrigins()).rejects.toThrow(/receipt.*posted/i);
+    await t.run((ctx) => ctx.db.patch(receiptEvent!.journalEntryId!, { status: "POSTED" }));
+    await t.run((ctx) => ctx.db.patch(receiptEvent!._id, { status: "PENDING" }));
+    await expect(requireOrigins()).rejects.toThrow(/receipt.*posted/i);
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("PENDING");
+    expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(10000);
   });
 
   test("transfers 2110 to AR exactly, with no second cash receipt", async () => {

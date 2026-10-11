@@ -9,6 +9,7 @@
  */
 
 import type * as accounting_accountSnapshots from "../accounting/accountSnapshots.js";
+import type * as accounting_invoiceReceiptActivation from "../accounting/invoiceReceiptActivation.js";
 import type * as accounting_invoiceReceiptReservation from "../accounting/invoiceReceiptReservation.js";
 import type * as accounting_postingEngine from "../accounting/postingEngine.js";
 import type * as accounting_postingRules from "../accounting/postingRules.js";
@@ -281,6 +282,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   "accounting/accountSnapshots": typeof accounting_accountSnapshots;
+  "accounting/invoiceReceiptActivation": typeof accounting_invoiceReceiptActivation;
   "accounting/invoiceReceiptReservation": typeof accounting_invoiceReceiptReservation;
   "accounting/postingEngine": typeof accounting_postingEngine;
   "accounting/postingRules": typeof accounting_postingRules;
