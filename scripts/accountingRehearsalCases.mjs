@@ -24,7 +24,7 @@
 // executed IDs, and the real-preview validator uses the same list.
 export const REQUIRED_REHEARSAL_CASE_IDS = Object.freeze([
   "A1", "A2", "D1", "D2", "D3", "D4", "C1", "C2", "UNAUTH", "TEN", "A3",
-  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "FD1", "FD2", "P1", "SETUP",
+  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "P1", "SETUP",
 ]);
 
 function fail(message) {
@@ -2438,6 +2438,161 @@ export async function runRehearsalCases(ctx) {
       reportsRead: ["accountingReports.trialBalance", "accountingReports.incomeStatement",
         "reports.getProfitAndLoss", "accountingLedger.listJournalEntries",
         "accountingLedger.listAccountingEvents", "collections.listPayments"] };
+  });
+
+  // The matching harness row exists in scrum486Certification.test.ts. This
+  // cloud row exercises the owned, configured-financier no-deposit recognition
+  // through public commands and checks the same independent JOD figures.
+  await recordCase(results, "M486C5", "SCRUM-486: owned configured-financier no-deposit sale recognizes full company AR and literal 12,500/10,000 JOD income", async () => {
+    const { toDate, reportArgs } = await ownedCashJodWindow({ caseId: "M486C5", orgId, ownerMust });
+    const stamp = `${Date.now().toString(36)}-${uuid().slice(0, 8)}`;
+    const chart = await ownerMust("query", "chartOfAccounts:list", { orgId });
+    const { keyOf, accountOf } = await chartIndex({ orgId, ownerMust });
+    for (const [key, code] of [
+      ["CASH_ON_HAND", "1100"], ["VEHICLE_INVENTORY", "1400"],
+      ["ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", "1210"],
+      ["SALES_REVENUE", "4100"], ["COST_OF_VEHICLES_SOLD", "5100"],
+    ]) {
+      expectEqual(chart.find((a) => a.systemKey === key)?.code, code, `M486C5 chart code ${key}`);
+      if (!accountOf.get(key)) unproven(`M486C5 chart account ${key} is unavailable`);
+    }
+    const openingBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    const openingEntries = await allJournalEntries({ orgId, ownerMust });
+    const customerId = await ownerMust("mutation", "customers:create", {
+      orgId, firstName: "Certification", lastName: `financed-${stamp}`,
+    });
+    const vin = `RHS486${uuid().replace(/-/g, "").slice(0, 11)}`.toUpperCase();
+    const vehicleId = await createVehicleForRehearsal(ownerMust, {
+      orgId, vin, make: "Toyota", model: "Camry-486", year: 2022,
+      mileage: 800, color: "Blue", fuelType: "Gasoline", transmission: "Automatic",
+      sellingPrice: 12_500, sourceType: "STOCK", status: "AVAILABLE",
+      purchasePrice: 10_000, purchasePaymentMethod: "CASH",
+      idempotencyKey: `rehearsal-m486c5-vehicle-${stamp}`,
+    });
+    const customerStatusId = await customerEligibilityStatusFor({ orgId, ownerMust });
+    const companyId = await ownerMust("mutation", "finance:createCompany", {
+      orgId, name: `Certification Finance ${stamp}`, profitRate: 5,
+      maxTermMonths: 60, gracePeriodMonths: 0, defaultLtvPercent: 100,
+      adminFees: 0, acceptedStatuses: [customerStatusId], isActive: true,
+    });
+    const quoteId = await ownerMust("mutation", "quotes:saveQuote", {
+      orgId, customerId, vehicleId, vehiclePrice: 12_500,
+      downPayment: 0, termMonths: 48, mode: "CONFIGURED_FINANCE_COMPANY",
+      companyId, customerEligibilityStatusIds: [customerStatusId],
+      totalFinancedAmount: 12_500,
+    });
+    const applicationId = await ownerMust("mutation", "applications:createFromQuote", { orgId, quoteId });
+    await ownerMust("mutation", "applications:updateStatus", { orgId, applicationId, status: "UNDER_REVIEW" });
+    await resolverMust("mutation", "applications:updateStatus", { orgId, applicationId, status: "APPROVED" });
+    await ownerMust("mutation", "financingEconomics:recordSubmittedQuotation", {
+      orgId, applicationId, submittedQuotationMinor: 12_500_000, source: "MANUAL_ENTRY",
+    });
+    await resolverMust("mutation", "financingEconomics:approveDealerPurchaseAmount", {
+      orgId, applicationId, approvedAmountMinor: 12_500_000, basis: "MANUAL",
+      notes: "Certification approval of the full vehicle price.",
+    });
+    const economicsStamp = await ownerMust("query", "applications:handoverStamp", { orgId, applicationId });
+    await ownerMust("mutation", "applications:registerVehicleHandover", { orgId, applicationId, economicsStamp });
+    await ownerMust("mutation", "applications:registerExpectedPayment", {
+      orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
+    });
+    await ownerMust("mutation", "financeDealCosts:recordLegalInvoice", {
+      orgId, applicationId, legalInvoiceAmountMinor: 12_500_000,
+      legalInvoiceNumber: `CERT-M486C5-${stamp}`, legalInvoiceDate: Date.now(),
+      issuedTo: "FINANCE_COMPANY",
+    });
+    const beforeBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    const beforeIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const saleId = await ownerMust("mutation", "applications:finalizeDeal", {
+      idempotencyKey: `rehearsal-m486c5-finalize-${stamp}`, orgId, applicationId,
+    });
+    if (Date.now() > toDate) unproven("M486C5 crossed its UTC accounting month during finalization");
+    const closed = await ownerMust("query", "applications:get", { orgId, applicationId });
+    expectEqual(closed?.status, "CLOSED", "M486C5 application closed");
+    expectEqual(String(closed?.finalizedSaleId), String(saleId), "M486C5 finalized sale identity");
+    expectEqual(closed?.financedSaleNetReceivableMinor, 12_500_000, "M486C5 full financier debt");
+    const listed = await ownerMust("query", "subledger:listReceivables", { orgId, limit: 200 });
+    if (!Array.isArray(listed) || listed.length >= 200) unproven("M486C5 tenant receivable listing is absent or truncated");
+    const saleClaims = listed.filter((r) =>
+      (r.sourceType === "finance_application" && String(r.sourceId) === String(applicationId)) ||
+      (r.sourceType === "sales" && String(r.sourceId) === String(saleId)));
+    expectEqual(saleClaims.length, 1, "M486C5 exactly one collectible invoice across application and sale sources");
+    const invoice = saleClaims[0];
+    expectEqual(invoice?.sourceType, "finance_application", "M486C5 invoice sourceType");
+    expectEqual(String(invoice?.sourceId), String(applicationId), "M486C5 invoice sourceId");
+    for (const [field, expected] of [
+      ["orgId", String(orgId)], ["customerId", String(customerId)],
+      ["financeCompanyId", String(companyId)], ["payerType", "FINANCE_COMPANY"],
+      ["documentType", "INVOICE"], ["status", "OPEN"],
+      ["currency", "JOD"], ["scale", 3], ["originalAmountMinor", 12_500_000],
+    ]) {
+      const actual = field.endsWith("Id") ? String(invoice?.[field]) : invoice?.[field];
+      expectEqual(actual, expected, `M486C5 invoice ${field}`);
+    }
+    const invoiceBalance = await ownerMust("query", "subledger:getReceivableBalance", {
+      orgId, receivableDocumentId: invoice._id,
+    });
+    expectEqual(String(invoiceBalance?.doc?._id), String(invoice._id), "M486C5 collectible invoice identity");
+    expectEqual(invoiceBalance?.outstandingMinor, 12_500_000, "M486C5 company invoice outstanding");
+    const acquisition = await eventAndJournal({
+      orgId, ownerMust, sourceType: "vehicles", sourceId: vehicleId, eventType: "VEHICLE_ACQUIRED",
+    });
+    expectExactLines(acquisition.lines, keyOf, [
+      { key: "VEHICLE_INVENTORY", debitMinor: 10_000_000 },
+      { key: "CASH_ON_HAND", creditMinor: 10_000_000 },
+    ], { currency: "JOD", decimals: 3, what: "M486C5 owned acquisition" });
+    const sale = await eventAndJournal({
+      orgId, ownerMust, sourceType: "sales", sourceId: saleId, eventType: "SALE_COMPLETED",
+    });
+    expectExactLines(sale.lines, keyOf, [
+      { key: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", debitMinor: 12_500_000 },
+      { key: "SALES_REVENUE", creditMinor: 12_500_000 },
+      { key: "COST_OF_VEHICLES_SOLD", debitMinor: 10_000_000 },
+      { key: "VEHICLE_INVENTORY", creditMinor: 10_000_000 },
+    ], { currency: "JOD", decimals: 3, what: "M486C5 financed sale" });
+    const finalEntries = await allJournalEntries({ orgId, ownerMust });
+    expectOnlyJournalEntriesAdded(openingEntries, finalEntries,
+      [acquisition.entry._id, sale.entry._id], "M486C5 unexpected journal entry");
+    const afterBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
+    const deltas = new Map([
+      ["CASH_ON_HAND", -10_000_000],
+      ["ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", 12_500_000],
+      ["SALES_REVENUE", 12_500_000],
+      ["COST_OF_VEHICLES_SOLD", 10_000_000],
+    ].map(([key, amount]) => [JSON.stringify([String(accountOf.get(key)), "JOD"]), amount]));
+    expectSameAccountBalances(openingBalance, afterBalance, "M486C5 full public trial balance", deltas);
+    const inventoryKey = JSON.stringify([String(accountOf.get("VEHICLE_INVENTORY")), "JOD"]);
+    const openingInventory = (openingBalance?.rows ?? []).find((r) =>
+      JSON.stringify([String(r.accountId), r.currency]) === inventoryKey)?.netMinor ?? 0;
+    const beforeInventory = (beforeBalance?.rows ?? []).find((r) =>
+      JSON.stringify([String(r.accountId), r.currency]) === inventoryKey)?.netMinor ?? 0;
+    expectEqual(beforeInventory - openingInventory, 10_000_000, "M486C5 acquisition capitalizes inventory");
+    const afterIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
+    const rowTotal = (report, bucket, code) => (report?.[bucket] ?? [])
+      .filter((row) => row.currency === "JOD" && row.code === code)
+      .reduce((sum, row) => sum + row.netMinor, 0);
+    expectEqual(rowTotal(afterIncome, "revenueRows", "4100") - rowTotal(beforeIncome, "revenueRows", "4100"),
+      12_500_000, "M486C5 public income revenue row 4100");
+    expectEqual(rowTotal(afterIncome, "cogsRows", "5100") - rowTotal(beforeIncome, "cogsRows", "5100"),
+      10_000_000, "M486C5 public income COGS row 5100");
+    for (const [field, delta] of [
+      ["totalRevenue", 12_500_000], ["totalCogs", 10_000_000],
+      ["grossProfit", 2_500_000], ["netIncome", 2_500_000],
+    ]) {
+      expectEqual(afterIncome?.[field] - beforeIncome?.[field], delta, `M486C5 public income ${field}`);
+    }
+    return { applicationId: String(applicationId), saleId: String(saleId),
+      companyId: String(companyId), invoiceId: String(invoice._id),
+      currency: "JOD", companyReceivableMinor: 12_500_000,
+      revenueMinor: 12_500_000, cogsMinor: 10_000_000,
+      commandsExercised: ["vehicles.create", "finance.createCompany", "quotes.saveQuote",
+        "applications.createFromQuote", "applications.updateStatus",
+        "financingEconomics.recordSubmittedQuotation", "financingEconomics.approveDealerPurchaseAmount",
+        "applications.registerVehicleHandover", "applications.registerExpectedPayment",
+        "financeDealCosts.recordLegalInvoice", "applications.finalizeDeal"],
+      reportsRead: ["subledger.listReceivables", "subledger.getReceivableBalance",
+        "accountingLedger.listAccountingEvents", "accountingLedger.getJournalEntry",
+        "accountingReports.trialBalance", "accountingReports.incomeStatement"] };
   });
 
   // ── FD1 — the financed deal's cash receipt settles the exact recorded debt ──

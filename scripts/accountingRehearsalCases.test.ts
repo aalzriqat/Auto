@@ -174,6 +174,14 @@ type Defects = {
   silentConsignedSale?: boolean;
   /** A quoted owned cash sale credits unrelated income instead of vehicle revenue. */
   cashSaleWrongRevenueAccount?: boolean;
+  /** A financed sale credits unrelated income while its monetary totals balance. */
+  financedSaleWrongRevenueAccount?: boolean;
+  /** The financier's invoice is assigned to the customer despite the correct amount. */
+  financedSaleWrongPayer?: boolean;
+  /** A second customer invoice claims the same finalized sale. */
+  financedSaleDuplicateCustomerInvoice?: boolean;
+  /** Compensating extra journals conceal a side effect in the trial balance. */
+  financedSaleExtraBalancedJournals?: boolean;
   /** The public income statement understates the certified sale by one minor unit. */
   cashSaleReportMisstatesProfit?: boolean;
   /** Vehicle creation records a cost but never capitalizes inventory. */
@@ -1338,7 +1346,7 @@ function makeBackend(defects: Defects = {}) {
             status: args.status,
             purchasePrice: Number(args.sourceType === "SOURCED" ? args.sourceCost : (args.purchasePrice ?? 0)),
           });
-          if (/^rehearsal-m486c[123]-vehicle-/.test(String(args.idempotencyKey ?? "")) &&
+          if (/^rehearsal-m486c[1235]-vehicle-/.test(String(args.idempotencyKey ?? "")) &&
               !defects.cashSaleAcquisitionMissingPosting) {
             const costMinor = defects.cashSaleAcquisitionWrongAmount ? 9_000_000 : 10_000_000;
             post("VEHICLE_ACQUIRED", "vehicles", String(madeVehicle.value), [
@@ -1876,13 +1884,17 @@ function makeBackend(defects: Defects = {}) {
         app.status = "CLOSED";
         app.financedSaleNetReceivableMinor = net;
         app.saleId = id("sale");
+        app.finalizedSaleId = app.saleId;
         const rid = id("rdoc");
         financeReceivables.set(rid, {
           _id: rid,
           orgId: app.orgId,
           sourceType: "finance_application",
           sourceId: app._id,
-          payerType: "FINANCE_COMPANY",
+          documentType: "INVOICE",
+          payerType: defects.financedSaleWrongPayer &&
+            String(args.idempotencyKey).startsWith("rehearsal-m486c5-finalize-")
+            ? "CUSTOMER" : "FINANCE_COMPANY",
           financeCompanyId: app.companyId,
           customerId: app.customerId,
           originalAmountMinor: net,
@@ -1891,6 +1903,38 @@ function makeBackend(defects: Defects = {}) {
           status: "OPEN",
         });
         app.receivableId = rid;
+        if (String(args.idempotencyKey).startsWith("rehearsal-m486c5-finalize-")) {
+          if (defects.financedSaleDuplicateCustomerInvoice) {
+            const duplicateId = id("rdoc");
+            financeReceivables.set(duplicateId, {
+              _id: duplicateId, orgId: app.orgId, sourceType: "sales", sourceId: app.saleId,
+              documentType: "INVOICE", payerType: "CUSTOMER", customerId: app.customerId,
+              originalAmountMinor: net, currency: ORG_CURRENCY, scale: 3, status: "OPEN",
+            });
+          }
+          const vehicleId = quoteVehicle.get(app.quoteId) ?? "";
+          const vehicle = vehicles.get(vehicleId);
+          const costMinor = Math.round(Number(vehicle?.purchasePrice ?? 0) * MINOR_SCALE);
+          post("SALE_COMPLETED", "sales", app.saleId, [
+            { key: "ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", debitMinor: gross,
+              customerId: app.customerId, vehicleId },
+            { key: defects.financedSaleWrongRevenueAccount
+              ? "MISCELLANEOUS_INCOME" : "SALES_REVENUE", creditMinor: gross,
+              customerId: app.customerId, vehicleId },
+            { key: "COST_OF_VEHICLES_SOLD", debitMinor: costMinor, vehicleId },
+            { key: "VEHICLE_INVENTORY", creditMinor: costMinor, vehicleId },
+          ]);
+          if (defects.financedSaleExtraBalancedJournals) {
+            post("CERTIFICATION_EXTRA", "sales", app.saleId, [
+              { key: "CASH_ON_HAND", debitMinor: 1 },
+              { key: "CUSTOMER_DEPOSITS_LIABILITY", creditMinor: 1 },
+            ]);
+            post("CERTIFICATION_EXTRA_REVERSAL", "sales", app.saleId, [
+              { key: "CUSTOMER_DEPOSITS_LIABILITY", debitMinor: 1 },
+              { key: "CASH_ON_HAND", creditMinor: 1 },
+            ]);
+          }
+        }
         return { ok: true as const, value: app.saleId };
       }
       case "applications:get":
@@ -2139,7 +2183,7 @@ describe("the rehearsal passes against a backend that behaves", () => {
     expect(declined.map((d) => `${d.id}: ${d.detail}`)).toEqual([]);
     // And it actually ran the cases rather than finding nothing to do.
     expect(results.map((r) => r.id).sort()).toEqual([...REQUIRED_REHEARSAL_CASE_IDS].sort());
-  for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "FD1", "FD2", "C1", "C2"]) {
+  for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "C1", "C2"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
   });
@@ -2428,6 +2472,17 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
   test("M486C4 accepts the same unrelated fractional profit before and after forfeiture", async () => {
     const results = await runAgainst({ cashForfeitUnrelatedFractionalProfit: true });
     expect(statusOf(results, "M486C4")).toBe("PASS");
+  });
+
+  test.each([
+    ["financedSaleWrongRevenueAccount", /financed sale: journal lines are not exactly/],
+    ["financedSaleWrongPayer", /invoice payerType/],
+    ["financedSaleDuplicateCustomerInvoice", /exactly one collectible invoice/],
+    ["financedSaleExtraBalancedJournals", /unexpected journal entry/],
+  ] as const)("M486C5 rejects %s", async (defect, diagnostic) => {
+    const results = await runAgainst({ [defect]: true });
+    expect(statusOf(results, "M486C5")).toBe("FAIL");
+    expect(String(results.find((row) => row.id === "M486C5")?.detail)).toMatch(diagnostic);
   });
 
   test("M486C3 marks a refund that crosses the UTC accounting month unavailable", async () => {
