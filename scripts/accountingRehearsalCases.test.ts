@@ -260,6 +260,7 @@ type Defects = {
   cashDepositLeavesVehicleAvailable?: boolean;
   cashRefundLeavesVehicleReserved?: boolean;
   cashRefundCreatorRefusalWrites?: boolean;
+  cashRefundCreatorRefusalClearsVehicleHold?: boolean;
   cashRefundLeavesStatusHeld?: boolean;
   cashRefundLeavesPreHoldStatus?: boolean;
   cashRefundCanonicalWrongStatus?: boolean;
@@ -576,6 +577,13 @@ function makeBackend(defects: Defects = {}) {
     if (!deposit) return { ok: false as const, error: "deposit not found" };
     if (args.depositId === certifiedCashRefundDepositId && creatorSeat && !defects.cashRefundAllowsCreator) {
       if (defects.cashRefundCreatorRefusalWrites) deposit.releaseCount += 1;
+      if (defects.cashRefundCreatorRefusalClearsVehicleHold) {
+        const vehicle = vehicles.get(deposit.vehicleId);
+        if (vehicle) {
+          vehicle.status = "AVAILABLE";
+          vehicle.preHoldStatus = undefined;
+        }
+      }
       return { ok: false as const, error: "Deposit creator cannot resolve their own deposit refund or forfeiture." };
     }
 
@@ -2314,6 +2322,7 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["cashDepositPaymentWrongMethod", /incoming payment method/],
     ["refundPostsWrongAccount", /cash refund|journal lines are not exactly/i],
     ["cashRefundCreatorRefusalWrites", /refused creator cannot count a release/],
+    ["cashRefundCreatorRefusalClearsVehicleHold", /refused creator cannot clear the vehicle hold/],
     ["cashRefundLeavesStatusHeld", /deposit is refunded/],
     ["cashRefundLeavesPreHoldStatus", /stale vehicle pre-hold status/],
     ["cashRefundCanonicalWrongStatus", /outbound canonical payment status/],

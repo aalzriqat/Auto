@@ -2128,6 +2128,11 @@ export async function runRehearsalCases(ctx) {
     expectC3DepositIdentity(afterRefusal, "refused", depositIdentity);
     expectEqual(afterRefusal.status, "HELD", "M486C3 refused creator cannot change deposit status");
     expectEqual(afterRefusal.releaseCount ?? 0, 0, "M486C3 refused creator cannot count a release");
+    const afterRefusalVehicle = await ownerMust("query", "vehicles:get", { orgId, vehicleId });
+    if (afterRefusalVehicle?.status !== "RESERVED" ||
+        afterRefusalVehicle?.preHoldStatus !== "AVAILABLE") {
+      fail("M486C3 refused creator cannot clear the vehicle hold");
+    }
     const refusedEvents = await ownerMust("query", "accountingLedger:listAccountingEvents", {
       orgId, sourceType: "deposits", sourceId: String(depositId), limit: 200,
     });
