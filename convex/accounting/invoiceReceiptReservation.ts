@@ -50,6 +50,16 @@ async function pendingSaleRows(
   return rows;
 }
 
+/** Includes every PENDING claim, so activation can refuse a stale over-reservation. */
+export async function pendingSaleInvoiceReceiptMinor(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  saleId: Id<"sales">
+): Promise<number> {
+  const rows = await pendingSaleRows(ctx, orgId, saleId);
+  return rows.reduce((sum, row) => sum + row.amountMinor, 0);
+}
+
 /**
  * SCRUM-722 dark slice: reserve an existing retained receipt against one sale
  * invoice. No allocation or journal is created here. A later, separately
@@ -81,7 +91,8 @@ export async function reservePendingInvoiceReceipt(
   }
   const invoice = await ctx.db.get(sale.canonicalReceivableDocumentId);
   if (
-    !invoice || invoice.orgId !== args.orgId || invoice.status === "CANCELLED" ||
+    !invoice || invoice.orgId !== args.orgId ||
+    (invoice.status !== "OPEN" && invoice.status !== "PARTIALLY_PAID") ||
     invoice.documentType !== "INVOICE" || invoice.payerType !== "CUSTOMER" ||
     invoice.sourceType !== "sales" || invoice.sourceId !== String(sale._id) ||
     invoice.customerId !== sale.customerId || movement.customerId !== sale.customerId ||

@@ -4523,7 +4523,7 @@ export default defineSchema({
     currency: v.string(),
     initialUnappliedMinor: v.number(),
     remainingUnappliedMinor: v.number(),
-    /** Monotonic count of applications, and the source of the next `sequence`. */
+    /** Legacy receiptApplications sequence counter; invoice claims use their own row id. */
     applicationCount: v.number(),
     updatedAt: v.number(),
   })
@@ -4547,6 +4547,10 @@ export default defineSchema({
     amountMinor: v.number(),
     status: v.union(v.literal("PENDING"), v.literal("ACTIVE"), v.literal("REVERSED"), v.literal("CANCELLED")),
     allocationId: v.optional(v.id("paymentAllocations")),
+    activationEventId: v.optional(v.id("accountingEvents")),
+    activatedAt: v.optional(v.number()),
+    splitFromApplicationId: v.optional(v.id("invoiceReceiptApplications")),
+    splitRemainderId: v.optional(v.id("invoiceReceiptApplications")),
     createdBy: v.id("users"),
     createdAt: v.number(),
     cancelledAt: v.optional(v.number()),

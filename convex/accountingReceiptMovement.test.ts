@@ -66,8 +66,9 @@ import {
   cancelPendingInvoiceReceiptsForSale,
   reservePendingInvoiceReceipt,
 } from "./accounting/invoiceReceiptReservation";
-import { requirePostedInvoiceReceiptOrigins } from "./accounting/invoiceReceiptActivation";
+import { activatePendingInvoiceReceipt, requirePostedInvoiceReceiptOrigins } from "./accounting/invoiceReceiptActivation";
 import { saleCompletedKey } from "./accounting/postingRules";
+import { getReceivableOutstandingMinor } from "./subledger";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -646,6 +647,73 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     await expect(requireOrigins()).rejects.toThrow(/receipt.*posted/i);
     expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("PENDING");
     expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(10000);
+  });
+
+  test("SCRUM-722: a posted invoice claim activates partially, splits, and replays once", async () => {
+    const { t, orgId, userId, customerId, movement } = await retainedCreditFixture("s722write");
+    const { saleId, invoiceId } = await completedSaleInvoice(t, orgId, userId, customerId, "WRITE");
+    const applicationId = await t.run((ctx) => reservePendingInvoiceReceipt(ctx, {
+      orgId, receiptMovementId: movement._id, saleId, amountMinor: 8000, actorId: userId,
+    }));
+    const activate = (id: Id<"invoiceReceiptApplications">, amountMinor: number) =>
+      t.run((ctx) => activatePendingInvoiceReceipt(ctx, {
+        orgId, applicationId: id, amountMinor, actorId: userId,
+      }));
+    const foreignOrgId = await t.run((ctx) => ctx.db.insert("organizations", {
+      name: "Other activation tenant", createdAt: Date.now(),
+    }));
+    await expect(t.run((ctx) => activatePendingInvoiceReceipt(ctx, {
+      orgId: foreignOrgId, applicationId, amountMinor: 3000, actorId: userId,
+    }))).rejects.toThrow(/not found in this organization/i);
+    await expect(activate(applicationId, 3000)).rejects.toThrow(/sale.*posted/i);
+    expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(10000);
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("PENDING");
+
+    await t.run(async (ctx) => {
+      const eventId = await ctx.db.insert("accountingEvents", {
+        orgId, eventType: "SALE_COMPLETED", sourceType: "sales", sourceId: String(saleId),
+        eventVersion: 1, idempotencyKey: saleCompletedKey(saleId),
+        occurredAt: Date.now(), accountingDate: Date.now(), currency: "USD",
+        payload: {}, status: "POSTED", createdBy: userId, createdAt: Date.now(),
+      });
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId, accountingEventId: eventId, journalNumber: "S722-WRITE",
+        accountingDate: Date.now(), sourceType: "sales", sourceId: String(saleId),
+        category: "SYSTEM", memo: "sale", currency: "USD", status: "POSTED",
+        postedBy: userId, postedAt: Date.now(), createdAt: Date.now(),
+      });
+      await ctx.db.patch(eventId, { journalEntryId });
+    });
+
+    await removeRetainedCreditAccount(t, orgId);
+    await expect(activate(applicationId, 3000)).rejects.toThrow();
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("PENDING");
+    expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(10000);
+    expect(await t.run((ctx) => getReceivableOutstandingMinor(ctx, invoiceId))).toBe(10000);
+    expect(await t.run((ctx) => ctx.db.query("paymentAllocations")
+      .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", invoiceId)).collect())).toHaveLength(0);
+    await seedRetainedCreditAccount(t, orgId);
+
+    const first = await activate(applicationId, 3000);
+    expect(first.remainderApplicationId).toBeDefined();
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("ACTIVE");
+    expect((await t.run((ctx) => ctx.db.get(first.remainderApplicationId!)))?.amountMinor).toBe(5000);
+    expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(7000);
+    expect(await t.run((ctx) => getReceivableOutstandingMinor(ctx, invoiceId))).toBe(7000);
+    expect(await activate(applicationId, 3000)).toEqual(first);
+    await expect(activate(applicationId, 2000)).rejects.toThrow(/replayed safely/i);
+
+    const lines = await linesBySystemKey(t, orgId, "invoiceReceiptApplications", String(applicationId));
+    expect(lines).toHaveLength(2);
+    expect(lines.find((line) => line.systemKey === SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY)?.debitMinor).toBe(3000);
+    expect(lines.find((line) => line.systemKey === SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)?.creditMinor).toBe(3000);
+    expect(lines.some((line) => line.systemKey === SYSTEM_KEYS.CASH_ON_HAND || line.systemKey === SYSTEM_KEYS.BANK_ACCOUNT)).toBe(false);
+
+    const second = await activate(first.remainderApplicationId!, 5000);
+    expect(second.remainderApplicationId).toBeUndefined();
+    expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(2000);
+    expect(await t.run((ctx) => getReceivableOutstandingMinor(ctx, invoiceId))).toBe(2000);
+    expect(await activate(first.remainderApplicationId!, 5000)).toEqual(second);
   });
 
   test("transfers 2110 to AR exactly, with no second cash receipt", async () => {

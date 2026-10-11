@@ -1,7 +1,11 @@
 import { ConvexError } from "convex/values";
-import type { Id } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
+import { allocatePaymentToReceivable, getReceivableOutstandingMinor } from "../subledger";
+import { postAccountingEvent } from "./postingEngine";
 import { saleCompletedKey } from "./postingRules";
+import { pendingInvoiceReceiptMinor, pendingSaleInvoiceReceiptMinor } from "./invoiceReceiptReservation";
+import { loadRetainedPosition } from "./receiptMovement";
 import { rehydrateReceiptOccurrence } from "./receiptOccurrence";
 import { findPostedReceiptOccurrence } from "./workflowHooks";
 
@@ -27,7 +31,7 @@ export async function requirePostedInvoiceReceiptOrigins(
     sale.canonicalReceivableDocumentId !== invoice._id ||
     invoice.documentType !== "INVOICE" || invoice.payerType !== "CUSTOMER" ||
     invoice.sourceType !== "sales" || invoice.sourceId !== String(sale._id) ||
-    invoice.status === "CANCELLED" ||
+    (invoice.status !== "OPEN" && invoice.status !== "PARTIALLY_PAID") ||
     application.customerId !== sale.customerId ||
     movement.customerId !== sale.customerId || invoice.customerId !== sale.customerId ||
     application.currency.toUpperCase() !== movement.currency.toUpperCase() ||
@@ -85,4 +89,203 @@ export async function requirePostedInvoiceReceiptOrigins(
     throw new ConvexError("The sale invoice's exact sale-completion journal must be posted before activation.");
   }
   return { application, movement, sale, invoice };
+}
+
+type ActivationResult = {
+  applicationId: Id<"invoiceReceiptApplications">;
+  allocationId: Id<"paymentAllocations">;
+  remainderApplicationId?: Id<"invoiceReceiptApplications">;
+};
+
+async function readActiveReplay(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  application: Doc<"invoiceReceiptApplications">,
+  amountMinor: number
+): Promise<ActivationResult> {
+  const [allocation, event] = await Promise.all([
+    application.allocationId ? ctx.db.get(application.allocationId) : Promise.resolve(null),
+    application.activationEventId ? ctx.db.get(application.activationEventId) : Promise.resolve(null),
+  ]);
+  const journal = event?.journalEntryId ? await ctx.db.get(event.journalEntryId) : null;
+  if (
+    application.amountMinor !== amountMinor || !allocation || allocation.orgId !== orgId ||
+    allocation.status !== "ACTIVE" || allocation.receivableDocumentId !== application.receivableDocumentId ||
+    allocation.amountMinor !== application.amountMinor || !event || event.orgId !== orgId ||
+    event.status !== "POSTED" || event.eventType !== "RECEIPT_CREDIT_APPLIED" ||
+    event.sourceType !== "invoiceReceiptApplications" || event.sourceId !== String(application._id) ||
+    !journal || journal.orgId !== orgId || journal.status !== "POSTED" ||
+    journal.accountingEventId !== event._id ||
+    journal.sourceType !== event.sourceType || journal.sourceId !== event.sourceId ||
+    journal.currency?.toUpperCase() !== application.currency.toUpperCase()
+  ) {
+    throw new ConvexError("This invoice receipt application cannot be replayed safely.");
+  }
+  return {
+    applicationId: application._id,
+    allocationId: allocation._id,
+    remainderApplicationId: application.splitRemainderId,
+  };
+}
+
+async function requireLiveActivationBalance(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    application: Doc<"invoiceReceiptApplications">;
+    movement: Doc<"receiptMovements">;
+    invoice: Doc<"receivableDocuments">;
+    amountMinor: number;
+  }
+): Promise<Doc<"receiptRetainedPositions">> {
+  const position = await loadRetainedPosition(ctx, args.orgId, args.movement._id);
+  const [receiptReservedMinor, saleReservedMinor, outstandingMinor] = await Promise.all([
+    pendingInvoiceReceiptMinor(ctx, args.orgId, args.movement._id),
+    pendingSaleInvoiceReceiptMinor(ctx, args.orgId, args.application.saleId),
+    getReceivableOutstandingMinor(ctx, args.invoice._id),
+  ]);
+  if (
+    position.customerId !== args.application.customerId ||
+    position.currency.toUpperCase() !== args.application.currency.toUpperCase() ||
+    !Number.isSafeInteger(position.remainingUnappliedMinor) ||
+    receiptReservedMinor > position.remainingUnappliedMinor ||
+    saleReservedMinor > outstandingMinor ||
+    args.amountMinor > outstandingMinor
+  ) {
+    throw new ConvexError("The retained credit or invoice balance no longer covers its pending claims.");
+  }
+  return position;
+}
+
+async function postInvoiceReceiptApplication(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    application: Doc<"invoiceReceiptApplications">;
+    movement: Doc<"receiptMovements">;
+    invoice: Doc<"receivableDocuments">;
+    amountMinor: number;
+    actorId: Id<"users">;
+    now: number;
+  }
+): Promise<Id<"accountingEvents">> {
+  const posted = await postAccountingEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "RECEIPT_CREDIT_APPLIED",
+    sourceType: "invoiceReceiptApplications",
+    sourceId: String(args.application._id),
+    eventVersion: 1,
+    accountingDate: args.now,
+    occurredAt: args.now,
+    currency: args.application.currency,
+    idempotencyKey: `invoice_receipt_applied_${args.application._id}`,
+    payload: {
+      receiptMovementId: String(args.movement._id),
+      applicationId: String(args.application._id),
+      sequence: 1,
+      amountMinor: args.amountMinor,
+      currency: args.application.currency,
+      customerId: String(args.application.customerId),
+      receivableDocumentId: String(args.invoice._id),
+    },
+    actorId: args.actorId,
+  });
+  if (posted.alreadyPosted || !posted.eventId || !posted.journalEntryId) {
+    throw new ConvexError("The invoice receipt application could not post its own journal.");
+  }
+  const [event, journal] = await Promise.all([
+    ctx.db.get(posted.eventId),
+    ctx.db.get(posted.journalEntryId),
+  ]);
+  if (
+    !event || event.orgId !== args.orgId || event.status !== "POSTED" ||
+    event.eventType !== "RECEIPT_CREDIT_APPLIED" ||
+    event.sourceType !== "invoiceReceiptApplications" || event.sourceId !== String(args.application._id) ||
+    !journal || journal.orgId !== args.orgId || journal.status !== "POSTED" ||
+    journal.accountingEventId !== event._id ||
+    journal.sourceType !== event.sourceType || journal.sourceId !== event.sourceId ||
+    journal.currency?.toUpperCase() !== args.application.currency.toUpperCase()
+  ) {
+    throw new ConvexError("The invoice receipt journal did not reach POSTED state.");
+  }
+  return event._id;
+}
+
+/**
+ * Dark SCRUM-722 writer. No registered mutation calls this until SCRUM-723's
+ * ACTIVE reversal exits and SCRUM-724's operator flow are in the same cutover.
+ * Every refusal escapes: in Convex a caught exception would commit earlier writes.
+ */
+export async function activatePendingInvoiceReceipt(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    applicationId: Id<"invoiceReceiptApplications">;
+    amountMinor: number;
+    actorId: Id<"users">;
+  }
+): Promise<ActivationResult> {
+  if (!Number.isSafeInteger(args.amountMinor) || args.amountMinor <= 0) {
+    throw new ConvexError("An invoice receipt activation must use a positive minor-unit amount.");
+  }
+  const row = await ctx.db.get(args.applicationId);
+  if (!row || row.orgId !== args.orgId) {
+    throw new ConvexError("Invoice receipt application not found in this organization.");
+  }
+  if (row.status === "ACTIVE") {
+    return readActiveReplay(ctx, args.orgId, row, args.amountMinor);
+  }
+  const { application, movement, invoice } = await requirePostedInvoiceReceiptOrigins(
+    ctx, args.orgId, args.applicationId
+  );
+  if (args.amountMinor > application.amountMinor) {
+    throw new ConvexError("Activation exceeds the reserved receipt amount.");
+  }
+  const position = await requireLiveActivationBalance(ctx, {
+    orgId: args.orgId, application, movement, invoice, amountMinor: args.amountMinor,
+  });
+
+  const allocationId = await allocatePaymentToReceivable(ctx, {
+    orgId: args.orgId,
+    paymentId: movement.canonicalPaymentId,
+    receivableDocumentId: invoice._id,
+    amountMinor: args.amountMinor,
+    actorId: args.actorId,
+  });
+  const now = Date.now();
+  const activationEventId = await postInvoiceReceiptApplication(ctx, {
+    orgId: args.orgId, application, movement, invoice,
+    amountMinor: args.amountMinor, actorId: args.actorId, now,
+  });
+
+  let remainderApplicationId: Id<"invoiceReceiptApplications"> | undefined;
+  const remainderMinor = application.amountMinor - args.amountMinor;
+  if (remainderMinor > 0) {
+    remainderApplicationId = await ctx.db.insert("invoiceReceiptApplications", {
+      orgId: args.orgId,
+      receiptMovementId: movement._id,
+      saleId: application.saleId,
+      receivableDocumentId: invoice._id,
+      customerId: application.customerId,
+      currency: application.currency,
+      amountMinor: remainderMinor,
+      status: "PENDING",
+      splitFromApplicationId: application._id,
+      createdBy: args.actorId,
+      createdAt: now,
+    });
+  }
+  await ctx.db.patch(position._id, {
+    remainingUnappliedMinor: position.remainingUnappliedMinor - args.amountMinor,
+    updatedAt: now,
+  });
+  await ctx.db.patch(application._id, {
+    amountMinor: args.amountMinor,
+    status: "ACTIVE",
+    allocationId,
+    activationEventId,
+    activatedAt: now,
+    splitRemainderId: remainderApplicationId,
+  });
+  return { applicationId: application._id, allocationId, remainderApplicationId };
 }
