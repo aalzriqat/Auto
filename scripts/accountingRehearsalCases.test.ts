@@ -267,6 +267,8 @@ type Defects = {
   cashRefundCollectionWrongMethod?: boolean;
   cashRefundAddsReceivable?: boolean;
   cashRefundIncomeMissingAfterRefund?: boolean;
+  cashHeldIncomeDropsRevenueRow?: boolean;
+  cashRefusedIncomeDropsRevenueRow?: boolean;
   cashRefundIncomeDropsRevenueRow?: boolean;
   cashHeldPaymentUnappliedWrong?: boolean;
   cashRefundCrossesUtcMonth?: boolean;
@@ -390,6 +392,7 @@ function makeBackend(defects: Defects = {}) {
   let certifiedCashSalePosted = false;
   let certifiedCashDepositId: string | undefined;
   let certifiedCashRefundDepositId: string | undefined;
+  let cashRefundCreatorRefused = false;
   /** The chart, keyed the way the product keys it, so lines resolve to system keys. */
   const CHART = [
     { _id: "acct_cash", code: defects.cashSaleWrongCashAccountCode ? "1000" : "1100", type: "ASSET", name: "Cash", systemKey: "CASH_ON_HAND", normalBalance: "DEBIT" },
@@ -577,6 +580,7 @@ function makeBackend(defects: Defects = {}) {
     const deposit = deposits.get(args.depositId);
     if (!deposit) return { ok: false as const, error: "deposit not found" };
     if (args.depositId === certifiedCashRefundDepositId && creatorSeat && !defects.cashRefundAllowsCreator) {
+      cashRefundCreatorRefused = true;
       if (defects.cashRefundCreatorRefusalWrites) deposit.releaseCount += 1;
       if (defects.cashRefundCreatorRefusalClearsVehicleHold) {
         const vehicle = vehicles.get(deposit.vehicleId);
@@ -916,6 +920,10 @@ function makeBackend(defects: Defects = {}) {
         };
         return { ok: true as const, value: { currency: ORG_CURRENCY,
           revenueRows: (defects.cashSaleReportMissingRevenueRow && certifiedCashSalePosted) ||
+            (defects.cashHeldIncomeDropsRevenueRow &&
+              deposits.get(certifiedCashRefundDepositId ?? "")?.status === "HELD") ||
+            (defects.cashRefusedIncomeDropsRevenueRow && cashRefundCreatorRefused &&
+              deposits.get(certifiedCashRefundDepositId ?? "")?.status === "HELD") ||
             (defects.cashRefundIncomeDropsRevenueRow &&
               deposits.get(certifiedCashRefundDepositId ?? "")?.status === "REFUNDED")
             ? [] : [row("SALES_REVENUE", net("SALES_REVENUE"))],
@@ -2332,6 +2340,8 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     ["cashRefundCollectionWrongMethod", /refund collection payment method/],
     ["cashRefundAddsReceivable", /must not create or modify a tenant receivable/],
     ["cashRefundIncomeMissingAfterRefund", /refunded income netIncome is unavailable/],
+    ["cashHeldIncomeDropsRevenueRow", /held income revenueRows/],
+    ["cashRefusedIncomeDropsRevenueRow", /refused income revenueRows/],
     ["cashRefundIncomeDropsRevenueRow", /refunded income revenueRows/],
     ["cashHeldPaymentUnappliedWrong", /held payment remains unapplied/],
   ] as const)("M486C3 rejects %s in an owned cash quote refund", async (defect, diagnostic) => {
