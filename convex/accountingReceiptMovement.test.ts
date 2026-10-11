@@ -1565,7 +1565,7 @@ describe("SCRUM-218-C §10 RM-01 — a bounced cheque cannot silently strand spe
     return { ...seeded, chequeId, movement };
   }
 
-  test("refuses a cleared-cheque return with an ACTIVE invoice claim before any writes", async () => {
+  test("refuses a cleared-cheque return with incomplete ACTIVE invoice lineage before any writes", async () => {
     const { t, asAdmin, orgId, userId, customerId, chequeId, movement } =
       await clearedChequeWithRetainedCredit("s723active", 100);
     const { saleId, invoiceId } = await completedSaleInvoice(t, orgId, userId, customerId, "RETURN");
@@ -1577,11 +1577,71 @@ describe("SCRUM-218-C §10 RM-01 — a bounced cheque cannot silently strand spe
 
     await expect(asAdmin.mutation(api.collections.returnClearedCheque, {
       idempotencyKey: crypto.randomUUID(), orgId, chequeId,
-    })).rejects.toThrow(/applied invoice credit.*reversed/i);
+    })).rejects.toThrow(/incomplete return lineage/i);
     expect((await t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("CLEARED");
     expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("ACTIVE");
     expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(10000);
     expect((await t.run((ctx) => ctx.db.get(movement.canonicalPaymentId)))?.status).toBe("SETTLED");
+  });
+
+  test("returns a cleared cheque by reversing its ACTIVE invoice journal and allocation", async () => {
+    const { t, asAdmin, orgId, userId, customerId, chequeId, movement } =
+      await clearedChequeWithRetainedCredit("s723reverse", 100);
+    const { saleId, invoiceId } = await completedSaleInvoice(t, orgId, userId, customerId, "REVERSE");
+    const applicationId = await t.run((ctx) => reservePendingInvoiceReceipt(ctx, {
+      orgId, receiptMovementId: movement._id, saleId, amountMinor: 8000, actorId: userId,
+    }));
+    await t.run(async (ctx) => {
+      const eventId = await ctx.db.insert("accountingEvents", {
+        orgId, eventType: "SALE_COMPLETED", sourceType: "sales", sourceId: String(saleId),
+        eventVersion: 1, idempotencyKey: saleCompletedKey(saleId),
+        occurredAt: Date.now(), accountingDate: Date.now(), currency: "USD",
+        payload: {}, status: "POSTED", createdBy: userId, createdAt: Date.now(),
+      });
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId, accountingEventId: eventId, journalNumber: "S723-RETURN",
+        accountingDate: Date.now(), sourceType: "sales", sourceId: String(saleId),
+        category: "SYSTEM", memo: "sale", currency: "USD", status: "POSTED",
+        postedBy: userId, postedAt: Date.now(), createdAt: Date.now(),
+      });
+      await ctx.db.patch(eventId, { journalEntryId });
+    });
+    const activated = await t.run((ctx) => activatePendingInvoiceReceipt(ctx, {
+      orgId, applicationId, amountMinor: 3000, actorId: userId,
+    }));
+    const forwardEventId = (await t.run((ctx) => ctx.db.get(applicationId)))?.activationEventId;
+    expect(forwardEventId).toBeDefined();
+    expect((await t.run((ctx) => ctx.db.get(activated.remainderApplicationId!)))?.status).toBe("PENDING");
+    expect(await t.run((ctx) => getReceivableOutstandingMinor(ctx, invoiceId))).toBe(7000);
+
+    await asAdmin.mutation(api.collections.returnClearedCheque, {
+      idempotencyKey: crypto.randomUUID(), orgId, chequeId,
+    });
+
+    expect((await t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("RETURNED");
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("REVERSED");
+    expect((await t.run((ctx) => ctx.db.get(activated.remainderApplicationId!)))?.status).toBe("CANCELLED");
+    expect((await t.run((ctx) => ctx.db.get(activated.allocationId)))?.status).toBe("REVERSED");
+    const forward = await t.run((ctx) => ctx.db.get(forwardEventId!));
+    expect(forward?.status).toBe("REVERSED");
+    const reversal = await t.run((ctx) => ctx.db.get(forward!.reversedByEventId!));
+    expect(reversal?.status).toBe("POSTED");
+    expect(reversal?.reversalOfEventId).toBe(forwardEventId);
+    const reversalLines = await t.run(async (ctx) => {
+      const lines = await ctx.db.query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", reversal!.journalEntryId!))
+        .collect();
+      return Promise.all(lines.map(async (line) => ({
+        systemKey: (await ctx.db.get(line.accountId))?.systemKey,
+        debitMinor: line.debitMinor,
+        creditMinor: line.creditMinor,
+      })));
+    });
+    expect(reversalLines.find((line) => line.systemKey === SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY)?.creditMinor).toBe(3000);
+    expect(reversalLines.find((line) => line.systemKey === SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS)?.debitMinor).toBe(3000);
+    expect(await t.run((ctx) => getReceivableOutstandingMinor(ctx, invoiceId))).toBe(10000);
+    expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(0);
+    expect((await t.run((ctx) => ctx.db.get(movement.canonicalPaymentId)))?.status).toBe("VOIDED");
   });
 
   /**

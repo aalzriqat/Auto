@@ -26,6 +26,10 @@ import {
   cancelPendingInvoiceReceiptsForMovement,
   pendingInvoiceReceiptMinor,
 } from "./accounting/invoiceReceiptReservation";
+import {
+  planActiveInvoiceReceiptReversal,
+  reverseActiveInvoiceReceiptApplications,
+} from "./accounting/invoiceReceiptActivation";
 import { ReceivableCreditKey } from "./accounting/postingRules";
 import { assertValidAccountingDate } from "./accountingPeriods";
 import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
@@ -2494,6 +2498,13 @@ export const returnClearedCheque = mutation({
           // Throws the named refusals — refund interaction, missing allocation,
           // conservation violation — and writes nothing.
           const plan = await planReceiptRevocation(ctx, { orgId: args.orgId, movement });
+          const invoicePlan = await planActiveInvoiceReceiptReversal(ctx, args.orgId, movement);
+          if (
+            plan.applications.length + invoicePlan.applications.length > 100 ||
+            plan.totalApplicationMinor + invoicePlan.totalMinor > movement.initialUnappliedMinor
+          ) {
+            throw new ConvexError("This receipt has more applied credit than one return can safely unwind.");
+          }
 
           // ── 2. EVERY LATER APPLICATION, NEWEST FIRST ───────────────────────
           //
@@ -2516,6 +2527,14 @@ export const returnClearedCheque = mutation({
             });
             await reopenLegacyReceivable(unwind.receivableId, unwind.amountMinor);
           }
+
+          await reverseActiveInvoiceReceiptApplications(ctx, {
+            orgId: args.orgId,
+            applications: invoicePlan.applications,
+            actorId: user._id,
+            reason,
+            reversalDate: now,
+          });
 
           // ── 3. THE INITIAL RECEIPT OCCURRENCE ──────────────────────────────
           //

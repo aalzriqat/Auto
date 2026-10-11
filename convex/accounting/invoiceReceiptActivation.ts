@@ -1,11 +1,12 @@
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
-import { allocatePaymentToReceivable, getReceivableOutstandingMinor } from "../subledger";
+import { allocatePaymentToReceivable, getReceivableOutstandingMinor, reverseAllocation } from "../subledger";
 import { postAccountingEvent } from "./postingEngine";
+import { reverseAccountingEvent } from "./reversals";
 import { saleCompletedKey } from "./postingRules";
 import { pendingInvoiceReceiptMinor, pendingSaleInvoiceReceiptMinor } from "./invoiceReceiptReservation";
-import { loadRetainedPosition } from "./receiptMovement";
+import { loadRetainedPosition, MAX_REVOCABLE_APPLICATIONS } from "./receiptMovement";
 import { rehydrateReceiptOccurrence } from "./receiptOccurrence";
 import { findPostedReceiptOccurrence } from "./workflowHooks";
 
@@ -96,6 +97,94 @@ type ActivationResult = {
   allocationId: Id<"paymentAllocations">;
   remainderApplicationId?: Id<"invoiceReceiptApplications">;
 };
+
+type ActiveInvoiceUnwind = {
+  application: Doc<"invoiceReceiptApplications">;
+  allocationId: Id<"paymentAllocations">;
+  eventId: Id<"accountingEvents">;
+};
+
+/** Prove the complete ACTIVE invoice lineage before a returned cheque writes anything. */
+export async function planActiveInvoiceReceiptReversal(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  movement: Doc<"receiptMovements">
+): Promise<{ applications: ActiveInvoiceUnwind[]; totalMinor: number }> {
+  if (movement.orgId !== orgId) {
+    throw new ConvexError("Receipt movement does not belong to this organization.");
+  }
+  const rows = await ctx.db.query("invoiceReceiptApplications")
+    .withIndex("by_org_movement_status", (q) => q.eq("orgId", orgId)
+      .eq("receiptMovementId", movement._id).eq("status", "ACTIVE"))
+    .take(MAX_REVOCABLE_APPLICATIONS + 1);
+  if (rows.length > MAX_REVOCABLE_APPLICATIONS) {
+    throw new ConvexError("This receipt has too many active invoice applications to return in one transaction.");
+  }
+
+  const applications: ActiveInvoiceUnwind[] = [];
+  let totalMinor = 0;
+  for (const application of rows) {
+    const [allocation, event, invoice] = await Promise.all([
+      application.allocationId ? ctx.db.get(application.allocationId) : Promise.resolve(null),
+      application.activationEventId ? ctx.db.get(application.activationEventId) : Promise.resolve(null),
+      ctx.db.get(application.receivableDocumentId),
+    ]);
+    const journal = event?.journalEntryId ? await ctx.db.get(event.journalEntryId) : null;
+    if (
+      application.customerId !== movement.customerId ||
+      application.currency.toUpperCase() !== movement.currency.toUpperCase() ||
+      !Number.isSafeInteger(application.amountMinor) || application.amountMinor <= 0 ||
+      !allocation || allocation.orgId !== orgId || allocation.status !== "ACTIVE" ||
+      allocation.paymentId !== movement.canonicalPaymentId ||
+      allocation.receivableDocumentId !== application.receivableDocumentId ||
+      allocation.amountMinor !== application.amountMinor ||
+      !invoice || invoice.orgId !== orgId || invoice.customerId !== application.customerId ||
+      !event || event.orgId !== orgId || event.status !== "POSTED" ||
+      event.eventType !== "RECEIPT_CREDIT_APPLIED" || event.eventVersion !== 1 ||
+      event.sourceType !== "invoiceReceiptApplications" || event.sourceId !== String(application._id) ||
+      !journal || journal.orgId !== orgId || journal.status !== "POSTED" ||
+      journal.accountingEventId !== event._id || journal.sourceType !== event.sourceType ||
+      journal.sourceId !== event.sourceId
+    ) {
+      throw new ConvexError("An active invoice receipt has incomplete return lineage.");
+    }
+    applications.push({ application, allocationId: allocation._id, eventId: event._id });
+    totalMinor += application.amountMinor;
+  }
+  if (!Number.isSafeInteger(totalMinor) || totalMinor > movement.initialUnappliedMinor) {
+    throw new ConvexError("Active invoice credit exceeds the receipt's retained amount.");
+  }
+  return { applications, totalMinor };
+}
+
+/** Reverse each proven 2110-to-AR journal and its canonical allocation together. */
+export async function reverseActiveInvoiceReceiptApplications(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    applications: readonly ActiveInvoiceUnwind[];
+    actorId: Id<"users">;
+    reason: string;
+    reversalDate: number;
+  }
+): Promise<void> {
+  for (const unwind of args.applications) {
+    await reverseAccountingEvent(ctx, {
+      orgId: args.orgId,
+      originalEventId: unwind.eventId,
+      reversalDate: args.reversalDate,
+      reason: args.reason,
+      actorId: args.actorId,
+      idempotencyKey: `reversed_invoice_receipt_applied_${unwind.application._id}`,
+    });
+    await reverseAllocation(ctx, {
+      orgId: args.orgId,
+      allocationId: unwind.allocationId,
+      actorId: args.actorId,
+    });
+    await ctx.db.patch(unwind.application._id, { status: "REVERSED" });
+  }
+}
 
 async function readActiveReplay(
   ctx: MutationCtx,

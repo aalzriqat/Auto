@@ -496,19 +496,6 @@ export async function planReceiptRevocation(
     throw new ConvexError("Receipt movement does not belong to this organization.");
   }
 
-  // SCRUM-723: this plan only reverses legacy receiptApplications. Refuse
-  // before its caller writes anything if the new invoice channel has spent
-  // this receipt; the canonical payment must not be voided under live credit.
-  const activeInvoiceApplication = await ctx.db
-    .query("invoiceReceiptApplications")
-    .withIndex("by_org_movement_status", (q) =>
-      q.eq("orgId", orgId).eq("receiptMovementId", movement._id).eq("status", "ACTIVE")
-    )
-    .first();
-  if (activeInvoiceApplication) {
-    throw new ConvexError("Applied invoice credit must be reversed before this cheque can be returned.");
-  }
-
   const requireActiveAllocation = async (allocationId: Id<"paymentAllocations">) => {
     const allocation = await ctx.db.get(allocationId);
     if (!allocation || allocation.orgId !== orgId) {
