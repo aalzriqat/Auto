@@ -1634,6 +1634,38 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     })).rejects.toThrow("Financial report is unavailable because legacy receipt history is too large.");
   });
 
+  test("many historical holds fail closed before source lookups return a partial total", async () => {
+    const { s } = await cashQuote("s486legacyholdsvolume");
+    const year = s.fiscalYear;
+    await s.t.run(async (ctx) => {
+      const creator = await ctx.db.query("users").first();
+      if (!creator) throw new Error("Missing test user");
+      for (let i = 0; i < 200; i++) {
+        const depositId = await ctx.db.insert("deposits", {
+          orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId,
+          amount: 1, status: "HELD", holdActive: false,
+          createdBy: creator._id, createdAt: Date.UTC(year, 0, 2) + i,
+        });
+        await ctx.db.insert("transactions", {
+          orgId: s.orgId, type: "IN", amount: 1,
+          date: Date.UTC(year, 0, 3) + i, category: "DEPOSIT",
+          description: "Historical deposit receipt", vehicleId: s.vehicleId, depositId,
+        });
+        for (let holdIndex = 0; holdIndex < 9; holdIndex++) {
+          await ctx.db.insert("depositVehicleHolds", {
+            orgId: s.orgId, depositId, vehicleId: s.vehicleId,
+            active: false, createdAt: Date.UTC(year, 0, 4) + i + holdIndex,
+          });
+        }
+      }
+    });
+    await expect(s.owner.as.query(api.reports.getProfitAndLoss, {
+      orgId: s.orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+    })).rejects.toThrow("Financial report is unavailable because legacy receipt history is too large.");
+  });
+
   test("forfeiture income follows its posted month and each journal reversal month", async () => {
     vi.useFakeTimers();
     try {
