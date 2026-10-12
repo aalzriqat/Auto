@@ -1,13 +1,13 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { toast } from "sonner";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
-import { getLocalizedErrorMessage } from "@/lib/errors";
+import { getCodedErrorMessage } from "@/lib/errors";
 import { formatMoneyDisplay, moneyDisplayScale } from "@/lib/moneyDisplay";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,8 +24,9 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage, pay
   canManage: boolean;
   /**
    * Backend-reported availability (`collections.summary.retainedCreditPayoutAvailable`).
-   * Absent or false (the pilot, or a backend not yet deployed) hides approve and
-   * record-payout; reject and cancel stay available.
+   * Absent or false (the pilot, or a backend that does not report it) shows
+   * approve and record-payout DISABLED, tied to the reason; reject and cancel stay
+   * available.
    */
   payoutAvailable?: boolean;
 }>) {
@@ -42,10 +43,16 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage, pay
   const [cancelReasons, setCancelReasons] = useState<Record<string, string>>({});
   const paidAtByRequest = useRef<Record<string, number>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
+  const payoutReasonId = useId();
   const rows = [...(pending ?? []), ...(approved ?? [])];
 
+  /** A coded refusal in the user's language, else the queue's own message: never server English. */
+  function showFailure(error: unknown) {
+    toast.error(getCodedErrorMessage(error, t) ?? t("RetainedCreditRefundActionFailed"));
+  }
+
   async function onDecide(requestId: Id<"retainedCreditRefundRequests">, status: "APPROVED" | "REJECTED") {
-    if (busyId) return;
+    if (busyId || (status === "APPROVED" && !payoutAvailable)) return;
     setBusyId(requestId);
     const intent = `retained-refund-decide:${requestId}:${status}`;
     try {
@@ -53,7 +60,7 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage, pay
       command.retire(intent);
       toast.success(t(status === "APPROVED" ? "RetainedCreditRefundApproved" : "RetainedCreditRefundRejected"));
     } catch (error) {
-      toast.error(getLocalizedErrorMessage(error, t));
+      showFailure(error);
     } finally { setBusyId(null); }
   }
 
@@ -65,13 +72,13 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage, pay
       await cancel({ orgId, requestId, reason });
       toast.success(t("RetainedCreditRefundCancelled"));
     } catch (error) {
-      toast.error(getLocalizedErrorMessage(error, t));
+      showFailure(error);
     } finally { setBusyId(null); }
   }
 
   async function onExecute(requestId: Id<"retainedCreditRefundRequests">) {
     const reference = (references[requestId] ?? "").trim();
-    if (busyId || !reference) return;
+    if (busyId || !reference || !payoutAvailable) return;
     setBusyId(requestId);
     const intent = `retained-refund-execute:${requestId}`;
     try {
@@ -84,7 +91,7 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage, pay
       delete paidAtByRequest.current[requestId];
       toast.success(t("RetainedCreditRefundPaid"));
     } catch (error) {
-      toast.error(getLocalizedErrorMessage(error, t));
+      showFailure(error);
     } finally { setBusyId(null); }
   }
 
@@ -93,7 +100,8 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage, pay
       data-testid="retained-credit-refunds">
       <h3 className="font-medium">{t("RetainedCreditRefundsHeading")}</h3>
       {rows.length > 0 && !payoutAvailable && (
-        <p className="text-sm text-muted-foreground" role="note" data-testid="retained-credit-payout-unavailable">
+        <p id={payoutReasonId} className="text-sm text-muted-foreground" role="note"
+          data-testid="retained-credit-payout-unavailable">
           {t("RetainedCreditPayoutUnavailable")}</p>
       )}
       {rows.length === 0 && <p className="text-sm text-muted-foreground">{t("RetainedCreditRefundsEmpty")}</p>}
@@ -107,8 +115,9 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage, pay
           <span className="text-muted-foreground">
             {t(row.status === "PENDING" ? "RetainedCreditStatusPENDING" : "RetainedCreditStatusAPPROVED")}</span>
           {row.status === "PENDING" && canApprove && !row.requestedByMe && <>
-            {payoutAvailable && <Button size="sm" variant="outline" disabled={!!busyId}
-              onClick={() => onDecide(row._id, "APPROVED")}>{t("Approve")}</Button>}
+            <Button size="sm" variant="outline" disabled={!!busyId || !payoutAvailable}
+              aria-describedby={payoutAvailable ? undefined : payoutReasonId}
+              onClick={() => onDecide(row._id, "APPROVED")}>{t("Approve")}</Button>
             <Button size="sm" variant="outline" disabled={!!busyId}
               onClick={() => onDecide(row._id, "REJECTED")}>{t("Reject")}</Button>
           </>}
@@ -120,12 +129,14 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage, pay
             <Button size="sm" variant="outline" disabled={!!busyId || !(cancelReasons[row._id] ?? "").trim()}
               onClick={() => onCancel(row._id)}>{t("RetainedCreditRefundCancel")}</Button>
           </>}
-          {row.status === "APPROVED" && canManage && payoutAvailable && <>
+          {row.status === "APPROVED" && canManage && <>
             <Input className="w-48" aria-label={t("RetainedCreditPayoutReference")}
               placeholder={t("RetainedCreditPayoutReference")} value={references[row._id] ?? ""}
-              disabled={!!busyId}
+              disabled={!!busyId || !payoutAvailable}
+              aria-describedby={payoutAvailable ? undefined : payoutReasonId}
               onChange={(event) => setReferences((prev) => ({ ...prev, [row._id]: event.target.value }))} />
-            <Button size="sm" disabled={!!busyId || !(references[row._id] ?? "").trim()}
+            <Button size="sm" disabled={!!busyId || !payoutAvailable || !(references[row._id] ?? "").trim()}
+              aria-describedby={payoutAvailable ? undefined : payoutReasonId}
               onClick={() => onExecute(row._id)}>{t("RetainedCreditExecute")}</Button>
           </>}
         </div>

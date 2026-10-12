@@ -5,9 +5,8 @@
  * MANAGE_FINANCE but not APPROVE_REQUESTS; MANAGER has APPROVE_REQUESTS but not
  * MANAGE_FINANCE.
  *
- * The section is rendered directly: it is intentionally NOT mounted in
- * CollectionsTab until the backend that owns `api.retainedCreditRefunds.*` is
- * deployed (see components/sales/SaleDialogContractSkew.test.ts, F1/FS-01).
+ * The section is rendered directly here; CollectionsTabRetainedCreditRefunds.test.tsx
+ * covers it as mounted on the Collections Approvals tab.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -95,15 +94,21 @@ describe("Retained-credit refund queue, lifecycle reachable under default roles"
 
 describe("SCRUM-724 pilot containment: payout actions disabled, exits stay", () => {
   test.each([false, undefined] as const)(
-    "payout unavailable (%s): no approve and no record-payout, reason shown, reject and cancel stay",
+    "payout unavailable (%s): approve and record-payout shown disabled and tied to the reason; reject and cancel stay",
     (availability) => {
       seedRefunds([refundRow({ status: "PENDING" }), refundRow({ _id: "r2", status: "APPROVED" })]);
       renderSection(BOTH, availability);
-      expect(screen.getByTestId("retained-credit-payout-unavailable")).toBeTruthy();
-      expect(screen.getByText("RetainedCreditPayoutUnavailable")).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "RetainedCreditExecute" })).toBeNull();
-      expect(screen.queryByLabelText("RetainedCreditPayoutReference")).toBeNull();
+      const reason = screen.getByTestId("retained-credit-payout-unavailable");
+      expect(reason.textContent).toBe("RetainedCreditPayoutUnavailable");
+      for (const name of ["Approve", "RetainedCreditExecute"]) {
+        const control = screen.getByRole("button", { name }) as HTMLButtonElement;
+        expect(control.disabled).toBe(true);
+        expect(control.getAttribute("aria-describedby")).toBe(reason.id);
+        fireEvent.click(control);
+      }
+      expect((screen.getByLabelText("RetainedCreditPayoutReference") as HTMLInputElement).disabled).toBe(true);
+      expect(stubs.mutations.get("retainedCreditRefunds:respondToRetainedCreditRefund")).not.toHaveBeenCalled();
+      expect(stubs.mutations.get("retainedCreditRefunds:executeRetainedCreditRefund")).not.toHaveBeenCalled();
       expect(screen.getAllByRole("button", { name: "Reject" })).toHaveLength(1);
       expect(screen.getAllByRole("button", { name: "RetainedCreditRefundCancel" })).toHaveLength(2);
     });
