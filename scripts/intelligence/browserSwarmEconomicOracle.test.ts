@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   BrowserSwarmOracleInconclusiveError,
   evaluateCommandIdentityLifetime,
+  evaluateConcurrentEditRace,
   evaluateExpenseSingleEffect,
   type ExpenseEffectSnapshot,
 } from "./browserSwarmEconomicOracle";
@@ -285,5 +286,118 @@ describe("SCRUM-826 client command identity lifetime oracle (ECON-2)", () => {
     expect(() => evaluateCommandIdentityLifetime([])).toThrow(
       BrowserSwarmOracleInconclusiveError,
     );
+  });
+});
+
+describe("SCRUM-826 concurrent-tab edit race oracle (CONC-1 / ECON-2)", () => {
+  const LOCKED =
+    "Posted expenses are locked. Use a correction or reversal workflow before changing accounting fields.";
+
+  it("passes when exactly one tab won, the other was refused by the posting lock, and the backend holds the winner", () => {
+    expect(
+      evaluateConcurrentEditRace({
+        tabs: [
+          { tab: "A", intendedAmount: 50, outcome: "SUCCESS" },
+          { tab: "B", intendedAmount: 80, outcome: "REFUSED", message: LOCKED },
+        ],
+        authoritative: { amount: 50, status: "PAID" },
+        staleRetry: { outcome: "REFUSED", message: LOCKED },
+      }),
+    ).toEqual({ passed: true, violations: [], winner: "A", winningAmount: 50 });
+  });
+
+  it("flags two tabs both reporting success as a lost update", () => {
+    const verdict = evaluateConcurrentEditRace({
+      tabs: [
+        { tab: "A", intendedAmount: 50, outcome: "SUCCESS" },
+        { tab: "B", intendedAmount: 80, outcome: "SUCCESS" },
+      ],
+      authoritative: { amount: 80, status: "PAID" },
+      staleRetry: { outcome: "REFUSED", message: LOCKED },
+    });
+    expect(verdict.passed).toBe(false);
+    expect(verdict.violations.join(" ")).toMatch(/2 tabs reported success/);
+  });
+
+  it("flags a backend that holds a value no successful tab asked for", () => {
+    const verdict = evaluateConcurrentEditRace({
+      tabs: [
+        { tab: "A", intendedAmount: 50, outcome: "SUCCESS" },
+        { tab: "B", intendedAmount: 80, outcome: "REFUSED", message: LOCKED },
+      ],
+      authoritative: { amount: 80, status: "PAID" },
+      staleRetry: { outcome: "REFUSED", message: LOCKED },
+    });
+    expect(verdict.passed).toBe(false);
+    expect(verdict.violations.join(" ")).toMatch(/backend holds 80/);
+  });
+
+  it("flags a stale retry from the losing tab that the backend accepted", () => {
+    const verdict = evaluateConcurrentEditRace({
+      tabs: [
+        { tab: "A", intendedAmount: 50, outcome: "SUCCESS" },
+        { tab: "B", intendedAmount: 80, outcome: "REFUSED", message: LOCKED },
+      ],
+      authoritative: { amount: 50, status: "PAID" },
+      staleRetry: { outcome: "SUCCESS" },
+    });
+    expect(verdict.passed).toBe(false);
+    expect(verdict.violations.join(" ")).toMatch(/stale retry/);
+  });
+
+  it("flags a backend left unpaid after a tab reported a successful payment", () => {
+    const verdict = evaluateConcurrentEditRace({
+      tabs: [
+        { tab: "A", intendedAmount: 50, outcome: "SUCCESS" },
+        { tab: "B", intendedAmount: 80, outcome: "REFUSED", message: LOCKED },
+      ],
+      authoritative: { amount: 50, status: "PENDING" },
+      staleRetry: { outcome: "REFUSED", message: LOCKED },
+    });
+    expect(verdict.passed).toBe(false);
+  });
+
+  it("is inconclusive when a tab's outcome was never observed", () => {
+    expect(() =>
+      evaluateConcurrentEditRace({
+        tabs: [
+          { tab: "A", intendedAmount: 50, outcome: "SUCCESS" },
+          { tab: "B", intendedAmount: 80, outcome: "UNKNOWN" },
+        ],
+        authoritative: { amount: 50, status: "PAID" },
+        staleRetry: { outcome: "REFUSED", message: LOCKED },
+      }),
+    ).toThrow(BrowserSwarmOracleInconclusiveError);
+  });
+
+  it("is inconclusive, not a pass, when the loser was refused for an environmental reason", () => {
+    expect(() =>
+      evaluateConcurrentEditRace({
+        tabs: [
+          { tab: "A", intendedAmount: 50, outcome: "SUCCESS" },
+          {
+            tab: "B",
+            intendedAmount: 80,
+            outcome: "REFUSED",
+            message: "Rate limit exceeded. Try again in 3s",
+          },
+        ],
+        authoritative: { amount: 50, status: "PAID" },
+        staleRetry: { outcome: "REFUSED", message: LOCKED },
+      }),
+    ).toThrow(BrowserSwarmOracleInconclusiveError);
+  });
+
+  it("flags no tab succeeding as a dead-ended workflow", () => {
+    const verdict = evaluateConcurrentEditRace({
+      tabs: [
+        { tab: "A", intendedAmount: 50, outcome: "REFUSED", message: LOCKED },
+        { tab: "B", intendedAmount: 80, outcome: "REFUSED", message: LOCKED },
+      ],
+      authoritative: { amount: 50, status: "PENDING" },
+      staleRetry: { outcome: "REFUSED", message: LOCKED },
+    });
+    expect(verdict.passed).toBe(false);
+    expect(verdict.violations.join(" ")).toMatch(/0 tabs reported success/);
   });
 });

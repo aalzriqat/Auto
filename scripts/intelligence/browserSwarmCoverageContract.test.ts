@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES,
@@ -144,6 +146,18 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
       )
       .sort();
     expect(fullyCovered).toEqual(["ECON-2", "UI-1"]);
+  });
+
+  it("keeps the economic attacks inside the shared egress-contained browser lifecycle", () => {
+    // The economic handlers must never launch their own browser or context:
+    // the only launch path is openMissionBrowser, which REQUIRES the egress
+    // proxy (SCRUM-784). A second launch path would be an unconstrained one.
+    const source = readFileSync(
+      path.join(__dirname, "browserSwarmEconomicAttacks.ts"),
+      "utf8",
+    );
+    expect(source).not.toMatch(/chromium|firefox|webkit|\.launch\(|newContext\(/);
+    expect(source).not.toMatch(/storageState/);
   });
 
   it("keeps the handler registry, the executable set and Jev admission in lockstep", () => {

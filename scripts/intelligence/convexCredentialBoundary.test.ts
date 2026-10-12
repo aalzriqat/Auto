@@ -187,8 +187,12 @@ function localUses(workflow: Workflow): string[] {
 
 // sha256 of each workflow that can reach a Convex credential.
 const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
+  // SCRUM-826: re-pinned for two prepare-job steps only — the trusted
+  // pre-provisioning coverage gate (`pnpm browser-swarm:coverage-gate` in
+  // `trusted/`, no secrets, no candidate path) and the upload of its refusal
+  // evidence — plus the coverage json in the plan evidence upload.
   "browser-attack-swarm.yml":
-    "623452bfa9c79d9c61193892dd715f27c5f217b5947942d9d0947fb68dac2ba2",
+    "0813fefd8357581403befd4930665e6661803ca8057e1218f67449629bbf0485",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":

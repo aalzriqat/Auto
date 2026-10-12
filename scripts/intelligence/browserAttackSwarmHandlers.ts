@@ -17,6 +17,7 @@ import {
   browserEgressLaunchOptions,
 } from "./browserEgressLaunch.mjs";
 import type { BrowserMissionEvidence } from "./browserAttackSwarm";
+import { createEconomicAttackHandlers } from "./browserSwarmEconomicAttacks";
 
 type ArtifactWriter = {
   root: string;
@@ -479,5 +480,15 @@ export function createInitialBrowserAttackHandlers(): BrowserAttackHandlerRegist
   return {
     RTL_PARITY: runRtlParityAttack,
     UI_BACKEND_MISMATCH: runUiBackendMismatchAttack,
+    // SCRUM-826: the economic attacks reuse this module's egress-contained
+    // browser lifecycle and evidence writer; they never launch their own.
+    ...createEconomicAttackHandlers({
+      open: openMissionBrowser,
+      finish: finishMissionBrowser,
+      rethrowAfterCleanup: rethrowAfterMissionCleanup,
+      writeBackendEvidence,
+      resolveOrgRoute,
+      authenticatedClient: authenticatedConvexClient,
+    }),
   };
 }
