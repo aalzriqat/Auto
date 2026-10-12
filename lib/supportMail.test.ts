@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   buildPreview,
   collapseBlankLines,
+  htmlToPlainText,
   isLikelyAutomated,
   isNoReplyAddress,
   resolveThreadCategory,
@@ -116,6 +117,19 @@ describe("buildPreview", () => {
 
   test("keeps Arabic text intact", () => {
     expect(buildPreview("السلام عليكم\n\nلدينا ثلاثة معارض")).toBe("السلام عليكم لدينا ثلاثة معارض");
+  });
+});
+
+describe("htmlToPlainText", () => {
+  test("keeps block structure as newlines, drops script/style/head", () => {
+    const html =
+      "<html><head><title>x</title><style>p{}</style></head><body><p>Hello&nbsp;<b>world</b></p><div>Line&nbsp;2<br>Line 3</div><script>alert(1)</script></body></html>";
+    expect(htmlToPlainText(html)).toBe("Hello world\nLine 2\nLine 3");
+  });
+
+  test("decodes named and numeric entities and never turns an escaped tag into markup", () => {
+    expect(htmlToPlainText("<p>a &amp; b &#8212; c</p>")).toBe("a & b — c");
+    expect(htmlToPlainText("<p>&lt;script&gt;</p>")).toBe("<script>");
   });
 });
 

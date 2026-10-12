@@ -117,12 +117,27 @@ const HTML_ENTITIES: Record<string, string> = {
   "&apos;": "'",
 };
 
-function stripHtmlToText(html: string): string {
-  return html
-    .replace(/<(script|style|head)\b[\s\S]*?<\/\1\s*>/gi, " ")
-    .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/&(?:nbsp|amp|lt|gt|quot|apos|#39);/gi, (m) => HTML_ENTITIES[m.toLowerCase()] ?? m);
+/**
+ * Tag-stripped text of an HTML email body. Block-level ends become newlines so
+ * the plain-text view of an HTML-only message stays readable. Regex-based on
+ * purpose (it runs in the Convex runtime, which has no DOM); the output is only
+ * ever rendered as TEXT, never as markup.
+ */
+export function htmlToPlainText(html: string): string {
+  return collapseBlankLines(
+    html
+      .replace(/<(script|style|head)\b[\s\S]*?<\/\1\s*>/gi, " ")
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(/<br\s*\/?>|<\/(?:p|div|tr|li|h[1-6]|table|blockquote)\s*>/gi, "\n")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/&(?:nbsp|amp|lt|gt|quot|apos|#39);/gi, (m) => HTML_ENTITIES[m.toLowerCase()] ?? m)
+      .replace(/&#(\d{1,6});/g, (m, code: string) => {
+        const point = Number(code);
+        return point > 0 && point <= 0x10ffff ? String.fromCodePoint(point) : m;
+      })
+      .replace(/[ \t]+/g, " ")
+      .replace(/ ?\n ?/g, "\n")
+  ).trim();
 }
 
 /**
@@ -132,7 +147,7 @@ function stripHtmlToText(html: string): string {
  * in half).
  */
 export function buildPreview(bodyText?: string | null, bodyHtml?: string | null): string {
-  const source = bodyText && bodyText.trim() ? bodyText : bodyHtml ? stripHtmlToText(bodyHtml) : "";
+  const source = bodyText && bodyText.trim() ? bodyText : bodyHtml ? htmlToPlainText(bodyHtml) : "";
   const cleaned = source.replace(ANGLE_LINK, " ").replace(/\s+/g, " ").trim();
   const points = Array.from(cleaned);
   return points.length <= PREVIEW_MAX_LENGTH ? cleaned : points.slice(0, PREVIEW_MAX_LENGTH).join("").trimEnd();
