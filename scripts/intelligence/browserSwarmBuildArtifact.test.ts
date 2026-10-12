@@ -471,6 +471,20 @@ describe("SCRUM-824 dangling pnpm hoist-index links", () => {
     }
   });
 
+  it("rejects a canonical-shaped dangling link whose store directory is a symlink elsewhere (Opus F1 S12)", async () => {
+    const f = await fixture();
+    try {
+      const index = await hoistIndex(f);
+      const elsewhere = path.join(f.candidateRoot, "elsewhere");
+      await mkdir(elsewhere, { recursive: true });
+      await symlink(elsewhere, path.join(index, "../x@1.0.0"), "dir");
+      await symlink("../x@1.0.0/node_modules/x", path.join(index, "x"), "dir");
+      await expect(build(f)).rejects.toThrow(/not a pnpm hoist-index link/i);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it("refuses non-canonical hoist targets: '..' climbs and name mismatches (Opus F1 S2)", async () => {
     const f = await fixture();
     try {
