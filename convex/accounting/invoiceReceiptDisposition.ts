@@ -5,6 +5,10 @@ import { createCanonicalPayment } from "../subledger";
 import { postAccountingEvent } from "./postingEngine";
 import { loadRetainedPosition } from "./receiptMovement";
 import {
+  assertCustomerCreditPayoutAllowed,
+  assertCustomerCreditPayoutMethodSupported,
+} from "../utils/customerCreditPayoutContainment";
+import {
   reverseActiveInvoiceReceiptApplications,
   type ActiveInvoiceUnwind,
 } from "./invoiceReceiptActivation";
@@ -42,6 +46,13 @@ export async function disposeActiveSaleInvoiceReceipts(
   const totalMinor = args.applications.reduce((sum, row) => sum + row.application.amountMinor, 0);
   if (!Number.isSafeInteger(totalMinor)) throw new ConvexError("Active customer receipt total is invalid.");
   const payout = args.payout;
+  // SCRUM-724 / SCRUM-795 c22479 + Sol Q7: the shared payout boundary. Every door
+  // that can pay a customer out funnels here, so the pilot refusal lives here as
+  // well as at each public door. It runs before any write.
+  if ((args.disposition === "REFUND" && totalMinor > 0) || payout !== undefined) {
+    assertCustomerCreditPayoutAllowed();
+  }
+  if (payout !== undefined) assertCustomerCreditPayoutMethodSupported(payout.method);
   if (args.disposition === "REFUND" && totalMinor > 0) {
     if (!payout || !Number.isSafeInteger(payout.amountMinor) || payout.amountMinor <= 0 ||
         payout.amountMinor > totalMinor ||

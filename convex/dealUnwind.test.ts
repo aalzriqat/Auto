@@ -14,7 +14,7 @@
 import {
   C, G, H, finalizeAsOwner, readyDeal, refusalMessageOf, seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { isFinanceCashReceivedReversalPosted, placeReturnedVehicleInInspection, UNWIND_BADGE_BATCH_MAX } from "./dealUnwind";
@@ -34,6 +34,21 @@ vi.mock("./rateLimit", () => ({
   },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
+
+/**
+ * Test-only handle on the pilot switch. Production reads the `true as const`
+ * constant; nothing a client sends can reach this. Default = the shipped value.
+ */
+const payoutSwitch = vi.hoisted(() => ({ disabled: true }));
+vi.mock("./utils/customerCreditPayoutContainment", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./utils/customerCreditPayoutContainment")>();
+  return {
+    ...original,
+    get CUSTOMER_CREDIT_PAYOUT_PILOT_DISABLED() { return payoutSwitch.disabled; },
+    assertCustomerCreditPayoutAllowed: (disabled: boolean = payoutSwitch.disabled) =>
+      original.assertCustomerCreditPayoutAllowed(disabled),
+  };
+});
 
 const MODULES = import.meta.glob("./**/*.ts");
 
@@ -148,7 +163,11 @@ const finishArgs = (s: Seeded, unwindId: Id<"dealUnwinds">, method: "BANK_TRANSF
   idempotencyKey: crypto.randomUUID(),
 });
 
-describe("SCRUM-723 customer receipt disposition during paid-deal unwind", () => {
+describe("SCRUM-723 customer receipt disposition during paid-deal unwind (pilot switch flipped off)", () => {
+  // These exercise the payout mechanics that stay dormant while the pilot switch is on.
+  beforeEach(() => { payoutSwitch.disabled = false; });
+  afterEach(() => { payoutSwitch.disabled = true; });
+
   test("a later return of the source cheque refuses while its customer payout remains", async () => {
     const { s, applicationId, chequeId, movement } =
       await paidDealWithActiveCustomerReceipt("s723bounce");
@@ -157,7 +176,7 @@ describe("SCRUM-723 customer receipt disposition during paid-deal unwind", () =>
     await s.owner.as.mutation(api.dealUnwind.finishDealUnwind, {
       ...finishArgs(s, unwindId),
       customerRefundAmountMinor: 2000,
-      customerRefundMethod: "CASH",
+      customerRefundMethod: "BANK_TRANSFER",
       customerRefundReference: "CUST-PV-BOUNCE",
       customerRefundedAt: Date.now(),
     });
@@ -180,7 +199,7 @@ describe("SCRUM-723 customer receipt disposition during paid-deal unwind", () =>
     const args = {
       ...finishArgs(s, unwindId),
       customerRefundAmountMinor: 2000,
-      customerRefundMethod: "CASH" as const,
+      customerRefundMethod: "BANK_TRANSFER" as const,
       customerRefundReference: "CUST-PV-1",
       customerRefundedAt: Date.now(),
     };
@@ -189,7 +208,7 @@ describe("SCRUM-723 customer receipt disposition during paid-deal unwind", () =>
 
     const completed = await s.t.run((ctx) => ctx.db.get(unwindId));
     expect(completed?.completion?.customerReceiptSettlement).toMatchObject({
-      refundedMinor: 2000, retainedMinor: 1000, method: "CASH", reference: "CUST-PV-1",
+      refundedMinor: 2000, retainedMinor: 1000, method: "BANK_TRANSFER", reference: "CUST-PV-1",
     });
     expect((await s.t.run((ctx) => ctx.db.get(applicationReceiptId)))?.status).toBe("REVERSED");
     expect((await s.t.run((ctx) => ctx.db.get(activated.remainderApplicationId!)))?.status).toBe("CANCELLED");
@@ -200,7 +219,7 @@ describe("SCRUM-723 customer receipt disposition during paid-deal unwind", () =>
     expect(position?.remainingUnappliedMinor).toBe(8000);
     const paymentId = completed!.completion!.customerReceiptSettlement!.refundPaymentIds[0];
     const payment = await s.t.run((ctx) => ctx.db.get(paymentId));
-    expect(payment).toMatchObject({ direction: "OUT", status: "SETTLED", amountMinor: 2000, method: "CASH" });
+    expect(payment).toMatchObject({ direction: "OUT", status: "SETTLED", amountMinor: 2000, method: "BANK_TRANSFER" });
     const refundEventId = completed!.completion!.customerReceiptSettlement!.refundEventIds[0];
     const refundEvent = await s.t.run((ctx) => ctx.db.get(refundEventId));
     expect(refundEvent).toMatchObject({ status: "POSTED", eventType: "RETAINED_CREDIT_REFUNDED" });
@@ -214,7 +233,7 @@ describe("SCRUM-723 customer receipt disposition during paid-deal unwind", () =>
       })));
     });
     expect(refundLines.find((line) => line.key === SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY)?.debit).toBe(2000);
-    expect(refundLines.find((line) => line.key === SYSTEM_KEYS.CASH_ON_HAND)?.credit).toBe(2000);
+    expect(refundLines.find((line) => line.key === SYSTEM_KEYS.BANK_ACCOUNT)?.credit).toBe(2000);
     await expect(s.owner.as.mutation(api.dealUnwind.finishDealUnwind, {
       ...args, idempotencyKey: crypto.randomUUID(),
     })).rejects.toThrow();
@@ -293,7 +312,7 @@ describe("SCRUM-723 customer receipt disposition during paid-deal unwind", () =>
     }));
     await expect(s.owner.as.mutation(api.dealUnwind.finishDealUnwind, {
       ...finishArgs(s, unwindId), orgId: otherOrgId,
-      customerRefundAmountMinor: 3000, customerRefundMethod: "CASH",
+      customerRefundAmountMinor: 3000, customerRefundMethod: "BANK_TRANSFER",
       customerRefundReference: "OTHER-PAYOUT", customerRefundedAt: Date.now(),
     })).rejects.toThrow();
     expect((await s.t.run((ctx) => ctx.db.get(applicationReceiptId)))?.status).toBe("ACTIVE");
@@ -1279,5 +1298,155 @@ describe("SCRUM-713 - the default MANAGER role can unwind a paid deal without re
     expect(await refusalMessageOf(start(s, applicationId, crypto.randomUUID(), s.sales.as))).toBeTruthy();
     const unwindId = await start(s, applicationId);
     await expect(finish(s, unwindId, "BANK_TRANSFER", s.sales.as)).rejects.toThrow();
+  });
+});
+
+/** The structured code of a refusal, or null when the call was accepted. */
+async function refusalCodeOf(promise: Promise<unknown>): Promise<string | null> {
+  try {
+    await promise;
+  } catch (error) {
+    return String((error as { data?: { code?: unknown } })?.data?.code ?? (error as Error)?.message ?? error);
+  }
+  return null;
+}
+
+describe("SCRUM-724 / SCRUM-795 c22479 + Sol Q7 - no new customer payout leaves the unwind door during the pilot", () => {
+  const payout = {
+    customerRefundAmountMinor: 2000, customerRefundMethod: "BANK_TRANSFER" as const,
+    customerRefundReference: "CUST-TRF-9",
+  };
+  const untouched = async (
+    f: Awaited<ReturnType<typeof paidDealWithActiveCustomerReceipt>>,
+    unwindId: Id<"dealUnwinds">
+  ) => {
+    const { s, applicationId, applicationReceiptId, activated } = f;
+    expect((await s.t.run((ctx) => ctx.db.get(unwindId)))?.status).toBe("ACTIVE");
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
+    expect((await s.t.run((ctx) => ctx.db.get(applicationReceiptId)))?.status).toBe("ACTIVE");
+    expect((await s.t.run((ctx) => ctx.db.get(activated.allocationId)))?.status).toBe("ACTIVE");
+    const outs = await s.t.run((ctx) => ctx.db.query("canonicalPayments")
+      .withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect()
+      .then((rows) => rows.filter((row) => row.direction === "OUT" && row.payerType === "CUSTOMER")));
+    expect(outs).toHaveLength(0);
+    const events = await s.t.run((ctx) => ctx.db.query("accountingEvents").collect()
+      .then((rows) => rows.filter((row) => row.orgId === s.orgId && row.eventType === "RETAINED_CREDIT_REFUNDED")));
+    expect(events).toHaveLength(0);
+  };
+
+  test("the switch is ON in this build", async () => {
+    const real = await vi.importActual<typeof import("./utils/customerCreditPayoutContainment")>(
+      "./utils/customerCreditPayoutContainment"
+    );
+    expect(real.CUSTOMER_CREDIT_PAYOUT_PILOT_DISABLED).toBe(true);
+    expect(() => real.assertCustomerCreditPayoutAllowed()).toThrow();
+  });
+
+  test("premise: the shipped MANAGER template can finish an unwind but lacks MANAGE_FINANCE", () => {
+    expect(TEMPLATE_MANAGER_PERMS).not.toContain("manage:finance");
+    expect(TEMPLATE_MANAGER_PERMS).toContain("cancel:closed_deal");
+    expect(TEMPLATE_MANAGER_PERMS).toContain("confirm:finance_disbursement");
+  });
+
+  test("R2: a template MANAGER requesting a customer payout is refused for permission, and nothing moves", async () => {
+    const f = await paidDealWithActiveCustomerReceipt("s724mgr");
+    const { s, applicationId } = f;
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    await expect(s.templateManager.as.mutation(api.dealUnwind.finishDealUnwind, {
+      ...finishArgs(s, unwindId), ...payout, customerRefundedAt: Date.now(),
+    })).rejects.toThrow(/manage:finance/i);
+    await untouched(f, unwindId);
+  });
+
+  test("R2: a template MANAGER choosing REFUND over active credit WITHOUT payout fields is also refused for permission", async () => {
+    const f = await paidDealWithActiveCustomerReceipt("s724mgr2");
+    const { s, applicationId } = f;
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    await expect(s.templateManager.as.mutation(api.dealUnwind.finishDealUnwind, finishArgs(s, unwindId)))
+      .rejects.toThrow(/manage:finance/i);
+    await untouched(f, unwindId);
+  });
+
+  test("a finance owner's positive payout is refused CUSTOMER_CREDIT_PAYOUT_DISABLED with every ACTIVE claim intact", async () => {
+    const f = await paidDealWithActiveCustomerReceipt("s724owner");
+    const { s, applicationId } = f;
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    expect(await refusalCodeOf(s.owner.as.mutation(api.dealUnwind.finishDealUnwind, {
+      ...finishArgs(s, unwindId), ...payout, customerRefundedAt: Date.now(),
+    }))).toBe("CUSTOMER_CREDIT_PAYOUT_DISABLED");
+    await untouched(f, unwindId);
+  });
+
+  test("REFUND over active credit with no payout fields is refused with the pilot code, not a validation hint", async () => {
+    const f = await paidDealWithActiveCustomerReceipt("s724nofields");
+    const { s, applicationId } = f;
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    expect(await refusalCodeOf(s.owner.as.mutation(api.dealUnwind.finishDealUnwind, finishArgs(s, unwindId))))
+      .toBe("CUSTOMER_CREDIT_PAYOUT_DISABLED");
+    await untouched(f, unwindId);
+  });
+
+  test("positive control: RETAIN_CREDIT still finishes (also for a template MANAGER) and REFUND with zero active credit still finishes", async () => {
+    const f = await paidDealWithActiveCustomerReceipt("s724retain");
+    const { s, applicationId } = f;
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    await s.templateManager.as.mutation(api.dealUnwind.finishDealUnwind, {
+      ...finishArgs(s, unwindId), customerPaymentDisposition: "RETAIN_CREDIT",
+    });
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+    const { s: s2, applicationId: app2 } = await paidDeal("s724zero");
+    const u2 = await start(s2, app2);
+    await forwardReturn(s2, u2);
+    await finish(s2, u2, "BANK_TRANSFER", s2.templateManager.as);
+    expect((await s2.t.run((ctx) => ctx.db.get(app2)))?.status).toBe("CANCELLED");
+  });
+
+  test("R3: a CASH customer payout stays refused even with the switch flipped off", async () => {
+    payoutSwitch.disabled = false;
+    try {
+      const f = await paidDealWithActiveCustomerReceipt("s724cash");
+      const { s, applicationId } = f;
+      const unwindId = await start(s, applicationId);
+      await forwardReturn(s, unwindId);
+      expect(await refusalCodeOf(s.owner.as.mutation(api.dealUnwind.finishDealUnwind, {
+        ...finishArgs(s, unwindId), ...payout, customerRefundMethod: "CASH", customerRefundedAt: Date.now(),
+      }))).toBe("CUSTOMER_CREDIT_CASH_PAYOUT_UNSUPPORTED");
+      await untouched(f, unwindId);
+    } finally {
+      payoutSwitch.disabled = true;
+    }
+  });
+
+  test("the pure guards: switch refuses, CASH refuses, bank passes when the switch is off", async () => {
+    const real = await vi.importActual<typeof import("./utils/customerCreditPayoutContainment")>(
+      "./utils/customerCreditPayoutContainment"
+    );
+    expect(() => real.assertCustomerCreditPayoutAllowed(true)).toThrow();
+    expect(() => real.assertCustomerCreditPayoutAllowed(false)).not.toThrow();
+    expect(() => real.assertCustomerCreditPayoutMethodSupported("CASH")).toThrow();
+    expect(() => real.assertCustomerCreditPayoutMethodSupported("BANK_TRANSFER")).not.toThrow();
+  });
+
+  test("unwindStatus does not offer a customer payout while the switch is on", async () => {
+    const f = await paidDealWithActiveCustomerReceipt("s724status");
+    const { s, applicationId } = f;
+    const unwindId = await start(s, applicationId);
+    await forwardReturn(s, unwindId);
+    const view = await s.owner.as.query(api.dealUnwind.unwindStatus, { orgId: s.orgId, applicationId });
+    expect(view.evidence).toMatchObject({ customerReceiptMinor: 3000, customerPayoutAvailable: false });
+    payoutSwitch.disabled = false;
+    try {
+      const open = await s.owner.as.query(api.dealUnwind.unwindStatus, { orgId: s.orgId, applicationId });
+      expect(open.evidence).toMatchObject({ customerPayoutAvailable: true });
+      const mgr = await s.templateManager.as.query(api.dealUnwind.unwindStatus, { orgId: s.orgId, applicationId });
+      expect(mgr.evidence).toMatchObject({ customerPayoutAvailable: false });
+    } finally {
+      payoutSwitch.disabled = true;
+    }
   });
 });
