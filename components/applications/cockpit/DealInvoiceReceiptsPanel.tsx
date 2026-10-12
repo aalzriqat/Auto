@@ -252,7 +252,9 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
         const intent = `sale-clear-cheque:${chequeId}`;
         await clearCheque({ orgId, chequeId, idempotencyKey: command.for(intent) });
         command.retire(intent);
-        setNotice(t("DealReceiptChequeCleared"));
+        // Never "reserved for this invoice": the server reserves only on a live
+        // intent with the doors open; otherwise the face is unreserved credit.
+        setNotice(t("DealReceiptChequeClearedToCredit"));
       }
     } catch (failure) {
       showFailure(failure, "DealReceiptChequeActionFailed");

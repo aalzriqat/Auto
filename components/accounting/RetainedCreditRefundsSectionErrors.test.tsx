@@ -66,7 +66,7 @@ const UNCODED: ReadonlyArray<[string, () => unknown]> = [
   ["code with no translation", () => new ConvexError({ code: "FORBIDDEN", message: "Forbidden: missing permission" })],
 ];
 
-const refundRow = (over: Record<string, unknown>) => ({
+const refundRow = (over: { status: "PENDING" | "APPROVED" }) => ({
   _id: "r1", orgId: "org1", amountMinor: 1200, currency: "JOD", customerName: "Layla Haddad",
   sourceChequeLabel: "Arab Bank #004512", originatingSaleStatus: "CANCELLED", requestedByMe: false, ...over,
 });

@@ -7,7 +7,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
-import { getLocalizedErrorMessage } from "@/lib/errors";
+import { getCodedErrorMessage } from "@/lib/errors";
 import { formatMoneyDisplay, moneyDisplayScale } from "@/lib/moneyDisplay";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,6 +46,11 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage, pay
   const payoutReasonId = useId();
   const rows = [...(pending ?? []), ...(approved ?? [])];
 
+  /** A coded refusal in the user's language, else the queue's own message: never server English. */
+  function showFailure(error: unknown) {
+    toast.error(getCodedErrorMessage(error, t) ?? t("RetainedCreditRefundActionFailed"));
+  }
+
   async function onDecide(requestId: Id<"retainedCreditRefundRequests">, status: "APPROVED" | "REJECTED") {
     if (busyId || (status === "APPROVED" && !payoutAvailable)) return;
     setBusyId(requestId);
@@ -55,7 +60,7 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage, pay
       command.retire(intent);
       toast.success(t(status === "APPROVED" ? "RetainedCreditRefundApproved" : "RetainedCreditRefundRejected"));
     } catch (error) {
-      toast.error(getLocalizedErrorMessage(error, t));
+      showFailure(error);
     } finally { setBusyId(null); }
   }
 
@@ -67,7 +72,7 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage, pay
       await cancel({ orgId, requestId, reason });
       toast.success(t("RetainedCreditRefundCancelled"));
     } catch (error) {
-      toast.error(getLocalizedErrorMessage(error, t));
+      showFailure(error);
     } finally { setBusyId(null); }
   }
 
@@ -86,7 +91,7 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage, pay
       delete paidAtByRequest.current[requestId];
       toast.success(t("RetainedCreditRefundPaid"));
     } catch (error) {
-      toast.error(getLocalizedErrorMessage(error, t));
+      showFailure(error);
     } finally { setBusyId(null); }
   }
 

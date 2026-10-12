@@ -194,7 +194,8 @@ describe("DealInvoiceReceiptsPanel under the SCRUM-724 pilot switches", () => {
     await vi.waitFor(() => expect(mutation("collections:clearCheque")).toHaveBeenCalledTimes(1));
     const notice = await screen.findByText(CLEARED[locale]);
     expect(notice.tagName).toBe("OUTPUT");
-    expect(screen.queryByText((locale === "ar" ? AR : EN).DealReceiptChequeCleared)).toBeNull();
+    // The pre-review copy, as literals: it claimed a reservation the server may not make.
+    expect(screen.queryByText(/reserved for this invoice|وحُجز للفاتورة/)).toBeNull();
   });
 
   test("a held cheque the invoice can still cover is depositable with the doors off (deposit is never switch-gated)", () => {
