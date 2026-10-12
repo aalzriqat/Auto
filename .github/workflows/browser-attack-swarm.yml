@@ -844,7 +844,13 @@ jobs:
 
       - name: Prove browser egress containment before authenticated traffic
         working-directory: trusted
-        run: node scripts/intelligence/browserEgressProof.mjs | tee egress-evidence/browser-egress-proof.json
+        env:
+          BROWSER_EGRESS_PROXY_LOG: egress-evidence/browser-egress-proxy.log
+        run: |
+          # pipefail: a failing proof must fail this step, not be masked by tee.
+          set -euo pipefail
+          node scripts/intelligence/browserEgressProof.mjs | tee egress-evidence/browser-egress-proof.json
+          node scripts/intelligence/browserEgressProofVerify.mjs egress-evidence/browser-egress-proof.json
 
       - name: Run full trusted E2E suite against exact candidate
         working-directory: trusted
@@ -1142,7 +1148,13 @@ jobs:
 
       - name: Prove browser egress containment before authenticated traffic
         working-directory: trusted
-        run: node scripts/intelligence/browserEgressProof.mjs | tee egress-evidence/browser-egress-proof.json
+        env:
+          BROWSER_EGRESS_PROXY_LOG: egress-evidence/browser-egress-proxy.log
+        run: |
+          # pipefail: a failing proof must fail this step, not be masked by tee.
+          set -euo pipefail
+          node scripts/intelligence/browserEgressProof.mjs | tee egress-evidence/browser-egress-proof.json
+          node scripts/intelligence/browserEgressProofVerify.mjs egress-evidence/browser-egress-proof.json
 
       - name: Execute trusted browser missions
         working-directory: trusted

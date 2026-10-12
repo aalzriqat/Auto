@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { newContainedContext } from "../containedContext";
 import {
   APPROVER_AUTH_FILE,
   createCustomer,
@@ -109,7 +110,7 @@ test.describe("recording a financed deal's economics through the interface", () 
     const dealUrl = await createFinancedApplication(page, { model, customer });
 
     // --- the manager, at the same dealership, on their own browser ---------
-    const approverContext = await browser.newContext({
+    const approverContext = await newContainedContext(browser, {
       storageState: APPROVER_AUTH_FILE,
     });
     const managerPage = await approverContext.newPage();

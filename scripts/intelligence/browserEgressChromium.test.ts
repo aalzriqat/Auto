@@ -65,6 +65,7 @@ describe.runIf(process.env.BROWSER_EGRESS_CHROMIUM_TESTS === "1")(
           env: { [BROWSER_EGRESS_PROXY_ENV]: `http://127.0.0.1:${proxy.port}` },
           allowedOrigin: origin,
           allowedPath: "/api/health",
+          readProxyLog: () => proxy.denied.join("\n"),
         });
         expect(result.failures).toEqual([]);
         expect(result.ok).toBe(true);
@@ -72,7 +73,10 @@ describe.runIf(process.env.BROWSER_EGRESS_CHROMIUM_TESTS === "1")(
         expect(result.allowedStatus).toBe(200);
         // The attempts really happened and were refused by the proxy.
         expect(proxy.denied.length).toBeGreaterThan(0);
-        expect(proxy.denied.join("\n")).toContain("127.0.0.2");
+        // G4-01: the host is never logged; the probe is evidenced by reason code.
+        expect(proxy.denied.join("\n")).not.toContain("127.0.0.2");
+        expect(result.proxyDenials?.["not-allowlisted-loopback"]).toBeGreaterThan(0);
+        expect(result.proxyDenials?.unrecognized).toBe(0);
         expect((result.channels as Record<string, string>)["service-worker"]).toBe("blocked");
         expect(JSON.stringify(proxy.denied)).not.toContain("SECRET");
       } finally {

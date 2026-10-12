@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { test, expect } from "@playwright/test";
+import { newContainedContext } from "../containedContext";
 
 /**
  * SCRUM-571 S1 — the held-payments section and the Expire-link confirmation,
@@ -119,7 +120,7 @@ for (const locale of LOCALES) {
   for (const viewport of VIEWPORTS) {
     for (const state of STATES) {
       test(`${state.name} · ${locale} · ${viewport.name}px`, async ({ browser }) => {
-        const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+        const context = await newContainedContext(browser, { viewport: { width: viewport.width, height: viewport.height } });
         const page = await context.newPage();
         try {
           const file = resolve(FIXTURES, `page-${state.name}-${locale}-${viewport.name}.html`);

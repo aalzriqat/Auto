@@ -14,6 +14,7 @@ type WorkflowStep = {
   with?: Record<string, unknown>;
   env?: Record<string, unknown>;
   run?: string;
+  shell?: string;
 };
 
 type WorkflowJob = {
@@ -890,6 +891,43 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       ["trusted-e2e", "Run full trusted E2E suite against exact candidate"],
       ["attack-worker", "Execute trusted browser missions"],
     ] as const;
+
+    // G4-02: GitHub's default `bash -e` has no pipefail, so
+    // `node proof | tee file` exits 0 when the proof fails. A failed or
+    // unavailable proof must stop the job before any authenticated test runs.
+    const PROOF_STEP = "Prove browser egress containment before authenticated traffic";
+
+    it.each(jobs)("%s proof step fails closed on a failing or unavailable proof", (jobName) => {
+      const proof = step(jobName, PROOF_STEP);
+      const run = String(proof.run ?? "");
+      expect(run).toMatch(/^\s*set -euo pipefail$/m);
+      const lines = run.split("\n").map((line) => line.trim());
+      const proofAt = lines.findIndex((line) => line.includes("browserEgressProof.mjs"));
+      const verifyAt = lines.findIndex((line) => line.includes("browserEgressProofVerify.mjs"));
+      expect(proofAt).toBeGreaterThan(-1);
+      // The written evidence is independently checked (ok:true, no collector
+      // traffic, allowed origin 200, service worker blocked, denial evidenced).
+      expect(verifyAt).toBeGreaterThan(proofAt);
+      expect(lines[verifyAt]).toContain("egress-evidence/browser-egress-proof.json");
+      // The proof reads the proxy's fixed-vocabulary denial log.
+      expect(proof.env).toHaveProperty(
+        "BROWSER_EGRESS_PROXY_LOG",
+        "egress-evidence/browser-egress-proxy.log",
+      );
+      expect(String(proof.shell ?? "")).not.toMatch(/^(sh|pwsh|powershell|cmd|python)/);
+    });
+
+    it("no pipeline in the workflow can mask a failing left-hand command", () => {
+      for (const [name, entry] of Object.entries(workflow.jobs ?? {})) {
+        for (const stepEntry of entry.steps ?? []) {
+          const run = String(stepEntry.run ?? "");
+          if (!/\|\s*tee\b/.test(run)) continue;
+          const failsClosed =
+            /^\s*set -[a-z]*o pipefail\b/m.test(run) || /^bash\b/.test(String(stepEntry.shell ?? ""));
+          expect(failsClosed, `${name}: ${stepEntry.name} pipes to tee without pipefail`).toBe(true);
+        }
+      }
+    });
 
     it.each(jobs)(
       "%s starts and proves the egress proxy before any authenticated candidate browser",

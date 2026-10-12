@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { newContainedContext } from "../containedContext";
 import type { Id } from "../../convex/_generated/dataModel";
 import { APPROVER_AUTH_FILE, authenticatedConvexClient, resolveOrgId, testDataSuffix } from "../utils";
 import { ensureFinanceCompany } from "../fixtures/financedDeal";
@@ -685,7 +686,7 @@ test.describe("financed deals, start to finish, checked through the ledger", () 
             `${s.id} LTV${s.company.ltvPercent} deposit=${s.deposit ? `${s.deposit.amount}/${s.deposit.method}` : "none"} expected=${s.expectedPayment} forward=${s.forwardMethod ?? "none"} — ${s.title}`,
         ).join("\n"),
     );
-    const context = await browser.newContext({ storageState: "playwright/.auth/user.json" });
+    const context = await newContainedContext(browser, { storageState: "playwright/.auth/user.json" });
     const page = await context.newPage();
     const orgId = (await resolveOrgId(page)) as Id<"organizations">;
     await ensureLedgerMonthOpen(await authenticatedConvexClient(page), orgId);
@@ -715,7 +716,7 @@ test.describe("financed deals, start to finish, checked through the ledger", () 
       }
       const dealUrl = await startApplication(page, customer);
 
-      const approver = await browser.newContext({ storageState: APPROVER_AUTH_FILE });
+      const approver = await newContainedContext(browser, { storageState: APPROVER_AUTH_FILE });
       const managerPage = await approver.newPage();
       try {
         await approveCreditDecision(managerPage, dealUrl);
@@ -1023,7 +1024,7 @@ test.describe("cancelled financed deals: the reversal and the deposit decision, 
   );
 
   test.beforeAll(async ({ browser }) => {
-    const context = await browser.newContext({ storageState: "playwright/.auth/user.json" });
+    const context = await newContainedContext(browser, { storageState: "playwright/.auth/user.json" });
     const page = await context.newPage();
     const orgId = (await resolveOrgId(page)) as Id<"organizations">;
     await ensureLedgerMonthOpen(await authenticatedConvexClient(page), orgId);
@@ -1053,7 +1054,7 @@ test.describe("cancelled financed deals: the reversal and the deposit decision, 
       }
       const dealUrl = await startApplication(page, customer);
 
-      const approver = await browser.newContext({ storageState: APPROVER_AUTH_FILE });
+      const approver = await newContainedContext(browser, { storageState: APPROVER_AUTH_FILE });
       const managerPage = await approver.newPage();
       try {
         await approveCreditDecision(managerPage, dealUrl);

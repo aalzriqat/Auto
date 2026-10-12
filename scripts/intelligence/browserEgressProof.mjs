@@ -1,5 +1,6 @@
 import dgram from "node:dgram";
 import net from "node:net";
+import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { chromium } from "@playwright/test";
 import {
@@ -7,7 +8,11 @@ import {
   DEFAULT_CANDIDATE_ORIGIN,
   EGRESS_CONTEXT_OPTIONS,
   browserEgressLaunchOptions,
+  parseEgressDenialLog,
 } from "./browserEgressContainment.mjs";
+
+/** File the trusted workflow redirects the proxy's stdout into. */
+const PROXY_LOG_ENV = "BROWSER_EGRESS_PROXY_LOG";
 
 /**
  * Runtime proof that the browser launched with the egress options cannot
@@ -150,13 +155,18 @@ async function attackFromPage({ tcpPort, udpPort, host, allowedUrl }) {
  *   env?: Record<string, string | undefined>,
  *   allowedOrigin?: string,
  *   allowedPath?: string,
- *   fulfillAllowedOrigin?: boolean,
+ *   readProxyLog?: () => Promise<string> | string,
  * }} [options]
  */
 export async function runBrowserEgressProof({
   env = process.env,
   allowedOrigin = DEFAULT_CANDIDATE_ORIGIN,
   allowedPath = "/api/health",
+  // Supplies the proxy's own (fixed-vocabulary) denial log. Defaults to the file
+  // named by BROWSER_EGRESS_PROXY_LOG; when neither exists the proof fails closed.
+  readProxyLog = env[PROXY_LOG_ENV]
+    ? () => readFile(env[PROXY_LOG_ENV], "utf8")
+    : undefined,
 } = {}) {
   const launch = browserEgressLaunchOptions({ ...env, BROWSER_EGRESS_REQUIRED: "1" });
   const tcp = await startTcpCollector();
@@ -203,8 +213,28 @@ export async function runBrowserEgressProof({
   if (attackResult.allowedStatus !== 200) {
     failures.push(`allowlisted origin was not reachable through the proxy (status ${attackResult.allowedStatus})`);
   }
-  if (attackResult.outcomes["service-worker"] === "REGISTERED") {
-    failures.push("a service worker registered");
+  if (attackResult.outcomes["service-worker"] !== "blocked") {
+    failures.push("service worker registration was not reported blocked");
+  }
+
+  // Positive control: the proxy itself must have recorded the refusals. Only
+  // fixed reason codes are read back; the host of the probe is never logged.
+  /** @type {Record<string, number> | null} */
+  let proxyDenials = null;
+  try {
+    if (!readProxyLog) throw new Error("no proxy log");
+    const parsed = parseEgressDenialLog(await readProxyLog());
+    proxyDenials = { ...parsed.denials, unrecognized: parsed.unrecognized };
+  } catch {
+    failures.push("the proxy denial log could not be read");
+  }
+  if (proxyDenials) {
+    if (!(proxyDenials["not-allowlisted-loopback"] >= 1)) {
+      failures.push("the proxy did not record a denial of the loopback collector probe");
+    }
+    if (proxyDenials.unrecognized > 0) {
+      failures.push("the proxy log contained lines outside the fixed vocabulary");
+    }
   }
   return {
     ok: failures.length === 0,
@@ -213,6 +243,7 @@ export async function runBrowserEgressProof({
     allowedStatus: attackResult.allowedStatus,
     topLevelNavigation: navigation,
     channels: attackResult.outcomes,
+    proxyDenials,
   };
 }
 

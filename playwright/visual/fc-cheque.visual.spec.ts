@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { test, expect, type Page } from "@playwright/test";
+import { newContainedContext } from "../containedContext";
 
 /**
  * SCRUM-447 Gate B: the finance-company cheque lineage UI, painted.
@@ -146,7 +147,7 @@ for (const scenario of SCENARIOS) {
     for (const theme of THEMES) {
       for (const viewport of VIEWPORTS) {
         test(`${scenario} · ${locale} · ${theme} · ${viewport.name}px`, async ({ browser }) => {
-          const context = await browser.newContext({
+          const context = await newContainedContext(browser, {
             viewport: { width: viewport.width, height: viewport.height },
             colorScheme: theme,
           });

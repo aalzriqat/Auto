@@ -45,6 +45,54 @@ export const EGRESS_CHROMIUM_ARGS = Object.freeze([
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost"]);
 
 /**
+ * The complete vocabulary of the proxy's denial log (SCRUM-350 G4-01). The log
+ * is uploaded as a workflow artifact from a public repository, so it may carry
+ * only these trusted constants: never a method, host, port, path or any other
+ * byte the candidate chose. `not-allowlisted-loopback` is a coarse class
+ * (127.0.0.0/8 or localhost, but not an allowlisted authority); it exists so the
+ * proof can show its deliberate 127.0.0.2 collector probe was refused without
+ * the host being logged.
+ */
+export const EGRESS_DENIAL_REASONS = Object.freeze([
+  "not-allowlisted",
+  "not-allowlisted-loopback",
+  "unresolvable-or-private",
+  "not-absolute-form",
+  "plain-upgrade-unsupported",
+]);
+const EGRESS_DENIED_PREFIX = "egress-denied ";
+
+/** @param {string} host */
+function isLoopbackName(host) {
+  return host === "localhost" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) || host === "[::1]";
+}
+
+/**
+ * Count the proxy log's denials by reason. Any line that is not a denial with a
+ * known reason, the allowlist banner or the listening banner is counted as
+ * `unrecognized`, so a regression that logs raw request data is visible.
+ *
+ * @param {string} text
+ * @returns {{ denials: Record<string, number>, unrecognized: number }}
+ */
+export function parseEgressDenialLog(text) {
+  /** @type {Record<string, number>} */
+  const denials = {};
+  let unrecognized = 0;
+  for (const line of String(text ?? "").split(/\r?\n/)) {
+    if (line === "") continue;
+    if (line.startsWith("egress-allowlist ") || /^egress-proxy-listening 127\.0\.0\.1:\d+$/.test(line)) continue;
+    const reason = line.startsWith(EGRESS_DENIED_PREFIX) ? line.slice(EGRESS_DENIED_PREFIX.length) : "";
+    if (EGRESS_DENIAL_REASONS.includes(reason)) {
+      denials[reason] = (denials[reason] ?? 0) + 1;
+    } else {
+      unrecognized += 1;
+    }
+  }
+  return { denials, unrecognized };
+}
+
+/**
  * Playwright `launchOptions` for the egress proxy, or undefined when egress
  * containment is not requested. When BROWSER_EGRESS_REQUIRED=1 a missing or
  * malformed proxy is an error, never a silent fall-back to open egress.
@@ -197,9 +245,12 @@ async function resolveTarget(host) {
  * http) and CONNECT (https and WebSockets). Plain `Upgrade` requests are denied:
  * Chromium tunnels ws:// and wss:// through CONNECT.
  *
- * Denials are recorded as `egress-denied <METHOD> <host:port> <reason>`. Paths,
- * queries, headers and bodies are never logged: they can carry the very
- * credentials this proxy exists to contain.
+ * Denials are recorded as `egress-denied <reason>` where reason is one of the
+ * fixed EGRESS_DENIAL_REASONS. The method, host, port, path, query, headers and
+ * bodies of a denied request are never logged: every one of them is
+ * candidate-controlled and can carry the very credentials this proxy exists to
+ * contain (a page can encode a token into host labels of a request it knows
+ * will be denied), and the log is uploaded as a workflow artifact.
  *
  * @param {{ allow: string[], log?: (line: string) => void }} options
  */
@@ -211,11 +262,18 @@ export function createEgressProxy({ allow, log = () => {} }) {
   const permitted = [];
   const sockets = new Set();
 
-  /** @param {string} method @param {string} target @param {string} reason */
-  function deny(method, target, reason) {
-    const line = `egress-denied ${method} ${target} ${reason}`;
+  /** @param {string} reason one of EGRESS_DENIAL_REASONS */
+  function deny(reason) {
+    // Defence in depth: a reason outside the vocabulary can never be emitted.
+    const safe = EGRESS_DENIAL_REASONS.includes(reason) ? reason : "not-allowlisted";
+    const line = `${EGRESS_DENIED_PREFIX}${safe}`;
     denied.push(line);
     log(line);
+  }
+
+  /** @param {string} host */
+  function notAllowlistedReason(host) {
+    return isLoopbackName(host) ? "not-allowlisted-loopback" : "not-allowlisted";
   }
 
   /** @param {import("node:net").Socket} socket */
@@ -231,13 +289,13 @@ export function createEgressProxy({ allow, log = () => {} }) {
     try {
       url = new URL(req.url ?? "");
     } catch {
-      deny(req.method ?? "?", "-", "not-absolute-form");
+      deny("not-absolute-form");
       res.writeHead(403).end("egress denied");
       return;
     }
     const authority = `${url.hostname}:${url.port || "80"}`.toLowerCase();
     if (url.protocol !== "http:" || !allowed.has(authority)) {
-      deny(req.method ?? "?", authority, "not-allowlisted");
+      deny(notAllowlistedReason(url.hostname));
       res.writeHead(403, { "content-type": "text/plain" }).end("egress denied");
       return;
     }
@@ -245,7 +303,7 @@ export function createEgressProxy({ allow, log = () => {} }) {
     try {
       address = await resolveTarget(url.hostname);
     } catch {
-      deny(req.method ?? "?", authority, "unresolvable-or-private");
+      deny("unresolvable-or-private");
       res.writeHead(502).end("egress denied");
       return;
     }
@@ -281,7 +339,7 @@ export function createEgressProxy({ allow, log = () => {} }) {
     const parsed = parseAuthority(req.url ?? "", 0);
     const authority = parsed ? `${parsed.host}:${parsed.port}` : "-";
     if (!parsed || parsed.port === 0 || !allowed.has(authority)) {
-      deny("CONNECT", authority, "not-allowlisted");
+      deny(notAllowlistedReason(parsed ? parsed.host : ""));
       clientSocket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
       return;
     }
@@ -289,7 +347,7 @@ export function createEgressProxy({ allow, log = () => {} }) {
     try {
       address = await resolveTarget(parsed.host);
     } catch {
-      deny("CONNECT", authority, "unresolvable-or-private");
+      deny("unresolvable-or-private");
       clientSocket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
       return;
     }
@@ -312,7 +370,7 @@ export function createEgressProxy({ allow, log = () => {} }) {
   });
 
   server.on("upgrade", (req, socket) => {
-    deny("UPGRADE", "-", "plain-upgrade-unsupported");
+    deny("plain-upgrade-unsupported");
     socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
   });
 
