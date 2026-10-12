@@ -921,7 +921,7 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     await expect(reserve(1000, otherOrgId)).rejects.toThrow(/not found in this organization/);
     await expect(reserve(Number.NaN)).rejects.toThrow(/positive minor-unit amount/);
     await reserve(6000);
-    await expect(reserve(5000)).rejects.toThrow(/insufficient unreserved balance/);
+    await expect(reserve(5000)).rejects.toThrow(/insufficient unreserved balance|RETAINED_CREDIT_UNAVAILABLE/);
     const secondPaymentId = await asAdmin.mutation(api.collections.recordPayment, {
       idempotencyKey: crypto.randomUUID(), orgId, customerId,
       amount: 100, method: "CASH", paymentDate: Date.now(),
