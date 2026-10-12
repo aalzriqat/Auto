@@ -676,7 +676,9 @@ const errCode = (promise: Promise<unknown>) =>
 const refundApi = () => (api as any).retainedCreditRefunds;
 
 async function allRows(s: Seeded, table: "invoiceReceiptApplications" | "retainedCreditRefundRequests" | "collectionPayments" | "canonicalPayments" | "postDatedCheques") {
-  return await s.t.run((ctx) => ctx.db.query(table).collect());
+  // Loosely typed on purpose: the table is a runtime argument, so the row type is a union.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (await s.t.run((ctx) => ctx.db.query(table).collect())) as Array<Record<string, any>>;
 }
 
 /** Cleared-after-cancel credit of 30.00 plus request/respond/cancel helpers. */
