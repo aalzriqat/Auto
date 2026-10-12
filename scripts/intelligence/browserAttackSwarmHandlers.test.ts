@@ -65,7 +65,55 @@ function defaultScenario(overrides: Partial<Scenario> = {}): Scenario {
   };
 }
 
-function makeBrowserFixture(scenario: Scenario) {
+// A tracing fake with the state machine of the real Playwright server
+// (playwright-core coreBundle Tracing.start/startChunk/stop), unlike the
+// always-succeeding vi.fn() pair below. SCRUM-826 / SCRUM-824 G4: the
+// Playwright TEST RUNNER starts tracing itself on every context created while
+// a test runs (trace: "retain-on-failure"), so a handler's own tracing.start()
+// threw "Tracing has been already started" and both attack workers died with
+// HARNESS_ERROR. Mock-only tracing could never see that.
+function makeStatefulTracing() {
+  const machine = { started: false, recording: false };
+  const writtenPaths: string[] = [];
+  const startOptions: unknown[] = [];
+  return {
+    machine,
+    writtenPaths,
+    startOptions,
+    start: vi.fn(async (options?: unknown) => {
+      if (machine.started) {
+        throw new Error("tracing.start: Tracing has been already started");
+      }
+      startOptions.push(options);
+      machine.started = true;
+      machine.recording = true;
+    }),
+    startChunk: vi.fn(async () => {
+      // Server behavior: a running chunk is discarded, then a new one begins.
+      if (!machine.started) {
+        throw new Error(
+          "tracing.startChunk: Must start tracing before starting a new chunk",
+        );
+      }
+      machine.recording = true;
+    }),
+    stop: vi.fn(async (options?: { path?: string }) => {
+      if (!machine.started) {
+        throw new Error("tracing.stop: Must start tracing before stopping");
+      }
+      if (options?.path && machine.recording) writtenPaths.push(options.path);
+      machine.started = false;
+      machine.recording = false;
+    }),
+  };
+}
+
+type TracingMode = "mock" | "stateful" | "runner-started";
+
+function makeBrowserFixture(
+  scenario: Scenario,
+  tracingMode: TracingMode = "mock",
+) {
   const state = {
     currentUrl: "http://127.0.0.1:3000/" + scenario.orgId + "/dashboard",
     lang: scenario.initialLanguageButton === "ar" ? "ar" : "en",
@@ -181,16 +229,28 @@ function makeBrowserFixture(scenario: Scenario) {
     screenshot: vi.fn(async () => undefined),
   };
 
-  const tracing = {
-    start: vi.fn(async () => undefined),
-    stop: vi.fn(async () => undefined),
-  };
+  const tracing =
+    tracingMode === "mock"
+      ? {
+          start: vi.fn(async () => undefined),
+          startChunk: vi.fn(async () => undefined),
+          stop: vi.fn(async () => undefined),
+        }
+      : makeStatefulTracing();
   const browserContext = {
     tracing,
     newPage: vi.fn(async () => page),
   };
   const browser = {
-    newContext: vi.fn(async () => browserContext),
+    newContext: vi.fn(async () => {
+      if (tracingMode === "runner-started") {
+        // What the Playwright test runner does inside browser.newContext():
+        // it starts tracing (with its own options) before handing the
+        // context back to the spec.
+        await tracing.start({ screenshots: true, snapshots: true });
+      }
+      return browserContext;
+    }),
     close: vi.fn(async () => {
       state.closed = true;
     }),
@@ -458,6 +518,86 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     expect(evidence.artifacts).toHaveLength(3);
     expect(mocks.writeFile).toHaveBeenCalledTimes(1);
     expect(fixture.browser.close).toHaveBeenCalled();
+  });
+
+  describe("tracing under the Playwright test runner (SCRUM-826, SCRUM-824 G4)", () => {
+    function statefulTracing(
+      fixture: ReturnType<typeof makeBrowserFixture>,
+    ): ReturnType<typeof makeStatefulTracing> {
+      return fixture.tracing as ReturnType<typeof makeStatefulTracing>;
+    }
+
+    it("control: starts tracing itself and writes the trace when the runner has not started it", async () => {
+      const fixture = makeBrowserFixture(defaultScenario(), "stateful");
+      const tracing = statefulTracing(fixture);
+
+      const evidence = await handlerFor("RTL_PARITY")(
+        executionContext("RTL_PARITY"),
+      );
+
+      expect(evidence.oracle.passed).toBe(true);
+      expect(tracing.start).toHaveBeenCalledTimes(1);
+      expect(tracing.startOptions).toEqual([
+        { screenshots: true, snapshots: true, sources: false },
+      ]);
+      expect(tracing.startChunk).not.toHaveBeenCalled();
+      expect(tracing.writtenPaths).toHaveLength(1);
+      expect(tracing.writtenPaths[0]).toMatch(/trace\.zip$/);
+      expect(evidence.artifacts.some((a) => a.endsWith("/trace.zip"))).toBe(
+        true,
+      );
+      expect(tracing.machine.started).toBe(false);
+    });
+
+    it("tolerates tracing the runner already started and still writes the trace artifact", async () => {
+      const fixture = makeBrowserFixture(defaultScenario(), "runner-started");
+      const tracing = statefulTracing(fixture);
+
+      const evidence = await handlerFor("RTL_PARITY")(
+        executionContext("RTL_PARITY"),
+      );
+
+      expect(evidence.oracle.passed).toBe(true);
+      // The handler adopts the running trace with its own chunk instead of
+      // starting a second trace.
+      expect(tracing.startChunk).toHaveBeenCalledTimes(1);
+      expect(tracing.writtenPaths).toHaveLength(1);
+      expect(tracing.writtenPaths[0]).toMatch(/trace\.zip$/);
+      expect(evidence.artifacts.some((a) => a.endsWith("/trace.zip"))).toBe(
+        true,
+      );
+      expect(tracing.machine.started).toBe(false);
+      expect(fixture.browser.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not swallow other tracing.start failures and still closes the browser", async () => {
+      const fixture = makeBrowserFixture(defaultScenario(), "stateful");
+      const tracing = statefulTracing(fixture);
+      tracing.start.mockRejectedValueOnce(
+        new Error("tracing.start: Target page, context or browser has been closed"),
+      );
+
+      await expect(
+        handlerFor("RTL_PARITY")(executionContext("RTL_PARITY")),
+      ).rejects.toThrow(/has been closed/);
+
+      expect(tracing.startChunk).not.toHaveBeenCalled();
+      expect(fixture.browser.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("surfaces a startChunk failure instead of masking it when adopting a runner trace", async () => {
+      const fixture = makeBrowserFixture(defaultScenario(), "runner-started");
+      const tracing = statefulTracing(fixture);
+      tracing.startChunk.mockRejectedValueOnce(
+        new Error("tracing.startChunk: Cannot start a trace chunk while stopping"),
+      );
+
+      await expect(
+        handlerFor("RTL_PARITY")(executionContext("RTL_PARITY")),
+      ).rejects.toThrow(/Cannot start a trace chunk/);
+
+      expect(fixture.browser.close).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("accepts a page that is already in Arabic without clicking the language toggle", async () => {
