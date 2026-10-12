@@ -7,6 +7,7 @@ import { requireSuperAdmin } from "./utils/tenancy";
 import { logAdminAction } from "./adminAudit";
 import { rateLimiter } from "./rateLimit";
 import type { MutationCtx } from "./_generated/server";
+import { buildPreview, isNoReplyAddress } from "../lib/supportMail";
 
 const CONTACT_FORM_TO_EMAIL = "info@autoflowdealer.com";
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -52,6 +53,7 @@ async function recordSupportMessage(
     .first();
 
   const now = Date.now();
+  const lastMessagePreview = buildPreview(args.bodyText, args.bodyHtml);
 
   if (!thread) {
     const threadId = await ctx.db.insert("supportThreads", {
@@ -61,6 +63,8 @@ async function recordSupportMessage(
       status: "OPEN",
       inbox,
       lastMessageAt: now,
+      lastMessagePreview,
+      awaitingReply: true,
     });
     thread = await ctx.db.get(threadId);
   } else {
@@ -68,6 +72,8 @@ async function recordSupportMessage(
       lastMessageAt: now,
       status: "OPEN",
       participantName: args.fromName ?? thread.participantName,
+      lastMessagePreview,
+      awaitingReply: true,
     });
   }
 
@@ -187,9 +193,13 @@ export const listThreads = query({
     await requireSuperAdmin(ctx);
 
     if (args.status) {
+      // Newest-first: the status index alone (`by_inbox_and_status`) is not
+      // time-ordered, so `.order("desc")` on it sorted by creation time instead.
       return await ctx.db
         .query("supportThreads")
-        .withIndex("by_inbox_and_status", (q) => q.eq("inbox", args.inbox).eq("status", args.status!))
+        .withIndex("by_inbox_status_and_lastMessageAt", (q) =>
+          q.eq("inbox", args.inbox).eq("status", args.status!)
+        )
         .order("desc")
         .paginate(args.paginationOpts);
     }
@@ -241,6 +251,28 @@ export const setThreadStatus = mutation({
   },
 });
 
+export const setThreadCategory = mutation({
+  args: {
+    threadId: v.id("supportThreads"),
+    // null clears the override and falls back to the heuristic.
+    category: v.union(v.literal("people"), v.literal("automated"), v.null()),
+  },
+  handler: async (ctx, args) => {
+    const admin = await requireSuperAdmin(ctx);
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread) throw new ConvexError("Thread not found.");
+    await ctx.db.patch(args.threadId, { categoryOverride: args.category ?? undefined });
+
+    await logAdminAction(ctx, admin, {
+      action: "supportSetThreadCategory",
+      targetTable: "supportThreads",
+      targetId: args.threadId,
+      before: { categoryOverride: thread.categoryOverride ?? null },
+      after: { categoryOverride: args.category },
+    });
+  },
+});
+
 // ─── Sending a reply (action — needs to call the Resend API) ──────────────────
 
 export const requireSuperAdminForAction = internalQuery({
@@ -274,7 +306,17 @@ export const recordOutboundMessage = internalMutation({
       sentByUserId: args.sentByUserId,
       createdAt: Date.now(),
     });
-    await ctx.db.patch(args.threadId, { lastMessageAt: Date.now() });
+    if (args.sentByUserId) {
+      // A human reply answers the thread. The automated acknowledgement (no
+      // sentByUserId) must not: it would hide a thread that still needs a person.
+      await ctx.db.patch(args.threadId, {
+        lastMessageAt: Date.now(),
+        awaitingReply: false,
+        lastMessagePreview: buildPreview(args.bodyText),
+      });
+    } else {
+      await ctx.db.patch(args.threadId, { lastMessageAt: Date.now() });
+    }
 
     // `sendReply` is an action, so it cannot write the audit row itself. It
     // passes the actor down and the row is inserted here, in the same
@@ -311,6 +353,11 @@ export const sendReply = action({
       threadId: args.threadId,
     });
     if (!threadData) throw new ConvexError("Thread not found.");
+
+    // Replies to no-reply senders bounce. Refuse before any email is attempted.
+    if (isNoReplyAddress(threadData.participantEmail)) {
+      throw new ConvexError("This sender does not accept replies.");
+    }
 
     const result = await ctx.runAction(internal.email.sendSupportReply, {
       toEmail: threadData.participantEmail,
