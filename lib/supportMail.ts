@@ -220,19 +220,20 @@ function endOfHead(html: string, from: number): number {
       let nameEnd = nameStart + 1;
       while (nameEnd < html.length && isNameChar(html.charCodeAt(nameEnd))) nameEnd += 1;
       const tag = html.slice(nameStart, nameEnd).toLowerCase();
+      if (!closing && tag === "body") return at;
+      // Invariant: the position only ever moves PAST everything already examined.
+      // endOfTag scans to the end of the input when there is no ">", so after it
+      // we must never resume at `at + 1` (that re-scans the same tail per "<").
       const gt = endOfTag(html, nameEnd);
+      if (gt === -1) return html.length; // unterminated tag/quote swallows the rest
       if (closing) {
-        if (tag === "head") return gt === -1 ? html.length : gt + 1;
-      } else {
-        if (tag === "body") return at;
-        if (gt === -1) return html.length; // unclosed tag/quote swallows the rest
-        if (RAW_HEAD_BLOCKS.has(tag)) {
-          at = html.indexOf("<", endOfBlock(html, tag, gt + 1));
-          continue;
-        }
-        at = html.indexOf("<", gt + 1);
+        if (tag === "head") return gt + 1;
+      } else if (RAW_HEAD_BLOCKS.has(tag)) {
+        at = html.indexOf("<", endOfBlock(html, tag, gt + 1));
         continue;
       }
+      at = html.indexOf("<", gt + 1);
+      continue;
     }
     at = html.indexOf("<", at + 1);
   }

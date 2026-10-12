@@ -319,9 +319,66 @@ describe("htmlToPlainText", () => {
     expect(htmlToPlainText("<head><title>x</title><body>Real")).toBe("Real");
   });
 
+  // Review R4-01: a closing tag with no ">" made endOfHead rescan the same tail for
+  // every "<" (quadratic: 250 KB took 9-13 s). A closing non-head tag WITH ">" is
+  // skipped normally; one without swallows the rest, like an unterminated opener.
+  test("a closing non-head tag with '>' is skipped; without '>' it swallows the rest", () => {
+    expect(htmlToPlainText("<head></meta foo><body>Hello")).toBe("Hello");
+    expect(buildPreview(undefined, "<head></meta foo><body>Hello")).toBe("Hello");
+    expect(() => buildPreview(undefined, "<head></a x")).not.toThrow();
+    expect(buildPreview(undefined, "<head></a x")).toBe("");
+    expect(htmlToPlainText("<head></a x")).toBe("");
+  });
+
   test("the preview is the text that comes AFTER a huge leading comment too", () => {
     const html = `<!--${"x".repeat(100_000)}--><p>Visible after the comment</p>`;
     expect(buildPreview(undefined, html)).toBe("Visible after the comment");
+  });
+});
+
+// Permanent linearity matrix: each pattern repeated to ~1 MiB, in a head and a body
+// context, must convert in under 200 ms. One line per future pattern.
+describe("scanner linearity matrix (1 MiB, head and body contexts)", () => {
+  const MIB = 1024 * 1024;
+  const repeatTo = (unit: string) => unit.repeat(Math.floor(MIB / unit.length));
+  // [name, unit, optional wrapper prefix that opens the raw block the unit sits in]
+  const PATTERNS: Array<[string, string, string?]> = [
+    ["</a x", "</a x"],
+    ['</a "', '</a "'],
+    ["</he", "</he"],
+    ["<a x", "<a x"],
+    ['<a "', '<a "'],
+    ['<a ""', '<a ""'],
+    ["</", "</"],
+    ["<style", "<style"],
+    ["</stylex inside <style>", "</stylex", "<style>"],
+    ["<title>", "<title>"],
+    ["<!--", "<!--"],
+    ["</head x", "</head x"],
+    ["<!x", "<!x"],
+    ["<?", "<?"],
+    ["</scriptx inside <script>", "</scriptx", "<script>"],
+    ["&#", "&#"],
+    ["&#1234567", "&#1234567"],
+    ["&nbsp;", "&nbsp;"],
+    ["<head>", "<head>"],
+  ];
+  const CONTEXTS: Array<[string, string]> = [
+    ["head", "<head>"],
+    ["body", "<body>"],
+  ];
+  const CASES = PATTERNS.flatMap(([name, unit, wrap]) =>
+    CONTEXTS.map(([ctx, prefix]) => [`${name} in ${ctx}`, `${prefix}${wrap ?? ""}${repeatTo(unit)}`] as [string, string])
+  );
+  test.each(CASES)("%s", (_name, html) => {
+    const started = performance.now();
+    const preview = buildPreview(undefined, html);
+    const elapsed = performance.now() - started;
+    expect(Array.from(preview).length).toBeLessThanOrEqual(160);
+    expect(elapsed).toBeLessThan(200);
+    const fullStarted = performance.now();
+    htmlToPlainText(html);
+    expect(performance.now() - fullStarted).toBeLessThan(200);
   });
 });
 
