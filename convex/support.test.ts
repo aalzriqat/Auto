@@ -232,6 +232,8 @@ describe("support inbox: sendReply", () => {
 
     await expect(as.action(api.support.sendReply, { threadId, bodyText: "On it" })).resolves.toEqual({
       success: true,
+      closed: false,
+      newerInbound: false,
     });
     expect(await outboundRows(t)).toHaveLength(1);
     const after = await getThread(t, threadId);
@@ -245,6 +247,190 @@ describe("support inbox: sendReply", () => {
     const threadId = await seedThread(t, "buyer@example.com");
     await expect(as.action(api.support.sendReply, { threadId, bodyText: "hi" })).rejects.toThrow();
     expect(await outboundRows(t)).toHaveLength(0);
+  });
+});
+
+describe("support inbox: reply racing a newer inbound message (review F2)", () => {
+  async function waitForNextMillisecond(since: number) {
+    // Date is real here (only setTimeout is faked); make the next write strictly later.
+    while (Date.now() <= since) {
+      /* spin <= 1ms */
+    }
+  }
+  const reply = (threadId: Id<"supportThreads">, userId: Id<"users">, extra: Record<string, unknown> = {}) => ({
+    threadId,
+    fromEmail: "support@autoflowdealer.com",
+    toEmail: "buyer@example.com",
+    bodyText: "We are on it.",
+    sentByUserId: userId,
+    sentByEmail: "admin@autoflow.dev",
+    ...extra,
+  });
+
+  test("inbound recording stamps lastInboundAt with lastMessageAt on insert and on patch", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const first = await inbound(t, { bodyText: "one" });
+    expect(first.lastInboundAt).toBe(first.lastMessageAt);
+    await waitForNextMillisecond(first.lastMessageAt);
+    const second = await inbound(t, { bodyText: "two" });
+    expect(second.lastInboundAt).toBe(second.lastMessageAt);
+    expect(second.lastInboundAt!).toBeGreaterThan(first.lastInboundAt!);
+  });
+
+  test("a newer inbound that arrived during the send is NOT hidden by Send & close", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { userId } = await seedUser(t, "admin", "admin@autoflow.dev");
+    const thread = await inbound(t, { bodyText: "First question" });
+    const observedLastInboundAt = thread.lastInboundAt!;
+
+    // The customer writes again while the provider call is in flight.
+    await waitForNextMillisecond(observedLastInboundAt);
+    await inbound(t, { bodyText: "Second, more urgent question" });
+
+    const result = await t.mutation(
+      internal.support.recordOutboundMessage,
+      reply(thread._id, userId, { observedLastInboundAt, closeAfterSend: true })
+    );
+    expect(result).toEqual({ closed: false, newerInbound: true });
+
+    const after = await getThread(t, thread._id);
+    expect(after?.status).toBe("OPEN");
+    expect(after?.awaitingReply).toBe(true);
+    expect(after?.lastMessagePreview).toBe("Second, more urgent question");
+    // The reply itself is still recorded and audited.
+    const messages = await t.run((ctx) => ctx.db.query("supportMessages").collect());
+    expect(messages.filter((m) => m.direction === "OUTBOUND" && m.sentByUserId)).toHaveLength(1);
+    const audit = await t.run((ctx) => ctx.db.query("adminAuditLog").collect());
+    expect(audit.filter((a) => a.action === "supportSendReply")).toHaveLength(1);
+    expect(audit.filter((a) => a.action === "supportSetThreadStatus")).toHaveLength(0);
+  });
+
+  test("a newer inbound also keeps the flag and preview for a plain reply (no close)", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { userId } = await seedUser(t, "admin", "admin@autoflow.dev");
+    const thread = await inbound(t, { bodyText: "First" });
+    await waitForNextMillisecond(thread.lastInboundAt!);
+    await inbound(t, { bodyText: "Newer" });
+    const result = await t.mutation(
+      internal.support.recordOutboundMessage,
+      reply(thread._id, userId, { observedLastInboundAt: thread.lastInboundAt })
+    );
+    expect(result).toEqual({ closed: false, newerInbound: true });
+    const after = await getThread(t, thread._id);
+    expect(after?.awaitingReply).toBe(true);
+    expect(after?.lastMessagePreview).toBe("Newer");
+  });
+
+  test("control: no race and closeAfterSend clears the flag, closes, and writes a status audit row", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { userId } = await seedUser(t, "admin", "admin@autoflow.dev");
+    const thread = await inbound(t, { bodyText: "Question" });
+    const result = await t.mutation(
+      internal.support.recordOutboundMessage,
+      reply(thread._id, userId, { observedLastInboundAt: thread.lastInboundAt, closeAfterSend: true })
+    );
+    expect(result).toEqual({ closed: true, newerInbound: false });
+    const after = await getThread(t, thread._id);
+    expect(after?.status).toBe("CLOSED");
+    expect(after?.awaitingReply).toBe(false);
+    expect(after?.lastMessagePreview).toBe("We are on it.");
+    const audit = await t.run((ctx) => ctx.db.query("adminAuditLog").collect());
+    const status = audit.filter((a) => a.action === "supportSetThreadStatus");
+    expect(status).toHaveLength(1);
+    expect(status[0]).toMatchObject({
+      actorUserId: userId,
+      actorEmail: "admin@autoflow.dev",
+      targetTable: "supportThreads",
+      targetId: thread._id,
+      before: { status: "OPEN" },
+      after: { status: "CLOSED" },
+    });
+  });
+
+  test("control: no race and no closeAfterSend replies without closing", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { userId } = await seedUser(t, "admin", "admin@autoflow.dev");
+    const thread = await inbound(t, { bodyText: "Question" });
+    const result = await t.mutation(
+      internal.support.recordOutboundMessage,
+      reply(thread._id, userId, { observedLastInboundAt: thread.lastInboundAt })
+    );
+    expect(result).toEqual({ closed: false, newerInbound: false });
+    const after = await getThread(t, thread._id);
+    expect(after?.status).toBe("OPEN");
+    expect(after?.awaitingReply).toBe(false);
+  });
+
+  test("the automated acknowledgement never touches the flag, preview or status", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const thread = await inbound(t, { bodyText: "Please call me" });
+    const result = await t.mutation(internal.support.recordOutboundMessage, {
+      threadId: thread._id,
+      fromEmail: "support@autoflowdealer.com",
+      toEmail: "buyer@example.com",
+      bodyText: "(Automated acknowledgment — ...)",
+    });
+    expect(result).toEqual({ closed: false, newerInbound: false });
+    const after = await getThread(t, thread._id);
+    expect(after?.awaitingReply).toBe(true);
+    expect(after?.status).toBe("OPEN");
+    expect(after?.lastMessagePreview).toBe("Please call me");
+  });
+
+  test("a legacy row with no lastInboundAt replies and closes normally", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { userId } = await seedUser(t, "admin", "admin@autoflow.dev");
+    const threadId = await t.run((ctx) =>
+      ctx.db.insert("supportThreads", {
+        participantEmail: "buyer@example.com",
+        subject: "Old",
+        status: "OPEN",
+        inbox: "support",
+        lastMessageAt: 1,
+        awaitingReply: true,
+      })
+    );
+    // sendReply captures `lastInboundAt ?? 0` for such a row.
+    const result = await t.mutation(
+      internal.support.recordOutboundMessage,
+      reply(threadId, userId, { observedLastInboundAt: 0, closeAfterSend: true })
+    );
+    expect(result).toEqual({ closed: true, newerInbound: false });
+    expect((await getThread(t, threadId))?.status).toBe("CLOSED");
+  });
+
+  test("a caller that passes no observedLastInboundAt keeps today's behaviour (unknown is not newer)", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { userId } = await seedUser(t, "admin", "admin@autoflow.dev");
+    const thread = await inbound(t, { bodyText: "Question" });
+    const result = await t.mutation(internal.support.recordOutboundMessage, reply(thread._id, userId));
+    expect(result).toEqual({ closed: false, newerInbound: false });
+    expect((await getThread(t, thread._id))?.awaitingReply).toBe(false);
+  });
+
+  test("sendReply with closeAfterSend closes the thread in one call and reports it", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    registerRateLimiter(t);
+    const { as } = await seedUser(t, "admin", "admin@autoflow.dev");
+    const thread = await inbound(t, { bodyText: "Question" });
+    await expect(
+      as.action(api.support.sendReply, { threadId: thread._id, bodyText: "Done", closeAfterSend: true })
+    ).resolves.toEqual({ success: true, closed: true, newerInbound: false });
+    expect((await getThread(t, thread._id))?.status).toBe("CLOSED");
+  });
+});
+
+describe("support inbox: hostile HTML on the inbound path (review F1)", () => {
+  test("a 480 KB hostile bodyHtml with no bodyText records the thread and message with a bounded preview", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const hostile = "<!--".repeat(120_000);
+    const started = performance.now();
+    const thread = await inbound(t, { bodyText: undefined, bodyHtml: hostile });
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(Array.from(thread.lastMessagePreview ?? "").length).toBeLessThanOrEqual(160);
+    const messages = await t.run((ctx) => ctx.db.query("supportMessages").collect());
+    expect(messages.filter((m) => m.direction === "INBOUND")).toHaveLength(1);
+    expect(messages[0]?.bodyHtml).toBe(hostile); // stored untouched
   });
 });
 

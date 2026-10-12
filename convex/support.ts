@@ -63,6 +63,7 @@ async function recordSupportMessage(
       status: "OPEN",
       inbox,
       lastMessageAt: now,
+      lastInboundAt: now,
       lastMessagePreview,
       awaitingReply: true,
     });
@@ -70,6 +71,7 @@ async function recordSupportMessage(
   } else {
     await ctx.db.patch(thread._id, {
       lastMessageAt: now,
+      lastInboundAt: now,
       status: "OPEN",
       participantName: args.fromName ?? thread.participantName,
       lastMessagePreview,
@@ -294,8 +296,17 @@ export const recordOutboundMessage = internalMutation({
     // action, so not auditable) from a reply a person sent.
     sentByUserId: v.optional(v.id("users")),
     sentByEmail: v.optional(v.string()),
+    // `thread.lastInboundAt ?? 0` as `sendReply` saw it BEFORE the provider call.
+    // A missing value means "unknown", and unknown is treated as NOT newer, so a
+    // caller that does not pass it keeps the pre-F2 behaviour (reply answers the
+    // thread). Only meaningful together with sentByUserId.
+    observedLastInboundAt: v.optional(v.number()),
+    // Send & close: close the thread in the same transaction as the reply, but
+    // only if no newer inbound message arrived during the send.
+    closeAfterSend: v.optional(v.boolean()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ closed: boolean; newerInbound: boolean }> => {
+    const now = Date.now();
     await ctx.db.insert("supportMessages", {
       threadId: args.threadId,
       direction: "OUTBOUND",
@@ -304,18 +315,38 @@ export const recordOutboundMessage = internalMutation({
       bodyText: args.bodyText,
       resendEmailId: args.resendEmailId,
       sentByUserId: args.sentByUserId,
-      createdAt: Date.now(),
+      createdAt: now,
     });
+
+    let closed = false;
+    let newerInbound = false;
+    let previousStatus: "OPEN" | "CLOSED" | undefined;
     if (args.sentByUserId) {
-      // A human reply answers the thread. The automated acknowledgement (no
-      // sentByUserId) must not: it would hide a thread that still needs a person.
-      await ctx.db.patch(args.threadId, {
-        lastMessageAt: Date.now(),
-        awaitingReply: false,
-        lastMessagePreview: buildPreview(args.bodyText),
-      });
+      // The provider call is a separate step from this mutation, so a customer
+      // message can land in between. Re-read the thread HERE (same transaction as
+      // the writes below) and compare against what the action observed.
+      const thread = await ctx.db.get(args.threadId);
+      previousStatus = thread?.status;
+      newerInbound =
+        args.observedLastInboundAt !== undefined && (thread?.lastInboundAt ?? 0) > args.observedLastInboundAt;
+
+      if (newerInbound) {
+        // The reply was sent and is recorded, but it did NOT answer the newest
+        // message: keep the flag, the inbound preview and the open status.
+        await ctx.db.patch(args.threadId, { lastMessageAt: now });
+      } else {
+        // A human reply answers the thread. The automated acknowledgement (no
+        // sentByUserId) must not: it would hide a thread that still needs a person.
+        await ctx.db.patch(args.threadId, {
+          lastMessageAt: now,
+          awaitingReply: false,
+          lastMessagePreview: buildPreview(args.bodyText),
+          ...(args.closeAfterSend ? { status: "CLOSED" as const } : {}),
+        });
+        closed = args.closeAfterSend === true;
+      }
     } else {
-      await ctx.db.patch(args.threadId, { lastMessageAt: Date.now() });
+      await ctx.db.patch(args.threadId, { lastMessageAt: now });
     }
 
     // `sendReply` is an action, so it cannot write the audit row itself. It
@@ -337,7 +368,22 @@ export const recordOutboundMessage = internalMutation({
         after: { toEmail: args.toEmail, resendEmailId: args.resendEmailId },
         createdAt: Date.now(),
       });
+
+      if (closed) {
+        // Same row shape `setThreadStatus` writes, so closing via Send & close is
+        // indistinguishable in the audit trail from closing by hand.
+        const actor = await ctx.db.get(args.sentByUserId);
+        if (!actor) throw new Error("recordOutboundMessage: sentByUserId does not exist.");
+        await logAdminAction(ctx, actor, {
+          action: "supportSetThreadStatus",
+          targetTable: "supportThreads",
+          targetId: args.threadId,
+          before: { status: previousStatus },
+          after: { status: "CLOSED" },
+        });
+      }
     }
+    return { closed, newerInbound };
   },
 });
 
@@ -345,8 +391,11 @@ export const sendReply = action({
   args: {
     threadId: v.id("supportThreads"),
     bodyText: v.string(),
+    // Send & close: closed server-side, atomically with recording the reply, and
+    // only if no newer inbound message arrived while the email was being sent.
+    closeAfterSend: v.optional(v.boolean()),
   },
-  handler: async (ctx, args): Promise<{ success: true }> => {
+  handler: async (ctx, args): Promise<{ success: true; closed: boolean; newerInbound: boolean }> => {
     const admin = await ctx.runQuery(internal.support.requireSuperAdminForAction, {});
 
     const threadData = await ctx.runQuery(internal.support.getThreadForReply, {
@@ -359,6 +408,10 @@ export const sendReply = action({
       throw new ConvexError("This sender does not accept replies.");
     }
 
+    // Captured BEFORE the provider call; recordOutboundMessage compares it with
+    // the thread as it is when the reply is recorded.
+    const observedLastInboundAt = threadData.lastInboundAt ?? 0;
+
     const result = await ctx.runAction(internal.email.sendSupportReply, {
       toEmail: threadData.participantEmail,
       subject: threadData.subject.startsWith("Re:") ? threadData.subject : `Re: ${threadData.subject}`,
@@ -370,7 +423,7 @@ export const sendReply = action({
       throw new ConvexError(result.error || "Failed to send reply email.");
     }
 
-    await ctx.runMutation(internal.support.recordOutboundMessage, {
+    const outcome = await ctx.runMutation(internal.support.recordOutboundMessage, {
       threadId: args.threadId,
       fromEmail: FROM_EMAIL[threadData.inbox as Inbox],
       toEmail: threadData.participantEmail,
@@ -378,9 +431,11 @@ export const sendReply = action({
       resendEmailId: result.resendEmailId,
       sentByUserId: admin._id,
       sentByEmail: admin.email,
+      observedLastInboundAt,
+      closeAfterSend: args.closeAfterSend,
     });
 
-    return { success: true };
+    return { success: true, closed: outcome.closed, newerInbound: outcome.newerInbound };
   },
 });
 

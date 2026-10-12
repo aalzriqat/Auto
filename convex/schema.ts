@@ -6611,6 +6611,11 @@ export default defineSchema({
     // true after an inbound message, false after a HUMAN reply. The automated
     // acknowledgement deliberately leaves it untouched.
     awaitingReply: v.optional(v.boolean()),
+    // Timestamp of the latest INBOUND message (== lastMessageAt at that moment).
+    // `sendReply` captures it before the provider call so a reply can tell that a
+    // newer inbound message arrived while it was in flight. Absent on old rows
+    // and read as 0.
+    lastInboundAt: v.optional(v.number()),
     // Admin override of the client-side people/automated heuristic.
     categoryOverride: v.optional(v.union(v.literal("people"), v.literal("automated"))),
   })
