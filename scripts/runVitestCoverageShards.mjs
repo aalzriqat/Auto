@@ -78,9 +78,6 @@ const sonarCoverageArgs = [
   // CI helpers (.cjs) under scripts/ are exercised by suites in scripts/, so
   // they are measured rather than left outside the report (SCRUM-293).
   "--coverage.include=scripts/**/*.cjs",
-  // The Clerk proxy wrapper carries the offline-swarm fail-closed path
-  // (SCRUM-350 G4); scripts/intelligence/proxyClerkHandler.test.ts drives it.
-  "--coverage.include=proxy.ts",
   "--coverage.exclude=convex/_generated/**",
   "--coverage.exclude=**/*.test.ts",
   ...thresholdZeroArgs,
