@@ -6602,10 +6602,30 @@ export default defineSchema({
     inbox: v.union(v.literal("support"), v.literal("info"), v.literal("subscriptions")),
     lastMessageAt: v.number(),
     autoRepliedAt: v.optional(v.number()),
+    // SCRUM-825 mail-client inbox. All optional: rows written before this change
+    // carry none of them and are NOT backfilled (the UI treats absent as
+    // "unknown": no preview text, no needs-reply flag).
+    // Whitespace-collapsed, link-dump-free snippet of the latest inbound message
+    // or human reply (never the automated acknowledgement).
+    lastMessagePreview: v.optional(v.string()),
+    // true after an inbound message, false after a HUMAN reply. The automated
+    // acknowledgement deliberately leaves it untouched.
+    awaitingReply: v.optional(v.boolean()),
+    // Per-thread counter of INBOUND messages, +1 on every one. `sendReply`
+    // captures it before the provider call so the reply can tell that a newer
+    // inbound message arrived while it was in flight. A counter, not a timestamp:
+    // two messages in the same millisecond, or a clock that steps back, would
+    // defeat a time comparison. Absent on old rows and read as 0, so the first
+    // new inbound on such a row (revision 1) reads as newer than a captured 0.
+    inboundRevision: v.optional(v.number()),
+    // Admin override of the client-side people/automated heuristic.
+    categoryOverride: v.optional(v.union(v.literal("people"), v.literal("automated"))),
   })
     .index("by_participantEmail_and_inbox", ["participantEmail", "inbox"])
     .index("by_inbox_and_lastMessageAt", ["inbox", "lastMessageAt"])
-    .index("by_inbox_and_status", ["inbox", "status"]),
+    .index("by_inbox_and_status", ["inbox", "status"])
+    // Time-ordered per status, so a status-filtered list is newest-first.
+    .index("by_inbox_status_and_lastMessageAt", ["inbox", "status", "lastMessageAt"]),
 
   supportMessages: defineTable({
     threadId: v.id("supportThreads"),
