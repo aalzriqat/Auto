@@ -656,22 +656,71 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
   });
 
   it("runs candidate runtime on an internal Docker network and cleans that network up", () => {
-    const startRun = String(
-      step(
-        "attack-worker",
-        "Start verified exact-SHA candidate frontend artifact",
-      ).run ?? "",
-    );
-    expect(startRun).toContain("docker network create --internal");
-    expect(startRun).toContain('--network "$CANDIDATE_NETWORK"');
-    expect(startRun).toContain("--publish 127.0.0.1:3000:3000");
-    expect(startRun).toContain("--cap-drop ALL");
-    expect(startRun).toContain("--security-opt no-new-privileges");
+    for (const [jobName, stopName] of [
+      ["trusted-e2e", "Stop isolated trusted E2E candidate frontend"],
+      ["attack-worker", "Stop isolated candidate frontend"],
+    ] as const) {
+      const startRun = String(
+        step(jobName, "Start verified exact-SHA candidate frontend artifact").run ?? "",
+      );
+      expect(startRun).toContain("docker network create --internal");
+      expect(startRun).toContain('--network "$CANDIDATE_NETWORK"');
+      expect(startRun).not.toContain("--publish");
+      expect(startRun).toContain("--cap-drop ALL");
+      expect(startRun).toContain("--security-opt no-new-privileges");
+      expect(startRun).toContain('CANDIDATE_DOCKER_IP="$CANDIDATE_IP"');
+      expect(startRun).toContain("trusted/scripts/intelligence/browserSwarmLoopbackRelay.mjs");
+      expect(startRun).toContain('CANDIDATE_RELAY_PID=$!');
 
-    const stopRun = String(
-      step("attack-worker", "Stop isolated candidate frontend").run ?? "",
-    );
-    expect(stopRun).toContain('docker network rm "$CANDIDATE_NETWORK"');
+      // The relay target is the candidate's address on ITS OWN named network
+      // (a multi-network container would otherwise concatenate addresses).
+      const ipLine =
+        'CANDIDATE_IP="$(docker inspect --format "{{(index .NetworkSettings.Networks \\"$CANDIDATE_NETWORK\\").IPAddress}}" "$CANDIDATE_CONTAINER")"';
+      const dockerRunAt = startRun.indexOf("docker run ");
+      const ipAt = startRun.indexOf(ipLine);
+      const relayAt = startRun.indexOf("trusted/scripts/intelligence/browserSwarmLoopbackRelay.mjs");
+      expect(startRun.split(ipLine).length, jobName).toBe(2);
+      expect(dockerRunAt, jobName).toBeGreaterThan(-1);
+      expect(ipAt, jobName).toBeGreaterThan(dockerRunAt);
+      expect(ipAt, jobName).toBeLessThan(relayAt);
+      expect(startRun, jobName).not.toContain("{{range .NetworkSettings.Networks}}");
+
+      // Fail closed if anything already holds port 3000 on v4 or v6 loopback,
+      // before the relay is launched (an impostor would otherwise answer
+      // /api/health while the relay dies of EADDRINUSE).
+      const v4Probe = startRun.indexOf("/dev/tcp/127.0.0.1/3000");
+      const v6Probe = startRun.indexOf("/dev/tcp/::1/3000");
+      const ssProbe = startRun.indexOf("ss -Hltn 'sport = :3000'");
+      for (const probe of [v4Probe, v6Probe, ssProbe]) {
+        expect(probe, jobName).toBeGreaterThan(-1);
+        expect(probe, jobName).toBeLessThan(relayAt);
+      }
+      expect(startRun.slice(v4Probe, relayAt), jobName).toContain("exit 1");
+
+      // The relay announces readiness itself; no curl may run before the
+      // workflow has seen that line, and relay liveness is checked before curl.
+      const readyAt = startRun.indexOf("relay-listening 127.0.0.1:3000");
+      const firstCurl = startRun.indexOf("curl ");
+      const liveAt = startRun.indexOf('kill -0 "$CANDIDATE_RELAY_PID"');
+      expect(readyAt, jobName).toBeGreaterThan(relayAt);
+      expect(readyAt, jobName).toBeLessThan(firstCurl);
+      expect(liveAt, jobName).toBeGreaterThan(relayAt);
+      expect(liveAt, jobName).toBeLessThan(firstCurl);
+      // The only health probe is the readiness-gated one.
+      const gatedProbe =
+        '[ "$RELAY_READY" = "1" ] && curl --fail --silent --show-error http://127.0.0.1:3000/api/health';
+      const gatedAt = startRun.indexOf(gatedProbe);
+      expect(gatedAt, jobName).toBeGreaterThan(-1);
+      expect(startRun.indexOf("/api/health"), jobName).toBeGreaterThan(-1);
+      expect(startRun.slice(0, gatedAt), jobName).not.toMatch(/curl[^\n]*\/api\/health/);
+      expect(startRun.split(gatedProbe).length, jobName).toBe(2);
+      expect(startRun, jobName).toContain("seq 1 60");
+      expect(startRun, jobName).toContain("sleep 2");
+
+      const stopRun = String(step(jobName, stopName).run ?? "");
+      expect(stopRun).toContain('kill "$CANDIDATE_RELAY_PID"');
+      expect(stopRun).toContain('docker network rm "$CANDIDATE_NETWORK"');
+    }
   });
 
   it("keeps a failed candidate runtime observable instead of destroying its logs (SCRUM-376)", () => {
