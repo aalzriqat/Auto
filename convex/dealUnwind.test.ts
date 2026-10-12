@@ -25,7 +25,8 @@ import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { mayReadFinanceEconomics } from "./utils/financeApplicationProjection";
 import { reservePendingInvoiceReceipt } from "./accounting/invoiceReceiptReservation";
-import { activatePendingInvoiceReceipt } from "./accounting/invoiceReceiptActivation";
+import { activatePendingInvoiceReceipt, planSaleInvoiceReceiptReversal } from "./accounting/invoiceReceiptActivation";
+import { disposeActiveSaleInvoiceReceipts } from "./accounting/invoiceReceiptDisposition";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -1430,6 +1431,33 @@ describe("SCRUM-724 / SCRUM-795 c22479 + Sol Q7 - no new customer payout leaves 
     expect(() => real.assertCustomerCreditPayoutAllowed(false)).not.toThrow();
     expect(() => real.assertCustomerCreditPayoutMethodSupported("CASH")).toThrow();
     expect(() => real.assertCustomerCreditPayoutMethodSupported("BANK_TRANSFER")).not.toThrow();
+  });
+
+  test("L-1: the shared helper refuses a bank payout on its own (no door in front of it), writing nothing", async () => {
+    const f = await paidDealWithActiveCustomerReceipt("s724helper");
+    const { s, applicationId, applicationReceiptId, activated } = f;
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(payoutSwitch.disabled).toBe(true);
+    const code = await refusalCodeOf(s.t.run(async (ctx) => {
+      const sale = (await ctx.db.get(app!.finalizedSaleId!))!;
+      const plan = await planSaleInvoiceReceiptReversal(ctx, s.orgId, sale);
+      expect(plan.totalMinor).toBe(3000);
+      return await disposeActiveSaleInvoiceReceipts(ctx, {
+        orgId: s.orgId, applications: plan.applications, disposition: "REFUND",
+        payout: { amountMinor: 2000, method: "BANK_TRANSFER", reference: "HELPER-TRF", paidAt: Date.now() },
+        actorId: s.owner.userId, reason: "L-1 direct helper call", now: Date.now(),
+      });
+    }));
+    expect(code).toBe("CUSTOMER_CREDIT_PAYOUT_DISABLED");
+    expect((await s.t.run((ctx) => ctx.db.get(applicationReceiptId)))?.status).toBe("ACTIVE");
+    expect((await s.t.run((ctx) => ctx.db.get(activated.allocationId)))?.status).toBe("ACTIVE");
+    const outs = await s.t.run((ctx) => ctx.db.query("canonicalPayments")
+      .withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect()
+      .then((rows) => rows.filter((row) => row.direction === "OUT" && row.payerType === "CUSTOMER")));
+    expect(outs).toHaveLength(0);
+    const events = await s.t.run((ctx) => ctx.db.query("accountingEvents").collect()
+      .then((rows) => rows.filter((row) => row.orgId === s.orgId && row.eventType === "RETAINED_CREDIT_REFUNDED")));
+    expect(events).toHaveLength(0);
   });
 
   test("unwindStatus does not offer a customer payout while the switch is on", async () => {
