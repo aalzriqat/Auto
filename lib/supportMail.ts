@@ -188,11 +188,25 @@ const NAMED_ENTITIES: ReadonlyMap<string, string> = new Map<string, string>([
 /** `&name;`, `&#123;` or `&#x1F600;` — one regex, one pass, so a result is never decoded twice. */
 const CHARACTER_REFERENCE = /&(?:#[xX]([0-9a-fA-F]{1,8})|#([0-9]{1,10})|([A-Za-z][A-Za-z0-9]{1,31}));/g;
 
-/** Numeric references to NUL, surrogates or beyond U+10FFFF become U+FFFD, as in browsers. */
+/**
+ * The HTML spec's replacement table for numeric references 0x80..0x9F (index =
+ * code - 0x80): they are Windows-1252, not C1 controls, so `&#146;` is a right
+ * single quote. 0 = no mapping (0x81 0x8D 0x8F 0x90 0x9D): the code point stays.
+ */
+const WINDOWS_1252_C1: readonly number[] = [
+  0x20ac, 0, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0, 0x017d, 0,
+  0, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0, 0x017e, 0x0178,
+];
+
+/**
+ * Numeric references to NUL, surrogates or beyond U+10FFFF become U+FFFD, and
+ * 0x80..0x9F go through the Windows-1252 table, as in browsers.
+ */
 function codePointOf(value: number): string {
   if (!Number.isFinite(value) || value === 0 || (value >= 0xd800 && value <= 0xdfff) || value > 0x10ffff) {
     return "�";
   }
+  if (value >= 0x80 && value <= 0x9f) return String.fromCodePoint(WINDOWS_1252_C1[value - 0x80] || value);
   return String.fromCodePoint(value);
 }
 
@@ -202,7 +216,7 @@ function decodeCharacterReference(match: string, hex?: string, decimal?: string,
   return NAMED_ENTITIES.get(name ?? "") ?? match;
 }
 
-const RAW_BLOCKS: ReadonlySet<string> = new Set(["script", "style", "title", "template"]);
+const RAW_BLOCKS: ReadonlySet<string> = new Set(["script", "style", "title", "template", "noscript"]);
 const NEWLINE_CLOSERS: ReadonlySet<string> = new Set([
   "p",
   "div",
@@ -319,12 +333,12 @@ function endOfTag(html: string, from: number): number {
  * second) linear.
  *
  * It models a browser, not a header parser:
- *  - `<script>`, `<style>`, `<title>` and `<template>` are raw blocks, skipped
- *    ANYWHERE to their boundary-matched closing tag (none of them is body text);
+ *  - `<script>`, `<style>`, `<title>`, `<template>` and `<noscript>` are raw
+ *    blocks, skipped ANYWHERE to their boundary-matched closing tag (none is
+ *    body text; the reading pane's sanitizer removes `<noscript>` too, so the
+ *    preview never shows text the message view does not);
  *  - every other tag is stripped and its text kept, so text in the head (or with
  *    no `<head>`/`<body>` at all) is just text, as the implied `<body>` makes it;
- *  - `<noscript>` is NOT skipped: the inbox iframe runs with scripting disabled,
- *    where a browser renders its content;
  *  - stray `<` characters are text and stay in the pending text run, so a flood
  *    of them is one slice, not one push each.
  */
@@ -410,9 +424,8 @@ const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[
  * bodyHtml (entities already decoded); `<https://…>` dumps removed; whitespace
  * collapsed; at most 160 characters, counted in code points so an emoji or
  * surrogate pair is never cut in half. The result is always well-formed
- * UTF-16: a lone surrogate in the raw text becomes U+FFFD, and when the cut
- * lands inside what could be a character reference the dangling `&name` /
- * `&#123` fragment is dropped.
+ * UTF-16: a lone surrogate in the raw text becomes U+FFFD. References are
+ * decoded before the cut, so the cut is plain truncation.
  */
 export function buildPreview(bodyText?: string | null, bodyHtml?: string | null): string {
   // The whole body is converted in the one linear pass: no input slice and no
@@ -432,13 +445,9 @@ export function buildPreview(bodyText?: string | null, bodyHtml?: string | null)
     end += cleaned.codePointAt(end)! > 0xffff ? 2 : 1;
     count += 1;
   }
-  let preview = cleaned;
-  if (cutAt !== -1) {
-    preview = cleaned.slice(0, cutAt);
-    // Cut straight through the middle of a would-be reference ("&c|opy;")?
-    if (/[A-Za-z0-9;]/.test(cleaned.charAt(cutAt))) preview = preview.replace(/&#?[A-Za-z0-9]{0,32}$/, "");
-    preview = preview.trimEnd();
-  }
+  // References are decoded before this cut, so any "&..." left here is literal
+  // text and cutting it is ordinary truncation (what a browser shows).
+  const preview = cutAt === -1 ? cleaned : cleaned.slice(0, cutAt).trimEnd();
   return preview.replace(LONE_SURROGATE, "�");
 }
 

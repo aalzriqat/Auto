@@ -281,11 +281,7 @@ describe("htmlToPlainText", () => {
       // Whatever the whole conversion produced is what is previewed, never a fragment of it.
       expect(fullText.startsWith(preview)).toBe(true);
       if (points.length <= 160) expect(preview).toBe(fullText);
-      else {
-        expect(Array.from(preview).length).toBeLessThanOrEqual(160);
-        // The cut never leaves a dangling `&name` / `&#123` fragment.
-        expect(/&#?[A-Za-z0-9]+$/.test(preview) && /[A-Za-z0-9;]/.test(fullText.charAt(preview.length))).toBe(false);
-      }
+      else expect(Array.from(preview).length).toBeLessThanOrEqual(160);
     }
   });
 
@@ -515,9 +511,12 @@ describe("scanner follows the browser (round 5 J1)", () => {
     expect(buildPreview(undefined, html)).toBe(expected);
   });
 
-  test("<noscript> content is shown: the inbox iframe runs with scripting disabled, like a browser doing so", () => {
-    expect(htmlToPlainText("<head><noscript><p>Enable JS</p></noscript></head><body>Real</body>")).toBe("Enable JS\nReal");
-    expect(buildPreview(undefined, "<noscript>Enable JS</noscript><p>Real</p>")).toBe("Enable JS Real");
+  // Round 6 K3: <noscript> is a raw block again. The reading pane's sanitizer
+  // (sanitizeEmailHtml.ts) removes it, so the preview must not show text the message
+  // view never shows. (This reverses round 5 J1, which displayed it.)
+  test("<noscript> content is skipped, matching what the reading pane shows", () => {
+    expect(buildPreview(undefined, "<p>Hi</p><noscript>Enable JS</noscript><p>Body</p>")).toBe("Hi Body");
+    expect(htmlToPlainText("<head><noscript><p>Enable JS</p></noscript></head><body>Real</body>")).toBe("Real");
   });
 
   test("an unterminated quoted value or tag swallows the rest", () => {
@@ -539,6 +538,16 @@ describe("character references (round 5 J2, J3)", () => {
   test("hex and decimal numeric references decode", () => {
     expect(htmlToPlainText("<p>&#x1F600; &#X41; &#65; &#8212;</p>")).toBe("😀 A A —");
   });
+  // Round 6 K1: 0x80-0x9F use the HTML spec's Windows-1252 table, as browsers do.
+  test("numeric references 0x80-0x9F use the Windows-1252 replacement table", () => {
+    expect(htmlToPlainText("<p>It&#146;s due</p>")).toBe("It’s due");
+    expect(htmlToPlainText("<p>&#128;</p>")).toBe("€");
+    expect(htmlToPlainText("<p>&#147;quoted&#148;</p>")).toBe("“quoted”");
+    expect(htmlToPlainText("<p>&#150;&#151;&#153;&#x85;&#x9F;</p>")).toBe("–—™…Ÿ");
+    // No mapping in the table (0x81 0x8D 0x8F 0x90 0x9D): the code point stays.
+    expect(htmlToPlainText("<p>a&#129;b</p>")).toBe("a\u0081b");
+    expect(htmlToPlainText("<p>&#157;</p>")).toBe("\u009d");
+  });
   test("references are decoded exactly once", () => {
     expect(htmlToPlainText("<p>&amp;#60;</p>")).toBe("&#60;");
     expect(htmlToPlainText("<p>&amp;amp;</p>")).toBe("&amp;");
@@ -548,12 +557,14 @@ describe("character references (round 5 J2, J3)", () => {
   test("unknown or malformed references stay literal", () => {
     expect(htmlToPlainText("<p>&bogus; &copy &#; &#x; AT&T</p>")).toBe("&bogus; © &#; &#x; AT&T".replace("©", "&copy"));
   });
-  test("a reference is decoded BEFORE the 160-code-point cut, and a dangling fragment is dropped", () => {
+  test("a reference is decoded BEFORE the 160-code-point cut; the cut itself is plain truncation (round 6 K2)", () => {
     expect(buildPreview(undefined, `<p>${"x".repeat(158)}&copy; tail</p>`)).toBe(`${"x".repeat(158)}©`);
     expect(buildPreview(undefined, `<p>${"x".repeat(157)}&eacute;&eacute; tail</p>`)).toBe(`${"x".repeat(157)}éé`);
-    // A literal (unknown) reference that the cut lands inside is dropped, not shown as "&b".
-    expect(buildPreview(undefined, `<p>${"x".repeat(158)}&bogus; tail</p>`)).toBe("x".repeat(158));
-    expect(buildPreview(undefined, `<p>${"x".repeat(158)}&#99999999999 tail</p>`)).toBe("x".repeat(158));
+    // Entities are already decoded, so any "&..." left at the cut is LITERAL text; cutting it is
+    // ordinary truncation (what a browser shows), not a half-entity to repair.
+    expect(buildPreview(undefined, `<p>${"x".repeat(158)}R&Demand</p>`)).toBe(`${"x".repeat(158)}R&`.slice(0, 160));
+    expect(buildPreview(undefined, `<p>${"x".repeat(157)}AT&Tail</p>`)).toBe(`${"x".repeat(157)}AT&`);
+    expect(buildPreview(undefined, `<p>${"x".repeat(158)}&bogus; tail</p>`)).toBe(`${"x".repeat(158)}&b`);
     // …but an ampersand inside text that fits is kept.
     expect(buildPreview(undefined, `<p>${"x".repeat(155)}AT&T</p>`)).toBe(`${"x".repeat(155)}AT&T`);
   });
@@ -585,7 +596,7 @@ describe("character references (round 5 J2, J3)", () => {
 // the inbox iframe uses) gives `document.body.textContent`; the preview must equal it.
 //
 // Deliberate divergences, applied to the ORACLE so the comparison stays exact:
-//  - <script>, <style>, <title>, <template> are removed (we never show them; a browser
+//  - <script>, <style>, <title>, <template>, <noscript> are removed (we never show them; a browser
 //    would render a <style>/<script> inside <body> as textContent, but not as visible text);
 //  - a space is inserted around every element (our scanner turns every tag into
 //    whitespace, so `wor<b>d</b>` previews as "wor d", where textContent gives "word");
@@ -594,7 +605,7 @@ describe("character references (round 5 J2, J3)", () => {
 describe("browser oracle (round 5 J5)", () => {
   const oracle = (html: string): string => {
     const doc = new DOMParser().parseFromString(html, "text/html");
-    doc.querySelectorAll("script, style, title, template").forEach((el) => el.remove());
+    doc.querySelectorAll("script, style, title, template, noscript").forEach((el) => el.remove());
     doc.body.querySelectorAll("*").forEach((el) => {
       el.before(" ");
       el.after(" ");
@@ -619,7 +630,13 @@ describe("browser oracle (round 5 J5)", () => {
     ["H1 NBSP", `<p>${"\u00a0".repeat(2_000)}</p>${INVOICE}`],
     ["H2 attribute <body", '<html><head><meta content="<body"><title>Internal heading</title></head><body>Actual customer question</body></html>'],
     ["H2 title text", "<head><title>Re: the <body> tag</title></head><body>Actual customer question"],
-    ["H2 noscript", "<head><noscript><p>Enable JS</p></noscript></head><body>Actual customer question"],
+    ["noscript between paragraphs", "<p>Hi</p><noscript>Enable JS</noscript><p>Body</p>"],
+    ["K1 &#146; apostrophe", "<p>It&#146;s due</p>"],
+    ["K1 &#128; euro", "<p>&#128;5 only</p>"],
+    ["K1 &#147; &#148; quotes", "<p>&#147;quoted&#148; and &#150; dash &#151; &#153;</p>"],
+    // (A <p> inside a HEAD <noscript> is not in the corpus: with scripting disabled the parser
+    // closes the head there and the text lands in the body, which is a parser quirk the oracle's
+    // "remove noscript" rule cannot model. The unit test above covers that shape directly.)
     ["H2 > in attribute", '<head><meta content="a>b"><title>Internal heading</title></head>Actual customer question'],
     ["Outlook MSO head", OUTLOOK],
     ["marketing spacers", `<table width="600"><tr><td style="font-size:0;line-height:0">&nbsp;</td></tr>${"<tr><td height=\"8\">&nbsp;</td></tr>".repeat(50)}<tr><td><h1>Spring sale</h1><p>20% off all <b>hatchbacks</b> this week.</p></td></tr></table>`],
