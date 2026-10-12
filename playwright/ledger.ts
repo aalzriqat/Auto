@@ -1,3 +1,4 @@
+// SCRUM-350 G4 probe: throwaway comment so the trusted swarm runs against current main. Do not merge.
 import { expect } from "@playwright/test";
 import type { ConvexHttpClient } from "convex/browser";
 import { api } from "../convex/_generated/api";
