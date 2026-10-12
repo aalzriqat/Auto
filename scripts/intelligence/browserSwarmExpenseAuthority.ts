@@ -173,11 +173,17 @@ async function readJournal(
       !isRecord(line) ||
       typeof line.debitMinor !== "number" ||
       typeof line.creditMinor !== "number" ||
-      typeof line.scale !== "number"
+      typeof line.scale !== "number" ||
+      typeof line.currency !== "string"
     ) {
       inconclusive(`journal ${journalEntryId} has a malformed line`);
     }
-    return { debitMinor: line.debitMinor, creditMinor: line.creditMinor, scale: line.scale };
+    return {
+      debitMinor: line.debitMinor,
+      creditMinor: line.creditMinor,
+      scale: line.scale,
+      currency: line.currency,
+    };
   });
   return { entryId: journalEntryId, lines };
 }

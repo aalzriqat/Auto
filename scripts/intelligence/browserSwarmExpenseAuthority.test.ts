@@ -79,8 +79,8 @@ function defaultHandlers(overrides: Record<string, (args: Record<string, unknown
     getJournalEntry: (args: Record<string, unknown>) => ({
       entry: { _id: args.journalEntryId },
       lines: [
-        { debitMinor: 41_000, creditMinor: 0, scale: 3 },
-        { debitMinor: 0, creditMinor: 41_000, scale: 3 },
+        { debitMinor: 41_000, creditMinor: 0, scale: 3, currency: "JOD" },
+        { debitMinor: 0, creditMinor: 41_000, scale: 3, currency: "JOD" },
       ],
     }),
     ...overrides,
@@ -156,6 +156,29 @@ describe("SCRUM-826 expense backend authority reader", () => {
 
   it("is inconclusive when a backend response has the wrong shape", async () => {
     const { client } = fakeClient(defaultHandlers({ listExpenses: () => null }));
+    await expect(
+      readExpenseEffectSnapshot(client, { orgId: "org1", title: TITLE, refs }),
+    ).rejects.toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
+  });
+
+  it("carries each journal line's own currency so its scale can be vouched (SCRUM-826 F1)", async () => {
+    const { client } = fakeClient(defaultHandlers());
+    const snapshot = await readExpenseEffectSnapshot(client, { orgId: "org1", title: TITLE, refs });
+    expect(snapshot.journals[0].lines.map((line) => line.currency)).toEqual(["JOD", "JOD"]);
+  });
+
+  it("is inconclusive when a journal line carries no currency (SCRUM-826 F1)", async () => {
+    const { client } = fakeClient(
+      defaultHandlers({
+        getJournalEntry: (args: Record<string, unknown>) => ({
+          entry: { _id: args.journalEntryId },
+          lines: [
+            { debitMinor: 41_000, creditMinor: 0, scale: 3 },
+            { debitMinor: 0, creditMinor: 41_000, scale: 3 },
+          ],
+        }),
+      }),
+    );
     await expect(
       readExpenseEffectSnapshot(client, { orgId: "org1", title: TITLE, refs }),
     ).rejects.toBeInstanceOf(BrowserSwarmOracleInconclusiveError);

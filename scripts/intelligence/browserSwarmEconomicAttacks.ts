@@ -31,10 +31,15 @@ import {
 } from "./browserSwarmConvexFrames";
 import {
   BrowserSwarmOracleInconclusiveError,
+  classifyIntentExercise,
   evaluateCommandIdentityLifetime,
   evaluateConcurrentEditRace,
   evaluateExpenseSingleEffect,
+  evaluateIntentReplies,
+  FINGERPRINT_CONFLICT_TEXT,
   type ExpenseEffectSnapshot,
+  type IntentReplyRow,
+  type IntentRepliesVerdict,
   type TabOutcome,
 } from "./browserSwarmEconomicOracle";
 import {
@@ -72,8 +77,10 @@ export interface MissionBrowserRuntime {
 
 const CREATE_EXPENSE_UDF = /^expenses(\.js)?:create$/;
 const UPDATE_EXPENSE_UDF = /^expenses(\.js)?:update$/;
-const FINGERPRINT_CONFLICT = /Idempotency key reused with different request content/;
+const FINGERPRINT_CONFLICT = FINGERPRINT_CONFLICT_TEXT;
 const UI_STEP_TIMEOUT_MS = 20_000;
+/** How long the race barrier waits for the second tab's save frame. */
+const RACE_BARRIER_TIMEOUT_MS = 10_000;
 const LOST_RESPONSE_RECOVERY_TIMEOUT_MS = 60_000;
 
 const EXPENSE_AUTHORITY_REFS: ExpenseAuthorityRefs = {
@@ -103,13 +110,40 @@ interface ObservedMutation {
   title: string | undefined;
   idempotencyKey: string | undefined;
   args: Record<string, unknown>;
+  /** Observer sequence at which the frame was forwarded to the backend. */
+  sentSeq: number | null;
 }
 
 interface ObservedResponse {
   pageLabel: string;
   requestId: number;
+  /** Title of the intent whose attempt this replies to, when known. */
+  title: string | undefined;
   success: boolean;
   errorText?: string;
+  /** Observer sequence at which the backend's response arrived. */
+  receivedSeq: number;
+  /** True when the harness withheld this reply (the injected lost response). */
+  withheld: boolean;
+}
+
+type SocketFrame = string | Buffer;
+
+/**
+ * A two-request start line. Each listed page's first matching mutation is
+ * held (with every later frame of that page, so socket order is preserved)
+ * until every listed page has sent one; then all are forwarded back to back.
+ * Both edits are therefore in flight before either can be answered — the
+ * overlap a race needs, instead of trusting Promise.all on two clicks
+ * (SCRUM-826 F2). On timeout the held frames are released unchanged and the
+ * barrier stays unsatisfied, which the handler reports as inconclusive.
+ */
+interface RaceBarrier {
+  title: string;
+  labels: ReadonlySet<string>;
+  held: Map<string, () => void>;
+  satisfied: boolean;
+  released: boolean;
 }
 
 /**
@@ -120,14 +154,44 @@ interface ObservedResponse {
  * the server committed, the client never heard, and the client reconnects and
  * retries. Nothing is forged or rewritten.
  */
-class ConvexSyncObserver {
+export class ConvexSyncObserver {
   readonly mutations: ObservedMutation[] = [];
   readonly responses: ObservedResponse[] = [];
   readonly withheld: { title: string; requestId: number }[] = [];
   private armedTitle: string | null = null;
   private readonly trackedRequests = new Set<string>();
+  private sequence = 0;
+  private barrier: RaceBarrier | null = null;
 
   constructor(private readonly udfPattern: RegExp) {}
+
+  /** Holds the first matching mutation of each listed page until all have sent one. */
+  armRaceBarrier(title: string, labels: readonly string[]): void {
+    this.barrier = {
+      title,
+      labels: new Set(labels),
+      held: new Map(),
+      satisfied: false,
+      released: false,
+    };
+  }
+
+  get raceBarrierSatisfied(): boolean {
+    return this.barrier?.satisfied ?? false;
+  }
+
+  /** Forwards anything still held, unchanged. Idempotent. */
+  releaseRaceBarrier(): void {
+    const barrier = this.barrier;
+    if (!barrier || barrier.released) return;
+    barrier.released = true;
+    for (const flush of barrier.held.values()) flush();
+  }
+
+  private nextSeq(): number {
+    this.sequence += 1;
+    return this.sequence;
+  }
 
   async attach(page: Page, pageLabel: string): Promise<void> {
     await page.routeWebSocket(
@@ -144,6 +208,18 @@ class ConvexSyncObserver {
     return this.mutations.filter((mutation) => mutation.title === title);
   }
 
+  /** Every backend reply to an attempt of the intent titled `title`, in arrival order. */
+  repliesFor(title: string): IntentReplyRow[] {
+    return this.responses
+      .filter((response) => response.title === title)
+      .map((response) => ({
+        requestId: response.requestId,
+        success: response.success,
+        withheld: response.withheld,
+        ...(response.errorText === undefined ? {} : { errorText: response.errorText }),
+      }));
+  }
+
   responseFor(pageLabel: string, requestId: number): ObservedResponse | undefined {
     return [...this.responses]
       .reverse()
@@ -152,30 +228,72 @@ class ConvexSyncObserver {
 
   private bridge(socket: WebSocketRoute, pageLabel: string): void {
     const server = socket.connectToServer();
+    // Frames held behind the race barrier, in page order. While non-null,
+    // every frame from this page queues so the socket order never changes.
+    let queue: { message: SocketFrame; record?: ObservedMutation }[] | null = null;
+    const forward = (message: SocketFrame, record?: ObservedMutation): void => {
+      if (record) record.sentSeq = this.nextSeq();
+      server.send(message);
+    };
     socket.onMessage((message) => {
       const frame = parseConvexMutationRequest(message, this.udfPattern);
+      let record: ObservedMutation | undefined;
       if (frame) {
         const title = typeof frame.args.title === "string" ? frame.args.title : undefined;
-        this.mutations.push({ pageLabel, ...frame, title });
+        record = { pageLabel, ...frame, title, sentSeq: null };
+        this.mutations.push(record);
         this.trackedRequests.add(pageLabel + "#" + frame.requestId);
       }
-      server.send(message);
+      if (queue) {
+        queue.push({ message, record });
+        return;
+      }
+      const barrier = this.barrier;
+      if (
+        record &&
+        barrier &&
+        !barrier.released &&
+        barrier.labels.has(pageLabel) &&
+        !barrier.held.has(pageLabel) &&
+        record.title === barrier.title
+      ) {
+        const held: { message: SocketFrame; record?: ObservedMutation }[] = [{ message, record }];
+        queue = held;
+        barrier.held.set(pageLabel, () => {
+          queue = null;
+          for (const entry of held) forward(entry.message, entry.record);
+        });
+        if (barrier.held.size === barrier.labels.size) {
+          barrier.satisfied = true;
+          this.releaseRaceBarrier();
+        }
+        return;
+      }
+      forward(message, record);
     });
     server.onMessage((message) => {
       const response = parseConvexMutationResponse(message);
       if (response && this.trackedRequests.has(pageLabel + "#" + response.requestId)) {
-        this.responses.push({ pageLabel, ...response });
         const request = [...this.mutations]
           .reverse()
           .find(
             (mutation) =>
               mutation.pageLabel === pageLabel && mutation.requestId === response.requestId,
           );
+        const observed: ObservedResponse = {
+          pageLabel,
+          ...response,
+          title: request?.title,
+          receivedSeq: this.nextSeq(),
+          withheld: false,
+        };
+        this.responses.push(observed);
         if (
           this.armedTitle !== null &&
           request?.title === this.armedTitle &&
           response.success
         ) {
+          observed.withheld = true;
           this.withheld.push({ title: this.armedTitle, requestId: response.requestId });
           this.armedTitle = null;
           // Withhold the committed response and drop the connection.
@@ -238,6 +356,8 @@ interface IntentReport {
   snapshot: ExpenseEffectSnapshot;
   effect: ReturnType<typeof evaluateExpenseSingleEffect>;
   identity: ReturnType<typeof evaluateCommandIdentityLifetime>;
+  replies: IntentReplyRow[];
+  replyVerdict: IntentRepliesVerdict;
 }
 
 async function settleIntent(
@@ -254,12 +374,21 @@ async function settleIntent(
   const observed = observer.mutationsFor(intent.title);
   const identities = observed.map((mutation) => mutation.idempotencyKey);
   const identity = evaluateCommandIdentityLifetime(identities);
+  const replies = observer.repliesFor(intent.title);
+  const replyVerdict = evaluateIntentReplies(intent.title, replies);
   const matching = snapshot.expenses.filter((row) => row.title === intent.title).length;
-  if (!intent.uiConfirmed && matching <= 1) {
-    // The client never reported success and the backend holds at most one
-    // record, so the attack was not exercised: inconclusive, never a pass.
+  const exercise = classifyIntentExercise({
+    uiConfirmed: intent.uiConfirmed,
+    backendRecords: matching,
+    refusedReplies: replyVerdict.refused,
+  });
+  if (exercise === "NOT_EXERCISED") {
+    // The client never reported success, the backend refused nothing it
+    // could see, and holds at most one record: the attack was not exercised.
+    // Inconclusive, never a pass. A refusal is a product verdict instead
+    // (SCRUM-826 O2) and falls through to the oracles below.
     throw new BrowserSwarmOracleInconclusiveError(
-      `intent "${intent.title}" was never confirmed by the client (backend holds ${matching}); the attack was not exercised`,
+      `intent "${intent.title}" was never confirmed by the client (backend holds ${matching}, no refusal reply); the attack was not exercised`,
     );
   }
   const effect = evaluateExpenseSingleEffect(snapshot, {
@@ -275,6 +404,8 @@ async function settleIntent(
     snapshot,
     effect,
     identity,
+    replies,
+    replyVerdict,
   };
 }
 
@@ -285,17 +416,52 @@ async function runDuplicateSubmitAttack(
   const startedAt = new Date().toISOString();
   const runtime = await runtimeApi.open(context);
   let cleanupStarted = false;
+  const observer = new ConvexSyncObserver(CREATE_EXPENSE_UDF);
+  const nonce = attackNonce(context);
+  let resolvedOrgId: string | null = null;
+
+  /** Writes the backend evidence and returns the mission's oracle verdict. */
+  const conclude = async (
+    violations: readonly string[],
+    detail: Record<string, unknown>,
+  ): Promise<BrowserMissionEvidence> => {
+    const passed = violations.length === 0;
+    const backendArtifact = await runtimeApi.writeBackendEvidence(runtime.paths, {
+      attack: "DUPLICATE_SUBMIT",
+      orgId: resolvedOrgId,
+      nonce,
+      ...detail,
+      lostResponse: observer.withheld,
+      replies: observer.responses,
+      violations,
+    });
+    cleanupStarted = true;
+    const artifacts = [...(await runtimeApi.finish(runtime)), backendArtifact];
+    return {
+      missionId: context.mission.id,
+      workerId: context.worker.workerId,
+      startedAt,
+      completedAt: new Date().toISOString(),
+      oracle: {
+        kind: "IDEMPOTENCY_SINGLE_EFFECT",
+        passed,
+        summary: passed
+          ? "Rapid resubmits, a lost response with client retry, an exact server replay and a fresh control intent each produced exactly one expense and one economic posting, every client-visible reply accepted the intent, and the conflicting replay was refused."
+          : "Duplicate-submit attack breached single economic effect: " + violations.join("; "),
+      },
+      artifacts,
+    };
+  };
 
   try {
     const { page } = runtime;
-    const observer = new ConvexSyncObserver(CREATE_EXPENSE_UDF);
     await observer.attach(page, "tab-1");
 
     const orgId = await runtimeApi.resolveOrgRoute(page);
     if (!orgId) throw new Error("DUPLICATE_SUBMIT could not resolve the authenticated organization route.");
+    resolvedOrgId = orgId;
     await gotoExpenses(page, orgId);
 
-    const nonce = attackNonce(context);
     const rapid = { title: nonce + "-rapid", amount: 41 };
     const lost = { title: nonce + "-lost", amount: 43 };
     const control = { title: nonce + "-control", amount: 47 };
@@ -320,6 +486,20 @@ async function runDuplicateSubmitAttack(
       LOST_RESPONSE_RECOVERY_TIMEOUT_MS,
     );
     if (!observer.withheld.some((entry) => entry.title === lost.title)) {
+      // The fault withholds only a SUCCESSFUL reply. If the backend refused
+      // the lost intent instead, that refusal is the product's verdict on a
+      // fresh intent — a breach, not a harness that failed to inject
+      // (SCRUM-826 O2). Only an intent with no refusal stays inconclusive.
+      const refusals = [rapid.title, lost.title].flatMap(
+        (title) => evaluateIntentReplies(title, observer.repliesFor(title)).violations,
+      );
+      if (refusals.some((violation) => violation.startsWith(lost.title + ":"))) {
+        return await conclude(refusals, {
+          phase: "LOST_RESPONSE",
+          uiConfirmed: { rapid: rapidConfirmed, lost: lostConfirmed },
+          mutations: observer.mutations,
+        });
+      }
       throw new BrowserSwarmOracleInconclusiveError(
         "the lost-response fault was never injected; the retry path was not exercised",
       );
@@ -376,6 +556,8 @@ async function runDuplicateSubmitAttack(
       for (const violation of [...report.effect.violations, ...report.identity.violations]) {
         violations.push(`${report.title}: ${violation}`);
       }
+      // Already prefixed with the intent title.
+      violations.push(...report.replyVerdict.violations);
     }
     const rapidReport = reports[0];
     if (reports[1].transmittedAttempts < 2) {
@@ -396,34 +578,30 @@ async function runDuplicateSubmitAttack(
       violations.push("distinct user intents shared a command identity: " + keys.join(", "));
     }
 
-    const passed = violations.length === 0;
-    const backendArtifact = await runtimeApi.writeBackendEvidence(runtime.paths, {
-      attack: "DUPLICATE_SUBMIT",
-      orgId,
-      nonce,
+    return await conclude(violations, {
       replay: { result: String(replayResult), conflict },
-      lostResponse: observer.withheld,
       reports,
-      violations,
     });
-    cleanupStarted = true;
-    const artifacts = [...(await runtimeApi.finish(runtime)), backendArtifact];
-
-    return {
-      missionId: context.mission.id,
-      workerId: context.worker.workerId,
-      startedAt,
-      completedAt: new Date().toISOString(),
-      oracle: {
-        kind: "IDEMPOTENCY_SINGLE_EFFECT",
-        passed,
-        summary: passed
-          ? "Rapid resubmits, a lost response with client retry, an exact server replay and a fresh control intent each produced exactly one expense and one economic posting; the conflicting replay was refused."
-          : "Duplicate-submit attack breached single economic effect: " + violations.join("; "),
-      },
-      artifacts,
-    };
   } catch (error) {
+    if (!cleanupStarted && error instanceof BrowserSwarmOracleInconclusiveError) {
+      // An inconclusive run still leaves its backend evidence behind, so an
+      // operator can tell a harness fault from a hidden product refusal
+      // (SCRUM-826 O2). Best effort: the inconclusive error stays the result.
+      try {
+        await runtimeApi.writeBackendEvidence(runtime.paths, {
+          attack: "DUPLICATE_SUBMIT",
+          outcome: "INCONCLUSIVE",
+          reason: error.message,
+          orgId: resolvedOrgId,
+          nonce,
+          mutations: observer.mutations,
+          replies: observer.responses,
+          lostResponse: observer.withheld,
+        });
+      } catch {
+        // The inconclusive verdict is reported regardless.
+      }
+    }
     return runtimeApi.rethrowAfterCleanup(runtime, error, cleanupStarted);
   }
 }
@@ -457,7 +635,14 @@ async function awaitUpdateOutcome(
   pageLabel: string,
   title: string,
   sentBefore: number,
-): Promise<TabOutcome & { requestId?: number; transmittedAmount?: unknown }> {
+): Promise<
+  TabOutcome & {
+    requestId?: number;
+    transmittedAmount?: unknown;
+    sentSeq?: number | null;
+    responseSeq?: number;
+  }
+> {
   const deadline = Date.now() + UI_STEP_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const sent = observer
@@ -468,14 +653,15 @@ async function awaitUpdateOutcome(
     if (request) {
       const response = observer.responseFor(pageLabel, request.requestId);
       if (response) {
+        const evidence = {
+          requestId: request.requestId,
+          transmittedAmount: request.args.amount,
+          sentSeq: request.sentSeq,
+          responseSeq: response.receivedSeq,
+        };
         return response.success
-          ? { outcome: "SUCCESS", requestId: request.requestId, transmittedAmount: request.args.amount }
-          : {
-              outcome: "REFUSED",
-              message: response.errorText ?? "",
-              requestId: request.requestId,
-              transmittedAmount: request.args.amount,
-            };
+          ? { outcome: "SUCCESS", ...evidence }
+          : { outcome: "REFUSED", message: response.errorText ?? "", ...evidence };
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -531,11 +717,25 @@ async function runMultiTabRaceAttack(
     await setPaidWithAmount(tabA, dialogA, intended.A);
     await setPaidWithAmount(tabB, dialogB, intended.B);
 
-    // Both tabs pay the same expense with different amounts, concurrently.
+    // Both tabs pay the same expense with different amounts. The barrier
+    // holds whichever save reaches the socket first until the other has been
+    // sent too, so both are in flight before either can be answered.
+    observer.armRaceBarrier(title, ["tab-a", "tab-b"]);
     await Promise.all([
       dialogA.getByRole("button", { name: "Save Changes", exact: true }).click(),
       dialogB.getByRole("button", { name: "Save Changes", exact: true }).click(),
     ]);
+    const barrierDeadline = Date.now() + RACE_BARRIER_TIMEOUT_MS;
+    while (!observer.raceBarrierSatisfied && Date.now() < barrierDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const overlapped = observer.raceBarrierSatisfied;
+    observer.releaseRaceBarrier();
+    if (!overlapped) {
+      throw new BrowserSwarmOracleInconclusiveError(
+        "both tabs' saves never reached the backend socket together; the race was not exercised",
+      );
+    }
     const [outcomeA, outcomeB] = await Promise.all([
       awaitUpdateOutcome(observer, "tab-a", title, 0),
       awaitUpdateOutcome(observer, "tab-b", title, 0),
@@ -576,6 +776,10 @@ async function runMultiTabRaceAttack(
       );
     }
     const race = evaluateConcurrentEditRace({
+      ordering: [
+        { tab: "A", sentSeq: outcomeA.sentSeq ?? null, responseSeq: outcomeA.responseSeq ?? null },
+        { tab: "B", sentSeq: outcomeB.sentSeq ?? null, responseSeq: outcomeB.responseSeq ?? null },
+      ],
       tabs: [
         { tab: "A", intendedAmount: intended.A, ...outcomeA },
         { tab: "B", intendedAmount: intended.B, ...outcomeB },

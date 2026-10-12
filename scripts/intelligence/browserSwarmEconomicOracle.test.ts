@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   BrowserSwarmOracleInconclusiveError,
+  classifyIntentExercise,
   evaluateCommandIdentityLifetime,
   evaluateConcurrentEditRace,
   evaluateExpenseSingleEffect,
+  evaluateIntentReplies,
   type ExpenseEffectSnapshot,
 } from "./browserSwarmEconomicOracle";
 
@@ -28,8 +30,8 @@ function posted(overrides: Partial<ExpenseEffectSnapshot> = {}): ExpenseEffectSn
       {
         entryId: "je1",
         lines: [
-          { debitMinor: 41_000, creditMinor: 0, scale: 3 },
-          { debitMinor: 0, creditMinor: 41_000, scale: 3 },
+          { debitMinor: 41_000, creditMinor: 0, scale: 3, currency: "JOD" },
+          { debitMinor: 0, creditMinor: 41_000, scale: 3, currency: "JOD" },
         ],
       },
     ],
@@ -55,6 +57,12 @@ function queued(overrides: Partial<ExpenseEffectSnapshot> = {}): ExpenseEffectSn
 }
 
 const expected = { amount: 41, status: "PAID" as const };
+
+/** Both saves were transmitted before either response arrived: a real overlap. */
+const OVERLAPPED = [
+  { tab: "A", sentSeq: 1, responseSeq: 3 },
+  { tab: "B", sentSeq: 2, responseSeq: 4 },
+];
 
 describe("SCRUM-826 single-economic-effect oracle", () => {
   it("passes exactly one expense with exactly one balanced posting of the authoritative amount", () => {
@@ -132,8 +140,8 @@ describe("SCRUM-826 single-economic-effect oracle", () => {
           {
             entryId: "je1",
             lines: [
-              { debitMinor: 71_000, creditMinor: 0, scale: 3 },
-              { debitMinor: 0, creditMinor: 71_000, scale: 3 },
+              { debitMinor: 71_000, creditMinor: 0, scale: 3, currency: "JOD" },
+              { debitMinor: 0, creditMinor: 71_000, scale: 3, currency: "JOD" },
             ],
           },
         ],
@@ -151,8 +159,8 @@ describe("SCRUM-826 single-economic-effect oracle", () => {
           {
             entryId: "je1",
             lines: [
-              { debitMinor: 41_000, creditMinor: 0, scale: 3 },
-              { debitMinor: 0, creditMinor: 40_000, scale: 3 },
+              { debitMinor: 41_000, creditMinor: 0, scale: 3, currency: "JOD" },
+              { debitMinor: 0, creditMinor: 40_000, scale: 3, currency: "JOD" },
             ],
           },
         ],
@@ -219,6 +227,61 @@ describe("SCRUM-826 single-economic-effect oracle", () => {
     expect(() => evaluateExpenseSingleEffect(posted({ journals: [] }), expected)).toThrow(
       BrowserSwarmOracleInconclusiveError,
     );
+  });
+
+  function postedWithLines(
+    lines: { debitMinor: number; creditMinor: number; scale: number; currency: string }[],
+  ): ExpenseEffectSnapshot {
+    return posted({ journals: [{ entryId: "je1", lines }] });
+  }
+
+  it("flags a balanced journal posted at the wrong minor-unit scale for its currency (SCRUM-826 F1)", () => {
+    // 41 JOD is 41,000 fils (scale 3). A journal claiming scale 0 for JOD
+    // agrees with itself but is ledger money at the wrong denomination.
+    const verdict = evaluateExpenseSingleEffect(
+      postedWithLines([
+        { debitMinor: 41, creditMinor: 0, scale: 0, currency: "JOD" },
+        { debitMinor: 0, creditMinor: 41, scale: 0, currency: "JOD" },
+      ]),
+      expected,
+    );
+    expect(verdict.passed).toBe(false);
+    expect(verdict.violations.join(" ")).toMatch(/scale 0.*JOD.*3/);
+  });
+
+  it("passes a correctly scaled posting in another canonical currency (positive control)", () => {
+    const verdict = evaluateExpenseSingleEffect(
+      postedWithLines([
+        { debitMinor: 4_100, creditMinor: 0, scale: 2, currency: "USD" },
+        { debitMinor: 0, creditMinor: 4_100, scale: 2, currency: "USD" },
+      ]),
+      expected,
+    );
+    expect(verdict).toMatchObject({ passed: true, ledgerAmountMinor: 4_100 });
+  });
+
+  it("is inconclusive when a journal mixes currencies", () => {
+    expect(() =>
+      evaluateExpenseSingleEffect(
+        postedWithLines([
+          { debitMinor: 41_000, creditMinor: 0, scale: 3, currency: "JOD" },
+          { debitMinor: 0, creditMinor: 41_000, scale: 3, currency: "KWD" },
+        ]),
+        expected,
+      ),
+    ).toThrow(BrowserSwarmOracleInconclusiveError);
+  });
+
+  it("is inconclusive when a journal line's currency is not canonical", () => {
+    expect(() =>
+      evaluateExpenseSingleEffect(
+        postedWithLines([
+          { debitMinor: 41_000, creditMinor: 0, scale: 3, currency: "jod" },
+          { debitMinor: 0, creditMinor: 41_000, scale: 3, currency: "jod" },
+        ]),
+        expected,
+      ),
+    ).toThrow(BrowserSwarmOracleInconclusiveError);
   });
 
   it("is inconclusive when the queued currency has no vouched scale", () => {
@@ -293,9 +356,44 @@ describe("SCRUM-826 concurrent-tab edit race oracle (CONC-1 / ECON-2)", () => {
   const LOCKED =
     "Posted expenses are locked. Use a correction or reversal workflow before changing accounting fields.";
 
+  it("is inconclusive, never a pass, when the two saves never overlapped (SCRUM-826 F2)", () => {
+    // A sent, committed and heard back before B ever sent: a sequential edit,
+    // not a race. Identical outcomes to the positive case — only the ordering
+    // evidence distinguishes them.
+    expect(() =>
+      evaluateConcurrentEditRace({
+        ordering: [
+          { tab: "A", sentSeq: 1, responseSeq: 2 },
+          { tab: "B", sentSeq: 3, responseSeq: 4 },
+        ],
+        tabs: [
+          { tab: "A", intendedAmount: 50, outcome: "SUCCESS" },
+          { tab: "B", intendedAmount: 80, outcome: "REFUSED", message: LOCKED },
+        ],
+        authoritative: { amount: 50, status: "PAID" },
+        staleRetry: { outcome: "REFUSED", message: LOCKED },
+      }),
+    ).toThrow(/did not overlap/);
+  });
+
+  it("is inconclusive when a tab's send or response was not ordered", () => {
+    expect(() =>
+      evaluateConcurrentEditRace({
+        ordering: [{ tab: "A", sentSeq: 1, responseSeq: 3 }],
+        tabs: [
+          { tab: "A", intendedAmount: 50, outcome: "SUCCESS" },
+          { tab: "B", intendedAmount: 80, outcome: "REFUSED", message: LOCKED },
+        ],
+        authoritative: { amount: 50, status: "PAID" },
+        staleRetry: { outcome: "REFUSED", message: LOCKED },
+      }),
+    ).toThrow(BrowserSwarmOracleInconclusiveError);
+  });
+
   it("passes when exactly one tab won, the other was refused by the posting lock, and the backend holds the winner", () => {
     expect(
       evaluateConcurrentEditRace({
+      ordering: OVERLAPPED,
         tabs: [
           { tab: "A", intendedAmount: 50, outcome: "SUCCESS" },
           { tab: "B", intendedAmount: 80, outcome: "REFUSED", message: LOCKED },
@@ -308,6 +406,7 @@ describe("SCRUM-826 concurrent-tab edit race oracle (CONC-1 / ECON-2)", () => {
 
   it("flags two tabs both reporting success as a lost update", () => {
     const verdict = evaluateConcurrentEditRace({
+      ordering: OVERLAPPED,
       tabs: [
         { tab: "A", intendedAmount: 50, outcome: "SUCCESS" },
         { tab: "B", intendedAmount: 80, outcome: "SUCCESS" },
@@ -321,6 +420,7 @@ describe("SCRUM-826 concurrent-tab edit race oracle (CONC-1 / ECON-2)", () => {
 
   it("flags a backend that holds a value no successful tab asked for", () => {
     const verdict = evaluateConcurrentEditRace({
+      ordering: OVERLAPPED,
       tabs: [
         { tab: "A", intendedAmount: 50, outcome: "SUCCESS" },
         { tab: "B", intendedAmount: 80, outcome: "REFUSED", message: LOCKED },
@@ -334,6 +434,7 @@ describe("SCRUM-826 concurrent-tab edit race oracle (CONC-1 / ECON-2)", () => {
 
   it("flags a stale retry from the losing tab that the backend accepted", () => {
     const verdict = evaluateConcurrentEditRace({
+      ordering: OVERLAPPED,
       tabs: [
         { tab: "A", intendedAmount: 50, outcome: "SUCCESS" },
         { tab: "B", intendedAmount: 80, outcome: "REFUSED", message: LOCKED },
@@ -347,6 +448,7 @@ describe("SCRUM-826 concurrent-tab edit race oracle (CONC-1 / ECON-2)", () => {
 
   it("flags a backend left unpaid after a tab reported a successful payment", () => {
     const verdict = evaluateConcurrentEditRace({
+      ordering: OVERLAPPED,
       tabs: [
         { tab: "A", intendedAmount: 50, outcome: "SUCCESS" },
         { tab: "B", intendedAmount: 80, outcome: "REFUSED", message: LOCKED },
@@ -360,6 +462,7 @@ describe("SCRUM-826 concurrent-tab edit race oracle (CONC-1 / ECON-2)", () => {
   it("is inconclusive when a tab's outcome was never observed", () => {
     expect(() =>
       evaluateConcurrentEditRace({
+      ordering: OVERLAPPED,
         tabs: [
           { tab: "A", intendedAmount: 50, outcome: "SUCCESS" },
           { tab: "B", intendedAmount: 80, outcome: "UNKNOWN" },
@@ -373,6 +476,7 @@ describe("SCRUM-826 concurrent-tab edit race oracle (CONC-1 / ECON-2)", () => {
   it("is inconclusive, not a pass, when the loser was refused for an environmental reason", () => {
     expect(() =>
       evaluateConcurrentEditRace({
+      ordering: OVERLAPPED,
         tabs: [
           { tab: "A", intendedAmount: 50, outcome: "SUCCESS" },
           {
@@ -390,6 +494,7 @@ describe("SCRUM-826 concurrent-tab edit race oracle (CONC-1 / ECON-2)", () => {
 
   it("flags no tab succeeding as a dead-ended workflow", () => {
     const verdict = evaluateConcurrentEditRace({
+      ordering: OVERLAPPED,
       tabs: [
         { tab: "A", intendedAmount: 50, outcome: "REFUSED", message: LOCKED },
         { tab: "B", intendedAmount: 80, outcome: "REFUSED", message: LOCKED },
@@ -399,5 +504,74 @@ describe("SCRUM-826 concurrent-tab edit race oracle (CONC-1 / ECON-2)", () => {
     });
     expect(verdict.passed).toBe(false);
     expect(verdict.violations.join(" ")).toMatch(/0 tabs reported success/);
+  });
+});
+
+describe("SCRUM-826 O1/O2 — client-visible replies to one intent", () => {
+  const ok = (requestId: number) => ({ requestId, success: true, withheld: false });
+
+  it("passes when every client-visible reply to the intent succeeded", () => {
+    const verdict = evaluateIntentReplies("i-1", [ok(1), ok(2), ok(3)]);
+    expect(verdict.violations).toEqual([]);
+    expect(verdict.refused).toBe(0);
+  });
+
+  it("names a fingerprint refusal of a same-intent retry as an ECON-2 breach", () => {
+    const verdict = evaluateIntentReplies("i-1", [
+      ok(1),
+      {
+        requestId: 2,
+        success: false,
+        withheld: false,
+        errorText: "Idempotency key reused with different request content",
+      },
+    ]);
+    expect(verdict.refused).toBe(1);
+    expect(verdict.violations).toHaveLength(1);
+    expect(verdict.violations[0]).toMatch(/i-1.*attempt 2.*fingerprint/);
+  });
+
+  it("counts any other refusal of a same-intent attempt as a breach too", () => {
+    const verdict = evaluateIntentReplies("i-1", [
+      { requestId: 4, success: false, withheld: false, errorText: "boom" },
+    ]);
+    expect(verdict.refused).toBe(1);
+    expect(verdict.violations[0]).toMatch(/attempt 4 was refused.*boom/);
+  });
+
+  it("never counts the reply the harness withheld as client-visible", () => {
+    const verdict = evaluateIntentReplies("i-1", [
+      { requestId: 5, success: false, withheld: true, errorText: "x" },
+      ok(5),
+    ]);
+    expect(verdict.violations).toEqual([]);
+    expect(verdict.refused).toBe(0);
+  });
+
+  it("classifies a confirmed or duplicated intent as exercised", () => {
+    expect(
+      classifyIntentExercise({ uiConfirmed: true, backendRecords: 1, refusedReplies: 0 }),
+    ).toBe("EXERCISED");
+    expect(
+      classifyIntentExercise({ uiConfirmed: false, backendRecords: 2, refusedReplies: 0 }),
+    ).toBe("EXERCISED");
+  });
+
+  it("classifies an unconfirmed intent the backend refused as a product refusal, not a harness error", () => {
+    expect(
+      classifyIntentExercise({ uiConfirmed: false, backendRecords: 1, refusedReplies: 1 }),
+    ).toBe("PRODUCT_REFUSED");
+    expect(
+      classifyIntentExercise({ uiConfirmed: false, backendRecords: 0, refusedReplies: 2 }),
+    ).toBe("PRODUCT_REFUSED");
+  });
+
+  it("keeps an unconfirmed intent with no refusal reply as not exercised", () => {
+    expect(
+      classifyIntentExercise({ uiConfirmed: false, backendRecords: 1, refusedReplies: 0 }),
+    ).toBe("NOT_EXERCISED");
+    expect(
+      classifyIntentExercise({ uiConfirmed: false, backendRecords: 0, refusedReplies: 0 }),
+    ).toBe("NOT_EXERCISED");
   });
 });

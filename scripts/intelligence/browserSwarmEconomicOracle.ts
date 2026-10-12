@@ -53,6 +53,8 @@ export interface JournalLineRow {
   debitMinor: number;
   creditMinor: number;
   scale: number;
+  /** The line's own denomination; its scale is vouched against it, never trusted. */
+  currency: string;
 }
 
 export interface JournalRow {
@@ -174,13 +176,30 @@ export function evaluateExpenseSingleEffect(
         `journal ${journal.entryId} has no lines; the ledger effect cannot be judged`,
       );
     }
-    const scales = new Set(journal.lines.map((line) => line.scale));
-    if (scales.size !== 1) {
+    const currencies = new Set(journal.lines.map((line) => line.currency));
+    if (currencies.size !== 1) {
       throw new BrowserSwarmOracleInconclusiveError(
-        `journal ${journal.entryId} mixes minor-unit scales`,
+        `journal ${journal.entryId} mixes currencies (${[...currencies].join(", ")})`,
       );
     }
-    const scale = journal.lines[0].scale;
+    const currency = journal.lines[0].currency;
+    // The journal's own scale only agrees with itself. The expected minor
+    // amount comes from the backend's canonical denomination rule for the
+    // line's currency; an unvouched code is inconclusive, a line written at a
+    // different scale is a misposted ledger amount (SCRUM-826 F1).
+    const scale = denominationOf(currency)?.scale;
+    if (scale === undefined) {
+      throw new BrowserSwarmOracleInconclusiveError(
+        `journal ${journal.entryId} carries currency ${currency} with no vouched minor-unit scale`,
+      );
+    }
+    const misScaled = journal.lines.filter((line) => line.scale !== scale);
+    if (misScaled.length > 0) {
+      violations.push(
+        `journal ${journal.entryId} records ${misScaled.length} line(s) at scale ${misScaled[0].scale} for ${currency}, whose canonical scale is ${scale}`,
+      );
+      return verdict(expense.id, "POSTED", null);
+    }
     const debit = journal.lines.reduce((sum, line) => sum + line.debitMinor, 0);
     const credit = journal.lines.reduce((sum, line) => sum + line.creditMinor, 0);
     if (debit !== credit) {
@@ -228,7 +247,24 @@ export type TabOutcome =
   | { outcome: "REFUSED"; message: string }
   | { outcome: "UNKNOWN"; message?: string };
 
+/**
+ * Observer-assigned sequence numbers for one tab's save: when its mutation
+ * frame was forwarded to the backend and when the backend's response came
+ * back. A shared monotonic counter across both tabs' sockets.
+ */
+export interface RaceOrderingRow {
+  tab: string;
+  sentSeq: number | null;
+  responseSeq: number | null;
+}
+
 export interface ConcurrentEditRaceInput {
+  /**
+   * Evidence that the race was actually run: both saves were in flight before
+   * either was answered. Without it a fully serialized edit sequence produces
+   * the same outcomes as a race and would PASS vacuously (SCRUM-826 F2).
+   */
+  ordering: readonly RaceOrderingRow[];
   tabs: readonly ({ tab: string; intendedAmount: number } & TabOutcome)[];
   authoritative: { amount: number; status: string };
   /** The losing tab submitting its stale form again after the race. */
@@ -269,6 +305,27 @@ export function evaluateConcurrentEditRace(
         `tab ${tab.tab} was refused for a reason other than the posting lock (${tab.message}); the race was not exercised`,
       );
     }
+  }
+  const sentSeqs: number[] = [];
+  const responseSeqs: number[] = [];
+  for (const tab of input.tabs) {
+    const order = input.ordering.find((row) => row.tab === tab.tab);
+    if (
+      !order ||
+      typeof order.sentSeq !== "number" ||
+      typeof order.responseSeq !== "number"
+    ) {
+      throw new BrowserSwarmOracleInconclusiveError(
+        `tab ${tab.tab} has no recorded send/response order; overlap cannot be proven`,
+      );
+    }
+    sentSeqs.push(order.sentSeq);
+    responseSeqs.push(order.responseSeq);
+  }
+  if (Math.max(...sentSeqs) > Math.min(...responseSeqs)) {
+    throw new BrowserSwarmOracleInconclusiveError(
+      "the concurrent saves did not overlap: one tab was answered before the other tab's save was sent, so this was a sequential edit, not a race",
+    );
   }
   if (input.staleRetry.outcome === "UNKNOWN") {
     throw new BrowserSwarmOracleInconclusiveError(
@@ -352,4 +409,65 @@ export function evaluateCommandIdentityLifetime(
     violations,
     key: distinct.length === 1 ? distinct[0] : null,
   };
+}
+
+/** One backend reply to a transmitted attempt of an intent. */
+export interface IntentReplyRow {
+  requestId: number;
+  success: boolean;
+  /** True only for the reply the harness withheld to simulate a lost response. */
+  withheld: boolean;
+  errorText?: string;
+}
+
+export interface IntentRepliesVerdict {
+  violations: string[];
+  /** Client-visible refusals of an attempt of this intent. */
+  refused: number;
+}
+
+export const FINGERPRINT_CONFLICT_TEXT = /Idempotency key reused with different request content/;
+
+/**
+ * ECON-2 (SCRUM-826 O1): every transmitted attempt of ONE user intent must be
+ * accepted as that intent — the first commits, every retry replays it. A
+ * client-visible refusal of any attempt is a breach: the user was told the
+ * save failed (and a fingerprint refusal means the client recomputed a
+ * fingerprinted input from a volatile value). The reply the harness itself
+ * withheld never reached the client and is not judged.
+ */
+export function evaluateIntentReplies(
+  title: string,
+  replies: readonly IntentReplyRow[],
+): IntentRepliesVerdict {
+  const violations: string[] = [];
+  for (const reply of replies) {
+    if (reply.withheld || reply.success) continue;
+    const text = reply.errorText ?? "";
+    violations.push(
+      FINGERPRINT_CONFLICT_TEXT.test(text)
+        ? `${title}: attempt ${reply.requestId} was refused with a fingerprint conflict on a same-intent retry: ${text}`
+        : `${title}: attempt ${reply.requestId} was refused: ${text || "(no error text)"}`,
+    );
+  }
+  return { violations, refused: violations.length };
+}
+
+export type IntentExercise = "EXERCISED" | "PRODUCT_REFUSED" | "NOT_EXERCISED";
+
+/**
+ * SCRUM-826 O2: separates a product refusal from a harness that never
+ * exercised the attack. An intent the client confirmed, or that the backend
+ * holds more than once, was exercised. An unconfirmed intent with a
+ * client-visible refusal is a PRODUCT verdict (the backend said no), never a
+ * harness error. Only an unconfirmed, unrefused intent is NOT_EXERCISED.
+ */
+export function classifyIntentExercise(input: {
+  uiConfirmed: boolean;
+  backendRecords: number;
+  refusedReplies: number;
+}): IntentExercise {
+  if (input.uiConfirmed || input.backendRecords > 1) return "EXERCISED";
+  if (input.refusedReplies > 0) return "PRODUCT_REFUSED";
+  return "NOT_EXERCISED";
 }
