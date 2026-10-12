@@ -540,6 +540,15 @@ describe("support inbox: hostile HTML on the inbound path (review F1)", () => {
     expect(messages.filter((m) => m.direction === "INBOUND")).toHaveLength(1);
     expect(messages[0]?.bodyHtml).toBe(hostile); // stored untouched
   });
+
+  // Review H1 (round 3): an HTML-only body that opens with 400 invisible spacer
+  // rows must still store the real sentence as the list preview.
+  test("an HTML-only body with 400 spacer rows stores the invoice sentence in lastMessagePreview", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const html = `<table>${"<tr><td>&nbsp;</td></tr>".repeat(400)}</table><p>Hello, my invoice #123 is wrong.</p>`;
+    const thread = await inbound(t, { bodyText: undefined, bodyHtml: html });
+    expect(thread.lastMessagePreview).toBe("Hello, my invoice #123 is wrong.");
+  });
 });
 
 describe("support inbox: setThreadCategory", () => {

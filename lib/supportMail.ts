@@ -9,8 +9,6 @@
  */
 
 const PREVIEW_MAX_LENGTH = 160;
-/** Visible characters of converted HTML a preview is built from (it keeps 160). */
-const PREVIEW_SOURCE_CHARS = 2000;
 
 /** `<https://…>` link dumps that plain-text mail bodies are full of. */
 const ANGLE_LINK = /<\s*(https?:\/\/[^\s<>]+)\s*>/gi;
@@ -145,16 +143,27 @@ function isAsciiLetter(code: number): boolean {
   return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
 }
 
+function isNameChar(code: number): boolean {
+  return isAsciiLetter(code) || (code >= 48 && code <= 57);
+}
+
+/** A closing-tag name ends at whitespace, "/" or ">" (so `</styleX>` is a different tag). */
+function isNameBoundary(code: number): boolean {
+  return code === 62 || code === 47 || code === 32 || (code >= 9 && code <= 13);
+}
+
 /**
  * Index just past the closing `</name>` of a skipped block (case-insensitive),
  * or `html.length` when it is never closed. Walks `</` occurrences with
- * indexOf, so each byte of input is inspected a bounded number of times.
+ * indexOf, so each byte of input is inspected a bounded number of times. The
+ * name must end at a boundary: `</styleX>` does not close a `<style>`.
  */
 function endOfBlock(html: string, name: string, from: number): number {
   let at = html.indexOf("</", from);
   while (at !== -1) {
-    if (html.slice(at + 2, at + 2 + name.length).toLowerCase() === name) {
-      const gt = html.indexOf(">", at + 2 + name.length);
+    const nameEnd = at + 2 + name.length;
+    if (html.slice(at + 2, nameEnd).toLowerCase() === name && (nameEnd >= html.length || isNameBoundary(html.charCodeAt(nameEnd)))) {
+      const gt = html.indexOf(">", nameEnd);
       return gt === -1 ? html.length : gt + 1;
     }
     at = html.indexOf("</", at + 2);
@@ -162,42 +171,66 @@ function endOfBlock(html: string, name: string, from: number): number {
   return html.length;
 }
 
-function isNameChar(code: number): boolean {
-  return isAsciiLetter(code) || (code >= 48 && code <= 57);
+/**
+ * Index of the `>` that really ends a tag whose name ended at `from`: quoted
+ * attribute values (`content="<body"`) may contain `>` and `<`. Each quote is
+ * jumped with indexOf, so the pass is linear; an unclosed quote runs to the end
+ * of the input (returns -1).
+ */
+function endOfTag(html: string, from: number): number {
+  let i = from;
+  while (i < html.length) {
+    const code = html.charCodeAt(i);
+    if (code === 62) return i;
+    if (code === 34 || code === 39) {
+      const close = html.indexOf(code === 34 ? '"' : "'", i + 1);
+      if (close === -1) return -1;
+      i = close + 1;
+    } else {
+      i += 1;
+    }
+  }
+  return -1;
 }
+
+const RAW_HEAD_BLOCKS: ReadonlySet<string> = new Set(["style", "script", "title", "noscript"]);
 
 /**
  * Where scanning resumes after `<head>`. `</head>` is optional in HTML, so the
- * head also ends at the first `<body` tag (which is NOT consumed: it is then
- * processed as an ordinary tag). Nested comments, `<style>` and `<script>` are
- * jumped over so a `<body` inside a CSS/JS string cannot end the head early.
- * An unclosed head with no `<body` runs to the end of the input. One forward
- * pass over the `<` characters, so it stays linear.
+ * head also ends at the first real `<body` tag (which is NOT consumed: it is
+ * then processed as an ordinary tag). Inside the head, tags are skipped
+ * quote-aware (an attribute value can hold `<body`), and comments, `<style>`,
+ * `<script>`, `<title>` and `<noscript>` are jumped to their closing tag so
+ * text such as `<title>the <body> tag</title>` cannot end it early. An unclosed
+ * head with no `<body` runs to the end of the input. One forward pass, linear.
  */
 function endOfHead(html: string, from: number): number {
   let at = html.indexOf("<", from);
   while (at !== -1) {
     const next = html.charCodeAt(at + 1);
-    if (next === 47) {
-      // "</head" + a non-name character
-      if (html.slice(at + 2, at + 6).toLowerCase() === "head" && !isNameChar(html.charCodeAt(at + 6))) {
-        const gt = html.indexOf(">", at + 6);
-        return gt === -1 ? html.length : gt + 1;
-      }
-    } else if (next === 33 && html.startsWith("<!--", at)) {
+    if (next === 33 && html.startsWith("<!--", at)) {
       const end = html.indexOf("-->", at + 4);
       if (end === -1) return html.length;
       at = html.indexOf("<", end + 3);
       continue;
-    } else if (isAsciiLetter(next)) {
-      let nameEnd = at + 1;
+    }
+    const closing = next === 47;
+    const nameStart = at + (closing ? 2 : 1);
+    if (isAsciiLetter(html.charCodeAt(nameStart))) {
+      let nameEnd = nameStart + 1;
       while (nameEnd < html.length && isNameChar(html.charCodeAt(nameEnd))) nameEnd += 1;
-      const tag = html.slice(at + 1, nameEnd).toLowerCase();
-      if (tag === "body") return at;
-      if (tag === "style" || tag === "script") {
-        const gt = html.indexOf(">", nameEnd);
-        if (gt === -1) return html.length;
-        at = html.indexOf("<", endOfBlock(html, tag, gt + 1));
+      const tag = html.slice(nameStart, nameEnd).toLowerCase();
+      const gt = endOfTag(html, nameEnd);
+      if (closing) {
+        if (tag === "head") return gt === -1 ? html.length : gt + 1;
+      } else {
+        if (tag === "body") return at;
+        if (gt === -1) return html.length; // unclosed tag/quote swallows the rest
+        if (RAW_HEAD_BLOCKS.has(tag)) {
+          at = html.indexOf("<", endOfBlock(html, tag, gt + 1));
+          continue;
+        }
+        at = html.indexOf("<", gt + 1);
         continue;
       }
     }
@@ -205,7 +238,6 @@ function endOfHead(html: string, from: number): number {
   }
   return html.length;
 }
-
 /**
  * The tag scanner behind `htmlToPlainText`: ONE left-to-right pass that only
  * ever moves forward. A previous regex pipeline backtracked over the whole
@@ -214,34 +246,17 @@ function endOfHead(html: string, from: number): number {
  * mutation has about a second. Here every unterminated construct simply runs to
  * the end of the input, and a missing `>` is discovered once, not once per `<`.
  */
-function stripTags(html: string, maxOutputChars?: number): string {
+function stripTags(html: string): string {
   const out: string[] = [];
   const length = html.length;
   let cursor = 0;
-  // Visible (non-whitespace) characters still allowed; Infinity = unbounded.
-  let budget = maxOutputChars ?? Infinity;
-  /** Push text, honouring the budget. Returns true when the budget is spent. */
-  const pushText = (chunk: string): boolean => {
-    if (budget === Infinity) {
-      out.push(chunk);
-      return false;
-    }
-    let taken = 0;
-    while (taken < chunk.length && budget > 0) {
-      if (chunk.charCodeAt(taken) > 32) budget -= 1;
-      taken += 1;
-    }
-    out.push(taken === chunk.length ? chunk : chunk.slice(0, taken));
-    return budget <= 0;
-  };
   while (cursor < length) {
     const lt = html.indexOf("<", cursor);
     if (lt === -1) {
-      pushText(html.slice(cursor));
+      out.push(html.slice(cursor));
       break;
     }
-    if (lt > cursor && pushText(html.slice(cursor, lt))) break;
-
+    if (lt > cursor) out.push(html.slice(cursor, lt));
     if (html.startsWith("<!--", lt)) {
       const end = html.indexOf("-->", lt + 4);
       out.push(" ");
@@ -255,7 +270,7 @@ function stripTags(html: string, maxOutputChars?: number): string {
     const first = html.charCodeAt(nameStart);
     const isDeclaration = first === 33 || first === 63; // "<!doctype", "<?xml"
     if (!isAsciiLetter(first) && !isDeclaration) {
-      if (pushText("<")) break; // a stray "<" is text
+      out.push("<"); // a stray "<" is text
       cursor = lt + 1;
       continue;
     }
@@ -295,14 +310,10 @@ function stripTags(html: string, maxOutputChars?: number): string {
  * linear scanner on purpose (it runs in the Convex runtime, which has no DOM,
  * on attacker-controlled input); the output is only ever rendered as TEXT,
  * never as markup.
- *
- * `maxOutputChars` stops the scan once that many non-whitespace characters of
- * visible text have been produced (the preview needs ~160, so it passes ~2000);
- * omit it to convert the whole body.
  */
-export function htmlToPlainText(html: string, options?: { maxOutputChars?: number }): string {
+export function htmlToPlainText(html: string): string {
   return collapseBlankLines(
-    stripTags(html, options?.maxOutputChars)
+    stripTags(html)
       .replace(/&(?:nbsp|amp|lt|gt|quot|apos|#39);/gi, (m) => HTML_ENTITIES[m.toLowerCase()] ?? m)
       .replace(/&#(\d{1,6});/g, (m, code: string) => {
         const point = Number(code);
@@ -320,14 +331,15 @@ export function htmlToPlainText(html: string, options?: { maxOutputChars?: numbe
  * in half).
  */
 export function buildPreview(bodyText?: string | null, bodyHtml?: string | null): string {
-  // The scanner is linear and stops once ~2000 visible characters have been
-  // produced; the whole body is NOT sliced first (a large <head> would otherwise
-  // use up the slice and leave an empty preview). The stored body is untouched.
+  // The whole body is converted in the one linear pass: no input slice and no
+  // early stop, because any budget counted before entity decoding can be spent
+  // on invisible spacers (`&nbsp;`, `&#32;`) and leave the preview empty or cut
+  // inside an entity. The input is bounded by Convex's 1 MiB document limit.
   const source =
     bodyText && bodyText.trim()
       ? bodyText
       : bodyHtml
-        ? htmlToPlainText(bodyHtml, { maxOutputChars: PREVIEW_SOURCE_CHARS })
+        ? htmlToPlainText(bodyHtml)
         : "";
   const cleaned = source.replace(ANGLE_LINK, " ").replace(/\s+/g, " ").trim();
   const points = Array.from(cleaned);

@@ -227,16 +227,96 @@ describe("htmlToPlainText", () => {
     expect(htmlToPlainText("<head><title>x</title></head><p>the <b>body</b> text</p>")).toBe("the body text");
   });
 
-  test("htmlToPlainText stops once maxOutputChars of visible text have accumulated", () => {
-    const html = `<p>${"word ".repeat(200_000)}</p><p>never reached</p>`;
+  // Review H1 (round 3): the early-stop budget counted RAW characters before
+  // entity decoding, so spacer markup used it up and the preview came out empty
+  // or cut inside an entity ("&n"). There is no budget any more: the whole body
+  // is converted in the one linear pass.
+  const INVOICE = "<p>Hello, my invoice #123 is wrong.</p>";
+  test.each([
+    ["&nbsp; spacer table rows", `<table>${"<tr><td>&nbsp;</td></tr>".repeat(400)}</table>${INVOICE}`],
+    ["&#32; entities", `<p>${"&#32;".repeat(400)}</p>${INVOICE}`],
+    ["literal NBSP characters", `<p>${" ".repeat(2_000)}</p>${INVOICE}`],
+  ])("preview survives a flood of invisible spacers (%s)", (_name, html) => {
+    expect(buildPreview(undefined, html)).toBe("Hello, my invoice #123 is wrong.");
+    expect(htmlToPlainText(html)).toContain("Hello, my invoice #123 is wrong.");
+  });
+
+  test("htmlToPlainText takes no options and does not truncate", () => {
+    expect(htmlToPlainText.length).toBe(1);
+    const text = "word ".repeat(5_000).trim();
+    expect(htmlToPlainText(`<p>${text}</p><p>tail</p>`)).toBe(`${text}\ntail`);
+  });
+
+  test("a preview never ends inside an entity (fuzz over entity-heavy inputs)", () => {
+    let seed = 12345;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    const pieces = ["&nbsp;", "&amp;", "&#32;", "&#160;", "&lt;", "&#8212;", " ", "<br>", "<p>", "</p>", "x", "word", " ", "&n", "&#"];
+    for (let i = 0; i < 300; i += 1) {
+      let html = "";
+      const count = 50 + Math.floor(rand() * 1_500);
+      for (let j = 0; j < count; j += 1) html += pieces[Math.floor(rand() * pieces.length)];
+      const preview = buildPreview(undefined, html);
+      const full = Array.from(htmlToPlainText(html).replace(/\s+/g, " ").trim()).slice(0, 160).join("").trimEnd();
+      expect(preview).toBe(full);
+      // Whatever the whole conversion produced is what is previewed, never a fragment of it.
+      expect(htmlToPlainText(html).replace(/\s+/g, " ").trim().startsWith(preview)).toBe(true);
+    }
+  });
+
+  // 1 MiB is Convex's document ceiling, so this is the worst input the webhook can see.
+  const MIB = 1024 * 1024;
+  const fill = (unit: string, tail = "") => unit.repeat(Math.floor(MIB / unit.length)) + tail; // whole units only
+  const ONE_MIB: Array<[string, string]> = [
+    ["&nbsp; spacer flood", fill("<tr><td>&nbsp;</td></tr>", INVOICE)],
+    ["&#32; flood", fill("&#32;", INVOICE)],
+    ["NBSP flood", fill(" ", INVOICE)],
+    ["comment openers", fill("<!--")],
+    ["head + 1 MB style", `<html><head><style>${"a{color:red}".repeat(90_000)}</style></head><body>${INVOICE}`],
+    ["quote flood in head", `<head>${'<meta content="'.repeat(70_000)}`],
+    ["unclosed quote in head", `<head><meta content="${"x".repeat(MIB)}`],
+  ];
+  test.each(ONE_MIB)("1 MiB hostile input (%s) builds a preview in under 200 ms", (_name, html) => {
     const started = performance.now();
-    const out = htmlToPlainText(html, { maxOutputChars: 2_000 });
+    const preview = buildPreview(undefined, html);
     expect(performance.now() - started).toBeLessThan(200);
-    expect(out.length).toBeGreaterThanOrEqual(1_000);
-    expect(out.length).toBeLessThan(3_000);
-    expect(out).not.toContain("never reached");
-    // Without the option nothing is truncated.
-    expect(htmlToPlainText("<p>aa</p><p>bb</p>")).toBe("aa\nbb");
+    expect(Array.from(preview).length).toBeLessThanOrEqual(160);
+  });
+  test("the 1 MiB spacer and head cases still produce the real text", () => {
+    expect(buildPreview(undefined, ONE_MIB[0]![1])).toBe("Hello, my invoice #123 is wrong.");
+    expect(buildPreview(undefined, ONE_MIB[4]![1])).toBe("Hello, my invoice #123 is wrong.");
+  });
+
+  // Review H2 (round 3): the head scan ended at a `<body` that was only text or
+  // an attribute value, and a closing tag matched on a name PREFIX.
+  test.each([
+    [
+      "<body inside an attribute value",
+      '<html><head><meta content="<body"><title>Internal heading</title></head><body>Actual customer question</body></html>',
+    ],
+    ["<body> mentioned in title text", "<head><title>Re: the <body> tag</title></head><body>Actual customer question"],
+    ["<body inside noscript", "<head><noscript><body>Internal heading</noscript></head><body>Actual customer question"],
+    ["unclosed head, <body in an attribute", '<head><meta content="<body"><title>Internal heading</title><body>Actual customer question'],
+    ["a > inside a quoted attribute", '<head><meta content="a>b"><title>Internal heading</title></head>Actual customer question'],
+  ])("head scan is quote-aware (%s)", (_name, html) => {
+    expect(htmlToPlainText(html)).toBe("Actual customer question");
+    expect(buildPreview(undefined, html)).toBe("Actual customer question");
+  });
+
+  test("a closing tag must match the whole name: </styleX> does not end a <style>", () => {
+    expect(htmlToPlainText("<style>p{}</styleX>leaked</style><p>Real</p>")).toBe("Real");
+    expect(htmlToPlainText("<script>x()</scriptable>leaked</script><p>Real</p>")).toBe("Real");
+    expect(htmlToPlainText("<style>p{}</style ><p>Real</p>")).toBe("Real");
+    expect(htmlToPlainText("<style>p{}</STYLE\n><p>Real</p>")).toBe("Real");
+  });
+
+  test("controls: <body inside a comment, style or script in the head is still ignored", () => {
+    expect(htmlToPlainText("<head><!-- <body> --><title>t</title></head><body>Real")).toBe("Real");
+    expect(htmlToPlainText("<head><style>/* <body> */</style><body>Real")).toBe("Real");
+    expect(htmlToPlainText('<head><script>var a = "<body>";</script><body>Real')).toBe("Real");
+    expect(htmlToPlainText("<head><title>x</title><body>Real")).toBe("Real");
   });
 
   test("the preview is the text that comes AFTER a huge leading comment too", () => {
