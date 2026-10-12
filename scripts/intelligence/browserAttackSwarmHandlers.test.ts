@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES,
   type BrowserAttackMission,
@@ -285,6 +285,40 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     mocks.mkdir.mockReset().mockResolvedValue(undefined);
     mocks.writeFile.mockReset().mockResolvedValue(undefined);
     process.env.PLAYWRIGHT_BASE_URL = "http://127.0.0.1:3000";
+    process.env.BROWSER_EGRESS_PROXY_SERVER = "http://127.0.0.1:3129";
+  });
+
+  afterEach(() => {
+    delete process.env.BROWSER_EGRESS_PROXY_SERVER;
+  });
+
+  it("launches Chromium only through the trusted egress proxy and blocks service workers (SCRUM-784)", async () => {
+    const fixture = makeBrowserFixture(defaultScenario());
+
+    await handlerFor("RTL_PARITY")(executionContext("RTL_PARITY"));
+
+    const launchOptions = mocks.chromiumLaunch.mock.calls[0]?.[0];
+    expect(launchOptions.proxy).toEqual({ server: "http://127.0.0.1:3129" });
+    expect(launchOptions.args).toContain(
+      "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+    );
+    expect(fixture.browser.newContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serviceWorkers: "block",
+        storageState: expect.any(String),
+      }),
+    );
+  });
+
+  it("refuses to launch a browser with saved QA state when the egress proxy is missing (SCRUM-784)", async () => {
+    delete process.env.BROWSER_EGRESS_PROXY_SERVER;
+    makeBrowserFixture(defaultScenario());
+
+    await expect(
+      handlerFor("RTL_PARITY")(executionContext("RTL_PARITY")),
+    ).rejects.toThrow(/open egress/);
+
+    expect(mocks.chromiumLaunch).not.toHaveBeenCalled();
   });
 
   it("keeps the executable Phase A family set identical to the handler registry", () => {

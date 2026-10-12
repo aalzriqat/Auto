@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { newContainedContext } from "../containedContext";
 import { gotoOrgRoute, APPROVER_AUTH_FILE, resolveOrgId, authenticatedConvexClient } from "../utils";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -107,7 +108,7 @@ test.describe("accounting workspace", () => {
     await expect(draftCard).toBeVisible();
 
     // Step 6: Review and Approve as approver identity (Segregation of Duties)
-    const approverContext = await browser.newContext({
+    const approverContext = await newContainedContext(browser, {
       storageState: APPROVER_AUTH_FILE,
     });
     const approverPage = await approverContext.newPage();

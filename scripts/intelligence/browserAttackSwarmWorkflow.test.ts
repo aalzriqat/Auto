@@ -2,6 +2,11 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
+import {
+  OFFLINE_SWARM_CLERK_FLAG,
+  OFFLINE_SWARM_CLERK_PLACEHOLDER_SECRET,
+} from "../../lib/offlineSwarmClerk";
+import { EGRESS_EVIDENCE_PATH } from "./browserEgressProofVerify.mjs";
 
 type WorkflowStep = {
   name?: string;
@@ -10,6 +15,8 @@ type WorkflowStep = {
   with?: Record<string, unknown>;
   env?: Record<string, unknown>;
   run?: string;
+  shell?: string;
+  "working-directory"?: string;
 };
 
 type WorkflowJob = {
@@ -831,5 +838,192 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(verdictRun).toContain("autoflow/trusted-browser-swarm");
     expect(verdictRun).toContain("Content-Type: application/json");
     expect(verdictRun).toContain('if [ "$STATE" != "success" ]');
+  });
+
+  describe("SCRUM-350 G4 offline Clerk candidate", () => {
+    const starts = [
+      ["trusted-e2e", "Start verified exact-SHA candidate frontend artifact"],
+      ["attack-worker", "Start verified exact-SHA candidate frontend artifact"],
+    ] as const;
+
+    it.each(starts)(
+      "%s starts the candidate with the offline flag and ONLY the public placeholder secret",
+      (jobName, stepName) => {
+        const candidateStep = step(jobName, stepName);
+        const run = String(candidateStep.run ?? "");
+        const dockerRun = run.slice(run.indexOf("docker run"), run.indexOf("node server.js"));
+
+        expect(dockerRun).toContain(`--env ${OFFLINE_SWARM_CLERK_FLAG}=1`);
+        expect(dockerRun).toContain(
+          `--env CLERK_SECRET_KEY=${OFFLINE_SWARM_CLERK_PLACEHOLDER_SECRET}`,
+        );
+        expect(dockerRun).toContain("--env CLERK_JWT_KEY");
+
+        // The real secret can reach the candidate neither by reference nor by
+        // pass-through; the only CLERK_SECRET_KEY it ever sees is the constant.
+        expect(run).not.toContain("secrets.CLERK_SECRET_KEY");
+        expect(candidateStep.env ?? {}).not.toHaveProperty("CLERK_SECRET_KEY");
+        for (const match of run.matchAll(/CLERK_SECRET_KEY\S*/g)) {
+          expect(match[0]).toBe(
+            `CLERK_SECRET_KEY=${OFFLINE_SWARM_CLERK_PLACEHOLDER_SECRET}`,
+          );
+        }
+        expect(dockerRun).not.toMatch(/--env CLERK_SECRET_KEY(?!=sk_test_autoflow_offline_swarm_placeholder_nonfunctional)/);
+      },
+    );
+
+    it("keeps the workflow placeholder byte-identical to the one proxy.ts requires", () => {
+      expect(OFFLINE_SWARM_CLERK_PLACEHOLDER_SECRET).toBe(
+        "sk_test_autoflow_offline_swarm_placeholder_nonfunctional",
+      );
+    });
+
+    it.each(starts)(
+      "%s refuses a candidate whose Clerk-proxied pages answer 5xx while /api/health is green",
+      (jobName, stepName) => {
+        const run = String(step(jobName, stepName).run ?? "");
+        expect(run).toContain("http://127.0.0.1:3000/sign-in");
+        expect(run).toContain('-lt 500');
+      },
+    );
+  });
+
+  describe("SCRUM-784 browser egress containment", () => {
+    const jobs = [
+      ["trusted-e2e", "Run full trusted E2E suite against exact candidate"],
+      ["attack-worker", "Execute trusted browser missions"],
+    ] as const;
+
+    // G4-02: GitHub's default `bash -e` has no pipefail, so
+    // `node proof | tee file` exits 0 when the proof fails. A failed or
+    // unavailable proof must stop the job before any authenticated test runs.
+    const PROOF_STEP = "Prove browser egress containment before authenticated traffic";
+
+    it.each(jobs)("%s proof step fails closed on a failing or unavailable proof", (jobName) => {
+      const proof = step(jobName, PROOF_STEP);
+      const run = String(proof.run ?? "");
+      expect(run).toMatch(/^\s*set -euo pipefail$/m);
+      const lines = run.split("\n").map((line) => line.trim());
+      const proofAt = lines.findIndex((line) => line.includes("browserEgressProof.mjs"));
+      const verifyAt = lines.findIndex((line) => line.includes("browserEgressProofVerify.mjs"));
+      expect(proofAt).toBeGreaterThan(-1);
+      // The written evidence is independently checked (ok:true, no collector
+      // traffic, allowed origin 200, service worker blocked, denial evidenced).
+      expect(verifyAt).toBeGreaterThan(proofAt);
+      // SC-1: the verifier accepts only this exact argument, resolved against
+      // the step's cwd, so any respelling or cwd change fails every real run.
+      expect(lines[verifyAt]).toBe(
+        `node scripts/intelligence/browserEgressProofVerify.mjs ${EGRESS_EVIDENCE_PATH}`,
+      );
+      expect(proof["working-directory"]).toBe("trusted");
+      // The proof reads the proxy's fixed-vocabulary denial log.
+      expect(proof.env).toHaveProperty(
+        "BROWSER_EGRESS_PROXY_LOG",
+        "${{ runner.temp }}/browser-egress-proxy.log",
+      );
+      expect(String(proof.shell ?? "")).not.toMatch(/^(sh|pwsh|powershell|cmd|python)/);
+    });
+
+    // G4R2-01: the ORDER of the proxy's per-request lines is a channel the
+    // candidate controls (it picks the reason class per denied request), so the
+    // raw log must stay on the runner. It is written under RUNNER_TEMP, read by
+    // the startup step and the proof, and never printed or uploaded afterwards.
+    const RAW_LOG = "browser-egress-proxy.log";
+    const EGRESS_JOBS = ["trusted-e2e", "attack-worker"] as const;
+
+    it.each(EGRESS_JOBS)("%s keeps the raw proxy log private to the runner", (jobName) => {
+      const steps = job(jobName).steps ?? [];
+      const start = steps.findIndex((entry) => entry.name === "Start trusted browser egress proxy");
+      const proof = steps.findIndex((entry) => entry.name === PROOF_STEP);
+
+      // The redirect target is under RUNNER_TEMP, not the workspace.
+      const startRun = String(steps[start]?.run ?? "");
+      expect(startRun).toMatch(/browserEgressContainment\.mjs > "\$RUNNER_TEMP\/browser-egress-proxy\.log" 2>&1 &/);
+      expect(startRun).not.toContain("egress-evidence/" + RAW_LOG);
+
+      // Nothing after the proof step mentions the raw log at all, so the
+      // stop/cleanup step cannot print it and no later step can read it.
+      for (const later of steps.slice(proof + 1)) {
+        expect(JSON.stringify(later), `${later.name} references the raw proxy log`).not.toContain(RAW_LOG);
+      }
+
+      // No upload from an egress job can carry the log or anything in RUNNER_TEMP.
+      const uploads = steps.filter((entry) => String(entry.uses ?? "").startsWith("actions/upload-artifact@"));
+      expect(uploads.length).toBeGreaterThan(0);
+      for (const upload of uploads) {
+        const uploadPath = String(upload.with?.path ?? "");
+        expect(uploadPath).not.toMatch(/runner\.temp|RUNNER_TEMP|egress-proxy|\.log\b/i);
+        // Every uploaded path is inside the trusted checkout, never an escape
+        // such as `${{ github.workspace }}/../_temp/` that names no temp dir.
+        for (const line of uploadPath.split("\n").map((l) => l.trim()).filter(Boolean)) {
+          expect(line, `${upload.name} uploads ${line}`).toMatch(/^trusted\/(?!.*\.\.)/);
+        }
+      }
+    });
+
+    it("only the startup step and the proof step reference the raw log anywhere in the workflow", () => {
+      for (const jobName of EGRESS_JOBS) {
+        const referencing = (job(jobName).steps ?? [])
+          .filter((entry) => JSON.stringify(entry).includes(RAW_LOG))
+          .map((entry) => entry.name);
+        expect(referencing).toEqual(["Start trusted browser egress proxy", PROOF_STEP]);
+      }
+    });
+
+    it("no pipeline in the workflow can mask a failing left-hand command", () => {
+      for (const [name, entry] of Object.entries(workflow.jobs ?? {})) {
+        for (const stepEntry of entry.steps ?? []) {
+          const run = String(stepEntry.run ?? "");
+          if (!/\|\s*tee\b/.test(run)) continue;
+          const failsClosed =
+            /^\s*set -[a-z]*o pipefail\b/m.test(run) || /^bash\b/.test(String(stepEntry.shell ?? ""));
+          expect(failsClosed, `${name}: ${stepEntry.name} pipes to tee without pipefail`).toBe(true);
+        }
+      }
+    });
+
+    it.each(jobs)(
+      "%s starts and proves the egress proxy before any authenticated candidate browser",
+      (jobName, testStepName) => {
+        const names = (job(jobName).steps ?? []).map((entry) => entry.name);
+        const start = names.indexOf("Start trusted browser egress proxy");
+        const proof = names.indexOf("Prove browser egress containment before authenticated traffic");
+        const candidate = names.indexOf("Start verified exact-SHA candidate frontend artifact");
+        const tests = names.indexOf(testStepName);
+        expect(candidate).toBeGreaterThan(-1);
+        expect(start).toBeGreaterThan(candidate);
+        expect(proof).toBeGreaterThan(start);
+        expect(tests).toBeGreaterThan(proof);
+
+        const proxyStep = step(jobName, "Start trusted browser egress proxy");
+        const proxyRun = String(proxyStep.run ?? "");
+        expect(proxyRun).toContain("browserEgressContainment.mjs");
+        expect(proxyRun).toContain("egress-proxy-listening 127.0.0.1:3129");
+        expect(proxyRun).toContain("BROWSER_EGRESS_PROXY_SERVER=http://127.0.0.1:3129");
+        expect(proxyRun).toContain("BROWSER_EGRESS_REQUIRED=1");
+        // Fail closed: the step errors if the proxy dies or never listens.
+        expect(proxyRun).toContain("exit 1");
+        // The proxy is trusted-main code and holds no secret.
+        expect(proxyStep.env ?? {}).not.toHaveProperty("CLERK_SECRET_KEY");
+        expect(proxyStep.env ?? {}).not.toHaveProperty("CONVEX_DEPLOY_KEY");
+
+        const proofRun = String(
+          step(jobName, "Prove browser egress containment before authenticated traffic").run ?? "",
+        );
+        expect(proofRun).toContain("browserEgressProof.mjs");
+        expect(step(jobName, testStepName).env).toHaveProperty("BROWSER_EGRESS_REQUIRED", "1");
+      },
+    );
+
+    it.each([
+      ["trusted-e2e", "Stop isolated trusted E2E candidate frontend"],
+      ["attack-worker", "Stop isolated candidate frontend"],
+    ] as const)("%s stops the proxy and uploads its denial log", (jobName, stopName) => {
+      expect(String(step(jobName, stopName).run ?? "")).toContain("BROWSER_EGRESS_PROXY_PID");
+      const upload = (job(jobName).steps ?? []).find((entry) =>
+        String(entry.uses ?? "").startsWith("actions/upload-artifact@"),
+      );
+      expect(String(upload?.with?.path ?? "")).toContain("trusted/egress-evidence/");
+    });
   });
 });
