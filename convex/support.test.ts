@@ -250,13 +250,7 @@ describe("support inbox: sendReply", () => {
   });
 });
 
-describe("support inbox: reply racing a newer inbound message (review F2)", () => {
-  async function waitForNextMillisecond(since: number) {
-    // Date is real here (only setTimeout is faked); make the next write strictly later.
-    while (Date.now() <= since) {
-      /* spin <= 1ms */
-    }
-  }
+describe("support inbox: reply racing a newer inbound message (review F2, round 2 G1/G2)", () => {
   const reply = (threadId: Id<"supportThreads">, userId: Id<"users">, extra: Record<string, unknown> = {}) => ({
     threadId,
     fromEmail: "support@autoflowdealer.com",
@@ -266,30 +260,30 @@ describe("support inbox: reply racing a newer inbound message (review F2)", () =
     sentByEmail: "admin@autoflow.dev",
     ...extra,
   });
+  const revisionOf = (thread: { inboundRevision?: number }) => thread.inboundRevision ?? 0;
 
-  test("inbound recording stamps lastInboundAt with lastMessageAt on insert and on patch", async () => {
+  test("every inbound message bumps inboundRevision: 1 on insert, +1 on each patch", async () => {
     const t = convexTestWithComponents(schema, MODULES);
     const first = await inbound(t, { bodyText: "one" });
-    expect(first.lastInboundAt).toBe(first.lastMessageAt);
-    await waitForNextMillisecond(first.lastMessageAt);
+    expect(first.inboundRevision).toBe(1);
     const second = await inbound(t, { bodyText: "two" });
-    expect(second.lastInboundAt).toBe(second.lastMessageAt);
-    expect(second.lastInboundAt!).toBeGreaterThan(first.lastInboundAt!);
+    expect(second.inboundRevision).toBe(2);
+    const third = await inbound(t, { bodyText: "three" });
+    expect(third.inboundRevision).toBe(3);
   });
 
   test("a newer inbound that arrived during the send is NOT hidden by Send & close", async () => {
     const t = convexTestWithComponents(schema, MODULES);
     const { userId } = await seedUser(t, "admin", "admin@autoflow.dev");
     const thread = await inbound(t, { bodyText: "First question" });
-    const observedLastInboundAt = thread.lastInboundAt!;
+    const observedInboundRevision = revisionOf(thread);
 
     // The customer writes again while the provider call is in flight.
-    await waitForNextMillisecond(observedLastInboundAt);
     await inbound(t, { bodyText: "Second, more urgent question" });
 
     const result = await t.mutation(
       internal.support.recordOutboundMessage,
-      reply(thread._id, userId, { observedLastInboundAt, closeAfterSend: true })
+      reply(thread._id, userId, { observedInboundRevision, closeAfterSend: true })
     );
     expect(result).toEqual({ closed: false, newerInbound: true });
 
@@ -305,20 +299,87 @@ describe("support inbox: reply racing a newer inbound message (review F2)", () =
     expect(audit.filter((a) => a.action === "supportSetThreadStatus")).toHaveLength(0);
   });
 
+  // G2: the guard used Date.now(), so an inbound in the SAME millisecond as the
+  // observed one (or a clock that moved backwards) was "not newer".
+  test("an inbound in the same millisecond as the observed one still counts as newer", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+    vi.setSystemTime(1000);
+    const t = convexTestWithComponents(schema, MODULES);
+    const { userId } = await seedUser(t, "admin", "admin@autoflow.dev");
+    const thread = await inbound(t, { bodyText: "First question" });
+    const observedInboundRevision = revisionOf(thread);
+
+    await inbound(t, { bodyText: "Second question, same millisecond" });
+    expect(Date.now()).toBe(1000);
+
+    const result = await t.mutation(
+      internal.support.recordOutboundMessage,
+      reply(thread._id, userId, { observedInboundRevision, closeAfterSend: true })
+    );
+    expect(result).toEqual({ closed: false, newerInbound: true });
+    const after = await getThread(t, thread._id);
+    expect(after?.status).toBe("OPEN");
+    expect(after?.awaitingReply).toBe(true);
+    expect(after?.lastMessagePreview).toBe("Second question, same millisecond");
+  });
+
+  test("a clock that moves backwards between the two inbound messages still counts as newer", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+    vi.setSystemTime(5000);
+    const t = convexTestWithComponents(schema, MODULES);
+    const { userId } = await seedUser(t, "admin", "admin@autoflow.dev");
+    const thread = await inbound(t, { bodyText: "First question" });
+    const observedInboundRevision = revisionOf(thread);
+
+    vi.setSystemTime(2000); // regression
+    await inbound(t, { bodyText: "Second question, clock went back" });
+
+    const result = await t.mutation(
+      internal.support.recordOutboundMessage,
+      reply(thread._id, userId, { observedInboundRevision, closeAfterSend: true })
+    );
+    expect(result).toEqual({ closed: false, newerInbound: true });
+    expect((await getThread(t, thread._id))?.status).toBe("OPEN");
+    expect((await getThread(t, thread._id))?.awaitingReply).toBe(true);
+  });
+
   test("a newer inbound also keeps the flag and preview for a plain reply (no close)", async () => {
     const t = convexTestWithComponents(schema, MODULES);
     const { userId } = await seedUser(t, "admin", "admin@autoflow.dev");
     const thread = await inbound(t, { bodyText: "First" });
-    await waitForNextMillisecond(thread.lastInboundAt!);
     await inbound(t, { bodyText: "Newer" });
     const result = await t.mutation(
       internal.support.recordOutboundMessage,
-      reply(thread._id, userId, { observedLastInboundAt: thread.lastInboundAt })
+      reply(thread._id, userId, { observedInboundRevision: revisionOf(thread) })
     );
     expect(result).toEqual({ closed: false, newerInbound: true });
     const after = await getThread(t, thread._id);
     expect(after?.awaitingReply).toBe(true);
     expect(after?.lastMessagePreview).toBe("Newer");
+  });
+
+  test("two admins: the second reply, observing the post-inbound revision, answers the thread", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { userId: adminA } = await seedUser(t, "admin", "admin@autoflow.dev");
+    const thread = await inbound(t, { bodyText: "First" });
+    const observedByA = revisionOf(thread);
+    await inbound(t, { bodyText: "Second" });
+    const observedByB = revisionOf((await getThread(t, thread._id))!);
+
+    // A (observed before the second inbound) is told a newer message exists...
+    const a = await t.mutation(
+      internal.support.recordOutboundMessage,
+      reply(thread._id, adminA, { observedInboundRevision: observedByA, closeAfterSend: true })
+    );
+    expect(a).toEqual({ closed: false, newerInbound: true });
+    expect((await getThread(t, thread._id))?.awaitingReply).toBe(true);
+    // ...and B (who saw the second message) answers it and closes.
+    const b = await t.mutation(
+      internal.support.recordOutboundMessage,
+      reply(thread._id, adminA, { observedInboundRevision: observedByB, closeAfterSend: true })
+    );
+    expect(b).toEqual({ closed: true, newerInbound: false });
+    expect((await getThread(t, thread._id))?.status).toBe("CLOSED");
   });
 
   test("control: no race and closeAfterSend clears the flag, closes, and writes a status audit row", async () => {
@@ -327,7 +388,7 @@ describe("support inbox: reply racing a newer inbound message (review F2)", () =
     const thread = await inbound(t, { bodyText: "Question" });
     const result = await t.mutation(
       internal.support.recordOutboundMessage,
-      reply(thread._id, userId, { observedLastInboundAt: thread.lastInboundAt, closeAfterSend: true })
+      reply(thread._id, userId, { observedInboundRevision: revisionOf(thread), closeAfterSend: true })
     );
     expect(result).toEqual({ closed: true, newerInbound: false });
     const after = await getThread(t, thread._id);
@@ -347,13 +408,45 @@ describe("support inbox: reply racing a newer inbound message (review F2)", () =
     });
   });
 
+  // G1: the close branch used to re-read the user AFTER the provider had already
+  // sent the email; a missing user threw and rolled the whole reply back, so the
+  // admin saw a failure and retried -> duplicate email.
+  test("Send & close still succeeds when the acting user's row is gone (audit uses the captured snapshot)", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const { userId } = await seedUser(t, "admin", "admin@autoflow.dev");
+    const thread = await inbound(t, { bodyText: "Question" });
+    // The snapshot (id + email) was captured by sendReply; now the user doc disappears.
+    await t.run((ctx) => ctx.db.delete(userId));
+
+    const result = await t.mutation(
+      internal.support.recordOutboundMessage,
+      reply(thread._id, userId, { observedInboundRevision: revisionOf(thread), closeAfterSend: true })
+    );
+    expect(result).toEqual({ closed: true, newerInbound: false });
+    const after = await getThread(t, thread._id);
+    expect(after?.status).toBe("CLOSED");
+    expect(after?.awaitingReply).toBe(false);
+    const messages = await t.run((ctx) => ctx.db.query("supportMessages").collect());
+    expect(messages.filter((m) => m.direction === "OUTBOUND" && m.sentByUserId)).toHaveLength(1);
+    const audit = await t.run((ctx) => ctx.db.query("adminAuditLog").collect());
+    expect(audit.filter((a) => a.action === "supportSendReply")).toHaveLength(1);
+    const status = audit.filter((a) => a.action === "supportSetThreadStatus");
+    expect(status).toHaveLength(1);
+    expect(status[0]).toMatchObject({
+      actorUserId: userId,
+      actorEmail: "admin@autoflow.dev",
+      before: { status: "OPEN" },
+      after: { status: "CLOSED" },
+    });
+  });
+
   test("control: no race and no closeAfterSend replies without closing", async () => {
     const t = convexTestWithComponents(schema, MODULES);
     const { userId } = await seedUser(t, "admin", "admin@autoflow.dev");
     const thread = await inbound(t, { bodyText: "Question" });
     const result = await t.mutation(
       internal.support.recordOutboundMessage,
-      reply(thread._id, userId, { observedLastInboundAt: thread.lastInboundAt })
+      reply(thread._id, userId, { observedInboundRevision: revisionOf(thread) })
     );
     expect(result).toEqual({ closed: false, newerInbound: false });
     const after = await getThread(t, thread._id);
@@ -361,7 +454,7 @@ describe("support inbox: reply racing a newer inbound message (review F2)", () =
     expect(after?.awaitingReply).toBe(false);
   });
 
-  test("the automated acknowledgement never touches the flag, preview or status", async () => {
+  test("the automated acknowledgement never touches the flag, preview, status or revision", async () => {
     const t = convexTestWithComponents(schema, MODULES);
     const thread = await inbound(t, { bodyText: "Please call me" });
     const result = await t.mutation(internal.support.recordOutboundMessage, {
@@ -375,31 +468,46 @@ describe("support inbox: reply racing a newer inbound message (review F2)", () =
     expect(after?.awaitingReply).toBe(true);
     expect(after?.status).toBe("OPEN");
     expect(after?.lastMessagePreview).toBe("Please call me");
+    expect(after?.inboundRevision).toBe(1);
   });
 
-  test("a legacy row with no lastInboundAt replies and closes normally", async () => {
+  test("a legacy row with no revision replies and closes normally; its first new inbound reads as newer", async () => {
     const t = convexTestWithComponents(schema, MODULES);
     const { userId } = await seedUser(t, "admin", "admin@autoflow.dev");
-    const threadId = await t.run((ctx) =>
-      ctx.db.insert("supportThreads", {
-        participantEmail: "buyer@example.com",
-        subject: "Old",
-        status: "OPEN",
-        inbox: "support",
-        lastMessageAt: 1,
-        awaitingReply: true,
-      })
-    );
-    // sendReply captures `lastInboundAt ?? 0` for such a row.
+    const legacy = () =>
+      t.run((ctx) =>
+        ctx.db.insert("supportThreads", {
+          participantEmail: "buyer@example.com",
+          subject: "Old",
+          status: "OPEN",
+          inbox: "support",
+          lastMessageAt: 1,
+          awaitingReply: true,
+        })
+      );
+    const threadId = await legacy();
+    // sendReply captures `inboundRevision ?? 0` for such a row; nothing newer arrived.
     const result = await t.mutation(
       internal.support.recordOutboundMessage,
-      reply(threadId, userId, { observedLastInboundAt: 0, closeAfterSend: true })
+      reply(threadId, userId, { observedInboundRevision: 0, closeAfterSend: true })
     );
     expect(result).toEqual({ closed: true, newerInbound: false });
     expect((await getThread(t, threadId))?.status).toBe("CLOSED");
+
+    // A new inbound on the legacy row sets revision 1 (> the observed 0): newer.
+    await inbound(t, { bodyText: "Back again" });
+    const row = (await t.run((ctx) => ctx.db.query("supportThreads").collect())).find(
+      (r) => r.participantEmail === "buyer@example.com"
+    )!;
+    expect(row.inboundRevision).toBe(1);
+    const again = await t.mutation(
+      internal.support.recordOutboundMessage,
+      reply(row._id, userId, { observedInboundRevision: 0, closeAfterSend: true })
+    );
+    expect(again).toEqual({ closed: false, newerInbound: true });
   });
 
-  test("a caller that passes no observedLastInboundAt keeps today's behaviour (unknown is not newer)", async () => {
+  test("a caller that passes no observedInboundRevision keeps today's behaviour (unknown is not newer)", async () => {
     const t = convexTestWithComponents(schema, MODULES);
     const { userId } = await seedUser(t, "admin", "admin@autoflow.dev");
     const thread = await inbound(t, { bodyText: "Question" });

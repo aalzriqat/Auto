@@ -63,7 +63,7 @@ async function recordSupportMessage(
       status: "OPEN",
       inbox,
       lastMessageAt: now,
-      lastInboundAt: now,
+      inboundRevision: 1,
       lastMessagePreview,
       awaitingReply: true,
     });
@@ -71,7 +71,7 @@ async function recordSupportMessage(
   } else {
     await ctx.db.patch(thread._id, {
       lastMessageAt: now,
-      lastInboundAt: now,
+      inboundRevision: (thread.inboundRevision ?? 0) + 1,
       status: "OPEN",
       participantName: args.fromName ?? thread.participantName,
       lastMessagePreview,
@@ -296,11 +296,11 @@ export const recordOutboundMessage = internalMutation({
     // action, so not auditable) from a reply a person sent.
     sentByUserId: v.optional(v.id("users")),
     sentByEmail: v.optional(v.string()),
-    // `thread.lastInboundAt ?? 0` as `sendReply` saw it BEFORE the provider call.
+    // `thread.inboundRevision ?? 0` as `sendReply` saw it BEFORE the provider call.
     // A missing value means "unknown", and unknown is treated as NOT newer, so a
     // caller that does not pass it keeps the pre-F2 behaviour (reply answers the
     // thread). Only meaningful together with sentByUserId.
-    observedLastInboundAt: v.optional(v.number()),
+    observedInboundRevision: v.optional(v.number()),
     // Send & close: close the thread in the same transaction as the reply, but
     // only if no newer inbound message arrived during the send.
     closeAfterSend: v.optional(v.boolean()),
@@ -328,7 +328,7 @@ export const recordOutboundMessage = internalMutation({
       const thread = await ctx.db.get(args.threadId);
       previousStatus = thread?.status;
       newerInbound =
-        args.observedLastInboundAt !== undefined && (thread?.lastInboundAt ?? 0) > args.observedLastInboundAt;
+        args.observedInboundRevision !== undefined && (thread?.inboundRevision ?? 0) > args.observedInboundRevision;
 
       if (newerInbound) {
         // The reply was sent and is recorded, but it did NOT answer the newest
@@ -370,16 +370,21 @@ export const recordOutboundMessage = internalMutation({
       });
 
       if (closed) {
-        // Same row shape `setThreadStatus` writes, so closing via Send & close is
-        // indistinguishable in the audit trail from closing by hand.
-        const actor = await ctx.db.get(args.sentByUserId);
-        if (!actor) throw new Error("recordOutboundMessage: sentByUserId does not exist.");
-        await logAdminAction(ctx, actor, {
+        // Same row shape `setThreadStatus` writes (writeAuditLog's fields), so
+        // closing via Send & close is indistinguishable in the audit trail from
+        // closing by hand. Written from the actor snapshot `sendReply` already
+        // captured, like the reply row above, with NO user re-read: this runs
+        // after the provider has sent the email, and a throw here would roll the
+        // reply back and invite a duplicate resend.
+        await ctx.db.insert("adminAuditLog", {
+          actorUserId: args.sentByUserId,
+          actorEmail: args.sentByEmail,
           action: "supportSetThreadStatus",
           targetTable: "supportThreads",
           targetId: args.threadId,
           before: { status: previousStatus },
           after: { status: "CLOSED" },
+          createdAt: Date.now(),
         });
       }
     }
@@ -410,7 +415,7 @@ export const sendReply = action({
 
     // Captured BEFORE the provider call; recordOutboundMessage compares it with
     // the thread as it is when the reply is recorded.
-    const observedLastInboundAt = threadData.lastInboundAt ?? 0;
+    const observedInboundRevision = threadData.inboundRevision ?? 0;
 
     const result = await ctx.runAction(internal.email.sendSupportReply, {
       toEmail: threadData.participantEmail,
@@ -431,7 +436,7 @@ export const sendReply = action({
       resendEmailId: result.resendEmailId,
       sentByUserId: admin._id,
       sentByEmail: admin.email,
-      observedLastInboundAt,
+      observedInboundRevision,
       closeAfterSend: args.closeAfterSend,
     });
 
