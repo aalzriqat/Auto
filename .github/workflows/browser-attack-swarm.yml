@@ -1188,7 +1188,7 @@ jobs:
 
       - name: Execute trusted browser missions
         working-directory: trusted
-        run: pnpm exec playwright test playwright/tests/browser-swarm.spec.ts --project=chromium --no-deps
+        run: pnpm exec playwright test playwright/tests/browser-swarm.spec.ts --project=chromium --no-deps --retries=0 --fail-on-flaky-tests
         env:
           BROWSER_EGRESS_REQUIRED: "1"
           CI: true
