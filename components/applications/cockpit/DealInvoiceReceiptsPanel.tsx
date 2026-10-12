@@ -72,6 +72,11 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   const factor = 10 ** moneyDisplayScale(currency);
   const money = (minor: number, code = currency) =>
     formatMoneyDisplay(minor / 10 ** moneyDisplayScale(code), code, locale);
+  // SCRUM-724: the backend reports availability. Absent (an older backend, or the
+  // frontend deployed before the manual backend deploy) means UNAVAILABLE, never
+  // "assume enabled" - the buttons stay hidden and the reason is shown instead.
+  const doorsAvailable = status?.saleInvoiceDoorsAvailable === true;
+  const payoutAvailable = status?.retainedCreditPayoutAvailable === true;
   const pending = status?.page ?? [];
   const positions = credits.results ?? [];
   const selectedCredit = positions.find((position) => position.receiptMovementId === selectedMovement);
@@ -84,7 +89,7 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   const reserveIntent = `sale-reserve:${saleId}`;
 
   async function onRecord() {
-    if (!status?.customerId || !canManage || !invoice || !receiptCurrencyMatches || busy) return;
+    if (!doorsAvailable || !status?.customerId || !canManage || !invoice || !receiptCurrencyMatches || busy) return;
     const paymentDate = economicDateInputToMs(date);
     if (!paymentAttempt && (parsedPayment.minor === null || parsedPayment.minor <= 0 ||
       parsedPayment.minor > invoice.availableToReserveMinor ||
@@ -112,7 +117,7 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   }
 
   async function onReserve() {
-    if (!canManage || !invoice || busy) return;
+    if (!doorsAvailable || !canManage || !invoice || busy) return;
     if (!reserveAttempt && (!selectedCredit || !selectedCredit.receiptPosted ||
       selectedCredit.currency !== currency || parsedReserve.minor === null ||
       parsedReserve.minor <= 0 || parsedReserve.minor > selectedCredit.availableUnappliedMinor ||
@@ -138,7 +143,7 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   }
 
   async function onActivate(applicationId: Id<"invoiceReceiptApplications">, amountMinor: number) {
-    if (!canManage || busy) return;
+    if (!doorsAvailable || !canManage || busy) return;
     const intent = `sale-activate:${applicationId}`;
     setBusy(true); setError(""); setNotice("");
     try {
@@ -153,7 +158,7 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   }
 
   async function onRegisterCheque() {
-    if (!canManage || !invoice || !receiptCurrencyMatches || busy) return;
+    if (!doorsAvailable || !canManage || !invoice || !receiptCurrencyMatches || busy) return;
     const chequeDateMs = dateInputToUtcMs(chequeDate);
     if (!chequeBank.trim() || !chequeNumber.trim() || !Number.isFinite(chequeDateMs) ||
       parsedCheque.minor === null || parsedCheque.minor <= 0 ||
@@ -173,7 +178,7 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   }
 
   async function onRequestRefund() {
-    if (!canManage || busy || !refundCredit || !refundCredit.receiptPosted) return;
+    if (!payoutAvailable || !canManage || busy || !refundCredit || !refundCredit.receiptPosted) return;
     if (parsedRefund.minor === null || parsedRefund.minor <= 0 ||
       parsedRefund.minor > refundCredit.availableUnappliedMinor || !refundReason.trim()) {
       setError(t("DealReceiptEnterValidCredit"));
@@ -191,8 +196,13 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
   }
 
   async function onAdvanceCheque(chequeId: Id<"postDatedCheques">, state: "HELD" | "DEPOSITED") {
-    if (!canManage || busy || status?.saleStatus !== "COMPLETED" ||
-      !invoice || invoice.availableToReserveMinor <= 0 || !receiptCurrencyMatches) return;
+    // A HELD cheque is deposited only while the live invoice can still cover it
+    // (the server refuses otherwise). A DEPOSITED one is already at the bank, so
+    // it can always be cleared: the server books it as invoice receipt or, when
+    // the sale was cancelled or is now covered, as unreserved customer credit.
+    if (!canManage || busy) return;
+    if (state === "HELD" && (status?.saleStatus !== "COMPLETED" ||
+      !invoice || invoice.availableToReserveMinor <= 0 || !receiptCurrencyMatches)) return;
     setBusy(true); setError(""); setNotice("");
     try {
       if (state === "HELD") {
@@ -223,8 +233,12 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
               <p className="text-sm text-muted-foreground">{t("DealReceiptFullyCovered")}</p>}
             {!receiptCurrencyMatches && <p className="text-sm text-muted-foreground">
               {t("DealReceiptCurrencyMismatch")}</p>}
+            {canManage && !doorsAvailable && (
+              <p className="text-sm text-muted-foreground" role="note" data-testid="deal-invoice-doors-unavailable">
+                {t("SaleInvoiceDoorsUnavailable")}</p>
+            )}
             {status.saleStatus === "COMPLETED" && invoice.availableToReserveMinor > 0 &&
-              receiptCurrencyMatches && canManage && (
+              receiptCurrencyMatches && canManage && doorsAvailable && (
               <section className="grid gap-3 sm:grid-cols-2" aria-label={t("DealReceiptRecordHeading")}>
                 <h3 className="sm:col-span-2 font-medium">{t("DealReceiptRecordHeading")}</h3>
                 <div><Label htmlFor="sale-receipt-amount">{t("DealReceiptAmount")}</Label>
@@ -251,7 +265,7 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
               <h3 className="font-medium">{t("DealReceiptChequeHeading")}</h3>
               <p className="text-xs text-muted-foreground">{t("DealReceiptChequeExplanation")}</p>
               {status.saleStatus === "COMPLETED" && invoice.availableToReserveMinor > 0 &&
-                receiptCurrencyMatches && canManage && <div className="grid gap-3 sm:grid-cols-2">
+                receiptCurrencyMatches && canManage && doorsAvailable && <div className="grid gap-3 sm:grid-cols-2">
                 <div><Label htmlFor="sale-cheque-bank">{t("DealReceiptChequeBank")}</Label>
                   <Input id="sale-cheque-bank" value={chequeBank} disabled={busy}
                     onChange={(event) => setChequeBank(event.target.value)} /></div>
@@ -276,8 +290,8 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
                   {status.saleStatus === "CANCELLED" && <span className="text-muted-foreground">
                     {t(cheque.status === "HELD" ? "RetainedCreditChequeCancelledHeld"
                       : "RetainedCreditChequeBecomesCredit")}</span>}
-                  {canManage && status.saleStatus === "COMPLETED" &&
-                    invoice.availableToReserveMinor > 0 && receiptCurrencyMatches &&
+                  {canManage && (cheque.status === "DEPOSITED" || (status.saleStatus === "COMPLETED" &&
+                    invoice.availableToReserveMinor > 0 && receiptCurrencyMatches)) &&
                     <Button size="sm" variant="outline" disabled={busy}
                     onClick={() => onAdvanceCheque(cheque.chequeId,
                       cheque.status === "HELD" ? "HELD" : "DEPOSITED")}>
@@ -305,14 +319,14 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
                     {t("RetainedCreditFromCheque")} <bdi dir="ltr">{position.sourceChequeLabel}</bdi>
                     {" · "}{t(position.originatingSaleStatus === "CANCELLED"
                       ? "RetainedCreditSaleCancelled" : "RetainedCreditSaleActive")}</span>}
-                  {canManage && position.receiptPosted && position.availableUnappliedMinor > 0 &&
+                  {canManage && payoutAvailable && position.receiptPosted && position.availableUnappliedMinor > 0 &&
                     <Button size="sm" variant="outline" disabled={busy}
                       onClick={() => { setRefundMovement(position.receiptMovementId); setRefundAmount(""); }}>
                       {t("RetainedCreditRequestRefund")}</Button>}
                   {position.originatingSaleStatus === "CANCELLED" && position.availableUnappliedMinor > 0 &&
                     <span className="text-xs text-muted-foreground" title={t("RetainedCreditApplyElsewhereHint")}>
                       {t("RetainedCreditApplyElsewhere")}: {t("RetainedCreditApplyElsewhereHint")}</span>}
-                  {canManage && position.receiptPosted && position.currency === currency &&
+                  {canManage && doorsAvailable && position.receiptPosted && position.currency === currency &&
                     position.availableUnappliedMinor > 0 && status.saleStatus === "COMPLETED" &&
                     invoice.availableToReserveMinor > 0 &&
                     <Button size="sm" variant="outline" disabled={busy || !!reserveAttempt}
@@ -322,7 +336,11 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
               ))}</ul>}
               {credits.status === "CanLoadMore" && <Button variant="outline" size="sm"
                 onClick={() => credits.loadMore(20)}>{t("LoadMore")}</Button>}
-              {canManage && refundCredit && <div className="grid gap-3 sm:grid-cols-2">
+              {canManage && !payoutAvailable && positions.length > 0 && (
+                <p className="text-xs text-muted-foreground" role="note" data-testid="deal-credit-payout-unavailable">
+                  {t("RetainedCreditPayoutUnavailable")}</p>
+              )}
+              {canManage && payoutAvailable && refundCredit && <div className="grid gap-3 sm:grid-cols-2">
                 <div><Label htmlFor="credit-refund-amount">{t("RetainedCreditRefundAmount")}</Label>
                   <Input id="credit-refund-amount" inputMode="decimal" value={refundAmount} disabled={busy}
                     onChange={(event) => setRefundAmount(event.target.value)} /></div>
@@ -339,7 +357,7 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
                 <Button className="w-fit" disabled={busy} onClick={onRequestRefund}>
                   {t("RetainedCreditRefundSubmit")}</Button>
               </div>}
-              {canManage && (selectedCredit || reserveAttempt) && <div className="flex flex-wrap items-end gap-2">
+              {canManage && doorsAvailable && (selectedCredit || reserveAttempt) && <div className="flex flex-wrap items-end gap-2">
                 <div><Label htmlFor="sale-reserve-amount">{t("DealReceiptAmount")}</Label>
                   <Input id="sale-reserve-amount" inputMode="decimal" value={reserveAmount}
                     disabled={!!reserveAttempt || busy} onChange={(event) => setReserveAmount(event.target.value)} /></div>
@@ -354,7 +372,7 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
                 <span>{money(application.amountMinor, application.currency)}</span>
                 <span>{application.readiness === "ORIGINS_VERIFIED" ? t("DealReceiptOriginsVerified")
                   : t(`DealReceiptReason_${application.reason ?? "PROOF_UNAVAILABLE"}`)}</span>
-                {canManage && application.readiness === "ORIGINS_VERIFIED" && status.saleStatus === "COMPLETED" &&
+                {canManage && doorsAvailable && application.readiness === "ORIGINS_VERIFIED" && status.saleStatus === "COMPLETED" &&
                   <Button size="sm" disabled={busy} onClick={() => onActivate(application.applicationId, application.amountMinor)}>
                     {t("DealReceiptTryActivateButton")}</Button>}
               </div>)}

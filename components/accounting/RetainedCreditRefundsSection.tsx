@@ -18,10 +18,16 @@ import { Input } from "@/components/ui/input";
  * approves, then a finance user records the payout. The server owns every rule;
  * this only shows the queue and forwards the three commands.
  */
-export function RetainedCreditRefundsSection({ orgId, canApprove, canManage }: Readonly<{
+export function RetainedCreditRefundsSection({ orgId, canApprove, canManage, payoutAvailable = false }: Readonly<{
   orgId: Id<"organizations">;
   canApprove: boolean;
   canManage: boolean;
+  /**
+   * Backend-reported availability (`collections.summary.retainedCreditPayoutAvailable`).
+   * Absent or false (the pilot, or a backend not yet deployed) hides approve and
+   * record-payout; reject and cancel stay available.
+   */
+  payoutAvailable?: boolean;
 }>) {
   const { t, locale } = useLanguage();
   const command = useCommandIdentity();
@@ -31,7 +37,9 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage }: R
     { orgId, status: "APPROVED" });
   const respond = useMutation(api.retainedCreditRefunds.respondToRetainedCreditRefund);
   const execute = useMutation(api.retainedCreditRefunds.executeRetainedCreditRefund);
+  const cancel = useMutation(api.retainedCreditRefunds.cancelRetainedCreditRefund);
   const [references, setReferences] = useState<Record<string, string>>({});
+  const [cancelReasons, setCancelReasons] = useState<Record<string, string>>({});
   const paidAtByRequest = useRef<Record<string, number>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const rows = [...(pending ?? []), ...(approved ?? [])];
@@ -44,6 +52,18 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage }: R
       await respond({ orgId, requestId, status, idempotencyKey: command.for(intent) });
       command.retire(intent);
       toast.success(t(status === "APPROVED" ? "RetainedCreditRefundApproved" : "RetainedCreditRefundRejected"));
+    } catch (error) {
+      toast.error(getLocalizedErrorMessage(error, t));
+    } finally { setBusyId(null); }
+  }
+
+  async function onCancel(requestId: Id<"retainedCreditRefundRequests">) {
+    const reason = (cancelReasons[requestId] ?? "").trim();
+    if (busyId || !reason) return;
+    setBusyId(requestId);
+    try {
+      await cancel({ orgId, requestId, reason });
+      toast.success(t("RetainedCreditRefundCancelled"));
     } catch (error) {
       toast.error(getLocalizedErrorMessage(error, t));
     } finally { setBusyId(null); }
@@ -72,6 +92,10 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage }: R
     <section className="mt-4 space-y-2" aria-label={t("RetainedCreditRefundsHeading")}
       data-testid="retained-credit-refunds">
       <h3 className="font-medium">{t("RetainedCreditRefundsHeading")}</h3>
+      {rows.length > 0 && !payoutAvailable && (
+        <p className="text-sm text-muted-foreground" role="note" data-testid="retained-credit-payout-unavailable">
+          {t("RetainedCreditPayoutUnavailable")}</p>
+      )}
       {rows.length === 0 && <p className="text-sm text-muted-foreground">{t("RetainedCreditRefundsEmpty")}</p>}
       {rows.map((row) => (
         <div key={row._id} className="flex flex-wrap items-center gap-2 rounded-md border p-2 text-sm">
@@ -83,12 +107,20 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage }: R
           <span className="text-muted-foreground">
             {t(row.status === "PENDING" ? "RetainedCreditStatusPENDING" : "RetainedCreditStatusAPPROVED")}</span>
           {row.status === "PENDING" && canApprove && !row.requestedByMe && <>
-            <Button size="sm" variant="outline" disabled={!!busyId}
-              onClick={() => onDecide(row._id, "APPROVED")}>{t("Approve")}</Button>
+            {payoutAvailable && <Button size="sm" variant="outline" disabled={!!busyId}
+              onClick={() => onDecide(row._id, "APPROVED")}>{t("Approve")}</Button>}
             <Button size="sm" variant="outline" disabled={!!busyId}
               onClick={() => onDecide(row._id, "REJECTED")}>{t("Reject")}</Button>
           </>}
-          {row.status === "APPROVED" && canManage && <>
+          {canManage && (row.status === "PENDING" || row.status === "APPROVED") && <>
+            <Input className="w-48" aria-label={t("RetainedCreditCancelReason")}
+              placeholder={t("RetainedCreditCancelReason")} maxLength={500}
+              value={cancelReasons[row._id] ?? ""} disabled={!!busyId}
+              onChange={(event) => setCancelReasons((prev) => ({ ...prev, [row._id]: event.target.value }))} />
+            <Button size="sm" variant="outline" disabled={!!busyId || !(cancelReasons[row._id] ?? "").trim()}
+              onClick={() => onCancel(row._id)}>{t("RetainedCreditRefundCancel")}</Button>
+          </>}
+          {row.status === "APPROVED" && canManage && payoutAvailable && <>
             <Input className="w-48" aria-label={t("RetainedCreditPayoutReference")}
               placeholder={t("RetainedCreditPayoutReference")} value={references[row._id] ?? ""}
               disabled={!!busyId}

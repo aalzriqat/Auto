@@ -11,6 +11,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 const stubs = vi.hoisted(() => ({
   permissions: new Set<string>(),
   queryResults: new Map<string, unknown>(),
+  mutations: new Map<string, ReturnType<typeof vi.fn>>(),
 }));
 
 vi.mock("@/components/providers/LanguageProvider", () => ({
@@ -41,7 +42,11 @@ vi.mock("convex/react", async () => {
       return typeof value === "function" ? (value as (a: unknown) => unknown)(args) : value;
     },
     usePaginatedQuery: () => ({ results: [], status: "Exhausted", loadMore: () => {} }),
-    useMutation: () => vi.fn(),
+    useMutation: (reference: never) => {
+      const name = getFunctionName(reference);
+      if (!stubs.mutations.has(name)) stubs.mutations.set(name, vi.fn().mockResolvedValue(null));
+      return stubs.mutations.get(name)!;
+    },
   };
 });
 
@@ -56,9 +61,14 @@ const refundRow = (over: Record<string, unknown>) => ({
   requestedByMe: false, ...over,
 });
 
-function seedRefunds(rows: Array<Record<string, unknown>>) {
+/**
+ * `payoutAvailable`: true/false is what the backend reports; "absent" models a
+ * frontend deployed before the manual backend deploy (the field does not exist).
+ */
+function seedRefunds(rows: Array<Record<string, unknown>>, payoutAvailable: boolean | "absent" = true) {
   stubs.queryResults.set("collections:summary", {
     totalOutstanding: 0, overdueOutstanding: 0, dueToday: 0, collectedToday: 0, upcomingChequeTotal: 0,
+    ...(payoutAvailable === "absent" ? {} : { retainedCreditPayoutAvailable: payoutAvailable }),
   });
   stubs.queryResults.set("retainedCreditRefunds:listRetainedCreditRefundRequests",
     (args: { status?: string }) => rows.filter((row) => row.status === args.status));
@@ -76,6 +86,7 @@ async function openApprovals(permissions: string[]) {
 afterEach(() => {
   cleanup();
   stubs.queryResults.clear();
+  stubs.mutations.clear();
   stubs.permissions = new Set();
 });
 
@@ -112,5 +123,44 @@ describe("Collections, refund lifecycle reachable under default roles", () => {
     stubs.permissions = new Set(["view:finance"]);
     render(<CollectionsTab />);
     expect(screen.queryByRole("tab", { name: "Approvals" })).toBeNull();
+  });
+});
+
+describe("SCRUM-724 pilot containment: payout actions disabled, exits stay", () => {
+  test.each([false, "absent"] as const)(
+    "payout unavailable (%s): no approve and no record-payout, reason shown, reject and cancel stay",
+    async (availability) => {
+      seedRefunds([refundRow({ status: "PENDING" }), refundRow({ _id: "r2", status: "APPROVED" })], availability);
+      await openApprovals([...ACCOUNTANT, "approve:requests"]);
+      expect(screen.getByTestId("retained-credit-payout-unavailable")).toBeTruthy();
+      expect(screen.getByText("RetainedCreditPayoutUnavailable")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "RetainedCreditExecute" })).toBeNull();
+      expect(screen.queryByLabelText("RetainedCreditPayoutReference")).toBeNull();
+      expect(screen.getAllByRole("button", { name: "Reject" })).toHaveLength(1);
+      expect(screen.getAllByRole("button", { name: "RetainedCreditRefundCancel" })).toHaveLength(2);
+    });
+
+  test("cancel needs a reason, then calls the cancel mutation with it (APPROVED and the requester's own PENDING)", async () => {
+    seedRefunds([refundRow({ status: "APPROVED" }), refundRow({ _id: "r2", status: "PENDING", requestedByMe: true })], false);
+    await openApprovals(ACCOUNTANT);
+    const buttons = screen.getAllByRole("button", { name: "RetainedCreditRefundCancel" }) as HTMLButtonElement[];
+    expect(buttons).toHaveLength(2);
+    expect(buttons.every((button) => button.disabled)).toBe(true);
+    const inputs = screen.getAllByLabelText("RetainedCreditCancelReason");
+    fireEvent.change(inputs[0], { target: { value: "  customer kept the credit  " } });
+    expect((screen.getAllByRole("button", { name: "RetainedCreditRefundCancel" })[0] as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getAllByRole("button", { name: "RetainedCreditRefundCancel" })[0]);
+    await vi.waitFor(() => {
+      expect(stubs.mutations.get("retainedCreditRefunds:cancelRetainedCreditRefund")).toHaveBeenCalledWith(
+        // Rows list PENDING first, so the first control is the requester's own r2.
+        { orgId: "org1", requestId: "r2", reason: "customer kept the credit" });
+    });
+  });
+
+  test("a view-only approver (no MANAGE_FINANCE) gets no cancel control", async () => {
+    seedRefunds([refundRow({ status: "PENDING" })], false);
+    await openApprovals(MANAGER);
+    expect(screen.queryByRole("button", { name: "RetainedCreditRefundCancel" })).toBeNull();
   });
 });

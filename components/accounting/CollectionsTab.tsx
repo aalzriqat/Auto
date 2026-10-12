@@ -672,7 +672,8 @@ export function CollectionsTab() {
                 </TableBody>
               </Table>
             </div>}
-            <RetainedCreditRefundsSection orgId={activeOrgId} canApprove={canApprove} canManage={canManage} />
+            <RetainedCreditRefundsSection orgId={activeOrgId} canApprove={canApprove} canManage={canManage}
+              payoutAvailable={summary?.retainedCreditPayoutAvailable === true} />
           </TabsContent>
         )}
       </Tabs>
