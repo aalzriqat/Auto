@@ -333,7 +333,7 @@ export const listRetainedCreditRefundRequests = query({
     )),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     const status = args.status;
     const rows = status
       ? await ctx.db.query("retainedCreditRefundRequests")
@@ -351,6 +351,8 @@ export const listRetainedCreditRefundRequests = query({
       const sale = position?.originatingSaleId ? await ctx.db.get(position.originatingSaleId) : null;
       return {
         ...row,
+        // The backend refuses self-approval; the UI uses this to not offer it.
+        requestedByMe: row.requestedBy === user._id,
         customerName: customer ? `${customer.firstName} ${customer.lastName}`.trim() : undefined,
         sourceChequeLabel: cheque && cheque.orgId === args.orgId
           ? `${cheque.bank} #${cheque.chequeNumber}` : undefined,

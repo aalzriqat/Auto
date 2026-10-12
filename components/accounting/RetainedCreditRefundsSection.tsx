@@ -82,7 +82,7 @@ export function RetainedCreditRefundsSection({ orgId, canApprove, canManage }: R
             {row.originatingSaleStatus === "CANCELLED" && <> · {t("RetainedCreditSaleCancelled")}</>}</span>}
           <span className="text-muted-foreground">
             {t(row.status === "PENDING" ? "RetainedCreditStatusPENDING" : "RetainedCreditStatusAPPROVED")}</span>
-          {row.status === "PENDING" && canApprove && <>
+          {row.status === "PENDING" && canApprove && !row.requestedByMe && <>
             <Button size="sm" variant="outline" disabled={!!busyId}
               onClick={() => onDecide(row._id, "APPROVED")}>{t("Approve")}</Button>
             <Button size="sm" variant="outline" disabled={!!busyId}

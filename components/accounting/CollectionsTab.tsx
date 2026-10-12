@@ -272,7 +272,7 @@ export function CollectionsTab() {
           <TabsTrigger value="cashDrawer">{t("CashDrawer" as any)}</TabsTrigger>
           <TabsTrigger value="payments">{t("Payments" as any)}</TabsTrigger>
           <TabsTrigger value="reports">{t("Reports" as any)}</TabsTrigger>
-          {canApprove && <TabsTrigger value="approvals">{t("Approvals" as any)}</TabsTrigger>}
+          {(canApprove || canManage) && <TabsTrigger value="approvals">{t("Approvals" as any)}</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="receivables" className="space-y-3">
@@ -630,9 +630,12 @@ export function CollectionsTab() {
           </ReportPanel>
         </TabsContent>
 
-        {canApprove && (
+        {(canApprove || canManage) && (
           <TabsContent value="approvals">
-            <div className="rounded-md border border-border overflow-x-auto">
+            {/* SCRUM-724: the Approvals tab is shared. The collection-approval table is
+                approver-only; the refund queue serves approvers (decide) and finance
+                managers (pay out) under the default role templates. */}
+            {canApprove && <div className="rounded-md border border-border overflow-x-auto">
               <Table>
                 <TableHeader className="bg-muted/50">
                   <TableRow>
@@ -668,7 +671,7 @@ export function CollectionsTab() {
                   )}
                 </TableBody>
               </Table>
-            </div>
+            </div>}
             <RetainedCreditRefundsSection orgId={activeOrgId} canApprove={canApprove} canManage={canManage} />
           </TabsContent>
         )}
