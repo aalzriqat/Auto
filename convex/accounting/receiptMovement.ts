@@ -40,7 +40,7 @@
  */
 import { ConvexError } from "convex/values";
 import { Doc, Id } from "../_generated/dataModel";
-import { MutationCtx } from "../_generated/server";
+import { MutationCtx, QueryCtx } from "../_generated/server";
 import { SYSTEM_KEYS } from "../utils/defaultChart";
 import {
   RECEIPT_CREDIT_APPLIED_EVENT_TYPE,
@@ -136,6 +136,11 @@ export async function sealReceiptMovement(
     currency: string;
     allocationIds: readonly Id<"paymentAllocations">[];
     actorId: Id<"users">;
+    /**
+     * SCRUM-724: immutable lineage copied onto the retained position when the
+     * receipt is a sale-invoice customer cheque. Written once, never patched.
+     */
+    lineage?: { sourceChequeId: Id<"postDatedCheques">; originatingSaleId: Id<"sales"> };
   }
 ): Promise<{ movementId: Id<"receiptMovements">; split: ReceiptSplit }> {
   // The identity must address THIS payment. Without this, a legitimately minted
@@ -220,6 +225,9 @@ export async function sealReceiptMovement(
       initialUnappliedMinor: unappliedMinor,
       remainingUnappliedMinor: unappliedMinor,
       applicationCount: 0,
+      ...(args.lineage
+        ? { sourceChequeId: args.lineage.sourceChequeId, originatingSaleId: args.lineage.originatingSaleId }
+        : {}),
       updatedAt: now,
     });
   }
@@ -288,7 +296,7 @@ export function computeApplicableMinor(args: {
  * money, which is an overdraft waiting to happen.
  */
 export async function loadRetainedPosition(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   receiptMovementId: Id<"receiptMovements">
 ): Promise<Doc<"receiptRetainedPositions">> {

@@ -117,6 +117,8 @@ const ACCEPTED_OPTIONAL_DANGLING: Record<string, string> = {
     "Self-reference; read only as an id compare (utils/financeCompanyForward.ts:154) and passed to a null-guarded get (utils/prepaidRecognitionEvents.ts:179-182); never a hard dereference.",
   "accountingEvents.reversedByEventId->accountingEvents":
     "Self-reference; every read null-guards the get (accounting/reversals.ts:58-59, accountingReports.ts:1110-1111, utils/financeCompanyForward.ts:149-153 fails to NEEDS_REPAIR).",
+  "retainedCreditRefundRequests.accountingEventId->accountingEvents":
+    "Optional, set once at payout (retainedCreditRefunds.ts); written only, the list query never dereferences it.",
   "canonicalPayments.accountingEventId->accountingEvents":
     "Written only (subledger.ts:123,201); no reader dereferences it.",
   "canonicalPayments.cashierSessionId->cashierReconciliations":
