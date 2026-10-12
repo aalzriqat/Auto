@@ -123,7 +123,7 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
    * (CHEQUE_INVOICE_UNCOVERED_HELD).
    */
   function invoiceCoversCheque(chequeAmountMajor: number): boolean {
-    if (!invoice || !status || status.saleStatus !== "COMPLETED" || !receiptCurrencyMatches) return false;
+    if (!invoice || status?.saleStatus !== "COMPLETED" || !receiptCurrencyMatches) return false;
     const faceMinor = Math.round(chequeAmountMajor * 10 ** moneyDisplayScale(status.receiptCurrency));
     return invoice.availableToReserveMinor > 0 && faceMinor <= invoice.availableToReserveMinor;
   }
@@ -149,8 +149,8 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
       command.retire(paymentIntent);
       setPaymentAttempt(null); setAmount(""); setReference("");
       setNotice(t("DealReceiptRecorded"));
-    } catch (failure) {
-      showFailure(failure, "DealReceiptActionFailed");
+    } catch (error_) {
+      showFailure(error_, "DealReceiptActionFailed");
     } finally {
       setBusy(false);
     }
@@ -175,8 +175,8 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
       command.retire(reserveIntent);
       setReserveAttempt(null); setReserveAmount(""); setSelectedMovement("");
       setNotice(t("DealReceiptReserved"));
-    } catch (failure) {
-      showFailure(failure, "DealReceiptActionFailed");
+    } catch (error_) {
+      showFailure(error_, "DealReceiptActionFailed");
     } finally {
       setBusy(false);
     }
@@ -190,8 +190,8 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
       await activate({ orgId, applicationId, amountMinor, idempotencyKey: command.for(intent) });
       command.retire(intent);
       setNotice(t("DealReceiptActivated"));
-    } catch (failure) {
-      showFailure(failure, "DealReceiptActionFailed");
+    } catch (error_) {
+      showFailure(error_, "DealReceiptActionFailed");
     } finally {
       setBusy(false);
     }
@@ -212,8 +212,8 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
         amountMinor: parsedCheque.minor });
       setChequeBank(""); setChequeNumber(""); setChequeAmount("");
       setNotice(t("DealReceiptChequeRegistered"));
-    } catch (failure) {
-      showFailure(failure, "DealReceiptChequeActionFailed");
+    } catch (error_) {
+      showFailure(error_, "DealReceiptChequeActionFailed");
     } finally { setBusy(false); }
   }
 
@@ -230,8 +230,8 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
         amountMinor: parsedRefund.minor, method: REFUND_METHOD, reason: refundReason.trim() });
       setRefundMovement(""); setRefundAmount(""); setRefundReason("");
       setNotice(t("RetainedCreditRefundRequested"));
-    } catch (failure) {
-      showFailure(failure, "DealReceiptActionFailed");
+    } catch (error_) {
+      showFailure(error_, "DealReceiptActionFailed");
     } finally { setBusy(false); }
   }
 
@@ -256,8 +256,8 @@ export function DealInvoiceReceiptsPanel({ orgId, saleId }: Readonly<{
         // intent with the doors open; otherwise the face is unreserved credit.
         setNotice(t("DealReceiptChequeClearedToCredit"));
       }
-    } catch (failure) {
-      showFailure(failure, "DealReceiptChequeActionFailed");
+    } catch (error_) {
+      showFailure(error_, "DealReceiptChequeActionFailed");
     } finally { setBusy(false); }
   }
 
