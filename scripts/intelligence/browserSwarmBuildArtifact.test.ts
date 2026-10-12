@@ -399,7 +399,19 @@ describe("SCRUM-824 dangling pnpm hoist-index links", () => {
     try {
       const index = await hoistIndex(f);
       await mkdir(path.join(index, "pkg"), { recursive: true });
-      await symlink("../missing", path.join(index, "pkg/dep"), "dir");
+      // Target points into the store, so only the leaf/scope check can refuse it.
+      await symlink("../../dep@1.0.0/node_modules/dep", path.join(index, "pkg/dep"), "dir");
+      await expect(build(f)).rejects.toThrow(/not a pnpm hoist-index link/i);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a dangling hoist link whose target lands back inside the hoist index", async () => {
+    const f = await fixture();
+    try {
+      const index = await hoistIndex(f);
+      await symlink("../node_modules/missing-in-index", path.join(index, "missing-in-index"), "dir");
       await expect(build(f)).rejects.toThrow(/not a pnpm hoist-index link/i);
     } finally {
       await rm(f.root, { recursive: true, force: true });
@@ -434,6 +446,40 @@ describe("SCRUM-824 dangling pnpm hoist-index links", () => {
         }),
       ).resolves.toBe(false);
       await expect(build(f)).rejects.toThrow(/not a pnpm hoist-index link/i);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a dangling hoist link that climbs out through a symlink and back with '..' (Opus F1 S10)", async () => {
+    // Lexically hop/.. cancels, so the target looks in-store; the kernel follows
+    // hop to a directory outside the candidate root first.
+    const f = await fixture();
+    try {
+      const index = await hoistIndex(f);
+      const outside = path.join(f.root, "hop-target");
+      await mkdir(outside, { recursive: true });
+      await symlink(outside, path.join(f.candidateRoot, ".next/hop"), "dir");
+      await symlink(
+        "../../../../hop/../standalone/node_modules/.pnpm/absent@1.0.0/node_modules/hop-pkg",
+        path.join(index, "hop-pkg"),
+        "dir",
+      );
+      await expect(build(f)).rejects.toThrow(/not a pnpm hoist-index link/i);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses non-canonical hoist targets: '..' climbs and name mismatches (Opus F1 S2)", async () => {
+    const f = await fixture();
+    try {
+      const index = await hoistIndex(f);
+      const hoist = { root: await realpath(index), store: await realpath(path.dirname(index)) };
+      await symlink("../nonexistent-dir/../absent@1.0.0/node_modules/absent", path.join(index, "absent"), "dir");
+      await symlink("../bar@1.0.0/node_modules/bar", path.join(index, "foo"), "dir");
+      await expect(isAllowedDanglingHoistLink(path.join(index, "absent"), hoist)).resolves.toBe(false);
+      await expect(isAllowedDanglingHoistLink(path.join(index, "foo"), hoist)).resolves.toBe(false);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -488,7 +534,7 @@ describe("SCRUM-824 dangling pnpm hoist-index links", () => {
       const index = await hoistIndex(f);
       await symlink("loop-b", path.join(index, "loop-a"), "dir");
       await symlink("loop-a", path.join(index, "loop-b"), "dir");
-      await expect(build(f)).rejects.toThrow();
+      await expect(build(f)).rejects.toThrow(/ELOOP/);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
