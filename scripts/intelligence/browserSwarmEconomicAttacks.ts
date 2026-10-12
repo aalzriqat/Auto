@@ -40,9 +40,11 @@ import {
   FINGERPRINT_CONFLICT_TEXT,
   isAuthenticationLapse,
   VerdictLedger,
+  type CommandIdentityVerdict,
   type ExpenseEffectSnapshot,
   type IntentReplyRow,
   type IntentRepliesVerdict,
+  type LedgerDecision,
   type TabOutcome,
 } from "./browserSwarmEconomicOracle";
 import {
@@ -207,6 +209,45 @@ export class ConvexSyncObserver {
     this.armedTitle = title;
   }
 
+  /** Ends the lost-response fault whether or not it fired (SCRUM-826 D1 P3). */
+  disarmLostResponse(): void {
+    this.armedTitle = null;
+  }
+
+  /**
+   * Transmitted attempts of `title` that no delivered reply has answered. A
+   * withheld reply never reached the client, so it answers nothing.
+   */
+  unansweredFor(title: string): ObservedMutation[] {
+    return this.mutationsFor(title).filter(
+      (mutation) =>
+        !this.responses.some(
+          (response) =>
+            !response.withheld &&
+            response.pageLabel === mutation.pageLabel &&
+            response.requestId === mutation.requestId,
+        ),
+    );
+  }
+
+  /** True once the client received a successful reply for an attempt of `title`. */
+  acceptedReplyDelivered(title: string): boolean {
+    return this.responses.some(
+      (response) => response.title === title && response.success && !response.withheld,
+    );
+  }
+
+  /** Waits, bounded, until every transmitted attempt of `title` was answered. */
+  async waitUntilAnswered(title: string, timeoutMs: number, signal: AbortSignal): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      signal.throwIfAborted();
+      if (this.unansweredFor(title).length === 0) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(50, timeoutMs)));
+    }
+  }
+
   mutationsFor(title: string): ObservedMutation[] {
     return this.mutations.filter((mutation) => mutation.title === title);
   }
@@ -312,20 +353,124 @@ export class ConvexSyncObserver {
 
 // ─── Expense UI drivers ──────────────────────────────────────────────────────
 
-async function gotoExpenses(page: Page, orgId: string): Promise<void> {
+async function gotoExpenses(page: Page, orgId: string, timeout = UI_STEP_TIMEOUT_MS): Promise<void> {
   await page.goto("/" + orgId + "/expenses", { waitUntil: "domcontentloaded" });
   await page
     .getByRole("button", { name: "Record Expense", exact: true })
-    .waitFor({ state: "visible", timeout: UI_STEP_TIMEOUT_MS });
+    .waitFor({ state: "visible", timeout });
 }
 
-async function openRecordDialog(page: Page): Promise<Locator> {
-  await page.getByRole("button", { name: "Record Expense", exact: true }).click();
+/** Settles `work` or rejects the moment the mission is aborted (SCRUM-826 D5). */
+function untilAborted<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
+  if (signal.aborted) {
+    work.catch(() => undefined);
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+type DialogOpening = { kind: "OPEN"; dialog: Locator } | { kind: "REFUSED"; reason: string };
+
+/** How long a just-opened dialog may take to apply its reset before it counts as stale. */
+const FRESH_FORM_SETTLE_MS = 2_000;
+
+/**
+ * Opens the Record Expense dialog for a NEW intent, or says why it cannot
+ * (SCRUM-826 D1). P1: no dialog may be open — while one is, Radix hides the
+ * page trigger and "Record Expense" resolves to that dialog's own submit
+ * button, so a click would resubmit the previous intent. P2: the dialog must
+ * be a closed-to-open transition showing the reset defaults (title "" and
+ * amount 0), read once the reset has had time to apply; a stale form is
+ * never reused for a new intent.
+ */
+export async function openFreshDialog(
+  page: Page,
+  phase: string,
+  timeout: number,
+  signal: AbortSignal,
+): Promise<DialogOpening> {
   const dialog = page.getByRole("dialog");
+  if (await dialog.isVisible()) {
+    return {
+      kind: "REFUSED",
+      reason: `${phase}: a dialog was still open, so the page trigger would resolve to its submit button (D1 P1)`,
+    };
+  }
+  await page.getByRole("button", { name: "Record Expense", exact: true }).click({ timeout });
   await dialog
     .getByRole("heading", { name: "Record Expense" })
-    .waitFor({ state: "visible", timeout: UI_STEP_TIMEOUT_MS });
-  return dialog;
+    .waitFor({ state: "visible", timeout });
+  const deadline = Date.now() + Math.min(timeout, FRESH_FORM_SETTLE_MS);
+  for (;;) {
+    signal.throwIfAborted();
+    const title = await dialog.getByLabel("Title / Description").inputValue({ timeout });
+    const amount = await dialog.getByLabel(/^Amount \(/).inputValue({ timeout });
+    if (title === "" && (amount === "" || Number(amount) === 0)) return { kind: "OPEN", dialog };
+    if (Date.now() >= deadline) {
+      return {
+        kind: "REFUSED",
+        reason: `${phase}: the dialog did not open with a fresh form (title ${JSON.stringify(title)}, amount ${JSON.stringify(amount)}) (D1 P2)`,
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+type PhaseExit =
+  | { kind: "CONFIRMED" }
+  | { kind: "CLOSED_UNCONFIRMED" }
+  | { kind: "CANCELLED" }
+  | { kind: "BLOCKED"; reason: string };
+
+/**
+ * Ends one UI phase (SCRUM-826 D2). Every transmitted attempt of the intent
+ * must be answered before the UI moves on: a save still in flight at the
+ * deadline BLOCKS every later UI phase, because a late reply would close (or
+ * be attributed to) the next dialog. The dialog is never cancelled while a
+ * save is in flight. The phase is CONFIRMED only when the dialog is hidden
+ * AND the client received an accepted reply for this intent's own title.
+ */
+async function exitPhase(
+  observer: ConvexSyncObserver,
+  dialog: Locator,
+  title: string,
+  waitMs: number,
+  uiStepMs: number,
+  signal: AbortSignal,
+): Promise<PhaseExit> {
+  const startedAt = Date.now();
+  await untilAborted(signal, dialogClosedAfterSuccess(dialog, waitMs));
+  const remaining = Math.max(0, waitMs - (Date.now() - startedAt));
+  const answered = await observer.waitUntilAnswered(title, remaining, signal);
+  if (!answered) {
+    return {
+      kind: "BLOCKED",
+      reason: `intent "${title}" still had an unanswered save in flight when its phase ended; no later dialog may open over it (D2)`,
+    };
+  }
+  if (!(await dialog.isVisible())) {
+    return observer.acceptedReplyDelivered(title)
+      ? { kind: "CONFIRMED" }
+      : { kind: "CLOSED_UNCONFIRMED" };
+  }
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click({ timeout: uiStepMs });
+  const dismissed = await untilAborted(signal, dialogClosedAfterSuccess(dialog, uiStepMs));
+  return dismissed
+    ? { kind: "CANCELLED" }
+    : { kind: "BLOCKED", reason: `intent "${title}": the dialog could not be dismissed (D2)` };
 }
 
 async function fillNewExpense(
@@ -385,7 +530,14 @@ async function settleIntent(
   });
   const observed = observer.mutationsFor(intent.title);
   const identities = observed.map((mutation) => mutation.idempotencyKey);
-  const identity = evaluateCommandIdentityLifetime(identities);
+  // SCRUM-826 R1: an intent that was never transmitted has no identity to
+  // judge. That is not an error — it must not abort the settlement of the
+  // other intents (and with it, their proof); the exercise classification
+  // below reports it unjudged.
+  const identity: CommandIdentityVerdict =
+    identities.length === 0
+      ? { passed: true, violations: [], key: null }
+      : evaluateCommandIdentityLifetime(identities);
   const replies = observer.repliesFor(intent.title);
   const replyVerdict = evaluateIntentReplies(intent.title, replies);
   const matching = snapshot.expenses.filter((row) => row.title === intent.title).length;
@@ -451,52 +603,219 @@ async function settleIntent(
   };
 }
 
+/** Timeouts of the DUPLICATE_SUBMIT phases; injectable so tests run the real handler quickly. */
+export interface DuplicateSubmitTimeouts {
+  uiStepMs: number;
+  lostResponseRecoveryMs: number;
+}
+
+export interface EconomicAttackOptions {
+  duplicateSubmitTimeouts?: Partial<DuplicateSubmitTimeouts>;
+}
+
+type ConflictObservation = { accepted: true } | { accepted: false; message: string };
+
+/** What phase C (the server-side replay) observed, as data for the verdict. */
+type ServerReplayObservation =
+  | { kind: "NOT_RUN" }
+  | { kind: "NO_RAPID_FRAME" }
+  | { kind: "SESSION_LAPSED" }
+  | {
+      kind: "RAN";
+      replay: { accepted: true; result: string } | { accepted: false; message: string };
+      conflict: ConflictObservation | null;
+    };
+
+interface DuplicateSubmitObservation {
+  intents: readonly { title: string }[];
+  rapidTitle: string;
+  lostTitle: string;
+  reports: ReadonlyMap<string, IntentReport>;
+  /** Client-visible replies per intent, judged (lapses excluded from proof, P2). */
+  replyVerdicts: ReadonlyMap<string, IntentRepliesVerdict>;
+  /** Intents whose dialog opened as a fresh closed-to-open transition (D1). */
+  fresh: ReadonlySet<string>;
+  lostInjected: boolean;
+  lostAttempts: number;
+  serverReplay: ServerReplayObservation;
+}
+
+function lapseReason(title: string, lapses: number): string {
+  return `intent "${title}" received ${lapses} reply(ies) refused for a lapsed session; the harness lost authentication (SCRUM-826 P2)`;
+}
+
+/**
+ * SCRUM-826 D3 — the ONE verdict composition for DUPLICATE_SUBMIT. The normal
+ * conclusion and the interrupted (catch) path both call it with whatever was
+ * observed, so a proof can never depend on which path concluded or on the
+ * order in which phases failed (F1, R1/ORD-R). Pure: it reads only the
+ * observation it is given.
+ */
+function composeDuplicateSubmitVerdict(observation: DuplicateSubmitObservation): {
+  proofs: string[];
+  unjudged: string[];
+} {
+  const proofs: string[] = [];
+  const unjudged: string[] = [];
+  for (const { title } of observation.intents) {
+    const replies = observation.replyVerdicts.get(title);
+    // A client-visible refusal is proof whenever it was seen.
+    if (replies) proofs.push(...replies.violations);
+    const report = observation.reports.get(title);
+    if (report) {
+      proofs.push(...report.proven);
+      if (report.inconclusive) unjudged.push(report.inconclusive);
+    } else {
+      unjudged.push(`intent "${title}" was not settled against the backend`);
+      // The report carries the lapse itself when it exists (R6).
+      if (replies && replies.authenticationLapses > 0) {
+        unjudged.push(lapseReason(title, replies.authenticationLapses));
+      }
+    }
+  }
+
+  // Retry after the lost response: transmitted attempts alone decide it, so
+  // it holds whatever happened to any other intent (R1/ORD-R).
+  if (observation.lostInjected) {
+    if (observation.lostAttempts < 2) {
+      proofs.push(
+        `${observation.lostTitle}: the client did not retry the command after the lost response (${observation.lostAttempts} attempt)`,
+      );
+    }
+  } else {
+    unjudged.push("the lost-response fault was never injected; the retry path was not exercised");
+  }
+
+  const serverReplay = observation.serverReplay;
+  switch (serverReplay.kind) {
+    case "NOT_RUN":
+      unjudged.push("the exact server replay was not run");
+      break;
+    case "NO_RAPID_FRAME":
+      unjudged.push("no transmitted create command was observed for the rapid intent");
+      break;
+    case "SESSION_LAPSED":
+      unjudged.push("the exact server replay was refused for a lapsed harness session (SCRUM-826 P2)");
+      break;
+    case "RAN": {
+      const { replay, conflict } = serverReplay;
+      if (!replay.accepted) {
+        proofs.push("the backend refused an exact replay of the transmitted command: " + replay.message);
+      } else {
+        const original = observation.reports.get(observation.rapidTitle)?.effect ?? null;
+        if (original === null) {
+          unjudged.push(
+            "the exact replay's result could not be compared: the rapid intent has no settled record",
+          );
+        } else if (replay.result !== String(original.expenseId)) {
+          proofs.push(
+            `replaying the transmitted command returned ${replay.result} instead of the original expense ${String(original.expenseId)}`,
+          );
+        }
+      }
+      if (conflict === null) {
+        unjudged.push("the conflicting replay was not run");
+      } else if (conflict.accepted) {
+        proofs.push("a conflicting replay under an existing command identity was accepted");
+      } else if (!FINGERPRINT_CONFLICT.test(conflict.message)) {
+        unjudged.push("the conflicting replay was refused for an unrelated reason: " + conflict.message);
+      }
+      break;
+    }
+  }
+
+  // Distinct intents must never share a command identity. Only intents that
+  // ran in their own fresh dialog are distinct by construction (D1), and only
+  // transmitted identities can collide.
+  const keys = observation.intents
+    .filter(({ title }) => observation.fresh.has(title))
+    .map(({ title }) => observation.reports.get(title)?.identity.key)
+    .filter((key): key is string => typeof key === "string");
+  if (new Set(keys).size !== keys.length) {
+    proofs.push("distinct user intents shared a command identity: " + keys.join(", "));
+  }
+  return { proofs, unjudged };
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function runDuplicateSubmitAttack(
   runtimeApi: MissionBrowserRuntime,
   context: BrowserMissionExecutionContext,
+  timeouts: DuplicateSubmitTimeouts,
 ): Promise<BrowserMissionEvidence> {
+  const { signal } = context;
   const startedAt = new Date().toISOString();
   const runtime = await runtimeApi.open(context);
   let cleanupStarted = false;
+  let concluding = false;
   const observer = new ConvexSyncObserver(CREATE_EXPENSE_UDF);
   const nonce = attackNonce(context);
   let resolvedOrgId: string | null = null;
   const rapid = { title: nonce + "-rapid", amount: 41 };
   const lost = { title: nonce + "-lost", amount: 43 };
   const control = { title: nonce + "-control", amount: 47 };
-  /**
-   * The single verdict authority (SCRUM-826 S1/C-1/C-2). Every proof is
-   * recorded the moment it is observed and never retracted; a phase that
-   * cannot be judged only adds an unjudged reason and the attack continues,
-   * so every phase gets the chance to produce proof. The decision is
-   * independent of the order in which proof and lapses/stalls happened.
-   */
-  const ledger = new VerdictLedger();
-  const reports = new Map<string, IntentReport>();
-  let concluding = false;
+  const intents = [rapid, lost, control] as const;
 
-  /** Settles one intent into the ledger. Never throws for an unjudgeable intent. */
-  const settleInto = async (
-    client: ConvexHttpClient,
-    orgId: string,
-    intent: { title: string; amount: number; uiConfirmed: boolean },
-  ): Promise<IntentReport> => {
-    const report = await settleIntent(client, orgId, observer, intent);
-    reports.set(intent.title, report);
-    ledger.prove(...report.proven);
-    if (report.inconclusive) ledger.unjudgeable(report.inconclusive);
-    return report;
+  // ── Observation state. The verdict is composed from it, never accumulated.
+  /** Why a phase could not be judged (blocked UI, refused dialog, unreadable intent). */
+  const phaseUnjudged: string[] = [];
+  const reports = new Map<string, IntentReport>();
+  const confirmed = new Map<string, boolean>();
+  const fresh = new Set<string>();
+  let uiBlocked: string | null = null;
+  let serverReplay: ServerReplayObservation = { kind: "NOT_RUN" };
+  /** The first settlement failure that is not an oracle-inconclusive one. */
+  let settlementFailure: unknown = null;
+
+  const decide = (): LedgerDecision => {
+    const replyVerdicts = new Map(
+      intents.map((intent) => [
+        intent.title,
+        evaluateIntentReplies(intent.title, observer.repliesFor(intent.title)),
+      ]),
+    );
+    const verdict = composeDuplicateSubmitVerdict({
+      intents,
+      rapidTitle: rapid.title,
+      lostTitle: lost.title,
+      reports,
+      replyVerdicts,
+      fresh,
+      lostInjected: observer.withheld.some((entry) => entry.title === lost.title),
+      lostAttempts: observer.mutationsFor(lost.title).length,
+      serverReplay,
+    });
+    const ledger = new VerdictLedger();
+    ledger.prove(...verdict.proofs);
+    for (const reason of [...phaseUnjudged, ...verdict.unjudged]) ledger.unjudgeable(reason);
+    return ledger.decide();
   };
 
-  /** Client-visible refusals are proof whenever they were seen (lapses excluded, P2). */
-  const proveObservedRefusals = (): void => {
-    for (const title of [rapid.title, lost.title, control.title]) {
-      const verdict = evaluateIntentReplies(title, observer.repliesFor(title));
-      ledger.prove(...verdict.violations);
-      if (verdict.authenticationLapses > 0) {
-        ledger.unjudgeable(
-          `intent "${title}" received ${verdict.authenticationLapses} reply(ies) refused for a lapsed session; the harness lost authentication (SCRUM-826 P2)`,
+  /** Settles every intent not yet settled. An unreadable intent is unjudged, never thrown. */
+  const settleAll = async (client: ConvexHttpClient, orgId: string): Promise<void> => {
+    for (const intent of intents) {
+      if (reports.has(intent.title)) continue;
+      signal.throwIfAborted();
+      try {
+        reports.set(
+          intent.title,
+          await untilAborted(
+            signal,
+            settleIntent(client, orgId, observer, {
+              ...intent,
+              uiConfirmed: confirmed.get(intent.title) ?? false,
+            }),
+          ),
         );
+      } catch (error) {
+        if (signal.aborted) throw error;
+        phaseUnjudged.push(`intent "${intent.title}" could not be settled: ${errorText(error)}`);
+        if (!(error instanceof BrowserSwarmOracleInconclusiveError) && settlementFailure === null) {
+          settlementFailure = error;
+        }
       }
     }
   };
@@ -508,7 +827,7 @@ async function runDuplicateSubmitAttack(
   ): Promise<BrowserMissionEvidence> => {
     concluding = true;
     const passed = violations.length === 0;
-    const backendArtifact = await runtimeApi.writeBackendEvidence(runtime.paths, {
+    const backendEvidence = {
       attack: "DUPLICATE_SUBMIT",
       orgId: resolvedOrgId,
       nonce,
@@ -516,9 +835,31 @@ async function runDuplicateSubmitAttack(
       lostResponse: observer.withheld,
       replies: observer.responses,
       violations,
-    });
+    };
+    let backendArtifact: string;
+    try {
+      backendArtifact = await runtimeApi.writeBackendEvidence(runtime.paths, backendEvidence);
+    } catch (writeError) {
+      // A pass is never certified without its evidence. A proven breach gets
+      // one more attempt, so a transient write fault cannot demote it to a
+      // harness error (SCRUM-826 C-3); if that also fails, the catch labels
+      // the fallback evidence BREACH_UNDELIVERED and the run is not certified.
+      if (passed) throw writeError;
+      backendArtifact = await runtimeApi.writeBackendEvidence(runtime.paths, backendEvidence);
+    }
     cleanupStarted = true;
-    const artifacts = [...(await runtimeApi.finish(runtime)), backendArtifact];
+    let browserArtifacts: readonly string[] = [];
+    let cleanupFailure: string | null = null;
+    try {
+      browserArtifacts = await runtimeApi.finish(runtime);
+    } catch (finishError) {
+      // Screenshot/trace/close failures cannot retract a breach whose backend
+      // evidence is already durable (SCRUM-826 C-3). A pass still requires a
+      // complete cleanup.
+      if (passed) throw finishError;
+      cleanupFailure = errorText(finishError);
+    }
+    const artifacts = [...browserArtifacts, backendArtifact];
     return {
       missionId: context.mission.id,
       workerId: context.worker.workerId,
@@ -529,62 +870,117 @@ async function runDuplicateSubmitAttack(
         passed,
         summary: passed
           ? "Rapid resubmits, a lost response with client retry, an exact server replay and a fresh control intent each produced exactly one expense and one economic posting, every client-visible reply accepted the intent, and the conflicting replay was refused."
-          : "Duplicate-submit attack breached single economic effect: " + violations.join("; "),
+          : "Duplicate-submit attack breached single economic effect: " +
+            violations.join("; ") +
+            (cleanupFailure === null
+              ? ""
+              : " (browser evidence cleanup also failed: " + cleanupFailure + ")"),
       },
       artifacts,
     };
   };
 
+  const replayDetail = (): Record<string, unknown> => ({
+    serverReplay: serverReplay.kind,
+    replay:
+      serverReplay.kind === "RAN"
+        ? {
+            ...(serverReplay.replay.accepted
+              ? { result: serverReplay.replay.result }
+              : { refused: serverReplay.replay.message }),
+            conflict: serverReplay.conflict,
+          }
+        : null,
+  });
+
   try {
     const { page } = runtime;
     await observer.attach(page, "tab-1");
 
-    const orgId = await runtimeApi.resolveOrgRoute(page);
+    const orgId = await untilAborted(signal, runtimeApi.resolveOrgRoute(page));
     if (!orgId) throw new Error("DUPLICATE_SUBMIT could not resolve the authenticated organization route.");
     resolvedOrgId = orgId;
-    await gotoExpenses(page, orgId);
+    await untilAborted(signal, gotoExpenses(page, orgId, timeouts.uiStepMs));
+
+    /**
+     * One UI phase under the D1/D2 contract: it runs only while the UI is not
+     * blocked, only in a fresh dialog, and it ends only through exitPhase. A
+     * phase that cannot run, or cannot end cleanly, is unjudged and blocks
+     * every later UI phase; it never produces proof by itself.
+     */
+    const runUiPhase = async (
+      phase: string,
+      intent: { title: string; amount: number },
+      waitMs: number,
+      act: (dialog: Locator) => Promise<void>,
+    ): Promise<void> => {
+      signal.throwIfAborted();
+      if (uiBlocked !== null) {
+        phaseUnjudged.push(`${phase} was not run: ${uiBlocked}`);
+        return;
+      }
+      const opening = await untilAborted(
+        signal,
+        openFreshDialog(page, phase, timeouts.uiStepMs, signal),
+      );
+      if (opening.kind === "REFUSED") {
+        uiBlocked = opening.reason;
+        phaseUnjudged.push(opening.reason);
+        return;
+      }
+      fresh.add(intent.title);
+      await untilAborted(signal, fillNewExpense(opening.dialog, intent));
+      await untilAborted(signal, act(opening.dialog));
+      const exit = await exitPhase(
+        observer,
+        opening.dialog,
+        intent.title,
+        waitMs,
+        timeouts.uiStepMs,
+        signal,
+      );
+      confirmed.set(intent.title, exit.kind === "CONFIRMED");
+      if (exit.kind === "BLOCKED") {
+        uiBlocked = exit.reason;
+        phaseUnjudged.push(exit.reason);
+      }
+    };
 
     // Phase A — impatient user: five submits of ONE intent in a single tick,
     // before React can re-render the disabled button (a double-click race).
-    const rapidDialog = await openRecordDialog(page);
-    await fillNewExpense(rapidDialog, rapid);
-    await rapidDialog.locator("form").evaluate((form: HTMLFormElement) => {
-      for (let attempt = 0; attempt < 5; attempt += 1) form.requestSubmit();
+    await runUiPhase("Phase A (rapid resubmits)", rapid, timeouts.uiStepMs, async (dialog) => {
+      await dialog.locator("form").evaluate((form: HTMLFormElement) => {
+        for (let attempt = 0; attempt < 5; attempt += 1) form.requestSubmit();
+      });
     });
-    const rapidConfirmed = await dialogClosedAfterSuccess(rapidDialog, UI_STEP_TIMEOUT_MS);
 
     // Phase B — lost response: the server commits, the response is withheld
-    // and the connection dropped; the client reconnects and retries.
-    const lostDialog = await openRecordDialog(page);
-    await fillNewExpense(lostDialog, lost);
-    observer.armLostResponse(lost.title);
-    await lostDialog.getByRole("button", { name: "Record Expense", exact: true }).click();
-    const lostConfirmed = await dialogClosedAfterSuccess(
-      lostDialog,
-      LOST_RESPONSE_RECOVERY_TIMEOUT_MS,
-    );
-    // The fault withholds only a SUCCESSFUL reply. If it never fired, the
-    // retry path is unjudged — but the attack continues, so the later phases
-    // can still produce proof; a refusal of the lost intent is itself proof
-    // (SCRUM-826 O2), recorded with the other observed replies.
-    const lostInjected = observer.withheld.some((entry) => entry.title === lost.title);
-    if (!lostInjected) {
-      ledger.unjudgeable(
-        "the lost-response fault was never injected; the retry path was not exercised",
+    // and the connection dropped; the client reconnects and retries. The
+    // fault is disarmed when the phase ends, fired or not (D1 P3).
+    try {
+      await runUiPhase(
+        "Phase B (lost response)",
+        lost,
+        timeouts.lostResponseRecoveryMs,
+        async (dialog) => {
+          observer.armLostResponse(lost.title);
+          await dialog
+            .getByRole("button", { name: "Record Expense", exact: true })
+            .click({ timeout: timeouts.uiStepMs });
+        },
       );
+    } finally {
+      observer.disarmLostResponse();
     }
 
     // Phase C — server-side replay of the exact transmitted command, then a
-    // conflicting replay under the same identity with a changed amount.
-    const client = await runtimeApi.authenticatedClient(page);
+    // conflicting replay under the same identity with a changed amount. It
+    // needs no dialog, so it runs even when the UI is blocked.
+    signal.throwIfAborted();
+    const client = await untilAborted(signal, runtimeApi.authenticatedClient(page));
     const rapidFrame = observer.mutationsFor(rapid.title)[0];
-    let replay:
-      | { accepted: true; result: unknown }
-      | { accepted: false; message: string }
-      | null = null;
-    let conflict: { accepted: boolean; message: string } | null = null;
     if (!rapidFrame) {
-      ledger.unjudgeable("no transmitted create command was observed for the rapid intent");
+      serverReplay = { kind: "NO_RAPID_FRAME" };
     } else {
       const replayArgs = jsonToConvex(rapidFrame.args as JSONValue) as FunctionArgs<
         typeof api.expenses.create
@@ -593,103 +989,56 @@ async function runDuplicateSubmitAttack(
       // is the product's verdict on replay semantics (SCRUM-826 R1); a lapse
       // of the harness session is unjudged (P2); a transport or unidentified
       // failure aborts as a harness error.
+      let replay: { accepted: true; result: string } | { accepted: false; message: string } | null =
+        null;
       try {
-        replay = { accepted: true, result: await client.mutation(api.expenses.create, replayArgs) };
+        replay = {
+          accepted: true,
+          result: String(
+            await untilAborted(signal, client.mutation(api.expenses.create, replayArgs)),
+          ),
+        };
       } catch (error) {
+        if (signal.aborted) throw error;
         if (isAuthenticationLapse(error)) {
-          ledger.unjudgeable(
-            "the exact server replay was refused for a lapsed harness session (SCRUM-826 P2)",
-          );
+          serverReplay = { kind: "SESSION_LAPSED" };
         } else if (classifyServerReplayFailure(error) === "BACKEND_REFUSED") {
-          replay = {
-            accepted: false,
-            message: error instanceof Error ? error.message : String(error),
-          };
-          ledger.prove(
-            "the backend refused an exact replay of the transmitted command: " + replay.message,
-          );
+          replay = { accepted: false, message: errorText(error) };
         } else {
           throw error;
         }
       }
       if (replay !== null) {
+        serverReplay = { kind: "RAN", replay, conflict: null };
+        let conflict: ConflictObservation;
         try {
-          await client.mutation(api.expenses.create, {
-            ...replayArgs,
-            amount: rapid.amount + 30,
-          });
-          conflict = { accepted: true, message: "" };
-          // Proof the moment it is observed (SCRUM-826 S2).
-          ledger.prove("a conflicting replay under an existing command identity was accepted");
+          await untilAborted(
+            signal,
+            client.mutation(api.expenses.create, { ...replayArgs, amount: rapid.amount + 30 }),
+          );
+          conflict = { accepted: true };
         } catch (error) {
-          conflict = {
-            accepted: false,
-            message: error instanceof Error ? error.message : String(error),
-          };
-          if (!FINGERPRINT_CONFLICT.test(conflict.message)) {
-            ledger.unjudgeable(
-              "the conflicting replay was refused for an unrelated reason: " + conflict.message,
-            );
-          }
+          if (signal.aborted) throw error;
+          conflict = { accepted: false, message: errorText(error) };
         }
+        serverReplay = { kind: "RAN", replay, conflict };
       }
     }
 
     // Phase D — control: a genuinely new intent from a fresh dialog must be a
     // new command identity and exactly one new record (retirement works).
-    const controlDialog = await openRecordDialog(page);
-    await fillNewExpense(controlDialog, control);
-    await controlDialog.getByRole("button", { name: "Record Expense", exact: true }).click();
-    const controlConfirmed = await dialogClosedAfterSuccess(controlDialog, UI_STEP_TIMEOUT_MS);
-
-    const authorityClient = await runtimeApi.authenticatedClient(page);
-    const rapidReport = await settleInto(authorityClient, orgId, {
-      ...rapid,
-      uiConfirmed: rapidConfirmed,
+    await runUiPhase("Phase D (fresh control intent)", control, timeouts.uiStepMs, async (dialog) => {
+      await dialog
+        .getByRole("button", { name: "Record Expense", exact: true })
+        .click({ timeout: timeouts.uiStepMs });
     });
-    const lostReport = await settleInto(authorityClient, orgId, {
-      ...lost,
-      uiConfirmed: lostConfirmed,
-    });
-    const controlReport = await settleInto(authorityClient, orgId, {
-      ...control,
-      uiConfirmed: controlConfirmed,
-    });
-    proveObservedRefusals();
 
-    if (lostInjected && lostReport.transmittedAttempts < 2) {
-      ledger.prove(
-        `${lost.title}: the client did not retry the command after the lost response (${lostReport.transmittedAttempts} attempt)`,
-      );
-    }
-    if (replay?.accepted && rapidReport.effect !== null) {
-      if (String(replay.result) !== String(rapidReport.effect.expenseId)) {
-        ledger.prove(
-          `replaying the transmitted command returned ${String(replay.result)} instead of the original expense ${String(rapidReport.effect.expenseId)}`,
-        );
-      }
-    }
-    // Only identities that were actually transmitted can collide.
-    const keys = [rapidReport, lostReport, controlReport]
-      .map((report) => report.identity.key)
-      .filter((key): key is string => typeof key === "string");
-    if (new Set(keys).size !== keys.length) {
-      ledger.prove("distinct user intents shared a command identity: " + keys.join(", "));
-    }
+    signal.throwIfAborted();
+    const authorityClient = await untilAborted(signal, runtimeApi.authenticatedClient(page));
+    await settleAll(authorityClient, orgId);
 
-    const detail = {
-      replay:
-        replay === null
-          ? null
-          : {
-              ...(replay.accepted
-                ? { result: String(replay.result) }
-                : { refused: replay.message }),
-              conflict,
-            },
-      reports: [...reports.values()],
-    };
-    const decision = ledger.decide();
+    const decision = decide();
+    const detail = { ...replayDetail(), reports: [...reports.values()] };
     if (decision.kind === "BREACH") {
       return await conclude(decision.violations, {
         ...detail,
@@ -697,56 +1046,71 @@ async function runDuplicateSubmitAttack(
       });
     }
     if (decision.kind === "INCONCLUSIVE") {
-      // Never a pass. The catch below writes the evidence.
+      // Never a pass. A settlement that failed for a harness reason is
+      // reported as that failure; otherwise the attack is inconclusive. The
+      // catch below writes the evidence.
+      if (settlementFailure !== null) throw settlementFailure;
       throw new BrowserSwarmOracleInconclusiveError(decision.reason);
     }
     return await conclude([], detail);
   } catch (error) {
     let undelivered: string[] | null = null;
     if (!cleanupStarted && !concluding) {
-      // A harness failure aborted the attack. Proof already observed is a
-      // product verdict and must survive it (SCRUM-826 C-1/C-2/S1): gather the
-      // observed refusals and, best effort, settle every intent not yet
-      // settled, then decide from the ledger.
-      proveObservedRefusals();
-      if (resolvedOrgId !== null) {
+      // A failure interrupted the attack. Proof already observed is a product
+      // verdict and must survive it (SCRUM-826 C-1/C-2/S1). Unless the mission
+      // was aborted (D5: stop touching the preview), settle what was not yet
+      // settled, best effort; then decide through the same composition.
+      if (!signal.aborted && resolvedOrgId !== null) {
         try {
-          const recoveryClient = await runtimeApi.authenticatedClient(runtime.page);
-          for (const intent of [rapid, lost, control]) {
-            if (reports.has(intent.title)) continue;
-            try {
-              await settleInto(recoveryClient, resolvedOrgId, { ...intent, uiConfirmed: false });
-            } catch {
-              // Unreadable now; the original failure stands for this intent.
-            }
-          }
+          const recoveryClient = await untilAborted(
+            signal,
+            runtimeApi.authenticatedClient(runtime.page),
+          );
+          await settleAll(recoveryClient, resolvedOrgId);
         } catch {
-          // No authority client; decide from what was already observed.
+          // Decide from what was already observed.
         }
       }
-      const decision = ledger.decide();
+      const decision = decide();
       if (decision.kind === "BREACH") {
         try {
           return await conclude(decision.violations, {
             phase: "INTERRUPTED",
-            interruptedBy: error instanceof Error ? error.message : String(error),
+            interruptedBy: errorText(error),
             unjudged: decision.unjudged,
             mutations: observer.mutations,
+            ...replayDetail(),
             reports: [...reports.values()],
           });
         } catch (concludeError) {
           // Evidence or cleanup failed while concluding. The original failure
-          // is reported, carrying the cleanup failure as its cause (L-A), and
-          // an undelivered breach is labelled as one (L-B).
+          // is reported, carrying that failure as its cause (L-A), and an
+          // undelivered breach is labelled as one (L-B).
           if (error instanceof Error && error.cause === undefined) error.cause = concludeError;
           if (!cleanupStarted) undelivered = decision.violations;
         }
       }
+    } else if (concluding && !cleanupStarted) {
+      // The normal conclusion could not write its evidence. A decided breach
+      // is still labelled as one in the fallback evidence (SCRUM-826 C-3).
+      const decision = decide();
+      if (decision.kind === "BREACH") undelivered = decision.violations;
     }
     if (!cleanupStarted) {
       // Every run that fails to conclude still leaves its backend evidence
       // behind, so an operator can tell a harness fault from a hidden product
-      // refusal (SCRUM-826 O2/R-1). Best effort: the error stays the result.
+      // refusal (SCRUM-826 O2/R-1). Browser cleanup runs FIRST so that its
+      // failure is recorded in that evidence rather than dropped (D4/R4).
+      // Best effort: the original error stays the result.
+      cleanupStarted = true;
+      let cleanupFailure: string | null = null;
+      try {
+        await runtimeApi.finish(runtime);
+      } catch (finishError) {
+        cleanupFailure = errorText(finishError);
+        if (error instanceof Error && error.cause === undefined) error.cause = finishError;
+      }
+      const fallback = decide();
       try {
         await runtimeApi.writeBackendEvidence(runtime.paths, {
           attack: "DUPLICATE_SUBMIT",
@@ -757,10 +1121,13 @@ async function runDuplicateSubmitAttack(
                 ? "INCONCLUSIVE"
                 : "HARNESS_ERROR",
           ...(undelivered !== null ? { violations: undelivered } : {}),
-          unjudged: ledger.unjudged,
-          reason: error instanceof Error ? error.message : String(error),
+          unjudged: fallback.kind === "PASS" ? [] : fallback.unjudged,
+          reason: errorText(error),
+          cleanupFailure,
           orgId: resolvedOrgId,
           nonce,
+          ...replayDetail(),
+          reports: [...reports.values()],
           mutations: observer.mutations,
           replies: observer.responses,
           lostResponse: observer.withheld,
@@ -998,9 +1365,16 @@ async function runMultiTabRaceAttack(
 
 export function createEconomicAttackHandlers(
   runtimeApi: MissionBrowserRuntime,
+  options: EconomicAttackOptions = {},
 ): { DUPLICATE_SUBMIT: BrowserMissionHandler; MULTI_TAB_RACE: BrowserMissionHandler } {
+  const duplicateSubmitTimeouts: DuplicateSubmitTimeouts = {
+    uiStepMs: options.duplicateSubmitTimeouts?.uiStepMs ?? UI_STEP_TIMEOUT_MS,
+    lostResponseRecoveryMs:
+      options.duplicateSubmitTimeouts?.lostResponseRecoveryMs ?? LOST_RESPONSE_RECOVERY_TIMEOUT_MS,
+  };
   return {
-    DUPLICATE_SUBMIT: (context) => runDuplicateSubmitAttack(runtimeApi, context),
+    DUPLICATE_SUBMIT: (context) =>
+      runDuplicateSubmitAttack(runtimeApi, context, duplicateSubmitTimeouts),
     MULTI_TAB_RACE: (context) => runMultiTabRaceAttack(runtimeApi, context),
   };
 }

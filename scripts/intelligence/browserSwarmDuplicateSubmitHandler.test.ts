@@ -2,10 +2,11 @@ import type { Page, WebSocketRoute } from "@playwright/test";
 import type { ConvexHttpClient } from "convex/browser";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import { ConvexError } from "convex/values";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { BrowserMissionExecutionContext } from "./browserAttackSwarmExecutor";
 import {
   createEconomicAttackHandlers,
+  openFreshDialog,
   type MissionBrowser,
   type MissionBrowserRuntime,
 } from "./browserSwarmEconomicAttacks";
@@ -61,6 +62,22 @@ interface Faults {
   finishFails?: boolean;
   /** The first backend evidence write fails (Opus L-B). */
   evidenceFailsOnce?: boolean;
+  /** The first N backend evidence writes fail (Codex C-3). */
+  evidenceFailures?: number;
+  /**
+   * A browser-session lapse covering the next N socket attempts, opening at
+   * the first "-lost" attempt (Opus F1: it spans the lost save and the
+   * control's first click).
+   */
+  sessionLapseFromLost?: number;
+  /** After the connection drops, the client does not resend this intent (Opus ORD). */
+  noResendSuffix?: string;
+  /** The client never transmits this intent's save (Opus ORD-R). */
+  noTransmitSuffix?: string;
+  /** The backend answers this intent's saves only after `ms` (design D2). */
+  delayReply?: { suffix: string; ms: number };
+  /** A reopened dialog keeps the previous dialog's values instead of resetting (design D1 P2). */
+  staleForm?: boolean;
 }
 
 interface ExpenseRecord {
@@ -72,6 +89,8 @@ interface ExpenseRecord {
 
 class FakeBackend {
   readonly expenses: ExpenseRecord[] = [];
+  /** Authority reads served, so a test can prove an aborted mission stopped reading (D5). */
+  queryCount = 0;
   private readonly keys = new Map<string, { fingerprint: string; id: string }>();
 
   constructor(readonly faults: Faults) {}
@@ -155,12 +174,26 @@ interface Dialog {
   title: string;
   amount: number;
   key: string;
-  requestIds: Set<number>;
-  confirmed: boolean;
 }
 
-/** The web client: one expense dialog at a time, one sync socket, reconnect + resend. */
+/**
+ * The web client, modal-faithful (SCRUM-826 D6), mirroring ExpenseDialog:
+ * - one dialog at a time; it stays open until a save succeeds or Cancel;
+ * - while it is open, Radix hides the page trigger, so the page's
+ *   "Record Expense" button resolves to the dialog's own submit button;
+ * - the submit button is not actionable while a save is in flight
+ *   ("Saving…"); Cancel always is;
+ * - ANY successful reply closes whatever dialog is open (onOpenChange(false));
+ * - closing retires the command identity; reopening resets the form to
+ *   title "" and amount 0 (unless the staleForm fault is set);
+ * - one sync socket, replies arrive asynchronously; after a drop the client
+ *   reconnects and resends every unanswered mutation.
+ * `log` records UI actions so every test can assert the handler's modal
+ * discipline: it never clicks the page trigger over an open dialog and never
+ * cancels a dialog while a save is in flight.
+ */
 class FakeApp {
+  readonly log: string[] = [];
   private routeHandler: ((socket: WebSocketRoute) => void) | null = null;
   private fromPage: ((frame: string) => void) | null = null;
   private fromServer: ((frame: string) => void) | null = null;
@@ -168,9 +201,15 @@ class FakeApp {
   private nextRequestId = 0;
   private nextKey = 0;
   private dialog: Dialog | null = null;
+  private lastValues = { title: "", amount: 0 };
   private lapsedOnce = false;
+  private lapseRemaining = -1;
 
   constructor(private readonly backend: FakeBackend) {}
+
+  get dialogOpen(): boolean {
+    return this.dialog !== null;
+  }
 
   async routeWebSocket(_matcher: unknown, handler: (socket: WebSocketRoute) => void): Promise<void> {
     this.routeHandler = handler;
@@ -185,10 +224,29 @@ class FakeApp {
         const parsed = JSON.parse(frame) as { type: string; requestId: number; args: unknown[] };
         if (parsed.type !== "Mutation") return;
         const args = parsed.args[0] as Record<string, unknown>;
-        const silent = this.backend.faults.silentSuffix;
-        if (silent && String(args.title).endsWith(silent)) return;
         const title = String(args.title);
-        const duplicateFirst = this.backend.faults.duplicateSuffix;
+        const faults = this.backend.faults;
+        const deliver = (reply: Record<string, unknown>): void => {
+          const delay = faults.delayReply && title.endsWith(faults.delayReply.suffix) ? faults.delayReply.ms : 0;
+          setTimeout(() => {
+            if (!closed) this.fromServer?.(JSON.stringify({ type: "MutationResponse", requestId: parsed.requestId, ...reply }));
+          }, delay);
+        };
+        const lapsed = {
+          success: false,
+          result: "Server Error",
+          errorData: { code: "UNAUTHENTICATED", message: "Not authenticated" },
+        };
+        if (faults.silentSuffix && title.endsWith(faults.silentSuffix)) return;
+        if (faults.sessionLapseFromLost !== undefined && this.lapseRemaining < 0 && title.endsWith("-lost")) {
+          this.lapseRemaining = faults.sessionLapseFromLost;
+        }
+        if (this.lapseRemaining > 0) {
+          this.lapseRemaining -= 1;
+          deliver(lapsed);
+          return;
+        }
+        const duplicateFirst = faults.duplicateSuffix;
         if (
           duplicateFirst &&
           title.endsWith(duplicateFirst) &&
@@ -196,54 +254,24 @@ class FakeApp {
         ) {
           this.backend.create({ ...args, idempotencyKey: "extra-" + parsed.requestId }, "socket");
         }
-        const lapseFirst = this.backend.faults.lapseFirstSuffix;
-        if (lapseFirst && title.endsWith(lapseFirst) && !this.lapsedOnce) {
+        if (faults.lapseFirstSuffix && title.endsWith(faults.lapseFirstSuffix) && !this.lapsedOnce) {
           this.lapsedOnce = true;
-          const firstRefusal = JSON.stringify({
-            type: "MutationResponse",
-            requestId: parsed.requestId,
-            success: false,
-            result: "Server Error",
-            errorData: { code: "UNAUTHENTICATED", message: "Not authenticated" },
-          });
-          if (!closed) this.fromServer?.(firstRefusal);
+          deliver(lapsed);
           return;
         }
-        const lapse = this.backend.faults.lapseSuffix;
-        const lapseDuplicate = this.backend.faults.lapseDuplicateSuffix;
-        const duplicate = Boolean(lapseDuplicate && String(args.title).endsWith(lapseDuplicate));
+        const duplicate = Boolean(faults.lapseDuplicateSuffix && title.endsWith(faults.lapseDuplicateSuffix));
         if (duplicate) {
           this.backend.create({ ...args, idempotencyKey: "dup-a" }, "socket");
           this.backend.create({ ...args, idempotencyKey: "dup-b" }, "socket");
         }
-        const lapseCommit = this.backend.faults.lapseCommitSuffix;
-        const committedThenLapsed = Boolean(
-          lapseCommit && String(args.title).endsWith(lapseCommit),
-        );
+        const committedThenLapsed = Boolean(faults.lapseCommitSuffix && title.endsWith(faults.lapseCommitSuffix));
         if (committedThenLapsed) this.backend.create(args, "socket");
-        if (
-          duplicate ||
-          committedThenLapsed ||
-          (lapse && String(args.title).endsWith(lapse))
-        ) {
-          const refusal = JSON.stringify({
-            type: "MutationResponse",
-            requestId: parsed.requestId,
-            success: false,
-            result: "Server Error",
-            errorData: { code: "UNAUTHENTICATED", message: "Not authenticated" },
-          });
-          if (!closed) this.fromServer?.(refusal);
+        if (duplicate || committedThenLapsed || (faults.lapseSuffix && title.endsWith(faults.lapseSuffix))) {
+          deliver(lapsed);
           return;
         }
         const outcome = this.backend.create(args, "socket");
-        const reply = JSON.stringify({
-          type: "MutationResponse",
-          requestId: parsed.requestId,
-          success: outcome.ok,
-          result: outcome.ok ? outcome.id : outcome.message,
-        });
-        if (!closed) this.fromServer?.(reply);
+        deliver({ success: outcome.ok, result: outcome.ok ? outcome.id : outcome.message });
       },
       onMessage: (handler: (frame: string) => void) => {
         this.fromServer = handler;
@@ -262,7 +290,12 @@ class FakeApp {
         // The client reconnects and resends every unanswered mutation.
         setTimeout(() => {
           this.connect();
-          for (const frame of this.pending.values()) this.fromPage?.(frame);
+          for (const frame of this.pending.values()) {
+            const skip = this.backend.faults.noResendSuffix;
+            const title = String((JSON.parse(frame) as { args: { title: string }[] }).args[0].title);
+            if (skip && title.endsWith(skip)) continue;
+            this.fromPage?.(frame);
+          }
         }, 0);
       },
     } as unknown as WebSocketRoute;
@@ -273,20 +306,42 @@ class FakeApp {
     const parsed = JSON.parse(frame) as { type: string; requestId: number; success: boolean };
     if (parsed.type !== "MutationResponse") return;
     this.pending.delete(parsed.requestId);
-    if (parsed.success && this.dialog?.requestIds.has(parsed.requestId)) {
-      this.dialog.confirmed = true;
-    }
+    // The dialog component awaits its save and then closes itself — whichever
+    // dialog happens to be open by then.
+    if (parsed.success) this.closeDialog();
   }
 
-  openDialog(): void {
+  private closeDialog(): void {
+    if (!this.dialog) return;
+    this.lastValues = { title: this.dialog.title, amount: this.dialog.amount };
+    this.dialog = null;
+  }
+
+  clickTrigger(): void {
+    if (this.dialog) {
+      // The trigger is aria-hidden; the locator resolves to the dialog's submit.
+      this.log.push("trigger-on-open-dialog");
+      this.clickSubmit();
+      return;
+    }
     this.nextKey += 1;
-    this.dialog = {
-      title: "",
-      amount: 0,
-      key: "key-" + this.nextKey,
-      requestIds: new Set(),
-      confirmed: false,
-    };
+    const values = this.backend.faults.staleForm ? this.lastValues : { title: "", amount: 0 };
+    this.dialog = { ...values, key: "key-" + this.nextKey };
+    this.log.push("open");
+  }
+
+  clickSubmit(): void {
+    if (!this.dialog) throw new Error("Timeout: no Record Expense button in an open dialog");
+    if (this.pending.size > 0) {
+      throw new Error("Timeout: the Record Expense button is not actionable while a save is in flight");
+    }
+    this.submit();
+  }
+
+  cancel(): void {
+    if (!this.dialog) throw new Error("Timeout: no Cancel button in an open dialog");
+    this.log.push(this.pending.size > 0 ? "cancel-in-flight" : "cancel");
+    this.closeDialog();
   }
 
   fill(label: string, value: string): void {
@@ -295,12 +350,16 @@ class FakeApp {
     if (label === "amount") this.dialog.amount = Number(value);
   }
 
+  inputValue(label: string): string {
+    if (!this.dialog) throw new Error("no dialog open");
+    return label === "title" ? this.dialog.title : String(this.dialog.amount);
+  }
+
   submit(): void {
     const dialog = this.dialog;
     if (!dialog) throw new Error("no dialog open");
     this.nextRequestId += 1;
     const requestId = this.nextRequestId;
-    dialog.requestIds.add(requestId);
     const frame = JSON.stringify({
       type: "Mutation",
       requestId,
@@ -315,16 +374,18 @@ class FakeApp {
         },
       ],
     });
+    const noTransmit = this.backend.faults.noTransmitSuffix;
+    if (noTransmit && dialog.title.endsWith(noTransmit)) return;
     this.pending.set(requestId, frame);
     this.fromPage?.(frame);
   }
 
-  async dialogHidden(): Promise<void> {
-    for (let tick = 0; tick < 20; tick += 1) {
-      if (this.dialog?.confirmed) return;
-      await new Promise((resolve) => setTimeout(resolve, 0));
+  async waitHidden(timeout: number): Promise<void> {
+    const deadline = Date.now() + timeout;
+    while (this.dialog) {
+      if (Date.now() >= deadline) throw new Error("Timeout: the dialog stayed open");
+      await new Promise((resolve) => setTimeout(resolve, 2));
     }
-    throw new Error("Timeout: the dialog stayed open");
   }
 }
 
@@ -347,18 +408,33 @@ class FakeLocator {
     return new FakeLocator(this.app, `${this.path}>${selector}`);
   }
 
-  async waitFor(options?: { state?: string }): Promise<void> {
-    if (this.path === "dialog" && options?.state === "hidden") await this.app.dialogHidden();
+  async waitFor(options?: { state?: string; timeout?: number }): Promise<void> {
+    if (this.path === "dialog" && options?.state === "hidden") {
+      await this.app.waitHidden(options.timeout ?? 30_000);
+      return;
+    }
+    if (this.path === "dialog>heading:Record Expense" && !this.app.dialogOpen) {
+      throw new Error("Timeout: the dialog heading never appeared");
+    }
+  }
+
+  async isVisible(): Promise<boolean> {
+    return this.path === "dialog" ? this.app.dialogOpen : true;
   }
 
   async click(): Promise<void> {
-    if (this.path === "page>button:Record Expense") this.app.openDialog();
-    else if (this.path === "dialog>button:Record Expense") this.app.submit();
+    if (this.path === "page>button:Record Expense") this.app.clickTrigger();
+    else if (this.path === "dialog>button:Record Expense") this.app.clickSubmit();
+    else if (this.path === "dialog>button:Cancel") this.app.cancel();
     else throw new Error("unexpected click " + this.path);
   }
 
   async fill(value: string): Promise<void> {
     this.app.fill(this.path.endsWith("label:title") ? "title" : "amount", value);
+  }
+
+  async inputValue(): Promise<string> {
+    return this.app.inputValue(this.path.endsWith("label:title") ? "title" : "amount");
   }
 
   async evaluate(fn: (form: { requestSubmit(): void }) => void): Promise<void> {
@@ -389,8 +465,10 @@ function fakeClient(backend: FakeBackend): ConvexHttpClient {
       if (!outcome.ok) throw new ConvexError(outcome.message);
       return outcome.id;
     },
-    query: async (ref: FunctionReference<"query">, args: Record<string, unknown>) =>
-      backend.query(getFunctionName(ref), args),
+    query: async (ref: FunctionReference<"query">, args: Record<string, unknown>) => {
+      backend.queryCount += 1;
+      return backend.query(getFunctionName(ref), args);
+    },
   } as unknown as ConvexHttpClient;
 }
 
@@ -398,13 +476,34 @@ interface Harness {
   run(): Promise<Awaited<ReturnType<ReturnType<typeof createEconomicAttackHandlers>["DUPLICATE_SUBMIT"]>>>;
   evidence: Record<string, unknown>[];
   backend: FakeBackend;
+  app: FakeApp;
 }
 
-function harness(faults: Faults = {}): Harness {
+interface HarnessOptions {
+  /** Phase timeouts; small by default so a blocked phase costs milliseconds. */
+  uiStepMs?: number;
+  lostResponseRecoveryMs?: number;
+  signal?: AbortSignal;
+}
+
+/** Every harness built by a test, checked for modal discipline after it (D1/D2). */
+const built: Harness[] = [];
+
+afterEach(() => {
+  for (const h of built.splice(0)) {
+    // Never click the page trigger over an open dialog (D1 P1), never
+    // cancel a dialog whose save is still in flight (D2).
+    expect(h.app.log).not.toContain("trigger-on-open-dialog");
+    expect(h.app.log).not.toContain("cancel-in-flight");
+  }
+});
+
+function harness(faults: Faults = {}, options: HarnessOptions = {}): Harness {
   const backend = new FakeBackend(faults);
   const app = new FakeApp(backend);
   const evidence: Record<string, unknown>[] = [];
   let evidenceFailed = false;
+  let evidenceWriteFailures = 0;
   const runtime: MissionBrowser = {
     browser: {} as MissionBrowser["browser"],
     browserContext: {} as MissionBrowser["browserContext"],
@@ -427,6 +526,10 @@ function harness(faults: Faults = {}): Harness {
         evidenceFailed = true;
         throw new Error("disk full");
       }
+      if (evidenceWriteFailures < (faults.evidenceFailures ?? 0)) {
+        evidenceWriteFailures += 1;
+        throw new Error("disk full");
+      }
       evidence.push(JSON.parse(JSON.stringify(value)) as Record<string, unknown>);
       return paths.backendState;
     },
@@ -437,10 +540,17 @@ function harness(faults: Faults = {}): Harness {
     manifest: { runId: "run-1" },
     worker: { workerId: "worker-1" },
     mission: { id: "mission-1", family: "DUPLICATE_SUBMIT" },
-    signal: new AbortController().signal,
+    signal: options.signal ?? new AbortController().signal,
   } as unknown as BrowserMissionExecutionContext;
-  const handler = createEconomicAttackHandlers(runtimeApi).DUPLICATE_SUBMIT;
-  return { run: () => handler(context), evidence, backend };
+  const handler = createEconomicAttackHandlers(runtimeApi, {
+    duplicateSubmitTimeouts: {
+      uiStepMs: options.uiStepMs ?? 200,
+      lostResponseRecoveryMs: options.lostResponseRecoveryMs ?? 400,
+    },
+  }).DUPLICATE_SUBMIT;
+  const entry: Harness = { run: () => handler(context), evidence, backend, app };
+  built.push(entry);
+  return entry;
 }
 
 describe("SCRUM-826 DUPLICATE_SUBMIT handler", () => {
@@ -611,6 +721,15 @@ describe("SCRUM-826 DUPLICATE_SUBMIT handler", () => {
     for (const disrupted of intents) {
       for (const duplicated of intents) {
         if (disrupted === duplicated) continue;
+        // An unanswered save blocks every LATER UI phase (D2), so a later
+        // intent is never exercised and cannot carry a duplicate; that
+        // ordering is pinned separately below.
+        if (
+          disruption.name === "unanswered" &&
+          intents.indexOf(disrupted) < intents.indexOf(duplicated)
+        ) {
+          continue;
+        }
         it(`S1: a duplicate on ${duplicated} stays a breach whatever the ${disruption.name} on ${disrupted}`, async () => {
           const h = harness({ ...disruption.faults(disrupted), duplicateSuffix: duplicated });
           const evidence = await h.run();
@@ -648,23 +767,65 @@ describe("SCRUM-826 DUPLICATE_SUBMIT handler", () => {
     expect(h.evidence[0].phase).toBe("INTERRUPTED");
   }, 30_000);
 
-  it("L-A: a cleanup failure after an interrupted breach is reported, not lost", async () => {
+  it("L-A/C-3: a browser cleanup failure after an interrupted breach keeps the breach and reports the cleanup", async () => {
     const h = harness({ volatileSuffix: "-rapid", httpTransportFailure: true, finishFails: true });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/-rapid: attempt \d+ was refused/);
+    expect(evidence.oracle.summary).toMatch(/cleanup failed/);
+    expect(evidence.artifacts).toEqual(["backend-state.json"]);
+    expect(h.evidence[0].phase).toBe("INTERRUPTED");
+  }, 30_000);
+
+  it("L-A: when no breach evidence can be written, the original failure carries the evidence failure as its cause", async () => {
+    const h = harness({ volatileSuffix: "-rapid", httpTransportFailure: true, evidenceFailures: 2 });
     const thrown = await h.run().then(
       () => null,
       (error: unknown) => error,
     );
     expect(thrown).toBeInstanceOf(Error);
-    expect(String((thrown as Error).cause)).toMatch(/cleanup failed/);
-    expect(h.evidence[0].phase).toBe("INTERRUPTED");
+    expect(String((thrown as Error).cause)).toMatch(/disk full/);
   }, 30_000);
 
   it("L-B: an undelivered interrupted breach is labelled as a breach in the fallback evidence", async () => {
-    const h = harness({ volatileSuffix: "-rapid", httpTransportFailure: true, evidenceFailsOnce: true });
+    const h = harness({ volatileSuffix: "-rapid", httpTransportFailure: true, evidenceFailures: 2 });
     await expect(h.run()).rejects.toBeDefined();
     expect(h.evidence).toHaveLength(1);
     expect(h.evidence[0].outcome).toBe("BREACH_UNDELIVERED");
     expect(JSON.stringify(h.evidence[0].violations)).toMatch(/-rapid: attempt \d+ was refused/);
+  }, 30_000);
+
+  it("C-3: a browser cleanup failure after a normally concluded breach keeps CONFIRMED_BREACH", async () => {
+    const h = harness({ volatileSuffix: "-rapid", finishFails: true });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/-rapid: attempt \d+ was refused/);
+    expect(evidence.oracle.summary).toMatch(/cleanup failed/);
+    expect(evidence.artifacts).toEqual(["backend-state.json"]);
+    expect(h.evidence).toHaveLength(1);
+    expect(JSON.stringify(h.evidence[0].violations)).toMatch(/-rapid: attempt \d+ was refused/);
+  }, 30_000);
+
+  it("C-3: one failed evidence write after a normally concluded breach keeps CONFIRMED_BREACH", async () => {
+    const h = harness({ volatileSuffix: "-rapid", evidenceFailures: 1 });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/-rapid: attempt \d+ was refused/);
+    expect(h.evidence).toHaveLength(1);
+    expect(JSON.stringify(h.evidence[0].violations)).toMatch(/-rapid: attempt \d+ was refused/);
+  }, 30_000);
+
+  it("C-3: a normally concluded breach whose evidence cannot be written is labelled BREACH_UNDELIVERED, never certified", async () => {
+    const h = harness({ volatileSuffix: "-rapid", evidenceFailures: 2 });
+    await expect(h.run()).rejects.toBeDefined();
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].outcome).toBe("BREACH_UNDELIVERED");
+    expect(JSON.stringify(h.evidence[0].violations)).toMatch(/-rapid: attempt \d+ was refused/);
+  }, 30_000);
+
+  it("C-3 control: a clean run whose browser cleanup fails is not certified as a pass", async () => {
+    const h = harness({ finishFails: true });
+    await expect(h.run()).rejects.toThrow(/cleanup failed/);
   }, 30_000);
 
   it("C-2: an earlier intent's proven double posting survives a later unexercised intent", async () => {
@@ -673,5 +834,152 @@ describe("SCRUM-826 DUPLICATE_SUBMIT handler", () => {
     expect(evidence.oracle.passed).toBe(false);
     expect(evidence.oracle.summary).toMatch(/-rapid: expected exactly 1 economic posting/);
     expect(h.evidence).toHaveLength(1);
+  }, 30_000);
+});
+
+/**
+ * SCRUM-826 circuit-breaker redesign (Jira c22983 + c22984): explicit phase
+ * preconditions (D1), the exit protocol (D2), one verdict composition (D3),
+ * the conclusion contract (D4) and bounded, abortable recovery (D5), all on
+ * the modal-faithful fake (D6). Each case reproduces a reviewer finding.
+ */
+describe("SCRUM-826 DUPLICATE_SUBMIT phase state machine", () => {
+  it("F1-R: a session lapse over the lost save and the control's first click is never a shared-identity breach", async () => {
+    const h = harness({ sessionLapseFromLost: 2 });
+    const outcome = await h.run().then(
+      (evidence) => (evidence.oracle.passed ? "PASS" : "BREACH: " + evidence.oracle.summary),
+      (error: unknown) => error,
+    );
+    expect(outcome).toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
+    expect(String((outcome as Error).message)).toMatch(/harness lost authentication/);
+    // The control ran in its own fresh dialog under its own identity.
+    expect(h.app.log.filter((entry) => entry === "open")).toHaveLength(3);
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].outcome).toBe("INCONCLUSIVE");
+  }, 30_000);
+
+  it("F1-N: a product refusal of the lost save is still a breach on the modal UI", async () => {
+    const h = harness({ refuseSuffix: "-lost" });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/-lost: attempt \d+ was refused/);
+    expect(evidence.oracle.summary).not.toMatch(/shared a command identity/);
+  }, 30_000);
+
+  it("ORD: a client that never retries after the lost response is a breach", async () => {
+    const h = harness({ noResendSuffix: "-lost" });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/did not retry the command after the lost response/);
+  }, 30_000);
+
+  it("ORD-R: the retry proof survives a control intent that was never transmitted", async () => {
+    const h = harness({ noResendSuffix: "-lost", noTransmitSuffix: "-control" });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/did not retry the command after the lost response/);
+  }, 30_000);
+
+  it("R1: an intent that was never transmitted is unjudged, and every other intent is still settled", async () => {
+    const h = harness({ noTransmitSuffix: "-control" });
+    await expect(h.run()).rejects.toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].outcome).toBe("INCONCLUSIVE");
+    expect(h.evidence[0].reports as unknown[]).toHaveLength(3);
+    expect(JSON.stringify(h.evidence[0].unjudged)).toMatch(/-control\W+ was never confirmed/);
+  }, 30_000);
+
+  it("D2: a lost save still in flight at its deadline blocks the control phase; nothing is cancelled under it", async () => {
+    const h = harness({ delayReply: { suffix: "-lost", ms: 1_500 } }, { lostResponseRecoveryMs: 300 });
+    const thrown = await h.run().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(thrown).toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
+    expect(String((thrown as Error).message)).toMatch(/unanswered save in flight/);
+    // The control intent was never opened, filled or transmitted.
+    expect(h.app.log.filter((entry) => entry === "open")).toHaveLength(2);
+    expect(h.backend.expenses.some((row) => row.title.endsWith("-control"))).toBe(false);
+    expect(JSON.stringify(h.evidence[0].unjudged)).toMatch(/Phase D \(fresh control intent\) was not run/);
+  }, 30_000);
+
+  it("D2: an unanswered rapid save blocks the later UI phases instead of overlapping them", async () => {
+    const h = harness({ silentSuffix: "-rapid", duplicateSuffix: "-lost" });
+    await expect(h.run()).rejects.toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
+    expect(h.app.log.filter((entry) => entry === "open")).toHaveLength(1);
+    expect(h.backend.expenses.some((row) => row.title.endsWith("-lost"))).toBe(false);
+    expect(JSON.stringify(h.evidence[0].unjudged)).toMatch(/Phase B \(lost response\) was not run/);
+  }, 30_000);
+
+  it("D1 P2: a dialog that reopens with a stale form is never reused for a new intent", async () => {
+    const h = harness({ staleForm: true });
+    await expect(h.run()).rejects.toThrow(/did not open with a fresh form/);
+    expect(h.backend.expenses.some((row) => row.title.endsWith("-lost"))).toBe(false);
+    expect(h.evidence[0].outcome).toBe("INCONCLUSIVE");
+  }, 30_000);
+
+  it("D1 P2 control: a fresh form on every phase passes", async () => {
+    const h = harness();
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(true);
+    expect(h.app.log).toEqual(["open", "open", "open"]);
+  }, 30_000);
+
+  it("D5: an aborted mission stops at once and reads nothing more from the preview", async () => {
+    const controller = new AbortController();
+    const h = harness({ silentSuffix: "-lost" }, { lostResponseRecoveryMs: 20_000, signal: controller.signal });
+    const startedAt = Date.now();
+    const running = h.run().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const readsAtAbort = h.backend.queryCount;
+    controller.abort(new Error("mission timeout"));
+    const thrown = await running;
+    expect(String((thrown as Error).message)).toMatch(/mission timeout/);
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(h.backend.queryCount).toBe(readsAtAbort);
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].outcome).toBe("HARNESS_ERROR");
+  }, 30_000);
+
+  it("D5: a breach already proven when the mission is aborted is still concluded", async () => {
+    const controller = new AbortController();
+    const h = harness(
+      { volatileSuffix: "-rapid", silentSuffix: "-lost" },
+      { lostResponseRecoveryMs: 20_000, signal: controller.signal },
+    );
+    const running = h.run();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    controller.abort(new Error("mission timeout"));
+    const evidence = await running;
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/-rapid: attempt \d+ was refused with a fingerprint conflict/);
+    expect(evidence.artifacts.length).toBeGreaterThan(0);
+  }, 30_000);
+
+  it("D1 P1: a phase never opens over a dialog that is still open", async () => {
+    const backend = new FakeBackend({});
+    const app = new FakeApp(backend);
+    app.clickTrigger();
+    app.fill("title", "previous intent");
+    const opening = await openFreshDialog(fakePage(app), "Phase D", 200, new AbortController().signal);
+    expect(opening.kind).toBe("REFUSED");
+    expect(opening.kind === "REFUSED" ? opening.reason : "").toMatch(/a dialog was still open/);
+    // Nothing was clicked: the open dialog was neither resubmitted nor reused.
+    expect(app.log).toEqual(["open"]);
+  });
+
+  it("D4/R4: a browser cleanup failure is recorded in the fallback evidence of an unconcluded run", async () => {
+    const h = harness({ httpTransportFailure: true, finishFails: true });
+    const thrown = await h.run().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(String((thrown as Error).message)).toMatch(/fetch failed/);
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].outcome).toBe("HARNESS_ERROR");
+    expect(String(h.evidence[0].cleanupFailure)).toMatch(/cleanup failed/);
   }, 30_000);
 });
