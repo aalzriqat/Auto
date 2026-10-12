@@ -47,6 +47,20 @@ interface Faults {
    * and the client sees a lapsed-session refusal (Opus P2-S ordering case).
    */
   lapseDuplicateSuffix?: string;
+  /** A socket create of this intent commits once, but the client sees a lapsed-session refusal (C-2). */
+  lapseCommitSuffix?: string;
+  /** Every expense of this intent carries two POSTED economic events (a double posting). */
+  doublePostSuffix?: string;
+  /** The first socket create of this intent commits an extra record (a duplicate effect, Opus S1). */
+  duplicateSuffix?: string;
+  /** Only the first socket attempt of this intent is refused for a lapsed session (Opus S1). */
+  lapseFirstSuffix?: string;
+  /** A server-side conflicting replay (same key, changed amount) is accepted (Opus S2). */
+  acceptConflict?: boolean;
+  /** Browser cleanup fails after the verdict (Opus L-A). */
+  finishFails?: boolean;
+  /** The first backend evidence write fails (Opus L-B). */
+  evidenceFailsOnce?: boolean;
 }
 
 interface ExpenseRecord {
@@ -75,7 +89,14 @@ class FakeBackend {
     const fingerprint = title + "|" + amount;
     const existing = this.keys.get(key);
     if (existing) {
-      if (existing.fingerprint !== fingerprint) return { ok: false, message: FINGERPRINT };
+      if (existing.fingerprint !== fingerprint) {
+        if (via === "http" && this.faults.acceptConflict) {
+          const conflictId = "exp" + (this.expenses.length + 1);
+          this.expenses.push({ _id: conflictId, title, amount, status: String(args.status ?? "PAID") });
+          return { ok: true, id: conflictId };
+        }
+        return { ok: false, message: FINGERPRINT };
+      }
       if (via === "http" && this.faults.refuseHttpReplay) return { ok: false, message: FINGERPRINT };
       if (
         via === "socket" &&
@@ -98,15 +119,18 @@ class FakeBackend {
         return { page: this.expenses, isDone: true, continueCursor: "" };
       case "accountingLedger:listAccountingEvents": {
         const id = String(args.sourceId);
-        return [
-          {
-            _id: "ev-" + id,
-            eventType: "EXPENSE_POSTED",
-            status: "POSTED",
-            idempotencyKey: "expense_posted_" + id,
-            journalEntryId: "je-" + id,
-          },
-        ];
+        const event = {
+          _id: "ev-" + id,
+          eventType: "EXPENSE_POSTED",
+          status: "POSTED",
+          idempotencyKey: "expense_posted_" + id,
+          journalEntryId: "je-" + id,
+        };
+        const title = this.expenses.find((row) => row._id === id)?.title ?? "";
+        const doublePost = this.faults.doublePostSuffix;
+        return doublePost && title.endsWith(doublePost)
+          ? [event, { ...event, _id: "ev2-" + id }]
+          : [event];
       }
       case "accountingOutbox:listPending":
         return [];
@@ -144,6 +168,7 @@ class FakeApp {
   private nextRequestId = 0;
   private nextKey = 0;
   private dialog: Dialog | null = null;
+  private lapsedOnce = false;
 
   constructor(private readonly backend: FakeBackend) {}
 
@@ -162,6 +187,28 @@ class FakeApp {
         const args = parsed.args[0] as Record<string, unknown>;
         const silent = this.backend.faults.silentSuffix;
         if (silent && String(args.title).endsWith(silent)) return;
+        const title = String(args.title);
+        const duplicateFirst = this.backend.faults.duplicateSuffix;
+        if (
+          duplicateFirst &&
+          title.endsWith(duplicateFirst) &&
+          !this.backend.expenses.some((row) => row.title === title)
+        ) {
+          this.backend.create({ ...args, idempotencyKey: "extra-" + parsed.requestId }, "socket");
+        }
+        const lapseFirst = this.backend.faults.lapseFirstSuffix;
+        if (lapseFirst && title.endsWith(lapseFirst) && !this.lapsedOnce) {
+          this.lapsedOnce = true;
+          const firstRefusal = JSON.stringify({
+            type: "MutationResponse",
+            requestId: parsed.requestId,
+            success: false,
+            result: "Server Error",
+            errorData: { code: "UNAUTHENTICATED", message: "Not authenticated" },
+          });
+          if (!closed) this.fromServer?.(firstRefusal);
+          return;
+        }
         const lapse = this.backend.faults.lapseSuffix;
         const lapseDuplicate = this.backend.faults.lapseDuplicateSuffix;
         const duplicate = Boolean(lapseDuplicate && String(args.title).endsWith(lapseDuplicate));
@@ -169,7 +216,16 @@ class FakeApp {
           this.backend.create({ ...args, idempotencyKey: "dup-a" }, "socket");
           this.backend.create({ ...args, idempotencyKey: "dup-b" }, "socket");
         }
-        if (duplicate || (lapse && String(args.title).endsWith(lapse))) {
+        const lapseCommit = this.backend.faults.lapseCommitSuffix;
+        const committedThenLapsed = Boolean(
+          lapseCommit && String(args.title).endsWith(lapseCommit),
+        );
+        if (committedThenLapsed) this.backend.create(args, "socket");
+        if (
+          duplicate ||
+          committedThenLapsed ||
+          (lapse && String(args.title).endsWith(lapse))
+        ) {
           const refusal = JSON.stringify({
             type: "MutationResponse",
             requestId: parsed.requestId,
@@ -348,6 +404,7 @@ function harness(faults: Faults = {}): Harness {
   const backend = new FakeBackend(faults);
   const app = new FakeApp(backend);
   const evidence: Record<string, unknown>[] = [];
+  let evidenceFailed = false;
   const runtime: MissionBrowser = {
     browser: {} as MissionBrowser["browser"],
     browserContext: {} as MissionBrowser["browserContext"],
@@ -356,11 +413,20 @@ function harness(faults: Faults = {}): Harness {
   };
   const runtimeApi: MissionBrowserRuntime = {
     open: async () => runtime,
-    finish: async () => ["trace.zip"],
+    finish: async () => {
+      if (faults.finishFails) {
+        throw new AggregateError([new Error("trace stop failed")], "cleanup failed");
+      }
+      return ["trace.zip"];
+    },
     rethrowAfterCleanup: async (_runtime, error) => {
       throw error;
     },
     writeBackendEvidence: async (paths, value) => {
+      if (faults.evidenceFailsOnce && !evidenceFailed) {
+        evidenceFailed = true;
+        throw new Error("disk full");
+      }
       evidence.push(JSON.parse(JSON.stringify(value)) as Record<string, unknown>);
       return paths.backendState;
     },
@@ -400,7 +466,10 @@ describe("SCRUM-826 DUPLICATE_SUBMIT handler", () => {
     expect(evidence.oracle.passed).toBe(false);
     expect(evidence.oracle.summary).toMatch(/-lost: attempt \d+ was refused/);
     expect(h.evidence).toHaveLength(1);
-    expect(h.evidence[0].phase).toBe("LOST_RESPONSE");
+    // Ledger redesign: the attack continues past the un-injected fault, so
+    // the verdict is a PARTIAL breach carrying the unjudged retry path.
+    expect(h.evidence[0].phase).toBe("PARTIAL");
+    expect(JSON.stringify(h.evidence[0].unjudged)).toMatch(/never injected/);
   }, 30_000);
 
   it("O2: a backend refusal of the fresh control intent is a breach, not 'never exercised'", async () => {
@@ -441,8 +510,18 @@ describe("SCRUM-826 DUPLICATE_SUBMIT handler", () => {
     expect(evidence.oracle.passed).toBe(false);
     expect(evidence.oracle.summary).toMatch(/-rapid: attempt \d+ was refused with a fingerprint conflict/);
     expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].phase).toBe("PARTIAL");
+    expect(JSON.stringify(h.evidence[0].unjudged)).toMatch(/never injected/);
+  }, 30_000);
+
+  it("C-1: a rapid-retry refusal survives a later harness failure (transport) as a breach", async () => {
+    const h = harness({ volatileSuffix: "-rapid", httpTransportFailure: true });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/-rapid: attempt \d+ was refused with a fingerprint conflict/);
+    expect(h.evidence).toHaveLength(1);
     expect(h.evidence[0].phase).toBe("INTERRUPTED");
-    expect(String(h.evidence[0].interruptedBy)).toMatch(/never injected/);
+    expect(String(h.evidence[0].interruptedBy)).toMatch(/fetch failed/);
   }, 30_000);
 
   it("C-1: a rapid-retry refusal survives a later unanswered control intent as a breach", async () => {
@@ -451,7 +530,7 @@ describe("SCRUM-826 DUPLICATE_SUBMIT handler", () => {
     expect(evidence.oracle.passed).toBe(false);
     expect(evidence.oracle.summary).toMatch(/-rapid: attempt \d+ was refused with a fingerprint conflict/);
     expect(h.evidence).toHaveLength(1);
-    expect(h.evidence[0].phase).toBe("INTERRUPTED");
+    expect(h.evidence[0].phase).toBe("PARTIAL");
   }, 30_000);
 
   it("C-1: an exact-replay refusal survives a later unanswered control intent as a breach", async () => {
@@ -460,7 +539,7 @@ describe("SCRUM-826 DUPLICATE_SUBMIT handler", () => {
     expect(evidence.oracle.passed).toBe(false);
     expect(evidence.oracle.summary).toMatch(/refused an exact replay of the transmitted command/);
     expect(h.evidence).toHaveLength(1);
-    expect(h.evidence[0].phase).toBe("INTERRUPTED");
+    expect(h.evidence[0].phase).toBe("PARTIAL");
   }, 30_000);
 
   it("P2: a lapsed harness session on the server replay is inconclusive, never a breach", async () => {
@@ -490,6 +569,109 @@ describe("SCRUM-826 DUPLICATE_SUBMIT handler", () => {
     expect(evidence.oracle.passed).toBe(false);
     expect(evidence.oracle.summary).toMatch(/-control: /);
     expect(h.backend.expenses.filter((row) => row.title.endsWith("-control"))).toHaveLength(2);
+    expect(h.evidence).toHaveLength(1);
+  }, 30_000);
+
+  it("C-2: a double posting stays a breach when the unconfirmed intent's reply lapsed", async () => {
+    const h = harness({ lapseCommitSuffix: "-control", doublePostSuffix: "-control" });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/-control: expected exactly 1 economic posting/);
+    expect(h.evidence).toHaveLength(1);
+  }, 30_000);
+
+  it("C-2 control: a committed intent whose reply lapsed, with a clean effect, stays inconclusive", async () => {
+    const h = harness({ lapseCommitSuffix: "-control" });
+    await expect(h.run()).rejects.toThrow(/harness lost authentication/);
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].outcome).toBe("INCONCLUSIVE");
+  }, 30_000);
+
+  it("S1 controls: a duplicate effect alone is a breach; one lapsed attempt alone is not", async () => {
+    for (const suffix of ["-rapid", "-lost"]) {
+      const h = harness({ duplicateSuffix: suffix });
+      const evidence = await h.run();
+      expect(evidence.oracle.passed).toBe(false);
+      expect(evidence.oracle.summary).toContain(`${suffix}: expected exactly 1 expense record`);
+    }
+    const lapsed = harness({ lapseFirstSuffix: "-rapid" });
+    const outcome = await lapsed.run().then(
+      (evidence) => (evidence.oracle.passed ? "PASS" : "BREACH"),
+      () => "THROWN",
+    );
+    expect(outcome).not.toBe("BREACH");
+  }, 60_000);
+
+  const intents = ["-rapid", "-lost", "-control"] as const;
+  const disruptions = [
+    { name: "lapse", faults: (suffix: string): Faults => ({ lapseSuffix: suffix }) },
+    { name: "unanswered", faults: (suffix: string): Faults => ({ silentSuffix: suffix }) },
+  ];
+  for (const disruption of disruptions) {
+    for (const disrupted of intents) {
+      for (const duplicated of intents) {
+        if (disrupted === duplicated) continue;
+        it(`S1: a duplicate on ${duplicated} stays a breach whatever the ${disruption.name} on ${disrupted}`, async () => {
+          const h = harness({ ...disruption.faults(disrupted), duplicateSuffix: duplicated });
+          const evidence = await h.run();
+          expect(evidence.oracle.passed).toBe(false);
+          expect(evidence.oracle.summary).toContain(`${duplicated}: expected exactly 1 expense record`);
+          expect(h.evidence).toHaveLength(1);
+        }, 30_000);
+      }
+    }
+  }
+
+  it("S1 (R-B): one lapsed rapid attempt does not mask a lost-intent duplicate", async () => {
+    const h = harness({ lapseFirstSuffix: "-rapid", duplicateSuffix: "-lost" });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toContain("-lost: expected exactly 1 expense record");
+  }, 30_000);
+
+  it("S2: an accepted conflicting replay survives a later unanswered control intent", async () => {
+    const alone = await harness({ acceptConflict: true }).run();
+    expect(alone.oracle.passed).toBe(false);
+    const h = harness({ acceptConflict: true, silentSuffix: "-control" });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(
+      /conflicting replay under an existing command identity was accepted/,
+    );
+  }, 60_000);
+
+  it("S1: a duplicate effect is still found when a harness failure aborts before settlement", async () => {
+    const h = harness({ duplicateSuffix: "-rapid", httpTransportFailure: true });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toContain("-rapid: expected exactly 1 expense record");
+    expect(h.evidence[0].phase).toBe("INTERRUPTED");
+  }, 30_000);
+
+  it("L-A: a cleanup failure after an interrupted breach is reported, not lost", async () => {
+    const h = harness({ volatileSuffix: "-rapid", httpTransportFailure: true, finishFails: true });
+    const thrown = await h.run().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(thrown).toBeInstanceOf(Error);
+    expect(String((thrown as Error).cause)).toMatch(/cleanup failed/);
+    expect(h.evidence[0].phase).toBe("INTERRUPTED");
+  }, 30_000);
+
+  it("L-B: an undelivered interrupted breach is labelled as a breach in the fallback evidence", async () => {
+    const h = harness({ volatileSuffix: "-rapid", httpTransportFailure: true, evidenceFailsOnce: true });
+    await expect(h.run()).rejects.toBeDefined();
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].outcome).toBe("BREACH_UNDELIVERED");
+    expect(JSON.stringify(h.evidence[0].violations)).toMatch(/-rapid: attempt \d+ was refused/);
+  }, 30_000);
+
+  it("C-2: an earlier intent's proven double posting survives a later unexercised intent", async () => {
+    const h = harness({ doublePostSuffix: "-rapid", silentSuffix: "-control" });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/-rapid: expected exactly 1 economic posting/);
     expect(h.evidence).toHaveLength(1);
   }, 30_000);
 });

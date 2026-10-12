@@ -518,3 +518,48 @@ export function classifyIntentExercise(input: {
   if (input.refusedReplies > 0) return "PRODUCT_REFUSED";
   return "NOT_EXERCISED";
 }
+
+export type LedgerDecision =
+  | { kind: "BREACH"; violations: string[]; unjudged: string[] }
+  | { kind: "INCONCLUSIVE"; reason: string; unjudged: string[] }
+  | { kind: "PASS" };
+
+/**
+ * SCRUM-826 S1/C-2 (redesign after the convergence circuit breaker): the one
+ * place a multi-phase attack's verdict is decided, independent of the order
+ * in which proof and unjudgeable conditions were observed.
+ *
+ *   any proof                → BREACH (with every unjudged reason attached)
+ *   no proof, any unjudged   → INCONCLUSIVE (never a pass)
+ *   neither                  → PASS
+ *
+ * Proof is recorded the moment it is observed and is never retracted; a
+ * later lapse, stall or harness failure can only add unjudged reasons.
+ */
+export class VerdictLedger {
+  private readonly proofs = new Set<string>();
+  private readonly reasons = new Set<string>();
+
+  prove(...violations: readonly string[]): void {
+    for (const violation of violations) this.proofs.add(violation);
+  }
+
+  unjudgeable(reason: string): void {
+    this.reasons.add(reason);
+  }
+
+  get proven(): string[] {
+    return [...this.proofs];
+  }
+
+  get unjudged(): string[] {
+    return [...this.reasons];
+  }
+
+  decide(): LedgerDecision {
+    const unjudged = this.unjudged;
+    if (this.proofs.size > 0) return { kind: "BREACH", violations: this.proven, unjudged };
+    if (unjudged.length > 0) return { kind: "INCONCLUSIVE", reason: unjudged.join("; "), unjudged };
+    return { kind: "PASS" };
+  }
+}

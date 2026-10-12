@@ -9,6 +9,7 @@ import {
   evaluateExpenseSingleEffect,
   evaluateIntentReplies,
   isAuthenticationLapse,
+  VerdictLedger,
   type ExpenseEffectSnapshot,
 } from "./browserSwarmEconomicOracle";
 
@@ -578,6 +579,27 @@ describe("SCRUM-826 O1/O2 — client-visible replies to one intent", () => {
     expect(classifyServerReplayFailure(new TypeError("fetch failed"))).toBe("UNIDENTIFIED");
     expect(classifyServerReplayFailure(new Error("502 Bad Gateway"))).toBe("UNIDENTIFIED");
     expect(classifyServerReplayFailure("boom")).toBe("UNIDENTIFIED");
+  });
+
+  it("decides a ledger by proof first, unjudged second, independent of order (S1)", () => {
+    const orders: Array<Array<(ledger: VerdictLedger) => void>> = [
+      [(l) => l.prove("p"), (l) => l.unjudgeable("u")],
+      [(l) => l.unjudgeable("u"), (l) => l.prove("p")],
+    ];
+    for (const order of orders) {
+      const ledger = new VerdictLedger();
+      for (const step of order) step(ledger);
+      expect(ledger.decide()).toEqual({ kind: "BREACH", violations: ["p"], unjudged: ["u"] });
+    }
+    const unjudgedOnly = new VerdictLedger();
+    unjudgedOnly.unjudgeable("a");
+    unjudgedOnly.unjudgeable("b");
+    expect(unjudgedOnly.decide()).toEqual({ kind: "INCONCLUSIVE", reason: "a; b", unjudged: ["a", "b"] });
+    expect(new VerdictLedger().decide()).toEqual({ kind: "PASS" });
+    const deduped = new VerdictLedger();
+    deduped.prove("x", "x");
+    deduped.prove("x");
+    expect(deduped.proven).toEqual(["x"]);
   });
 
   it("keeps a lapsed harness session on a server replay inconclusive, never a product refusal (P2)", () => {

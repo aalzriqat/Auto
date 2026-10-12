@@ -39,6 +39,7 @@ import {
   evaluateIntentReplies,
   FINGERPRINT_CONFLICT_TEXT,
   isAuthenticationLapse,
+  VerdictLedger,
   type ExpenseEffectSnapshot,
   type IntentReplyRow,
   type IntentRepliesVerdict,
@@ -356,10 +357,19 @@ interface IntentReport {
   transmittedAttempts: number;
   identities: (string | undefined)[];
   snapshot: ExpenseEffectSnapshot;
-  effect: ReturnType<typeof evaluateExpenseSingleEffect>;
+  /** Null when the intent was not exercised and no record could be judged. */
+  effect: ReturnType<typeof evaluateExpenseSingleEffect> | null;
   identity: ReturnType<typeof evaluateCommandIdentityLifetime>;
   replies: IntentReplyRow[];
   replyVerdict: IntentRepliesVerdict;
+  /** Why this intent cannot be judged as a whole; null when it can. */
+  inconclusive: string | null;
+  /**
+   * Title-prefixed violations that are proof on their own (backend effect,
+   * transmitted identity, client-visible refusal), whether or not the intent
+   * was exercised (SCRUM-826 C-2).
+   */
+  proven: string[];
 }
 
 async function settleIntent(
@@ -384,37 +394,50 @@ async function settleIntent(
     backendRecords: matching,
     refusedReplies: replyVerdict.refused,
   });
-  if (exercise === "NOT_EXERCISED" && replyVerdict.authenticationLapses > 0) {
-    throw new BrowserSwarmOracleInconclusiveError(
-      `intent "${intent.title}" received ${replyVerdict.authenticationLapses} reply(ies) refused for a lapsed session and was never confirmed; the harness lost authentication (SCRUM-826 P2)`,
-    );
+  const expected = { amount: intent.amount, status: "PAID" as const };
+  let effect: ReturnType<typeof evaluateExpenseSingleEffect> | null = null;
+  if (exercise !== "NOT_EXERCISED") {
+    effect = evaluateExpenseSingleEffect(snapshot, expected);
+  } else if (matching > 0) {
+    // SCRUM-826 C-2: an unexercised intent whose record nevertheless exists
+    // in the settled snapshot is still judged on that record — a double
+    // posting is proof whether or not the client saw a reply. A record that
+    // is absent proves nothing here, and an unreadable ledger stays
+    // unjudged rather than becoming a verdict.
+    try {
+      effect = evaluateExpenseSingleEffect(snapshot, expected);
+    } catch (error) {
+      if (!(error instanceof BrowserSwarmOracleInconclusiveError)) throw error;
+    }
   }
+  const proven = [
+    ...(effect?.violations ?? []).map((violation) => `${intent.title}: ${violation}`),
+    ...identity.violations.map((violation) => `${intent.title}: ${violation}`),
+    // Already prefixed with the intent title; session lapses are excluded (P2).
+    ...replyVerdict.violations,
+  ];
+  let inconclusive: string | null = null;
   if (exercise === "NOT_EXERCISED") {
     // The client never reported success, the backend refused nothing it
     // could see, and holds at most one record: the attack was not exercised.
-    // Inconclusive, never a pass. A refusal is a product verdict instead
-    // (SCRUM-826 O2) and falls through to the oracles below.
-    throw new BrowserSwarmOracleInconclusiveError(
-      `intent "${intent.title}" was never confirmed by the client (backend holds ${matching}, no refusal reply); the attack was not exercised`,
-    );
-  }
-  const effect = evaluateExpenseSingleEffect(snapshot, {
-    amount: intent.amount,
-    status: "PAID",
-  });
-  if (
+    // Inconclusive, never a pass; any proof above is still reported
+    // (SCRUM-826 O2/C-2).
+    inconclusive =
+      replyVerdict.authenticationLapses > 0
+        ? `intent "${intent.title}" received ${replyVerdict.authenticationLapses} reply(ies) refused for a lapsed session and was never confirmed; the harness lost authentication (SCRUM-826 P2)`
+        : `intent "${intent.title}" was never confirmed by the client (backend holds ${matching}, no refusal reply); the attack was not exercised`;
+  } else if (
     replyVerdict.authenticationLapses > 0 &&
-    effect.violations.length === 0 &&
+    (effect?.violations.length ?? 0) === 0 &&
     identity.violations.length === 0
   ) {
     // A lapsed session makes the reply-based verdict unjudgeable (SCRUM-826
-    // P2). A proven backend effect or identity breach is judged first and
-    // still stands; only an otherwise-clean intent becomes inconclusive.
-    throw new BrowserSwarmOracleInconclusiveError(
-      `intent "${intent.title}" received ${replyVerdict.authenticationLapses} reply(ies) refused for a lapsed session; the harness lost authentication (SCRUM-826 P2)`,
-    );
+    // P2). A proven backend effect or identity breach still stands.
+    inconclusive = `intent "${intent.title}" received ${replyVerdict.authenticationLapses} reply(ies) refused for a lapsed session; the harness lost authentication (SCRUM-826 P2)`;
   }
   return {
+    inconclusive,
+    proven,
     title: intent.title,
     amount: intent.amount,
     uiConfirmed: intent.uiConfirmed,
@@ -442,12 +465,41 @@ async function runDuplicateSubmitAttack(
   const lost = { title: nonce + "-lost", amount: 43 };
   const control = { title: nonce + "-control", amount: 47 };
   /**
-   * Backend refusals proven outside the socket replies (the exact server
-   * replay). Kept across phases so a later harness failure cannot erase them
-   * (SCRUM-826 C-1).
+   * The single verdict authority (SCRUM-826 S1/C-1/C-2). Every proof is
+   * recorded the moment it is observed and never retracted; a phase that
+   * cannot be judged only adds an unjudged reason and the attack continues,
+   * so every phase gets the chance to produce proof. The decision is
+   * independent of the order in which proof and lapses/stalls happened.
    */
-  const provenRefusals: string[] = [];
+  const ledger = new VerdictLedger();
+  const reports = new Map<string, IntentReport>();
   let concluding = false;
+
+  /** Settles one intent into the ledger. Never throws for an unjudgeable intent. */
+  const settleInto = async (
+    client: ConvexHttpClient,
+    orgId: string,
+    intent: { title: string; amount: number; uiConfirmed: boolean },
+  ): Promise<IntentReport> => {
+    const report = await settleIntent(client, orgId, observer, intent);
+    reports.set(intent.title, report);
+    ledger.prove(...report.proven);
+    if (report.inconclusive) ledger.unjudgeable(report.inconclusive);
+    return report;
+  };
+
+  /** Client-visible refusals are proof whenever they were seen (lapses excluded, P2). */
+  const proveObservedRefusals = (): void => {
+    for (const title of [rapid.title, lost.title, control.title]) {
+      const verdict = evaluateIntentReplies(title, observer.repliesFor(title));
+      ledger.prove(...verdict.violations);
+      if (verdict.authenticationLapses > 0) {
+        ledger.unjudgeable(
+          `intent "${title}" received ${verdict.authenticationLapses} reply(ies) refused for a lapsed session; the harness lost authentication (SCRUM-826 P2)`,
+        );
+      }
+    }
+  };
 
   /** Writes the backend evidence and returns the mission's oracle verdict. */
   const conclude = async (
@@ -511,28 +563,13 @@ async function runDuplicateSubmitAttack(
       lostDialog,
       LOST_RESPONSE_RECOVERY_TIMEOUT_MS,
     );
-    if (!observer.withheld.some((entry) => entry.title === lost.title)) {
-      // The fault withholds only a SUCCESSFUL reply. If the backend refused
-      // the lost intent instead, that refusal is the product's verdict on a
-      // fresh intent — a breach, not a harness that failed to inject
-      // (SCRUM-826 O2). Only an intent with no refusal stays inconclusive.
-      const verdicts = [rapid.title, lost.title].map((title) =>
-        evaluateIntentReplies(title, observer.repliesFor(title)),
-      );
-      if (verdicts.some((verdict) => verdict.authenticationLapses > 0)) {
-        throw new BrowserSwarmOracleInconclusiveError(
-          "a reply was refused for a lapsed session before the lost-response fault; the harness lost authentication (SCRUM-826 P2)",
-        );
-      }
-      const refusals = verdicts.flatMap((verdict) => verdict.violations);
-      if (refusals.some((violation) => violation.startsWith(lost.title + ":"))) {
-        return await conclude(refusals, {
-          phase: "LOST_RESPONSE",
-          uiConfirmed: { rapid: rapidConfirmed, lost: lostConfirmed },
-          mutations: observer.mutations,
-        });
-      }
-      throw new BrowserSwarmOracleInconclusiveError(
+    // The fault withholds only a SUCCESSFUL reply. If it never fired, the
+    // retry path is unjudged — but the attack continues, so the later phases
+    // can still produce proof; a refusal of the lost intent is itself proof
+    // (SCRUM-826 O2), recorded with the other observed replies.
+    const lostInjected = observer.withheld.some((entry) => entry.title === lost.title);
+    if (!lostInjected) {
+      ledger.unjudgeable(
         "the lost-response fault was never injected; the retry path was not exercised",
       );
     }
@@ -541,55 +578,61 @@ async function runDuplicateSubmitAttack(
     // conflicting replay under the same identity with a changed amount.
     const client = await runtimeApi.authenticatedClient(page);
     const rapidFrame = observer.mutationsFor(rapid.title)[0];
+    let replay:
+      | { accepted: true; result: unknown }
+      | { accepted: false; message: string }
+      | null = null;
+    let conflict: { accepted: boolean; message: string } | null = null;
     if (!rapidFrame) {
-      throw new BrowserSwarmOracleInconclusiveError(
-        "no transmitted create command was observed for the rapid intent",
-      );
-    }
-    const replayArgs = jsonToConvex(rapidFrame.args as JSONValue) as FunctionArgs<
-      typeof api.expenses.create
-    >;
-    // An exact replay must return the original record. If the backend refuses
-    // it, that is the product's verdict on replay semantics — a breach, not a
-    // harness error (SCRUM-826 R1). Only an unidentified failure (transport,
-    // HTTP) stays inconclusive.
-    let replay: { accepted: true; result: unknown } | { accepted: false; message: string };
-    try {
-      replay = { accepted: true, result: await client.mutation(api.expenses.create, replayArgs) };
-    } catch (error) {
-      if (isAuthenticationLapse(error)) {
-        throw new BrowserSwarmOracleInconclusiveError(
-          "the exact server replay was refused for a lapsed harness session (SCRUM-826 P2)",
-        );
+      ledger.unjudgeable("no transmitted create command was observed for the rapid intent");
+    } else {
+      const replayArgs = jsonToConvex(rapidFrame.args as JSONValue) as FunctionArgs<
+        typeof api.expenses.create
+      >;
+      // An exact replay must return the original record. A backend refusal
+      // is the product's verdict on replay semantics (SCRUM-826 R1); a lapse
+      // of the harness session is unjudged (P2); a transport or unidentified
+      // failure aborts as a harness error.
+      try {
+        replay = { accepted: true, result: await client.mutation(api.expenses.create, replayArgs) };
+      } catch (error) {
+        if (isAuthenticationLapse(error)) {
+          ledger.unjudgeable(
+            "the exact server replay was refused for a lapsed harness session (SCRUM-826 P2)",
+          );
+        } else if (classifyServerReplayFailure(error) === "BACKEND_REFUSED") {
+          replay = {
+            accepted: false,
+            message: error instanceof Error ? error.message : String(error),
+          };
+          ledger.prove(
+            "the backend refused an exact replay of the transmitted command: " + replay.message,
+          );
+        } else {
+          throw error;
+        }
       }
-      if (classifyServerReplayFailure(error) !== "BACKEND_REFUSED") throw error;
-      replay = {
-        accepted: false,
-        message: error instanceof Error ? error.message : String(error),
-      };
-    }
-    if (!replay.accepted) {
-      provenRefusals.push(
-        "the backend refused an exact replay of the transmitted command: " + replay.message,
-      );
-    }
-    let conflict: { accepted: boolean; message: string };
-    try {
-      await client.mutation(api.expenses.create, {
-        ...replayArgs,
-        amount: rapid.amount + 30,
-      });
-      conflict = { accepted: true, message: "" };
-    } catch (error) {
-      conflict = {
-        accepted: false,
-        message: error instanceof Error ? error.message : String(error),
-      };
-    }
-    if (!conflict.accepted && !FINGERPRINT_CONFLICT.test(conflict.message)) {
-      throw new BrowserSwarmOracleInconclusiveError(
-        "the conflicting replay was refused for an unrelated reason: " + conflict.message,
-      );
+      if (replay !== null) {
+        try {
+          await client.mutation(api.expenses.create, {
+            ...replayArgs,
+            amount: rapid.amount + 30,
+          });
+          conflict = { accepted: true, message: "" };
+          // Proof the moment it is observed (SCRUM-826 S2).
+          ledger.prove("a conflicting replay under an existing command identity was accepted");
+        } catch (error) {
+          conflict = {
+            accepted: false,
+            message: error instanceof Error ? error.message : String(error),
+          };
+          if (!FINGERPRINT_CONFLICT.test(conflict.message)) {
+            ledger.unjudgeable(
+              "the conflicting replay was refused for an unrelated reason: " + conflict.message,
+            );
+          }
+        }
+      }
     }
 
     // Phase D — control: a genuinely new intent from a fresh dialog must be a
@@ -600,72 +643,103 @@ async function runDuplicateSubmitAttack(
     const controlConfirmed = await dialogClosedAfterSuccess(controlDialog, UI_STEP_TIMEOUT_MS);
 
     const authorityClient = await runtimeApi.authenticatedClient(page);
-    const reports = [
-      await settleIntent(authorityClient, orgId, observer, { ...rapid, uiConfirmed: rapidConfirmed }),
-      await settleIntent(authorityClient, orgId, observer, { ...lost, uiConfirmed: lostConfirmed }),
-      await settleIntent(authorityClient, orgId, observer, { ...control, uiConfirmed: controlConfirmed }),
-    ];
-
-    const violations: string[] = [];
-    for (const report of reports) {
-      for (const violation of [...report.effect.violations, ...report.identity.violations]) {
-        violations.push(`${report.title}: ${violation}`);
-      }
-      // Already prefixed with the intent title.
-      violations.push(...report.replyVerdict.violations);
-    }
-    const rapidReport = reports[0];
-    if (reports[1].transmittedAttempts < 2) {
-      violations.push(
-        `${lost.title}: the client did not retry the command after the lost response (${reports[1].transmittedAttempts} attempt)`,
-      );
-    }
-    if (!replay.accepted) {
-      violations.push(...provenRefusals);
-    } else if (String(replay.result) !== String(rapidReport.effect.expenseId)) {
-      violations.push(
-        `replaying the transmitted command returned ${String(replay.result)} instead of the original expense ${String(rapidReport.effect.expenseId)}`,
-      );
-    }
-    if (conflict.accepted) {
-      violations.push("a conflicting replay under an existing command identity was accepted");
-    }
-    const keys = reports.map((report) => report.identity.key);
-    if (new Set(keys).size !== keys.length) {
-      violations.push("distinct user intents shared a command identity: " + keys.join(", "));
-    }
-
-    return await conclude(violations, {
-      replay: {
-        ...(replay.accepted
-          ? { result: String(replay.result) }
-          : { refused: replay.message }),
-        conflict,
-      },
-      reports,
+    const rapidReport = await settleInto(authorityClient, orgId, {
+      ...rapid,
+      uiConfirmed: rapidConfirmed,
     });
+    const lostReport = await settleInto(authorityClient, orgId, {
+      ...lost,
+      uiConfirmed: lostConfirmed,
+    });
+    const controlReport = await settleInto(authorityClient, orgId, {
+      ...control,
+      uiConfirmed: controlConfirmed,
+    });
+    proveObservedRefusals();
+
+    if (lostInjected && lostReport.transmittedAttempts < 2) {
+      ledger.prove(
+        `${lost.title}: the client did not retry the command after the lost response (${lostReport.transmittedAttempts} attempt)`,
+      );
+    }
+    if (replay?.accepted && rapidReport.effect !== null) {
+      if (String(replay.result) !== String(rapidReport.effect.expenseId)) {
+        ledger.prove(
+          `replaying the transmitted command returned ${String(replay.result)} instead of the original expense ${String(rapidReport.effect.expenseId)}`,
+        );
+      }
+    }
+    // Only identities that were actually transmitted can collide.
+    const keys = [rapidReport, lostReport, controlReport]
+      .map((report) => report.identity.key)
+      .filter((key): key is string => typeof key === "string");
+    if (new Set(keys).size !== keys.length) {
+      ledger.prove("distinct user intents shared a command identity: " + keys.join(", "));
+    }
+
+    const detail = {
+      replay:
+        replay === null
+          ? null
+          : {
+              ...(replay.accepted
+                ? { result: String(replay.result) }
+                : { refused: replay.message }),
+              conflict,
+            },
+      reports: [...reports.values()],
+    };
+    const decision = ledger.decide();
+    if (decision.kind === "BREACH") {
+      return await conclude(decision.violations, {
+        ...detail,
+        ...(decision.unjudged.length > 0 ? { phase: "PARTIAL", unjudged: decision.unjudged } : {}),
+      });
+    }
+    if (decision.kind === "INCONCLUSIVE") {
+      // Never a pass. The catch below writes the evidence.
+      throw new BrowserSwarmOracleInconclusiveError(decision.reason);
+    }
+    return await conclude([], detail);
   } catch (error) {
+    let undelivered: string[] | null = null;
     if (!cleanupStarted && !concluding) {
-      // A backend refusal already observed is a product verdict; a later phase
-      // that stalls or fails in the harness must not erase it (SCRUM-826 C-1).
-      // Session-lapse replies are never counted (P2).
-      const confirmed = [
-        ...[rapid.title, lost.title, control.title].flatMap(
-          (title) => evaluateIntentReplies(title, observer.repliesFor(title)).violations,
-        ),
-        ...provenRefusals,
-      ];
-      if (confirmed.length > 0) {
+      // A harness failure aborted the attack. Proof already observed is a
+      // product verdict and must survive it (SCRUM-826 C-1/C-2/S1): gather the
+      // observed refusals and, best effort, settle every intent not yet
+      // settled, then decide from the ledger.
+      proveObservedRefusals();
+      if (resolvedOrgId !== null) {
         try {
-          return await conclude(confirmed, {
+          const recoveryClient = await runtimeApi.authenticatedClient(runtime.page);
+          for (const intent of [rapid, lost, control]) {
+            if (reports.has(intent.title)) continue;
+            try {
+              await settleInto(recoveryClient, resolvedOrgId, { ...intent, uiConfirmed: false });
+            } catch {
+              // Unreadable now; the original failure stands for this intent.
+            }
+          }
+        } catch {
+          // No authority client; decide from what was already observed.
+        }
+      }
+      const decision = ledger.decide();
+      if (decision.kind === "BREACH") {
+        try {
+          return await conclude(decision.violations, {
             phase: "INTERRUPTED",
             interruptedBy: error instanceof Error ? error.message : String(error),
+            unjudged: decision.unjudged,
             mutations: observer.mutations,
+            reports: [...reports.values()],
           });
         } catch (concludeError) {
-          // Evidence or cleanup failed while concluding; report the original
-          // failure through the normal path below.
-          void concludeError;
+          // Evidence or cleanup failed while concluding. The original failure
+          // is reported, carrying the cleanup failure as its cause (L-A), and
+          // an undelivered breach is labelled as one (L-B).
+          if (error instanceof Error && error.cause === undefined) error.cause = concludeError;
+          if (!cleanupStarted) undelivered = decision.violations;
         }
       }
     }
@@ -677,7 +751,13 @@ async function runDuplicateSubmitAttack(
         await runtimeApi.writeBackendEvidence(runtime.paths, {
           attack: "DUPLICATE_SUBMIT",
           outcome:
-            error instanceof BrowserSwarmOracleInconclusiveError ? "INCONCLUSIVE" : "HARNESS_ERROR",
+            undelivered !== null
+              ? "BREACH_UNDELIVERED"
+              : error instanceof BrowserSwarmOracleInconclusiveError
+                ? "INCONCLUSIVE"
+                : "HARNESS_ERROR",
+          ...(undelivered !== null ? { violations: undelivered } : {}),
+          unjudged: ledger.unjudged,
           reason: error instanceof Error ? error.message : String(error),
           orgId: resolvedOrgId,
           nonce,
