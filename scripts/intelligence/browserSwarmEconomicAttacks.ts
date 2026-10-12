@@ -13,6 +13,7 @@
  *                    error, including BrowserSwarmOracleInconclusiveError).
  *                    The executor fails the run on it; it is never a pass.
  */
+import { randomBytes } from "node:crypto";
 import type { Browser, BrowserContext, Locator, Page, WebSocketRoute } from "@playwright/test";
 import type { ConvexHttpClient } from "convex/browser";
 import type { FunctionArgs } from "convex/server";
@@ -103,7 +104,8 @@ function attackNonce(context: BrowserMissionExecutionContext): string {
     leaf(context.worker.workerId),
     leaf(context.mission.family.toLowerCase()),
     Date.now().toString(36),
-    Math.random().toString(36).slice(2, 8),
+    // A CSPRNG suffix: the oracle relies on titles being run-unique nonces.
+    randomBytes(6).toString("hex"),
   ].join("-");
 }
 
