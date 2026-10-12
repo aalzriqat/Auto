@@ -744,6 +744,8 @@ jobs:
             --env NEXT_PUBLIC_CONVEX_URL \
             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY \
             --env CLERK_JWT_KEY \
+            --env AUTOFLOW_OFFLINE_SWARM_CLERK=1 \
+            --env CLERK_SECRET_KEY=sk_test_autoflow_offline_swarm_placeholder_nonfunctional \
             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY \
             --env NEXT_PUBLIC_APP_URL \
             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
@@ -780,7 +782,14 @@ jobs:
               RELAY_READY=1
             fi
             if [ "$RELAY_READY" = "1" ] && curl --fail --silent --show-error http://127.0.0.1:3000/api/health > /dev/null; then
-              exit 0
+              # /api/health is outside the Clerk proxy matcher, so it stays green
+              # even when every page 500s (the SCRUM-350 G4 failure). Require a
+              # page that runs through the proxy to answer below 500 as well.
+              PAGE_STATUS="$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/sign-in || true)"
+              if [ "${PAGE_STATUS:-000}" -ge 200 ] && [ "${PAGE_STATUS:-000}" -lt 500 ]; then
+                exit 0
+              fi
+              echo "::warning::/api/health is up but a Clerk-proxied page answered HTTP ${PAGE_STATUS:-000}"
             fi
             if [ "$(docker inspect --format '{{.State.Running}}' "$CANDIDATE_CONTAINER" 2>/dev/null || echo false)" != "true" ]; then
               echo "::error::Candidate container exited before answering /api/health"
@@ -800,10 +809,48 @@ jobs:
           echo "::$LOG_FENCE::"
           exit 1
 
+      # SCRUM-784: the browser below holds saved QA storageState and loads
+      # candidate-controlled pages. Everything it does goes through this trusted
+      # deny-by-default proxy (exact host:port allowlist), proven before any
+      # authenticated candidate traffic. Any failure here fails the job, so the
+      # verdict can never be PASS without verified egress containment.
+      - name: Start trusted browser egress proxy
+        working-directory: trusted
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p egress-evidence
+          node scripts/intelligence/browserEgressContainment.mjs > egress-evidence/browser-egress-proxy.log 2>&1 &
+          EGRESS_PID=$!
+          echo "BROWSER_EGRESS_PROXY_PID=$EGRESS_PID" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 40); do
+            if ! kill -0 "$EGRESS_PID" 2>/dev/null; then
+              echo "::error::Trusted egress proxy exited before listening"
+              cat egress-evidence/browser-egress-proxy.log >&2 || true
+              exit 1
+            fi
+            if grep -Fxq 'egress-proxy-listening 127.0.0.1:3129' egress-evidence/browser-egress-proxy.log; then
+              echo "BROWSER_EGRESS_PROXY_SERVER=http://127.0.0.1:3129" >> "$GITHUB_ENV"
+              echo "BROWSER_EGRESS_REQUIRED=1" >> "$GITHUB_ENV"
+              grep -F 'egress-allowlist' egress-evidence/browser-egress-proxy.log
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "::error::Trusted egress proxy did not report listening"
+          exit 1
+
+      - name: Prove browser egress containment before authenticated traffic
+        working-directory: trusted
+        run: node scripts/intelligence/browserEgressProof.mjs | tee egress-evidence/browser-egress-proof.json
+
       - name: Run full trusted E2E suite against exact candidate
         working-directory: trusted
         run: pnpm exec playwright test --project=chromium --no-deps
         env:
+          BROWSER_EGRESS_REQUIRED: "1"
           CI: true
           PLAYWRIGHT_SKIP_WEBSERVER: "1"
           PLAYWRIGHT_BASE_URL: http://localhost:3000
@@ -816,6 +863,9 @@ jobs:
         run: |
           if [ -n "${CANDIDATE_RELAY_PID:-}" ] && ps -p "$CANDIDATE_RELAY_PID" -o args= | grep -Fq 'browserSwarmLoopbackRelay.mjs'; then
             kill "$CANDIDATE_RELAY_PID" >/dev/null 2>&1 || true
+          fi
+          if [ -n "${BROWSER_EGRESS_PROXY_PID:-}" ] && ps -p "$BROWSER_EGRESS_PROXY_PID" -o args= | grep -Fq 'browserEgressContainment.mjs'; then
+            kill "$BROWSER_EGRESS_PROXY_PID" >/dev/null 2>&1 || true
           fi
           if [ -n "${CANDIDATE_CONTAINER:-}" ]; then
             docker rm --force "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
@@ -832,6 +882,7 @@ jobs:
           path: |
             trusted/playwright-report/
             trusted/test-results/
+            trusted/egress-evidence/
           if-no-files-found: warn
           retention-days: 14
 
@@ -991,6 +1042,8 @@ jobs:
             --env NEXT_PUBLIC_CONVEX_URL \
             --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY \
             --env CLERK_JWT_KEY \
+            --env AUTOFLOW_OFFLINE_SWARM_CLERK=1 \
+            --env CLERK_SECRET_KEY=sk_test_autoflow_offline_swarm_placeholder_nonfunctional \
             --env NEXT_PUBLIC_TURNSTILE_SITE_KEY \
             --env NEXT_PUBLIC_APP_URL \
             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
@@ -1024,7 +1077,14 @@ jobs:
               RELAY_READY=1
             fi
             if [ "$RELAY_READY" = "1" ] && curl --fail --silent --show-error http://127.0.0.1:3000/api/health > /dev/null; then
-              exit 0
+              # /api/health is outside the Clerk proxy matcher, so it stays green
+              # even when every page 500s (the SCRUM-350 G4 failure). Require a
+              # page that runs through the proxy to answer below 500 as well.
+              PAGE_STATUS="$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/sign-in || true)"
+              if [ "${PAGE_STATUS:-000}" -ge 200 ] && [ "${PAGE_STATUS:-000}" -lt 500 ]; then
+                exit 0
+              fi
+              echo "::warning::/api/health is up but a Clerk-proxied page answered HTTP ${PAGE_STATUS:-000}"
             fi
             if [ "$(docker inspect --format '{{.State.Running}}' "$CANDIDATE_CONTAINER" 2>/dev/null || echo false)" != "true" ]; then
               echo "::error::Candidate container exited before answering /api/health"
@@ -1051,10 +1111,44 @@ jobs:
           NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
           NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
 
+      # SCRUM-784: see the matching step in trusted-e2e.
+      - name: Start trusted browser egress proxy
+        working-directory: trusted
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p egress-evidence
+          node scripts/intelligence/browserEgressContainment.mjs > egress-evidence/browser-egress-proxy.log 2>&1 &
+          EGRESS_PID=$!
+          echo "BROWSER_EGRESS_PROXY_PID=$EGRESS_PID" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 40); do
+            if ! kill -0 "$EGRESS_PID" 2>/dev/null; then
+              echo "::error::Trusted egress proxy exited before listening"
+              cat egress-evidence/browser-egress-proxy.log >&2 || true
+              exit 1
+            fi
+            if grep -Fxq 'egress-proxy-listening 127.0.0.1:3129' egress-evidence/browser-egress-proxy.log; then
+              echo "BROWSER_EGRESS_PROXY_SERVER=http://127.0.0.1:3129" >> "$GITHUB_ENV"
+              echo "BROWSER_EGRESS_REQUIRED=1" >> "$GITHUB_ENV"
+              grep -F 'egress-allowlist' egress-evidence/browser-egress-proxy.log
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "::error::Trusted egress proxy did not report listening"
+          exit 1
+
+      - name: Prove browser egress containment before authenticated traffic
+        working-directory: trusted
+        run: node scripts/intelligence/browserEgressProof.mjs | tee egress-evidence/browser-egress-proof.json
+
       - name: Execute trusted browser missions
         working-directory: trusted
         run: pnpm exec playwright test playwright/tests/browser-swarm.spec.ts --project=chromium --no-deps
         env:
+          BROWSER_EGRESS_REQUIRED: "1"
           CI: true
           PLAYWRIGHT_SKIP_WEBSERVER: "1"
           BROWSER_SWARM_TRUSTED_EXTERNAL_SERVER: "1"
@@ -1075,6 +1169,9 @@ jobs:
           if [ -n "${CANDIDATE_RELAY_PID:-}" ] && ps -p "$CANDIDATE_RELAY_PID" -o args= | grep -Fq 'browserSwarmLoopbackRelay.mjs'; then
             kill "$CANDIDATE_RELAY_PID" >/dev/null 2>&1 || true
           fi
+          if [ -n "${BROWSER_EGRESS_PROXY_PID:-}" ] && ps -p "$BROWSER_EGRESS_PROXY_PID" -o args= | grep -Fq 'browserEgressContainment.mjs'; then
+            kill "$BROWSER_EGRESS_PROXY_PID" >/dev/null 2>&1 || true
+          fi
           if [ -n "${CANDIDATE_CONTAINER:-}" ]; then
             docker rm --force "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
           fi
@@ -1091,6 +1188,7 @@ jobs:
             trusted/swarm/
             trusted/playwright-report/
             trusted/test-results/
+            trusted/egress-evidence/
           if-no-files-found: warn
           retention-days: 14
 
