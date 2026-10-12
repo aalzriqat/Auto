@@ -1,5 +1,4 @@
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -339,10 +338,8 @@ describe("SCRUM-824 dangling pnpm hoist-index links", () => {
       await expect(
         verifyBrowserSwarmBuildArtifact({ artifactRoot: f.artifactRoot, expected: identity }),
       ).resolves.toMatchObject({ testedSha: identity.testedSha });
-      // The runtime must not depend on the omitted package: an optional
-      // require of it (debug's pattern) resolves to "absent", nothing else.
-      const runtimeRequire = createRequire(path.join(f.artifactRoot, "runtime/server.js"));
-      expect(() => runtimeRequire.resolve("supports-color")).toThrow(/Cannot find module/);
+      // Absence is asserted on the artifact itself (above), never via Node's
+      // module resolution, which also consults the ambient NODE_PATH (Opus N1).
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -399,7 +396,8 @@ describe("SCRUM-824 dangling pnpm hoist-index links", () => {
     try {
       const index = await hoistIndex(f);
       await mkdir(path.join(index, "pkg"), { recursive: true });
-      // Target points into the store, so only the leaf/scope check can refuse it.
+      // Target points into the store; the dedicated gate test is
+      // "refuses a canonical-shaped dangling link that is not in the hoist index".
       await symlink("../../dep@1.0.0/node_modules/dep", path.join(index, "pkg/dep"), "dir");
       await expect(build(f)).rejects.toThrow(/not a pnpm hoist-index link/i);
     } finally {
@@ -425,6 +423,71 @@ describe("SCRUM-824 dangling pnpm hoist-index links", () => {
       const index = await hoistIndex(f);
       await symlink("../../../../missing-outside-store", path.join(index, "escape-rel"), "dir");
       await expect(build(f)).rejects.toThrow(/not a pnpm hoist-index link/i);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  // Opus N2: each of these is refused by exactly one guard, so removing that
+  // guard alone turns the case into an omission.
+  it("refuses a canonical-shaped dangling link that is not in the hoist index (leaf/scope gate)", async () => {
+    const f = await fixture();
+    try {
+      const index = await hoistIndex(f);
+      const pkgDir = path.join(index, "../foo@1.0.0");
+      await mkdir(pkgDir, { recursive: true });
+      await symlink("../dep@1.0.0/node_modules/dep", path.join(pkgDir, "dep"), "dir");
+      await expect(
+        isAllowedDanglingHoistLink(path.join(pkgDir, "dep"), {
+          root: await realpath(index),
+          store: await realpath(path.dirname(index)),
+        }),
+      ).resolves.toBe(false);
+      await expect(build(f)).rejects.toThrow(/not a pnpm hoist-index link/i);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses canonical-shaped links with an invalid package name or no node_modules segment", async () => {
+    const f = await fixture();
+    try {
+      const index = await hoistIndex(f);
+      const hoist = { root: await realpath(index), store: await realpath(path.dirname(index)) };
+      await symlink("../bin@1.0.0/node_modules/.bin", path.join(index, ".bin"), "dir");
+      await symlink("../x@1.0.0/lib/x", path.join(index, "x"), "dir");
+      await expect(isAllowedDanglingHoistLink(path.join(index, ".bin"), hoist)).resolves.toBe(false);
+      await expect(isAllowedDanglingHoistLink(path.join(index, "x"), hoist)).resolves.toBe(false);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("grants no omission when the hoist index is a symlink inside the store", async () => {
+    const f = await fixture();
+    try {
+      const store = path.join(f.candidateRoot, ".next/standalone/node_modules/.pnpm");
+      const realIndex = path.join(store, "real-index");
+      await mkdir(realIndex, { recursive: true });
+      await symlink(realIndex, path.join(store, "node_modules"), "dir");
+      await symlink("../ghost@1.0.0/node_modules/ghost", path.join(realIndex, "ghost"), "dir");
+      await expect(build(f)).rejects.toThrow(/not a pnpm hoist-index link/i);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("omits a dangling link into a peer-suffixed store directory", async () => {
+    const f = await fixture();
+    try {
+      const index = await hoistIndex(f);
+      await symlink(
+        "../debug@4.4.3_supports-color@8.1.1/node_modules/debug",
+        path.join(index, "debug"),
+        "dir",
+      );
+      await build(f);
+      expect((await manifestPaths(f.artifactRoot)).filter((p) => p.includes("debug"))).toEqual([]);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
