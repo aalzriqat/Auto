@@ -912,9 +912,50 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       // The proof reads the proxy's fixed-vocabulary denial log.
       expect(proof.env).toHaveProperty(
         "BROWSER_EGRESS_PROXY_LOG",
-        "egress-evidence/browser-egress-proxy.log",
+        "${{ runner.temp }}/browser-egress-proxy.log",
       );
       expect(String(proof.shell ?? "")).not.toMatch(/^(sh|pwsh|powershell|cmd|python)/);
+    });
+
+    // G4R2-01: the ORDER of the proxy's per-request lines is a channel the
+    // candidate controls (it picks the reason class per denied request), so the
+    // raw log must stay on the runner. It is written under RUNNER_TEMP, read by
+    // the startup step and the proof, and never printed or uploaded afterwards.
+    const RAW_LOG = "browser-egress-proxy.log";
+    const EGRESS_JOBS = ["trusted-e2e", "attack-worker"] as const;
+
+    it.each(EGRESS_JOBS)("%s keeps the raw proxy log private to the runner", (jobName) => {
+      const steps = job(jobName).steps ?? [];
+      const start = steps.findIndex((entry) => entry.name === "Start trusted browser egress proxy");
+      const proof = steps.findIndex((entry) => entry.name === PROOF_STEP);
+
+      // The redirect target is under RUNNER_TEMP, not the workspace.
+      const startRun = String(steps[start]?.run ?? "");
+      expect(startRun).toMatch(/browserEgressContainment\.mjs > "\$RUNNER_TEMP\/browser-egress-proxy\.log" 2>&1 &/);
+      expect(startRun).not.toContain("egress-evidence/" + RAW_LOG);
+
+      // Nothing after the proof step mentions the raw log at all, so the
+      // stop/cleanup step cannot print it and no later step can read it.
+      for (const later of steps.slice(proof + 1)) {
+        expect(JSON.stringify(later), `${later.name} references the raw proxy log`).not.toContain(RAW_LOG);
+      }
+
+      // No upload from an egress job can carry the log or anything in RUNNER_TEMP.
+      const uploads = steps.filter((entry) => String(entry.uses ?? "").startsWith("actions/upload-artifact@"));
+      expect(uploads.length).toBeGreaterThan(0);
+      for (const upload of uploads) {
+        const uploadPath = String(upload.with?.path ?? "");
+        expect(uploadPath).not.toMatch(/runner\.temp|RUNNER_TEMP|egress-proxy|\.log\b/i);
+      }
+    });
+
+    it("only the startup step and the proof step reference the raw log anywhere in the workflow", () => {
+      for (const jobName of EGRESS_JOBS) {
+        const referencing = (job(jobName).steps ?? [])
+          .filter((entry) => JSON.stringify(entry).includes(RAW_LOG))
+          .map((entry) => entry.name);
+        expect(referencing).toEqual(["Start trusted browser egress proxy", PROOF_STEP]);
+      }
     });
 
     it("no pipeline in the workflow can mask a failing left-hand command", () => {

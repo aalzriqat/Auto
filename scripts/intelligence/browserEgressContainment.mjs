@@ -61,6 +61,8 @@ export const EGRESS_DENIAL_REASONS = Object.freeze([
   "plain-upgrade-unsupported",
 ]);
 const EGRESS_DENIED_PREFIX = "egress-denied ";
+const EGRESS_LOG_TRUNCATED = "egress-log-truncated";
+export const DEFAULT_MAX_RECORDED_LINES = 2000;
 
 /** @param {string} host */
 function isLoopbackName(host) {
@@ -81,6 +83,7 @@ export function parseEgressDenialLog(text) {
   let unrecognized = 0;
   for (const line of String(text ?? "").split(/\r?\n/)) {
     if (line === "") continue;
+    if (line === EGRESS_LOG_TRUNCATED) continue;
     if (line.startsWith("egress-allowlist ") || /^egress-proxy-listening 127\.0\.0\.1:\d+$/.test(line)) continue;
     const reason = line.startsWith(EGRESS_DENIED_PREFIX) ? line.slice(EGRESS_DENIED_PREFIX.length) : "";
     if (EGRESS_DENIAL_REASONS.includes(reason)) {
@@ -252,23 +255,43 @@ async function resolveTarget(host) {
  * contain (a page can encode a token into host labels of a request it knows
  * will be denied), and the log is uploaded as a workflow artifact.
  *
- * @param {{ allow: string[], log?: (line: string) => void }} options
+ * Memory and log growth are bounded (G4R2-01): per-request lines and the
+ * `denied` array stop after `maxRecorded`, a single `egress-log-truncated`
+ * marker is written, and exact totals live in `counts` / `stats()`.
+ *
+ * The ORDER of per-request lines is itself a channel (the reason class is
+ * candidate-selectable), so the raw log must stay on the runner: the workflow
+ * redirects it to a private path and never prints or uploads it.
+ *
+ * @param {{ allow: string[], log?: (line: string) => void, maxRecorded?: number }} options
  */
-export function createEgressProxy({ allow, log = () => {} }) {
+export function createEgressProxy({ allow, log = () => {}, maxRecorded = DEFAULT_MAX_RECORDED_LINES }) {
   const allowed = new Set(allow.map((entry) => entry.toLowerCase()));
   /** @type {string[]} */
   const denied = [];
-  /** @type {string[]} */
-  const permitted = [];
+  /** @type {Record<string, number>} */
+  const counts = {};
+  let deniedTotal = 0;
+  let permittedTotal = 0;
   const sockets = new Set();
 
   /** @param {string} reason one of EGRESS_DENIAL_REASONS */
   function deny(reason) {
     // Defence in depth: a reason outside the vocabulary can never be emitted.
     const safe = EGRESS_DENIAL_REASONS.includes(reason) ? reason : "not-allowlisted";
-    const line = `${EGRESS_DENIED_PREFIX}${safe}`;
-    denied.push(line);
-    log(line);
+    counts[safe] = (counts[safe] ?? 0) + 1;
+    deniedTotal += 1;
+    if (deniedTotal <= maxRecorded) {
+      const line = `${EGRESS_DENIED_PREFIX}${safe}`;
+      denied.push(line);
+      log(line);
+    } else if (deniedTotal === maxRecorded + 1) {
+      log(EGRESS_LOG_TRUNCATED);
+    }
+  }
+
+  function permit() {
+    permittedTotal += 1;
   }
 
   /** @param {string} host */
@@ -307,7 +330,7 @@ export function createEgressProxy({ allow, log = () => {} }) {
       res.writeHead(502).end("egress denied");
       return;
     }
-    permitted.push(`${req.method} ${authority}`);
+    permit();
     const headers = { ...req.headers };
     delete headers["proxy-connection"];
     delete headers["proxy-authorization"];
@@ -351,7 +374,7 @@ export function createEgressProxy({ allow, log = () => {} }) {
       clientSocket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
       return;
     }
-    permitted.push(`CONNECT ${authority}`);
+    permit();
     const upstream = net.connect({ host: address, port: parsed.port });
     track(upstream);
     upstream.on("connect", () => {
@@ -379,14 +402,20 @@ export function createEgressProxy({ allow, log = () => {} }) {
     server.close();
   }
 
-  return { server, denied, permitted, stop };
+  return {
+    server,
+    denied,
+    counts,
+    stats: () => ({ denied: deniedTotal, permitted: permittedTotal }),
+    stop,
+  };
 }
 
 /**
  * @param {{ allow: string[], port?: number, log?: (line: string) => void }} options
  */
-export function startEgressProxy({ allow, port = DEFAULT_EGRESS_PROXY_PORT, log }) {
-  const proxy = createEgressProxy({ allow, log });
+export function startEgressProxy({ allow, port = DEFAULT_EGRESS_PROXY_PORT, log, maxRecorded }) {
+  const proxy = createEgressProxy({ allow, log, maxRecorded });
   return new Promise((resolve, reject) => {
     proxy.server.once("error", reject);
     proxy.server.listen(port, "127.0.0.1", () => {

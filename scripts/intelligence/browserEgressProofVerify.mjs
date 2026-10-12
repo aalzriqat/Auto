@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { EGRESS_DENIAL_REASONS } from "./browserEgressContainment.mjs";
+import { EGRESS_PROOF_CHANNELS, EGRESS_PROOF_NAVIGATION_OUTCOMES } from "./browserEgressChannels.mjs";
 
 /**
  * Independent check of the evidence written by browserEgressProof.mjs
@@ -23,7 +24,24 @@ export function verifyEgressProofEvidence(evidence) {
   if (e.collector?.tcpEvents !== 0) failures.push("collector tcpEvents is not 0");
   if (e.collector?.udpPackets !== 0) failures.push("collector udpPackets is not 0");
   if (e.allowedStatus !== 200) failures.push("allowlisted origin status is not 200");
-  if (e.channels?.["service-worker"] !== "blocked") failures.push("service worker was not reported blocked");
+
+  // Every mandatory probe must be present with a contained outcome; unknown
+  // probes are rejected so the record cannot drift from the proof's source.
+  const channels = e.channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    failures.push("channels is missing");
+  } else {
+    for (const [name, accepted] of Object.entries(EGRESS_PROOF_CHANNELS)) {
+      if (!Object.hasOwn(channels, name)) failures.push(`mandatory probe "${name}" is missing`);
+      else if (!accepted.includes(channels[name])) failures.push(`mandatory probe "${name}" has an uncontained outcome`);
+    }
+    for (const name of Object.keys(channels)) {
+      if (!Object.hasOwn(EGRESS_PROOF_CHANNELS, name)) failures.push("an unlisted probe is present");
+    }
+  }
+  if (!EGRESS_PROOF_NAVIGATION_OUTCOMES.includes(e.topLevelNavigation)) {
+    failures.push("top-level navigation outcome is missing or uncontained");
+  }
 
   const denials = e.proxyDenials;
   if (!denials || typeof denials !== "object" || Array.isArray(denials)) {

@@ -10,6 +10,9 @@ import {
   browserEgressLaunchOptions,
   parseEgressDenialLog,
 } from "./browserEgressContainment.mjs";
+import { EGRESS_PROOF_CHANNELS, EGRESS_PROOF_NAVIGATION_OUTCOMES } from "./browserEgressChannels.mjs";
+
+export { EGRESS_PROOF_CHANNELS, EGRESS_PROOF_NAVIGATION_OUTCOMES };
 
 /** File the trusted workflow redirects the proxy's stdout into. */
 const PROXY_LOG_ENV = "BROWSER_EGRESS_PROXY_LOG";
@@ -213,8 +216,19 @@ export async function runBrowserEgressProof({
   if (attackResult.allowedStatus !== 200) {
     failures.push(`allowlisted origin was not reachable through the proxy (status ${attackResult.allowedStatus})`);
   }
-  if (attackResult.outcomes["service-worker"] !== "blocked") {
-    failures.push("service worker registration was not reported blocked");
+  // Every mandatory probe must have run and ended in a contained outcome; an
+  // unavailable or missing probe is a failure, never a skip.
+  for (const [name, accepted] of Object.entries(EGRESS_PROOF_CHANNELS)) {
+    const outcome = attackResult.outcomes[name];
+    if (typeof outcome !== "string" || !accepted.includes(outcome)) {
+      failures.push(`mandatory probe "${name}" did not end in a contained outcome`);
+    }
+  }
+  for (const name of Object.keys(attackResult.outcomes)) {
+    if (!(name in EGRESS_PROOF_CHANNELS)) failures.push("an unlisted probe ran");
+  }
+  if (!EGRESS_PROOF_NAVIGATION_OUTCOMES.includes(navigation)) {
+    failures.push("top-level navigation to the collector was not refused");
   }
 
   // Positive control: the proxy itself must have recorded the refusals. Only

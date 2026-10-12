@@ -822,19 +822,22 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p egress-evidence
-          node scripts/intelligence/browserEgressContainment.mjs > egress-evidence/browser-egress-proxy.log 2>&1 &
+          # The raw proxy log never leaves the runner: the order of its lines is a
+          # candidate-selectable channel (G4R2-01), so it lives under RUNNER_TEMP,
+          # is read only by this step and by the proof, and is never uploaded.
+          node scripts/intelligence/browserEgressContainment.mjs > "$RUNNER_TEMP/browser-egress-proxy.log" 2>&1 &
           EGRESS_PID=$!
           echo "BROWSER_EGRESS_PROXY_PID=$EGRESS_PID" >> "$GITHUB_ENV"
           for attempt in $(seq 1 40); do
             if ! kill -0 "$EGRESS_PID" 2>/dev/null; then
               echo "::error::Trusted egress proxy exited before listening"
-              cat egress-evidence/browser-egress-proxy.log >&2 || true
+              cat "$RUNNER_TEMP/browser-egress-proxy.log" >&2 || true
               exit 1
             fi
-            if grep -Fxq 'egress-proxy-listening 127.0.0.1:3129' egress-evidence/browser-egress-proxy.log; then
+            if grep -Fxq 'egress-proxy-listening 127.0.0.1:3129' "$RUNNER_TEMP/browser-egress-proxy.log"; then
               echo "BROWSER_EGRESS_PROXY_SERVER=http://127.0.0.1:3129" >> "$GITHUB_ENV"
               echo "BROWSER_EGRESS_REQUIRED=1" >> "$GITHUB_ENV"
-              grep -F 'egress-allowlist' egress-evidence/browser-egress-proxy.log
+              grep -F 'egress-allowlist' "$RUNNER_TEMP/browser-egress-proxy.log"
               exit 0
             fi
             sleep 0.5
@@ -845,7 +848,7 @@ jobs:
       - name: Prove browser egress containment before authenticated traffic
         working-directory: trusted
         env:
-          BROWSER_EGRESS_PROXY_LOG: egress-evidence/browser-egress-proxy.log
+          BROWSER_EGRESS_PROXY_LOG: ${{ runner.temp }}/browser-egress-proxy.log
         run: |
           # pipefail: a failing proof must fail this step, not be masked by tee.
           set -euo pipefail
@@ -1126,19 +1129,22 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p egress-evidence
-          node scripts/intelligence/browserEgressContainment.mjs > egress-evidence/browser-egress-proxy.log 2>&1 &
+          # The raw proxy log never leaves the runner: the order of its lines is a
+          # candidate-selectable channel (G4R2-01), so it lives under RUNNER_TEMP,
+          # is read only by this step and by the proof, and is never uploaded.
+          node scripts/intelligence/browserEgressContainment.mjs > "$RUNNER_TEMP/browser-egress-proxy.log" 2>&1 &
           EGRESS_PID=$!
           echo "BROWSER_EGRESS_PROXY_PID=$EGRESS_PID" >> "$GITHUB_ENV"
           for attempt in $(seq 1 40); do
             if ! kill -0 "$EGRESS_PID" 2>/dev/null; then
               echo "::error::Trusted egress proxy exited before listening"
-              cat egress-evidence/browser-egress-proxy.log >&2 || true
+              cat "$RUNNER_TEMP/browser-egress-proxy.log" >&2 || true
               exit 1
             fi
-            if grep -Fxq 'egress-proxy-listening 127.0.0.1:3129' egress-evidence/browser-egress-proxy.log; then
+            if grep -Fxq 'egress-proxy-listening 127.0.0.1:3129' "$RUNNER_TEMP/browser-egress-proxy.log"; then
               echo "BROWSER_EGRESS_PROXY_SERVER=http://127.0.0.1:3129" >> "$GITHUB_ENV"
               echo "BROWSER_EGRESS_REQUIRED=1" >> "$GITHUB_ENV"
-              grep -F 'egress-allowlist' egress-evidence/browser-egress-proxy.log
+              grep -F 'egress-allowlist' "$RUNNER_TEMP/browser-egress-proxy.log"
               exit 0
             fi
             sleep 0.5
@@ -1149,7 +1155,7 @@ jobs:
       - name: Prove browser egress containment before authenticated traffic
         working-directory: trusted
         env:
-          BROWSER_EGRESS_PROXY_LOG: egress-evidence/browser-egress-proxy.log
+          BROWSER_EGRESS_PROXY_LOG: ${{ runner.temp }}/browser-egress-proxy.log
         run: |
           # pipefail: a failing proof must fail this step, not be masked by tee.
           set -euo pipefail

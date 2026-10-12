@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -16,6 +16,7 @@ import {
   parseEgressDenialLog,
   startEgressProxy,
 } from "./browserEgressContainment.mjs";
+import { EGRESS_PROOF_CHANNELS } from "./browserEgressChannels.mjs";
 import { verifyEgressProofEvidence } from "./browserEgressProofVerify.mjs";
 
 const PK = "pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk"; // example.clerk.accounts.dev
@@ -199,16 +200,26 @@ describe("verifyEgressProofEvidence and parseEgressDenialLog (G4-02)", () => {
     failures: [],
     collector: { tcpEvents: 0, udpPackets: 0 },
     allowedStatus: 200,
-    topLevelNavigation: "failed",
-    channels: { "service-worker": "blocked" },
+    topLevelNavigation: "response:403",
+    channels: Object.fromEntries(Object.entries(EGRESS_PROOF_CHANNELS).map(([name, accepted]) => [name, accepted[0]])),
     proxyDenials: { "not-allowlisted-loopback": 9, "not-allowlisted": 2, unrecognized: 0 },
   });
+
+  const omit = (record: Record<string, string>, key: string) =>
+    Object.fromEntries(Object.entries(record).filter(([name]) => name !== key));
 
   it("accepts a complete passing proof", () => {
     expect(verifyEgressProofEvidence(good())).toEqual([]);
   });
 
-  it.each([
+  it("the mandatory channel list is exactly the set of attacks the proof page attempts (G4R2-02)", () => {
+    const source = readFileSync(path.join(__dirname, "browserEgressProof.mjs"), "utf8");
+    const attempted = [...source.matchAll(/attempt\("([^"]+)"/g)].map((match) => match[1]);
+    expect(new Set(attempted).size).toBe(attempted.length);
+    expect([...attempted].sort()).toEqual(Object.keys(EGRESS_PROOF_CHANNELS).sort());
+  });
+
+  it.each<[string, unknown]>([
     ["non-object evidence", null],
     ["ok false", { ...good(), ok: false }],
     ["ok missing", { ...good(), ok: undefined }],
@@ -217,8 +228,18 @@ describe("verifyEgressProofEvidence and parseEgressDenialLog (G4-02)", () => {
     ["udp collector traffic", { ...good(), collector: { tcpEvents: 0, udpPackets: 1 } }],
     ["collector counts missing", { ...good(), collector: undefined }],
     ["allowlisted origin not 200", { ...good(), allowedStatus: 502 }],
-    ["service worker registered", { ...good(), channels: { "service-worker": "REGISTERED" } }],
-    ["service worker outcome missing", { ...good(), channels: {} }],
+    ["service worker registered", { ...good(), channels: { ...good().channels, "service-worker": "REGISTERED" } }],
+    ["every channel missing but the service worker", { ...good(), channels: { "service-worker": "blocked" } }],
+    ["channels missing", { ...good(), channels: undefined }],
+    ["an unlisted channel", { ...good(), channels: { ...good().channels, extra: "done" } }],
+    ["navigation missing", { ...good(), topLevelNavigation: undefined }],
+    ["navigation not refused", { ...good(), topLevelNavigation: "response:200" }],
+    ["navigation not-run", { ...good(), topLevelNavigation: "not-run" }],
+    ...Object.keys(EGRESS_PROOF_CHANNELS).flatMap((name): [string, unknown][] => [
+      [`channel ${name} missing`, { ...good(), channels: omit(good().channels, name) }],
+      [`channel ${name} unavailable`, { ...good(), channels: { ...good().channels, [name]: "unavailable" } }],
+    ]),
+    ["websocket opened", { ...good(), channels: { ...good().channels, websocket: "open" } }],
     ["proxyDenials missing", { ...good(), proxyDenials: undefined }],
     ["no loopback probe denial", { ...good(), proxyDenials: { "not-allowlisted": 4, unrecognized: 0 } }],
     ["unrecognized log lines", { ...good(), proxyDenials: { "not-allowlisted-loopback": 1, unrecognized: 1 } }],
@@ -339,6 +360,39 @@ describe("egress proxy log carries only fixed reason codes (G4-01)", () => {
     for (const line of lines) {
       expect(line).toMatch(/^egress-denied (not-allowlisted|not-allowlisted-loopback)$/);
     }
+  });
+
+  it("bounds memory and log growth: lines and the denied array stop at the cap, totals stay exact (G4R2-01)", async () => {
+    const lines: string[] = [];
+    const small = createEgressProxy({ allow: ["127.0.0.1:1"], log: (line) => lines.push(line), maxRecorded: 3 });
+    const port = await listen(small.server);
+    for (let i = 0; i < 10; i++) {
+      await new Promise<void>((resolve) => {
+        const req = http.request(
+          { host: "127.0.0.1", port, path: "http://127.0.0.2:9/x", headers: { host: "127.0.0.2:9" } },
+          (res) => {
+            res.resume();
+            res.on("end", () => resolve());
+          },
+        );
+        req.on("error", () => resolve());
+        req.end();
+      });
+    }
+    small.stop();
+    expect(small.denied).toHaveLength(3);
+    expect(lines).toEqual([
+      "egress-denied not-allowlisted-loopback",
+      "egress-denied not-allowlisted-loopback",
+      "egress-denied not-allowlisted-loopback",
+      "egress-log-truncated",
+    ]);
+    expect(small.counts).toEqual({ "not-allowlisted-loopback": 10 });
+    expect(small.stats()).toEqual({ denied: 10, permitted: 0 });
+    expect(parseEgressDenialLog(lines.join("\n"))).toEqual({
+      denials: { "not-allowlisted-loopback": 3 },
+      unrecognized: 0,
+    });
   });
 
   it("control: the denial itself is still evidenced by a fixed reason code", async () => {

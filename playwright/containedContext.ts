@@ -8,7 +8,7 @@ import { EGRESS_CONTEXT_OPTIONS } from "../scripts/intelligence/browserEgressCon
  * NOT the project's context options, so without this a manual context carrying
  * saved QA storageState could register a service worker, which is a path around
  * the egress proxy. The containment options are applied last so a caller's
- * options can never switch them off. `containedContext.guard.test.ts` fails if
+ * options can never switch them off. `scripts/intelligence/playwrightContainedContext.test.ts` fails if
  * a spec calls `browser.newContext(` directly.
  */
 export function newContainedContext(
