@@ -670,8 +670,18 @@ export interface DuplicateSubmitTimeouts {
 /** Production settle interval; matches readSettledExpenseEffectSnapshot's default. */
 const SETTLE_INTERVAL_MS = 1_500;
 
+export interface MultiTabRaceTimeouts {
+  /** How long each tab's save may take to be answered. */
+  uiStepMs: number;
+  /** How long the race barrier waits for the second tab's save frame. */
+  barrierMs: number;
+  /** Interval between authority reads while waiting for settled state. */
+  settleMs: number;
+}
+
 export interface EconomicAttackOptions {
   duplicateSubmitTimeouts?: Partial<DuplicateSubmitTimeouts>;
+  multiTabRaceTimeouts?: Partial<MultiTabRaceTimeouts>;
 }
 
 type ConflictObservation = { accepted: true } | { accepted: false; message: string };
@@ -1286,6 +1296,8 @@ async function awaitUpdateOutcome(
   pageLabel: string,
   title: string,
   sentBefore: number,
+  timeoutMs: number,
+  signal: AbortSignal,
 ): Promise<
   TabOutcome & {
     requestId?: number;
@@ -1294,8 +1306,9 @@ async function awaitUpdateOutcome(
     responseSeq?: number;
   }
 > {
-  const deadline = Date.now() + UI_STEP_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    signal.throwIfAborted();
     const sent = observer
       .mutationsFor(title)
       .filter((mutation) => mutation.pageLabel === pageLabel)
@@ -1327,57 +1340,79 @@ function sentCount(observer: ConvexSyncObserver, pageLabel: string, title: strin
 async function runMultiTabRaceAttack(
   runtimeApi: MissionBrowserRuntime,
   context: BrowserMissionExecutionContext,
+  timeouts: MultiTabRaceTimeouts,
 ): Promise<BrowserMissionEvidence> {
   const startedAt = new Date().toISOString();
+  const { signal } = context;
   const runtime = await runtimeApi.open(context);
   let cleanupStarted = false;
+  // Set once a breach is decided, so a conclusion that cannot write its
+  // evidence still labels the fallback evidence as a breach (SCRUM-826 C-3).
+  let decidedViolations: readonly string[] | null = null;
+  let orgId: string | null = null;
+  let nonce: string | null = null;
+  let expenseId: string | null = null;
 
   try {
     const tabA = runtime.page;
     const observer = new ConvexSyncObserver(UPDATE_EXPENSE_UDF);
-    await observer.attach(tabA, "tab-a");
-    const tabB = await runtime.browserContext.newPage();
-    await observer.attach(tabB, "tab-b");
+    await untilAborted(signal, observer.attach(tabA, "tab-a"));
+    const tabB = await untilAborted(signal, runtime.browserContext.newPage());
+    await untilAborted(signal, observer.attach(tabB, "tab-b"));
 
-    const orgId = await runtimeApi.resolveOrgRoute(tabA);
-    if (!orgId) throw new Error("MULTI_TAB_RACE could not resolve the authenticated organization route.");
+    const resolvedOrgId = await untilAborted(signal, runtimeApi.resolveOrgRoute(tabA));
+    if (!resolvedOrgId) throw new Error("MULTI_TAB_RACE could not resolve the authenticated organization route.");
+    orgId = resolvedOrgId;
 
     // Synthetic setup through the same authenticated, permission-checked
     // command the UI uses: one PENDING (not yet money-moving) expense.
-    const nonce = attackNonce(context);
-    const title = nonce + "-race";
+    const runNonce = attackNonce(context);
+    nonce = runNonce;
+    const title = runNonce + "-race";
     const setupAmount = MULTI_TAB_RACE_AMOUNTS.setup;
     const today = new Date();
     const date = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
-    const setupClient = await runtimeApi.authenticatedClient(tabA);
-    const expenseId = String(
-      await setupClient.mutation(api.expenses.create, {
-        idempotencyKey: "swarm-setup:" + nonce,
-        orgId: orgId as Id<"organizations">,
-        title,
-        amount: setupAmount,
-        date,
-        category: "OTHER",
-        status: "PENDING",
-      }),
+    const setupClient = await untilAborted(signal, runtimeApi.authenticatedClient(tabA));
+    // An aborted mission stops touching the preview (D5): the setup write is
+    // never started once the mission has been aborted.
+    signal.throwIfAborted();
+    const createdId = String(
+      await untilAborted(
+        signal,
+        setupClient.mutation(api.expenses.create, {
+          idempotencyKey: "swarm-setup:" + runNonce,
+          orgId: resolvedOrgId as Id<"organizations">,
+          title,
+          amount: setupAmount,
+          date,
+          category: "OTHER",
+          status: "PENDING",
+        }),
+      ),
     );
+    expenseId = createdId;
 
-    const dialogA = await openEditDialog(tabA, orgId, title, expenseId);
-    const dialogB = await openEditDialog(tabB, orgId, title, expenseId);
+    const dialogA = await untilAborted(signal, openEditDialog(tabA, resolvedOrgId, title, createdId));
+    const dialogB = await untilAborted(signal, openEditDialog(tabB, resolvedOrgId, title, createdId));
     const intended = { A: MULTI_TAB_RACE_AMOUNTS.A, B: MULTI_TAB_RACE_AMOUNTS.B } as const;
-    await setPaidWithAmount(tabA, dialogA, intended.A);
-    await setPaidWithAmount(tabB, dialogB, intended.B);
+    await untilAborted(signal, setPaidWithAmount(tabA, dialogA, intended.A));
+    await untilAborted(signal, setPaidWithAmount(tabB, dialogB, intended.B));
 
     // Both tabs pay the same expense with different amounts. The barrier
     // holds whichever save reaches the socket first until the other has been
     // sent too, so both are in flight before either can be answered.
+    signal.throwIfAborted();
     observer.armRaceBarrier(title, ["tab-a", "tab-b"]);
-    await Promise.all([
-      dialogA.getByRole("button", { name: "Save Changes", exact: true }).click(),
-      dialogB.getByRole("button", { name: "Save Changes", exact: true }).click(),
-    ]);
-    const barrierDeadline = Date.now() + RACE_BARRIER_TIMEOUT_MS;
+    await untilAborted(
+      signal,
+      Promise.all([
+        dialogA.getByRole("button", { name: "Save Changes", exact: true }).click(),
+        dialogB.getByRole("button", { name: "Save Changes", exact: true }).click(),
+      ]),
+    );
+    const barrierDeadline = Date.now() + timeouts.barrierMs;
     while (!observer.raceBarrierSatisfied && Date.now() < barrierDeadline) {
+      signal.throwIfAborted();
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     const overlapped = observer.raceBarrierSatisfied;
@@ -1388,8 +1423,8 @@ async function runMultiTabRaceAttack(
       );
     }
     const [outcomeA, outcomeB] = await Promise.all([
-      awaitUpdateOutcome(observer, "tab-a", title, 0),
-      awaitUpdateOutcome(observer, "tab-b", title, 0),
+      awaitUpdateOutcome(observer, "tab-a", title, 0, timeouts.uiStepMs, signal),
+      awaitUpdateOutcome(observer, "tab-b", title, 0, timeouts.uiStepMs, signal),
     ]);
     for (const [label, outcome, amount] of [
       ["A", outcomeA, intended.A],
@@ -1410,17 +1445,25 @@ async function runMultiTabRaceAttack(
     let staleRetry: TabOutcome = { outcome: "REFUSED", message: "Posted expenses are locked (no loser to retry)" };
     if (loser) {
       const before = sentCount(observer, loser.page, title);
-      await loser.dialog.getByRole("button", { name: "Save Changes", exact: true }).click();
-      staleRetry = await awaitUpdateOutcome(observer, loser.page, title, before);
+      signal.throwIfAborted();
+      await untilAborted(
+        signal,
+        loser.dialog.getByRole("button", { name: "Save Changes", exact: true }).click(),
+      );
+      staleRetry = await awaitUpdateOutcome(observer, loser.page, title, before, timeouts.uiStepMs, signal);
     }
 
-    const authorityClient = await runtimeApi.authenticatedClient(tabA);
-    const snapshot = await readSettledExpenseEffectSnapshot(authorityClient, {
-      orgId,
-      title,
-      refs: EXPENSE_AUTHORITY_REFS,
-    });
-    const authoritative = snapshot.expenses.find((row) => row.id === expenseId);
+    const authorityClient = await untilAborted(signal, runtimeApi.authenticatedClient(tabA));
+    signal.throwIfAborted();
+    const snapshot = await untilAborted(
+      signal,
+      readSettledExpenseEffectSnapshot(
+        authorityClient,
+        { orgId: resolvedOrgId, title, refs: EXPENSE_AUTHORITY_REFS },
+        { settleMs: timeouts.settleMs },
+      ),
+    );
+    const authoritative = snapshot.expenses.find((row) => row.id === createdId);
     if (!authoritative) {
       throw new BrowserSwarmOracleInconclusiveError(
         "the synthetic race expense is missing from backend authority",
@@ -1444,12 +1487,14 @@ async function runMultiTabRaceAttack(
         : evaluateExpenseSingleEffect(snapshot, { amount: race.winningAmount, status: "PAID" });
     const violations = [...race.violations, ...(effect?.violations ?? [])];
 
+    // The verdict is decided. From here on a proven breach is a product
+    // verdict that no evidence or cleanup fault may retract (SCRUM-826 C-3).
     const passed = violations.length === 0;
-    const backendArtifact = await runtimeApi.writeBackendEvidence(runtime.paths, {
+    const backendEvidence: Record<string, unknown> = {
       attack: "MULTI_TAB_RACE",
-      orgId,
-      nonce,
-      expenseId,
+      orgId: resolvedOrgId,
+      nonce: runNonce,
+      expenseId: createdId,
       setup: { amount: setupAmount, status: "PENDING" },
       tabs: { A: outcomeA, B: outcomeB },
       staleRetry,
@@ -1457,9 +1502,29 @@ async function runMultiTabRaceAttack(
       race,
       effect,
       violations,
-    });
+    };
+    if (!passed) decidedViolations = violations;
+    let backendArtifact: string;
+    try {
+      backendArtifact = await runtimeApi.writeBackendEvidence(runtime.paths, backendEvidence);
+    } catch (writeError) {
+      // A pass is never certified without its evidence. A proven breach gets
+      // one more attempt; if that also fails, the catch labels the fallback
+      // evidence BREACH_UNDELIVERED and the run is not certified.
+      if (passed) throw writeError;
+      backendArtifact = await runtimeApi.writeBackendEvidence(runtime.paths, backendEvidence);
+    }
     cleanupStarted = true;
-    const artifacts = [...(await runtimeApi.finish(runtime)), backendArtifact];
+    let browserArtifacts: readonly string[] = [];
+    let cleanupFailure: string | null = null;
+    try {
+      browserArtifacts = await runtimeApi.finish(runtime);
+    } catch (finishError) {
+      // Screenshot/trace/close failures cannot retract a breach whose backend
+      // evidence is already durable. A pass still requires a complete cleanup.
+      if (passed) throw finishError;
+      cleanupFailure = errorText(finishError);
+    }
 
     return {
       missionId: context.mission.id,
@@ -1471,11 +1536,43 @@ async function runMultiTabRaceAttack(
         passed,
         summary: passed
           ? `Two tabs paid the same expense concurrently; exactly one (tab ${race.winner}) won, the loser and its stale retry were refused by the posting lock, and the backend holds one posting of the winning amount.`
-          : "Concurrent-tab race breached single economic effect: " + violations.join("; "),
+          : "Concurrent-tab race breached single economic effect: " +
+            violations.join("; ") +
+            (cleanupFailure === null
+              ? ""
+              : " (browser evidence cleanup also failed: " + cleanupFailure + ")"),
       },
-      artifacts,
+      artifacts: [...browserArtifacts, backendArtifact],
     };
   } catch (error) {
+    if (decidedViolations !== null && !cleanupStarted) {
+      // A decided breach whose evidence could not be written: clean up, then
+      // leave fallback evidence labelled as an undelivered breach, best
+      // effort. The original error stays the result, so the run is reported
+      // as a harness fault and never certified.
+      cleanupStarted = true;
+      let cleanupFailure: string | null = null;
+      try {
+        await runtimeApi.finish(runtime);
+      } catch (finishError) {
+        cleanupFailure = errorText(finishError);
+        if (error instanceof Error && error.cause === undefined) error.cause = finishError;
+      }
+      try {
+        await runtimeApi.writeBackendEvidence(runtime.paths, {
+          attack: "MULTI_TAB_RACE",
+          outcome: "BREACH_UNDELIVERED",
+          violations: decidedViolations,
+          reason: errorText(error),
+          cleanupFailure,
+          orgId,
+          nonce,
+          expenseId,
+        });
+      } catch {
+        // The original error is reported regardless.
+      }
+    }
     return runtimeApi.rethrowAfterCleanup(runtime, error, cleanupStarted);
   }
 }
@@ -1490,9 +1587,14 @@ export function createEconomicAttackHandlers(
       options.duplicateSubmitTimeouts?.lostResponseRecoveryMs ?? LOST_RESPONSE_RECOVERY_TIMEOUT_MS,
     settleMs: options.duplicateSubmitTimeouts?.settleMs ?? SETTLE_INTERVAL_MS,
   };
+  const multiTabRaceTimeouts: MultiTabRaceTimeouts = {
+    uiStepMs: options.multiTabRaceTimeouts?.uiStepMs ?? UI_STEP_TIMEOUT_MS,
+    barrierMs: options.multiTabRaceTimeouts?.barrierMs ?? RACE_BARRIER_TIMEOUT_MS,
+    settleMs: options.multiTabRaceTimeouts?.settleMs ?? SETTLE_INTERVAL_MS,
+  };
   return {
     DUPLICATE_SUBMIT: (context) =>
       runDuplicateSubmitAttack(runtimeApi, context, duplicateSubmitTimeouts),
-    MULTI_TAB_RACE: (context) => runMultiTabRaceAttack(runtimeApi, context),
+    MULTI_TAB_RACE: (context) => runMultiTabRaceAttack(runtimeApi, context, multiTabRaceTimeouts),
   };
 }
