@@ -30,6 +30,8 @@ import { useMemo, useRef } from "react";
  * `intentId` names the intent, not the request: use something stable for the
  * thing being acted on (`clear-cheque:<chequeId>`), NOT something that varies
  * per render or per attempt.
+ *
+ * SCRUM-824 G4 probe: comment-only, DO NOT MERGE.
  */
 export type CommandIdentity = {
   /** The identity for this intent — stable until it is retired. */
