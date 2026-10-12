@@ -32,6 +32,7 @@ import {
 import {
   BrowserSwarmOracleInconclusiveError,
   classifyIntentExercise,
+  classifyServerReplayFailure,
   evaluateCommandIdentityLifetime,
   evaluateConcurrentEditRace,
   evaluateExpenseSingleEffect,
@@ -517,7 +518,20 @@ async function runDuplicateSubmitAttack(
     const replayArgs = jsonToConvex(rapidFrame.args as JSONValue) as FunctionArgs<
       typeof api.expenses.create
     >;
-    const replayResult = await client.mutation(api.expenses.create, replayArgs);
+    // An exact replay must return the original record. If the backend refuses
+    // it, that is the product's verdict on replay semantics — a breach, not a
+    // harness error (SCRUM-826 R1). Only an unidentified failure (transport,
+    // HTTP) stays inconclusive.
+    let replay: { accepted: true; result: unknown } | { accepted: false; message: string };
+    try {
+      replay = { accepted: true, result: await client.mutation(api.expenses.create, replayArgs) };
+    } catch (error) {
+      if (classifyServerReplayFailure(error) !== "BACKEND_REFUSED") throw error;
+      replay = {
+        accepted: false,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
     let conflict: { accepted: boolean; message: string };
     try {
       await client.mutation(api.expenses.create, {
@@ -565,9 +579,13 @@ async function runDuplicateSubmitAttack(
         `${lost.title}: the client did not retry the command after the lost response (${reports[1].transmittedAttempts} attempt)`,
       );
     }
-    if (String(replayResult) !== String(rapidReport.effect.expenseId)) {
+    if (!replay.accepted) {
       violations.push(
-        `replaying the transmitted command returned ${String(replayResult)} instead of the original expense ${String(rapidReport.effect.expenseId)}`,
+        "the backend refused an exact replay of the transmitted command: " + replay.message,
+      );
+    } else if (String(replay.result) !== String(rapidReport.effect.expenseId)) {
+      violations.push(
+        `replaying the transmitted command returned ${String(replay.result)} instead of the original expense ${String(rapidReport.effect.expenseId)}`,
       );
     }
     if (conflict.accepted) {
@@ -579,19 +597,25 @@ async function runDuplicateSubmitAttack(
     }
 
     return await conclude(violations, {
-      replay: { result: String(replayResult), conflict },
+      replay: {
+        ...(replay.accepted
+          ? { result: String(replay.result) }
+          : { refused: replay.message }),
+        conflict,
+      },
       reports,
     });
   } catch (error) {
-    if (!cleanupStarted && error instanceof BrowserSwarmOracleInconclusiveError) {
-      // An inconclusive run still leaves its backend evidence behind, so an
-      // operator can tell a harness fault from a hidden product refusal
-      // (SCRUM-826 O2). Best effort: the inconclusive error stays the result.
+    if (!cleanupStarted) {
+      // Every run that fails to conclude still leaves its backend evidence
+      // behind, so an operator can tell a harness fault from a hidden product
+      // refusal (SCRUM-826 O2/R-1). Best effort: the error stays the result.
       try {
         await runtimeApi.writeBackendEvidence(runtime.paths, {
           attack: "DUPLICATE_SUBMIT",
-          outcome: "INCONCLUSIVE",
-          reason: error.message,
+          outcome:
+            error instanceof BrowserSwarmOracleInconclusiveError ? "INCONCLUSIVE" : "HARNESS_ERROR",
+          reason: error instanceof Error ? error.message : String(error),
           orgId: resolvedOrgId,
           nonce,
           mutations: observer.mutations,
@@ -599,7 +623,7 @@ async function runDuplicateSubmitAttack(
           lostResponse: observer.withheld,
         });
       } catch {
-        // The inconclusive verdict is reported regardless.
+        // The original error is reported regardless.
       }
     }
     return runtimeApi.rethrowAfterCleanup(runtime, error, cleanupStarted);

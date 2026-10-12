@@ -16,6 +16,7 @@
  *                              fails the run — it is never a pass.
  */
 
+import { ConvexError } from "convex/values";
 import { denominationOf } from "../../convex/utils/money";
 
 export class BrowserSwarmOracleInconclusiveError extends Error {
@@ -451,6 +452,19 @@ export function evaluateIntentReplies(
     );
   }
   return { violations, refused: violations.length };
+}
+
+export type ServerReplayFailure = "BACKEND_REFUSED" | "UNIDENTIFIED";
+
+/**
+ * SCRUM-826 O2/R1: a server-side replay that fails is a product verdict only
+ * when the backend itself refused it. ConvexHttpClient raises ConvexError
+ * exclusively for an application refusal returned by the deployment; a
+ * transport, HTTP or unidentified failure stays inconclusive (never a pass,
+ * never a fabricated breach).
+ */
+export function classifyServerReplayFailure(error: unknown): ServerReplayFailure {
+  return error instanceof ConvexError ? "BACKEND_REFUSED" : "UNIDENTIFIED";
 }
 
 export type IntentExercise = "EXERCISED" | "PRODUCT_REFUSED" | "NOT_EXERCISED";

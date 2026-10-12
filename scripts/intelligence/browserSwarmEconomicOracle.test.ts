@@ -1,7 +1,9 @@
+import { ConvexError } from "convex/values";
 import { describe, expect, it } from "vitest";
 import {
   BrowserSwarmOracleInconclusiveError,
   classifyIntentExercise,
+  classifyServerReplayFailure,
   evaluateCommandIdentityLifetime,
   evaluateConcurrentEditRace,
   evaluateExpenseSingleEffect,
@@ -564,6 +566,17 @@ describe("SCRUM-826 O1/O2 — client-visible replies to one intent", () => {
     expect(
       classifyIntentExercise({ uiConfirmed: false, backendRecords: 0, refusedReplies: 2 }),
     ).toBe("PRODUCT_REFUSED");
+  });
+
+  it("treats a backend ConvexError on a server replay as a product refusal", () => {
+    const refusal = new ConvexError("Idempotency key reused with different request content");
+    expect(classifyServerReplayFailure(refusal)).toBe("BACKEND_REFUSED");
+  });
+
+  it("keeps a transport or unidentified failure on a server replay inconclusive", () => {
+    expect(classifyServerReplayFailure(new TypeError("fetch failed"))).toBe("UNIDENTIFIED");
+    expect(classifyServerReplayFailure(new Error("502 Bad Gateway"))).toBe("UNIDENTIFIED");
+    expect(classifyServerReplayFailure("boom")).toBe("UNIDENTIFIED");
   });
 
   it("keeps an unconfirmed intent with no refusal reply as not exercised", () => {
