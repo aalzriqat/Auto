@@ -13,13 +13,14 @@
  *                    error, including BrowserSwarmOracleInconclusiveError).
  *                    The executor fails the run on it; it is never a pass.
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { Browser, BrowserContext, Locator, Page, WebSocketRoute } from "@playwright/test";
 import type { ConvexHttpClient } from "convex/browser";
 import type { FunctionArgs } from "convex/server";
 import { jsonToConvex, type JSONValue } from "convex/values";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import { CreateExpenseSchema } from "../../convex/validations/expenses";
 import type { BrowserMissionEvidence } from "./browserAttackSwarm";
 import type {
   BrowserMissionExecutionContext,
@@ -96,17 +97,35 @@ const EXPENSE_AUTHORITY_REFS: ExpenseAuthorityRefs = {
   getJournalEntry: api.accountingLedger.getJournalEntry,
 };
 
+/** Room reserved after a nonce for the longest intent suffix ("-control"). */
+const ATTACK_TITLE_SUFFIX_BUDGET = 16;
+
+/**
+ * A run-unique synthetic title stem. Every title built from it must be VALID
+ * backend input: a refusal of an invalid title would read as a product breach
+ * (SCRUM-826 D1). The length is bounded by construction, whatever the run id;
+ * the full run id is kept as a digest so long ids sharing a prefix stay apart.
+ */
 function attackNonce(context: BrowserMissionExecutionContext): string {
-  const leaf = (value: string) => value.replace(/[^A-Za-z0-9-]/g, "-").slice(0, 40);
-  return [
+  const leaf = (value: string, max: number) => value.replace(/[^A-Za-z0-9-]/g, "-").slice(0, max);
+  const runId = context.manifest.runId;
+  const nonce = [
     "swarm",
-    leaf(context.manifest.runId),
-    leaf(context.worker.workerId),
-    leaf(context.mission.family.toLowerCase()),
+    leaf(runId, 12),
+    createHash("sha256").update(runId).digest("hex").slice(0, 10),
+    leaf(context.worker.workerId, 12),
+    leaf(context.mission.family.toLowerCase(), 16),
     Date.now().toString(36),
     // A CSPRNG suffix: the oracle relies on titles being run-unique nonces.
     randomBytes(6).toString("hex"),
   ].join("-");
+  const titleMax = CreateExpenseSchema.shape.title.maxLength;
+  if (titleMax !== null && nonce.length + ATTACK_TITLE_SUFFIX_BUDGET > titleMax) {
+    throw new Error(
+      `Synthetic attack title would exceed the backend title limit (${titleMax}); refusing to run an attack whose refusal could not be judged`,
+    );
+  }
+  return nonce;
 }
 
 // ─── Convex sync observation and fault injection ──────────────────────────────

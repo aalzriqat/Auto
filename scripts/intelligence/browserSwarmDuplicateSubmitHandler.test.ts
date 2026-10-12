@@ -11,6 +11,7 @@ import {
   type MissionBrowserRuntime,
 } from "./browserSwarmEconomicAttacks";
 import { BrowserSwarmOracleInconclusiveError } from "./browserSwarmEconomicOracle";
+import { CreateExpenseSchema } from "../../convex/validations/expenses";
 
 /**
  * SCRUM-826 O1/O2/R-1 — handler-level tests for DUPLICATE_SUBMIT.
@@ -116,6 +117,10 @@ class FakeBackend {
     const key = String(args.idempotencyKey);
     if (this.faults.refuseSuffix && title.endsWith(this.faults.refuseSuffix)) {
       return { ok: false, message: "Expense recording is not allowed for this account." };
+    }
+    // The real backend validator: a synthetic title it rejects is a refusal.
+    if (!CreateExpenseSchema.shape.title.safeParse(title).success) {
+      return { ok: false, message: "Title is too long" };
     }
     const fingerprint = title + "|" + amount;
     const existing = this.keys.get(key);
@@ -513,6 +518,9 @@ interface HarnessOptions {
   uiStepMs?: number;
   lostResponseRecoveryMs?: number;
   signal?: AbortSignal;
+  /** Manifest run id and worker id; the defaults are short. */
+  runId?: string;
+  workerId?: string;
 }
 
 /** Every harness built by a test, checked for modal discipline after it (D1/D2). */
@@ -566,8 +574,8 @@ function harness(faults: Faults = {}, options: HarnessOptions = {}): Harness {
     authenticatedClient: async () => fakeClient(backend),
   };
   const context = {
-    manifest: { runId: "run-1" },
-    worker: { workerId: "worker-1" },
+    manifest: { runId: options.runId ?? "run-1" },
+    worker: { workerId: options.workerId ?? "worker-1" },
     mission: { id: "mission-1", family: "DUPLICATE_SUBMIT" },
     signal: options.signal ?? new AbortController().signal,
   } as unknown as BrowserMissionExecutionContext;
@@ -591,6 +599,22 @@ describe("SCRUM-826 DUPLICATE_SUBMIT handler", () => {
     expect(h.evidence).toHaveLength(1);
     expect(h.evidence[0].violations).toEqual([]);
   }, 30_000);
+
+  // SCRUM-826 D1 (Codex, 758c64586): every synthetic title must be valid
+  // backend input, or its refusal is a false product breach. The manifest
+  // accepts run ids of up to 81 characters; the expense title cap is 100.
+  for (const runId of ["r".repeat(39), "a" + "b.c_d-".repeat(13) + "ee"]) {
+    it(`D1: a valid ${runId.length}-character run id still yields backend-valid titles`, async () => {
+      expect(runId).toMatch(/^[a-z0-9][a-z0-9._-]{0,80}$/);
+      const h = harness({}, { runId, workerId: "worker-12" });
+      const evidence = await h.run();
+      expect(evidence.oracle.passed).toBe(true);
+      expect(h.backend.expenses).toHaveLength(3);
+      for (const expense of h.backend.expenses) {
+        expect(CreateExpenseSchema.shape.title.safeParse(expense.title).success).toBe(true);
+      }
+    }, 30_000);
+  }
 
   it("O1: a fingerprint refusal of a same-intent rapid retry is a breach", async () => {
     const h = harness({ volatileSuffix: "-rapid" });
