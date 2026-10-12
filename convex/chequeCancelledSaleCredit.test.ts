@@ -8,9 +8,9 @@
  * direct DB reads are assertions.
  */
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 
@@ -365,6 +365,18 @@ describe("SCRUM-724 cancelled-sale credit: authorized refund", () => {
     expect(await s.t.run((ctx) => ctx.db.query("retainedCreditRefundRequests" as never).collect())).toHaveLength(0);
   }, 30_000);
 
+  test("e5. listRetainedCreditRefundRequests.requestedByMe is true for the requester and false for a different finance user", async () => {
+    const { s, request } = await refundFixture("e5");
+    const requestId = await request(1000);
+    const list = (as: { query: (...a: never[]) => Promise<unknown> } & Record<string, unknown>) =>
+      (as as any).query((api as any).retainedCreditRefunds.listRetainedCreditRefundRequests,
+        { orgId: s.orgId, status: "PENDING" }) as Promise<Array<{ _id: string; requestedByMe: boolean }>>;
+    const mine = (await list(s.asOwner as never)).find((row) => row._id === requestId);
+    const theirs = (await list(s.financeOnly.as as never)).find((row) => row._id === requestId);
+    expect(mine?.requestedByMe).toBe(true);
+    expect(theirs?.requestedByMe).toBe(false);
+  }, 30_000);
+
   test("g. returning the cleared cheque after a standalone refund is refused with no writes", async () => {
     const { s, chequeId, paymentId, movement, request, respond, execute } = await refundFixture("g");
     const requestId = await request(1000);
@@ -390,6 +402,202 @@ describe("SCRUM-724 cancelled-sale credit: authorized refund", () => {
     expect(paymentId).toBeDefined();
     expect(movement).toBeDefined();
   }, 30_000);
+
+  const codeOf = (promise: Promise<unknown>) =>
+    promise.then(() => null, (e: unknown) => (e as { data?: { code?: string } }).data?.code ?? "UNCODED");
+
+  test("F2a. a reservation cannot claim credit that an open refund request already counts (coded refusal, nothing written)", async () => {
+    const { s, movement, request, respond } = await refundFixture("f2a");
+    const target = await newSale(s);
+    const reserve = (amountMinor: number) => s.asOwner.mutation(api.collections.reserveSaleInvoiceReceipt, {
+      orgId: s.orgId, saleId: target, receiptMovementId: movement._id, amountMinor, idempotencyKey: crypto.randomUUID(),
+    });
+    const pendingId = await request(2000); // PENDING counts
+    expect(await codeOf(reserve(1500))).toBe("RETAINED_CREDIT_UNAVAILABLE");
+    await respond(pendingId); // APPROVED still counts
+    expect(await codeOf(reserve(1500))).toBe("RETAINED_CREDIT_UNAVAILABLE");
+    expect((await s.t.run((ctx) => ctx.db.query("invoiceReceiptApplications").collect()))).toHaveLength(0);
+    await expect(reserve(1000)).resolves.toBeDefined(); // 3000 - 2000 open is still free
+  }, 60_000);
+
+  test("F2b. the other order: credit already reserved is not requestable, and a REJECTED request frees it for a reservation", async () => {
+    const { s, movement, request, respond } = await refundFixture("f2b");
+    const target = await newSale(s);
+    await s.asOwner.mutation(api.collections.reserveSaleInvoiceReceipt, {
+      orgId: s.orgId, saleId: target, receiptMovementId: movement._id, amountMinor: 2500, idempotencyKey: crypto.randomUUID(),
+    });
+    expect(await codeOf(request(1000))).toBe("RETAINED_CREDIT_REFUND_INSUFFICIENT");
+    const requestId = await request(500);
+    await respond(requestId, s.approver.as, "REJECTED");
+    await expect(s.asOwner.mutation(api.collections.reserveSaleInvoiceReceipt, {
+      orgId: s.orgId, saleId: target, receiptMovementId: movement._id, amountMinor: 500, idempotencyKey: crypto.randomUUID(),
+    })).resolves.toBeDefined();
+  }, 60_000);
+
+  test("RT1. deciding the same request twice: the second decision is refused NOT_PENDING and nothing changes", async () => {
+    const { s, request, respond } = await refundFixture("rt1");
+    const requestId = await request(1000);
+    await respond(requestId);
+    expect(await codeOf(respond(requestId))).toBe("RETAINED_CREDIT_REFUND_NOT_PENDING");
+    expect(await codeOf(respond(requestId, s.approver.as, "REJECTED"))).toBe("RETAINED_CREDIT_REFUND_NOT_PENDING");
+    expect((await s.t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("APPROVED");
+  }, 60_000);
+
+  test.each([0, -1, 1.5, Number.NaN])("RT2. a refund request of %s is refused INVALID_AMOUNT with no row", async (amount) => {
+    const { s, request } = await refundFixture(`rt2${String(amount).replace(/W/g, "x")}`);
+    expect(await codeOf(request(amount))).toBe("RETAINED_CREDIT_REFUND_INVALID_AMOUNT");
+    expect(await s.t.run((ctx) => ctx.db.query("retainedCreditRefundRequests").collect())).toHaveLength(0);
+  }, 60_000);
+
+  test("RT3. a legacy position WITHOUT lineage fields can still be refunded and reallocated", async () => {
+    const { s, movement, request, respond, execute } = await refundFixture("rt3");
+    const position = (await s.t.run((ctx) => ctx.db.query("receiptRetainedPositions")
+      .withIndex("by_org_movement", (q) => q.eq("orgId", s.orgId).eq("receiptMovementId", movement._id)).unique()))!;
+    await s.t.run((ctx) => ctx.db.replace(position._id, (({ _id, _creationTime, sourceChequeId, originatingSaleId, ...rest }) => rest)(position)));
+    const legacy = await s.t.run((ctx) => ctx.db.get(position._id));
+    expect(legacy?.sourceChequeId).toBeUndefined();
+    expect(legacy?.originatingSaleId).toBeUndefined();
+    const requestId = await request(1000);
+    await respond(requestId);
+    await execute(requestId);
+    const target = await newSale(s);
+    await expect(s.asOwner.mutation(api.collections.reserveSaleInvoiceReceipt, {
+      orgId: s.orgId, saleId: target, receiptMovementId: movement._id, amountMinor: 2000, idempotencyKey: crypto.randomUUID(),
+    })).resolves.toBeDefined();
+    const listed = await s.asOwner.query(api.collections.listRetainedCredits, {
+      orgId: s.orgId, customerId: s.customerId, onlyRemaining: false, paginationOpts: { cursor: null, numItems: 20 },
+    });
+    expect(listed.page[0]?.sourceChequeId).toBeUndefined();
+    expect(listed.page[0]?.originatingSaleId).toBeUndefined();
+  }, 60_000);
+
+  test("RT4. clearing a DEPOSITED cancelled-sale cheque with the 2110 account unmapped DEFERS the posting (SCRUM-218-C), loses nothing, and posts exactly once when restored", async () => {
+    const s = await seed("rt4");
+    const saleId = await newSale(s);
+    const chequeId = await registerCheque(s, saleId, "RT4-1");
+    await deposit(s, chequeId);
+    await cancelSale(s, saleId);
+    const key = SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY;
+    const removed = await s.t.run(async (ctx) => {
+      const row = (await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) =>
+        q.eq("orgId", s.orgId).eq("systemKey", key)).unique())!;
+      await ctx.db.delete(row._id);
+      return row;
+    });
+    await clear(s, chequeId);
+    const cheque = await s.t.run((ctx) => ctx.db.get(chequeId));
+    expect(cheque?.status).toBe("CLEARED");
+    const payments = await s.t.run((ctx) => ctx.db.query("collectionPayments").collect());
+    expect(payments).toHaveLength(1);
+    const movement = await movementOf(s.t, s.orgId, payments[0]!._id);
+    const position = await positionOf(s.t, s.orgId, movement._id);
+    expect(position.remainingUnappliedMinor).toBe(3000);
+    // Nothing reached the ledger without 2110, and the posting is durably queued, not lost.
+    const unbalanced = await s.t.run(async (ctx) => {
+      const lines = await ctx.db.query("journalLines").collect();
+      return lines.filter((l) => l.accountId === removed._id);
+    });
+    expect(unbalanced).toHaveLength(0);
+    const queued = await s.t.run((ctx) => ctx.db.query("pendingAccountingEvents").collect());
+    expect(queued.filter((q) => q.status === "PENDING").length).toBeGreaterThan(0);
+    // Credit is not spendable-to-refund while its receipt is unposted? Record the observed behaviour only: restoring the
+    // account and draining posts the receipt once and a second drain adds nothing.
+    await s.t.run(async (ctx) => {
+      const { _id, _creationTime, ...rest } = removed;
+      await ctx.db.insert("chartOfAccounts", rest);
+    });
+    const drain = async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      try {
+        await s.t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId: s.orgId });
+        for (let pass = 0; pass < 10; pass += 1) {
+          await s.t.finishAllScheduledFunctions(vi.runAllTimers);
+          const open = (await s.t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect()))
+            .filter((x) => x.state.kind === "pending" || x.state.kind === "inProgress").length;
+          if (open === 0) break;
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    };
+    await drain();
+    const after = await glLines(s.t, s.orgId, "collectionPayments", String(payments[0]!._id));
+    const credit2110 = after.filter((l) => l.key === key && l.status === "POSTED");
+    expect(credit2110.reduce((a, l) => a + l.credit - l.debit, 0)).toBe(3000);
+    await drain();
+    const again = await glLines(s.t, s.orgId, "collectionPayments", String(payments[0]!._id));
+    expect(again).toHaveLength(after.length);
+  }, 60_000);
+
+  test("RT6. executing a refund while the 2110 account is unmapped is refused: no payout, no journal, the request stays APPROVED", async () => {
+    const { s, request, respond, execute } = await refundFixture("rt6");
+    const requestId = await request(1000);
+    await respond(requestId);
+    await s.t.run(async (ctx) => {
+      const row = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) =>
+        q.eq("orgId", s.orgId).eq("systemKey", SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY)).unique();
+      await ctx.db.delete(row!._id);
+    });
+    await expect(execute(requestId)).rejects.toThrow();
+    expect((await s.t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("APPROVED");
+    const outs = await s.t.run((ctx) => ctx.db.query("canonicalPayments")
+      .withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect());
+    expect(outs.filter((p) => p.direction === "OUT")).toHaveLength(0);
+  }, 60_000);
+
+  test("RT5. a deleted (isDeleted) cheque cannot be deposited, cleared or replaced, and a cancelled sale's cheque cannot be replaced", async () => {
+    const s = await seed("rt5");
+    const saleId = await newSale(s);
+    const chequeId = await registerCheque(s, saleId, "RT5-1");
+    await s.t.run((ctx) => ctx.db.patch(chequeId, { isDeleted: true }));
+    await expect(deposit(s, chequeId)).rejects.toThrow();
+    await expect(clear(s, chequeId)).rejects.toThrow();
+    expect((await s.t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("HELD");
+    expect(await s.t.run((ctx) => ctx.db.query("collectionPayments").collect())).toHaveLength(0);
+  }, 60_000);
+
+  test("RT7. a DEPOSITED cheque whose cancelled source sale is soft-deleted still clears into credit with lineage (the bank already moved the money)", async () => {
+    const s = await seed("rt7");
+    const saleId = await newSale(s);
+    const chequeId = await registerCheque(s, saleId, "RT7-1");
+    await deposit(s, chequeId);
+    await cancelSale(s, saleId);
+    await s.t.run((ctx) => ctx.db.patch(saleId, { isDeleted: true }));
+    await clear(s, chequeId);
+    const payments = await s.t.run((ctx) => ctx.db.query("collectionPayments").collect());
+    expect(payments).toHaveLength(1);
+    const position = await positionOf(s.t, s.orgId, (await movementOf(s.t, s.orgId, payments[0]!._id))._id);
+    expect(position).toMatchObject({ remainingUnappliedMinor: 3000, sourceChequeId: chequeId, originatingSaleId: saleId });
+    const lines = await glLines(s.t, s.orgId, "collectionPayments", String(payments[0]!._id));
+    expect(lines.find((l) => l.key === SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY)?.credit).toBe(3000);
+  }, 60_000);
+
+  test("F1. the return guard fails closed at the request cap: 201 requests, the EXECUTED one LAST, still refuses with no writes", async () => {
+    const { s, chequeId, movement } = await refundFixture("f1");
+    const position = (await s.t.run((ctx) => ctx.db.query("receiptRetainedPositions")
+      .withIndex("by_org_movement", (q) => q.eq("orgId", s.orgId).eq("receiptMovementId", movement._id)).unique()))!;
+    await s.t.run(async (ctx) => {
+      const base = {
+        orgId: s.orgId, receiptMovementId: movement._id, positionId: position._id,
+        customerId: position.customerId, currency: position.currency, amountMinor: 1,
+        method: "CASH" as const, reason: "seed", requestedBy: s.userId, createdAt: 1, updatedAt: 1,
+      };
+      for (let i = 0; i < 200; i++) await ctx.db.insert("retainedCreditRefundRequests", { ...base, status: "REJECTED" });
+      await ctx.db.insert("retainedCreditRefundRequests", { ...base, status: "EXECUTED" });
+    });
+    const snapshot = () => s.t.run(async (ctx) => ({
+      pos: await ctx.db.query("receiptRetainedPositions").collect(),
+      pay: await ctx.db.query("collectionPayments").collect(),
+      ev: await ctx.db.query("accountingEvents").collect(),
+      cheque: await ctx.db.get(chequeId),
+    }));
+    const before = await snapshot();
+    const err = await s.asOwner.mutation(api.collections.returnClearedCheque, {
+      orgId: s.orgId, chequeId, idempotencyKey: crypto.randomUUID(),
+    }).then(() => null, (e: unknown) => e as { data?: { code?: string } });
+    expect(err?.data?.code).toBe("CHEQUE_RETURN_AFTER_CREDIT_REFUND");
+    expect(await snapshot()).toEqual(before);
+  }, 60_000);
 
   test("h. a cleared cancelled-sale cheque with NO refund can still be returned (credit retired, no revenue)", async () => {
     const s = await seed("h");

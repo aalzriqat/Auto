@@ -3,6 +3,8 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getReceivableOutstandingMinor } from "../subledger";
 import { loadRetainedPosition } from "./receiptMovement";
+import { AppErrorCode, throwAppError } from "../utils/errors";
+import { RETAINED_CREDIT_MESSAGES } from "../utils/retainedCreditMessages";
 
 const MAX_PENDING_APPLICATIONS = 500;
 
@@ -21,6 +23,36 @@ async function pendingReceiptRows(
     throw new ConvexError("This receipt has too many pending applications for a safe balance check.");
   }
   return rows;
+}
+
+const OPEN_REFUND_REQUEST_SCAN = 200;
+
+/**
+ * SCRUM-724: credit already asked back by the customer (PENDING + APPROVED
+ * standalone refund requests) for one movement. ONE notion of available credit
+ * is `remaining - reserved - open refunds`; request, approve, reserve and
+ * execute all subtract the same terms. Fails closed (coded) if the movement has
+ * more requests than a bounded scan can read.
+ */
+export async function openRefundRequestMinor(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  receiptMovementId: Id<"receiptMovements">,
+  excludeRequestId?: Id<"retainedCreditRefundRequests">
+): Promise<number> {
+  const rows = await ctx.db
+    .query("retainedCreditRefundRequests")
+    .withIndex("by_org_movement", (q) => q.eq("orgId", orgId).eq("receiptMovementId", receiptMovementId))
+    .take(OPEN_REFUND_REQUEST_SCAN + 1);
+  if (rows.length > OPEN_REFUND_REQUEST_SCAN) {
+    throwAppError(
+      AppErrorCode.RETAINED_CREDIT_REFUND_INSUFFICIENT,
+      RETAINED_CREDIT_MESSAGES.RETAINED_CREDIT_REFUND_INSUFFICIENT
+    );
+  }
+  return rows
+    .filter((row) => (row.status === "PENDING" || row.status === "APPROVED") && row._id !== excludeRequestId)
+    .reduce((sum, row) => sum + row.amountMinor, 0);
 }
 
 /** Reserved credit is still a 2110 liability; it has not paid an invoice. */
@@ -108,10 +140,11 @@ export async function reservePendingInvoiceReceipt(
   ) {
     throw new ConvexError("Retained credit position does not match its receipt.");
   }
-  const [receiptRows, saleRows, outstandingMinor] = await Promise.all([
+  const [receiptRows, saleRows, outstandingMinor, openRefundMinor] = await Promise.all([
     pendingReceiptRows(ctx, args.orgId, movement._id),
     pendingSaleRows(ctx, args.orgId, sale._id),
     getReceivableOutstandingMinor(ctx, invoice._id),
+    openRefundRequestMinor(ctx, args.orgId, movement._id),
   ]);
   // Keep the next claim inside the bound used by read-back and both exits.
   if (receiptRows.length >= MAX_PENDING_APPLICATIONS || saleRows.length >= MAX_PENDING_APPLICATIONS) {
@@ -119,10 +152,15 @@ export async function reservePendingInvoiceReceipt(
   }
   const reservedMinor = receiptRows.reduce((sum, row) => sum + row.amountMinor, 0);
   const pendingForSaleMinor = saleRows.reduce((sum, row) => sum + row.amountMinor, 0);
-  if (
-    args.amountMinor > position.remainingUnappliedMinor - reservedMinor ||
-    args.amountMinor > outstandingMinor - pendingForSaleMinor
-  ) {
+  // SCRUM-724: credit a customer already asked back is not reservable; coded so
+  // the operator sees the reason in EN/AR instead of a raw English string.
+  if (args.amountMinor > position.remainingUnappliedMinor - reservedMinor - openRefundMinor) {
+    throwAppError(
+      AppErrorCode.RETAINED_CREDIT_UNAVAILABLE,
+      RETAINED_CREDIT_MESSAGES.RETAINED_CREDIT_UNAVAILABLE
+    );
+  }
+  if (args.amountMinor > outstandingMinor - pendingForSaleMinor) {
     throw new ConvexError("The retained credit or sale invoice has insufficient unreserved balance.");
   }
   const now = Date.now();

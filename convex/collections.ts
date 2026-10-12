@@ -2827,13 +2827,15 @@ export const returnClearedCheque = mutation({
           // payout would be left unrecovered. Refused before the first write;
           // refund reversal / payout recovery is out of scope and handled by an
           // accountant.
-          const refundRows = await ctx.db
+          // Status-precise: an EXECUTED row is found however many other requests
+          // the movement has, so the guard cannot be outrun by the request cap.
+          const executedRefund = await ctx.db
             .query("retainedCreditRefundRequests")
-            .withIndex("by_org_movement", (q) =>
-              q.eq("orgId", args.orgId).eq("receiptMovementId", movement._id)
+            .withIndex("by_org_movement_status", (q) =>
+              q.eq("orgId", args.orgId).eq("receiptMovementId", movement._id).eq("status", "EXECUTED")
             )
-            .take(200);
-          if (refundRows.some((row) => row.status === "EXECUTED")) {
+            .first();
+          if (executedRefund) {
             throwAppError(
               AppErrorCode.CHEQUE_RETURN_AFTER_CREDIT_REFUND,
               RETAINED_CREDIT_MESSAGES.CHEQUE_RETURN_AFTER_CREDIT_REFUND

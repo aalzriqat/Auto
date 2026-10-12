@@ -1844,6 +1844,10 @@ const serverErrorMessages = defineBilingualMessages({
     "The refund could not be posted to the general ledger, so nothing was paid or changed.",
     "تعذّر ترحيل الردّ إلى دفتر الأستاذ العام، لذلك لم يُدفع أو يُغيَّر أي شيء.",
   ],
+  ServerError_RETAINED_CREDIT_UNAVAILABLE: [
+    "That much customer credit is not available: part of it is reserved for a sale invoice or already requested as a refund. Nothing has been changed.",
+    "مبلغ رصيد العميل المطلوب غير متاح: جزء منه محجوز لفاتورة بيع أو مطلوب ردّه مسبقًا. لم يتم تغيير أي شيء.",
+  ],
   ServerError_CHEQUE_NOT_FOUND: [
     "Cheque not found. Nothing has been changed.",
     "لم يتم العثور على الشيك. لم يتم تغيير أي شيء.",

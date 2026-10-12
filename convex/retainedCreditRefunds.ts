@@ -16,7 +16,7 @@
  * refusal, because a caught exception would commit the writes before it.
  */
 import { v } from "convex/values";
-import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { query, type MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -28,33 +28,15 @@ import { RETAINED_CREDIT_MESSAGES } from "./utils/retainedCreditMessages";
 import { createCanonicalPayment } from "./subledger";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import { loadRetainedPosition, requirePostedReceiptForMovement } from "./accounting/receiptMovement";
-import { pendingInvoiceReceiptMinor } from "./accounting/invoiceReceiptReservation";
+import { openRefundRequestMinor as openRequestMinor, pendingInvoiceReceiptMinor } from "./accounting/invoiceReceiptReservation";
 
 const REASON_MAX = 500;
 const REFERENCE_MAX = 120;
-const OPEN_REQUEST_SCAN = 200;
 
 const methodValidator = v.union(v.literal("BANK_TRANSFER"), v.literal("CASH"));
 
 function refuse(code: keyof typeof RETAINED_CREDIT_MESSAGES): never {
   return throwAppError(AppErrorCode[code], RETAINED_CREDIT_MESSAGES[code]);
-}
-
-/** Money requested but not yet paid out (PENDING + APPROVED) for one movement. */
-async function openRequestMinor(
-  ctx: QueryCtx | MutationCtx,
-  orgId: Id<"organizations">,
-  receiptMovementId: Id<"receiptMovements">,
-  excludeRequestId?: Id<"retainedCreditRefundRequests">
-): Promise<number> {
-  const rows = await ctx.db
-    .query("retainedCreditRefundRequests")
-    .withIndex("by_org_movement", (q) => q.eq("orgId", orgId).eq("receiptMovementId", receiptMovementId))
-    .take(OPEN_REQUEST_SCAN + 1);
-  if (rows.length > OPEN_REQUEST_SCAN) refuse("RETAINED_CREDIT_REFUND_INSUFFICIENT");
-  return rows
-    .filter((row) => (row.status === "PENDING" || row.status === "APPROVED") && row._id !== excludeRequestId)
-    .reduce((sum, row) => sum + row.amountMinor, 0);
 }
 
 async function loadMovementAndPosition(

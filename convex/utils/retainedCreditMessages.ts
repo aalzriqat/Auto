@@ -26,6 +26,8 @@ export const RETAINED_CREDIT_MESSAGES = {
     "Enter the payout reference (at most 120 characters) and a payout date that is not in the future. Nothing has been changed.",
   RETAINED_CREDIT_REFUND_POSTING_FAILED:
     "The refund could not be posted to the general ledger, so nothing was paid or changed.",
+  RETAINED_CREDIT_UNAVAILABLE:
+    "That much customer credit is not available: part of it is reserved for a sale invoice or already requested as a refund. Nothing has been changed.",
 } as const satisfies Partial<Record<AppErrorCode, string>>;
 
 export type RetainedCreditMessageCode = keyof typeof RETAINED_CREDIT_MESSAGES;

@@ -4584,7 +4584,8 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
-    .index("by_org_movement", ["orgId", "receiptMovementId"]),
+    .index("by_org_movement", ["orgId", "receiptMovementId"])
+    .index("by_org_movement_status", ["orgId", "receiptMovementId", "status"]),
 
   /**
    * SCRUM-722: a pending claim on retained 2110 credit for a completed sale's
