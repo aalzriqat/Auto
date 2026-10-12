@@ -76,6 +76,18 @@ const RESET_TABLES = [
   // to `reverseAccountingEvent`, which throws on a missing event. It stays AFTER
   // `commitmentAuthorityWork`, which is its child (see CHILD_TABLES).
   "pendingAccountingEvents",
+  // ⚠️ SCRUM-813. `invoiceReceiptApplications.activationEventId` names the
+  // RECEIPT_CREDIT_APPLIED event that posted the application; the activation replay
+  // (`accounting/invoiceReceiptActivation.readActiveReplay`) loads it and refuses
+  // when it is gone. So applications are listed BEFORE `accountingEvents` and
+  // `CHILD_TABLES.accountingEvents` defers the events while any application remains.
+  // Nothing in the reset references an application except the application itself,
+  // so moving it up creates no ordering cycle.
+  // SCRUM-724: a standalone refund request names its position, movement, payment
+  // and (once executed) its RETAINED_CREDIT_REFUNDED event, so it drains before all
+  // of them. Nothing references a refund request, so listing it first adds no cycle.
+  "retainedCreditRefundRequests",
+  "invoiceReceiptApplications",
   "accountingEvents",
   // ⚠️ SCRUM-549: `journalLines.journalEntryId` and `.accountId` are REQUIRED, so
   // lines go BEFORE their entry and their account (CHILD_TABLES defers both).
@@ -118,9 +130,8 @@ const RESET_TABLES = [
   // `orgDeletionCoverage.test.ts` now enforces the ordering half, because a
   // property stated only in a comment is not enforced — which is exactly how
   // this comment came to be wrong twice.
-  // SCRUM-724: a standalone refund request names its position, movement and payment.
-  "retainedCreditRefundRequests",
-  "invoiceReceiptApplications",
+  // `retainedCreditRefundRequests` and `invoiceReceiptApplications` are listed
+  // earlier, before `accountingEvents` (SCRUM-813 / SCRUM-724).
   "receiptApplications",
   "receiptRetainedPositions",
   "receiptMovements",
@@ -292,7 +303,8 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   // (`accountingOutbox.reversePendingEntry`, a non-tenant-auth path) passes it to
   // `reverseAccountingEvent`, which throws "Accounting event not found" when the
   // event is gone. `pendingAccountingEvents` is therefore listed first.
-  accountingEvents: ["pendingAccountingEvents"],
+  // SCRUM-813: plus `invoiceReceiptApplications.activationEventId` (see RESET_TABLES).
+  accountingEvents: ["pendingAccountingEvents", "invoiceReceiptApplications"],
   // SCRUM-559 (E4). `financeDealFees.custodyId` and `.custodyPosted.custodyId`:
   // `financeDealCosts.requireLinkedCustody` (`ctx.db.get`, refuses on null) loads
   // the custody record a fee names.
