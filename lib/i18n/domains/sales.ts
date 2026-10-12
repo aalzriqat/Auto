@@ -2321,7 +2321,28 @@ const quotationUnavailableMessages = defineBilingualMessages({
     "لا يتوفّر لأوتوفلو مبلغ بيع مستهدف ليحتسب منه لهذه الصفقة. سجِّل المبلغ الذي أُرسل فعلياً.",
   ],
 });
+/**
+ * SCRUM-724 mount: the deal-page receipts panel and the Collections refund queue
+ * degrade to these when their own queries fail, and the panel explains a held
+ * cheque the invoice can no longer cover before the server has to refuse it.
+ */
+const customerMoneyMountMessages = defineBilingualMessages({
+  DealReceiptPanelLoadFailed: [
+    "Customer money for this sale could not be loaded. The rest of the deal is unaffected. Reload the page to try again.",
+    "تعذّر تحميل أموال العميل لهذه الصفقة. باقي الصفقة لم يتأثر. أعد تحميل الصفحة للمحاولة مجدداً.",
+  ],
+  RetainedCreditRefundsLoadFailed: [
+    "Customer credit refunds could not be loaded. Reload the page to try again.",
+    "تعذّر تحميل طلبات ردّ رصيد العملاء. أعد تحميل الصفحة للمحاولة مجدداً.",
+  ],
+  DealReceiptChequeExceedsInvoice: [
+    "The invoice can no longer cover this cheque, so it cannot be deposited. Return it to the customer.",
+    "لم تعد الفاتورة تغطي هذا الشيك، لذلك لا يمكن إيداعه. أعده إلى العميل.",
+  ],
+});
+
 export const salesEn = {
+  ...customerMoneyMountMessages.en,
   ...quoteWizardQaMessages.en,
   ...quotationUnavailableMessages.en,
   ...serverErrorMessages.en,
@@ -3508,6 +3529,7 @@ export const salesEn = {
 };
 
 export const salesAr = {
+  ...customerMoneyMountMessages.ar,
   ...quoteWizardQaMessages.ar,
   ...quotationUnavailableMessages.ar,
   ...serverErrorMessages.ar,
