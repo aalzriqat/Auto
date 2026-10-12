@@ -270,6 +270,8 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   // outstanding-amount check while still inserting a `collectionPayments` row
   // that carries the dead `receivableId` (SCRUM-559 R1 / #17).
   receivables: ["receiptApplications", "collectionApprovalRequests", "postDatedCheques"],
+  // SCRUM-724: `receiptRetainedPositions.sourceChequeId` (immutable lineage).
+  postDatedCheques: ["receiptRetainedPositions"],
   // SCRUM-549 — the ledger. `journalLines.journalEntryId` / `.accountId` and
   // `accountBalanceSnapshots.accountId` are REQUIRED.
   //
@@ -316,6 +318,8 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
     "payrollItems",
     "commitmentAuthorityWork",
     "depositCancellationPendings",
+    // SCRUM-724: `receiptRetainedPositions.originatingSaleId` (immutable lineage).
+    "receiptRetainedPositions",
   ],
   quotes: ["sales", "financeApplications", "deposits", "receivables"],
   payrollRuns: ["payrollItems"],

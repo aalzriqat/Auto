@@ -670,8 +670,8 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // preview marker's `orgId`, and it patches only rows it looked up itself (role, membership).
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 520,
-      analysed: 347,
+      totalMutations: 526,
+      analysed: 353,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 158,
     });
