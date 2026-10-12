@@ -549,6 +549,17 @@ describe("support inbox: hostile HTML on the inbound path (review F1)", () => {
     const thread = await inbound(t, { bodyText: undefined, bodyHtml: html });
     expect(thread.lastMessagePreview).toBe("Hello, my invoice #123 is wrong.");
   });
+
+  // Review J3 (round 5): a numeric reference to a surrogate decoded to a LONE surrogate,
+  // which was then written to Convex inside this mutation. It must be U+FFFD.
+  test("an inbound HTML body with a surrogate numeric reference stores a well-formed preview", async () => {
+    const t = convexTestWithComponents(schema, MODULES);
+    const thread = await inbound(t, { bodyText: undefined, bodyHtml: "<p>&#55357;x &#xDE00;y &#0;z</p>" });
+    expect(thread.lastMessagePreview).toBe("�x �y �z");
+    expect((thread.lastMessagePreview as unknown as { isWellFormed(): boolean }).isWellFormed()).toBe(true);
+    const messages = await t.run((ctx) => ctx.db.query("supportMessages").collect());
+    expect(messages.filter((m) => m.direction === "INBOUND")).toHaveLength(1);
+  });
 });
 
 describe("support inbox: setThreadCategory", () => {

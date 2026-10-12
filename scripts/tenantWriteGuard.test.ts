@@ -671,12 +671,16 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // SCRUM-724: + retainedCreditRefunds.cancelRetainedCreditRefund (+1) - 526 -> 527 total, 353 -> 354 analysed
   // (re-measured FROM THE ANALYSER). It takes `orgId`, runs requireTenantAuth(MANAGE_FINANCE) and loads and
   // org-compares the request (ctx.db.get + orgId check) before its only patch; the unguarded-write audit stays empty.
+  // SCRUM-825: + support.setThreadCategory (+1) - 527 -> 528 total, 158 -> 159 skippedNoOrgId, `analysed`
+  // unchanged at 354 (re-measured FROM THE ANALYSER). A super-admin-only mutation (requireSuperAdmin) with
+  // no `orgId` arg that patches the PLATFORM `supportThreads` table (not tenant data); the unguarded-write
+  // audit stays empty.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 527,
+      totalMutations: 528,
       analysed: 354,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 158,
+      skippedNoOrgId: 159,
     });
   });
 });

@@ -162,7 +162,8 @@ describe("htmlToPlainText", () => {
   });
 
   test("entities decode as before", () => {
-    expect(htmlToPlainText("<p>&nbsp;a&nbsp;&amp;&nbsp;b &#128512; &bogus; &#0;</p>")).toBe("a & b 😀 &bogus; &#0;");
+    // `&#0;` is U+FFFD (browsers; round 5 J3), not left as a literal.
+    expect(htmlToPlainText("<p>&nbsp;a&nbsp;&amp;&nbsp;b &#128512; &bogus; &#0;</p>")).toBe("a & b 😀 &bogus; �");
   });
 
   test("an unclosed comment, script, style or head swallows the rest instead of leaking markup", () => {
@@ -219,8 +220,12 @@ describe("htmlToPlainText", () => {
     expect(htmlToPlainText("<head><style>p{}</style><Body\nbgcolor=#fff>Hello")).toBe("Hello");
   });
 
-  test("a head that really never ends still swallows the rest (no body to resume at)", () => {
-    expect(htmlToPlainText("<p>before</p><head><title>x</title><p>hidden</p>")).toBe("before");
+  // Round 5 (J1): there is no "head mode" any more. Like a browser, text after
+  // <head> is just text (the implied <body>); only script/style/title/template
+  // are raw blocks, anywhere.
+  test("text after an unclosed <head> is body text, as in a browser", () => {
+    expect(htmlToPlainText("<p>before</p><head><title>x</title><p>shown</p>")).toBe("before\nshown");
+    expect(htmlToPlainText("<head><title>Title</title><p>Actual customer question</p>")).toBe("Actual customer question");
   });
 
   test("a closed head still wins over a later literal 'body' word", () => {
@@ -259,10 +264,16 @@ describe("htmlToPlainText", () => {
       const count = 50 + Math.floor(rand() * 1_500);
       for (let j = 0; j < count; j += 1) html += pieces[Math.floor(rand() * pieces.length)];
       const preview = buildPreview(undefined, html);
-      const full = Array.from(htmlToPlainText(html).replace(/\s+/g, " ").trim()).slice(0, 160).join("").trimEnd();
-      expect(preview).toBe(full);
+      const fullText = htmlToPlainText(html).replace(/\s+/g, " ").trim();
+      const points = Array.from(fullText);
       // Whatever the whole conversion produced is what is previewed, never a fragment of it.
-      expect(htmlToPlainText(html).replace(/\s+/g, " ").trim().startsWith(preview)).toBe(true);
+      expect(fullText.startsWith(preview)).toBe(true);
+      if (points.length <= 160) expect(preview).toBe(fullText);
+      else {
+        expect(Array.from(preview).length).toBeLessThanOrEqual(160);
+        // The cut never leaves a dangling `&name` / `&#123` fragment.
+        expect(/&#?[A-Za-z0-9]+$/.test(preview) && /[A-Za-z0-9;]/.test(fullText.charAt(preview.length))).toBe(false);
+      }
     }
   });
 
@@ -297,7 +308,6 @@ describe("htmlToPlainText", () => {
       '<html><head><meta content="<body"><title>Internal heading</title></head><body>Actual customer question</body></html>',
     ],
     ["<body> mentioned in title text", "<head><title>Re: the <body> tag</title></head><body>Actual customer question"],
-    ["<body inside noscript", "<head><noscript><body>Internal heading</noscript></head><body>Actual customer question"],
     ["unclosed head, <body in an attribute", '<head><meta content="<body"><title>Internal heading</title><body>Actual customer question'],
     ["a > inside a quoted attribute", '<head><meta content="a>b"><title>Internal heading</title></head>Actual customer question'],
   ])("head scan is quote-aware (%s)", (_name, html) => {
@@ -362,14 +372,26 @@ describe("scanner linearity matrix (1 MiB, head and body contexts)", () => {
     ["&#1234567", "&#1234567"],
     ["&nbsp;", "&nbsp;"],
     ["<head>", "<head>"],
+    [" < (stray less-than flood)", " <"],
+    ["<p>&amp;", "<p>&amp;"],
   ];
   const CONTEXTS: Array<[string, string]> = [
     ["head", "<head>"],
     ["body", "<body>"],
   ];
-  const CASES = PATTERNS.flatMap(([name, unit, wrap]) =>
-    CONTEXTS.map(([ctx, prefix]) => [`${name} in ${ctx}`, `${prefix}${wrap ?? ""}${repeatTo(unit)}`] as [string, string])
-  );
+  // Shapes that are not "one unit repeated": [name, builder(prefix)].
+  const SHAPES: Array<[string, (prefix: string) => string]> = [
+    // A terminated tag whose quoted value contains MANY tag-like openers: resuming at
+    // `<` + 1 instead of past the tag's `>` would rescan the tail once per opener.
+    ['rescan after an ended tag (<meta content=" + <x ×n)', (p) => `${p}<meta content="${"<x ".repeat(MIB / 3)}">Visible text`],
+    ["rescan after an ended tag, no space (<x><x>…)", (p) => `${p}<meta content="${"<x>".repeat(MIB / 3)}">Visible text`],
+  ];
+  const CASES = [
+    ...PATTERNS.flatMap(([name, unit, wrap]) =>
+      CONTEXTS.map(([ctx, prefix]) => [`${name} in ${ctx}`, `${prefix}${wrap ?? ""}${repeatTo(unit)}`] as [string, string])
+    ),
+    ...SHAPES.flatMap(([name, build]) => CONTEXTS.map(([ctx, prefix]) => [`${name} in ${ctx}`, build(prefix)] as [string, string])),
+  ];
   test.each(CASES)("%s", (_name, html) => {
     const started = performance.now();
     const preview = buildPreview(undefined, html);
@@ -464,5 +486,152 @@ describe("collapseBlankLines / splitBodyText", () => {
   test("text with no links is one text segment; empty is none", () => {
     expect(splitBodyText("just words")).toEqual([{ kind: "text", text: "just words" }]);
     expect(splitBodyText("")).toEqual([]);
+  });
+});
+
+
+// Round 5 J1: reproductions from review, each validated against a real browser parser.
+describe("scanner follows the browser (round 5 J1)", () => {
+  const CUSTOMER = "Customer cannot pay invoice";
+  test.each([
+    [
+      "R4-02a: '>' and '<body>' inside a quoted head attribute",
+      `<head data="> <body>">${"<title>INTERNAL HEADING</title>".repeat(15)}</head><body>${CUSTOMER}</body>`,
+      CUSTOMER,
+    ],
+    ["R4-02b: head then a paragraph, no <body>", "<head><title>Title</title><p>Actual customer question</p>", "Actual customer question"],
+    ["R5-01: unquoted value with an apostrophe", "<head><meta name=a content=O'Brien></head><body>Body text</body>", "Body text"],
+    ['R5-01: doubled closing quote', '<head><meta charset="utf-8""></head><body>Body text</body>', "Body text"],
+    ["R5-01: a quote inside an attribute NAME", '<head><meta na"me=x></head><body>Body text</body>', "Body text"],
+    ["R5-01: a quote inside an unquoted value", "<head><meta content=a\"b></head><body>Body text</body>", "Body text"],
+    ["<bodyx> is an unknown tag, not the body", "<bodyx>Body text</bodyx>", "Body text"],
+    ["a title in the body is not body text", "<body><title>t</title>Body text</body>", "Body text"],
+    ["a template is not body text", "<template><p>hidden</p></template><p>Body text</p>", "Body text"],
+  ])("%s", (_name, html, expected) => {
+    expect(htmlToPlainText(html)).toBe(expected);
+    expect(buildPreview(undefined, html)).toBe(expected);
+  });
+
+  test("<noscript> content is shown: the inbox iframe runs with scripting disabled, like a browser doing so", () => {
+    expect(htmlToPlainText("<head><noscript><p>Enable JS</p></noscript></head><body>Real</body>")).toBe("Enable JS\nReal");
+    expect(buildPreview(undefined, "<noscript>Enable JS</noscript><p>Real</p>")).toBe("Enable JS Real");
+  });
+
+  test("an unterminated quoted value or tag swallows the rest", () => {
+    expect(buildPreview(undefined, '<p>kept</p><meta content="never closed <p>gone</p>')).toBe("kept");
+    expect(buildPreview(undefined, "<p>kept</p><a href=x <p gone")).toBe("kept");
+  });
+});
+
+// Round 5 J2/J3: character references.
+describe("character references (round 5 J2, J3)", () => {
+  const wellFormed = (s: string) => (s as unknown as { isWellFormed(): boolean }).isWellFormed();
+
+  test("named entities decode (Latin-1 + typographic) and the Latin-1 table is exactly 96 names", () => {
+    expect(htmlToPlainText("<p>Caf&eacute; &copy; 2026 &mdash; &ldquo;ok&rdquo; &hellip; &euro;5 &pound;3 &times; &Eacute;</p>")).toBe(
+      "Café © 2026 — “ok” … €5 £3 × É"
+    );
+    expect(htmlToPlainText("<p>&yuml;&nbsp;&agrave;&THORN;&divide;&deg;&laquo;&raquo;&bull;&middot;&trade;&reg;</p>")).toBe("ÿ àÞ÷°«»•·™®");
+  });
+  test("hex and decimal numeric references decode", () => {
+    expect(htmlToPlainText("<p>&#x1F600; &#X41; &#65; &#8212;</p>")).toBe("😀 A A —");
+  });
+  test("references are decoded exactly once", () => {
+    expect(htmlToPlainText("<p>&amp;#60;</p>")).toBe("&#60;");
+    expect(htmlToPlainText("<p>&amp;amp;</p>")).toBe("&amp;");
+    expect(htmlToPlainText("<p>&amp;lt;b&amp;gt;</p>")).toBe("&lt;b&gt;");
+    expect(htmlToPlainText("<p>&lt;script&gt;</p>")).toBe("<script>");
+  });
+  test("unknown or malformed references stay literal", () => {
+    expect(htmlToPlainText("<p>&bogus; &copy &#; &#x; AT&T</p>")).toBe("&bogus; © &#; &#x; AT&T".replace("©", "&copy"));
+  });
+  test("a reference is decoded BEFORE the 160-code-point cut, and a dangling fragment is dropped", () => {
+    expect(buildPreview(undefined, `<p>${"x".repeat(158)}&copy; tail</p>`)).toBe(`${"x".repeat(158)}©`);
+    expect(buildPreview(undefined, `<p>${"x".repeat(157)}&eacute;&eacute; tail</p>`)).toBe(`${"x".repeat(157)}éé`);
+    // A literal (unknown) reference that the cut lands inside is dropped, not shown as "&b".
+    expect(buildPreview(undefined, `<p>${"x".repeat(158)}&bogus; tail</p>`)).toBe("x".repeat(158));
+    expect(buildPreview(undefined, `<p>${"x".repeat(158)}&#99999999999 tail</p>`)).toBe("x".repeat(158));
+    // …but an ampersand inside text that fits is kept.
+    expect(buildPreview(undefined, `<p>${"x".repeat(155)}AT&T</p>`)).toBe(`${"x".repeat(155)}AT&T`);
+  });
+
+  test.each([
+    ["decimal surrogate", "<p>&#55357;x</p>"],
+    ["hex low surrogate", "<p>&#xDE00;x</p>"],
+    ["above U+10FFFF", "<p>&#1114112;x</p>"],
+    ["NUL", "<p>&#0;x</p>"],
+    ["far above range", "<p>&#4294967295;x</p>"],
+  ])("a numeric reference to an invalid code point becomes U+FFFD (%s)", (_name, html) => {
+    expect(htmlToPlainText(html)).toBe("\ufffdx");
+    const preview = buildPreview(undefined, html);
+    expect(preview).toBe("\ufffdx");
+    expect(wellFormed(preview)).toBe(true);
+  });
+
+  test("a lone surrogate in raw text never reaches the preview", () => {
+    for (const html of ["<p>a\ud83dx</p>", "<p>a\ude00x</p>", "<p>a\ud83d</p>"]) {
+      expect(wellFormed(buildPreview(undefined, html))).toBe(true);
+    }
+    expect(buildPreview("a\ud83dx")).toBe("a\ufffdx");
+    expect(buildPreview("😀\ude00")).toBe("😀\ufffd");
+    expect(buildPreview("😀")).toBe("😀"); // a valid pair is untouched
+  });
+});
+
+// Round 5 J5: the browser is the oracle. jsdom's HTML parser (the same spec tokenizer
+// the inbox iframe uses) gives `document.body.textContent`; the preview must equal it.
+//
+// Deliberate divergences, applied to the ORACLE so the comparison stays exact:
+//  - <script>, <style>, <title>, <template> are removed (we never show them; a browser
+//    would render a <style>/<script> inside <body> as textContent, but not as visible text);
+//  - a space is inserted around every element (our scanner turns every tag into
+//    whitespace, so `wor<b>d</b>` previews as "wor d", where textContent gives "word");
+// and by construction: only the ~110 named references in the table decode (the corpus
+// stays inside it), and `<https://…>` link dumps are removed by buildPreview.
+describe("browser oracle (round 5 J5)", () => {
+  const oracle = (html: string): string => {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    doc.querySelectorAll("script, style, title, template").forEach((el) => el.remove());
+    doc.body.querySelectorAll("*").forEach((el) => {
+      el.before(" ");
+      el.after(" ");
+    });
+    const text = (doc.body.textContent ?? "").replace(/\s+/g, " ").trim();
+    const points = Array.from(text);
+    return points.length <= 160 ? text : points.slice(0, 160).join("").trimEnd();
+  };
+
+  const INVOICE = "<p>Hello, my invoice #123 is wrong.</p>";
+  const OUTLOOK =
+    '<html xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><!--[if gte mso 9]><xml><o:OfficeDocumentSettings><o:AllowPNG/></o:OfficeDocumentSettings></xml><![endif]--><style type="text/css">p{margin:0}</style><title></title></head><body style="margin:0"><div><p>Hi team,</p><p>The invoice is wrong.</p></div></body></html>';
+  const CORPUS: Array<[string, string]> = [
+    ["R4-02a", `<head data="> <body>">${"<title>INTERNAL HEADING</title>".repeat(15)}</head><body>Customer cannot pay invoice</body>`],
+    ["R4-02b", "<head><title>Title</title><p>Actual customer question</p>"],
+    ["R5-01 apostrophe", "<head><meta name=a content=O'Brien></head><body>Body text</body>"],
+    ["R5-01 doubled quote", '<head><meta charset="utf-8""></head><body>Body text</body>'],
+    ["R5-01 quote in name", '<head><meta na"me=x></head><body>Body text</body>'],
+    ["bodyx", "<bodyx>Body text</bodyx>"],
+    ["H1 &nbsp; rows", `<table>${"<tr><td>&nbsp;</td></tr>".repeat(400)}</table>${INVOICE}`],
+    ["H1 &#32;", `<p>${"&#32;".repeat(400)}</p>${INVOICE}`],
+    ["H1 NBSP", `<p>${"\u00a0".repeat(2_000)}</p>${INVOICE}`],
+    ["H2 attribute <body", '<html><head><meta content="<body"><title>Internal heading</title></head><body>Actual customer question</body></html>'],
+    ["H2 title text", "<head><title>Re: the <body> tag</title></head><body>Actual customer question"],
+    ["H2 noscript", "<head><noscript><p>Enable JS</p></noscript></head><body>Actual customer question"],
+    ["H2 > in attribute", '<head><meta content="a>b"><title>Internal heading</title></head>Actual customer question'],
+    ["Outlook MSO head", OUTLOOK],
+    ["marketing spacers", `<table width="600"><tr><td style="font-size:0;line-height:0">&nbsp;</td></tr>${"<tr><td height=\"8\">&nbsp;</td></tr>".repeat(50)}<tr><td><h1>Spring sale</h1><p>20% off all <b>hatchbacks</b> this week.</p></td></tr></table>`],
+    ["plain paragraph", "<p>Hello there</p>"],
+    ["no html/head/body", "<div>Just a <span>div</span> with a<br>break</div>"],
+    ["bare text", "Plain words only"],
+    ["doctype only wrapper", "<!doctype html><html><body><p>Doctype mail</p></body></html>"],
+    ["Arabic RTL", '<div dir="rtl"><p>مرحبا بكم في أوتوفلو</p><p>لدينا ثلاثة معارض</p></div>'],
+    ["entities", "<p>Caf&eacute; &copy; 2026 &mdash; &ldquo;ok&rdquo; &amp;#60; &#x1F600; &lt;b&gt;</p>"],
+    ["invalid numeric refs", "<p>&#55357;x &#0;y &#1114112;z</p>"],
+    ["comment and style in body text flow", "<p>one</p><!-- hidden --><p>two</p>"],
+    ["long mail cut at 160", `<p>${"word ".repeat(100)}</p>`],
+    ["emoji at the cut", `<p>${"x".repeat(159)}😀 tail</p>`],
+  ];
+  test.each(CORPUS)("%s", (_name, html) => {
+    expect(buildPreview(undefined, html)).toBe(oracle(html));
   });
 });

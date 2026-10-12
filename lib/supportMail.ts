@@ -113,17 +113,96 @@ export function resolveThreadCategory(thread: {
   return isLikelyAutomated(thread.participantEmail) ? "automated" : "people";
 }
 
-const HTML_ENTITIES: Record<string, string> = {
-  "&nbsp;": " ",
-  "&amp;": "&",
-  "&lt;": "<",
-  "&gt;": ">",
-  "&quot;": '"',
-  "&#39;": "'",
-  "&apos;": "'",
-};
+/**
+ * Named character references, decoded ONCE in `htmlToPlainText`. Case-sensitive
+ * (`&Eacute;` and `&eacute;` differ). Latin-1 (U+00A0..U+00FF, in code-point
+ * order, 96 names) plus the typographic/symbol entities mail clients actually
+ * emit. Anything else stays literal text. The `entities` package is not a direct
+ * dependency, so this stays a small table with no imports.
+ */
+const LATIN1_NAMES =
+  "nbsp iexcl cent pound curren yen brvbar sect uml copy ordf laquo not shy reg macr " +
+  "deg plusmn sup2 sup3 acute micro para middot cedil sup1 ordm raquo frac14 frac12 frac34 iquest " +
+  "Agrave Aacute Acirc Atilde Auml Aring AElig Ccedil Egrave Eacute Ecirc Euml Igrave Iacute Icirc Iuml " +
+  "ETH Ntilde Ograve Oacute Ocirc Otilde Ouml times Oslash Ugrave Uacute Ucirc Uuml Yacute THORN szlig " +
+  "agrave aacute acirc atilde auml aring aelig ccedil egrave eacute ecirc euml igrave iacute icirc iuml " +
+  "eth ntilde ograve oacute ocirc otilde ouml divide oslash ugrave uacute ucirc uuml yacute thorn yuml";
 
-const SKIPPED_BLOCKS: ReadonlySet<string> = new Set(["script", "style", "head"]);
+const NAMED_ENTITIES: ReadonlyMap<string, string> = new Map<string, string>([
+  ...LATIN1_NAMES.split(" ").map((name, index): [string, string] => [name, String.fromCharCode(0xa0 + index)]),
+  // `&nbsp;` is a plain space here (not U+00A0) so it collapses with the
+  // surrounding whitespace; literal U+00A0 / `&#160;` are left alone and
+  // collapse in `buildPreview` (JS `\s` includes them).
+  ["nbsp", " "],
+  ["amp", "&"],
+  ["lt", "<"],
+  ["gt", ">"],
+  ["quot", '"'],
+  ["apos", "'"],
+  ["ensp", " "],
+  ["emsp", " "],
+  ["thinsp", " "],
+  ["zwnj", "‌"],
+  ["zwj", "‍"],
+  ["lrm", "‎"],
+  ["rlm", "‏"],
+  ["ndash", "–"],
+  ["mdash", "—"],
+  ["lsquo", "‘"],
+  ["rsquo", "’"],
+  ["sbquo", "‚"],
+  ["ldquo", "“"],
+  ["rdquo", "”"],
+  ["bdquo", "„"],
+  ["dagger", "†"],
+  ["Dagger", "‡"],
+  ["bull", "•"],
+  ["hellip", "…"],
+  ["permil", "‰"],
+  ["prime", "′"],
+  ["Prime", "″"],
+  ["lsaquo", "‹"],
+  ["rsaquo", "›"],
+  ["euro", "€"],
+  ["trade", "™"],
+  ["larr", "←"],
+  ["uarr", "↑"],
+  ["rarr", "→"],
+  ["darr", "↓"],
+  ["harr", "↔"],
+  ["minus", "−"],
+  ["asymp", "≈"],
+  ["ne", "≠"],
+  ["le", "≤"],
+  ["ge", "≥"],
+  ["infin", "∞"],
+  // Upper-case spellings HTML also defines.
+  ["AMP", "&"],
+  ["LT", "<"],
+  ["GT", ">"],
+  ["QUOT", '"'],
+  ["COPY", "©"],
+  ["REG", "®"],
+]);
+
+/** `&name;`, `&#123;` or `&#x1F600;` — one regex, one pass, so a result is never decoded twice. */
+const CHARACTER_REFERENCE = /&(?:#[xX]([0-9a-fA-F]{1,8})|#([0-9]{1,10})|([A-Za-z][A-Za-z0-9]{1,31}));/g;
+
+/** Numeric references to NUL, surrogates or beyond U+10FFFF become U+FFFD, as in browsers. */
+function codePointOf(value: number): string {
+  if (!Number.isFinite(value) || value === 0 || (value >= 0xd800 && value <= 0xdfff) || value > 0x10ffff) {
+    return "�";
+  }
+  return String.fromCodePoint(value);
+}
+
+function decodeCharacterReference(match: string, hex?: string, decimal?: string, name?: string): string {
+  if (hex !== undefined) return codePointOf(parseInt(hex, 16));
+  if (decimal !== undefined) return codePointOf(parseInt(decimal, 10));
+  return NAMED_ENTITIES.get(name ?? "") ?? match;
+}
+
+const RAW_BLOCKS: ReadonlySet<string> = new Set(["script", "style", "title", "template"]);
 const NEWLINE_CLOSERS: ReadonlySet<string> = new Set([
   "p",
   "div",
@@ -143,26 +222,30 @@ function isAsciiLetter(code: number): boolean {
   return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
 }
 
-function isNameChar(code: number): boolean {
-  return isAsciiLetter(code) || (code >= 48 && code <= 57);
+/** HTML whitespace: tab, LF, FF, CR, space. */
+function isHtmlSpace(code: number): boolean {
+  return code === 32 || code === 9 || code === 10 || code === 12 || code === 13;
 }
 
 /** A closing-tag name ends at whitespace, "/" or ">" (so `</styleX>` is a different tag). */
 function isNameBoundary(code: number): boolean {
-  return code === 62 || code === 47 || code === 32 || (code >= 9 && code <= 13);
+  return code === 62 || code === 47 || isHtmlSpace(code);
 }
 
 /**
- * Index just past the closing `</name>` of a skipped block (case-insensitive),
- * or `html.length` when it is never closed. Walks `</` occurrences with
- * indexOf, so each byte of input is inspected a bounded number of times. The
- * name must end at a boundary: `</styleX>` does not close a `<style>`.
+ * Index just past the closing `</name>` of a raw block (case-insensitive), or
+ * `html.length` when it is never closed. Walks `</` occurrences with indexOf, so
+ * each byte of input is inspected a bounded number of times. The name must end
+ * at a boundary: `</styleX>` does not close a `<style>`.
  */
 function endOfBlock(html: string, name: string, from: number): number {
   let at = html.indexOf("</", from);
   while (at !== -1) {
     const nameEnd = at + 2 + name.length;
-    if (html.slice(at + 2, nameEnd).toLowerCase() === name && (nameEnd >= html.length || isNameBoundary(html.charCodeAt(nameEnd)))) {
+    if (
+      html.slice(at + 2, nameEnd).toLowerCase() === name &&
+      (nameEnd >= html.length || isNameBoundary(html.charCodeAt(nameEnd)))
+    ) {
       const gt = html.indexOf(">", nameEnd);
       return gt === -1 ? html.length : gt + 1;
     }
@@ -172,136 +255,134 @@ function endOfBlock(html: string, name: string, from: number): number {
 }
 
 /**
- * Index of the `>` that really ends a tag whose name ended at `from`: quoted
- * attribute values (`content="<body"`) may contain `>` and `<`. Each quote is
- * jumped with indexOf, so the pass is linear; an unclosed quote runs to the end
- * of the input (returns -1).
+ * Index of the `>` that ends a tag whose name ended at `from`, following the
+ * HTML tokenizer's attribute states: a quote delimits ONLY when it opens an
+ * attribute value (after `=` and optional whitespace). Anywhere else a quote is
+ * an ordinary character, so `content=O'Brien` and `charset="utf-8""` do not
+ * swallow the rest of the message. A quoted value that never closes (or a tag
+ * with no `>`) returns -1 and the caller swallows the rest of the input.
+ *
+ * One forward pass; a quoted value is jumped with indexOf. The caller resumes
+ * after the returned index, so no byte is ever scanned twice.
  */
 function endOfTag(html: string, from: number): number {
+  // 0 before attribute name, 1 in name, 2 after name, 3 before value, 4 unquoted value
+  let state = 0;
   let i = from;
-  while (i < html.length) {
+  const length = html.length;
+  while (i < length) {
     const code = html.charCodeAt(i);
-    if (code === 62) return i;
-    if (code === 34 || code === 39) {
-      const close = html.indexOf(code === 34 ? '"' : "'", i + 1);
-      if (close === -1) return -1;
-      i = close + 1;
-    } else {
-      i += 1;
+    switch (state) {
+      case 0:
+        if (code === 62) return i;
+        if (!isHtmlSpace(code) && code !== 47) state = 1;
+        break;
+      case 1:
+        if (code === 62) return i;
+        if (code === 61) state = 3;
+        else if (code === 47) state = 0;
+        else if (isHtmlSpace(code)) state = 2;
+        break;
+      case 2:
+        if (code === 62) return i;
+        if (code === 61) state = 3;
+        else if (code === 47) state = 0;
+        else if (!isHtmlSpace(code)) state = 1;
+        break;
+      case 3:
+        if (code === 62) return i;
+        if (code === 34 || code === 39) {
+          const close = html.indexOf(code === 34 ? '"' : "'", i + 1);
+          if (close === -1) return -1;
+          i = close;
+          state = 0;
+        } else if (!isHtmlSpace(code)) {
+          state = 4;
+        }
+        break;
+      default:
+        if (code === 62) return i;
+        if (isHtmlSpace(code)) state = 0;
+        break;
     }
+    i += 1;
   }
   return -1;
 }
 
-const RAW_HEAD_BLOCKS: ReadonlySet<string> = new Set(["style", "script", "title", "noscript"]);
-
-/**
- * Where scanning resumes after `<head>`. `</head>` is optional in HTML, so the
- * head also ends at the first real `<body` tag (which is NOT consumed: it is
- * then processed as an ordinary tag). Inside the head, tags are skipped
- * quote-aware (an attribute value can hold `<body`), and comments, `<style>`,
- * `<script>`, `<title>` and `<noscript>` are jumped to their closing tag so
- * text such as `<title>the <body> tag</title>` cannot end it early. An unclosed
- * head with no `<body` runs to the end of the input. One forward pass, linear.
- */
-function endOfHead(html: string, from: number): number {
-  let at = html.indexOf("<", from);
-  while (at !== -1) {
-    const next = html.charCodeAt(at + 1);
-    if (next === 33 && html.startsWith("<!--", at)) {
-      const end = html.indexOf("-->", at + 4);
-      if (end === -1) return html.length;
-      at = html.indexOf("<", end + 3);
-      continue;
-    }
-    const closing = next === 47;
-    const nameStart = at + (closing ? 2 : 1);
-    if (isAsciiLetter(html.charCodeAt(nameStart))) {
-      let nameEnd = nameStart + 1;
-      while (nameEnd < html.length && isNameChar(html.charCodeAt(nameEnd))) nameEnd += 1;
-      const tag = html.slice(nameStart, nameEnd).toLowerCase();
-      if (!closing && tag === "body") return at;
-      // Invariant: the position only ever moves PAST everything already examined.
-      // endOfTag scans to the end of the input when there is no ">", so after it
-      // we must never resume at `at + 1` (that re-scans the same tail per "<").
-      const gt = endOfTag(html, nameEnd);
-      if (gt === -1) return html.length; // unterminated tag/quote swallows the rest
-      if (closing) {
-        if (tag === "head") return gt + 1;
-      } else if (RAW_HEAD_BLOCKS.has(tag)) {
-        at = html.indexOf("<", endOfBlock(html, tag, gt + 1));
-        continue;
-      }
-      at = html.indexOf("<", gt + 1);
-      continue;
-    }
-    at = html.indexOf("<", at + 1);
-  }
-  return html.length;
-}
 /**
  * The tag scanner behind `htmlToPlainText`: ONE left-to-right pass that only
- * ever moves forward. A previous regex pipeline backtracked over the whole
- * input for every unterminated `<!--`, `<head>`, `<style>` or `<a ` and took
- * 5–28 s on 480 KB (SCRUM-825 review F1) — on the inbound-mutation path, where a
- * mutation has about a second. Here every unterminated construct simply runs to
- * the end of the input, and a missing `>` is discovered once, not once per `<`.
+ * ever moves forward (SCRUM-825). Every construct is consumed exactly once and
+ * scanning resumes AFTER the region it examined, never behind it; an
+ * unterminated comment, declaration, tag or quoted value simply swallows the
+ * rest of the input. That is what keeps hostile mail (a mutation has about a
+ * second) linear.
+ *
+ * It models a browser, not a header parser:
+ *  - `<script>`, `<style>`, `<title>` and `<template>` are raw blocks, skipped
+ *    ANYWHERE to their boundary-matched closing tag (none of them is body text);
+ *  - every other tag is stripped and its text kept, so text in the head (or with
+ *    no `<head>`/`<body>` at all) is just text, as the implied `<body>` makes it;
+ *  - `<noscript>` is NOT skipped: the inbox iframe runs with scripting disabled,
+ *    where a browser renders its content;
+ *  - stray `<` characters are text and stay in the pending text run, so a flood
+ *    of them is one slice, not one push each.
  */
 function stripTags(html: string): string {
   const out: string[] = [];
   const length = html.length;
-  let cursor = 0;
-  while (cursor < length) {
-    const lt = html.indexOf("<", cursor);
-    if (lt === -1) {
-      out.push(html.slice(cursor));
-      break;
-    }
-    if (lt > cursor) out.push(html.slice(cursor, lt));
+  let textFrom = 0; // start of the pending run of plain text
+  let from = 0; // where to look for the next "<"
+  while (from < length) {
+    const lt = html.indexOf("<", from);
+    if (lt === -1) break;
+
     if (html.startsWith("<!--", lt)) {
+      out.push(html.slice(textFrom, lt), " ");
       const end = html.indexOf("-->", lt + 4);
-      out.push(" ");
-      if (end === -1) break; // unclosed comment swallows the rest
-      cursor = end + 3;
+      if (end === -1) return out.join(""); // unclosed comment swallows the rest
+      textFrom = from = end + 3;
       continue;
     }
 
-    const closing = html.charCodeAt(lt + 1) === 47; // "/"
+    const second = html.charCodeAt(lt + 1);
+    if (second === 33 || second === 63) {
+      // "<!doctype …>", "<?xml …?>": a declaration ends at the first ">"
+      out.push(html.slice(textFrom, lt), " ");
+      const gt = html.indexOf(">", lt + 2);
+      if (gt === -1) return out.join("");
+      textFrom = from = gt + 1;
+      continue;
+    }
+
+    const closing = second === 47; // "/"
     const nameStart = lt + (closing ? 2 : 1);
-    const first = html.charCodeAt(nameStart);
-    const isDeclaration = first === 33 || first === 63; // "<!doctype", "<?xml"
-    if (!isAsciiLetter(first) && !isDeclaration) {
-      out.push("<"); // a stray "<" is text
-      cursor = lt + 1;
+    if (!isAsciiLetter(html.charCodeAt(nameStart))) {
+      from = lt + 1; // a stray "<" is text: stays in the pending run
       continue;
     }
 
-    let nameEnd = nameStart;
-    if (!isDeclaration) {
-      while (nameEnd < length) {
-        const code = html.charCodeAt(nameEnd);
-        if (!isAsciiLetter(code) && !(code >= 48 && code <= 57)) break;
-        nameEnd += 1;
-      }
-    }
+    let nameEnd = nameStart + 1;
+    while (nameEnd < length && !isNameBoundary(html.charCodeAt(nameEnd))) nameEnd += 1;
     const name = html.slice(nameStart, nameEnd).toLowerCase();
 
-    const gt = html.indexOf(">", nameEnd);
+    out.push(html.slice(textFrom, lt));
+    const gt = endOfTag(html, nameEnd);
     if (gt === -1) {
-      // No ">" anywhere after this point: the rest is one unterminated tag.
-      // Stopping here (not skipping just this "<") is what keeps it linear.
+      // No real end for this tag: the rest is one unterminated tag.
       out.push(" ");
-      break;
+      return out.join("");
     }
 
-    if (!closing && SKIPPED_BLOCKS.has(name)) {
+    if (!closing && RAW_BLOCKS.has(name)) {
       out.push(" ");
-      cursor = name === "head" ? endOfHead(html, gt + 1) : endOfBlock(html, name, gt + 1);
+      textFrom = from = endOfBlock(html, name, gt + 1);
       continue;
     }
-    out.push(!isDeclaration && (name === "br" || (closing && NEWLINE_CLOSERS.has(name))) ? "\n" : " ");
-    cursor = gt + 1;
+    out.push(name === "br" || (closing && NEWLINE_CLOSERS.has(name)) ? "\n" : " ");
+    textFrom = from = gt + 1;
   }
+  out.push(html.slice(textFrom));
   return out.join("");
 }
 
@@ -310,26 +391,28 @@ function stripTags(html: string): string {
  * the plain-text view of an HTML-only message stays readable. A hand-written
  * linear scanner on purpose (it runs in the Convex runtime, which has no DOM,
  * on attacker-controlled input); the output is only ever rendered as TEXT,
- * never as markup.
+ * never as markup. Character references are decoded exactly once, after the
+ * tags are gone, so `&lt;script&gt;` stays text and `&amp;#60;` gives `&#60;`.
  */
 export function htmlToPlainText(html: string): string {
   return collapseBlankLines(
     stripTags(html)
-      .replace(/&(?:nbsp|amp|lt|gt|quot|apos|#39);/gi, (m) => HTML_ENTITIES[m.toLowerCase()] ?? m)
-      .replace(/&#(\d{1,6});/g, (m, code: string) => {
-        const point = Number(code);
-        return point > 0 && point <= 0x10ffff ? String.fromCodePoint(point) : m;
-      })
+      .replace(CHARACTER_REFERENCE, decodeCharacterReference)
       .replace(/[ \t]+/g, " ")
       .replace(/ ?\n ?/g, "\n")
   ).trim();
 }
 
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+
 /**
  * One-line list preview: bodyText when it has content, else the tag-stripped
- * bodyHtml; `<https://…>` dumps removed; whitespace collapsed; at most 160
- * characters (counted in code points so an emoji or surrogate pair is never cut
- * in half).
+ * bodyHtml (entities already decoded); `<https://…>` dumps removed; whitespace
+ * collapsed; at most 160 characters, counted in code points so an emoji or
+ * surrogate pair is never cut in half. The result is always well-formed
+ * UTF-16: a lone surrogate in the raw text becomes U+FFFD, and when the cut
+ * lands inside what could be a character reference the dangling `&name` /
+ * `&#123` fragment is dropped.
  */
 export function buildPreview(bodyText?: string | null, bodyHtml?: string | null): string {
   // The whole body is converted in the one linear pass: no input slice and no
@@ -337,14 +420,26 @@ export function buildPreview(bodyText?: string | null, bodyHtml?: string | null)
   // on invisible spacers (`&nbsp;`, `&#32;`) and leave the preview empty or cut
   // inside an entity. The input is bounded by Convex's 1 MiB document limit.
   const source =
-    bodyText && bodyText.trim()
-      ? bodyText
-      : bodyHtml
-        ? htmlToPlainText(bodyHtml)
-        : "";
+    bodyText && bodyText.trim() ? bodyText : bodyHtml ? htmlToPlainText(bodyHtml) : "";
   const cleaned = source.replace(ANGLE_LINK, " ").replace(/\s+/g, " ").trim();
-  const points = Array.from(cleaned);
-  return points.length <= PREVIEW_MAX_LENGTH ? cleaned : points.slice(0, PREVIEW_MAX_LENGTH).join("").trimEnd();
+
+  // Walk at most 161 code points instead of materialising all of them.
+  let end = 0;
+  let count = 0;
+  let cutAt = -1;
+  while (end < cleaned.length && count <= PREVIEW_MAX_LENGTH) {
+    if (count === PREVIEW_MAX_LENGTH) cutAt = end;
+    end += cleaned.codePointAt(end)! > 0xffff ? 2 : 1;
+    count += 1;
+  }
+  let preview = cleaned;
+  if (cutAt !== -1) {
+    preview = cleaned.slice(0, cutAt);
+    // Cut straight through the middle of a would-be reference ("&c|opy;")?
+    if (/[A-Za-z0-9;]/.test(cleaned.charAt(cutAt))) preview = preview.replace(/&#?[A-Za-z0-9]{0,32}$/, "");
+    preview = preview.trimEnd();
+  }
+  return preview.replace(LONE_SURROGATE, "�");
 }
 
 export type BodyTextSegment =
