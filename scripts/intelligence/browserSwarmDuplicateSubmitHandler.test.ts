@@ -78,6 +78,18 @@ interface Faults {
   delayReply?: { suffix: string; ms: number };
   /** A reopened dialog keeps the previous dialog's values instead of resetting (design D1 P2). */
   staleForm?: boolean;
+  /** Every submit of this intent mints a new command identity (a per-click key, Codex DS-2). */
+  keyPerSubmitSuffix?: string;
+  /** The authority read of this intent's economic events fails (Codex DS-2). */
+  authorityFails?: RegExp;
+  /** After the drop, the client's new connection never hears from the server (Codex DS-1). */
+  reconnectSilent?: boolean;
+  /** After the drop, the client reconnects and resends only after this delay (Opus N1). */
+  resendDelayMs?: number;
+  /** Every backend authority read fails: the preview read path is down (E7/DS-2). */
+  authorityDown?: boolean;
+  /** The client never retires its command identity: every dialog reuses one key (E7). */
+  sharedKey?: boolean;
 }
 
 interface ExpenseRecord {
@@ -146,6 +158,9 @@ class FakeBackend {
           journalEntryId: "je-" + id,
         };
         const title = this.expenses.find((row) => row._id === id)?.title ?? "";
+        if (this.faults.authorityFails?.test(title)) {
+          throw new Error("authority read failed: listAccountingEvents returned 500");
+        }
         const doublePost = this.faults.doublePostSuffix;
         return doublePost && title.endsWith(doublePost)
           ? [event, { ...event, _id: "ev2-" + id }]
@@ -204,6 +219,7 @@ class FakeApp {
   private lastValues = { title: "", amount: 0 };
   private lapsedOnce = false;
   private lapseRemaining = -1;
+  private connections = 0;
 
   constructor(private readonly backend: FakeBackend) {}
 
@@ -287,7 +303,8 @@ class FakeApp {
       close: async () => {
         if (closed) return;
         closed = true;
-        // The client reconnects and resends every unanswered mutation.
+        // The client reconnects and resends every unanswered mutation (after
+        // resendDelayMs, a correct but slow client — Opus N1).
         setTimeout(() => {
           this.connect();
           for (const frame of this.pending.values()) {
@@ -296,10 +313,18 @@ class FakeApp {
             if (skip && title.endsWith(skip)) continue;
             this.fromPage?.(frame);
           }
-        }, 0);
+        }, this.backend.faults.resendDelayMs ?? 0);
       },
     } as unknown as WebSocketRoute;
     this.routeHandler(route);
+    // A healthy connection hears from the server (a query Transition) right
+    // after it opens; a silent reconnect never does (DS-1).
+    this.connections += 1;
+    if (!(this.backend.faults.reconnectSilent && this.connections > 1)) {
+      setTimeout(() => {
+        if (!closed) this.fromServer?.(JSON.stringify({ type: "Transition", startVersion: {}, endVersion: {}, modifications: [] }));
+      }, 0);
+    }
   }
 
   private deliverToPage(frame: string): void {
@@ -326,7 +351,7 @@ class FakeApp {
     }
     this.nextKey += 1;
     const values = this.backend.faults.staleForm ? this.lastValues : { title: "", amount: 0 };
-    this.dialog = { ...values, key: "key-" + this.nextKey };
+    this.dialog = { ...values, key: this.backend.faults.sharedKey ? "key-shared" : "key-" + this.nextKey };
     this.log.push("open");
   }
 
@@ -370,7 +395,10 @@ class FakeApp {
           title: dialog.title,
           amount: dialog.amount,
           status: "PAID",
-          idempotencyKey: dialog.key,
+          idempotencyKey:
+            this.backend.faults.keyPerSubmitSuffix && dialog.title.endsWith(this.backend.faults.keyPerSubmitSuffix)
+              ? dialog.key + "-" + requestId
+              : dialog.key,
         },
       ],
     });
@@ -467,6 +495,7 @@ function fakeClient(backend: FakeBackend): ConvexHttpClient {
     },
     query: async (ref: FunctionReference<"query">, args: Record<string, unknown>) => {
       backend.queryCount += 1;
+      if (backend.faults.authorityDown) throw new Error("authority read failed: preview read path unavailable");
       return backend.query(getFunctionName(ref), args);
     },
   } as unknown as ConvexHttpClient;
@@ -957,6 +986,105 @@ describe("SCRUM-826 DUPLICATE_SUBMIT phase state machine", () => {
     expect(evidence.oracle.passed).toBe(false);
     expect(evidence.oracle.summary).toMatch(/-rapid: attempt \d+ was refused with a fingerprint conflict/);
     expect(evidence.artifacts.length).toBeGreaterThan(0);
+  }, 30_000);
+
+  // Codex DS-1: "the client did not retry" is a breach only after a retry
+  // opportunity was positively observed: the recovery window ran to its end
+  // AND the client was back on a connection the server answered.
+  it("DS-1: an abort inside the lost-response recovery window is never a no-retry breach", async () => {
+    const controller = new AbortController();
+    const h = harness({ noResendSuffix: "-lost" }, { lostResponseRecoveryMs: 20_000, signal: controller.signal });
+    const running = h.run().then(
+      (evidence) => evidence,
+      (error: unknown) => error,
+    );
+    const deadline = Date.now() + 5_000;
+    while (h.backend.expenses.filter((row) => row.title.endsWith("-lost")).length === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    controller.abort(new Error("mission timeout"));
+    const settled = await running;
+    expect(settled).toBeInstanceOf(Error);
+    expect(String((settled as Error).message)).toMatch(/mission timeout/);
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].outcome).not.toBe("BREACH");
+    expect(JSON.stringify(h.evidence[0].violations ?? [])).not.toMatch(/did not retry/);
+    expect(JSON.stringify(h.evidence[0].unjudged)).toMatch(/retry window .*interrupted/);
+  }, 30_000);
+
+  it("N1: a correct client whose retry is still pending at the abort is never a no-retry breach", async () => {
+    const controller = new AbortController();
+    const h = harness({ resendDelayMs: 1_500 }, { lostResponseRecoveryMs: 10_000, signal: controller.signal });
+    const running = h.run().then(
+      (evidence) => evidence,
+      (error: unknown) => error,
+    );
+    const deadline = Date.now() + 5_000;
+    while (h.backend.expenses.filter((row) => row.title.endsWith("-lost")).length === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    controller.abort(new Error("mission timeout"));
+    const settled = await running;
+    expect(settled).toBeInstanceOf(Error);
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].outcome).toBe("HARNESS_ERROR");
+    expect(JSON.stringify(h.evidence[0].unjudged)).toMatch(/retry window .*interrupted/);
+  }, 30_000);
+
+  it("N1 control: the same slow but correct client passes when the window is allowed to elapse", async () => {
+    const h = harness({ resendDelayMs: 1_500 }, { lostResponseRecoveryMs: 10_000 });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(true);
+    expect(h.backend.expenses.filter((row) => row.title.endsWith("-lost"))).toHaveLength(1);
+  }, 30_000);
+
+  it("DS-1: a reconnect the server never answered is unjudged, not a no-retry breach", async () => {
+    const h = harness({ noResendSuffix: "-lost", reconnectSilent: true });
+    await expect(h.run()).rejects.toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].outcome).toBe("INCONCLUSIVE");
+    expect(JSON.stringify(h.evidence[0].unjudged)).toMatch(/never heard from the server again/);
+  }, 30_000);
+
+  it("DS-1 control: a healthy reconnect with no resend over the full window is still a breach", async () => {
+    const h = harness({ noResendSuffix: "-lost" });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/-lost: the client did not retry the command after the lost response/);
+  }, 30_000);
+
+  // Codex DS-2: a transmitted identity breach is witnessed on the wire; a
+  // failed backend read cannot un-witness it.
+  it("DS-2: an identity breach survives a failed authority read of the same intent", async () => {
+    const h = harness({ keyPerSubmitSuffix: "-rapid", authorityFails: /-rapid$/ });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/-rapid: one intent was transmitted under \d+ distinct command identities/);
+    expect(evidence.artifacts.length).toBeGreaterThan(0);
+  }, 30_000);
+
+  it("E7: distinct intents transmitted under one shared identity are a breach (control)", async () => {
+    const h = harness({ sharedKey: true });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/distinct user intents shared a command identity/);
+  }, 30_000);
+
+  it("E7/DS-2: a shared identity is still proven when every backend read fails", async () => {
+    const h = harness({ sharedKey: true, authorityDown: true });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/distinct user intents shared a command identity/);
+  }, 30_000);
+
+  it("DS-2 control: the same failed read with one stable identity stays a harness error, never a pass", async () => {
+    const h = harness({ authorityFails: /-rapid$/ });
+    await expect(h.run()).rejects.toThrow(/authority read failed/);
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].outcome).not.toBe("PASS");
+    expect(h.evidence[0].outcome).not.toBe("BREACH");
   }, 30_000);
 
   it("D1 P1: a phase never opens over a dialog that is still open", async () => {

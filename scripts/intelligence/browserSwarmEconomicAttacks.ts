@@ -162,7 +162,11 @@ interface RaceBarrier {
 export class ConvexSyncObserver {
   readonly mutations: ObservedMutation[] = [];
   readonly responses: ObservedResponse[] = [];
-  readonly withheld: { title: string; requestId: number }[] = [];
+  readonly withheld: { title: string; requestId: number; pageLabel: string; connection: number }[] = [];
+  /** Sync connections, numbered in the order the pages opened them (Codex DS-1). */
+  private connections = 0;
+  /** Connections on which the server was heard after they opened, per page label. */
+  private readonly answeredConnections = new Map<string, Set<number>>();
   private armedTitle: string | null = null;
   private readonly trackedRequests = new Set<string>();
   private sequence = 0;
@@ -230,6 +234,19 @@ export class ConvexSyncObserver {
     );
   }
 
+  /**
+   * SCRUM-826 DS-1: true when, after the lost-response fault dropped the
+   * connection that carried `title`, the same page was back on a NEWER
+   * connection and the server was heard on it. Only then did the client have
+   * a positively observed opportunity to retry.
+   */
+  reconnectedAfterLostResponse(title: string): boolean {
+    const fault = this.withheld.find((entry) => entry.title === title);
+    if (!fault) return false;
+    const heard = this.answeredConnections.get(fault.pageLabel);
+    return heard !== undefined && [...heard].some((connection) => connection > fault.connection);
+  }
+
   /** True once the client received a successful reply for an attempt of `title`. */
   acceptedReplyDelivered(title: string): boolean {
     return this.responses.some(
@@ -272,6 +289,8 @@ export class ConvexSyncObserver {
 
   private bridge(socket: WebSocketRoute, pageLabel: string): void {
     const server = socket.connectToServer();
+    this.connections += 1;
+    const connection = this.connections;
     // Frames held behind the race barrier, in page order. While non-null,
     // every frame from this page queues so the socket order never changes.
     let queue: { message: SocketFrame; record?: ObservedMutation }[] | null = null;
@@ -316,6 +335,9 @@ export class ConvexSyncObserver {
       forward(message, record);
     });
     server.onMessage((message) => {
+      const heard = this.answeredConnections.get(pageLabel) ?? new Set<number>();
+      heard.add(connection);
+      this.answeredConnections.set(pageLabel, heard);
       const response = parseConvexMutationResponse(message);
       if (response && this.trackedRequests.has(pageLabel + "#" + response.requestId)) {
         const request = [...this.mutations]
@@ -338,7 +360,12 @@ export class ConvexSyncObserver {
           response.success
         ) {
           observed.withheld = true;
-          this.withheld.push({ title: this.armedTitle, requestId: response.requestId });
+          this.withheld.push({
+            title: this.armedTitle,
+            requestId: response.requestId,
+            pageLabel,
+            connection,
+          });
           this.armedTitle = null;
           // Withhold the committed response and drop the connection.
           void socket.close({ code: 4000, reason: "swarm-injected-lost-response" });
@@ -637,6 +664,20 @@ interface DuplicateSubmitObservation {
   fresh: ReadonlySet<string>;
   lostInjected: boolean;
   lostAttempts: number;
+  /**
+   * Phase B's recovery window ran to its end: exitPhase returned, so the
+   * retry either arrived and was answered or the full wait elapsed (DS-1/N1).
+   * False when the phase was aborted or failed before that.
+   */
+  lostWindowClosed: boolean;
+  /** The page was heard on a newer connection after the fault (DS-1). */
+  lostReconnected: boolean;
+  /**
+   * Command identities transmitted per intent, read from the wire. Identity
+   * is witnessed on the frames, so it is judged from them and never depends
+   * on a backend read succeeding (Codex DS-2).
+   */
+  transmittedKeys: ReadonlyMap<string, readonly (string | undefined)[]>;
   serverReplay: ServerReplayObservation;
 }
 
@@ -671,16 +712,38 @@ function composeDuplicateSubmitVerdict(observation: DuplicateSubmitObservation):
       if (replies && replies.authenticationLapses > 0) {
         unjudged.push(lapseReason(title, replies.authenticationLapses));
       }
+      // The report also carries the identity verdict when it exists. Without
+      // one, the transmitted identities are still witnessed on the wire, so a
+      // failed backend read cannot hide an identity breach (Codex DS-2).
+      const keys = observation.transmittedKeys.get(title) ?? [];
+      if (keys.length > 0) {
+        proofs.push(
+          ...evaluateCommandIdentityLifetime(keys).violations.map((violation) => `${title}: ${violation}`),
+        );
+      }
     }
   }
 
-  // Retry after the lost response: transmitted attempts alone decide it, so
-  // it holds whatever happened to any other intent (R1/ORD-R).
+  // Retry after the lost response. A missing retry is the absence of an
+  // event, so it is proof only once a retry opportunity was positively
+  // observed: the recovery window ran to its end AND the page was back on a
+  // connection the server answered (Codex DS-1, Opus N1). Transmitted
+  // attempts alone decide it, whatever happened to any other intent (R1/ORD-R).
   if (observation.lostInjected) {
     if (observation.lostAttempts < 2) {
-      proofs.push(
-        `${observation.lostTitle}: the client did not retry the command after the lost response (${observation.lostAttempts} attempt)`,
-      );
+      if (!observation.lostWindowClosed) {
+        unjudged.push(
+          `${observation.lostTitle}: the retry window after the lost response was interrupted before it elapsed; a missing retry cannot be judged`,
+        );
+      } else if (!observation.lostReconnected) {
+        unjudged.push(
+          `${observation.lostTitle}: after the lost response the client never heard from the server again; it had no observed opportunity to retry`,
+        );
+      } else {
+        proofs.push(
+          `${observation.lostTitle}: the client did not retry the command after the lost response (${observation.lostAttempts} attempt)`,
+        );
+      }
     }
   } else {
     unjudged.push("the lost-response fault was never injected; the retry path was not exercised");
@@ -726,10 +789,14 @@ function composeDuplicateSubmitVerdict(observation: DuplicateSubmitObservation):
 
   // Distinct intents must never share a command identity. Only intents that
   // ran in their own fresh dialog are distinct by construction (D1), and only
-  // transmitted identities can collide.
+  // transmitted identities can collide. Read from the wire, not from reports
+  // (Codex DS-2).
   const keys = observation.intents
     .filter(({ title }) => observation.fresh.has(title))
-    .map(({ title }) => observation.reports.get(title)?.identity.key)
+    .map(({ title }) => {
+      const transmitted = observation.transmittedKeys.get(title) ?? [];
+      return transmitted.length > 0 ? evaluateCommandIdentityLifetime(transmitted).key : null;
+    })
     .filter((key): key is string => typeof key === "string");
   if (new Set(keys).size !== keys.length) {
     proofs.push("distinct user intents shared a command identity: " + keys.join(", "));
@@ -767,6 +834,8 @@ async function runDuplicateSubmitAttack(
   const fresh = new Set<string>();
   let uiBlocked: string | null = null;
   let serverReplay: ServerReplayObservation = { kind: "NOT_RUN" };
+  /** Phase B's recovery window ran to its end (DS-1/N1). */
+  let lostWindowClosed = false;
   /** The first settlement failure that is not an oracle-inconclusive one. */
   let settlementFailure: unknown = null;
 
@@ -786,6 +855,14 @@ async function runDuplicateSubmitAttack(
       fresh,
       lostInjected: observer.withheld.some((entry) => entry.title === lost.title),
       lostAttempts: observer.mutationsFor(lost.title).length,
+      lostWindowClosed,
+      lostReconnected: observer.reconnectedAfterLostResponse(lost.title),
+      transmittedKeys: new Map(
+        intents.map((intent) => [
+          intent.title,
+          observer.mutationsFor(intent.title).map((mutation) => mutation.idempotencyKey),
+        ]),
+      ),
       serverReplay,
     });
     const ledger = new VerdictLedger();
@@ -969,6 +1046,9 @@ async function runDuplicateSubmitAttack(
             .click({ timeout: timeouts.uiStepMs });
         },
       );
+      // Reached only when exitPhase returned: the retry was answered or the
+      // full recovery window elapsed. An abort or failure skips it (DS-1/N1).
+      lostWindowClosed = true;
     } finally {
       observer.disarmLostResponse();
     }
