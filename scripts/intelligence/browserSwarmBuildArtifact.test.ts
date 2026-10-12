@@ -417,6 +417,46 @@ describe("SCRUM-824 dangling pnpm hoist-index links", () => {
     }
   });
 
+  it("rejects a dangling hoist link redirected out of the store by a symlinked path component (Codex R1)", async () => {
+    // path.resolve is lexical but the kernel follows .pnpm/redirect, so the
+    // effective target is <candidate>/elsewhere/missing — outside the store.
+    const f = await fixture();
+    try {
+      const index = await hoistIndex(f);
+      const elsewhere = path.join(f.candidateRoot, "elsewhere");
+      await mkdir(elsewhere, { recursive: true });
+      await symlink(elsewhere, path.join(index, "../redirect"), "dir");
+      await symlink("../redirect/missing", path.join(index, "escape"), "dir");
+      await expect(
+        isAllowedDanglingHoistLink(path.join(index, "escape"), {
+          root: await realpath(index),
+          store: await realpath(path.dirname(index)),
+        }),
+      ).resolves.toBe(false);
+      await expect(build(f)).rejects.toThrow(/not a pnpm hoist-index link/i);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("grants no omission when the .pnpm virtual store itself is a symlink (Codex R1)", async () => {
+    const f = await fixture();
+    try {
+      const realStore = path.join(f.candidateRoot, "forged-store");
+      await mkdir(path.join(realStore, "node_modules"), { recursive: true });
+      await mkdir(path.join(f.candidateRoot, ".next/standalone/node_modules"), { recursive: true });
+      await symlink(realStore, path.join(f.candidateRoot, ".next/standalone/node_modules/.pnpm"), "dir");
+      await symlink(
+        "../supports-color@8.1.1/node_modules/supports-color",
+        path.join(realStore, "node_modules/supports-color"),
+        "dir",
+      );
+      await expect(build(f)).rejects.toThrow(/not a pnpm hoist-index link/i);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a dangling hoist link with an absolute target", async () => {
     const f = await fixture();
     try {
