@@ -38,6 +38,15 @@ interface Faults {
   refuseHttpReplay?: boolean;
   /** A server-side replay fails in transport (no backend verdict). */
   httpTransportFailure?: boolean;
+  /** A server-side replay is refused because the harness session lapsed (P2). */
+  httpSessionLapse?: boolean;
+  /** Socket creates of this intent are refused because the browser session lapsed (P2). */
+  lapseSuffix?: string;
+  /**
+   * A socket create of this intent commits TWO records (a duplicate effect)
+   * and the client sees a lapsed-session refusal (Opus P2-S ordering case).
+   */
+  lapseDuplicateSuffix?: string;
 }
 
 interface ExpenseRecord {
@@ -153,6 +162,24 @@ class FakeApp {
         const args = parsed.args[0] as Record<string, unknown>;
         const silent = this.backend.faults.silentSuffix;
         if (silent && String(args.title).endsWith(silent)) return;
+        const lapse = this.backend.faults.lapseSuffix;
+        const lapseDuplicate = this.backend.faults.lapseDuplicateSuffix;
+        const duplicate = Boolean(lapseDuplicate && String(args.title).endsWith(lapseDuplicate));
+        if (duplicate) {
+          this.backend.create({ ...args, idempotencyKey: "dup-a" }, "socket");
+          this.backend.create({ ...args, idempotencyKey: "dup-b" }, "socket");
+        }
+        if (duplicate || (lapse && String(args.title).endsWith(lapse))) {
+          const refusal = JSON.stringify({
+            type: "MutationResponse",
+            requestId: parsed.requestId,
+            success: false,
+            result: "Server Error",
+            errorData: { code: "UNAUTHENTICATED", message: "Not authenticated" },
+          });
+          if (!closed) this.fromServer?.(refusal);
+          return;
+        }
         const outcome = this.backend.create(args, "socket");
         const reply = JSON.stringify({
           type: "MutationResponse",
@@ -299,6 +326,9 @@ function fakeClient(backend: FakeBackend): ConvexHttpClient {
     mutation: async (ref: FunctionReference<"mutation">, args: Record<string, unknown>) => {
       if (getFunctionName(ref) !== "expenses:create") throw new Error("unexpected mutation");
       if (backend.faults.httpTransportFailure) throw new TypeError("fetch failed");
+      if (backend.faults.httpSessionLapse) {
+        throw new ConvexError({ code: "UNAUTHENTICATED", message: "Not authenticated" });
+      }
       const outcome = backend.create(args, "http");
       if (!outcome.ok) throw new ConvexError(outcome.message);
       return outcome.id;
@@ -386,6 +416,9 @@ describe("SCRUM-826 DUPLICATE_SUBMIT handler", () => {
     expect(evidence.oracle.passed).toBe(false);
     expect(evidence.oracle.summary).toMatch(/refused an exact replay of the transmitted command/);
     expect(h.evidence).toHaveLength(1);
+    expect((h.evidence[0].replay as { refused?: string }).refused).toMatch(
+      /Idempotency key reused with different request content/,
+    );
   }, 30_000);
 
   it("a transport failure on the server replay stays a harness error, with evidence", async () => {
@@ -400,5 +433,63 @@ describe("SCRUM-826 DUPLICATE_SUBMIT handler", () => {
     await expect(h.run()).rejects.toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
     expect(h.evidence).toHaveLength(1);
     expect(h.evidence[0].outcome).toBe("INCONCLUSIVE");
+  }, 30_000);
+
+  it("C-1: a rapid-retry refusal survives a later unanswered lost intent as a breach", async () => {
+    const h = harness({ volatileSuffix: "-rapid", silentSuffix: "-lost" });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/-rapid: attempt \d+ was refused with a fingerprint conflict/);
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].phase).toBe("INTERRUPTED");
+    expect(String(h.evidence[0].interruptedBy)).toMatch(/never injected/);
+  }, 30_000);
+
+  it("C-1: a rapid-retry refusal survives a later unanswered control intent as a breach", async () => {
+    const h = harness({ volatileSuffix: "-rapid", silentSuffix: "-control" });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/-rapid: attempt \d+ was refused with a fingerprint conflict/);
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].phase).toBe("INTERRUPTED");
+  }, 30_000);
+
+  it("C-1: an exact-replay refusal survives a later unanswered control intent as a breach", async () => {
+    const h = harness({ refuseHttpReplay: true, silentSuffix: "-control" });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/refused an exact replay of the transmitted command/);
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].phase).toBe("INTERRUPTED");
+  }, 30_000);
+
+  it("P2: a lapsed harness session on the server replay is inconclusive, never a breach", async () => {
+    const h = harness({ httpSessionLapse: true });
+    await expect(h.run()).rejects.toThrow(/lapsed harness session/);
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].outcome).toBe("INCONCLUSIVE");
+  }, 30_000);
+
+  it("P2: a lapsed browser session on the lost intent is inconclusive, never a breach", async () => {
+    const h = harness({ lapseSuffix: "-lost" });
+    await expect(h.run()).rejects.toThrow(/harness lost authentication/);
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].outcome).toBe("INCONCLUSIVE");
+  }, 30_000);
+
+  it("P2: a lapsed browser session on the control intent is inconclusive, never a breach", async () => {
+    const h = harness({ lapseSuffix: "-control" });
+    await expect(h.run()).rejects.toThrow(/harness lost authentication/);
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0].outcome).toBe("INCONCLUSIVE");
+  }, 30_000);
+
+  it("P2-S: a duplicate economic effect stays a breach even when a session lapse also occurred", async () => {
+    const h = harness({ lapseDuplicateSuffix: "-control" });
+    const evidence = await h.run();
+    expect(evidence.oracle.passed).toBe(false);
+    expect(evidence.oracle.summary).toMatch(/-control: /);
+    expect(h.backend.expenses.filter((row) => row.title.endsWith("-control"))).toHaveLength(2);
+    expect(h.evidence).toHaveLength(1);
   }, 30_000);
 });

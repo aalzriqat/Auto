@@ -8,6 +8,7 @@ import {
   evaluateConcurrentEditRace,
   evaluateExpenseSingleEffect,
   evaluateIntentReplies,
+  isAuthenticationLapse,
   type ExpenseEffectSnapshot,
 } from "./browserSwarmEconomicOracle";
 
@@ -577,6 +578,39 @@ describe("SCRUM-826 O1/O2 — client-visible replies to one intent", () => {
     expect(classifyServerReplayFailure(new TypeError("fetch failed"))).toBe("UNIDENTIFIED");
     expect(classifyServerReplayFailure(new Error("502 Bad Gateway"))).toBe("UNIDENTIFIED");
     expect(classifyServerReplayFailure("boom")).toBe("UNIDENTIFIED");
+  });
+
+  it("keeps a lapsed harness session on a server replay inconclusive, never a product refusal (P2)", () => {
+    const lapse = new ConvexError({ code: "UNAUTHENTICATED", message: "Not authenticated" });
+    expect(classifyServerReplayFailure(lapse)).toBe("UNIDENTIFIED");
+    expect(isAuthenticationLapse(lapse)).toBe(true);
+    // The same principal just acted: an authorization refusal stays a product verdict.
+    const denied = new ConvexError({ code: "UNAUTHORIZED", message: "Not allowed" });
+    expect(classifyServerReplayFailure(denied)).toBe("BACKEND_REFUSED");
+    expect(isAuthenticationLapse(denied)).toBe(false);
+    expect(isAuthenticationLapse(new Error("UNAUTHENTICATED"))).toBe(false);
+  });
+
+  it("does not judge a socket reply refused for a lapsed session as a product refusal (P2)", () => {
+    const verdict = evaluateIntentReplies("t", [
+      {
+        requestId: 9,
+        success: false,
+        withheld: false,
+        errorText: 'Server Error | {"code":"UNAUTHENTICATED","message":"Not authenticated"}',
+      },
+      {
+        requestId: 10,
+        success: false,
+        withheld: false,
+        errorText: 'Server Error | {"code":"UNAUTHORIZED","message":"Not allowed"}',
+      },
+    ]);
+    expect(verdict.authenticationLapses).toBe(1);
+    expect(verdict.refused).toBe(1);
+    expect(verdict.violations).toEqual([
+      't: attempt 10 was refused: Server Error | {"code":"UNAUTHORIZED","message":"Not allowed"}',
+    ]);
   });
 
   it("keeps an unconfirmed intent with no refusal reply as not exercised", () => {

@@ -425,6 +425,11 @@ export interface IntentRepliesVerdict {
   violations: string[];
   /** Client-visible refusals of an attempt of this intent. */
   refused: number;
+  /**
+   * Replies refused because the session had lapsed (SCRUM-826 P2). Not judged
+   * as product refusals; the caller must treat any as an inconclusive run.
+   */
+  authenticationLapses: number;
 }
 
 export const FINGERPRINT_CONFLICT_TEXT = /Idempotency key reused with different request content/;
@@ -442,16 +447,21 @@ export function evaluateIntentReplies(
   replies: readonly IntentReplyRow[],
 ): IntentRepliesVerdict {
   const violations: string[] = [];
+  let authenticationLapses = 0;
   for (const reply of replies) {
     if (reply.withheld || reply.success) continue;
     const text = reply.errorText ?? "";
+    if (AUTHENTICATION_LAPSE_TEXT.test(text)) {
+      authenticationLapses += 1;
+      continue;
+    }
     violations.push(
       FINGERPRINT_CONFLICT_TEXT.test(text)
         ? `${title}: attempt ${reply.requestId} was refused with a fingerprint conflict on a same-intent retry: ${text}`
         : `${title}: attempt ${reply.requestId} was refused: ${text || "(no error text)"}`,
     );
   }
-  return { violations, refused: violations.length };
+  return { violations, refused: violations.length, authenticationLapses };
 }
 
 export type ServerReplayFailure = "BACKEND_REFUSED" | "UNIDENTIFIED";
@@ -464,8 +474,31 @@ export type ServerReplayFailure = "BACKEND_REFUSED" | "UNIDENTIFIED";
  * never a fabricated breach).
  */
 export function classifyServerReplayFailure(error: unknown): ServerReplayFailure {
-  return error instanceof ConvexError ? "BACKEND_REFUSED" : "UNIDENTIFIED";
+  if (!(error instanceof ConvexError)) return "UNIDENTIFIED";
+  // SCRUM-826 P2: the harness's own session lapsing is not a product verdict.
+  return isAuthenticationLapse(error) ? "UNIDENTIFIED" : "BACKEND_REFUSED";
 }
+
+/**
+ * SCRUM-826 P2: requireTenantAuth throws ConvexError({code:"UNAUTHENTICATED"})
+ * when the caller's session token is missing or expired. During an attack the
+ * same principal has just acted successfully, so this means the harness lost
+ * its session — inconclusive, never a product refusal and never a pass. An
+ * authorization refusal (UNAUTHORIZED/FORBIDDEN) of that same principal stays
+ * a product verdict.
+ */
+export function isAuthenticationLapse(error: unknown): boolean {
+  if (!(error instanceof ConvexError)) return false;
+  const data: unknown = error.data;
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    (data as { code?: unknown }).code === "UNAUTHENTICATED"
+  );
+}
+
+/** The serialized errorData of a socket MutationResponse for a lapsed session. */
+export const AUTHENTICATION_LAPSE_TEXT = /"code":"UNAUTHENTICATED"/;
 
 export type IntentExercise = "EXERCISED" | "PRODUCT_REFUSED" | "NOT_EXERCISED";
 
