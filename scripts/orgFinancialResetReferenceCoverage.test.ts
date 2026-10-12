@@ -141,6 +141,10 @@ const ACCEPTED_OPTIONAL_DANGLING: Record<string, string> = {
     "Self-reference; written only (financingEconomics.ts:2096); no reader dereferences it.",
   "financeDealCustodyEntries.reversesEntryId->financeDealCustodyEntries":
     "Self-reference; hard-dereferenced by financeDealCosts.ts:1326,1419,3235 and utils/custodySourceLedger.ts:1258,1750, all tenant-auth functions or pure ledger folds over a live custody, blocked by the suspension preflight.",
+  "invoiceReceiptApplications.splitFromApplicationId->invoiceReceiptApplications":
+    "Self-reference (a table cannot defer itself through CHILD_TABLES); written only when an application is split (accounting/invoiceReceiptActivation.ts:273); no reader dereferences it.",
+  "invoiceReceiptApplications.splitRemainderId->invoiceReceiptApplications":
+    "Self-reference; written when an application is split (accounting/invoiceReceiptActivation.ts:288) and only echoed back as an id in the replay result (:127); never dereferenced.",
   "journalEntries.accountingEventId->accountingEvents":
     "Reverse of the E2 edge (accountingEvents.journalEntryId), which would cycle; the only reader null-guards (accountingLedger.ts:198).",
   "journalEntries.reversalOfJournalEntryId->journalEntries":
