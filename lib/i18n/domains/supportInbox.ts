@@ -53,10 +53,13 @@ const supportInboxMessages = defineBilingualMessages({
   SupportInboxNoContent: ["(No content)", "(لا يوجد محتوى)"],
   SupportInboxEmailContent: ["Email content", "محتوى البريد"],
   SupportInboxImagesHidden: [
-    "Remote images are hidden to protect privacy.",
-    "الصور الخارجية مخفية لحماية الخصوصية.",
+    "Remote images are blocked to protect privacy.",
+    "تم حظر الصور الخارجية لحماية الخصوصية.",
   ],
-  SupportInboxShowImages: ["Show images", "إظهار الصور"],
+  SupportInboxUnsafeEmail: [
+    "This message could not be displayed safely. Use Plain text.",
+    "تعذّر عرض هذه الرسالة بأمان. استخدم النص العادي.",
+  ],
   SupportInboxViewPlain: ["Plain text", "نص عادي"],
   SupportInboxViewFormatted: ["Formatted", "منسّق"],
 
@@ -85,11 +88,11 @@ const supportInboxMessages = defineBilingualMessages({
   // Toasts
   SupportInboxReplySent: ["Reply sent.", "تم إرسال الرد."],
   SupportInboxReplySentClosed: ["Reply sent and conversation closed.", "تم إرسال الرد وإغلاق المحادثة."],
-  SupportInboxReplyFailed: ["Could not send the reply. Please try again.", "تعذّر إرسال الرد. حاول مرة أخرى."],
-  SupportInboxReplySentCloseFailed: [
-    "Reply sent, but the conversation could not be closed.",
-    "تم إرسال الرد، لكن تعذّر إغلاق المحادثة.",
+  SupportInboxReplySentNewerInbound: [
+    "Reply sent. A new message arrived, so the conversation was kept open.",
+    "تم إرسال الرد. وصلت رسالة جديدة، لذلك بقيت المحادثة مفتوحة.",
   ],
+  SupportInboxReplyFailed: ["Could not send the reply. Please try again.", "تعذّر إرسال الرد. حاول مرة أخرى."],
   SupportInboxStatusFailed: ["Could not update the conversation.", "تعذّر تحديث المحادثة."],
   SupportInboxCategoryFailed: ["Could not update the category.", "تعذّر تحديث التصنيف."],
 });

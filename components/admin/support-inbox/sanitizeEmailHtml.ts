@@ -9,15 +9,26 @@
  *      with no access to the app's cookies, storage or DOM.
  *   2. A CSP <meta> that is the FIRST thing in <head>: `default-src 'none'`, so
  *      even a sanitizer miss cannot load a script, frame, font, form target or
- *      (by default) a remote image.
- *   3. This DOMParser pass, which drops the dangerous elements and attributes.
- *      It is defence in depth, not the primary control.
+ *      a remote image. Remote images are ALWAYS blocked: an iframe srcdoc also
+ *      inherits the app's own CSP (next.config.ts), whose img-src is an
+ *      allowlist that a meta tag can only narrow, never widen, so an opt-in
+ *      "show images" could not work and is not offered.
+ *   3. This DOMParser pass, which drops the dangerous elements and attributes,
+ *      followed by a fixed-point check: the produced markup is parsed AGAIN (as
+ *      the iframe will) and, if anything dangerous reappears — the mutation-XSS
+ *      class, where one parse and one serialization disagree about namespaces —
+ *      the body is discarded and `unsafe` is reported. It is defence in depth,
+ *      not the primary control.
  *
  * Client-only (needs DOMParser). The result is a string for `srcDoc`; it is
  * never injected into the main document.
  */
 
-/** Elements removed outright, together with their children. */
+/**
+ * Elements removed outright, together with their children. `svg` and `math`
+ * are removed wholesale: their different parsing rules are what namespace
+ * confusion (mXSS) abuses, and email has no need for them.
+ */
 const REMOVED_SELECTOR = [
   "script",
   "iframe",
@@ -38,6 +49,8 @@ const REMOVED_SELECTOR = [
   "noscript",
   "template",
   "foreignObject",
+  "svg",
+  "math",
   "audio",
   "video",
   "source",
@@ -46,14 +59,24 @@ const REMOVED_SELECTOR = [
 
 const URL_ATTRIBUTES = ["href", "src", "xlink:href", "action", "formaction", "background", "poster", "data", "cite"];
 
-const IMAGE_CSP_REMOTE = "img-src data: https:";
-const IMAGE_CSP_BLOCKED = "img-src data:";
+const IMAGE_SOURCE_ATTRIBUTES = ["src", "background", "poster"];
+
+/** `url(http…)` / `url(//…)` in CSS: a remote image (or font) reference. */
+const REMOTE_CSS_URL = /url\(\s*['"]?\s*(?:https?:)?\/\//i;
+
+/** SVG elements whose href loads an image. Detected before svg is removed. */
+const SVG_IMAGE_ELEMENTS: ReadonlySet<string> = new Set(["image", "feimage"]);
 
 export interface SanitizedEmail {
   /** Complete HTML document for `<iframe srcDoc>`. */
   srcDoc: string;
-  /** True when the original message references at least one remote image. */
+  /** True when the original message references at least one remote image (all are blocked). */
   hasRemoteImages: boolean;
+  /**
+   * True when the markup could not be made safe and the body was discarded
+   * (`srcDoc` then has an empty body). The caller shows a placeholder instead.
+   */
+  unsafe: boolean;
 }
 
 function isRemoteUrl(value: string): boolean {
@@ -76,26 +99,83 @@ const DANGEROUS_STYLE = /expression\s*\(|javascript:|vbscript:|-moz-binding|beha
 const BASE_STYLE =
   "html,body{margin:0;padding:0}body{padding:12px;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;color:#1f1e1d;background:#fff;overflow-wrap:anywhere}img{max-width:100%;height:auto}table{max-width:100%}";
 
+const CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; form-action 'none'";
+
 function escapeAttribute(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
-export function sanitizeEmailHtml(html: string, options: { allowRemoteImages: boolean }): SanitizedEmail {
-  const csp = `default-src 'none'; style-src 'unsafe-inline'; ${
-    options.allowRemoteImages ? IMAGE_CSP_REMOTE : IMAGE_CSP_BLOCKED
-  }; font-src 'none'; form-action 'none'`;
+function parse(html: string): Document {
+  return new DOMParser().parseFromString(html, "text/html");
+}
+
+/** Does this element reference a remote image (attribute, CSS url(), or SVG href)? */
+function referencesRemoteImage(element: Element): boolean {
+  for (const attribute of Array.from(element.attributes)) {
+    const name = attribute.name.toLowerCase();
+    const value = attribute.value;
+    if (IMAGE_SOURCE_ATTRIBUTES.includes(name) && isRemoteUrl(value)) return true;
+    if (name === "srcset" && /(?:^|[\s,])(?:https?:)?\/\//i.test(value)) return true;
+    if (name === "style" && REMOTE_CSS_URL.test(value)) return true;
+    if (
+      (name === "href" || name === "xlink:href") &&
+      SVG_IMAGE_ELEMENTS.has(element.localName.toLowerCase()) &&
+      isRemoteUrl(value)
+    ) {
+      return true;
+    }
+  }
+  if (element.localName.toLowerCase() === "style" && REMOTE_CSS_URL.test(element.textContent ?? "")) return true;
+  return false;
+}
+
+/**
+ * The fixed-point check. Parses `markup` the way the iframe will and reports
+ * whether anything the sanitizer is supposed to have removed is present: a
+ * removed element, an on* attribute, an unsafe or remote URL, a dangerous style.
+ */
+export function isStillUnsafe(markup: string): boolean {
+  if (typeof DOMParser === "undefined") return false;
+  const doc = parse(markup);
+  if (doc.querySelector(REMOVED_SELECTOR)) return true;
+  for (const element of Array.from(doc.querySelectorAll("*"))) {
+    if (element.localName.toLowerCase() === "style" && DANGEROUS_STYLE.test(element.textContent ?? "")) return true;
+    for (const attribute of Array.from(element.attributes)) {
+      const name = attribute.name.toLowerCase();
+      if (name.startsWith("on")) return true;
+      if (name === "style" && DANGEROUS_STYLE.test(attribute.value)) return true;
+      if (name === "srcset" && attribute.value.trim() !== "") return true;
+      if (URL_ATTRIBUTES.includes(name)) {
+        if (!isSafeUrl(name, attribute.value)) return true;
+        if (IMAGE_SOURCE_ATTRIBUTES.includes(name) && isRemoteUrl(attribute.value)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function sanitizeEmailHtml(html: string): SanitizedEmail {
   const shell = (head: string, body: string, bodyAttributes = "") =>
     `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${escapeAttribute(
-      csp
+      CSP
     )}"><base target="_blank">${head}</head><body${bodyAttributes}>${body}</body></html>`;
 
   if (typeof DOMParser === "undefined") {
     // Server render / non-DOM environment: render nothing rather than raw markup.
-    return { srcDoc: shell(`<style>${BASE_STYLE}</style>`, ""), hasRemoteImages: false };
+    return { srcDoc: shell(`<style>${BASE_STYLE}</style>`, ""), hasRemoteImages: false, unsafe: false };
   }
 
-  const doc = new DOMParser().parseFromString(html, "text/html");
+  const doc = parse(html);
+
+  // Remote-image detection runs BEFORE removal so that images referenced from
+  // inside elements that are about to be dropped (SVG <image>) still count.
   let hasRemoteImages = false;
+  for (const element of Array.from(doc.querySelectorAll("*"))) {
+    if (referencesRemoteImage(element)) {
+      hasRemoteImages = true;
+      break;
+    }
+  }
 
   // Style blocks are kept (email layout depends on them) but are scanned first.
   for (const style of Array.from(doc.querySelectorAll("style"))) {
@@ -118,8 +198,8 @@ export function sanitizeEmailHtml(html: string, options: { allowRemoteImages: bo
         continue;
       }
       if (name === "srcset") {
-        hasRemoteImages = hasRemoteImages || /(?:^|[\s,])(?:https?:)?\/\//i.test(value);
-        if (!options.allowRemoteImages) element.removeAttribute(attribute.name);
+        // Remote images are always blocked; the CSP would refuse the load anyway.
+        element.removeAttribute(attribute.name);
         continue;
       }
       if (URL_ATTRIBUTES.includes(name)) {
@@ -127,13 +207,9 @@ export function sanitizeEmailHtml(html: string, options: { allowRemoteImages: bo
           element.removeAttribute(attribute.name);
           continue;
         }
-        const isImageSource = name === "src" || name === "background" || name === "poster";
-        if (isImageSource && isRemoteUrl(value)) {
-          hasRemoteImages = true;
-          // With images blocked the CSP already refuses the load; dropping the
-          // attribute as well avoids a broken-image icon and a needless request attempt.
-          if (!options.allowRemoteImages) element.removeAttribute(attribute.name);
-        }
+        // Dropping the attribute as well as relying on the CSP avoids a
+        // broken-image icon and a needless request attempt.
+        if (IMAGE_SOURCE_ATTRIBUTES.includes(name) && isRemoteUrl(value)) element.removeAttribute(attribute.name);
       }
     }
 
@@ -147,6 +223,13 @@ export function sanitizeEmailHtml(html: string, options: { allowRemoteImages: bo
     .map((style) => style.outerHTML)
     .join("");
   // Remaining <style> in the body stay in place via body.innerHTML.
+  const bodyHtml = doc.body.innerHTML;
+
+  // Fixed point: what the iframe will parse must be as clean as what we built.
+  if (isStillUnsafe(`${headStyles}${bodyHtml}`)) {
+    return { srcDoc: shell(`<style>${BASE_STYLE}</style>`, ""), hasRemoteImages, unsafe: true };
+  }
+
   const bodyStyle = doc.body.getAttribute("style");
   const bodyBgColor = doc.body.getAttribute("bgcolor");
   const bodyAttributes =
@@ -154,7 +237,8 @@ export function sanitizeEmailHtml(html: string, options: { allowRemoteImages: bo
     (bodyBgColor ? ` bgcolor="${escapeAttribute(bodyBgColor)}"` : "");
 
   return {
-    srcDoc: shell(`<style>${BASE_STYLE}</style>${headStyles}`, doc.body.innerHTML, bodyAttributes),
+    srcDoc: shell(`<style>${BASE_STYLE}</style>${headStyles}`, bodyHtml, bodyAttributes),
     hasRemoteImages,
+    unsafe: false,
   };
 }

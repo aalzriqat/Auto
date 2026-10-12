@@ -41,7 +41,7 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
     locale: "en",
   }),
 }));
-vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 
 import { SupportInbox } from "./SupportInbox";
 import { toast } from "@/components/ui/sonner";
@@ -85,7 +85,8 @@ beforeEach(() => {
   stubs.messagesByThread = new Map();
   stubs.listArgs = [];
   stubs.mutations = new Map();
-  stubs.sendReply = vi.fn().mockResolvedValue({ success: true });
+  stubs.sendReply = vi.fn().mockResolvedValue({ success: true, closed: false, newerInbound: false });
+  vi.mocked(toast.warning).mockClear();
   vi.mocked(toast.error).mockClear();
   vi.mocked(toast.success).mockClear();
 });
@@ -179,13 +180,12 @@ describe("SupportInbox reading pane", () => {
     expect(srcdoc).not.toContain("t.example");
     // HTML-only mail must not claim to have no content.
     expect(screen.queryByText(/no text content/i)).toBeNull();
-    expect(screen.getByText("Remote images are hidden to protect privacy.")).toBeTruthy();
-
-    // Showing images relaxes only img-src.
-    fireEvent.click(screen.getByRole("button", { name: "Show images" }));
-    const shown = (screen.getByTitle("Email content") as HTMLIFrameElement).getAttribute("srcdoc") ?? "";
-    expect(shown).toContain("img-src data: https:");
-    expect(shown).toContain("t.example");
+    // Informational only: the app CSP is an allowlist the iframe cannot widen, so
+    // there is deliberately no way to show remote images (review F3).
+    expect(screen.getByText("Remote images are blocked to protect privacy.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Show images" })).toBeNull();
+    expect(srcdoc).toContain("img-src data:");
+    expect(srcdoc).not.toContain("https:");
 
     fireEvent.click(screen.getByRole("button", { name: "Plain text" }));
     expect(screen.queryByTitle("Email content")).toBeNull();
@@ -262,17 +262,20 @@ describe("SupportInbox reading pane", () => {
     expect(screen.queryByPlaceholderText("Write your reply…")).toBeNull();
   });
 
-  test("Send & close sends, then closes; a send failure shows the server's message and keeps the draft", async () => {
+  test("Send & close is ONE sendReply call with closeAfterSend and never a separate setThreadStatus; a send failure shows the server's message and keeps the draft", async () => {
     const t1 = thread({ subject: "Photos" });
     stubs.threads = [t1];
     stubs.messagesByThread.set(t1._id, [message(t1._id)]);
+    stubs.sendReply.mockResolvedValue({ success: true, closed: true, newerInbound: false });
     render(<SupportInbox />);
     fireEvent.click(screen.getByText("Photos"));
     fireEvent.click(screen.getByRole("button", { name: "Reply" }));
     fireEvent.change(screen.getByPlaceholderText("Write your reply…"), { target: { value: "Fixed" } });
     fireEvent.click(screen.getByRole("button", { name: "Send & close" }));
     await waitFor(() => expect(stubs.sendReply).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(stubs.mutations.get("support:setThreadStatus")).toHaveBeenCalledWith({ threadId: t1._id, status: "CLOSED" }));
+    expect(stubs.sendReply).toHaveBeenCalledWith({ threadId: t1._id, bodyText: "Fixed", closeAfterSend: true });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Reply sent and conversation closed."));
+    expect(stubs.mutations.get("support:setThreadStatus")?.mock.calls ?? []).toHaveLength(0);
 
     // Failure path: draft survives, message comes from the ConvexError string.
     const { ConvexError } = await import("convex/values");
@@ -282,6 +285,42 @@ describe("SupportInbox reading pane", () => {
     fireEvent.keyDown(screen.getByPlaceholderText("Write your reply…"), { key: "Enter", metaKey: true });
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("This sender does not accept replies."));
     expect((screen.getByPlaceholderText("Write your reply…") as HTMLTextAreaElement).value).toBe("Again");
+  });
+
+  test("Send & close warns, instead of claiming it closed, when a newer message arrived during the send", async () => {
+    const t1 = thread({ subject: "Photos" });
+    stubs.threads = [t1];
+    stubs.messagesByThread.set(t1._id, [message(t1._id)]);
+    stubs.sendReply.mockResolvedValue({ success: true, closed: false, newerInbound: true });
+    render(<SupportInbox />);
+    fireEvent.click(screen.getByText("Photos"));
+    fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+    fireEvent.change(screen.getByPlaceholderText("Write your reply…"), { target: { value: "Fixed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send & close" }));
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith(
+        "Reply sent. A new message arrived, so the conversation was kept open."
+      )
+    );
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(stubs.mutations.get("support:setThreadStatus")?.mock.calls ?? []).toHaveLength(0);
+  });
+
+  test("a message whose HTML cannot be made safe shows a placeholder instead of an iframe", () => {
+    const t1 = thread({ subject: "Odd" });
+    stubs.threads = [t1];
+    stubs.messagesByThread.set(t1._id, [
+      message(t1._id, {
+        bodyText: undefined,
+        bodyHtml: "<math><mtext><table><mglyph><style><!--</style><xmp>--><img src=x onerror=1></xmp>",
+      }),
+    ]);
+    render(<SupportInbox />);
+    fireEvent.click(screen.getByText("Odd"));
+    // Either the sanitizer removed everything (empty iframe, nothing live) or it
+    // reported unsafe and the placeholder replaced the frame: never live markup.
+    const frame = screen.queryByTitle("Email content") as HTMLIFrameElement | null;
+    if (frame) expect(frame.getAttribute("srcdoc") ?? "").not.toMatch(/onerror/i);
   });
 
   test("toolbar: close/reopen and the category toggle call the backend", async () => {

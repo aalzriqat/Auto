@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useAction, useMutation } from "convex/react";
+import { useAction } from "convex/react";
 import { CornerUpLeft, TriangleAlert } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -31,7 +31,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 export function Composer({ thread, open, onOpenChange }: ComposerProps) {
   const { t } = useLanguage();
   const sendReply = useAction(api.support.sendReply);
-  const setThreadStatus = useMutation(api.support.setThreadStatus);
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -70,8 +69,16 @@ export function Composer({ thread, open, onOpenChange }: ComposerProps) {
     const text = body.trim();
     if (!text || sending) return;
     setSending(true);
+    let outcome: { closed?: boolean; newerInbound?: boolean } | null;
     try {
-      await sendReply({ threadId: thread._id as Id<"supportThreads">, bodyText: text });
+      // Send & close is ONE backend call: the server closes the thread in the
+      // same transaction as the reply, and only if no newer inbound message
+      // arrived while the email was being sent.
+      outcome = await sendReply({
+        threadId: thread._id as Id<"supportThreads">,
+        bodyText: text,
+        ...(closeAfter ? { closeAfterSend: true } : {}),
+      });
     } catch (error) {
       toast.error(errorToastMessage(error, t("SupportInboxReplyFailed")));
       setSending(false);
@@ -80,13 +87,10 @@ export function Composer({ thread, open, onOpenChange }: ComposerProps) {
     // The reply is out; from here the draft must be cleared whatever happens.
     setBody("");
     onOpenChange(false);
-    if (closeAfter) {
-      try {
-        await setThreadStatus({ threadId: thread._id as Id<"supportThreads">, status: "CLOSED" });
-        toast.success(t("SupportInboxReplySentClosed"));
-      } catch (error) {
-        toast.error(errorToastMessage(error, t("SupportInboxReplySentCloseFailed")));
-      }
+    if (outcome?.newerInbound) {
+      toast.warning(t("SupportInboxReplySentNewerInbound"));
+    } else if (closeAfter && outcome?.closed) {
+      toast.success(t("SupportInboxReplySentClosed"));
     } else {
       toast.success(t("SupportInboxReplySent"));
     }
