@@ -9,6 +9,7 @@
  */
 
 const PREVIEW_MAX_LENGTH = 160;
+const PREVIEW_HTML_MAX_CHARS = 64 * 1024;
 
 /** `<https://…>` link dumps that plain-text mail bodies are full of. */
 const ANGLE_LINK = /<\s*(https?:\/\/[^\s<>]+)\s*>/gi;
@@ -27,13 +28,18 @@ function domainOf(email: string): string {
 
 /**
  * Token match on the LOCAL part only: `noreply`, `no-reply`, `no_reply`,
- * `do-not-reply`, `donotreply`, `mailer-daemon`, `postmaster`, `notification(s)`
- * as a whole token, so `noreply+cffa368`, `no-reply-uamktl…` and `info-noreply`
- * match while `reply-ztecov…@mail.anthropic.com` (a real, repliable address)
- * and `noreplying` do not.
+ * `do-not-reply`, `donotreply`, `mailer-daemon` as a whole token, so
+ * `noreply+cffa368`, `no-reply-uamktl…` and `info-noreply` match while
+ * `reply-ztecov…@mail.anthropic.com` (a real, repliable address) and
+ * `noreplying` do not.
+ *
+ * This predicate drives a HARD server-side refusal and a hidden composer, so it
+ * is deliberately narrow: `notifications` and `postmaster` are NOT here. Those
+ * are only "likely automated" (see AUTOMATED_LOCAL_PARTS) and can still be
+ * replied to.
  */
 const NO_REPLY_TOKEN =
-  /(^|[^a-z])(no[-_.]?reply|do[-_.]?not[-_.]?reply|mailer[-_.]?daemon|postmaster|notifications?)([^a-z]|$)/;
+  /(^|[^a-z])(no[-_.]?reply|do[-_.]?not[-_.]?reply|mailer[-_.]?daemon)([^a-z]|$)/;
 
 export function isNoReplyAddress(email: string | null | undefined): boolean {
   if (!email) return false;
@@ -66,6 +72,7 @@ const AUTOMATED_LOCAL_PARTS: ReadonlySet<string> = new Set([
   "mailer",
   "bounce",
   "bounces",
+  "postmaster",
 ]);
 
 /**
@@ -117,19 +124,120 @@ const HTML_ENTITIES: Record<string, string> = {
   "&apos;": "'",
 };
 
+const SKIPPED_BLOCKS: ReadonlySet<string> = new Set(["script", "style", "head"]);
+const NEWLINE_CLOSERS: ReadonlySet<string> = new Set([
+  "p",
+  "div",
+  "tr",
+  "li",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "table",
+  "blockquote",
+]);
+
+function isAsciiLetter(code: number): boolean {
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+/**
+ * Index just past the closing `</name>` of a skipped block (case-insensitive),
+ * or `html.length` when it is never closed. Walks `</` occurrences with
+ * indexOf, so each byte of input is inspected a bounded number of times.
+ */
+function endOfBlock(html: string, name: string, from: number): number {
+  let at = html.indexOf("</", from);
+  while (at !== -1) {
+    if (html.slice(at + 2, at + 2 + name.length).toLowerCase() === name) {
+      const gt = html.indexOf(">", at + 2 + name.length);
+      return gt === -1 ? html.length : gt + 1;
+    }
+    at = html.indexOf("</", at + 2);
+  }
+  return html.length;
+}
+
+/**
+ * The tag scanner behind `htmlToPlainText`: ONE left-to-right pass that only
+ * ever moves forward. A previous regex pipeline backtracked over the whole
+ * input for every unterminated `<!--`, `<head>`, `<style>` or `<a ` and took
+ * 5–28 s on 480 KB (SCRUM-825 review F1) — on the inbound-mutation path, where a
+ * mutation has about a second. Here every unterminated construct simply runs to
+ * the end of the input, and a missing `>` is discovered once, not once per `<`.
+ */
+function stripTags(html: string): string {
+  const out: string[] = [];
+  const length = html.length;
+  let cursor = 0;
+  while (cursor < length) {
+    const lt = html.indexOf("<", cursor);
+    if (lt === -1) {
+      out.push(html.slice(cursor));
+      break;
+    }
+    if (lt > cursor) out.push(html.slice(cursor, lt));
+
+    if (html.startsWith("<!--", lt)) {
+      const end = html.indexOf("-->", lt + 4);
+      out.push(" ");
+      if (end === -1) break; // unclosed comment swallows the rest
+      cursor = end + 3;
+      continue;
+    }
+
+    const closing = html.charCodeAt(lt + 1) === 47; // "/"
+    const nameStart = lt + (closing ? 2 : 1);
+    const first = html.charCodeAt(nameStart);
+    const isDeclaration = first === 33 || first === 63; // "<!doctype", "<?xml"
+    if (!isAsciiLetter(first) && !isDeclaration) {
+      out.push("<"); // a stray "<" is text
+      cursor = lt + 1;
+      continue;
+    }
+
+    let nameEnd = nameStart;
+    if (!isDeclaration) {
+      while (nameEnd < length) {
+        const code = html.charCodeAt(nameEnd);
+        if (!isAsciiLetter(code) && !(code >= 48 && code <= 57)) break;
+        nameEnd += 1;
+      }
+    }
+    const name = html.slice(nameStart, nameEnd).toLowerCase();
+
+    const gt = html.indexOf(">", nameEnd);
+    if (gt === -1) {
+      // No ">" anywhere after this point: the rest is one unterminated tag.
+      // Stopping here (not skipping just this "<") is what keeps it linear.
+      out.push(" ");
+      break;
+    }
+
+    if (!closing && SKIPPED_BLOCKS.has(name)) {
+      out.push(" ");
+      cursor = endOfBlock(html, name, gt + 1);
+      continue;
+    }
+    out.push(!isDeclaration && (name === "br" || (closing && NEWLINE_CLOSERS.has(name))) ? "\n" : " ");
+    cursor = gt + 1;
+  }
+  return out.join("");
+}
+
 /**
  * Tag-stripped text of an HTML email body. Block-level ends become newlines so
- * the plain-text view of an HTML-only message stays readable. Regex-based on
- * purpose (it runs in the Convex runtime, which has no DOM); the output is only
- * ever rendered as TEXT, never as markup.
+ * the plain-text view of an HTML-only message stays readable. A hand-written
+ * linear scanner on purpose (it runs in the Convex runtime, which has no DOM,
+ * on attacker-controlled input); the output is only ever rendered as TEXT,
+ * never as markup.
  */
 export function htmlToPlainText(html: string): string {
   return collapseBlankLines(
-    html
-      .replace(/<(script|style|head)\b[\s\S]*?<\/\1\s*>/gi, " ")
-      .replace(/<!--[\s\S]*?-->/g, " ")
-      .replace(/<br\s*\/?>|<\/(?:p|div|tr|li|h[1-6]|table|blockquote)\s*>/gi, "\n")
-      .replace(/<[^>]*>/g, " ")
+    stripTags(html)
       .replace(/&(?:nbsp|amp|lt|gt|quot|apos|#39);/gi, (m) => HTML_ENTITIES[m.toLowerCase()] ?? m)
       .replace(/&#(\d{1,6});/g, (m, code: string) => {
         const point = Number(code);
@@ -147,7 +255,14 @@ export function htmlToPlainText(html: string): string {
  * in half).
  */
 export function buildPreview(bodyText?: string | null, bodyHtml?: string | null): string {
-  const source = bodyText && bodyText.trim() ? bodyText : bodyHtml ? htmlToPlainText(bodyHtml) : "";
+  // Only the head of the HTML can reach a 160-character preview, so cap the
+  // work at 64 KB regardless of the scanner's speed. The stored body is untouched.
+  const source =
+    bodyText && bodyText.trim()
+      ? bodyText
+      : bodyHtml
+        ? htmlToPlainText(bodyHtml.slice(0, PREVIEW_HTML_MAX_CHARS))
+        : "";
   const cleaned = source.replace(ANGLE_LINK, " ").replace(/\s+/g, " ").trim();
   const points = Array.from(cleaned);
   return points.length <= PREVIEW_MAX_LENGTH ? cleaned : points.slice(0, PREVIEW_MAX_LENGTH).join("").trimEnd();

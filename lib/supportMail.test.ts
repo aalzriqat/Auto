@@ -20,13 +20,23 @@ describe("isNoReplyAddress", () => {
     "do-not-reply@x.com",
     "donotreply@x.com",
     "mailer-daemon@x.com",
-    "postmaster@x.com",
-    "notifications@github.com",
-    "notification@x.com",
     "info-noreply@x.com",
+    "noreply-tag@x.com",
+    "do-not-reply+abc@x.com",
   ])("%s is a no-reply address", (email) => {
     expect(isNoReplyAddress(email)).toBe(true);
   });
+
+  // Reviewer ruling (SCRUM-825 round 1): the hard server refusal must only fire
+  // for addresses that genuinely cannot receive mail. These are categorized as
+  // Automated but a human can still reply to them.
+  test.each(["notifications@github.com", "notification@x.com", "postmaster@x.com"])(
+    "%s is repliable (not no-reply) but still likely automated",
+    (email) => {
+      expect(isNoReplyAddress(email)).toBe(false);
+      expect(isLikelyAutomated(email)).toBe(true);
+    }
+  );
 
   test.each([
     "reply-ztecovhsgwh5_tikctu-qw@mail.anthropic.com",
@@ -130,6 +140,69 @@ describe("htmlToPlainText", () => {
   test("decodes named and numeric entities and never turns an escaped tag into markup", () => {
     expect(htmlToPlainText("<p>a &amp; b &#8212; c</p>")).toBe("a & b — c");
     expect(htmlToPlainText("<p>&lt;script&gt;</p>")).toBe("<script>");
+  });
+
+  test("normal HTML-only email", () => {
+    const html =
+      '<!doctype html><html><head><meta charset="utf-8"><title>T</title></head><body><!-- c --><div><p>Hi Omar,</p><p>Your <a href="https://x.test/a?b=1&amp;c=2">invoice</a> is ready.</p></div></body></html>';
+    expect(htmlToPlainText(html)).toBe("Hi Omar,\nYour invoice is ready.");
+  });
+
+  test("nested tables keep row structure", () => {
+    const html = "<table><tr><td>A</td><td>B</td></tr><tr><td><table><tr><td>C</td></tr></table></td></tr></table>";
+    expect(htmlToPlainText(html)).toBe("A B\nC");
+  });
+
+  test("br becomes a newline in every spelling", () => {
+    expect(htmlToPlainText("a<br>b<BR/>c<br />d")).toBe("a\nb\nc\nd");
+  });
+
+  test("Arabic and emoji survive", () => {
+    expect(htmlToPlainText("<p>السلام عليكم 😀</p><p>مرحبا</p>")).toBe("السلام عليكم 😀\nمرحبا");
+  });
+
+  test("entities decode as before", () => {
+    expect(htmlToPlainText("<p>&nbsp;a&nbsp;&amp;&nbsp;b &#128512; &bogus; &#0;</p>")).toBe("a & b 😀 &bogus; &#0;");
+  });
+
+  test("an unclosed comment, script, style or head swallows the rest instead of leaking markup", () => {
+    expect(htmlToPlainText("<p>before</p><!-- never closed <p>secret</p>")).toBe("before");
+    expect(htmlToPlainText("<p>before</p><script>alert(1)")).toBe("before");
+    expect(htmlToPlainText("<p>before</p><style>p{")).toBe("before");
+    expect(htmlToPlainText("<p>before</p><head><title>x</title>")).toBe("before");
+  });
+
+  test("a stray less-than sign stays text", () => {
+    expect(htmlToPlainText("<p>1 < 2 and 3 > 2</p>")).toBe("1 < 2 and 3 > 2");
+  });
+
+  // Reviewer finding F1 (HIGH): the regex pipeline was quadratic on these. They
+  // run on the inbound-mutation path, which has ~1s of user code, so a hostile
+  // sender could make the webhook retry forever. 480 KB each; budget 200 ms.
+  const HOSTILE: Array<[string, string]> = [
+    ["comment openers", "<!--".repeat(120_000)],
+    ["head openers", "<head>".repeat(80_000)],
+    ["style openers", "<style>".repeat(68_000)],
+    ["unterminated tag openers", "<a ".repeat(160_000)],
+  ];
+  test.each(HOSTILE)("hostile 480 KB input (%s) converts in under 200 ms", (_name, payload) => {
+    const started = performance.now();
+    htmlToPlainText(payload);
+    expect(performance.now() - started).toBeLessThan(200);
+  });
+  test.each(HOSTILE)("hostile 480 KB input (%s) builds a bounded preview in under 200 ms", (_name, payload) => {
+    const started = performance.now();
+    const preview = buildPreview(undefined, payload);
+    expect(performance.now() - started).toBeLessThan(200);
+    expect(Array.from(preview).length).toBeLessThanOrEqual(160);
+  });
+
+  test("buildPreview only looks at the first 64 KB of the HTML", () => {
+    const html = `<p>${"x".repeat(70_000)}</p>`;
+    expect(buildPreview(undefined, html)).toBe("x".repeat(160));
+    // Text that only appears after the cap cannot reach the preview.
+    const late = `<p>${" ".repeat(70_000)}late</p>`;
+    expect(buildPreview(undefined, late)).toBe("");
   });
 });
 
