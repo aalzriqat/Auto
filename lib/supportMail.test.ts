@@ -354,9 +354,13 @@ describe("htmlToPlainText", () => {
 });
 
 // Permanent linearity matrix: each pattern repeated to ~1 MiB, in a head and a body
-// context, must convert in under 200 ms. One line per future pattern.
+// context, must convert in under MIB_BUDGET_MS. One line per future pattern.
 describe("scanner linearity matrix (1 MiB, head and body contexts)", () => {
   const MIB = 1024 * 1024;
+  // Linear runs take ~90 ms locally but ~205 ms in CI under coverage instrumentation
+  // (PR #567, slice 2/4). A quadratic rescan at this size takes seconds or minutes
+  // (R4-01 measured 181 s), so 1 s still separates the two by an order of magnitude.
+  const MIB_BUDGET_MS = 1000;
   const repeatTo = (unit: string) => unit.repeat(Math.floor(MIB / unit.length));
   // [name, unit, optional wrapper prefix that opens the raw block the unit sits in]
   const PATTERNS: Array<[string, string, string?]> = [
@@ -402,8 +406,8 @@ describe("scanner linearity matrix (1 MiB, head and body contexts)", () => {
   test.each(CASES)("%s", (_name, html) => {
     const preview = buildPreview(undefined, html);
     expect(Array.from(preview).length).toBeLessThanOrEqual(160);
-    expect(fastestMs(() => buildPreview(undefined, html))).toBeLessThan(200);
-    expect(fastestMs(() => htmlToPlainText(html))).toBeLessThan(200);
+    expect(fastestMs(() => buildPreview(undefined, html))).toBeLessThan(MIB_BUDGET_MS);
+    expect(fastestMs(() => htmlToPlainText(html))).toBeLessThan(MIB_BUDGET_MS);
   });
 });
 
