@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -18,10 +18,30 @@ import {
 } from "./browserEgressContainment.mjs";
 import { EGRESS_PROOF_CHANNELS } from "./browserEgressChannels.mjs";
 import {
+  EGRESS_EVIDENCE_PATH,
   resolveEvidencePath,
   runEvidenceVerifierCli,
   verifyEgressProofEvidence,
 } from "./browserEgressProofVerify.mjs";
+
+// The exact relative path both browser-attack-swarm.yml calls pass. Pinned as a
+// literal here so a change to the verifier's constant cannot silently drift
+// from the workflow; the constant itself is asserted equal to it below.
+const EVIDENCE_PATH = "egress-evidence/browser-egress-proof.json";
+
+// Symlink creation needs privileges on Windows; probe once so only that case skips.
+const canSymlink = (() => {
+  const dir = mkdtempSync(path.join(tmpdir(), "egress-symlink-probe-"));
+  try {
+    writeFileSync(path.join(dir, "t"), "x");
+    symlinkSync(path.join(dir, "t"), path.join(dir, "l"));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
 
 const PK = "pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk"; // example.clerk.accounts.dev
 const CONVEX = "https://happy-animal-123.convex.cloud";
@@ -254,12 +274,15 @@ describe("verifyEgressProofEvidence and parseEgressDenialLog (G4-02)", () => {
 
   it("CLI exits non-zero for missing, empty, failing and passing-with-no-evidence files, zero for a full pass", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "egress-verify-"));
-    const run = (name: string, body: string | null) => {
-      const file = path.join(dir, name);
-      if (body !== null) writeFileSync(file, body);
-      // The verifier only reads inside its working directory (as the workflow
-      // does, with a relative path), so the fixture directory is the cwd.
-      return spawnSync(process.execPath, [path.join(__dirname, "browserEgressProofVerify.mjs"), name], {
+    const run = (_name: string, body: string | null) => {
+      // The verifier reads only its fixed evidence path under its working
+      // directory (as the workflow does), so the fixture directory is the cwd.
+      rmSync(path.join(dir, "egress-evidence"), { recursive: true, force: true });
+      if (body !== null) {
+        mkdirSync(path.join(dir, "egress-evidence"), { recursive: true });
+        writeFileSync(path.join(dir, EVIDENCE_PATH), body);
+      }
+      return spawnSync(process.execPath, [path.join(__dirname, "browserEgressProofVerify.mjs"), EVIDENCE_PATH], {
         encoding: "utf8",
         cwd: dir,
       });
@@ -296,19 +319,76 @@ describe("verifyEgressProofEvidence and parseEgressDenialLog (G4-02)", () => {
     }
   });
 
-  it("resolveEvidencePath accepts only paths strictly inside the working directory", () => {
-    const cwd = path.resolve(tmpdir(), "egress-cwd");
-    expect(resolveEvidencePath("egress-evidence/proof.json", cwd)).toBe(path.join(cwd, "egress-evidence", "proof.json"));
-    expect(resolveEvidencePath(path.join(cwd, "proof.json"), cwd)).toBe(path.join(cwd, "proof.json"));
-    expect(resolveEvidencePath("..proof.json", cwd)).toBe(path.join(cwd, "..proof.json"));
-    for (const bad of ["../outside.json", "a/../../outside.json", path.resolve(cwd, "..", "other.json"), ".", "", ".."]) {
-      expect(() => resolveEvidencePath(bad, cwd)).toThrow(/outside the working directory/);
+  it("EGRESS_EVIDENCE_PATH is the exact path the workflow passes", () => {
+    expect(EGRESS_EVIDENCE_PATH).toBe(EVIDENCE_PATH);
+  });
+
+  it("resolveEvidencePath accepts exactly the fixed evidence path and derives the read path from the constant", () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "egress-cwd-"));
+    try {
+      mkdirSync(path.join(cwd, "egress-evidence"));
+      const real = path.join(cwd, EVIDENCE_PATH);
+      writeFileSync(real, JSON.stringify(good()));
+      expect(resolveEvidencePath(EVIDENCE_PATH, cwd)).toBe(path.join(cwd, EVIDENCE_PATH));
+      writeFileSync(path.join(cwd, "egress-evidence", "other.json"), "{}");
+      for (const bad of [
+        "../x.json",
+        real,
+        `./${EVIDENCE_PATH}`,
+        "egress-evidence/other.json",
+        "egress-evidence\\browser-egress-proof.json",
+        undefined,
+        "",
+      ]) {
+        expect(() => resolveEvidencePath(bad as string, cwd)).toThrow(/not the fixed egress evidence path/);
+      }
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEvidencePath refuses a fixed path that is missing or is not a regular file", () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "egress-cwd-"));
+    try {
+      expect(() => resolveEvidencePath(EVIDENCE_PATH, cwd)).toThrow();
+      mkdirSync(path.join(cwd, EVIDENCE_PATH), { recursive: true }); // a directory, not a file
+      expect(() => resolveEvidencePath(EVIDENCE_PATH, cwd)).toThrow(/regular file/);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!canSymlink)("resolveEvidencePath refuses the fixed path when it is a symlink to a real file inside cwd", () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "egress-cwd-"));
+    try {
+      mkdirSync(path.join(cwd, "egress-evidence"));
+      writeFileSync(path.join(cwd, "real-pass.json"), JSON.stringify(good()));
+      symlinkSync(path.join(cwd, "real-pass.json"), path.join(cwd, EVIDENCE_PATH));
+      expect(() => resolveEvidencePath(EVIDENCE_PATH, cwd)).toThrow(/regular file/);
+      // The CLI reports it with the fixed message and never verifies the target.
+      const out: string[] = [];
+      const err: string[] = [];
+      const codes: number[] = [];
+      runEvidenceVerifierCli(EVIDENCE_PATH, {
+        cwd,
+        stdout: (t) => out.push(t),
+        stderr: (t) => err.push(t),
+        exit: (c) => codes.push(c),
+      });
+      expect(codes).toEqual([1]);
+      expect(out).toEqual([]);
+      expect(err).toEqual(["::error::Egress proof evidence rejected: evidence file is missing or is not valid JSON\n"]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
     }
   });
 
   it("runEvidenceVerifierCli reports through its injected streams", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "egress-verify-cli-"));
     try {
+      mkdirSync(path.join(dir, "egress-evidence"));
+      const evidenceFile = path.join(dir, EVIDENCE_PATH);
+      // Other in-cwd files, valid or not, are never read.
       writeFileSync(path.join(dir, "pass.json"), JSON.stringify(good()));
       writeFileSync(path.join(dir, "bad.json"), JSON.stringify({ ...good(), ok: false, allowedStatus: 500 }));
       const drive = (file: string | undefined) => {
@@ -323,19 +403,28 @@ describe("verifyEgressProofEvidence and parseEgressDenialLog (G4-02)", () => {
         });
         return { out, err, codes };
       };
-      expect(drive("pass.json")).toEqual({ out: ["Egress proof evidence verified.\n"], err: [], codes: [] });
-      const bad = drive("bad.json");
+      writeFileSync(evidenceFile, JSON.stringify(good()));
+      expect(drive(EVIDENCE_PATH)).toEqual({ out: ["Egress proof evidence verified.\n"], err: [], codes: [] });
+      writeFileSync(evidenceFile, JSON.stringify({ ...good(), ok: false, allowedStatus: 500 }));
+      const bad = drive(EVIDENCE_PATH);
       expect(bad.codes).toEqual([1]);
       expect(bad.out).toEqual([]);
       expect(bad.err).toEqual([
         "::error::Egress proof evidence rejected: ok is not true\n",
         "::error::Egress proof evidence rejected: allowlisted origin status is not 200\n",
       ]);
-      for (const missing of [undefined, "nope.json", "../escape.json"]) {
-        const result = drive(missing);
+      // Even with a passing evidence file at the fixed path, any other argument fails.
+      writeFileSync(evidenceFile, JSON.stringify(good()));
+      for (const other of [undefined, "pass.json", "nope.json", "../escape.json", evidenceFile, `./${EVIDENCE_PATH}`]) {
+        const result = drive(other);
         expect(result.codes).toEqual([1]);
+        expect(result.out).toEqual([]);
         expect(result.err).toEqual(["::error::Egress proof evidence rejected: evidence file is missing or is not valid JSON\n"]);
       }
+      rmSync(evidenceFile);
+      const missing = drive(EVIDENCE_PATH);
+      expect(missing.codes).toEqual([1]);
+      expect(missing.err).toEqual(["::error::Egress proof evidence rejected: evidence file is missing or is not valid JSON\n"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { EGRESS_DENIAL_REASONS } from "./browserEgressContainment.mjs";
@@ -65,32 +65,39 @@ export function verifyEgressProofEvidence(evidence) {
 }
 
 /**
- * The evidence path comes from the command line. Resolve it and refuse anything
- * that is not strictly inside the working directory (the workflow passes a
- * relative `egress-evidence/...` path), so the verifier can never be pointed at
- * an arbitrary file on the runner.
+ * The one evidence file this verifier ever reads: the path browser-attack-swarm.yml
+ * writes browserEgressProof.mjs output to and passes back on the command line.
+ */
+export const EGRESS_EVIDENCE_PATH = "egress-evidence/browser-egress-proof.json";
+
+/**
+ * Returns the path of the fixed evidence file under `cwd`. The command-line
+ * argument is accepted only to keep the workflow interface: it is compared with
+ * EGRESS_EVIDENCE_PATH by exact string equality and never used as a path, so no
+ * caller-supplied value reaches the filesystem. The returned path is built from
+ * the constant alone, and must be a regular file that is not a symbolic link
+ * (readFileSync would follow a link to anywhere).
  *
- * @param {string} file
+ * @param {string | undefined} file
  * @param {string} [cwd]
  * @returns {string}
  */
 export function resolveEvidencePath(file, cwd = process.cwd()) {
-  const resolved = path.resolve(cwd, file);
-  const relative = path.relative(cwd, resolved);
-  if (
-    relative === "" ||
-    relative === ".." ||
-    relative.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relative)
-  ) {
-    throw new Error("evidence path is outside the working directory");
+  if (file !== EGRESS_EVIDENCE_PATH) {
+    throw new Error("evidence path is not the fixed egress evidence path");
   }
-  return resolved;
+  const fixed = path.join(cwd, EGRESS_EVIDENCE_PATH);
+  const stat = lstatSync(fixed);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error("evidence path is not a regular file");
+  }
+  return fixed;
 }
 
 /**
- * CLI body. Every failure to obtain readable, valid JSON evidence (including a
- * path outside the working directory) is reported with the same fixed message.
+ * CLI body. Every failure to obtain readable, valid JSON evidence (including any
+ * argument other than the fixed evidence path, or a symlinked evidence file) is
+ * reported with the same fixed message.
  *
  * @param {string | undefined} file
  * @param {{ stdout?: (text: string) => void, stderr?: (text: string) => void, exit?: (code: number) => void, cwd?: string }} [io]
