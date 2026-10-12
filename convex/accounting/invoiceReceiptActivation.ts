@@ -10,15 +10,25 @@ import { loadRetainedPosition, MAX_REVOCABLE_APPLICATIONS } from "./receiptMovem
 import { rehydrateReceiptOccurrence } from "./receiptOccurrence";
 import { findPostedReceiptOccurrence } from "./workflowHooks";
 
+export type InvoiceReceiptProofReason =
+  | "CLAIM_CHANGED" | "RECEIPT_UNSETTLED" | "RECEIPT_UNPOSTED"
+  | "SALE_UNPOSTED" | "BALANCE_CHANGED";
+
+export class InvoiceReceiptProofError extends ConvexError<string> {
+  constructor(readonly reason: InvoiceReceiptProofReason, message: string) {
+    super(message);
+  }
+}
+
 /** Verify the persisted claim and its two posting origins before any activation writes. */
 export async function requirePostedInvoiceReceiptOrigins(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   applicationId: Id<"invoiceReceiptApplications">
 ) {
   const application = await ctx.db.get(applicationId);
   if (!application || application.orgId !== orgId || application.status !== "PENDING") {
-    throw new ConvexError("Pending invoice receipt application not found in this organization.");
+    throw new InvoiceReceiptProofError("CLAIM_CHANGED", "Pending invoice receipt application not found in this organization.");
   }
   const [movement, sale, invoice] = await Promise.all([
     ctx.db.get(application.receiptMovementId),
@@ -41,7 +51,7 @@ export async function requirePostedInvoiceReceiptOrigins(
     !Number.isSafeInteger(application.amountMinor) || application.amountMinor <= 0 ||
     application.allocationId !== undefined
   ) {
-    throw new ConvexError("Pending application no longer matches this organization's completed sale invoice and receipt.");
+    throw new InvoiceReceiptProofError("CLAIM_CHANGED", "Pending application no longer matches this organization's completed sale invoice and receipt.");
   }
 
   const [collection, canonical] = await Promise.all([
@@ -56,7 +66,7 @@ export async function requirePostedInvoiceReceiptOrigins(
     canonical.status !== "SETTLED" || canonical.customerId !== application.customerId ||
     canonical.currency.toUpperCase() !== application.currency.toUpperCase()
   ) {
-    throw new ConvexError("The retained receipt is no longer a settled inbound collection.");
+    throw new InvoiceReceiptProofError("RECEIPT_UNSETTLED", "The retained receipt is no longer a settled inbound collection.");
   }
 
   const receiptIdentity = rehydrateReceiptOccurrence({ orgId, snapshot: movement.occurrence });
@@ -69,7 +79,7 @@ export async function requirePostedInvoiceReceiptOrigins(
     receiptJournal.sourceType !== receiptEvent.sourceType || receiptJournal.sourceId !== receiptEvent.sourceId ||
     receiptJournal.currency?.toUpperCase() !== invoice.currency.toUpperCase()
   ) {
-    throw new ConvexError("The receipt and its journal must be posted before invoice activation.");
+    throw new InvoiceReceiptProofError("RECEIPT_UNPOSTED", "The receipt and its journal must be posted before invoice activation.");
   }
 
   const saleEvent = await ctx.db.query("accountingEvents")
@@ -87,7 +97,7 @@ export async function requirePostedInvoiceReceiptOrigins(
     saleJournal.sourceType !== saleEvent.sourceType || saleJournal.sourceId !== saleEvent.sourceId ||
     saleJournal.currency?.toUpperCase() !== invoice.currency.toUpperCase()
   ) {
-    throw new ConvexError("The sale invoice's exact sale-completion journal must be posted before activation.");
+    throw new InvoiceReceiptProofError("SALE_UNPOSTED", "The sale invoice's exact sale-completion journal must be posted before activation.");
   }
   return { application, movement, sale, invoice };
 }
@@ -307,7 +317,7 @@ async function readActiveReplay(
 }
 
 async function requireLiveActivationBalance(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   args: {
     orgId: Id<"organizations">;
     application: Doc<"invoiceReceiptApplications">;
@@ -330,9 +340,24 @@ async function requireLiveActivationBalance(
     saleReservedMinor > outstandingMinor ||
     args.amountMinor > outstandingMinor
   ) {
-    throw new ConvexError("The retained credit or invoice balance no longer covers its pending claims.");
+    throw new InvoiceReceiptProofError("BALANCE_CHANGED", "The retained credit or invoice balance no longer covers its pending claims.");
   }
   return position;
+}
+
+/** The operator preview uses the exact read-only guards the writer uses. */
+export async function verifyPendingInvoiceReceiptActivation(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  applicationId: Id<"invoiceReceiptApplications">
+): Promise<boolean> {
+  const { application, movement, invoice } = await requirePostedInvoiceReceiptOrigins(
+    ctx, orgId, applicationId
+  );
+  await requireLiveActivationBalance(ctx, {
+    orgId, application, movement, invoice, amountMinor: application.amountMinor,
+  });
+  return true;
 }
 
 async function postInvoiceReceiptApplication(

@@ -71,15 +71,16 @@ import { saleCompletedKey } from "./accounting/postingRules";
 import { getReceivableOutstandingMinor } from "./subledger";
 
 /** Test-only handle on the pilot switch; the shipped value is `true` and no client input reaches this. */
-const payoutSwitch = vi.hoisted(() => ({ disabled: true }));
+const payoutSwitch = vi.hoisted(() => ({ disabled: true, invoiceDoorsDisabled: false }));
 vi.mock("./utils/customerCreditPayoutContainment", async (importOriginal) => {
   const original = await importOriginal<typeof import("./utils/customerCreditPayoutContainment")>();
-  return {
-    ...original,
-    get CUSTOMER_CREDIT_PAYOUT_PILOT_DISABLED() { return payoutSwitch.disabled; },
-    assertCustomerCreditPayoutAllowed: (disabled: boolean = payoutSwitch.disabled) =>
-      original.assertCustomerCreditPayoutAllowed(disabled),
-  };
+  // The SCRUM-724 tests in this file exercise the invoice-receipt doors, so the
+  // separate doors switch is held OFF here (it is covered with the switch ON in
+  // chequeCancelledSaleCredit.test.ts).
+  return (await import("../test-utils/pilotSwitchMock")).pilotSwitchModule(original, {
+    get payoutDisabled() { return payoutSwitch.disabled; },
+    get invoiceDoorsDisabled() { return payoutSwitch.invoiceDoorsDisabled; },
+  } as { payoutDisabled: boolean; invoiceDoorsDisabled: boolean });
 });
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
@@ -540,6 +541,191 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     }
     return null;
   };
+  test("SCRUM-724: operator reserves, sees proof status, and activates a posted sale receipt once", async () => {
+    const { t, asAdmin, orgId, userId, customerId, movement } = await retainedCreditFixture("s724operator");
+    const { saleId, invoiceId } = await completedSaleInvoice(t, orgId, userId, customerId, "OPERATOR");
+    const reserveKey = crypto.randomUUID();
+    const reserveArgs = {
+      orgId, saleId, receiptMovementId: movement._id,
+      amountMinor: 3000, idempotencyKey: reserveKey,
+    };
+    const applicationId = await asAdmin.mutation(api.collections.reserveSaleInvoiceReceipt, reserveArgs);
+    expect(await asAdmin.mutation(api.collections.reserveSaleInvoiceReceipt, reserveArgs)).toBe(applicationId);
+    await expect(asAdmin.mutation(api.collections.reserveSaleInvoiceReceipt, {
+      ...reserveArgs, amountMinor: 2000,
+    })).rejects.toThrow();
+    const statusArgs = { orgId, saleId, paginationOpts: { cursor: null, numItems: 20 } };
+    const before = await asAdmin.query(api.collections.saleInvoiceReceiptStatus, statusArgs);
+    expect(before.invoice?.outstandingMinor).toBe(10000);
+    expect(before.invoice?.availableToReserveMinor).toBe(7000);
+    expect(before.page).toMatchObject([{
+      applicationId, readiness: "REVIEW_REQUIRED", reason: "SALE_UNPOSTED", amountMinor: 3000,
+    }]);
+    await t.run(async (ctx) => {
+      const eventId = await ctx.db.insert("accountingEvents", {
+        orgId, eventType: "SALE_COMPLETED", sourceType: "sales", sourceId: String(saleId),
+        eventVersion: 1, idempotencyKey: saleCompletedKey(saleId),
+        occurredAt: Date.now(), accountingDate: Date.now(), currency: "USD",
+        payload: {}, status: "POSTED", createdBy: userId, createdAt: Date.now(),
+      });
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId, accountingEventId: eventId, journalNumber: "S724-OPERATOR",
+        accountingDate: Date.now(), sourceType: "sales", sourceId: String(saleId),
+        category: "SYSTEM", memo: "sale", currency: "USD", status: "POSTED",
+        postedBy: userId, postedAt: Date.now(), createdAt: Date.now(),
+      });
+      await ctx.db.patch(eventId, { journalEntryId });
+    });
+    const ready = await asAdmin.query(api.collections.saleInvoiceReceiptStatus, statusArgs);
+    expect(ready.page).toMatchObject([{ applicationId, readiness: "ORIGINS_VERIFIED" }]);
+    await removeRetainedCreditAccount(t, orgId);
+    expect((await asAdmin.query(api.collections.saleInvoiceReceiptStatus, statusArgs)).page)
+      .toMatchObject([{ applicationId, readiness: "ORIGINS_VERIFIED" }]);
+    const activationArgs = {
+      orgId, applicationId, amountMinor: 3000, idempotencyKey: crypto.randomUUID(),
+    };
+    await expect(asAdmin.mutation(api.collections.activateSaleInvoiceReceipt, activationArgs)).rejects.toThrow();
+    await seedRetainedCreditAccount(t, orgId);
+    const activated = await asAdmin.mutation(api.collections.activateSaleInvoiceReceipt, activationArgs);
+    expect(await asAdmin.mutation(api.collections.activateSaleInvoiceReceipt, activationArgs)).toEqual(activated);
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("ACTIVE");
+    expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(7000);
+    expect(await t.run((ctx) => getReceivableOutstandingMinor(ctx, invoiceId))).toBe(7000);
+    expect((await asAdmin.query(api.collections.saleInvoiceReceiptStatus, statusArgs)).page).toHaveLength(0);
+  });
+
+  test("SCRUM-724: a cancelled reservation cannot replay as a live operator success", async () => {
+    const { t, asAdmin, orgId, userId, customerId, movement } = await retainedCreditFixture("s724cancelreplay");
+    const { saleId } = await completedSaleInvoice(t, orgId, userId, customerId, "REPLAY");
+    const args = { orgId, saleId, receiptMovementId: movement._id,
+      amountMinor: 3000, idempotencyKey: crypto.randomUUID() };
+    const applicationId = await asAdmin.mutation(api.collections.reserveSaleInvoiceReceipt, args);
+    await t.run((ctx) => cancelPendingInvoiceReceipt(ctx, orgId, applicationId));
+    await expect(asAdmin.mutation(api.collections.reserveSaleInvoiceReceipt, args))
+      .rejects.toThrow(/no longer pending/i);
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+    const replacement = await asAdmin.mutation(api.collections.reserveSaleInvoiceReceipt, {
+      ...args, idempotencyKey: crypto.randomUUID(),
+    });
+    expect(replacement).not.toBe(applicationId);
+  });
+
+  test("SCRUM-724: customer cheque is held, deposited, cleared, then becomes posted retained credit", async () => {
+    const { t, asAdmin, orgId, userId, customerId } = await seedOrg("s724cheque");
+    registerRateLimiter(t);
+    await seedRetainedCreditAccount(t, orgId);
+    const { saleId } = await completedSaleInvoice(t, orgId, userId, customerId, "CHEQUE");
+    const statusArgs = { orgId, saleId, paginationOpts: { cursor: null, numItems: 20 } };
+    const status = await asAdmin.query(api.collections.saleInvoiceReceiptStatus, statusArgs);
+    expect(status.invoice?.availableToReserveMinor).toBe(10000);
+    await expect(asAdmin.mutation(api.collections.registerSaleInvoiceCheque, {
+      orgId, saleId, bank: "Test Bank", chequeNumber: "S724-OVER",
+      chequeDate: Date.now(), amountMinor: 10001,
+    })).rejects.toThrow(/available customer invoice amount/i);
+    const chequeId = await asAdmin.mutation(api.collections.registerSaleInvoiceCheque, {
+      orgId, saleId, bank: "Test Bank", chequeNumber: "S724-1",
+      chequeDate: Date.now(), amountMinor: 3000,
+    });
+    const list = () => asAdmin.query(api.collections.listSaleCustomerCheques, statusArgs);
+    expect((await list()).page).toMatchObject([{ chequeId, status: "HELD" }]);
+    await asAdmin.mutation(api.collections.depositCheque, { orgId, chequeId });
+    expect((await list()).page).toMatchObject([{ chequeId, status: "DEPOSITED" }]);
+    const clearArgs = {
+      orgId, chequeId, idempotencyKey: crypto.randomUUID(),
+    };
+    const paymentId = await asAdmin.mutation(api.collections.clearCheque, clearArgs);
+    expect(await asAdmin.mutation(api.collections.clearCheque, clearArgs)).toBe(paymentId);
+    expect((await list()).page).toHaveLength(0);
+    const movement = await movementFor(t, orgId, paymentId);
+    expect(movement?.customerId).toBe(customerId);
+    expect((await t.run((ctx) => ctx.db.get(chequeId)))?.saleId).toBeUndefined();
+    expect((await t.run((ctx) => ctx.db.get(chequeId)))?.invoiceSaleId).toBe(saleId);
+    expect((await positionFor(t, orgId, movement!._id))?.remainingUnappliedMinor).toBe(3000);
+    const credits = await asAdmin.query(api.collections.listRetainedCredits, {
+      orgId, customerId, paginationOpts: { cursor: null, numItems: 20 },
+    });
+    expect(credits.page.find((row) => row.receiptMovementId === movement!._id))
+      .toMatchObject({ receiptPosted: true, reservedForSaleInvoicesMinor: 3000, availableUnappliedMinor: 0 });
+    expect((await asAdmin.query(api.collections.saleInvoiceReceiptStatus, statusArgs)).page)
+      .toMatchObject([{ amountMinor: 3000 }]);
+  });
+
+  test("SCRUM-724: deal-scoped cash receipt reserves its invoice atomically", async () => {
+    const { t, asAdmin, orgId, userId, customerId } = await seedOrg("s724direct");
+    registerRateLimiter(t);
+    await seedRetainedCreditAccount(t, orgId);
+    const { saleId } = await completedSaleInvoice(t, orgId, userId, customerId, "DIRECT");
+    await expect(asAdmin.mutation(api.collections.recordPayment, {
+      orgId, customerId, invoiceSaleId: saleId, amount: 101,
+      method: "CASH", paymentDate: Date.now(), idempotencyKey: crypto.randomUUID(),
+    })).rejects.toThrow(/exceeds the available customer invoice amount/i);
+    const paymentArgs = {
+      orgId, customerId, invoiceSaleId: saleId, amount: 30,
+      method: "CASH", paymentDate: Date.now(), idempotencyKey: crypto.randomUUID(),
+    } as const;
+    const paymentId = await asAdmin.mutation(api.collections.recordPayment, paymentArgs);
+    expect(await asAdmin.mutation(api.collections.recordPayment, paymentArgs)).toBe(paymentId);
+    const movement = await movementFor(t, orgId, paymentId);
+    expect((await positionFor(t, orgId, movement!._id))?.remainingUnappliedMinor).toBe(3000);
+    const status = await asAdmin.query(api.collections.saleInvoiceReceiptStatus, {
+      orgId, saleId, paginationOpts: { cursor: null, numItems: 20 },
+    });
+    expect(status.page).toMatchObject([{ amountMinor: 3000 }]);
+    expect(status.invoice?.availableToReserveMinor).toBe(7000);
+  });
+
+  test("SCRUM-724: a HELD cheque on a really-cancelled sale is refused; a DEPOSITED one clears into customer credit", async () => {
+    const { t, asAdmin, orgId, userId, customerId } = await seedOrg("s724deadcheque");
+    registerRateLimiter(t);
+    const vehicleId = await t.run((ctx) => ctx.db.insert("vehicles", {
+      orgId, vin: "VIN-S724-DEAD", make: "Kia", model: "Rio", year: 2021,
+      mileage: 0, color: "White", fuelType: "Gasoline", transmission: "Automatic",
+      sellingPrice: 100, purchasePrice: 60, status: "AVAILABLE", sourceType: "STOCK",
+    }));
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 100, saleDate: Date.now(), status: "COMPLETED",
+      financingType: "CASH", idempotencyKey: crypto.randomUUID(),
+    });
+    const register = (no: string) => asAdmin.mutation(api.collections.registerSaleInvoiceCheque, {
+      orgId, saleId, bank: "Test Bank", chequeNumber: no, chequeDate: Date.now(), amountMinor: 3000,
+    });
+    const heldId = await register("S724-HELD");
+    const depositedId = await register("S724-DEP");
+    await asAdmin.mutation(api.collections.depositCheque, { orgId, chequeId: depositedId });
+    await t.run(async (ctx) => {
+      const actor = await ctx.db.insert("users", {
+        clerkId: "s724_dead_approver", email: "s724_dead_approver@example.com", name: "Approver",
+      });
+      const roleId = await ctx.db.insert("roles", {
+        orgId, name: "Cancel approver", permissions: ["view:sales", "edit:sales", "approve:requests", "manage:finance"],
+      });
+      await ctx.db.insert("memberships", { orgId, userId: actor, roleId });
+    });
+    const approver = t.withIdentity({ subject: "s724_dead_approver", clerkId: "s724_dead_approver" });
+    await approver.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+    expect((await t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("CANCELLED");
+
+    // HELD: refused on deposit AND clear with the coded error; nothing moves.
+    await expect(asAdmin.mutation(api.collections.depositCheque, { orgId, chequeId: heldId }))
+      .rejects.toThrow(/returned to the customer|return/i);
+    await expect(asAdmin.mutation(api.collections.clearCheque, {
+      orgId, chequeId: heldId, idempotencyKey: crypto.randomUUID(),
+    })).rejects.toThrow(/returned to the customer|return/i);
+    expect((await t.run((ctx) => ctx.db.get(heldId)))?.status).toBe("HELD");
+
+    // DEPOSITED: clears into unapplied customer credit with lineage.
+    const paymentId = await asAdmin.mutation(api.collections.clearCheque, {
+      orgId, chequeId: depositedId, idempotencyKey: crypto.randomUUID(),
+    });
+    expect((await t.run((ctx) => ctx.db.get(depositedId)))?.status).toBe("CLEARED");
+    const movement = await movementFor(t, orgId, paymentId as Id<"collectionPayments">);
+    const position = await positionFor(t, orgId, movement!._id);
+    expect(position).toMatchObject({
+      remainingUnappliedMinor: 3000, sourceChequeId: depositedId, originatingSaleId: saleId,
+    });
+  });
+
 
   test("SCRUM-724 / SCRUM-795 c22479 + Sol Q7: cancellation with active credit refuses a customer payout in the pilot, RETAIN_CREDIT still works", async () => {
     const { t, orgId, customerId, saleId, applicationId, movement, approver } = await cashSaleWithActiveCredit("s724cancel");
@@ -736,7 +922,7 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     await expect(reserve(1000, otherOrgId)).rejects.toThrow(/not found in this organization/);
     await expect(reserve(Number.NaN)).rejects.toThrow(/positive minor-unit amount/);
     await reserve(6000);
-    await expect(reserve(5000)).rejects.toThrow(/insufficient unreserved balance/);
+    await expect(reserve(5000)).rejects.toThrow(/insufficient unreserved balance|RETAINED_CREDIT_UNAVAILABLE/);
     const secondPaymentId = await asAdmin.mutation(api.collections.recordPayment, {
       idempotencyKey: crypto.randomUUID(), orgId, customerId,
       amount: 100, method: "CASH", paymentDate: Date.now(),
@@ -753,12 +939,14 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(10000);
   });
 
-  test("SCRUM-722: the 500th pending claim cannot admit a 501st on either receipt or sale", async () => {
+  // SCRUM-724 R4: the reservation bound equals the 100-row reversal bound
+  // (was 500, which could admit a reservation set no single return could unwind).
+  test("SCRUM-722: the 100th pending claim cannot admit a 101st on either receipt or sale", async () => {
     const { t, asAdmin, orgId, userId, customerId, movement } = await retainedCreditFixture("s722cap");
     const first = await completedSaleInvoice(t, orgId, userId, customerId, "CAP1");
     const second = await completedSaleInvoice(t, orgId, userId, customerId, "CAP2");
     await t.runUnwrapped(async (ctx) => {
-      for (let index = 0; index < 500; index += 1) {
+      for (let index = 0; index < 100; index += 1) {
         await ctx.db.insert("invoiceReceiptApplications", {
           orgId, receiptMovementId: movement._id, saleId: first.saleId,
           receivableDocumentId: first.invoiceId, customerId, currency: "USD",
