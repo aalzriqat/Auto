@@ -7,7 +7,7 @@ import {
   type JevBrowserMissionSuggestion,
 } from "./browserAttackSwarm";
 import type { InvariantSeverity } from "../autoflowInvariantCatalog";
-import { browserEgressLaunchOptions } from "./browserEgressContainment.mjs";
+import { browserEgressLaunchOptions } from "./browserEgressLaunch.mjs";
 
 type Env = Record<string, string | undefined>;
 

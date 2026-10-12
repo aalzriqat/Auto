@@ -19,28 +19,29 @@ import { clerkTestFrontendApiOrigin } from "./clerkPublicJwtKey.mjs";
  * loaded from the candidate checkout.
  */
 
-export const BROWSER_EGRESS_PROXY_ENV = "BROWSER_EGRESS_PROXY_SERVER";
-export const BROWSER_EGRESS_REQUIRED_ENV = "BROWSER_EGRESS_REQUIRED";
+// The browser-side launch surface lives in a dependency-free module so the
+// Playwright configs and specs can load it: Playwright transpiles them to
+// CommonJS, which cannot load this file's node imports, its import.meta main
+// guard, or the top-level await in clerkPublicJwtKey.mjs. Re-exported here so
+// the proxy, proof and swarm handlers keep one import.
+import {
+  BROWSER_EGRESS_PROXY_ENV,
+  BROWSER_EGRESS_REQUIRED_ENV,
+  EGRESS_CHROMIUM_ARGS,
+  EGRESS_CONTEXT_OPTIONS,
+  browserEgressLaunchOptions,
+} from "./browserEgressLaunch.mjs";
+
+export {
+  BROWSER_EGRESS_PROXY_ENV,
+  BROWSER_EGRESS_REQUIRED_ENV,
+  EGRESS_CHROMIUM_ARGS,
+  EGRESS_CONTEXT_OPTIONS,
+  browserEgressLaunchOptions,
+};
+
 export const DEFAULT_EGRESS_PROXY_PORT = 3129;
 export const DEFAULT_CANDIDATE_ORIGIN = "http://127.0.0.1:3000";
-
-/** Context options every candidate-facing browser context must use. */
-export const EGRESS_CONTEXT_OPTIONS = Object.freeze({ serviceWorkers: "block" });
-
-/**
- * Chromium flags that close paths a proxy setting alone leaves open:
- * - no local DNS resolution at all (the proxy resolves; a page cannot make the
- *   browser process resolve an attacker name, which would be a DNS channel);
- * - WebRTC may only use the proxy, never direct UDP (STUN/TURN is an exfil
- *   channel that ignores --proxy-server);
- * - no QUIC/HTTP3 (UDP that would bypass an HTTP proxy).
- */
-export const EGRESS_CHROMIUM_ARGS = Object.freeze([
-  "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
-  "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
-  "--webrtc-ip-handling-policy=disable_non_proxied_udp",
-  "--disable-quic",
-]);
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost"]);
 
@@ -94,49 +95,6 @@ export function parseEgressDenialLog(text) {
     }
   }
   return { denials, unrecognized };
-}
-
-/**
- * Playwright `launchOptions` for the egress proxy, or undefined when egress
- * containment is not requested. When BROWSER_EGRESS_REQUIRED=1 a missing or
- * malformed proxy is an error, never a silent fall-back to open egress.
- *
- * Playwright adds `--proxy-bypass-list=<-loopback>` itself when no bypass is
- * given, so loopback traffic (including the candidate) also traverses the proxy.
- *
- * @param {Record<string, string | undefined>} env
- */
-export function browserEgressLaunchOptions(env) {
-  const server = env[BROWSER_EGRESS_PROXY_ENV]?.trim();
-  if (!server) {
-    if (env[BROWSER_EGRESS_REQUIRED_ENV] === "1") {
-      throw new Error(
-        `${BROWSER_EGRESS_REQUIRED_ENV}=1 but ${BROWSER_EGRESS_PROXY_ENV} is not set; refusing to launch a browser with open egress.`,
-      );
-    }
-    return undefined;
-  }
-  let parsed;
-  try {
-    parsed = new URL(server);
-  } catch {
-    throw new Error(`${BROWSER_EGRESS_PROXY_ENV} must be a valid URL.`);
-  }
-  if (
-    parsed.protocol !== "http:" ||
-    parsed.hostname !== "127.0.0.1" ||
-    !parsed.port ||
-    parsed.username ||
-    parsed.password ||
-    parsed.pathname !== "/" ||
-    parsed.search ||
-    parsed.hash
-  ) {
-    throw new Error(
-      `${BROWSER_EGRESS_PROXY_ENV} must be exactly http://127.0.0.1:<port>.`,
-    );
-  }
-  return { proxy: { server: parsed.origin }, args: [...EGRESS_CHROMIUM_ARGS] };
 }
 
 /** @param {string} value @param {number} defaultPort */

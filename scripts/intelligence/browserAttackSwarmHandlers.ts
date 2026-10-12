@@ -15,7 +15,7 @@ import { browserSwarmLocalBaseUrl } from "./browserAttackSwarmRuntime";
 import {
   EGRESS_CONTEXT_OPTIONS,
   browserEgressLaunchOptions,
-} from "./browserEgressContainment.mjs";
+} from "./browserEgressLaunch.mjs";
 import type { BrowserMissionEvidence } from "./browserAttackSwarm";
 
 type ArtifactWriter = {

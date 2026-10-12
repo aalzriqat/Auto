@@ -1,5 +1,5 @@
 import type { Browser, BrowserContext, BrowserContextOptions } from "@playwright/test";
-import { EGRESS_CONTEXT_OPTIONS } from "../scripts/intelligence/browserEgressContainment.mjs";
+import { EGRESS_CONTEXT_OPTIONS } from "../scripts/intelligence/browserEgressLaunch.mjs";
 
 /**
  * The only way a spec may build its own browser context (SCRUM-350 G4 M-1).

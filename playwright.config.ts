@@ -4,7 +4,7 @@ import { defineConfig, devices } from "@playwright/test";
 import {
   EGRESS_CONTEXT_OPTIONS,
   browserEgressLaunchOptions,
-} from "./scripts/intelligence/browserEgressContainment.mjs";
+} from "./scripts/intelligence/browserEgressLaunch.mjs";
 
 function loadEnvLocal(): void {
   const envFile = resolve(process.cwd(), ".env.local");
