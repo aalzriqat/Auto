@@ -17,7 +17,11 @@ import {
   startEgressProxy,
 } from "./browserEgressContainment.mjs";
 import { EGRESS_PROOF_CHANNELS } from "./browserEgressChannels.mjs";
-import { verifyEgressProofEvidence } from "./browserEgressProofVerify.mjs";
+import {
+  resolveEvidencePath,
+  runEvidenceVerifierCli,
+  verifyEgressProofEvidence,
+} from "./browserEgressProofVerify.mjs";
 
 const PK = "pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk"; // example.clerk.accounts.dev
 const CONVEX = "https://happy-animal-123.convex.cloud";
@@ -253,8 +257,11 @@ describe("verifyEgressProofEvidence and parseEgressDenialLog (G4-02)", () => {
     const run = (name: string, body: string | null) => {
       const file = path.join(dir, name);
       if (body !== null) writeFileSync(file, body);
-      return spawnSync(process.execPath, [path.join(__dirname, "browserEgressProofVerify.mjs"), file], {
+      // The verifier only reads inside its working directory (as the workflow
+      // does, with a relative path), so the fixture directory is the cwd.
+      return spawnSync(process.execPath, [path.join(__dirname, "browserEgressProofVerify.mjs"), name], {
         encoding: "utf8",
+        cwd: dir,
       });
     };
     try {
@@ -265,6 +272,70 @@ describe("verifyEgressProofEvidence and parseEgressDenialLog (G4-02)", () => {
       const pass = run("pass.json", JSON.stringify(good()));
       expect(pass.status).toBe(0);
       expect(pass.stdout).toContain("verified");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("CLI refuses an evidence path outside the working directory, even when that file is a full pass", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "egress-verify-outside-"));
+    try {
+      const file = path.join(dir, "pass.json");
+      writeFileSync(file, JSON.stringify(good()));
+      // cwd is the repository root, the evidence lives in the OS temp dir.
+      for (const argument of [file, path.relative(process.cwd(), file)]) {
+        const result = spawnSync(process.execPath, [path.join(__dirname, "browserEgressProofVerify.mjs"), argument], {
+          encoding: "utf8",
+        });
+        expect(result.status).toBe(1);
+        expect(result.stdout).not.toContain("verified");
+        expect(result.stderr).toContain("evidence file is missing or is not valid JSON");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEvidencePath accepts only paths strictly inside the working directory", () => {
+    const cwd = path.resolve(tmpdir(), "egress-cwd");
+    expect(resolveEvidencePath("egress-evidence/proof.json", cwd)).toBe(path.join(cwd, "egress-evidence", "proof.json"));
+    expect(resolveEvidencePath(path.join(cwd, "proof.json"), cwd)).toBe(path.join(cwd, "proof.json"));
+    expect(resolveEvidencePath("..proof.json", cwd)).toBe(path.join(cwd, "..proof.json"));
+    for (const bad of ["../outside.json", "a/../../outside.json", path.resolve(cwd, "..", "other.json"), ".", "", ".."]) {
+      expect(() => resolveEvidencePath(bad, cwd)).toThrow(/outside the working directory/);
+    }
+  });
+
+  it("runEvidenceVerifierCli reports through its injected streams", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "egress-verify-cli-"));
+    try {
+      writeFileSync(path.join(dir, "pass.json"), JSON.stringify(good()));
+      writeFileSync(path.join(dir, "bad.json"), JSON.stringify({ ...good(), ok: false, allowedStatus: 500 }));
+      const drive = (file: string | undefined) => {
+        const out: string[] = [];
+        const err: string[] = [];
+        const codes: number[] = [];
+        runEvidenceVerifierCli(file, {
+          cwd: dir,
+          stdout: (text) => out.push(text),
+          stderr: (text) => err.push(text),
+          exit: (code) => codes.push(code),
+        });
+        return { out, err, codes };
+      };
+      expect(drive("pass.json")).toEqual({ out: ["Egress proof evidence verified.\n"], err: [], codes: [] });
+      const bad = drive("bad.json");
+      expect(bad.codes).toEqual([1]);
+      expect(bad.out).toEqual([]);
+      expect(bad.err).toEqual([
+        "::error::Egress proof evidence rejected: ok is not true\n",
+        "::error::Egress proof evidence rejected: allowlisted origin status is not 200\n",
+      ]);
+      for (const missing of [undefined, "nope.json", "../escape.json"]) {
+        const result = drive(missing);
+        expect(result.codes).toEqual([1]);
+        expect(result.err).toEqual(["::error::Egress proof evidence rejected: evidence file is missing or is not valid JSON\n"]);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

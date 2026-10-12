@@ -157,11 +157,12 @@ export function buildEgressAllowlist({
     }
     entries.add(`${parsed.host}:${parsed.port}`);
   }
-  return [...entries].sort();
+  // Explicit comparator (host:port strings): plain code-unit order, as before.
+  return [...entries].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
-/** @param {string} ip */
-function isPublicAddress(ip) {
+/** Exported for tests. @param {string} ip */
+export function isPublicAddress(ip) {
   if (net.isIPv6(ip)) {
     const lower = ip.toLowerCase();
     return !(
@@ -192,9 +193,11 @@ function isPublicAddress(ip) {
  * address, so an allowed name cannot be turned into a path to the runner's
  * private network.
  *
+ * Exported for tests.
+ *
  * @param {string} host
  */
-async function resolveTarget(host) {
+export async function resolveTarget(host) {
   if (LOOPBACK_HOSTS.has(host)) return "127.0.0.1";
   const addresses = await dns.lookup(host, { all: true });
   const usable = addresses.find((entry) => isPublicAddress(entry.address));
@@ -388,8 +391,8 @@ export function startEgressProxy({ allow, port = DEFAULT_EGRESS_PROXY_PORT, log,
   });
 }
 
-/** CLI used by the trusted workflow. Fails closed: any problem exits non-zero. */
-async function main(env) {
+/** CLI used by the trusted workflow. Fails closed: any problem exits non-zero. Exported for tests. */
+export async function main(env) {
   const allow = buildEgressAllowlist({
     candidateOrigin: env.BROWSER_EGRESS_CANDIDATE_ORIGIN || DEFAULT_CANDIDATE_ORIGIN,
     convexUrl: env.NEXT_PUBLIC_CONVEX_URL,

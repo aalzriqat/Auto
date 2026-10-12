@@ -253,6 +253,7 @@ describe("runVitestCoverageShards", () => {
     expect(authority).toContain("--coverage.include=convex/**/*.ts");
     expect(authority).toContain("--coverage.include=scripts/**/*.mjs");
     expect(authority).toContain("--coverage.include=scripts/**/*.cjs");
+    expect(authority).toContain("--coverage.include=proxy.ts");
     for (const threshold of EXPECTED_ZERO_THRESHOLDS) expect(authority).toContain(threshold);
 
     const shard1 = rawArgs(childBoundary.calls[1]);

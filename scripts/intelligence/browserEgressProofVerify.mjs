@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { EGRESS_DENIAL_REASONS } from "./browserEgressContainment.mjs";
 import { EGRESS_PROOF_CHANNELS, EGRESS_PROOF_NAVIGATION_OUTCOMES } from "./browserEgressChannels.mjs";
@@ -63,18 +64,56 @@ export function verifyEgressProofEvidence(evidence) {
   return failures;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+/**
+ * The evidence path comes from the command line. Resolve it and refuse anything
+ * that is not strictly inside the working directory (the workflow passes a
+ * relative `egress-evidence/...` path), so the verifier can never be pointed at
+ * an arbitrary file on the runner.
+ *
+ * @param {string} file
+ * @param {string} [cwd]
+ * @returns {string}
+ */
+export function resolveEvidencePath(file, cwd = process.cwd()) {
+  const resolved = path.resolve(cwd, file);
+  const relative = path.relative(cwd, resolved);
+  if (
+    relative === "" ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error("evidence path is outside the working directory");
+  }
+  return resolved;
+}
+
+/**
+ * CLI body. Every failure to obtain readable, valid JSON evidence (including a
+ * path outside the working directory) is reported with the same fixed message.
+ *
+ * @param {string | undefined} file
+ * @param {{ stdout?: (text: string) => void, stderr?: (text: string) => void, exit?: (code: number) => void, cwd?: string }} [io]
+ */
+export function runEvidenceVerifierCli(file, io = {}) {
+  const stdout = io.stdout ?? ((text) => process.stdout.write(text));
+  const stderr = io.stderr ?? ((text) => process.stderr.write(text));
+  const exit = io.exit ?? ((code) => process.exit(code));
   let failures;
   try {
-    const file = process.argv[2];
     if (!file) throw new Error("no evidence file");
-    failures = verifyEgressProofEvidence(JSON.parse(readFileSync(file, "utf8")));
+    failures = verifyEgressProofEvidence(JSON.parse(readFileSync(resolveEvidencePath(file, io.cwd), "utf8")));
   } catch {
     failures = ["evidence file is missing or is not valid JSON"];
   }
   if (failures.length > 0) {
-    for (const failure of failures) process.stderr.write(`::error::Egress proof evidence rejected: ${failure}\n`);
-    process.exit(1);
+    for (const failure of failures) stderr(`::error::Egress proof evidence rejected: ${failure}\n`);
+    exit(1);
+    return;
   }
-  process.stdout.write("Egress proof evidence verified.\n");
+  stdout("Egress proof evidence verified.\n");
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  runEvidenceVerifierCli(process.argv[2]);
 }

