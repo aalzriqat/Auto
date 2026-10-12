@@ -349,7 +349,10 @@ describe("resetOrgFinancialData", () => {
     // deposit money state — it names a deposit, an application and a hold the
     // reset clears — so leaving it would strand a car locked RESERVED against a
     // deposit that no longer exists. It sits in the `deposits` group.
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(39);
+    // 39 -> 40: `invoiceReceiptApplications` (SCRUM-722) reserves retained
+    // receipt credit against a sale invoice. Reset must remove the claim before
+    // its receipt movement, invoice and sale parents.
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(40);
   });
 });
 

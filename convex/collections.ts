@@ -22,6 +22,14 @@ import {
   retireReceiptRevocationState,
   RETAINED_CREDIT_SYSTEM_KEY,
 } from "./accounting/receiptMovement";
+import {
+  cancelPendingInvoiceReceiptsForMovement,
+  pendingInvoiceReceiptMinor,
+} from "./accounting/invoiceReceiptReservation";
+import {
+  planActiveInvoiceReceiptReversal,
+  reverseActiveInvoiceReceiptApplications,
+} from "./accounting/invoiceReceiptActivation";
 import { ReceivableCreditKey } from "./accounting/postingRules";
 import { assertValidAccountingDate } from "./accountingPeriods";
 import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
@@ -888,6 +896,9 @@ export const listRetainedCredits = query({
       result.page.map(async (position) => {
         const movement = await ctx.db.get(position.receiptMovementId);
         const customer = await ctx.db.get(position.customerId);
+        const reservedForSaleInvoicesMinor = await pendingInvoiceReceiptMinor(
+          ctx, args.orgId, position.receiptMovementId
+        );
         return {
           receiptMovementId: position.receiptMovementId,
           customerId: position.customerId,
@@ -895,6 +906,8 @@ export const listRetainedCredits = query({
           currency: position.currency,
           initialUnappliedMinor: position.initialUnappliedMinor,
           remainingUnappliedMinor: position.remainingUnappliedMinor,
+          reservedForSaleInvoicesMinor,
+          availableUnappliedMinor: position.remainingUnappliedMinor - reservedForSaleInvoicesMinor,
           applicationCount: position.applicationCount,
           // Whether `applyRetainedCredit` would currently accept it. The receipt
           // must be POSTED, so a credit whose own journal is still queued behind
@@ -1621,6 +1634,9 @@ export const applyRetainedCredit = mutation({
         await requirePostedReceiptForMovement(ctx, movement);
 
         const position = await loadRetainedPosition(ctx, args.orgId, movement._id);
+        const reservedForSaleInvoicesMinor = await pendingInvoiceReceiptMinor(
+          ctx, args.orgId, movement._id
+        );
 
         const receivable = await ctx.db.get(args.receivableId);
         if (!receivable || receivable.orgId !== args.orgId) {
@@ -1660,7 +1676,7 @@ export const applyRetainedCredit = mutation({
 
         const amountMinor = computeApplicableMinor({
           requestedMinor: toMinorUnits(roundMoney(args.requestedAmount, currency), currency),
-          remainingUnappliedMinor: position.remainingUnappliedMinor,
+          remainingUnappliedMinor: position.remainingUnappliedMinor - reservedForSaleInvoicesMinor,
           outstandingMinor: Math.min(
             toMinorUnits(roundMoney(receivable.outstandingAmount, currency), currency),
             canonicalOutstandingMinor
@@ -2482,6 +2498,13 @@ export const returnClearedCheque = mutation({
           // Throws the named refusals — refund interaction, missing allocation,
           // conservation violation — and writes nothing.
           const plan = await planReceiptRevocation(ctx, { orgId: args.orgId, movement });
+          const invoicePlan = await planActiveInvoiceReceiptReversal(ctx, args.orgId, movement);
+          if (
+            plan.applications.length + invoicePlan.applications.length > 100 ||
+            plan.totalApplicationMinor + invoicePlan.totalMinor > movement.initialUnappliedMinor
+          ) {
+            throw new ConvexError("This receipt has more applied credit than one return can safely unwind.");
+          }
 
           // ── 2. EVERY LATER APPLICATION, NEWEST FIRST ───────────────────────
           //
@@ -2504,6 +2527,14 @@ export const returnClearedCheque = mutation({
             });
             await reopenLegacyReceivable(unwind.receivableId, unwind.amountMinor);
           }
+
+          await reverseActiveInvoiceReceiptApplications(ctx, {
+            orgId: args.orgId,
+            applications: invoicePlan.applications,
+            actorId: user._id,
+            reason,
+            reversalDate: now,
+          });
 
           // ── 3. THE INITIAL RECEIPT OCCURRENCE ──────────────────────────────
           //
@@ -2553,6 +2584,7 @@ export const returnClearedCheque = mutation({
           // Applications marked REVERSED and the retained position taken to zero,
           // together, so no 2110 residue survives a tender that no longer exists
           // and no future application can be drawn from it.
+          await cancelPendingInvoiceReceiptsForMovement(ctx, args.orgId, movement._id);
           await retireReceiptRevocationState(ctx, { orgId: args.orgId, plan });
 
           if (clearedPayment.canonicalPaymentId) {
