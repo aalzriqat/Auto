@@ -51,6 +51,7 @@ export type UnwindStatusView = Readonly<{
     remittanceMethod: "BANK_TRANSFER" | "CASH";
     customerReceiptMinor?: number | null;
     customerReceiptCurrency?: string | null;
+    customerPayoutAvailable?: boolean;
     /** `null` for an unwind actor without finance-economics read: it equals deposit + contribution (SCRUM-713). */
     forwardDueMinor: number | null;
   }> | null;
@@ -386,7 +387,11 @@ function FinishStep({
     customerRefundAmount,
     moneyDisplayScale(status.evidence?.customerReceiptCurrency || "JOD")
   ).minor;
-  const customerPayoutRequired = disposition === "REFUND" && customerReceiptMinor > 0;
+  // SCRUM-724 / SCRUM-795 c22479 + Sol Q7: the server decides whether a customer payout exists at all
+  // (pilot switch + the viewer's MANAGE_FINANCE). Absent (an older backend) means unavailable.
+  const customerPayoutAvailable = status.evidence?.customerPayoutAvailable === true;
+  const payoutBlocked = customerReceiptMinor > 0 && !customerPayoutAvailable;
+  const customerPayoutRequired = disposition === "REFUND" && customerReceiptMinor > 0 && customerPayoutAvailable;
   const customerPayoutOk = !customerPayoutRequired || (
     refundAmount !== null && refundAmount > 0 && refundAmount <= customerReceiptMinor &&
     customerRefundReference.trim() !== "" && customerRefundDate !== ""
@@ -536,7 +541,11 @@ function FinishStep({
               <SelectValue placeholder={t("UnwindDispositionPlaceholder")} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="REFUND">{t("UnwindDispositionRefund")}</SelectItem>
+              <SelectItem value="REFUND" disabled={payoutBlocked}>
+                {customerReceiptMinor > 0 && customerPayoutAvailable
+                  ? t("UnwindDispositionRefundPayout")
+                  : t("UnwindDispositionRefund")}
+              </SelectItem>
               <SelectItem value="RETAIN_CREDIT">{t("UnwindDispositionCredit")}</SelectItem>
             </SelectContent>
           </Select>
@@ -544,6 +553,11 @@ function FinishStep({
         {customerReceiptMinor > 0 && (
           <p className="text-sm font-medium" data-testid="deal-unwind-customer-credit">
             {t("UnwindCustomerCreditLabel")}: <span dir="ltr">{formatMinor(customerReceiptMinor)}</span>
+          </p>
+        )}
+        {payoutBlocked && (
+          <p className="text-sm text-muted-foreground" data-testid="deal-unwind-customer-payout-unavailable">
+            {t("UnwindCustomerPayoutUnavailable")}
           </p>
         )}
         {customerPayoutRequired && (
@@ -558,12 +572,12 @@ function FinishStep({
             <div className="space-y-1.5">
               <Label htmlFor="deal-unwind-customer-method">{t("UnwindCustomerPayoutMethodLabel")}</Label>
               <Select value={customerRefundMethod}
-                onValueChange={(value) => setCustomerRefundMethod(value === "CASH" ? "CASH" : "BANK_TRANSFER")}
+                onValueChange={() => setCustomerRefundMethod("BANK_TRANSFER")}
                 disabled={submitting}>
                 <SelectTrigger id="deal-unwind-customer-method"><SelectValue /></SelectTrigger>
                 <SelectContent>
+                  {/* A cash customer payout is refused by the server (no cashier-day row yet). */}
                   <SelectItem value="BANK_TRANSFER">{t("UnwindMethodBank")}</SelectItem>
-                  <SelectItem value="CASH">{t("UnwindMethodCash")}</SelectItem>
                 </SelectContent>
               </Select>
             </div>

@@ -47,7 +47,7 @@
  * posts once the account is present, so both directions stay exercised.
  */
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { readSourceRelativeTo } from "../test-utils/sourceText";
 import { runContinuationBatch } from "../test-utils/orgResetFixtures";
 import schema from "./schema";
@@ -69,6 +69,18 @@ import {
 import { activatePendingInvoiceReceipt, requirePostedInvoiceReceiptOrigins } from "./accounting/invoiceReceiptActivation";
 import { saleCompletedKey } from "./accounting/postingRules";
 import { getReceivableOutstandingMinor } from "./subledger";
+
+/** Test-only handle on the pilot switch; the shipped value is `true` and no client input reaches this. */
+const payoutSwitch = vi.hoisted(() => ({ disabled: true }));
+vi.mock("./utils/customerCreditPayoutContainment", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./utils/customerCreditPayoutContainment")>();
+  return {
+    ...original,
+    get CUSTOMER_CREDIT_PAYOUT_PILOT_DISABLED() { return payoutSwitch.disabled; },
+    assertCustomerCreditPayoutAllowed: (disabled: boolean = payoutSwitch.disabled) =>
+      original.assertCustomerCreditPayoutAllowed(disabled),
+  };
+});
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -479,7 +491,55 @@ async function completedSaleInvoice(
   });
 }
 
+/** A completed cash sale with 30.00 of ACTIVE customer invoice credit and a manage:finance approver. */
+async function cashSaleWithActiveCredit(tag: string) {
+    const { t, asAdmin, orgId, userId, customerId } = await seedOrg(tag);
+    registerRateLimiter(t);
+    const vehicleId = await t.run((ctx) => ctx.db.insert("vehicles", {
+      orgId, vin: "VIN-S723-CASH-CANCEL", make: "Kia", model: "Rio", year: 2021,
+      mileage: 0, color: "White", fuelType: "Gasoline", transmission: "Automatic",
+      sellingPrice: 100, purchasePrice: 60, status: "AVAILABLE", sourceType: "STOCK",
+    }));
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 100, saleDate: Date.now(), status: "COMPLETED",
+      financingType: "CASH", idempotencyKey: crypto.randomUUID(),
+    });
+    const collectionId = await asAdmin.mutation(api.collections.recordPayment, {
+      orgId, customerId, amount: 50, method: "CASH", paymentDate: Date.now(),
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const movement = (await movementFor(t, orgId, collectionId))!;
+    const applicationId = await t.run((ctx) => reservePendingInvoiceReceipt(ctx, {
+      orgId, receiptMovementId: movement._id, saleId, amountMinor: 3000, actorId: userId,
+    }));
+    await t.run((ctx) => activatePendingInvoiceReceipt(ctx, {
+      orgId, applicationId, amountMinor: 3000, actorId: userId,
+    }));
+    const approverId = await t.run(async (ctx) => {
+      const actor = await ctx.db.insert("users", {
+        clerkId: "s723_cash_approver", email: "s723_cash_approver@example.com", name: "Cash approver",
+      });
+      const roleId = await ctx.db.insert("roles", {
+        orgId, name: "Cash approver", permissions: ["view:sales", "edit:sales", "approve:requests", "manage:finance"],
+      });
+      await ctx.db.insert("memberships", { orgId, userId: actor, roleId });
+      return actor;
+    });
+    const approver = t.withIdentity({ subject: "s723_cash_approver", clerkId: "s723_cash_approver" });
+    expect(approverId).toBeDefined();
+  return { t, asAdmin, orgId, userId, customerId, saleId, applicationId, movement, approver };
+}
+
 describe("SCRUM-218-C §4 — applying retained credit", () => {
+  const refusalCode = async (promise: Promise<unknown>): Promise<string | null> => {
+    try {
+      await promise;
+    } catch (error) {
+      return String((error as { data?: { code?: unknown } })?.data?.code ?? (error as Error)?.message ?? error);
+    }
+    return null;
+  };
   test("SCRUM-724: operator reserves, sees proof status, and activates a posted sale receipt once", async () => {
     const { t, asAdmin, orgId, userId, customerId, movement } = await retainedCreditFixture("s724operator");
     const { saleId, invoiceId } = await completedSaleInvoice(t, orgId, userId, customerId, "OPERATOR");
@@ -665,42 +725,55 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     });
   });
 
-  test("SCRUM-723: a completed cash sale cancels with a separate partial customer payout", async () => {
-    const { t, asAdmin, orgId, userId, customerId } = await seedOrg("s723cashcancel");
-    registerRateLimiter(t);
-    const vehicleId = await t.run((ctx) => ctx.db.insert("vehicles", {
-      orgId, vin: "VIN-S723-CASH-CANCEL", make: "Kia", model: "Rio", year: 2021,
-      mileage: 0, color: "White", fuelType: "Gasoline", transmission: "Automatic",
-      sellingPrice: 100, purchasePrice: 60, status: "AVAILABLE", sourceType: "STOCK",
-    }));
-    const saleId = await asAdmin.mutation(api.sales.create, {
-      orgId, vehicleId, customerId, salespersonId: userId,
-      salePrice: 100, saleDate: Date.now(), status: "COMPLETED",
-      financingType: "CASH", idempotencyKey: crypto.randomUUID(),
+
+  test("SCRUM-724 / SCRUM-795 c22479 + Sol Q7: cancellation with active credit refuses a customer payout in the pilot, RETAIN_CREDIT still works", async () => {
+    const { t, orgId, customerId, saleId, applicationId, movement, approver } = await cashSaleWithActiveCredit("s724cancel");
+    const bankPayout = {
+      customerRefundAmountMinor: 2000, customerRefundMethod: "BANK_TRANSFER" as const,
+      customerRefundReference: "TRF-1", customerRefundedAt: Date.now(),
+    };
+    expect(await refusalCode(approver.mutation(api.sales.update, {
+      orgId, saleId, status: "CANCELLED", customerPaymentDisposition: "REFUND", ...bankPayout,
+    }))).toBe("CUSTOMER_CREDIT_PAYOUT_DISABLED");
+    // REFUND without payout fields gets the pilot code too, not a validation hint.
+    expect(await refusalCode(approver.mutation(api.sales.update, {
+      orgId, saleId, status: "CANCELLED", customerPaymentDisposition: "REFUND",
+    }))).toBe("CUSTOMER_CREDIT_PAYOUT_DISABLED");
+    expect((await t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("COMPLETED");
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("ACTIVE");
+    const outs = await t.run((ctx) => ctx.db.query("canonicalPayments")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+      .then((rows) => rows.filter((row) => row.direction === "OUT" && row.customerId === customerId)));
+    expect(outs).toHaveLength(0);
+    // Positive control: keeping the credit is the supported pilot path.
+    await approver.mutation(api.sales.update, {
+      orgId, saleId, status: "CANCELLED", customerPaymentDisposition: "RETAIN_CREDIT",
     });
-    const collectionId = await asAdmin.mutation(api.collections.recordPayment, {
-      orgId, customerId, amount: 50, method: "CASH", paymentDate: Date.now(),
-      idempotencyKey: crypto.randomUUID(),
-    });
-    const movement = (await movementFor(t, orgId, collectionId))!;
-    const applicationId = await t.run((ctx) => reservePendingInvoiceReceipt(ctx, {
-      orgId, receiptMovementId: movement._id, saleId, amountMinor: 3000, actorId: userId,
-    }));
-    await t.run((ctx) => activatePendingInvoiceReceipt(ctx, {
-      orgId, applicationId, amountMinor: 3000, actorId: userId,
-    }));
-    const approverId = await t.run(async (ctx) => {
-      const actor = await ctx.db.insert("users", {
-        clerkId: "s723_cash_approver", email: "s723_cash_approver@example.com", name: "Cash approver",
-      });
-      const roleId = await ctx.db.insert("roles", {
-        orgId, name: "Cash approver", permissions: ["view:sales", "edit:sales", "approve:requests", "manage:finance"],
-      });
-      await ctx.db.insert("memberships", { orgId, userId: actor, roleId });
-      return actor;
-    });
-    const approver = t.withIdentity({ subject: "s723_cash_approver", clerkId: "s723_cash_approver" });
-    expect(approverId).toBeDefined();
+    expect((await t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("CANCELLED");
+    expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("REVERSED");
+    expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(5000);
+  });
+
+  test("SCRUM-724: a CASH customer payout from a cancellation stays refused even with the switch flipped off", async () => {
+    payoutSwitch.disabled = false;
+    try {
+      const { t, orgId, saleId, applicationId, approver } = await cashSaleWithActiveCredit("s724cashoff");
+      expect(await refusalCode(approver.mutation(api.sales.update, {
+        orgId, saleId, status: "CANCELLED", customerPaymentDisposition: "REFUND",
+        customerRefundAmountMinor: 2000, customerRefundMethod: "CASH",
+        customerRefundReference: "PV-CASH-1", customerRefundedAt: Date.now(),
+      }))).toBe("CUSTOMER_CREDIT_CASH_PAYOUT_UNSUPPORTED");
+      expect((await t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("COMPLETED");
+      expect((await t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("ACTIVE");
+    } finally {
+      payoutSwitch.disabled = true;
+    }
+  });
+
+  test("SCRUM-723 (pilot switch flipped off): a completed cash sale cancels with a separate partial customer payout", async () => {
+    payoutSwitch.disabled = false;
+    try {
+    const { t, orgId, customerId, saleId, applicationId, movement, approver } = await cashSaleWithActiveCredit("s723cashcancel");
     expect(await approver.query(api.sales.cancellationReceiptStatus, { orgId, saleId })).toMatchObject({
       customerReceiptMinor: 3000, blocked: false,
     });
@@ -709,7 +782,7 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     })).rejects.toThrow(/customer refund/i);
     await approver.mutation(api.sales.update, {
       orgId, saleId, status: "CANCELLED", customerPaymentDisposition: "REFUND",
-      customerRefundAmountMinor: 2000, customerRefundMethod: "CASH",
+      customerRefundAmountMinor: 2000, customerRefundMethod: "BANK_TRANSFER",
       customerRefundReference: "PV-CASH-1", customerRefundedAt: Date.now(),
     });
     expect((await t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("CANCELLED");
@@ -719,7 +792,10 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     const payments = await t.run((ctx) => ctx.db.query("canonicalPayments")
       .withIndex("by_org", (q) => q.eq("orgId", orgId)).collect());
     expect(payments.filter((payment) => payment.direction === "OUT" && payment.customerId === customerId))
-      .toMatchObject([{ amountMinor: 2000, method: "CASH", externalReference: "PV-CASH-1", status: "SETTLED" }]);
+      .toMatchObject([{ amountMinor: 2000, method: "BANK_TRANSFER", externalReference: "PV-CASH-1", status: "SETTLED" }]);
+    } finally {
+      payoutSwitch.disabled = true;
+    }
   });
 
   test("SCRUM-723: sales approval alone cannot pay out an active customer receipt", async () => {
@@ -845,7 +921,7 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     await expect(reserve(1000, otherOrgId)).rejects.toThrow(/not found in this organization/);
     await expect(reserve(Number.NaN)).rejects.toThrow(/positive minor-unit amount/);
     await reserve(6000);
-    await expect(reserve(5000)).rejects.toThrow(/customer credit is not available/);
+    await expect(reserve(5000)).rejects.toThrow(/insufficient unreserved balance/);
     const secondPaymentId = await asAdmin.mutation(api.collections.recordPayment, {
       idempotencyKey: crypto.randomUUID(), orgId, customerId,
       amount: 100, method: "CASH", paymentDate: Date.now(),

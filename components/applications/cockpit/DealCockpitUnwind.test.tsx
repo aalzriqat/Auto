@@ -93,10 +93,10 @@ vi.mock("@/components/ui/select", async () => {
     SelectTrigger: ({ id }: { id?: string }) => <button type="button" id={id} aria-label="UnwindDispositionLabel" />,
     SelectValue: () => null,
     SelectContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-    SelectItem: ({ value, children }: { value: string; children: React.ReactNode }) => {
+    SelectItem: ({ value, children, disabled }: { value: string; children: React.ReactNode; disabled?: boolean }) => {
       const pick = React.useContext(Ctx);
       return (
-        <button type="button" role="option" aria-selected={false} onClick={() => pick(value)}>
+        <button type="button" role="option" aria-selected={false} disabled={disabled} onClick={() => pick(value)}>
           {children}
         </button>
       );
@@ -412,5 +412,37 @@ describe("SCRUM-691 / 693 -- Unwind deal replaces Cancel on a paid deal", () => 
     render_({ ...status, eligibility: { ...status.eligibility, canAbandon: false } });
     fireEvent.click(screen.getByTestId("deal-unwind-deal"));
     expect(screen.queryByTestId("deal-unwind-abandon")).toBeNull();
+  });
+});
+
+describe("SCRUM-724 / SCRUM-795 c22479 + Sol Q7 -- customer payout is offered only when the server says so", () => {
+  const withCredit = (extra: Record<string, unknown>) => {
+    const base = ACTIVE("AWAITING_FINISH", "BANK_TRANSFER");
+    return { ...base, evidence: { ...base.evidence, customerReceiptMinor: 3000, customerReceiptCurrency: "USD", ...extra } };
+  };
+
+  test("credit present, payout not available (pilot / older backend): REFUND is disabled, a reason is shown, no payout fields", async () => {
+    render_(withCredit({}));
+    fireEvent.click(screen.getByTestId("deal-unwind-deal"));
+    expect(screen.getByTestId("deal-unwind-customer-payout-unavailable").textContent).toBe("UnwindCustomerPayoutUnavailable");
+    const refund = await screen.findByRole("option", { name: "UnwindDispositionRefund" });
+    expect((refund as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByLabelText("UnwindCustomerPayoutAmountLabel")).toBeNull();
+  });
+
+  test("credit present, payout available: the payout option is labelled as a payout and offers a bank rail only", async () => {
+    render_(withCredit({ customerPayoutAvailable: true }));
+    fireEvent.click(screen.getByTestId("deal-unwind-deal"));
+    expect(screen.queryByTestId("deal-unwind-customer-payout-unavailable")).toBeNull();
+    fireEvent.click(await screen.findByRole("option", { name: "UnwindDispositionRefundPayout" }));
+    expect(await screen.findByLabelText("UnwindCustomerPayoutAmountLabel")).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "UnwindMethodCash" })).toBeNull();
+  });
+
+  test("no credit: the original refund label and no unavailable note", async () => {
+    render_(ACTIVE("AWAITING_FINISH", "BANK_TRANSFER"));
+    fireEvent.click(screen.getByTestId("deal-unwind-deal"));
+    expect(screen.queryByTestId("deal-unwind-customer-payout-unavailable")).toBeNull();
+    expect(await screen.findByRole("option", { name: "UnwindDispositionRefund" })).toBeTruthy();
   });
 });

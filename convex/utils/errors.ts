@@ -172,6 +172,9 @@ export const AppErrorCode = {
   SALE_HAS_LEGACY_RECEIVABLE: "SALE_HAS_LEGACY_RECEIVABLE",
   SALE_DEBT_RECEIPT_REFUSED: "SALE_DEBT_RECEIPT_REFUSED",
   PAYMENT_LINKS_DISABLED: "PAYMENT_LINKS_DISABLED",
+  // SCRUM-724/SCRUM-795 c22479 + Sol Q7: pilot containment of customer-credit payouts. Translated under ServerError_<code>.
+  CUSTOMER_CREDIT_PAYOUT_DISABLED: "CUSTOMER_CREDIT_PAYOUT_DISABLED",
+  CUSTOMER_CREDIT_CASH_PAYOUT_UNSUPPORTED: "CUSTOMER_CREDIT_CASH_PAYOUT_UNSUPPORTED",
   // SCRUM-113. `approvals.respondToApproval` refuses APPROVED when the request's vehicle is
   // missing, in another organisation or soft-deleted; REJECTED stays allowed. Translated under
   // ServerError_<code>.

@@ -2151,8 +2151,16 @@ const serverErrorMessages = defineBilingualMessages({
     "اختر ما يحدث لها",
   ],
   UnwindDispositionRefund: [
+    "Mark it to be refunded to the customer (paid out separately)",
+    "تحديدها للردّ للعميل (يُصرف الردّ بشكل منفصل)",
+  ],
+  UnwindDispositionRefundPayout: [
     "Record a separate customer payout",
     "تسجيل صرف مستقل للعميل",
+  ],
+  UnwindCustomerPayoutUnavailable: [
+    "Paying this customer credit out is not available yet. Keep it as customer credit.",
+    "صرف رصيد العميل غير متاح حاليًا. احتفظ به كرصيد دائن للعميل.",
   ],
   UnwindDispositionCredit: [
     "Keep it as customer credit",

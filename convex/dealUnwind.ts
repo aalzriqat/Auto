@@ -42,6 +42,11 @@ import { getOpenPeriodForDate } from "./accountingPeriods";
 import { hookFinanceCashReceivedReturned } from "./accounting/workflowHooks";
 import { planSaleInvoiceReceiptReversal } from "./accounting/invoiceReceiptActivation";
 import { disposeActiveSaleInvoiceReceipts } from "./accounting/invoiceReceiptDisposition";
+import {
+  CUSTOMER_CREDIT_PAYOUT_PILOT_DISABLED,
+  assertCustomerCreditPayoutAllowed,
+  assertCustomerCreditPayoutMethodSupported,
+} from "./utils/customerCreditPayoutContainment";
 import { reverseAllocation, voidCanonicalPayment } from "./subledger";
 import { auditLog } from "./financialAudit";
 import {
@@ -631,6 +636,21 @@ export const finishDealUnwind = mutation({
           refundedAt: args.refundedAt,
         });
 
+        // SCRUM-724 / SCRUM-795 c22479 + Sol Q7: a customer-credit PAYOUT is a new
+        // money exit. FINISH_PERMS are deal-cancel authorities, not payout
+        // authority (the default MANAGER holds them without MANAGE_FINANCE), so
+        // any request that could pay the customer out also needs MANAGE_FINANCE,
+        // checked BEFORE the pilot refusal and before any write below.
+        const payoutFieldGiven = [args.customerRefundAmountMinor, args.customerRefundMethod,
+          args.customerRefundReference, args.customerRefundedAt].some((value) => value !== undefined);
+        if (payoutFieldGiven || (args.customerPaymentDisposition === "REFUND" && invoicePlan.totalMinor > 0)) {
+          await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+          assertCustomerCreditPayoutAllowed();
+          if (args.customerRefundMethod !== undefined) {
+            assertCustomerCreditPayoutMethodSupported(args.customerRefundMethod);
+          }
+        }
+
         // 1. The receipt comes off the books.
         for (const allocation of activeAllocations) {
           await reverseAllocation(ctx, { orgId: args.orgId, allocationId: allocation._id, actorId: user._id });
@@ -1014,6 +1034,9 @@ export const unwindStatus = query({
             remittanceMethod: unwind.remittanceMethod,
             customerReceiptMinor: customerReceiptPreview?.amountMinor ?? null,
             customerReceiptCurrency: customerReceiptPreview?.currency ?? null,
+            // The dialog offers a customer payout only when this is true (pilot switch off AND the viewer may pay out).
+            customerPayoutAvailable:
+              !(CUSTOMER_CREDIT_PAYOUT_PILOT_DISABLED as boolean) && holds(role, [PERMISSIONS.MANAGE_FINANCE]),
             forwardDueMinor: financeReader ? unwind.forwardDueMinor : null,
             forwardReturn: unwind.forwardReturn
               ? {

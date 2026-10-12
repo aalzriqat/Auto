@@ -44,6 +44,7 @@ import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompany
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { assertCustomerCreditPayoutAllowed } from "./utils/customerCreditPayoutContainment";
 import { saleHasActiveDealUnwind } from "./utils/dealUnwindGuard";
 import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
 import { assertFinancedSaleHasDeal, assertOperatedDealMode } from "./utils/dealModes";
@@ -1168,6 +1169,14 @@ export const update = mutation({
         const invoicePlan = await planSaleInvoiceReceiptReversal(ctx, args.orgId, sale);
         if (invoicePlan.totalMinor > 0) {
           await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+        }
+        // SCRUM-724 / SCRUM-795 c22479 + Sol Q7: the customer REFUND disposition is a
+        // new payout. Refuse it at this door before any validation hint or write,
+        // after the MANAGE_FINANCE check above; the shared helper refuses too.
+        if ((args.customerPaymentDisposition === "REFUND" && invoicePlan.totalMinor > 0) ||
+            [args.customerRefundAmountMinor, args.customerRefundMethod,
+              args.customerRefundReference, args.customerRefundedAt].some((value) => value !== undefined)) {
+          assertCustomerCreditPayoutAllowed();
         }
         if (invoicePlan.totalMinor > 0 && !args.customerPaymentDisposition) {
           throwAppError(AppErrorCode.VALIDATION_FAILED, "Choose whether to refund or retain the customer's invoice credit.");
