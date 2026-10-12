@@ -262,19 +262,42 @@ describe("trusted browser swarm run assembly", () => {
     });
   });
 
-  it("preserves unsupported deterministic impact for the trusted worker planner to reject", () => {
+  // SCRUM-826: this used to PRESERVE unsupported impact for the attack workers
+  // to reject. Run 38224038549 shows what that cost: preview provisioning, an
+  // exact-SHA build and a full trusted E2E suite all ran before both workers
+  // refused at setup. The trusted plan now refuses it itself.
+  it("refuses impact whose mandatory missions have no executable handler before workers are scheduled", () => {
+    expect(() =>
+      assemble({
+        impactArtifact: impact([
+          { id: "TEN-1", severity: "CRITICAL" },
+        ]),
+      }),
+    ).toThrow(/no executable handler.*TENANT_ESCAPE.*TEN-1/i);
+  });
+
+  it("binds the executable mission plan to the trusted run evidence", () => {
     const payload = assemble({
-      impactArtifact: impact([
-        { id: "TEN-1", severity: "CRITICAL" },
-      ]),
+      impactArtifact: impact([{ id: "ECON-2", severity: "CRITICAL" }]),
+      jevArtifact: jev("LIVE", { suggestions: [] }),
     });
 
-    expect(payload.shouldRun).toBe(true);
-    expect(payload.impactedInvariants).toEqual([
-      { id: "TEN-1", severity: "CRITICAL" },
+    expect(payload.plannedMissions).toEqual([
+      expect.objectContaining({
+        id: "det::ECON-2::DUPLICATE_SUBMIT",
+        family: "DUPLICATE_SUBMIT",
+        source: "DETERMINISTIC",
+        invariantIds: ["ECON-2"],
+        oracle: "IDEMPOTENCY_SINGLE_EFFECT",
+      }),
+      expect.objectContaining({
+        id: "det::ECON-2::MULTI_TAB_RACE",
+        family: "MULTI_TAB_RACE",
+        source: "DETERMINISTIC",
+        invariantIds: ["ECON-2"],
+        oracle: "IDEMPOTENCY_SINGLE_EFFECT",
+      }),
     ]);
-    expect(payload.workerCount).toBe(2);
-    expect(payload.workerMatrix).toEqual({ worker_index: [1, 2] });
   });
 
   it("refuses a candidate descriptor from a different exact head", () => {

@@ -90,6 +90,39 @@ const CANDIDATE_FORBIDDEN_ENV = [
 ] as const;
 
 describe("SCRUM-350 trusted browser swarm workflow authority", () => {
+  it("refuses unexecutable mandatory missions before the preview, the build or E2E is paid for (SCRUM-826)", () => {
+    const steps = job("prepare").steps ?? [];
+    const names = steps.map((entry) => entry.name);
+    const gateName =
+      "Refuse mandatory missions without executable handlers before provisioning";
+    const gate = step("prepare", gateName);
+
+    expect(gate.run).toContain("pnpm browser-swarm:coverage-gate");
+    expect(gate["working-directory"]).toBe("trusted");
+    expect(gate.if).toBeUndefined();
+    expect(gate.env).toMatchObject({
+      BASE_SHA: "${{ steps.provenance.outputs.base_sha }}",
+      HEAD_SHA: "${{ github.event.workflow_run.pull_requests[0].head.sha }}",
+    });
+
+    const gateIndex = names.indexOf(gateName);
+    expect(gateIndex).toBeGreaterThan(
+      names.indexOf("Derive mandatory impact from trusted main"),
+    );
+    for (const later of [
+      "Download triggering E2E preview descriptor",
+      "Recreate disposable Convex preview from trusted main",
+      "Generate bounded Jev browser exploration once",
+      "Assemble trusted run and fail closed on unsupported impact",
+    ]) {
+      expect(names.indexOf(later)).toBeGreaterThan(gateIndex);
+    }
+
+    expect(String(step("prepare", "Publish trusted plan evidence").with?.path)).toContain(
+      "trusted/artifacts/browser-swarm-coverage.json",
+    );
+  });
+
   it("keeps the PR preflight completely free of reusable secret references", () => {
     expect(playwrightWorkflowSource).not.toContain("secrets.");
     expect(playwrightWorkflowSource).not.toContain("CLERK_SECRET_KEY");

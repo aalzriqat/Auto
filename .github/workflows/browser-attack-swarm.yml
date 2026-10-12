@@ -166,6 +166,29 @@ jobs:
           BASE_SHA: ${{ steps.provenance.outputs.base_sha }}
           HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
 
+      # SCRUM-826: refuse an impact set whose mandatory deterministic missions
+      # include a family with no executable handler BEFORE a preview is
+      # recreated, a candidate is built or E2E runs. Unconditional on purpose.
+      # The attack workers keep their own independent refusal.
+      - name: Refuse mandatory missions without executable handlers before provisioning
+        id: coverage_gate
+        working-directory: trusted
+        run: pnpm browser-swarm:coverage-gate
+        env:
+          BASE_SHA: ${{ steps.provenance.outputs.base_sha }}
+          HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+
+      - name: Publish coverage refusal evidence
+        if: failure() && steps.coverage_gate.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trusted-browser-swarm-coverage-refusal
+          path: |
+            trusted/artifacts/browser-swarm-trusted-impact.json
+            trusted/artifacts/browser-swarm-coverage.json
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Download triggering E2E preview descriptor
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -299,6 +322,7 @@ jobs:
           name: trusted-browser-swarm-plan
           path: |
             trusted/artifacts/browser-swarm-trusted-impact.json
+            trusted/artifacts/browser-swarm-coverage.json
             trusted/artifacts/browser-swarm-convex-authority.json
             trusted/artifacts/browser-swarm-jev-suggestions.json
             trusted/artifacts/browser-swarm-trusted-run.json
