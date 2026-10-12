@@ -6,6 +6,7 @@ import {
   OFFLINE_SWARM_CLERK_FLAG,
   OFFLINE_SWARM_CLERK_PLACEHOLDER_SECRET,
 } from "../../lib/offlineSwarmClerk";
+import { EGRESS_EVIDENCE_PATH } from "./browserEgressProofVerify.mjs";
 
 type WorkflowStep = {
   name?: string;
@@ -15,6 +16,7 @@ type WorkflowStep = {
   env?: Record<string, unknown>;
   run?: string;
   shell?: string;
+  "working-directory"?: string;
 };
 
 type WorkflowJob = {
@@ -908,7 +910,12 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       // The written evidence is independently checked (ok:true, no collector
       // traffic, allowed origin 200, service worker blocked, denial evidenced).
       expect(verifyAt).toBeGreaterThan(proofAt);
-      expect(lines[verifyAt]).toContain("egress-evidence/browser-egress-proof.json");
+      // SC-1: the verifier accepts only this exact argument, resolved against
+      // the step's cwd, so any respelling or cwd change fails every real run.
+      expect(lines[verifyAt]).toBe(
+        `node scripts/intelligence/browserEgressProofVerify.mjs ${EGRESS_EVIDENCE_PATH}`,
+      );
+      expect(proof["working-directory"]).toBe("trusted");
       // The proof reads the proxy's fixed-vocabulary denial log.
       expect(proof.env).toHaveProperty(
         "BROWSER_EGRESS_PROXY_LOG",
