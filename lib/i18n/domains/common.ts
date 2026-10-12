@@ -294,6 +294,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "A cash payout of customer credit is not supported yet. Use a bank transfer. Nothing has been changed.",
     "صرف رصيد العميل نقدًا غير مدعوم بعد. استخدم التحويل البنكي. لم يتم تغيير أي شيء.",
   ],
+  ServerError_SALE_INVOICE_RECEIPT_DOORS_DISABLED: [
+    "Recording or applying customer credit against a sale invoice is not available during the pilot. Nothing has been changed.",
+    "تسجيل رصيد العميل أو تطبيقه على فاتورة البيع غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
+  ],
   ServerError_PAYMENT_LINKS_DISABLED: [
     "Payment links are not available yet. Nothing has been changed.",
     "روابط الدفع غير متاحة حاليًا. لم يتم تغيير أي شيء.",

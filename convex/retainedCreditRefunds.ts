@@ -29,6 +29,10 @@ import { createCanonicalPayment } from "./subledger";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import { loadRetainedPosition, requirePostedReceiptForMovement } from "./accounting/receiptMovement";
 import { availableRetainedCreditMinor } from "./accounting/invoiceReceiptReservation";
+import {
+  assertCustomerCreditPayoutAllowed,
+  assertCustomerCreditPayoutMethodSupported,
+} from "./utils/customerCreditPayoutContainment";
 
 const REASON_MAX = 500;
 const REFERENCE_MAX = 120;
@@ -85,6 +89,8 @@ export const requestRetainedCreditRefund = mutation({
   },
   handler: async (ctx, args): Promise<Id<"retainedCreditRefundRequests">> => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // SCRUM-724 Sol 6 Q1=b / Q7: one payout authority, one switch. Refused before any read or write.
+    assertCustomerCreditPayoutAllowed();
     assertPositiveMinor(args.amountMinor);
     const reason = args.reason.trim();
     if (reason.length === 0 || reason.length > REASON_MAX) {
@@ -124,6 +130,9 @@ export const respondToRetainedCreditRefund = mutation({
   },
   handler: async (ctx, args): Promise<Id<"retainedCreditRefundRequests">> => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    // Approval authorizes a payout, so it is refused with the payout switch on.
+    // REJECTED authorizes nothing and stays available as an exit.
+    if (args.status === "APPROVED") assertCustomerCreditPayoutAllowed();
     return await runWithIdempotency(
       ctx,
       {
@@ -179,6 +188,8 @@ export const executeRetainedCreditRefund = mutation({
     args
   ): Promise<{ paymentId: Id<"canonicalPayments">; eventId: Id<"accountingEvents">; amountMinor: number }> => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // Refused before the idempotency wrapper, so a stored replay is refused too.
+    assertCustomerCreditPayoutAllowed();
     const reference = args.reference.trim();
     const now = Date.now();
     if (reference.length === 0 || reference.length > REFERENCE_MAX ||
@@ -200,6 +211,9 @@ export const executeRetainedCreditRefund = mutation({
         if (!request || request.orgId !== args.orgId) refuse("RETAINED_CREDIT_REFUND_NOT_FOUND");
         // EXECUTED is terminal: a second execution under any key stops here.
         if (request.status !== "APPROVED") refuse("RETAINED_CREDIT_REFUND_NOT_APPROVED");
+        // Defence in depth that survives the switch: a CASH payout would leave no
+        // collectionPayments row for cashier-day reconciliation (Sol Q5, deferred).
+        assertCustomerCreditPayoutMethodSupported(request.method);
 
         const { movement, position } = await loadMovementAndPosition(ctx, args.orgId, request.receiptMovementId);
         if (position._id !== request.positionId || movement.customerId !== request.customerId) {
@@ -300,12 +314,55 @@ export const executeRetainedCreditRefund = mutation({
   },
 });
 
+/**
+ * SCRUM-724 Sol 6 Q3: the audited exit for an open request. Withdraws a PENDING
+ * request (the requester included) or cancels an APPROVED one, always with a
+ * reason, by any MANAGE_FINANCE user. Deliberately NOT behind the payout switch:
+ * it moves no money and is how an operator releases a hold while payout is off.
+ *
+ * Releasing the hold is the status change itself (`openRefundRequestMinor` counts
+ * only PENDING + APPROVED), so release is atomic with the audit fields. EXECUTED
+ * (money already paid) and REJECTED are terminal and refused. A retry on an
+ * already-CANCELLED request is a no-op that keeps the original audit.
+ */
+export const cancelRetainedCreditRefund = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    requestId: v.id("retainedCreditRefundRequests"),
+    reason: v.string(),
+  },
+  handler: async (ctx, args): Promise<Id<"retainedCreditRefundRequests">> => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const request = await ctx.db.get(args.requestId);
+    if (!request || request.orgId !== args.orgId) refuse("RETAINED_CREDIT_REFUND_NOT_FOUND");
+    const reason = args.reason.trim();
+    if (reason.length === 0 || reason.length > REASON_MAX) {
+      refuse("RETAINED_CREDIT_REFUND_CANCEL_REASON_REQUIRED");
+    }
+    if (request.status === "CANCELLED") return request._id;
+    if (request.status !== "PENDING" && request.status !== "APPROVED") {
+      refuse("RETAINED_CREDIT_REFUND_NOT_CANCELLABLE");
+    }
+    const now = Date.now();
+    await ctx.db.patch(request._id, {
+      status: "CANCELLED",
+      cancelledBy: user._id,
+      cancelledAt: now,
+      cancelReason: reason,
+      cancelledFromStatus: request.status,
+      updatedAt: now,
+    });
+    return request._id;
+  },
+});
+
 /** Refund requests for the approvals / credit screens, newest first. */
 export const listRetainedCreditRefundRequests = query({
   args: {
     orgId: v.id("organizations"),
     status: v.optional(v.union(
-      v.literal("PENDING"), v.literal("APPROVED"), v.literal("REJECTED"), v.literal("EXECUTED")
+      v.literal("PENDING"), v.literal("APPROVED"), v.literal("REJECTED"), v.literal("EXECUTED"),
+      v.literal("CANCELLED")
     )),
   },
   handler: async (ctx, args) => {

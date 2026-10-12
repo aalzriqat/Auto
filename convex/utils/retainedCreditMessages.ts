@@ -28,6 +28,12 @@ export const RETAINED_CREDIT_MESSAGES = {
     "The refund could not be posted to the general ledger, so nothing was paid or changed.",
   RETAINED_CREDIT_UNAVAILABLE:
     "That much customer credit is not available: part of it is reserved for a sale invoice or already requested as a refund. Nothing has been changed.",
+  RETAINED_CREDIT_REFUND_NOT_CANCELLABLE:
+    "Only a pending or approved refund request can be cancelled. Nothing has been changed.",
+  RETAINED_CREDIT_REFUND_CANCEL_REASON_REQUIRED:
+    "Give a reason of at most 500 characters to cancel this refund request. Nothing has been changed.",
+  CHEQUE_INVOICE_UNCOVERED_HELD:
+    "This sale's invoice can no longer cover the cheque, so it cannot be deposited. Return it to the customer. Nothing has been changed.",
 } as const satisfies Partial<Record<AppErrorCode, string>>;
 
 export type RetainedCreditMessageCode = keyof typeof RETAINED_CREDIT_MESSAGES;

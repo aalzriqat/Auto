@@ -14,6 +14,15 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 
+/**
+ * Both pilot switches ship ON. This suite exercises the doors' BEHAVIOR, so it
+ * opens them by default; the "pilot containment" blocks below close them again
+ * to prove the backend refuses before any write.
+ */
+const pilot = vi.hoisted(() => ({ payoutDisabled: false, invoiceDoorsDisabled: false }));
+vi.mock("./utils/customerCreditPayoutContainment", async (importOriginal) =>
+  (await import("../test-utils/pilotSwitchMock")).pilotSwitchModule(await importOriginal(), pilot));
+
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 type TestHarness = ReturnType<typeof convexTestWithComponents<typeof schema>>;
 
@@ -655,4 +664,353 @@ describe("SCRUM-724 cancelled-sale credit: authorized refund", () => {
     expect((await positionOf(s.t, s.orgId, movement._id)).remainingUnappliedMinor).toBe(0);
     expect((await s.t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("RETURNED");
   }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// SCRUM-724 Sol 6 (c22938): pilot containment, Q2-A clearing, Q3 exits, R4 bound
+// ---------------------------------------------------------------------------
+
+const errCode = (promise: Promise<unknown>) =>
+  promise.then(() => null, (e: unknown) => (e as { data?: { code?: string } }).data?.code ?? "UNCODED");
+
+const refundApi = () => (api as any).retainedCreditRefunds;
+
+async function allRows(s: Seeded, table: "invoiceReceiptApplications" | "retainedCreditRefundRequests" | "collectionPayments" | "canonicalPayments" | "postDatedCheques") {
+  return await s.t.run((ctx) => ctx.db.query(table).collect());
+}
+
+/** Cleared-after-cancel credit of 30.00 plus request/respond/cancel helpers. */
+async function creditFixture(suffix: string) {
+  const s = await seed(suffix);
+  const base = await clearAfterCancel(s, `${suffix}-1`);
+  const request = (amountMinor = 1000, as: { mutation: (...a: never[]) => Promise<unknown> } = s.asOwner as never) =>
+    (as as any).mutation(refundApi().requestRetainedCreditRefund, {
+      orgId: s.orgId, receiptMovementId: base.movement._id, amountMinor, method: "BANK_TRANSFER",
+      reason: "Customer asked for money back",
+    }) as Promise<Id<"retainedCreditRefundRequests">>;
+  const respond = (requestId: Id<"retainedCreditRefundRequests">, status: "APPROVED" | "REJECTED" = "APPROVED") =>
+    (s.approver.as as any).mutation(refundApi().respondToRetainedCreditRefund, {
+      orgId: s.orgId, requestId, status, idempotencyKey: crypto.randomUUID(),
+    });
+  const execute = (requestId: Id<"retainedCreditRefundRequests">, as: unknown = s.asOwner) =>
+    (as as any).mutation(refundApi().executeRetainedCreditRefund, {
+      orgId: s.orgId, requestId, reference: "PV-1", paidAt: Date.now() - 1000, idempotencyKey: crypto.randomUUID(),
+    });
+  const cancel = (requestId: Id<"retainedCreditRefundRequests">, reason: string | undefined = "Customer withdrew", as: unknown = s.asOwner, orgId = s.orgId) =>
+    (as as any).mutation(refundApi().cancelRetainedCreditRefund, { orgId, requestId, reason });
+  const available = async () => (await s.asOwner.query(api.collections.listRetainedCredits, {
+    orgId: s.orgId, customerId: s.customerId, onlyRemaining: false, paginationOpts: { cursor: null, numItems: 20 },
+  })).page.find((row) => row.receiptMovementId === base.movement._id)!.availableUnappliedMinor;
+  return { s, ...base, request, respond, execute, cancel, available };
+}
+
+describe("SCRUM-724 pilot containment: new retained-credit payout authority is dark (Q1=b, Q7)", () => {
+  test("P1. with the payout switch ON, request, approve and execute are all refused before any write; reject and viewing stay", async () => {
+    const f = await creditFixture("p1");
+    // Open requests created while the doors were open: one PENDING, one APPROVED.
+    const approvedId = await f.request(1000);
+    await f.respond(approvedId);
+    const pendingId = await f.request(500);
+    const before = {
+      requests: await allRows(f.s, "retainedCreditRefundRequests"),
+      out: (await allRows(f.s, "canonicalPayments")).filter((p) => p.direction === "OUT"),
+      events: (await f.s.t.run((ctx) => ctx.db.query("accountingEvents").collect())).length,
+    };
+    pilot.payoutDisabled = true;
+    try {
+      expect(await errCode(f.request(100))).toBe("CUSTOMER_CREDIT_PAYOUT_DISABLED");
+      expect(await errCode(f.respond(pendingId, "APPROVED"))).toBe("CUSTOMER_CREDIT_PAYOUT_DISABLED");
+      expect(await errCode(f.execute(approvedId))).toBe("CUSTOMER_CREDIT_PAYOUT_DISABLED");
+      expect(await allRows(f.s, "retainedCreditRefundRequests")).toEqual(before.requests);
+      expect((await allRows(f.s, "canonicalPayments")).filter((p) => p.direction === "OUT")).toEqual(before.out);
+      expect((await f.s.t.run((ctx) => ctx.db.query("accountingEvents").collect())).length).toBe(before.events);
+      // Viewing and the non-payout decision stay available.
+      const listed = await (f.s.asOwner as any).query(refundApi().listRetainedCreditRefundRequests,
+        { orgId: f.s.orgId, status: "PENDING" });
+      expect(listed.map((row: { _id: string }) => row._id)).toContain(pendingId);
+      await f.respond(pendingId, "REJECTED");
+      expect((await f.s.t.run((ctx) => ctx.db.get(pendingId)))?.status).toBe("REJECTED");
+    } finally {
+      pilot.payoutDisabled = false;
+    }
+    // Positive control: with the switch flipped the same calls work.
+    await expect(f.execute(approvedId)).resolves.toBeDefined();
+  }, 60_000);
+
+  test("P2. a CASH payout stays refused at execute even with the switch flipped off; the request stays APPROVED", async () => {
+    const f = await creditFixture("p2");
+    const requestId = (await (f.s.asOwner as any).mutation(refundApi().requestRetainedCreditRefund, {
+      orgId: f.s.orgId, receiptMovementId: f.movement._id, amountMinor: 1000, method: "CASH", reason: "cash please",
+    })) as Id<"retainedCreditRefundRequests">;
+    await f.respond(requestId);
+    expect(await errCode(f.execute(requestId))).toBe("CUSTOMER_CREDIT_CASH_PAYOUT_UNSUPPORTED");
+    expect((await f.s.t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("APPROVED");
+    expect((await allRows(f.s, "canonicalPayments")).filter((p) => p.direction === "OUT")).toHaveLength(0);
+  }, 60_000);
+
+  test("P3. each new sale-invoice door is refused with its OWN switch on, before any write; the payout switch does not open them", async () => {
+    const s = await seed("p3");
+    const saleId = await newSale(s);
+    // A PENDING reservation made while the doors were open, to prove activate is refused too.
+    const funding = await clearAfterCancel(s, "P3-F");
+    const reserved = (await s.asOwner.mutation(api.collections.reserveSaleInvoiceReceipt, {
+      orgId: s.orgId, saleId, receiptMovementId: funding.movement._id, amountMinor: 1000, idempotencyKey: crypto.randomUUID(),
+    })) as Id<"invoiceReceiptApplications">;
+    const before = {
+      cheques: await allRows(s, "postDatedCheques"),
+      apps: await allRows(s, "invoiceReceiptApplications"),
+      pays: await allRows(s, "collectionPayments"),
+    };
+    pilot.invoiceDoorsDisabled = true;
+    pilot.payoutDisabled = false; // proves the two switches are independent
+    try {
+      expect(await errCode(registerCheque(s, saleId, "P3-C"))).toBe("SALE_INVOICE_RECEIPT_DOORS_DISABLED");
+      expect(await errCode(s.asOwner.mutation(api.collections.reserveSaleInvoiceReceipt, {
+        orgId: s.orgId, saleId, receiptMovementId: funding.movement._id, amountMinor: 500, idempotencyKey: crypto.randomUUID(),
+      }))).toBe("SALE_INVOICE_RECEIPT_DOORS_DISABLED");
+      expect(await errCode(s.asOwner.mutation(api.collections.activateSaleInvoiceReceipt, {
+        orgId: s.orgId, applicationId: reserved, amountMinor: 1000, idempotencyKey: crypto.randomUUID(),
+      }))).toBe("SALE_INVOICE_RECEIPT_DOORS_DISABLED");
+      expect(await errCode(s.asOwner.mutation(api.collections.recordPayment, {
+        orgId: s.orgId, customerId: s.customerId, invoiceSaleId: saleId, amount: 10,
+        method: "CASH", paymentDate: Date.now(), idempotencyKey: crypto.randomUUID(),
+      }))).toBe("SALE_INVOICE_RECEIPT_DOORS_DISABLED");
+      expect(await allRows(s, "postDatedCheques")).toEqual(before.cheques);
+      expect(await allRows(s, "invoiceReceiptApplications")).toEqual(before.apps);
+      expect(await allRows(s, "collectionPayments")).toEqual(before.pays);
+      // The ordinary receipt door (no invoiceSaleId) is NOT affected.
+      await expect(s.asOwner.mutation(api.collections.recordPayment, {
+        orgId: s.orgId, customerId: s.customerId, amount: 10,
+        method: "CASH", paymentDate: Date.now(), idempotencyKey: crypto.randomUUID(),
+      })).resolves.toBeDefined();
+    } finally {
+      pilot.invoiceDoorsDisabled = false;
+    }
+  }, 90_000);
+
+  test("P4. while the invoice-door switch is ON a clearing sale-invoice cheque still books the bank money as whole, UNRESERVED 2110 credit (never strands)", async () => {
+    const s = await seed("p4");
+    const saleId = await newSale(s);
+    const chequeId = await registerCheque(s, saleId, "P4-1");
+    await deposit(s, chequeId);
+    pilot.invoiceDoorsDisabled = true;
+    try {
+      const paymentId = await clear(s, chequeId);
+      const movement = await movementOf(s.t, s.orgId, paymentId);
+      expect(await applicationsFor(s.t, s.orgId)).toHaveLength(0);
+      expect(await positionOf(s.t, s.orgId, movement._id)).toMatchObject({
+        remainingUnappliedMinor: 3000, sourceChequeId: chequeId, originatingSaleId: saleId,
+      });
+      const lines = await glLines(s.t, s.orgId, "collectionPayments", String(paymentId));
+      expect(lines.find((l) => l.key === SYSTEM_KEYS.BANK_ACCOUNT)?.debit).toBe(3000);
+      expect(lines.find((l) => l.key === SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY)?.credit).toBe(3000);
+    } finally {
+      pilot.invoiceDoorsDisabled = false;
+    }
+  }, 60_000);
+
+  test("P5. the backend publishes availability: false while the switches are on, true when flipped; payout and doors are independent", async () => {
+    const s = await seed("p5");
+    const saleId = await newSale(s);
+    const flags = async () => {
+      const status = await s.asOwner.query(api.collections.saleInvoiceReceiptStatus, {
+        orgId: s.orgId, saleId, paginationOpts: { cursor: null, numItems: 5 },
+      });
+      const summary = await s.asOwner.query(api.collections.summary, { orgId: s.orgId });
+      return {
+        statusPayout: (status as any).retainedCreditPayoutAvailable,
+        statusDoors: (status as any).saleInvoiceDoorsAvailable,
+        summaryPayout: (summary as any).retainedCreditPayoutAvailable,
+      };
+    };
+    pilot.payoutDisabled = true; pilot.invoiceDoorsDisabled = true;
+    try {
+      expect(await flags()).toEqual({ statusPayout: false, statusDoors: false, summaryPayout: false });
+      pilot.payoutDisabled = false;
+      expect(await flags()).toEqual({ statusPayout: true, statusDoors: false, summaryPayout: true });
+      pilot.invoiceDoorsDisabled = false;
+      expect(await flags()).toEqual({ statusPayout: true, statusDoors: true, summaryPayout: true });
+    } finally {
+      pilot.payoutDisabled = false; pilot.invoiceDoorsDisabled = false;
+    }
+  }, 60_000);
+});
+
+describe("SCRUM-724 Q2=A: a cheque the bank clears into an over-covered LIVE sale becomes whole unreserved 2110 credit", () => {
+  /** Registers a 30.00 cheque, then covers the invoice elsewhere so the cheque is over-covered (outstanding - reserved = 20.00 < 30.00). */
+  async function overCovered(s: Seeded, no: string, depositFirst: boolean) {
+    const saleId = await newSale(s);
+    const chequeId = await registerCheque(s, saleId, no);
+    if (depositFirst) await deposit(s, chequeId);
+    await s.asOwner.mutation(api.collections.recordPayment, {
+      orgId: s.orgId, customerId: s.customerId, invoiceSaleId: saleId, amount: 80,
+      method: "CASH", paymentDate: Date.now(), idempotencyKey: crypto.randomUUID(),
+    });
+    return { saleId, chequeId };
+  }
+
+  test("Q2a. deposited -> over-covered -> clear: whole face to unreserved 2110, one journal, lineage, sale/AR untouched, replay adds nothing", async () => {
+    const s = await seed("q2a");
+    const { saleId, chequeId } = await overCovered(s, "Q2A-1", true);
+    const appsBefore = await applicationsFor(s.t, s.orgId);
+    expect(appsBefore).toHaveLength(1); // only the 80.00 cash reservation
+    const invoiceId = (await s.t.run((ctx) => ctx.db.get(saleId)))!.canonicalReceivableDocumentId!;
+    const arBefore = await s.t.run((ctx) => ctx.db.get(invoiceId));
+    const key = crypto.randomUUID();
+    const paymentId = await clear(s, chequeId, key);
+    expect((await s.t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("CLEARED");
+    const movement = await movementOf(s.t, s.orgId, paymentId);
+    expect(await positionOf(s.t, s.orgId, movement._id)).toMatchObject({
+      remainingUnappliedMinor: 3000, sourceChequeId: chequeId, originatingSaleId: saleId,
+    });
+    const lines = await glLines(s.t, s.orgId, "collectionPayments", String(paymentId));
+    expect(sum(lines, "debit")).toBe(3000);
+    expect(sum(lines, "credit")).toBe(3000);
+    expect(lines.find((l) => l.key === SYSTEM_KEYS.BANK_ACCOUNT)?.debit).toBe(3000);
+    expect(lines.find((l) => l.key === SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY)?.credit).toBe(3000);
+    // No new reservation for this cheque; AR, invoice and sale are untouched.
+    expect(await applicationsFor(s.t, s.orgId)).toHaveLength(1);
+    expect(await s.t.run((ctx) => ctx.db.get(invoiceId))).toEqual(arBefore);
+    expect((await s.t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("COMPLETED");
+    // Exactly once: same key replays the stored payment, nothing more is posted.
+    expect(await clear(s, chequeId, key)).toBe(paymentId);
+    expect(await glLines(s.t, s.orgId, "collectionPayments", String(paymentId))).toHaveLength(lines.length);
+    expect((await s.t.run((ctx) => ctx.db.query("collectionPayments")
+      .withIndex("by_cheque", (q) => q.eq("chequeId", chequeId)).collect()))).toHaveLength(1);
+    // The credit is spendable (unreserved) through the listing.
+    const credits = await s.asOwner.query(api.collections.listRetainedCredits, {
+      orgId: s.orgId, customerId: s.customerId, paginationOpts: { cursor: null, numItems: 20 },
+    });
+    expect(credits.page.find((row) => row.receiptMovementId === movement._id))
+      .toMatchObject({ availableUnappliedMinor: 3000, reservedForSaleInvoicesMinor: 0 });
+  }, 60_000);
+
+  test("Q2b. a still-HELD uncovered cheque cannot be deposited or cleared (coded refusal), nothing changes", async () => {
+    const s = await seed("q2b");
+    const { chequeId } = await overCovered(s, "Q2B-1", false);
+    const before = { cheques: await allRows(s, "postDatedCheques"), pays: await allRows(s, "collectionPayments") };
+    expect(await errCode(deposit(s, chequeId))).toBe("CHEQUE_INVOICE_UNCOVERED_HELD");
+    expect(await errCode(clear(s, chequeId))).toBe("CHEQUE_INVOICE_UNCOVERED_HELD");
+    expect(await allRows(s, "postDatedCheques")).toEqual(before.cheques);
+    expect(await allRows(s, "collectionPayments")).toEqual(before.pays);
+    // It can still go back to the customer.
+    await s.asOwner.mutation(api.collections.returnCheque, { orgId: s.orgId, chequeId, returnReason: "uncovered" });
+    expect((await s.t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("RETURNED");
+  }, 60_000);
+
+  test("Q2c. control: a covered DEPOSITED cheque still clears into a PENDING reservation when the doors are open", async () => {
+    const s = await seed("q2c");
+    const saleId = await newSale(s);
+    const chequeId = await registerCheque(s, saleId, "Q2C-1");
+    await deposit(s, chequeId);
+    await clear(s, chequeId);
+    expect(await applicationsFor(s.t, s.orgId)).toMatchObject([{ status: "PENDING", amountMinor: 3000 }]);
+  }, 60_000);
+});
+
+describe("SCRUM-724 Q3: open refund requests always have an audited MANAGE_FINANCE exit", () => {
+  test("X1. a PENDING request is withdrawn by its requester with a reason: audited, hold released, works while the payout switch is ON", async () => {
+    const f = await creditFixture("x1");
+    const requestId = await f.request(2500);
+    expect(await f.available()).toBe(500);
+    pilot.payoutDisabled = true;
+    try {
+      expect(await f.cancel(requestId, "Customer changed their mind")).toBe(requestId);
+    } finally { pilot.payoutDisabled = false; }
+    expect(await f.s.t.run((ctx) => ctx.db.get(requestId))).toMatchObject({
+      status: "CANCELLED", cancelledBy: f.s.userId, cancelReason: "Customer changed their mind",
+      cancelledFromStatus: "PENDING",
+    });
+    expect(typeof (await f.s.t.run((ctx) => ctx.db.get(requestId)) as any).cancelledAt).toBe("number");
+    expect(await f.available()).toBe(3000);
+    // A cancelled request can be neither approved nor executed.
+    expect(await errCode(f.respond(requestId))).toBe("RETAINED_CREDIT_REFUND_NOT_PENDING");
+    expect(await errCode(f.execute(requestId))).toBe("RETAINED_CREDIT_REFUND_NOT_APPROVED");
+    // Exactly once: a retry is a no-op and keeps the original audit.
+    const first = await f.s.t.run((ctx) => ctx.db.get(requestId)) as any;
+    expect(await f.cancel(requestId, "different reason")).toBe(requestId);
+    expect(await f.s.t.run((ctx) => ctx.db.get(requestId))).toEqual(first);
+  }, 60_000);
+
+  test("X2. an APPROVED request is cancelled by a different MANAGE_FINANCE user: hold released, no payout, no journal", async () => {
+    const f = await creditFixture("x2");
+    const requestId = await f.request(1000);
+    await f.respond(requestId);
+    const eventsBefore = (await f.s.t.run((ctx) => ctx.db.query("accountingEvents").collect())).length;
+    await f.cancel(requestId, "Wrong bank account", f.s.financeOnly.as);
+    expect(await f.s.t.run((ctx) => ctx.db.get(requestId))).toMatchObject({
+      status: "CANCELLED", cancelledBy: f.s.financeOnly.actorId, cancelledFromStatus: "APPROVED",
+    });
+    expect(await f.available()).toBe(3000);
+    expect((await allRows(f.s, "canonicalPayments")).filter((p) => p.direction === "OUT")).toHaveLength(0);
+    expect((await f.s.t.run((ctx) => ctx.db.query("accountingEvents").collect())).length).toBe(eventsBefore);
+  }, 60_000);
+
+  test("X3. EXECUTED and REJECTED are never cancellable; a missing reason, no MANAGE_FINANCE and a wrong org are refused with nothing written", async () => {
+    const f = await creditFixture("x3");
+    const executedId = await f.request(1000);
+    await f.respond(executedId);
+    await f.execute(executedId);
+    const rejectedId = await f.request(500);
+    await f.respond(rejectedId, "REJECTED");
+    const openId = await f.request(400);
+    expect(await errCode(f.cancel(executedId))).toBe("RETAINED_CREDIT_REFUND_NOT_CANCELLABLE");
+    expect(await errCode(f.cancel(rejectedId))).toBe("RETAINED_CREDIT_REFUND_NOT_CANCELLABLE");
+    for (const reason of ["", "   ", "x".repeat(501)]) {
+      expect(await errCode(f.cancel(openId, reason))).toBe("RETAINED_CREDIT_REFUND_CANCEL_REASON_REQUIRED");
+    }
+    expect(await errCode(f.cancel(openId, "ok", f.s.viewOnly.as))).not.toBeNull();
+    const foreign = await seed("x3x");
+    expect(await errCode(f.cancel(openId, "ok", foreign.asOwner, foreign.orgId))).not.toBeNull();
+    expect((await f.s.t.run((ctx) => ctx.db.get(executedId)))?.status).toBe("EXECUTED");
+    expect((await f.s.t.run((ctx) => ctx.db.get(rejectedId)))?.status).toBe("REJECTED");
+    expect((await f.s.t.run((ctx) => ctx.db.get(openId)))?.status).toBe("PENDING");
+  }, 90_000);
+
+  test("X4. returning the cleared source cheque cancels open requests (audited) BEFORE reversing the source; none is left to strand", async () => {
+    const f = await creditFixture("x4");
+    const pendingId = await f.request(500);
+    const approvedId = await f.request(700);
+    await f.respond(approvedId);
+    pilot.payoutDisabled = true; // the pilot state: the return must still work
+    try {
+      await f.s.asOwner.mutation(api.collections.returnClearedCheque, {
+        orgId: f.s.orgId, chequeId: f.chequeId, idempotencyKey: crypto.randomUUID(),
+      });
+    } finally { pilot.payoutDisabled = false; }
+    for (const id of [pendingId, approvedId]) {
+      const row = (await f.s.t.run((ctx) => ctx.db.get(id)))!;
+      expect(row).toMatchObject({ status: "CANCELLED", cancelledBy: f.s.userId });
+      expect(row.cancelReason).toMatch(/cheque/i);
+    }
+    expect((await f.s.t.run((ctx) => ctx.db.get(approvedId)))?.cancelledFromStatus).toBe("APPROVED");
+    expect((await positionOf(f.s.t, f.s.orgId, f.movement._id)).remainingUnappliedMinor).toBe(0);
+    expect((await f.s.t.run((ctx) => ctx.db.get(f.chequeId)))?.status).toBe("RETURNED");
+    expect(await errCode(f.execute(approvedId))).toBe("RETAINED_CREDIT_REFUND_NOT_APPROVED");
+  }, 90_000);
+});
+
+describe("SCRUM-724 R4: the reservation bound equals the reversal bound (100 PENDING per receipt / sale)", () => {
+  test("B1. the 101st PENDING reservation on one receipt is refused; 100 are accepted", async () => {
+    const f = await creditFixture("b1");
+    const target = await newSale(f.s);
+    const position = await positionOf(f.s.t, f.s.orgId, f.movement._id);
+    const invoiceId = (await f.s.t.run((ctx) => ctx.db.get(target)))!.canonicalReceivableDocumentId!;
+    await f.s.t.run(async (ctx) => {
+      for (let i = 0; i < 99; i++) {
+        await ctx.db.insert("invoiceReceiptApplications", {
+          orgId: f.s.orgId, receiptMovementId: f.movement._id, saleId: target, receivableDocumentId: invoiceId,
+          customerId: f.s.customerId, currency: position.currency, amountMinor: 1, status: "PENDING",
+          createdBy: f.s.userId, createdAt: Date.now(),
+        });
+      }
+    });
+    const reserve = (amountMinor: number) => f.s.asOwner.mutation(api.collections.reserveSaleInvoiceReceipt, {
+      orgId: f.s.orgId, saleId: target, receiptMovementId: f.movement._id, amountMinor, idempotencyKey: crypto.randomUUID(),
+    });
+    await expect(reserve(1)).resolves.toBeDefined(); // the 100th
+    await expect(reserve(1)).rejects.toThrow(/too many pending applications/i); // the 101st
+    const pending = (await applicationsFor(f.s.t, f.s.orgId)).filter((row) => row.status === "PENDING");
+    expect(pending).toHaveLength(100);
+  }, 90_000);
 });

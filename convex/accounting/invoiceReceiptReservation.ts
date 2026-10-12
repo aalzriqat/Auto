@@ -2,11 +2,16 @@ import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { getReceivableOutstandingMinor } from "../subledger";
-import { loadRetainedPosition } from "./receiptMovement";
+import { loadRetainedPosition, MAX_REVOCABLE_APPLICATIONS } from "./receiptMovement";
 import { AppErrorCode, throwAppError } from "../utils/errors";
 import { RETAINED_CREDIT_MESSAGES } from "../utils/retainedCreditMessages";
 
-const MAX_PENDING_APPLICATIONS = 500;
+/**
+ * SCRUM-724 R4 (Codex stack review): the reservation bound IS the reversal bound.
+ * A return or cancellation plans at most MAX_REVOCABLE_APPLICATIONS rows, so a
+ * receipt or sale may never hold more PENDING claims than one unwind can release.
+ */
+const MAX_PENDING_APPLICATIONS = MAX_REVOCABLE_APPLICATIONS;
 
 async function pendingReceiptRows(
   ctx: QueryCtx | MutationCtx,
@@ -26,6 +31,52 @@ async function pendingReceiptRows(
 }
 
 const OPEN_REFUND_REQUEST_SCAN = 200;
+
+/**
+ * SCRUM-724 Sol 6 Q3: invalidates every OPEN (PENDING + APPROVED) refund request
+ * of one movement, with an audited reason, in the caller's transaction. Used when
+ * the source cheque is returned: the credit those requests would pay out is about
+ * to be retired, and an APPROVED request left behind could never execute nor be
+ * cancelled by anyone who does not know it exists. EXECUTED rows are never touched
+ * (the caller refuses that case first). Fails closed beyond the bound.
+ */
+export async function cancelOpenRefundRequestsForMovement(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    receiptMovementId: Id<"receiptMovements">;
+    actorId: Id<"users">;
+    reason: string;
+  }
+): Promise<number> {
+  const now = Date.now();
+  let cancelled = 0;
+  for (const status of ["PENDING", "APPROVED"] as const) {
+    const rows = await ctx.db
+      .query("retainedCreditRefundRequests")
+      .withIndex("by_org_movement_status", (q) =>
+        q.eq("orgId", args.orgId).eq("receiptMovementId", args.receiptMovementId).eq("status", status))
+      .take(OPEN_REFUND_REQUEST_SCAN + 1);
+    if (rows.length > OPEN_REFUND_REQUEST_SCAN) {
+      throwAppError(
+        AppErrorCode.RETAINED_CREDIT_REFUND_INSUFFICIENT,
+        RETAINED_CREDIT_MESSAGES.RETAINED_CREDIT_REFUND_INSUFFICIENT
+      );
+    }
+    for (const row of rows) {
+      await ctx.db.patch(row._id, {
+        status: "CANCELLED",
+        cancelledBy: args.actorId,
+        cancelledAt: now,
+        cancelReason: args.reason,
+        cancelledFromStatus: status,
+        updatedAt: now,
+      });
+      cancelled += 1;
+    }
+  }
+  return cancelled;
+}
 
 /**
  * SCRUM-724: credit already asked back by the customer (PENDING + APPROVED

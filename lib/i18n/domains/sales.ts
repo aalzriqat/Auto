@@ -1848,6 +1848,18 @@ const serverErrorMessages = defineBilingualMessages({
     "That much customer credit is not available: part of it is reserved for a sale invoice or already requested as a refund. Nothing has been changed.",
     "مبلغ رصيد العميل المطلوب غير متاح: جزء منه محجوز لفاتورة بيع أو مطلوب ردّه مسبقًا. لم يتم تغيير أي شيء.",
   ],
+  ServerError_RETAINED_CREDIT_REFUND_NOT_CANCELLABLE: [
+    "Only a pending or approved refund request can be cancelled. Nothing has been changed.",
+    "لا يمكن إلغاء إلا طلب ردّ معلّق أو معتمد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_RETAINED_CREDIT_REFUND_CANCEL_REASON_REQUIRED: [
+    "Give a reason of at most 500 characters to cancel this refund request. Nothing has been changed.",
+    "اذكر سببًا (500 حرف كحد أقصى) لإلغاء طلب الردّ هذا. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CHEQUE_INVOICE_UNCOVERED_HELD: [
+    "This sale's invoice can no longer cover the cheque, so it cannot be deposited. Return it to the customer. Nothing has been changed.",
+    "لم تعد فاتورة هذه الصفقة تغطي الشيك، لذلك لا يمكن إيداعه. أعده إلى العميل. لم يتم تغيير أي شيء.",
+  ],
   ServerError_CHEQUE_NOT_FOUND: [
     "Cheque not found. Nothing has been changed.",
     "لم يتم العثور على الشيك. لم يتم تغيير أي شيء.",

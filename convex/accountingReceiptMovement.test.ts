@@ -71,15 +71,16 @@ import { saleCompletedKey } from "./accounting/postingRules";
 import { getReceivableOutstandingMinor } from "./subledger";
 
 /** Test-only handle on the pilot switch; the shipped value is `true` and no client input reaches this. */
-const payoutSwitch = vi.hoisted(() => ({ disabled: true }));
+const payoutSwitch = vi.hoisted(() => ({ disabled: true, invoiceDoorsDisabled: false }));
 vi.mock("./utils/customerCreditPayoutContainment", async (importOriginal) => {
   const original = await importOriginal<typeof import("./utils/customerCreditPayoutContainment")>();
-  return {
-    ...original,
-    get CUSTOMER_CREDIT_PAYOUT_PILOT_DISABLED() { return payoutSwitch.disabled; },
-    assertCustomerCreditPayoutAllowed: (disabled: boolean = payoutSwitch.disabled) =>
-      original.assertCustomerCreditPayoutAllowed(disabled),
-  };
+  // The SCRUM-724 tests in this file exercise the invoice-receipt doors, so the
+  // separate doors switch is held OFF here (it is covered with the switch ON in
+  // chequeCancelledSaleCredit.test.ts).
+  return (await import("../test-utils/pilotSwitchMock")).pilotSwitchModule(original, {
+    get payoutDisabled() { return payoutSwitch.disabled; },
+    get invoiceDoorsDisabled() { return payoutSwitch.invoiceDoorsDisabled; },
+  } as { payoutDisabled: boolean; invoiceDoorsDisabled: boolean });
 });
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
@@ -938,12 +939,14 @@ describe("SCRUM-218-C §4 — applying retained credit", () => {
     expect((await positionFor(t, orgId, movement._id))?.remainingUnappliedMinor).toBe(10000);
   });
 
-  test("SCRUM-722: the 500th pending claim cannot admit a 501st on either receipt or sale", async () => {
+  // SCRUM-724 R4: the reservation bound equals the 100-row reversal bound
+  // (was 500, which could admit a reservation set no single return could unwind).
+  test("SCRUM-722: the 100th pending claim cannot admit a 101st on either receipt or sale", async () => {
     const { t, asAdmin, orgId, userId, customerId, movement } = await retainedCreditFixture("s722cap");
     const first = await completedSaleInvoice(t, orgId, userId, customerId, "CAP1");
     const second = await completedSaleInvoice(t, orgId, userId, customerId, "CAP2");
     await t.runUnwrapped(async (ctx) => {
-      for (let index = 0; index < 500; index += 1) {
+      for (let index = 0; index < 100; index += 1) {
         await ctx.db.insert("invoiceReceiptApplications", {
           orgId, receiptMovementId: movement._id, saleId: first.saleId,
           receivableDocumentId: first.invoiceId, customerId, currency: "USD",

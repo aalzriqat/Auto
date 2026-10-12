@@ -4568,13 +4568,21 @@ export default defineSchema({
       v.literal("PENDING"),
       v.literal("APPROVED"),
       v.literal("REJECTED"),
-      v.literal("EXECUTED")
+      v.literal("EXECUTED"),
+      // SCRUM-724 Sol 6 Q3: withdrawn (from PENDING) or cancelled (from
+      // APPROVED) by a MANAGE_FINANCE user, or invalidated by a source-cheque
+      // return. Terminal; never reached from EXECUTED.
+      v.literal("CANCELLED")
     ),
     requestedBy: v.id("users"),
     decidedBy: v.optional(v.id("users")),
     decidedAt: v.optional(v.number()),
     decisionNotes: v.optional(v.string()),
     responseIdempotencyKey: v.optional(v.string()),
+    cancelledBy: v.optional(v.id("users")),
+    cancelledAt: v.optional(v.number()),
+    cancelReason: v.optional(v.string()),
+    cancelledFromStatus: v.optional(v.union(v.literal("PENDING"), v.literal("APPROVED"))),
     executedBy: v.optional(v.id("users")),
     executedAt: v.optional(v.number()),
     canonicalPaymentId: v.optional(v.id("canonicalPayments")),
