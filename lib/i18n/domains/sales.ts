@@ -2321,7 +2321,39 @@ const quotationUnavailableMessages = defineBilingualMessages({
     "لا يتوفّر لأوتوفلو مبلغ بيع مستهدف ليحتسب منه لهذه الصفقة. سجِّل المبلغ الذي أُرسل فعلياً.",
   ],
 });
+/**
+ * SCRUM-724 mount: the deal-page receipts panel and the Collections refund queue
+ * degrade to these when their own queries fail, and the panel explains a held
+ * cheque the invoice can no longer cover before the server has to refuse it.
+ */
+const customerMoneyMountMessages = defineBilingualMessages({
+  DealReceiptPanelLoadFailed: [
+    "Customer money for this sale could not be loaded. The rest of the deal is unaffected. Reload the page to try again.",
+    "تعذّر تحميل أموال العميل لهذه الصفقة. باقي الصفقة لم يتأثر. أعد تحميل الصفحة للمحاولة مجدداً.",
+  ],
+  RetainedCreditRefundsLoadFailed: [
+    "Customer credit refunds could not be loaded. Reload the page to try again.",
+    "تعذّر تحميل طلبات ردّ رصيد العملاء. أعد تحميل الصفحة للمحاولة مجدداً.",
+  ],
+  DealReceiptChequeExceedsInvoice: [
+    "The invoice can no longer cover this cheque, so it cannot be deposited. Return it to the customer.",
+    "لم تعد الفاتورة تغطي هذا الشيك، لذلك لا يمكن إيداعه. أعده إلى العميل.",
+  ],
+  // Always true: the server reserves for the invoice only on a live intent with
+  // the doors open, so the notice must not claim a reservation (review F1).
+  DealReceiptChequeClearedToCredit: [
+    "Cheque cleared. Its amount is now customer credit; see the credit and any pending invoice application below.",
+    "حُصّل الشيك. أصبح مبلغه رصيداً للعميل؛ راجع الرصيد وأي تطبيق معلّق على الفاتورة أدناه.",
+  ],
+  // An uncoded or untranslated refusal on the refund queue (review R1/F2).
+  RetainedCreditRefundActionFailed: [
+    "The refund action could not be completed. Reload the page to see its current status, then try again.",
+    "تعذّر إتمام إجراء ردّ الرصيد. أعد تحميل الصفحة لرؤية حالته الحالية، ثم حاول مجدداً.",
+  ],
+});
+
 export const salesEn = {
+  ...customerMoneyMountMessages.en,
   ...quoteWizardQaMessages.en,
   ...quotationUnavailableMessages.en,
   ...serverErrorMessages.en,
@@ -3123,7 +3155,6 @@ export const salesEn = {
   DealReceiptChequeActionFailed: "Cheque action could not be completed. Check the cheque status before trying again.",
   DealReceiptChequeRegistered: "Cheque registered. Deposit it when presented to the bank.",
   DealReceiptChequeDepositNotice: "Cheque marked deposited. Clear it only after the bank confirms payment.",
-  DealReceiptChequeCleared: "Cheque cleared and reserved for this invoice. Check its posting status below before activation.",
   DealReceiptRecordButton: "Record customer receipt",
   DealReceiptCreditHeading: "Customer credit available to apply",
   DealReceiptNoCredit: "No customer credit is available yet.",
@@ -3508,6 +3539,7 @@ export const salesEn = {
 };
 
 export const salesAr = {
+  ...customerMoneyMountMessages.ar,
   ...quoteWizardQaMessages.ar,
   ...quotationUnavailableMessages.ar,
   ...serverErrorMessages.ar,
@@ -4292,7 +4324,6 @@ export const salesAr = {
   DealReceiptChequeActionFailed: "تعذّر إكمال إجراء الشيك. تحقق من حالته قبل المحاولة مجدداً.",
   DealReceiptChequeRegistered: "سُجل الشيك. أودعه عند تقديمه إلى البنك.",
   DealReceiptChequeDepositNotice: "سُجل إيداع الشيك. لا تؤكد تحصيله قبل تأكيد البنك.",
-  DealReceiptChequeCleared: "حُصّل الشيك وحُجز للفاتورة. تحقق من حالة الترحيل أدناه قبل التفعيل.",
   DealReceiptRecordButton: "تسجيل دفعة العميل",
   DealReceiptCreditHeading: "رصيد العميل المتاح للتطبيق",
   DealReceiptNoCredit: "لا يوجد رصيد متاح للعميل بعد.",
