@@ -7,6 +7,7 @@ import {
   type JevBrowserMissionSuggestion,
 } from "./browserAttackSwarm";
 import type { InvariantSeverity } from "../autoflowInvariantCatalog";
+import { browserEgressLaunchOptions } from "./browserEgressContainment.mjs";
 
 type Env = Record<string, string | undefined>;
 
@@ -89,6 +90,11 @@ export function assertBrowserSwarmExecutionEnvironment(env: Env): void {
   }
 
   browserSwarmLocalBaseUrl(env);
+
+  // SCRUM-784: the swarm drives a browser holding authenticated QA state against
+  // candidate-controlled pages. Without the trusted egress proxy that is an
+  // exfiltration path, so the run is refused (FAIL, never PASS or skip).
+  browserEgressLaunchOptions({ ...env, BROWSER_EGRESS_REQUIRED: "1" });
 }
 
 function parseJson(raw: string, label: string): unknown {

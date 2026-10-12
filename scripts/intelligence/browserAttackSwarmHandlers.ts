@@ -12,6 +12,10 @@ import type {
   BrowserMissionExecutionContext,
 } from "./browserAttackSwarmExecutor";
 import { browserSwarmLocalBaseUrl } from "./browserAttackSwarmRuntime";
+import {
+  EGRESS_CONTEXT_OPTIONS,
+  browserEgressLaunchOptions,
+} from "./browserEgressContainment.mjs";
 import type { BrowserMissionEvidence } from "./browserAttackSwarm";
 
 type ArtifactWriter = {
@@ -85,7 +89,14 @@ async function openMissionBrowser(
   await ensureArtifactRoot(paths);
   throwIfMissionAborted(context.signal);
 
-  const browser = await chromium.launch({ headless: true });
+  // SCRUM-784: the saved QA storageState must never be usable from a browser
+  // with open egress. Required, so a missing proxy fails the mission instead of
+  // silently launching an unconstrained browser.
+  const egress = browserEgressLaunchOptions({
+    ...process.env,
+    BROWSER_EGRESS_REQUIRED: "1",
+  });
+  const browser = await chromium.launch({ headless: true, ...egress });
   const abort = () => {
     void browser.close().catch((error: unknown) => {
       const kind = error instanceof Error ? error.name : typeof error;
@@ -104,6 +115,7 @@ async function openMissionBrowser(
     const browserContext = await browser.newContext({
       baseURL: browserSwarmLocalBaseUrl(process.env),
       storageState: USER_AUTH_FILE,
+      ...EGRESS_CONTEXT_OPTIONS,
     });
     throwIfMissionAborted(context.signal);
 
