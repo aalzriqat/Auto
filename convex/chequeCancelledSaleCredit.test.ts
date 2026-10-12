@@ -200,19 +200,25 @@ describe("SCRUM-724 cancelled-sale cheque credit: clearing", () => {
         originatingSaleStatus: "CANCELLED" });
   }, 30_000);
 
-  test("c. a HELD cheque of a cancelled sale can be neither deposited nor cleared; nothing changes", async () => {
+  test("c. a HELD cheque of a cancelled sale can be neither deposited, cleared nor replaced; nothing changes", async () => {
     const s = await seed("c");
     const saleId = await newSale(s);
     const chequeId = await registerCheque(s, saleId, "C-1");
     await cancelSale(s, saleId);
+    const chequesBefore = await s.t.run((ctx) => ctx.db.query("postDatedCheques").collect());
     for (const act of [
       () => deposit(s, chequeId),
       () => clear(s, chequeId),
+      () => s.asOwner.mutation(api.collections.replaceCheque, {
+        orgId: s.orgId, chequeId, bank: "Test Bank", chequeNumber: "C-2",
+        chequeDate: Date.now(), amount: 30,
+      }),
     ]) {
       const err = await act().then(() => null, (e: unknown) => e as { data?: { code?: string } });
       expect(err?.data?.code).toBe("CHEQUE_SALE_CANCELLED_RETURN_TO_CUSTOMER");
     }
     expect((await s.t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("HELD");
+    expect(await s.t.run((ctx) => ctx.db.query("postDatedCheques").collect())).toHaveLength(chequesBefore.length);
     expect(await s.t.run((ctx) => ctx.db.query("collectionPayments").collect())).toHaveLength(0);
   }, 30_000);
 
@@ -554,7 +560,7 @@ describe("SCRUM-724 cancelled-sale credit: authorized refund", () => {
     expect(outs.filter((p) => p.direction === "OUT")).toHaveLength(0);
   }, 60_000);
 
-  test("RT5. a deleted (isDeleted) cheque cannot be deposited, cleared or replaced, and a cancelled sale's cheque cannot be replaced", async () => {
+  test("RT5. a deleted (isDeleted) cheque cannot be deposited or cleared", async () => {
     const s = await seed("rt5");
     const saleId = await newSale(s);
     const chequeId = await registerCheque(s, saleId, "RT5-1");
