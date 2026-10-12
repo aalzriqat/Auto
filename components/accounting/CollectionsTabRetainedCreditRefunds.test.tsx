@@ -126,6 +126,23 @@ describe("Collections, refund lifecycle reachable under default roles", () => {
     expect(screen.queryByRole("button", { name: "Reject" })).toBeNull();
   });
 
+  test("a failing refund queue degrades to a localized alert; the Collections tab and the approval table stay", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    seedRefunds([]);
+    stubs.queryResults.set("retainedCreditRefunds:listRetainedCreditRefundRequests", () => {
+      throw new Error("[CONVEX Q(retainedCreditRefunds:listRetainedCreditRefundRequests)] Server Error");
+    });
+    stubs.permissions = new Set(MANAGER);
+    render(<CollectionsTab />);
+    const tab = screen.getByRole("tab", { name: "Approvals" });
+    fireEvent.mouseDown(tab, { button: 0, ctrlKey: false });
+    fireEvent.focus(tab);
+    expect((await screen.findByRole("alert")).textContent).toBe("RetainedCreditRefundsLoadFailed");
+    expect(screen.getByText("NoPendingCollectionApprovals")).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/CONVEX|Server Error/);
+    vi.restoreAllMocks();
+  });
+
   test("a view-only user gets no Approvals tab", () => {
     seedRefunds([]);
     stubs.permissions = new Set(["view:finance"]);
