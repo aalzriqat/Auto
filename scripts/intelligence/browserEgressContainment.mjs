@@ -46,9 +46,10 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost"]);
 
 /**
  * The complete vocabulary of the proxy's denial log (SCRUM-350 G4-01). The log
- * is uploaded as a workflow artifact from a public repository, so it may carry
- * only these trusted constants: never a method, host, port, path or any other
- * byte the candidate chose. `not-allowlisted-loopback` is a coarse class
+ * may carry only these trusted constants: never a method, host, port, path or
+ * any other byte the candidate chose. The fixed vocabulary alone does NOT make
+ * the log safe to publish (the order of lines is a channel, G4R2-01): the raw
+ * log must stay on the runner and must never be uploaded or printed. `not-allowlisted-loopback` is a coarse class
  * (127.0.0.0/8 or localhost, but not an allowlisted authority); it exists so the
  * proof can show its deliberate 127.0.0.2 collector probe was refused without
  * the host being logged.
@@ -253,7 +254,7 @@ async function resolveTarget(host) {
  * bodies of a denied request are never logged: every one of them is
  * candidate-controlled and can carry the very credentials this proxy exists to
  * contain (a page can encode a token into host labels of a request it knows
- * will be denied), and the log is uploaded as a workflow artifact.
+ * will be denied). Only the proof's unordered counts leave the runner.
  *
  * Memory and log growth are bounded (G4R2-01): per-request lines and the
  * `denied` array stop after `maxRecorded`, a single `egress-log-truncated`

@@ -946,6 +946,11 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       for (const upload of uploads) {
         const uploadPath = String(upload.with?.path ?? "");
         expect(uploadPath).not.toMatch(/runner\.temp|RUNNER_TEMP|egress-proxy|\.log\b/i);
+        // Every uploaded path is inside the trusted checkout, never an escape
+        // such as `${{ github.workspace }}/../_temp/` that names no temp dir.
+        for (const line of uploadPath.split("\n").map((l) => l.trim()).filter(Boolean)) {
+          expect(line, `${upload.name} uploads ${line}`).toMatch(/^trusted\/(?!.*\.\.)/);
+        }
       }
     });
 
