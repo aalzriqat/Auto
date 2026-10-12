@@ -9,7 +9,8 @@
  */
 
 const PREVIEW_MAX_LENGTH = 160;
-const PREVIEW_HTML_MAX_CHARS = 64 * 1024;
+/** Visible characters of converted HTML a preview is built from (it keeps 160). */
+const PREVIEW_SOURCE_CHARS = 2000;
 
 /** `<https://…>` link dumps that plain-text mail bodies are full of. */
 const ANGLE_LINK = /<\s*(https?:\/\/[^\s<>]+)\s*>/gi;
@@ -161,6 +162,50 @@ function endOfBlock(html: string, name: string, from: number): number {
   return html.length;
 }
 
+function isNameChar(code: number): boolean {
+  return isAsciiLetter(code) || (code >= 48 && code <= 57);
+}
+
+/**
+ * Where scanning resumes after `<head>`. `</head>` is optional in HTML, so the
+ * head also ends at the first `<body` tag (which is NOT consumed: it is then
+ * processed as an ordinary tag). Nested comments, `<style>` and `<script>` are
+ * jumped over so a `<body` inside a CSS/JS string cannot end the head early.
+ * An unclosed head with no `<body` runs to the end of the input. One forward
+ * pass over the `<` characters, so it stays linear.
+ */
+function endOfHead(html: string, from: number): number {
+  let at = html.indexOf("<", from);
+  while (at !== -1) {
+    const next = html.charCodeAt(at + 1);
+    if (next === 47) {
+      // "</head" + a non-name character
+      if (html.slice(at + 2, at + 6).toLowerCase() === "head" && !isNameChar(html.charCodeAt(at + 6))) {
+        const gt = html.indexOf(">", at + 6);
+        return gt === -1 ? html.length : gt + 1;
+      }
+    } else if (next === 33 && html.startsWith("<!--", at)) {
+      const end = html.indexOf("-->", at + 4);
+      if (end === -1) return html.length;
+      at = html.indexOf("<", end + 3);
+      continue;
+    } else if (isAsciiLetter(next)) {
+      let nameEnd = at + 1;
+      while (nameEnd < html.length && isNameChar(html.charCodeAt(nameEnd))) nameEnd += 1;
+      const tag = html.slice(at + 1, nameEnd).toLowerCase();
+      if (tag === "body") return at;
+      if (tag === "style" || tag === "script") {
+        const gt = html.indexOf(">", nameEnd);
+        if (gt === -1) return html.length;
+        at = html.indexOf("<", endOfBlock(html, tag, gt + 1));
+        continue;
+      }
+    }
+    at = html.indexOf("<", at + 1);
+  }
+  return html.length;
+}
+
 /**
  * The tag scanner behind `htmlToPlainText`: ONE left-to-right pass that only
  * ever moves forward. A previous regex pipeline backtracked over the whole
@@ -169,17 +214,33 @@ function endOfBlock(html: string, name: string, from: number): number {
  * mutation has about a second. Here every unterminated construct simply runs to
  * the end of the input, and a missing `>` is discovered once, not once per `<`.
  */
-function stripTags(html: string): string {
+function stripTags(html: string, maxOutputChars?: number): string {
   const out: string[] = [];
   const length = html.length;
   let cursor = 0;
+  // Visible (non-whitespace) characters still allowed; Infinity = unbounded.
+  let budget = maxOutputChars ?? Infinity;
+  /** Push text, honouring the budget. Returns true when the budget is spent. */
+  const pushText = (chunk: string): boolean => {
+    if (budget === Infinity) {
+      out.push(chunk);
+      return false;
+    }
+    let taken = 0;
+    while (taken < chunk.length && budget > 0) {
+      if (chunk.charCodeAt(taken) > 32) budget -= 1;
+      taken += 1;
+    }
+    out.push(taken === chunk.length ? chunk : chunk.slice(0, taken));
+    return budget <= 0;
+  };
   while (cursor < length) {
     const lt = html.indexOf("<", cursor);
     if (lt === -1) {
-      out.push(html.slice(cursor));
+      pushText(html.slice(cursor));
       break;
     }
-    if (lt > cursor) out.push(html.slice(cursor, lt));
+    if (lt > cursor && pushText(html.slice(cursor, lt))) break;
 
     if (html.startsWith("<!--", lt)) {
       const end = html.indexOf("-->", lt + 4);
@@ -194,7 +255,7 @@ function stripTags(html: string): string {
     const first = html.charCodeAt(nameStart);
     const isDeclaration = first === 33 || first === 63; // "<!doctype", "<?xml"
     if (!isAsciiLetter(first) && !isDeclaration) {
-      out.push("<"); // a stray "<" is text
+      if (pushText("<")) break; // a stray "<" is text
       cursor = lt + 1;
       continue;
     }
@@ -219,7 +280,7 @@ function stripTags(html: string): string {
 
     if (!closing && SKIPPED_BLOCKS.has(name)) {
       out.push(" ");
-      cursor = endOfBlock(html, name, gt + 1);
+      cursor = name === "head" ? endOfHead(html, gt + 1) : endOfBlock(html, name, gt + 1);
       continue;
     }
     out.push(!isDeclaration && (name === "br" || (closing && NEWLINE_CLOSERS.has(name))) ? "\n" : " ");
@@ -234,10 +295,14 @@ function stripTags(html: string): string {
  * linear scanner on purpose (it runs in the Convex runtime, which has no DOM,
  * on attacker-controlled input); the output is only ever rendered as TEXT,
  * never as markup.
+ *
+ * `maxOutputChars` stops the scan once that many non-whitespace characters of
+ * visible text have been produced (the preview needs ~160, so it passes ~2000);
+ * omit it to convert the whole body.
  */
-export function htmlToPlainText(html: string): string {
+export function htmlToPlainText(html: string, options?: { maxOutputChars?: number }): string {
   return collapseBlankLines(
-    stripTags(html)
+    stripTags(html, options?.maxOutputChars)
       .replace(/&(?:nbsp|amp|lt|gt|quot|apos|#39);/gi, (m) => HTML_ENTITIES[m.toLowerCase()] ?? m)
       .replace(/&#(\d{1,6});/g, (m, code: string) => {
         const point = Number(code);
@@ -255,13 +320,14 @@ export function htmlToPlainText(html: string): string {
  * in half).
  */
 export function buildPreview(bodyText?: string | null, bodyHtml?: string | null): string {
-  // Only the head of the HTML can reach a 160-character preview, so cap the
-  // work at 64 KB regardless of the scanner's speed. The stored body is untouched.
+  // The scanner is linear and stops once ~2000 visible characters have been
+  // produced; the whole body is NOT sliced first (a large <head> would otherwise
+  // use up the slice and leave an empty preview). The stored body is untouched.
   const source =
     bodyText && bodyText.trim()
       ? bodyText
       : bodyHtml
-        ? htmlToPlainText(bodyHtml.slice(0, PREVIEW_HTML_MAX_CHARS))
+        ? htmlToPlainText(bodyHtml, { maxOutputChars: PREVIEW_SOURCE_CHARS })
         : "";
   const cleaned = source.replace(ANGLE_LINK, " ").replace(/\s+/g, " ").trim();
   const points = Array.from(cleaned);
@@ -272,9 +338,54 @@ export type BodyTextSegment =
   | { kind: "text"; text: string }
   | { kind: "link"; url: string; host: string };
 
-/** Collapse runs of 3+ newlines (with optional blank-line whitespace) to one blank line. */
+/**
+ * Collapse runs of 3+ newlines (with optional blank-line whitespace) to one blank line.
+ *
+ * Output is identical to `text.replace(/(?:[ \t]*\r?\n){3,}/g, "\n\n")`, which
+ * was super-linear on long space/tab runs (80K of them took 3.3 s, and this runs
+ * in the admin's browser on raw message text). One pass over the "\n"
+ * positions instead: a "unit" is `[ \t]*\r?\n`; consecutive units form a run, and
+ * a run of 3 or more becomes "\n\n" — including the whitespace that led its
+ * first line, exactly as the regex consumed it.
+ */
 export function collapseBlankLines(text: string): string {
-  return text.replace(/(?:[ \t]*\r?\n){3,}/g, "\n\n");
+  const out: string[] = [];
+  let copyFrom = 0;
+  let runStart = -1;
+  let runUnits = 0;
+  let lastNewline = -1;
+  const closeRun = () => {
+    if (runUnits >= 3) {
+      out.push(text.slice(copyFrom, runStart), "\n\n");
+      copyFrom = lastNewline + 1;
+    }
+    runUnits = 0;
+  };
+  let newline = text.indexOf("\n");
+  while (newline !== -1) {
+    // Start of the maximal `[ \t]*\r?` that ends right before this newline,
+    // never reaching back past the previous newline.
+    const segmentStart = lastNewline + 1;
+    let unitStart = newline;
+    if (unitStart > segmentStart && text.charCodeAt(unitStart - 1) === 13) unitStart -= 1;
+    while (unitStart > segmentStart) {
+      const code = text.charCodeAt(unitStart - 1);
+      if (code !== 32 && code !== 9) break;
+      unitStart -= 1;
+    }
+    if (runUnits > 0 && unitStart === segmentStart) {
+      runUnits += 1; // the whole segment is blank: the run continues
+    } else {
+      closeRun();
+      runStart = unitStart;
+      runUnits = 1;
+    }
+    lastNewline = newline;
+    newline = text.indexOf("\n", newline + 1);
+  }
+  closeRun();
+  out.push(text.slice(copyFrom));
+  return out.join("");
 }
 
 /**

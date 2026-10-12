@@ -197,12 +197,109 @@ describe("htmlToPlainText", () => {
     expect(Array.from(preview).length).toBeLessThanOrEqual(160);
   });
 
-  test("buildPreview only looks at the first 64 KB of the HTML", () => {
-    const html = `<p>${"x".repeat(70_000)}</p>`;
-    expect(buildPreview(undefined, html)).toBe("x".repeat(160));
-    // Text that only appears after the cap cannot reach the preview.
-    const late = `<p>${" ".repeat(70_000)}late</p>`;
-    expect(buildPreview(undefined, late)).toBe("");
+  // Review G3 (round 2): the first fix sliced the HTML to 64 KB BEFORE scanning,
+  // so a large <head> (style block) left an empty preview, and a <head> with no
+  // </head> (legal HTML) swallowed the whole message.
+  test("a head longer than 64 KB does not empty the preview", () => {
+    const css = "a{color:red}".repeat(6_500); // ~78 KB
+    expect(css.length).toBeGreaterThan(64 * 1024);
+    const html = `<html><head><style>${css}</style></head><body>Real message text</body></html>`;
+    expect(buildPreview(undefined, html)).toBe("Real message text");
+    expect(htmlToPlainText(html)).toBe("Real message text");
+  });
+
+  test("a <head> with no </head> ends at <body>", () => {
+    const html = "<html><head><title>x</title><body><p>Real message text</p>";
+    expect(htmlToPlainText(html)).toBe("Real message text");
+    expect(buildPreview(undefined, html)).toBe("Real message text");
+  });
+
+  test("<body> ends an unclosed head case-insensitively and with attributes", () => {
+    expect(htmlToPlainText("<HEAD><META x=1><BODY class=a>Hello</BODY>")).toBe("Hello");
+    expect(htmlToPlainText("<head><style>p{}</style><Body\nbgcolor=#fff>Hello")).toBe("Hello");
+  });
+
+  test("a head that really never ends still swallows the rest (no body to resume at)", () => {
+    expect(htmlToPlainText("<p>before</p><head><title>x</title><p>hidden</p>")).toBe("before");
+  });
+
+  test("a closed head still wins over a later literal 'body' word", () => {
+    expect(htmlToPlainText("<head><title>x</title></head><p>the <b>body</b> text</p>")).toBe("the body text");
+  });
+
+  test("htmlToPlainText stops once maxOutputChars of visible text have accumulated", () => {
+    const html = `<p>${"word ".repeat(200_000)}</p><p>never reached</p>`;
+    const started = performance.now();
+    const out = htmlToPlainText(html, { maxOutputChars: 2_000 });
+    expect(performance.now() - started).toBeLessThan(200);
+    expect(out.length).toBeGreaterThanOrEqual(1_000);
+    expect(out.length).toBeLessThan(3_000);
+    expect(out).not.toContain("never reached");
+    // Without the option nothing is truncated.
+    expect(htmlToPlainText("<p>aa</p><p>bb</p>")).toBe("aa\nbb");
+  });
+
+  test("the preview is the text that comes AFTER a huge leading comment too", () => {
+    const html = `<!--${"x".repeat(100_000)}--><p>Visible after the comment</p>`;
+    expect(buildPreview(undefined, html)).toBe("Visible after the comment");
+  });
+});
+
+// Review G4 (round 2, Opus M-2): the blank-line collapse regex was super-linear on
+// long whitespace runs and runs in the browser (plain-text view) on raw bodyText.
+describe("collapseBlankLines is linear", () => {
+  const timed = (fn: () => unknown) => {
+    const started = performance.now();
+    fn();
+    return performance.now() - started;
+  };
+
+  test.each([
+    ["space-tab pairs then text", " \t".repeat(100_000) + "x"],
+    ["tabs only", "\t".repeat(200_000)],
+    ["spaces then newline-less text", " ".repeat(300_000) + "x"],
+    ["alternating blank lines", " \n".repeat(150_000) + "x"],
+    ["CRLF runs", "\r\n \t".repeat(80_000) + "x"],
+  ])("splitBodyText on %s finishes in under 200 ms", (_name, payload) => {
+    expect(timed(() => splitBodyText(payload))).toBeLessThan(200);
+    expect(timed(() => collapseBlankLines(payload))).toBeLessThan(200);
+  });
+
+  // The previous implementation is the oracle: the rewrite must match it exactly.
+  const reference = (text: string) => text.replace(/(?:[ \t]*\r?\n){3,}/g, "\n\n");
+
+  test("matches the previous regex output exactly on edge cases", () => {
+    for (const sample of [
+      "",
+      "\n\n\n",
+      "a\n\n\nb",
+      "a\n\nb",
+      "a\nb",
+      "a  \n \t \n\t\n\nb",
+      "a\r\n\r\n\r\nb",
+      "\n\n\nabc\n\n\n",
+      "x \n \n \n y",
+      "a\n \nb",
+      "  \n\n\n  tail",
+      "tail\n\n\n   ",
+    ]) {
+      expect(collapseBlankLines(sample), JSON.stringify(sample)).toBe(reference(sample));
+    }
+  });
+
+  test("matches the previous regex output exactly on random whitespace-heavy input", () => {
+    const alphabet = [" ", "\t", "\n", "\r\n", "a", "b"];
+    let seed = 12345;
+    const next = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed;
+    };
+    for (let i = 0; i < 2_000; i += 1) {
+      const length = next() % 40;
+      let sample = "";
+      for (let j = 0; j < length; j += 1) sample += alphabet[next() % alphabet.length];
+      expect(collapseBlankLines(sample), JSON.stringify(sample)).toBe(reference(sample));
+    }
   });
 });
 
