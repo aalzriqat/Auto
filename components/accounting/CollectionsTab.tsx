@@ -266,7 +266,9 @@ export function CollectionsTab() {
       </div>
 
       <Tabs defaultValue="receivables" className="space-y-4">
-        <TabsList className="bg-muted/50 border border-border">
+        {/* SCRUM-724: seven sub-tabs are ~650px wide; on a phone the strip scrolls
+            inside its own frame so Approvals (the refund queue) stays reachable. */}
+        <TabsList className="max-w-full justify-start overflow-x-auto bg-muted/50 border border-border">
           <TabsTrigger value="receivables">{t("Receivables" as any)}</TabsTrigger>
           <TabsTrigger value="cheques">{t("Cheques" as any)}</TabsTrigger>
           <TabsTrigger value="paymentLinks">{t("PaymentLinks" as any)}</TabsTrigger>
