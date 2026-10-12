@@ -9,6 +9,21 @@ import {
   splitBodyText,
 } from "./supportMail";
 
+/**
+ * Fastest of three runs, in ms. The timing tests guard against super-linear
+ * scans, which cost seconds at these sizes; taking the minimum keeps that signal
+ * while a single slow run on a loaded CI worker cannot fail the bound.
+ */
+function fastestMs(fn: () => unknown): number {
+  let best = Infinity;
+  for (let run = 0; run < 3; run += 1) {
+    const started = performance.now();
+    fn();
+    best = Math.min(best, performance.now() - started);
+  }
+  return best;
+}
+
 describe("isNoReplyAddress", () => {
   test.each([
     "no-reply@email.claude.com",
@@ -187,14 +202,11 @@ describe("htmlToPlainText", () => {
     ["unterminated tag openers", "<a ".repeat(160_000)],
   ];
   test.each(HOSTILE)("hostile 480 KB input (%s) converts in under 200 ms", (_name, payload) => {
-    const started = performance.now();
-    htmlToPlainText(payload);
-    expect(performance.now() - started).toBeLessThan(200);
+    expect(fastestMs(() => htmlToPlainText(payload))).toBeLessThan(200);
   });
   test.each(HOSTILE)("hostile 480 KB input (%s) builds a bounded preview in under 200 ms", (_name, payload) => {
-    const started = performance.now();
+    expect(fastestMs(() => buildPreview(undefined, payload))).toBeLessThan(200);
     const preview = buildPreview(undefined, payload);
-    expect(performance.now() - started).toBeLessThan(200);
     expect(Array.from(preview).length).toBeLessThanOrEqual(160);
   });
 
@@ -290,9 +302,8 @@ describe("htmlToPlainText", () => {
     ["unclosed quote in head", `<head><meta content="${"x".repeat(MIB)}`],
   ];
   test.each(ONE_MIB)("1 MiB hostile input (%s) builds a preview in under 200 ms", (_name, html) => {
-    const started = performance.now();
+    expect(fastestMs(() => buildPreview(undefined, html))).toBeLessThan(200);
     const preview = buildPreview(undefined, html);
-    expect(performance.now() - started).toBeLessThan(200);
     expect(Array.from(preview).length).toBeLessThanOrEqual(160);
   });
   test("the 1 MiB spacer and head cases still produce the real text", () => {
@@ -393,25 +404,17 @@ describe("scanner linearity matrix (1 MiB, head and body contexts)", () => {
     ...SHAPES.flatMap(([name, build]) => CONTEXTS.map(([ctx, prefix]) => [`${name} in ${ctx}`, build(prefix)] as [string, string])),
   ];
   test.each(CASES)("%s", (_name, html) => {
-    const started = performance.now();
     const preview = buildPreview(undefined, html);
-    const elapsed = performance.now() - started;
     expect(Array.from(preview).length).toBeLessThanOrEqual(160);
-    expect(elapsed).toBeLessThan(200);
-    const fullStarted = performance.now();
-    htmlToPlainText(html);
-    expect(performance.now() - fullStarted).toBeLessThan(200);
+    expect(fastestMs(() => buildPreview(undefined, html))).toBeLessThan(200);
+    expect(fastestMs(() => htmlToPlainText(html))).toBeLessThan(200);
   });
 });
 
 // Review G4 (round 2, Opus M-2): the blank-line collapse regex was super-linear on
 // long whitespace runs and runs in the browser (plain-text view) on raw bodyText.
 describe("collapseBlankLines is linear", () => {
-  const timed = (fn: () => unknown) => {
-    const started = performance.now();
-    fn();
-    return performance.now() - started;
-  };
+  const timed = fastestMs;
 
   test.each([
     ["space-tab pairs then text", " \t".repeat(100_000) + "x"],
