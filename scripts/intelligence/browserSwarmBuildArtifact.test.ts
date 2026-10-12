@@ -411,7 +411,8 @@ describe("SCRUM-824 dangling pnpm hoist-index links", () => {
     const f = await fixture();
     try {
       const index = await hoistIndex(f);
-      await symlink("../node_modules/missing-in-index", path.join(index, "missing-in-index"), "dir");
+      // A different name, so the link dangles instead of looping onto itself.
+      await symlink("../node_modules/absent-in-index", path.join(index, "into-index"), "dir");
       await expect(build(f)).rejects.toThrow(/not a pnpm hoist-index link/i);
     } finally {
       await rm(f.root, { recursive: true, force: true });

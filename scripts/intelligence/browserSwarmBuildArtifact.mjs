@@ -153,9 +153,10 @@ const PNPM_SCOPE_NAME_RE = /^@[a-z0-9_~-][a-z0-9._~-]*$/i;
  * dangling-link exception exists at all.
  */
 async function resolvePnpmHoistIndex(standaloneRoot, candidateBoundary) {
-  const store = await realpath(path.join(standaloneRoot, "node_modules", ".pnpm")).catch(
-    () => null,
-  );
+  const storePath = path.join(standaloneRoot, "node_modules", ".pnpm");
+  // lstat: a symlinked .pnpm is not a directory, so a forged store never qualifies.
+  if (!(await lstat(storePath).catch(() => null))?.isDirectory()) return null;
+  const store = await realpath(storePath).catch(() => null);
   if (!store || !isInside(candidateBoundary, store)) return null;
   const root = await realpath(path.join(store, "node_modules")).catch(() => null);
   if (root !== path.join(store, "node_modules")) return null;
@@ -187,6 +188,25 @@ export async function isAllowedDanglingHoistLink(sourcePath, hoistIndex) {
   if (typeof target !== "string" || !target || target.includes("\0") || path.isAbsolute(target)) {
     return false;
   }
+  // Only pnpm's canonical shape is accepted:
+  //   ../<store-dir>/node_modules/<name>                 (index leaf)
+  //   ../../<store-dir>/node_modules/@scope/<name>       (scoped leaf)
+  // No other "..", ".", or empty segment, and the name must match the link.
+  // path.resolve cancels "x/.." lexically while the kernel follows x first, so
+  // any further ".." could leave the store through a symlink and come back.
+  const segments = target.split("/");
+  const ups = inScope ? 2 : 1;
+  const linkName = inScope
+    ? [path.basename(parentReal), path.basename(sourcePath)]
+    : [path.basename(sourcePath)];
+  if (segments.length !== ups + 2 + linkName.length) return false;
+  if (segments.slice(0, ups).some((segment) => segment !== "..")) return false;
+  const storeDir = segments[ups];
+  if (!storeDir || storeDir === "." || storeDir === ".." || storeDir === "node_modules") {
+    return false;
+  }
+  if (segments[ups + 1] !== "node_modules") return false;
+  if (segments.slice(ups + 2).join("/") !== linkName.join("/")) return false;
   const resolved = path.resolve(parentReal, target);
   if (!isInside(hoistIndex.store, resolved) || isInside(hoistIndex.root, resolved)) {
     return false;
@@ -195,7 +215,22 @@ export async function isAllowedDanglingHoistLink(sourcePath, hoistIndex) {
     () => "present",
     (error) => (error?.code === "ENOENT" ? "absent" : "unreadable"),
   );
-  return targetState === "absent";
+  if (targetState !== "absent") return false;
+  // path.resolve is lexical, but the kernel follows symlinked components. The
+  // nearest existing ancestor of the target must be its own realpath, so no
+  // component between the store and the target can redirect it elsewhere.
+  let existing = path.dirname(resolved);
+  for (;;) {
+    if (!isInside(hoistIndex.store, existing)) return false;
+    const state = await lstat(existing).then(
+      () => "present",
+      (error) => (error?.code === "ENOENT" ? "absent" : "unreadable"),
+    );
+    if (state === "unreadable") return false;
+    if (state === "present") break;
+    existing = path.dirname(existing);
+  }
+  return (await realpath(existing).catch(() => null)) === existing;
 }
 
 async function materializeEntry({
