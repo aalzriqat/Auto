@@ -583,6 +583,8 @@ function harness(faults: Faults = {}, options: HarnessOptions = {}): Harness {
     duplicateSubmitTimeouts: {
       uiStepMs: options.uiStepMs ?? 200,
       lostResponseRecoveryMs: options.lostResponseRecoveryMs ?? 400,
+      // The fake backend is static once a phase ends; settle fast.
+      settleMs: 25,
     },
   }).DUPLICATE_SUBMIT;
   const entry: Harness = { run: () => handler(context), evidence, backend, app };

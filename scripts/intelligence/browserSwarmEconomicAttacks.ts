@@ -570,12 +570,13 @@ async function settleIntent(
   orgId: string,
   observer: ConvexSyncObserver,
   intent: { title: string; amount: number; uiConfirmed: boolean },
+  settleMs: number,
 ): Promise<IntentReport> {
-  const snapshot = await readSettledExpenseEffectSnapshot(client, {
-    orgId,
-    title: intent.title,
-    refs: EXPENSE_AUTHORITY_REFS,
-  });
+  const snapshot = await readSettledExpenseEffectSnapshot(
+    client,
+    { orgId, title: intent.title, refs: EXPENSE_AUTHORITY_REFS },
+    { settleMs },
+  );
   const observed = observer.mutationsFor(intent.title);
   const identities = observed.map((mutation) => mutation.idempotencyKey);
   // SCRUM-826 R1: an intent that was never transmitted has no identity to
@@ -651,11 +652,23 @@ async function settleIntent(
   };
 }
 
+/**
+ * MULTI_TAB_RACE amounts. They must be pairwise distinct: if a tab's intended
+ * amount equals the setup amount, a dropped write by that tab is
+ * indistinguishable from its success, and the oracle would PASS a lost update.
+ */
+export const MULTI_TAB_RACE_AMOUNTS = { setup: 50, A: 60, B: 80 } as const;
+
 /** Timeouts of the DUPLICATE_SUBMIT phases; injectable so tests run the real handler quickly. */
 export interface DuplicateSubmitTimeouts {
   uiStepMs: number;
   lostResponseRecoveryMs: number;
+  /** Interval between authority reads while waiting for settled state. */
+  settleMs: number;
 }
+
+/** Production settle interval; matches readSettledExpenseEffectSnapshot's default. */
+const SETTLE_INTERVAL_MS = 1_500;
 
 export interface EconomicAttackOptions {
   duplicateSubmitTimeouts?: Partial<DuplicateSubmitTimeouts>;
@@ -902,10 +915,13 @@ async function runDuplicateSubmitAttack(
           intent.title,
           await untilAborted(
             signal,
-            settleIntent(client, orgId, observer, {
-              ...intent,
-              uiConfirmed: confirmed.get(intent.title) ?? false,
-            }),
+            settleIntent(
+              client,
+              orgId,
+              observer,
+              { ...intent, uiConfirmed: confirmed.get(intent.title) ?? false },
+              timeouts.settleMs,
+            ),
           ),
         );
       } catch (error) {
@@ -1330,7 +1346,7 @@ async function runMultiTabRaceAttack(
     // command the UI uses: one PENDING (not yet money-moving) expense.
     const nonce = attackNonce(context);
     const title = nonce + "-race";
-    const setupAmount = 50;
+    const setupAmount = MULTI_TAB_RACE_AMOUNTS.setup;
     const today = new Date();
     const date = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
     const setupClient = await runtimeApi.authenticatedClient(tabA);
@@ -1348,7 +1364,7 @@ async function runMultiTabRaceAttack(
 
     const dialogA = await openEditDialog(tabA, orgId, title, expenseId);
     const dialogB = await openEditDialog(tabB, orgId, title, expenseId);
-    const intended = { A: 50, B: 80 } as const;
+    const intended = { A: MULTI_TAB_RACE_AMOUNTS.A, B: MULTI_TAB_RACE_AMOUNTS.B } as const;
     await setPaidWithAmount(tabA, dialogA, intended.A);
     await setPaidWithAmount(tabB, dialogB, intended.B);
 
@@ -1472,6 +1488,7 @@ export function createEconomicAttackHandlers(
     uiStepMs: options.duplicateSubmitTimeouts?.uiStepMs ?? UI_STEP_TIMEOUT_MS,
     lostResponseRecoveryMs:
       options.duplicateSubmitTimeouts?.lostResponseRecoveryMs ?? LOST_RESPONSE_RECOVERY_TIMEOUT_MS,
+    settleMs: options.duplicateSubmitTimeouts?.settleMs ?? SETTLE_INTERVAL_MS,
   };
   return {
     DUPLICATE_SUBMIT: (context) =>

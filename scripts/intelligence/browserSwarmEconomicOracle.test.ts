@@ -12,6 +12,7 @@ import {
   VerdictLedger,
   type ExpenseEffectSnapshot,
 } from "./browserSwarmEconomicOracle";
+import { MULTI_TAB_RACE_AMOUNTS } from "./browserSwarmEconomicAttacks";
 
 const TITLE = "swarm-gh-1-1-worker-1-dup-a";
 
@@ -407,6 +408,29 @@ describe("SCRUM-826 concurrent-tab edit race oracle (CONC-1 / ECON-2)", () => {
       }),
     ).toEqual({ passed: true, violations: [], winner: "A", winningAmount: 50 });
   });
+
+  // CodeRabbit on PR #566: with the handler's real amounts, a winner whose
+  // amount write the backend dropped (status moved, amount still the setup
+  // value) must be a breach, whichever tab wins.
+  for (const winner of ["A", "B"] as const) {
+    it(`the MULTI_TAB_RACE plan detects tab ${winner}'s dropped amount write`, () => {
+      const { setup, A, B } = MULTI_TAB_RACE_AMOUNTS;
+      const verdict = evaluateConcurrentEditRace({
+        ordering: OVERLAPPED,
+        tabs: [
+          winner === "A"
+            ? { tab: "A", intendedAmount: A, outcome: "SUCCESS" }
+            : { tab: "A", intendedAmount: A, outcome: "REFUSED", message: LOCKED },
+          winner === "B"
+            ? { tab: "B", intendedAmount: B, outcome: "SUCCESS" }
+            : { tab: "B", intendedAmount: B, outcome: "REFUSED", message: LOCKED },
+        ],
+        authoritative: { amount: setup, status: "PAID" },
+        staleRetry: { outcome: "REFUSED", message: LOCKED },
+      });
+      expect(verdict.passed).toBe(false);
+    });
+  }
 
   it("flags two tabs both reporting success as a lost update", () => {
     const verdict = evaluateConcurrentEditRace({
