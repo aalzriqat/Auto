@@ -172,6 +172,31 @@ describe("DealInvoiceReceiptsPanel under the SCRUM-724 pilot switches", () => {
     expect(screen.queryByRole("button", { name: EN.DealReceiptDepositCheque })).toBeNull();
   });
 
+  // Opus F1: clearCheque reserves for the invoice only on a LIVE intent with the
+  // doors open; otherwise the whole face stays unreserved customer credit. The
+  // success notice must therefore never claim a reservation it cannot know of.
+  const CLEARED = {
+    en: "Cheque cleared. Its amount is now customer credit; see the credit and any pending invoice application below.",
+    ar: "حُصّل الشيك. أصبح مبلغه رصيداً للعميل؛ راجع الرصيد وأي تطبيق معلّق على الفاتورة أدناه.",
+  } as const;
+  test.each([
+    ["en", "doors off, COMPLETED sale", { saleInvoiceDoorsAvailable: false }],
+    ["ar", "doors off, COMPLETED sale", { saleInvoiceDoorsAvailable: false }],
+    ["en", "cancelled sale", { saleStatus: "CANCELLED", saleInvoiceDoorsAvailable: true }],
+    ["ar", "invoice already covered, doors open", { saleInvoiceDoorsAvailable: true,
+      invoice: { currency: "JOD", originalAmountMinor: 100000, outstandingMinor: 0, availableToReserveMinor: 0 } }],
+  ] as const)("%s · %s: clearing a cheque never claims it was reserved for the invoice", async (locale, _label, over) => {
+    stubs.locale = locale;
+    stubs.status = baseStatus({ ...over });
+    stubs.cheques = [depositedCheque];
+    renderPanel();
+    fireEvent.click(button("DealReceiptClearCheque"));
+    await vi.waitFor(() => expect(mutation("collections:clearCheque")).toHaveBeenCalledTimes(1));
+    const notice = await screen.findByText(CLEARED[locale]);
+    expect(notice.tagName).toBe("OUTPUT");
+    expect(screen.queryByText((locale === "ar" ? AR : EN).DealReceiptChequeCleared)).toBeNull();
+  });
+
   test("a held cheque the invoice can still cover is depositable with the doors off (deposit is never switch-gated)", () => {
     stubs.status = baseStatus({});
     stubs.cheques = [heldCheque];
