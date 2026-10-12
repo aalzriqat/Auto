@@ -55,7 +55,6 @@ import { InstallmentCalendar } from "./collections/InstallmentCalendar";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
-import { RetainedCreditRefundsSection } from "./RetainedCreditRefundsSection";
 
 type ReceivableRow = Doc<"receivables"> & {
   customerName: string;
@@ -272,7 +271,7 @@ export function CollectionsTab() {
           <TabsTrigger value="cashDrawer">{t("CashDrawer" as any)}</TabsTrigger>
           <TabsTrigger value="payments">{t("Payments" as any)}</TabsTrigger>
           <TabsTrigger value="reports">{t("Reports" as any)}</TabsTrigger>
-          {(canApprove || canManage) && <TabsTrigger value="approvals">{t("Approvals" as any)}</TabsTrigger>}
+          {canApprove && <TabsTrigger value="approvals">{t("Approvals" as any)}</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="receivables" className="space-y-3">
@@ -630,12 +629,9 @@ export function CollectionsTab() {
           </ReportPanel>
         </TabsContent>
 
-        {(canApprove || canManage) && (
+        {canApprove && (
           <TabsContent value="approvals">
-            {/* SCRUM-724: the Approvals tab is shared. The collection-approval table is
-                approver-only; the refund queue serves approvers (decide) and finance
-                managers (pay out) under the default role templates. */}
-            {canApprove && <div className="rounded-md border border-border overflow-x-auto">
+            <div className="rounded-md border border-border overflow-x-auto">
               <Table>
                 <TableHeader className="bg-muted/50">
                   <TableRow>
@@ -671,9 +667,7 @@ export function CollectionsTab() {
                   )}
                 </TableBody>
               </Table>
-            </div>}
-            <RetainedCreditRefundsSection orgId={activeOrgId} canApprove={canApprove} canManage={canManage}
-              payoutAvailable={summary?.retainedCreditPayoutAvailable === true} />
+            </div>
           </TabsContent>
         )}
       </Tabs>
