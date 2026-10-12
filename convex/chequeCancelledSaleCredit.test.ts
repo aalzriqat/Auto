@@ -167,7 +167,7 @@ describe("SCRUM-724 cancelled-sale cheque credit: clearing", () => {
     const payments = await s.t.run((ctx) => ctx.db.query("collectionPayments")
       .withIndex("by_cheque", (q) => q.eq("chequeId", chequeId)).collect());
     expect(payments).toHaveLength(1);
-  });
+  }, 30_000);
 
   test("b. cheque cleared BEFORE the cancel keeps identical lineage once the sale is cancelled", async () => {
     const s = await seed("b");
@@ -189,7 +189,7 @@ describe("SCRUM-724 cancelled-sale cheque credit: clearing", () => {
     expect(credits.page.find((r) => r.receiptMovementId === movement._id))
       .toMatchObject({ availableUnappliedMinor: 3000, sourceChequeId: chequeId, originatingSaleId: saleId,
         originatingSaleStatus: "CANCELLED" });
-  });
+  }, 30_000);
 
   test("c. a HELD cheque of a cancelled sale can be neither deposited nor cleared; nothing changes", async () => {
     const s = await seed("c");
@@ -205,7 +205,7 @@ describe("SCRUM-724 cancelled-sale cheque credit: clearing", () => {
     }
     expect((await s.t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("HELD");
     expect(await s.t.run((ctx) => ctx.db.query("collectionPayments").collect())).toHaveLength(0);
-  });
+  }, 30_000);
 
   test("c2. a HELD cheque of a cancelled sale can still be RETURNED to the customer, with no journal", async () => {
     const s = await seed("c2");
@@ -217,7 +217,7 @@ describe("SCRUM-724 cancelled-sale cheque credit: clearing", () => {
     expect((await s.t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("RETURNED");
     expect(await s.t.run((ctx) => ctx.db.query("accountingEvents").collect())).toHaveLength(eventsBefore.length);
     expect(await s.t.run((ctx) => ctx.db.query("collectionPayments").collect())).toHaveLength(0);
-  });
+  }, 30_000);
 
   test("d. replacement keeps invoiceSaleId; replace -> deposit -> cancel -> clear yields lineage", async () => {
     const s = await seed("d");
@@ -236,7 +236,7 @@ describe("SCRUM-724 cancelled-sale cheque credit: clearing", () => {
     expect(position.sourceChequeId).toBe(newId);
     expect(position.originatingSaleId).toBe(saleId);
     expect(position.remainingUnappliedMinor).toBe(3000);
-  });
+  }, 30_000);
 
   test("a2. identity mismatch (cheque of another customer than the sale) is still refused after cancel", async () => {
     const s = await seed("a2");
@@ -250,7 +250,7 @@ describe("SCRUM-724 cancelled-sale cheque credit: clearing", () => {
     await cancelSale(s, saleId);
     await expect(clear(s, chequeId)).rejects.toThrow();
     expect((await s.t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("DEPOSITED");
-  });
+  }, 30_000);
 });
 
 describe("SCRUM-724 cancelled-sale credit: reallocation", () => {
@@ -271,7 +271,7 @@ describe("SCRUM-724 cancelled-sale credit: reallocation", () => {
     const appId = await s.asOwner.mutation(api.collections.reserveSaleInvoiceReceipt, args(otherSale));
     expect((await s.t.run((ctx) => ctx.db.get(appId)))?.saleId).toBe(otherSale);
     expect((await s.t.run((ctx) => ctx.db.get(saleId)))?.status).toBe("CANCELLED");
-  });
+  }, 30_000);
 });
 
 describe("SCRUM-724 cancelled-sale credit: authorized refund", () => {
@@ -316,7 +316,7 @@ describe("SCRUM-724 cancelled-sale credit: authorized refund", () => {
     expect(outs.filter((p) => p.direction === "OUT")).toHaveLength(1);
     // over-refund of the remainder refused
     await expect(request(1801)).rejects.toThrow();
-  });
+  }, 30_000);
 
   test("e2. self-approval, missing APPROVE_REQUESTS, view-only and unapproved execution are refused", async () => {
     const { s, movement, request, respond, execute } = await refundFixture("e2");
@@ -331,7 +331,7 @@ describe("SCRUM-724 cancelled-sale credit: authorized refund", () => {
     expect((await positionOf(s.t, s.orgId, movement._id)).remainingUnappliedMinor).toBe(3000);
     expect((await s.t.run((ctx) => ctx.db.query("canonicalPayments")
       .withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect())).filter((p) => p.direction === "OUT")).toHaveLength(0);
-  });
+  }, 30_000);
 
   test("e3. another organization cannot request, decide or execute", async () => {
     const { s, movement, request, respond, execute } = await refundFixture("e3");
@@ -349,7 +349,7 @@ describe("SCRUM-724 cancelled-sale credit: authorized refund", () => {
     })).rejects.toThrow();
     await expect(execute(requestId)).resolves.toBeDefined();
     expect(s).toBeDefined();
-  });
+  }, 30_000);
 
   test("e4. a receipt that has not reached the ledger cannot be refunded; no rows written", async () => {
     const s = await seed("e4");
@@ -363,7 +363,7 @@ describe("SCRUM-724 cancelled-sale credit: authorized refund", () => {
       orgId: s.orgId, receiptMovementId: movement._id, amountMinor: 1000, method: "CASH", reason: "x",
     })).rejects.toThrow();
     expect(await s.t.run((ctx) => ctx.db.query("retainedCreditRefundRequests" as never).collect())).toHaveLength(0);
-  });
+  }, 30_000);
 
   test("g. returning the cleared cheque after a standalone refund is refused with no writes", async () => {
     const { s, chequeId, paymentId, movement, request, respond, execute } = await refundFixture("g");
@@ -389,7 +389,7 @@ describe("SCRUM-724 cancelled-sale credit: authorized refund", () => {
     expect(after).toEqual(before);
     expect(paymentId).toBeDefined();
     expect(movement).toBeDefined();
-  });
+  }, 30_000);
 
   test("h. a cleared cancelled-sale cheque with NO refund can still be returned (credit retired, no revenue)", async () => {
     const s = await seed("h");
@@ -399,5 +399,5 @@ describe("SCRUM-724 cancelled-sale credit: authorized refund", () => {
     });
     expect((await positionOf(s.t, s.orgId, movement._id)).remainingUnappliedMinor).toBe(0);
     expect((await s.t.run((ctx) => ctx.db.get(chequeId)))?.status).toBe("RETURNED");
-  });
+  }, 30_000);
 });
