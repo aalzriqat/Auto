@@ -1884,9 +1884,14 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
 
     const saleId = await completeCashSale(s, quoteId, "foreign-sale-denial");
     const completedSale = await dbSnapshot(s.t, Object.keys(schema.tables));
+    // `sales.update` loads the sale through `requireOwnedRow` (8ac18f38a), whose
+    // deliberate anti-enumeration contract (utils/tenancy.ts) raises ONE generic
+    // "Record not found in this organization." for both a missing and a foreign row.
+    // The refusal is the same tenant denial as before; only the wording changed. The
+    // behavioural assertions below (no row changes, event still POSTED) are unchanged.
     await expect(other.owner.mutation(api.sales.update, {
       orgId: other.orgId, saleId, status: "CANCELLED",
-    })).rejects.toThrow(/Sale not found in this organization/);
+    })).rejects.toThrow(/Record not found in this organization/);
     expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(completedSale);
     expect(await eventStatuses(s, "SALE_COMPLETED", saleId)).toEqual(["POSTED"]);
   });

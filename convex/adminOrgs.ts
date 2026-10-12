@@ -209,6 +209,9 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "invitations", index: "by_org" },
   { kind: "orgRows", table: "memberships", index: "by_org" },
   { kind: "orgRows", table: "roles", index: "by_org" },
+  // Appended to preserve saved currentStepIndex values for in-flight purges.
+  // runDeletionRequestBatch drains this child before the frozen parent steps.
+  { kind: "orgRows", table: "invoiceReceiptApplications", index: "by_org" },
   // SCRUM-571 D-8: held provider payments. Appended last (the order is pinned).
   // Rows with no orgId (UNKNOWN_REFERENCE) belong to no tenant and survive.
   { kind: "orgRows", table: "unmatchedProviderFunds", index: "by_org_review" },
@@ -1057,20 +1060,6 @@ export const runDeletionRequestBatch = internalMutation({
       const now = Date.now();
       const currentStepIndex = request.currentStepIndex ?? 0;
 
-      if (currentStepIndex >= ORGANIZATION_DELETION_STEPS.length) {
-        const org = await ctx.db.get(request.orgId);
-        if (org) {
-          await ctx.db.delete(request.orgId);
-        }
-        await ctx.db.patch(args.requestId, {
-          status: "COMPLETED",
-          completedAt: now,
-          currentStepIndex,
-          lastProcessedAt: now,
-        });
-        return { status: "COMPLETED" as const };
-      }
-
       // ⚠️ SCRUM-297 — STAMP IRREVERSIBILITY BEFORE THE FIRST DESTRUCTIVE STEP.
       //
       // Ordered ahead of `runDeletionStep`, in the same transaction, so the
@@ -1087,6 +1076,37 @@ export const runDeletionRequestBatch = internalMutation({
       const org = await ctx.db.get(request.orgId);
       if (org && org.destructivePurgeStartedAt === undefined) {
         await ctx.db.patch(request.orgId, { destructivePurgeStartedAt: now });
+      }
+
+      // The saved step index is a durable cursor, so the new reservation step
+      // must stay appended. Drain its rows before any frozen parent step runs;
+      // this also handles a request already partway through that old manifest.
+      const reservationCounts = await runDeletionStep(
+        ctx,
+        { kind: "orgRows", table: "invoiceReceiptApplications", index: "by_org" },
+        request.orgId
+      );
+      const reservationsDeleted = countDeletedRows(reservationCounts);
+      if (reservationsDeleted > 0) {
+        await ctx.db.patch(args.requestId, {
+          deletedCounts: mergeDeletedCounts(request.deletedCounts, reservationCounts),
+          lastProcessedAt: now,
+        });
+        await scheduleDeletionBatch(ctx, args.requestId);
+        return { status: "RUNNING" as const, currentStepIndex, deletedInBatch: reservationsDeleted };
+      }
+
+      if (currentStepIndex >= ORGANIZATION_DELETION_STEPS.length) {
+        if (org) {
+          await ctx.db.delete(request.orgId);
+        }
+        await ctx.db.patch(args.requestId, {
+          status: "COMPLETED",
+          completedAt: now,
+          currentStepIndex,
+          lastProcessedAt: now,
+        });
+        return { status: "COMPLETED" as const };
       }
 
       const step = ORGANIZATION_DELETION_STEPS[currentStepIndex];

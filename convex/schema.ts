@@ -3566,6 +3566,15 @@ export default defineSchema({
         vehicleReturnedAt: v.number(),
         vehicleReturnNote: v.string(),
         customerPaymentDisposition: v.union(v.literal("REFUND"), v.literal("RETAIN_CREDIT")),
+        customerReceiptSettlement: v.optional(v.object({
+          refundedMinor: v.number(),
+          retainedMinor: v.number(),
+          refundPaymentIds: v.array(v.id("canonicalPayments")),
+          refundEventIds: v.array(v.id("accountingEvents")),
+          method: v.optional(v.union(v.literal("BANK_TRANSFER"), v.literal("CASH"))),
+          reference: v.optional(v.string()),
+          paidAt: v.optional(v.number()),
+        })),
         completedBy: v.id("users"),
         completedAt: v.number(),
       })
@@ -4523,13 +4532,41 @@ export default defineSchema({
     currency: v.string(),
     initialUnappliedMinor: v.number(),
     remainingUnappliedMinor: v.number(),
-    /** Monotonic count of applications, and the source of the next `sequence`. */
+    /** Legacy receiptApplications sequence counter; invoice claims use their own row id. */
     applicationCount: v.number(),
     updatedAt: v.number(),
   })
     .index("by_org", ["orgId"])
     .index("by_org_movement", ["orgId", "receiptMovementId"])
     .index("by_org_customer", ["orgId", "customerId"]),
+
+  /**
+   * SCRUM-722: a pending claim on retained 2110 credit for a completed sale's
+   * canonical invoice. PENDING reserves money without calling it applied.
+   * The receipt and invoice journals still have to be POSTED before a future
+   * activation can create an allocation or move 2110 to AR.
+   */
+  invoiceReceiptApplications: defineTable({
+    orgId: v.id("organizations"),
+    receiptMovementId: v.id("receiptMovements"),
+    saleId: v.id("sales"),
+    receivableDocumentId: v.id("receivableDocuments"),
+    customerId: v.id("customers"),
+    currency: v.string(),
+    amountMinor: v.number(),
+    status: v.union(v.literal("PENDING"), v.literal("ACTIVE"), v.literal("REVERSED"), v.literal("CANCELLED")),
+    allocationId: v.optional(v.id("paymentAllocations")),
+    activationEventId: v.optional(v.id("accountingEvents")),
+    activatedAt: v.optional(v.number()),
+    splitFromApplicationId: v.optional(v.id("invoiceReceiptApplications")),
+    splitRemainderId: v.optional(v.id("invoiceReceiptApplications")),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    cancelledAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_movement_status", ["orgId", "receiptMovementId", "status"])
+    .index("by_org_sale_status", ["orgId", "saleId", "status"]),
 
   /**
    * One append-only row per later application of retained credit.

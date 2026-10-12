@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { economicDateInputToMs, economicTodayDateInput, msToDateInput } from "@/lib/dateInput";
 import { cn } from "@/lib/utils";
+import { moneyDisplayScale, parseTypedAmount } from "@/lib/moneyDisplay";
 import {
   Dialog,
   DialogContent,
@@ -48,6 +49,9 @@ export type UnwindStatusView = Readonly<{
   evidence: Readonly<{
     remittanceMinor: number;
     remittanceMethod: "BANK_TRANSFER" | "CASH";
+    customerReceiptMinor?: number | null;
+    customerReceiptCurrency?: string | null;
+    customerPayoutAvailable?: boolean;
     /** `null` for an unwind actor without finance-economics read: it equals deposit + contribution (SCRUM-713). */
     forwardDueMinor: number | null;
   }> | null;
@@ -63,6 +67,10 @@ export type UnwindFinishValues = Readonly<{
   vehicleReturnedAt: number;
   vehicleReturnNote: string;
   customerPaymentDisposition: "REFUND" | "RETAIN_CREDIT";
+  customerRefundAmountMinor?: number;
+  customerRefundMethod?: "BANK_TRANSFER" | "CASH";
+  customerRefundReference?: string;
+  customerRefundedAt?: number;
 }>;
 
 const MAX_TEXT_CHARS = 500;
@@ -370,6 +378,24 @@ function FinishStep({
   const [vehicleDate, setVehicleDate] = useState(economicTodayDateInput());
   const [vehicleNote, setVehicleNote] = useState("");
   const [disposition, setDisposition] = useState<"REFUND" | "RETAIN_CREDIT" | "">("");
+  const [customerRefundAmount, setCustomerRefundAmount] = useState("");
+  const [customerRefundMethod, setCustomerRefundMethod] = useState<"BANK_TRANSFER" | "CASH">("BANK_TRANSFER");
+  const [customerRefundReference, setCustomerRefundReference] = useState("");
+  const [customerRefundDate, setCustomerRefundDate] = useState(economicTodayDateInput());
+  const customerReceiptMinor = status.evidence?.customerReceiptMinor ?? 0;
+  const refundAmount = parseTypedAmount(
+    customerRefundAmount,
+    moneyDisplayScale(status.evidence?.customerReceiptCurrency || "JOD")
+  ).minor;
+  // SCRUM-724 / SCRUM-795 c22479 + Sol Q7: the server decides whether a customer payout exists at all
+  // (pilot switch + the viewer's MANAGE_FINANCE). Absent (an older backend) means unavailable.
+  const customerPayoutAvailable = status.evidence?.customerPayoutAvailable === true;
+  const payoutBlocked = customerReceiptMinor > 0 && !customerPayoutAvailable;
+  const customerPayoutRequired = disposition === "REFUND" && customerReceiptMinor > 0 && customerPayoutAvailable;
+  const customerPayoutOk = !customerPayoutRequired || (
+    refundAmount !== null && refundAmount > 0 && refundAmount <= customerReceiptMinor &&
+    customerRefundReference.trim() !== "" && customerRefundDate !== ""
+  );
 
   const evidenceOk =
     method === "BANK_TRANSFER" ? bankReference.trim() !== "" : method === "CASH" ? voucherNumber.trim() !== "" && acknowledged : false;
@@ -380,7 +406,7 @@ function FinishStep({
     vehicleDate !== "" &&
     creditNote.trim() !== "" &&
     vehicleNote.trim() !== "" &&
-    disposition !== "";
+    disposition !== "" && customerPayoutOk;
 
   return (
     <>
@@ -400,6 +426,12 @@ function FinishStep({
             vehicleReturnedAt: economicDateInputToMs(vehicleDate),
             vehicleReturnNote: vehicleNote.trim(),
             customerPaymentDisposition: disposition,
+            ...(customerPayoutRequired && refundAmount !== null ? {
+              customerRefundAmountMinor: refundAmount,
+              customerRefundMethod,
+              customerRefundReference: customerRefundReference.trim(),
+              customerRefundedAt: refundInstant(customerRefundDate, frozenNow, undefined),
+            } : {}),
           });
         }}
       >
@@ -509,11 +541,60 @@ function FinishStep({
               <SelectValue placeholder={t("UnwindDispositionPlaceholder")} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="REFUND">{t("UnwindDispositionRefund")}</SelectItem>
+              <SelectItem value="REFUND" disabled={payoutBlocked}>
+                {customerReceiptMinor > 0 && customerPayoutAvailable
+                  ? t("UnwindDispositionRefundPayout")
+                  : t("UnwindDispositionRefund")}
+              </SelectItem>
               <SelectItem value="RETAIN_CREDIT">{t("UnwindDispositionCredit")}</SelectItem>
             </SelectContent>
           </Select>
         </div>
+        {customerReceiptMinor > 0 && (
+          <p className="text-sm font-medium" data-testid="deal-unwind-customer-credit">
+            {t("UnwindCustomerCreditLabel")}: <span dir="ltr">{formatMinor(customerReceiptMinor)}</span>
+          </p>
+        )}
+        {payoutBlocked && (
+          <p className="text-sm text-muted-foreground" data-testid="deal-unwind-customer-payout-unavailable">
+            {t("UnwindCustomerPayoutUnavailable")}
+          </p>
+        )}
+        {customerPayoutRequired && (
+          <div className="space-y-3 rounded-md border p-3">
+            <p className="text-sm font-medium">{t("UnwindCustomerPayoutTitle")}</p>
+            <div className="space-y-1.5">
+              <Label htmlFor="deal-unwind-customer-amount">{t("UnwindCustomerPayoutAmountLabel")}</Label>
+              <Input id="deal-unwind-customer-amount" inputMode="decimal" required
+                value={customerRefundAmount} disabled={submitting}
+                onChange={(event) => setCustomerRefundAmount(event.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="deal-unwind-customer-method">{t("UnwindCustomerPayoutMethodLabel")}</Label>
+              <Select value={customerRefundMethod}
+                onValueChange={() => setCustomerRefundMethod("BANK_TRANSFER")}
+                disabled={submitting}>
+                <SelectTrigger id="deal-unwind-customer-method"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {/* A cash customer payout is refused by the server (no cashier-day row yet). */}
+                  <SelectItem value="BANK_TRANSFER">{t("UnwindMethodBank")}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="deal-unwind-customer-ref">{t("UnwindCustomerPayoutReferenceLabel")}</Label>
+              <Input id="deal-unwind-customer-ref" required maxLength={MAX_REFERENCE_CHARS}
+                value={customerRefundReference} disabled={submitting}
+                onChange={(event) => setCustomerRefundReference(event.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="deal-unwind-customer-date">{t("UnwindCustomerPayoutDateLabel")}</Label>
+              <Input id="deal-unwind-customer-date" type="date" required
+                value={customerRefundDate} max={economicTodayDateInput()}
+                disabled={submitting} onChange={(event) => setCustomerRefundDate(event.target.value)} />
+            </div>
+          </div>
+        )}
       </form>
       <RefusalNote refusal={status.refusals.finish} t={t} testId="deal-unwind-finish-refusal" />
       <DialogFooter>

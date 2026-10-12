@@ -30,6 +30,7 @@ import { auditLog } from "../financialAudit";
 import { AppErrorCode, throwAppError } from "./errors";
 import { toMinorUnits } from "./money";
 import { settlementView } from "./supplierSettlement";
+import { cancelPendingInvoiceReceiptsForSale } from "../accounting/invoiceReceiptReservation";
 
 async function getActiveReceivableAllocations(
   ctx: QueryCtx | MutationCtx,
@@ -82,11 +83,16 @@ async function assertOnlySafelyReversiblePaymentsApplied(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   sale: Doc<"sales">,
-  receivable: Doc<"receivableDocuments">
+  receivable: Doc<"receivableDocuments">,
+  plannedInvoiceAllocationIds: readonly Id<"paymentAllocations">[] = []
 ) {
   const activeAllocations = await getActiveReceivableAllocations(ctx, receivable._id);
   const safeKeys = await getSafelyReversiblePaymentKeys(ctx, sale);
+  const plannedIds = new Set(plannedInvoiceAllocationIds);
   for (const allocation of activeAllocations) {
+    // finishDealUnwind proves these exact invoice applications separately and
+    // reverses them before it calls the writing teardown.
+    if (plannedIds.has(allocation._id)) continue;
     const payment = await ctx.db.get(allocation.paymentId);
     if (!payment || payment.orgId !== orgId || !safeKeys.has(payment.idempotencyKey)) {
       throw new ConvexError(
@@ -107,6 +113,7 @@ async function cancelSaleReceivableIfSafe(
     reversalDate: number;
   }
 ) {
+  await cancelPendingInvoiceReceiptsForSale(ctx, args.orgId, args.sale._id);
   if (!args.sale.canonicalReceivableDocumentId) return;
   const receivable = await ctx.db.get(args.sale.canonicalReceivableDocumentId);
   if (!receivable || receivable.orgId !== args.orgId || receivable.status === "CANCELLED") return;
@@ -878,7 +885,11 @@ function assertCommissionNotPaid(sale: Doc<"sales">) {
  */
 export async function assertSaleTeardownPreflight(
   ctx: QueryCtx | MutationCtx,
-  args: { orgId: Id<"organizations">; sale: Doc<"sales"> }
+  args: {
+    orgId: Id<"organizations">;
+    sale: Doc<"sales">;
+    plannedInvoiceAllocationIds?: readonly Id<"paymentAllocations">[];
+  }
 ) {
   const { orgId, sale } = args;
   await assertNoSaleLinkedLegacyReceivable(ctx, orgId, sale._id);
@@ -888,7 +899,9 @@ export async function assertSaleTeardownPreflight(
   if (sale.canonicalReceivableDocumentId) {
     const receivable = await ctx.db.get(sale.canonicalReceivableDocumentId);
     if (receivable && receivable.orgId === orgId && receivable.status !== "CANCELLED") {
-      await assertOnlySafelyReversiblePaymentsApplied(ctx, orgId, sale, receivable);
+      await assertOnlySafelyReversiblePaymentsApplied(
+        ctx, orgId, sale, receivable, args.plannedInvoiceAllocationIds
+      );
     }
   }
   const tradeInVehicleId = sale.tradeInVehicleId;

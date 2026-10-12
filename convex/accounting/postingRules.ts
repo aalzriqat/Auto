@@ -31,6 +31,7 @@ export type EventType =
   // SCRUM-218-C: a later application of retained customer credit. NOT a second
   // receipt — no cash moves, the money arrived when COLLECTION_PAYMENT posted.
   | "RECEIPT_CREDIT_APPLIED"
+  | "RETAINED_CREDIT_REFUNDED"
   | "EXPENSE_POSTED"
   | "CHEQUE_RECEIVED"
   | "CHEQUE_DEPOSITED"
@@ -97,7 +98,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "DEPOSIT_RECEIVED", "DEPOSIT_APPLIED", "DEPOSIT_APPLIED_TO_SETTLEMENT",
   "DEPOSIT_REFUNDED", "DEPOSIT_FORFEITED",
   "SALE_COMPLETED", "SALE_CANCELLED", "COLLECTION_PAYMENT", "COLLECTION_REFUND",
-  "RECEIPT_CREDIT_APPLIED", "EXPENSE_POSTED",
+  "RECEIPT_CREDIT_APPLIED", "RETAINED_CREDIT_REFUNDED", "EXPENSE_POSTED",
   "CHEQUE_RECEIVED", "CHEQUE_DEPOSITED", "CHEQUE_CLEARED", "CHEQUE_RETURNED",
   "COMMISSION_ACCRUED", "COMMISSION_ADJUSTED", "COMMISSION_PAID",
   "FINANCE_DISBURSED", "FINANCE_CASH_RECEIVED", "PAYMENT_LINK_RECEIVED",
@@ -137,7 +138,7 @@ export const AP_AFFECTING_BY_EVENT_TYPE = {
   DEPOSIT_RECEIVED: false, DEPOSIT_APPLIED: false, DEPOSIT_APPLIED_TO_SETTLEMENT: false,
   DEPOSIT_REFUNDED: false, DEPOSIT_FORFEITED: false,
   SALE_COMPLETED: true, SALE_CANCELLED: false, COLLECTION_PAYMENT: false, COLLECTION_REFUND: false,
-  RECEIPT_CREDIT_APPLIED: false, EXPENSE_POSTED: false,
+  RECEIPT_CREDIT_APPLIED: false, RETAINED_CREDIT_REFUNDED: false, EXPENSE_POSTED: false,
   CHEQUE_RECEIVED: false, CHEQUE_DEPOSITED: false, CHEQUE_CLEARED: false, CHEQUE_RETURNED: false,
   COMMISSION_ACCRUED: false, COMMISSION_ADJUSTED: false, COMMISSION_PAID: false,
   FINANCE_DISBURSED: false, FINANCE_CASH_RECEIVED: false, PAYMENT_LINK_RECEIVED: false,
@@ -560,6 +561,15 @@ export interface CollectionRefundPayload {
   currency: string;
   customerId: string;
   paymentMethod?: string;
+}
+
+export interface RetainedCreditRefundPayload {
+  applicationId: string;
+  paymentId: string;
+  amountMinor: number;
+  currency: string;
+  customerId: string;
+  paymentMethod: "BANK_TRANSFER" | "CASH";
 }
 
 export interface ExpensePostedPayload {
@@ -1805,6 +1815,24 @@ export function ruleCollectionRefund(p: CollectionRefundPayload): RuleResult {
       line(disbursementKey, 0, p.amountMinor, "Refund paid out", { customerId: p.customerId }),
     ],
     memo: "Collection payment refunded",
+    category: "SYSTEM",
+  };
+}
+
+/** Return held customer credit; the sale's AR has already been reopened separately. */
+export function ruleRetainedCreditRefunded(p: RetainedCreditRefundPayload): RuleResult {
+  if (!Number.isSafeInteger(p.amountMinor) || p.amountMinor <= 0 ||
+      (p.paymentMethod !== "BANK_TRANSFER" && p.paymentMethod !== "CASH")) {
+    throw new Error("Retained credit refund needs a positive amount and a supported payout method.");
+  }
+  return {
+    lines: [
+      line(SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY, p.amountMinor, 0,
+        "Customer credit refunded", { customerId: p.customerId }),
+      line(disbursementAccountKey(p.paymentMethod), 0, p.amountMinor,
+        "Customer refund paid out", { customerId: p.customerId }),
+    ],
+    memo: "Retained customer credit refunded",
     category: "SYSTEM",
   };
 }
@@ -3105,6 +3133,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "COLLECTION_PAYMENT": return ruleCollectionPayment(payload as unknown as CollectionPaymentPayload);
     case "RECEIPT_CREDIT_APPLIED": return ruleReceiptCreditApplied(payload as unknown as ReceiptCreditAppliedPayload);
     case "COLLECTION_REFUND": return ruleCollectionRefund(payload as unknown as CollectionRefundPayload);
+    case "RETAINED_CREDIT_REFUNDED": return ruleRetainedCreditRefunded(payload as unknown as RetainedCreditRefundPayload);
     case "EXPENSE_POSTED": return ruleExpensePosted(payload as unknown as ExpensePostedPayload);
     case "CHEQUE_RECEIVED": return ruleChequeReceived(payload as unknown as ChequeReceivedPayload);
     case "CHEQUE_CLEARED": return ruleChequeClear(payload as unknown as ChequeClearedPayload);

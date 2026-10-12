@@ -2110,9 +2110,41 @@ const serverErrorMessages = defineBilingualMessages({
     "Mark it to be refunded to the customer (paid out separately)",
     "تحديدها للردّ للعميل (يُصرف الردّ بشكل منفصل)",
   ],
+  UnwindDispositionRefundPayout: [
+    "Record a separate customer payout",
+    "تسجيل صرف مستقل للعميل",
+  ],
+  UnwindCustomerPayoutUnavailable: [
+    "Paying this customer credit out is not available yet. Keep it as customer credit.",
+    "صرف رصيد العميل غير متاح حاليًا. احتفظ به كرصيد دائن للعميل.",
+  ],
   UnwindDispositionCredit: [
     "Keep it as customer credit",
     "الاحتفاظ بها كرصيد دائن للعميل",
+  ],
+  UnwindCustomerCreditLabel: [
+    "Customer credit applied to this sale",
+    "رصيد العميل المستخدم في هذا البيع",
+  ],
+  UnwindCustomerPayoutTitle: [
+    "Customer payout details",
+    "تفاصيل المبلغ المصروف للعميل",
+  ],
+  UnwindCustomerPayoutAmountLabel: [
+    "Amount paid to customer",
+    "المبلغ المصروف للعميل",
+  ],
+  UnwindCustomerPayoutMethodLabel: [
+    "Customer payout method",
+    "طريقة الصرف للعميل",
+  ],
+  UnwindCustomerPayoutReferenceLabel: [
+    "Customer payout reference",
+    "مرجع الصرف للعميل",
+  ],
+  UnwindCustomerPayoutDateLabel: [
+    "Customer payout date",
+    "تاريخ الصرف للعميل",
   ],
   UnwindFinishAction: [
     "Refund and reverse the sale",
