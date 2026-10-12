@@ -14,6 +14,7 @@ import { notificationsEn, notificationsAr } from "./domains/notifications";
 import { messagesEn, messagesAr } from "./domains/messages";
 import { marketplaceEn, marketplaceAr } from "./domains/marketplace";
 import { payrollEn, payrollAr } from "./domains/payroll";
+import { supportInboxEn, supportInboxAr } from "./domains/supportInbox";
 
 export type Locale = "en" | "ar";
 
@@ -34,6 +35,7 @@ const en = {
   ...messagesEn,
   ...marketplaceEn,
   ...payrollEn,
+  ...supportInboxEn,
 };
 
 /**
@@ -73,6 +75,7 @@ const ar: Record<keyof typeof en, string> = {
   ...messagesAr,
   ...marketplaceAr,
   ...payrollAr,
+  ...supportInboxAr,
 };
 
 export const dictionaries = {
