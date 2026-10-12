@@ -210,6 +210,10 @@ const KNOWN_SURVIVING_REFERENCES: Record<string, string> = {
   // sibling `financeCompanyForwards`; same SCRUM-546 document-only treatment.
   "dealUnwinds.applicationId->financeApplications":
     "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
+  "dealUnwinds.completion.customerReceiptSettlement.refundEventIds[]->accountingEvents":
+    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
+  "dealUnwinds.completion.customerReceiptSettlement.refundPaymentIds[]->canonicalPayments":
+    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "dealUnwinds.remittanceRefund.paymentId->canonicalPayments":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "dealUnwinds.remittanceRefund.reversedAllocationIds[]->paymentAllocations":
