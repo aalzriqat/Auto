@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,6 +7,7 @@ import {
   BUILD_MANIFEST_FILE,
   byCodeUnit,
   createBrowserSwarmBuildArtifact,
+  isAllowedDanglingHoistLink,
   verifyBrowserSwarmBuildArtifact,
 } from "./browserSwarmBuildArtifact.mjs";
 
@@ -288,6 +290,180 @@ describe("SCRUM-350 immutable candidate build artifact", () => {
           identity,
         }),
       ).rejects.toThrow(/escapes candidate root/i);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("SCRUM-824 dangling pnpm hoist-index links", () => {
+  // PR #531's lockfile made Next's tracer emit
+  // .pnpm/node_modules/supports-color without its target; realpath threw ENOENT
+  // and the whole exact-candidate-build failed (runs 38217669760, 38188555038).
+  // Owner ruling c22957: only a genuinely dangling leaf link inside the hoist
+  // index, pointing back into the virtual store, may be omitted. Everything
+  // else stays fail-closed.
+  const build = (f: { candidateRoot: string; artifactRoot: string }) =>
+    createBrowserSwarmBuildArtifact({
+      candidateRoot: f.candidateRoot,
+      artifactRoot: f.artifactRoot,
+      identity,
+    });
+
+  async function hoistIndex(f: { candidateRoot: string }) {
+    const index = path.join(f.candidateRoot, ".next/standalone/node_modules/.pnpm/node_modules");
+    await mkdir(index, { recursive: true });
+    return index;
+  }
+
+  async function manifestPaths(artifactRoot: string): Promise<string[]> {
+    const manifest = JSON.parse(await readFile(path.join(artifactRoot, BUILD_MANIFEST_FILE), "utf8"));
+    return manifest.files.map((file: { path: string }) => file.path);
+  }
+
+  it("omits the PR #531 supports-color dangling hoist link from the runtime and manifest", async () => {
+    const f = await fixture();
+    try {
+      const index = await hoistIndex(f);
+      await symlink("../supports-color@8.1.1/node_modules/supports-color", path.join(index, "supports-color"), "dir");
+      await mkdir(path.join(index, "ms"), { recursive: true });
+      await writeFile(path.join(index, "ms/index.js"), "ms\n", "utf8");
+
+      await build(f);
+
+      const runtimeNm = path.join(f.artifactRoot, "runtime/node_modules");
+      expect(await readFile(path.join(runtimeNm, "ms/index.js"), "utf8")).toBe("ms\n");
+      await expect(lstat(path.join(runtimeNm, "supports-color"))).rejects.toThrow(/ENOENT/);
+      await expect(lstat(path.join(runtimeNm, ".pnpm/node_modules/supports-color"))).rejects.toThrow(/ENOENT/);
+      expect((await manifestPaths(f.artifactRoot)).filter((p) => p.includes("supports-color"))).toEqual([]);
+      await expect(
+        verifyBrowserSwarmBuildArtifact({ artifactRoot: f.artifactRoot, expected: identity }),
+      ).resolves.toMatchObject({ testedSha: identity.testedSha });
+      // The runtime must not depend on the omitted package: an optional
+      // require of it (debug's pattern) resolves to "absent", nothing else.
+      const runtimeRequire = createRequire(path.join(f.artifactRoot, "runtime/server.js"));
+      expect(() => runtimeRequire.resolve("supports-color")).toThrow(/Cannot find module/);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("omits a dangling scoped hoist link", async () => {
+    const f = await fixture();
+    try {
+      const index = await hoistIndex(f);
+      await mkdir(path.join(index, "@scope"), { recursive: true });
+      await symlink("../../@scope+pkg@1.0.0/node_modules/@scope/pkg", path.join(index, "@scope/pkg"), "dir");
+      await build(f);
+      expect((await manifestPaths(f.artifactRoot)).filter((p) => p.includes("@scope"))).toEqual([]);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("still materializes a resolvable hoist link as a real copy", async () => {
+    const f = await fixture();
+    try {
+      const index = await hoistIndex(f);
+      const target = path.join(index, "../has-flag@4.0.0/node_modules/has-flag");
+      await mkdir(target, { recursive: true });
+      await writeFile(path.join(target, "index.js"), "has-flag\n", "utf8");
+      await symlink("../has-flag@4.0.0/node_modules/has-flag", path.join(index, "has-flag"), "dir");
+      await build(f);
+      const copied = path.join(f.artifactRoot, "runtime/node_modules/has-flag");
+      expect((await lstat(copied)).isSymbolicLink()).toBe(false);
+      expect(await readFile(path.join(copied, "index.js"), "utf8")).toBe("has-flag\n");
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a dangling link outside the hoist index with an explicit diagnostic", async () => {
+    const f = await fixture();
+    try {
+      await hoistIndex(f);
+      await mkdir(path.join(f.candidateRoot, ".next/standalone/node_modules"), { recursive: true });
+      await symlink(
+        ".pnpm/supports-color@8.1.1/node_modules/supports-color",
+        path.join(f.candidateRoot, ".next/standalone/node_modules/supports-color"),
+        "dir",
+      );
+      await expect(build(f)).rejects.toThrow(/dangling symlink.*not a pnpm hoist-index link/i);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a dangling link nested below a hoisted package", async () => {
+    const f = await fixture();
+    try {
+      const index = await hoistIndex(f);
+      await mkdir(path.join(index, "pkg"), { recursive: true });
+      await symlink("../missing", path.join(index, "pkg/dep"), "dir");
+      await expect(build(f)).rejects.toThrow(/not a pnpm hoist-index link/i);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a dangling hoist link whose target leaves the virtual store", async () => {
+    const f = await fixture();
+    try {
+      const index = await hoistIndex(f);
+      await symlink("../../../../missing-outside-store", path.join(index, "escape-rel"), "dir");
+      await expect(build(f)).rejects.toThrow(/not a pnpm hoist-index link/i);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a dangling hoist link with an absolute target", async () => {
+    const f = await fixture();
+    try {
+      const index = await hoistIndex(f);
+      await symlink(path.join(index, "../absent@1.0.0/node_modules/absent"), path.join(index, "absent"), "dir");
+      await expect(build(f)).rejects.toThrow(/not a pnpm hoist-index link/i);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("still rejects an existing hoist link that escapes the candidate root", async () => {
+    const f = await fixture();
+    const outside = path.join(f.root, "outside-pkg");
+    try {
+      const index = await hoistIndex(f);
+      await mkdir(outside, { recursive: true });
+      await writeFile(path.join(outside, "index.js"), "must-not-copy", "utf8");
+      await symlink(outside, path.join(index, "outside-pkg"), "dir");
+      await expect(build(f)).rejects.toThrow(/escapes candidate root/i);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a symlink cycle in the hoist index", async () => {
+    const f = await fixture();
+    try {
+      const index = await hoistIndex(f);
+      await symlink("loop-b", path.join(index, "loop-a"), "dir");
+      await symlink("loop-a", path.join(index, "loop-b"), "dir");
+      await expect(build(f)).rejects.toThrow();
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat an ordinary missing path as an omittable link", async () => {
+    const f = await fixture();
+    try {
+      const index = await hoistIndex(f);
+      await expect(
+        isAllowedDanglingHoistLink(path.join(index, "never-existed"), {
+          root: await realpath(index),
+          store: await realpath(path.dirname(index)),
+        }),
+      ).resolves.toBe(false);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
