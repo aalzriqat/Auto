@@ -24,7 +24,7 @@ import {
 } from "./accounting/receiptMovement";
 import {
   cancelPendingInvoiceReceiptsForMovement,
-  pendingInvoiceReceiptMinor,
+  availableRetainedCreditMinor,
   pendingSaleInvoiceReceiptMinor,
   reservePendingInvoiceReceipt,
 } from "./accounting/invoiceReceiptReservation";
@@ -906,9 +906,8 @@ export const listRetainedCredits = query({
       result.page.map(async (position) => {
         const movement = await ctx.db.get(position.receiptMovementId);
         const customer = await ctx.db.get(position.customerId);
-        const reservedForSaleInvoicesMinor = await pendingInvoiceReceiptMinor(
-          ctx, args.orgId, position.receiptMovementId
-        );
+        const { reservedMinor: reservedForSaleInvoicesMinor, openRefundMinor, availableMinor } =
+          await availableRetainedCreditMinor(ctx, args.orgId, position);
         // SCRUM-724: lineage is read from the immutable position fields; whether
         // the originating sale is cancelled is derived NOW from the sale row.
         const lineageCheque = position.sourceChequeId ? await ctx.db.get(position.sourceChequeId) : null;
@@ -926,7 +925,8 @@ export const listRetainedCredits = query({
           initialUnappliedMinor: position.initialUnappliedMinor,
           remainingUnappliedMinor: position.remainingUnappliedMinor,
           reservedForSaleInvoicesMinor,
-          availableUnappliedMinor: position.remainingUnappliedMinor - reservedForSaleInvoicesMinor,
+          openRefundRequestMinor: openRefundMinor,
+          availableUnappliedMinor: availableMinor,
           applicationCount: position.applicationCount,
           // Whether `applyRetainedCredit` would currently accept it. The receipt
           // must be POSTED, so a credit whose own journal is still queued behind
@@ -1868,9 +1868,15 @@ export const applyRetainedCredit = mutation({
         await requirePostedReceiptForMovement(ctx, movement);
 
         const position = await loadRetainedPosition(ctx, args.orgId, movement._id);
-        const reservedForSaleInvoicesMinor = await pendingInvoiceReceiptMinor(
-          ctx, args.orgId, movement._id
-        );
+        const credit = await availableRetainedCreditMinor(ctx, args.orgId, position);
+        // SCRUM-724: credit that exists but is held (reserved for a sale invoice or
+        // asked back by the customer) is refused with a coded, localized reason.
+        if (credit.availableMinor <= 0 && position.remainingUnappliedMinor > 0) {
+          throwAppError(
+            AppErrorCode.RETAINED_CREDIT_UNAVAILABLE,
+            RETAINED_CREDIT_MESSAGES.RETAINED_CREDIT_UNAVAILABLE
+          );
+        }
 
         const receivable = await ctx.db.get(args.receivableId);
         if (!receivable || receivable.orgId !== args.orgId) {
@@ -1910,7 +1916,7 @@ export const applyRetainedCredit = mutation({
 
         const amountMinor = computeApplicableMinor({
           requestedMinor: toMinorUnits(roundMoney(args.requestedAmount, currency), currency),
-          remainingUnappliedMinor: position.remainingUnappliedMinor - reservedForSaleInvoicesMinor,
+          remainingUnappliedMinor: Math.max(0, credit.availableMinor),
           outstandingMinor: Math.min(
             toMinorUnits(roundMoney(receivable.outstandingAmount, currency), currency),
             canonicalOutstandingMinor

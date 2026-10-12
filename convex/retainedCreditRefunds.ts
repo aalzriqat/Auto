@@ -28,7 +28,7 @@ import { RETAINED_CREDIT_MESSAGES } from "./utils/retainedCreditMessages";
 import { createCanonicalPayment } from "./subledger";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import { loadRetainedPosition, requirePostedReceiptForMovement } from "./accounting/receiptMovement";
-import { openRefundRequestMinor as openRequestMinor, pendingInvoiceReceiptMinor } from "./accounting/invoiceReceiptReservation";
+import { availableRetainedCreditMinor } from "./accounting/invoiceReceiptReservation";
 
 const REASON_MAX = 500;
 const REFERENCE_MAX = 120;
@@ -92,11 +92,8 @@ export const requestRetainedCreditRefund = mutation({
     }
     const { movement, position } = await loadMovementAndPosition(ctx, args.orgId, args.receiptMovementId);
     await requireReceiptPosted(ctx, movement);
-    const [reservedMinor, openMinor] = await Promise.all([
-      pendingInvoiceReceiptMinor(ctx, args.orgId, movement._id),
-      openRequestMinor(ctx, args.orgId, movement._id),
-    ]);
-    if (args.amountMinor > position.remainingUnappliedMinor - reservedMinor - openMinor) {
+    const { availableMinor } = await availableRetainedCreditMinor(ctx, args.orgId, position);
+    if (args.amountMinor > availableMinor) {
       refuse("RETAINED_CREDIT_REFUND_INSUFFICIENT");
     }
     const now = Date.now();
@@ -149,11 +146,8 @@ export const respondToRetainedCreditRefund = mutation({
         if (args.status === "APPROVED") {
           const { movement, position } = await loadMovementAndPosition(ctx, args.orgId, request.receiptMovementId);
           await requireReceiptPosted(ctx, movement);
-          const [reservedMinor, otherOpenMinor] = await Promise.all([
-            pendingInvoiceReceiptMinor(ctx, args.orgId, movement._id),
-            openRequestMinor(ctx, args.orgId, movement._id, request._id),
-          ]);
-          if (request.amountMinor > position.remainingUnappliedMinor - reservedMinor - otherOpenMinor) {
+          const { availableMinor } = await availableRetainedCreditMinor(ctx, args.orgId, position, request._id);
+          if (request.amountMinor > availableMinor) {
             refuse("RETAINED_CREDIT_REFUND_INSUFFICIENT");
           }
         }
@@ -212,8 +206,8 @@ export const executeRetainedCreditRefund = mutation({
           refuse("RETAINED_CREDIT_REFUND_NOT_FOUND");
         }
         await requireReceiptPosted(ctx, movement);
-        const reservedMinor = await pendingInvoiceReceiptMinor(ctx, args.orgId, movement._id);
-        if (request.amountMinor > position.remainingUnappliedMinor - reservedMinor) {
+        const { availableMinor } = await availableRetainedCreditMinor(ctx, args.orgId, position, request._id);
+        if (request.amountMinor > availableMinor) {
           refuse("RETAINED_CREDIT_REFUND_INSUFFICIENT");
         }
 

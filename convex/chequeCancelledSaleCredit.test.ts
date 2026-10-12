@@ -572,6 +572,53 @@ describe("SCRUM-724 cancelled-sale credit: authorized refund", () => {
     expect(lines.find((l) => l.key === SYSTEM_KEYS.UNAPPLIED_CUSTOMER_RECEIPTS_LIABILITY)?.credit).toBe(3000);
   }, 60_000);
 
+  test("G1. an open refund request holds its credit against applyRetainedCredit and the listing; REJECTED and EXECUTED release or consume it", async () => {
+    const { s, movement, request, respond, execute } = await refundFixture("g1");
+    const receivableId = (await s.asOwner.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(), orgId: s.orgId, customerId: s.customerId,
+      sourceType: "OTHER", creditSystemKey: "MISCELLANEOUS_INCOME", title: "Balance due",
+      amount: 100, dueDate: Date.now() + 86_400_000,
+    })) as Id<"receivables">;
+    const apply = (requestedAmount: number) => s.asOwner.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(), orgId: s.orgId, receiptMovementId: movement._id,
+      receivableId, requestedAmount,
+    });
+    const listed = async () => (await s.asOwner.query(api.collections.listRetainedCredits, {
+      orgId: s.orgId, customerId: s.customerId, onlyRemaining: false, paginationOpts: { cursor: null, numItems: 20 },
+    })).page[0]!;
+
+    expect(await listed()).toMatchObject({ remainingUnappliedMinor: 3000, availableUnappliedMinor: 3000 });
+    const requestId = await request(2500);
+    // PENDING already holds the credit: listing is net, apply cannot consume it.
+    expect(await listed()).toMatchObject({ remainingUnappliedMinor: 3000, availableUnappliedMinor: 500 });
+    await respond(requestId);
+    expect(await listed()).toMatchObject({ availableUnappliedMinor: 500 });
+    // asking for 3000 applies only the free 500, never the held 2500
+    expect((await apply(30)).appliedMinor).toBe(500);
+    expect(await listed()).toMatchObject({ remainingUnappliedMinor: 2500, availableUnappliedMinor: 0 });
+    // nothing free is left: refused with the coded reason, nothing written
+    expect(await codeOf(apply(1))).toBe("RETAINED_CREDIT_UNAVAILABLE");
+    expect((await listed()).remainingUnappliedMinor).toBe(2500);
+    // executing consumes the held credit; nothing is double counted
+    await execute(requestId);
+    expect(await listed()).toMatchObject({ remainingUnappliedMinor: 0, availableUnappliedMinor: 0 });
+
+    // REJECTED releases the hold (second movement)
+    const g = await refundFixture("g1b");
+    const receivable2 = (await g.s.asOwner.mutation(api.collections.createReceivable, {
+      idempotencyKey: crypto.randomUUID(), orgId: g.s.orgId, customerId: g.s.customerId,
+      sourceType: "OTHER", creditSystemKey: "MISCELLANEOUS_INCOME", title: "Balance due",
+      amount: 100, dueDate: Date.now() + 86_400_000,
+    })) as Id<"receivables">;
+    const rejected = await g.request(2500);
+    await g.respond(rejected, g.s.approver.as, "REJECTED");
+    const afterReject = await g.s.asOwner.mutation(api.collections.applyRetainedCredit, {
+      idempotencyKey: crypto.randomUUID(), orgId: g.s.orgId, receiptMovementId: g.movement._id,
+      receivableId: receivable2, requestedAmount: 30,
+    });
+    expect(afterReject.appliedMinor).toBe(3000);
+  }, 90_000);
+
   test("F1. the return guard fails closed at the request cap: 201 requests, the EXECUTED one LAST, still refuses with no writes", async () => {
     const { s, chequeId, movement } = await refundFixture("f1");
     const position = (await s.t.run((ctx) => ctx.db.query("receiptRetainedPositions")
