@@ -36,3 +36,12 @@ Three `rule` records bind exact titles in `convex/consignmentEconomics.test.ts` 
 - Ruling ids are `SCRUM-n#cN` (a comment) or `SCRUM-n#description` (the issue description). A non-owner invariant source (e.g. the tenant write guard) has no form yet; tenancy records stay deferred.
 - Permission records need a located test that already asserts the refusal. Next candidate: the refusal list in convex/scrum413bDealDoors.test.ts (needs a SCRUM-413#description digest).
 - SCRUM-760#c22465 holds two standing rulings (R-CONSISTENCY, R-PERMISSION; Sol 6, owner away, subject to owner override). One comment id, one digest: the digested text is the two quoted ruling sentences, each prefixed with its label (R-CONSISTENCY: / R-PERMISSION:) and joined by a newline, whitespace-normalised. A record cites the comment id and names the rule in its invariant text; there is no per-rule id form.
+
+## Screen records (SCRUM-834)
+
+Five `screen` / `browser` records bind exact titles in `playwright/tests/deal-cost-reconcile-route.spec.ts`: the unchecked finance-company fee reconciled from its Handover costs row in EN and AR at 1280px and 390px (four records), and a disputed appraisal fee corrected then removed (AR, 390px). They are interactive replays in a signed-in session against the real backend; the cost line is recorded through the public `recordDealFee` command (no screen creates these fee types), every later step is a click.
+
+- They cite SCRUM-760#c22465 for R-CONSISTENCY, the nearest standing ruling ("the same business measure must agree across screens"): the closing checklist and the costs panel must agree on what is unchecked and offer the action that clears it. The rule that every readiness blocker has a visible action is stated in SCRUM-834 (finding, not an owner ruling) and SCRUM-417; there is no snapshot entry for it, so no record cites it.
+- Not in the browser: the permission negative (both E2E seats hold both permissions) and the foreign-currency negative (the public command cannot create such a line). They are covered at the component and backend levels (`HandoverCostRowRoutes.test.tsx`, `financeDealCosts.test.ts`).
+- The bound execution-fee section is not drawn for the suite's zero-fee finance company, so its reconcile control has no browser record (`HandoverExecutionFeeReconcile.test.tsx` covers it).
+- A record is bound by title and by static checks only. Whether the replay passes is decided by running it; this change did not run it.
