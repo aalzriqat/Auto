@@ -31,8 +31,11 @@ import {
 } from "./accountingRehearsalCases.mjs";
 
 describe("SCRUM-834 reconcileDealFee two-contract bridge", () => {
-  const extra = (name: string) =>
-    `[Request ID: x] Server Error\nArgumentValidationError: Object contains extra field \`${name}\` that is not in the validator.`;
+  // One validator sentence per named field; the names are the caller's, not the classifier's.
+  const extra = (...names: string[]) =>
+    `[Request ID: x] Server Error\nArgumentValidationError: ${names
+      .map((name) => `Object contains extra field \`${name}\` that is not in the validator.`)
+      .join(" ")}`;
   const base = { orgId: "o", applicationId: "a", feeId: "f", notes: "n", expectedActualAmountMinor: 500 };
   const listing = (fee: Record<string, unknown>) => ({ ok: true as const, value: { fees: [{ _id: "f", ...fee }] } });
   const script = (...mutations: Array<{ ok: boolean; value?: unknown; error?: string }>) => {
@@ -65,7 +68,8 @@ describe("SCRUM-834 reconcileDealFee two-contract bridge", () => {
     ["a stale revision", "The evidence revision is stale."],
     ["a missing required field", "ArgumentValidationError: Object is missing the required field `expectedActualEvidenceRevision`."],
     ["an unrelated extra field", extra("somethingElse")],
-    ["a mixed extra field", extra("notes2")],
+    ["a recognized bridge field mixed with an unrelated one", extra("expectedActualAmountMinor", "notes2")],
+    ["an unrelated field mixed with a recognized bridge field", extra("notes2", "expectedActualEvidenceRevision")],
     ["an authorization refusal", "Not authorized."],
     ["an empty error", ""],
   ])("%s is returned as the refusal with no retry", async (_label, error) => {
@@ -89,6 +93,8 @@ describe("SCRUM-834 reconcileDealFee two-contract bridge", () => {
   test("the classifier accepts only validator extra-field errors naming the two bridge fields", () => {
     expect(isReconcileLegacyContractRefusal(extra("expectedActualEvidenceRevision"))).toBe(true);
     expect(isReconcileLegacyContractRefusal("Object contains extra field `expectedActualAmountMinor`")).toBe(false);
+    expect(isReconcileLegacyContractRefusal(extra("expectedActualAmountMinor", "expectedActualEvidenceRevision"))).toBe(true);
+    expect(isReconcileLegacyContractRefusal(extra("expectedActualAmountMinor", "other"))).toBe(false);
     expect(isReconcileLegacyContractRefusal(extra("other"))).toBe(false);
     expect(isReconcileLegacyContractRefusal(undefined)).toBe(false);
   });
