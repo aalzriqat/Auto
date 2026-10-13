@@ -380,7 +380,7 @@ function pickPageCredentials(data: unknown): FacebookPageCredential[] {
 }
 
 /** The only fields read from an untrusted Graph reply; anything else is ignored. */
-type GraphBody = { access_token?: string; data?: unknown } | null;
+type GraphBody = { access_token?: string; id?: unknown; data?: unknown } | null;
 
 /**
  * GETs a Graph URL that carries credentials in its query string. A rejected
@@ -436,22 +436,19 @@ export const exchangeCodeForToken = internalAction({
     }
     const longLivedUserToken: string = longLivedJson.access_token;
 
-    // 3. Fetch the connecting user's own Facebook ID — needed because Meta's
-    // deauthorize/data-deletion callbacks only identify the user, not the
-    // Page, in their signed_request payload.
-    let connectedByUserId: string | undefined;
-    try {
-      const meUrl = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/me`);
-      meUrl.searchParams.set("fields", "id");
-      meUrl.searchParams.set("access_token", longLivedUserToken);
-      const meRes = await fetch(meUrl.toString());
-      const meJson = await meRes.json();
-      // Untrusted: a non-string id would fail the mutation's argument
-      // validation, whose error carries the whole argument — page tokens included.
-      if (typeof meJson?.id === "string" && meJson.id) connectedByUserId = meJson.id;
-    } catch {
-      // Non-fatal — connection still succeeds; only the deauth/data-deletion
-      // callbacks would be unable to resolve this org later.
+    // 3. Fetch the connecting user's own Facebook ID. Meta's deauthorize and
+    // data-deletion callbacks identify only the user, never the Page, and
+    // disconnectByFacebookConnectedUserId finds the org through this ID alone —
+    // so Page tokens stored without it could never be erased by them. Any /me
+    // failure therefore aborts the connection before anything is written.
+    const meUrl = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/me`);
+    meUrl.searchParams.set("fields", "id");
+    meUrl.searchParams.set("access_token", longLivedUserToken);
+    const identityFailed = "Facebook could not identify the connecting account.";
+    const { ok: meOk, json: meJson } = await graphGet(meUrl, identityFailed);
+    const connectedByUserId = meJson?.id;
+    if (!meOk || typeof connectedByUserId !== "string" || !connectedByUserId) {
+      throw new ConvexError(identityFailed);
     }
 
     // 4. List the Pages this person manages. Page Access Tokens returned
@@ -488,7 +485,9 @@ export const saveFacebookPendingPages = internalMutation({
   args: {
     orgId: v.id("organizations"),
     pages: v.array(v.object({ id: v.string(), name: v.string(), access_token: v.string() })),
-    connectedByUserId: v.optional(v.string()),
+    // Required: it is the only key Meta's deauthorize / data-deletion callbacks
+    // can use to find and erase these credentials.
+    connectedByUserId: v.string(),
   },
   handler: async (ctx, args) => {
     const { orgId, pages, connectedByUserId } = args;

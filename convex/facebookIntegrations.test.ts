@@ -317,7 +317,9 @@ describe("facebookIntegrations: a Page belongs to one org", () => {
 // annotation does not strip the extra fields Meta returns per Page, and the
 // strict mutation validator then rejected the argument and echoed the rejected
 // value — page token included — into the thrown error, which the OAuth callback
-// stores in the admin-visible webhook log.
+// stores in the admin-visible webhook log. It also requires a valid /me id before
+// any write, since Meta's deauthorize/data-deletion callbacks resolve the org
+// only through it.
 describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () => {
   const SYNTHETIC_PAGE_TOKEN = "synthetic-page-token-DO-NOT-LEAK";
   const SYNTHETIC_PROVIDER_TEXT = "synthetic-provider-error-DO-NOT-LEAK";
@@ -410,34 +412,88 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
     expect((await settings())?.facebookPendingCredentials).toBeUndefined();
   });
 
-  // /me is untrusted too: connectedByUserId travels in the same mutation call as
-  // the page tokens, so a non-string id would fail argument validation with the
-  // whole argument — tokens included — in the error.
+  // /me is untrusted, and its id is the ONLY key Meta's deauthorize and
+  // data-deletion callbacks use to find this org's credentials
+  // (disconnectByFacebookConnectedUserId). Storing Page tokens without it would
+  // leave credentials those callbacks cannot erase while reporting success, so
+  // any /me failure aborts the connection before anything is written.
+  const PAGES = () => graphJson({ data: [{ id: "page_1", name: "Dealer One", access_token: SYNTHETIC_PAGE_TOKEN }] });
+  const EXISTING_USER = "fb_existing_user";
+  const ME_FAILED = /could not identify the connecting account/i;
+
   test.each([
-    ["a numeric id", 12345],
-    ["an object id", { nested: "value" }],
-    ["an empty id", ""],
-  ])("%s from /me is omitted and the connection still completes", async (_label, badId) => {
-    const { orgId, t, settings } = await run(
-      () => graphJson({ data: [{ id: "page_1", name: "Dealer One", access_token: SYNTHETIC_PAGE_TOKEN }] }),
-      { me: () => graphJson({ id: badId }) }
-    );
+    ["a numeric id", { me: () => graphJson({ id: 12345 }) }],
+    ["an object id", { me: () => graphJson({ id: { nested: "value" } }) }],
+    ["an empty id", { me: () => graphJson({ id: "" }) }],
+    ["no id", { me: () => graphJson({}) }],
+    ["an array body", { me: () => graphJson(["fb_user_1"]) }],
+    // A valid id alongside an error status: the status must be checked too.
+    ["an HTTP error status", { me: () => graphJson({ id: "fb_user_1", error: { message: SYNTHETIC_PROVIDER_TEXT } }, 500) }],
+    ["a non-JSON body", { me: () => new Response(`<html>${SYNTHETIC_PROVIDER_TEXT}</html>`, { status: 200 }) }],
+    ["a rejected fetch", { me: rejectEmbeddingUrl }],
+  ] as const)(
+    "%s from /me aborts before any credential is written and leaves an existing connection untouched",
+    async (_label, overrides) => {
+      const { orgId, t, settings } = await run(PAGES, overrides);
+      await t.run((ctx) =>
+        ctx.runMutation(internal.facebookIntegrations.saveFacebookCredentials, {
+          orgId,
+          facebookPageId: "page_active",
+          facebookPageAccessToken: "active-page-token-synthetic",
+          facebookConnectedByUserId: EXISTING_USER,
+        })
+      );
+      const before = await settings();
+      expect(before).toMatchObject({
+        facebookConnectedByUserId: EXISTING_USER,
+        facebookPageAccessToken: "active-page-token-synthetic",
+      });
+      expect(before?.facebookPendingCredentials).toBeUndefined();
 
-    await t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" });
+      const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
 
-    const row = await settings();
-    expect(row?.facebookConnectedByUserId).toBeUndefined();
-    expect(row?.facebookPendingCredentials).toEqual([
-      { id: "page_1", name: "Dealer One", token: SYNTHETIC_PAGE_TOKEN },
-    ]);
+      expect(text).toMatch(ME_FAILED);
+      for (const secret of [...URL_CREDENTIALS, SYNTHETIC_PROVIDER_TEXT, SYNTHETIC_PAGE_TOKEN]) {
+        expect(text).not.toContain(secret);
+      }
+      // Nothing written: the whole row, not just the fields we know about.
+      expect(await settings()).toEqual(before);
+
+      // The existing connection is still erasable by Meta's callbacks.
+      await t.run((ctx) =>
+        ctx.runMutation(internal.facebookIntegrations.disconnectByFacebookConnectedUserId, {
+          facebookConnectedByUserId: EXISTING_USER,
+        })
+      );
+      const erased = await settings();
+      expect(erased?.facebookPageAccessToken).toBeUndefined();
+      expect(erased?.facebookConnectedByUserId).toBeUndefined();
+    }
+  );
+
+  test("a first-time connection whose /me fails stores no pending credentials at all", async () => {
+    const { orgId, t, settings } = await run(PAGES, { me: () => graphJson({ id: 12345 }) });
+    await expect(
+      t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" })
+    ).rejects.toThrow(ME_FAILED);
+    expect(await settings()).toBeNull();
   });
 
-  test("a valid /me id is still recorded", async () => {
-    const { orgId, t, settings } = await run(() =>
-      graphJson({ data: [{ id: "page_1", name: "Dealer One", access_token: SYNTHETIC_PAGE_TOKEN }] })
-    );
+  test("a recorded /me id lets the data-deletion lookup erase the pending Page tokens", async () => {
+    const { orgId, t, settings } = await run(PAGES);
     await t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" });
+    expect((await settings())?.facebookPendingCredentials).toHaveLength(1);
     expect((await settings())?.facebookConnectedByUserId).toBe("fb_user_1");
+
+    await t.run((ctx) =>
+      ctx.runMutation(internal.facebookIntegrations.disconnectByFacebookConnectedUserId, {
+        facebookConnectedByUserId: "fb_user_1",
+      })
+    );
+
+    const row = await settings();
+    expect(row?.facebookPendingCredentials).toBeUndefined();
+    expect(row?.facebookAvailablePages).toBeUndefined();
   });
 
   test("a /me/accounts body whose data is not an array fails generically", async () => {
@@ -473,17 +529,6 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
       for (const secret of [...URL_CREDENTIALS, SYNTHETIC_PROVIDER_TEXT]) expect(text).not.toContain(secret);
     }
   );
-
-  test("a rejected /me fetch is non-fatal and records no connected user id", async () => {
-    const { orgId, t, settings } = await run(
-      () => graphJson({ data: [{ id: "page_1", name: "Dealer One", access_token: SYNTHETIC_PAGE_TOKEN }] }),
-      { me: rejectEmbeddingUrl }
-    );
-    await t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" });
-    const row = await settings();
-    expect(row?.facebookConnectedByUserId).toBeUndefined();
-    expect(row?.facebookAvailablePages).toEqual([{ id: "page_1", name: "Dealer One" }]);
-  });
 
   // The callback records err.message in webhookLogs, so this is the stored-row
   // boundary: drive the real route, then read what it persisted.
