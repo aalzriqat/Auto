@@ -379,6 +379,24 @@ function pickPageCredentials(data: unknown): FacebookPageCredential[] {
   });
 }
 
+/** The only fields read from an untrusted Graph reply; anything else is ignored. */
+type GraphBody = { access_token?: string; data?: unknown } | null;
+
+/**
+ * GETs a Graph URL that carries credentials in its query string. A rejected
+ * fetch can embed that URL (`client_secret`, `access_token`) in its message, and
+ * the OAuth callback stores thrown messages in the webhook log, so a transport
+ * or body failure is replaced by the caller's fixed message.
+ */
+async function graphGet(url: URL, failureMessage: string): Promise<{ ok: boolean; json: GraphBody }> {
+  try {
+    const res = await fetch(url.toString());
+    return { ok: res.ok, json: await res.json().catch(() => null) };
+  } catch {
+    throw new ConvexError(failureMessage);
+  }
+}
+
 /**
  * Exchanges the OAuth `code` for a long-lived user token, fetches all Pages
  * this user manages, and stores them in `facebookAvailablePages` for the org
@@ -398,11 +416,11 @@ export const exchangeCodeForToken = internalAction({
     tokenUrl.searchParams.set("client_secret", appSecret);
     tokenUrl.searchParams.set("redirect_uri", redirectUri);
     tokenUrl.searchParams.set("code", args.code);
-    const tokenRes = await fetch(tokenUrl.toString());
-    const tokenJson = await tokenRes.json().catch(() => null);
+    const tokenFailed = "Facebook token exchange failed.";
+    const { ok: tokenOk, json: tokenJson } = await graphGet(tokenUrl, tokenFailed);
     const shortLivedToken: string | undefined = tokenJson?.access_token;
-    if (!tokenRes.ok || !shortLivedToken) {
-      throw new ConvexError("Facebook token exchange failed.");
+    if (!tokenOk || !shortLivedToken) {
+      throw new ConvexError(tokenFailed);
     }
 
     // 2. Exchange for a long-lived user access token (~60 days).
@@ -411,10 +429,10 @@ export const exchangeCodeForToken = internalAction({
     longLivedUrl.searchParams.set("client_id", appId);
     longLivedUrl.searchParams.set("client_secret", appSecret);
     longLivedUrl.searchParams.set("fb_exchange_token", shortLivedToken);
-    const longLivedRes = await fetch(longLivedUrl.toString());
-    const longLivedJson = await longLivedRes.json().catch(() => null);
-    if (!longLivedRes.ok || !longLivedJson?.access_token) {
-      throw new ConvexError("Facebook long-lived token exchange failed.");
+    const longLivedFailed = "Facebook long-lived token exchange failed.";
+    const { ok: longLivedOk, json: longLivedJson } = await graphGet(longLivedUrl, longLivedFailed);
+    if (!longLivedOk || !longLivedJson?.access_token) {
+      throw new ConvexError(longLivedFailed);
     }
     const longLivedUserToken: string = longLivedJson.access_token;
 
@@ -428,7 +446,9 @@ export const exchangeCodeForToken = internalAction({
       meUrl.searchParams.set("access_token", longLivedUserToken);
       const meRes = await fetch(meUrl.toString());
       const meJson = await meRes.json();
-      connectedByUserId = meJson.id;
+      // Untrusted: a non-string id would fail the mutation's argument
+      // validation, whose error carries the whole argument — page tokens included.
+      if (typeof meJson?.id === "string" && meJson.id) connectedByUserId = meJson.id;
     } catch {
       // Non-fatal — connection still succeeds; only the deauth/data-deletion
       // callbacks would be unable to resolve this org later.
@@ -439,10 +459,10 @@ export const exchangeCodeForToken = internalAction({
     // non-expiring — no separate refresh flow needed, unlike Instagram.
     const accountsUrl = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/me/accounts`);
     accountsUrl.searchParams.set("access_token", longLivedUserToken);
-    const accountsRes = await fetch(accountsUrl.toString());
-    const accountsJson = await accountsRes.json().catch(() => null);
-    if (!accountsRes.ok) {
-      throw new ConvexError("Facebook Pages could not be retrieved.");
+    const accountsFailed = "Facebook Pages could not be retrieved.";
+    const { ok: accountsOk, json: accountsJson } = await graphGet(accountsUrl, accountsFailed);
+    if (!accountsOk) {
+      throw new ConvexError(accountsFailed);
     }
     const pages = pickPageCredentials(accountsJson?.data);
     if (pages.length === 0) {
@@ -567,15 +587,18 @@ export const selectFacebookPage = action({
       const subscribeRes = await fetch(subscribeUrl.toString(), { method: "POST" });
       const subscribeJson = await subscribeRes.json();
       if (!subscribeRes.ok || subscribeJson?.success !== true) {
-        throw new ConvexError(subscribeJson?.error?.message ?? subscribeRes.statusText);
+        throw new ConvexError("subscribed_apps was not accepted");
       }
-    } catch (err) {
+    } catch {
       // Non-fatal — save credentials anyway; only inbound webhook is affected.
+      // The log row is fixed text: the request URL carries the Page token and
+      // Meta's error.message / a fetch failure can echo it, and the row is
+      // stored verbatim.
       await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
         source: "facebook",
         status: "error",
         summary: `subscribed_apps failed for Page ${page.pageId}`,
-        error: err instanceof Error ? err.message : String(err),
+        error: "Webhook subscription failed; provider detail withheld.",
       });
     }
 

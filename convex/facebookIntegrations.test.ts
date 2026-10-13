@@ -1,5 +1,5 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
-import { expect, test, describe, vi } from "vitest";
+import { afterEach, expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -17,6 +17,10 @@ vi.mock("./utils/env", () => ({
     NEXT_PUBLIC_APP_URL: "https://app.test",
   })),
 }));
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 async function seedOwner(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run(async (ctx) =>
@@ -313,28 +317,40 @@ describe("facebookIntegrations: a Page belongs to one org", () => {
 // annotation does not strip the extra fields Meta returns per Page, and the
 // strict mutation validator then rejected the argument and echoed the rejected
 // value — page token included — into the thrown error, which the OAuth callback
-// writes to the public-facing webhook log.
+// stores in the admin-visible webhook log.
 describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () => {
   const SYNTHETIC_PAGE_TOKEN = "synthetic-page-token-DO-NOT-LEAK";
   const SYNTHETIC_PROVIDER_TEXT = "synthetic-provider-error-DO-NOT-LEAK";
   const graphJson = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
+  /** A Graph step: a reply, or a throw (a rejected fetch). Receives the real request URL. */
+  type Step = (url: URL) => Response | Promise<Response>;
+  type Steps = { shortToken?: Step; longToken?: Step; me?: Step };
+  const SYNTHETIC_FETCH_SECRET = "synthetic-fetch-secret-DO-NOT-LEAK";
+  /** What undici-style failures can look like: the message embeds the full request URL. */
+  const rejectEmbeddingUrl: Step = (url) => {
+    throw new Error(`request to ${url.href} failed, reason: ${SYNTHETIC_FETCH_SECRET}`);
+  };
+  /** Every credential the action puts in a Graph URL (or that the mock env holds). */
+  const URL_CREDENTIALS = ["test_fb_app_secret", "short_user_token", "long_user_token", SYNTHETIC_FETCH_SECRET];
+
   /** Routes the four Graph calls the action makes; `accounts` is the /me/accounts reply. */
-  function stubGraph(accounts: () => Response, overrides: { shortToken?: () => Response } = {}) {
+  function stubGraph(accounts: Step, overrides: Steps = {}) {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string | URL | Request) => {
         const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
-        if (url.pathname.endsWith("/me/accounts")) return accounts();
-        if (url.pathname.endsWith("/me")) return graphJson({ id: "fb_user_1" });
-        if (url.searchParams.get("grant_type") === "fb_exchange_token") return graphJson({ access_token: "long_user_token" });
-        return overrides.shortToken?.() ?? graphJson({ access_token: "short_user_token" });
+        if (url.pathname.endsWith("/me/accounts")) return accounts(url);
+        if (url.pathname.endsWith("/me")) return overrides.me?.(url) ?? graphJson({ id: "fb_user_1" });
+        if (url.searchParams.get("grant_type") === "fb_exchange_token")
+          return overrides.longToken?.(url) ?? graphJson({ access_token: "long_user_token" });
+        return overrides.shortToken?.(url) ?? graphJson({ access_token: "short_user_token" });
       })
     );
   }
 
-  async function run(accounts: () => Response, overrides: { shortToken?: () => Response } = {}) {
+  async function run(accounts: Step, overrides: Steps = {}) {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOwner(t);
     stubGraph(accounts, overrides);
@@ -394,6 +410,36 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
     expect((await settings())?.facebookPendingCredentials).toBeUndefined();
   });
 
+  // /me is untrusted too: connectedByUserId travels in the same mutation call as
+  // the page tokens, so a non-string id would fail argument validation with the
+  // whole argument — tokens included — in the error.
+  test.each([
+    ["a numeric id", 12345],
+    ["an object id", { nested: "value" }],
+    ["an empty id", ""],
+  ])("%s from /me is omitted and the connection still completes", async (_label, badId) => {
+    const { orgId, t, settings } = await run(
+      () => graphJson({ data: [{ id: "page_1", name: "Dealer One", access_token: SYNTHETIC_PAGE_TOKEN }] }),
+      { me: () => graphJson({ id: badId }) }
+    );
+
+    await t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" });
+
+    const row = await settings();
+    expect(row?.facebookConnectedByUserId).toBeUndefined();
+    expect(row?.facebookPendingCredentials).toEqual([
+      { id: "page_1", name: "Dealer One", token: SYNTHETIC_PAGE_TOKEN },
+    ]);
+  });
+
+  test("a valid /me id is still recorded", async () => {
+    const { orgId, t, settings } = await run(() =>
+      graphJson({ data: [{ id: "page_1", name: "Dealer One", access_token: SYNTHETIC_PAGE_TOKEN }] })
+    );
+    await t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" });
+    expect((await settings())?.facebookConnectedByUserId).toBe("fb_user_1");
+  });
+
   test("a /me/accounts body whose data is not an array fails generically", async () => {
     const { orgId, t } = await run(() => graphJson({ data: { access_token: SYNTHETIC_PAGE_TOKEN } }));
     const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
@@ -406,6 +452,56 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
     const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
     expect(text).toMatch(/unexpected Pages response/i);
     expect(text).not.toContain(SYNTHETIC_PROVIDER_TEXT);
+  });
+
+  test.each([
+    ["the token exchange", { shortToken: rejectEmbeddingUrl }, () => graphJson({ data: [] }), /token exchange failed/i],
+    ["the long-lived token exchange", { longToken: rejectEmbeddingUrl }, () => graphJson({ data: [] }), /long-lived token exchange failed/i],
+    ["/me/accounts", {}, rejectEmbeddingUrl, /could not be retrieved/i],
+    [
+      "a long-lived token provider error",
+      { longToken: () => graphJson({ error: { message: `${SYNTHETIC_PROVIDER_TEXT} ${SYNTHETIC_FETCH_SECRET}` } }, 400) },
+      () => graphJson({ data: [] }),
+      /long-lived token exchange failed/i,
+    ],
+  ] as const)(
+    "a failure in %s throws a fixed step-specific error that quotes no credential",
+    async (_label, overrides, accounts, expected) => {
+      const { orgId, t } = await run(accounts, overrides);
+      const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
+      expect(text).toMatch(expected);
+      for (const secret of [...URL_CREDENTIALS, SYNTHETIC_PROVIDER_TEXT]) expect(text).not.toContain(secret);
+    }
+  );
+
+  test("a rejected /me fetch is non-fatal and records no connected user id", async () => {
+    const { orgId, t, settings } = await run(
+      () => graphJson({ data: [{ id: "page_1", name: "Dealer One", access_token: SYNTHETIC_PAGE_TOKEN }] }),
+      { me: rejectEmbeddingUrl }
+    );
+    await t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" });
+    const row = await settings();
+    expect(row?.facebookConnectedByUserId).toBeUndefined();
+    expect(row?.facebookAvailablePages).toEqual([{ id: "page_1", name: "Dealer One" }]);
+  });
+
+  // The callback records err.message in webhookLogs, so this is the stored-row
+  // boundary: drive the real route, then read what it persisted.
+  test("the OAuth callback stores a fixed message, not a credential-bearing fetch failure", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+    await asOwner.mutation(api.facebookIntegrations.createConnectUrl, { orgId });
+    const state = await t.run(async (ctx) => (await ctx.db.query("oauthStates").first())!.state);
+    stubGraph(() => graphJson({ data: [] }), { longToken: rejectEmbeddingUrl });
+
+    const res = await t.fetch(`/facebook-oauth-callback?code=abc&state=${state}`, { redirect: "manual" });
+
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toContain("error=1");
+    const logs = await t.run((ctx) => ctx.db.query("webhookLogs").collect());
+    const failure = logs.find((l) => l.source === "facebook-oauth" && l.status === "error");
+    expect(failure?.error).toMatch(/long-lived token exchange failed/i);
+    for (const secret of URL_CREDENTIALS) expect(JSON.stringify(logs)).not.toContain(secret);
   });
 
   test("an account with no Pages keeps its own message", async () => {
@@ -433,5 +529,67 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
     expect(text).toMatch(/token exchange failed/i);
     expect(text).not.toContain(SYNTHETIC_PROVIDER_TEXT);
     expect(text).not.toContain(SYNTHETIC_PAGE_TOKEN);
+  });
+});
+
+// SCRUM-841: selectFacebookPage's subscribed_apps URL carries the Page token as
+// `access_token`, and its failure is persisted verbatim in webhookLogs. Neither
+// Meta's error.message (which can echo a malformed token) nor a fetch failure
+// (whose message can embed the request URL) may reach that row.
+describe("facebookIntegrations.selectFacebookPage: subscription failure logging", () => {
+  const SYNTHETIC_PAGE_TOKEN = "synthetic-page-token-DO-NOT-LEAK";
+  const SYNTHETIC_PROVIDER_TEXT = "synthetic-provider-error-DO-NOT-LEAK";
+
+  async function selectWith(subscribe: () => Promise<Response>) {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "JOD",
+        currencySymbol: "JD",
+        enabledPaymentTypes: [],
+        facebookPendingCredentials: [{ id: "page_1", name: "Dealer One", token: SYNTHETIC_PAGE_TOKEN }],
+      })
+    );
+    vi.stubGlobal("fetch", vi.fn(subscribe));
+    await asOwner.action(api.facebookIntegrations.selectFacebookPage, { orgId, pageId: "page_1" });
+    const logs = await t.run((ctx) => ctx.db.query("webhookLogs").collect());
+    const settings = await t.run((ctx) =>
+      ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    return { logs, settings };
+  }
+
+  test.each([
+    [
+      "a provider error that echoes the token",
+      async () =>
+        new Response(
+          JSON.stringify({ error: { message: `${SYNTHETIC_PROVIDER_TEXT} Malformed access token ${SYNTHETIC_PAGE_TOKEN}` } }),
+          { status: 400, headers: { "content-type": "application/json" } }
+        ),
+    ],
+    [
+      "a non-JSON provider body",
+      async () => new Response(`<html>${SYNTHETIC_PROVIDER_TEXT} ${SYNTHETIC_PAGE_TOKEN}</html>`, { status: 502 }),
+    ],
+    [
+      "a network failure whose message embeds the request URL",
+      async () => {
+        throw new Error(`request to https://graph.facebook.com/v1/page_1/subscribed_apps?access_token=${SYNTHETIC_PAGE_TOKEN} failed`);
+      },
+    ],
+  ])("%s is logged without provider text or the token, and the Page is still saved", async (_label, subscribe) => {
+    const { logs, settings } = await selectWith(subscribe);
+
+    const failure = logs.find((l) => l.source === "facebook" && l.status === "error");
+    expect(failure).toBeDefined();
+    const stored = JSON.stringify(logs);
+    expect(stored).not.toContain(SYNTHETIC_PAGE_TOKEN);
+    expect(stored).not.toContain(SYNTHETIC_PROVIDER_TEXT);
+    // Non-fatal by design: the connection is still completed.
+    expect(settings?.facebookPageId).toBe("page_1");
+    expect(settings?.facebookPageAccessToken).toBe(SYNTHETIC_PAGE_TOKEN);
   });
 });
