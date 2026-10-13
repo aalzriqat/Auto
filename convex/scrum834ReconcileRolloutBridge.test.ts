@@ -2,12 +2,14 @@
  * SCRUM-834 rollout bridge: `reconcileDealFee` accepts BOTH contracts for a short
  * window.
  *
- * The frontend deploys automatically when the cost-reconcile PR merges, while the
- * Convex backend is deployed by hand through the protected main-tip workflow. The
- * previous validator rejects the pins as extra arguments, so this bridge must be
- * deployed BEFORE that frontend merges; with it live, the new screen's pinned call
- * and a legacy call from a screen still open from before are both accepted. Until
- * the backend carries the required-pin contract:
+ * The pins ship with a frontend. A merge to main automatically creates a Vercel
+ * build, but autoflowdealer.com is promoted by hand, after the protected Convex
+ * deployment, so the backend that carries the pin arguments goes live while the
+ * old UI (which sends no pins) is still what users load. The old call must keep
+ * working until promotion, and the pinned call must be accepted from then on. In
+ * the other direction a validator without these arguments rejects a pinned call
+ * as extra arguments, so the backend deployment comes first. Until the pins are
+ * required:
  *
  *   - a LEGACY call `{ orgId, feeId, notes }` still reconciles;
  *   - a PINNED call, carrying BOTH `expectedActualAmountMinor` and

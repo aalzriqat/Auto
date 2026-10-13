@@ -13,8 +13,9 @@
  *  F3  The amount alone does not identify what was checked. A re-record that
  *      keeps the amount can replace the receipt reference, paid date or
  *      attachments, so `reconcileDealFee` also pins the line's
- *      `actualEvidenceRevision` (absent = 0), which only `recordActualFeeAmount`
- *      moves and which no payment, custody or binding write touches.
+ *      `actualEvidenceRevision` (absent = 0). `recordActualFeeAmount` moves it,
+ *      and so does an identical re-record; charging the line to custody does not
+ *      (payment and binding writes are not exercised here).
  *
  *  Until the live screen is promoted the two pins are accepted as a pair or not
  *  at all (the rollout bridge, `scrum834ReconcileRolloutBridge.test.ts`): an
@@ -257,6 +258,7 @@ describe("F3: a reconciliation is pinned to the evidence revision the checker sa
       orgId: s.orgId, feeId, expectedCurrency: "JOD", actualAmountMinor: amount, ...evidence,
     });
   const staleRefusal = /re-recorded since you opened it/i;
+  const lonePinRefusal = /pins both the amount and the evidence revision it was checked against, or neither/;
 
   async function expectNothingCertified(s: Seeded, feeId: Id<"financeDealFees">) {
     const row = await feeRow(s, feeId);
@@ -265,7 +267,7 @@ describe("F3: a reconciliation is pinned to the evidence revision the checker sa
     expect(row?.reconciliationNotes).toBeUndefined();
   }
 
-  test("a fresh, never-re-recorded line carries no revision and reconciles at 0 (legacy rows read 0)", async () => {
+  test("a fresh line stores no revision and reconciles with a pinned revision of 0", async () => {
     const s = await seed("f3a");
     const feeId = await addFee(s, "DEALER", jod(1500));
     expect((await feeRow(s, feeId))?.actualEvidenceRevision).toBeUndefined();
@@ -330,7 +332,7 @@ describe("F3: a reconciliation is pinned to the evidence revision the checker sa
     expect((await feeRow(s, feeId))?.reconciledAt).toBeDefined();
   });
 
-  test("an IDENTICAL re-record still moves the revision: the checker cannot tell it was identical", async () => {
+  test("an IDENTICAL re-record still moves the revision, so a pin taken before it is refused", async () => {
     const s = await seed("f3f");
     const feeId = await addFee(s, "DEALER", jod(1500));
     await reRecord(s, feeId, jod(1500));
@@ -355,27 +357,28 @@ describe("F3: a reconciliation is pinned to the evidence revision the checker sa
       s.operator.as.mutation(api.financeDealCosts.reconcileDealFee, {
         orgId: s.orgId, feeId, notes: "x", expectedActualAmountMinor: jod(1500),
       })
-    ).rejects.toThrow(/both the amount and the evidence revision|both|neither/i);
+    ).rejects.toThrow(lonePinRefusal);
     await expect(
       s.operator.as.mutation(api.financeDealCosts.reconcileDealFee, {
         orgId: s.orgId, feeId, notes: "x", expectedActualEvidenceRevision: 0,
       })
-    ).rejects.toThrow(/both|neither/i);
+    ).rejects.toThrow(lonePinRefusal);
     await expectNothingCertified(s, feeId);
   });
 
-  test("writes that are not a re-record of the actual leave the revision alone (updatedAt is not the pin)", async () => {
+  test("charging the line to custody does not move the revision, and a pin at 0 still certifies", async () => {
     const s = await seed("f3i");
     const feeId = await addFee(s, "EMPLOYEE", jod(100));
     const custodyId = await s.operator.as.mutation(api.financeDealCosts.openDealCustody, {
       method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, applicationId: s.applicationId, userId: s.holder.userId, issuedMinor: jod(5000),
     });
-    const before = await feeRow(s, feeId);
-    // Charging the line to custody moves updatedAt and posts a journal, but replaces no evidence.
+    expect((await feeRow(s, feeId))?.custodyId).toBeUndefined();
     await s.operator.as.mutation(api.financeDealCosts.setFeeCustody, { orgId: s.orgId, feeId, custodyId });
     const after = await feeRow(s, feeId);
-    expect(after?.updatedAt).toBeGreaterThanOrEqual(before?.updatedAt ?? 0);
+    // The write really happened (the line sits on the record now)...
+    expect(after?.custodyId).toBe(custodyId);
+    // ...and it replaced no evidence, so the revision a checker pinned earlier is still the one on file.
     expect(after?.actualEvidenceRevision).toBeUndefined();
     await reconcile(s, feeId, jod(100), 0);
     expect((await feeRow(s, feeId))?.reconciledAt).toBeDefined();
@@ -403,13 +406,16 @@ describe("F3: a reconciliation is pinned to the evidence revision the checker sa
     expect(row?.receiptReference).toBeUndefined();
   });
 
-  test("tenancy and authority are unchanged: a sales member still cannot reconcile, with any pin", async () => {
+  test("a SALES member is refused a pinned and an unpinned reconcile, and nothing is certified", async () => {
     const s = await seed("f3l");
     const feeId = await addFee(s, "DEALER", jod(1500));
     await expect(
       s.sales.as.mutation(api.financeDealCosts.reconcileDealFee, {
         orgId: s.orgId, feeId, notes: "x", expectedActualAmountMinor: jod(1500), expectedActualEvidenceRevision: 0,
       })
+    ).rejects.toThrow(/missing required permissions: confirm:finance_disbursement/i);
+    await expect(
+      s.sales.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "x" })
     ).rejects.toThrow(/missing required permissions: confirm:finance_disbursement/i);
     await expectNothingCertified(s, feeId);
   });

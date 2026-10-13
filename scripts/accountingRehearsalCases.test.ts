@@ -1862,19 +1862,25 @@ function makeBackend(defects: Defects = {}) {
           fee.reconciledAt = Date.now();
           return { ok: true as const, value: fee._id };
         }
-        // The real mutation certifies the figure the checker saw (SCRUM-834).
-        if (args.expectedActualAmountMinor === undefined) {
-          return { ok: false as const, error: "ArgumentValidationError: Object is missing the required field `expectedActualAmountMinor`." };
+        // The backend as the rollout bridge leaves it (#576): BOTH pins or NEITHER. No pin is the
+        // legacy call and is accepted; exactly one is refused; both are validated strictly.
+        const amountPin = args.expectedActualAmountMinor;
+        const revisionPin = args.expectedActualEvidenceRevision;
+        if ((amountPin === undefined) !== (revisionPin === undefined)) {
+          return {
+            ok: false as const,
+            error: "A reconciliation pins both the amount and the evidence revision it was checked against, or neither; one without the other is refused. Reload the deal and try again. Nothing has been changed.",
+          };
         }
-        if (fee.actualAmountMinor !== args.expectedActualAmountMinor) {
-          return { ok: false as const, error: "The recorded amount of this cost has changed since you opened it." };
-        }
-        // ... and the evidence revision it saw: a same-amount re-record moves only this.
-        if (args.expectedActualEvidenceRevision === undefined) {
-          return { ok: false as const, error: "ArgumentValidationError: Object is missing the required field `expectedActualEvidenceRevision`." };
-        }
-        if ((fee.actualEvidenceRevision ?? 0) !== args.expectedActualEvidenceRevision) {
-          return { ok: false as const, error: "The receipt, paid date or attachments of this cost have been re-recorded since you opened it." };
+        if (amountPin !== undefined) {
+          // The real mutation certifies the figure the checker saw (SCRUM-834)...
+          if (fee.actualAmountMinor !== amountPin) {
+            return { ok: false as const, error: "The recorded amount of this cost has changed since you opened it." };
+          }
+          // ... and the evidence revision it saw: a same-amount re-record moves only this.
+          if ((fee.actualEvidenceRevision ?? 0) !== revisionPin) {
+            return { ok: false as const, error: "The receipt, paid date or attachments of this cost have been re-recorded since you opened it." };
+          }
         }
         fee.reconciledAt = Date.now();
         return { ok: true as const, value: fee._id };
@@ -2343,6 +2349,67 @@ describe("the rehearsal passes against a backend that behaves", () => {
   for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "C1", "C2"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
+  });
+});
+
+describe("the rehearsal fake's reconcile is the rollout bridge's, so a green rehearsal does not overclaim", () => {
+  /** A live finance-company fee of 1,500 JOD on a fresh fake, and what reads back about it. */
+  async function withFee(defects: Defects = {}) {
+    const backend = makeBackend(defects);
+    const applicationId = await backend.must("mutation", "applications:createFromQuote", { orgId: "org_1", quoteId: "quote_1" });
+    const feeId = await backend.must("mutation", "financeDealCosts:recordDealFee", {
+      orgId: "org_1", applicationId, feeType: "FINANCE_COMPANY_FEE", paidBy: "DEALER", paidTo: "FINANCE_COMPANY",
+      accountingTreatment: "FINANCE_COMPANY_COMMISSION", actualAmountMinor: 1_500_000, expectedCurrency: "JOD", idempotencyKey: "bridge-fake-1",
+    });
+    const reconciledAt = async () => {
+      const read = await backend.must("query", "financeDealCosts:listDealCosts", { orgId: "org_1", applicationId });
+      return read.fees.find((fee: { _id: string }) => fee._id === feeId).reconciledAt;
+    };
+    const reconcile = (pins: Record<string, unknown>) =>
+      backend.authedCall("mutation", "financeDealCosts:reconcileDealFee", { orgId: "org_1", feeId, notes: "Matched.", ...pins });
+    return { backend, applicationId, feeId, reconcile, reconciledAt };
+  }
+  const LONE_PIN = /pins both the amount and the evidence revision it was checked against, or neither/;
+
+  test("an unpinned call is accepted and certifies the line (the old screen)", async () => {
+    const f = await withFee();
+    expect(await f.reconciledAt()).toBeUndefined();
+    expect((await f.reconcile({})).ok).toBe(true);
+    expect(await f.reconciledAt()).toBeDefined();
+  });
+
+  test.each([
+    ["the amount pin alone", { expectedActualAmountMinor: 1_500_000 }],
+    ["the revision pin alone", { expectedActualEvidenceRevision: 0 }],
+  ])("%s is refused, even when it is correct, and certifies nothing", async (_label, pins) => {
+    const f = await withFee();
+    const result = await f.reconcile(pins);
+    expect(result.ok).toBe(false);
+    expect(String((result as { error?: string }).error)).toMatch(LONE_PIN);
+    expect(await f.reconciledAt()).toBeUndefined();
+  });
+
+  test("both pins are validated: a stale amount and a stale revision are refused, the right pair is accepted", async () => {
+    const f = await withFee();
+    const staleAmount = await f.reconcile({ expectedActualAmountMinor: 1_250_000, expectedActualEvidenceRevision: 0 });
+    expect(staleAmount.ok).toBe(false);
+    expect(String((staleAmount as { error?: string }).error)).toMatch(/changed since you opened it/);
+    const staleRevision = await f.reconcile({ expectedActualAmountMinor: 1_500_000, expectedActualEvidenceRevision: 1 });
+    expect(staleRevision.ok).toBe(false);
+    expect(String((staleRevision as { error?: string }).error)).toMatch(/re-recorded since you opened it/);
+    expect(await f.reconciledAt()).toBeUndefined();
+    expect((await f.reconcile({ expectedActualAmountMinor: 1_500_000, expectedActualEvidenceRevision: 0 })).ok).toBe(true);
+    expect(await f.reconciledAt()).toBeDefined();
+  });
+
+  test("the pre-bridge backend mode still accepts the unpinned call and refuses any pin as an extra field", async () => {
+    const f = await withFee({ legacyReconcileContract: true });
+    const pinned = await f.reconcile({ expectedActualAmountMinor: 1_500_000, expectedActualEvidenceRevision: 0 });
+    expect(pinned.ok).toBe(false);
+    expect(String((pinned as { error?: string }).error)).toMatch(/extra field/);
+    expect(await f.reconciledAt()).toBeUndefined();
+    expect((await f.reconcile({})).ok).toBe(true);
+    expect(await f.reconciledAt()).toBeDefined();
   });
 });
 
