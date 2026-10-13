@@ -1704,18 +1704,13 @@ describe("a deducted cost write establishes the remittance from what the company
  * `HandoverCostRowRoutes.test.tsx`; this is the backend half of the same claim.
  */
 describe("every live fee type can be taken from blocking to closable", () => {
-  type FeeType = "APPRAISAL_FEE" | "ADMINISTRATIVE_FEE" | "COMMISSION" | "FINANCE_COMPANY_FEE";
-  const SHAPES: ReadonlyArray<{
-    feeType: FeeType;
-    paidTo: "APPRAISER" | "OTHER" | "FINANCE_COMPANY";
-    accountingTreatment: "APPRAISAL_EXPENSE" | "SELLING_EXPENSE" | "FINANCE_COMPANY_COMMISSION";
-  }> = [
+  const SHAPES = [
     { feeType: "APPRAISAL_FEE", paidTo: "APPRAISER", accountingTreatment: "APPRAISAL_EXPENSE" },
     { feeType: "ADMINISTRATIVE_FEE", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE" },
     { feeType: "COMMISSION", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE" },
     // Never bound as the execution fee: a plain finance-company charge.
     { feeType: "FINANCE_COMPANY_FEE", paidTo: "FINANCE_COMPANY", accountingTreatment: "FINANCE_COMPANY_COMMISSION" },
-  ];
+  ] as const;
 
   async function addShape(seed: Seed, shape: (typeof SHAPES)[number], actualAmountMinor?: number) {
     return await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
