@@ -2476,7 +2476,7 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     });
   });
 
-  test("without create:finance_application the section is read-only; a non-handover line never gets controls", () => {
+  test("without create:finance_application the section is read-only; with it, every live fee type gets a route (SCRUM-834)", () => {
     readableDeal();
     queryResults.set(
       COSTS_QUERY,
@@ -2492,7 +2492,10 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
     renderCockpit();
     expect(within(screen.getByTestId("deal-handover-cost-fee_1")).getByRole("button", { name: "RecordActualCost" })).toBeTruthy();
-    expect(within(screen.getByTestId("deal-handover-cost-fee_2")).queryByRole("button")).toBeNull();
+    // A finance-company fee that is not the bound execution fee blocks closing
+    // like any other live line, so it carries the same record / remove route.
+    expect(within(screen.getByTestId("deal-handover-cost-fee_2")).getByRole("button", { name: "RecordActualCost" })).toBeTruthy();
+    expect(within(screen.getByTestId("deal-handover-cost-fee_2")).getByRole("button", { name: "RemoveHandoverCost" })).toBeTruthy();
   });
 
   test("totals are the server's, estimated and actual apart; a line without an amount reads as not recorded, never zero", () => {

@@ -1695,3 +1695,157 @@ describe("a deducted cost write establishes the remittance from what the company
     expect(app?.economicsRevision).toBe(7);
   });
 });
+
+/**
+ * SCRUM-834: closing readiness (`COSTS_CLOSABLE`) judges EVERY live line, so
+ * every fee type a deal can carry has to be recordable, reconcilable and
+ * removable by the same mutations -- including the types the Handover screen's
+ * add form never offers. The screen routes for them are
+ * `HandoverCostRowRoutes.test.tsx`; this is the backend half of the same claim.
+ */
+describe("every live fee type can be taken from blocking to closable", () => {
+  type FeeType = "APPRAISAL_FEE" | "ADMINISTRATIVE_FEE" | "COMMISSION" | "FINANCE_COMPANY_FEE";
+  const SHAPES: ReadonlyArray<{
+    feeType: FeeType;
+    paidTo: "APPRAISER" | "OTHER" | "FINANCE_COMPANY";
+    accountingTreatment: "APPRAISAL_EXPENSE" | "SELLING_EXPENSE" | "FINANCE_COMPANY_COMMISSION";
+  }> = [
+    { feeType: "APPRAISAL_FEE", paidTo: "APPRAISER", accountingTreatment: "APPRAISAL_EXPENSE" },
+    { feeType: "ADMINISTRATIVE_FEE", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE" },
+    { feeType: "COMMISSION", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE" },
+    // Never bound as the execution fee: a plain finance-company charge.
+    { feeType: "FINANCE_COMPANY_FEE", paidTo: "FINANCE_COMPANY", accountingTreatment: "FINANCE_COMPANY_COMMISSION" },
+  ];
+
+  async function addShape(seed: Seed, shape: (typeof SHAPES)[number], actualAmountMinor?: number) {
+    return await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
+      expectedCurrency: "JOD",
+      idempotencyKey: crypto.randomUUID(),
+      orgId: seed.orgId,
+      applicationId: seed.applicationId,
+      feeType: shape.feeType,
+      description: "Unplanned charge",
+      estimatedAmountMinor: jod(100),
+      ...(actualAmountMinor !== undefined ? { actualAmountMinor } : {}),
+      paidBy: "DEALER",
+      paidTo: shape.paidTo,
+      accountingTreatment: shape.accountingTreatment,
+    });
+  }
+
+  async function feeRow(seed: Seed, feeId: Id<"financeDealFees">) {
+    return (await readCosts(seed)).fees.find((fee) => fee._id === feeId);
+  }
+
+  test.each(SHAPES)("$feeType: no actual -> actual recorded -> reconciled, each step moving the readiness reason", async (shape) => {
+    const seed = await withCompany(await seedDeal(`ladder_${shape.feeType}`));
+    const feeId = await addShape(seed, shape);
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({
+      status: "BLOCKED", reason: expect.stringMatching(/no actual amount recorded/i),
+    });
+
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+      expectedCurrency: "JOD", orgId: seed.orgId, feeId, actualAmountMinor: jod(137),
+    });
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({
+      status: "BLOCKED", reason: expect.stringMatching(/nobody has checked/i),
+    });
+    // The screen pins the revision it served: one re-record makes it 1.
+    expect(await feeRow(seed, feeId)).toMatchObject({ feeType: shape.feeType, status: "ACTUAL_RECORDED", actualEvidenceRevision: 1 });
+
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: seed.orgId, feeId, notes: "Matched to the receipt.",
+      expectedActualAmountMinor: jod(137),
+      expectedActualEvidenceRevision: 1,
+    });
+    expect(await feeRow(seed, feeId)).toMatchObject({ status: "RECONCILED" });
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "READY", reason: null });
+  });
+
+  test.each(SHAPES)("$feeType: a reconcile pinned to evidence that was re-recorded since is refused and nothing changes", async (shape) => {
+    const seed = await withCompany(await seedDeal(`stale_${shape.feeType}`));
+    const feeId = await addShape(seed, shape, jod(80));
+    // Same amount, new receipt: only the evidence moves.
+    await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+      expectedCurrency: "JOD", orgId: seed.orgId, feeId, actualAmountMinor: jod(80), receiptReference: "REC-2",
+    });
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+        orgId: seed.orgId, feeId, notes: "Matched.",
+        expectedActualAmountMinor: jod(80),
+        expectedActualEvidenceRevision: 0,
+      })
+    ).rejects.toThrow(/re-recorded since you opened it/i);
+    expect(await feeRow(seed, feeId)).toMatchObject({ status: "ACTUAL_RECORDED" });
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({
+      status: "BLOCKED", reason: expect.stringMatching(/nobody has checked/i),
+    });
+  });
+
+  test.each(SHAPES)("$feeType: removing the unchecked line clears the blocker while a reconciled sibling stands", async (shape) => {
+    const seed = await withCompany(await seedDeal(`void_${shape.feeType}`));
+    const sibling = await addFee(seed, { actualAmountMinor: jod(120) });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: seed.orgId, feeId: sibling, notes: "Matched.", expectedActualAmountMinor: jod(120), expectedActualEvidenceRevision: 0,
+    });
+    const feeId = await addShape(seed, shape, jod(60));
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "BLOCKED" });
+
+    await seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "Charged to the wrong deal" });
+
+    expect((await readCosts(seed)).fees.map((fee) => fee._id)).toEqual([sibling]);
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "READY", reason: null });
+  });
+
+  test.each(SHAPES)("$feeType: the currency guard holds -- an amount counted in another currency is refused, and a line already in one blocks closing", async (shape) => {
+    const seed = await withCompany(await seedDeal(`ccy_${shape.feeType}`));
+    const feeId = await addShape(seed, shape, jod(80));
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+        expectedCurrency: "USD", orgId: seed.orgId, feeId, actualAmountMinor: jod(90),
+      })
+    ).rejects.toThrow(/entered in USD|recorded in JOD|currency/i);
+    expect((await feeRow(seed, feeId))?.actualAmountMinor).toBe(jod(80));
+
+    // A legacy / raw-edited line in another currency is never reconciled into a green check.
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { currency: "USD" }));
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({
+      status: "BLOCKED", reason: expect.stringMatching(/not in JOD/i),
+    });
+  });
+
+  test.each(SHAPES)("$feeType: the tenant guard holds -- another organization's accountant can reconcile nothing", async (shape) => {
+    const seed = await withCompany(await seedDeal(`tenant_${shape.feeType}`));
+    const feeId = await addShape(seed, shape, jod(80));
+    const otherOrg = await seed.t.run(async (ctx) => {
+      const orgId = await ctx.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() });
+      const userId = await ctx.db.insert("users", { clerkId: "costs_outsider", email: "out@x.com" });
+      const roleId = await ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ALL_PERMISSIONS, isSystemOwnerRole: true });
+      await ctx.db.insert("memberships", { orgId, userId, roleId });
+      return orgId;
+    });
+    const outsider = seed.t.withIdentity({ subject: "costs_outsider" });
+    await expect(
+      outsider.mutation(api.financeDealCosts.reconcileDealFee, {
+        orgId: otherOrg, feeId, notes: "Matched.", expectedActualAmountMinor: jod(80), expectedActualEvidenceRevision: 0,
+      })
+    ).rejects.toThrow();
+    expect(await feeRow(seed, feeId)).toMatchObject({ status: "ACTUAL_RECORDED" });
+  });
+
+  test.each(SHAPES)("$feeType: the freeze guard holds -- once the deal is closed the line can no longer be removed or re-recorded", async (shape) => {
+    const seed = await withCompany(await seedDeal(`frozen_${shape.feeType}`));
+    const feeId = await addShape(seed, shape, jod(80));
+    // `dealEconomicsFrozen` reads a CLOSED application the same as a finalized sale.
+    await seed.t.run((ctx) => ctx.db.patch(seed.applicationId, { status: "CLOSED" }));
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "Too late" })
+    ).rejects.toThrow(/finalized/i);
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+        expectedCurrency: "JOD", orgId: seed.orgId, feeId, actualAmountMinor: jod(90),
+      })
+    ).rejects.toThrow(/finalized/i);
+    expect(await feeRow(seed, feeId)).toMatchObject({ actualAmountMinor: jod(80) });
+  });
+});
