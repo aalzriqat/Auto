@@ -1,6 +1,6 @@
 {
   "id": "unchecked-finance-fee-is-reconciled-from-its-row-en-1280",
-  "fingerprint": "d2ce4c1b6ff97fc568f9f3c2c54780d2dd184a19a2902e77701d8bb2bff64a64",
+  "fingerprint": "1ccecc1baa7fd25e838aeb9269460f3fc31478ce3defee8073f486dc146793d0",
   "domain": "screen",
   "level": "browser",
   "status": "active",
@@ -29,6 +29,18 @@
         "role": "owner",
         "org": "A"
       },
+      "action": "deal.closingChecklist.goToCosts",
+      "input": {
+        "locale": "en",
+        "viewportWidth": 1280,
+        "feeRowInitiallyOutOfView": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
       "action": "deal.handoverCosts.reconcileFee",
       "input": {
         "locale": "en",
@@ -39,12 +51,24 @@
   ],
   "expected": [
     {
+      "observable": "fee.drawnIn",
+      "value": "genericList"
+    },
+    {
       "observable": "closingCheck.costsClosable.beforeAction",
       "value": "BLOCKED"
     },
     {
+      "observable": "row.inViewport.afterLink",
+      "value": true
+    },
+    {
       "observable": "row.estimatedAndActualShown",
       "value": true
+    },
+    {
+      "observable": "row.varianceStated",
+      "value": "actualHigherBy250"
     },
     {
       "observable": "row.actionsInsideViewport",
@@ -53,6 +77,10 @@
         "recordActual",
         "remove"
       ]
+    },
+    {
+      "observable": "form.figuresAndVarianceVisibleWhileTyping",
+      "value": true
     },
     {
       "observable": "fee.status.afterReconcile",

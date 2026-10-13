@@ -64,11 +64,22 @@ function executionFeeFormPermitted(form: ExecutionFeeForm, access: ExecutionFeeA
 }
 
 /**
+ * Re-recording or removing a RECONCILED line undoes somebody's check, and the
+ * server asks for the permission to confirm finance disbursements for it
+ * (`assertMayUndoReconciliation`). Editing costs alone is not enough, so a
+ * manager without it is told who can instead of being offered a refused button.
+ */
+function mayUndoCheck(status: string, canConfirmDisbursements: boolean): boolean {
+  return status !== "RECONCILED" || canConfirmDisbursements;
+}
+
+/**
  * The ONE decision on whether a section form (and the button that opens it) can
  * be offered on the bound line: permitted, and the line can still take it.
  * Only a line in the deal's own currency is compared or edited here; Reconcile
  * needs an unreconciled recorded actual, Correct a recorded actual to correct,
- * Remove any line. The panel's reset, the section's form branches and its
+ * Remove any line; Correct and Remove on a RECONCILED line also need the
+ * permission to undo a check. The panel's reset, the section's form branches and its
  * buttons all call this, so a form is never marked open that nothing draws.
  */
 function executionFeeFormAvailable(
@@ -82,9 +93,9 @@ function executionFeeFormAvailable(
     case "RECONCILE":
       return line.actualAmountMinor !== undefined && line.status !== "RECONCILED";
     case "CORRECT":
-      return line.actualAmountMinor !== undefined;
+      return line.actualAmountMinor !== undefined && mayUndoCheck(line.status, access.canReconcile);
     case "REMOVE":
-      return true;
+      return mayUndoCheck(line.status, access.canReconcile);
   }
 }
 
@@ -836,6 +847,15 @@ export function HandoverCostsPanel({
   // but its figures are not the deal's: it can be neither recorded nor
   // reconciled here, only removed (`voidDealFee` judges no currency).
   const inDealCurrency = (line: HandoverCostLine) => line.currency === denomination.code;
+  // Re-recording or removing a RECONCILED line undoes a check: the server asks
+  // for the disbursement-confirm permission (`mayUndoCheck`), so a manager
+  // without it is told who can instead of being offered a refused button.
+  const mayUndo = (status: string) => mayUndoCheck(status, mayReconcile);
+  const reconciledHandoff = (feeId: string) => (
+    <span className="text-xs text-muted-foreground" data-testid={`deal-handover-cost-${feeId}-reconciled-handoff`}>
+      {t("ReconciledNeedsAccountant")}
+    </span>
+  );
   // The section only renders a form `executionFeeFormAvailable` allows, and the
   // same decision ends it here, so the marker never outlives what is drawn.
   // Another user reconciling or re-recording the fee, a handler or permission
@@ -1251,9 +1271,10 @@ export function HandoverCostsPanel({
                                       <CheckCheck className="h-3.5 w-3.5" />
                                     </Button>
                                   )}
+                                  {canManage && !mayUndo(row.actual.status) && reconciledHandoff(row.actual.feeId)}
                                   {canManage && (
                                     <>
-                                      {row.actual.currency === denomination.code && (
+                                      {row.actual.currency === denomination.code && mayUndo(row.actual.status) && (
                                         <Button
                                           type="button"
                                           variant="ghost"
@@ -1272,23 +1293,25 @@ export function HandoverCostsPanel({
                                           <Pencil className="h-3.5 w-3.5" />
                                         </Button>
                                       )}
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-7 w-7 text-destructive hover:text-destructive"
-                                        aria-label={t("RemoveHandoverCost")}
-                                        disabled={submittingAny || paymentPending}
-                                        onClick={() => {
-                                          if (!closeAddForm()) return;
-                                          setRecordingTemplateIndex(null);
-                                          setEditingId(null);
-                                          setReconcilingId(null);
-                                          setVoidingId(row.actual?.feeId ?? null);
-                                        }}
-                                      >
-                                        <Trash2 className="h-3.5 w-3.5" />
-                                      </Button>
+                                      {mayUndo(row.actual.status) && (
+                                        <Button
+                                          type="button"
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-7 w-7 text-destructive hover:text-destructive"
+                                          aria-label={t("RemoveHandoverCost")}
+                                          disabled={submittingAny || paymentPending}
+                                          onClick={() => {
+                                            if (!closeAddForm()) return;
+                                            setRecordingTemplateIndex(null);
+                                            setEditingId(null);
+                                            setReconcilingId(null);
+                                            setVoidingId(row.actual?.feeId ?? null);
+                                          }}
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                        </Button>
+                                      )}
                                     </>
                                   )}
                                 </div>
@@ -1362,6 +1385,9 @@ export function HandoverCostsPanel({
                   {reconcilingId === line._id && line.actualAmountMinor !== undefined ? (
                     <ReconcileForm
                       t={t}
+                      testId={`deal-handover-reconcile-${line._id}-form`}
+                      figures={<LineFigures line={line} money={money} t={t} varianceTestId={`deal-handover-reconcile-${line._id}-variance`} />}
+                      differs={line.estimatedAmountMinor !== undefined && line.estimatedAmountMinor !== line.actualAmountMinor}
                       currentActualMinor={line.actualAmountMinor}
                       currentEvidenceRevision={line.actualEvidenceRevision ?? 0}
                       formatAmount={(minor) => money(minor, line.currency)}
@@ -1416,6 +1442,14 @@ export function HandoverCostsPanel({
                             </>
                           )}
                         </div>
+                        <FeeVariance
+                          expectedMinor={line.estimatedAmountMinor ?? null}
+                          actual={line.actualAmountMinor === undefined ? undefined : { minor: line.actualAmountMinor, currency: line.currency }}
+                          currency={denomination.code}
+                          money={money}
+                          t={t}
+                          testId={`deal-handover-cost-${line._id}-variance`}
+                        />
                       </div>
                       <div className="flex items-start gap-3 md:flex-row-reverse md:items-center">
                         <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs md:w-56 md:grid-cols-2">
@@ -1466,9 +1500,10 @@ export function HandoverCostsPanel({
                                 <CheckCheck className="h-3.5 w-3.5" />
                               </Button>
                             )}
+                            {canManage && !mayUndo(line.status) && reconciledHandoff(line._id)}
                             {canManage && (
                               <>
-                                {inDealCurrency(line) && (
+                                {inDealCurrency(line) && mayUndo(line.status) && (
                                   <Button
                                     type="button"
                                     variant="ghost"
@@ -1486,22 +1521,24 @@ export function HandoverCostsPanel({
                                     <Pencil className="h-3.5 w-3.5" />
                                   </Button>
                                 )}
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-7 w-7 text-destructive hover:text-destructive"
-                                  aria-label={t("RemoveHandoverCost")}
-                                  disabled={submittingAny || paymentPending}
-                                  onClick={() => {
-                                    if (!closeAddForm()) return;
-                                    setEditingId(null);
-                                    setReconcilingId(null);
-                                    setVoidingId(line._id);
-                                  }}
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </Button>
+                                {mayUndo(line.status) && (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7 text-destructive hover:text-destructive"
+                                    aria-label={t("RemoveHandoverCost")}
+                                    disabled={submittingAny || paymentPending}
+                                    onClick={() => {
+                                      if (!closeAddForm()) return;
+                                      setEditingId(null);
+                                      setReconcilingId(null);
+                                      setVoidingId(line._id);
+                                    }}
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                )}
                               </>
                             )}
                           </div>
@@ -2151,6 +2188,11 @@ function ExecutionFeeSection({
               {t("ReconcileNeedsAccountant")}
             </p>
           )}
+          {canManage && !canReconcile && bound !== undefined && sameCurrency && !mayUndoCheck(bound.status, canReconcile) && (
+            <p className="text-xs text-muted-foreground" data-testid="deal-execution-fee-reconciled-handoff">
+              {t("ReconciledNeedsAccountant")}
+            </p>
+          )}
           {bound && sameCurrency && (
             <div className="flex flex-wrap items-center justify-end gap-2">
               {available("RECONCILE") && (
@@ -2599,9 +2641,6 @@ function FeeFigures({
   actualTestId?: string;
   varianceTestId: string;
 }>) {
-  // A gap between two denominations is not a number; only a same-currency one is shown.
-  const variance =
-    expectedMinor === null || actual === undefined || actual.currency !== currency ? null : actual.minor - expectedMinor;
   return (
     <>
       <dl className="grid w-fit grid-cols-[auto_auto] gap-x-3 text-end text-xs">
@@ -2622,23 +2661,99 @@ function FeeFigures({
           )}
         </dd>
       </dl>
-      {variance !== null && (
-        <p
-          className={`text-xs ${variance === 0 ? "text-muted-foreground" : "font-medium text-amber-700 dark:text-amber-400"}`}
-          data-testid={varianceTestId}
-        >
-          {variance === 0 ? (
-            t("ReconcileVarianceNone")
-          ) : (
-            <>
-              {t(variance > 0 ? "ReconcileVarianceOver" : "ReconcileVarianceUnder")}{" "}
-              <bdi dir="ltr" className="tabular-nums">
-                {money(Math.abs(variance), currency)}
-              </bdi>
-            </>
-          )}
-        </p>
+      <FeeVariance expectedMinor={expectedMinor} actual={actual} currency={currency} money={money} t={t} testId={varianceTestId} />
+    </>
+  );
+}
+
+/**
+ * The gap between an expectation and what was recorded, in words with its
+ * amount ("Actual is higher than expected by 250 JOD"). Nothing is drawn when
+ * either side is missing or the two are in different currencies: a gap between
+ * two denominations is not a number.
+ */
+function FeeVariance({
+  expectedMinor,
+  actual,
+  currency,
+  money,
+  t,
+  testId,
+}: Readonly<{
+  expectedMinor: number | null;
+  actual: { minor: number; currency: string } | undefined;
+  currency: string;
+  money: (minor: number, currency: string) => string;
+  t: (key: string) => string;
+  testId: string;
+}>) {
+  const variance =
+    expectedMinor === null || actual === undefined || actual.currency !== currency ? null : actual.minor - expectedMinor;
+  if (variance === null) return null;
+  return (
+    <p
+      className={`text-xs ${variance === 0 ? "text-muted-foreground" : "font-medium text-amber-700 dark:text-amber-400"}`}
+      data-testid={testId}
+    >
+      {variance === 0 ? (
+        t("ReconcileVarianceNone")
+      ) : (
+        <>
+          {t(variance > 0 ? "ReconcileVarianceOver" : "ReconcileVarianceUnder")}{" "}
+          <bdi dir="ltr" className="tabular-nums">
+            {money(Math.abs(variance), currency)}
+          </bdi>
+        </>
       )}
+    </p>
+  );
+}
+
+/**
+ * What a generic cost line's check is of: its estimate (when it has one), its
+ * actual and the stated gap. Kept on screen inside the line's reconcile form so
+ * the person writing the note is looking at the figures they are vouching for.
+ */
+function LineFigures({
+  line,
+  money,
+  t,
+  varianceTestId,
+}: Readonly<{
+  line: HandoverCostLine;
+  money: (minor: number, currency: string) => string;
+  t: (key: string) => string;
+  varianceTestId: string;
+}>) {
+  const actual = line.actualAmountMinor === undefined ? undefined : { minor: line.actualAmountMinor, currency: line.currency };
+  return (
+    <>
+      <dl className="grid w-fit grid-cols-[auto_auto] gap-x-3 text-end text-xs">
+        <dt className="text-muted-foreground">{t("CostEstimated")}</dt>
+        <dd className="tabular-nums">
+          {line.estimatedAmountMinor === undefined ? (
+            <span className="text-muted-foreground">{t("FactUnavailable")}</span>
+          ) : (
+            <bdi dir="ltr">{money(line.estimatedAmountMinor, line.currency)}</bdi>
+          )}
+        </dd>
+        <dt className="text-muted-foreground">{t("CostActual")}</dt>
+        <dd className="font-semibold tabular-nums text-money-out">
+          {actual === undefined ? (
+            <span className="font-normal text-muted-foreground">{t("CostNotRecorded")}</span>
+          ) : (
+            <bdi dir="ltr">{money(actual.minor, actual.currency)}</bdi>
+          )}
+        </dd>
+      </dl>
+      <FeeVariance
+        expectedMinor={line.estimatedAmountMinor ?? null}
+        actual={actual}
+        currency={line.currency}
+        money={money}
+        t={t}
+        testId={varianceTestId}
+      />
     </>
   );
 }

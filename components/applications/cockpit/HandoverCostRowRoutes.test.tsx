@@ -364,3 +364,221 @@ describe("a live line in another currency than the deal's (legacy) blocks closin
     expect(within(row()).getByRole("button", { name: salesAr.RemoveHandoverCost })).toBeTruthy();
   });
 });
+
+/**
+ * SCRUM-834 (Codex P2): re-recording or removing a RECONCILED line undoes
+ * somebody's check, and the backend asks for confirm:finance_disbursement for it
+ * (`assertMayUndoReconciliation`). The default SALES role can manage costs
+ * without holding it, so the screen must not offer that role a button the server
+ * refuses -- it says who can instead.
+ */
+describe.each(["LICENSING", ...NON_HANDOVER_TYPES])("a RECONCILED %s line and a manager who cannot confirm finance disbursements", (feeType) => {
+  const SALES = { canManage: true, canReconcile: false } as const;
+  const reconciled = (overrides: Partial<HandoverCostLine> = {}) => lineOf(feeType, { status: "RECONCILED", ...overrides });
+  const handoff = () => screen.queryByTestId("deal-handover-cost-fee1-reconciled-handoff");
+
+  test("is offered neither Record actual nor Remove, and is told who can", () => {
+    renderPanel(costs([reconciled()]), { onReconcile: async () => {} }, SALES);
+    expect(maybeButton(salesEn.RecordActualCost)).toBeNull();
+    expect(maybeButton(salesEn.RemoveHandoverCost)).toBeNull();
+    expect(maybeButton(salesEn.ReconcileDealFee)).toBeNull();
+    expect(handoff()?.textContent).toBe(salesEn.ReconciledNeedsAccountant);
+    // Nothing is "waiting to be reconciled": it already is.
+    expect(screen.queryByTestId("deal-handover-reconcile-fee1-waiting")).toBeNull();
+  });
+
+  test("the holder of the permission keeps the audited correction and removal, with no hand-off note", () => {
+    renderPanel(costs([reconciled()]), { onReconcile: async () => {} }, { canManage: true, canReconcile: true });
+    expect(button(salesEn.RecordActualCost)).toBeTruthy();
+    expect(button(salesEn.RemoveHandoverCost)).toBeTruthy();
+    expect(handoff()).toBeNull();
+  });
+
+  test("an UNRECONCILED line is still corrected and removed by the same manager, who is told an accountant must reconcile", () => {
+    renderPanel(costs([lineOf(feeType)]), { onReconcile: async () => {} }, SALES);
+    expect(button(salesEn.RecordActualCost)).toBeTruthy();
+    expect(button(salesEn.RemoveHandoverCost)).toBeTruthy();
+    expect(handoff()).toBeNull();
+    expect(screen.getByTestId("deal-handover-reconcile-fee1-waiting")).toBeTruthy();
+  });
+
+  test("a reconciled line in another currency cannot be removed by that manager either", () => {
+    renderPanel(costs([reconciled({ currency: "USD" })]), { onReconcile: async () => {} }, SALES);
+    expect(screen.getByTestId("deal-handover-cost-fee1-currency")).toBeTruthy();
+    expect(maybeButton(salesEn.RemoveHandoverCost)).toBeNull();
+    expect(handoff()?.textContent).toBe(salesEn.ReconciledNeedsAccountant);
+  });
+
+  test("an unreconciled line in another currency is still removable by that manager (the legacy clean-up route)", () => {
+    renderPanel(costs([lineOf(feeType, { currency: "USD" })]), { onReconcile: async () => {} }, SALES);
+    expect(button(salesEn.RemoveHandoverCost)).toBeTruthy();
+    expect(handoff()).toBeNull();
+  });
+
+  test("a configured (checklist) row gets the same rule", () => {
+    const checklist = (status: string) =>
+      costs([reconciled({ status })], {
+        expected: {
+          source: "COMPANY_RULE_SNAPSHOT",
+          currency: "JOD",
+          rows: [
+            {
+              templateIndex: 0,
+              feeType,
+              description: "Configured",
+              expectedAmountMinor: 100_000,
+              expectedAmountReason: null,
+              duplicateIdentity: false,
+              actual: { feeId: "fee1", actualAmountMinor: 120_000, currency: "JOD", status },
+            },
+          ],
+          expectedTotalMinor: 100_000,
+          expectedTotalReason: null,
+          actualTotalMinor: 120_000,
+          differenceMinor: -20_000,
+          unplannedLineIds: [],
+        } as never,
+      });
+    const view = renderPanel(checklist("RECONCILED"), { onReconcile: async () => {} }, SALES);
+    expect(screen.queryByRole("button", { name: salesEn.RecordActualCost })).toBeNull();
+    expect(screen.queryByRole("button", { name: salesEn.RemoveHandoverCost })).toBeNull();
+    expect(handoff()?.textContent).toBe(salesEn.ReconciledNeedsAccountant);
+    view.unmount();
+
+    renderPanel(checklist("RECONCILED"), { onReconcile: async () => {} }, { canManage: true, canReconcile: true });
+    expect(screen.getByRole("button", { name: salesEn.RecordActualCost })).toBeTruthy();
+    expect(screen.getByRole("button", { name: salesEn.RemoveHandoverCost })).toBeTruthy();
+  });
+});
+
+test("the hand-off to an authorized user reads in Arabic", () => {
+  const tAr = (key: string) => (salesAr as Record<string, string>)[key] ?? key;
+  render(
+    <HandoverCostsPanel
+      costs={costs([lineOf("LICENSING", { status: "RECONCILED" })])}
+      loading={false}
+      denomination={{ code: "JOD" }}
+      scaleOf={() => 3}
+      money={money}
+      canManage
+      canReconcile={false}
+      dealClosed={false}
+      costSource={{ kind: "PENDING" }}
+      t={tAr}
+      onAdd={async () => {}}
+      onAbandonAdd={() => {}}
+      onRecordActual={(async () => {}) as never}
+      onVoid={async () => {}}
+    />
+  );
+  expect(salesAr.ReconciledNeedsAccountant).not.toBe(salesEn.ReconciledNeedsAccountant);
+  expect(screen.getByTestId("deal-handover-cost-fee1-reconciled-handoff").textContent).toBe(salesAr.ReconciledNeedsAccountant);
+});
+
+/**
+ * SCRUM-834: the variance is stated, not left for the reader to subtract, and the
+ * figures a checker is vouching for stay on screen while the note is typed.
+ */
+describe("the variance of a cost line, stated in words with its amount", () => {
+  const varianceLine = (overrides: Partial<HandoverCostLine> = {}) =>
+    lineOf("FINANCE_COMPANY_FEE", { estimatedAmountMinor: 1_250_000, actualAmountMinor: 1_500_000, ...overrides });
+
+  test("an actual above the estimate says by how much, on the row", () => {
+    renderPanel(costs([varianceLine()]), { onReconcile: async () => {} });
+    const variance = screen.getByTestId("deal-handover-cost-fee1-variance");
+    expect(variance.textContent).toContain(salesEn.ReconcileVarianceOver);
+    expect(variance.textContent).toContain("250 JOD");
+  });
+
+  test("below, equal and absent estimates", () => {
+    const below = renderPanel(costs([varianceLine({ actualAmountMinor: 1_000_000 })]), {});
+    expect(screen.getByTestId("deal-handover-cost-fee1-variance").textContent).toContain(salesEn.ReconcileVarianceUnder);
+    expect(screen.getByTestId("deal-handover-cost-fee1-variance").textContent).toContain("250 JOD");
+    below.unmount();
+
+    const equal = renderPanel(costs([varianceLine({ actualAmountMinor: 1_250_000 })]), {});
+    expect(screen.getByTestId("deal-handover-cost-fee1-variance").textContent).toBe(salesEn.ReconcileVarianceNone);
+    equal.unmount();
+
+    const { estimatedAmountMinor: _estimate, ...noEstimate } = varianceLine();
+    void _estimate;
+    renderPanel(costs([noEstimate]), {});
+    expect(screen.queryByTestId("deal-handover-cost-fee1-variance")).toBeNull();
+  });
+
+  test("no variance is invented without an actual or across two currencies", () => {
+    const { actualAmountMinor: _actual, ...noActual } = varianceLine({ status: "ESTIMATED_ONLY" });
+    void _actual;
+    const first = renderPanel(costs([noActual]), {});
+    expect(screen.queryByTestId("deal-handover-cost-fee1-variance")).toBeNull();
+    first.unmount();
+    renderPanel(costs([varianceLine({ currency: "USD" })]), {});
+    expect(screen.queryByTestId("deal-handover-cost-fee1-variance")).toBeNull();
+  });
+
+  test("the reconcile form keeps the estimate, the actual and the variance on screen while the note is typed", async () => {
+    const onReconcile = vi.fn(async () => {});
+    renderPanel(costs([varianceLine()]), { onReconcile });
+    fireEvent.click(button(salesEn.ReconcileDealFee));
+    const form = screen.getByTestId("deal-handover-reconcile-fee1-form");
+    expect(within(form).getByText("1,250 JOD")).toBeTruthy();
+    expect(within(form).getByText("1,500 JOD")).toBeTruthy();
+    expect(within(form).getByTestId("deal-handover-reconcile-fee1-variance").textContent).toContain("250 JOD");
+    // The prompt says what to write when the figures differ.
+    expect(within(form).getByText(salesEn.ReconcileVarianceNotesHint)).toBeTruthy();
+
+    fireEvent.change(within(form).getByLabelText(salesEn.ReconcileNotes), { target: { value: "company letter 31 confirms 1,500" } });
+    // Still on screen after typing.
+    expect(within(form).getByText("1,500 JOD")).toBeTruthy();
+    expect(within(form).getByTestId("deal-handover-reconcile-fee1-variance")).toBeTruthy();
+    fireEvent.click(within(form).getByRole("button", { name: salesEn.ConfirmReconcile }));
+    await waitFor(() => expect(onReconcile).toHaveBeenCalledWith("fee1", "company letter 31 confirms 1,500", 1_500_000, 0));
+  });
+
+  test("a line with no estimate shows its actual in the form and no variance or difference prompt", () => {
+    const { estimatedAmountMinor: _estimate, ...noEstimate } = varianceLine();
+    void _estimate;
+    renderPanel(costs([noEstimate]), { onReconcile: async () => {} });
+    fireEvent.click(button(salesEn.ReconcileDealFee));
+    const form = screen.getByTestId("deal-handover-reconcile-fee1-form");
+    expect(within(form).getByText("1,500 JOD")).toBeTruthy();
+    expect(within(form).queryByTestId("deal-handover-reconcile-fee1-variance")).toBeNull();
+    expect(within(form).queryByText(salesEn.ReconcileVarianceNotesHint)).toBeNull();
+  });
+
+  test("a matching actual shows no difference prompt", () => {
+    renderPanel(costs([varianceLine({ actualAmountMinor: 1_250_000 })]), { onReconcile: async () => {} });
+    fireEvent.click(button(salesEn.ReconcileDealFee));
+    const form = screen.getByTestId("deal-handover-reconcile-fee1-form");
+    expect(within(form).getByTestId("deal-handover-reconcile-fee1-variance").textContent).toBe(salesEn.ReconcileVarianceNone);
+    expect(within(form).queryByText(salesEn.ReconcileVarianceNotesHint)).toBeNull();
+  });
+
+  test("in Arabic the variance and the form's figures are the Arabic strings", () => {
+    const tAr = (key: string) => (salesAr as Record<string, string>)[key] ?? key;
+    render(
+      <HandoverCostsPanel
+        costs={costs([varianceLine()])}
+        loading={false}
+        denomination={{ code: "JOD" }}
+        scaleOf={() => 3}
+        money={money}
+        canManage
+        canReconcile
+        dealClosed={false}
+        costSource={{ kind: "PENDING" }}
+        t={tAr}
+        onAdd={async () => {}}
+        onAbandonAdd={() => {}}
+        onRecordActual={(async () => {}) as never}
+        onVoid={async () => {}}
+        onReconcile={async () => {}}
+      />
+    );
+    expect(screen.getByTestId("deal-handover-cost-fee1-variance").textContent).toContain(salesAr.ReconcileVarianceOver);
+    fireEvent.click(within(row()).getByRole("button", { name: salesAr.ReconcileDealFee }));
+    const form = screen.getByTestId("deal-handover-reconcile-fee1-form");
+    expect(within(form).getByTestId("deal-handover-reconcile-fee1-variance").textContent).toContain(salesAr.ReconcileVarianceOver);
+    expect(within(form).getByText(salesAr.ReconcileVarianceNotesHint)).toBeTruthy();
+  });
+});

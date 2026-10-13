@@ -723,3 +723,49 @@ describe("copy", () => {
     }
   });
 });
+
+/**
+ * SCRUM-834 (Codex P2): the bound execution fee, already RECONCILED, can be
+ * re-recorded or removed only by whoever may confirm finance disbursements
+ * (`assertMayUndoReconciliation`). The default SALES role manages costs without
+ * it: the section tells that manager who can, and offers no refused button.
+ */
+describe("a RECONCILED bound execution fee and a manager who cannot confirm finance disbursements", () => {
+  const reconciledLine: HandoverCostLine = { ...boundLine, status: "RECONCILED" };
+  const handoff = () => screen.queryByTestId("deal-execution-fee-reconciled-handoff");
+
+  test("is offered neither Correct amount nor Remove, and is told who can", () => {
+    renderPanel(costs([reconciledLine]), { onReconcile: async () => {} }, { canManage: true, canReconcile: false });
+    expect(within(section()).queryByRole("button", { name: salesEn.ExecutionFeeCorrectAmount })).toBeNull();
+    expect(within(section()).queryByRole("button", { name: salesEn.RemoveHandoverCost })).toBeNull();
+    expect(within(section()).queryByRole("button", { name: salesEn.ReconcileDealFee })).toBeNull();
+    expect(handoff()?.textContent).toBe(salesEn.ReconciledNeedsAccountant);
+    expect(within(section()).queryByTestId("deal-execution-fee-reconcile-waiting")).toBeNull();
+  });
+
+  test("the holder keeps Correct amount and Remove, with no hand-off note", () => {
+    renderPanel(costs([reconciledLine]), { onReconcile: async () => {} }, { canManage: true, canReconcile: true });
+    expect(within(section()).getByRole("button", { name: salesEn.ExecutionFeeCorrectAmount })).toBeTruthy();
+    expect(within(section()).getByRole("button", { name: salesEn.RemoveHandoverCost })).toBeTruthy();
+    expect(handoff()).toBeNull();
+  });
+
+  test("an UNRECONCILED fee is still corrected and removed by that manager", () => {
+    renderPanel(costs([boundLine]), { onReconcile: async () => {} }, { canManage: true, canReconcile: false });
+    expect(within(section()).getByRole("button", { name: salesEn.ExecutionFeeCorrectAmount })).toBeTruthy();
+    expect(within(section()).getByRole("button", { name: salesEn.RemoveHandoverCost })).toBeTruthy();
+    expect(handoff()).toBeNull();
+  });
+
+  test("a form opened while the fee was unreconciled closes when it becomes reconciled and the viewer cannot undo that", async () => {
+    const view = renderPanel(costs([boundLine]), { onReconcile: async () => {}, onVoid: async () => {} }, { canManage: true, canReconcile: false });
+    fireEvent.click(within(section()).getByRole("button", { name: salesEn.RemoveHandoverCost }));
+    expect(screen.getByLabelText(salesEn.VoidReasonLabel)).toBeTruthy();
+
+    // Somebody else reconciles it while this manager's removal form is open.
+    view.update(costs([reconciledLine]), { canManage: true, canReconcile: false });
+
+    await waitFor(() => expect(screen.queryByLabelText(salesEn.VoidReasonLabel)).toBeNull());
+    expect(handoff()?.textContent).toBe(salesEn.ReconciledNeedsAccountant);
+  });
+});

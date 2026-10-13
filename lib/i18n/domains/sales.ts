@@ -875,6 +875,10 @@ const dealRailMessages = defineBilingualMessages({
     "Waiting for an accountant or a manager to reconcile this cost.",
     "بانتظار محاسب أو مدير لمطابقة هذه التكلفة.",
   ],
+  ReconciledNeedsAccountant: [
+    "Reconciled. Changing or removing it needs someone who can confirm finance disbursements.",
+    "تمت المطابقة. تعديل المبلغ أو إزالته يتطلب شخصاً يملك صلاحية تأكيد صرف التمويل.",
+  ],
   DirectPaymentWaiting: [
     "Waiting for a manager or an accountant to record the payment.",
     "بانتظار مدير أو محاسب لتسجيل الدفع.",

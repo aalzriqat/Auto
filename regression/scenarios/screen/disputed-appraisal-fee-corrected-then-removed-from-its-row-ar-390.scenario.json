@@ -1,6 +1,6 @@
 {
   "id": "disputed-appraisal-fee-corrected-then-removed-from-its-row-ar-390",
-  "fingerprint": "bbc3cc006a7e432351f55664b898798bae2911050b2bdbb7dd1e9081544c53f4",
+  "fingerprint": "aec54579a623a7d83538f62c4314dd070a30882983a9da2592ded8b7c4b25483",
   "domain": "screen",
   "level": "browser",
   "status": "active",
@@ -74,8 +74,16 @@
   ],
   "expected": [
     {
+      "observable": "fee.drawnIn",
+      "value": "genericList"
+    },
+    {
       "observable": "closingCheck.costsClosable.beforeAction",
       "value": "BLOCKED"
+    },
+    {
+      "observable": "row.variance.afterCorrection",
+      "value": "matchesExpected"
     },
     {
       "observable": "fee.actualEvidenceRevision.afterCorrection",
