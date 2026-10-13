@@ -304,6 +304,21 @@ async function assertFacebookPageFree(ctx: MutationCtx, orgId: Id<"organizations
   }
 }
 
+// Fixed text: this is thrown on a path that holds Page tokens.
+const FACEBOOK_SELECTION_CHANGED_MESSAGE =
+  "This Facebook connection changed before it could be completed. Please reconnect via OAuth.";
+
+/**
+ * Finalises a Page selection: the only writer of an active Page token.
+ *
+ * selectFacebookPage reads the pending credential, awaits Meta's subscribed_apps
+ * call, and only then calls this. Meta's deauthorize / data-deletion callback
+ * (or a newer OAuth) can clear or replace the pending credentials during that
+ * await, so the caller's copy proves nothing here: the org row must STILL hold a
+ * pending credential with the same Page id and token, under the same non-empty
+ * connecting-user id, read in this transaction. Otherwise a token the callback
+ * had already erased would be written back after it reported success.
+ */
 export const saveFacebookCredentials = internalMutation({
   args: {
     orgId: v.id("organizations"),
@@ -311,7 +326,7 @@ export const saveFacebookCredentials = internalMutation({
     facebookPageAccessToken: v.string(),
     facebookTokenExpiresAt: v.optional(v.number()),
     facebookPageName: v.optional(v.string()),
-    facebookConnectedByUserId: v.optional(v.string()),
+    facebookConnectedByUserId: v.string(),
   },
   handler: async (ctx, args) => {
     const { orgId, ...fields } = args;
@@ -321,22 +336,24 @@ export const saveFacebookCredentials = internalMutation({
       .withIndex("by_org", (q) => q.eq("orgId", orgId))
       .unique();
 
-    if (existing) {
-      // Clear both pending-page fields now that selection is finalised.
-      await ctx.db.patch(existing._id, {
-        ...fields,
-        facebookAvailablePages: undefined,
-        facebookPendingCredentials: undefined,
-      });
-    } else {
-      await ctx.db.insert("orgSettings", {
-        orgId,
-        currency: DEFAULT_SETTINGS.currency,
-        currencySymbol: DEFAULT_SETTINGS.currencySymbol,
-        enabledPaymentTypes: DEFAULT_SETTINGS.enabledPaymentTypes,
-        ...fields,
-      });
+    const stillPending = existing?.facebookPendingCredentials?.some(
+      (cred) => cred.id === fields.facebookPageId && cred.token === fields.facebookPageAccessToken
+    );
+    if (
+      !existing ||
+      !stillPending ||
+      !fields.facebookConnectedByUserId ||
+      existing.facebookConnectedByUserId !== fields.facebookConnectedByUserId
+    ) {
+      throw new ConvexError(FACEBOOK_SELECTION_CHANGED_MESSAGE);
     }
+
+    // Clear both pending-page fields now that selection is finalised.
+    await ctx.db.patch(existing._id, {
+      ...fields,
+      facebookAvailablePages: undefined,
+      facebookPendingCredentials: undefined,
+    });
   },
 });
 
