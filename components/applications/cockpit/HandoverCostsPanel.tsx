@@ -831,6 +831,13 @@ export function HandoverCostsPanel({
    */
   const lineFor = (row: ExpectedHandoverRow): HandoverCostLine | undefined =>
     row.actual === null ? undefined : costs?.lines.find((line) => line._id === row.actual?.feeId);
+  /**
+   * The recorded actual of a configured row as the variance and figures read it:
+   * absent until it has an amount. The currency travels with it, so a gap is
+   * drawn only against the expectation's own currency (`FeeVariance`).
+   */
+  const configuredActual = (row: ExpectedHandoverRow) =>
+    row.actual?.actualAmountMinor === undefined ? undefined : { minor: row.actual.actualAmountMinor, currency: row.actual.currency };
   const canAdd = canManage;
   // Reconciling is its own permission, held by the accountant tier that may
   // not edit costs (`canManage`), so it is offered independently of editing —
@@ -1201,6 +1208,14 @@ export function HandoverCostsPanel({
                                   </Badge>
                                 )}
                               </div>
+                              <FeeVariance
+                                expectedMinor={row.expectedAmountMinor}
+                                actual={configuredActual(row)}
+                                currency={checklist.currency}
+                                money={money}
+                                t={t}
+                                testId={`deal-handover-expected-${row.templateIndex}-variance`}
+                              />
                             </div>
                             <div className="flex items-start gap-3 md:flex-row-reverse md:items-center">
                               <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs md:w-56 md:grid-cols-2">
@@ -1350,6 +1365,22 @@ export function HandoverCostsPanel({
                           <div className="mt-3">
                             <ReconcileForm
                               t={t}
+                              testId={`deal-handover-expected-reconcile-${row.templateIndex}-form`}
+                              figures={
+                                <FeeFigures
+                                  expectedMinor={row.expectedAmountMinor}
+                                  actual={configuredActual(row)}
+                                  currency={checklist.currency}
+                                  money={money}
+                                  t={t}
+                                  varianceTestId={`deal-handover-expected-reconcile-${row.templateIndex}-variance`}
+                                />
+                              }
+                              differs={
+                                row.expectedAmountMinor !== null &&
+                                row.actual.currency === checklist.currency &&
+                                row.expectedAmountMinor !== row.actual.actualAmountMinor
+                              }
                               currentActualMinor={row.actual.actualAmountMinor}
                               currentEvidenceRevision={(lineFor(row) as HandoverCostLine).actualEvidenceRevision ?? 0}
                               formatAmount={(minor) => money(minor, row.actual?.currency ?? denomination.code)}
