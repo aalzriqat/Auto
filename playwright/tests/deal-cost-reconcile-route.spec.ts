@@ -13,13 +13,16 @@ import { EXECUTION_FEE_COMPANY, buildDealWithRecordedEconomics, openDealDetails 
  *
  * This is an interactive replay in a real signed-in session against the real
  * backend, not a painted fixture. The deal is built through the screens an
- * operator uses (two seats, as `deal-cockpit-measure.spec.ts` does). The one
- * thing that is NOT built through a screen is the cost line itself: the "Add
+ * operator uses (two seats, as `deal-cockpit-measure.spec.ts` does). What is
+ * NOT built through a screen is the cost setup. The "Add
  * cost" form offers only the handover fee types and records an actual with no
  * estimate, so the lines that used to be dead ends (a finance-company fee, an
  * appraisal fee) have no screen that creates them. They are recorded through
  * the public `financeDealCosts.recordDealFee` command, as the signed-in owner,
- * which is the path such lines arrive by. Every step AFTER that is a click.
+ * which is the path such lines arrive by. The rest of the setup is public
+ * commands too: the appraisal case reconciles an anchor line and records a
+ * second fee, and the execution-fee case binds its line with
+ * `bindExecutionFeeLine`. Only the action under test is clicked.
  *
  * EN and AR, 1280px and 390px. Each of the four reconcile cases:
  *   1. the closing checklist names the costs as BLOCKED and offers its link;

@@ -1,6 +1,6 @@
 {
   "id": "unchecked-finance-fee-is-reconciled-from-its-row-ar-390",
-  "fingerprint": "3c7adda0a06f3cf52d7c28ad37d3c86390b24b85fa462793cd9aa1a6822c19b1",
+  "fingerprint": "ec7769db69169850c94b8da17778b7e0297b36443393cecb4f9d23ad094af1f6",
   "domain": "screen",
   "level": "browser",
   "status": "active",
@@ -20,6 +20,7 @@
         "feeType": "FINANCE_COMPANY_FEE",
         "paidBy": "DEALER",
         "paidTo": "FINANCE_COMPANY",
+        "accountingTreatment": "FINANCE_COMPANY_COMMISSION",
         "estimatedMajor": 1250,
         "actualMajor": 1500
       }

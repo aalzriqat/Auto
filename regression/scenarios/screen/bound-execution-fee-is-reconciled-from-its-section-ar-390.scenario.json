@@ -1,6 +1,6 @@
 {
   "id": "bound-execution-fee-is-reconciled-from-its-section-ar-390",
-  "fingerprint": "a2e36dd974fbd359f92d0e0cace924c4edf14ecb86499651b4f02256c5fe3e0e",
+  "fingerprint": "8828628803155770f410c4afda815789887b8beb8354826131b653110da08070",
   "domain": "screen",
   "level": "browser",
   "status": "active",
@@ -30,6 +30,7 @@
         "feeType": "FINANCE_COMPANY_FEE",
         "paidBy": "DEALER",
         "paidTo": "FINANCE_COMPANY",
+        "accountingTreatment": "FINANCE_COMPANY_COMMISSION",
         "estimatedMajor": 1250,
         "actualMajor": 1500
       }
