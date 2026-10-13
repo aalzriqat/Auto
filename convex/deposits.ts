@@ -13,6 +13,10 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import {
+  DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED,
+  refuseDepositOtherTreatment,
+} from "./utils/depositOtherContainment";
+import {
   assertNoPendingShareOnHold,
   clearPendingDisposition,
   hasPendingDispositionForDeposit,
@@ -771,6 +775,11 @@ export const resolveReleasedAllocation = mutation({
         ? [PERMISSIONS.APPROVE_REQUESTS]
         : [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]
     );
+    // SCRUM-801: OTHER leaves the liability for a manual journal, which the
+    // pilot has switched off. Refused after auth and before any read or write.
+    if (args.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
+      refuseDepositOtherTreatment();
+    }
 
     const hold = await ctx.db.get(args.holdId);
     if (!hold || hold.orgId !== args.orgId) {

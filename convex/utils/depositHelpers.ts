@@ -492,6 +492,13 @@ export type DepositTreatment =
   | "OTHER";
 
 /**
+ * Every treatment except OTHER. The helpers that resolve or release a deposit
+ * through a posting take this, so OTHER can only ever be recorded by
+ * `recordUnpostedDepositTreatment` (SCRUM-801: gated behind the pilot switch).
+ */
+export type PostedDepositTreatment = Exclude<DepositTreatment, "OTHER">;
+
+/**
  * The deposit row status each treatment leaves behind.
  *
  * OTHER maps to null deliberately. It means a human has approved a treatment
@@ -552,7 +559,7 @@ export async function resolveDepositsForQuote(
      * Absent for the implicit dealer-owned path, where "applied to what the
      * customer owes" is the only thing APPLIED has ever meant.
      */
-    treatment?: DepositTreatment;
+    treatment?: PostedDepositTreatment;
     treatmentReason?: string;
     saleId?: Id<"sales">;
   }
@@ -1016,7 +1023,7 @@ export async function releaseHeldDeposit(
     occurredAt?: number;
     /** Recorded on the deposit when the release was decided by closing a sale. */
     saleId?: Id<"sales">;
-    treatment?: DepositTreatment;
+    treatment?: PostedDepositTreatment;
   }
 ): Promise<{ amountMinor: number; currency: string }> {
   if (args.resolution === "REFUNDED" && !args.refundMethod) {

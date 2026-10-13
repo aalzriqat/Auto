@@ -16,6 +16,10 @@ import {
   type DepositTreatment,
 } from "./depositHelpers";
 import type { DepositMethod } from "./depositRecording";
+import {
+  DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED,
+  refuseDepositOtherTreatment,
+} from "./depositOtherContainment";
 import { throwAppError, AppErrorCode } from "./errors";
 import { requireOrgMember } from "./tenancy";
 import { assertNoSaleLinkedLegacyReceivable } from "./saleDebtContainment";
@@ -1076,7 +1080,9 @@ async function resolveReservationDeposits(
       );
     }
     throw new ConvexError(
-      "The reservation deposit held on this vehicle is larger than what the dealership billed the customer for it, so part of it would be left unapplied. Record what happens to that money: applied to what they owe the dealership, applied to the supplier settlement, refunded, forfeited, or an approved other treatment with a reason."
+      DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED
+        ? "The reservation deposit held on this vehicle is larger than what the dealership billed the customer for it, so part of it would be left unapplied. Record what happens to that money: applied to what they owe the dealership, applied to the supplier settlement, refunded, or forfeited."
+        : "The reservation deposit held on this vehicle is larger than what the dealership billed the customer for it, so part of it would be left unapplied. Record what happens to that money: applied to what they owe the dealership, applied to the supplier settlement, refunded, forfeited, or an approved other treatment with a reason."
     );
   }
 
@@ -1222,6 +1228,9 @@ async function resolveReservationDeposits(
     }
 
     case "OTHER":
+      // SCRUM-801: the one choke point for every completion door. Ahead of the
+      // shared-deposit and missing-reason refusals so the pilot reason wins.
+      if (DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) refuseDepositOtherTreatment();
       return await recordOtherTreatment(ctx, {
         ...opts,
         isSharedDeposit: allocationHoldId !== undefined,
