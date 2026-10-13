@@ -47,8 +47,12 @@ function data(lines: HandoverCostLine[], expected: HandoverCostsData["expected"]
   };
 }
 
-/** The policy checklist with one configured fee whose actual is `feeId`. */
-function checklistFor(feeId: string): HandoverCostsData["expected"] {
+/**
+ * The policy checklist with one configured fee whose actual is `feeId`. The
+ * actual is always 90_000; `expectedAmountMinor` is the configured amount and
+ * may differ from it, so a test can tell the two figures apart.
+ */
+function checklistFor(feeId: string, expectedAmountMinor = 90_000): HandoverCostsData["expected"] {
   return {
     source: "COMPANY_RULE_SNAPSHOT",
     currency: "JOD",
@@ -56,37 +60,45 @@ function checklistFor(feeId: string): HandoverCostsData["expected"] {
       templateIndex: 0,
       feeType: "LICENSING",
       description: "Plates",
-      expectedAmountMinor: 90_000,
+      expectedAmountMinor,
       expectedAmountReason: null,
       duplicateIdentity: false,
       actual: { feeId, actualAmountMinor: 90_000, currency: "JOD", status: "ACTUAL_RECORDED" },
     }],
-    expectedTotalMinor: 90_000,
+    expectedTotalMinor: expectedAmountMinor,
     expectedTotalReason: null,
     actualTotalMinor: 90_000,
-    differenceMinor: 0,
+    differenceMinor: expectedAmountMinor - 90_000,
     unplannedLineIds: [],
   };
 }
 
-function renderPanel(
-  lines: HandoverCostLine[],
-  props: {
-    canRecordDirectPayment?: boolean;
-    canManage?: boolean;
-    expected?: HandoverCostsData["expected"];
-    canReconcile?: boolean;
-    onReconcile?: (feeId: string, notes: string) => Promise<void>;
-    onRecordDirectPayment?: (feeId: string, values: DirectHandoverPayment) => Promise<void>;
-    onAbandonDirectPayment?: (feeId: string, intentId: string) => void;
-    dealClosed?: boolean;
-    dealStopped?: DealStopped;
-    postingHoldFeeIds?: ReadonlyArray<string>;
-    handoverCostsCheck?: "READY" | "BLOCKED" | "UNAVAILABLE" | "NOT_APPLICABLE";
-    custodyLedgerCheck?: "READY" | "BLOCKED" | "UNAVAILABLE" | "NOT_APPLICABLE";
-  } = {}
-) {
-  return render(
+function renderPanel(lines: HandoverCostLine[], props: PanelProps = {}) {
+  const view = render(panelElement(lines, props));
+  return {
+    ...view,
+    update: (nextLines: HandoverCostLine[], nextExpected?: HandoverCostsData["expected"]) =>
+      view.rerender(panelElement(nextLines, { ...props, expected: nextExpected ?? props.expected })),
+  };
+}
+
+type PanelProps = {
+  canRecordDirectPayment?: boolean;
+  canManage?: boolean;
+  expected?: HandoverCostsData["expected"];
+  canReconcile?: boolean;
+  onReconcile?: (feeId: string, notes: string, expectedActualAmountMinor: number, expectedActualEvidenceRevision: number) => Promise<void>;
+  onRecordDirectPayment?: (feeId: string, values: DirectHandoverPayment) => Promise<void>;
+  onAbandonDirectPayment?: (feeId: string, intentId: string) => void;
+  dealClosed?: boolean;
+  dealStopped?: DealStopped;
+  postingHoldFeeIds?: ReadonlyArray<string>;
+  handoverCostsCheck?: "READY" | "BLOCKED" | "UNAVAILABLE" | "NOT_APPLICABLE";
+  custodyLedgerCheck?: "READY" | "BLOCKED" | "UNAVAILABLE" | "NOT_APPLICABLE";
+};
+
+function panelElement(lines: HandoverCostLine[], props: PanelProps) {
+  return (
     <HandoverCostsPanel
       costs={data(lines, props.expected ?? null)}
       loading={false}
@@ -482,18 +494,44 @@ describe("the reconcile action follows the permission the server checks (SCRUM-4
   // sends the dealer to exactly that tier, so it must be able to act here.
   describe.each([
     ["an additional line", undefined],
-    ["a configured checklist row", checklistFor("fee1")],
+    // Configured amount 80_000 differs from the recorded actual 90_000: the
+    // pin must be the actual the accountant checked, never the policy figure.
+    ["a configured checklist row", checklistFor("fee1", 80_000)],
   ])("on %s", (_where, expected) => {
     test("a reconciler who may not edit costs is still offered Reconcile, and it submits", async () => {
-      const onReconcile = vi.fn<(feeId: string, notes: string) => Promise<void>>(async () => {});
-      renderPanel([line()], { canManage: false, canReconcile: true, onReconcile, expected });
+      const onReconcile = vi.fn<NonNullable<PanelProps["onReconcile"]>>(async () => {});
+      renderPanel([line({ actualEvidenceRevision: 2 })], { canManage: false, canReconcile: true, onReconcile, expected });
       expect(screen.queryByTestId("deal-handover-reconcile-fee1-waiting")).toBeNull();
       expect(screen.queryByRole("button", { name: salesEn.RecordActualCost })).toBeNull();
       expect(screen.queryByRole("button", { name: salesEn.RemoveHandoverCost })).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: reconcileName }));
       fireEvent.change(screen.getByRole("textbox"), { target: { value: "Receipt checked" } });
       fireEvent.submit(screen.getByRole("textbox").closest("form") as HTMLFormElement);
-      await waitFor(() => expect(onReconcile).toHaveBeenCalledWith("fee1", "Receipt checked"));
+      // The pin is the amount AND the evidence revision the checker was looking at.
+      await waitFor(() => expect(onReconcile).toHaveBeenCalledWith("fee1", "Receipt checked", 90_000, 2));
+    });
+
+    test("a same-amount re-record while the form is open blocks the stale check, and a freshly opened form pins the new evidence", async () => {
+      const onReconcile = vi.fn<NonNullable<PanelProps["onReconcile"]>>(async () => {});
+      const view = renderPanel([line({ actualEvidenceRevision: 1 })], { canManage: false, canReconcile: true, onReconcile, expected });
+      fireEvent.click(screen.getByRole("button", { name: reconcileName }));
+      fireEvent.change(screen.getByRole("textbox"), { target: { value: "Receipt 12 checked" } });
+
+      // Same amount (90_000), replaced receipt/attachments: only the revision moves.
+      view.update([line({ actualEvidenceRevision: 2, receiptReference: "REC-2" })]);
+
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain(salesEn.ReconcileEvidenceChanged);
+      const confirm = screen.getByRole("button", { name: salesEn.ConfirmReconcile }) as HTMLButtonElement;
+      expect(confirm.disabled).toBe(true);
+      fireEvent.submit(screen.getByRole("textbox").closest("form") as HTMLFormElement);
+      expect(onReconcile).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: t("Cancel") }));
+      fireEvent.click(screen.getByRole("button", { name: reconcileName }));
+      fireEvent.change(screen.getByRole("textbox"), { target: { value: "Receipt REC-2 checked" } });
+      fireEvent.submit(screen.getByRole("textbox").closest("form") as HTMLFormElement);
+      await waitFor(() => expect(onReconcile).toHaveBeenCalledWith("fee1", "Receipt REC-2 checked", 90_000, 2));
     });
 
     test("once the deal is closed nobody is offered Reconcile", () => {

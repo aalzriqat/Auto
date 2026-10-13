@@ -2925,6 +2925,17 @@ export const setFeeCustody = mutation({
     const custodyId = args.custodyId
       ? await resolveFeeCustody(ctx, args.orgId, fee.applicationId, args.custodyId, fee, user._id)
       : undefined;
+    // `reconcileDealFee` refuses the holder of a record a line already sits on;
+    // this is the same separation from the other side. Whoever certified the
+    // figure is not the person the charge then reimburses (SCRUM-834 F2).
+    if (custodyId !== undefined && fee.reconciledBy !== undefined) {
+      const target = await requireLinkedCustody(ctx, fee, custodyId, "charging a reconciled cost to a custody record");
+      if (target.userId === fee.reconciledBy) {
+        throw new ConvexError(
+          "This cost was reconciled by the person holding that custody record, who cannot then be reimbursed for it. Charge it to a different record, or have somebody else re-record and reconcile it. Nothing has been changed."
+        );
+      }
+    }
     const now = Date.now();
     // The link patch is judged on its own, BEFORE it is written. The posting
     // that follows judges the line with its posting record, but returns early

@@ -43,7 +43,7 @@ async function seedDeal(scenario: Scenario) {
   const asConfirmOnly = await deal.member("confirm_u", confirmOnlyRoleId);
 
   if (scenario === "CURRENCY_DRIFT") {
-    await asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Matched." });
+    await asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 25 * JOD_SCALE, expectedActualEvidenceRevision: 0 });
     const settings = await t.run((ctx) =>
       ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
     );

@@ -154,7 +154,9 @@ export async function readyDeal(s: DealSeed) {
     feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
     deductedFromSettlement: false, actualAmountMinor: 0, description: "No closing costs.",
   });
-  await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Matched." });
+  await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
+    orgId: s.orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0,
+  });
   // The deposit H the dealership holds for this customer and car, and the contribution C.
   await s.t.run(async (ctx) => {
     await ctx.db.insert("deposits", {

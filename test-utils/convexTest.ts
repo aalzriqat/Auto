@@ -144,7 +144,26 @@ export async function recordReconciledZeroCost(
     expectedCurrency: "JOD",
     idempotencyKey: crypto.randomUUID(),
   });
-  await asReconciler.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Nothing to match." });
+  await asReconciler.mutation(api.financeDealCosts.reconcileDealFee, {
+    orgId, feeId, notes: "Nothing to match.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0,
+  });
+}
+
+/**
+ * The actual a checker looking at this cost line would be pinning their
+ * reconciliation to (`reconcileDealFee.expectedActualAmountMinor`, SCRUM-834).
+ * Read from the row, so a test still exercises the pin against what is stored;
+ * a line with no recorded actual throws here rather than pinning an invented 0.
+ */
+export async function recordedActualMinor(
+  t: TestConvex<typeof schema>,
+  feeId: Id<"financeDealFees">
+): Promise<number> {
+  const fee = await t.run((ctx) => ctx.db.get(feeId));
+  if (fee?.actualAmountMinor === undefined) {
+    throw new Error("recordedActualMinor: the cost line has no recorded actual to pin a reconciliation to.");
+  }
+  return fee.actualAmountMinor;
 }
 
 /**

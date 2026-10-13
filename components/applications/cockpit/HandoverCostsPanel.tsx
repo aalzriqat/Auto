@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 /** A stopped deal: the server refuses new custody cash and direct payments on both (`dealAcceptsNewCustodyCash`). */
 export type DealStopped = "CANCELLED" | "REJECTED" | null;
+
+/** The forms the execution-fee section opens on its bound line; the panel owns which one is open. */
+type ExecutionFeeForm = "RECONCILE" | "CORRECT" | "REMOVE";
 import { Loader2, Pencil, Plus, Trash2, CheckCheck, Receipt } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,6 +27,66 @@ import {
 
 /** The fee-type union the server validates — the row carries it as such, so no cast is needed to send it back. */
 export type ServedFeeType = Doc<"financeDealFees">["feeType"];
+
+/** What the viewer may do to the execution fee's bound line: the rights they hold and the handlers wired. */
+type ExecutionFeeAccess = Readonly<{
+  /** Edit rights on an open deal. */
+  canManage: boolean;
+  /** `confirm:finance_disbursement` on an open deal — independent of `canManage`. */
+  canReconcile: boolean;
+  hasReconcile: boolean;
+  hasCorrect: boolean;
+  hasRemove: boolean;
+}>;
+
+const executionFeeAccess = (
+  canManage: boolean,
+  canReconcile: boolean,
+  handlers: Readonly<{ onReconcile?: unknown; onCorrect?: unknown; onRemove?: unknown }>
+): ExecutionFeeAccess => ({
+  canManage,
+  canReconcile,
+  hasReconcile: handlers.onReconcile !== undefined,
+  hasCorrect: handlers.onCorrect !== undefined,
+  hasRemove: handlers.onRemove !== undefined,
+});
+
+/** Whether the viewer holds the right and the handler for a form, whatever the line looks like. */
+function executionFeeFormPermitted(form: ExecutionFeeForm, access: ExecutionFeeAccess): boolean {
+  switch (form) {
+    case "RECONCILE":
+      return access.canReconcile && access.hasReconcile;
+    case "CORRECT":
+      return access.canManage && access.hasCorrect;
+    case "REMOVE":
+      return access.canManage && access.hasRemove;
+  }
+}
+
+/**
+ * The ONE decision on whether a section form (and the button that opens it) can
+ * be offered on the bound line: permitted, and the line can still take it.
+ * Only a line in the deal's own currency is compared or edited here; Reconcile
+ * needs an unreconciled recorded actual, Correct a recorded actual to correct,
+ * Remove any line. The panel's reset, the section's form branches and its
+ * buttons all call this, so a form is never marked open that nothing draws.
+ */
+function executionFeeFormAvailable(
+  form: ExecutionFeeForm,
+  line: Pick<HandoverCostLine, "currency" | "status" | "actualAmountMinor"> | undefined,
+  currency: string,
+  access: ExecutionFeeAccess
+): boolean {
+  if (line === undefined || line.currency !== currency || !executionFeeFormPermitted(form, access)) return false;
+  switch (form) {
+    case "RECONCILE":
+      return line.actualAmountMinor !== undefined && line.status !== "RECONCILED";
+    case "CORRECT":
+      return line.actualAmountMinor !== undefined;
+    case "REMOVE":
+      return true;
+  }
+}
 
 /**
  * رسوم ومصاريف تسليم السيارة — the costs of handing THIS car to THIS customer,
@@ -198,6 +261,12 @@ export type HandoverCostLine = {
   status: string;
   paidAt?: number;
   receiptReference?: string;
+  /**
+   * How many times the actual and its evidence were re-recorded (SCRUM-834);
+   * absent on a payload that predates it, read as 0. A reconcile form pins it
+   * with the amount, because a same-amount re-record changes the evidence only.
+   */
+  actualEvidenceRevision?: number;
   /**
    * Who paid this cost and whether it is on the books (SCRUM-443), as the
    * server derives it from `convex/utils/handoverCostPayment` — the module the
@@ -536,7 +605,8 @@ export function HandoverCostsPanel({
   onAbandonAdd: (intentId: string) => void;
   onRecordActual: (feeId: string, values: ActualHandoverCost) => Promise<void>;
   onVoid: (feeId: string, reason: string) => Promise<void>;
-  onReconcile?: (feeId: string, notes: string) => Promise<void>;
+  /** `expectedActualAmountMinor` is the actual the checker was looking at; the server refuses a stale one. */
+  onReconcile?: (feeId: string, notes: string, expectedActualAmountMinor: number, expectedActualEvidenceRevision: number) => Promise<void>;
   /**
    * Records the ACTUAL for a configured fee, by its position in the deal's
    * frozen snapshot. Every other field is the server's. Absent when the
@@ -630,6 +700,8 @@ export function HandoverCostsPanel({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [voidingId, setVoidingId] = useState<string | null>(null);
   const [reconcilingId, setReconcilingId] = useState<string | null>(null);
+  /** The execution-fee section's reconcile / correct / remove form, when open. Lives here so it obeys the one-form-at-a-time rule. */
+  const [feeForm, setFeeForm] = useState<{ form: ExecutionFeeForm; feeId: string } | null>(null);
   /** The add form's intent while the form is open; null when it is not. */
   const [openIntent, setOpenIntent] = useState<AddIntent | null>(null);
   /** Every attempt that has gone out and is not yet resolved, by intentId. */
@@ -758,13 +830,59 @@ export function HandoverCostsPanel({
   // and, like editing, never once the deal's economics are frozen.
   const mayReconcile = canReconcile && !dealClosed;
   const adding = openIntent !== null;
+  const boundFeeId = costs?.executionFee?.boundFeeId ?? null;
+  const boundLine = costs?.lines.find((line) => line._id === boundFeeId);
+  // The section only renders a form `executionFeeFormAvailable` allows, and the
+  // same decision ends it here, so the marker never outlives what is drawn.
+  // Another user reconciling or re-recording the fee, a handler or permission
+  // going, or the deal closing can end it while the form is open. The form is
+  // also bound to the fee row it was opened on: if the execution fee is rebound
+  // to another row (even one with an equal actual) it is dropped rather than
+  // carried over. While the costs are loading only the rights are judged.
+  const feeAccess = executionFeeAccess(canManage && !dealClosed, mayReconcile, { onReconcile, onCorrect: onRecordActual, onRemove: onVoid });
+  const feeFormUnshowable =
+    feeForm !== null &&
+    (costs === undefined
+      ? !executionFeeFormPermitted(feeForm.form, feeAccess)
+      : feeForm.feeId !== boundFeeId ||
+        !executionFeeFormAvailable(feeForm.form, boundLine, denomination.code, feeAccess));
+  // Every other opener nulls `feeForm`'s rivals in the same batch as it sets its own
+  // state, so a rival being open here means `feeForm` lost the turn (or its form can
+  // no longer be shown); reset during render, as for `payingStale`.
+  const feeFormStale =
+    feeForm !== null &&
+    (adding ||
+      payingId !== null ||
+      recordingTemplateIndex !== null ||
+      editingId !== null ||
+      voidingId !== null ||
+      reconcilingId !== null ||
+      feeFormUnshowable);
+  if (feeFormStale) setFeeForm(null);
+  /** Opens a section form under the same guards as every other opener. */
+  const openFeeForm = (form: ExecutionFeeForm) => {
+    // An in-flight or UNKNOWN attempt keeps its form: no opener may swap it out.
+    if (paymentPending || submittingAny || boundFeeId === null) return;
+    if (!closeAddForm()) return;
+    setEditingId(null);
+    setVoidingId(null);
+    setReconcilingId(null);
+    setRecordingTemplateIndex(null);
+    setPayingId(null);
+    setFeeForm({ form, feeId: boundFeeId });
+  };
   /**
    * The payment state of one line (SCRUM-443), under the line's own row and
    * hidden while that line's edit/remove/reconcile form is open — changing the
    * amount reverses a direct payment, so the two are never offered together.
+   * The execution fee's bound line has its section forms in place of its own.
    */
   const paymentRow = (line: HandoverCostLine | undefined) =>
-    line && editingId !== line._id && voidingId !== line._id && reconcilingId !== line._id ? (
+    line &&
+    editingId !== line._id &&
+    voidingId !== line._id &&
+    reconcilingId !== line._id &&
+    !(feeForm !== null && line._id === boundFeeId) ? (
       <HandoverPaymentRow
         line={line}
         money={money}
@@ -814,7 +932,8 @@ export function HandoverCostsPanel({
         recordingTemplateIndex !== null ||
         editingId !== null ||
         voidingId !== null ||
-        reconcilingId !== null
+        reconcilingId !== null ||
+        feeForm !== null
           ? ""
           : undefined
       }
@@ -981,11 +1100,19 @@ export function HandoverCostsPanel({
                 scale={scaleOf(denomination.code)}
                 money={money}
                 canManage={canManage && !dealClosed}
+                canReconcile={mayReconcile}
+                form={feeForm?.form ?? null}
+                busy={submittingAny || paymentPending}
+                onOpenForm={openFeeForm}
+                onCloseForm={() => setFeeForm(null)}
                 t={t}
                 onRecord={onRecordExecutionFee}
                 onAbandonRecord={onAbandonExecutionFee}
                 onLink={onLinkExecutionFee}
                 onUnlink={onUnlinkExecutionFee}
+                onReconcile={onReconcile}
+                onCorrect={onRecordActual}
+                onRemove={onVoid}
               />
             )}
 
@@ -1185,14 +1312,17 @@ export function HandoverCostsPanel({
                             />
                           </div>
                         )}
-                        {row.actual !== null && reconcilingId === row.actual.feeId && lineFor(row) && (
+                        {row.actual !== null && row.actual.actualAmountMinor !== undefined && reconcilingId === row.actual.feeId && lineFor(row) && (
                           <div className="mt-3">
                             <ReconcileForm
                               t={t}
+                              currentActualMinor={row.actual.actualAmountMinor}
+                              currentEvidenceRevision={(lineFor(row) as HandoverCostLine).actualEvidenceRevision ?? 0}
+                              formatAmount={(minor) => money(minor, row.actual?.currency ?? denomination.code)}
                               onCancel={() => setReconcilingId(null)}
-                              onSubmit={async (notes) => {
+                              onSubmit={async (notes, actualMinor, evidenceRevision) => {
                                 if (onReconcile) {
-                                  await onReconcile((lineFor(row) as HandoverCostLine)._id, notes);
+                                  await onReconcile((lineFor(row) as HandoverCostLine)._id, notes, actualMinor, evidenceRevision);
                                 }
                                 setReconcilingId(null);
                               }}
@@ -1218,13 +1348,16 @@ export function HandoverCostsPanel({
                   className="rounded-md border p-3 text-sm"
                   data-testid={`deal-handover-cost-${line._id}`}
                 >
-                  {reconcilingId === line._id ? (
+                  {reconcilingId === line._id && line.actualAmountMinor !== undefined ? (
                     <ReconcileForm
                       t={t}
+                      currentActualMinor={line.actualAmountMinor}
+                      currentEvidenceRevision={line.actualEvidenceRevision ?? 0}
+                      formatAmount={(minor) => money(minor, line.currency)}
                       onCancel={() => setReconcilingId(null)}
-                      onSubmit={async (notes) => {
+                      onSubmit={async (notes, actualMinor, evidenceRevision) => {
                         if (onReconcile) {
-                          await onReconcile(line._id, notes);
+                          await onReconcile(line._id, notes, actualMinor, evidenceRevision);
                         }
                         setReconcilingId(null);
                       }}
@@ -1820,11 +1953,19 @@ function ExecutionFeeSection({
   scale,
   money,
   canManage,
+  canReconcile,
+  form,
+  busy,
+  onOpenForm,
+  onCloseForm,
   t,
   onRecord,
   onAbandonRecord,
   onLink,
   onUnlink,
+  onReconcile,
+  onCorrect,
+  onRemove,
 }: Readonly<{
   fee: HandoverExecutionFee;
   lines: ReadonlyArray<HandoverCostLine>;
@@ -1832,11 +1973,23 @@ function ExecutionFeeSection({
   scale: number;
   money: (minor: number, currency: string) => string;
   canManage: boolean;
+  /** `confirm:finance_disbursement` and the deal still open — independent of `canManage`. */
+  canReconcile: boolean;
+  /** The reconcile / correct / remove form that is open. The panel owns it: one form at a time. */
+  form: ExecutionFeeForm | null;
+  /** A direct-payment or add attempt is in flight or UNKNOWN: no form may be opened over it. */
+  busy: boolean;
+  onOpenForm: (form: ExecutionFeeForm) => void;
+  onCloseForm: () => void;
   t: (key: string) => string;
   onRecord?: (values: ActualHandoverCost) => Promise<void>;
   onAbandonRecord?: () => void;
   onLink?: (feeId: string) => Promise<void>;
   onUnlink?: (feeId: string, reason: string) => Promise<void>;
+  onReconcile?: (feeId: string, notes: string, expectedActualAmountMinor: number, expectedActualEvidenceRevision: number) => Promise<void>;
+  /** Re-records the linked line's actual; every guard (reconciled, paid, frozen) stays on the server. */
+  onCorrect?: (feeId: string, values: ActualHandoverCost) => Promise<void>;
+  onRemove?: (feeId: string, reason: string) => Promise<void>;
 }>) {
   const [mode, setMode] = useState<"IDLE" | "RECORD" | "UNLINK">("IDLE");
   const [linkId, setLinkId] = useState("");
@@ -1857,6 +2010,27 @@ function ExecutionFeeSection({
     duplicateIdentity: false,
     actual: null,
   };
+  const boundActual = bound?.actualAmountMinor === undefined ? undefined : { minor: bound.actualAmountMinor, currency: bound.currency };
+  // Only a line in the deal's own currency can be compared with the expectation or edited here.
+  const sameCurrency = bound !== undefined && bound.currency === currency;
+  const access = executionFeeAccess(canManage, canReconcile, { onReconcile, onCorrect, onRemove });
+  const available = (candidate: ExecutionFeeForm, withAccess: ExecutionFeeAccess = access) =>
+    executionFeeFormAvailable(candidate, bound, currency, withAccess);
+  // The open form, only while the shared decision still allows it; the narrowing
+  // checks in the branches below are implied by it and only satisfy the types.
+  const openForm = form !== null && available(form) ? form : null;
+  const differs = fee.expectedMinor !== null && boundActual !== undefined && boundActual.minor !== fee.expectedMinor;
+  const figures = (varianceTestId: string, actualTestId?: string) => (
+    <FeeFigures
+      expectedMinor={fee.expectedMinor}
+      actual={boundActual}
+      currency={currency}
+      money={money}
+      t={t}
+      actualTestId={actualTestId}
+      varianceTestId={varianceTestId}
+    />
+  );
 
   return (
     <section className="space-y-2 rounded-md border p-3 text-sm" data-testid="deal-execution-fee">
@@ -1885,6 +2059,41 @@ function ExecutionFeeSection({
             setMode("IDLE");
           }}
         />
+      ) : openForm === "RECONCILE" && bound && boundActual && onReconcile ? (
+        <ReconcileForm
+          t={t}
+          testId="deal-execution-fee-reconcile-form"
+          currentActualMinor={boundActual.minor}
+          currentEvidenceRevision={bound.actualEvidenceRevision ?? 0}
+          formatAmount={(minor) => money(minor, boundActual.currency)}
+          figures={figures("reconcile-variance")}
+          differs={differs}
+          onCancel={onCloseForm}
+          onSubmit={async (notes, actualMinor, evidenceRevision) => {
+            await onReconcile(bound._id, notes, actualMinor, evidenceRevision);
+            onCloseForm();
+          }}
+        />
+      ) : openForm === "CORRECT" && bound && onCorrect ? (
+        <ActualForm
+          line={bound}
+          scale={scale}
+          t={t}
+          onCancel={onCloseForm}
+          onSubmit={async (values) => {
+            await onCorrect(bound._id, values);
+            onCloseForm();
+          }}
+        />
+      ) : openForm === "REMOVE" && bound && onRemove ? (
+        <VoidForm
+          t={t}
+          onCancel={onCloseForm}
+          onSubmit={async (reason) => {
+            await onRemove(bound._id, reason);
+            onCloseForm();
+          }}
+        />
       ) : (
         <>
           <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
@@ -1892,24 +2101,7 @@ function ExecutionFeeSection({
               <p className="font-medium">{t("ExecutionFeeLabel")}</p>
               <p className="text-xs text-muted-foreground">{t("ExecutionFeeNote")}</p>
             </div>
-            <dl className="grid grid-cols-[auto_auto] gap-x-3 text-end text-xs">
-              <dt className="text-muted-foreground">{t("CostExpected")}</dt>
-              <dd className="tabular-nums">
-                {fee.expectedMinor === null ? (
-                  <span className="text-amber-700 dark:text-amber-400">{t("CostExpectedUnreadable")}</span>
-                ) : (
-                  <bdi dir="ltr">{money(fee.expectedMinor, currency)}</bdi>
-                )}
-              </dd>
-              <dt className="text-muted-foreground">{t("CostActual")}</dt>
-              <dd className="font-semibold tabular-nums text-money-out" data-testid="deal-execution-fee-actual">
-                {bound?.actualAmountMinor === undefined ? (
-                  <span className="font-normal text-muted-foreground">{t("CostNotRecorded")}</span>
-                ) : (
-                  <bdi dir="ltr">{money(bound.actualAmountMinor, bound.currency)}</bdi>
-                )}
-              </dd>
-            </dl>
+            <div className="space-y-1 text-end">{figures("deal-execution-fee-variance", "deal-execution-fee-actual")}</div>
           </div>
           {fee.withheld && (
             <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="deal-execution-fee-withheld">
@@ -1927,9 +2119,44 @@ function ExecutionFeeSection({
             </p>
           )}
           {bound && (
-            <p className="text-xs text-muted-foreground" data-testid="deal-execution-fee-linked">
+            // A div, not a p: the badge is a block-level element.
+            <div className="text-xs text-muted-foreground" data-testid="deal-execution-fee-linked">
+              <Badge variant="outline" className="me-1.5">
+                {t(STATUS_LABEL[bound.status] ?? bound.status)}
+              </Badge>
               {t("ExecutionFeeLinkedTo")}: <bdi>{describe(bound)}</bdi>
+            </div>
+          )}
+          {bound && !sameCurrency && (
+            <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="deal-execution-fee-currency">
+              {t("HandoverCostCurrencyDiffers")}
             </p>
+          )}
+          {/* `canManage` is already false on a closed deal: nobody is "waiting for an accountant" there, and a viewer who cannot manage is not the one waiting. */}
+          {canManage && !canReconcile && available("RECONCILE", { ...access, canReconcile: true }) && (
+            <p className="text-xs text-muted-foreground" data-testid="deal-execution-fee-reconcile-waiting">
+              {t("ReconcileNeedsAccountant")}
+            </p>
+          )}
+          {bound && sameCurrency && (
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {available("RECONCILE") && (
+                <Button type="button" size="sm" disabled={busy} onClick={() => onOpenForm("RECONCILE")}>
+                  <CheckCheck className="h-4 w-4 me-1.5" />
+                  {t("ReconcileDealFee")}
+                </Button>
+              )}
+              {available("CORRECT") && (
+                <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => onOpenForm("CORRECT")}>
+                  {t("ExecutionFeeCorrectAmount")}
+                </Button>
+              )}
+              {available("REMOVE") && (
+                <Button type="button" size="sm" variant="ghost" className="text-destructive hover:text-destructive" disabled={busy} onClick={() => onOpenForm("REMOVE")}>
+                  {t("RemoveHandoverCost")}
+                </Button>
+              )}
+            </div>
           )}
           {canManage && fee.unrecorded && (
             <div className="flex flex-wrap items-end justify-end gap-2">
@@ -2335,24 +2562,115 @@ function VoidForm({
   );
 }
 
+/**
+ * What the check is of: expected, actual and the gap between them. Shown on the
+ * execution-fee row and kept on screen inside its reconcile form, so the person
+ * writing the evidence note is looking at the figures they are vouching for.
+ */
+function FeeFigures({
+  expectedMinor,
+  actual,
+  currency,
+  money,
+  t,
+  actualTestId,
+  varianceTestId,
+}: Readonly<{
+  expectedMinor: number | null;
+  /** The recorded actual and the currency it was recorded in; absent until one is. */
+  actual: { minor: number; currency: string } | undefined;
+  /** The deal's denomination — the expectation is always in it. */
+  currency: string;
+  money: (minor: number, currency: string) => string;
+  t: (key: string) => string;
+  actualTestId?: string;
+  varianceTestId: string;
+}>) {
+  // A gap between two denominations is not a number; only a same-currency one is shown.
+  const variance =
+    expectedMinor === null || actual === undefined || actual.currency !== currency ? null : actual.minor - expectedMinor;
+  return (
+    <>
+      <dl className="grid w-fit grid-cols-[auto_auto] gap-x-3 text-end text-xs">
+        <dt className="text-muted-foreground">{t("CostExpected")}</dt>
+        <dd className="tabular-nums">
+          {expectedMinor === null ? (
+            <span className="text-amber-700 dark:text-amber-400">{t("CostExpectedUnreadable")}</span>
+          ) : (
+            <bdi dir="ltr">{money(expectedMinor, currency)}</bdi>
+          )}
+        </dd>
+        <dt className="text-muted-foreground">{t("CostActual")}</dt>
+        <dd className="font-semibold tabular-nums text-money-out" data-testid={actualTestId}>
+          {actual === undefined ? (
+            <span className="font-normal text-muted-foreground">{t("CostNotRecorded")}</span>
+          ) : (
+            <bdi dir="ltr">{money(actual.minor, actual.currency)}</bdi>
+          )}
+        </dd>
+      </dl>
+      {variance !== null && (
+        <p
+          className={`text-xs ${variance === 0 ? "text-muted-foreground" : "font-medium text-amber-700 dark:text-amber-400"}`}
+          data-testid={varianceTestId}
+        >
+          {variance === 0 ? (
+            t("ReconcileVarianceNone")
+          ) : (
+            <>
+              {t(variance > 0 ? "ReconcileVarianceOver" : "ReconcileVarianceUnder")}{" "}
+              <bdi dir="ltr" className="tabular-nums">
+                {money(Math.abs(variance), currency)}
+              </bdi>
+            </>
+          )}
+        </p>
+      )}
+    </>
+  );
+}
+
 function ReconcileForm({
   t,
   onCancel,
   onSubmit,
+  currentActualMinor,
+  currentEvidenceRevision,
+  formatAmount,
+  figures,
+  differs = false,
+  testId,
 }: Readonly<{
   t: (key: string) => string;
   onCancel: () => void;
-  onSubmit: (notes: string) => Promise<void>;
+  /** The check is submitted PINNED to the actual and evidence revision the form opened on. */
+  onSubmit: (notes: string, actualMinor: number, evidenceRevision: number) => Promise<void>;
+  /** The line's actual as it stands now; if it moves, the check no longer describes it. */
+  currentActualMinor: number;
+  /** The line's evidence revision as it stands now: a same-amount re-record moves this and not the amount. */
+  currentEvidenceRevision: number;
+  formatAmount: (minor: number) => string;
+  /** Expected / actual / variance, kept visible while the note is typed. */
+  figures?: ReactNode;
+  /** The actual differs from the expectation: say what to write in the note. */
+  differs?: boolean;
+  testId?: string;
 }>) {
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [checkedActualMinor] = useState(currentActualMinor);
+  const [checkedEvidenceRevision] = useState(currentEvidenceRevision);
+  const amountChanged = currentActualMinor !== checkedActualMinor;
+  const changed = amountChanged || currentEvidenceRevision !== checkedEvidenceRevision;
 
   return (
     <form
       className="space-y-3"
+      data-testid={testId}
       onSubmit={async (event) => {
         event.preventDefault();
+        if (changed) return;
         if (!notes.trim()) {
           setError(t("ReconcileNotesRequired"));
           return;
@@ -2360,7 +2678,7 @@ function ReconcileForm({
         setSubmitting(true);
         setError(null);
         try {
-          await onSubmit(notes.trim());
+          await onSubmit(notes.trim(), checkedActualMinor, checkedEvidenceRevision);
         } catch (caught) {
           setError(caught instanceof Error ? caught.message : t("UnexpectedError"));
         } finally {
@@ -2369,7 +2687,9 @@ function ReconcileForm({
       }}
     >
       <p className="font-medium text-emerald-600">{t("ReconcileDealFee")}</p>
+      {figures}
       <p className="text-xs text-muted-foreground">{t("ReconcileFeeNote")}</p>
+      {differs && <p className="text-xs text-muted-foreground">{t("ReconcileVarianceNotesHint")}</p>}
       <div className="space-y-1.5">
         <Label htmlFor="reconcile-notes">{t("ReconcileNotes")}</Label>
         <Input
@@ -2381,6 +2701,17 @@ function ReconcileForm({
           required
         />
       </div>
+      {changed && (
+        <p role="alert" className="text-xs font-medium text-destructive">
+          {amountChanged ? (
+            <>
+              {t("ReconcileAmountChanged")} <bdi dir="ltr">{formatAmount(currentActualMinor)}</bdi>
+            </>
+          ) : (
+            t("ReconcileEvidenceChanged")
+          )}
+        </p>
+      )}
       {error && (
         <p role="alert" className="text-xs font-medium text-destructive">
           {error}
@@ -2390,7 +2721,7 @@ function ReconcileForm({
         <Button type="button" variant="ghost" size="sm" disabled={submitting} onClick={onCancel}>
           {t("Cancel")}
         </Button>
-        <Button type="submit" size="sm" disabled={submitting || !notes.trim()}>
+        <Button type="submit" size="sm" disabled={submitting || changed || !notes.trim()}>
           {submitting && <Loader2 className="h-4 w-4 me-1.5 animate-spin" />}
           {t("ConfirmReconcile")}
         </Button>

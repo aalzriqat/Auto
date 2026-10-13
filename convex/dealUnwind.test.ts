@@ -1042,6 +1042,8 @@ describe("SCRUM-693 D3 - the returned car goes into inspection (Sol A', c22134)"
       });
       await seeded.owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
         orgId: seeded.orgId, feeId, notes: "Execution fee reconciled.",
+        expectedActualAmountMinor: 50_000,
+        expectedActualEvidenceRevision: 0,
       });
       await seeded.owner.as.mutation(api.financeDealCosts.recordDirectFeePayment, {
         orgId: seeded.orgId, feeId, method: "BANK_TRANSFER", paidAt: Date.now(), expectedAmountMinor: 50_000,

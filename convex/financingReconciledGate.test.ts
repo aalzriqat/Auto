@@ -31,7 +31,7 @@ async function seedDeal(opts: { flag?: boolean; reconcileFee?: boolean }) {
   });
   const { t, orgId, applicationId, feeId, asOwner } = deal;
   if (opts.reconcileFee !== false) {
-    await asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Matched." });
+    await asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
   }
   // The flag is set LAST, so no earlier writer's recompute can move it.
   await t.run((ctx) =>
@@ -64,7 +64,7 @@ async function driveRecomputeWithDeductedFee(s: Seeded, n: number) {
     deductedFromSettlement: true, actualAmountMinor: 0, description: `Fee ${n} (drives the recompute)`,
     idempotencyKey: `gate-fee-${n}:` + s.applicationId,
   });
-  await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Matched." });
+  await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
 }
 
 // One flagged deal serves the two READ-ONLY readiness tests (T7); every test that

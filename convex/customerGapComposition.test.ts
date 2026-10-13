@@ -184,7 +184,7 @@ describe("the composition boundary at every real caller", () => {
       accountingTreatment: "SELLING_EXPENSE", deductedFromSettlement: false, actualAmountMinor: 0, expectedCurrency: "JOD",
       idempotencyKey: crypto.randomUUID(),
     });
-    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "nothing to match" });
+    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "nothing to match", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
     const plan = async (pair: { cash?: number; installment?: number }) => {
       await setGap(s, pair);
       return await s.t.run(async (ctx) => {
@@ -228,7 +228,7 @@ describe("the composition boundary at every real caller", () => {
       accountingTreatment: "OWNERSHIP_TRANSFER_EXPENSE", actualAmountMinor: 90_000, expectedCurrency: "JOD",
       idempotencyKey: crypto.randomUUID(),
     });
-    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "checked" });
+    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "checked", expectedActualAmountMinor: 90_000, expectedActualEvidenceRevision: 0 });
     await setGap(s, { cash: -100_000, installment: 200_000 });
     const before = (await s.t.run((ctx) => ctx.db.get(s.applicationId)))!;
 

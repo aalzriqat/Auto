@@ -290,6 +290,8 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     });
     await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: s.orgId, feeId, notes: "No fee to settle.",
+      expectedActualAmountMinor: 0,
+      expectedActualEvidenceRevision: 0,
     });
     await s.owner.as.mutation(api.applications.finalizeDeal, {
       idempotencyKey: "s486-financed-held-finalize", orgId: s.orgId, applicationId,
@@ -478,6 +480,8 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     });
     await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: s.orgId, feeId, notes: "No fee to settle.",
+      expectedActualAmountMinor: 0,
+      expectedActualEvidenceRevision: 0,
     });
     await s.owner.as.mutation(api.applications.finalizeDeal, {
       idempotencyKey: `${tag}-finalize`, orgId: s.orgId, applicationId,
@@ -678,6 +682,8 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     });
     await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: s.orgId, feeId, notes: "No fee to settle.",
+      expectedActualAmountMinor: 0,
+      expectedActualEvidenceRevision: 0,
     });
     await s.owner.as.mutation(api.applications.setSupplierSettlementRoute, {
       orgId: s.orgId, applicationId, route,

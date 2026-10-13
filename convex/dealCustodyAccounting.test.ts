@@ -1,5 +1,5 @@
 import { TestConvex as ConvexTestInstance } from "convex-test";
-import { convexTestWithComponents } from "../test-utils/convexTest";
+import { convexTestWithComponents, recordedActualMinor } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -1821,7 +1821,7 @@ describe("E — the custody holder never links, unlinks, records, changes, voids
     await expect(asHolder.mutation(api.financeDealCosts.setFeeCustody, { orgId: seed.orgId, feeId: linked })).rejects.toThrow(refusal);
     // voidDealFee and reconcileDealFee on a line on own custody.
     await expect(asHolder.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId: linked, reason: "mine" })).rejects.toThrow(refusal);
-    await expect(asHolder.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId: linked, notes: "looks right to me" })).rejects.toThrow(refusal);
+    await expect(asHolder.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId: linked, notes: "looks right to me", expectedActualAmountMinor: jod(300), expectedActualEvidenceRevision: 0 })).rejects.toThrow(refusal);
     expect(await snapshot()).toEqual(before);
 
     // A second person closes the record after the return, and the holder cannot reopen it.
@@ -1837,7 +1837,7 @@ describe("E — the custody holder never links, unlinks, records, changes, voids
     await seed.asUser.mutation(api.financeDealCosts.reopenDealCustody, { orgId: seed.orgId, custodyId, reason: "late receipt" });
     await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { orgId: seed.orgId, feeId: linked, actualAmountMinor: jod(310), expectedCurrency: "JOD" });
     await seed.asUser.mutation(api.financeDealCosts.setFeeCustody, { orgId: seed.orgId, feeId: plain, custodyId });
-    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId: plain, notes: "checked" });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId: plain, notes: "checked", expectedActualAmountMinor: jod(100), expectedActualEvidenceRevision: 0 });
     await seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId: plain, reason: "duplicate" });
     expect((await seed.t.run((ctx) => ctx.db.get(linked)))?.custodyPosted).toEqual({ version: 2, amountMinor: jod(310), custodyId, occurredAt: expect.any(Number) });
   });
@@ -1923,7 +1923,7 @@ describe("G1 — the family gate proves the LEDGER, not the rows: only the exact
     expect(await familyRefusal(seed)).toMatch(/not on the books/);
 
     // Wired into the classification door: closed, reconciled, invoiced — and still refused on the ledger.
-    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "receipt" });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "receipt", expectedActualAmountMinor: jod(700), expectedActualEvidenceRevision: 0 });
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealCustody, { idempotencyKey: crypto.randomUUID(), orgId: seed.orgId, custodyId, notes: "balanced" });
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       orgId: seed.orgId, applicationId: seed.applicationId, legalInvoiceAmountMinor: jod(10_500), legalInvoiceNumber: "INV-G1", issuedTo: "FINANCE_COMPANY", legalInvoiceDate: Date.now() - DAY,
@@ -2145,11 +2145,11 @@ describe("G4 — a line that no longer carries a custody charge must be OFF the 
     const seed = await seedDeal("void-deferred", { templates: false });
     const custodyId = await openCustody(seed, jod(700));
     const feeId = await employeeFee(seed, custodyId, jod(700));
-    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "receipt" });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "receipt", expectedActualAmountMinor: jod(700), expectedActualEvidenceRevision: 0 });
     // A dealer-paid line stays live so classification reaches the custody
     // family gate rather than refusing on "no costs itemized".
     const dealerFee = await employeeFee(seed, undefined, jod(40), { paidBy: "DEALER" });
-    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId: dealerFee, notes: "receipt" });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId: dealerFee, notes: "receipt", expectedActualAmountMinor: jod(40), expectedActualEvidenceRevision: 0 });
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       orgId: seed.orgId, applicationId: seed.applicationId, legalInvoiceAmountMinor: jod(10_500), legalInvoiceNumber: "INV-G4", issuedTo: "FINANCE_COMPANY", legalInvoiceDate: Date.now() - DAY,
     });
@@ -4087,7 +4087,7 @@ describe("R7-F3 — a STORED custody link is proven this org's, on this deal, be
     ).rejects.toThrow(refusal);
     await expect(seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "gone" })).rejects.toThrow(refusal);
     await expect(seed.asUser.mutation(api.financeDealCosts.setFeeCustody, { orgId: seed.orgId, feeId })).rejects.toThrow(refusal);
-    await expect(seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "checked" })).rejects.toThrow(refusal);
+    await expect(seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "checked", expectedActualAmountMinor: await recordedActualMinor(seed.t, feeId), expectedActualEvidenceRevision: 0 })).rejects.toThrow(refusal);
     expect((await events(seed)).length).toBe(before.events);
     expect((await pending(seed)).length).toBe(before.pending);
     expect(await seed.t.run((ctx) => ctx.db.get(feeId))).toEqual(before.fee);

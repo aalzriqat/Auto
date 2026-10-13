@@ -1840,6 +1840,20 @@ function makeBackend(defects: Defects = {}) {
       case "financeDealCosts:reconcileDealFee": {
         const fee = financeDealFees.get(String(args.feeId));
         if (!fee || fee.voidedAt !== undefined) return { ok: false as const, error: "Deal cost not found in this organization." };
+        // The real mutation certifies the figure the checker saw (SCRUM-834).
+        if (args.expectedActualAmountMinor === undefined) {
+          return { ok: false as const, error: "ArgumentValidationError: Object is missing the required field `expectedActualAmountMinor`." };
+        }
+        if (fee.actualAmountMinor !== args.expectedActualAmountMinor) {
+          return { ok: false as const, error: "The recorded amount of this cost has changed since you opened it." };
+        }
+        // ... and the evidence revision it saw: a same-amount re-record moves only this.
+        if (args.expectedActualEvidenceRevision === undefined) {
+          return { ok: false as const, error: "ArgumentValidationError: Object is missing the required field `expectedActualEvidenceRevision`." };
+        }
+        if ((fee.actualEvidenceRevision ?? 0) !== args.expectedActualEvidenceRevision) {
+          return { ok: false as const, error: "The receipt, paid date or attachments of this cost have been re-recorded since you opened it." };
+        }
         fee.reconciledAt = Date.now();
         return { ok: true as const, value: fee._id };
       }
@@ -1895,6 +1909,7 @@ function makeBackend(defects: Defects = {}) {
           return { ok: false as const, error: `This amount was entered in ${args.expectedCurrency}, but this cost line is recorded in ${fee.currency}. Reload the deal and enter the amount in ${fee.currency}.` };
         }
         fee.actualAmountMinor = args.actualAmountMinor;
+        fee.actualEvidenceRevision = (fee.actualEvidenceRevision ?? 0) + 1;
         return { ok: true as const, value: fee._id };
       }
       case "financeDealCosts:recordDirectFeePayment": {
