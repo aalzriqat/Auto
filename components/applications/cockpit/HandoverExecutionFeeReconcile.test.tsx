@@ -5,9 +5,9 @@
  * expected 1,250 JOD, actual 1,500 JOD, "unreconciled" in closing readiness).
  *
  * Production-shaped: a FINANCE_COMPANY_FEE line, bound by `boundFeeId`, in the
- * payload `listDealCosts` serves. The sibling fee types and an UNBOUND
- * finance-company line are the negative controls — FINANCE_COMPANY_FEE is not a
- * handover type, so only the bound line gets the action here.
+ * payload `listDealCosts` serves. The bound line is acted on in its own section
+ * and nowhere else; any OTHER live line, an unbound finance-company fee
+ * included, is reconciled from the list (`HandoverCostRowRoutes.test.tsx`).
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -321,14 +321,18 @@ describe("who is offered the action, and when", () => {
   });
 });
 
-describe("negative controls: only the BOUND finance-company line, and no sibling type, changes", () => {
-  test("an unbound finance-company fee line gets no reconcile action (it is not the execution fee)", () => {
+describe("the bound line is acted on in its section; every other line is reconciled from the list", () => {
+  test("an unbound finance-company fee line is reconciled from the list (it blocks closing, so it needs a route)", async () => {
+    const onReconcile = vi.fn(async () => {});
     const other: HandoverCostLine = { ...boundLine, _id: "fee2", description: "Admin charge" };
     renderPanel(
       costs([other], { ...bound, boundFeeId: null, unrecorded: true, eligibleFeeIds: ["fee2"] }),
-      { onReconcile: async () => {} }
+      { onReconcile }
     );
-    expect(screen.queryByRole("button", { name: salesEn.ReconcileDealFee })).toBeNull();
+    fireEvent.click(within(screen.getByTestId("deal-handover-cost-fee2")).getByRole("button", { name: salesEn.ReconcileDealFee }));
+    fireEvent.change(screen.getByLabelText(salesEn.ReconcileNotes), { target: { value: "company letter 12" } });
+    fireEvent.click(screen.getByRole("button", { name: salesEn.ConfirmReconcile }));
+    await waitFor(() => expect(onReconcile).toHaveBeenCalledWith("fee2", "company letter 12", 1_500_000, 0));
   });
 
   test("a handover fee type keeps its own list action, and now pins the actual it displays", async () => {
