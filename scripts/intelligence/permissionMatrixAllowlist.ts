@@ -142,7 +142,6 @@ export const MEMBER_ONLY_ALLOWLIST: AllowEntry[] = [
     "convex/subscriptions.ts:getUsageStats",
     "convex/vehicleEdits.ts:getHistory",
   ]),
-  { id: "convex/orgCustomFields.ts:setValues", reason: "UNRULED, defect candidate: a view-only member can write custom-field values — SCRUM-790 (reproduced with a throwaway convex-test on origin/main, NOT committed because the expected policy is unruled)" },
 ];
 
 /** guard === "inline": no permission argument, but the handler reads PERMISSIONS.* itself. */

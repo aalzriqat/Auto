@@ -242,6 +242,13 @@ describe("orgCustomFields cross-tenant guards", () => {
   test("owner can still read and write their own custom field values", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const { attacker, asAttacker } = await setupTwoOrgs(t, "cf6");
+    // setValues now requires the entity to exist in the caller's org (SCRUM-790).
+    const vehicleId = await t.run((ctx: any) =>
+      ctx.db.insert("vehicles", {
+        orgId: attacker.orgId, vin: "CF6VIN", make: "T", model: "M", year: 2021, color: "White",
+        fuelType: "Gasoline", transmission: "Automatic", mileage: 0, sellingPrice: 1, status: "AVAILABLE",
+      }),
+    );
 
     const fieldId = await asAttacker.mutation(api.orgCustomFields.create, {
       orgId: attacker.orgId,
@@ -254,14 +261,14 @@ describe("orgCustomFields cross-tenant guards", () => {
     await asAttacker.mutation(api.orgCustomFields.setValues, {
       orgId: attacker.orgId,
       entityType: "vehicle",
-      entityId: "veh_own",
+      entityId: vehicleId,
       values: [{ fieldId, value: "ABC-1" }],
     });
 
     let values = await asAttacker.query(api.orgCustomFields.getValues, {
       orgId: attacker.orgId,
       entityType: "vehicle",
-      entityId: "veh_own",
+      entityId: vehicleId,
     });
     expect(values).toHaveLength(1);
     expect(values[0].value).toBe("ABC-1");
@@ -270,26 +277,26 @@ describe("orgCustomFields cross-tenant guards", () => {
     await asAttacker.mutation(api.orgCustomFields.setValues, {
       orgId: attacker.orgId,
       entityType: "vehicle",
-      entityId: "veh_own",
+      entityId: vehicleId,
       values: [{ fieldId, value: "ABC-2" }],
     });
     values = await asAttacker.query(api.orgCustomFields.getValues, {
       orgId: attacker.orgId,
       entityType: "vehicle",
-      entityId: "veh_own",
+      entityId: vehicleId,
     });
     expect(values[0].value).toBe("ABC-2");
 
     await asAttacker.mutation(api.orgCustomFields.setValues, {
       orgId: attacker.orgId,
       entityType: "vehicle",
-      entityId: "veh_own",
+      entityId: vehicleId,
       values: [{ fieldId, value: "" }],
     });
     values = await asAttacker.query(api.orgCustomFields.getValues, {
       orgId: attacker.orgId,
       entityType: "vehicle",
-      entityId: "veh_own",
+      entityId: vehicleId,
     });
     expect(values).toEqual([]);
 
