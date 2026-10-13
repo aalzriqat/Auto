@@ -1,6 +1,6 @@
 {
   "id": "disputed-appraisal-fee-corrected-then-removed-from-its-row-ar-390",
-  "fingerprint": "aec54579a623a7d83538f62c4314dd070a30882983a9da2592ded8b7c4b25483",
+  "fingerprint": "c51b57ac85677f71879292ec11901905bcb65231d9708154656234f23c649d28",
   "domain": "screen",
   "level": "browser",
   "status": "active",
@@ -19,6 +19,8 @@
       "input": {
         "feeType": "OTHER_CLOSING_EXPENSE",
         "paidBy": "DEALER",
+        "paidTo": "OTHER",
+        "accountingTreatment": "SELLING_EXPENSE",
         "actualMajor": 0
       }
     },
@@ -43,6 +45,7 @@
         "feeType": "APPRAISAL_FEE",
         "paidBy": "DEALER",
         "paidTo": "APPRAISER",
+        "accountingTreatment": "APPRAISAL_EXPENSE",
         "estimatedMajor": 1250,
         "actualMajor": 1500
       }
@@ -92,6 +95,14 @@
     {
       "observable": "fee.status.afterCorrection",
       "value": "ACTUAL_RECORDED"
+    },
+    {
+      "observable": "fee.actualMajor.afterCorrection",
+      "value": 1250
+    },
+    {
+      "observable": "closingCheck.costsClosable.afterCorrection",
+      "value": "BLOCKED"
     },
     {
       "observable": "fee.live.afterRemove",
