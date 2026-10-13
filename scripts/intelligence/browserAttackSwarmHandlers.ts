@@ -69,12 +69,23 @@ function orgIdFromUrl(url: string): string | null {
   }
 }
 
+// SCRUM-826 / SCRUM-824 G4: the wait below must be decided by the PATHNAME,
+// through the very same parse orgIdFromUrl uses. It used to be an unanchored
+// RegExp tested against the FULL URL, so "http://localhost:3000/dashboard"
+// matched as "/localhost:3000/dashboard" (host:port read as the org segment)
+// before the app had redirected /dashboard to /<orgId>/dashboard; waitForURL
+// returned at once, orgIdFromUrl("/dashboard") was null, and both attack
+// workers died as HARNESS_ERROR in under a second. With one parser behind both
+// the wait and the read, a URL that satisfies the wait always yields an org id.
+// Fail closed: if no org-bearing URL appears within the timeout, waitForURL
+// rejects and the harness error propagates; no org id is ever invented.
+function isOrgRouteUrl(url: URL): boolean {
+  return orgIdFromUrl(url.href) !== null;
+}
+
 async function resolveOrgRoute(page: Page): Promise<string | null> {
   await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
-  await page.waitForURL(
-    /\/[^/]+\/(dashboard|sales|leads|accounting)(\?.*)?$/,
-    { timeout: 20_000 },
-  );
+  await page.waitForURL(isOrgRouteUrl, { timeout: 20_000 });
   return orgIdFromUrl(page.url());
 }
 
