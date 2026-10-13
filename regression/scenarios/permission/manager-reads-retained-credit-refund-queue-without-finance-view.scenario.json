@@ -1,0 +1,58 @@
+{
+  "id": "manager-reads-retained-credit-refund-queue-without-finance-view",
+  "fingerprint": "6be96ae152d63fe94918fdf8b9077cd6886615bd8a163fae8bdd6a61e70c6a52",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum831-manager-queue",
+    "firstSeen": "2026-10-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "manager",
+        "org": "A"
+      },
+      "action": "retainedCreditRefunds.listRetainedCreditRefundApprovalQueue",
+      "input": {
+        "paginationOpts": {
+          "numItems": 50,
+          "cursor": null
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "manager",
+        "org": "A"
+      },
+      "action": "retainedCreditRefunds.listRetainedCreditRefundRequests",
+      "input": {
+        "status": "PENDING"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.pendingRequestsVisible",
+      "value": 1
+    },
+    {
+      "observable": "step2.refusal",
+      "value": "view:finance"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-831#c23014",
+      "digest": "b4423b4fff822cd31bb4880ded9b80746e11ab24781bca59b35bd1498a8b2163"
+    }
+  ],
+  "impl": {
+    "file": "convex/chequeCancelledSaleCredit.test.ts",
+    "testName": "Q1. the default MANAGER sees the pending request without view:finance; the finance query still refuses them"
+  },
+  "matrixRow": "SCRUM-831-refund-approval-authority"
+}

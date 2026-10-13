@@ -9,10 +9,12 @@
  */
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
+import { ConvexError } from "convex/values";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 
 /**
  * Both pilot switches ship ON. This suite exercises the doors' BEHAVIOR, so it
@@ -1021,4 +1023,310 @@ describe("SCRUM-724 R4: the reservation bound equals the reversal bound (100 PEN
     const pending = (await applicationsFor(f.s.t, f.s.orgId)).filter((row) => row.status === "PENDING");
     expect(pending).toHaveLength(100);
   }, 90_000);
+});
+
+// ---------------------------------------------------------------------------
+// SCRUM-831: a default MANAGER (approve:requests, no view:finance) works the queue
+// ---------------------------------------------------------------------------
+
+describe("SCRUM-831 manager retained-credit refund approval queue", () => {
+  const queueApi = () => refundApi().listRetainedCreditRefundApprovalQueue;
+
+  /** An actor holding EXACTLY a shipped role template, so a template edit changes the outcome. */
+  async function templateActor(s: Seeded, template: string, suffix: string) {
+    const name = `tpl${template.toLowerCase()}`;
+    const permissions = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === template)!.permissions;
+    const actorId = await s.t.run(async (ctx) => {
+      const id = await ctx.db.insert("users", { clerkId: `${name}_${suffix}`, email: `${name}_${suffix}@x.com`, name });
+      const roleId = await ctx.db.insert("roles", { orgId: s.orgId, name: template, permissions: [...permissions] });
+      await ctx.db.insert("memberships", { orgId: s.orgId, userId: id, roleId });
+      return id;
+    });
+    return { actorId, as: s.t.withIdentity({ subject: `${name}_${suffix}`, clerkId: `${name}_${suffix}` }) };
+  }
+  const queue = (as: unknown, orgId: Id<"organizations">) =>
+    (as as any).query(queueApi(), { orgId, paginationOpts: { numItems: 50, cursor: null } });
+  const idsOf = (rows: Array<{ _id: string }>) => rows.map((row) => row._id);
+
+  /**
+   * Strict SCRUM-486 permission oracle. A call is REFUSED (false) only with the FORBIDDEN refusal
+   * for exactly the one permission it requires; it is AUTHORIZED (true) only if it succeeds or
+   * fails with one of the named domain codes. Anything else (a crash, another permission, an
+   * unexpected code) throws, so an unexpected failure can never read as "authorized".
+   */
+  async function isAuthorized(call: Promise<unknown>, required: string, domainCodes: readonly string[] = []): Promise<boolean> {
+    try {
+      await call;
+      return true;
+    } catch (error) {
+      const data = (error as { data?: { code?: unknown; message?: unknown } }).data;
+      if (data?.code === "FORBIDDEN" && data.message === `Forbidden: Missing required permissions: ${required}`) return false;
+      if (typeof data?.code === "string" && domainCodes.includes(data.code)) return true;
+      throw new Error(`Unexpected outcome for a call requiring ${required}: ${data?.code ?? String(error)}`, { cause: error });
+    }
+  }
+
+  test("Q1. the default MANAGER sees the pending request without view:finance; the finance query still refuses them", async () => {
+    const f = await creditFixture("q1");
+    const manager = await templateActor(f.s, "MANAGER", "q1");
+    expect(DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "MANAGER")!.permissions).not.toContain("view:finance");
+    const requestId = await f.request(1000);
+
+    const result = await queue(manager.as, f.s.orgId);
+    expect(idsOf(result.page)).toEqual([requestId]);
+    expect(result.page[0]).toMatchObject({
+      amountMinor: 1000, currency: "USD", method: "BANK_TRANSFER", reason: "Customer asked for money back",
+      customerName: "Cust q1", requestedByMe: false,
+    });
+    // The finance listing stays finance-only: the narrow path did not broaden it.
+    await expect((manager.as as any).query(refundApi().listRetainedCreditRefundRequests,
+      { orgId: f.s.orgId, status: "PENDING" })).rejects.toThrow(/view:finance/);
+  }, 60_000);
+
+  test("Q2. the row carries only what a manager needs to judge; no internal ids, keys or decision fields", async () => {
+    const f = await creditFixture("q2");
+    const manager = await templateActor(f.s, "MANAGER", "q2");
+    await f.request(1000);
+    const [row] = (await queue(manager.as, f.s.orgId)).page;
+    expect(Object.keys(row).sort()).toEqual([
+      "_id", "amountMinor", "createdAt", "currency", "customerName", "method", "originatingSaleStatus",
+      "payoutAvailable", "reason", "requestedByMe", "requestedByName", "sourceChequeLabel",
+    ]);
+    expect(row.sourceChequeLabel).toBe("Test Bank #q2-1");
+    expect(row.originatingSaleStatus).toBe("CANCELLED");
+    expect(row.requestedByName).toBe("Owner");
+  }, 60_000);
+
+  test("Q3. the default ACCOUNTANT (manage:finance, no approve:requests) and a view-only finance user are refused", async () => {
+    const f = await creditFixture("q3");
+    await f.request(1000);
+    const accountant = await templateActor(f.s, "ACCOUNTANT", "q3");
+    expect(DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "ACCOUNTANT")!.permissions).not.toContain("approve:requests");
+    await expect(queue(accountant.as, f.s.orgId)).rejects.toThrow(/approve:requests/);
+    await expect(queue(f.s.financeOnly.as, f.s.orgId)).rejects.toThrow(/approve:requests/);
+    await expect(queue(f.s.viewOnly.as, f.s.orgId)).rejects.toThrow(/approve:requests/);
+  }, 60_000);
+
+  test("Q4. another organization's approver neither reads nor learns of this organization's requests", async () => {
+    const f = await creditFixture("q4");
+    const requestId = await f.request(1000);
+    // The second tenant lives in the SAME database: a separate harness would hand out
+    // identical ids and make the cross-tenant call vacuous.
+    const otherOrgId = await f.s.t.run(async (ctx) => {
+      const orgId = await ctx.db.insert("organizations", { name: "CCSC q4 other", createdAt: Date.now() });
+      const userId = await ctx.db.insert("users", { clerkId: "mgr_q4_other", email: "mgr_q4_other@x.com", name: "Other" });
+      const roleId = await ctx.db.insert("roles", {
+        orgId, name: "MANAGER",
+        permissions: [...DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "MANAGER")!.permissions],
+      });
+      await ctx.db.insert("memberships", { orgId, userId, roleId });
+      return orgId;
+    });
+    const otherManager = f.s.t.withIdentity({ subject: "mgr_q4_other", clerkId: "mgr_q4_other" });
+    // Not a member of the credit's organization: refused outright.
+    await expect(queue(otherManager, f.s.orgId)).rejects.toThrow(/not a member/i);
+    // A member of their own organization sees only their own (empty) queue.
+    const own = await queue(otherManager, otherOrgId);
+    expect(own.page).toEqual([]);
+    expect(JSON.stringify(own)).not.toContain(String(requestId));
+  }, 60_000);
+
+  test("Q4b. a request whose customer id points into another organization never exposes that customer's name", async () => {
+    const f = await creditFixture("q4b");
+    const manager = await templateActor(f.s, "MANAGER", "q4b");
+    const requestId = await f.request(1000);
+    expect((await queue(manager.as, f.s.orgId)).page[0].customerName).toBe("Cust q4b");
+
+    // Same database as the request: a separate harness would hand out colliding ids.
+    const foreignCustomerId = await f.s.t.run(async (ctx) => {
+      const foreignOrgId = await ctx.db.insert("organizations", { name: "CCSC q4b foreign", createdAt: Date.now() });
+      return await ctx.db.insert("customers", {
+        orgId: foreignOrgId, firstName: "Foreign", lastName: "Secret", createdAt: Date.now(),
+      });
+    });
+    await f.s.t.run((ctx) => ctx.db.patch(requestId, { customerId: foreignCustomerId }));
+
+    const result = await queue(manager.as, f.s.orgId);
+    // The request is still queued for the decision; only the foreign name is withheld.
+    expect(idsOf(result.page)).toEqual([requestId]);
+    expect(result.page[0].customerName).toBeUndefined();
+    expect(JSON.stringify(result)).not.toMatch(/Foreign|Secret/);
+  }, 60_000);
+
+  test("Q5. only PENDING requests are queued, newest first; APPROVED, REJECTED and CANCELLED leave it", async () => {
+    const f = await creditFixture("q5");
+    const manager = await templateActor(f.s, "MANAGER", "q5");
+    const older = await f.request(300);
+    const newer = await f.request(400);
+    const approved = await f.request(500);
+    const rejected = await f.request(600);
+    const cancelled = await f.request(700);
+    await f.respond(approved, "APPROVED");
+    await f.respond(rejected, "REJECTED");
+    await f.cancel(cancelled);
+    expect(idsOf((await queue(manager.as, f.s.orgId)).page)).toEqual([newer, older]);
+  }, 60_000);
+
+  test("Q6. the queue states whether payout is available; with the pilot switch ON it is readable and says false", async () => {
+    const f = await creditFixture("q6");
+    const manager = await templateActor(f.s, "MANAGER", "q6");
+    const requestId = await f.request(1000);
+    expect((await queue(manager.as, f.s.orgId)).page[0].payoutAvailable).toBe(true);
+    pilot.payoutDisabled = true;
+    try {
+      const closed = await queue(manager.as, f.s.orgId);
+      expect(closed.page[0].payoutAvailable).toBe(false);
+      expect(idsOf(closed.page)).toEqual([requestId]);
+    } finally {
+      pilot.payoutDisabled = false;
+    }
+  }, 60_000);
+
+  test("Q7. different-actor rule: the requester cannot decide their own request; the manager can; the read writes nothing", async () => {
+    const f = await creditFixture("q7");
+    const manager = await templateActor(f.s, "MANAGER", "q7");
+    // `approver` holds manage:finance AND approve:requests, so only the different-actor rule stops it.
+    const requestId = (await (f.s.approver.as as any).mutation(refundApi().requestRetainedCreditRefund, {
+      orgId: f.s.orgId, receiptMovementId: f.movement._id, amountMinor: 1000, method: "BANK_TRANSFER", reason: "Own request",
+    })) as Id<"retainedCreditRefundRequests">;
+
+    const seenByRequester = (await queue(f.s.approver.as, f.s.orgId)).page;
+    expect(seenByRequester.find((row: { _id: string }) => row._id === requestId)?.requestedByMe).toBe(true);
+    const decide = (as: unknown, status: "APPROVED" | "REJECTED") => (as as any).mutation(refundApi().respondToRetainedCreditRefund, {
+      orgId: f.s.orgId, requestId, status, idempotencyKey: crypto.randomUUID(),
+    });
+    await expect(decide(f.s.approver.as, "APPROVED")).rejects.toThrow(/Requester cannot approve or reject their own/);
+    await expect(decide(f.s.approver.as, "REJECTED")).rejects.toThrow(/Requester cannot approve or reject their own/);
+    expect((await f.s.t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("PENDING");
+
+    const before = await allRows(f.s, "retainedCreditRefundRequests");
+    const seenByManager = (await queue(manager.as, f.s.orgId)).page;
+    expect(seenByManager.find((row: { _id: string }) => row._id === requestId)?.requestedByMe).toBe(false);
+    expect(await allRows(f.s, "retainedCreditRefundRequests")).toEqual(before);
+
+    await decide(manager.as, "APPROVED");
+    expect((await f.s.t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("APPROVED");
+    expect((await queue(manager.as, f.s.orgId)).page).toEqual([]);
+    // The manager holds no manage:finance, so execute and cancel stay finance-only.
+    await expect(f.execute(requestId, manager.as)).rejects.toThrow(/manage:finance/);
+    await expect(f.cancel(requestId, "nope", manager.as)).rejects.toThrow(/manage:finance/);
+  }, 90_000);
+
+  test("Q8. SCRUM-486 permission matrix: refund authority per shipped role template (literal expectations)", async () => {
+    // Literals, written from the SCRUM-831 c23014 ruling and SCRUM-724: the approval queue and
+    // the decision need approve:requests; the finance list needs view:finance; execute and
+    // cancel need manage:finance. A template that gains or loses one of these changes a cell.
+    const MATRIX: Record<string, { queue: boolean; financeList: boolean; decide: boolean; execute: boolean; cancel: boolean }> = {
+      OWNER: { queue: true, financeList: true, decide: true, execute: true, cancel: true },
+      MANAGER: { queue: true, financeList: false, decide: true, execute: false, cancel: false },
+      SALES: { queue: false, financeList: false, decide: false, execute: false, cancel: false },
+      RECEPTION: { queue: false, financeList: false, decide: false, execute: false, cancel: false },
+      ACCOUNTANT: { queue: false, financeList: true, decide: false, execute: true, cancel: true },
+      SENIOR_ACCOUNTANT: { queue: false, financeList: true, decide: false, execute: true, cancel: true },
+    };
+    expect(DEFAULT_ROLE_TEMPLATES.map((role) => role.name).sort()).toEqual(Object.keys(MATRIX).sort());
+
+    const f = await creditFixture("q8");
+
+    // Requesting is itself refused while the payout switch is ON, so each role's request is raised first.
+    const requestIds: Record<string, Id<"retainedCreditRefundRequests">> = {};
+    for (const role of DEFAULT_ROLE_TEMPLATES) requestIds[role.name] = await f.request(100);
+
+    // The pilot state: the payout switch stays ON. Reject authorizes nothing and stays live; execute
+    // is refused by the switch only AFTER its permission check.
+    pilot.payoutDisabled = true;
+    try {
+      for (const role of DEFAULT_ROLE_TEMPLATES) {
+        const expected = MATRIX[role.name];
+        const actor = await templateActor(f.s, role.name, `q8${role.name.toLowerCase()}`);
+        const requestId = requestIds[role.name];
+        const cells = {
+          queue: await isAuthorized(queue(actor.as, f.s.orgId), "approve:requests"),
+          financeList: await isAuthorized((actor.as as any).query(refundApi().listRetainedCreditRefundRequests,
+            { orgId: f.s.orgId, status: "PENDING" }), "view:finance"),
+          // An empty reason is refused AFTER the permission check, so it never cancels the request.
+          cancel: await isAuthorized(f.cancel(requestId, "", actor.as), "manage:finance",
+            ["RETAINED_CREDIT_REFUND_CANCEL_REASON_REQUIRED"]),
+          execute: await isAuthorized(f.execute(requestId, actor.as), "manage:finance",
+            ["CUSTOMER_CREDIT_PAYOUT_DISABLED"]),
+          decide: await isAuthorized((actor.as as any).mutation(refundApi().respondToRetainedCreditRefund, {
+            orgId: f.s.orgId, requestId, status: "REJECTED", idempotencyKey: crypto.randomUUID(),
+          }), "approve:requests"),
+        };
+        expect({ role: role.name, ...cells }).toEqual({ role: role.name, ...expected });
+        expect((await f.s.t.run((ctx) => ctx.db.get(requestId)))?.status).toBe(expected.decide ? "REJECTED" : "PENDING");
+      }
+    } finally {
+      pilot.payoutDisabled = false;
+    }
+    // Only the PENDING requests of roles that cannot decide are still queued.
+    const pendingAfter = await f.s.t.run((ctx) => ctx.db.query("retainedCreditRefundRequests").collect());
+    expect(pendingAfter.filter((row) => row.status === "PENDING")).toHaveLength(4);
+    expect(pendingAfter.filter((row) => row.status === "REJECTED")).toHaveLength(2);
+  }, 120_000);
+
+  test("Q9. every PENDING request is reachable by cursor, newest first; a page is capped; another tenant's rows never join", async () => {
+    const f = await creditFixture("q9");
+    const manager = await templateActor(f.s, "MANAGER", "q9");
+    const seedId = await f.request(1000);
+    // The regression scenario schema cannot express this setup: one valid seed request is cloned into 130 PENDING
+    // requests in the same org (distinct amounts), plus a PENDING row of a foreign org in the same database.
+    const TOTAL = 130; // more than the 100 the unpaged read used to stop at
+    const ids = await f.s.t.run(async (ctx) => {
+      const { _id, _creationTime, ...fields } = (await ctx.db.get(seedId))!;
+      const inserted: Array<Id<"retainedCreditRefundRequests">> = [_id];
+      for (let i = 1; i < TOTAL; i++) {
+        inserted.push(await ctx.db.insert("retainedCreditRefundRequests", { ...fields, amountMinor: 1000 + i }));
+      }
+      // A PENDING request of ANOTHER organization, in the same database.
+      const foreignOrgId = await ctx.db.insert("organizations", { name: "CCSC q9 foreign", createdAt: Date.now() });
+      await ctx.db.insert("retainedCreditRefundRequests", { ...fields, orgId: foreignOrgId });
+      return inserted;
+    });
+
+    const page = (numItems: number, cursor: string | null) =>
+      (manager.as as any).query(queueApi(), { orgId: f.s.orgId, paginationOpts: { numItems, cursor } });
+    const walked: Array<{ _id: string; payoutAvailable: boolean }> = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    for (; pages < 20; pages++) {
+      const next: { page: typeof walked; isDone: boolean; continueCursor: string } = await page(50, cursor);
+      expect(next.page.length).toBeLessThanOrEqual(50);
+      walked.push(...next.page);
+      if (next.isDone) { pages++; break; }
+      cursor = next.continueCursor;
+    }
+    expect(pages).toBe(3); // 50 + 50 + 30
+    // Item 101 and beyond are reachable: all 130, none twice, newest first, none from another tenant.
+    expect(walked.map((row) => row._id)).toEqual([...ids].reverse());
+    expect(walked.every((row) => row.payoutAvailable === true)).toBe(true);
+
+    // The numItems of a first-page request is capped server-side (one page fans out several reads per row).
+    // This proves the cap on the first page only: the oversized continuation just returns the 30 remaining rows,
+    // so it proves neither a continuation cap nor an end-cursor replay cap.
+    const oversized = await page(100_000, null);
+    expect(oversized.page).toHaveLength(100);
+    expect(oversized.isDone).toBe(false);
+    expect(idsOf((await page(100_000, oversized.continueCursor)).page)).toEqual([...ids].reverse().slice(100));
+  }, 90_000);
+
+  test("Q8b. negative control: the matrix oracle refuses to read an unrelated failure as a verdict", async () => {
+    const forbidden = (permission: string) =>
+      Promise.reject(new ConvexError({ code: "FORBIDDEN", message: `Forbidden: Missing required permissions: ${permission}` }));
+    const coded = (code: string) => Promise.reject(new ConvexError({ code, message: "domain refusal" }));
+    const CANCEL_CODE = ["RETAINED_CREDIT_REFUND_CANCEL_REASON_REQUIRED"];
+
+    // What it must accept.
+    expect(await isAuthorized(forbidden("manage:finance"), "manage:finance")).toBe(false);
+    expect(await isAuthorized(Promise.resolve("ok"), "manage:finance")).toBe(true);
+    expect(await isAuthorized(coded(CANCEL_CODE[0]), "manage:finance", CANCEL_CODE)).toBe(true);
+
+    // What it must reject: each would have been a false "authorized" under the old any-other-error rule.
+    await expect(isAuthorized(Promise.reject(new Error("boom")), "manage:finance", CANCEL_CODE)).rejects.toThrow(/Unexpected outcome/);
+    await expect(isAuthorized(coded("RETAINED_CREDIT_REFUND_NOT_FOUND"), "manage:finance", CANCEL_CODE)).rejects.toThrow(/Unexpected outcome/);
+    await expect(isAuthorized(coded(CANCEL_CODE[0]), "manage:finance")).rejects.toThrow(/Unexpected outcome/);
+    // A refusal for a different permission, or for a list of them, is not the exact one required.
+    await expect(isAuthorized(forbidden("view:finance"), "manage:finance")).rejects.toThrow(/Unexpected outcome/);
+    await expect(isAuthorized(forbidden("manage:finance, view:finance"), "manage:finance")).rejects.toThrow(/Unexpected outcome/);
+  });
 });

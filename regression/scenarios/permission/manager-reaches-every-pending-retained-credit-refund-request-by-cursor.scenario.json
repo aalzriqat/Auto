@@ -1,0 +1,116 @@
+{
+  "id": "manager-reaches-every-pending-retained-credit-refund-request-by-cursor",
+  "fingerprint": "b77ad630a7dfbe74ab62a6f8b43bf25d4cafdd289da26f23349919b24e62d702",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum831-c23023",
+    "firstSeen": "2026-10-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "manager",
+        "org": "A"
+      },
+      "action": "retainedCreditRefunds.listRetainedCreditRefundApprovalQueue",
+      "input": {
+        "paginationOpts": {
+          "numItems": 50,
+          "cursor": null
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "manager",
+        "org": "A"
+      },
+      "action": "retainedCreditRefunds.listRetainedCreditRefundApprovalQueue",
+      "input": {
+        "paginationOpts": {
+          "numItems": 50,
+          "cursor": "step1.continueCursor"
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "manager",
+        "org": "A"
+      },
+      "action": "retainedCreditRefunds.listRetainedCreditRefundApprovalQueue",
+      "input": {
+        "paginationOpts": {
+          "numItems": 50,
+          "cursor": "step2.continueCursor"
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "manager",
+        "org": "A"
+      },
+      "action": "retainedCreditRefunds.listRetainedCreditRefundApprovalQueue",
+      "input": {
+        "paginationOpts": {
+          "numItems": 100000,
+          "cursor": null
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "manager",
+        "org": "A"
+      },
+      "action": "retainedCreditRefunds.listRetainedCreditRefundApprovalQueue",
+      "input": {
+        "paginationOpts": {
+          "numItems": 100000,
+          "cursor": "step4.continueCursor"
+        }
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "walk.pageCount",
+      "value": 3
+    },
+    {
+      "observable": "walk.rowsReached",
+      "value": 130
+    },
+    {
+      "observable": "walk.foreignOrgRows",
+      "value": 0
+    },
+    {
+      "observable": "step4.pageLength",
+      "value": 100
+    },
+    {
+      "observable": "step4.isDone",
+      "value": false
+    },
+    {
+      "observable": "step5.pageLength",
+      "value": 30
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-831#c23014",
+      "digest": "b4423b4fff822cd31bb4880ded9b80746e11ab24781bca59b35bd1498a8b2163"
+    }
+  ],
+  "impl": {
+    "file": "convex/chequeCancelledSaleCredit.test.ts",
+    "testName": "Q9. every PENDING request is reachable by cursor, newest first; a page is capped; another tenant's rows never join"
+  },
+  "matrixRow": "SCRUM-831-refund-approval-authority"
+}
