@@ -322,19 +322,6 @@ describe("who is offered the action, and when", () => {
 });
 
 describe("the bound line is acted on in its section; every other line is reconciled from the list", () => {
-  test("an unbound finance-company fee line is reconciled from the list (it blocks closing, so it needs a route)", async () => {
-    const onReconcile = vi.fn(async () => {});
-    const other: HandoverCostLine = { ...boundLine, _id: "fee2", description: "Admin charge" };
-    renderPanel(
-      costs([other], { ...bound, boundFeeId: null, unrecorded: true, eligibleFeeIds: ["fee2"] }),
-      { onReconcile }
-    );
-    fireEvent.click(within(screen.getByTestId("deal-handover-cost-fee2")).getByRole("button", { name: salesEn.ReconcileDealFee }));
-    fireEvent.change(screen.getByLabelText(salesEn.ReconcileNotes), { target: { value: "company letter 12" } });
-    fireEvent.click(screen.getByRole("button", { name: salesEn.ConfirmReconcile }));
-    await waitFor(() => expect(onReconcile).toHaveBeenCalledWith("fee2", "company letter 12", 1_500_000, 0));
-  });
-
   test("a handover fee type keeps its own list action, and now pins the actual it displays", async () => {
     const onReconcile = vi.fn(async () => {});
     const stamps: HandoverCostLine = {

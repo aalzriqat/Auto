@@ -12,6 +12,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { salesEn } from "@/lib/i18n/domains/sales";
 import {
+  FEE_TYPE_LABEL,
   HandoverCostsPanel,
   type HandoverCostLine,
   type HandoverCostsData,
@@ -176,7 +177,7 @@ describe.each(NON_HANDOVER_TYPES)("an unplanned %s that stops the deal closing",
     renderPanel(costs([lineOf(feeType)]), { onReconcile: async () => {} }, { canManage: false, canReconcile: false });
     expect(within(row()).queryByRole("button")).toBeNull();
     expect(within(row()).queryByTestId("deal-handover-reconcile-fee1-waiting")).toBeNull();
-    expect(row().textContent).toContain(t(feeType === "APPRAISAL_FEE" ? "FeeTypeAppraisal" : feeType === "ADMINISTRATIVE_FEE" ? "FeeTypeAdministrative" : feeType === "COMMISSION" ? "FeeTypeCommission" : "FeeTypeFinanceCompany"));
+    expect(row().textContent).toContain(t(FEE_TYPE_LABEL[feeType]));
   });
 
   test("outside the checklist (a frozen policy with its own rows) it is still reconcilable", async () => {
@@ -245,9 +246,7 @@ describe("an unbound finance-company fee, with and without an execution-fee sect
     expect(within(screen.getByTestId("deal-execution-fee")).getByRole("button", { name: salesEn.ReconcileDealFee })).toBeTruthy();
   });
 
-  test("a binding the section cannot show (the position names no usable line) leaves the row with its controls", () => {
-    // `boundFeeId: null` while a second line carries a stale binding: the server
-    // reads that as ambiguous and serves no bound id, so no section owns the row.
+  test("a withheld binding (no bound id served) leaves the row with its controls", () => {
     renderPanel(costs([lineOf("FINANCE_COMPANY_FEE")], { executionFee: { ...unbound, withheld: true } }), { onReconcile: async () => {} });
     expect(button(salesEn.ReconcileDealFee)).toBeTruthy();
     expect(button(salesEn.RemoveHandoverCost)).toBeTruthy();

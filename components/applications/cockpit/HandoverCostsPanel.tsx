@@ -828,18 +828,10 @@ export function HandoverCostsPanel({
   const adding = openIntent !== null;
   const boundFeeId = costs?.executionFee?.boundFeeId ?? null;
   const boundLine = costs?.lines.find((line) => line._id === boundFeeId);
-  /**
-   * Whether the execution-fee section is the one place this line is acted on.
-   * Every OTHER live line gets the list's reconcile / correct / remove controls
-   * whatever its fee type: closing readiness judges every live line, so a type
-   * with no route here (an appraisal or administrative fee, a commission, an
-   * unbound finance-company fee) would block a deal nobody could unblock
-   * (SCRUM-834). A bound line keeps the section's controls alone, so the two are
-   * never offered side by side — and is not left without any when the section
-   * is not drawn (`costs.executionFee` is null).
-   */
-  const actedOnInExecutionFeeSection = (line: HandoverCostLine) =>
-    costs?.executionFee != null && line._id === boundFeeId;
+  // Closing readiness judges every live line, so every line gets the list's
+  // controls whatever its fee type (SCRUM-834) — except the bound line while the
+  // execution-fee section is drawn, which acts on it alone.
+  const sectionFeeId = costs?.executionFee ? boundFeeId : null;
   // The section only renders a form `executionFeeFormAvailable` allows, and the
   // same decision ends it here, so the marker never outlives what is drawn.
   // Another user reconciling or re-recording the fee, a handler or permission
@@ -1433,12 +1425,12 @@ export function HandoverCostsPanel({
                             )}
                           </dd>
                         </dl>
-                        {canManage && !actedOnInExecutionFeeSection(line) && line.currency !== denomination.code && (
+                        {canManage && line._id !== sectionFeeId && line.currency !== denomination.code && (
                           <span className="text-xs text-amber-700 dark:text-amber-400" data-testid={`deal-handover-cost-${line._id}-currency`}>
                             {t("HandoverCostCurrencyDiffers")}
                           </span>
                         )}
-                        {(canManage || mayReconcile) && !actedOnInExecutionFeeSection(line) && line.currency === denomination.code && (
+                        {(canManage || mayReconcile) && line._id !== sectionFeeId && line.currency === denomination.code && (
                           <div className="flex gap-1">
                             {canManage && line.actualAmountMinor !== undefined && line.status !== "RECONCILED" && onReconcile && !canReconcile && (
                               <span className="text-xs text-muted-foreground" data-testid={`deal-handover-reconcile-${line._id}-waiting`}>
