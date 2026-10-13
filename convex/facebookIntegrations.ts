@@ -213,24 +213,27 @@ export const setFacebookLeadCreationConfig = mutation({
 export const disconnectByFacebookConnectedUserId = internalMutation({
   args: { facebookConnectedByUserId: v.string() },
   handler: async (ctx, args) => {
-    const settings = await ctx.db
+    // One Facebook user can connect several orgs (e.g. a dealer-group admin);
+    // Meta sends a single callback for that user, so every one must be cleared.
+    const rows = await ctx.db
       .query("orgSettings")
       .withIndex("by_facebook_connected_user_id", (q) =>
         q.eq("facebookConnectedByUserId", args.facebookConnectedByUserId)
       )
-      .first();
-    if (!settings) return;
+      .collect();
 
-    await ctx.db.patch(settings._id, {
-      facebookPageId: undefined,
-      facebookPageAccessToken: undefined,
-      facebookTokenExpiresAt: undefined,
-      facebookPageName: undefined,
-      facebookConnectedByUserId: undefined,
-      facebookAutoReplyEnabled: false,
-      facebookAvailablePages: undefined,
-      facebookPendingCredentials: undefined,
-    });
+    for (const settings of rows) {
+      await ctx.db.patch(settings._id, {
+        facebookPageId: undefined,
+        facebookPageAccessToken: undefined,
+        facebookTokenExpiresAt: undefined,
+        facebookPageName: undefined,
+        facebookConnectedByUserId: undefined,
+        facebookAutoReplyEnabled: false,
+        facebookAvailablePages: undefined,
+        facebookPendingCredentials: undefined,
+      });
+    }
   },
 });
 
@@ -496,6 +499,17 @@ export const saveFacebookPendingPages = internalMutation({
       .withIndex("by_org", (q) => q.eq("orgId", orgId))
       .unique();
 
+    // facebookConnectedByUserId is the single key Meta's callbacks use to find
+    // this row. Overwriting it while an active Page token stays would make that
+    // token invisible to its real owner's deauthorization, so another user (or
+    // an unknown one, on a legacy row) must disconnect first. Pending-only state
+    // has nothing active depending on the id and may be replaced.
+    if (existing?.facebookPageAccessToken && existing.facebookConnectedByUserId !== connectedByUserId) {
+      throw new ConvexError(
+        "A different Facebook account is already connected to this organization. Disconnect Facebook first, then connect again."
+      );
+    }
+
     // Picker-safe subset for the client; credentials kept server-side only.
     const pickerPages = pages.map(({ id, name }) => ({ id, name }));
     const pendingCredentials = pages.map(({ id, name, access_token }) => ({
@@ -551,11 +565,17 @@ export const validateFacebookPageSelectAuth = internalMutation({
     }
     // Refuse before the action subscribes the Page, not only at save time.
     await assertFacebookPageFree(ctx, args.orgId, cred.id);
+    // Credentials saved before the user id was mandatory carry none, and Meta's
+    // deauthorize / data-deletion callbacks could never find them once promoted.
+    const facebookConnectedByUserId = settings?.facebookConnectedByUserId;
+    if (!facebookConnectedByUserId) {
+      throw new ConvexError("This Facebook connection is incomplete. Please reconnect via OAuth.");
+    }
     return {
       pageId: cred.id,
       pageName: cred.name,
       pageAccessToken: cred.token,
-      facebookConnectedByUserId: settings?.facebookConnectedByUserId,
+      facebookConnectedByUserId,
     };
   },
 });

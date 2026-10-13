@@ -2,7 +2,8 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
+import type { WithoutSystemFields } from "convex/server";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -549,6 +550,209 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
     for (const secret of URL_CREDENTIALS) expect(JSON.stringify(logs)).not.toContain(secret);
   });
 
+  // The deletion invariant: every credential row Meta's deauthorize and
+  // data-deletion callbacks must be able to erase is reachable through
+  // orgSettings.facebookConnectedByUserId. Tests labelled "(signed route)" POST
+  // a real HMAC-signed signed_request to the HTTP route; "(action)" ones call the
+  // named action directly and prove nothing about the route.
+  describe("deletion invariants", () => {
+    const APP_SECRET = "test_fb_app_secret"; // the mocked getValidatedEnv value
+    const toBase64Url = (bytes: Uint8Array | string) => Buffer.from(bytes).toString("base64url");
+
+    async function signedRequest(payload: Record<string, unknown>): Promise<string> {
+      const encoded = toBase64Url(JSON.stringify(payload));
+      const key = await crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(APP_SECRET),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"]
+      );
+      const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(encoded)));
+      return `${toBase64Url(sig)}.${encoded}`;
+    }
+
+    type T = ReturnType<typeof convexTestWithComponents<typeof schema>>;
+    async function postToRoute(t: T, path: string, userId: string) {
+      return t.fetch(path, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ signed_request: await signedRequest({ user_id: userId }) }).toString(),
+      });
+    }
+
+    const newOrg = (t: T, name: string) => t.run((ctx) => ctx.db.insert("organizations", { name, createdAt: Date.now() }));
+    const insertSettings = (t: T, orgId: Id<"organizations">, fields: Partial<WithoutSystemFields<Doc<"orgSettings">>>) =>
+      t.run((ctx) =>
+        ctx.db.insert("orgSettings", { orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: [], ...fields })
+      );
+    const settingsOf = (t: T, orgId: Id<"organizations">) =>
+      t.run((ctx) => ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique());
+
+    test.each(["/facebook-deauthorize", "/facebook-data-deletion"])(
+      "(signed route) %s erases every org the Facebook user connected, not just the first or the first few",
+      async (path) => {
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+        const shared = [await newOrg(t, "A"), await newOrg(t, "B"), await newOrg(t, "C")];
+        const orgOther = await newOrg(t, "Other");
+        const connected = (suffix: string, userId: string) => ({
+          facebookPageId: `page_${suffix}`,
+          facebookPageAccessToken: `synthetic-token-${suffix}`,
+          facebookPageName: suffix,
+          facebookConnectedByUserId: userId,
+        });
+        await insertSettings(t, shared[0], connected("a", "fb_shared_user"));
+        await insertSettings(t, shared[1], {
+          ...connected("b", "fb_shared_user"),
+          facebookPendingCredentials: [{ id: "page_b2", name: "B2", token: "synthetic-pending-b" }],
+          facebookAvailablePages: [{ id: "page_b2", name: "B2" }],
+        });
+        await insertSettings(t, shared[2], connected("c", "fb_shared_user"));
+        await insertSettings(t, orgOther, connected("other", "fb_someone_else"));
+        const otherBefore = await settingsOf(t, orgOther);
+
+        const res = await postToRoute(t, path, "fb_shared_user");
+
+        expect(res.status).toBe(200);
+        for (const orgId of shared) {
+          const row = await settingsOf(t, orgId);
+          expect(row?.facebookPageId).toBeUndefined();
+          expect(row?.facebookPageAccessToken).toBeUndefined();
+          expect(row?.facebookConnectedByUserId).toBeUndefined();
+          expect(row?.facebookPendingCredentials).toBeUndefined();
+          expect(row?.facebookAvailablePages).toBeUndefined();
+        }
+        expect(await settingsOf(t, orgOther)).toEqual(otherBefore);
+      }
+    );
+
+    describe("a different Facebook user cannot take over the id of an active connection", () => {
+      const ACTIVE = { facebookPageId: "page_active", facebookPageAccessToken: "active-page-token-synthetic" };
+      const OTHER_USER_FAILED = /different Facebook account/i;
+
+      test.each([
+        ["a different user", { facebookConnectedByUserId: "fb_original_user" }],
+        ["an unknown (legacy) user", {}],
+        ["an empty (corrupt) stored user", { facebookConnectedByUserId: "" }],
+      ])("(action) a reconnect by a different Facebook user over an active connection owned by %s is refused before any write", async (_label, owner) => {
+        const { orgId, t } = await run(PAGES, { me: () => graphJson({ id: "fb_intruder" }) });
+        await insertSettings(t, orgId, { ...ACTIVE, ...owner });
+        const allSettings = () => t.run((ctx) => ctx.db.query("orgSettings").collect());
+        const before = await allSettings();
+
+        const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
+
+        expect(text).toMatch(OTHER_USER_FAILED);
+        for (const secret of [...URL_CREDENTIALS, SYNTHETIC_PAGE_TOKEN, ACTIVE.facebookPageAccessToken]) {
+          expect(text).not.toContain(secret);
+        }
+        expect(await allSettings()).toEqual(before);
+      });
+
+      test("(signed route) the original user's deauthorization still erases the active connection after the refused reconnect", async () => {
+        const { orgId, t, settings } = await run(PAGES, { me: () => graphJson({ id: "fb_intruder" }) });
+        await insertSettings(t, orgId, { ...ACTIVE, facebookConnectedByUserId: "fb_original_user" });
+        await expect(
+          t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" })
+        ).rejects.toThrow(OTHER_USER_FAILED);
+
+        const res = await postToRoute(t, "/facebook-deauthorize", "fb_original_user");
+
+        expect(res.status).toBe(200);
+        const row = await settings();
+        expect(row?.facebookPageId).toBeUndefined();
+        expect(row?.facebookPageAccessToken).toBeUndefined();
+        expect(row?.facebookConnectedByUserId).toBeUndefined();
+      });
+
+      test("(action) the same user may reconnect over their own active connection", async () => {
+        const { orgId, t, settings } = await run(PAGES, { me: () => graphJson({ id: "fb_original_user" }) });
+        await insertSettings(t, orgId, { ...ACTIVE, facebookConnectedByUserId: "fb_original_user" });
+
+        await t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" });
+
+        const row = await settings();
+        expect(row?.facebookPageAccessToken).toBe(ACTIVE.facebookPageAccessToken);
+        expect(row?.facebookConnectedByUserId).toBe("fb_original_user");
+        expect(row?.facebookPendingCredentials).toEqual([{ id: "page_1", name: "Dealer One", token: SYNTHETIC_PAGE_TOKEN }]);
+      });
+
+      test("(action) a different user may replace pending-only state, which no active connection depends on", async () => {
+        const { orgId, t, settings } = await run(PAGES, { me: () => graphJson({ id: "fb_new_user" }) });
+        await insertSettings(t, orgId, {
+          facebookConnectedByUserId: "fb_old_user",
+          facebookPendingCredentials: [{ id: "page_old", name: "Old", token: "synthetic-old-pending" }],
+        });
+
+        await t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" });
+
+        const row = await settings();
+        expect(row?.facebookConnectedByUserId).toBe("fb_new_user");
+        expect(row?.facebookPendingCredentials).toEqual([{ id: "page_1", name: "Dealer One", token: SYNTHETIC_PAGE_TOKEN }]);
+      });
+    });
+
+    describe("promoting pending credentials needs a stored Facebook user id", () => {
+      async function select(fields: Partial<WithoutSystemFields<Doc<"orgSettings">>>) {
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+        const { orgId, asOwner } = await seedOwner(t);
+        await insertSettings(t, orgId, {
+          ...fields,
+          facebookPendingCredentials: [{ id: "page_1", name: "Dealer One", token: SYNTHETIC_PAGE_TOKEN }],
+        });
+        const fetchSpy = vi.fn();
+        vi.stubGlobal("fetch", fetchSpy);
+        return {
+          t,
+          orgId,
+          fetchSpy,
+          settings: () => settingsOf(t, orgId),
+          call: () => asOwner.action(api.facebookIntegrations.selectFacebookPage, { orgId, pageId: "page_1" }),
+        };
+      }
+
+      test.each([
+        ["missing", {}],
+        ["empty", { facebookConnectedByUserId: "" }],
+      ])("(action) a stored user id that is %s is refused before subscribed_apps, and nothing is promoted", async (_label, fields) => {
+        const { fetchSpy, settings, call } = await select(fields);
+        const before = await settings();
+
+        const text = await failureText(call());
+
+        expect(text).toMatch(/incomplete.*reconnect/i);
+        expect(text).not.toMatch(/not in the pending list/i);
+        expect(text).not.toContain(SYNTHETIC_PAGE_TOKEN);
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(await settings()).toEqual(before);
+      });
+
+      // The id check must run AFTER the Page-in-use check, so a Page another org
+      // holds is still reported as such.
+      test("(action) a Page held by another org is still reported as such when the stored user id is also missing", async () => {
+        const { t, fetchSpy, call } = await select({});
+        const holder = await newOrg(t, "Holder");
+        await insertSettings(t, holder, { facebookPageId: "page_1", facebookPageAccessToken: "synthetic-holder-token" });
+
+        await expect(call()).rejects.toThrow(/already connected to another/i);
+        expect(fetchSpy).not.toHaveBeenCalled();
+      });
+
+      test("(action) a stored user id still promotes the Page and keeps the id", async () => {
+        const { fetchSpy, settings, call } = await select({ facebookConnectedByUserId: "fb_user_1" });
+        fetchSpy.mockResolvedValue(graphJson({ success: true }));
+
+        await call();
+
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        expect(String(fetchSpy.mock.calls[0][0])).toContain("/page_1/subscribed_apps");
+        const row = await settings();
+        expect(row?.facebookPageAccessToken).toBe(SYNTHETIC_PAGE_TOKEN);
+        expect(row?.facebookConnectedByUserId).toBe("fb_user_1");
+      });
+    });
+  });
+
   test("an account with no Pages keeps its own message", async () => {
     const { orgId, t } = await run(() => graphJson({ data: [] }));
     await expect(
@@ -594,6 +798,7 @@ describe("facebookIntegrations.selectFacebookPage: subscription failure logging"
         currency: "JOD",
         currencySymbol: "JD",
         enabledPaymentTypes: [],
+        facebookConnectedByUserId: "fb_user_1",
         facebookPendingCredentials: [{ id: "page_1", name: "Dealer One", token: SYNTHETIC_PAGE_TOKEN }],
       })
     );
