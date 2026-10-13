@@ -15,6 +15,11 @@
  *      attachments, so `reconcileDealFee` also pins the line's
  *      `actualEvidenceRevision` (absent = 0), which only `recordActualFeeAmount`
  *      moves and which no payment, custody or binding write touches.
+ *
+ *  Until the live screen is promoted the two pins are accepted as a pair or not
+ *  at all (the rollout bridge, `scrum834ReconcileRolloutBridge.test.ts`): an
+ *  unpinned call still reconciles, one pin without the other is refused, and a
+ *  pinned call is validated as in F1 and F3.
  */
 import { describe, expect, test } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
@@ -143,15 +148,14 @@ describe("F1: a reconciliation is pinned to the amount the checker saw", () => {
     expect((await feeRow(s, feeId))?.reconciledAt).toBeUndefined();
   });
 
-  test("a caller that omits the pin is refused by the argument validator, never defaulted", async () => {
+  test("an unpinned call (the screen from before the frontend changed) still reconciles during the rollout bridge", async () => {
     const s = await seed("f1d");
     const feeId = await addFee(s, "DEALER", jod(1500));
-    await expect(
-      s.operator.as.mutation(api.financeDealCosts.reconcileDealFee, {
-        orgId: s.orgId, feeId, notes: "x",
-      } as never)
-    ).rejects.toThrow(/expectedActualAmountMinor/);
-    expect((await feeRow(s, feeId))?.reconciledAt).toBeUndefined();
+    await s.operator.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Matched receipt #77." });
+    const row = await feeRow(s, feeId);
+    expect(row?.reconciledAt).toBeDefined();
+    expect(row?.reconciledBy).toBe(s.operator.userId);
+    expect(row?.reconciliationNotes).toBe("Matched receipt #77.");
   });
 
   test("a member without confirm:finance_disbursement cannot reconcile", async () => {
@@ -342,7 +346,7 @@ describe("F3: a reconciliation is pinned to the evidence revision the checker sa
     await expectNothingCertified(s, feeId);
   });
 
-  test("a revision from the future, a NaN and a missing revision all certify nothing", async () => {
+  test("a revision from the future and a NaN certify nothing, and one pin without the other is refused (both or neither)", async () => {
     const s = await seed("f3h");
     const feeId = await addFee(s, "DEALER", jod(1500));
     await expect(reconcile(s, feeId, jod(1500), 1)).rejects.toThrow(staleRefusal);
@@ -350,8 +354,13 @@ describe("F3: a reconciliation is pinned to the evidence revision the checker sa
     await expect(
       s.operator.as.mutation(api.financeDealCosts.reconcileDealFee, {
         orgId: s.orgId, feeId, notes: "x", expectedActualAmountMinor: jod(1500),
-      } as never)
-    ).rejects.toThrow(/expectedActualEvidenceRevision/);
+      })
+    ).rejects.toThrow(/both the amount and the evidence revision|both|neither/i);
+    await expect(
+      s.operator.as.mutation(api.financeDealCosts.reconcileDealFee, {
+        orgId: s.orgId, feeId, notes: "x", expectedActualEvidenceRevision: 0,
+      })
+    ).rejects.toThrow(/both|neither/i);
     await expectNothingCertified(s, feeId);
   });
 

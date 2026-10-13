@@ -192,6 +192,13 @@ type Deposit = {
 };
 
 type Defects = {
+  /**
+   * Not a defect: the backend predates SCRUM-834. `reconcileDealFee` takes only
+   * `{ orgId, feeId, notes }` -- the validator rejects the pins as extra fields
+   * -- and `listDealCosts` serves no `actualEvidenceRevision`. The trusted
+   * script runs from main against either contract.
+   */
+  legacyReconcileContract?: boolean;
   /** Distinct keys each pay the ORIGINAL free balance — the OCC failure C2 hunts. */
   doublePayOnDistinctKeys?: boolean;
   /** A later genuine payout is served the earlier one's stored result — the stale-key incident. */
@@ -1846,6 +1853,15 @@ function makeBackend(defects: Defects = {}) {
       case "financeDealCosts:reconcileDealFee": {
         const fee = financeDealFees.get(String(args.feeId));
         if (!fee || fee.voidedAt !== undefined) return { ok: false as const, error: "Deal cost not found in this organization." };
+        if (defects.legacyReconcileContract) {
+          for (const name of ["expectedActualAmountMinor", "expectedActualEvidenceRevision"]) {
+            if (args[name] !== undefined) {
+              return { ok: false as const, error: `ArgumentValidationError: Object contains extra field \`${name}\` that is not in the validator.` };
+            }
+          }
+          fee.reconciledAt = Date.now();
+          return { ok: true as const, value: fee._id };
+        }
         // The real mutation certifies the figure the checker saw (SCRUM-834).
         if (args.expectedActualAmountMinor === undefined) {
           return { ok: false as const, error: "ArgumentValidationError: Object is missing the required field `expectedActualAmountMinor`." };
@@ -1961,7 +1977,10 @@ function makeBackend(defects: Defects = {}) {
           ok: true as const,
           value: {
             currency,
-            fees: live.map((fee) => ({ ...fee })),
+            // The real read serves the revision a reconcile pins, 0 for a line never re-recorded (SCRUM-834).
+            fees: live.map((fee) =>
+              defects.legacyReconcileContract ? { ...fee } : { ...fee, actualEvidenceRevision: fee.actualEvidenceRevision ?? 0 }
+            ),
             summary: mixed ? null : {
               lineCount: live.length,
               estimatedTotalMinor: live.reduce((sum, fee) => sum + (fee.estimatedAmountMinor ?? 0), 0),
@@ -2324,6 +2343,17 @@ describe("the rehearsal passes against a backend that behaves", () => {
   for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "C1", "C2"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
+  });
+});
+
+describe("SCRUM-834 the rehearsal runs from main against either reconcile contract", () => {
+  test.each([
+    ["the candidate contract (pins the amount and evidence revision)", {}],
+    ["the legacy contract (no pins, no revision served)", { legacyReconcileContract: true }],
+  ] as const)("every case is green against %s", async (_label, defects) => {
+    const results = await runAgainst(defects);
+    expect(results.filter((r) => r.status !== "PASS").map((r) => `${r.id}: ${r.status} ${r.detail}`)).toEqual([]);
+    for (const id of ["M486C5", "FD1"]) expect(statusOf(results, id), `${id} reconciles a fee`).toBe("PASS");
   });
 });
 
