@@ -26,7 +26,73 @@ import {
   REQUIRED_REHEARSAL_CASE_IDS,
   fd1DirectPaymentTime,
   runRehearsalCases,
+  reconcileDealFeeCompat,
+  isReconcileLegacyContractRefusal,
 } from "./accountingRehearsalCases.mjs";
+
+describe("SCRUM-834 reconcileDealFee two-contract bridge", () => {
+  const extra = (name: string) =>
+    `[Request ID: x] Server Error\nArgumentValidationError: Object contains extra field \`${name}\` that is not in the validator.`;
+  const base = { orgId: "o", applicationId: "a", feeId: "f", notes: "n", expectedActualAmountMinor: 500 };
+  const listing = (fee: Record<string, unknown>) => ({ ok: true as const, value: { fees: [{ _id: "f", ...fee }] } });
+  const script = (...mutations: Array<{ ok: boolean; value?: unknown; error?: string }>) => {
+    const calls: Array<{ path: string; args: Record<string, unknown> }> = [];
+    const queue = [...mutations];
+    const call = vi.fn(async (_kind: string, path: string, args: Record<string, unknown>) => {
+      calls.push({ path, args });
+      return path === "financeDealCosts:listDealCosts" ? listing({ actualEvidenceRevision: 3 }) : queue.shift()!;
+    });
+    return { call, calls, mutations: () => calls.filter((c) => c.path.endsWith("reconcileDealFee")) };
+  };
+
+  test("new contract: sends the expected amount and read-back revision, one attempt", async () => {
+    const s = script({ ok: true, value: "f" });
+    expect((await reconcileDealFeeCompat(s.call, base)).ok).toBe(true);
+    expect(s.mutations().map((c) => c.args)).toEqual([
+      { orgId: "o", feeId: "f", notes: "n", expectedActualAmountMinor: 500, expectedActualEvidenceRevision: 3 },
+    ]);
+  });
+
+  test("legacy backend: retries once with exactly the legacy arguments", async () => {
+    const s = script({ ok: false, error: extra("expectedActualAmountMinor") }, { ok: true, value: "f" });
+    expect((await reconcileDealFeeCompat(s.call, base)).ok).toBe(true);
+    expect(s.mutations()[1].args).toEqual({ orgId: "o", feeId: "f", notes: "n" });
+    expect(s.mutations()).toHaveLength(2);
+  });
+
+  test.each([
+    ["a stale amount", "The recorded amount changed since you read it."],
+    ["a stale revision", "The evidence revision is stale."],
+    ["a missing required field", "ArgumentValidationError: Object is missing the required field `expectedActualEvidenceRevision`."],
+    ["an unrelated extra field", extra("somethingElse")],
+    ["a mixed extra field", extra("notes2")],
+    ["an authorization refusal", "Not authorized."],
+    ["an empty error", ""],
+  ])("%s is returned as the refusal with no retry", async (_label, error) => {
+    const s = script({ ok: false, error });
+    const result = await reconcileDealFeeCompat(s.call, base);
+    expect(result).toEqual({ ok: false, error });
+    expect(s.mutations()).toHaveLength(1);
+  });
+
+  test("a legacy retry that is itself refused stays a refusal", async () => {
+    const s = script({ ok: false, error: extra("expectedActualEvidenceRevision") }, { ok: false, error: "Not authorized." });
+    expect(await reconcileDealFeeCompat(s.call, base)).toEqual({ ok: false, error: "Not authorized." });
+  });
+
+  test("an unreadable cost list is a refusal, not a silent legacy call", async () => {
+    const call = vi.fn(async () => ({ ok: false as const, error: "boom" }));
+    expect(await reconcileDealFeeCompat(call, base)).toEqual({ ok: false, error: "boom" });
+    expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  test("the classifier accepts only validator extra-field errors naming the two bridge fields", () => {
+    expect(isReconcileLegacyContractRefusal(extra("expectedActualEvidenceRevision"))).toBe(true);
+    expect(isReconcileLegacyContractRefusal("Object contains extra field `expectedActualAmountMinor`")).toBe(false);
+    expect(isReconcileLegacyContractRefusal(extra("other"))).toBe(false);
+    expect(isReconcileLegacyContractRefusal(undefined)).toBe(false);
+  });
+});
 
 describe("FD1 direct-payment date", () => {
   test("stays inside the opened UTC month during its first minute", () => {
