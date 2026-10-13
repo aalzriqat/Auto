@@ -352,6 +352,33 @@ export const getEnvForExchange = internalQuery({
   },
 });
 
+// Fixed user-facing text. Meta's own `error.message` and the response body are
+// untrusted and may echo tokens; they are never interpolated into these.
+const FACEBOOK_UNEXPECTED_PAGES = "Facebook returned an unexpected Pages response.";
+
+type FacebookPageCredential = { id: string; name: string; access_token: string };
+
+/**
+ * Narrows the untrusted `/me/accounts` `data` array to the three fields we store.
+ *
+ * Meta also returns `category`, `category_list` and `tasks` per Page, and a type
+ * annotation does not remove them at runtime: `saveFacebookPendingPages`
+ * validates strictly, so passing the response through made it reject the
+ * argument and echo the rejected value — `access_token` included — into the
+ * thrown error. Any row that is not a Page with a string id, name and token
+ * fails the whole connection, with a message that quotes nothing from Meta.
+ */
+function pickPageCredentials(data: unknown): FacebookPageCredential[] {
+  if (!Array.isArray(data)) throw new ConvexError(FACEBOOK_UNEXPECTED_PAGES);
+  return data.map((page) => {
+    const { id, name, access_token } = (page && typeof page === "object" ? page : {}) as Record<string, unknown>;
+    if (typeof id !== "string" || !id || typeof name !== "string" || typeof access_token !== "string" || !access_token) {
+      throw new ConvexError(FACEBOOK_UNEXPECTED_PAGES);
+    }
+    return { id, name, access_token };
+  });
+}
+
 /**
  * Exchanges the OAuth `code` for a long-lived user token, fetches all Pages
  * this user manages, and stores them in `facebookAvailablePages` for the org
@@ -372,10 +399,10 @@ export const exchangeCodeForToken = internalAction({
     tokenUrl.searchParams.set("redirect_uri", redirectUri);
     tokenUrl.searchParams.set("code", args.code);
     const tokenRes = await fetch(tokenUrl.toString());
-    const tokenJson = await tokenRes.json();
-    const shortLivedToken: string | undefined = tokenJson.access_token;
+    const tokenJson = await tokenRes.json().catch(() => null);
+    const shortLivedToken: string | undefined = tokenJson?.access_token;
     if (!tokenRes.ok || !shortLivedToken) {
-      throw new ConvexError(`Facebook token exchange failed: ${tokenJson?.error?.message ?? tokenRes.statusText}`);
+      throw new ConvexError("Facebook token exchange failed.");
     }
 
     // 2. Exchange for a long-lived user access token (~60 days).
@@ -385,9 +412,9 @@ export const exchangeCodeForToken = internalAction({
     longLivedUrl.searchParams.set("client_secret", appSecret);
     longLivedUrl.searchParams.set("fb_exchange_token", shortLivedToken);
     const longLivedRes = await fetch(longLivedUrl.toString());
-    const longLivedJson = await longLivedRes.json();
-    if (!longLivedRes.ok || !longLivedJson.access_token) {
-      throw new ConvexError(`Facebook long-lived token exchange failed: ${longLivedJson?.error?.message ?? longLivedRes.statusText}`);
+    const longLivedJson = await longLivedRes.json().catch(() => null);
+    if (!longLivedRes.ok || !longLivedJson?.access_token) {
+      throw new ConvexError("Facebook long-lived token exchange failed.");
     }
     const longLivedUserToken: string = longLivedJson.access_token;
 
@@ -413,12 +440,13 @@ export const exchangeCodeForToken = internalAction({
     const accountsUrl = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/me/accounts`);
     accountsUrl.searchParams.set("access_token", longLivedUserToken);
     const accountsRes = await fetch(accountsUrl.toString());
-    const accountsJson = await accountsRes.json();
-    const pages: Array<{ id: string; name: string; access_token: string }> = accountsJson?.data ?? [];
-    if (!accountsRes.ok || pages.length === 0) {
-      throw new ConvexError(
-        `No Facebook Pages available to connect: ${accountsJson?.error?.message ?? "this account doesn't manage any Pages."}`
-      );
+    const accountsJson = await accountsRes.json().catch(() => null);
+    if (!accountsRes.ok) {
+      throw new ConvexError("Facebook Pages could not be retrieved.");
+    }
+    const pages = pickPageCredentials(accountsJson?.data);
+    if (pages.length === 0) {
+      throw new ConvexError("No Facebook Pages available to connect: this account doesn't manage any Pages.");
     }
 
     // 5. Store the full page list so the admin can pick which Page to connect.

@@ -308,3 +308,130 @@ describe("facebookIntegrations: a Page belongs to one org", () => {
     fetchSpy.mockRestore();
   });
 });
+
+// SCRUM-841: the /me/accounts response is untrusted provider data. A type
+// annotation does not strip the extra fields Meta returns per Page, and the
+// strict mutation validator then rejected the argument and echoed the rejected
+// value — page token included — into the thrown error, which the OAuth callback
+// writes to the public-facing webhook log.
+describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () => {
+  const SYNTHETIC_PAGE_TOKEN = "synthetic-page-token-DO-NOT-LEAK";
+  const SYNTHETIC_PROVIDER_TEXT = "synthetic-provider-error-DO-NOT-LEAK";
+  const graphJson = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+  /** Routes the four Graph calls the action makes; `accounts` is the /me/accounts reply. */
+  function stubGraph(accounts: () => Response, overrides: { shortToken?: () => Response } = {}) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+        if (url.pathname.endsWith("/me/accounts")) return accounts();
+        if (url.pathname.endsWith("/me")) return graphJson({ id: "fb_user_1" });
+        if (url.searchParams.get("grant_type") === "fb_exchange_token") return graphJson({ access_token: "long_user_token" });
+        return overrides.shortToken?.() ?? graphJson({ access_token: "short_user_token" });
+      })
+    );
+  }
+
+  async function run(accounts: () => Response, overrides: { shortToken?: () => Response } = {}) {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOwner(t);
+    stubGraph(accounts, overrides);
+    const settings = () =>
+      t.run((ctx) => ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique());
+    return { orgId, t, settings };
+  }
+
+  async function failureText(promise: Promise<unknown>): Promise<string> {
+    try {
+      await promise;
+    } catch (err) {
+      const e = err as { message?: string; data?: unknown };
+      return `${e.message ?? ""} ${JSON.stringify(e.data ?? "")}`;
+    }
+    throw new Error("expected the action to fail");
+  }
+
+  test("Pages carrying Meta's extra fields are stored as id/name/token only", async () => {
+    const { orgId, t, settings } = await run(() =>
+      graphJson({
+        data: [
+          {
+            id: "page_1",
+            name: "Dealer One",
+            access_token: SYNTHETIC_PAGE_TOKEN,
+            category: "Automotive Dealership",
+            category_list: [{ id: "1", name: "Automotive Dealership" }],
+            tasks: ["ADVERTISE", "ANALYZE", "CREATE_CONTENT", "MESSAGING", "MODERATE", "MANAGE"],
+          },
+        ],
+      })
+    );
+
+    await t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" });
+
+    const row = await settings();
+    expect(row?.facebookAvailablePages).toEqual([{ id: "page_1", name: "Dealer One" }]);
+    expect(row?.facebookPendingCredentials).toEqual([
+      { id: "page_1", name: "Dealer One", token: SYNTHETIC_PAGE_TOKEN },
+    ]);
+  });
+
+  test.each([
+    ["a Page without a token", { id: "page_1", name: "Dealer One" }],
+    ["a Page with a non-string name", { id: "page_1", name: 7, access_token: SYNTHETIC_PAGE_TOKEN }],
+    ["a Page with an empty id", { id: "", name: "Dealer One", access_token: SYNTHETIC_PAGE_TOKEN }],
+    ["a row that is not an object", "page_1"],
+  ])("%s fails the whole connection with a generic error and stores nothing", async (_label, bad) => {
+    const good = { id: "page_2", name: "Dealer Two", access_token: SYNTHETIC_PAGE_TOKEN };
+    const { orgId, t, settings } = await run(() => graphJson({ data: [good, bad] }));
+
+    const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
+
+    expect(text).toMatch(/unexpected Pages response/i);
+    expect(text).not.toContain(SYNTHETIC_PAGE_TOKEN);
+    expect((await settings())?.facebookPendingCredentials).toBeUndefined();
+  });
+
+  test("a /me/accounts body whose data is not an array fails generically", async () => {
+    const { orgId, t } = await run(() => graphJson({ data: { access_token: SYNTHETIC_PAGE_TOKEN } }));
+    const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
+    expect(text).toMatch(/unexpected Pages response/i);
+    expect(text).not.toContain(SYNTHETIC_PAGE_TOKEN);
+  });
+
+  test("a non-JSON /me/accounts body fails generically without quoting the body", async () => {
+    const { orgId, t } = await run(() => new Response(`<html>${SYNTHETIC_PROVIDER_TEXT}</html>`, { status: 200 }));
+    const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
+    expect(text).toMatch(/unexpected Pages response/i);
+    expect(text).not.toContain(SYNTHETIC_PROVIDER_TEXT);
+  });
+
+  test("an account with no Pages keeps its own message", async () => {
+    const { orgId, t } = await run(() => graphJson({ data: [] }));
+    await expect(
+      t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" })
+    ).rejects.toThrow(/doesn't manage any Pages/i);
+  });
+
+  test("a provider error from /me/accounts is never reflected into the thrown error", async () => {
+    const { orgId, t } = await run(() =>
+      graphJson({ error: { message: `${SYNTHETIC_PROVIDER_TEXT} ${SYNTHETIC_PAGE_TOKEN}` } }, 400)
+    );
+    const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
+    expect(text).toMatch(/could not be retrieved/i);
+    expect(text).not.toContain(SYNTHETIC_PROVIDER_TEXT);
+    expect(text).not.toContain(SYNTHETIC_PAGE_TOKEN);
+  });
+
+  test("a provider error from the token exchange is never reflected into the thrown error", async () => {
+    const { orgId, t } = await run(() => graphJson({ data: [] }), {
+      shortToken: () => graphJson({ error: { message: `${SYNTHETIC_PROVIDER_TEXT} ${SYNTHETIC_PAGE_TOKEN}` } }, 400),
+    });
+    const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
+    expect(text).toMatch(/token exchange failed/i);
+    expect(text).not.toContain(SYNTHETIC_PROVIDER_TEXT);
+    expect(text).not.toContain(SYNTHETIC_PAGE_TOKEN);
+  });
+});
