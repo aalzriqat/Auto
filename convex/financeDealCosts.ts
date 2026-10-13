@@ -788,6 +788,26 @@ function assertMayPostCustody(auth: { role: Doc<"roles"> }, action: string): voi
 }
 
 /**
+ * The revision of a line's actual evidence (SCRUM-834): how many times
+ * `recordActualFeeAmount` has replaced it. A line never re-recorded — every
+ * legacy row, every fresh insert — carries none and reads as 0.
+ */
+export function actualEvidenceRevisionOf(fee: Pick<Doc<"financeDealFees">, "actualEvidenceRevision">): number {
+  return fee.actualEvidenceRevision ?? 0;
+}
+
+/** The revision a re-record writes: one past the stored one, or a refusal when the stored one is not a count. */
+function nextActualEvidenceRevision(fee: Pick<Doc<"financeDealFees">, "actualEvidenceRevision">, action: string): number {
+  const current = actualEvidenceRevisionOf(fee);
+  if (!Number.isSafeInteger(current) || current < 0 || current >= Number.MAX_SAFE_INTEGER) {
+    throw new ConvexError(
+      `This cost line carries an evidence revision that is not a usable count (${String(current)}), so ${action} is refused; nothing has been changed. Have the record reviewed.`
+    );
+  }
+  return current + 1;
+}
+
+/**
  * A custody record opened BEFORE custody posted to the ledger carries
  * movements with no journal behind them (Codex AF-CUST-07). Posting a new
  * movement against it would put one leg of the record on the books and leave
@@ -1703,6 +1723,8 @@ export const listDealCosts = query({
       fees: fees.map((fee) => ({
         ...fee,
         status: deriveFeeStatus(fee),
+        /** The revision a reconcile form pins (SCRUM-834); a never-re-recorded line reads 0. */
+        actualEvidenceRevision: actualEvidenceRevisionOf(fee),
         /** Whether this line may be charged to an employee's custody from the screen — the boundary's own rules. */
         custodyEligible:
           fee.paidBy === "EMPLOYEE" &&
@@ -2628,6 +2650,9 @@ export const recordActualFeeAmount = mutation({
       paidAt: args.paidAt ?? fee.paidAt,
       receiptReference: args.receiptReference?.trim() || fee.receiptReference,
       documentStorageIds: nextStorageIds,
+      // Every re-record replaces the evidence a checker may be looking at, the
+      // amount unchanged or not (SCRUM-834), so it always moves the revision.
+      actualEvidenceRevision: nextActualEvidenceRevision(fee, "recording this actual amount"),
       custodyId,
       // Changing the amount invalidates the check that was made against the old
       // one. Leaving the reconciliation in place would let an edit slip past
@@ -2674,6 +2699,32 @@ export const reconcileDealFee = mutation({
     orgId: v.id("organizations"),
     feeId: v.id("financeDealFees"),
     notes: v.string(),
+    /**
+     * ROLLOUT BRIDGE (SCRUM-834) — optional here, required once the bridge is
+     * removed. The actual amount the checker was looking at when they wrote
+     * their notes. The reconciliation certifies THAT figure: if the row has
+     * been re-recorded since, the notes describe a number that is no longer
+     * there and the call is refused. Compared with `!==`, so a NaN (which the
+     * number validator admits) matches nothing.
+     *
+     * The frontend that sends the pins deploys automatically when it merges,
+     * while this backend is deployed by hand. The previous validator rejects the
+     * pins as extra arguments, so this bridge MUST be deployed BEFORE that
+     * frontend merges: a pinned call reaching a backend without it fails. Once
+     * it is live either lag is safe: a pinned call is accepted, and so is a
+     * legacy call from a screen still open from before the frontend changed.
+     * The two pins are accepted together or not at all: neither is the legacy
+     * call, both are the pinned contract, exactly one is refused.
+     */
+    expectedActualAmountMinor: v.optional(v.number()),
+    /**
+     * ROLLOUT BRIDGE (SCRUM-834) — optional here, required once the bridge is
+     * removed. The line's `actualEvidenceRevision` when the checker opened it
+     * (absent reads as 0). Pins the EVIDENCE the notes describe — receipt
+     * reference, paid date, attachments — which a same-amount re-record replaces
+     * without moving the amount. Compared with `!==`, so a NaN matches nothing.
+     */
+    expectedActualEvidenceRevision: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [
@@ -2686,6 +2737,16 @@ export const reconcileDealFee = mutation({
       args.feeId,
       FEE_NOT_FOUND
     );
+    // Both pins or neither (ROLLOUT BRIDGE). One without the other is not the
+    // legacy call and not the pinned one, and silently reading it as either
+    // would drop a protection the caller believed it had.
+    const amountPin = args.expectedActualAmountMinor;
+    const revisionPin = args.expectedActualEvidenceRevision;
+    if ((amountPin === undefined) !== (revisionPin === undefined)) {
+      throw new ConvexError(
+        "A reconciliation pins both the amount and the evidence revision it was checked against, or neither; one without the other is refused. Reload the deal and try again. Nothing has been changed."
+      );
+    }
     if (fee.voidedAt !== undefined) {
       throw new ConvexError("This cost has been voided and cannot be reconciled.");
     }
@@ -2693,6 +2754,20 @@ export const reconcileDealFee = mutation({
       throw new ConvexError(
         "Record what this cost actually came to before reconciling it. An estimate is not evidence."
       );
+    }
+    if (amountPin !== undefined && revisionPin !== undefined) {
+      if (fee.actualAmountMinor !== amountPin) {
+        throw new ConvexError(
+          "The recorded amount of this cost has changed since you opened it, so your check no longer describes it. Reload the deal and check the current figure. Nothing has been changed."
+        );
+      }
+      // The amount alone does not identify what was checked: a same-amount
+      // re-record can replace the receipt reference, paid date or attachments.
+      if (actualEvidenceRevisionOf(fee) !== revisionPin) {
+        throw new ConvexError(
+          "The receipt, paid date or attachments of this cost have been re-recorded since you opened it, so your check no longer describes them. Reload the deal and check the current evidence. Nothing has been changed."
+        );
+      }
     }
     // A line charged to custody is the evidence its holder is reimbursed
     // on; the holder does not certify it (final round E) — and the link is
