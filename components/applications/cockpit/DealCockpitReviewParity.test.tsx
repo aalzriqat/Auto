@@ -2375,7 +2375,7 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     expect(screen.getByTestId("deal-handover-costs-totals")).toBeTruthy();
   });
 
-  test("AF-215-01 — a line recorded in another currency is spelled in ITS currency, is not editable here, and withholds the mixed totals", () => {
+  test("AF-215-01 — a line recorded in another currency is spelled in ITS currency, is not editable here (only removable), and withholds the mixed totals", async () => {
     readableDeal();
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
     queryResults.set(
@@ -2387,7 +2387,9 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     // 4,000 minor at USD scale 2 = 40 USD — never 4 JD (scale 3) and never relabelled.
     expect(usd.textContent).toContain("40 USD");
     expect(usd.textContent).not.toContain("4 Jordanian");
-    expect(within(usd).queryByRole("button")).toBeNull();
+    // Not recordable or reconcilable across the mismatch -- but it blocks closing, so it can be removed (SCRUM-834).
+    expect(within(usd).queryByRole("button", { name: "RecordActualCost" })).toBeNull();
+    expect(within(usd).queryByRole("button", { name: "ReconcileDealFee" })).toBeNull();
     expect(screen.getByTestId("deal-handover-cost-fee_usd-currency").textContent).toBe("HandoverCostCurrencyDiffers");
     // `summary: null` from the server, with its reason — no total is invented from the lines.
     expect(screen.queryByTestId("deal-handover-costs-totals")).toBeNull();
@@ -2396,6 +2398,12 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     expect(screen.getByTestId("deal-handover-costs-mixed").textContent).toContain("/ JOD");
     // The JOD line keeps its controls.
     expect(within(screen.getByTestId("deal-handover-cost-fee_1")).getByRole("button", { name: "RecordActualCost" })).toBeTruthy();
+
+    fireEvent.click(within(usd).getByRole("button", { name: "RemoveHandoverCost" }));
+    fireEvent.change(screen.getByLabelText("VoidReasonLabel"), { target: { value: "Legacy USD line" } });
+    fireEvent.click(screen.getByRole("button", { name: "ConfirmRemoveCost" }));
+    await waitFor(() => expect(mutationCalls.get("financeDealCosts:voidDealFee")).toHaveLength(1));
+    expect(mutationCalls.get("financeDealCosts:voidDealFee")![0]).toEqual({ orgId: ORG, feeId: "fee_usd", reason: "Legacy USD line" });
   });
 
   test("AF-215-01 — an actual is scaled at the LINE's own currency, and that currency is named in the payload", async () => {
@@ -2476,7 +2484,7 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     });
   });
 
-  test("without create:finance_application the section is read-only; a non-handover line never gets controls", () => {
+  test("without create:finance_application the section is read-only; with it, every live fee type gets a route (SCRUM-834)", () => {
     readableDeal();
     queryResults.set(
       COSTS_QUERY,
@@ -2492,7 +2500,10 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
     permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
     renderCockpit();
     expect(within(screen.getByTestId("deal-handover-cost-fee_1")).getByRole("button", { name: "RecordActualCost" })).toBeTruthy();
-    expect(within(screen.getByTestId("deal-handover-cost-fee_2")).queryByRole("button")).toBeNull();
+    // A finance-company fee that is not the bound execution fee blocks closing
+    // like any other live line, so it carries the same record / remove route.
+    expect(within(screen.getByTestId("deal-handover-cost-fee_2")).getByRole("button", { name: "RecordActualCost" })).toBeTruthy();
+    expect(within(screen.getByTestId("deal-handover-cost-fee_2")).getByRole("button", { name: "RemoveHandoverCost" })).toBeTruthy();
   });
 
   test("totals are the server's, estimated and actual apart; a line without an amount reads as not recorded, never zero", () => {

@@ -368,7 +368,7 @@ async function walkToFinalization(
   stop =
     (await step("reconcileDealFee", () =>
       s.asManager.mutation(api.financeDealCosts.reconcileDealFee, {
-        orgId: s.orgId, feeId, notes: "Nothing to match.",
+        orgId: s.orgId, feeId, notes: "Nothing to match.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0,
       })
     )) ??
     // SCRUM-407: no manual classification step — finalizeDeal checks the

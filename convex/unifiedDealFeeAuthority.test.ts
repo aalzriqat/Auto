@@ -999,6 +999,8 @@ describe("Unified Deal Single Fee Authority & Economics Regression", () => {
         orgId,
         feeId,
         notes: "Execution fees reconciled.",
+        expectedActualAmountMinor: 700 * 1000,
+        expectedActualEvidenceRevision: 0,
       });
       // SCRUM-443: a dealer-borne handover cost must reach the ledger from a
       // recorded source before the deal closes; here the dealership paid it directly.

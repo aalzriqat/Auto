@@ -31,8 +31,11 @@ import {
 } from "./accountingRehearsalCases.mjs";
 
 describe("SCRUM-834 reconcileDealFee two-contract bridge", () => {
-  const extra = (name: string) =>
-    `[Request ID: x] Server Error\nArgumentValidationError: Object contains extra field \`${name}\` that is not in the validator.`;
+  // One validator sentence per named field; the names are the caller's, not the classifier's.
+  const extra = (...names: string[]) =>
+    `[Request ID: x] Server Error\nArgumentValidationError: ${names
+      .map((name) => `Object contains extra field \`${name}\` that is not in the validator.`)
+      .join(" ")}`;
   const base = { orgId: "o", applicationId: "a", feeId: "f", notes: "n", expectedActualAmountMinor: 500 };
   const listing = (fee: Record<string, unknown>) => ({ ok: true as const, value: { fees: [{ _id: "f", ...fee }] } });
   const script = (...mutations: Array<{ ok: boolean; value?: unknown; error?: string }>) => {
@@ -65,7 +68,8 @@ describe("SCRUM-834 reconcileDealFee two-contract bridge", () => {
     ["a stale revision", "The evidence revision is stale."],
     ["a missing required field", "ArgumentValidationError: Object is missing the required field `expectedActualEvidenceRevision`."],
     ["an unrelated extra field", extra("somethingElse")],
-    ["a mixed extra field", extra("notes2")],
+    ["a recognized bridge field mixed with an unrelated one", extra("expectedActualAmountMinor", "notes2")],
+    ["an unrelated field mixed with a recognized bridge field", extra("notes2", "expectedActualEvidenceRevision")],
     ["an authorization refusal", "Not authorized."],
     ["an empty error", ""],
   ])("%s is returned as the refusal with no retry", async (_label, error) => {
@@ -89,6 +93,8 @@ describe("SCRUM-834 reconcileDealFee two-contract bridge", () => {
   test("the classifier accepts only validator extra-field errors naming the two bridge fields", () => {
     expect(isReconcileLegacyContractRefusal(extra("expectedActualEvidenceRevision"))).toBe(true);
     expect(isReconcileLegacyContractRefusal("Object contains extra field `expectedActualAmountMinor`")).toBe(false);
+    expect(isReconcileLegacyContractRefusal(extra("expectedActualAmountMinor", "expectedActualEvidenceRevision"))).toBe(true);
+    expect(isReconcileLegacyContractRefusal(extra("expectedActualAmountMinor", "other"))).toBe(false);
     expect(isReconcileLegacyContractRefusal(extra("other"))).toBe(false);
     expect(isReconcileLegacyContractRefusal(undefined)).toBe(false);
   });
@@ -186,6 +192,13 @@ type Deposit = {
 };
 
 type Defects = {
+  /**
+   * Not a defect: the backend predates SCRUM-834. `reconcileDealFee` takes only
+   * `{ orgId, feeId, notes }` -- the validator rejects the pins as extra fields
+   * -- and `listDealCosts` serves no `actualEvidenceRevision`. The trusted
+   * script runs from main against either contract.
+   */
+  legacyReconcileContract?: boolean;
   /** Distinct keys each pay the ORIGINAL free balance — the OCC failure C2 hunts. */
   doublePayOnDistinctKeys?: boolean;
   /** A later genuine payout is served the earlier one's stored result — the stale-key incident. */
@@ -1840,6 +1853,35 @@ function makeBackend(defects: Defects = {}) {
       case "financeDealCosts:reconcileDealFee": {
         const fee = financeDealFees.get(String(args.feeId));
         if (!fee || fee.voidedAt !== undefined) return { ok: false as const, error: "Deal cost not found in this organization." };
+        if (defects.legacyReconcileContract) {
+          for (const name of ["expectedActualAmountMinor", "expectedActualEvidenceRevision"]) {
+            if (args[name] !== undefined) {
+              return { ok: false as const, error: `ArgumentValidationError: Object contains extra field \`${name}\` that is not in the validator.` };
+            }
+          }
+          fee.reconciledAt = Date.now();
+          return { ok: true as const, value: fee._id };
+        }
+        // The backend as the rollout bridge leaves it (#576): BOTH pins or NEITHER. No pin is the
+        // legacy call and is accepted; exactly one is refused; both are validated strictly.
+        const amountPin = args.expectedActualAmountMinor;
+        const revisionPin = args.expectedActualEvidenceRevision;
+        if ((amountPin === undefined) !== (revisionPin === undefined)) {
+          return {
+            ok: false as const,
+            error: "A reconciliation pins both the amount and the evidence revision it was checked against, or neither; one without the other is refused. Reload the deal and try again. Nothing has been changed.",
+          };
+        }
+        if (amountPin !== undefined) {
+          // The real mutation certifies the figure the checker saw (SCRUM-834)...
+          if (fee.actualAmountMinor !== amountPin) {
+            return { ok: false as const, error: "The recorded amount of this cost has changed since you opened it." };
+          }
+          // ... and the evidence revision it saw: a same-amount re-record moves only this.
+          if ((fee.actualEvidenceRevision ?? 0) !== revisionPin) {
+            return { ok: false as const, error: "The receipt, paid date or attachments of this cost have been re-recorded since you opened it." };
+          }
+        }
         fee.reconciledAt = Date.now();
         return { ok: true as const, value: fee._id };
       }
@@ -1895,6 +1937,7 @@ function makeBackend(defects: Defects = {}) {
           return { ok: false as const, error: `This amount was entered in ${args.expectedCurrency}, but this cost line is recorded in ${fee.currency}. Reload the deal and enter the amount in ${fee.currency}.` };
         }
         fee.actualAmountMinor = args.actualAmountMinor;
+        fee.actualEvidenceRevision = (fee.actualEvidenceRevision ?? 0) + 1;
         return { ok: true as const, value: fee._id };
       }
       case "financeDealCosts:recordDirectFeePayment": {
@@ -1940,7 +1983,10 @@ function makeBackend(defects: Defects = {}) {
           ok: true as const,
           value: {
             currency,
-            fees: live.map((fee) => ({ ...fee })),
+            // The real read serves the revision a reconcile pins, 0 for a line never re-recorded (SCRUM-834).
+            fees: live.map((fee) =>
+              defects.legacyReconcileContract ? { ...fee } : { ...fee, actualEvidenceRevision: fee.actualEvidenceRevision ?? 0 }
+            ),
             summary: mixed ? null : {
               lineCount: live.length,
               estimatedTotalMinor: live.reduce((sum, fee) => sum + (fee.estimatedAmountMinor ?? 0), 0),
@@ -2303,6 +2349,78 @@ describe("the rehearsal passes against a backend that behaves", () => {
   for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "C1", "C2"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
+  });
+});
+
+describe("the rehearsal fake's reconcile is the rollout bridge's, so a green rehearsal does not overclaim", () => {
+  /** A live finance-company fee of 1,500 JOD on a fresh fake, and what reads back about it. */
+  async function withFee(defects: Defects = {}) {
+    const backend = makeBackend(defects);
+    const applicationId = await backend.must("mutation", "applications:createFromQuote", { orgId: "org_1", quoteId: "quote_1" });
+    const feeId = await backend.must("mutation", "financeDealCosts:recordDealFee", {
+      orgId: "org_1", applicationId, feeType: "FINANCE_COMPANY_FEE", paidBy: "DEALER", paidTo: "FINANCE_COMPANY",
+      accountingTreatment: "FINANCE_COMPANY_COMMISSION", actualAmountMinor: 1_500_000, expectedCurrency: "JOD", idempotencyKey: "bridge-fake-1",
+    });
+    const reconciledAt = async () => {
+      const read = await backend.must("query", "financeDealCosts:listDealCosts", { orgId: "org_1", applicationId });
+      return read.fees.find((fee: { _id: string }) => fee._id === feeId).reconciledAt;
+    };
+    const reconcile = (pins: Record<string, unknown>) =>
+      backend.authedCall("mutation", "financeDealCosts:reconcileDealFee", { orgId: "org_1", feeId, notes: "Matched.", ...pins });
+    return { backend, applicationId, feeId, reconcile, reconciledAt };
+  }
+  const LONE_PIN = /pins both the amount and the evidence revision it was checked against, or neither/;
+
+  test("an unpinned call is accepted and certifies the line (the old screen)", async () => {
+    const f = await withFee();
+    expect(await f.reconciledAt()).toBeUndefined();
+    expect((await f.reconcile({})).ok).toBe(true);
+    expect(await f.reconciledAt()).toBeDefined();
+  });
+
+  test.each([
+    ["the amount pin alone", { expectedActualAmountMinor: 1_500_000 }],
+    ["the revision pin alone", { expectedActualEvidenceRevision: 0 }],
+  ])("%s is refused, even when it is correct, and certifies nothing", async (_label, pins) => {
+    const f = await withFee();
+    const result = await f.reconcile(pins);
+    expect(result.ok).toBe(false);
+    expect(String((result as { error?: string }).error)).toMatch(LONE_PIN);
+    expect(await f.reconciledAt()).toBeUndefined();
+  });
+
+  test("both pins are validated: a stale amount and a stale revision are refused, the right pair is accepted", async () => {
+    const f = await withFee();
+    const staleAmount = await f.reconcile({ expectedActualAmountMinor: 1_250_000, expectedActualEvidenceRevision: 0 });
+    expect(staleAmount.ok).toBe(false);
+    expect(String((staleAmount as { error?: string }).error)).toMatch(/changed since you opened it/);
+    const staleRevision = await f.reconcile({ expectedActualAmountMinor: 1_500_000, expectedActualEvidenceRevision: 1 });
+    expect(staleRevision.ok).toBe(false);
+    expect(String((staleRevision as { error?: string }).error)).toMatch(/re-recorded since you opened it/);
+    expect(await f.reconciledAt()).toBeUndefined();
+    expect((await f.reconcile({ expectedActualAmountMinor: 1_500_000, expectedActualEvidenceRevision: 0 })).ok).toBe(true);
+    expect(await f.reconciledAt()).toBeDefined();
+  });
+
+  test("the pre-bridge backend mode still accepts the unpinned call and refuses any pin as an extra field", async () => {
+    const f = await withFee({ legacyReconcileContract: true });
+    const pinned = await f.reconcile({ expectedActualAmountMinor: 1_500_000, expectedActualEvidenceRevision: 0 });
+    expect(pinned.ok).toBe(false);
+    expect(String((pinned as { error?: string }).error)).toMatch(/extra field/);
+    expect(await f.reconciledAt()).toBeUndefined();
+    expect((await f.reconcile({})).ok).toBe(true);
+    expect(await f.reconciledAt()).toBeDefined();
+  });
+});
+
+describe("SCRUM-834 the rehearsal runs from main against either reconcile contract", () => {
+  test.each([
+    ["the candidate contract (pins the amount and evidence revision)", {}],
+    ["the legacy contract (no pins, no revision served)", { legacyReconcileContract: true }],
+  ] as const)("every case is green against %s", async (_label, defects) => {
+    const results = await runAgainst(defects);
+    expect(results.filter((r) => r.status !== "PASS").map((r) => `${r.id}: ${r.status} ${r.detail}`)).toEqual([]);
+    for (const id of ["M486C5", "FD1"]) expect(statusOf(results, id), `${id} reconciles a fee`).toBe("PASS");
   });
 });
 

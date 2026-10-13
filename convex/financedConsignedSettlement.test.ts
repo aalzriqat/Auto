@@ -463,6 +463,8 @@ async function runDeal(
     });
     await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: s.orgId, feeId, notes: "Nothing to match.",
+      expectedActualAmountMinor: 0,
+      expectedActualEvidenceRevision: 0,
     });
   }
 
@@ -8109,7 +8111,7 @@ describe("finalization judges the deal's costs as they are NOW, never the stored
       feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
       deductedFromSettlement: false, actualAmountMinor: 0, description: "The dealership bore no closing costs on this deal.",
     });
-    await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Nothing to match." });
+    await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Nothing to match.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
     // A LEGACY stamp, planted raw: SCRUM-407 retired the command that wrote it,
     // and these cases prove finalization never trusts one.
     await s.t.run((ctx) => ctx.db.patch(applicationId, { accountingClassification: "CLASSIFIED" }));
@@ -8256,7 +8258,7 @@ describe("finalization judges the deal's costs as they are NOW, never the stored
           orgId: s.orgId, applicationId: id, templateIndex: 0, feeType: "APPRAISAL_FEE",
           expectedCurrency: "JOD", actualAmountMinor: 80 * SCALE, idempotencyKey: crypto.randomUUID(),
         });
-        await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "matched" });
+        await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "matched", expectedActualAmountMinor: 80 * SCALE, expectedActualEvidenceRevision: 0 });
       },
     });
     await invoiceAndClassify(s, applicationId);
@@ -8632,7 +8634,7 @@ describe("SCRUM-407: automatic closing readiness", () => {
         feeType: "COMMISSION", paidBy: "DEALER", paidTo: "FINANCE_COMPANY", accountingTreatment: "REFUNDABLE_DEPOSIT",
         deductedFromSettlement: true, actualAmountMinor: 120 * SCALE,
       });
-      await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Matched." });
+      await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 120 * SCALE, expectedActualEvidenceRevision: 0 });
 
       const readiness = await s.asUser.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
       const costs = readiness.checks.find((check) => check.key === "COSTS_CLOSABLE");

@@ -1,0 +1,109 @@
+{
+  "id": "unchecked-finance-fee-is-reconciled-from-its-row-ar-390",
+  "fingerprint": "ec7769db69169850c94b8da17778b7e0297b36443393cecb4f9d23ad094af1f6",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum834-reconcile-route",
+    "firstSeen": "2026-10-13"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "financeDealCosts.recordDealFee",
+      "input": {
+        "feeType": "FINANCE_COMPANY_FEE",
+        "paidBy": "DEALER",
+        "paidTo": "FINANCE_COMPANY",
+        "accountingTreatment": "FINANCE_COMPANY_COMMISSION",
+        "estimatedMajor": 1250,
+        "actualMajor": 1500
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "deal.closingChecklist.goToCosts",
+      "input": {
+        "locale": "ar",
+        "viewportWidth": 390,
+        "feeRowInitiallyOutOfView": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "deal.handoverCosts.reconcileFee",
+      "input": {
+        "locale": "ar",
+        "viewportWidth": 390,
+        "notes": "required"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "fee.drawnIn",
+      "value": "genericList"
+    },
+    {
+      "observable": "closingCheck.costsClosable.beforeAction",
+      "value": "BLOCKED"
+    },
+    {
+      "observable": "row.inViewport.afterLink",
+      "value": true
+    },
+    {
+      "observable": "row.estimatedAndActualShown",
+      "value": true
+    },
+    {
+      "observable": "row.varianceStated",
+      "value": "actualHigherBy250"
+    },
+    {
+      "observable": "row.actionsInsideViewport",
+      "value": [
+        "reconcile",
+        "recordActual",
+        "remove"
+      ]
+    },
+    {
+      "observable": "form.figuresAndVarianceVisibleWhileTyping",
+      "value": true
+    },
+    {
+      "observable": "fee.status.afterReconcile",
+      "value": "RECONCILED"
+    },
+    {
+      "observable": "closingCheck.costsClosable.afterReconcile",
+      "value": "READY"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "playwright/tests/deal-cost-reconcile-route.spec.ts",
+    "testName": "ar @ 390: an unchecked finance-company fee shows its variance and is reconciled from its row"
+  },
+  "sourceGlobs": [
+    "components/applications/cockpit/HandoverCostsPanel.tsx",
+    "components/applications/cockpit/DealCockpit.tsx"
+  ]
+}

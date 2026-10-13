@@ -146,6 +146,7 @@ function setupDeal() {
         feeType: "OWNERSHIP_TRANSFER",
         description: "Transfer Fee",
         actualAmountMinor: 150000,
+        actualEvidenceRevision: 2,
         status: "RECORDED",
         currency: "JOD",
         paidBy: "DEALER",
@@ -258,6 +259,10 @@ describe("DealCockpit closing bindings (TASK-DEAL-04)", () => {
       orgId: ORG,
       feeId: "fee_1",
       notes: "Verified against ministry receipt.",
+      // Pinned to the figure the checker was looking at (SCRUM-834).
+      expectedActualAmountMinor: 150000,
+      // ... and to the evidence revision it was looking at.
+      expectedActualEvidenceRevision: 2,
     });
   });
 

@@ -1404,6 +1404,8 @@ export function DealCockpit({
                   status: fee.status,
                   paidAt: fee.paidAt,
                   receiptReference: fee.receiptReference,
+                  // SCRUM-834: what a reconcile form pins besides the amount.
+                  actualEvidenceRevision: fee.actualEvidenceRevision,
                   // SCRUM-443: who paid it and whether it is on the books —
                   // the server's verdict (the closing check's own module),
                   // passed through, never re-derived here.
@@ -1726,12 +1728,20 @@ export function DealCockpit({
               throw new Error(getErrorMessage(error));
             }
           },
-          onReconcile: async (feeId: string, notes: string) => {
+          onReconcile: async (
+            feeId: string,
+            notes: string,
+            expectedActualAmountMinor: number,
+            expectedActualEvidenceRevision: number
+          ) => {
             try {
               await reconcileDealFee({
                 orgId,
                 feeId: feeId as Id<"financeDealFees">,
                 notes,
+                // The figure and evidence the checker was looking at: the server refuses if either moved.
+                expectedActualAmountMinor,
+                expectedActualEvidenceRevision,
               });
               toast.success(t("HandoverCostReconciled"));
             } catch (error) {

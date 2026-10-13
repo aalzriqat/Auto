@@ -176,7 +176,7 @@ describe("every writer refuses an oversize resulting financeDealFees document, w
     const seed = await seedDeal("w-reconcile");
     const feeId = await addFee(seed);
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: HUGE })
+      seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: HUGE, expectedActualAmountMinor: jod(50), expectedActualEvidenceRevision: 0 })
     ).rejects.toThrow(/may be at most 500 characters/);
     expect((await rowOf(seed, feeId))?.reconciledAt).toBeUndefined();
   });
@@ -200,7 +200,7 @@ describe("every writer refuses an oversize resulting financeDealFees document, w
       })
     ).rejects.toThrow(/too large to store/);
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "n".repeat(300) })
+      seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "n".repeat(300), expectedActualAmountMinor: jod(50), expectedActualEvidenceRevision: 0 })
     ).rejects.toThrow(/too large to store/);
     await expect(
       seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "v".repeat(200) })

@@ -875,6 +875,10 @@ const dealRailMessages = defineBilingualMessages({
     "Waiting for an accountant or a manager to reconcile this cost.",
     "بانتظار محاسب أو مدير لمطابقة هذه التكلفة.",
   ],
+  ReconciledNeedsAccountant: [
+    "Reconciled. Changing or removing it needs someone who can confirm finance disbursements.",
+    "تمت المطابقة. تعديل المبلغ أو إزالته يتطلب شخصاً يملك صلاحية تأكيد صرف التمويل.",
+  ],
   DirectPaymentWaiting: [
     "Waiting for a manager or an accountant to record the payment.",
     "بانتظار مدير أو محاسب لتسجيل الدفع.",
@@ -1343,6 +1347,22 @@ const dealOverviewMessages = defineBilingualMessages({
   ReconcileNotesPlaceholder: ["e.g. Verified against ministry receipt #12345", "مثال: تم التحقق من وصل الوزارة رقم 12345"],
   ReconcileNotesRequired: ["Record what was checked before reconciling this cost.", "سجّل ما تم التحقق منه قبل تسوية هذا المصروف."],
   ConfirmReconcile: ["Confirm reconciliation", "تأكيد التسوية"],
+  ReconcileVarianceOver: ["Actual is higher than expected by", "الفعلي أعلى من المتوقّع بمقدار"],
+  ReconcileVarianceUnder: ["Actual is lower than expected by", "الفعلي أقل من المتوقّع بمقدار"],
+  ReconcileVarianceNone: ["Actual matches the expected amount", "الفعلي يطابق المبلغ المتوقّع"],
+  ReconcileVarianceNotesHint: [
+    "The actual differs from the expected amount. Say what you checked and why it differs (receipt number, company letter).",
+    "الفعلي يختلف عن المتوقّع. اذكر ما تحققت منه وسبب الاختلاف (رقم الإيصال، كتاب الشركة).",
+  ],
+  ReconcileAmountChanged: [
+    "The recorded amount changed while this form was open. Cancel and reopen it to check the current figure.",
+    "تغيّر المبلغ المسجّل أثناء فتح هذا النموذج. ألغِ وأعد فتحه لمراجعة المبلغ الحالي.",
+  ],
+  ReconcileEvidenceChanged: [
+    "The receipt, paid date or attachments were re-recorded while this form was open. Cancel and reopen it to check the current evidence.",
+    "أُعيد تسجيل الإيصال أو تاريخ الدفع أو المرفقات أثناء فتح هذا النموذج. ألغِ وأعد فتحه لمراجعة الأدلة الحالية.",
+  ],
+  ExecutionFeeCorrectAmount: ["Correct amount", "تصحيح المبلغ"],
   HandoverCostReconciled: ["Cost reconciled", "تمت تسوية المصروف"],
   LegalInvoiceNotRecorded: ["No legal invoice recorded yet.", "لم يتم تسجيل فاتورة قانونية بعد."],
   // SCRUM-407 — the automatic closing readiness that replaced manual classification.

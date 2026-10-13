@@ -2707,12 +2707,15 @@ export const reconcileDealFee = mutation({
      * there and the call is refused. Compared with `!==`, so a NaN (which the
      * number validator admits) matches nothing.
      *
-     * The frontend that sends the pins deploys automatically when it merges,
-     * while this backend is deployed by hand. The previous validator rejects the
-     * pins as extra arguments, so this bridge MUST be deployed BEFORE that
-     * frontend merges: a pinned call reaching a backend without it fails. Once
-     * it is live either lag is safe: a pinned call is accepted, and so is a
-     * legacy call from a screen still open from before the frontend changed.
+     * Why they are optional: the pins ship with a frontend. A merge to main
+     * automatically creates a Vercel build, but autoflowdealer.com is promoted
+     * by hand, after the protected Convex deployment. So the backend that
+     * carries these arguments goes live while the old UI (which sends no pins)
+     * is still what users load, and the pinned UI only becomes live at
+     * promotion; the old call therefore has to keep working until then. In the
+     * other direction, a validator without these arguments rejects a pinned call
+     * as extra arguments, so the backend deployment comes before the pinned UI
+     * is promoted (or previewed against it).
      * The two pins are accepted together or not at all: neither is the legacy
      * call, both are the pinned contract, exactly one is refused.
      */
@@ -2925,6 +2928,17 @@ export const setFeeCustody = mutation({
     const custodyId = args.custodyId
       ? await resolveFeeCustody(ctx, args.orgId, fee.applicationId, args.custodyId, fee, user._id)
       : undefined;
+    // `reconcileDealFee` refuses the holder of a record a line already sits on;
+    // this is the same separation from the other side. Whoever certified the
+    // figure is not the person the charge then reimburses (SCRUM-834 F2).
+    if (custodyId !== undefined && fee.reconciledBy !== undefined) {
+      const target = await requireLinkedCustody(ctx, fee, custodyId, "charging a reconciled cost to a custody record");
+      if (target.userId === fee.reconciledBy) {
+        throw new ConvexError(
+          "This cost was reconciled by the person holding that custody record, who cannot then be reimbursed for it. Charge it to a different record, or have somebody else re-record and reconcile it. Nothing has been changed."
+        );
+      }
+    }
     const now = Date.now();
     // The link patch is judged on its own, BEFORE it is written. The posting
     // that follows judges the line with its posting record, but returns early
