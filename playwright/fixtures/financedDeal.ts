@@ -163,11 +163,11 @@ export async function ensureFinanceCompany(page: Page, company: FinanceCompanyFi
     const offsetRule = dialog.locator("#first-payment-offset-rule");
     await expect(adminFees).toBeVisible();
     // A company left by an earlier run may predate either field (SCRUM-428):
-    // without the offset rule every quote below stays uncalculated. The fee
-    // must also MATCH the fixture, not merely be present: the quotation check
-    // expects price + company.adminFees, so a stale non-blank fee is rewritten.
-    const currentFees = (await adminFees.inputValue()).trim();
-    const needsFees = currentFees === "" || Number(currentFees) !== Number(company.adminFees);
+    // without the offset rule every quote below stays uncalculated, and the
+    // quotation check expects price + company.adminFees, so a blank or stale
+    // fee is rewritten. The dialog shows `String(adminFees)`, so equal fees
+    // compare equal as strings.
+    const needsFees = (await adminFees.inputValue()) !== company.adminFees;
     const needsRule = (await offsetRule.inputValue()) !== "yes";
     if (needsFees) await adminFees.fill(company.adminFees);
     if (needsRule) await offsetRule.selectOption("yes");
