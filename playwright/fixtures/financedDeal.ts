@@ -226,6 +226,7 @@ export async function createFinancedApplication(
   page: Page,
   fixtures: { model: string; customer: string; company?: FinanceCompanyFixture },
 ): Promise<string> {
+  const company = fixtures.company ?? ZERO_FEE_COMPANY;
   await gotoOrgRoute(page, "sales");
   await dismissOverlays(page);
   await page.locator("#btn-new-installment-sale").click();
@@ -259,7 +260,7 @@ export async function createFinancedApplication(
 
   // The customer's status is what makes a configured company offerable.
   await page.getByText(CUSTOMER_STATUS, { exact: true }).first().click();
-  await page.getByText((fixtures.company ?? ZERO_FEE_COMPANY).name, { exact: false }).first().click();
+  await page.getByText(company.name, { exact: false }).first().click();
   await page.getByRole("button", { name: "Next", exact: true }).click();
 
   // --- step 2: the customer -----------------------------------------------
@@ -297,7 +298,7 @@ export async function createFinancedApplication(
 
   await page.waitForURL(/\/applications\/[^/]+\/deal$/, { timeout: 60_000 });
   const dealUrl = page.url();
-  await expectQuotationRecordedAtCreation(page, dealUrl);
+  await expectQuotationRecordedAtCreation(page, dealUrl, company);
   return dealUrl;
 }
 
@@ -313,7 +314,11 @@ export async function createFinancedApplication(
  * Needs the snapshot to be visible to this caller (`view:finance`, SCRUM-117):
  * the fixture's operator is the org owner, which holds it.
  */
-async function expectQuotationRecordedAtCreation(page: Page, dealUrl: string): Promise<void> {
+async function expectQuotationRecordedAtCreation(
+  page: Page,
+  dealUrl: string,
+  company: FinanceCompanyFixture,
+): Promise<void> {
   const match = /\/([^/]+)\/applications\/([^/]+)\/deal$/.exec(new URL(dealUrl).pathname);
   if (!match) throw new Error(`Unexpected deal URL shape: ${dealUrl}`);
   const orgId = match[1] as Id<"organizations">;
@@ -331,12 +336,14 @@ async function expectQuotationRecordedAtCreation(page: Page, dealUrl: string): P
   expect(snapshot?.calculatedQuotationMinor).toBe(app.submittedQuotationMinor);
   expect(snapshot?.finalQuotationMinor).toBe(app.submittedQuotationMinor);
   // The down payment covers the unfinanced share at this rate (3,000 against
-  // 10% of 15,000), so the solver's answer is the vehicle price itself. The
-  // scale comes from the deal's own currency, never assumed: JOD is three
-  // decimals, not two.
+  // 10% of 15,000), so the solver's answer is the vehicle price plus the
+  // company's execution fee: 15,000 for the zero-fee lender, 16,250 for the
+  // 1,250-fee one (SCRUM-834). The scale comes from the deal's own currency,
+  // never assumed: JOD is three decimals, not two.
   const scale = supportedCurrencyScale(app.economicsCurrency);
   expect(scale).not.toBeNull();
-  expect(app.submittedQuotationMinor).toBe(Number(VEHICLE_PRICE) * 10 ** (scale ?? 0));
+  const expectedMajor = Number(VEHICLE_PRICE) + Number(company.adminFees);
+  expect(app.submittedQuotationMinor).toBe(expectedMajor * 10 ** (scale ?? 0));
 }
 
 /**
