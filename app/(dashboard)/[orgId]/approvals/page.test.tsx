@@ -11,8 +11,10 @@ import { DEFAULT_ROLE_TEMPLATES } from "@/convex/utils/permissions";
 
 const stubs = vi.hoisted(() => ({
   queryArgs: new Map<string, unknown>(),
+  queryOptions: new Map<string, unknown>(),
   queryResults: new Map<string, unknown>(),
   permissions: [] as string[],
+  firstPageLoading: { results: [], status: "LoadingFirstPage", loadMore: () => undefined },
 }));
 
 vi.mock("convex/react", async () => {
@@ -24,11 +26,7 @@ vi.mock("convex/react", async () => {
       if (args === "skip") return undefined;
       // The server refuses the profit-approval queue to anyone without the
       // permission; model that so an unguarded call fails the way production did.
-      if (
-        (name === "approvals:listPendingApprovals" ||
-          name === "retainedCreditRefunds:listRetainedCreditRefundApprovalQueue") &&
-        !stubs.permissions.includes("approve:requests")
-      ) {
+      if (name === "approvals:listPendingApprovals" && !stubs.permissions.includes("approve:requests")) {
         throw new Error("Forbidden: approve:requests");
       }
       if (name === "retainedCreditRefunds:listRetainedCreditRefundRequests") {
@@ -37,6 +35,17 @@ vi.mock("convex/react", async () => {
       }
       const value = stubs.queryResults.get(name);
       return typeof value === "function" ? (value as (a: unknown) => unknown)(args) : value;
+    },
+    // The refund approval queue is cursor-paged; its stub is the hook's own result shape.
+    usePaginatedQuery: (reference: never, args: unknown, options: unknown) => {
+      const name = getFunctionName(reference);
+      stubs.queryArgs.set(name, args);
+      stubs.queryOptions.set(name, options);
+      if (args === "skip") return stubs.firstPageLoading;
+      if (!stubs.permissions.includes("approve:requests")) throw new Error("Forbidden: approve:requests");
+      const value = stubs.queryResults.get(name);
+      if (typeof value === "function") return (value as (a: unknown) => unknown)(args);
+      return value ?? stubs.firstPageLoading;
     },
     useMutation: () => async () => null,
   };
@@ -70,6 +79,7 @@ const row = {
 afterEach(() => {
   cleanup();
   stubs.queryArgs.clear();
+  stubs.queryOptions.clear();
   stubs.queryResults.clear();
 });
 
@@ -107,12 +117,13 @@ describe("ApprovalsPage: customer-credit refund approval queue (SCRUM-831)", () 
     stubs.permissions = permissionsOf("MANAGER");
     expect(stubs.permissions).toContain("approve:requests");
     expect(stubs.permissions).not.toContain("view:finance");
-    stubs.queryResults.set(QUEUE, { payoutAvailable: true, requests: [refund] });
+    stubs.queryResults.set(QUEUE, { results: [{ ...refund, payoutAvailable: true }], status: "Exhausted", loadMore: () => undefined });
     stubs.queryResults.set("approvals:listPendingApprovals", []);
 
     render(<ApprovalsPage />);
 
     expect(stubs.queryArgs.get(QUEUE)).toEqual({ orgId: "org1" });
+    expect(stubs.queryOptions.get(QUEUE)).toEqual({ initialNumItems: 25 });
     expect(stubs.queryArgs.has("retainedCreditRefunds:listRetainedCreditRefundRequests")).toBe(false);
     expect(screen.getByTestId("refund-approval-queue")).toBeTruthy();
     expect(screen.getAllByTestId("refund-approval-row")).toHaveLength(1);

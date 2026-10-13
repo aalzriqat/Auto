@@ -16,6 +16,7 @@
  * refusal, because a caught exception would commit the writes before it.
  */
 import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { query, type MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -37,6 +38,8 @@ import {
 
 const REASON_MAX = 500;
 const REFERENCE_MAX = 120;
+const APPROVAL_QUEUE_DEFAULT_PAGE = 25;
+const APPROVAL_QUEUE_MAX_PAGE = 100;
 
 const methodValidator = v.union(v.literal("BANK_TRANSFER"), v.literal("CASH"));
 
@@ -404,17 +407,30 @@ export const listRetainedCreditRefundRequests = query({
  * requests only, and only what a decider needs to judge them (no position,
  * movement, payment or user ids, no decision, idempotency or audit fields).
  * Deciding stays `respondToRetainedCreditRefund` (different actor enforced there);
- * execute and cancel stay with MANAGE_FINANCE. `payoutAvailable` is reported
- * because approval is refused while the pilot payout switch is on.
+ * execute and cancel stay with MANAGE_FINANCE. `payoutAvailable` rides on every row
+ * (the paginated client hook keeps only the rows) because approval is refused while
+ * the pilot payout switch is on.
+ *
+ * Cursor-paginated, newest first, so every PENDING request is reachable: a fixed
+ * `take(100)` silently hid the 101st and later. `numItems` is capped because each
+ * row costs several point reads; the cap bounds the first page a caller requests.
+ * It makes no claim about a loaded-page replay, which Convex re-runs with the
+ * page's own end cursor.
  */
 export const listRetainedCreditRefundApprovalQueue = query({
-  args: { orgId: v.id("organizations") },
+  args: { orgId: v.id("organizations"), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
-    const rows = await ctx.db.query("retainedCreditRefundRequests")
+    const requested = Number.isNaN(args.paginationOpts.numItems)
+      ? APPROVAL_QUEUE_DEFAULT_PAGE
+      : Math.floor(args.paginationOpts.numItems);
+    const numItems = Math.min(Math.max(1, requested), APPROVAL_QUEUE_MAX_PAGE);
+    const result = await ctx.db.query("retainedCreditRefundRequests")
       .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
-      .order("desc").take(100);
-    const requests = await Promise.all(rows.map(async (row) => {
+      .order("desc")
+      .paginate({ ...args.paginationOpts, numItems });
+    const payoutAvailable = !isCustomerCreditPayoutDisabled();
+    const page = await Promise.all(result.page.map(async (row) => {
       const [position, customer, requester] = await Promise.all([
         ctx.db.get(row.positionId),
         ctx.db.get(row.customerId),
@@ -429,6 +445,7 @@ export const listRetainedCreditRefundApprovalQueue = query({
         method: row.method,
         reason: row.reason,
         createdAt: row.createdAt,
+        payoutAvailable,
         requestedByMe: row.requestedBy === user._id,
         requestedByName: requester?.name,
         customerName: customer && customer.orgId === args.orgId
@@ -438,6 +455,6 @@ export const listRetainedCreditRefundApprovalQueue = query({
         originatingSaleStatus: sale && sale.orgId === args.orgId ? sale.status : undefined,
       };
     }));
-    return { payoutAvailable: !isCustomerCreditPayoutDisabled(), requests };
+    return { ...result, page };
   },
 });

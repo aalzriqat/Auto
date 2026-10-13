@@ -1,6 +1,6 @@
 {
   "id": "manager-reads-retained-credit-refund-queue-without-finance-view",
-  "fingerprint": "d967df0258e94a81c2af33575b4e69e4fbf9f2881ffb9949effe2288fa019b0b",
+  "fingerprint": "6be96ae152d63fe94918fdf8b9077cd6886615bd8a163fae8bdd6a61e70c6a52",
   "domain": "permission",
   "level": "backend",
   "status": "active",
@@ -16,7 +16,12 @@
         "org": "A"
       },
       "action": "retainedCreditRefunds.listRetainedCreditRefundApprovalQueue",
-      "input": {}
+      "input": {
+        "paginationOpts": {
+          "numItems": 50,
+          "cursor": null
+        }
+      }
     },
     {
       "actor": {

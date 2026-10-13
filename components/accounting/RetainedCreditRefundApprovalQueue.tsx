@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, usePaginatedQuery } from "convex/react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/convex/_generated/api";
@@ -19,17 +19,25 @@ import { Button } from "@/components/ui/button";
  * never the finance one. It offers approve and reject only: recording the payout
  * and cancelling stay in the Accounting queue. The server owns every rule,
  * including that the requester cannot decide their own request; the row only
- * avoids offering what would be refused.
+ * avoids offering what would be refused. The list is cursor-paged, so a queue longer
+ * than one page is reached with "Load more" rather than silently cut off; a failed
+ * read throws to the page's error boundary.
  */
+const PAGE_SIZE = 25;
+
 export function RetainedCreditRefundApprovalQueue({ orgId }: Readonly<{ orgId: Id<"organizations"> }>) {
   const { t, locale } = useLanguage();
   const command = useCommandIdentity();
-  const queue = useQuery(api.retainedCreditRefunds.listRetainedCreditRefundApprovalQueue, { orgId });
+  const { results: requests, status, loadMore } = usePaginatedQuery(
+    api.retainedCreditRefunds.listRetainedCreditRefundApprovalQueue,
+    { orgId },
+    { initialNumItems: PAGE_SIZE },
+  );
   const respond = useMutation(api.retainedCreditRefunds.respondToRetainedCreditRefund);
   const [busyId, setBusyId] = useState<string | null>(null);
   const pausedNoteId = useId();
 
-  if (queue === undefined) {
+  if (status === "LoadingFirstPage") {
     return (
       <output aria-busy="true" data-testid="refund-approval-loading"
         className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
@@ -39,19 +47,20 @@ export function RetainedCreditRefundApprovalQueue({ orgId }: Readonly<{ orgId: I
     );
   }
 
-  const { requests, payoutAvailable } = queue;
+  // Reported on every row by the server; one dark row means the pilot switch is on.
+  const payoutAvailable = requests.every((row) => row.payoutAvailable);
   const dateFormat = new Intl.DateTimeFormat(locale === "ar" ? "ar-JO" : "en-GB", {
     dateStyle: "medium", numberingSystem: "latn",
   });
 
-  async function onDecide(requestId: Id<"retainedCreditRefundRequests">, status: "APPROVED" | "REJECTED") {
-    if (busyId || (status === "APPROVED" && !payoutAvailable)) return;
+  async function onDecide(requestId: Id<"retainedCreditRefundRequests">, decision: "APPROVED" | "REJECTED") {
+    if (busyId || (decision === "APPROVED" && !payoutAvailable)) return;
     setBusyId(requestId);
-    const intent = `retained-refund-decide:${requestId}:${status}`;
+    const intent = `retained-refund-decide:${requestId}:${decision}`;
     try {
-      await respond({ orgId, requestId, status, idempotencyKey: command.for(intent) });
+      await respond({ orgId, requestId, status: decision, idempotencyKey: command.for(intent) });
       command.retire(intent);
-      toast.success(t(status === "APPROVED" ? "RetainedCreditRefundApproved" : "RetainedCreditRefundRejected"));
+      toast.success(t(decision === "APPROVED" ? "RetainedCreditRefundApproved" : "RetainedCreditRefundRejected"));
     } catch (error) {
       // A coded refusal in the user's language, else the queue's own message: never server English.
       toast.error(getCodedErrorMessage(error, t) ?? t("RetainedCreditRefundActionFailed"));
@@ -72,9 +81,12 @@ export function RetainedCreditRefundApprovalQueue({ orgId }: Readonly<{ orgId: I
         </p>
       )}
       {requests.length === 0 ? (
-        <p className="text-sm text-muted-foreground" data-testid="refund-approval-empty">
-          {t("RefundApprovalQueueEmpty")}
-        </p>
+        // A page can come back short of its size before the end; only the end proves "empty".
+        status === "Exhausted" && (
+          <p className="text-sm text-muted-foreground" data-testid="refund-approval-empty">
+            {t("RefundApprovalQueueEmpty")}
+          </p>
+        )
       ) : (
         <ul className="divide-y">
           {requests.map((row) => (
@@ -122,6 +134,14 @@ export function RetainedCreditRefundApprovalQueue({ orgId }: Readonly<{ orgId: I
             </li>
           ))}
         </ul>
+      )}
+      {status !== "Exhausted" && (
+        <Button type="button" size="sm" variant="outline" data-testid="refund-approval-load-more"
+          disabled={status === "LoadingMore"} aria-busy={status === "LoadingMore"}
+          onClick={() => loadMore(PAGE_SIZE)}>
+          {status === "LoadingMore" && <Loader2 className="me-2 h-4 w-4 animate-spin" aria-hidden="true" />}
+          {t(status === "LoadingMore" ? "RefundApprovalLoadingMore" : "RefundApprovalLoadMore")}
+        </Button>
       )}
     </section>
   );

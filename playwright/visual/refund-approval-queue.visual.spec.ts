@@ -53,6 +53,8 @@ const LITERAL = {
     en: "Approving is paused: paying customer credit out is not available during the pilot. The credit stays on the customer's account. You can still reject a request.",
     ar: "الموافقة متوقفة: دفع أرصدة العملاء غير متاح خلال المرحلة التجريبية. يبقى الرصيد في حساب العميل. ما زال بإمكانك رفض الطلب.",
   },
+  loadMore: { en: "Load more requests", ar: "تحميل المزيد من الطلبات" },
+  loadingMore: { en: "Loading more requests…", ar: "جارٍ تحميل المزيد من الطلبات…" },
   loadFailed: {
     en: "Customer credit refunds could not be loaded. Reload the page to try again.",
     ar: "تعذّر تحميل طلبات ردّ رصيد العملاء. أعد تحميل الصفحة للمحاولة مجدداً.",
@@ -70,6 +72,8 @@ const BUTTON = {
   reject: { en: "Reject", ar: "رفض" },
   execute: { en: "Record payout", ar: "تسجيل الدفع" },
   cancel: { en: "Cancel request", ar: "إلغاء الطلب" },
+  loadMore: { en: "Load more requests", ar: "تحميل المزيد من الطلبات" },
+  loadingMore: { en: "Loading more requests…", ar: "جارٍ تحميل المزيد من الطلبات…" },
 } as const;
 type Button = keyof typeof BUTTON;
 
@@ -91,13 +95,25 @@ const STATES: ReadonlyArray<{
     name: "manager-open",
     shows: ["title", "own", "customer", "reason"],
     absent: ["paused"],
-    buttons: { approve: "enabled", reject: "enabled", execute: "absent", cancel: "absent" },
+    buttons: { approve: "enabled", reject: "enabled", execute: "absent", cancel: "absent", loadMore: "absent" },
+  },
+  {
+    name: "manager-more",
+    shows: ["title", "customer", "reason"],
+    absent: ["empty", "loadingMore"],
+    buttons: { approve: "enabled", reject: "enabled", loadMore: "enabled", loadingMore: "absent" },
+  },
+  {
+    name: "manager-loading-more",
+    shows: ["title", "customer", "loadingMore"],
+    absent: ["empty", "loadMore"],
+    buttons: { approve: "enabled", loadMore: "absent", loadingMore: "disabled" },
   },
   {
     name: "manager-empty",
     shows: ["title", "empty"],
     absent: ["paused", "own"],
-    buttons: { approve: "absent", reject: "absent" },
+    buttons: { approve: "absent", reject: "absent", loadMore: "absent" },
   },
   { name: "manager-loading", shows: ["loading"], absent: ["title", "empty"], buttons: { approve: "absent" } },
   {

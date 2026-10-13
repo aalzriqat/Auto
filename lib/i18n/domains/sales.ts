@@ -2382,6 +2382,8 @@ const refundApprovalQueueMessages = defineBilingualMessages({
     "Approving is paused: paying customer credit out is not available during the pilot. The credit stays on the customer's account. You can still reject a request.",
     "الموافقة متوقفة: دفع أرصدة العملاء غير متاح خلال المرحلة التجريبية. يبقى الرصيد في حساب العميل. ما زال بإمكانك رفض الطلب.",
   ],
+  RefundApprovalLoadMore: ["Load more requests", "تحميل المزيد من الطلبات"],
+  RefundApprovalLoadingMore: ["Loading more requests…", "جارٍ تحميل المزيد من الطلبات…"],
   RefundApprovalRequestedBy: ["Requested by", "مقدّم الطلب"],
   RefundApprovalRequestedOn: ["on", "بتاريخ"],
 });

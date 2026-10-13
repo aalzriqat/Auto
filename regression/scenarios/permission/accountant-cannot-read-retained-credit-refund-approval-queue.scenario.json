@@ -1,6 +1,6 @@
 {
   "id": "accountant-cannot-read-retained-credit-refund-approval-queue",
-  "fingerprint": "073e458d66725d320ca26c511c7c38e40d1623410ebab4060584ae9d214995d6",
+  "fingerprint": "d7ab2598bc7e75f9a14c3ba2c4e50c89ce2f1f4576663f3c1791fa53d599a7a5",
   "domain": "permission",
   "level": "backend",
   "status": "active",
@@ -16,7 +16,12 @@
         "org": "A"
       },
       "action": "retainedCreditRefunds.listRetainedCreditRefundApprovalQueue",
-      "input": {}
+      "input": {
+        "paginationOpts": {
+          "numItems": 50,
+          "cursor": null
+        }
+      }
     }
   ],
   "expected": [

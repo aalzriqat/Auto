@@ -1044,7 +1044,8 @@ describe("SCRUM-831 manager retained-credit refund approval queue", () => {
     });
     return { actorId, as: s.t.withIdentity({ subject: `${name}_${suffix}`, clerkId: `${name}_${suffix}` }) };
   }
-  const queue = (as: unknown, orgId: Id<"organizations">) => (as as any).query(queueApi(), { orgId });
+  const queue = (as: unknown, orgId: Id<"organizations">) =>
+    (as as any).query(queueApi(), { orgId, paginationOpts: { numItems: 50, cursor: null } });
   const idsOf = (rows: Array<{ _id: string }>) => rows.map((row) => row._id);
 
   /**
@@ -1072,8 +1073,8 @@ describe("SCRUM-831 manager retained-credit refund approval queue", () => {
     const requestId = await f.request(1000);
 
     const result = await queue(manager.as, f.s.orgId);
-    expect(idsOf(result.requests)).toEqual([requestId]);
-    expect(result.requests[0]).toMatchObject({
+    expect(idsOf(result.page)).toEqual([requestId]);
+    expect(result.page[0]).toMatchObject({
       amountMinor: 1000, currency: "USD", method: "BANK_TRANSFER", reason: "Customer asked for money back",
       customerName: "Cust q1", requestedByMe: false,
     });
@@ -1086,10 +1087,10 @@ describe("SCRUM-831 manager retained-credit refund approval queue", () => {
     const f = await creditFixture("q2");
     const manager = await templateActor(f.s, "MANAGER", "q2");
     await f.request(1000);
-    const [row] = (await queue(manager.as, f.s.orgId)).requests;
+    const [row] = (await queue(manager.as, f.s.orgId)).page;
     expect(Object.keys(row).sort()).toEqual([
       "_id", "amountMinor", "createdAt", "currency", "customerName", "method", "originatingSaleStatus",
-      "reason", "requestedByMe", "requestedByName", "sourceChequeLabel",
+      "payoutAvailable", "reason", "requestedByMe", "requestedByName", "sourceChequeLabel",
     ]);
     expect(row.sourceChequeLabel).toBe("Test Bank #q2-1");
     expect(row.originatingSaleStatus).toBe("CANCELLED");
@@ -1126,7 +1127,7 @@ describe("SCRUM-831 manager retained-credit refund approval queue", () => {
     await expect(queue(otherManager, f.s.orgId)).rejects.toThrow(/not a member/i);
     // A member of their own organization sees only their own (empty) queue.
     const own = await queue(otherManager, otherOrgId);
-    expect(own.requests).toEqual([]);
+    expect(own.page).toEqual([]);
     expect(JSON.stringify(own)).not.toContain(String(requestId));
   }, 60_000);
 
@@ -1134,7 +1135,7 @@ describe("SCRUM-831 manager retained-credit refund approval queue", () => {
     const f = await creditFixture("q4b");
     const manager = await templateActor(f.s, "MANAGER", "q4b");
     const requestId = await f.request(1000);
-    expect((await queue(manager.as, f.s.orgId)).requests[0].customerName).toBe("Cust q4b");
+    expect((await queue(manager.as, f.s.orgId)).page[0].customerName).toBe("Cust q4b");
 
     // Same database as the request: a separate harness would hand out colliding ids.
     const foreignCustomerId = await f.s.t.run(async (ctx) => {
@@ -1147,8 +1148,8 @@ describe("SCRUM-831 manager retained-credit refund approval queue", () => {
 
     const result = await queue(manager.as, f.s.orgId);
     // The request is still queued for the decision; only the foreign name is withheld.
-    expect(idsOf(result.requests)).toEqual([requestId]);
-    expect(result.requests[0].customerName).toBeUndefined();
+    expect(idsOf(result.page)).toEqual([requestId]);
+    expect(result.page[0].customerName).toBeUndefined();
     expect(JSON.stringify(result)).not.toMatch(/Foreign|Secret/);
   }, 60_000);
 
@@ -1163,19 +1164,19 @@ describe("SCRUM-831 manager retained-credit refund approval queue", () => {
     await f.respond(approved, "APPROVED");
     await f.respond(rejected, "REJECTED");
     await f.cancel(cancelled);
-    expect(idsOf((await queue(manager.as, f.s.orgId)).requests)).toEqual([newer, older]);
+    expect(idsOf((await queue(manager.as, f.s.orgId)).page)).toEqual([newer, older]);
   }, 60_000);
 
   test("Q6. the queue states whether payout is available; with the pilot switch ON it is readable and says false", async () => {
     const f = await creditFixture("q6");
     const manager = await templateActor(f.s, "MANAGER", "q6");
     const requestId = await f.request(1000);
-    expect((await queue(manager.as, f.s.orgId)).payoutAvailable).toBe(true);
+    expect((await queue(manager.as, f.s.orgId)).page[0].payoutAvailable).toBe(true);
     pilot.payoutDisabled = true;
     try {
       const closed = await queue(manager.as, f.s.orgId);
-      expect(closed.payoutAvailable).toBe(false);
-      expect(idsOf(closed.requests)).toEqual([requestId]);
+      expect(closed.page[0].payoutAvailable).toBe(false);
+      expect(idsOf(closed.page)).toEqual([requestId]);
     } finally {
       pilot.payoutDisabled = false;
     }
@@ -1189,7 +1190,7 @@ describe("SCRUM-831 manager retained-credit refund approval queue", () => {
       orgId: f.s.orgId, receiptMovementId: f.movement._id, amountMinor: 1000, method: "BANK_TRANSFER", reason: "Own request",
     })) as Id<"retainedCreditRefundRequests">;
 
-    const seenByRequester = (await queue(f.s.approver.as, f.s.orgId)).requests;
+    const seenByRequester = (await queue(f.s.approver.as, f.s.orgId)).page;
     expect(seenByRequester.find((row: { _id: string }) => row._id === requestId)?.requestedByMe).toBe(true);
     const decide = (as: unknown, status: "APPROVED" | "REJECTED") => (as as any).mutation(refundApi().respondToRetainedCreditRefund, {
       orgId: f.s.orgId, requestId, status, idempotencyKey: crypto.randomUUID(),
@@ -1199,13 +1200,13 @@ describe("SCRUM-831 manager retained-credit refund approval queue", () => {
     expect((await f.s.t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("PENDING");
 
     const before = await allRows(f.s, "retainedCreditRefundRequests");
-    const seenByManager = (await queue(manager.as, f.s.orgId)).requests;
+    const seenByManager = (await queue(manager.as, f.s.orgId)).page;
     expect(seenByManager.find((row: { _id: string }) => row._id === requestId)?.requestedByMe).toBe(false);
     expect(await allRows(f.s, "retainedCreditRefundRequests")).toEqual(before);
 
     await decide(manager.as, "APPROVED");
     expect((await f.s.t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("APPROVED");
-    expect((await queue(manager.as, f.s.orgId)).requests).toEqual([]);
+    expect((await queue(manager.as, f.s.orgId)).page).toEqual([]);
     // The manager holds no manage:finance, so execute and cancel stay finance-only.
     await expect(f.execute(requestId, manager.as)).rejects.toThrow(/manage:finance/);
     await expect(f.cancel(requestId, "nope", manager.as)).rejects.toThrow(/manage:finance/);
@@ -1263,6 +1264,51 @@ describe("SCRUM-831 manager retained-credit refund approval queue", () => {
     expect(pendingAfter.filter((row) => row.status === "PENDING")).toHaveLength(4);
     expect(pendingAfter.filter((row) => row.status === "REJECTED")).toHaveLength(2);
   }, 120_000);
+
+  test("Q9. every PENDING request is reachable by cursor, newest first; a page is capped; another tenant's rows never join", async () => {
+    const f = await creditFixture("q9");
+    const manager = await templateActor(f.s, "MANAGER", "q9");
+    const seedId = await f.request(1000);
+    // The regression scenario schema cannot express this setup: one valid seed request is cloned into 130 PENDING
+    // requests in the same org (distinct amounts), plus a PENDING row of a foreign org in the same database.
+    const TOTAL = 130; // more than the 100 the unpaged read used to stop at
+    const ids = await f.s.t.run(async (ctx) => {
+      const { _id, _creationTime, ...fields } = (await ctx.db.get(seedId))!;
+      const inserted: Array<Id<"retainedCreditRefundRequests">> = [_id];
+      for (let i = 1; i < TOTAL; i++) {
+        inserted.push(await ctx.db.insert("retainedCreditRefundRequests", { ...fields, amountMinor: 1000 + i }));
+      }
+      // A PENDING request of ANOTHER organization, in the same database.
+      const foreignOrgId = await ctx.db.insert("organizations", { name: "CCSC q9 foreign", createdAt: Date.now() });
+      await ctx.db.insert("retainedCreditRefundRequests", { ...fields, orgId: foreignOrgId });
+      return inserted;
+    });
+
+    const page = (numItems: number, cursor: string | null) =>
+      (manager.as as any).query(queueApi(), { orgId: f.s.orgId, paginationOpts: { numItems, cursor } });
+    const walked: Array<{ _id: string; payoutAvailable: boolean }> = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    for (; pages < 20; pages++) {
+      const next: { page: typeof walked; isDone: boolean; continueCursor: string } = await page(50, cursor);
+      expect(next.page.length).toBeLessThanOrEqual(50);
+      walked.push(...next.page);
+      if (next.isDone) { pages++; break; }
+      cursor = next.continueCursor;
+    }
+    expect(pages).toBe(3); // 50 + 50 + 30
+    // Item 101 and beyond are reachable: all 130, none twice, newest first, none from another tenant.
+    expect(walked.map((row) => row._id)).toEqual([...ids].reverse());
+    expect(walked.every((row) => row.payoutAvailable === true)).toBe(true);
+
+    // The numItems of a first-page request is capped server-side (one page fans out several reads per row).
+    // This proves the cap on the first page only: the oversized continuation just returns the 30 remaining rows,
+    // so it proves neither a continuation cap nor an end-cursor replay cap.
+    const oversized = await page(100_000, null);
+    expect(oversized.page).toHaveLength(100);
+    expect(oversized.isDone).toBe(false);
+    expect(idsOf((await page(100_000, oversized.continueCursor)).page)).toEqual([...ids].reverse().slice(100));
+  }, 90_000);
 
   test("Q8b. negative control: the matrix oracle refuses to read an unrelated failure as a verdict", async () => {
     const forbidden = (permission: string) =>
