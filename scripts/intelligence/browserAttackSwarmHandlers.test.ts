@@ -49,6 +49,12 @@ type Scenario = {
   backendOwnsOrg: boolean;
   backendCustomerMatches: number;
   backendQueryError?: Error;
+  // When set, page.goto("/dashboard") lands on `landingUrl` (the app's entry
+  // point, before its redirect) and, if `settledUrl` is non-null, the app then
+  // redirects to it a moment later; the page's waitForURL honors RegExp and
+  // predicate matchers like the real one. Absent = the legacy instant redirect
+  // with a no-op waitForURL.
+  routing?: { landingUrl: string; settledUrl: string | null };
 };
 
 function defaultScenario(overrides: Partial<Scenario> = {}): Scenario {
@@ -173,16 +179,54 @@ function makeBrowserFixture(
     }),
   };
 
+  // Redirects still to come after goto("/dashboard") resolved (routing mode).
+  let pendingRedirects = 0;
+
+  const urlMatches = (
+    matcher: string | RegExp | ((url: URL) => boolean),
+    current: string,
+  ): boolean => {
+    // Same contract as playwright-core: a string must equal the full URL, a
+    // RegExp is tested against the full URL string, a predicate gets a URL.
+    if (typeof matcher === "function") return matcher(new URL(current));
+    if (matcher instanceof RegExp) return matcher.test(current);
+    return matcher === current;
+  };
+
   const page = {
     goto: vi.fn(async (url: string) => {
-      if (url === "/dashboard") {
+      if (url === "/dashboard" && scenario.routing) {
+        state.currentUrl = scenario.routing.landingUrl;
+        const settledUrl = scenario.routing.settledUrl;
+        if (settledUrl !== null) {
+          pendingRedirects += 1;
+          setTimeout(() => {
+            state.currentUrl = settledUrl;
+            pendingRedirects -= 1;
+          }, 15);
+        }
+      } else if (url === "/dashboard") {
         state.currentUrl =
           "http://127.0.0.1:3000/" + scenario.orgId + "/dashboard";
       } else {
         state.currentUrl = "http://127.0.0.1:3000" + url;
       }
     }),
-    waitForURL: vi.fn(async () => undefined),
+    waitForURL: vi.fn(
+      async (matcher: string | RegExp | ((url: URL) => boolean)) => {
+        if (!scenario.routing) return undefined;
+        // Resolve as soon as the current URL (now or after a later redirect)
+        // matches. With no redirect left to wait for and no match, the real
+        // 20s timeout is what would fire; model it as an immediate rejection.
+        for (;;) {
+          if (urlMatches(matcher, state.currentUrl)) return undefined;
+          if (pendingRedirects === 0) {
+            throw new Error("page.waitForURL: Timeout 20000ms exceeded.");
+          }
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+      },
+    ),
     url: vi.fn(() => state.currentUrl),
     getByRole: vi.fn((role: string, options?: { name?: string | RegExp }) => {
       if (role === "dialog") return dialog;
@@ -773,5 +817,83 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     ).rejects.toThrow(/did not resolve an organization route/);
 
     expect(fixture.browser.close).toHaveBeenCalled();
+  });
+
+  // SCRUM-826 / SCRUM-824 G4: the org route is read from the URL PATHNAME. The
+  // old unanchored RegExp matched the host:port of
+  // "http://localhost:3000/dashboard" as if it were an org segment, so the wait
+  // returned before the app's redirect and both attack workers died with
+  // "could not resolve the authenticated organization route".
+  describe("organization route resolution (SCRUM-826, SCRUM-824 G4)", () => {
+    it("waits through the /dashboard entry URL until the redirect carries the org segment", async () => {
+      const fixture = makeBrowserFixture(
+        defaultScenario({
+          orgId: "org123",
+          routing: {
+            landingUrl: "http://localhost:3000/dashboard",
+            settledUrl: "http://localhost:3000/org123/dashboard",
+          },
+        }),
+      );
+
+      const evidence = await handlerFor("RTL_PARITY")(
+        executionContext("RTL_PARITY"),
+      );
+
+      // The org id came from the redirected URL, and the backend oracle that
+      // consumed it agrees (listMine returns org123).
+      expect(evidence.oracle.passed).toBe(true);
+      expect(fixture.page.url()).toBe("http://localhost:3000/org123/dashboard");
+      expect(mocks.writeFile).toHaveBeenCalledWith(
+        expect.stringMatching(/backend-state\.json$/),
+        expect.stringContaining('"orgIdBefore": "org123"'),
+        "utf8",
+      );
+    });
+
+    it("resolves an org route that carries a query string", async () => {
+      makeBrowserFixture(
+        defaultScenario({
+          orgId: "org123",
+          routing: {
+            landingUrl: "http://localhost:3000/dashboard",
+            settledUrl: "http://localhost:3000/org123/sales?x=1",
+          },
+        }),
+      );
+
+      const evidence = await handlerFor("RTL_PARITY")(
+        executionContext("RTL_PARITY"),
+      );
+
+      expect(evidence.oracle.passed).toBe(true);
+      expect(mocks.writeFile).toHaveBeenCalledWith(
+        expect.stringMatching(/backend-state\.json$/),
+        expect.stringContaining('"orgIdBefore": "org123"'),
+        "utf8",
+      );
+    });
+
+    it("fails closed and never invents an org id when the app never leaves /dashboard", async () => {
+      const fixture = makeBrowserFixture(
+        defaultScenario({
+          orgId: "org123",
+          routing: {
+            landingUrl: "http://localhost:3000/dashboard",
+            settledUrl: null,
+          },
+        }),
+      );
+
+      await expect(
+        handlerFor("RTL_PARITY")(executionContext("RTL_PARITY")),
+      ).rejects.toThrow(/waitForURL: Timeout|organization route/);
+
+      // No backend authority query ran against a guessed organization, and the
+      // browser was still cleaned up.
+      expect(mocks.authenticatedConvexClient).not.toHaveBeenCalled();
+      expect(mocks.writeFile).not.toHaveBeenCalled();
+      expect(fixture.browser.close).toHaveBeenCalledTimes(1);
+    });
   });
 });
