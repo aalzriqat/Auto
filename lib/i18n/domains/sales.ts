@@ -2352,7 +2352,42 @@ const customerMoneyMountMessages = defineBilingualMessages({
   ],
 });
 
+/**
+ * SCRUM-831: the approver's own queue of customer-credit refund requests on the
+ * Approvals page. A manager decides here without the finance ledger; recording the
+ * payout stays in Accounting, so no payout wording belongs to this surface.
+ */
+const refundApprovalQueueMessages = defineBilingualMessages({
+  RefundApprovalQueueTitle: [
+    "Customer credit refunds awaiting approval",
+    "طلبات ردّ رصيد العملاء بانتظار الموافقة",
+  ],
+  RefundApprovalQueueDesc: [
+    "Finance asked to pay customer credit back. Approve or reject each request; recording the payout stays in Accounting.",
+    "طلبت المالية ردّ رصيد عميل. وافق على كل طلب أو ارفضه؛ أما تسجيل الدفع فيبقى في المحاسبة.",
+  ],
+  RefundApprovalQueueLoading: [
+    "Loading refund requests…",
+    "جارٍ تحميل طلبات الردّ…",
+  ],
+  RefundApprovalQueueEmpty: [
+    "No customer credit refunds are waiting for your approval.",
+    "لا توجد طلبات ردّ أرصدة بانتظار موافقتك.",
+  ],
+  RefundApprovalOwnRequest: [
+    "You requested this refund, so a different approver must decide it.",
+    "أنت من قدّم طلب الردّ هذا، لذلك يجب أن يبتّ فيه موافق آخر.",
+  ],
+  RefundApprovalPaused: [
+    "Approving is paused: paying customer credit out is not available during the pilot. The credit stays on the customer's account. You can still reject a request.",
+    "الموافقة متوقفة: دفع أرصدة العملاء غير متاح خلال المرحلة التجريبية. يبقى الرصيد في حساب العميل. ما زال بإمكانك رفض الطلب.",
+  ],
+  RefundApprovalRequestedBy: ["Requested by", "مقدّم الطلب"],
+  RefundApprovalRequestedOn: ["on", "بتاريخ"],
+});
+
 export const salesEn = {
+  ...refundApprovalQueueMessages.en,
   ...customerMoneyMountMessages.en,
   ...quoteWizardQaMessages.en,
   ...quotationUnavailableMessages.en,
@@ -3539,6 +3574,7 @@ export const salesEn = {
 };
 
 export const salesAr = {
+  ...refundApprovalQueueMessages.ar,
   ...customerMoneyMountMessages.ar,
   ...quoteWizardQaMessages.ar,
   ...quotationUnavailableMessages.ar,

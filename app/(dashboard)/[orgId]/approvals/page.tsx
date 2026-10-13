@@ -15,6 +15,8 @@ import { Id, Doc } from "@/convex/_generated/dataModel";
 import { useTableControls } from "@/hooks/useTableControls";
 import { getLocalizedErrorMessage } from "@/lib/errors";
 import { PendingDepositRequestsQueue } from "@/components/deposits/DepositRequests";
+import { MoneySurfaceErrorBoundary } from "@/components/accounting/MoneySurfaceErrorBoundary";
+import { RetainedCreditRefundApprovalQueue } from "@/components/accounting/RetainedCreditRefundApprovalQueue";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 
@@ -83,6 +85,22 @@ export default function ApprovalsPage() {
       {/* SCRUM-444: deposits a salesperson has asked to record. Nothing is held
           until one is confirmed here. */}
       <PendingDepositRequestsQueue orgId={activeOrgId} />
+
+      {/* SCRUM-831: customer-credit refund requests, for the approver. Asked only of
+          someone holding `approve:requests` (a default MANAGER, who has no
+          `view:finance`); a failed query degrades to its own message. */}
+      {canApprove && (
+        <MoneySurfaceErrorBoundary
+          key={activeOrgId}
+          fallback={
+            <div role="alert" className="rounded-md border border-border px-4 py-6 text-center text-sm text-destructive">
+              {t("RetainedCreditRefundsLoadFailed")}
+            </div>
+          }
+        >
+          <RetainedCreditRefundApprovalQueue orgId={activeOrgId} />
+        </MoneySurfaceErrorBoundary>
+      )}
 
       {canApprove && pendingApprovals && pendingApprovals.length > 0 && (
         <div className="flex items-center w-full max-w-sm space-x-2 relative">

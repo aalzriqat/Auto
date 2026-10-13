@@ -32,6 +32,7 @@ import { availableRetainedCreditMinor } from "./accounting/invoiceReceiptReserva
 import {
   assertCustomerCreditPayoutAllowed,
   assertCustomerCreditPayoutMethodSupported,
+  isCustomerCreditPayoutDisabled,
 } from "./utils/customerCreditPayoutContainment";
 
 const REASON_MAX = 500;
@@ -393,5 +394,50 @@ export const listRetainedCreditRefundRequests = query({
         originatingSaleStatus: sale && sale.orgId === args.orgId ? sale.status : undefined,
       };
     }));
+  },
+});
+
+/**
+ * SCRUM-831: the manager's retained-credit refund approval queue. A default MANAGER
+ * holds `approve:requests` but not `view:finance`, so the finance listing above is
+ * closed to the person who has to decide. This is a separate, narrow read: PENDING
+ * requests only, and only what a decider needs to judge them (no position,
+ * movement, payment or user ids, no decision, idempotency or audit fields).
+ * Deciding stays `respondToRetainedCreditRefund` (different actor enforced there);
+ * execute and cancel stay with MANAGE_FINANCE. `payoutAvailable` is reported
+ * because approval is refused while the pilot payout switch is on.
+ */
+export const listRetainedCreditRefundApprovalQueue = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    const rows = await ctx.db.query("retainedCreditRefundRequests")
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
+      .order("desc").take(100);
+    const requests = await Promise.all(rows.map(async (row) => {
+      const [position, customer, requester] = await Promise.all([
+        ctx.db.get(row.positionId),
+        ctx.db.get(row.customerId),
+        ctx.db.get(row.requestedBy),
+      ]);
+      const cheque = position?.sourceChequeId ? await ctx.db.get(position.sourceChequeId) : null;
+      const sale = position?.originatingSaleId ? await ctx.db.get(position.originatingSaleId) : null;
+      return {
+        _id: row._id,
+        amountMinor: row.amountMinor,
+        currency: row.currency,
+        method: row.method,
+        reason: row.reason,
+        createdAt: row.createdAt,
+        requestedByMe: row.requestedBy === user._id,
+        requestedByName: requester?.name,
+        customerName: customer && customer.orgId === args.orgId
+          ? `${customer.firstName} ${customer.lastName}`.trim() : undefined,
+        sourceChequeLabel: cheque && cheque.orgId === args.orgId
+          ? `${cheque.bank} #${cheque.chequeNumber}` : undefined,
+        originatingSaleStatus: sale && sale.orgId === args.orgId ? sale.status : undefined,
+      };
+    }));
+    return { payoutAvailable: !isCustomerCreditPayoutDisabled(), requests };
   },
 });
