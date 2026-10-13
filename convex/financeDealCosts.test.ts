@@ -1792,8 +1792,12 @@ describe("every live fee type can be taken from blocking to closable", () => {
     expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "READY", reason: null });
   });
 
-  test.each(SHAPES)("$feeType: the currency guard holds -- an amount counted in another currency is refused, and a line already in one blocks closing", async (shape) => {
+  test.each(SHAPES)("$feeType: the currency guard holds -- an amount counted in another currency is refused, and a line already in one blocks closing until it is removed", async (shape) => {
     const seed = await withCompany(await seedDeal(`ccy_${shape.feeType}`));
+    const sibling = await addFee(seed, { actualAmountMinor: jod(120) });
+    await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: seed.orgId, feeId: sibling, notes: "Matched.", expectedActualAmountMinor: jod(120), expectedActualEvidenceRevision: 0,
+    });
     const feeId = await addShape(seed, shape, jod(80));
     await expect(
       seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
@@ -1807,6 +1811,45 @@ describe("every live fee type can be taken from blocking to closable", () => {
     expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({
       status: "BLOCKED", reason: expect.stringMatching(/not in JOD/i),
     });
+    // Nor can its actual be re-recorded in the deal's currency over the line's own...
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, {
+        expectedCurrency: "JOD", orgId: seed.orgId, feeId, actualAmountMinor: jod(90),
+      })
+    ).rejects.toThrow(/recorded in USD|currency/i);
+    // ...but removing it needs a reason, and then nothing foreign is left to block.
+    await expect(
+      seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "  " })
+    ).rejects.toThrow(/say why/i);
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "BLOCKED" });
+
+    await seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "Legacy USD line on a JOD deal" });
+
+    expect((await readCosts(seed)).fees.map((fee) => fee._id)).toEqual([sibling]);
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "READY", reason: null });
+    const voided = await seed.t.run((ctx) => ctx.db.get(feeId));
+    expect(voided).toMatchObject({ voidReason: "Legacy USD line on a JOD deal", currency: "USD" });
+    expect(voided?.voidedBy).toBe(seed.userId);
+  });
+
+  test("a member without create:finance_application cannot remove a foreign-currency line, and the blocker stays", async () => {
+    const seed = await withCompany(await seedDeal("ccy_role"));
+    const feeId = await addShape(seed, SHAPES[0], jod(80));
+    await seed.t.run((ctx) => ctx.db.patch(feeId, { currency: "USD" }));
+    const accountant = DEFAULT_ROLE_TEMPLATES.find((role) => !role.permissions.includes("create:finance_application"));
+    if (!accountant) throw new Error("no role template lacks create:finance_application");
+    await seed.t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", { clerkId: "costs_noedit", email: "noedit@x.com" });
+      const roleId = await ctx.db.insert("roles", { orgId: seed.orgId, name: accountant.name, permissions: [...accountant.permissions] });
+      await ctx.db.insert("memberships", { orgId: seed.orgId, userId, roleId });
+    });
+    await expect(
+      seed.t.withIdentity({ subject: "costs_noedit" }).mutation(api.financeDealCosts.voidDealFee, {
+        orgId: seed.orgId, feeId, reason: "Legacy USD line",
+      })
+    ).rejects.toThrow(/permission/i);
+    expect((await feeRow(seed, feeId))?._id).toBe(feeId);
+    expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "BLOCKED", reason: expect.stringMatching(/not in JOD/i) });
   });
 
   test.each(SHAPES)("$feeType: the tenant guard holds -- another organization's accountant can reconcile nothing", async (shape) => {

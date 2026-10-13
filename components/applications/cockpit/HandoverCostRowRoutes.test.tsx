@@ -10,7 +10,7 @@
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { salesEn } from "@/lib/i18n/domains/sales";
+import { salesAr, salesEn } from "@/lib/i18n/domains/sales";
 import {
   FEE_TYPE_LABEL,
   HandoverCostsPanel,
@@ -159,10 +159,17 @@ describe.each(NON_HANDOVER_TYPES)("an unplanned %s that stops the deal closing",
     expect(button(salesEn.RecordActualCost)).toBeTruthy();
   });
 
-  test("keeps the currency guard: a line in another currency is flagged, never edited or reconciled here", () => {
-    renderPanel(costs([lineOf(feeType, { currency: "USD" })]), { onReconcile: async () => {} });
+  test("keeps the currency guard: a line in another currency is flagged and cannot be recorded or reconciled, but can be removed", async () => {
+    const onVoid = vi.fn(async () => {});
+    renderPanel(costs([lineOf(feeType, { currency: "USD" })]), { onReconcile: async () => {}, onVoid });
     expect(screen.getByTestId("deal-handover-cost-fee1-currency").textContent).toBe(salesEn.HandoverCostCurrencyDiffers);
-    expect(within(row()).queryByRole("button")).toBeNull();
+    expect(maybeButton(salesEn.ReconcileDealFee)).toBeNull();
+    expect(maybeButton(salesEn.RecordActualCost)).toBeNull();
+    fireEvent.click(button(salesEn.RemoveHandoverCost));
+    expect((screen.getByRole("button", { name: salesEn.ConfirmRemoveCost }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText(salesEn.VoidReasonLabel), { target: { value: "Legacy USD line on a JOD deal" } });
+    fireEvent.click(screen.getByRole("button", { name: salesEn.ConfirmRemoveCost }));
+    await waitFor(() => expect(onVoid).toHaveBeenCalledWith("fee1", "Legacy USD line on a JOD deal"));
   });
 
   test("keeps the freeze guard: once the sale is recognised no control is offered", () => {
@@ -250,5 +257,110 @@ describe("an unbound finance-company fee, with and without an execution-fee sect
     renderPanel(costs([lineOf("FINANCE_COMPANY_FEE")], { executionFee: { ...unbound, withheld: true } }), { onReconcile: async () => {} });
     expect(button(salesEn.ReconcileDealFee)).toBeTruthy();
     expect(button(salesEn.RemoveHandoverCost)).toBeTruthy();
+  });
+});
+
+describe("a live line in another currency than the deal's (legacy) blocks closing, so it can be removed -- and only removed", () => {
+  const foreign = (overrides: Partial<HandoverCostLine> = {}) => lineOf("LICENSING", { currency: "USD", ...overrides });
+
+  test("an unreconciled and a reconciled foreign line both offer Remove, with the warning kept", () => {
+    for (const status of ["ACTUAL_RECORDED", "RECONCILED"]) {
+      renderPanel(costs([foreign({ status })]), { onReconcile: async () => {} });
+      expect(screen.getByTestId("deal-handover-cost-fee1-currency")).toBeTruthy();
+      expect(button(salesEn.RemoveHandoverCost)).toBeTruthy();
+      cleanup();
+    }
+  });
+
+  test("the removal is the manager's: an accountant who cannot edit costs, and a viewer, are offered nothing", () => {
+    const accountant = renderPanel(costs([foreign()]), { onReconcile: async () => {} }, { canManage: false, canReconcile: true });
+    expect(within(row()).queryByRole("button")).toBeNull();
+    expect(screen.queryByTestId("deal-handover-cost-fee1-currency")).toBeNull();
+    accountant.unmount();
+    renderPanel(costs([foreign()]), { onReconcile: async () => {} }, { canManage: false, canReconcile: false });
+    expect(within(row()).queryByRole("button")).toBeNull();
+  });
+
+  test("a manager without the reconcile right still sees no 'waiting for an accountant' hint on a line that cannot be reconciled", () => {
+    renderPanel(costs([foreign()]), { onReconcile: async () => {} }, { canManage: true, canReconcile: false });
+    expect(screen.queryByTestId("deal-handover-reconcile-fee1-waiting")).toBeNull();
+    expect(button(salesEn.RemoveHandoverCost)).toBeTruthy();
+  });
+
+  test("a frozen deal offers no removal (the cockpit withdraws canManage once economics are frozen)", () => {
+    renderPanel(costs([foreign()]), { onReconcile: async () => {} }, { canManage: false, canReconcile: true, dealClosed: true });
+    expect(within(row()).queryByRole("button")).toBeNull();
+  });
+
+  test("a refusal from the void handler stays in the form with the server's reason", async () => {
+    const onVoid = vi.fn(async () => {
+      throw new Error("This deal has been finalized.");
+    });
+    renderPanel(costs([foreign()]), { onVoid });
+    fireEvent.click(button(salesEn.RemoveHandoverCost));
+    fireEvent.change(screen.getByLabelText(salesEn.VoidReasonLabel), { target: { value: "wrong currency" } });
+    fireEvent.click(screen.getByRole("button", { name: salesEn.ConfirmRemoveCost }));
+    expect((await screen.findByRole("alert")).textContent).toContain("finalized");
+  });
+
+  test("a configured (checklist) row whose actual is in another currency can be removed, and nothing else", async () => {
+    const onVoid = vi.fn(async () => {});
+    renderPanel(
+      costs([foreign()], {
+        expected: {
+          source: "COMPANY_RULE_SNAPSHOT",
+          currency: "JOD",
+          rows: [
+            {
+              templateIndex: 0,
+              feeType: "LICENSING",
+              description: "Plates",
+              expectedAmountMinor: 100_000,
+              expectedAmountReason: null,
+              duplicateIdentity: false,
+              actual: { feeId: "fee1", actualAmountMinor: 120_000, currency: "USD", status: "ACTUAL_RECORDED" },
+            },
+          ],
+          expectedTotalMinor: 100_000,
+          expectedTotalReason: null,
+          actualTotalMinor: null,
+          differenceMinor: null,
+          unplannedLineIds: [],
+        },
+      }),
+      { onReconcile: async () => {}, onVoid }
+    );
+    const checklistRow = screen.getByTestId("deal-handover-cost-fee1-currency").closest("li") as HTMLElement;
+    expect(within(checklistRow).queryByRole("button", { name: salesEn.ReconcileDealFee })).toBeNull();
+    expect(within(checklistRow).queryByRole("button", { name: salesEn.RecordActualCost })).toBeNull();
+    fireEvent.click(within(checklistRow).getByRole("button", { name: salesEn.RemoveHandoverCost }));
+    fireEvent.change(screen.getByLabelText(salesEn.VoidReasonLabel), { target: { value: "USD line" } });
+    fireEvent.click(screen.getByRole("button", { name: salesEn.ConfirmRemoveCost }));
+    await waitFor(() => expect(onVoid).toHaveBeenCalledWith("fee1", "USD line"));
+  });
+
+  test("in Arabic the warning and the removal are labelled in Arabic", () => {
+    const tAr = (key: string) => (salesAr as Record<string, string>)[key] ?? key;
+    render(
+      <HandoverCostsPanel
+        costs={costs([foreign()])}
+        loading={false}
+        denomination={{ code: "JOD" }}
+        scaleOf={() => 3}
+        money={money}
+        canManage
+        canReconcile={false}
+        dealClosed={false}
+        costSource={{ kind: "PENDING" }}
+        t={tAr}
+        onAdd={async () => {}}
+        onAbandonAdd={() => {}}
+        onRecordActual={(async () => {}) as never}
+        onVoid={async () => {}}
+      />
+    );
+    expect(salesAr.HandoverCostCurrencyDiffers).not.toBe(salesEn.HandoverCostCurrencyDiffers);
+    expect(screen.getByTestId("deal-handover-cost-fee1-currency").textContent).toBe(salesAr.HandoverCostCurrencyDiffers);
+    expect(within(row()).getByRole("button", { name: salesAr.RemoveHandoverCost })).toBeTruthy();
   });
 });

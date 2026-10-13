@@ -832,6 +832,10 @@ export function HandoverCostsPanel({
   // controls whatever its fee type (SCRUM-834) — except the bound line while the
   // execution-fee section is drawn, which acts on it alone.
   const sectionFeeId = costs?.executionFee ? boundFeeId : null;
+  // A line in another currency than the deal's (a legacy record) blocks closing
+  // but its figures are not the deal's: it can be neither recorded nor
+  // reconciled here, only removed (`voidDealFee` judges no currency).
+  const inDealCurrency = (line: HandoverCostLine) => line.currency === denomination.code;
   // The section only renders a form `executionFeeFormAvailable` allows, and the
   // same decision ends it here, so the marker never outlives what is drawn.
   // Another user reconciling or re-recording the fee, a handler or permission
@@ -1216,14 +1220,19 @@ export function HandoverCostsPanel({
                                   {t("RecordTemplateActual")}
                                 </Button>
                               )}
-                              {(canManage || mayReconcile) && row.actual !== null && row.actual.currency === denomination.code && lineFor(row) && (
+                              {canManage && row.actual !== null && row.actual.currency !== denomination.code && lineFor(row) && (
+                                <span className="text-xs text-amber-700 dark:text-amber-400" data-testid={`deal-handover-cost-${row.actual.feeId}-currency`}>
+                                  {t("HandoverCostCurrencyDiffers")}
+                                </span>
+                              )}
+                              {(canManage || (mayReconcile && row.actual?.currency === denomination.code)) && row.actual !== null && lineFor(row) && (
                                 <div className="flex gap-1">
-                                  {canManage && row.actual.status !== "RECONCILED" && onReconcile && !canReconcile && (
+                                  {canManage && row.actual.currency === denomination.code && row.actual.status !== "RECONCILED" && onReconcile && !canReconcile && (
                                     <span className="text-xs text-muted-foreground" data-testid={`deal-handover-reconcile-${row.actual.feeId}-waiting`}>
                                       {t("ReconcileNeedsAccountant")}
                                     </span>
                                   )}
-                                  {mayReconcile && row.actual.status !== "RECONCILED" && onReconcile && (
+                                  {mayReconcile && row.actual.currency === denomination.code && row.actual.status !== "RECONCILED" && onReconcile && (
                                     <Button
                                       type="button"
                                       variant="ghost"
@@ -1244,23 +1253,25 @@ export function HandoverCostsPanel({
                                   )}
                                   {canManage && (
                                     <>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-7 w-7"
-                                        aria-label={t("RecordActualCost")}
-                                        disabled={submittingAny || paymentPending}
-                                        onClick={() => {
-                                          if (!closeAddForm()) return;
-                                          setRecordingTemplateIndex(null);
-                                          setVoidingId(null);
-                                          setReconcilingId(null);
-                                          setEditingId(row.actual?.feeId ?? null);
-                                        }}
-                                      >
-                                        <Pencil className="h-3.5 w-3.5" />
-                                      </Button>
+                                      {row.actual.currency === denomination.code && (
+                                        <Button
+                                          type="button"
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-7 w-7"
+                                          aria-label={t("RecordActualCost")}
+                                          disabled={submittingAny || paymentPending}
+                                          onClick={() => {
+                                            if (!closeAddForm()) return;
+                                            setRecordingTemplateIndex(null);
+                                            setVoidingId(null);
+                                            setReconcilingId(null);
+                                            setEditingId(row.actual?.feeId ?? null);
+                                          }}
+                                        >
+                                          <Pencil className="h-3.5 w-3.5" />
+                                        </Button>
+                                      )}
                                       <Button
                                         type="button"
                                         variant="ghost"
@@ -1425,19 +1436,19 @@ export function HandoverCostsPanel({
                             )}
                           </dd>
                         </dl>
-                        {canManage && line._id !== sectionFeeId && line.currency !== denomination.code && (
+                        {canManage && line._id !== sectionFeeId && !inDealCurrency(line) && (
                           <span className="text-xs text-amber-700 dark:text-amber-400" data-testid={`deal-handover-cost-${line._id}-currency`}>
                             {t("HandoverCostCurrencyDiffers")}
                           </span>
                         )}
-                        {(canManage || mayReconcile) && line._id !== sectionFeeId && line.currency === denomination.code && (
+                        {(canManage || (mayReconcile && inDealCurrency(line))) && line._id !== sectionFeeId && (
                           <div className="flex gap-1">
-                            {canManage && line.actualAmountMinor !== undefined && line.status !== "RECONCILED" && onReconcile && !canReconcile && (
+                            {canManage && inDealCurrency(line) && line.actualAmountMinor !== undefined && line.status !== "RECONCILED" && onReconcile && !canReconcile && (
                               <span className="text-xs text-muted-foreground" data-testid={`deal-handover-reconcile-${line._id}-waiting`}>
                                 {t("ReconcileNeedsAccountant")}
                               </span>
                             )}
-                            {mayReconcile && line.actualAmountMinor !== undefined && line.status !== "RECONCILED" && onReconcile && (
+                            {mayReconcile && inDealCurrency(line) && line.actualAmountMinor !== undefined && line.status !== "RECONCILED" && onReconcile && (
                               <Button
                                 type="button"
                                 variant="ghost"
@@ -1457,22 +1468,24 @@ export function HandoverCostsPanel({
                             )}
                             {canManage && (
                               <>
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-7 w-7"
-                                  aria-label={t("RecordActualCost")}
-                                  disabled={submittingAny || paymentPending}
-                                  onClick={() => {
-                                    if (!closeAddForm()) return;
-                                    setVoidingId(null);
-                                    setReconcilingId(null);
-                                    setEditingId(line._id);
-                                  }}
-                                >
-                                  <Pencil className="h-3.5 w-3.5" />
-                                </Button>
+                                {inDealCurrency(line) && (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    aria-label={t("RecordActualCost")}
+                                    disabled={submittingAny || paymentPending}
+                                    onClick={() => {
+                                      if (!closeAddForm()) return;
+                                      setVoidingId(null);
+                                      setReconcilingId(null);
+                                      setEditingId(line._id);
+                                    }}
+                                  >
+                                    <Pencil className="h-3.5 w-3.5" />
+                                  </Button>
+                                )}
                                 <Button
                                   type="button"
                                   variant="ghost"
