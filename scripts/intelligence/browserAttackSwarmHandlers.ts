@@ -78,6 +78,35 @@ async function resolveOrgRoute(page: Page): Promise<string | null> {
   return orgIdFromUrl(page.url());
 }
 
+// playwright-core throws exactly this ("Tracing has been already started") from
+// Tracing.start when the context already carries a trace.
+const TRACING_ALREADY_STARTED = /tracing has been already started/i;
+
+// SCRUM-826 / SCRUM-824 G4: this handler runs inside the Playwright test runner
+// (playwright/tests/browser-swarm.spec.ts), and with `trace: "retain-on-failure"`
+// the runner starts tracing on EVERY context created during the test, including
+// ones from browser.newContext() on a browser we launched ourselves. A plain
+// tracing.start() therefore threw and both attack workers ended HARNESS_ERROR.
+//
+// Start our own trace when none is running; when the runner already started
+// one, begin a fresh chunk of it (startChunk discards the runner's empty chunk)
+// so the later tracing.stop({ path }) still writes this mission's trace.zip.
+// Any other start failure is a real harness error and is rethrown untouched.
+async function startMissionTrace(browserContext: BrowserContext): Promise<void> {
+  try {
+    await browserContext.tracing.start({
+      screenshots: true,
+      snapshots: true,
+      sources: false,
+    });
+  } catch (error) {
+    if (!(error instanceof Error) || !TRACING_ALREADY_STARTED.test(error.message)) {
+      throw error;
+    }
+    await browserContext.tracing.startChunk();
+  }
+}
+
 async function openMissionBrowser(
   context: BrowserMissionExecutionContext,
 ): Promise<{
@@ -120,11 +149,7 @@ async function openMissionBrowser(
     });
     throwIfMissionAborted(context.signal);
 
-    await browserContext.tracing.start({
-      screenshots: true,
-      snapshots: true,
-      sources: false,
-    });
+    await startMissionTrace(browserContext);
     throwIfMissionAborted(context.signal);
 
     const page = await browserContext.newPage();

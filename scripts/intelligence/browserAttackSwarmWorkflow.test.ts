@@ -1059,4 +1059,48 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       expect(String(upload?.with?.path ?? "")).toContain("trusted/egress-evidence/");
     });
   });
+  // SCRUM-826 review F1: playwright.config.ts sets `retries: CI ? 1 : 0` and the
+  // swarm worker runs with CI=true. Playwright exits 0 when a retry passes
+  // (failOnFlakyTests defaults to false), so a worker whose first attempt
+  // confirmed a breach or hit a harness error would still turn the worker job,
+  // and autoflow/trusted-browser-swarm, green - and re-run mutating missions
+  // against the shared preview, overwriting attempt 1's evidence. Swarm
+  // missions are timing-dependent by design (races), so the retry-pass path is
+  // reachable. A breach or harness error in ANY attempt must fail the worker.
+  describe("a trusted swarm worker never retries (SCRUM-826 F1)", () => {
+    // Guards must be live code: a commented-out guard still contains the text.
+    const stripComments = (source: string): string =>
+      source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    const hasRetryPin = (source: string): boolean =>
+      /test\.describe\.configure\(\{\s*retries:\s*0\s*\}\)/.test(
+        stripComments(source),
+      );
+    const hasRetryGuard = (source: string): boolean =>
+      /if\s*\(\s*testInfo\.retry\s*>\s*0\s*\)\s*\{?\s*throw new Error\(/.test(
+        stripComments(source),
+      );
+    const swarmSpecSource = readFileSync(
+      path.resolve(process.cwd(), "playwright/tests/browser-swarm.spec.ts"),
+      "utf8",
+    );
+
+    it("pins the swarm describe to zero retries independent of the global CI retry policy", () => {
+      expect(hasRetryPin(swarmSpecSource)).toBe(true);
+    });
+
+    it("throws if the swarm test body ever runs as a retry", () => {
+      expect(hasRetryGuard(swarmSpecSource)).toBe(true);
+    });
+
+    it("negative control: commented-out guards do not satisfy the contract", () => {
+      const pin = "test.describe.configure({ retries: 0 });";
+      const guard = 'if (testInfo.retry > 0) { throw new Error("x"); }';
+      expect(hasRetryPin(pin)).toBe(true);
+      expect(hasRetryGuard(guard)).toBe(true);
+      expect(hasRetryPin("// " + pin)).toBe(false);
+      expect(hasRetryPin("/* " + pin + " */")).toBe(false);
+      expect(hasRetryGuard("// " + guard)).toBe(false);
+      expect(hasRetryGuard("/*\n" + guard + "\n*/")).toBe(false);
+    });
+  });
 });
