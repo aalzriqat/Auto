@@ -31,11 +31,11 @@ export function RetainedCreditRefundApprovalQueue({ orgId }: Readonly<{ orgId: I
 
   if (queue === undefined) {
     return (
-      <p role="status" aria-busy="true" data-testid="refund-approval-loading"
+      <output aria-busy="true" data-testid="refund-approval-loading"
         className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
         {t("RefundApprovalQueueLoading")}
-      </p>
+      </output>
     );
   }
 
