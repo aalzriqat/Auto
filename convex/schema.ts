@@ -3354,6 +3354,19 @@ export default defineSchema({
     paidAt: v.optional(v.number()),
     receiptReference: v.optional(v.string()),
     documentStorageIds: v.optional(v.array(v.id("_storage"))),
+    /**
+     * SCRUM-834. How many times this line's actual and its evidence (amount,
+     * paid date, receipt reference, attachments) have been RE-recorded
+     * through `recordActualFeeAmount`; absent on a line never re-recorded and
+     * read as 0. Monotonic and unrelated to `updatedAt`, which payment,
+     * custody and binding writes also move. `reconcileDealFee` pins the value
+     * its checker was looking at, so a reconciliation can never certify
+     * evidence that was replaced under it — even by a same-amount re-record.
+     * Written only by `recordActualFeeAmount`: the one writer that replaces
+     * those fields on an existing row (the inserts create new rows, which
+     * start at 0).
+     */
+    actualEvidenceRevision: v.optional(v.number()),
 
     /** Whether the line came from the company's fee template or was typed. */
     source: v.union(v.literal("COMPANY_TEMPLATE"), v.literal("MANUAL")),

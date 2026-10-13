@@ -314,6 +314,8 @@ describe("itemized deal costs", () => {
       orgId: seed.orgId,
       feeId,
       notes: "Matched to the licensing receipt.",
+      expectedActualAmountMinor: jod(137),
+      expectedActualEvidenceRevision: 0,
     });
     expect((await readCosts(seed)).fees[0]?.status).toBe("RECONCILED");
 
@@ -339,6 +341,9 @@ describe("itemized deal costs", () => {
         orgId: seed.orgId,
         feeId,
         notes: "Looks about right.",
+        // An estimate has no actual to pin; the refusal for that comes first.
+        expectedActualAmountMinor: 0,
+        expectedActualEvidenceRevision: 0,
       })
     ).rejects.toThrow(/estimate is not evidence/i);
   });
@@ -656,6 +661,8 @@ describe("a closed record cannot go quietly wrong afterwards", () => {
     const { custodyId, feeId } = await settledCustody(seed);
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: seed.orgId, feeId, notes: "Matched.",
+      expectedActualAmountMinor: jod(700),
+      expectedActualEvidenceRevision: 0,
     });
     await invoiceIt(seed, "INV-9");
     expect(await closingCheck(seed, "CUSTODY_SETTLED")).toMatchObject({ status: "READY" });
@@ -686,6 +693,8 @@ describe("a closed record cannot go quietly wrong afterwards", () => {
     const feeId = await addFee(seed, { actualAmountMinor: jod(120) });
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: seed.orgId, feeId, notes: "Matched.",
+      expectedActualAmountMinor: jod(120),
+      expectedActualEvidenceRevision: 0,
     });
     await invoiceIt(seed, "INV-10");
     expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "READY", reason: null });
@@ -1068,6 +1077,8 @@ describe("reconciled work is not destroyable from below", () => {
     const feeId = await addFee(seed, { actualAmountMinor: jod(750) });
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: seed.orgId, feeId, notes: "Matched receipt #4471.",
+      expectedActualAmountMinor: jod(750),
+      expectedActualEvidenceRevision: 0,
     });
 
     // Re-recording the amount is the MORE destructive of the two routes:
@@ -1095,6 +1106,8 @@ describe("reconciled work is not destroyable from below", () => {
     const feeId = await addFee(seed, { actualAmountMinor: jod(750) });
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: seed.orgId, feeId, notes: "Matched receipt #4471.",
+      expectedActualAmountMinor: jod(750),
+      expectedActualEvidenceRevision: 0,
     });
 
     await seed.asUser.mutation(api.financeDealCosts.recordActualFeeAmount, { expectedCurrency: "JOD",
@@ -1117,11 +1130,15 @@ describe("reconciled work is not destroyable from below", () => {
     const feeId = await addFee(seed, { actualAmountMinor: jod(750) });
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: seed.orgId, feeId, notes: "Matched receipt #4471.",
+      expectedActualAmountMinor: jod(750),
+      expectedActualEvidenceRevision: 0,
     });
 
     await expect(
       seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
         orgId: seed.orgId, feeId, notes: "ok",
+        expectedActualAmountMinor: jod(750),
+        expectedActualEvidenceRevision: 0,
       })
     ).rejects.toThrow(/already been reconciled/i);
     expect((await readCosts(seed)).fees[0]?.reconciliationNotes).toBe(
@@ -1197,6 +1214,9 @@ describe("the legal invoice and automatic closing readiness", () => {
 
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: seed.orgId, feeId, notes: "Matched to the receipt.",
+      expectedActualAmountMinor: jod(137),
+      // The actual was recorded once above, so the evidence is at revision 1.
+      expectedActualEvidenceRevision: 1,
     });
     expect(await closingCheck(seed, "COSTS_CLOSABLE")).toMatchObject({ status: "READY", reason: null });
     expect(await closingCheck(seed, "LEGAL_INVOICE_RECORDED")).toMatchObject({ status: "READY", reason: null });
@@ -1253,6 +1273,8 @@ describe("the legal invoice and automatic closing readiness", () => {
       orgId: seed.orgId,
       feeId: liveFeeId,
       notes: "Matched to the receipt.",
+      expectedActualAmountMinor: jod(120),
+      expectedActualEvidenceRevision: 0,
     });
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       orgId: seed.orgId,
@@ -1289,6 +1311,8 @@ describe("the legal invoice and automatic closing readiness", () => {
     const feeId = await addFee(seed, { actualAmountMinor: jod(120) });
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: seed.orgId, feeId, notes: "Matched to the receipt.",
+      expectedActualAmountMinor: jod(120),
+      expectedActualEvidenceRevision: 0,
     });
     await seed.asUser.mutation(api.financeDealCosts.openDealCustody, { method: "CASH", idempotencyKey: crypto.randomUUID(),
       orgId: seed.orgId, applicationId: seed.applicationId,
@@ -1561,6 +1585,8 @@ describe("a deducted cost write establishes the remittance from what the company
       orgId: seed.orgId,
       feeId,
       notes: "Matched to the settlement advice.",
+      expectedActualAmountMinor: fee.actualAmountMinor,
+      expectedActualEvidenceRevision: 0,
     });
     await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
       orgId: seed.orgId,

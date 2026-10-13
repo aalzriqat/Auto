@@ -147,7 +147,7 @@ async function finalizedChequeDeal(tag: string, ledger: Ledger, opts: { forward?
     feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
     deductedFromSettlement: false, actualAmountMinor: 0, description: "No closing costs.",
   });
-  await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Matched." });
+  await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
   if (opts.forward) {
     await s.t.run(async (ctx) => {
       await ctx.db.insert("deposits", {

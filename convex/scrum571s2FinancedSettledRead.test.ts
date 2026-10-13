@@ -120,7 +120,7 @@ async function prepareDeal(s: FinSeed, opts: { gap: number }) {
     accountingTreatment: "SELLING_EXPENSE", deductedFromSettlement: false, actualAmountMinor: 0,
     description: "No closing costs.",
   });
-  await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Nothing to match." });
+  await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Nothing to match.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
   await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: key(), orgId: s.orgId, applicationId });
   return { applicationId, approved };
 }

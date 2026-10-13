@@ -606,7 +606,7 @@ describe("getBillOfSaleEconomics - FINANCED (through the Deal)", () => {
         orgId: s.orgId, applicationId, actualAmountMinor: 100 * SCALE, expectedCurrency: "JOD",
         paidBy: "DEALER", idempotencyKey: crypto.randomUUID(),
       });
-      await s.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Execution fee reconciled." });
+      await s.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Execution fee reconciled.", expectedActualAmountMinor: 100 * SCALE, expectedActualEvidenceRevision: 0 });
       await s.as.mutation(api.financeDealCosts.recordDirectFeePayment, {
         orgId: s.orgId, feeId, method: "BANK_TRANSFER", paidAt: Date.now(), expectedAmountMinor: 100 * SCALE,
         idempotencyKey: crypto.randomUUID(),

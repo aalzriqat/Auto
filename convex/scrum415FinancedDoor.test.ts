@@ -328,7 +328,7 @@ describe("(c) positive control: finalizeDeal still completes a FINANCED sale thr
       actualAmountMinor: 0,
       description: "The dealership bore no closing costs on this deal.",
     });
-    await asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Nothing to match." });
+    await asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Nothing to match.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
 
     const saleId = await asUser.mutation(api.applications.finalizeDeal, {
       idempotencyKey: crypto.randomUUID(),

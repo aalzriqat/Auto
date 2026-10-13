@@ -95,7 +95,7 @@ async function dealWithRealDeposit(s: Seeded) {
     feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
     deductedFromSettlement: false, actualAmountMinor: 0, description: "No closing costs.",
   });
-  await owner.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Matched." });
+  await owner.as.mutation(api.financeDealCosts.reconcileDealFee, { orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
   const depositId = await owner.as.mutation(api.deposits.create, {
     method: "CASH", idempotencyKey: crypto.randomUUID(), orgId, quoteId, amount: H / 1000,
   });

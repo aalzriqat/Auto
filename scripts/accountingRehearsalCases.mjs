@@ -2509,7 +2509,7 @@ export async function runRehearsalCases(ctx) {
       description: "No closing costs.",
     });
     await ownerMust("mutation", "financeDealCosts:reconcileDealFee", {
-      orgId, feeId: zeroFeeId, notes: "No fee to settle.",
+      orgId, feeId: zeroFeeId, notes: "No fee to settle.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0,
     });
     const beforeBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const beforeIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
@@ -2756,6 +2756,8 @@ export async function runRehearsalCases(ctx) {
         orgId,
         feeId: deductedFeeId,
         notes: "Reviewed before testing the forbidden settlement deduction.",
+        expectedActualAmountMinor: dealerCost,
+        expectedActualEvidenceRevision: 0,
       });
       const deductedClose = await ownerCall("mutation", "applications:finalizeDeal", {
         idempotencyKey: `rehearsal-fd1-deducted-close-${stamp}`,
@@ -2797,7 +2799,7 @@ export async function runRehearsalCases(ctx) {
         // SCRUM-319: every cost write names the currency its integer is in.
         expectedCurrency: denom.currency,
       });
-      await ownerMust("mutation", "financeDealCosts:reconcileDealFee", { orgId, feeId, notes: "Matched." });
+      await ownerMust("mutation", "financeDealCosts:reconcileDealFee", { orgId, feeId, notes: "Matched.", expectedActualAmountMinor: dealerCost, expectedActualEvidenceRevision: 0 });
       // The full finance-company transfer does not pay this dealer-borne
       // handover cost. Record its separate bank payment before closing.
       await ownerMust("mutation", "financeDealCosts:recordDirectFeePayment", {

@@ -317,6 +317,8 @@ describe("applications.finalizeDeal re-verifies at the commit point", () => {
     });
     await ids.asOwner.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: ids.orgId, feeId, notes: "Nothing to match.",
+      expectedActualAmountMinor: 0,
+      expectedActualEvidenceRevision: 0,
     });
     // SCRUM-407: no manual classification step - finalization checks readiness itself.
     return { quoteId, applicationId };

@@ -228,7 +228,7 @@ describe("dealOverview.financedDealOverview", () => {
     };
     // Settlement stage complete, but the line is RECORDED, not RECONCILED: still an estimate.
     expect(await classificationOf()).toBe("ESTIMATED_AWAITING_SETTLEMENT");
-    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "checked against the receipt" });
+    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "checked against the receipt", expectedActualAmountMinor: 90_000, expectedActualEvidenceRevision: 0 });
     expect(await classificationOf()).toBe("ACTUAL_UNPOSTABLE");
   });
 
@@ -279,7 +279,7 @@ describe("dealOverview.financedDealOverview", () => {
       expectedCurrency: "JOD",
       idempotencyKey: crypto.randomUUID(),
     });
-    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "checked" });
+    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "checked", expectedActualAmountMinor: 10_000, expectedActualEvidenceRevision: 0 });
     const classificationOf = async () => {
       const view = await s.asOwner.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
       const profit = view!.financialSummary!.profit;
@@ -298,7 +298,7 @@ describe("dealOverview.financedDealOverview", () => {
       idempotencyKey: crypto.randomUUID(),
     });
     expect(await classificationOf()).toBe("ESTIMATED_AWAITING_SETTLEMENT");
-    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId: templateFeeId, notes: "checked" });
+    await s.asOwner.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId: templateFeeId, notes: "checked", expectedActualAmountMinor: 250_000, expectedActualEvidenceRevision: 0 });
     expect(await classificationOf()).toBe("ACTUAL_UNPOSTABLE");
   });
 
