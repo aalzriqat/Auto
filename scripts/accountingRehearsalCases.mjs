@@ -225,6 +225,41 @@ let unproven = (reason) => {
   throw new Error(`UNPROVEN (no recorder bound): ${reason}`);
 };
 
+/**
+ * SCRUM-834 bridge: `reconcileDealFee` is moving from `{ orgId, feeId, notes }`
+ * to a contract that also requires `expectedActualAmountMinor` and
+ * `expectedActualEvidenceRevision`. This script runs from `main` against the
+ * candidate backend, so it must work against both.
+ *
+ * The new contract is tried first. The legacy contract is retried ONLY when the
+ * refusal is Convex's argument validator rejecting an extra field that is one
+ * of those two names and nothing else. A validator rejects before the handler
+ * runs, so the retry cannot double-apply. Every other refusal -- a stale
+ * amount or revision, a missing field, auth, a business rule -- is returned
+ * unchanged for the caller to treat as a failure.
+ */
+const RECONCILE_BRIDGE_FIELDS = new Set(["expectedActualAmountMinor", "expectedActualEvidenceRevision"]);
+
+export function isReconcileLegacyContractRefusal(error) {
+  const text = String(error ?? "");
+  if (!/ArgumentValidationError/i.test(text)) return false;
+  const extras = [...text.matchAll(/extra field `([^`]+)`/g)].map((m) => m[1]);
+  return extras.length > 0 && extras.every((name) => RECONCILE_BRIDGE_FIELDS.has(name));
+}
+
+export async function reconcileDealFeeCompat(call, { orgId, applicationId, feeId, notes, expectedActualAmountMinor }) {
+  const costs = await call("query", "financeDealCosts:listDealCosts", { orgId, applicationId });
+  if (!costs.ok) return costs;
+  const fee = (costs.value?.fees ?? []).find((f) => String(f._id) === String(feeId));
+  const next = { orgId, feeId, notes, expectedActualAmountMinor };
+  if (fee?.actualEvidenceRevision !== undefined) {
+    next.expectedActualEvidenceRevision = fee.actualEvidenceRevision;
+  }
+  const attempt = await call("mutation", "financeDealCosts:reconcileDealFee", next);
+  if (attempt.ok || !isReconcileLegacyContractRefusal(attempt.error)) return attempt;
+  return call("mutation", "financeDealCosts:reconcileDealFee", { orgId, feeId, notes });
+}
+
 export async function runRehearsalCases(ctx) {
   const { results, orgId, recordCase, fireConcurrentReleases, tokens, config } = ctx;
   unproven = ctx.unproven;
@@ -245,6 +280,11 @@ export async function runRehearsalCases(ctx) {
   // at all.
   const ownerCall = ctx.asSales;
   const ownerMust = ctx.salesMust;
+  const reconcileFee = async (args) => {
+    const result = await reconcileDealFeeCompat(ownerCall, args);
+    if (!result.ok) fail(`financeDealCosts:reconcileDealFee failed: ${result.error}`);
+    return result.value;
+  };
   const resolverCall = ctx.asApprover;
   const resolverMust = ctx.approverMust;
 
@@ -2508,8 +2548,8 @@ export async function runRehearsalCases(ctx) {
       deductedFromSettlement: false, actualAmountMinor: 0,
       description: "No closing costs.",
     });
-    await ownerMust("mutation", "financeDealCosts:reconcileDealFee", {
-      orgId, feeId: zeroFeeId, notes: "No fee to settle.",
+    await reconcileFee({
+      orgId, applicationId, feeId: zeroFeeId, notes: "No fee to settle.", expectedActualAmountMinor: 0,
     });
     const beforeBalance = await ownerMust("query", "accountingReports:trialBalance", { orgId, toDate });
     const beforeIncome = await ownerMust("query", "accountingReports:incomeStatement", reportArgs);
@@ -2752,10 +2792,12 @@ export async function runRehearsalCases(ctx) {
         description: "Intentionally invalid deduction from the full transfer.",
         expectedCurrency: denom.currency,
       });
-      await ownerMust("mutation", "financeDealCosts:reconcileDealFee", {
+      await reconcileFee({
         orgId,
+        applicationId,
         feeId: deductedFeeId,
         notes: "Reviewed before testing the forbidden settlement deduction.",
+        expectedActualAmountMinor: dealerCost,
       });
       const deductedClose = await ownerCall("mutation", "applications:finalizeDeal", {
         idempotencyKey: `rehearsal-fd1-deducted-close-${stamp}`,
@@ -2797,7 +2839,7 @@ export async function runRehearsalCases(ctx) {
         // SCRUM-319: every cost write names the currency its integer is in.
         expectedCurrency: denom.currency,
       });
-      await ownerMust("mutation", "financeDealCosts:reconcileDealFee", { orgId, feeId, notes: "Matched." });
+      await reconcileFee({ orgId, applicationId, feeId, notes: "Matched.", expectedActualAmountMinor: dealerCost });
       // The full finance-company transfer does not pay this dealer-borne
       // handover cost. Record its separate bank payment before closing.
       await ownerMust("mutation", "financeDealCosts:recordDirectFeePayment", {
