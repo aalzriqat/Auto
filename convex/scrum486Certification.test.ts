@@ -278,10 +278,6 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     await s.owner.as.mutation(api.applications.registerExpectedPayment, {
       orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
     });
-    await s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
-      orgId: s.orgId, applicationId, legalInvoiceAmountMinor: 12_500_000,
-      legalInvoiceNumber: `CERT-${applicationId}`, legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
-    });
     const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
       expectedCurrency: "JOD", idempotencyKey: "s486-financed-held-zero-fee", orgId: s.orgId, applicationId,
       feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER",
@@ -467,10 +463,6 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     await registerHandover(s.owner.as, api, s.orgId, applicationId);
     await s.owner.as.mutation(api.applications.registerExpectedPayment, {
       orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
-    });
-    await s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
-      orgId: s.orgId, applicationId, legalInvoiceAmountMinor: 12_500_000,
-      legalInvoiceNumber: `CERT-${applicationId}`, legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
     });
     const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
       expectedCurrency: "JOD", idempotencyKey: `${tag}-zero-fee`, orgId: s.orgId, applicationId,
@@ -669,10 +661,6 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     await registerHandover(s.owner.as, api, s.orgId, applicationId);
     await s.owner.as.mutation(api.applications.registerExpectedPayment, {
       orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
-    });
-    await s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
-      orgId: s.orgId, applicationId, legalInvoiceAmountMinor: 12_500_000,
-      legalInvoiceNumber: `CERT-${applicationId}`, legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
     });
     const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
       expectedCurrency: "JOD", idempotencyKey: `${tag}-zero-fee`, orgId: s.orgId, applicationId,

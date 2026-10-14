@@ -113,11 +113,11 @@ const proofOf = (s: Seeded, applicationId: Id<"financeApplications">) =>
   s.t.run(async (ctx) => deriveForwardState(ctx, (await ctx.db.get(applicationId))!));
 
 describe("SCRUM-435 - the worked example books what the owner ruled", () => {
-  test("finalize freezes v2: due = deposit + contribution, the receivable is the FULL approved amount", async () => {
+  test("finalize freezes v3: due = deposit + contribution, the receivable is the FULL approved amount", async () => {
     const { s, applicationId } = await finalizedDeal("wx1");
     const app = await s.t.run((ctx) => ctx.db.get(applicationId));
     expect(app?.status).toBe("CLOSED");
-    expect(app?.financedSalePlanVersion).toBe(2);
+    expect(app?.financedSalePlanVersion).toBe(3);
     expect(app?.financeCompanyForwardDueMinor).toBe(FORWARD);
     expect(app?.financedSaleNetReceivableMinor).toBe(G);
     const proof = await proofOf(s, applicationId);

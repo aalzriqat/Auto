@@ -156,15 +156,11 @@ const enterLetter = (
     dealerSendsMinor: over.dealerSendsMinor ?? c.S,
   });
 
-/** The finishing steps every finalizable manual deal shares: handover, expected payment, legal invoice L, reconciled costs, deposit. */
-async function finishManualDeal(s: Seeded, applicationId: Id<"financeApplications">, c: Pick<Case, "H">, invoiceMinor: number = G) {
+/** The finishing steps every finalizable manual deal shares: handover, expected payment, reconciled costs, deposit. No legal invoice (SCRUM-411): the server derives the consideration. */
+async function finishManualDeal(s: Seeded, applicationId: Id<"financeApplications">, c: Pick<Case, "H">) {
   await registerHandover(s.owner.as, api, s.orgId, applicationId);
   await s.owner.as.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
-  });
-  await s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
-    orgId: s.orgId, applicationId, legalInvoiceAmountMinor: invoiceMinor, legalInvoiceNumber: `INV-${applicationId}`,
-    legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
   });
   await recordReconciledZeroCost(s.owner.as, api, s.orgId, applicationId);
   await s.t.run(async (ctx) => {
@@ -316,11 +312,11 @@ describe.each(CASES)("SCRUM-27 - $name", (c) => {
     expect(app?.finalizedSaleId).toBeUndefined();
   });
 
-  test("finalize freezes v2: due = S, the receivable is the FULL G and names the company, the sale journal balances", async () => {
+  test("finalize freezes v3: due = S, the receivable is the FULL G and names the company, the sale journal balances", async () => {
     const { s, applicationId } = await finalizedManualDeal(`fin_${c.H}_${c.S}`, c);
     const app = await s.t.run((ctx) => ctx.db.get(applicationId));
     expect(app?.status).toBe("CLOSED");
-    expect(app?.financedSalePlanVersion).toBe(2);
+    expect(app?.financedSalePlanVersion).toBe(3);
     expect(app?.financeCompanyForwardDueMinor).toBe(c.S);
     expect(app?.financedSaleNetReceivableMinor).toBe(G);
     expect(app?.dealerContributionMinor).toBe(C);
@@ -621,6 +617,8 @@ describe("SCRUM-27 OR-12 - the shortfall (sale price minus the letter) is settle
     const net = await netByAccount(s, "SALE_COMPLETED");
     expect(net.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES).toBe(G - GAP);
     expect(net.ACCOUNTS_RECEIVABLE_CUSTOMERS).toBe(GAP);
+    // Revenue is the server-derived consideration A + R = (G - GAP) + GAP, with no invoice involved (SCRUM-411).
+    expect(net.SALES_REVENUE).toBe(-G);
     const { arFinanceDebits, receivable } = await s.t.run(async (ctx) => {
       const account = await ctx.db
         .query("chartOfAccounts")
@@ -638,14 +636,9 @@ describe("SCRUM-27 OR-12 - the shortfall (sale price minus the letter) is settle
     expect(receivable?.payerNameSnapshot).toBe(LETTER_NAME);
   });
 
-  test("dealer absorbs the gap: the invoice at the sale price is refused (G + customer receivable must equal L); at the letter amount it finalizes with no customer receivable", async () => {
-    const refused = await shortfallDeal("or12_absorb_refused", "ABSORB");
-    await finishManualDeal(refused.s, refused.applicationId, NO_DEPOSIT);
-    expect(await refusalOf(finalize(refused.s, refused.applicationId))).toMatch(/legal invoice does not agree with the approved amount/);
-    expect((await refused.s.t.run((ctx) => ctx.db.get(refused.applicationId)))?.status).toBe("APPROVED");
-
+  test("dealer absorbs the gap: the server-derived consideration is the letter amount, so it finalizes with no customer receivable and no invoice", async () => {
     const { s, applicationId } = await shortfallDeal("or12_absorb_ok", "ABSORB");
-    await finishManualDeal(s, applicationId, NO_DEPOSIT, G - GAP);
+    await finishManualDeal(s, applicationId, NO_DEPOSIT);
     await finalize(s, applicationId);
     expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
     const net = await netByAccount(s, "SALE_COMPLETED");
@@ -654,11 +647,18 @@ describe("SCRUM-27 OR-12 - the shortfall (sale price minus the letter) is settle
     expect(Object.values(net).reduce((a, b) => a + b, 0)).toBe(0);
   });
 
-  test("an invoice that differs from the sale price is reported, never silently posted", async () => {
+  test("an optional genuine invoice that differs from the approved amount is refused when recorded, never stored or posted", async () => {
     const { s, applicationId } = await shortfallDeal("or12_invoice_differs", "CASH");
-    await finishManualDeal(s, applicationId, NO_DEPOSIT, G - 500_000);
-    expect(await refusalOf(finalize(s, applicationId))).toMatch(/legal invoice does not agree with the approved amount/);
-    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("APPROVED");
+    await finishManualDeal(s, applicationId, NO_DEPOSIT);
+    expect(
+      await refusalOf(
+        s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
+          orgId: s.orgId, applicationId, legalInvoiceAmountMinor: G, legalInvoiceNumber: "INV-DIFF",
+          legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
+        })
+      )
+    ).toMatch(/does not match the amount the finance company approved/);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.legalInvoiceAmountMinor).toBeUndefined();
   });
 
   test("reopening the approval clears the letter and every gap field", async () => {
