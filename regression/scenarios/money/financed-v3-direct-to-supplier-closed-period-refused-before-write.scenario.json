@@ -12,14 +12,18 @@
         "contributionMinor": 1375000,
         "supplierEntitlementMinor": 9000000,
         "route": "DIRECT_TO_SUPPLIER",
-        "handoverPeriod": "no.open.period"
+        "handoverPeriodStatus": "CLOSED"
       }
     }
   ],
   "expected": [
     {
-      "observable": "mutation.refusal.message",
-      "value": "no.open.accounting.period"
+      "observable": "finalize.refusalCode",
+      "value": "RECOGNITION_PERIOD_NOT_OPEN"
+    },
+    {
+      "observable": "sales.count",
+      "value": 0
     },
     {
       "observable": "ledger.entriesWritten",
@@ -34,10 +38,10 @@
   ],
   "impl": {
     "file": "convex/scrum411DirectRoute.test.ts",
-    "testName": "a handover date with no open accounting period refuses finalize, and nothing is written"
+    "testName": "a direct-to-supplier handover dated in a CLOSED accounting period refuses finalize, and nothing is written"
   },
   "matrixRow": "pilot-financed-v3-direct-route",
-  "fingerprint": "70fd569da62c33fe868205b585dd0fd3ae5fc78d921a061f431d4ae4eaaa444d",
+  "fingerprint": "a68970dc17242916df88500cdff1dfb3300f7244bd1f29d90ebac7dc354d55d3",
   "domain": "money",
   "level": "backend",
   "status": "active",

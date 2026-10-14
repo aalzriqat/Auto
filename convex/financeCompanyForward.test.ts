@@ -10,12 +10,14 @@
  * runtime (no OCC, no paginated-query limit) and not production data.
  */
 import {
-  C, G, H, downgradeToV1, finalizeAsOwner, readyDeal, refusalMessageOf, seedFinancedDealership,
+  C, G, H, downgradeToV1, downgradeToV2, finalizeAsOwner, readyDeal, refusalMessageOf, seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
 import { deriveForwardState, isReportedReturn } from "./utils/financeCompanyForward";
+import { planVersionOf } from "./utils/financedSalePostingPlan";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -404,6 +406,114 @@ describe("SCRUM-435 - v1 deals are never recomputed", () => {
     const proof = await proofOf(s, applicationId);
     expect(proof.state).toBe("NOT_DUE");
     expect(proof.applies).toBe(false);
+  });
+});
+
+/**
+ * New finalizations freeze plan v3 (SCRUM-411), but a deal closed under v2 must
+ * keep every forward rule: the proof, the transfer gate, reverse and return,
+ * manager-only cancel and unwind. The deal is finalized through the real
+ * mutation and then re-marked v2 (version + fingerprint prefix), so this group
+ * is the only one in the file that is not v3.
+ */
+describe("SCRUM-411 - a deal closed under plan v2 keeps the forward rules", () => {
+  async function closedV2Deal(tag: string) {
+    const { s, applicationId } = await finalizedDeal(tag);
+    await downgradeToV2(s, applicationId);
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app?.status).toBe("CLOSED");
+    expect(app?.financedSalePlanVersion).toBe(2);
+    expect(planVersionOf(app!)).toBe(2);
+    return { s, applicationId };
+  }
+
+  test("the proof applies, is DUE for the frozen H + C, and the transfer is gated until it is paid", async () => {
+    const { s, applicationId } = await closedV2Deal("v2fwd");
+    const proof = await proofOf(s, applicationId);
+    expect(proof.applies).toBe(true);
+    expect(proof.state).toBe("DUE");
+    expect(proof.dueMinor).toBe(FORWARD);
+    expect(await refusalOf(confirmTransfer(s, applicationId))).toMatch(/manager or accountant records that payment/i);
+
+    await record(s, applicationId);
+    expect((await proofOf(s, applicationId)).state).toBe("SETTLED");
+    const forwardNet = await netByAccount(s, "FINANCE_COMPANY_FORWARD_PAID");
+    expect(forwardNet.ACCOUNTS_PAYABLE_FINANCE_COMPANIES).toBe(FORWARD);
+    expect(await refusalOf(confirmTransfer(s, applicationId, G))).toBeNull();
+    expect((await netByAccount(s, "FINANCE_CASH_RECEIVED")).ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES).toBe(-G);
+  });
+
+  test("reverse before the transfer makes it due again; after the transfer only a reported return does", async () => {
+    const { s, applicationId } = await closedV2Deal("v2rev");
+    const forwardId = await record(s, applicationId);
+    const reverse = (reason: string) =>
+      s.owner.as.mutation(api.financeCompanyForward.reverseFinanceCompanyForward, {
+        orgId: s.orgId, applicationId, forwardId, reason, idempotencyKey: crypto.randomUUID(),
+      });
+    await reverse("Paid the wrong company.");
+    const reversed = await proofOf(s, applicationId);
+    expect(reversed.state).toBe("DUE");
+    expect(reversed.versions[0].state).toBe("REVERSED");
+
+    const replacementId = await record(s, applicationId);
+    await confirmTransfer(s, applicationId);
+    expect(
+      await refusalOf(
+        s.owner.as.mutation(api.financeCompanyForward.reverseFinanceCompanyForward, {
+          orgId: s.orgId, applicationId, forwardId: replacementId, reason: "Too late.", idempotencyKey: crypto.randomUUID(),
+        })
+      )
+    ).toMatch(/report it as returned/i);
+    await s.owner.as.mutation(api.financeCompanyForward.reportFinanceCompanyForwardReturned, {
+      orgId: s.orgId, applicationId, forwardId: replacementId, reason: "The company sent it back.", idempotencyKey: crypto.randomUUID(),
+    });
+    const returned = await proofOf(s, applicationId);
+    expect(returned.state).toBe("DUE");
+    expect(returned.returnedExceptionOpen).toBe(true);
+  });
+
+  test("only a manager cancels it: SALES and ACCOUNTANT are refused, a cancel-only role is told a manager cancels", async () => {
+    const { s, applicationId } = await closedV2Deal("v2can");
+    const cancel = (as = s.owner.as) =>
+      as.mutation(api.applications.cancelApplication, {
+        orgId: s.orgId, applicationId, reason: "Customer withdrew.", idempotencyKey: crypto.randomUUID(),
+      });
+    expect(await refusalOf(cancel(s.sales.as))).not.toBeNull();
+    expect(await refusalOf(cancel(s.accountant.as))).not.toBeNull();
+    const userId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "v2can_fin", email: "v2can.fin@example.com", name: "fin" }));
+    const roleId = await s.t.run((ctx) =>
+      ctx.db.insert("roles", {
+        orgId: s.orgId, name: "FINALIZER",
+        permissions: ["cancel:closed_deal", "create:finance_application", "view:finance_applications"],
+      })
+    );
+    await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId }));
+    const asFinalizer = s.t.withIdentity({ subject: "v2can_fin", clerkId: "v2can_fin" });
+    expect(await refusalOf(cancel(asFinalizer))).toBe("A manager cancels a finalized deal.");
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
+    expect(await refusalOf(cancel(s.manager.as))).toBeNull();
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+  });
+
+  test("a paid v2 deal is eligible for unwind, while the same paid deal marked v1 is not", async () => {
+    const paid = async (tag: string) => {
+      const { s, applicationId } = await closedV2Deal(tag);
+      await record(s, applicationId);
+      await confirmTransfer(s, applicationId);
+      return { s, applicationId };
+    };
+    const start = (s: Seeded, applicationId: Id<"financeApplications">) =>
+      s.owner.as.mutation(api.dealUnwind.startDealUnwind, {
+        orgId: s.orgId, applicationId, reason: "Customer returned the car.", idempotencyKey: crypto.randomUUID(),
+      });
+
+    const v2 = await paid("v2unw");
+    const unwindId = await start(v2.s, v2.applicationId);
+    expect(await v2.s.t.run((ctx) => ctx.db.get(unwindId))).not.toBeNull();
+
+    const v1 = await paid("v1unw");
+    await downgradeToV1(v1.s, v1.applicationId);
+    expect(await refusalOf(start(v1.s, v1.applicationId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_NOT_ELIGIBLE);
   });
 });
 

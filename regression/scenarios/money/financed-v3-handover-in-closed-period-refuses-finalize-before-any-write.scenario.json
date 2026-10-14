@@ -9,7 +9,7 @@
       "action": "applications.finalizeDeal",
       "input": {
         "approvedMinor": 12500000,
-        "handoverPeriodOpen": false
+        "handoverPeriodStatus": "CLOSED"
       }
     }
   ],
@@ -27,6 +27,10 @@
       "value": 0
     },
     {
+      "observable": "ledger.entriesWritten",
+      "value": 0
+    },
+    {
       "observable": "saleJournal.totalNetMinor",
       "value": 0
     }
@@ -39,10 +43,10 @@
   ],
   "impl": {
     "file": "convex/scrum411ServerSaleEconomics.test.ts",
-    "testName": "a handover date with no open accounting period blocks the close before anything is written"
+    "testName": "a handover dated in a CLOSED accounting period blocks the close before anything is written"
   },
   "matrixRow": "pilot-financed-v3-period",
-  "fingerprint": "11c4535832f5f12501d97a1912d6b96c4d9af45e5fe371c954eb54470aa7b12c",
+  "fingerprint": "ddc0cdece19d0bd7c3febd349c243a54d609e18f0662ee9644f1016fd6dfc696",
   "domain": "money",
   "level": "backend",
   "status": "active",

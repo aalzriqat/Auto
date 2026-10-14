@@ -24,7 +24,7 @@
  * runtime and not production data.
  */
 import {
-  C, G, finalizeAsOwner, readyDeal, refusalMessageOf, seedFinancedDealership,
+  C, G, closePriorYearPeriod, finalizeAsOwner, readyDeal, refusalDataOf, refusalMessageOf, seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
@@ -284,28 +284,33 @@ describe("SCRUM-411 - direct route: every report reads the ledger's net commissi
 });
 
 describe("SCRUM-411 - direct route: refusals happen before the first write", () => {
-  test("a handover date with no open accounting period refuses finalize, and nothing is written", async () => {
+  test("a direct-to-supplier handover dated in a CLOSED accounting period refuses finalize, and nothing is written", async () => {
     const s = await seed("p1");
     const { applicationId } = await readyDirect(s);
-    // A date in a year this org has no period for.
-    await s.t.run((ctx) =>
-      ctx.db.patch(applicationId, { vehicleHandoverAt: Date.UTC(s.fiscalYear - 1, 5, 1) })
-    );
+    // A real prior-year period, opened and then closed through the accounting-period mutations.
+    const { periodId, handoverAt } = await closePriorYearPeriod(s);
+    expect((await s.t.run((ctx) => ctx.db.get(periodId)))?.status).toBe("CLOSED");
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { vehicleHandoverAt: handoverAt }));
 
-    const refusal = await refusalMessageOf(
+    const refusal = await refusalDataOf(
       s.owner.as.mutation(api.applications.finalizeDeal, {
         idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
       })
     );
-    expect(refusal).toMatch(/no open accounting period/i);
+    expect(refusal).toEqual({
+      code: "RECOGNITION_PERIOD_NOT_OPEN",
+      message:
+        "The vehicle was handed over on a date that has no open accounting period, so the sale cannot be recognised. Open or reopen that period before finalizing.",
+    });
 
     const app = await s.t.run((ctx) => ctx.db.get(applicationId));
     expect(app!.status).not.toBe("CLOSED");
     expect(app!.finalizedSaleId).toBeUndefined();
-    const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
-    expect(sales).toEqual([]);
-    const claims = await s.t.run((ctx) => ctx.db.query("vehicleSupplierReceivables").collect());
-    expect(claims).toEqual([]);
+    expect(await s.t.run((ctx) => ctx.db.query("sales").collect())).toEqual([]);
+    expect(await s.t.run((ctx) => ctx.db.query("vehicleSupplierReceivables").collect())).toEqual([]);
+    expect(await s.t.run((ctx) => ctx.db.query("accountingEvents").collect())).toEqual([]);
+    expect(await s.t.run((ctx) => ctx.db.query("journalEntries").collect())).toEqual([]);
+    expect(await s.t.run((ctx) => ctx.db.query("journalLines").collect())).toEqual([]);
   });
 
   test("a deal that still holds a reservation deposit is refused on this route, as before", async () => {

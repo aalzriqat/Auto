@@ -21,7 +21,7 @@
     },
     {
       "observable": "application.financedSalePlanVersion",
-      "value": 3
+      "value": 2
     },
     {
       "observable": "application.forwardDueMinor",
@@ -40,13 +40,15 @@
   ],
   "impl": {
     "file": "convex/financeCompanyForward.test.ts",
-    "testName": "finalize freezes v3: due = deposit + contribution, the receivable is the FULL approved amount"
+    "testName": "finalize freezes v2: due = deposit + contribution, the receivable is the FULL approved amount"
   },
   "matrixRow": "pilot-financed-v2-finalize",
-  "fingerprint": "d48f06cec14c7a8a231d72c26cc6de3bc0569d04ec8afa3fb6e25e0d089c7944",
+  "fingerprint": "448b64ea97c91e3c27ce4b2a6c0802ea1b76df76f61c810e919128625d807ca6",
   "domain": "money",
   "level": "backend",
-  "status": "active",
+  "status": "retired",
+  "retiredReason": "finalizeDeal now freezes plan v3 (server-derived consideration, SCRUM-411), so a new finalization can no longer produce v2. Superseded by financed-v3-finalize-freezes-forward-due-and-full-receivable; v2 on already-closed deals is covered by a seeded v2 case in the same test file.",
+  "retiredByRuling": "SCRUM-407#c21031",
   "source": {
     "hunter": "scripted",
     "runId": "scrum761-pilot-path",

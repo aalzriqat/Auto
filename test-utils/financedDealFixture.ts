@@ -208,6 +208,69 @@ export async function downgradeToV1(s: Pick<DealSeed, "t">, applicationId: Id<"f
   );
 }
 
+/**
+ * Creates the previous fiscal year's period, opens it and CLOSES it through the
+ * real mutations (checklist warnings acknowledged as the close dialog does), so
+ * a handover dated in it meets a genuinely CLOSED period rather than a missing
+ * one. Returns a handover timestamp inside that period.
+ */
+export async function closePriorYearPeriod(
+  s: Pick<DealSeed, "orgId" | "owner"> & { fiscalYear: number }
+): Promise<{ periodId: Id<"accountingPeriods">; handoverAt: number }> {
+  const year = s.fiscalYear - 1;
+  const periodId = await s.owner.as.mutation(api.accountingPeriods.create, {
+    orgId: s.orgId,
+    startDate: Date.UTC(year, 0, 1),
+    endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+    fiscalYear: year,
+    periodNumber: 1,
+    openImmediately: true,
+  });
+  const checklist = await s.owner.as.query(api.accountingPeriods.closeChecklist, { orgId: s.orgId, periodId });
+  await s.owner.as.mutation(api.accountingPeriods.close, {
+    orgId: s.orgId, periodId, acknowledgedWarnings: checklist.warnings,
+  });
+  return { periodId, handoverAt: Date.UTC(year, 5, 15) };
+}
+
+/** The `{ code, message }` a refused call carried, or null when it was accepted. */
+export async function refusalDataOf(promise: Promise<unknown>): Promise<{ code?: string; message: string } | null> {
+  try {
+    await promise;
+  } catch (error) {
+    const data = (error as { data?: unknown })?.data;
+    if (typeof data === "object" && data !== null) {
+      const { code, message } = data as { code?: unknown; message?: unknown };
+      return {
+        ...(typeof code === "string" ? { code } : {}),
+        message: typeof message === "string" ? message : refusalMessageOfError(error),
+      };
+    }
+    return { message: refusalMessageOfError(error) };
+  }
+  return null;
+}
+
+/**
+ * Rewrites a finalized deal as a CLOSED v2 deal (the plan version live before
+ * server-derived economics): the v2 marker and the v2 fingerprint prefix. Every
+ * other frozen figure of a non-direct deal is the same under v2 and v3, so the
+ * forward fields stay as finalize froze them.
+ */
+export async function downgradeToV2(s: Pick<DealSeed, "t">, applicationId: Id<"financeApplications">) {
+  await s.t.run(async (ctx) => {
+    const app = await ctx.db.get(applicationId);
+    const fingerprint = app?.financedSaleRecognitionFingerprint;
+    if (typeof fingerprint !== "string" || !fingerprint.startsWith("v3;")) {
+      throw new Error("downgradeToV2 expects a deal finalized under plan v3");
+    }
+    await ctx.db.patch(applicationId, {
+      financedSalePlanVersion: 2,
+      financedSaleRecognitionFingerprint: `v2;${fingerprint.slice(3)}`,
+    });
+  });
+}
+
 export function refusalMessageOfError(error: unknown): string {
   const data = (error as { data?: unknown })?.data;
   if (typeof data === "object" && data !== null && typeof (data as { message?: unknown }).message === "string") {

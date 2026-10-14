@@ -16,7 +16,7 @@
  * runtime and not production data.
  */
 import {
-  C, G, H, finalizeAsOwner, readyDeal, refusalMessageOf, seedFinancedDealership,
+  C, G, H, closePriorYearPeriod, finalizeAsOwner, readyDeal, refusalDataOf, refusalMessageOf, seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
@@ -155,22 +155,50 @@ describe("SCRUM-411 - a deal with no legal invoice closes from server-derived ec
     expect((await getApp(s, applicationId))?.legalInvoiceAmountMinor).toBe(G);
   });
 
-  test("a handover date with no open accounting period blocks the close before anything is written", async () => {
+  test("a handover dated in a CLOSED accounting period blocks the close before anything is written", async () => {
     const s = await seed("period1");
     const { applicationId } = await readyDeal(s);
-    // The seeded fiscal year is the only open period; hand the car over in the year before it.
-    const lastYear = Date.UTC(s.fiscalYear - 1, 5, 15);
-    await s.t.run((ctx) => ctx.db.patch(applicationId, { vehicleHandoverAt: lastYear }));
+    // A real prior-year period, opened and then closed through the accounting-period mutations.
+    const { periodId, handoverAt } = await closePriorYearPeriod(s);
+    expect((await s.t.run((ctx) => ctx.db.get(periodId)))?.status).toBe("CLOSED");
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { vehicleHandoverAt: handoverAt }));
 
-    const refusal = await refusalMessageOf(finalizeAsOwner(s, applicationId));
-    expect(refusal).toMatch(/accounting period/i);
+    const refusal = await refusalDataOf(finalizeAsOwner(s, applicationId));
+    expect(refusal).toEqual({
+      code: "RECOGNITION_PERIOD_NOT_OPEN",
+      message:
+        "The vehicle was handed over on a date that has no open accounting period, so the sale cannot be recognised. Open or reopen that period before finalizing.",
+    });
 
     const app = await getApp(s, applicationId);
     expect(app?.status).not.toBe("CLOSED");
     expect(app?.finalizedSaleId).toBeUndefined();
-    const sales = await s.t.run((ctx) => ctx.db.query("sales").collect());
-    expect(sales).toHaveLength(0);
+    expect(await s.t.run((ctx) => ctx.db.query("sales").collect())).toHaveLength(0);
+    expect(await s.t.run((ctx) => ctx.db.query("accountingEvents").collect())).toHaveLength(0);
+    expect(await s.t.run((ctx) => ctx.db.query("journalEntries").collect())).toHaveLength(0);
+    expect(await s.t.run((ctx) => ctx.db.query("journalLines").collect())).toHaveLength(0);
     expect(await netByAccount(s, "SALE_COMPLETED")).toEqual({});
+  });
+});
+
+describe("SCRUM-411 - replacing a recorded invoice is audited, whichever field moved", () => {
+  test("an issuer-only replacement writes an audit row whose before and after name the two issuers", async () => {
+    const s = await seed("auditIssuer", true);
+    const { applicationId } = await readyDeal(s);
+    const original = { issuedBy: "THIRD_PARTY" as const, issuerName: "Importer A" };
+    await record(s, applicationId, original);
+    // Same amount, number, date and recipient: only the issuer's identity changes.
+    const date = (await getApp(s, applicationId))?.legalInvoiceDate;
+    await record(s, applicationId, { ...original, issuerName: "Importer B", legalInvoiceDate: date });
+
+    const rows = await s.t.run((ctx) =>
+      ctx.db.query("financeApplicationOverrides").collect()
+    );
+    const audit = rows.filter((r) => r.applicationId === applicationId && r.field === "legalInvoiceAmountMinor");
+    expect(audit).toHaveLength(1);
+    expect(audit[0].previousValue).toContain("issued by THIRD_PARTY — Importer A");
+    expect(audit[0].newValue).toContain("issued by THIRD_PARTY — Importer B");
+    expect(audit[0].previousValue).not.toBe(audit[0].newValue);
   });
 });
 
