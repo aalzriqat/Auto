@@ -199,8 +199,10 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // SCRUM-350 G4: also re-pinned for one trusted-e2e step only — the swarm
   // accounting period setup (`playwright test` of one trusted spec, no secret,
   // no candidate path) — plus its report folders in the E2E report upload.
+  // The step is named for what it measures (opens the period, drains the
+  // pending outbox); it does not claim a later posting will settle.
   "browser-attack-swarm.yml":
-    "2726de53cfa1b3b7367fd78fa944ae62cef7b0f90d79ea41d1e8fa544acb0964",
+    "d3e24f70b3e4b91258044cc4d78194c48af1cf8d61f9746c41c0a1999cd12362",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":

@@ -1340,7 +1340,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
   // returned HARNESS_ERROR. The period is opened once, after trusted E2E and
   // before any attack worker, never by a worker and never by the bootstrap.
   describe("swarm accounting period setup (SCRUM-350 G4)", () => {
-    const SETUP = "Open the swarm accounting period and verify postings can settle";
+    const SETUP = "Open the swarm accounting period and drain its pending outbox";
     const FULL_SUITE = "Run full trusted E2E suite against exact candidate";
     const STOP = "Stop isolated trusted E2E candidate frontend";
     const SPEC = "playwright/tests/browser-swarm-accounting-period.spec.ts";

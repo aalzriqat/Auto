@@ -935,7 +935,7 @@ jobs:
       # before any attack worker, and refuse to continue until the backend
       # reports it open with nothing dated inside it still pending. The full
       # suite's report and results are left untouched: this run writes its own.
-      - name: Open the swarm accounting period and verify postings can settle
+      - name: Open the swarm accounting period and drain its pending outbox
         working-directory: trusted
         run: >-
           pnpm exec playwright test playwright/tests/browser-swarm-accounting-period.spec.ts

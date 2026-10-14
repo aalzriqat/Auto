@@ -44,6 +44,8 @@ interface Options {
   createRefusal?: string;
   /** The instant the backend and the setup both read as "now". */
   now?: number;
+  /** Runs on every client call, so a test can make round trips consume time. */
+  onCall?: () => void;
 }
 
 function setup(options: Options = {}) {
@@ -55,6 +57,7 @@ function setup(options: Options = {}) {
 
   const client = {
     query: async (ref: never, args: Record<string, unknown>) => {
+      options.onCall?.();
       const name = getFunctionName(ref);
       calls.push({ name, args });
       if (name === "accountingPeriods:list") return periods.map((period) => ({ ...period }));
@@ -74,6 +77,7 @@ function setup(options: Options = {}) {
       throw new Error(`unexpected query ${name}`);
     },
     mutation: async (ref: never, args: Record<string, unknown>) => {
+      options.onCall?.();
       const name = getFunctionName(ref);
       calls.push({ name, args });
       if (name === "accountingPeriods:create") {
@@ -260,6 +264,41 @@ describe("ensureSwarmAccountingPeriod", () => {
       const { run } = setup({ redrive: "stalls", pending: outside });
 
       await expect(run()).rejects.toThrow(/did not settle/i);
+    });
+
+    it("bounds the wait by elapsed time when every backend call consumes time, not by an attempt count", async () => {
+      // Fake time: each client call costs 400ms and each sleep advances the clock
+      // by what it was asked for. The 5s budget starts after the redrive (t=800ms):
+      //   check 1 = two queries -> t=1600, remaining 4200, sleep 1000 -> 2600
+      //   check 2 -> 3400, remaining 2400, sleep 1000 -> 4400
+      //   check 3 -> 5200, remaining 600, sleep clamped to 600 -> 5800
+      //   check 4 -> 6600, deadline passed -> refuse
+      // An attempt-count loop (ceil(5000 / 1000) = 5) would run a fifth check and
+      // never clamp the last sleep.
+      let elapsed = 0;
+      const sleeps: number[] = [];
+      const { run, calls } = setup({
+        redrive: "stalls",
+        pending: [{ _id: "evt_stuck", status: "PENDING", accountingDate: NOW - 1000 }],
+        onCall: () => {
+          elapsed += 400;
+        },
+      });
+
+      await expect(
+        run({
+          clock: () => elapsed,
+          sleep: async (ms) => {
+            sleeps.push(ms);
+            elapsed += ms;
+          },
+          timeoutMs: 5_000,
+          pollMs: 1_000,
+        }),
+      ).rejects.toThrow("did not settle within 5000ms (4 checks)");
+
+      expect(sleeps).toEqual([1_000, 1_000, 600]);
+      expect(calls.filter((call) => call.name === "accountingOutbox:listPending")).toHaveLength(4);
     });
   });
 });
