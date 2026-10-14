@@ -4,6 +4,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from "@playwri
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
+  APPROVER_AUTH_FILE,
   USER_AUTH_FILE,
   authenticatedConvexClient,
 } from "../../playwright/utils";
@@ -17,7 +18,12 @@ import {
   browserEgressLaunchOptions,
 } from "./browserEgressLaunch.mjs";
 import type { BrowserMissionEvidence } from "./browserAttackSwarm";
-import { createEconomicAttackHandlers } from "./browserSwarmEconomicAttacks";
+import { createBoundaryAttackHandlers } from "./browserSwarmBoundaryAttacks";
+import {
+  createEconomicAttackHandlers,
+  type MissionSeat,
+} from "./browserSwarmEconomicAttacks";
+import { createNetworkRecoveryHandler } from "./browserSwarmNetworkRecoveryAttack";
 
 type ArtifactWriter = {
   root: string;
@@ -32,9 +38,15 @@ function safeLeaf(value: string): string {
 
 function artifactPaths(
   context: BrowserMissionExecutionContext,
+  seat: MissionSeat = "primary",
 ): ArtifactWriter {
   const missionLeaf = safeLeaf(context.mission.id);
-  const root = context.worker.artifactRoot + "/" + missionLeaf;
+  // A second seat keeps its own trace and screenshot beside the primary's.
+  const root =
+    context.worker.artifactRoot +
+    "/" +
+    missionLeaf +
+    (seat === "primary" ? "" : "/" + seat);
   return {
     root,
     trace: root + "/trace.zip",
@@ -120,13 +132,14 @@ async function startMissionTrace(browserContext: BrowserContext): Promise<void> 
 
 async function openMissionBrowser(
   context: BrowserMissionExecutionContext,
+  seat: MissionSeat = "primary",
 ): Promise<{
   browser: Browser;
   browserContext: BrowserContext;
   page: Page;
   paths: ArtifactWriter;
 }> {
-  const paths = artifactPaths(context);
+  const paths = artifactPaths(context, seat);
   await ensureArtifactRoot(paths);
   throwIfMissionAborted(context.signal);
 
@@ -155,7 +168,7 @@ async function openMissionBrowser(
 
     const browserContext = await browser.newContext({
       baseURL: browserSwarmLocalBaseUrl(process.env),
-      storageState: USER_AUTH_FILE,
+      storageState: seat === "approver" ? APPROVER_AUTH_FILE : USER_AUTH_FILE,
       ...EGRESS_CONTEXT_OPTIONS,
     });
     throwIfMissionAborted(context.signal);
@@ -512,19 +525,25 @@ async function runUiBackendMismatchAttack(
   }
 }
 
+export const missionBrowserRuntime = {
+  open: openMissionBrowser,
+  finish: finishMissionBrowser,
+  rethrowAfterCleanup: rethrowAfterMissionCleanup,
+  writeBackendEvidence,
+  resolveOrgRoute,
+  authenticatedClient: authenticatedConvexClient,
+};
+
 export function createInitialBrowserAttackHandlers(): BrowserAttackHandlerRegistry {
   return {
     RTL_PARITY: runRtlParityAttack,
     UI_BACKEND_MISMATCH: runUiBackendMismatchAttack,
     // SCRUM-826: the economic attacks reuse this module's egress-contained
     // browser lifecycle and evidence writer; they never launch their own.
-    ...createEconomicAttackHandlers({
-      open: openMissionBrowser,
-      finish: finishMissionBrowser,
-      rethrowAfterCleanup: rethrowAfterMissionCleanup,
-      writeBackendEvidence,
-      resolveOrgRoute,
-      authenticatedClient: authenticatedConvexClient,
-    }),
+    ...createEconomicAttackHandlers(missionBrowserRuntime),
+    // SCRUM-350: boundary attacks (tenant, authorization, completeness,
+    // reversal) and network recovery, on the same contained lifecycle.
+    ...createBoundaryAttackHandlers(missionBrowserRuntime),
+    NETWORK_RECOVERY: createNetworkRecoveryHandler(missionBrowserRuntime),
   };
 }

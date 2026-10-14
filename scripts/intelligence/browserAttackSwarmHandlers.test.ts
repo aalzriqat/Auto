@@ -20,6 +20,7 @@ vi.mock("@playwright/test", () => ({
 
 vi.mock("../../playwright/utils", () => ({
   USER_AUTH_FILE: "playwright/.auth/user.json",
+  APPROVER_AUTH_FILE: "playwright/.auth/approver.json",
   authenticatedConvexClient: mocks.authenticatedConvexClient,
 }));
 
@@ -37,7 +38,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
-import { createInitialBrowserAttackHandlers } from "./browserAttackSwarmHandlers";
+import { createInitialBrowserAttackHandlers, missionBrowserRuntime } from "./browserAttackSwarmHandlers";
 
 type Scenario = {
   orgId: string;
@@ -412,6 +413,26 @@ describe("SCRUM-350 initial browser attack handlers", () => {
         storageState: expect.any(String),
       }),
     );
+  });
+
+  it("opens the primary seat as the OWNER and the approver seat as the MANAGER, each with its own artifacts (SCRUM-350)", async () => {
+    const fixture = makeBrowserFixture(defaultScenario());
+    const context = executionContext("TENANT_ESCAPE");
+
+    const primary = await missionBrowserRuntime.open(context);
+    const approver = await missionBrowserRuntime.open(context, "approver");
+
+    const states = (
+      fixture.browser.newContext.mock.calls as unknown as [{ storageState: string }][]
+    ).map(([options]) => options.storageState);
+    expect(states).toEqual(["playwright/.auth/user.json", "playwright/.auth/approver.json"]);
+    expect(primary.paths.root).not.toBe(approver.paths.root);
+    expect(approver.paths.root.startsWith(primary.paths.root + "/")).toBe(true);
+    expect(approver.paths.trace).not.toBe(primary.paths.trace);
+    // Every seat still goes through the egress proxy.
+    for (const [options] of mocks.chromiumLaunch.mock.calls) {
+      expect(options.proxy).toEqual({ server: "http://127.0.0.1:3129" });
+    }
   });
 
   it("refuses to launch a browser with saved QA state when the egress proxy is missing (SCRUM-784)", async () => {
