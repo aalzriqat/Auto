@@ -81,7 +81,7 @@ function realSleep(ms: number): Promise<void> {
 
 /** 17 uppercase characters, unique to the run, free of the letters a VIN forbids. */
 function syntheticVin(nonce: string): string {
-  return "CONS1" + createHash("sha256").update(nonce).digest("hex").slice(0, 12).toUpperCase();
+  return "CNSG1" + createHash("sha256").update(nonce).digest("hex").slice(0, 12).toUpperCase();
 }
 
 interface SaleLedger {
