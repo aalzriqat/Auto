@@ -320,14 +320,14 @@ export function checkLegalInvoiceEvidence(
     refusal: { code, message } as PlanRefusal & { code: LegalInvoiceRefusalCode },
   });
   if (!isWholeMinorAmount(amount) || amount <= 0) {
-    return fail("LEGAL_INVOICE_UNUSABLE", "The recorded legal invoice amount is not a usable figure. Record it again, or remove it - the invoice is optional evidence.");
+    return fail("LEGAL_INVOICE_UNUSABLE", "The recorded legal invoice amount is not a usable figure. Record the invoice again with the real document's amount; recording it again replaces the stored one.");
   }
   if (input.legalInvoiceIssuedTo !== "FINANCE_COMPANY") {
     return fail(
       "LEGAL_INVOICE_WRONG_RECIPIENT",
       `The financing company is the legal buyer on this deal, but the recorded invoice was issued to ${
         input.legalInvoiceIssuedTo?.toLowerCase().replace(/_/g, " ") ?? "nobody recorded"
-      }. Re-record the invoice with its real recipient.`
+      }. Record the invoice again with its real recipient; recording it again replaces the stored one.`
     );
   }
   if (input.approvedAmountMinor === undefined) {
@@ -339,20 +339,20 @@ export function checkLegalInvoiceEvidence(
   if (amount !== input.approvedAmountMinor) {
     return fail(
       "LEGAL_INVOICE_AMOUNT_MISMATCH",
-      "The recorded legal invoice does not match the amount the finance company approved. The company's invoice is for the approved amount only (the customer's own gap is not on it). Correct the invoice to the real document."
+      "The recorded legal invoice does not match the amount the finance company approved. The company's invoice is for the approved amount only (the customer's own gap is not on it). Record the invoice again with the real document's amount; recording it again replaces the stored one."
     );
   }
   if (input.vehicleIsConsigned) {
     if (input.legalInvoiceIssuedBy !== "THIRD_PARTY" || !input.legalInvoiceIssuerName?.trim()) {
       return fail(
         "LEGAL_INVOICE_WRONG_ISSUER",
-        "This car belongs to a supplier or importer, so the vehicle invoice to the finance company is theirs - the dealership issues none for its margin. Record who really issued it (the importer's or supplier's name), or leave the invoice out."
+        "This car belongs to a supplier or importer, so the vehicle invoice to the finance company is theirs - the dealership issues none for its margin. Record the invoice again with who really issued it (the importer's or supplier's name); recording it again replaces the stored one."
       );
     }
   } else if (input.legalInvoiceIssuedBy !== undefined && input.legalInvoiceIssuedBy !== "DEALERSHIP") {
     return fail(
       "LEGAL_INVOICE_WRONG_ISSUER",
-      "This car is dealer-owned stock, so the invoice to the finance company is the dealership's own. A third party's document cannot stand as the sale invoice here."
+      "This car is dealer-owned stock, so the invoice to the finance company is the dealership's own. A third party's document cannot stand as the sale invoice here. Record the invoice again as the dealership's own; recording it again replaces the stored one."
     );
   }
   return { ok: true, recorded: true };
@@ -667,6 +667,22 @@ export function planVersionOf(app: {
  */
 export function isForwardPlanVersion(version: number): version is 2 | 3 {
   return version === 2 || version === 3;
+}
+
+/**
+ * True for plan v3 alone: the sale consideration is the server's own A + R rather
+ * than a legal invoice's figure. The ONE predicate for that, so no reader spells
+ * it as a `>= 3` that a later version would silently satisfy.
+ */
+export function isServerDerivedPlanVersion(version: number): version is 3 {
+  return version === 3;
+}
+
+/** `isForwardPlanVersion` for a built plan: narrows the plan union to v2 | v3 and accepts an absent plan. */
+export function isForwardPlan<P extends { version: number }>(
+  plan: P | undefined
+): plan is Extract<P, { version: 2 | 3 }> {
+  return plan !== undefined && isForwardPlanVersion(plan.version);
 }
 
 export function buildFinancedSalePostingPlanV2(input: FinancedSalePlanV2Input): BuildPlanV2Result {

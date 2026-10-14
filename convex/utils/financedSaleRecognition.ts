@@ -8,6 +8,8 @@ import {
   buildFinancedSalePostingPlanV3,
   checkLegalInvoice,
   checkLegalInvoiceEvidence,
+  isServerDerivedPlanVersion,
+  planVersionOf,
   treatmentPosting,
   type FinancedSalePostingPlan,
   type FinancedSalePostingPlanV2,
@@ -115,6 +117,16 @@ export function costsGateApplies(
   return opts.mode === "MANUAL_FINANCE_COMPANY" || opts.mode === "LEASE" || opts.mode === "INTERNAL_INSTALLMENT";
 }
 
+/**
+ * The plan version recognition is asked under: a finalized deal's own (0 for a
+ * deal that closed before plans existed), else the version a deal finalized now
+ * would get. Never a blind default - a closed legacy deal must not read as v3.
+ */
+function recognitionPlanVersion(app: Doc<"financeApplications">): 0 | 1 | 2 | 3 {
+  const frozen = planVersionOf(app);
+  return frozen === 0 && app.finalizedSaleId === undefined ? 3 : frozen;
+}
+
 /** Deals this model covers. Everything else posts the way it always did. */
 export function financedSaleRecognitionApplies(
   app: Doc<"financeApplications">,
@@ -127,8 +139,9 @@ export function financedSaleRecognitionApplies(
   // as every other financed deal - K = A + R, the contribution D as contra-revenue,
   // dated on the handover. The finance company pays the SUPPLIER there, so the
   // plan opens no finance receivable; only v3 describes that route, and the
-  // legacy builders (1, 2) never did.
-  if (opts.settlesDirect) return hasFinancier && (opts.planVersion ?? 3) === 3;
+  // legacy builders (1, 2) never did - so a direct deal closed under one of
+  // them, or before plans existed, stays outside it.
+  if (opts.settlesDirect) return hasFinancier && (opts.planVersion ?? recognitionPlanVersion(app)) === 3;
   return hasFinancier;
 }
 
@@ -661,7 +674,7 @@ export async function evaluateClosingReadiness(
   // never left standing as evidence.
   if (!planCovered) {
     add("LEGAL_INVOICE_RECORDED", "NOT_APPLICABLE", null);
-  } else if (planVersion < 3) {
+  } else if (!isServerDerivedPlanVersion(planVersion)) {
     planOnly("LEGAL_INVOICE_RECORDED", () => {
       const invoice = checkLegalInvoice({
         legalInvoiceConsiderationMinor: app.legalInvoiceAmountMinor,
@@ -718,7 +731,7 @@ export async function evaluateClosingReadiness(
   // rather than discovered after the sale exists with its posting queued into a
   // period nobody can post to. A deal whose org has no chart posts nothing
   // anywhere, so there is no period to judge (NOT_APPLICABLE). APPENDED LAST.
-  if (!planCovered || planVersion < 3) {
+  if (!planCovered || !isServerDerivedPlanVersion(planVersion)) {
     add("RECOGNITION_PERIOD_OPEN", "NOT_APPLICABLE", null);
   } else if (app.vehicleHandoverAt === undefined) {
     add(
@@ -1157,7 +1170,7 @@ export function financedSaleRecognitionDate(
   // evidenced server fact - never on an invoice date a person typed. A deal with
   // no recorded handover cannot be dated, so it is refused rather than dated at
   // the wall clock (`finalizeDeal` requires the handover before it gets here).
-  if (planVersion >= 3) {
+  if (isServerDerivedPlanVersion(planVersion)) {
     const handoverAt = app.vehicleHandoverAt;
     if (handoverAt === undefined) {
       throw new ConvexError("The sale is recognised on the vehicle handover date, and the handover is not registered yet. Register it before finalizing.");

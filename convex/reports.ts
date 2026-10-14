@@ -157,7 +157,7 @@ export const getSalesAndProfitReport = query({
     // net revenue in any other currency is withheld, not converted).
     const orgCurrency = await getOrgCurrency(ctx, args.orgId);
 
-    const enrichedSales =salesInDateRange.map((sale) => {
+    const enrichedSales = salesInDateRange.map((sale) => {
       const vehicle = vehicleMap.get(sale.vehicleId);
       // SCRUM-389: a supplier-borne cost is the supplier's, owed back — not
       // an expense this sale carried.
@@ -794,7 +794,7 @@ export const getSalespersonPerformance = query({
     const verifiedFinancing = await verifiedFinancingApplicationSaleIds(ctx, salesInDateRange);
     const orgCurrency = await getOrgCurrency(ctx, args.orgId);
 
-    const result =Object.entries(salesBySalesperson).map(([userId, userSales]) => {
+    const result = Object.entries(salesBySalesperson).map(([userId, userSales]) => {
       let totalRevenue = 0;
       let totalProfit = 0;
       let totalGrossTransactionValue = 0;

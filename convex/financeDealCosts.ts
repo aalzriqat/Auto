@@ -4301,9 +4301,11 @@ export const recordLegalInvoice = mutation({
       number: string | undefined,
       date: number | undefined,
       issuedTo: string | undefined,
-      other: string | undefined
+      other: string | undefined,
+      by: string,
+      issuer: string | undefined
     ): string =>
-      `${amountMinor ?? "unrecorded"} (invoice ${number || "unrecorded"} dated ${date ?? "unrecorded"} to ${issuedTo ?? "unrecorded"}${other ? ` — ${other}` : ""})`;
+      `${amountMinor ?? "unrecorded"} (invoice ${number || "unrecorded"} dated ${date ?? "unrecorded"} to ${issuedTo ?? "unrecorded"}${other ? ` — ${other}` : ""}, issued by ${by}${issuer ? ` — ${issuer}` : ""})`;
 
     if (
       app.legalInvoiceAmountMinor !== undefined &&
@@ -4321,11 +4323,13 @@ export const recordLegalInvoice = mutation({
         field: "legalInvoiceAmountMinor",
         previousValue: describe(
           app.legalInvoiceAmountMinor, app.legalInvoiceNumber,
-          app.legalInvoiceDate, app.legalInvoiceIssuedTo, app.legalInvoiceIssuedToOther
+          app.legalInvoiceDate, app.legalInvoiceIssuedTo, app.legalInvoiceIssuedToOther,
+          app.legalInvoiceIssuedBy ?? "DEALERSHIP", app.legalInvoiceIssuerName
         ),
         newValue: describe(
           args.legalInvoiceAmountMinor, invoiceNumber,
-          args.legalInvoiceDate, args.issuedTo, nextIssuedToOther
+          args.legalInvoiceDate, args.issuedTo, nextIssuedToOther,
+          issuedBy, issuerName
         ),
         reason: "The recorded legal invoice was replaced.",
         changedBy: user._id,

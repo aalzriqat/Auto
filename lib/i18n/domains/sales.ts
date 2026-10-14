@@ -1335,14 +1335,6 @@ const dealOverviewMessages = defineBilingualMessages({
     "Today's date opens on the ledger at {time} (midnight UTC). Pick the date printed on the invoice; if it is today, save the invoice after that time.",
     "يبدأ تاريخ اليوم في الدفاتر الساعة {time} (منتصف الليل بتوقيت UTC). اختر التاريخ المطبوع على الفاتورة، وإن كان تاريخ اليوم فاحفظ الفاتورة بعد ذلك الوقت.",
   ],
-  LegalInvoiceDateDayChanged: [
-    "The day changed while this form was open. Pick the date printed on the invoice.",
-    "تغيّر اليوم بينما كان هذا النموذج مفتوحًا. اختر التاريخ المطبوع على الفاتورة.",
-  ],
-  LegalInvoiceDateNowOpen: [
-    "Today's date is now open on the ledger. Pick the date printed on the invoice.",
-    "أصبح تاريخ اليوم متاحًا الآن في الدفاتر. اختر التاريخ المطبوع على الفاتورة.",
-  ],
   LegalInvoiceIssuedTo: ["Issued to", "صادرة إلى"],
   LegalInvoiceIssuedToOther: ["Specify recipient", "تحديد المستلم"],
   SubmitLegalInvoice: ["Save Legal Invoice", "حفظ الفاتورة القانونية"],
@@ -1620,7 +1612,10 @@ const dealOverviewMessages = defineBilingualMessages({
     "The customer's first payment is not recorded yet.",
     "لم تُسجَّل الدفعة الأولى للعميل بعد.",
   ],
-  ClosingReason_WITHHELD_LEGAL_INVOICE_RECORDED: ["The legal invoice is not recorded yet.", "لم تُسجَّل الفاتورة القانونية بعد."],
+  ClosingReason_WITHHELD_LEGAL_INVOICE_RECORDED: [
+    "The legal invoice is missing, or the one recorded does not agree with this deal.",
+    "الفاتورة القانونية غير مسجَّلة، أو أن المسجَّلة منها لا تتفق مع هذه الصفقة.",
+  ],
   // SCRUM-420 — the financing figures are flagged for a reconciliation review.
   ClosingReason_FINANCING_RECONCILIATION_FLAGGED: [
     "This deal's financing figures are flagged for reconciliation review. Review them and record the review before closing.",

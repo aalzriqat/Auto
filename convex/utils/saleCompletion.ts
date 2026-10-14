@@ -39,6 +39,7 @@ import {
   planContraRevenueMinor,
   type FinancedSalePlanPayload,
 } from "../accounting/postingRules";
+import { isServerDerivedPlanVersion } from "./financedSalePostingPlan";
 import { isChartInitialized } from "../chartOfAccounts";
 import { toMinorUnits, fromMinorUnits, denominationOf, isValidMinorAmount, addMinor } from "./money";
 import { assertProfitApproved, saleRequiresMinimumProfit } from "./profitApproval";
@@ -1554,7 +1555,7 @@ async function applySaleCompletionSideEffects(
   // position and the recognized revenue below are measured from it - the same
   // figure the journal's commission is posted from.
   const serverConsiderationMinor =
-    args.financedSalePlan && args.financedSalePlan.version >= 3
+    args.financedSalePlan && isServerDerivedPlanVersion(args.financedSalePlan.version)
       ? planConsiderationMinor(args.financedSalePlan)
       : undefined;
   const supplierGrossReceiptMinor = settlesDirectToSupplier

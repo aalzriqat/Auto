@@ -41,7 +41,7 @@ import { assertOperatedDealMode } from "./utils/dealModes";
 import { assertQuoteEconomicsMatchFrozen } from "./utils/quoteEconomicsAnchor";
 import { completeSale } from "./utils/saleCompletion";
 import { requireCommercialVehicle } from "./utils/vehicleLiveness";
-import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
+import { isForwardPlan, isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal, forwardGateRefusal } from "./utils/financeCompanyForward";
 import {
   resolveFinancedSalePlan,
@@ -4974,8 +4974,9 @@ export const finalizeDeal = mutation({
         // withholds at the account that cost's own treatment names.
         //
         // `undefined` for every deal this model does not cover — a cash sale, a
-        // deal with no named financier, the direct route — and those post exactly
-        // as they always have. When it DOES cover a deal and the plan cannot be
+        // deal with no named financier — and those post exactly as they always
+        // have. The direct route IS covered, by plan v3 only (no finance
+        // receivable opens: the company pays the supplier). When it DOES cover a deal and the plan cannot be
         // derived, it throws here rather than returning nothing, so there is no
         // path where a missing plan quietly falls back to the old posting.
         const financedSalePlan = await resolveFinancedSalePlan(ctx, app, {
@@ -5031,7 +5032,7 @@ export const finalizeDeal = mutation({
                 depositLiabilityAppliedMinor:
                   financedSalePlan.depositLiabilityAppliedMinor,
                 // v2/v3 (SCRUM-435): H and C are owed onward to the company.
-                ...(financedSalePlan.version === 2 || financedSalePlan.version === 3
+                ...(isForwardPlan(financedSalePlan)
                   ? {
                       forwardDepositMinor: financedSalePlan.forwardDepositMinor,
                       forwardContributionMinor: financedSalePlan.forwardContributionMinor,
@@ -5052,9 +5053,11 @@ export const finalizeDeal = mutation({
           // v2/v3. `completeSale` applies it to a dealer-owned car alone and
           // freezes it onto the sale row.
           commissionBase:
-            financedSalePlan && (financedSalePlan.version === 2 || financedSalePlan.version === 3)
+            isForwardPlan(financedSalePlan)
               ? {
-                  approvedMinor: financedSalePlan.financeCompanyReceivableMinor,
+                  // G in full under v2, A under v3. Not `financeCompanyReceivableMinor`,
+                  // which the direct route zeroes: the company still approved A there.
+                  approvedMinor: financedSalePlan.grossDealerSettlementMinor,
                   contributionMinor: financedSalePlan.forwardContributionMinor,
                   currency: financedSalePlan.currency,
                 }
@@ -5160,7 +5163,7 @@ export const finalizeDeal = mutation({
                 financedSaleNetReceivableMinor:
                   financedSalePlan.financeCompanyReceivableMinor,
                 // SCRUM-435: frozen forward due (H + C) and its split.
-                ...(financedSalePlan.version === 2 || financedSalePlan.version === 3
+                ...(isForwardPlan(financedSalePlan)
                   ? {
                       financedSalePlanVersion: financedSalePlan.version,
                       financeCompanyForwardDueMinor: financedSalePlan.forwardDueMinor,
@@ -5171,7 +5174,7 @@ export const finalizeDeal = mutation({
                 // SCRUM-27: a manual deal's dealership contribution is derived
                 // at this moment (S minus the deposits held) and frozen here, so
                 // the cockpit and forward readers see the figure that posted.
-                ...(!app.companyId && (financedSalePlan.version === 2 || financedSalePlan.version === 3)
+                ...(!app.companyId && isForwardPlan(financedSalePlan)
                   ? {
                       dealerContributionMinor: financedSalePlan.forwardContributionMinor,
                       economicsRevision: (app.economicsRevision ?? 0) + 1,

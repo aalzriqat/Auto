@@ -1,7 +1,11 @@
 import { ConvexError } from "convex/values";
 import { SYSTEM_KEYS, SystemKey } from "../utils/defaultChart";
 import { CUSTODY_CLEARING_KEY, custodyFeeExpenseKey } from "../utils/dealCustodyPosting";
-import type { FeeAccountingTreatment } from "../utils/financedSalePostingPlan";
+import {
+  isForwardPlanVersion,
+  isServerDerivedPlanVersion,
+  type FeeAccountingTreatment,
+} from "../utils/financedSalePostingPlan";
 import type { Id } from "../_generated/dataModel";
 
 /**
@@ -355,7 +359,7 @@ export interface FinancedSalePlanPayload {
  * rather than reading the other version's field or posting a NaN line.
  */
 export function planConsiderationMinor(plan: Pick<FinancedSalePlanPayload, "version" | "legalInvoiceConsiderationMinor" | "considerationMinor">): number {
-  const amount = plan.version >= 3 ? plan.considerationMinor : plan.legalInvoiceConsiderationMinor;
+  const amount = isServerDerivedPlanVersion(plan.version) ? plan.considerationMinor : plan.legalInvoiceConsiderationMinor;
   if (amount === undefined || !Number.isSafeInteger(amount) || amount < 0) {
     throw new ConvexError(
       `A financed sale plan (version ${plan.version}) carries no usable consideration, so its revenue cannot be posted. Re-derive the deal's settlement before posting it.`
@@ -367,15 +371,16 @@ export function planConsiderationMinor(plan: Pick<FinancedSalePlanPayload, "vers
 /**
  * The contra-revenue a plan posts against the vehicle leg: the showroom's
  * contribution C (v2/v3) plus every classified component whose treatment posts to
- * SALES_CONSIDERATION_REDUCTIONS, net of any that credit it. This is the SAME
- * set of lines `settlementFundingLines` writes, so `consideration - this` is the
- * revenue the ledger nets - the figure a sale freezes for the reports to read.
+ * SALES_CONSIDERATION_REDUCTIONS, net of any that credit it. Read off the lines
+ * `settlementFundingLines` itself writes - not re-selected here - so
+ * `consideration - this` is the revenue the ledger nets, the figure a sale
+ * freezes for the reports to read.
  */
-export function planContraRevenueMinor(plan: Pick<FinancedSalePlanPayload, "version" | "forwardContributionMinor" | "components">): number {
-  let contra = plan.version === 2 || plan.version === 3 ? (plan.forwardContributionMinor ?? 0) : 0;
-  for (const component of plan.components) {
-    if (component.systemKey === SYSTEM_KEYS.SALES_CONSIDERATION_REDUCTIONS) {
-      contra += component.side === "DEBIT" ? component.amountMinor : -component.amountMinor;
+export function planContraRevenueMinor(plan: FinancedSalePlanPayload): number {
+  let contra = 0;
+  for (const funded of settlementFundingLines(plan, {}).lines) {
+    if (funded.accountSystemKey === SYSTEM_KEYS.SALES_CONSIDERATION_REDUCTIONS) {
+      contra += funded.debitMinor - funded.creditMinor;
     }
   }
   return contra;
@@ -958,7 +963,7 @@ function settlementFundingLines(
   // ONWARD to the finance company, which transfers the full approved amount. H
   // is the debit above (liability released) against AP-Finance; C is
   // contra-revenue against AP-Finance. The forward payment later clears 2220.
-  if (plan.version === 2 || plan.version === 3) {
+  if (isForwardPlanVersion(plan.version)) {
     const forwardDeposit = plan.forwardDepositMinor ?? 0;
     const forwardContribution = plan.forwardContributionMinor ?? 0;
     if (forwardDeposit > 0) {
@@ -1012,7 +1017,7 @@ function settlementFundingLines(
     lines,
     customerReceivableMinor: plan.customerReceivableMinor,
     considerationMinor: planConsiderationMinor(plan),
-    serverDerivedConsideration: plan.version >= 3,
+    serverDerivedConsideration: isServerDerivedPlanVersion(plan.version),
     financeReceivableMinor: plan.financeCompanyReceivableMinor,
     depositAppliedMinor: plan.depositLiabilityAppliedMinor,
   };
