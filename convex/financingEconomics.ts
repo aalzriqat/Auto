@@ -406,7 +406,10 @@ async function recomputeAndPatchEconomics(
         `${snapshot.companyName} keeps the customer's payment rather than passing it through, and how much reached them has not been recorded. The expected dealer remittance cannot be determined until it is.`
       );
   const reconcileReason = settlementReasons.length > 0
-    ? settlementReasons.reduce(appendReconciliationReason, remittanceReason)
+    ? settlementReasons.reduce(
+        (existing, addition) => appendReconciliationReason(existing, addition),
+        remittanceReason
+      )
     : remittanceIsKnowable
       ? undefined
       : remittanceReason;
