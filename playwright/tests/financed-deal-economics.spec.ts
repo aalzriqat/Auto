@@ -15,6 +15,7 @@ import {
   recordApprovedAmount,
   recordQuotation,
 } from "../fixtures/financedDeal";
+import { displayedAmount } from "../fixtures/displayedAmount";
 
 /**
  * The financed deal's economics, recorded by the two people the product
@@ -141,9 +142,11 @@ test.describe("recording a financed deal's economics through the interface", () 
         await expect(approvalDialog.getByText(`${PURCHASE_LTV}%`)).toBeVisible();
       });
 
-      // --- the derived economics, worked out by the server -----------------
-      // 13,000 approved - 3,000 customer first payment = 10,000 funded (within 90% cap of 11,700),
-      // leaving 1,300 unfinanced. Asserted as figures rather than as "a panel appeared":
+      // --- the derived economics (funded from the server; not financed = approved − funded) ---
+      // 13,000 approved - 3,000 customer first payment = 10,000 funded (within 90% cap of 11,700).
+      // The first payment exceeds the 1,300 unfinanced slice, so the company lends less and
+      // 3,000 is not financed: 10,000 + 3,000 = 13,000 (SCRUM-613 F-19, owner option أ).
+      // Asserted as figures rather than as "a panel appeared":
       // a split that renders but does not add up is the failure this is here to catch.
 
       // The approval moves the live step to handover, which folds the decision
@@ -151,8 +154,12 @@ test.describe("recording a financed deal's economics through the interface", () 
       // the way an operator would before reading the split.
       await openDealDetails(managerPage);
       await expect(managerPage.getByText("What that leaves")).toBeVisible();
-      await expect(managerPage.getByText(/10,000/).first()).toBeVisible();
-      await expect(managerPage.getByText(/1,300/).first()).toBeVisible();
+      // Each row's whole value, figure and currency marker: a page-wide match could be satisfied by
+      // another figure, and a partial match by "-3,000" or "3,000.01".
+      await expect(managerPage.locator('[data-row-kind="funded"] dd')).toHaveText(displayedAmount("10,000"));
+      const notFinanced = managerPage.locator('[data-row-kind="unfinanced"] dd');
+      await expect(notFinanced).toHaveText(displayedAmount("3,000"));
+      await expect(notFinanced).not.toHaveText(displayedAmount("1,300"));
       // --- handover, expected payment, and close — FROM THE COCKPIT ---------
       // SCRUM-78. This tail used to be driven through
       // `Finance Applications → row → Review`, which is exactly why the suite
