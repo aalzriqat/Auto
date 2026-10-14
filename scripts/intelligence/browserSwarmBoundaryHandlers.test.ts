@@ -49,6 +49,8 @@ interface Faults {
   /** The Team screen offers no Change Role control on the OWNER row. */
   teamNoControl?: boolean;
   teamUnreachable?: boolean;
+  /** The Team screen's role change fails for a reason that is not an authorization refusal. */
+  teamError?: "rateLimited" | "validation" | "transport";
   // COMPLETENESS_BOUNDARY
   ui?: "all" | "truncated" | "partial" | "claimUnreadable" | "racy";
   rateLimitCreateOnce?: boolean;
@@ -68,7 +70,9 @@ interface Faults {
   /** The repeated reversal is refused as "Expense not found" yet leaves an unlinked reversal behind. */
   strayOnReplay?: boolean;
   /** The seeded expense is posted as something other than a balanced entry of its amount. */
-  posting?: "unbalanced" | "zero" | "wrongAmount";
+  posting?: "unbalanced" | "zero" | "wrongAmount" | "wrongCurrency";
+  /** What the organization's settings say its currency is; "missing" returns no settings at all. */
+  settings?: "missing" | "usd";
   uiNoRow?: boolean;
   /** Clicking Delete Permanently does nothing, so the reversal form never appears. */
   uiNoFlip?: boolean;
@@ -249,6 +253,10 @@ class World {
         return this.page(rows, a.paginationOpts as { numItems: number; cursor: string | null });
       }
       case "memberships:updateRole": {
+        if (a.viaUi === true && this.faults.teamError) {
+          if (this.faults.teamError === "transport") throw new Error("Failed to fetch");
+          throw new ConvexError(this.faults.teamError === "rateLimited" ? "Rate limit exceeded. Try again in 3s" : "Invalid role selection.");
+        }
         this.member(actor, orgId);
         const touchesOwner =
           this.membershipRole.get(String(a.membershipId)) === "r-owner" || a.newRoleId === "r-owner";
@@ -273,20 +281,27 @@ class World {
         if (!this.isOwner(actor) && !this.faults.roleUpdateUnguarded) throw new ConvexError(OWNER_ONLY);
         this.rolePermissions[String(a.roleId)] = a.permissions as string[];
         return null;
+      case "orgSettings:get":
+        this.member(actor, orgId);
+        if (this.faults.settings === "missing") return null;
+        return { orgId, currency: this.faults.settings === "usd" ? "USD" : "JOD" };
       case "expenses:create": {
         const id = this.id("exp");
         this.expenses.set(id, { title: String(a.title), amount: Number(a.amount) });
         if (!this.faults.neverPosts) {
           const eventId = this.id("ev");
           const journalId = this.id("je");
-          const seeded = Math.round(Number(a.amount) * 1000);
           const { posting } = this.faults;
+          const usd = posting === "wrongCurrency";
+          const seeded = Math.round(Number(a.amount) * (usd ? 100 : 1000));
           const debit = posting === "zero" ? 0 : posting === "wrongAmount" ? Math.round(seeded / 10) : seeded;
           const credit = posting === "unbalanced" ? seeded - 1000 : debit;
+          const currency = usd ? "USD" : "JOD";
+          const scale = usd ? 2 : 3;
           this.events.push({ _id: eventId, eventType: "EXPENSE_POSTED", status: "POSTED", journalEntryId: journalId, sourceId: id });
           this.journals.set(journalId, [
-            { accountId: "acc-expense", debitMinor: debit, creditMinor: 0, scale: 3, currency: "JOD" },
-            { accountId: "acc-cash", debitMinor: 0, creditMinor: credit, scale: 3, currency: "JOD" },
+            { accountId: "acc-expense", debitMinor: debit, creditMinor: 0, scale, currency },
+            { accountId: "acc-cash", debitMinor: 0, creditMinor: credit, scale, currency },
           ]);
         }
         return id;
@@ -386,7 +401,8 @@ class FakePage {
   // Team screen: the Change Role dialog.
   private roleTarget: string | null = null;
   private pickedRole: string | null = null;
-  private errorToast = false;
+  /** sonner toasts as the product raises them: access refusals are untyped, other failures are errors. */
+  private toast: { type: "default" | "error"; title: string; description: string } | null = null;
 
   constructor(
     readonly world: World,
@@ -484,8 +500,12 @@ class FakePage {
         viaUi: true,
       });
       this.closeDialogs();
-    } catch {
-      this.errorToast = true;
+    } catch (error) {
+      const text = error instanceof ConvexError ? String(error.data) : (error as Error).message;
+      // components/ui/sonner.tsx rewrites an access refusal into a calm, typeless toast.
+      this.toast = /only the organization owner/i.test(text)
+        ? { type: "default", title: "Access restricted", description: "Only the organization owner can perform this action." }
+        : { type: "error", title: text, description: "" };
     }
   }
 
@@ -575,7 +595,19 @@ class FakePage {
     const row = /^#row-(.+)$/.exec(selector);
     if (row) return this.expenseRow(row[1]!);
     if (selector === "tr") return { filter: ({ hasText }: { hasText: string }) => this.teamRow(hasText) };
-    if (selector.includes("sonner")) return { first: () => ({ isVisible: async () => this.errorToast }) };
+    if (selector.includes("sonner")) {
+      // Honour the selector: "[data-type='error']" needs a typed error toast, ":not([data-type='success'])" any other.
+      const wantsError = selector.includes("[data-type='error']");
+      const toast = wantsError && this.toast?.type !== "error" ? null : this.toast;
+      return {
+        first: () => ({
+          isVisible: async () => toast !== null,
+          // Like the DOM: textContent runs the title and description together, innerText separates them.
+          textContent: async () => (toast ? toast.title + toast.description : null),
+          innerText: async () => (toast ? [toast.title, toast.description].filter(Boolean).join("\n") : ""),
+        }),
+      };
+    }
     return {
       evaluateAll: async (fn: (elements: { id: string }[]) => string[]) => {
         const rows = fn(this.uiRows().map((id) => ({ id: "row-" + id })));
@@ -821,6 +853,33 @@ describe("SCRUM-350 AUTHORIZATION_ABUSE handler", () => {
     expect(result.oracle.summary).toMatch(/changed/);
   });
 
+  it("a Team screen refusal for the owner-only guard is recorded as the authorization refusal", async () => {
+    const h = auth();
+    await h.run();
+    expect(h.evidence[0].teamScreen).toMatchObject({
+      answer: "refused",
+      message: expect.stringMatching(/Access restricted\nOnly the organization owner/),
+    });
+  });
+
+  const teamErrors: [string, NonNullable<Faults["teamError"]>][] = [
+    ["a rate limit", "rateLimited"],
+    ["a validation failure", "validation"],
+    ["a network failure", "transport"],
+  ];
+  for (const [name, teamError] of teamErrors) {
+    it(`a Team screen error toast for ${name} is unjudged, never an authorization refusal`, async () => {
+      const h = auth({ teamError });
+      const error: unknown = await h.run().then(
+        () => null,
+        (thrown: unknown) => thrown,
+      );
+      expect(error).toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
+      expect((error as Error).message).toMatch(/not an authorization refusal/);
+      expect(h.evidence.at(-1)?.teamScreen).toMatchObject({ answer: "unclassified" });
+    });
+  }
+
   it("a Team screen that cannot be driven is unjudged, never a pass", async () => {
     const error: unknown = await auth({ teamUnreachable: true })
       .run()
@@ -936,6 +995,16 @@ describe("SCRUM-350 LIFECYCLE_REVERSAL handler", () => {
     ["an unbalanced posting that its exact mirror reverses", { posting: "unbalanced" }, /posted journal is not balanced/],
     ["a zero posting that its exact mirror reverses", { posting: "zero" }, /zero posting/],
     ["a balanced posting of the wrong amount", { posting: "wrongAmount" }, /minor units but the seeded expense is 53000/],
+    [
+      "a consistent 53 USD posting and mirror in a JOD organization",
+      { posting: "wrongCurrency" },
+      /posted in USD but the organization's currency is JOD/,
+    ],
+    [
+      "a JOD posting in an organization whose settings say USD",
+      { settings: "usd" },
+      /posted in JOD but the organization's currency is USD/,
+    ],
   ];
   for (const [name, faults, message] of breaches) {
     it(`${name} is a breach`, async () => {
@@ -963,6 +1032,23 @@ describe("SCRUM-350 LIFECYCLE_REVERSAL handler", () => {
       );
     });
   }
+
+  it("an organization currency that cannot be read independently is unjudged, never a pass", async () => {
+    const h = lifecycle({ settings: "missing" });
+    const error: unknown = await h.run().then(
+      () => null,
+      (thrown: unknown) => thrown,
+    );
+    expect(error).toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
+    expect((error as Error).message).toMatch(/organization's currency was not readable/);
+  });
+
+  it("reads the organization's currency before the expense exists", async () => {
+    const h = lifecycle();
+    await h.run();
+    expect(h.evidence[0].expectedCurrency).toBe("JOD");
+    expect(h.world.queryLog.indexOf("owner:orgSettings:get")).toBeLessThan(h.world.queryLog.indexOf("owner:expenses:create"));
+  });
 
   it("a repeated reversal that is accepted is unjudged: the pass would claim a refusal that never happened", async () => {
     const h = lifecycle({ replayAccepted: true });

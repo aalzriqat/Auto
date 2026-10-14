@@ -266,7 +266,7 @@ describe("evaluateListCompleteness", () => {
 
 describe("evaluateReversalReconciliation", () => {
   const reconcile = (input: { posted: LedgerSnapshot; reversed: LedgerSnapshot; replayed: LedgerSnapshot }) =>
-    evaluateReversalReconciliation({ ...input, seededAmount: 53 });
+    evaluateReversalReconciliation({ ...input, seededAmount: 53, expectedCurrency: "JOD" });
   const originalLines = [
     { accountId: "acc-expense", debitMinor: 53_000, creditMinor: 0, scale: 3, currency: "JOD" },
     { accountId: "acc-cash", debitMinor: 0, creditMinor: 53_000, scale: 3, currency: "JOD" },
@@ -423,13 +423,17 @@ describe("evaluateReversalReconciliation", () => {
   });
 
   describe("the posting itself must be a real, balanced effect of the seeded amount", () => {
-    const run = (lines: readonly (typeof originalLines)[number][], mirror: readonly (typeof originalLines)[number][]) => {
+    const run = (
+      lines: readonly (typeof originalLines)[number][],
+      mirror: readonly (typeof originalLines)[number][],
+      expectedCurrency: string | null = "JOD",
+    ) => {
       const post: LedgerSnapshot = { events: [postedEvent], journals: { "je-1": lines } };
       const rev: LedgerSnapshot = {
         events: [{ ...postedEvent, status: "REVERSED", reversedByEventId: "ev-2" }, reversalEvent],
         journals: { "je-1": lines, "je-2": mirror },
       };
-      return evaluateReversalReconciliation({ posted: post, reversed: rev, replayed: rev, seededAmount: 53 });
+      return evaluateReversalReconciliation({ posted: post, reversed: rev, replayed: rev, seededAmount: 53, expectedCurrency });
     };
     const mirrorOf = (lines: typeof originalLines) =>
       lines.map((line) => ({ ...line, debitMinor: line.creditMinor, creditMinor: line.debitMinor }));
@@ -476,11 +480,29 @@ describe("evaluateReversalReconciliation", () => {
       }
     });
 
-    it("cannot judge a currency the product does not support", () => {
-      const lines = originalLines.map((line) => ({ ...line, currency: "XXX" }));
-      const verdict = run(lines, mirrorOf(lines));
+    it("proves a balanced posting in another currency than the organization's, even with its exact mirror", () => {
+      // 53 USD at scale 2 is a perfectly consistent entry: only the organization's own currency convicts it.
+      const lines = originalLines.map((line) => ({ ...line, debitMinor: line.debitMinor && 5_300, creditMinor: line.creditMinor && 5_300, scale: 2, currency: "USD" }));
+      const verdict = run(lines, mirrorOf(lines), "JOD");
+      expect(verdict.violations.join(" | ")).toMatch(/posted in USD but the organization's currency is JOD/);
+    });
+
+    it("judges the same 53 USD posting clean when USD is the organization's currency", () => {
+      const lines = originalLines.map((line) => ({ ...line, debitMinor: line.debitMinor && 5_300, creditMinor: line.creditMinor && 5_300, scale: 2, currency: "USD" }));
+      expect(run(lines, mirrorOf(lines), "USD")).toEqual({ violations: [], unjudged: [] });
+    });
+
+    it("cannot judge when the organization's currency could not be read independently", () => {
+      const verdict = run(originalLines, mirrorOf(originalLines), null);
       expect(verdict.violations).toEqual([]);
-      expect(verdict.unjudged.join(" | ")).toMatch(/currency/);
+      expect(verdict.unjudged.join(" | ")).toMatch(/organization's currency was not readable/);
+    });
+
+    it("cannot judge when the organization's currency is not one the product supports", () => {
+      const lines = originalLines.map((line) => ({ ...line, currency: "XXX" }));
+      const verdict = run(lines, mirrorOf(lines), "XXX");
+      expect(verdict.violations).toEqual([]);
+      expect(verdict.unjudged.join(" | ")).toMatch(/currency XXX is not one the product supports/);
     });
 
     it("cannot judge a posting whose lines are not two or more", () => {

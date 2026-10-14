@@ -373,15 +373,17 @@ async function readAuthorityState(
 /**
  * The manager asks the Team screen to move the OWNER onto the manager's own
  * role. `control: "withheld"` means the screen offers no such button; otherwise
- * the screen's own answer is awaited (the dialog closing is acceptance, the
- * error toast refusal) before anything is read back, and silence is inconclusive.
+ * the screen's own answer is awaited (the dialog closing is acceptance) before
+ * anything is read back, and silence is inconclusive. A toast is a refusal only
+ * when its text is the product's authorization refusal; a rate limit,
+ * validation or network failure is "unclassified" and proves nothing.
  */
 async function demoteOwnerOnTeamScreen(
   env: BoundaryMissionEnv,
   options: Required<BoundaryAttackOptions>,
   ownerEmail: string,
   ownRoleId: string,
-): Promise<{ control: "withheld" | "attempted"; answer?: "accepted" | "refused" }> {
+): Promise<{ control: "withheld" | "attempted"; answer?: "accepted" | "refused" | "unclassified"; message?: string }> {
   const { page, signal, orgId } = env;
   await untilAborted(signal, page.goto(`/${orgId}/team`, { waitUntil: "domcontentloaded" }));
   const ownerRow = page.locator("tr").filter({ hasText: ownerEmail });
@@ -396,11 +398,17 @@ async function demoteOwnerOnTeamScreen(
   await untilAborted(signal, dialog.getByTestId(`searchable-option-${ownRoleId}`).click(UI_STEP));
   await untilAborted(signal, dialog.getByRole("button", { name: "Save", exact: true }).click(UI_STEP));
 
-  const errorToast = page.locator("[data-sonner-toast][data-type='error']").first();
+  // An access refusal is shown as an untyped "Access restricted" toast, not an error one
+  // (components/ui/sonner.tsx), so any toast but a success counts as the screen's answer.
+  const answerToast = page.locator("[data-sonner-toast]:not([data-type='success'])").first();
   const deadline = Date.now() + options.uiSettleMs;
   for (;;) {
     if (!(await untilAborted(signal, dialog.isVisible()))) return { control: "attempted", answer: "accepted" };
-    if (await untilAborted(signal, errorToast.isVisible())) return { control: "attempted", answer: "refused" };
+    if (await untilAborted(signal, answerToast.isVisible())) {
+      // innerText keeps the title and description apart, as the refusal pattern needs.
+      const message = (await untilAborted(signal, answerToast.innerText(UI_STEP))).trim().slice(0, 200);
+      return { control: "attempted", answer: AUTHORIZATION_REFUSAL.test(message) ? "refused" : "unclassified", message };
+    }
     if (Date.now() >= deadline) return inconclusive("the Team screen gave no answer to the role change");
     await untilAborted(signal, options.sleep(options.pollMs));
   }
@@ -417,7 +425,8 @@ async function demoteOwnerOnTeamScreen(
  * unchanged afterwards. The manager then repeats the most sensitive of those,
  * demoting the OWNER, through the Team screen's own Change Role dialog; the
  * screen may withhold the control (recorded) or offer it, in which case the
- * backend must refuse and the state must still be unchanged.
+ * backend must refuse with its authorization refusal (any other toast is
+ * unjudged) and the state must still be unchanged.
  *
  * The browser leg is that one screen. The other three attacks are direct
  * backend calls from the manager's authenticated session, not clicks: this is
@@ -504,6 +513,8 @@ function authorizationAbuseSpec(options: Required<BoundaryAttackOptions>) {
           detail.teamScreen = team;
           if (team.answer === "accepted") {
             env.judge({ violations: ["the Team screen's role change (demote the OWNER) was accepted"], unjudged: [] });
+          } else if (team.answer === "unclassified") {
+            env.unjudged(`the Team screen's role change failed with "${team.message}", which is not an authorization refusal`);
           }
         } catch (error) {
           if (signal.aborted) throw error;
@@ -753,9 +764,11 @@ async function reverseOnExpenseScreen(page: Page, signal: AbortSignal, expenseId
  * the ledger byte-identical. It then performs the canonical reversal through the
  * expense screen's own Delete → Reverse & Delete flow, and asks for it a second
  * time directly. The ledger must hold a real, balanced posting of the seeded
- * amount, keep the original posted event and its journal untouched, hold
- * exactly one linked reversal event whose journal is the exact mirror of the
- * original, and acquire no further reversal or posting event of any kind.
+ * amount in the organization's own currency (read independently from its
+ * settings; unreadable settings leave the mission unjudged), keep the original
+ * posted event and its journal untouched, hold exactly one linked reversal event
+ * whose journal is the exact mirror of the original, and acquire no further
+ * reversal or posting event of any kind.
  *
  * The only legitimate refusal of the repeat is the product's own "Expense not
  * found" (the first reversal soft-deletes the expense). A rate limit, a missing
@@ -772,13 +785,19 @@ function lifecycleReversalSpec(options: Required<BoundaryAttackOptions>) {
     seat: "primary" as const,
     oracles: ["REVERSAL_RECONCILIATION" as const],
     passSummary:
-      "A posted expense could not be edited or deleted, its balanced ledger posting stayed untouched through a canonical reversal made on the expense screen, the ledger held exactly one linked reversal that mirrors the original, and asking again was refused as 'Expense not found' and created no further ledger event.",
+      "A posted expense could not be edited or deleted, its balanced ledger posting in the organization's currency stayed untouched through a canonical reversal made on the expense screen, the ledger held exactly one linked reversal that mirrors the original, and asking again was refused as 'Expense not found' and created no further ledger event.",
     breachSummary: "Posted financial history was not preserved by its reversal",
     async run(env: BoundaryMissionEnv): Promise<void> {
       const { client, orgId, nonce, signal, detail, page } = env;
       const org = orgId as Id<"organizations">;
 
       await untilAborted(signal, gotoExpenses(page, orgId));
+
+      // The posting's denomination is the organization's own, read before anything is
+      // seeded. No settings (or none this seat may read) leaves it unknown, never assumed.
+      const settings: unknown = await untilAborted(signal, client.query(api.orgSettings.get, { orgId: org }));
+      const expectedCurrency = isRecord(settings) && typeof settings.currency === "string" ? settings.currency : null;
+      detail.expectedCurrency = expectedCurrency;
 
       const amount = 53;
       const expenseId = String(
@@ -850,7 +869,7 @@ function lifecycleReversalSpec(options: Required<BoundaryAttackOptions>) {
       const replayed = await readSettledLedger(env, options, expenseId);
 
       detail.ledger = { posted, reversed, replayed };
-      env.judge(evaluateReversalReconciliation({ posted, reversed, replayed, seededAmount: amount }));
+      env.judge(evaluateReversalReconciliation({ posted, reversed, replayed, seededAmount: amount, expectedCurrency }));
     },
   };
 }

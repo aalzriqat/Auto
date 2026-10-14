@@ -343,7 +343,18 @@ const isMinorUnits = (value: unknown): value is number =>
  * equal to credits, and the seeded effect. Without this an unbalanced or zero
  * posting and its exact mirror would reconcile.
  */
-function judgePosting(lines: readonly LedgerLine[], seededAmount: number): Judgement {
+function judgePosting(lines: readonly LedgerLine[], seededAmount: number, expectedCurrency: string | null): Judgement {
+  // The denomination comes from the organization, never from the journal being judged.
+  if (expectedCurrency === null) {
+    return {
+      violations: [],
+      unjudged: ["the organization's currency was not readable independently, so the posting's denomination could not be judged"],
+    };
+  }
+  const denomination = denominationOf(expectedCurrency);
+  if (denomination === null) {
+    return { violations: [], unjudged: [`the organization's currency ${expectedCurrency} is not one the product supports`] };
+  }
   if (lines.length < 2) {
     return { violations: [], unjudged: ["the expense's posted event had no readable balanced journal before the reversal"] };
   }
@@ -359,13 +370,15 @@ function judgePosting(lines: readonly LedgerLine[], seededAmount: number): Judge
     return { violations: ["the posted journal mixes currencies or scales within one posting"], unjudged: [] };
   }
   const first = lines[0]!;
-  const denomination = denominationOf(first.currency);
-  if (denomination === null) {
-    return { violations: [], unjudged: [`the posted journal's currency ${first.currency} is not one the product supports`] };
+  if (first.currency !== expectedCurrency) {
+    return {
+      violations: [`the expense was posted in ${first.currency} but the organization's currency is ${expectedCurrency}`],
+      unjudged: [],
+    };
   }
   if (denomination.scale !== first.scale) {
     return {
-      violations: [`the posted journal is stored at scale ${first.scale} but ${first.currency} uses scale ${denomination.scale}`],
+      violations: [`the posted journal is stored at scale ${first.scale} but ${expectedCurrency} uses scale ${denomination.scale}`],
       unjudged: [],
     };
   }
@@ -398,8 +411,10 @@ export function evaluateReversalReconciliation(input: {
   replayed: LedgerSnapshot;
   /** The synthetic expense's amount in major units; the posting must carry exactly this. */
   seededAmount: number;
+  /** The organization's currency from its settings; null when that read was not possible. */
+  expectedCurrency: string | null;
 }): Judgement {
-  const { posted, reversed, replayed, seededAmount } = input;
+  const { posted, reversed, replayed, seededAmount, expectedCurrency } = input;
   const postedEvents = posted.events.filter((event) => event.eventType === "EXPENSE_POSTED");
   if (postedEvents.length !== 1) {
     return {
@@ -419,7 +434,7 @@ export function evaluateReversalReconciliation(input: {
       unjudged: ["the expense's posted event had no readable balanced journal before the reversal"],
     };
   }
-  const posting = judgePosting(originalLines, seededAmount);
+  const posting = judgePosting(originalLines, seededAmount, expectedCurrency);
   if (posting.unjudged.length > 0) return posting;
 
   const stages: [string, LedgerSnapshot][] = [["after reversal", reversed]];
