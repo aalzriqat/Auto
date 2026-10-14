@@ -100,7 +100,9 @@ jobs:
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
 
       - name: Run the scenario matrix and screen audit
-        run: pnpm exec playwright test -c playwright.scenarios.config.ts
+        run: |
+          set -o pipefail
+          pnpm exec playwright test -c playwright.scenarios.config.ts 2>&1 | tee "$RUNNER_TEMP/deal-scenarios-output.log"
         env:
           NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
           # The explorer re-asks the backend whether NEXT_PUBLIC_CONVEX_URL is
@@ -133,6 +135,18 @@ jobs:
           name: deal-scenarios-playwright-report
           path: playwright-report/
           retention-days: 14
+
+      # SCRUM-799: capture only a request ID, error class and public source
+      # location while the failed run's disposable backend still exists.
+      # Raw Convex logs can contain tenant data and must never enter public CI logs.
+      - name: Diagnose preview attestation before cleanup
+        if: failure() && env.CONVEX_PREVIEW_CREATED_AT != ''
+        run: node scripts/previewAttestationDiagnostic.mjs
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          CONVEX_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+          CONVEX_PREVIEW_URL: ${{ env.CONVEX_PREVIEW_URL }}
+          CONVEX_PREVIEW_CREATED_AT: ${{ env.CONVEX_PREVIEW_CREATED_AT }}
 
       - name: Delete the disposable preview
         if: always() && env.CONVEX_PREVIEW_CREATED_AT != ''

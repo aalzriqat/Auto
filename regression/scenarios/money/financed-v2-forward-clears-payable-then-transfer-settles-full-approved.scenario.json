@@ -1,0 +1,75 @@
+{
+  "id": "financed-v2-forward-clears-payable-then-transfer-settles-full-approved",
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "approvedMinor": 12500000,
+        "depositMinor": 200000,
+        "contributionMinor": 1375000
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "financeCompanyForward.recordFinanceCompanyForward",
+      "input": {
+        "expectedAmountMinor": 1575000
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "applications.confirmDisbursement",
+      "input": {
+        "disbursedAmountMinor": 12500000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.forwardProofState",
+      "value": "SETTLED"
+    },
+    {
+      "observable": "step2.forwardPayableNetMinor",
+      "value": 1575000
+    },
+    {
+      "observable": "step2.salePlusForwardPayableNetMinor",
+      "value": 0
+    },
+    {
+      "observable": "step3.financeReceivableNetMinor",
+      "value": -12500000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/financeCompanyForward.test.ts",
+    "testName": "recording the forward clears AP-Finance to zero; the transfer then settles the FULL G"
+  },
+  "matrixRow": "pilot-financed-v2-forward-transfer",
+  "fingerprint": "419a6ae22f41321404ef0d8d3272e12aa03f96ddeca068b77ca2135bec90032d",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum761-pilot-path",
+    "firstSeen": "2026-10-08"
+  }
+}

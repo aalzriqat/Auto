@@ -50,7 +50,7 @@
  * reads the resulting economic state back — released amount, `releaseCount`,
  * canonical payments, ledger effects, remaining balance — and asserts on that.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { isPreviewDeployKey } from "./e2ePreviewBootstrap.mjs";
@@ -353,8 +353,17 @@ export async function resolveIdentity(email, secretKey) {
  * and the failure it protects against — `convex run` silently resolving an
  * unspecified target to the shared DEV deployment — is exactly the one this
  * rehearsal must never hit.
+ *
+ * @param {{
+ *   functionName: string,
+ *   args: Record<string, unknown>,
+ *   previewName: string,
+ *   deployKey: string,
+ *   env?: Record<string, string | undefined>,
+ *   spawnCli?: (command: string, args: string[], options: object) => { status: number | null, error?: Error },
+ * }} options
  */
-export async function runPreviewFunction({ functionName, args, previewName, deployKey, env = process.env }) {
+export async function runPreviewFunction({ functionName, args, previewName, deployKey, env = process.env, spawnCli = spawnSync }) {
   const { buildConvexRunArgs, runConvex } = await import("./e2ePreviewBootstrap.mjs");
   const argv = buildConvexRunArgs({
     functionName,
@@ -363,7 +372,13 @@ export async function runPreviewFunction({ functionName, args, previewName, depl
     deployKey,
     env,
   });
-  runConvex(argv, functionName);
+  // The assertion returns bootstrap JSON on stdout. The release workflow
+  // reserves this process's stdout for its single evidence document; letting
+  // the child inherit it produced two adjacent JSON objects and a red verdict
+  // after all 22 cloud cases passed. Keep stderr visible and retain runConvex's
+  // argument/exit checks while capturing only this child command's stdout.
+  runConvex(argv, functionName, (command, commandArgs, options) =>
+    spawnCli(command, commandArgs, { ...options, stdio: ["inherit", "pipe", "inherit"] }));
 }
 
 /**
@@ -474,7 +489,7 @@ export function summarize(results) {
     // The run is only "complete" when nothing was skipped. A green exit code
     // beside a non-empty unproven list is how a partial rehearsal gets quoted
     // as a full one.
-    complete: failed.length === 0 && unprovenCases.length === 0,
+    complete: results.length > 0 && failed.length === 0 && unprovenCases.length === 0,
   };
 }
 
@@ -487,6 +502,7 @@ export async function main(env = process.env) {
     convexUrl: config.convexUrl,
     deploymentType: "preview",
     workflowRunId: env.GITHUB_RUN_ID ?? null,
+    workflowRunAttempt: env.GITHUB_RUN_ATTEMPT ?? null,
     workflowJob: env.GITHUB_JOB ?? null,
     cases: [],
   };
@@ -595,12 +611,14 @@ export async function main(env = process.env) {
  * Pure, so it can be unit-tested for every branch without running a rehearsal.
  */
 export function exitCodeForSummary(summary) {
+  if (!Number.isSafeInteger(summary.total) || summary.total === 0 || summary.complete !== true) return 1;
   if (summary.failed > 0) return 1;
   if (summary.unproven > 0) return 1;
   return 0;
 }
 
 export function bannerForSummary(summary) {
+  if (summary.total === 0) return "\nREHEARSAL INCOMPLETE — NOT CERTIFIED: no cloud cases executed.";
   if (summary.failed > 0) {
     const unprovenTail =
       summary.unproven > 0 ? `; ${summary.unproven} UNPROVEN (${summary.unprovenIds.join(", ")})` : "";

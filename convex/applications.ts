@@ -913,7 +913,7 @@ async function loadDealRoute(ctx: QueryCtx | MutationCtx, app: Doc<"financeAppli
   return { vehicle, sale, consigned, route };
 }
 
-async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">) {
+export async function resolveSettlement(ctx: QueryCtx, app: Doc<"financeApplications">) {
   const { vehicle, sale, consigned, route } = await loadDealRoute(ctx, app);
   const { routeKnown, settlesDirect, saleCancelled } = route;
 

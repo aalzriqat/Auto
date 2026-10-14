@@ -148,7 +148,7 @@ describe("a1 - the dead end: a description past the cap is refused at entry, an 
       })
     ).rejects.toThrow(/at most 200 characters/);
     await expect(
-      seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "n".repeat(MAX_FEE_RECONCILIATION_NOTES_CHARS + 1) })
+      seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "n".repeat(MAX_FEE_RECONCILIATION_NOTES_CHARS + 1), expectedActualAmountMinor: jod(50), expectedActualEvidenceRevision: 0 })
     ).rejects.toThrow(/at most 500 characters/);
     await expect(
       seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId, reason: "v".repeat(MAX_FEE_VOID_REASON_CHARS + 1) })

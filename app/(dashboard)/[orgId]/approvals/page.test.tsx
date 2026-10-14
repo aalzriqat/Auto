@@ -11,8 +11,10 @@ import { DEFAULT_ROLE_TEMPLATES } from "@/convex/utils/permissions";
 
 const stubs = vi.hoisted(() => ({
   queryArgs: new Map<string, unknown>(),
+  queryOptions: new Map<string, unknown>(),
   queryResults: new Map<string, unknown>(),
   permissions: [] as string[],
+  firstPageLoading: { results: [], status: "LoadingFirstPage", loadMore: () => undefined },
 }));
 
 vi.mock("convex/react", async () => {
@@ -27,7 +29,23 @@ vi.mock("convex/react", async () => {
       if (name === "approvals:listPendingApprovals" && !stubs.permissions.includes("approve:requests")) {
         throw new Error("Forbidden: approve:requests");
       }
-      return stubs.queryResults.get(name);
+      if (name === "retainedCreditRefunds:listRetainedCreditRefundRequests") {
+        // The finance listing: a default MANAGER holds no view:finance, so it must never be asked of them.
+        throw new Error("Forbidden: view:finance");
+      }
+      const value = stubs.queryResults.get(name);
+      return typeof value === "function" ? (value as (a: unknown) => unknown)(args) : value;
+    },
+    // The refund approval queue is cursor-paged; its stub is the hook's own result shape.
+    usePaginatedQuery: (reference: never, args: unknown, options: unknown) => {
+      const name = getFunctionName(reference);
+      stubs.queryArgs.set(name, args);
+      stubs.queryOptions.set(name, options);
+      if (args === "skip") return stubs.firstPageLoading;
+      if (!stubs.permissions.includes("approve:requests")) throw new Error("Forbidden: approve:requests");
+      const value = stubs.queryResults.get(name);
+      if (typeof value === "function") return (value as (a: unknown) => unknown)(args);
+      return value ?? stubs.firstPageLoading;
     },
     useMutation: () => async () => null,
   };
@@ -40,6 +58,10 @@ vi.mock("@/hooks/useCurrency", () => ({
   useCurrency: () => ({ code: "JOD", format: (n: number) => String(n) }),
 }));
 vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@/hooks/useCommandIdentity", () => ({
+  useCommandIdentity: () => ({ for: (k: string) => k, retire: () => {} }),
+}));
 vi.mock("@/hooks/use-permissions", () => ({
   usePermissions: () => ({ hasPermission: (permission: string) => stubs.permissions.includes(permission) }),
 }));
@@ -57,6 +79,7 @@ const row = {
 afterEach(() => {
   cleanup();
   stubs.queryArgs.clear();
+  stubs.queryOptions.clear();
   stubs.queryResults.clear();
 });
 
@@ -79,5 +102,60 @@ describe("ApprovalsPage", () => {
     render(<ApprovalsPage />);
     expect(screen.getByText("NoPendingApprovals")).toBeTruthy();
     expect(stubs.queryArgs.get("depositRequests:listPending")).toBe("skip");
+  });
+});
+
+describe("ApprovalsPage: customer-credit refund approval queue (SCRUM-831)", () => {
+  const QUEUE = "retainedCreditRefunds:listRetainedCreditRefundApprovalQueue";
+  const refund = {
+    _id: "r1", amountMinor: 1200, currency: "JOD", method: "BANK_TRANSFER", reason: "Customer asked for money back",
+    createdAt: Date.UTC(2026, 9, 12), requestedByMe: false, requestedByName: "Dana", customerName: "Layla Haddad",
+    sourceChequeLabel: "Arab Bank #004512", originatingSaleStatus: "CANCELLED",
+  };
+
+  test("the default MANAGER (approve:requests, no view:finance) is shown the queue and never asks the finance listing", () => {
+    stubs.permissions = permissionsOf("MANAGER");
+    expect(stubs.permissions).toContain("approve:requests");
+    expect(stubs.permissions).not.toContain("view:finance");
+    stubs.queryResults.set(QUEUE, { results: [{ ...refund, payoutAvailable: true }], status: "Exhausted", loadMore: () => undefined });
+    stubs.queryResults.set("approvals:listPendingApprovals", []);
+
+    render(<ApprovalsPage />);
+
+    expect(stubs.queryArgs.get(QUEUE)).toEqual({ orgId: "org1" });
+    expect(stubs.queryOptions.get(QUEUE)).toEqual({ initialNumItems: 25 });
+    expect(stubs.queryArgs.has("retainedCreditRefunds:listRetainedCreditRefundRequests")).toBe(false);
+    expect(screen.getByTestId("refund-approval-queue")).toBeTruthy();
+    expect(screen.getAllByTestId("refund-approval-row")).toHaveLength(1);
+    expect((screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Reject" }) as HTMLButtonElement).disabled).toBe(false);
+    // Execute and cancel belong to the Accounting queue, not here.
+    expect(screen.queryByRole("button", { name: "RetainedCreditExecute" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "RetainedCreditRefundCancel" })).toBeNull();
+  });
+
+  test("the default ACCOUNTANT (no approve:requests) never asks the queue and sees no section", () => {
+    stubs.permissions = permissionsOf("ACCOUNTANT");
+    render(<ApprovalsPage />);
+    // Not mounted at all, so the narrow read is never even asked of them.
+    expect(stubs.queryArgs.has(QUEUE)).toBe(false);
+    expect(screen.queryByTestId("refund-approval-queue")).toBeNull();
+    expect(screen.queryByTestId("refund-approval-loading")).toBeNull();
+  });
+
+  test("a refused queue read degrades to its own alert instead of taking the page down", () => {
+    stubs.permissions = ["approve:requests"];
+    stubs.queryResults.set("approvals:listPendingApprovals", []);
+    const original = console.error;
+    console.error = () => undefined;
+    try {
+      stubs.queryResults.set(QUEUE, () => { throw new Error("backend refused"); });
+      render(<ApprovalsPage />);
+    } finally {
+      console.error = original;
+    }
+    expect(screen.getByRole("alert").textContent).toBe("RetainedCreditRefundsLoadFailed");
+    // The rest of the page is unaffected.
+    expect(screen.getByText("NoPendingApprovals")).toBeTruthy();
   });
 });

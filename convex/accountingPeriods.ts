@@ -33,6 +33,13 @@ const periodStatusValidator = v.union(
   v.literal("LOCKED"),
 );
 
+// Internal snapshot provenance must not change the existing period API shape.
+function publicPeriod(period: Doc<"accountingPeriods">) {
+  const result = { ...period };
+  delete result.snapshotFastPathEligible;
+  return result;
+}
+
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /**
@@ -196,7 +203,7 @@ export const list = query({
         .query("accountingPeriods")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId));
     }
-    return await q.collect();
+    return (await q.collect()).map(publicPeriod);
   },
 });
 
@@ -210,7 +217,7 @@ export const get = query({
     await requireFeature(ctx, args.orgId, "accounting");
     const period = await ctx.db.get(args.periodId);
     if (!period || period.orgId !== args.orgId) return null;
-    return period;
+    return publicPeriod(period);
   },
 });
 
@@ -227,7 +234,7 @@ export const currentOpenPeriod = query({
       .query("accountingPeriods")
       .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "OPEN"));
     for await (const period of openPeriods) {
-      if (period.startDate <= now && period.endDate >= now) return period;
+      if (period.startDate <= now && period.endDate >= now) return publicPeriod(period);
     }
     return null;
   },
@@ -293,6 +300,9 @@ export const create = mutation({
     const status = args.openImmediately ? "OPEN" : "FUTURE";
     const periodId = await ctx.db.insert("accountingPeriods", {
       orgId: args.orgId,
+      // A newly allocated period id cannot have historical journal lines.
+      // Every posting path writes its account snapshot in the same mutation.
+      snapshotFastPathEligible: true,
       fiscalYear: args.fiscalYear,
       periodNumber: args.periodNumber,
       startDate: args.startDate,

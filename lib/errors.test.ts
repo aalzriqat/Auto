@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { ConvexError } from "convex/values";
-import { getErrorMessage, getLocalizedErrorMessage, GENERIC_ERROR_MESSAGE } from "./errors";
+import { getCodedErrorMessage, getErrorMessage, getLocalizedErrorMessage, GENERIC_ERROR_MESSAGE } from "./errors";
 
 /** Mirrors what the browser client hands a `catch` block for a server throw. */
 function convexWrapped(inner: string, kind: "Error" | "ConvexError" = "Error"): string {
@@ -469,5 +469,43 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     expect(dictionaries.en.ServerError_COMMISSION_BASE_UNUSABLE).toContain("{baseCurrency}");
     expect(dictionaries.en.ServerError_COMMISSION_BASE_UNUSABLE).toContain("{orgCurrency}");
+  });
+});
+
+describe("getCodedErrorMessage - SCRUM-724 CR-1: a coded refusal or nothing, never raw server text", () => {
+  const table: Record<string, string> = { ServerError_SOME_CODE: "ترجمة {amount}" };
+  const t = (key: string) => table[key] ?? key;
+
+  it("returns the placeholder-filled translation for a coded refusal with a dictionary entry", () => {
+    expect(getCodedErrorMessage(new ConvexError({ code: "SOME_CODE", message: "English", amount: 5 }), t)).toBe("ترجمة 5");
+  });
+
+  it("returns null - not the server's English - for everything without a translation", () => {
+    expect(getCodedErrorMessage(new ConvexError({ code: "UNKNOWN_CODE", message: "English" }), t)).toBeNull();
+    expect(getCodedErrorMessage(new ConvexError("Cheque not found."), t)).toBeNull();
+    expect(getCodedErrorMessage(new ConvexError({ code: 42, message: "Numeric" }), t)).toBeNull();
+    expect(getCodedErrorMessage(new Error("boom"), t)).toBeNull();
+    expect(getCodedErrorMessage(undefined, t)).toBeNull();
+    expect(getCodedErrorMessage(new ConvexError({ code: "SOME_CODE", message: "x" }), () => { throw new Error("no provider"); })).toBeNull();
+  });
+
+  it("getLocalizedErrorMessage is unchanged: the coded translation, else the cleaned server message", () => {
+    expect(getLocalizedErrorMessage(new ConvexError({ code: "SOME_CODE", message: "English", amount: 5 }), t)).toBe("ترجمة 5");
+    expect(getLocalizedErrorMessage(new ConvexError("Cheque not found."), t)).toBe("Cheque not found.");
+  });
+
+  it("the SCRUM-724 deal-panel refusal codes have EN and AR entries that differ", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    for (const code of ["RETAINED_CREDIT_UNAVAILABLE", "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
+      "CHEQUE_INVOICE_UNCOVERED_HELD", "CHEQUE_SALE_CANCELLED_RETURN_TO_CUSTOMER", "CUSTOMER_CREDIT_PAYOUT_DISABLED"]) {
+      const error = new ConvexError({ code, message: "server text" });
+      const enText = getCodedErrorMessage(error, en);
+      const arText = getCodedErrorMessage(error, ar);
+      expect(enText, code).toBeTruthy();
+      expect(arText, code).toMatch(/[؀-ۿ]/);
+      expect(arText).not.toBe(enText);
+    }
   });
 });

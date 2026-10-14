@@ -55,6 +55,8 @@ import { InstallmentCalendar } from "./collections/InstallmentCalendar";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
+import { RetainedCreditRefundsSection } from "./RetainedCreditRefundsSection";
+import { MoneySurfaceErrorBoundary } from "./MoneySurfaceErrorBoundary";
 
 type ReceivableRow = Doc<"receivables"> & {
   customerName: string;
@@ -68,6 +70,8 @@ type ChequeRow = Doc<"postDatedCheques"> & {
   /** SCRUM-447: the row has finance-company lineage; the drawer is named or unverified. */
   isFinanceCompanyCheque?: boolean;
   drawerName?: string | null;
+  /** SCRUM-724: status of the sale this cheque was written for. */
+  invoiceSaleStatus?: string;
 };
 
 type ApprovalRow = Doc<"collectionApprovalRequests"> & {
@@ -262,14 +266,16 @@ export function CollectionsTab() {
       </div>
 
       <Tabs defaultValue="receivables" className="space-y-4">
-        <TabsList className="bg-muted/50 border border-border">
+        {/* SCRUM-724: seven sub-tabs are ~650px wide; on a phone the strip scrolls
+            inside its own frame so Approvals (the refund queue) stays reachable. */}
+        <TabsList className="max-w-full justify-start overflow-x-auto bg-muted/50 border border-border">
           <TabsTrigger value="receivables">{t("Receivables" as any)}</TabsTrigger>
           <TabsTrigger value="cheques">{t("Cheques" as any)}</TabsTrigger>
           <TabsTrigger value="paymentLinks">{t("PaymentLinks" as any)}</TabsTrigger>
           <TabsTrigger value="cashDrawer">{t("CashDrawer" as any)}</TabsTrigger>
           <TabsTrigger value="payments">{t("Payments" as any)}</TabsTrigger>
           <TabsTrigger value="reports">{t("Reports" as any)}</TabsTrigger>
-          {canApprove && <TabsTrigger value="approvals">{t("Approvals" as any)}</TabsTrigger>}
+          {(canApprove || canManage) && <TabsTrigger value="approvals">{t("Approvals" as any)}</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="receivables" className="space-y-3">
@@ -414,7 +420,14 @@ export function CollectionsTab() {
                       </TableCell>
                       <TableCell>{cheque.bank}</TableCell>
                       <TableCell>{cheque.chequeNumber}</TableCell>
-                      <TableCell><StatusBadge status={cheque.status} /></TableCell>
+                      <TableCell>
+                        <StatusBadge status={cheque.status} />
+                        {cheque.invoiceSaleStatus === "CANCELLED" && (cheque.status === "HELD" || cheque.status === "DEPOSITED") && (
+                          <div className="text-xs text-muted-foreground">
+                            {t(cheque.status === "HELD" ? "RetainedCreditChequeCancelledHeld" : "RetainedCreditChequeBecomesCredit" as any)}
+                          </div>
+                        )}
+                      </TableCell>
                       <TableCell className="text-right font-semibold">{formatCurrency(cheque.amount)}</TableCell>
                       <TableCell className="text-right">
                         {canManage && (() => {
@@ -620,9 +633,12 @@ export function CollectionsTab() {
           </ReportPanel>
         </TabsContent>
 
-        {canApprove && (
+        {(canApprove || canManage) && (
           <TabsContent value="approvals">
-            <div className="rounded-md border border-border overflow-x-auto">
+            {/* SCRUM-724: the Approvals tab is shared. The collection-approval table is
+                approver-only; the refund queue serves approvers (decide) and finance
+                managers (pay out) under the default role templates. */}
+            {canApprove && <div className="rounded-md border border-border overflow-x-auto">
               <Table>
                 <TableHeader className="bg-muted/50">
                   <TableRow>
@@ -658,7 +674,18 @@ export function CollectionsTab() {
                   )}
                 </TableBody>
               </Table>
-            </div>
+            </div>}
+            <MoneySurfaceErrorBoundary
+              key={activeOrgId}
+              fallback={
+                <div role="alert" className="mt-4 rounded-md border border-border px-4 py-6 text-center text-sm text-destructive">
+                  {t("RetainedCreditRefundsLoadFailed")}
+                </div>
+              }
+            >
+              <RetainedCreditRefundsSection orgId={activeOrgId} canApprove={canApprove} canManage={canManage}
+                payoutAvailable={summary?.retainedCreditPayoutAvailable === true} />
+            </MoneySurfaceErrorBoundary>
           </TabsContent>
         )}
       </Tabs>

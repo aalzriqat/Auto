@@ -215,6 +215,10 @@ export default defineSchema({
 
   accountingPeriods: defineTable({
     orgId: v.id("organizations"),
+    // Set only when this period was created with synchronous snapshot writers.
+    // Older retained periods have no certificate and use journal lines for
+    // containing-period reports until their snapshots are reconciled.
+    snapshotFastPathEligible: v.optional(v.boolean()),
     startDate: v.number(),
     endDate: v.number(),
     fiscalYear: v.number(),
@@ -720,6 +724,7 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_date", ["orgId", "accountingDate"])
     .index("by_org_period", ["orgId", "periodId"])
+    .index("by_org_period_date", ["orgId", "periodId", "accountingDate"])
     .index("by_org_source", ["orgId", "sourceType", "sourceId"])
     .index("by_accounting_event", ["accountingEventId"])
     // SCRUM-555 lane-B: getPostedLines reads POSTED and REVERSED entries.
@@ -3349,6 +3354,19 @@ export default defineSchema({
     paidAt: v.optional(v.number()),
     receiptReference: v.optional(v.string()),
     documentStorageIds: v.optional(v.array(v.id("_storage"))),
+    /**
+     * SCRUM-834. How many times this line's actual and its evidence (amount,
+     * paid date, receipt reference, attachments) have been RE-recorded
+     * through `recordActualFeeAmount`; absent on a line never re-recorded and
+     * read as 0. Monotonic and unrelated to `updatedAt`, which payment,
+     * custody and binding writes also move. `reconcileDealFee` pins the value
+     * its checker was looking at, so a reconciliation can never certify
+     * evidence that was replaced under it — even by a same-amount re-record.
+     * Written only by `recordActualFeeAmount`: the one writer that replaces
+     * those fields on an existing row (the inserts create new rows, which
+     * start at 0).
+     */
+    actualEvidenceRevision: v.optional(v.number()),
 
     /** Whether the line came from the company's fee template or was typed. */
     source: v.union(v.literal("COMPANY_TEMPLATE"), v.literal("MANUAL")),
@@ -3561,6 +3579,15 @@ export default defineSchema({
         vehicleReturnedAt: v.number(),
         vehicleReturnNote: v.string(),
         customerPaymentDisposition: v.union(v.literal("REFUND"), v.literal("RETAIN_CREDIT")),
+        customerReceiptSettlement: v.optional(v.object({
+          refundedMinor: v.number(),
+          retainedMinor: v.number(),
+          refundPaymentIds: v.array(v.id("canonicalPayments")),
+          refundEventIds: v.array(v.id("accountingEvents")),
+          method: v.optional(v.union(v.literal("BANK_TRANSFER"), v.literal("CASH"))),
+          reference: v.optional(v.string()),
+          paidAt: v.optional(v.number()),
+        })),
         completedBy: v.id("users"),
         completedAt: v.number(),
       })
@@ -4518,13 +4545,96 @@ export default defineSchema({
     currency: v.string(),
     initialUnappliedMinor: v.number(),
     remainingUnappliedMinor: v.number(),
-    /** Monotonic count of applications, and the source of the next `sequence`. */
+    /** Legacy receiptApplications sequence counter; invoice claims use their own row id. */
     applicationCount: v.number(),
+    /**
+     * SCRUM-724 lineage, written ONCE at insert and never patched. Present only
+     * on a position created by clearing a customer cheque that was registered
+     * against a sale invoice. "Cancelled" is NOT stored: it is derived from the
+     * sale's status at read time. Rows created before SCRUM-724 carry neither.
+     */
+    sourceChequeId: v.optional(v.id("postDatedCheques")),
+    originatingSaleId: v.optional(v.id("sales")),
     updatedAt: v.number(),
   })
     .index("by_org", ["orgId"])
     .index("by_org_movement", ["orgId", "receiptMovementId"])
     .index("by_org_customer", ["orgId", "customerId"]),
+
+  /**
+   * SCRUM-724: a request to pay retained 2110 customer credit back to the
+   * customer. Keyed to the retained position / movement, NEVER to a receivable
+   * (no receivable exists for credit left by a cancelled sale). One approved
+   * request authorizes exactly one payout: `status` moves
+   * PENDING -> APPROVED -> EXECUTED, and EXECUTED is terminal.
+   */
+  retainedCreditRefundRequests: defineTable({
+    orgId: v.id("organizations"),
+    receiptMovementId: v.id("receiptMovements"),
+    positionId: v.id("receiptRetainedPositions"),
+    customerId: v.id("customers"),
+    currency: v.string(),
+    amountMinor: v.number(),
+    method: v.union(v.literal("BANK_TRANSFER"), v.literal("CASH")),
+    reason: v.string(),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("APPROVED"),
+      v.literal("REJECTED"),
+      v.literal("EXECUTED"),
+      // SCRUM-724 Sol 6 Q3: withdrawn (from PENDING) or cancelled (from
+      // APPROVED) by a MANAGE_FINANCE user, or invalidated by a source-cheque
+      // return. Terminal; never reached from EXECUTED.
+      v.literal("CANCELLED")
+    ),
+    requestedBy: v.id("users"),
+    decidedBy: v.optional(v.id("users")),
+    decidedAt: v.optional(v.number()),
+    decisionNotes: v.optional(v.string()),
+    responseIdempotencyKey: v.optional(v.string()),
+    cancelledBy: v.optional(v.id("users")),
+    cancelledAt: v.optional(v.number()),
+    cancelReason: v.optional(v.string()),
+    cancelledFromStatus: v.optional(v.union(v.literal("PENDING"), v.literal("APPROVED"))),
+    executedBy: v.optional(v.id("users")),
+    executedAt: v.optional(v.number()),
+    canonicalPaymentId: v.optional(v.id("canonicalPayments")),
+    accountingEventId: v.optional(v.id("accountingEvents")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_movement", ["orgId", "receiptMovementId"])
+    .index("by_org_movement_status", ["orgId", "receiptMovementId", "status"]),
+
+  /**
+   * SCRUM-722: a pending claim on retained 2110 credit for a completed sale's
+   * canonical invoice. PENDING reserves money without calling it applied.
+   * The receipt and invoice journals still have to be POSTED before a future
+   * activation can create an allocation or move 2110 to AR.
+   */
+  invoiceReceiptApplications: defineTable({
+    orgId: v.id("organizations"),
+    receiptMovementId: v.id("receiptMovements"),
+    saleId: v.id("sales"),
+    receivableDocumentId: v.id("receivableDocuments"),
+    customerId: v.id("customers"),
+    currency: v.string(),
+    amountMinor: v.number(),
+    status: v.union(v.literal("PENDING"), v.literal("ACTIVE"), v.literal("REVERSED"), v.literal("CANCELLED")),
+    allocationId: v.optional(v.id("paymentAllocations")),
+    activationEventId: v.optional(v.id("accountingEvents")),
+    activatedAt: v.optional(v.number()),
+    splitFromApplicationId: v.optional(v.id("invoiceReceiptApplications")),
+    splitRemainderId: v.optional(v.id("invoiceReceiptApplications")),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    cancelledAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_movement_status", ["orgId", "receiptMovementId", "status"])
+    .index("by_org_sale_status", ["orgId", "saleId", "status"]),
 
   /**
    * One append-only row per later application of retained credit.
@@ -4722,6 +4832,8 @@ export default defineSchema({
     customerId: v.id("customers"),
     vehicleId: v.optional(v.id("vehicles")),
     saleId: v.optional(v.id("sales")),
+    // Customer invoice intent; legacy saleId remains absent when this cheque clears.
+    invoiceSaleId: v.optional(v.id("sales")),
     // Set when this cheque is the registered expected-payment method for a
     // finance application, ahead of finalizeDeal — see registerExpectedPayment.
     //
@@ -6503,10 +6615,30 @@ export default defineSchema({
     inbox: v.union(v.literal("support"), v.literal("info"), v.literal("subscriptions")),
     lastMessageAt: v.number(),
     autoRepliedAt: v.optional(v.number()),
+    // SCRUM-825 mail-client inbox. All optional: rows written before this change
+    // carry none of them and are NOT backfilled (the UI treats absent as
+    // "unknown": no preview text, no needs-reply flag).
+    // Whitespace-collapsed, link-dump-free snippet of the latest inbound message
+    // or human reply (never the automated acknowledgement).
+    lastMessagePreview: v.optional(v.string()),
+    // true after an inbound message, false after a HUMAN reply. The automated
+    // acknowledgement deliberately leaves it untouched.
+    awaitingReply: v.optional(v.boolean()),
+    // Per-thread counter of INBOUND messages, +1 on every one. `sendReply`
+    // captures it before the provider call so the reply can tell that a newer
+    // inbound message arrived while it was in flight. A counter, not a timestamp:
+    // two messages in the same millisecond, or a clock that steps back, would
+    // defeat a time comparison. Absent on old rows and read as 0, so the first
+    // new inbound on such a row (revision 1) reads as newer than a captured 0.
+    inboundRevision: v.optional(v.number()),
+    // Admin override of the client-side people/automated heuristic.
+    categoryOverride: v.optional(v.union(v.literal("people"), v.literal("automated"))),
   })
     .index("by_participantEmail_and_inbox", ["participantEmail", "inbox"])
     .index("by_inbox_and_lastMessageAt", ["inbox", "lastMessageAt"])
-    .index("by_inbox_and_status", ["inbox", "status"]),
+    .index("by_inbox_and_status", ["inbox", "status"])
+    // Time-ordered per status, so a status-filtered list is newest-first.
+    .index("by_inbox_status_and_lastMessageAt", ["inbox", "status", "lastMessageAt"]),
 
   supportMessages: defineTable({
     threadId: v.id("supportThreads"),

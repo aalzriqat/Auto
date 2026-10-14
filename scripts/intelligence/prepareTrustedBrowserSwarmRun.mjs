@@ -5,6 +5,10 @@ import { previewNameForRef } from "../e2ePreviewBootstrap.mjs";
 import { validateE2EPreviewDescriptor } from "./e2ePreviewDescriptor.mjs";
 import { validateConvexPreviewAuthority } from "./convexPreviewAuthority.mjs";
 import { validateTrustedBrowserJevArtifact } from "./trustedBrowserJevSuggestions.mjs";
+import {
+  assertBrowserSwarmMissionsExecutable,
+  planBrowserAttackSwarm,
+} from "./browserAttackSwarm.ts";
 
 function exactSha(value, label) {
   if (!/^[0-9a-f]{40}$/i.test(value ?? "")) {
@@ -31,7 +35,12 @@ function safeRunId(value) {
   return value;
 }
 
-function assertTrustedImpact(value, expected) {
+/**
+ * @param {unknown} value
+ * @param {{ baseSha: string, headSha: string }} expected
+ * @returns {Array<{ id: string, severity: "CRITICAL" | "HIGH" }>}
+ */
+export function assertTrustedImpact(value, expected) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Trusted browser impact artifact must be an object.");
   }
@@ -123,6 +132,18 @@ export function assembleTrustedBrowserSwarmRun(input) {
       "No-impact browser swarm run must skip Jev exploration.",
     );
   }
+  // SCRUM-826: plan exactly what the workers will plan (deterministic impact
+  // plus admitted Jev) and refuse it here if any mission cannot execute, so
+  // an unexecutable obligation never reaches a worker as a late failure. The
+  // worker manifest keeps its own independent refusal.
+  const plannedMissions = shouldRun
+    ? planBrowserAttackSwarm({
+        impactedInvariants,
+        jevSuggestions: jevExploration.suggestions,
+      }).missions
+    : [];
+  assertBrowserSwarmMissionsExecutable(plannedMissions);
+
   // Two is the initial bounded rollout. Keep the matrix derived from the same
   // trusted workerCount so GitHub cannot drift from the run evidence.
   const workerCount = shouldRun ? 2 : 0;
@@ -149,9 +170,17 @@ export function assembleTrustedBrowserSwarmRun(input) {
       suggestions: jevExploration.suggestions,
     },
     shouldRun,
+    plannedMissions: plannedMissions.map((mission) => ({
+      id: mission.id,
+      family: mission.family,
+      source: mission.source,
+      invariantIds: [...mission.invariantIds],
+      oracle: mission.oracle,
+      timeoutMs: mission.timeoutMs,
+    })),
     workerCount,
     workerMatrix,
-    planningMode: "TRUSTED_DETERMINISTIC_PLUS_BOUNDED_JEV",
+    planningMode:"TRUSTED_DETERMINISTIC_PLUS_BOUNDED_JEV",
   };
 }
 

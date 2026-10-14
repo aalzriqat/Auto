@@ -253,6 +253,8 @@ describe("runVitestCoverageShards", () => {
     expect(authority).toContain("--coverage.include=convex/**/*.ts");
     expect(authority).toContain("--coverage.include=scripts/**/*.mjs");
     expect(authority).toContain("--coverage.include=scripts/**/*.cjs");
+    // proxy.ts is excluded from Sonar coverage; the trusted LCOV validator refuses SF:proxy.ts (SCRUM-784).
+    expect(authority).not.toContain("--coverage.include=proxy.ts");
     for (const threshold of EXPECTED_ZERO_THRESHOLDS) expect(authority).toContain(threshold);
 
     const shard1 = rawArgs(childBoundary.calls[1]);

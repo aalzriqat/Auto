@@ -76,6 +76,18 @@ const RESET_TABLES = [
   // to `reverseAccountingEvent`, which throws on a missing event. It stays AFTER
   // `commitmentAuthorityWork`, which is its child (see CHILD_TABLES).
   "pendingAccountingEvents",
+  // ⚠️ SCRUM-813. `invoiceReceiptApplications.activationEventId` names the
+  // RECEIPT_CREDIT_APPLIED event that posted the application; the activation replay
+  // (`accounting/invoiceReceiptActivation.readActiveReplay`) loads it and refuses
+  // when it is gone. So applications are listed BEFORE `accountingEvents` and
+  // `CHILD_TABLES.accountingEvents` defers the events while any application remains.
+  // Nothing in the reset references an application except the application itself,
+  // so moving it up creates no ordering cycle.
+  // SCRUM-724: a standalone refund request names its position, movement, payment
+  // and (once executed) its RETAINED_CREDIT_REFUNDED event, so it drains before all
+  // of them. Nothing references a refund request, so listing it first adds no cycle.
+  "retainedCreditRefundRequests",
+  "invoiceReceiptApplications",
   "accountingEvents",
   // ⚠️ SCRUM-549: `journalLines.journalEntryId` and `.accountId` are REQUIRED, so
   // lines go BEFORE their entry and their account (CHILD_TABLES defers both).
@@ -118,6 +130,8 @@ const RESET_TABLES = [
   // `orgDeletionCoverage.test.ts` now enforces the ordering half, because a
   // property stated only in a comment is not enforced — which is exactly how
   // this comment came to be wrong twice.
+  // `retainedCreditRefundRequests` and `invoiceReceiptApplications` are listed
+  // earlier, before `accountingEvents` (SCRUM-813 / SCRUM-724).
   "receiptApplications",
   "receiptRetainedPositions",
   "receiptMovements",
@@ -241,8 +255,8 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   // said they did, which was an over-correction of an earlier comment saying
   // ordering was the whole story. Both halves are required; the array order is
   // enforced by `orgDeletionCoverage.test.ts`.
-  receiptMovements: ["receiptApplications", "receiptRetainedPositions"],
-  receiptRetainedPositions: ["receiptApplications"],
+  receiptMovements: ["retainedCreditRefundRequests", "invoiceReceiptApplications", "receiptApplications", "receiptRetainedPositions"],
+  receiptRetainedPositions: ["retainedCreditRefundRequests", "invoiceReceiptApplications", "receiptApplications"],
   // The rows a receipt movement and its applications POINT AT. Deleting these
   // first would leave live receipt authority referring to payments,
   // allocations and receivables that no longer exist.
@@ -254,19 +268,21 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   // SCRUM-559 (E1). `collectionPayments.canonicalPaymentId`:
   // `collections.returnClearedCheque` patches `clearedPayment.canonicalPaymentId`
   // to VOIDED, and a patch on a deleted row throws.
-  canonicalPayments: ["receiptMovements", "paymentAllocations", "deposits", "collectionPayments"],
+  canonicalPayments: ["receiptMovements", "paymentAllocations", "deposits", "collectionPayments", "retainedCreditRefundRequests"],
   // `receiptMovements.initialAllocationIds[]` is REQUIRED; `collectionPayments.
   // paymentAllocationId` is optional but listed so no payment points at a
   // deleted allocation.
-  paymentAllocations: ["receiptApplications", "receiptMovements", "collectionPayments"],
+  paymentAllocations: ["invoiceReceiptApplications", "receiptApplications", "receiptMovements", "collectionPayments"],
   // `receivables` and `sales` carry `canonicalReceivableDocumentId` (optional,
   // but `paymentIntents.create` refuses a missing document).
-  receivableDocuments: ["receiptApplications", "paymentAllocations", "receivables", "sales"],
+  receivableDocuments: ["invoiceReceiptApplications", "receiptApplications", "paymentAllocations", "receivables", "sales"],
   // SCRUM-559 (E6). `postDatedCheques.receivableId`: `collections.clearCheque`
   // does `receivable = ctx.db.get(cheque.receivableId)` and, on null, skips the
   // outstanding-amount check while still inserting a `collectionPayments` row
   // that carries the dead `receivableId` (SCRUM-559 R1 / #17).
   receivables: ["receiptApplications", "collectionApprovalRequests", "postDatedCheques"],
+  // SCRUM-724: `receiptRetainedPositions.sourceChequeId` (immutable lineage).
+  postDatedCheques: ["receiptRetainedPositions"],
   // SCRUM-549 — the ledger. `journalLines.journalEntryId` / `.accountId` and
   // `accountBalanceSnapshots.accountId` are REQUIRED.
   //
@@ -287,7 +303,8 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   // (`accountingOutbox.reversePendingEntry`, a non-tenant-auth path) passes it to
   // `reverseAccountingEvent`, which throws "Accounting event not found" when the
   // event is gone. `pendingAccountingEvents` is therefore listed first.
-  accountingEvents: ["pendingAccountingEvents"],
+  // SCRUM-813: plus `invoiceReceiptApplications.activationEventId` (see RESET_TABLES).
+  accountingEvents: ["pendingAccountingEvents", "invoiceReceiptApplications"],
   // SCRUM-559 (E4). `financeDealFees.custodyId` and `.custodyPosted.custodyId`:
   // `financeDealCosts.requireLinkedCustody` (`ctx.db.get`, refuses on null) loads
   // the custody record a fee names.
@@ -302,6 +319,7 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   // commitmentAuthorityWork.saleId (REQUIRED); it is not behaviour-tested because
   // the preflight refuses a destructive reset while authority rows exist.
   sales: [
+    "invoiceReceiptApplications",
     "financeApplications",
     "deposits",
     "receivables",
@@ -312,6 +330,8 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
     "payrollItems",
     "commitmentAuthorityWork",
     "depositCancellationPendings",
+    // SCRUM-724: `receiptRetainedPositions.originatingSaleId` (immutable lineage).
+    "receiptRetainedPositions",
   ],
   quotes: ["sales", "financeApplications", "deposits", "receivables"],
   payrollRuns: ["payrollItems"],
@@ -348,6 +368,8 @@ const RESET_ORG_INDEX: Record<ResetTable, string> = {
   financialAuditLog: "by_org",
   accountBalanceSnapshots: "by_org_period",
   chartOfAccounts: "by_org",
+  invoiceReceiptApplications: "by_org",
+  retainedCreditRefundRequests: "by_org",
   receiptApplications: "by_org",
   receiptRetainedPositions: "by_org",
   receiptMovements: "by_org",

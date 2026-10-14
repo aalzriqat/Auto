@@ -2,6 +2,11 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
+import {
+  OFFLINE_SWARM_CLERK_FLAG,
+  OFFLINE_SWARM_CLERK_PLACEHOLDER_SECRET,
+} from "../../lib/offlineSwarmClerk";
+import { EGRESS_EVIDENCE_PATH } from "./browserEgressProofVerify.mjs";
 
 type WorkflowStep = {
   name?: string;
@@ -10,6 +15,8 @@ type WorkflowStep = {
   with?: Record<string, unknown>;
   env?: Record<string, unknown>;
   run?: string;
+  shell?: string;
+  "working-directory"?: string;
 };
 
 type WorkflowJob = {
@@ -83,6 +90,39 @@ const CANDIDATE_FORBIDDEN_ENV = [
 ] as const;
 
 describe("SCRUM-350 trusted browser swarm workflow authority", () => {
+  it("refuses unexecutable mandatory missions before the preview, the build or E2E is paid for (SCRUM-826)", () => {
+    const steps = job("prepare").steps ?? [];
+    const names = steps.map((entry) => entry.name);
+    const gateName =
+      "Refuse mandatory missions without executable handlers before provisioning";
+    const gate = step("prepare", gateName);
+
+    expect(gate.run).toContain("pnpm browser-swarm:coverage-gate");
+    expect(gate["working-directory"]).toBe("trusted");
+    expect(gate.if).toBeUndefined();
+    expect(gate.env).toMatchObject({
+      BASE_SHA: "${{ steps.provenance.outputs.base_sha }}",
+      HEAD_SHA: "${{ github.event.workflow_run.pull_requests[0].head.sha }}",
+    });
+
+    const gateIndex = names.indexOf(gateName);
+    expect(gateIndex).toBeGreaterThan(
+      names.indexOf("Derive mandatory impact from trusted main"),
+    );
+    for (const later of [
+      "Download triggering E2E preview descriptor",
+      "Recreate disposable Convex preview from trusted main",
+      "Generate bounded Jev browser exploration once",
+      "Assemble trusted run and fail closed on unsupported impact",
+    ]) {
+      expect(names.indexOf(later)).toBeGreaterThan(gateIndex);
+    }
+
+    expect(String(step("prepare", "Publish trusted plan evidence").with?.path)).toContain(
+      "trusted/artifacts/browser-swarm-coverage.json",
+    );
+  });
+
   it("keeps the PR preflight completely free of reusable secret references", () => {
     expect(playwrightWorkflowSource).not.toContain("secrets.");
     expect(playwrightWorkflowSource).not.toContain("CLERK_SECRET_KEY");
@@ -656,22 +696,71 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
   });
 
   it("runs candidate runtime on an internal Docker network and cleans that network up", () => {
-    const startRun = String(
-      step(
-        "attack-worker",
-        "Start verified exact-SHA candidate frontend artifact",
-      ).run ?? "",
-    );
-    expect(startRun).toContain("docker network create --internal");
-    expect(startRun).toContain('--network "$CANDIDATE_NETWORK"');
-    expect(startRun).toContain("--publish 127.0.0.1:3000:3000");
-    expect(startRun).toContain("--cap-drop ALL");
-    expect(startRun).toContain("--security-opt no-new-privileges");
+    for (const [jobName, stopName] of [
+      ["trusted-e2e", "Stop isolated trusted E2E candidate frontend"],
+      ["attack-worker", "Stop isolated candidate frontend"],
+    ] as const) {
+      const startRun = String(
+        step(jobName, "Start verified exact-SHA candidate frontend artifact").run ?? "",
+      );
+      expect(startRun).toContain("docker network create --internal");
+      expect(startRun).toContain('--network "$CANDIDATE_NETWORK"');
+      expect(startRun).not.toContain("--publish");
+      expect(startRun).toContain("--cap-drop ALL");
+      expect(startRun).toContain("--security-opt no-new-privileges");
+      expect(startRun).toContain('CANDIDATE_DOCKER_IP="$CANDIDATE_IP"');
+      expect(startRun).toContain("trusted/scripts/intelligence/browserSwarmLoopbackRelay.mjs");
+      expect(startRun).toContain('CANDIDATE_RELAY_PID=$!');
 
-    const stopRun = String(
-      step("attack-worker", "Stop isolated candidate frontend").run ?? "",
-    );
-    expect(stopRun).toContain('docker network rm "$CANDIDATE_NETWORK"');
+      // The relay target is the candidate's address on ITS OWN named network
+      // (a multi-network container would otherwise concatenate addresses).
+      const ipLine =
+        'CANDIDATE_IP="$(docker inspect --format "{{(index .NetworkSettings.Networks \\"$CANDIDATE_NETWORK\\").IPAddress}}" "$CANDIDATE_CONTAINER")"';
+      const dockerRunAt = startRun.indexOf("docker run ");
+      const ipAt = startRun.indexOf(ipLine);
+      const relayAt = startRun.indexOf("trusted/scripts/intelligence/browserSwarmLoopbackRelay.mjs");
+      expect(startRun.split(ipLine).length, jobName).toBe(2);
+      expect(dockerRunAt, jobName).toBeGreaterThan(-1);
+      expect(ipAt, jobName).toBeGreaterThan(dockerRunAt);
+      expect(ipAt, jobName).toBeLessThan(relayAt);
+      expect(startRun, jobName).not.toContain("{{range .NetworkSettings.Networks}}");
+
+      // Fail closed if anything already holds port 3000 on v4 or v6 loopback,
+      // before the relay is launched (an impostor would otherwise answer
+      // /api/health while the relay dies of EADDRINUSE).
+      const v4Probe = startRun.indexOf("/dev/tcp/127.0.0.1/3000");
+      const v6Probe = startRun.indexOf("/dev/tcp/::1/3000");
+      const ssProbe = startRun.indexOf("ss -Hltn 'sport = :3000'");
+      for (const probe of [v4Probe, v6Probe, ssProbe]) {
+        expect(probe, jobName).toBeGreaterThan(-1);
+        expect(probe, jobName).toBeLessThan(relayAt);
+      }
+      expect(startRun.slice(v4Probe, relayAt), jobName).toContain("exit 1");
+
+      // The relay announces readiness itself; no curl may run before the
+      // workflow has seen that line, and relay liveness is checked before curl.
+      const readyAt = startRun.indexOf("relay-listening 127.0.0.1:3000");
+      const firstCurl = startRun.indexOf("curl ");
+      const liveAt = startRun.indexOf('kill -0 "$CANDIDATE_RELAY_PID"');
+      expect(readyAt, jobName).toBeGreaterThan(relayAt);
+      expect(readyAt, jobName).toBeLessThan(firstCurl);
+      expect(liveAt, jobName).toBeGreaterThan(relayAt);
+      expect(liveAt, jobName).toBeLessThan(firstCurl);
+      // The only health probe is the readiness-gated one.
+      const gatedProbe =
+        '[ "$RELAY_READY" = "1" ] && curl --fail --silent --show-error http://127.0.0.1:3000/api/health';
+      const gatedAt = startRun.indexOf(gatedProbe);
+      expect(gatedAt, jobName).toBeGreaterThan(-1);
+      expect(startRun.indexOf("/api/health"), jobName).toBeGreaterThan(-1);
+      expect(startRun.slice(0, gatedAt), jobName).not.toMatch(/curl[^\n]*\/api\/health/);
+      expect(startRun.split(gatedProbe).length, jobName).toBe(2);
+      expect(startRun, jobName).toContain("seq 1 60");
+      expect(startRun, jobName).toContain("sleep 2");
+
+      const stopRun = String(step(jobName, stopName).run ?? "");
+      expect(stopRun).toContain('kill "$CANDIDATE_RELAY_PID"');
+      expect(stopRun).toContain('docker network rm "$CANDIDATE_NETWORK"');
+    }
   });
 
   it("keeps a failed candidate runtime observable instead of destroying its logs (SCRUM-376)", () => {
@@ -782,5 +871,236 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(verdictRun).toContain("autoflow/trusted-browser-swarm");
     expect(verdictRun).toContain("Content-Type: application/json");
     expect(verdictRun).toContain('if [ "$STATE" != "success" ]');
+  });
+
+  describe("SCRUM-350 G4 offline Clerk candidate", () => {
+    const starts = [
+      ["trusted-e2e", "Start verified exact-SHA candidate frontend artifact"],
+      ["attack-worker", "Start verified exact-SHA candidate frontend artifact"],
+    ] as const;
+
+    it.each(starts)(
+      "%s starts the candidate with the offline flag and ONLY the public placeholder secret",
+      (jobName, stepName) => {
+        const candidateStep = step(jobName, stepName);
+        const run = String(candidateStep.run ?? "");
+        const dockerRun = run.slice(run.indexOf("docker run"), run.indexOf("node server.js"));
+
+        expect(dockerRun).toContain(`--env ${OFFLINE_SWARM_CLERK_FLAG}=1`);
+        expect(dockerRun).toContain(
+          `--env CLERK_SECRET_KEY=${OFFLINE_SWARM_CLERK_PLACEHOLDER_SECRET}`,
+        );
+        expect(dockerRun).toContain("--env CLERK_JWT_KEY");
+
+        // The real secret can reach the candidate neither by reference nor by
+        // pass-through; the only CLERK_SECRET_KEY it ever sees is the constant.
+        expect(run).not.toContain("secrets.CLERK_SECRET_KEY");
+        expect(candidateStep.env ?? {}).not.toHaveProperty("CLERK_SECRET_KEY");
+        for (const match of run.matchAll(/CLERK_SECRET_KEY\S*/g)) {
+          expect(match[0]).toBe(
+            `CLERK_SECRET_KEY=${OFFLINE_SWARM_CLERK_PLACEHOLDER_SECRET}`,
+          );
+        }
+        expect(dockerRun).not.toMatch(/--env CLERK_SECRET_KEY(?!=sk_test_autoflow_offline_swarm_placeholder_nonfunctional)/);
+      },
+    );
+
+    it("keeps the workflow placeholder byte-identical to the one proxy.ts requires", () => {
+      expect(OFFLINE_SWARM_CLERK_PLACEHOLDER_SECRET).toBe(
+        "sk_test_autoflow_offline_swarm_placeholder_nonfunctional",
+      );
+    });
+
+    it.each(starts)(
+      "%s refuses a candidate whose Clerk-proxied pages answer 5xx while /api/health is green",
+      (jobName, stepName) => {
+        const run = String(step(jobName, stepName).run ?? "");
+        expect(run).toContain("http://127.0.0.1:3000/sign-in");
+        expect(run).toContain('-lt 500');
+      },
+    );
+  });
+
+  describe("SCRUM-784 browser egress containment", () => {
+    const jobs = [
+      ["trusted-e2e", "Run full trusted E2E suite against exact candidate"],
+      ["attack-worker", "Execute trusted browser missions"],
+    ] as const;
+
+    // G4-02: GitHub's default `bash -e` has no pipefail, so
+    // `node proof | tee file` exits 0 when the proof fails. A failed or
+    // unavailable proof must stop the job before any authenticated test runs.
+    const PROOF_STEP = "Prove browser egress containment before authenticated traffic";
+
+    it.each(jobs)("%s proof step fails closed on a failing or unavailable proof", (jobName) => {
+      const proof = step(jobName, PROOF_STEP);
+      const run = String(proof.run ?? "");
+      expect(run).toMatch(/^\s*set -euo pipefail$/m);
+      const lines = run.split("\n").map((line) => line.trim());
+      const proofAt = lines.findIndex((line) => line.includes("browserEgressProof.mjs"));
+      const verifyAt = lines.findIndex((line) => line.includes("browserEgressProofVerify.mjs"));
+      expect(proofAt).toBeGreaterThan(-1);
+      // The written evidence is independently checked (ok:true, no collector
+      // traffic, allowed origin 200, service worker blocked, denial evidenced).
+      expect(verifyAt).toBeGreaterThan(proofAt);
+      // SC-1: the verifier accepts only this exact argument, resolved against
+      // the step's cwd, so any respelling or cwd change fails every real run.
+      expect(lines[verifyAt]).toBe(
+        `node scripts/intelligence/browserEgressProofVerify.mjs ${EGRESS_EVIDENCE_PATH}`,
+      );
+      expect(proof["working-directory"]).toBe("trusted");
+      // The proof reads the proxy's fixed-vocabulary denial log.
+      expect(proof.env).toHaveProperty(
+        "BROWSER_EGRESS_PROXY_LOG",
+        "${{ runner.temp }}/browser-egress-proxy.log",
+      );
+      expect(String(proof.shell ?? "")).not.toMatch(/^(sh|pwsh|powershell|cmd|python)/);
+    });
+
+    // G4R2-01: the ORDER of the proxy's per-request lines is a channel the
+    // candidate controls (it picks the reason class per denied request), so the
+    // raw log must stay on the runner. It is written under RUNNER_TEMP, read by
+    // the startup step and the proof, and never printed or uploaded afterwards.
+    const RAW_LOG = "browser-egress-proxy.log";
+    const EGRESS_JOBS = ["trusted-e2e", "attack-worker"] as const;
+
+    it.each(EGRESS_JOBS)("%s keeps the raw proxy log private to the runner", (jobName) => {
+      const steps = job(jobName).steps ?? [];
+      const start = steps.findIndex((entry) => entry.name === "Start trusted browser egress proxy");
+      const proof = steps.findIndex((entry) => entry.name === PROOF_STEP);
+
+      // The redirect target is under RUNNER_TEMP, not the workspace.
+      const startRun = String(steps[start]?.run ?? "");
+      expect(startRun).toMatch(/browserEgressContainment\.mjs > "\$RUNNER_TEMP\/browser-egress-proxy\.log" 2>&1 &/);
+      expect(startRun).not.toContain("egress-evidence/" + RAW_LOG);
+
+      // Nothing after the proof step mentions the raw log at all, so the
+      // stop/cleanup step cannot print it and no later step can read it.
+      for (const later of steps.slice(proof + 1)) {
+        expect(JSON.stringify(later), `${later.name} references the raw proxy log`).not.toContain(RAW_LOG);
+      }
+
+      // No upload from an egress job can carry the log or anything in RUNNER_TEMP.
+      const uploads = steps.filter((entry) => String(entry.uses ?? "").startsWith("actions/upload-artifact@"));
+      expect(uploads.length).toBeGreaterThan(0);
+      for (const upload of uploads) {
+        const uploadPath = String(upload.with?.path ?? "");
+        expect(uploadPath).not.toMatch(/runner\.temp|RUNNER_TEMP|egress-proxy|\.log\b/i);
+        // Every uploaded path is inside the trusted checkout, never an escape
+        // such as `${{ github.workspace }}/../_temp/` that names no temp dir.
+        for (const line of uploadPath.split("\n").map((l) => l.trim()).filter(Boolean)) {
+          expect(line, `${upload.name} uploads ${line}`).toMatch(/^trusted\/(?!.*\.\.)/);
+        }
+      }
+    });
+
+    it("only the startup step and the proof step reference the raw log anywhere in the workflow", () => {
+      for (const jobName of EGRESS_JOBS) {
+        const referencing = (job(jobName).steps ?? [])
+          .filter((entry) => JSON.stringify(entry).includes(RAW_LOG))
+          .map((entry) => entry.name);
+        expect(referencing).toEqual(["Start trusted browser egress proxy", PROOF_STEP]);
+      }
+    });
+
+    it("no pipeline in the workflow can mask a failing left-hand command", () => {
+      for (const [name, entry] of Object.entries(workflow.jobs ?? {})) {
+        for (const stepEntry of entry.steps ?? []) {
+          const run = String(stepEntry.run ?? "");
+          if (!/\|\s*tee\b/.test(run)) continue;
+          const failsClosed =
+            /^\s*set -[a-z]*o pipefail\b/m.test(run) || /^bash\b/.test(String(stepEntry.shell ?? ""));
+          expect(failsClosed, `${name}: ${stepEntry.name} pipes to tee without pipefail`).toBe(true);
+        }
+      }
+    });
+
+    it.each(jobs)(
+      "%s starts and proves the egress proxy before any authenticated candidate browser",
+      (jobName, testStepName) => {
+        const names = (job(jobName).steps ?? []).map((entry) => entry.name);
+        const start = names.indexOf("Start trusted browser egress proxy");
+        const proof = names.indexOf("Prove browser egress containment before authenticated traffic");
+        const candidate = names.indexOf("Start verified exact-SHA candidate frontend artifact");
+        const tests = names.indexOf(testStepName);
+        expect(candidate).toBeGreaterThan(-1);
+        expect(start).toBeGreaterThan(candidate);
+        expect(proof).toBeGreaterThan(start);
+        expect(tests).toBeGreaterThan(proof);
+
+        const proxyStep = step(jobName, "Start trusted browser egress proxy");
+        const proxyRun = String(proxyStep.run ?? "");
+        expect(proxyRun).toContain("browserEgressContainment.mjs");
+        expect(proxyRun).toContain("egress-proxy-listening 127.0.0.1:3129");
+        expect(proxyRun).toContain("BROWSER_EGRESS_PROXY_SERVER=http://127.0.0.1:3129");
+        expect(proxyRun).toContain("BROWSER_EGRESS_REQUIRED=1");
+        // Fail closed: the step errors if the proxy dies or never listens.
+        expect(proxyRun).toContain("exit 1");
+        // The proxy is trusted-main code and holds no secret.
+        expect(proxyStep.env ?? {}).not.toHaveProperty("CLERK_SECRET_KEY");
+        expect(proxyStep.env ?? {}).not.toHaveProperty("CONVEX_DEPLOY_KEY");
+
+        const proofRun = String(
+          step(jobName, "Prove browser egress containment before authenticated traffic").run ?? "",
+        );
+        expect(proofRun).toContain("browserEgressProof.mjs");
+        expect(step(jobName, testStepName).env).toHaveProperty("BROWSER_EGRESS_REQUIRED", "1");
+      },
+    );
+
+    it.each([
+      ["trusted-e2e", "Stop isolated trusted E2E candidate frontend"],
+      ["attack-worker", "Stop isolated candidate frontend"],
+    ] as const)("%s stops the proxy and uploads its denial log", (jobName, stopName) => {
+      expect(String(step(jobName, stopName).run ?? "")).toContain("BROWSER_EGRESS_PROXY_PID");
+      const upload = (job(jobName).steps ?? []).find((entry) =>
+        String(entry.uses ?? "").startsWith("actions/upload-artifact@"),
+      );
+      expect(String(upload?.with?.path ?? "")).toContain("trusted/egress-evidence/");
+    });
+  });
+  // SCRUM-826 review F1: playwright.config.ts sets `retries: CI ? 1 : 0` and the
+  // swarm worker runs with CI=true. Playwright exits 0 when a retry passes
+  // (failOnFlakyTests defaults to false), so a worker whose first attempt
+  // confirmed a breach or hit a harness error would still turn the worker job,
+  // and autoflow/trusted-browser-swarm, green - and re-run mutating missions
+  // against the shared preview, overwriting attempt 1's evidence. Swarm
+  // missions are timing-dependent by design (races), so the retry-pass path is
+  // reachable. A breach or harness error in ANY attempt must fail the worker.
+  describe("a trusted swarm worker never retries (SCRUM-826 F1)", () => {
+    // Guards must be live code: a commented-out guard still contains the text.
+    const stripComments = (source: string): string =>
+      source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    const hasRetryPin = (source: string): boolean =>
+      /test\.describe\.configure\(\{\s*retries:\s*0\s*\}\)/.test(
+        stripComments(source),
+      );
+    const hasRetryGuard = (source: string): boolean =>
+      /if\s*\(\s*testInfo\.retry\s*>\s*0\s*\)\s*\{?\s*throw new Error\(/.test(
+        stripComments(source),
+      );
+    const swarmSpecSource = readFileSync(
+      path.resolve(process.cwd(), "playwright/tests/browser-swarm.spec.ts"),
+      "utf8",
+    );
+
+    it("pins the swarm describe to zero retries independent of the global CI retry policy", () => {
+      expect(hasRetryPin(swarmSpecSource)).toBe(true);
+    });
+
+    it("throws if the swarm test body ever runs as a retry", () => {
+      expect(hasRetryGuard(swarmSpecSource)).toBe(true);
+    });
+
+    it("negative control: commented-out guards do not satisfy the contract", () => {
+      const pin = "test.describe.configure({ retries: 0 });";
+      const guard = 'if (testInfo.retry > 0) { throw new Error("x"); }';
+      expect(hasRetryPin(pin)).toBe(true);
+      expect(hasRetryGuard(guard)).toBe(true);
+      expect(hasRetryPin("// " + pin)).toBe(false);
+      expect(hasRetryPin("/* " + pin + " */")).toBe(false);
+      expect(hasRetryGuard("// " + guard)).toBe(false);
+      expect(hasRetryGuard("/*\n" + guard + "\n*/")).toBe(false);
+    });
   });
 });

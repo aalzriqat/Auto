@@ -125,21 +125,42 @@ export async function getCumulativeBalancesAsOf(
   }
 
   if (containingPeriod) {
-    // Bounded to this one period's own entries via the indexed by_org_period
-    // lookup — not a date-filtered scan of every journalLine the org has
-    // ever posted, which wouldn't actually be indexed on date across all
-    // accounts and would silently re-introduce the full-scan problem.
-    // Include REVERSED entries too — same reasoning as accountingReports.ts's
-    // getPostedLines: a reversed entry's own lines are still real historical
-    // postings, cancelled out by a separately-posted reversal entry, not
-    // erased. Filtering to POSTED-only here would keep the reversal's
-    // inverted lines while dropping the original, breaking net-zero.
+    // Retained periods lack a snapshot-completeness certificate. Keep their
+    // journal-line path; absence of a future entry says nothing about older
+    // lines missing from snapshots. Newly created periods start empty and
+    // every posting path updates their snapshots in the same mutation.
+    if (containingPeriod.snapshotFastPathEligible) {
+      // The indexed probe reads at most one entry. A future-dated posting
+      // requires the original date-bounded journal-line calculation.
+      const futureEntry = await ctx.db
+        .query("journalEntries")
+        .withIndex("by_org_period_date", (q) =>
+          q.eq("orgId", orgId).eq("periodId", containingPeriod._id).gt("accountingDate", asOfDate)
+        )
+        .first();
+      if (!futureEntry) {
+        const snapshots = await ctx.db
+          .query("accountBalanceSnapshots")
+          .withIndex("by_org_period", (q) => q.eq("orgId", orgId).eq("periodId", containingPeriod._id))
+          .collect();
+        for (const s of snapshots) {
+          addTo(s.accountId, s.currency, s.runningDebitMinor, s.runningCreditMinor);
+        }
+        return Array.from(totals.values());
+      }
+    }
+
+    // On a partial-period read, narrow the range by accounting date before
+    // loading entries. Include REVERSED entries too: their original lines
+    // remain postings, offset by a separately posted reversal.
     const entriesInPeriod = (
       await ctx.db
         .query("journalEntries")
-        .withIndex("by_org_period", (q) => q.eq("orgId", orgId).eq("periodId", containingPeriod._id))
+        .withIndex("by_org_period_date", (q) =>
+          q.eq("orgId", orgId).eq("periodId", containingPeriod._id).lte("accountingDate", asOfDate)
+        )
         .collect()
-    ).filter((e) => (e.status === "POSTED" || e.status === "REVERSED") && e.accountingDate <= asOfDate);
+    ).filter((e) => e.status === "POSTED" || e.status === "REVERSED");
 
     for (const entry of entriesInPeriod) {
       const lines = await ctx.db

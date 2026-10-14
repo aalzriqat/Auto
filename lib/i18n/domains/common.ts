@@ -286,6 +286,18 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Payments, credits and cheques for a sale cannot be recorded against a separate receivable. Nothing has been changed.",
     "لا يمكن تسجيل الدفعات أو الأرصدة الدائنة أو الشيكات الخاصة بعملية بيع على ذمة مدينة منفصلة. لم يتم تغيير أي شيء.",
   ],
+  ServerError_CUSTOMER_CREDIT_PAYOUT_DISABLED: [
+    "Paying customer credit out is not available during the pilot. Keep it as customer credit instead. Nothing has been changed.",
+    "صرف رصيد العميل غير متاح خلال المرحلة التجريبية. احتفظ به كرصيد دائن للعميل بدلًا من ذلك. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_CUSTOMER_CREDIT_CASH_PAYOUT_UNSUPPORTED: [
+    "A cash payout of customer credit is not supported yet. Use a bank transfer. Nothing has been changed.",
+    "صرف رصيد العميل نقدًا غير مدعوم بعد. استخدم التحويل البنكي. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_SALE_INVOICE_RECEIPT_DOORS_DISABLED: [
+    "Recording or applying customer credit against a sale invoice is not available during the pilot. Nothing has been changed.",
+    "تسجيل رصيد العميل أو تطبيقه على فاتورة البيع غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
+  ],
   ServerError_PAYMENT_LINKS_DISABLED: [
     "Payment links are not available yet. Nothing has been changed.",
     "روابط الدفع غير متاحة حاليًا. لم يتم تغيير أي شيء.",

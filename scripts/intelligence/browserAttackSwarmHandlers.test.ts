@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES,
   type BrowserAttackMission,
@@ -49,6 +49,12 @@ type Scenario = {
   backendOwnsOrg: boolean;
   backendCustomerMatches: number;
   backendQueryError?: Error;
+  // When set, page.goto("/dashboard") lands on `landingUrl` (the app's entry
+  // point, before its redirect) and, if `settledUrl` is non-null, the app then
+  // redirects to it a moment later; the page's waitForURL honors RegExp and
+  // predicate matchers like the real one. Absent = the legacy instant redirect
+  // with a no-op waitForURL.
+  routing?: { landingUrl: string; settledUrl: string | null };
 };
 
 function defaultScenario(overrides: Partial<Scenario> = {}): Scenario {
@@ -65,7 +71,55 @@ function defaultScenario(overrides: Partial<Scenario> = {}): Scenario {
   };
 }
 
-function makeBrowserFixture(scenario: Scenario) {
+// A tracing fake with the state machine of the real Playwright server
+// (playwright-core coreBundle Tracing.start/startChunk/stop), unlike the
+// always-succeeding vi.fn() pair below. SCRUM-826 / SCRUM-824 G4: the
+// Playwright TEST RUNNER starts tracing itself on every context created while
+// a test runs (trace: "retain-on-failure"), so a handler's own tracing.start()
+// threw "Tracing has been already started" and both attack workers died with
+// HARNESS_ERROR. Mock-only tracing could never see that.
+function makeStatefulTracing() {
+  const machine = { started: false, recording: false };
+  const writtenPaths: string[] = [];
+  const startOptions: unknown[] = [];
+  return {
+    machine,
+    writtenPaths,
+    startOptions,
+    start: vi.fn(async (options?: unknown) => {
+      if (machine.started) {
+        throw new Error("tracing.start: Tracing has been already started");
+      }
+      startOptions.push(options);
+      machine.started = true;
+      machine.recording = true;
+    }),
+    startChunk: vi.fn(async () => {
+      // Server behavior: a running chunk is discarded, then a new one begins.
+      if (!machine.started) {
+        throw new Error(
+          "tracing.startChunk: Must start tracing before starting a new chunk",
+        );
+      }
+      machine.recording = true;
+    }),
+    stop: vi.fn(async (options?: { path?: string }) => {
+      if (!machine.started) {
+        throw new Error("tracing.stop: Must start tracing before stopping");
+      }
+      if (options?.path && machine.recording) writtenPaths.push(options.path);
+      machine.started = false;
+      machine.recording = false;
+    }),
+  };
+}
+
+type TracingMode = "mock" | "stateful" | "runner-started";
+
+function makeBrowserFixture(
+  scenario: Scenario,
+  tracingMode: TracingMode = "mock",
+) {
   const state = {
     currentUrl: "http://127.0.0.1:3000/" + scenario.orgId + "/dashboard",
     lang: scenario.initialLanguageButton === "ar" ? "ar" : "en",
@@ -125,16 +179,54 @@ function makeBrowserFixture(scenario: Scenario) {
     }),
   };
 
+  // Redirects still to come after goto("/dashboard") resolved (routing mode).
+  let pendingRedirects = 0;
+
+  const urlMatches = (
+    matcher: string | RegExp | ((url: URL) => boolean),
+    current: string,
+  ): boolean => {
+    // Same contract as playwright-core: a string must equal the full URL, a
+    // RegExp is tested against the full URL string, a predicate gets a URL.
+    if (typeof matcher === "function") return matcher(new URL(current));
+    if (matcher instanceof RegExp) return matcher.test(current);
+    return matcher === current;
+  };
+
   const page = {
     goto: vi.fn(async (url: string) => {
-      if (url === "/dashboard") {
+      if (url === "/dashboard" && scenario.routing) {
+        state.currentUrl = scenario.routing.landingUrl;
+        const settledUrl = scenario.routing.settledUrl;
+        if (settledUrl !== null) {
+          pendingRedirects += 1;
+          setTimeout(() => {
+            state.currentUrl = settledUrl;
+            pendingRedirects -= 1;
+          }, 15);
+        }
+      } else if (url === "/dashboard") {
         state.currentUrl =
           "http://127.0.0.1:3000/" + scenario.orgId + "/dashboard";
       } else {
         state.currentUrl = "http://127.0.0.1:3000" + url;
       }
     }),
-    waitForURL: vi.fn(async () => undefined),
+    waitForURL: vi.fn(
+      async (matcher: string | RegExp | ((url: URL) => boolean)) => {
+        if (!scenario.routing) return undefined;
+        // Resolve as soon as the current URL (now or after a later redirect)
+        // matches. With no redirect left to wait for and no match, the real
+        // 20s timeout is what would fire; model it as an immediate rejection.
+        for (;;) {
+          if (urlMatches(matcher, state.currentUrl)) return undefined;
+          if (pendingRedirects === 0) {
+            throw new Error("page.waitForURL: Timeout 20000ms exceeded.");
+          }
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+      },
+    ),
     url: vi.fn(() => state.currentUrl),
     getByRole: vi.fn((role: string, options?: { name?: string | RegExp }) => {
       if (role === "dialog") return dialog;
@@ -181,16 +273,28 @@ function makeBrowserFixture(scenario: Scenario) {
     screenshot: vi.fn(async () => undefined),
   };
 
-  const tracing = {
-    start: vi.fn(async () => undefined),
-    stop: vi.fn(async () => undefined),
-  };
+  const tracing =
+    tracingMode === "mock"
+      ? {
+          start: vi.fn(async () => undefined),
+          startChunk: vi.fn(async () => undefined),
+          stop: vi.fn(async () => undefined),
+        }
+      : makeStatefulTracing();
   const browserContext = {
     tracing,
     newPage: vi.fn(async () => page),
   };
   const browser = {
-    newContext: vi.fn(async () => browserContext),
+    newContext: vi.fn(async () => {
+      if (tracingMode === "runner-started") {
+        // What the Playwright test runner does inside browser.newContext():
+        // it starts tracing (with its own options) before handing the
+        // context back to the spec.
+        await tracing.start({ screenshots: true, snapshots: true });
+      }
+      return browserContext;
+    }),
     close: vi.fn(async () => {
       state.closed = true;
     }),
@@ -285,6 +389,40 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     mocks.mkdir.mockReset().mockResolvedValue(undefined);
     mocks.writeFile.mockReset().mockResolvedValue(undefined);
     process.env.PLAYWRIGHT_BASE_URL = "http://127.0.0.1:3000";
+    process.env.BROWSER_EGRESS_PROXY_SERVER = "http://127.0.0.1:3129";
+  });
+
+  afterEach(() => {
+    delete process.env.BROWSER_EGRESS_PROXY_SERVER;
+  });
+
+  it("launches Chromium only through the trusted egress proxy and blocks service workers (SCRUM-784)", async () => {
+    const fixture = makeBrowserFixture(defaultScenario());
+
+    await handlerFor("RTL_PARITY")(executionContext("RTL_PARITY"));
+
+    const launchOptions = mocks.chromiumLaunch.mock.calls[0]?.[0];
+    expect(launchOptions.proxy).toEqual({ server: "http://127.0.0.1:3129" });
+    expect(launchOptions.args).toContain(
+      "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+    );
+    expect(fixture.browser.newContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serviceWorkers: "block",
+        storageState: expect.any(String),
+      }),
+    );
+  });
+
+  it("refuses to launch a browser with saved QA state when the egress proxy is missing (SCRUM-784)", async () => {
+    delete process.env.BROWSER_EGRESS_PROXY_SERVER;
+    makeBrowserFixture(defaultScenario());
+
+    await expect(
+      handlerFor("RTL_PARITY")(executionContext("RTL_PARITY")),
+    ).rejects.toThrow(/open egress/);
+
+    expect(mocks.chromiumLaunch).not.toHaveBeenCalled();
   });
 
   it("keeps the executable Phase A family set identical to the handler registry", () => {
@@ -424,6 +562,86 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     expect(evidence.artifacts).toHaveLength(3);
     expect(mocks.writeFile).toHaveBeenCalledTimes(1);
     expect(fixture.browser.close).toHaveBeenCalled();
+  });
+
+  describe("tracing under the Playwright test runner (SCRUM-826, SCRUM-824 G4)", () => {
+    function statefulTracing(
+      fixture: ReturnType<typeof makeBrowserFixture>,
+    ): ReturnType<typeof makeStatefulTracing> {
+      return fixture.tracing as ReturnType<typeof makeStatefulTracing>;
+    }
+
+    it("control: starts tracing itself and writes the trace when the runner has not started it", async () => {
+      const fixture = makeBrowserFixture(defaultScenario(), "stateful");
+      const tracing = statefulTracing(fixture);
+
+      const evidence = await handlerFor("RTL_PARITY")(
+        executionContext("RTL_PARITY"),
+      );
+
+      expect(evidence.oracle.passed).toBe(true);
+      expect(tracing.start).toHaveBeenCalledTimes(1);
+      expect(tracing.startOptions).toEqual([
+        { screenshots: true, snapshots: true, sources: false },
+      ]);
+      expect(tracing.startChunk).not.toHaveBeenCalled();
+      expect(tracing.writtenPaths).toHaveLength(1);
+      expect(tracing.writtenPaths[0]).toMatch(/trace\.zip$/);
+      expect(evidence.artifacts.some((a) => a.endsWith("/trace.zip"))).toBe(
+        true,
+      );
+      expect(tracing.machine.started).toBe(false);
+    });
+
+    it("tolerates tracing the runner already started and still writes the trace artifact", async () => {
+      const fixture = makeBrowserFixture(defaultScenario(), "runner-started");
+      const tracing = statefulTracing(fixture);
+
+      const evidence = await handlerFor("RTL_PARITY")(
+        executionContext("RTL_PARITY"),
+      );
+
+      expect(evidence.oracle.passed).toBe(true);
+      // The handler adopts the running trace with its own chunk instead of
+      // starting a second trace.
+      expect(tracing.startChunk).toHaveBeenCalledTimes(1);
+      expect(tracing.writtenPaths).toHaveLength(1);
+      expect(tracing.writtenPaths[0]).toMatch(/trace\.zip$/);
+      expect(evidence.artifacts.some((a) => a.endsWith("/trace.zip"))).toBe(
+        true,
+      );
+      expect(tracing.machine.started).toBe(false);
+      expect(fixture.browser.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not swallow other tracing.start failures and still closes the browser", async () => {
+      const fixture = makeBrowserFixture(defaultScenario(), "stateful");
+      const tracing = statefulTracing(fixture);
+      tracing.start.mockRejectedValueOnce(
+        new Error("tracing.start: Target page, context or browser has been closed"),
+      );
+
+      await expect(
+        handlerFor("RTL_PARITY")(executionContext("RTL_PARITY")),
+      ).rejects.toThrow(/has been closed/);
+
+      expect(tracing.startChunk).not.toHaveBeenCalled();
+      expect(fixture.browser.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("surfaces a startChunk failure instead of masking it when adopting a runner trace", async () => {
+      const fixture = makeBrowserFixture(defaultScenario(), "runner-started");
+      const tracing = statefulTracing(fixture);
+      tracing.startChunk.mockRejectedValueOnce(
+        new Error("tracing.startChunk: Cannot start a trace chunk while stopping"),
+      );
+
+      await expect(
+        handlerFor("RTL_PARITY")(executionContext("RTL_PARITY")),
+      ).rejects.toThrow(/Cannot start a trace chunk/);
+
+      expect(fixture.browser.close).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("accepts a page that is already in Arabic without clicking the language toggle", async () => {
@@ -599,5 +817,83 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     ).rejects.toThrow(/did not resolve an organization route/);
 
     expect(fixture.browser.close).toHaveBeenCalled();
+  });
+
+  // SCRUM-826 / SCRUM-824 G4: the org route is read from the URL PATHNAME. The
+  // old unanchored RegExp matched the host:port of
+  // "http://localhost:3000/dashboard" as if it were an org segment, so the wait
+  // returned before the app's redirect and both attack workers died with
+  // "could not resolve the authenticated organization route".
+  describe("organization route resolution (SCRUM-826, SCRUM-824 G4)", () => {
+    it("waits through the /dashboard entry URL until the redirect carries the org segment", async () => {
+      const fixture = makeBrowserFixture(
+        defaultScenario({
+          orgId: "org123",
+          routing: {
+            landingUrl: "http://localhost:3000/dashboard",
+            settledUrl: "http://localhost:3000/org123/dashboard",
+          },
+        }),
+      );
+
+      const evidence = await handlerFor("RTL_PARITY")(
+        executionContext("RTL_PARITY"),
+      );
+
+      // The org id came from the redirected URL, and the backend oracle that
+      // consumed it agrees (listMine returns org123).
+      expect(evidence.oracle.passed).toBe(true);
+      expect(fixture.page.url()).toBe("http://localhost:3000/org123/dashboard");
+      expect(mocks.writeFile).toHaveBeenCalledWith(
+        expect.stringMatching(/backend-state\.json$/),
+        expect.stringContaining('"orgIdBefore": "org123"'),
+        "utf8",
+      );
+    });
+
+    it("resolves an org route that carries a query string", async () => {
+      makeBrowserFixture(
+        defaultScenario({
+          orgId: "org123",
+          routing: {
+            landingUrl: "http://localhost:3000/dashboard",
+            settledUrl: "http://localhost:3000/org123/sales?x=1",
+          },
+        }),
+      );
+
+      const evidence = await handlerFor("RTL_PARITY")(
+        executionContext("RTL_PARITY"),
+      );
+
+      expect(evidence.oracle.passed).toBe(true);
+      expect(mocks.writeFile).toHaveBeenCalledWith(
+        expect.stringMatching(/backend-state\.json$/),
+        expect.stringContaining('"orgIdBefore": "org123"'),
+        "utf8",
+      );
+    });
+
+    it("fails closed and never invents an org id when the app never leaves /dashboard", async () => {
+      const fixture = makeBrowserFixture(
+        defaultScenario({
+          orgId: "org123",
+          routing: {
+            landingUrl: "http://localhost:3000/dashboard",
+            settledUrl: null,
+          },
+        }),
+      );
+
+      await expect(
+        handlerFor("RTL_PARITY")(executionContext("RTL_PARITY")),
+      ).rejects.toThrow(/waitForURL: Timeout|organization route/);
+
+      // No backend authority query ran against a guessed organization, and the
+      // browser was still cleaned up.
+      expect(mocks.authenticatedConvexClient).not.toHaveBeenCalled();
+      expect(mocks.writeFile).not.toHaveBeenCalled();
+      expect(fixture.browser.close).toHaveBeenCalledTimes(1);
+    });
   });
 });

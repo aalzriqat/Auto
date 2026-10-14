@@ -22,3 +22,9 @@ aa12d3c97d707fc8044123167f3dbe49e1ae01c2:.gitleaksignore:generic-api-key:5
 # line is described here, not quoted: a verbatim copy of it would trip the
 # same rule on THIS file, as the aa12d3c97 entry above records.)
 fd9b600387d145e607072200d7409e7af51027ac:convex/dealCustodyAccounting.test.ts:generic-api-key:4172
+
+# SCRUM-350 G4: the offline-swarm Clerk unit test builds a fabricated
+# publishable key whose base64 body decodes to the placeholder frontend host
+# foo.clerk.accounts.dev. Publishable keys are public by design and this one
+# names no real Clerk instance; generic-api-key matched it on entropy.
+cec5f13009eda47dbe6e773a7634ed00cd971ef2:lib/offlineSwarmClerk.test.ts:generic-api-key:14

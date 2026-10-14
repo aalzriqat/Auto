@@ -21,6 +21,8 @@ export type BrowserAttackFamily =
   | "UI_BACKEND_MISMATCH";
 
 export const PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES = [
+  "DUPLICATE_SUBMIT",
+  "MULTI_TAB_RACE",
   "RTL_PARITY",
   "UI_BACKEND_MISMATCH",
 ] as const satisfies readonly BrowserAttackFamily[];
@@ -114,6 +116,21 @@ type DeterministicMissionTemplate = Omit<
 
 const DEFAULT_TIMEOUT_MS = 45_000;
 
+/**
+ * Economic attacks drive several real submissions, a forced websocket
+ * reconnect and bounded backend authority reads against a cold preview. A
+ * budget that cannot fit the attack turns every run into HARNESS_ERROR, which
+ * is fail-closed but proves nothing, so these families get a larger bound.
+ */
+const FAMILY_TIMEOUT_MS: Partial<Record<BrowserAttackFamily, number>> = {
+  DUPLICATE_SUBMIT: 180_000,
+  MULTI_TAB_RACE: 180_000,
+};
+
+export function browserMissionTimeoutMs(family: BrowserAttackFamily): number {
+  return FAMILY_TIMEOUT_MS[family] ?? DEFAULT_TIMEOUT_MS;
+}
+
 const template = (
   family: BrowserAttackFamily,
   oracle: BrowserOracleKind,
@@ -122,7 +139,7 @@ const template = (
 ): DeterministicMissionTemplate => ({
   family,
   oracle,
-  timeoutMs: DEFAULT_TIMEOUT_MS,
+  timeoutMs: browserMissionTimeoutMs(family),
   estimatedCostUnits,
   evidence,
 });
@@ -390,7 +407,7 @@ export function planBrowserAttackSwarm({
         ? "CRITICAL"
         : "HIGH",
       oracle: JEV_DEFAULT_ORACLE[suggestion.family],
-      timeoutMs: DEFAULT_TIMEOUT_MS,
+      timeoutMs: browserMissionTimeoutMs(suggestion.family),
       estimatedCostUnits: 5,
       evidence: FAMILY_EVIDENCE[suggestion.family],
       jevProbability: suggestion.probability,
@@ -449,6 +466,74 @@ export function partitionBrowserAttackMissions(
   return buckets;
 }
 
+/**
+ * SCRUM-826 planner-to-executor coverage contract. One source of truth for
+ * "can this plan actually run": the trusted plan calls it before any preview,
+ * build or E2E is paid for, and the worker manifest calls it again. A plan
+ * with ANY unexecutable mission is refused whole — running the executable
+ * half would let the missing obligations look satisfied.
+ */
+export function assertBrowserSwarmMissionsExecutable(
+  missions: readonly BrowserAttackMission[],
+): void {
+  const unsupported = new Map<string, Set<string>>();
+  for (const mission of missions) {
+    if (PHASE_A_EXECUTABLE_FAMILY_SET.has(mission.family)) continue;
+    const invariants = unsupported.get(mission.family) ?? new Set<string>();
+    for (const id of mission.invariantIds) invariants.add(id);
+    unsupported.set(mission.family, invariants);
+  }
+  if (unsupported.size === 0) return;
+  const described = [...unsupported.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(
+      ([family, invariants]) =>
+        `${family} (${[...invariants].sort((l, r) => l.localeCompare(r)).join(", ")})`,
+    );
+  throw new Error(
+    "Browser swarm Phase A has no executable handler for mission family/families: " +
+      described.join(", "),
+  );
+}
+
+/**
+ * Plans ONLY the mandatory deterministic obligations of a trusted impact set
+ * and refuses it if any cannot execute. Jev is excluded on purpose: this is
+ * the pre-provisioning check of what the change obliges, which exploration
+ * can add to but never subtract from.
+ */
+export function assertMandatoryBrowserSwarmCoverage(
+  impactedInvariants: readonly { id: string; severity: InvariantSeverity }[],
+): BrowserMissionPlan {
+  if (impactedInvariants.length === 0) {
+    throw new Error(
+      "Browser swarm coverage requires at least one impacted invariant; an empty set has no obligations to certify",
+    );
+  }
+  const plan = planBrowserAttackSwarm({ impactedInvariants });
+  assertBrowserSwarmMissionsExecutable(plan.missions);
+  return plan;
+}
+
+export interface BrowserSwarmCoverageRow {
+  invariantId: string;
+  family: BrowserAttackFamily;
+  oracle: BrowserOracleKind;
+  executable: boolean;
+}
+
+/** The complete mandatory-mission coverage matrix, one row per mapping. */
+export function browserSwarmCoverageMatrix(): readonly BrowserSwarmCoverageRow[] {
+  return SUPPORTED_BROWSER_SWARM_INVARIANT_IDS.flatMap((invariantId) =>
+    (DETERMINISTIC_MISSIONS[invariantId] ?? []).map((missionTemplate) => ({
+      invariantId,
+      family: missionTemplate.family,
+      oracle: missionTemplate.oracle,
+      executable: PHASE_A_EXECUTABLE_FAMILY_SET.has(missionTemplate.family),
+    })),
+  );
+}
+
 function assertSafeRunId(runId: string): void {
   if (!/^[a-z0-9][a-z0-9._-]{0,80}$/.test(runId)) {
     throw new Error(
@@ -503,20 +588,9 @@ export function buildBrowserSwarmRunManifest({
 }): BrowserSwarmRunManifest {
   assertSafeRunId(runId);
   assertSwarmPreviewIdentity(previewName, expectedCloudUrl);
-
-  const unsupportedFamilies = [
-    ...new Set(
-      plan.missions
-        .map((mission) => mission.family)
-        .filter((family) => !PHASE_A_EXECUTABLE_FAMILY_SET.has(family)),
-    ),
-  ].sort((left, right) => left.localeCompare(right));
-  if (unsupportedFamilies.length > 0) {
-    throw new Error(
-      "Browser swarm Phase A has no executable handler for mission family/families: " +
-        unsupportedFamilies.join(", "),
-    );
-  }
+  // Second, independent enforcement point: the trusted plan already refused
+  // this before provisioning, but the worker never trusts that it did.
+  assertBrowserSwarmMissionsExecutable(plan.missions);
 
   const partitions = partitionBrowserAttackMissions(plan.missions, workerCount);
 

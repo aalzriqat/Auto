@@ -244,6 +244,8 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
     });
 
     expect(PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES).toEqual([
+      "DUPLICATE_SUBMIT",
+      "MULTI_TAB_RACE",
       "RTL_PARITY",
       "UI_BACKEND_MISMATCH",
     ]);

@@ -12,7 +12,12 @@ import type {
   BrowserMissionExecutionContext,
 } from "./browserAttackSwarmExecutor";
 import { browserSwarmLocalBaseUrl } from "./browserAttackSwarmRuntime";
+import {
+  EGRESS_CONTEXT_OPTIONS,
+  browserEgressLaunchOptions,
+} from "./browserEgressLaunch.mjs";
 import type { BrowserMissionEvidence } from "./browserAttackSwarm";
+import { createEconomicAttackHandlers } from "./browserSwarmEconomicAttacks";
 
 type ArtifactWriter = {
   root: string;
@@ -64,13 +69,53 @@ function orgIdFromUrl(url: string): string | null {
   }
 }
 
+// SCRUM-826 / SCRUM-824 G4: the wait below must be decided by the PATHNAME,
+// through the very same parse orgIdFromUrl uses. It used to be an unanchored
+// RegExp tested against the FULL URL, so "http://localhost:3000/dashboard"
+// matched as "/localhost:3000/dashboard" (host:port read as the org segment)
+// before the app had redirected /dashboard to /<orgId>/dashboard; waitForURL
+// returned at once, orgIdFromUrl("/dashboard") was null, and both attack
+// workers died as HARNESS_ERROR in under a second. With one parser behind both
+// the wait and the read, a URL that satisfies the wait always yields an org id.
+// Fail closed: if no org-bearing URL appears within the timeout, waitForURL
+// rejects and the harness error propagates; no org id is ever invented.
+function isOrgRouteUrl(url: URL): boolean {
+  return orgIdFromUrl(url.href) !== null;
+}
+
 async function resolveOrgRoute(page: Page): Promise<string | null> {
   await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
-  await page.waitForURL(
-    /\/[^/]+\/(dashboard|sales|leads|accounting)(\?.*)?$/,
-    { timeout: 20_000 },
-  );
+  await page.waitForURL(isOrgRouteUrl, { timeout: 20_000 });
   return orgIdFromUrl(page.url());
+}
+
+// playwright-core throws exactly this ("Tracing has been already started") from
+// Tracing.start when the context already carries a trace.
+const TRACING_ALREADY_STARTED = /tracing has been already started/i;
+
+// SCRUM-826 / SCRUM-824 G4: this handler runs inside the Playwright test runner
+// (playwright/tests/browser-swarm.spec.ts), and with `trace: "retain-on-failure"`
+// the runner starts tracing on EVERY context created during the test, including
+// ones from browser.newContext() on a browser we launched ourselves. A plain
+// tracing.start() therefore threw and both attack workers ended HARNESS_ERROR.
+//
+// Start our own trace when none is running; when the runner already started
+// one, begin a fresh chunk of it (startChunk discards the runner's empty chunk)
+// so the later tracing.stop({ path }) still writes this mission's trace.zip.
+// Any other start failure is a real harness error and is rethrown untouched.
+async function startMissionTrace(browserContext: BrowserContext): Promise<void> {
+  try {
+    await browserContext.tracing.start({
+      screenshots: true,
+      snapshots: true,
+      sources: false,
+    });
+  } catch (error) {
+    if (!(error instanceof Error) || !TRACING_ALREADY_STARTED.test(error.message)) {
+      throw error;
+    }
+    await browserContext.tracing.startChunk();
+  }
 }
 
 async function openMissionBrowser(
@@ -85,7 +130,14 @@ async function openMissionBrowser(
   await ensureArtifactRoot(paths);
   throwIfMissionAborted(context.signal);
 
-  const browser = await chromium.launch({ headless: true });
+  // SCRUM-784: the saved QA storageState must never be usable from a browser
+  // with open egress. Required, so a missing proxy fails the mission instead of
+  // silently launching an unconstrained browser.
+  const egress = browserEgressLaunchOptions({
+    ...process.env,
+    BROWSER_EGRESS_REQUIRED: "1",
+  });
+  const browser = await chromium.launch({ headless: true, ...egress });
   const abort = () => {
     void browser.close().catch((error: unknown) => {
       const kind = error instanceof Error ? error.name : typeof error;
@@ -104,14 +156,11 @@ async function openMissionBrowser(
     const browserContext = await browser.newContext({
       baseURL: browserSwarmLocalBaseUrl(process.env),
       storageState: USER_AUTH_FILE,
+      ...EGRESS_CONTEXT_OPTIONS,
     });
     throwIfMissionAborted(context.signal);
 
-    await browserContext.tracing.start({
-      screenshots: true,
-      snapshots: true,
-      sources: false,
-    });
+    await startMissionTrace(browserContext);
     throwIfMissionAborted(context.signal);
 
     const page = await browserContext.newPage();
@@ -467,5 +516,15 @@ export function createInitialBrowserAttackHandlers(): BrowserAttackHandlerRegist
   return {
     RTL_PARITY: runRtlParityAttack,
     UI_BACKEND_MISMATCH: runUiBackendMismatchAttack,
+    // SCRUM-826: the economic attacks reuse this module's egress-contained
+    // browser lifecycle and evidence writer; they never launch their own.
+    ...createEconomicAttackHandlers({
+      open: openMissionBrowser,
+      finish: finishMissionBrowser,
+      rethrowAfterCleanup: rethrowAfterMissionCleanup,
+      writeBackendEvidence,
+      resolveOrgRoute,
+      authenticatedClient: authenticatedConvexClient,
+    }),
   };
 }
