@@ -153,7 +153,7 @@ describe("v3 financed-sale plan (server-derived consideration)", () => {
     }
   });
 
-  it("direct-to-supplier: the dealership holds no finance receivable, the plan says so, and a deposit is refused", () => {
+  it("direct-to-supplier: the dealership holds no finance receivable, the plan says so, and a deposit is forwarded", () => {
     const r = buildFinancedSalePostingPlanV3({ ...base, settlesDirect: true });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -177,14 +177,32 @@ describe("v3 financed-sale plan (server-derived consideration)", () => {
       }
     }
 
-    // A reservation deposit cannot be forwarded when the dealership never held the money.
+    // SCRUM-407 c21033: a held reservation deposit is forwarded to the company with the
+    // contribution on this route too (H + D = 500 + 1,375 owed onward), never consideration.
     const withDeposit = buildFinancedSalePostingPlanV3({
       ...base,
       settlesDirect: true,
       depositLiabilityAppliedMinor: 500,
+      customerFirstPaymentMinor: 500,
     });
-    expect(withDeposit.ok).toBe(false);
-    if (!withDeposit.ok) expect(withDeposit.refusal.code).toBe("DEPOSIT_INVALID");
+    expect(withDeposit.ok).toBe(true);
+    if (!withDeposit.ok) return;
+    expect(withDeposit.plan.financeCompanyReceivableMinor).toBe(0);
+    expect(withDeposit.plan.considerationMinor).toBe(12_500);
+    expect(withDeposit.plan.forwardDepositMinor).toBe(500);
+    expect(withDeposit.plan.forwardContributionMinor).toBe(1_375);
+    expect(withDeposit.plan.forwardDueMinor).toBe(1_875);
+    expect(withDeposit.plan.fingerprint).toBe("v3;JOD;K12500;G12500;F1875;D500;C1375;R0;DIRECT");
+
+    // A deposit above the agreed first payment is still refused, on this route as on the other.
+    const tooMuch = buildFinancedSalePostingPlanV3({
+      ...base,
+      settlesDirect: true,
+      depositLiabilityAppliedMinor: 600,
+      customerFirstPaymentMinor: 500,
+    });
+    expect(tooMuch.ok).toBe(false);
+    if (!tooMuch.ok) expect(tooMuch.refusal.code).toBe("DEPOSIT_EXCEEDS_FIRST_PAYMENT");
   });
 
   it("refuses a zero consideration", () => {

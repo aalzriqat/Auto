@@ -3551,6 +3551,10 @@ export default defineSchema({
     reference: v.optional(v.string()),
     actorId: v.id("users"),
     createdAt: v.number(),
+    // SCRUM-411 P2-01: the sale plan fingerprint (A/F/H/D/R) this payment was
+    // recorded against. A payment made BEFORE finalizing counts only while the plan
+    // finalize would freeze still has this fingerprint; absent on older rows.
+    planFingerprint: v.optional(v.string()),
     // Reversal intent (the ledger decides whether it happened).
     reversalRequestedAt: v.optional(v.number()),
     reversalIdempotencyKey: v.optional(v.string()),
@@ -3560,6 +3564,36 @@ export default defineSchema({
     reversalActorId: v.optional(v.id("users")),
   })
     .index("by_org_application", ["orgId", "applicationId"]),
+
+  /**
+   * SCRUM-411 P2-02: the immutable provenance of the DEPOSIT part of one forward version -
+   * which deposit (and which hold, when the deposit carries one) was paid onward to the
+   * finance company inside H + D, and for how much. Written in the same transaction as the
+   * forward row and NEVER patched or deleted: whether the money is still FORWARDED, or has
+   * been recovered, is DERIVED from the forward version's accounting events (a posted
+   * reversal), exactly like the forward's own state, so there is no label here that could
+   * disagree with the ledger. `sum(amountMinor)` over a version's slices equals that row's
+   * `depositPortionMinor` (checked when it is written). Absent for forwards recorded before
+   * this table existed and for a replacement recorded after the sale (its deposit is already
+   * consumed into the sale); the deposit spend guard treats a live unsliced version of an
+   * unfinalized deal as covering every deposit of its quote.
+   */
+  financeCompanyForwardSlices: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    forwardId: v.id("financeCompanyForwards"),
+    version: v.number(),
+    depositId: v.id("deposits"),
+    /** The one live hold row of this deposit on the car, when the deposit carries hold rows. */
+    holdId: v.optional(v.id("depositVehicleHolds")),
+    vehicleId: v.id("vehicles"),
+    amountMinor: v.number(),
+    currency: v.string(),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org_forward", ["orgId", "forwardId"])
+    .index("by_org_deposit", ["orgId", "depositId"]),
 
   /**
    * SCRUM-693: one server-owned unwind of a CLOSED, finance-company-paid deal.

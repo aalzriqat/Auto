@@ -14,7 +14,8 @@
  * runtime and not production data.
  */
 import {
-  C, H, approved, downgradeToV1, finalizeAsOwner, readyDeal, refusalMessageOf, seedFinancedDealership, underReview,
+  approved, downgradeToV1, finalizeAsOwner, finalizeThenTakeForwardBack, payForwardAsOwner, readyDeal,
+  refusalMessageOf, seedFinancedDealership, underReview,
 } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
@@ -82,11 +83,16 @@ async function seed(tag: string, opts: { sourced?: boolean } = {}) {
 }
 type Seeded = Awaited<ReturnType<typeof seed>>;
 
-/** Approved, with a held deposit H and a dealership contribution C, finalized. */
+/**
+ * Approved, with a held deposit H and a dealership contribution C, finalized.
+ * SCRUM-411 P2-01: finalize needs the payment to the company on the books, and a cancel
+ * is refused while it is, so the payment is taken back after the close: the deal is
+ * CLOSED with the forward DUE (the state these door tests always cancelled from).
+ */
 async function finalizedDeal(tag: string, version: 1 | 2 = 2) {
   const s = await seed(tag);
   const { applicationId } = await readyDeal(s);
-  await finalizeAsOwner(s, applicationId);
+  await finalizeThenTakeForwardBack(s, applicationId);
   if (version === 1) await downgradeToV1(s, applicationId);
   return { s, applicationId };
 }
@@ -351,12 +357,6 @@ describe("SCRUM-413 PR-B S413B-4 - a template sync never turns a fake OWNER row 
  * refusal must write nothing.
  */
 describe("SCRUM-413 PR-B D-37 - the cockpit's cancel offer equals what a fresh cancel does, forward gate included", () => {
-  const FORWARD = H + C;
-  const record = (s: Seeded, applicationId: Id<"financeApplications">) =>
-    s.actors.OWNER.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
-      expectedAmountMinor: FORWARD, idempotencyKey: crypto.randomUUID(),
-    });
   const reverse = (s: Seeded, applicationId: Id<"financeApplications">, forwardId: Id<"financeCompanyForwards">) =>
     s.actors.OWNER.as.mutation(api.financeCompanyForward.reverseFinanceCompanyForward, {
       orgId: s.orgId, applicationId, forwardId, reason: "Recorded in error.", idempotencyKey: crypto.randomUUID(),
@@ -387,25 +387,31 @@ describe("SCRUM-413 PR-B D-37 - the cockpit's cancel offer equals what a fresh c
       })
     );
 
+  // SCRUM-411 P2-01: every scenario starts from a deal finalized WITH its payment (the only way to
+  // close a deal that owes H + C), so `forwardId` is that payment, ON_BOOKS; `arrange` moves it to
+  // the state under test.
   const SCENARIOS: Array<{
-    name: string; expected: boolean; version?: 1 | 2;
-    arrange: (s: Seeded, applicationId: Id<"financeApplications">) => Promise<void>;
+    name: string; expected: boolean;
+    arrange: (s: Seeded, applicationId: Id<"financeApplications">, forwardId: Id<"financeCompanyForwards">) => Promise<void>;
   }> = [
-    { name: "DUE (nothing paid yet)", expected: true, arrange: async () => {} },
-    { name: "v1 deal (the forward gate does not apply)", expected: true, version: 1, arrange: async () => {} },
-    { name: "ON_BOOKS", expected: false, arrange: async (s, a) => { await record(s, a); } },
+    // Paid before the close, then taken back: the deal is CLOSED with the forward due again.
+    { name: "DUE (nothing paid yet)", expected: true, arrange: async (s, a, f) => { await reverse(s, a, f); } },
+    {
+      name: "v1 deal (the forward gate does not apply)", expected: true,
+      arrange: async (s, a, f) => { await reverse(s, a, f); await downgradeToV1(s, a); },
+    },
+    { name: "ON_BOOKS", expected: false, arrange: async () => {} },
     {
       name: "POSTING_PENDING", expected: false,
-      arrange: async (s, a) => { await record(s, a); await patchOriginalEvent(s, { status: "PENDING" }); },
+      arrange: async (s) => { await patchOriginalEvent(s, { status: "PENDING" }); },
     },
     {
       name: "POSTING_FAILED", expected: false,
-      arrange: async (s, a) => { await record(s, a); await patchOriginalEvent(s, { status: "FAILED" }); },
+      arrange: async (s) => { await patchOriginalEvent(s, { status: "FAILED" }); },
     },
     {
       name: "REVERSAL_PENDING", expected: false,
-      arrange: async (s, a) => {
-        const forwardId = await record(s, a);
+      arrange: async (s, _a, forwardId) => {
         await s.t.run(async (ctx) => {
           const row = (await ctx.db.get(forwardId))!;
           const key = `finance_company_forward_reversal_${row.applicationId}_v${row.version}`;
@@ -421,23 +427,22 @@ describe("SCRUM-413 PR-B D-37 - the cockpit's cancel offer equals what a fresh c
     },
     {
       name: "completed RETURNED (reported, reversal posted)", expected: true,
-      arrange: async (s, a) => { await reportReturned(s, a, await record(s, a)); },
+      arrange: async (s, a, f) => { await reportReturned(s, a, f); },
     },
     {
       name: "completed REVERSED (voided before the transfer)", expected: true,
-      arrange: async (s, a) => { await reverse(s, a, await record(s, a)); },
+      arrange: async (s, a, f) => { await reverse(s, a, f); },
     },
     {
       name: "NEEDS_REPAIR (reversed but the reversal link is missing)", expected: false,
-      arrange: async (s, a) => {
-        await reverse(s, a, await record(s, a));
+      arrange: async (s, a, f) => {
+        await reverse(s, a, f);
         await patchOriginalEvent(s, { reversedByEventId: undefined });
       },
     },
     {
       name: "over-limit (more versions than the proof reads) fails CLOSED", expected: false,
-      arrange: async (s, a) => {
-        const forwardId = await record(s, a);
+      arrange: async (s, _a, forwardId) => {
         await s.t.run(async (ctx) => {
           const { _id, _creationTime, ...row } = (await ctx.db.get(forwardId))!;
           void _id; void _creationTime;
@@ -453,9 +458,9 @@ describe("SCRUM-413 PR-B D-37 - the cockpit's cancel offer equals what a fresh c
     test(`${scenario.name}: the offer equals a fresh cancel, and a refusal writes nothing`, async () => {
       const s = await seed(`par_${scenario.name.replace(/[^a-z0-9]/gi, "").slice(0, 12)}`);
       const { applicationId } = await readyDeal(s);
-      await finalizeAsOwner(s, applicationId);
-      if (scenario.version === 1) await downgradeToV1(s, applicationId);
-      await scenario.arrange(s, applicationId);
+      const forwardId = (await payForwardAsOwner(s, applicationId))!;
+      await finalizeAsOwner(s, applicationId, { payForward: false });
+      await scenario.arrange(s, applicationId, forwardId);
 
       for (const role of ["MANAGER", "OWNER"] as RoleKey[]) {
         const cockpit = await s.actors[role].as.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });

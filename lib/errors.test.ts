@@ -465,6 +465,63 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(forwardCancelRefusal(proofOf([], "SETTLED"))).toBeNull();
   });
 
+  it("SCRUM-411 P2-01 every forward finalize/transfer refusal has an AR entry and its EN equals the server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { forwardGateRefusal } = await import("../convex/utils/financeCompanyForward");
+    const ar = dictionaries.ar as Record<string, string>;
+    const en = dictionaries.en as Record<string, string>;
+    const finalizeBlocks = ["UNPAID", "STALE", "POSTING_PENDING", "POSTING_FAILED", "REVERSAL_PENDING", "NEEDS_REPAIR"] as const;
+    const seen = new Set<string>();
+    for (const [gate, blocks] of [
+      ["FINALIZE", finalizeBlocks],
+      ["TRANSFER", finalizeBlocks.filter((block) => block !== "STALE")],
+    ] as const) {
+      for (const block of blocks) {
+        const refusal = forwardGateRefusal(block, gate);
+        expect(refusal.code).toBe(`FORWARD_${gate}_${block}`);
+        expect(seen.has(refusal.code)).toBe(false);
+        seen.add(refusal.code);
+        expect(en[`ServerError_${refusal.code}`]).toBe(refusal.message);
+        expect(ar[`ServerError_${refusal.code}`]).toMatch(/[؀-ۿ]/);
+        const error = new ConvexError({ code: refusal.code, message: refusal.message });
+        expect(getLocalizedErrorMessage(error, (k: string) => ar[k] ?? k)).toBe(ar[`ServerError_${refusal.code}`]);
+      }
+    }
+    // The transfer gate has no plan to compare, so a stale judgment there is the books-mismatch refusal.
+    expect(forwardGateRefusal("STALE", "TRANSFER").code).toBe("FORWARD_TRANSFER_NEEDS_REPAIR");
+    expect(seen.size).toBe(11);
+  });
+
+  it("SCRUM-411 P2-03 the unfunded first payment refusal has an AR entry and its EN equals the server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { FIRST_PAYMENT_UNFUNDED_MESSAGE } = await import("../convex/utils/financedSaleRecognition");
+    const ar = dictionaries.ar as Record<string, string>;
+    expect((dictionaries.en as Record<string, string>).ServerError_FIRST_PAYMENT_UNFUNDED).toBe(FIRST_PAYMENT_UNFUNDED_MESSAGE);
+    expect(ar.ServerError_FIRST_PAYMENT_UNFUNDED).toMatch(/[؀-ۿ]/);
+  });
+
+  it("SCRUM-411 P2-02 the deposit-already-paid-onward refusal has an AR entry and its EN equals the server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { DEPOSIT_PAID_ONWARD_REFUSAL } = await import("../convex/utils/financeCompanyForward");
+    const code = "DEPOSIT_PAID_ONWARD_TO_FINANCE_COMPANY";
+    const ar = dictionaries.ar as Record<string, string>;
+    expect(DEPOSIT_PAID_ONWARD_REFUSAL.code).toBe(code);
+    expect((dictionaries.en as Record<string, string>)[`ServerError_${code}`]).toBe(DEPOSIT_PAID_ONWARD_REFUSAL.message);
+    expect(ar[`ServerError_${code}`]).toMatch(/[؀-ۿ]/);
+    const error = new ConvexError({ code, message: DEPOSIT_PAID_ONWARD_REFUSAL.message });
+    expect(getLocalizedErrorMessage(error, (k: string) => ar[k] ?? k)).toBe(ar[`ServerError_${code}`]);
+  });
+
+  it("SCRUM-411 P2-02 the forward-deposit-provenance refusal has an AR entry and its EN equals the server message", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const { FORWARD_DEPOSIT_PROVENANCE_REFUSAL } = await import("../convex/utils/financeCompanyForward");
+    const code = "FORWARD_DEPOSIT_PROVENANCE_UNCLEAR";
+    const ar = dictionaries.ar as Record<string, string>;
+    expect(FORWARD_DEPOSIT_PROVENANCE_REFUSAL.code).toBe(code);
+    expect((dictionaries.en as Record<string, string>)[`ServerError_${code}`]).toBe(FORWARD_DEPOSIT_PROVENANCE_REFUSAL.message);
+    expect(ar[`ServerError_${code}`]).toMatch(/[؀-ۿ]/);
+  });
+
   it("the English dictionary text equals the server's message for both codes", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     expect(dictionaries.en.ServerError_COMMISSION_BASE_UNUSABLE).toContain("{baseCurrency}");

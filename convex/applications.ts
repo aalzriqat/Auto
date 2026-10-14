@@ -41,8 +41,19 @@ import { assertOperatedDealMode } from "./utils/dealModes";
 import { assertQuoteEconomicsMatchFrozen } from "./utils/quoteEconomicsAnchor";
 import { completeSale } from "./utils/saleCompletion";
 import { requireCommercialVehicle } from "./utils/vehicleLiveness";
-import { isForwardPlan, isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
-import { deriveForwardState, forwardCancelRefusal, forwardGateRefusal } from "./utils/financeCompanyForward";
+import {
+  isForwardPlan,
+  isForwardPlanVersion,
+  planVersionOf,
+  type FinancedSalePostingPlanV3,
+} from "./utils/financedSalePostingPlan";
+import {
+  FORWARD_VERSIONS_ONLY,
+  assertForwardSettledForTransfer,
+  deriveForwardState,
+  forwardCancelRefusal,
+  forwardFinalizeRefusal,
+} from "./utils/financeCompanyForward";
 import {
   resolveFinancedSalePlan,
   financedSaleRecognitionDate,
@@ -1919,15 +1930,8 @@ export const get = query({
     // same facts: an inline copy here would be a third opinion in the file that
     // exists to remove the second one.
     const payer = await settlementPayerForApplication(ctx, app);
-    // The payer is not the only thing that can refuse the direct route.
-    // `setSupplierSettlementRoute` also refuses it while a عربون is held,
-    // because on that route the dealership bills the customer nothing for the
-    // car and the deposit has nowhere to land. Deriving the screen's answer
-    // from the payer alone offered an enabled option the server would reject —
-    // the same UI/server disagreement this query exists to prevent, one guard
-    // further along. Read off the deposits already loaded above rather than
-    // re-querying them.
-    const hasHeldDeposit = deposits.some((deposit) => deposit.status === "HELD");
+    // A held عربون no longer refuses the direct route (plan v3 forwards it to the
+    // finance company with the contribution), so the payer alone decides.
     const payerAllowsDirect = payer.external && payer.counterparty !== null;
 
     return {
@@ -1961,14 +1965,12 @@ export const get = query({
       /** Whether an outside party pays for the car at all. */
       hasExternalFinancier: payer.external,
       /** Whether DIRECT_TO_SUPPLIER is available, and why not when it is not. */
-      canSettleDirectToSupplier: payerAllowsDirect && !hasHeldDeposit,
+      canSettleDirectToSupplier: payerAllowsDirect,
       directRouteRefusal: !payer.external
         ? "NoExternalFinancier"
         : payer.counterparty === null
           ? payer.unidentifiedReason
-          : hasHeldDeposit
-            ? "HeldDeposit"
-            : null,
+          : null,
     };
   },
 });
@@ -3911,6 +3913,14 @@ export const cancelApplication = mutation({
             now,
           });
         } else {
+          // SCRUM-411 P2-01: the payment to the finance company is recorded BEFORE
+          // finalizing, so a deal not yet finalized can already hold one. Cancelling
+          // would strand it on the books with no sale to clear it against; the payment
+          // is taken back (or reported returned) first, by the same proof as above.
+          if (app.finalizedSaleId === undefined) {
+            const forwardBlock = forwardCancelRefusal(await deriveForwardState(ctx, app, FORWARD_VERSIONS_ONLY));
+            if (forwardBlock !== null) throwAppError(forwardBlock.code, forwardBlock.message);
+          }
           await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
         }
 
@@ -4536,29 +4546,9 @@ export const setSupplierSettlementRoute = mutation({
         }
       }
     }
-    // A held عربون and the direct route together are refused, deliberately and
-    // for now.
-    //
-    // On this route the dealership bills the customer nothing for the car, so
-    // the deposit always exceeds what it billed and what becomes of it is a
-    // decision the sale cannot make for itself. The treatments available are
-    // genuinely constrained: applying it to the supplier settlement is refused
-    // whenever it exceeds the margin — which `depositSettlementPlan` calls
-    // ordinary, since deposits run 5-10% of the price and consignment margins
-    // are often smaller — and refunding it needs a method, an approver
-    // different from whoever took it, and the deposit permissions.
-    //
-    // That is a whole product surface, and the mockup gives it one: a
-    // `معالجة العربون` action of its own. Building half of it inside the
-    // finalize button produced two dead ends in review. So the combination
-    // fails closed here, at the point where the operator is choosing, with
-    // somewhere to go — rather than at finalization, where they would be stuck
-    // holding a deal they can neither complete nor unwind.
-    if (args.route === "DIRECT_TO_SUPPLIER" && (await hasHeldQuoteDeposit(ctx, app.quoteId))) {
-      throw new ConvexError(
-        "This deal is holding a reservation deposit, and on the direct route the dealership bills the customer nothing for the car — so what happens to that deposit has to be settled first. Resolve the deposit, then choose this route."
-      );
-    }
+    // A held عربون no longer blocks the direct route (SCRUM-407 c21033, SCRUM-411):
+    // plan v3 discharges it at the sale and owes it onward to the finance company
+    // together with the contribution, exactly as on the through route.
 
     const previous = consignedSettlementRoute(app);
     await ctx.db.patch(args.applicationId, {
@@ -4638,6 +4628,25 @@ async function closingReadinessInputsOrRefusal(
       currency: app.economicsCurrency ?? orgCurrencyNow,
     },
   };
+}
+
+/**
+ * SCRUM-411 P2-01. The forward plan this deal WOULD freeze if it were finalized
+ * now - the one derivation finalize itself uses, so the payment recorded before
+ * finalizing and the gate finalize applies cannot disagree about H + D. Refuses
+ * (like finalize) while the deal is not ready to close. `null`: no forward plan
+ * covers the deal (a cash deal, no financier), so nothing is owed onward.
+ */
+export async function prospectiveForwardPlan(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">,
+  mayReadMoney: boolean
+): Promise<FinancedSalePostingPlanV3 | null> {
+  const inputs = await closingReadinessInputsOrRefusal(ctx, app, "recording the payment to the finance company");
+  if (!inputs.ok) throw closingRefusalError(redactClosingReason(inputs.refusal, mayReadMoney, "WITHHELD_UNAVAILABLE"));
+  const plan = await resolveFinancedSalePlan(ctx, app, { ...inputs.inputs, mayReadMoney });
+  // `=== 3` (not the version predicate): a type guard on `plan.version` does not narrow `plan` itself.
+  return plan !== undefined && isForwardPlan(plan) && plan.version === 3 ? plan : null;
 }
 
 /** A readiness reason flattened onto the wire: the English diagnostic, the code, and params only when there are any. */
@@ -4894,25 +4903,6 @@ export const finalizeDeal = mutation({
           }
         }
 
-        // The same refusal as `setSupplierSettlementRoute`, by the other door.
-        //
-        // That guard sees only the moment the route is chosen. A deposit taken
-        // AFTERWARDS slips past it — `deposits.create` needs only VIEW_SALES and
-        // the vehicle is RESERVED rather than SOLD, so nothing stops one. The
-        // deal then reached `resolveReservationDeposits`, whose message names
-        // five treatments this PR removed the UI for, leaving the operator at
-        // the finalize button being told to do something the product no longer
-        // offers. That is precisely the stranding the route-time refusal exists
-        // to prevent, so it is refused here too and in the same terms.
-        if (
-          app.supplierSettlementRoute === "DIRECT_TO_SUPPLIER" &&
-          (await hasHeldQuoteDeposit(ctx, app.quoteId))
-        ) {
-          throw new ConvexError(
-            "This deal is holding a reservation deposit, and on the direct route the dealership bills the customer nothing for the car — so what happens to that deposit has to be settled first. Resolve the deposit, then finalize."
-          );
-        }
-
         const quote = await ctx.db.get(app.quoteId);
         if (!quote || quote.orgId !== args.orgId) throw new ConvexError("Quote not found");
         if (quote.customerId !== app.customerId || quote.vehicleId !== app.vehicleId) {
@@ -4987,6 +4977,21 @@ export const finalizeDeal = mutation({
           depositTreatment: args.depositResolution?.treatment,
           mayReadMoney,
         });
+
+        // SCRUM-411 P2-01. The deposit and the contribution are paid to the finance
+        // company BEFORE the sale, so the CURRENT amount must already be on the books
+        // against the exact plan about to be frozen. A payment recorded against other
+        // figures (the contribution, the deposit or the approved amount moved since)
+        // does not count. Refused here, before the first write.
+        if (financedSalePlan !== undefined && isForwardPlan(financedSalePlan)) {
+          const forwardRefusal = forwardFinalizeRefusal(
+            await deriveForwardState(ctx, app, {
+              dueMinor: financedSalePlan.forwardDueMinor,
+              fingerprint: financedSalePlan.fingerprint,
+            })
+          );
+          if (forwardRefusal !== null) throwAppError(forwardRefusal.code, forwardRefusal.message);
+        }
 
         // The sale row's financingType; the settlementStatus below keys on it too.
         const saleFinancingType =
@@ -5409,9 +5414,7 @@ export const confirmDisbursement = mutation({
         // books (or nothing is due) - by the ONE proof, never a second check.
         // The refusal names who acts next and never carries the forward amounts.
         if (isForwardPlanVersion(planVersionOf(app))) {
-          const forward = await deriveForwardState(ctx, app);
-          const forwardRefusal = forwardGateRefusal(forward.state);
-          if (forwardRefusal !== null) throw new ConvexError(forwardRefusal);
+          await assertForwardSettledForTransfer(ctx, app);
         } else if (!app.companyId) {
           // SCRUM-27: a manual company only ever exists on the current plan. One
           // that does not carry it has no proven forward and must not receive.
@@ -5950,6 +5953,12 @@ export const confirmSupplierDisbursement = mutation({
             "This deal settles through the dealership, so the finance company pays the dealership rather than the supplier. Confirm the disbursement on the deal instead."
           );
         }
+        // SCRUM-407 c21033 / SCRUM-411: the finance company transfers the FULL
+        // approved amount only after the dealership has forwarded the deposit and its
+        // contribution to it, on this route exactly as on the through route. The same
+        // ONE proof `confirmDisbursement` asks; the refusal names who acts next and
+        // never carries H or D.
+        if (isForwardPlanVersion(planVersionOf(app))) await assertForwardSettledForTransfer(ctx, app);
         // Not folded into the idempotency key's job. A retry with the same key
         // is suppressed upstream; this catches a SECOND advice recorded under a
         // different key, which is a correction somebody has to make

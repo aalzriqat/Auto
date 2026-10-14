@@ -24,7 +24,8 @@
  * runtime and not production data.
  */
 import {
-  C, G, closePriorYearPeriod, finalizeAsOwner, readyDeal, refusalDataOf, refusalMessageOf, seedFinancedDealership,
+  C, G, closePriorYearPeriod, finalizeAsOwner, finalizeThenTakeForwardBack, readyDeal, refusalDataOf, refusalMessageOf,
+  seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
@@ -313,15 +314,50 @@ describe("SCRUM-411 - direct route: refusals happen before the first write", () 
     expect(await s.t.run((ctx) => ctx.db.query("journalLines").collect())).toEqual([]);
   });
 
-  test("a deal that still holds a reservation deposit is refused on this route, as before", async () => {
+  test("a deal that holds a reservation deposit finalizes on this route once the deposit and contribution are paid", async () => {
+    // Owner rulings SCRUM-407 c21031/c21033: the deposit is forwarded to the finance
+    // company with the contribution, never revenue. Hand-worked from A 12,500, E 9,000,
+    // H 200, D 1,375 (R 0):
+    //   Dr claim A - E 3,500 + Dr deposit liability 200 + Dr contra-revenue 1,375 = 5,075
+    //   Cr commission A + R - E 3,500 + Cr AP-finance H + D 1,575              = 5,075
     const s = await seed("p2");
     const { applicationId } = await readyDeal(s, { route: "DIRECT_TO_SUPPLIER" });
-    const refusal = await refusalMessageOf(
+    await finalizeAsOwner(s, applicationId);
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app!.status).toBe("CLOSED");
+    expect(app!.financeCompanyForwardDueMinor).toBe(1_575_000);
+    expect(app!.financedSaleNetReceivableMinor).toBe(0);
+
+    const net = await netByAccount(s, "SALE_COMPLETED");
+    expect(net.RECEIVABLE_FROM_SUPPLIERS).toBe(3_500_000);
+    expect(net.CUSTOMER_DEPOSITS_LIABILITY).toBe(200_000);
+    expect(net.SALES_CONSIDERATION_REDUCTIONS).toBe(C);
+    expect(net.CONSIGNMENT_COMMISSION_REVENUE).toBe(-3_500_000);
+    expect(net.ACCOUNTS_PAYABLE_FINANCE_COMPANIES).toBe(-1_575_000);
+    expect(net.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES ?? 0).toBe(0);
+    expect(Object.values(net).reduce((sum, amount) => sum + amount, 0)).toBe(0);
+
+    // The payment made before the sale cleared exactly what the sale then owed onward.
+    const forward = await netByAccount(s, "FINANCE_COMPANY_FORWARD_PAID");
+    expect(forward.ACCOUNTS_PAYABLE_FINANCE_COMPANIES).toBe(1_575_000);
+    const all = await everyLineNet(s);
+    expect(all.ACCOUNTS_PAYABLE_FINANCE_COMPANIES ?? 0).toBe(0);
+  });
+
+  test("the same deal is refused until the deposit and contribution are on the books, and nothing is written", async () => {
+    const s = await seed("p2b");
+    const { applicationId } = await readyDeal(s, { route: "DIRECT_TO_SUPPLIER" });
+    const refusal = await refusalDataOf(
       s.owner.as.mutation(api.applications.finalizeDeal, {
         idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
       })
     );
-    expect(refusal).toMatch(/reservation deposit/i);
+    expect(refusal?.code).toBe("FORWARD_FINALIZE_UNPAID");
+    expect(refusal?.message).toMatch(/have not been paid yet/i);
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app!.status).not.toBe("CLOSED");
+    expect(await s.t.run((ctx) => ctx.db.query("sales").collect())).toEqual([]);
+    expect(await s.t.run((ctx) => ctx.db.query("journalLines").collect())).toEqual([]);
   });
 
   test("an approved amount below the supplier's entitlement still refuses (the supplier would be short)", async () => {
@@ -342,7 +378,12 @@ describe("SCRUM-411 - direct route: refusals happen before the first write", () 
 describe("SCRUM-411 - direct route: cancellation mirrors the posted plan", () => {
   test("cancelling the closed deal reverses the v3 journal exactly and cancels the supplier claim", async () => {
     const s = await seed("c1");
-    const { applicationId, saleId } = await closeDirect(s, { gapMinor: R });
+    // A paid forward blocks the cancel (it must be reported returned first), so the
+    // payment is taken back before the sale is cancelled; the payable then nets to nothing.
+    const { applicationId } = await readyDirect(s, { gapMinor: R });
+    await finalizeThenTakeForwardBack(s, applicationId);
+    const closed = await s.t.run((ctx) => ctx.db.get(applicationId));
+    const saleId = closed!.finalizedSaleId as Id<"sales">;
 
     await s.owner.as.mutation(api.applications.cancelApplication, {
       orgId: s.orgId, applicationId, reason: "Customer withdrew.", idempotencyKey: crypto.randomUUID(),

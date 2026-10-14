@@ -38,7 +38,7 @@ import {
   type ClosingReadinessReasonCode,
   type ClosingReadinessReasonParams,
 } from "../../lib/closingReadinessReasonCodes";
-import type { AppErrorData } from "./errors";
+import { AppErrorCode, throwAppError, type AppErrorData } from "./errors";
 import {
   custodyLedgerFamilyRefusal,
 } from "./custodySourceLedger";
@@ -789,6 +789,13 @@ function firstUnmetRefusal(readiness: ClosingReadiness): TaggedClosingRefusal {
   };
 }
 
+/**
+ * SCRUM-411 P2-03. Thrown (coded `FIRST_PAYMENT_UNFUNDED`) by `resolveFinancedSalePlan`; the cockpit's
+ * pre-finalize status recognises the code. The EN dictionary entry equals this text (lib/errors.test.ts).
+ */
+export const FIRST_PAYMENT_UNFUNDED_MESSAGE =
+  "The customer's first payment on this deal was agreed on the strength of a reservation deposit that is not being applied to it, so that first payment would be funded by nothing. Apply the deposit to the transaction settlement, or reopen the approval and amend the first payment, before finalizing.";
+
 export async function resolveFinancedSalePlan(
   ctx: QueryCtx | MutationCtx,
   app: Doc<"financeApplications">,
@@ -1033,6 +1040,19 @@ export async function resolveFinancedSalePlan(
         "On a deal financed by a finance company the customer's deposit is forwarded to the company, not applied against the dealer's amount. Choose to apply it to the transaction settlement, or refund or forfeit it, before finalizing."
       );
     }
+    // SCRUM-411 P2-03. The agreed first payment was founded on the customer's
+    // deposit. If that deposit is NOT applied to this purchase - refused here
+    // (refund, forfeiture, offset) or already refunded/forfeited before - H falls
+    // to zero while the first payment is still agreed, and the deal would be
+    // finalized with the customer's first payment funded by nothing. There is no
+    // evidenced replacement-payment path (and no first-payment amendment once
+    // approved), so the combination is refused rather than treated as paid.
+    if (
+      (app.customerFirstPaymentMinor ?? 0) > depositLiabilityAppliedMinor &&
+      ((depositHeldMajor > 0 && !depositIsApplied) || (await hasSettledAwayQuoteDeposit(ctx, app)))
+    ) {
+      throwAppError(AppErrorCode.FIRST_PAYMENT_UNFUNDED, FIRST_PAYMENT_UNFUNDED_MESSAGE);
+    }
     // SCRUM-27: for a manual company the contribution is NOT a stored figure.
     // The letter says how much the dealership sends (S); the deposits already
     // held are part of that, so the dealership's own money is S minus H. It is
@@ -1127,6 +1147,21 @@ export async function resolveFinancedSalePlan(
     throw new ConvexError(result.refusal.message);
   }
   return result.plan;
+}
+
+/** Whether a deposit taken for this deal's car was already refunded or forfeited before finalizing. */
+async function hasSettledAwayQuoteDeposit(
+  ctx: QueryCtx | MutationCtx,
+  app: Doc<"financeApplications">
+): Promise<boolean> {
+  for (const status of ["REFUNDED", "FORFEITED"] as const) {
+    for await (const deposit of ctx.db
+      .query("deposits")
+      .withIndex("by_quote_status", (q) => q.eq("quoteId", app.quoteId).eq("status", status))) {
+      if (deposit.isDeleted !== true && deposit.vehicleId === app.vehicleId) return true;
+    }
+  }
+  return false;
 }
 
 /** "OWNERSHIP_TRANSFER" -> "Ownership transfer". Only for a line with no description. */

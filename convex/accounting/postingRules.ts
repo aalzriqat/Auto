@@ -1179,12 +1179,15 @@ function consignedAgentSaleLines(
   // to collect. The contribution D is contra-revenue owed onward to the company.
   const directV3 = consignment.settlementRoute === "DIRECT_TO_SUPPLIER" && funding?.serverDerivedConsideration === true;
   if (directV3 && funding) {
-    // A v3 direct plan opens no finance receivable and applies no deposit; one that
-    // does is a through-route plan on a direct event, and posting it would credit
-    // revenue for money the company never owed the dealership. Fail closed.
-    if (funding.financeReceivableMinor !== 0 || funding.depositAppliedMinor !== 0) {
+    // A v3 direct plan opens no finance receivable; one that does is a
+    // through-route plan on a direct event, and posting it would credit revenue for
+    // money the company never owed the dealership. Fail closed. A held deposit H is
+    // allowed: it is discharged here (Dr deposit liability) against the same amount
+    // owed onward to the company (Cr AP-finance), so the entry still balances and
+    // no separate DEPOSIT_APPLIED event releases it twice.
+    if (funding.financeReceivableMinor !== 0) {
       throw new ConvexError(
-        `Consigned sale ${p.saleId} settles directly with ${supplier} but its settlement plan carries a finance-company receivable or an applied deposit, which only a sale settled through the dealership has. Re-derive the deal's settlement before posting it.`
+        `Consigned sale ${p.saleId} settles directly with ${supplier} but its settlement plan carries a finance-company receivable, which only a sale settled through the dealership has. Re-derive the deal's settlement before posting it.`
       );
     }
     // K must be exactly what reaches the supplier plus what the customer owes; the

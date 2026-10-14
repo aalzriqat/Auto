@@ -19,7 +19,7 @@
  * runtime and not production data.
  */
 import {
-  C, G, finalizeAsOwner, readyDeal, seedFinancedDealership,
+  C, G, finalizeAsOwner, finalizeThenTakeForwardBack, readyDeal, seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
@@ -98,14 +98,17 @@ async function ledgerNetRevenueMinor(s: Seeded, revenueKey: "SALES_REVENUE" | "C
  */
 async function closeDeal(
   s: Seeded,
-  over: { gapMinor?: number; contributionMinor?: number } = {}
+  over: { gapMinor?: number; contributionMinor?: number; takeForwardBack?: boolean } = {}
 ) {
   const { applicationId } = await readyDeal(s, {
     gapMinor: over.gapMinor,
     contributionMinor: over.contributionMinor,
     route: s.sourced ? "THROUGH_DEALERSHIP" : undefined,
   });
-  await finalizeAsOwner(s, applicationId);
+  // SCRUM-411 P2-01: the payment to the finance company precedes the close. A cancel is refused
+  // while it is on the books, so a test that cancels takes it back after the close.
+  if (over.takeForwardBack === true) await finalizeThenTakeForwardBack(s, applicationId);
+  else await finalizeAsOwner(s, applicationId);
   const app = await s.t.run((ctx) => ctx.db.get(applicationId));
   const sale = await s.t.run((ctx) => ctx.db.get(app!.finalizedSaleId!));
   return { applicationId, saleId: app!.finalizedSaleId as Id<"sales">, sale: sale! };
@@ -332,7 +335,7 @@ describe("SCRUM-411 - a frozen net revenue that is present but untrustworthy is 
 describe("SCRUM-411 - cancelling the deal removes it from every report", () => {
   test("a cancelled owned deal contributes nothing and the ledger nets to zero", async () => {
     const s = await seed("can1");
-    const { applicationId } = await closeDeal(s);
+    const { applicationId } = await closeDeal(s, { takeForwardBack: true });
     await s.owner.as.mutation(api.applications.cancelApplication, {
       orgId: s.orgId, applicationId, reason: "Customer withdrew.", idempotencyKey: crypto.randomUUID(),
     });

@@ -17,6 +17,7 @@
  */
 import { convexTestWithComponents, registerHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
+import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -197,8 +198,14 @@ async function readyManualDeal(s: Seeded, o: { price: number; g: number; sends: 
   return { applicationId, quoteId };
 }
 
-const finalize = (s: Seeded, applicationId: Id<"financeApplications">, key = crypto.randomUUID()) =>
-  s.as.mutation(api.applications.finalizeDeal, { idempotencyKey: key, orgId: s.orgId, applicationId });
+/**
+ * SCRUM-411 P2-01: the deposit and the contribution owed to the finance company are
+ * paid BEFORE the deal is finalized (`pay` false: finalize as is, for a retry).
+ */
+async function finalize(s: Seeded, applicationId: Id<"financeApplications">, key = crypto.randomUUID(), pay = true) {
+  if (pay) await payForwardBeforeFinalize(s, s.as, applicationId);
+  return await s.as.mutation(api.applications.finalizeDeal, { idempotencyKey: key, orgId: s.orgId, applicationId });
+}
 
 async function saleOf(s: Seeded, applicationId: Id<"financeApplications">) {
   return await s.t.run(async (ctx) => {
@@ -412,9 +419,9 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     const sales = () => s.t.run((ctx) => ctx.db.query("sales").collect());
     const countBefore = (await sales()).length;
 
-    await finalize(s, applicationId, key); // same key: a replay, not a second completion
+    await finalize(s, applicationId, key, false); // same key: a replay, not a second completion
     // A fresh key on an already-finalized deal: whether it replays or refuses, state must not move.
-    await finalize(s, applicationId, crypto.randomUUID()).catch(() => undefined);
+    await finalize(s, applicationId, crypto.randomUUID(), false).catch(() => undefined);
 
     const after = await saleOf(s, applicationId);
     expect(after?._id).toBe(first?._id);

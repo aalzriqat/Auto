@@ -810,9 +810,10 @@ export interface FinancedSalePlanV3Input {
   /**
    * True on a consigned car settled DIRECT to the supplier: the finance company
    * pays the SUPPLIER the approved amount A, so the dealership is owed none of it
-   * and the plan opens no finance receivable. K, D and R are derived exactly as on
-   * the through route; the dealership bills the customer nothing for the car, so a
-   * held deposit has no place in the plan.
+   * and the plan opens no finance receivable. K, D, R and a held deposit H are
+   * derived exactly as on the through route: H is the customer's money the
+   * dealership still forwards to the company (with D), so the forward due is
+   * H + D here too and the supplier claim is A - E.
    */
   settlesDirect?: boolean;
 }
@@ -883,16 +884,6 @@ export function buildFinancedSalePostingPlanV3(input: FinancedSalePlanV3Input): 
     );
   }
   const direct = input.settlesDirect === true;
-  // On the direct route the dealership bills the customer nothing for the car, so
-  // a deposit it holds for this deal has no place in the plan: it is resolved
-  // first (refunded, forfeited or offset), never forwarded as if the company were
-  // the dealership's debtor.
-  if (direct && h > 0) {
-    return refuseV3(
-      "DEPOSIT_INVALID",
-      "This deal settles directly with the supplier and the dealership bills the customer nothing for the car, so a reservation deposit it holds has to be resolved before finalizing."
-    );
-  }
   if (input.customerFirstPaymentMinor !== undefined && h > input.customerFirstPaymentMinor) {
     return refuseV3(
       "DEPOSIT_EXCEEDS_FIRST_PAYMENT",

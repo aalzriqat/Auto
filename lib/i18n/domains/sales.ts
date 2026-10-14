@@ -249,6 +249,39 @@ const dealRailMessages = defineBilingualMessages({
     "An accountant resolves the payment to the finance company before the transfer can be confirmed.",
     "يعالج المحاسب الدفع لشركة التمويل قبل أن يمكن تأكيد التحويل.",
   ],
+  /**
+   * SCRUM-411 P2-01. The deposit and the contribution are paid to the finance
+   * company BEFORE the deal is closed; the close waits for the payment to be on
+   * the books for the figures the close would freeze. Each names who acts next.
+   */
+  FinalizeNeedsForwardPayment: [
+    "The customer's deposit and the dealership's contribution are paid to the finance company before the deal is closed. Record that payment, then close the deal.",
+    "يُدفع عربون العميل ومساهمة المعرض لشركة التمويل قبل إغلاق الصفقة. سجّل هذا الدفع ثم أغلق الصفقة.",
+  ],
+  FinalizeForwardPaymentStale: [
+    "The payment to the finance company was recorded against different figures than this deal has now. A manager or accountant voids it (Void the payment, above) and records it again before the deal is closed.",
+    "سُجّل الدفع لشركة التمويل على أرقام تختلف عمّا في الصفقة الآن. يلغي المدير أو المحاسب هذا الدفع (إلغاء الدفع، في الأعلى) ويسجّله من جديد قبل إغلاق الصفقة.",
+  ],
+  FinalizeForwardPaymentPosting: [
+    "The payment to the finance company is recorded but not yet posted to the books. An accountant posts it before the deal is closed.",
+    "الدفع لشركة التمويل مسجَّل لكنه لم يُرحَّل إلى الدفاتر بعد. يرحّله المحاسب قبل إغلاق الصفقة.",
+  ],
+  FinalizeForwardPaymentPostingFailed: [
+    "The payment to the finance company failed to post to the books. An accountant resolves it before the deal is closed.",
+    "تعذّر ترحيل الدفع لشركة التمويل إلى الدفاتر. يعالجه المحاسب قبل إغلاق الصفقة.",
+  ],
+  FinalizeForwardPaymentReversing: [
+    "The payment to the finance company is being reversed and the reversal is not yet posted. An accountant posts it before the deal is closed.",
+    "يجري عكس الدفع لشركة التمويل ولم يُرحَّل العكس بعد. يرحّله المحاسب قبل إغلاق الصفقة.",
+  ],
+  FinalizeForwardPaymentNeedsReview: [
+    "The record of the payment to the finance company does not match the books. An accountant reviews it before the deal is closed.",
+    "سجل الدفع لشركة التمويل لا يطابق الدفاتر. يراجعه المحاسب قبل إغلاق الصفقة.",
+  ],
+  FinalizeFirstPaymentUnfunded: [
+    "The customer's first payment was agreed on the strength of a reservation deposit that has since been refunded or forfeited, so nothing funds it. A manager reopens the approval and amends the first payment before the deal is closed.",
+    "اتُّفق على الدفعة الأولى للعميل اعتمادًا على عربون حجز جرى استرداده أو مصادرته لاحقًا، فلا يوجد ما يموّلها. يعيد المدير فتح الموافقة ويعدّل الدفعة الأولى قبل إغلاق الصفقة.",
+  ],
   ForwardReturnedNotSettledReason: [
     "The finance company returned the payment. An accountant resolves its reversal before the replacement payment can be recorded.",
     "أعادت شركة التمويل الدفعة. يعالج المحاسب عكسها قبل أن يمكن تسجيل الدفعة البديلة.",
@@ -2643,8 +2676,6 @@ export const salesEn = {
   NotRecorded: "Not recorded",
   LeaseFinancing: "Lease",
   CashOrDirect: "Cash / Direct",
-  RouteDirectUnavailableHeldDeposit:
-    "A reservation deposit is still held. On this route the dealership bills the customer nothing for the car, so settle the deposit first.",
   RouteDirectUnavailableNoExternalFinancier:
     "No outside financier on this deal, so nobody but the dealership pays the supplier.",
   RouteDirectUnavailableLease:
@@ -3820,8 +3851,6 @@ export const salesAr = {
   NotRecorded: "غير مسجّل",
   LeaseFinancing: "تأجير تمويلي",
   CashOrDirect: "نقدي / مباشر",
-  RouteDirectUnavailableHeldDeposit:
-    "ما زال هناك عربون محجوز. في هذا المسار لا يُطالب المعرض المشتري بثمن السيارة، لذا يجب معالجة العربون أولًا.",
   RouteDirectUnavailableNoExternalFinancier:
     "لا توجد جهة تمويل خارجية في هذه الصفقة، فلا أحد غير المعرض يدفع للمورّد.",
   RouteDirectUnavailableLease:

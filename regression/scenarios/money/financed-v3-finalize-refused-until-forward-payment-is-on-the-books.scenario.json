@@ -1,0 +1,59 @@
+{
+  "id": "financed-v3-finalize-refused-until-forward-payment-is-on-the-books",
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "approvedMinor": 12500000,
+        "depositMinor": 200000,
+        "contributionMinor": 1375000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "finalize.refusalCode",
+      "value": "FORWARD_FINALIZE_UNPAID"
+    },
+    {
+      "observable": "application.status",
+      "value": "APPROVED"
+    },
+    {
+      "observable": "sales.count",
+      "value": 0
+    },
+    {
+      "observable": "writes.accountingEventsCount",
+      "value": 0
+    },
+    {
+      "observable": "writes.forwardsCount",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum411ForwardOrdering.test.ts",
+    "testName": "finalize without the payment is refused and writes nothing"
+  },
+  "matrixRow": "pilot-financed-v3-forward-gate",
+  "fingerprint": "8f93f71f8325212fe3da27d062af5e8860d57d3ed5772e28a4ac3a414d290a13",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum411-forward-ordering",
+    "firstSeen": "2026-10-14"
+  }
+}

@@ -8,6 +8,7 @@
  */
 import { convexTestWithComponents, registerHandover } from "../test-utils/convexTest";
 import { payInvoice } from "../test-utils/saleInvoiceFixtures";
+import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -117,6 +118,9 @@ async function prepareDeal(s: FinSeed, opts: { gap: number }) {
     description: "No closing costs.",
   });
   await s.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: s.orgId, feeId, notes: "Nothing to match.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0 });
+  // SCRUM-411 P2-01: no deposit is held and the dealer bears no gap share, so nothing is
+  // owed onward and no payment is recorded before finalize.
+  expect(await payForwardBeforeFinalize(s, s.asUser, applicationId)).toBeNull();
   await s.asUser.mutation(api.applications.finalizeDeal, { idempotencyKey: key(), orgId: s.orgId, applicationId });
   return { applicationId, approved };
 }

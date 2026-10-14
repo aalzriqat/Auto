@@ -163,7 +163,9 @@ describe("SCRUM-411 - a deal with no legal invoice closes from server-derived ec
     expect((await s.t.run((ctx) => ctx.db.get(periodId)))?.status).toBe("CLOSED");
     await s.t.run((ctx) => ctx.db.patch(applicationId, { vehicleHandoverAt: handoverAt }));
 
-    const refusal = await refusalDataOf(finalizeAsOwner(s, applicationId));
+    // No payment to the company first: the period refusal fires before the forward gate, and a
+    // payment would itself write an accounting event the "nothing written" checks below forbid.
+    const refusal = await refusalDataOf(finalizeAsOwner(s, applicationId, { payForward: false }));
     expect(refusal).toEqual({
       code: "RECOGNITION_PERIOD_NOT_OPEN",
       message:
