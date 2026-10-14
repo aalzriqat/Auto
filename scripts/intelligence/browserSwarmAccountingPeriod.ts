@@ -10,8 +10,11 @@
  * This runs once, after trusted E2E and before any attack worker, through the
  * same public mutations a dealership uses. It opens the period the current
  * instant falls in, then refuses to finish until the backend itself reports
- * that period as the current open one and nothing dated inside it is still
- * waiting in the outbox. It never writes a probe expense: ACC-2 judges its own.
+ * that period as the current open one and no PENDING outbox event dated inside
+ * it remains. That establishes an open period and a drained backlog; it does
+ * not post anything or observe a posting, so it is not proof that a later
+ * expense will reach POSTED. It never writes a probe expense: ACC-2 judges its
+ * own.
  */
 import type { ConvexHttpClient } from "convex/browser";
 import { api } from "../../convex/_generated/api";
@@ -21,7 +24,8 @@ import { browserEgressLaunchOptions } from "./browserEgressLaunch.mjs";
 export const SWARM_PERIOD_SETUP_FLAG = "BROWSER_SWARM_PERIOD_SETUP";
 
 const PENDING_PAGE_LIMIT = 200; // accountingOutbox.listPending caps at 200
-const DEFAULT_TIMEOUT_MS = 60_000;
+/** Real elapsed time the final check loop may take; the spec sizes its own timeout from this. */
+export const SWARM_PERIOD_SETTLE_TIMEOUT_MS = 60_000;
 const DEFAULT_POLL_MS = 1_000;
 
 export type SwarmAccountingPeriodEvidence = {
@@ -31,13 +35,16 @@ export type SwarmAccountingPeriodEvidence = {
   periodNumber: number;
   startDate: number;
   endDate: number;
-  /** PENDING outbox events dated inside the period when verification passed. */
+  /** PENDING outbox events dated inside the period at the final check. */
   pendingInWindow: number;
   verificationAttempts: number;
 };
 
 export type SwarmAccountingPeriodOptions = {
+  /** The instant whose month is opened. */
   now?: () => number;
+  /** Elapsed-time clock for the settle deadline; separate so a fixed `now` cannot stall it. */
+  clock?: () => number;
   sleep?: (ms: number) => Promise<void>;
   timeoutMs?: number;
   pollMs?: number;
@@ -72,7 +79,7 @@ function periodLabel(period: Pick<PeriodRow, "fiscalYear" | "periodNumber">): st
   return `${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")}`;
 }
 
-/** Opens (or confirms) the period containing `now` and returns what to verify. */
+/** Opens (or confirms) the period containing `now` and returns what to check. */
 async function establishPeriod(
   client: ConvexHttpClient,
   orgId: Id<"organizations">,
@@ -113,7 +120,7 @@ async function establishPeriod(
   };
 }
 
-/** What still stops postings from settling inside `period`; empty means settled. */
+/** What still blocks `period` from being the open period with a drained backlog; empty means none. */
 async function postingBlockers(
   client: ConvexHttpClient,
   orgId: Id<"organizations">,
@@ -150,8 +157,9 @@ export async function ensureSwarmAccountingPeriod(
   options: SwarmAccountingPeriodOptions = {},
 ): Promise<SwarmAccountingPeriodEvidence> {
   const now = (options.now ?? Date.now)();
+  const clock = options.clock ?? Date.now;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ?? SWARM_PERIOD_SETTLE_TIMEOUT_MS;
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
 
   const { period, action } = await establishPeriod(client, orgId, now);
@@ -159,7 +167,9 @@ export async function ensureSwarmAccountingPeriod(
   // and anything queued earlier in the run must post before workers attack.
   await client.mutation(api.accountingOutbox.redrive, { orgId });
 
-  const maxAttempts = Math.max(1, Math.ceil(timeoutMs / pollMs));
+  // Real elapsed time, not an attempt count: every check costs round trips on
+  // top of the sleep, so counting polls would run well past `timeoutMs`.
+  const deadline = clock() + timeoutMs;
   for (let attempt = 1; ; attempt++) {
     const { blockers, pendingInWindow } = await postingBlockers(client, orgId, period);
     if (blockers.length === 0) {
@@ -174,11 +184,12 @@ export async function ensureSwarmAccountingPeriod(
         verificationAttempts: attempt,
       };
     }
-    if (attempt >= maxAttempts) {
+    const remainingMs = deadline - clock();
+    if (remainingMs <= 0) {
       throw new Error(
-        `Swarm accounting period ${periodLabel(period)} did not settle after ${attempt} checks: ${blockers.join("; ")}.`,
+        `Swarm accounting period ${periodLabel(period)} did not settle within ${timeoutMs}ms (${attempt} checks): ${blockers.join("; ")}.`,
       );
     }
-    await sleep(pollMs);
+    await sleep(Math.min(pollMs, remainingMs));
   }
 }

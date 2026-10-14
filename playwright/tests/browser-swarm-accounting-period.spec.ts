@@ -3,9 +3,16 @@ import type { Id } from "../../convex/_generated/dataModel";
 import {
   assertSwarmPeriodSetupEnvironment,
   ensureSwarmAccountingPeriod,
+  SWARM_PERIOD_SETTLE_TIMEOUT_MS,
   SWARM_PERIOD_SETUP_FLAG,
 } from "../../scripts/intelligence/browserSwarmAccountingPeriod";
 import { authenticatedConvexClient, resolveOrgId } from "../utils";
+
+// Everything before the settle loop: the dashboard load and org resolution, the
+// Clerk token wait (up to 30s in playwright/utils.ts), and the period and
+// redrive mutations. The default 60s test timeout would fire inside the loop
+// and replace its "did not settle" blockers with a bare timeout.
+const BROWSER_AND_MUTATION_MARGIN_MS = 90_000;
 
 // SCRUM-350 G4: runs once, after the full trusted E2E suite and before any
 // attack worker, only when the trusted swarm workflow opts in. Anywhere else
@@ -16,10 +23,11 @@ if (process.env[SWARM_PERIOD_SETUP_FLAG] === "1") {
     // failed first attempt.
     test.describe.configure({ retries: 0 });
 
-    test("opens the current accounting period and proves postings can settle", async ({ page }, testInfo) => {
+    test("opens the current accounting period and drains its pending outbox", async ({ page }, testInfo) => {
       if (testInfo.retry > 0) {
         throw new Error("swarm accounting period setup never retries");
       }
+      testInfo.setTimeout(SWARM_PERIOD_SETTLE_TIMEOUT_MS + BROWSER_AND_MUTATION_MARGIN_MS);
       assertSwarmPeriodSetupEnvironment(process.env);
 
       const orgId = (await resolveOrgId(page)) as Id<"organizations">;
