@@ -343,7 +343,7 @@ async function recomputeAndPatchEconomics(
       ) ?? {}
     );
   })();
-  // An agreement the resolver would refuse is void, not merely flagged: a unsealed
+  // An agreement the resolver would refuse is void, not merely flagged: an unsealed
   // recompute (a corrected first payment, say) can leave the customer's payment to
   // the finance company larger than the contribution it replaces even though the
   // shortfall itself did not move.
@@ -3001,10 +3001,9 @@ export const applyQuoteFirstPayment = mutation({
  *    is not dealership money and must never become a dealer receivable or
  *    profit. It is credited instead against `dealerContributionMinor` (SCRUM-766
  *    PR-B), which `recomputeAndPatchEconomics` stores already reduced. A writer
- *    that recorded the share and omitted the split would
- *    understate the profit by the entire gap and nothing downstream would
- *    notice. That is why every destination is a required argument: absence is
- *    not zero here.
+ *    that recorded the share and omitted the split would understate the profit
+ *    by the entire gap and nothing downstream would notice. That is why every
+ *    destination is a required argument: absence is not zero here.
  * 2. It is atomic. Either the resolution, both shares, all three destinations
  *    and the audit stamp land together, or nothing does. A half-resolved row is
  *    a deal whose agreed split does not reconcile to its own gap.
