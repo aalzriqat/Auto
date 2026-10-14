@@ -68,9 +68,13 @@ export interface MissionBrowser {
   paths: MissionArtifactPaths;
 }
 
+/** The two authenticated QA seats a mission browser can be opened as. */
+export type MissionSeat = "primary" | "approver";
+
 /** The shared, egress-contained mission browser lifecycle from the handler module. */
 export interface MissionBrowserRuntime {
-  open(context: BrowserMissionExecutionContext): Promise<MissionBrowser>;
+  /** `seat` defaults to the primary OWNER seat; the approver is the dealership's MANAGER. */
+  open(context: BrowserMissionExecutionContext, seat?: MissionSeat): Promise<MissionBrowser>;
   finish(runtime: MissionBrowser): Promise<readonly string[]>;
   rethrowAfterCleanup(
     runtime: MissionBrowser,
@@ -82,15 +86,15 @@ export interface MissionBrowserRuntime {
   authenticatedClient(page: Page): Promise<ConvexHttpClient>;
 }
 
-const CREATE_EXPENSE_UDF = /^expenses(\.js)?:create$/;
+export const CREATE_EXPENSE_UDF = /^expenses(\.js)?:create$/;
 const UPDATE_EXPENSE_UDF = /^expenses(\.js)?:update$/;
 const FINGERPRINT_CONFLICT = FINGERPRINT_CONFLICT_TEXT;
-const UI_STEP_TIMEOUT_MS = 20_000;
+export const UI_STEP_TIMEOUT_MS = 20_000;
 /** How long the race barrier waits for the second tab's save frame. */
 const RACE_BARRIER_TIMEOUT_MS = 10_000;
 const LOST_RESPONSE_RECOVERY_TIMEOUT_MS = 60_000;
 
-const EXPENSE_AUTHORITY_REFS: ExpenseAuthorityRefs = {
+export const EXPENSE_AUTHORITY_REFS: ExpenseAuthorityRefs = {
   listExpenses: api.expenses.list,
   listAccountingEvents: api.accountingLedger.listAccountingEvents,
   listPendingOutbox: api.accountingOutbox.listPending,
@@ -106,7 +110,7 @@ const ATTACK_TITLE_SUFFIX_BUDGET = 16;
  * (SCRUM-826 D1). The length is bounded by construction, whatever the run id;
  * the full run id is kept as a digest so long ids sharing a prefix stay apart.
  */
-function attackNonce(context: BrowserMissionExecutionContext): string {
+export function attackNonce(context: BrowserMissionExecutionContext): string {
   const leaf = (value: string, max: number) => value.replace(/[^A-Za-z0-9-]/g, "-").slice(0, max);
   const runId = context.manifest.runId;
   const nonce = [
@@ -189,6 +193,9 @@ export class ConvexSyncObserver {
   /** Connections on which the server was heard after they opened, per page label. */
   private readonly answeredConnections = new Map<string, Set<number>>();
   private armedTitle: string | null = null;
+  /** SCRUM-350: an outage that swallows one request and refuses reconnects for a while. */
+  private outage: { title: string; durationMs: number; until: number | null } | null = null;
+  readonly dropped: { title: string; requestId: number; pageLabel: string; connection: number }[] = [];
   private readonly trackedRequests = new Set<string>();
   private sequence = 0;
   private barrier: RaceBarrier | null = null;
@@ -237,6 +244,39 @@ export class ConvexSyncObserver {
   /** Ends the lost-response fault whether or not it fired (SCRUM-826 D1 P3). */
   disarmLostResponse(): void {
     this.armedTitle = null;
+  }
+
+  /**
+   * SCRUM-350 NETWORK_RECOVERY: the request never arrives. The first mutation
+   * of `title` is swallowed before it reaches the server, the connection is
+   * dropped, and every reconnect is refused for `durationMs`; afterwards the
+   * network is back. The complement of the lost response, where the server
+   * committed and only the reply was lost.
+   */
+  armOutage(title: string, durationMs: number): void {
+    this.outage = { title, durationMs, until: null };
+  }
+
+  /** Ends the outage whether or not it fired. */
+  disarmOutage(): void {
+    this.outage = null;
+  }
+
+  /** Mutations of `title` the outage swallowed before the server saw them. */
+  droppedFor(title: string): readonly { requestId: number }[] {
+    return this.dropped.filter((entry) => entry.title === title);
+  }
+
+  /**
+   * True when, after the outage dropped the connection that carried `title`,
+   * the same page was back on a NEWER connection and the server was heard on
+   * it: the client had a positively observed chance to resend.
+   */
+  reconnectedAfterOutage(title: string): boolean {
+    const fault = this.dropped.find((entry) => entry.title === title);
+    if (!fault) return false;
+    const heard = this.answeredConnections.get(fault.pageLabel);
+    return heard !== undefined && [...heard].some((connection) => connection > fault.connection);
   }
 
   /**
@@ -309,6 +349,12 @@ export class ConvexSyncObserver {
   }
 
   private bridge(socket: WebSocketRoute, pageLabel: string): void {
+    const outage = this.outage;
+    if (outage?.until != null && Date.now() < outage.until) {
+      // The network is still down: this connection never reaches the server.
+      void socket.close({ code: 4001, reason: "swarm-injected-network-outage" });
+      return;
+    }
     const server = socket.connectToServer();
     this.connections += 1;
     const connection = this.connections;
@@ -327,6 +373,21 @@ export class ConvexSyncObserver {
         record = { pageLabel, ...frame, title, sentSeq: null };
         this.mutations.push(record);
         this.trackedRequests.add(pageLabel + "#" + frame.requestId);
+      }
+      const outageNow = this.outage;
+      if (record && outageNow && outageNow.until === null && record.title === outageNow.title) {
+        // The network goes down with this request in flight: it is lost
+        // before the server, and the connection is dropped.
+        outageNow.until = Date.now() + outageNow.durationMs;
+        this.dropped.push({
+          title: outageNow.title,
+          requestId: record.requestId,
+          pageLabel,
+          connection,
+        });
+        void socket.close({ code: 4001, reason: "swarm-injected-network-outage" });
+        void server.close();
+        return;
       }
       if (queue) {
         queue.push({ message, record });
@@ -401,7 +462,7 @@ export class ConvexSyncObserver {
 
 // ─── Expense UI drivers ──────────────────────────────────────────────────────
 
-async function gotoExpenses(page: Page, orgId: string, timeout = UI_STEP_TIMEOUT_MS): Promise<void> {
+export async function gotoExpenses(page: Page, orgId: string, timeout = UI_STEP_TIMEOUT_MS): Promise<void> {
   await page.goto("/" + orgId + "/expenses", { waitUntil: "domcontentloaded" });
   await page
     .getByRole("button", { name: "Record Expense", exact: true })
@@ -409,7 +470,7 @@ async function gotoExpenses(page: Page, orgId: string, timeout = UI_STEP_TIMEOUT
 }
 
 /** Settles `work` or rejects the moment the mission is aborted (SCRUM-826 D5). */
-function untilAborted<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
+export function untilAborted<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
   if (signal.aborted) {
     work.catch(() => undefined);
     return Promise.reject(signal.reason);
@@ -477,7 +538,7 @@ export async function openFreshDialog(
   }
 }
 
-type PhaseExit =
+export type PhaseExit =
   | { kind: "CONFIRMED" }
   | { kind: "CLOSED_UNCONFIRMED" }
   | { kind: "CANCELLED" }
@@ -491,7 +552,7 @@ type PhaseExit =
  * save is in flight. The phase is CONFIRMED only when the dialog is hidden
  * AND the client received an accepted reply for this intent's own title.
  */
-async function exitPhase(
+export async function exitPhase(
   observer: ConvexSyncObserver,
   dialog: Locator,
   title: string,
@@ -521,7 +582,7 @@ async function exitPhase(
     : { kind: "BLOCKED", reason: `intent "${title}": the dialog could not be dismissed (D2)` };
 }
 
-async function fillNewExpense(
+export async function fillNewExpense(
   dialog: Locator,
   intent: { title: string; amount: number },
 ): Promise<void> {
@@ -532,7 +593,7 @@ async function fillNewExpense(
 }
 
 /** Waits for the dialog to close, which the client does ONLY after success. */
-async function dialogClosedAfterSuccess(dialog: Locator, timeout: number): Promise<boolean> {
+export async function dialogClosedAfterSuccess(dialog: Locator, timeout: number): Promise<boolean> {
   try {
     await dialog.waitFor({ state: "hidden", timeout });
     return true;
@@ -543,7 +604,7 @@ async function dialogClosedAfterSuccess(dialog: Locator, timeout: number): Promi
 
 // ─── DUPLICATE_SUBMIT ────────────────────────────────────────────────────────
 
-interface IntentReport {
+export interface IntentReport {
   title: string;
   amount: number;
   uiConfirmed: boolean;
@@ -565,7 +626,7 @@ interface IntentReport {
   proven: string[];
 }
 
-async function settleIntent(
+export async function settleIntent(
   client: ConvexHttpClient,
   orgId: string,
   observer: ConvexSyncObserver,
@@ -668,7 +729,7 @@ export interface DuplicateSubmitTimeouts {
 }
 
 /** Production settle interval; matches readSettledExpenseEffectSnapshot's default. */
-const SETTLE_INTERVAL_MS = 1_500;
+export const SETTLE_INTERVAL_MS = 1_500;
 
 export interface MultiTabRaceTimeouts {
   /** How long each tab's save may take to be answered. */
@@ -848,7 +909,7 @@ function composeDuplicateSubmitVerdict(observation: DuplicateSubmitObservation):
   return { proofs, unjudged };
 }
 
-function errorText(error: unknown): string {
+export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
