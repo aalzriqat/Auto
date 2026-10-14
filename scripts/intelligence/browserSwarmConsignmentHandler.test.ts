@@ -45,10 +45,26 @@ interface Faults {
   unmappedAccount?: boolean;
   /** finalizeDeal answers with another, unrelated sale (other vehicle, customer, application). */
   unrelatedSale?: boolean;
+  /** Besides the posted sale, the sale holds an event that FAILED to post. */
+  failedEvent?: boolean;
+  /** The only event the sale holds is a SALE_COMPLETED that FAILED. */
+  failedOnly?: boolean;
+  /** The SALE_COMPLETED is POSTED but names no journal entry. */
+  postedWithoutJournal?: boolean;
+  /** An event the sale's query returned belongs to another source. */
+  foreignSource?: boolean;
+  /** The journal behind the posted event is not itself POSTED. */
+  journalNotPosted?: boolean;
+  /** A journal line carries a non-finite amount. */
+  nanAmount?: boolean;
+  /** A journal line carries a negative amount. */
+  negativeAmount?: boolean;
+  /** A journal line carries a debit and a credit at once. */
+  bothSidesAmount?: boolean;
   /** The sales screen cannot be opened for the screenshot. */
   screenFails?: boolean;
-  /** The first vehicle create hits the write rate limit. */
-  rateLimitVehicleOnce?: boolean;
+  /** The first N vehicle creates hit the write rate limit ("Try again in 1s"). */
+  rateLimitVehicleTimes?: number;
 }
 
 const SCALE = 1_000;
@@ -66,10 +82,9 @@ class World {
   readonly vins: string[] = [];
   readonly actorOf = new Map<string, "owner" | "manager">();
   private nextId = 0;
-  private vehicleRateLimited = false;
+  private vehicleRateLimits = 0;
   private saleId: string | null = null;
   private readonly seeded = { vehicle: "", customer: "", application: "" };
-  private reads = 0;
 
   constructor(readonly faults: Faults) {}
 
@@ -100,6 +115,9 @@ class World {
       line("ACCOUNTS_PAYABLE_SUPPLIERS", 0, (this.faults.shortSupplier ? 14_000 : 15_000) * SCALE),
       line("CONSIGNMENT_COMMISSION_REVENUE", 0, 5_000 * SCALE + (this.faults.overstatedCommission ? 1 : 0)),
     ];
+    if (this.faults.nanAmount) correct[1] = { ...correct[1]!, creditMinor: Number.NaN };
+    if (this.faults.negativeAmount) correct[1] = { ...correct[1]!, debitMinor: -1_000, creditMinor: 15_001_000 };
+    if (this.faults.bothSidesAmount) correct[1] = { ...correct[1]!, debitMinor: 7 };
     // Balanced hidden pair: nothing in the mapped lines betrays it.
     return this.faults.unmappedAccount
       ? [...correct, line("HIDDEN_COGS", 15_000 * SCALE, 0), line("HIDDEN_INVENTORY", 0, 15_000 * SCALE)]
@@ -122,8 +140,8 @@ class World {
       case "finance:createCompany":
         return this.id("company");
       case "vehicles:create":
-        if (this.faults.rateLimitVehicleOnce && !this.vehicleRateLimited) {
-          this.vehicleRateLimited = true;
+        if (this.vehicleRateLimits < (this.faults.rateLimitVehicleTimes ?? 0)) {
+          this.vehicleRateLimits += 1;
           throw new ConvexError("Rate limit exceeded. Try again in 1s");
         }
         this.vins.push(String(a.vin));
@@ -181,14 +199,26 @@ class World {
       case "chartOfAccounts:list":
         return ACCOUNTS.map((key) => ({ _id: `acct-${key}`, systemKey: key, code: "0000" }));
       case "accountingLedger:listAccountingEvents": {
-        this.reads += 1;
-        if (this.faults.neverPosts) return [{ _id: "ev-p", eventType: "SALE_COMPLETED", status: "PENDING" }];
-        const event = { _id: "ev-1", eventType: "SALE_COMPLETED", status: "POSTED", journalEntryId: "je-1" };
+        const source = { sourceType: "sales", sourceId: this.saleId };
+        if (this.faults.neverPosts) return [{ _id: "ev-p", eventType: "SALE_COMPLETED", status: "PENDING", ...source }];
+        if (this.faults.failedOnly) return [{ _id: "ev-f", eventType: "SALE_COMPLETED", status: "FAILED", ...source }];
+        const event = {
+          _id: "ev-1",
+          eventType: "SALE_COMPLETED",
+          status: "POSTED",
+          ...(this.faults.postedWithoutJournal ? {} : { journalEntryId: "je-1" }),
+          ...source,
+          ...(this.faults.foreignSource ? { sourceId: "sale-other" } : {}),
+        };
+        if (this.faults.failedEvent) return [event, { _id: "ev-f", eventType: "DEPOSIT_RECEIVED", status: "FAILED", ...source }];
         return this.faults.duplicateEvent ? [event, { ...event, _id: "ev-2", journalEntryId: "je-2" }] : [event];
       }
       case "accountingLedger:getJournalEntry":
         // The duplicate event posts the same economics again: only the count is wrong.
-        return { entry: { _id: a.journalEntryId }, lines: this.faults.duplicateEvent && a.journalEntryId === "je-2" ? [] : this.lines() };
+        return {
+          entry: { _id: a.journalEntryId, status: this.faults.journalNotPosted ? "DRAFT" : "POSTED" },
+          lines: this.faults.duplicateEvent && a.journalEntryId === "je-2" ? [] : this.lines(),
+        };
       default:
         throw new Error(`unscripted backend call ${name}`);
     }
@@ -208,7 +238,10 @@ class FakePage {
   }
 }
 
-function harness(faults: Faults = {}, options: { signal?: AbortSignal; finishFails?: boolean; oracle?: string } = {}) {
+function harness(
+  faults: Faults = {},
+  options: { signal?: AbortSignal; finishFails?: boolean; oracle?: string; onSleep?: (ms: number) => void } = {},
+) {
   const world = new World(faults);
   const evidence: Record<string, unknown>[] = [];
   const opened: { seat: MissionSeat; finished: boolean }[] = [];
@@ -254,60 +287,87 @@ function harness(faults: Faults = {}, options: { signal?: AbortSignal; finishFai
     mission: { id: "mission-1", family: "CONSIGNMENT_ECONOMICS", oracle: options.oracle ?? "ECONOMIC_AUTHORITY" },
     signal: options.signal ?? new AbortController().signal,
   } as unknown as BrowserMissionExecutionContext;
+  const sleeps: number[] = [];
   const handler = createConsignmentAttackHandlers(runtimeApi, {
-    sleep: async () => undefined,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      options.onSleep?.(ms);
+    },
     pollMs: 1,
     postingWaitMs: 500,
     uiSettleMs: 0,
   }).CONSIGNMENT_ECONOMICS;
   if (!handler) throw new Error("no handler registered for CONSIGNMENT_ECONOMICS");
-  return { run: () => handler(context), world, evidence, opened };
+  return { run: () => handler(context), world, evidence, opened, sleeps };
 }
 
-describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler: mission contract", () => {
-  it("passes a correct product, judges the ECONOMIC_AUTHORITY oracle and records trace, screenshot and backend state", async () => {
+/** Runs the handler and returns whatever it ended in, a result or the error it threw. */
+const settle = (h: { run: () => Promise<unknown> }): Promise<unknown> => h.run().catch((thrown: unknown) => thrown);
+
+/** Asserts the mission ended INCONCLUSIVE for `pattern`, with its evidence written and every seat finished. */
+const inconclusive = async (faults: Faults, pattern: RegExp) => {
+  const h = harness(faults);
+  const error = await settle(h);
+  expect(error).toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
+  expect((error as Error).message).toMatch(pattern);
+  // The evidence says why, labelled by what went wrong; no pass-shaped artifact exists.
+  expect(h.evidence).toHaveLength(1);
+  expect(h.evidence[0]).toMatchObject({ outcome: "INCONCLUSIVE" });
+  expect(h.opened.every((entry) => entry.finished)).toBe(true);
+  return h;
+};
+
+describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler: approved-vs-price basis is never certified", () => {
+  it("is INCONCLUSIVE, never a pass, for a correct product while the scenario seeds approved = price", async () => {
     const h = harness();
-    const result = await h.run();
-    expect(result.oracle).toMatchObject({ kind: "ECONOMIC_AUTHORITY", passed: true });
-    // One trace and screenshot per seat, then the single backend-state record.
-    expect(result.artifacts).toEqual(["trace.zip", "final.png", "trace.zip", "final.png", "backend-state.json"]);
+    const outcome = await settle(h);
+    expect(outcome).toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
+    expect((outcome as Error).message).toMatch(/UNAVAILABLE.*APPROVED_VS_PRICE_BASIS/);
+    // The whole scenario still ran and was read, so the operator can see what was and was not certified.
+    expect(h.world.calls).toContain("owner:applications:finalizeDeal");
+    expect(h.world.calls).toContain("ui:goto /org1/sales");
     expect(h.opened.map((entry) => entry.seat).sort()).toEqual(["approver", "primary"]);
     expect(h.opened.every((entry) => entry.finished)).toBe(true);
     expect(h.evidence).toHaveLength(1);
     expect(h.evidence[0]).toMatchObject({
       attack: "CONSIGNMENT_ECONOMICS",
       oracle: "ECONOMIC_AUTHORITY",
-      violations: [],
+      outcome: "INCONCLUSIVE",
       currency: "JOD",
       settlementRoute: "THROUGH_DEALERSHIP",
-      expected: {
-        priceMinor: 20_000_000,
-        approvedMinor: 20_000_000,
-        entitlementMinor: 15_000_000,
-        contributionMinor: 0,
-        route: "THROUGH_DEALERSHIP",
-      },
+      notDiscriminated: ["APPROVED_VS_PRICE_BASIS"],
+      unjudged: [expect.stringMatching(/APPROVED_VS_PRICE_BASIS/)],
+      expected: { priceMinor: 20_000_000, approvedMinor: 20_000_000, entitlementMinor: 15_000_000, contributionMinor: 0 },
+      ledger: { complete: true },
     });
-    // What the scenario did not exercise is stated, so a pass is not read as more than it proved.
+    // What the scenario did not exercise is stated, so no result is read as more than it proved.
     expect(h.evidence[0]?.notExercised).toEqual([
       "DEALERSHIP_CONTRIBUTION",
       "CUSTOMER_DEPOSIT_FORWARD",
       "DIRECT_TO_SUPPLIER",
       "REVERSAL",
     ]);
-    expect(h.world.calls).toContain("ui:goto /org1/sales");
   });
 
+  it("still reports a proven breach when the scenario cannot discriminate, with the gap stated alongside it", async () => {
+    const h = harness({ grossRecognition: true });
+    const result = (await h.run()) as { oracle: { passed: boolean } };
+    expect(result.oracle.passed).toBe(false);
+    expect(h.evidence[0]).toMatchObject({ phase: "PARTIAL", unjudged: [expect.stringMatching(/APPROVED_VS_PRICE_BASIS/)] });
+  });
+});
+
+describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler: mission contract", () => {
   it("seeds the car with a VIN the product accepts: 17 uppercase characters with no I, O or Q", async () => {
     const h = harness();
-    await h.run();
+    await settle(h);
     expect(h.world.vins).toHaveLength(1);
     expect(h.world.vins[0]).toMatch(/^[A-HJ-NPR-Z0-9]{17}$/);
   });
 
   it("drives the deal through the two seats: the OWNER submits and the MANAGER approves", async () => {
     const h = harness();
-    await h.run();
+    await settle(h);
     expect(h.world.calls).toContain("manager:applications:updateStatus");
     expect(h.world.calls).toContain("manager:financingEconomics:approveDealerPurchaseAmount");
     expect(h.world.calls).toContain("owner:applications:finalizeDeal");
@@ -319,9 +379,11 @@ describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler: mission contract", () => {
     expect(h.world.calls).toEqual([]);
   });
 
-  it("never passes when browser evidence cleanup fails", async () => {
-    const h = harness({}, { finishFails: true });
-    await expect(h.run()).rejects.toThrow(/browser evidence cleanup failed/);
+  it("reports a browser cleanup failure beside a proven breach, never hiding either", async () => {
+    const h = harness({ grossRecognition: true }, { finishFails: true });
+    const result = (await h.run()) as { oracle: { passed: boolean; summary: string } };
+    expect(result.oracle.passed).toBe(false);
+    expect(result.oracle.summary).toMatch(/browser evidence cleanup also failed/);
   });
 
   it("stops touching the backend once the mission is aborted", async () => {
@@ -332,16 +394,49 @@ describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler: mission contract", () => {
     expect(h.world.calls).toEqual([]);
   });
 
-  it("waits out the product's write rate limit and still passes", async () => {
-    const h = harness({ rateLimitVehicleOnce: true });
-    const result = await h.run();
-    expect(result.oracle.passed).toBe(true);
+  it("waits out the product's write rate limit and still runs the scenario to its ledger read", async () => {
+    const h = harness({ rateLimitVehicleTimes: 1 });
+    const outcome = await settle(h);
+    expect(outcome).toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
+    expect(h.evidence[0]).toMatchObject({ outcome: "INCONCLUSIVE", ledger: { complete: true } });
     expect(h.world.calls.filter((call) => call === "owner:vehicles:create")).toHaveLength(2);
+    // "Try again in 1s" is waited out for one second more than it asks.
+    expect(h.sleeps.filter((ms) => ms === 2_000)).toHaveLength(1);
+  });
+
+  it("retries a rate-limited command exactly three times: the fourth attempt goes through", async () => {
+    const h = harness({ rateLimitVehicleTimes: 3 });
+    const outcome = await settle(h);
+    expect(outcome).toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
+    expect(h.evidence[0]).toMatchObject({ outcome: "INCONCLUSIVE", ledger: { complete: true } });
+    expect(h.world.calls.filter((call) => call === "owner:vehicles:create")).toHaveLength(4);
+    expect(h.sleeps.filter((ms) => ms === 2_000)).toHaveLength(3);
+  });
+
+  it("throws the rate limit once the three retries are spent, and goes no further", async () => {
+    const h = harness({ rateLimitVehicleTimes: 4 });
+    await expect(h.run()).rejects.toThrow(/Rate limit exceeded/);
+    expect(h.world.calls.filter((call) => call === "owner:vehicles:create")).toHaveLength(4);
+    // One wait between each pair of attempts, none after the last.
+    expect(h.sleeps).toEqual([2_000, 2_000, 2_000]);
+    expect(h.world.calls).not.toContain("owner:applications:finalizeDeal");
+    expect(h.evidence[0]).toMatchObject({ outcome: "HARNESS_ERROR" });
+  });
+
+  it("makes no further attempt when the mission is aborted while waiting out a rate limit", async () => {
+    const controller = new AbortController();
+    const h = harness(
+      { rateLimitVehicleTimes: 4 },
+      { signal: controller.signal, onSleep: () => controller.abort(new Error("mission timed out")) },
+    );
+    await expect(h.run()).rejects.toThrow(/mission timed out/);
+    expect(h.world.calls.filter((call) => call === "owner:vehicles:create")).toHaveLength(1);
+    expect(h.evidence[0]).toMatchObject({ outcome: "HARNESS_ERROR" });
   });
 
   it("never writes a credential or a connection string into the evidence", async () => {
     const h = harness();
-    await h.run();
+    await settle(h);
     const text = JSON.stringify(h.evidence);
     expect(text).not.toMatch(/token|secret|password|bearer|https?:\/\//i);
   });
@@ -378,22 +473,101 @@ describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler: breaches", () => {
   });
 });
 
-describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler: never a vacuous pass", () => {
-  const inconclusive = async (faults: Faults, pattern: RegExp) => {
-    const h = harness(faults);
-    const error = await h.run().then(
-      () => null,
-      (thrown: unknown) => thrown,
-    );
-    expect(error).toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
-    expect((error as Error).message).toMatch(pattern);
-    // The evidence says why, labelled by what went wrong; no pass-shaped artifact exists.
-    expect(h.evidence).toHaveLength(1);
-    expect(h.evidence[0]).toMatchObject({ outcome: "INCONCLUSIVE" });
-    expect(h.opened.every((entry) => entry.finished)).toBe(true);
-    return h;
-  };
+describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler: B2 line amounts", () => {
+  it("reports a breach for a negative journal line amount", async () => {
+    const result = await harness({ negativeAmount: true }).run();
+    expect(result.oracle.passed).toBe(false);
+    expect(result.oracle.summary).toMatch(/ACCOUNTS_PAYABLE_SUPPLIERS line .* not a nonnegative safe integer/);
+  });
 
+  it("reports a breach for a journal line that carries a debit and a credit at once", async () => {
+    const result = await harness({ bothSidesAmount: true }).run();
+    expect(result.oracle.passed).toBe(false);
+    expect(result.oracle.summary).toMatch(/carries both a debit and a credit/);
+  });
+});
+
+describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler: B4 event and journal failures", () => {
+  it("reports a breach, naming the event, when the sale holds an event that FAILED to post", async () => {
+    const h = harness({ failedEvent: true });
+    const result = await h.run();
+    expect(result.oracle.passed).toBe(false);
+    expect(result.oracle.summary).toMatch(/event ev-f \(DEPOSIT_RECEIVED\) FAILED/);
+    expect(h.evidence[0]).toMatchObject({ violations: [expect.stringMatching(/ev-f/)] });
+  });
+
+  it("reports a breach, not an inconclusive wait, when the only SALE_COMPLETED FAILED", async () => {
+    const h = harness({ failedOnly: true });
+    const result = await h.run();
+    expect(result.oracle.passed).toBe(false);
+    expect(result.oracle.summary).toMatch(/event ev-f \(SALE_COMPLETED\) FAILED/);
+    expect(result.oracle.summary).toMatch(/0 posted SALE_COMPLETED events/);
+  });
+
+  it("reports a breach when a POSTED event names no journal entry", async () => {
+    const result = await harness({ postedWithoutJournal: true }).run();
+    expect(result.oracle.passed).toBe(false);
+    expect(result.oracle.summary).toMatch(/event ev-1 \(SALE_COMPLETED\) is POSTED but names no journal entry/);
+  });
+
+  it("reports a breach when the journal behind a posted event is not itself POSTED", async () => {
+    const result = await harness({ journalNotPosted: true }).run();
+    expect(result.oracle.passed).toBe(false);
+    expect(result.oracle.summary).toMatch(/journal je-1 .* status DRAFT, not POSTED/);
+  });
+
+  it("is inconclusive, never a pass, when a returned event belongs to another source", async () => {
+    await inconclusive({ foreignSource: true }, /belongs to sales\/sale-other, not sales\/sale\d+/);
+  });
+
+  it("is inconclusive when a journal line carries a non-finite amount", async () => {
+    await inconclusive({ nanAmount: true }, /malformed line/);
+  });
+});
+
+describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler: B5 evidence survives a non-pass", () => {
+  it("keeps the expectation and the last ledger read when the ledger never settles", async () => {
+    const h = harness({ neverPosts: true });
+    await settle(h);
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0]).toMatchObject({
+      outcome: "INCONCLUSIVE",
+      expected: { approvedMinor: 20_000_000, entitlementMinor: 15_000_000, route: "THROUGH_DEALERSHIP" },
+      ledger: { complete: true, events: [{ id: "ev-p", eventType: "SALE_COMPLETED", status: "PENDING" }] },
+    });
+    expect((h.evidence[0]?.ledger as { reads: number }).reads).toBeGreaterThan(1);
+  });
+
+  it("keeps the unmapped account id when the journal posts to an account the chart cannot name", async () => {
+    const h = harness({ unmappedAccount: true });
+    await settle(h);
+    expect(h.evidence[0]).toMatchObject({
+      outcome: "INCONCLUSIVE",
+      ledger: {
+        unmappedAccountIds: ["acct-HIDDEN_COGS", "acct-HIDDEN_INVENTORY"],
+        journals: [{ id: "je-1", eventId: "ev-1", status: "POSTED" }],
+      },
+    });
+  });
+
+  it("keeps event, journal and account ids in the evidence of a breach", async () => {
+    const h = harness({ grossRecognition: true });
+    await h.run();
+    expect(h.evidence[0]).toMatchObject({
+      expected: { approvedMinor: 20_000_000 },
+      ledger: {
+        complete: true,
+        events: [{ id: "ev-1", eventType: "SALE_COMPLETED", status: "POSTED", journalEntryId: "je-1" }],
+        journals: [{ id: "je-1", eventId: "ev-1", status: "POSTED" }],
+        lines: expect.arrayContaining([
+          expect.objectContaining({ accountId: "acct-SALES_REVENUE", entryId: "je-1", key: "SALES_REVENUE" }),
+        ]),
+      },
+    });
+  });
+});
+
+describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler: never a vacuous pass", () => {
   it("is inconclusive when the sale never reaches a posted journal", async () => {
     await inconclusive({ neverPosts: true }, /did not settle with a posted SALE_COMPLETED entry/);
   });

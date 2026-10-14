@@ -18,6 +18,13 @@
  * settles, a deal that cannot be finalized, or a setup the product refuses is
  * INCONCLUSIVE or a harness error — never a pass.
  *
+ * ⚠️ This mission cannot PASS yet. The scenario approves the whole price, so a
+ * margin measured on the price cannot be told from one measured on the
+ * financier's approval; while that holds it ends INCONCLUSIVE with
+ * `APPROVED_VS_PRICE_BASIS` in the evidence (a proven breach is still a breach).
+ * It becomes certifiable only when an approved < price case with a resolved
+ * customer gap is seeded and judged (oracle: `customerGapMinor`).
+ *
  * Not covered, and recorded as such in the evidence: a nonzero dealership
  * contribution (its contra-revenue treatment is judged by the oracle, but this
  * scenario seeds none), a customer reservation deposit and its forward to the
@@ -32,6 +39,7 @@ import type { BrowserAttackHandlerRegistry } from "./browserAttackSwarmExecutor"
 import { describeError } from "./browserSwarmBoundaryOracle";
 import { runBoundaryMission, type BoundaryMissionEnv } from "./browserSwarmBoundaryHarness";
 import {
+  discriminatesApprovedFromPrice,
   evaluateConsignmentEconomics,
   toMinor,
   type ConsignmentExpectation,
@@ -84,13 +92,49 @@ function syntheticVin(nonce: string): string {
   return "CNSG1" + createHash("sha256").update(nonce).digest("hex").slice(0, 12).toUpperCase();
 }
 
+const EVENT_STATUSES = ["PENDING", "POSTED", "FAILED", "REVERSED"] as const;
+
 interface SaleLedger {
   events: { id: string; eventType: string; status: string; journalEntryId: string | null }[];
+  journals: { id: string; eventId: string; status: string }[];
   lines: ConsignmentLine[];
+  /** Account ids a journal line posted to that the chart cannot name. */
+  unmappedAccountIds: string[];
+  /** Product failures the read itself proves: a FAILED or REVERSED event, a POSTED one with no journal, a journal that is not POSTED. */
+  defects: string[];
 }
 
-async function readSaleLedger(env: BoundaryMissionEnv, saleId: string, keyOf: ReadonlyMap<string, string>): Promise<SaleLedger> {
+function isSaleCompleted(event: SaleLedger["events"][number], status: string): boolean {
+  return event.eventType === "SALE_COMPLETED" && event.status === status;
+}
+
+/** Leaves what has been read so far in the evidence (`complete` once the whole read finished), so a thrown read still does. */
+function recordLedger(env: BoundaryMissionEnv, ledger: SaleLedger, complete: boolean, reads: number): void {
+  env.detail.ledger = {
+    complete,
+    reads,
+    events: [...ledger.events],
+    journals: [...ledger.journals],
+    lines: [...ledger.lines],
+    unmappedAccountIds: [...ledger.unmappedAccountIds],
+    defects: [...ledger.defects],
+  };
+}
+
+async function readSaleLedger(
+  env: BoundaryMissionEnv,
+  saleId: string,
+  keyOf: ReadonlyMap<string, string>,
+  reads: number,
+): Promise<SaleLedger> {
   const org = env.orgId as Id<"organizations">;
+  const ledger: SaleLedger = { events: [], journals: [], lines: [], unmappedAccountIds: [], defects: [] };
+  const record = (complete: boolean): void => recordLedger(env, ledger, complete, reads);
+  /** Inconclusive, with what was read before the problem kept as evidence. */
+  const fail: (message: string) => never = (message) => {
+    record(false);
+    return inconclusive(message);
+  };
   const raw = asArray(
     await env.client.query(api.accountingLedger.listAccountingEvents, {
       orgId: org,
@@ -100,26 +144,51 @@ async function readSaleLedger(env: BoundaryMissionEnv, saleId: string, keyOf: Re
     }),
     "listAccountingEvents",
   );
-  if (raw.length >= LEDGER_ROW_LIMIT) inconclusive(`accounting events for sale ${saleId} may be truncated`);
-  const events: SaleLedger["events"] = raw.map((row) => {
-    if (!isRecord(row) || typeof row._id !== "string" || typeof row.eventType !== "string" || typeof row.status !== "string") {
-      inconclusive("listAccountingEvents returned a malformed row");
+  if (raw.length >= LEDGER_ROW_LIMIT) fail(`accounting events for sale ${saleId} may be truncated`);
+  for (const row of raw) {
+    if (
+      !isRecord(row) ||
+      typeof row._id !== "string" ||
+      typeof row.eventType !== "string" ||
+      typeof row.status !== "string" ||
+      !(EVENT_STATUSES as readonly string[]).includes(row.status)
+    ) {
+      fail("listAccountingEvents returned a malformed row");
     }
-    return {
+    if (row.sourceType !== "sales" || row.sourceId !== saleId) {
+      fail(`accounting event ${row._id} belongs to ${String(row.sourceType)}/${String(row.sourceId)}, not sales/${saleId}`);
+    }
+    ledger.events.push({
       id: row._id,
       eventType: row.eventType,
       status: row.status,
       journalEntryId: typeof row.journalEntryId === "string" ? row.journalEntryId : null,
-    };
-  });
-  const lines: ConsignmentLine[] = [];
-  for (const event of events) {
-    if (event.status !== "POSTED" || event.journalEntryId === null) continue;
+    });
+  }
+  record(false);
+
+  for (const event of ledger.events) {
+    const label = `event ${event.id} (${event.eventType})`;
+    if (event.status === "FAILED") ledger.defects.push(`${label} FAILED to post`);
+    if (event.status === "REVERSED") ledger.defects.push(`${label} was REVERSED on a sale that was only just finalized`);
+    if (event.status !== "POSTED") continue;
+    if (event.journalEntryId === null) {
+      ledger.defects.push(`${label} is POSTED but names no journal entry`);
+      continue;
+    }
     const entry: unknown = await env.client.query(api.accountingLedger.getJournalEntry, {
       orgId: org,
       journalEntryId: event.journalEntryId as Id<"journalEntries">,
     });
-    if (!isRecord(entry)) inconclusive(`journal ${event.journalEntryId} could not be read back`);
+    if (!isRecord(entry) || !isRecord(entry.entry)) fail(`journal ${event.journalEntryId} could not be read back`);
+    const header = entry.entry;
+    if (header._id !== event.journalEntryId || typeof header.status !== "string") {
+      fail(`journal ${event.journalEntryId} came back with another identity or no status`);
+    }
+    ledger.journals.push({ id: event.journalEntryId, eventId: event.id, status: header.status });
+    if (header.status !== "POSTED") {
+      ledger.defects.push(`journal ${event.journalEntryId} (${label}) has status ${header.status}, not POSTED`);
+    }
     for (const line of asArray(entry.lines, "journal lines")) {
       if (
         !isRecord(line) ||
@@ -127,26 +196,45 @@ async function readSaleLedger(env: BoundaryMissionEnv, saleId: string, keyOf: Re
         typeof line.debitMinor !== "number" ||
         typeof line.creditMinor !== "number" ||
         typeof line.scale !== "number" ||
-        typeof line.currency !== "string"
+        typeof line.currency !== "string" ||
+        !Number.isFinite(line.debitMinor) ||
+        !Number.isFinite(line.creditMinor) ||
+        !Number.isFinite(line.scale)
       ) {
-        inconclusive(`journal ${event.journalEntryId} has a malformed line`);
+        fail(`journal ${event.journalEntryId} has a malformed line`);
       }
       // An account the chart cannot name could be COGS, inventory or revenue in disguise: never judge around it.
       const key = keyOf.get(line.accountId);
-      if (key === undefined) inconclusive(`journal ${event.journalEntryId} posts to an account that is not in the chart, so the lines cannot be judged`);
-      lines.push({
+      if (key === undefined) {
+        if (!ledger.unmappedAccountIds.includes(line.accountId)) ledger.unmappedAccountIds.push(line.accountId);
+        continue;
+      }
+      ledger.lines.push({
         key,
         debitMinor: line.debitMinor,
         creditMinor: line.creditMinor,
         currency: line.currency,
         scale: line.scale,
+        entryId: event.journalEntryId,
+        accountId: line.accountId,
       });
     }
   }
-  return { events, lines };
+  record(true);
+  if (ledger.unmappedAccountIds.length > 0) {
+    inconclusive(
+      `the sale's journals post to ${ledger.unmappedAccountIds.length} account(s) that are not in the chart (${ledger.unmappedAccountIds.join(", ")}), so the lines cannot be judged`,
+    );
+  }
+  return ledger;
 }
 
-/** Two consecutive identical reads that include the sale's own POSTED entry: the outbox drains asynchronously. */
+/**
+ * Two consecutive identical reads that include the sale's own POSTED entry: the
+ * outbox drains asynchronously. A sale whose SALE_COMPLETED stays FAILED for the
+ * whole window (with nothing posted or pending) is returned as it stands: that
+ * is the product's failure to post, to be judged, not a wait that ran out.
+ */
 async function readSettledSaleLedger(
   env: BoundaryMissionEnv,
   options: Required<ConsignmentAttackOptions>,
@@ -154,17 +242,25 @@ async function readSettledSaleLedger(
   keyOf: ReadonlyMap<string, string>,
 ): Promise<SaleLedger> {
   const deadline = Date.now() + options.postingWaitMs;
-  const isPosted = (ledger: SaleLedger): boolean =>
-    ledger.events.some((event) => event.eventType === "SALE_COMPLETED" && event.status === "POSTED") &&
-    ledger.events.every((event) => event.status !== "PENDING");
-  let previous = await untilAborted(env.signal, readSaleLedger(env, saleId, keyOf));
-  for (let reads = 1; reads < LEDGER_MAX_READS && Date.now() < deadline; reads += 1) {
+  let reads = 0;
+  const read = async (): Promise<SaleLedger> => {
+    reads += 1;
+    return untilAborted(env.signal, readSaleLedger(env, saleId, keyOf, reads));
+  };
+  const has = (ledger: SaleLedger, status: string): boolean => ledger.events.some((event) => isSaleCompleted(event, status));
+  const noPending = (ledger: SaleLedger): boolean => ledger.events.every((event) => event.status !== "PENDING");
+  const isPosted = (ledger: SaleLedger): boolean => has(ledger, "POSTED") && noPending(ledger);
+  const failedForGood = (ledger: SaleLedger): boolean => has(ledger, "FAILED") && !has(ledger, "POSTED") && noPending(ledger);
+  let previous = await read();
+  while (reads < LEDGER_MAX_READS && Date.now() < deadline) {
     await untilAborted(env.signal, options.sleep(options.pollMs));
-    const current = await untilAborted(env.signal, readSaleLedger(env, saleId, keyOf));
+    const current = await read();
     if (isPosted(current) && JSON.stringify(current) === JSON.stringify(previous)) return current;
     previous = current;
   }
-  return inconclusive(`the ledger state for sale ${saleId} did not settle with a posted SALE_COMPLETED entry`);
+  if (failedForGood(previous)) return previous;
+  const last = previous.events.map((event) => `${event.eventType}=${event.status}`).join(", ") || "no events";
+  return inconclusive(`the ledger state for sale ${saleId} did not settle with a posted SALE_COMPLETED entry (last read: ${last})`);
 }
 
 function consignmentEconomicsSpec(options: Required<ConsignmentAttackOptions>) {
@@ -181,15 +277,17 @@ function consignmentEconomicsSpec(options: Required<ConsignmentAttackOptions>) {
 
       /** One product command, waiting out the product's own write rate limit. */
       const command = async <T>(run: () => Promise<T>): Promise<T> => {
-        for (let tries = 0; ; tries += 1) {
+        for (let retries = 0; retries < RATE_LIMIT_RETRIES; retries += 1) {
           try {
             return await untilAborted(signal, run());
           } catch (error) {
             const wait = RATE_LIMIT_TEXT.exec(describeError(error));
-            if (!wait || tries >= RATE_LIMIT_RETRIES) throw error;
+            if (!wait) throw error;
             await untilAborted(signal, options.sleep((Number(wait[1]) + 1) * 1000));
           }
         }
+        // The retries are spent: this last attempt's failure, a rate limit included, propagates.
+        return untilAborted(signal, run());
       };
 
       // The denomination is the organization's own, read before anything is seeded.
@@ -204,6 +302,28 @@ function consignmentEconomicsSpec(options: Required<ConsignmentAttackOptions>) {
           "the organization's currency is unreadable or has no known minor-unit scale, so no amount of the scenario can be expressed or judged; nothing was seeded",
         );
         return;
+      }
+
+      // Computed from the scenario's own figures before anything is seeded, so every non-pass states what was expected.
+      const expectation: ConsignmentExpectation = {
+        currency,
+        priceMinor,
+        approvedMinor,
+        entitlementMinor,
+        contributionMinor: 0,
+        route: "THROUGH_DEALERSHIP",
+      };
+      detail.expected = expectation;
+      detail.notExercised = ["DEALERSHIP_CONTRIBUTION", "CUSTOMER_DEPOSIT_FORWARD", "DIRECT_TO_SUPPLIER", "REVERSAL"];
+      // Approved equals price here, so a margin measured on the price would pass too. A pass would certify
+      // a property this scenario cannot tell apart, so the mission is UNAVAILABLE (never a pass) until an
+      // approved < price case with a resolved customer gap is seeded. Breaches it can still prove are reported.
+      const discriminates = discriminatesApprovedFromPrice(expectation);
+      detail.notDiscriminated = discriminates ? [] : ["APPROVED_VS_PRICE_BASIS"];
+      if (!discriminates) {
+        env.unjudged(
+          `UNAVAILABLE (APPROVED_VS_PRICE_BASIS): the scenario seeds approved = price (${approvedMinor} minor units), so a margin measured on the price is indistinguishable from one measured on the financier's approval; CONSIGNMENT_ECONOMICS cannot be certified until an approved < price case with a resolved customer gap is seeded`,
+        );
       }
 
       // The MANAGER seat approves what the OWNER seat submits. A split dealership means no deal can be approved.
@@ -305,7 +425,7 @@ function consignmentEconomicsSpec(options: Required<ConsignmentAttackOptions>) {
         }),
       );
       const economicsStamp = await command(() => client.query(api.applications.handoverStamp, { orgId: org, applicationId }));
-      if (!economicsStamp) throw new BrowserSwarmOracleInconclusiveError("CONS-1: the product issued no economics stamp for the handover, so the deal cannot proceed.");
+      if (!economicsStamp) inconclusive("the product issued no economics stamp for the handover, so the deal cannot proceed");
       await command(() => client.mutation(api.applications.registerVehicleHandover, { orgId: org, applicationId, economicsStamp }));
       await command(() =>
         client.mutation(api.applications.registerExpectedPayment, {
@@ -391,23 +511,11 @@ function consignmentEconomicsSpec(options: Required<ConsignmentAttackOptions>) {
         const key = typeof account.systemKey === "string" ? account.systemKey : typeof account.code === "string" ? account.code : null;
         if (key !== null) keyOf.set(account._id, key);
       }
+      // Every read, including one that throws, leaves its events, journals and account ids in the evidence.
       const ledger = await readSettledSaleLedger(env, options, saleId, keyOf);
-      const completed = ledger.events.filter((event) => event.eventType === "SALE_COMPLETED" && event.status === "POSTED");
+      const completed = ledger.events.filter((event) => isSaleCompleted(event, "POSTED"));
 
-      const expectation: ConsignmentExpectation = {
-        currency,
-        priceMinor,
-        approvedMinor,
-        entitlementMinor,
-        contributionMinor: 0,
-        route: "THROUGH_DEALERSHIP",
-      };
-      detail.expected = expectation;
-      detail.notExercised = ["DEALERSHIP_CONTRIBUTION", "CUSTOMER_DEPOSIT_FORWARD", "DIRECT_TO_SUPPLIER", "REVERSAL"];
-      detail.ledger = {
-        events: ledger.events.map((event) => ({ eventType: event.eventType, status: event.status })),
-        lines: ledger.lines,
-      };
+      if (ledger.defects.length > 0) env.judge({ violations: ledger.defects, unjudged: [] });
       if (completed.length !== 1) {
         env.judge({
           violations: [`the sale holds ${completed.length} posted SALE_COMPLETED events, expected exactly one economic occurrence`],
