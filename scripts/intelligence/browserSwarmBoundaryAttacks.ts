@@ -450,6 +450,13 @@ const SHARED_PREVIEW_MUTATED =
  * restore is attempted. A worker cannot contain this for the others, so the
  * evidence says so (`sharedPreviewMutated`) and no other mission that ran beside
  * or after it may be read as independent of a run that recorded it.
+ *
+ * The marker is a disclosure, not containment. It lives only in this mission's
+ * own evidence; the PASS evidence of other missions is not annotated, so those
+ * PASS claims stand alone only while no mission in the run confirmed a breach
+ * (the run itself fails on one). It is set only for a change this mission
+ * observed: a mutation it could not observe (an ambiguous failure, state that
+ * could not be read back) is not flagged.
  */
 function authorizationAbuseSpec(options: Required<BoundaryAttackOptions>) {
   return {

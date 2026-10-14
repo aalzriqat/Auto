@@ -17,8 +17,8 @@ import type { MissionBrowser, MissionBrowserRuntime, MissionSeat } from "./brows
 interface Options {
   /** The first N backend evidence writes fail. */
   writeFailures?: number;
-  /** Only the Nth backend evidence write (1-based) fails. */
-  failWriteNumber?: number;
+  /** Evidence writes carrying one of these outcomes fail; every other write lands. */
+  failOutcomes?: string[];
   finishFails?: boolean;
   signal?: AbortSignal;
   oracle?: BrowserOracleKind;
@@ -29,7 +29,8 @@ function setup(options: Options = {}) {
   const opened: { seat: MissionSeat; finished: boolean }[] = [];
   const order: string[] = [];
   let failuresLeft = options.writeFailures ?? 0;
-  let writes = 0;
+  /** Every evidence write attempted, landed or not. */
+  const attempted: Record<string, unknown>[] = [];
   const runtimeApi: MissionBrowserRuntime = {
     open: async (_context, seat = "primary") => {
       const entry = { seat, finished: false };
@@ -42,6 +43,7 @@ function setup(options: Options = {}) {
       };
     },
     finish: async (runtime) => {
+      order.push("finish");
       (runtime.browserContext as unknown as { entry: { finished: boolean } }).entry.finished = true;
       if (options.finishFails) throw new Error("trace stop failed");
       return ["trace.zip"];
@@ -51,8 +53,8 @@ function setup(options: Options = {}) {
     },
     writeBackendEvidence: async (paths, value) => {
       order.push("evidence");
-      writes += 1;
-      if (writes === options.failWriteNumber) throw new Error("relabel write failed");
+      attempted.push(JSON.parse(JSON.stringify(value)) as Record<string, unknown>);
+      if (options.failOutcomes?.includes((value as { outcome?: string }).outcome ?? "")) throw new Error("labelled write failed");
       if (failuresLeft > 0) {
         failuresLeft -= 1;
         throw new Error("disk full");
@@ -79,6 +81,7 @@ function setup(options: Options = {}) {
   });
   return {
     evidence,
+    attempted,
     opened,
     order,
     run: (run: BoundaryMissionSpec["run"]) => runBoundaryMission(runtimeApi, context, spec(run)),
@@ -132,6 +135,8 @@ describe("SCRUM-350 runBoundaryMission", () => {
     ).rejects.toThrow(/disk full/);
     expect(t.evidence).toHaveLength(1);
     expect(t.evidence[0]).toMatchObject({ outcome: "HARNESS_ERROR", reason: "disk full" });
+    // The browsers were finished before the write; the failure path must not finish them again.
+    expect(t.order.filter((step) => step === "finish")).toHaveLength(1);
   });
 
   it("a proven breach survives one failed evidence write", async () => {
@@ -203,7 +208,7 @@ describe("SCRUM-350 runBoundaryMission", () => {
       env.judge({ violations: [], unjudged: [] });
     });
     expect(calls).toEqual(["second", "first"]);
-    expect(t.order).toEqual(["cleanup-second", "cleanup-first", "evidence"]);
+    expect(t.order).toEqual(["cleanup-second", "cleanup-first", "finish", "evidence"]);
     expect(t.evidence[0].cleanup).toEqual({ second: "failed: already gone", first: "done" });
   });
 
@@ -251,17 +256,17 @@ describe("SCRUM-350 runBoundaryMission", () => {
         env.judge({ violations: [], unjudged: [] });
       }),
     ).rejects.toThrow(/browser evidence cleanup failed/);
-    // The pass-shaped body is written first; the last write on disk must retract it.
-    expect(t.evidence.at(-1)).toMatchObject({
+    // The browsers fail before anything is written, so the only evidence is the failure label.
+    expect(t.evidence).toHaveLength(1);
+    expect(t.evidence[0]).toMatchObject({
       outcome: "HARNESS_ERROR",
       reason: expect.stringContaining("browser evidence cleanup failed: trace stop failed"),
       browserCleanupFailure: "trace stop failed",
     });
   });
 
-  it("relabelling a failed pass keeps the browser cleanup error as the result even when that write fails", async () => {
-    // The pass body lands; the relabelling write is the second and fails.
-    const t = setup({ finishFails: true, failWriteNumber: 2 });
+  it("a pass whose browser cleanup fails never writes pass-shaped evidence, even when the failure write also fails", async () => {
+    const t = setup({ finishFails: true, failOutcomes: ["HARNESS_ERROR"] });
     const error: unknown = await t
       .run(async (env) => {
         env.judge({ violations: [], unjudged: [] });
@@ -271,7 +276,24 @@ describe("SCRUM-350 runBoundaryMission", () => {
         (thrown: unknown) => thrown,
       );
     expect((error as Error).message).toMatch(/browser evidence cleanup failed: trace stop failed/);
-    expect(((error as Error).cause as Error).message).toBe("relabel write failed");
+    // Nothing pass-shaped may be on disk, and none may even have been attempted.
+    expect(t.evidence).toEqual([]);
+    expect(t.attempted.length).toBeGreaterThan(0);
+    expect(t.attempted.every((body) => body.outcome === "HARNESS_ERROR")).toBe(true);
+  });
+
+  it("finishes the browsers before a pass's evidence is written, and after a breach's", async () => {
+    const pass = setup();
+    await pass.run(async (env) => {
+      env.judge({ violations: [], unjudged: [] });
+    });
+    expect(pass.order).toEqual(["finish", "evidence"]);
+    const breach = setup();
+    await breach.run(async (env) => {
+      env.judge({ violations: ["leak"], unjudged: [] });
+    });
+    // A breach is made durable first so a stuck browser cannot delay or lose it.
+    expect(breach.order).toEqual(["evidence", "finish"]);
   });
 
   it("a breach survives a browser cleanup failure and says so", async () => {

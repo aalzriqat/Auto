@@ -10,8 +10,9 @@
  *   BREACH        any proof: oracle.passed = false, evidence written first.
  *   INCONCLUSIVE  no proof but something unjudged: thrown, the executor
  *                 records HARNESS_ERROR and the run fails. Never a pass.
- *   PASS          every observation judged clean AND the evidence was written
- *                 AND the browser evidence was captured.
+ *   PASS          every observation judged clean AND the browser evidence was
+ *                 captured AND the backend evidence was written, in that order,
+ *                 so no pass-shaped artifact exists unless all three held.
  */
 import type { Page } from "@playwright/test";
 import type { ConvexHttpClient } from "convex/browser";
@@ -109,18 +110,26 @@ export async function runBoundaryMission(
     }
   };
 
-  /** Captures browser evidence for every opened seat; reports a failure instead of hiding it. */
-  const finishAll = async (): Promise<{ artifacts: string[]; failure: string | null }> => {
-    const artifacts: string[] = [];
-    const failures: string[] = [];
-    for (const runtime of opened) {
-      try {
-        artifacts.push(...(await runtimeApi.finish(runtime)));
-      } catch (error) {
-        failures.push(errorText(error));
+  /**
+   * Captures browser evidence for every opened seat; reports a failure instead
+   * of hiding it. Runs once: later calls return the first result, so a pass that
+   * finished its browsers early cannot finish them again on the failure path.
+   */
+  let finished: Promise<{ artifacts: string[]; failure: string | null }> | null = null;
+  const finishAll = (): Promise<{ artifacts: string[]; failure: string | null }> => {
+    finished ??= (async () => {
+      const artifacts: string[] = [];
+      const failures: string[] = [];
+      for (const runtime of opened) {
+        try {
+          artifacts.push(...(await runtimeApi.finish(runtime)));
+        } catch (error) {
+          failures.push(errorText(error));
+        }
       }
-    }
-    return { artifacts, failure: failures.length > 0 ? failures.join("; ") : null };
+      return { artifacts, failure: failures.length > 0 ? failures.join("; ") : null };
+    })();
+    return finished;
   };
 
   const evidenceBody = (extra: Record<string, unknown>): Record<string, unknown> => ({
@@ -141,6 +150,15 @@ export async function runBoundaryMission(
     concluding = true;
     const passed = violations.length === 0;
     await runCleanups();
+    if (passed) {
+      // A pass needs complete browser evidence, so settle it BEFORE anything
+      // pass-shaped is written: a failure here must leave no artifact to read as
+      // a pass, whatever else fails afterwards. The thrown error reaches the
+      // failure path, which labels the evidence HARNESS_ERROR. A breach is made
+      // durable first, below.
+      const early = await finishAll();
+      if (early.failure !== null) throw new Error(`browser evidence cleanup failed: ${early.failure}`);
+    }
     const body = evidenceBody({ ...extra, violations });
     let backendArtifact: string;
     try {
@@ -153,21 +171,7 @@ export async function runBoundaryMission(
     }
     cleanupStarted = true;
     const browser = await finishAll();
-    // Screenshot or trace failures cannot retract a breach already on disk,
-    // but a pass requires complete evidence.
-    if (browser.failure !== null && passed) {
-      const failure = new Error(`browser evidence cleanup failed: ${browser.failure}`);
-      // The pass-shaped body is already on disk; retract it so nobody reads it as a pass.
-      try {
-        await runtimeApi.writeBackendEvidence(
-          primary.paths,
-          evidenceBody({ outcome: "HARNESS_ERROR", reason: errorText(failure), browserCleanupFailure: browser.failure }),
-        );
-      } catch (relabelError) {
-        failure.cause = relabelError;
-      }
-      throw failure;
-    }
+    // Screenshot or trace failures cannot retract a breach already on disk.
     return {
       missionId: mission.id,
       workerId: context.worker.workerId,
