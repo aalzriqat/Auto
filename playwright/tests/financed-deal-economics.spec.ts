@@ -155,8 +155,9 @@ test.describe("recording a financed deal's economics through the interface", () 
       await expect(managerPage.getByText("What that leaves")).toBeVisible();
       await expect(managerPage.getByText(/10,000/).first()).toBeVisible();
       // Scoped to the row: a page-wide match could be satisfied by another figure.
-      await expect(managerPage.locator('[data-row-kind="unfinanced"]')).toContainText(/3,000/);
-      await expect(managerPage.locator('[data-row-kind="unfinanced"]')).not.toContainText(/1,300/);
+      const notFinancedRow = managerPage.locator('[data-row-kind="unfinanced"]');
+      await expect(notFinancedRow).toContainText(/3,000/);
+      await expect(notFinancedRow).not.toContainText(/1,300/);
       // --- handover, expected payment, and close — FROM THE COCKPIT ---------
       // SCRUM-78. This tail used to be driven through
       // `Finance Applications → row → Review`, which is exactly why the suite

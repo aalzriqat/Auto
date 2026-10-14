@@ -676,72 +676,60 @@ describe("the derived figures", () => {
     expect(document.querySelectorAll("input").length).toBe(0);
   });
 
+  // The F-19 cases below vary only the figures; the deal is otherwise an
+  // approved, open USD application.
+  function renderFigures(figures: Partial<FinanceDecisionFacts>) {
+    renderCockpit(
+      wiring({
+        currency: "USD",
+        facts: { approvedPurchaseRecorded: true, closed: false, dealerContributionMinor: 0, ...figures },
+      })
+    );
+  }
+  const notFinancedRow = () => document.querySelector('[data-row-kind="unfinanced"] dd')?.textContent;
+
   test("funded + not financed reconcile to the approved amount when the first payment exceeds the unfinanced slice (SCRUM-613 F-19, owner option أ)", () => {
     // Approved 12,000 at 90%, first payment 2,000: the stored unfinanced slice
     // is 1,200 (approved − 90%), but the finance company lends only
     // approved − first payment = 10,000, so 2,000 is not financed. Showing the
     // stored 1,200 beside funded 10,000 summed to 11,200, not 12,000.
-    renderCockpit(
-      wiring({
-        currency: "USD",
-        facts: {
-          approvedPurchaseRecorded: true,
-          approvedPurchaseAmountMinor: 12_000 * 100,
-          submittedQuotationMinor: 12_000 * 100,
-          financeCompanyFundedPortionMinor: 10_000 * 100,
-          unfinancedPortionMinor: 1_200 * 100,
-          dealerContributionMinor: 0,
-          appliedLtvPercent: 90,
-          closed: false,
-        },
-      })
-    );
+    renderFigures({
+      approvedPurchaseAmountMinor: 12_000 * 100,
+      submittedQuotationMinor: 12_000 * 100,
+      financeCompanyFundedPortionMinor: 10_000 * 100,
+      unfinancedPortionMinor: 1_200 * 100,
+      appliedLtvPercent: 90,
+    });
 
     expect(screen.getByText("10,000 USD")).toBeTruthy();
-    const row = document.querySelector('[data-row-kind="unfinanced"] dd');
-    expect(row?.textContent).toBe("2,000 USD");
+    expect(notFinancedRow()).toBe("2,000 USD");
     expect(screen.queryByText("1,200 USD")).toBeNull();
   });
 
   test("falls back to the stored unfinanced slice when the approved amount is not visible", () => {
-    renderCockpit(
-      wiring({
-        currency: "USD",
-        facts: {
-          approvedPurchaseRecorded: true,
-          approvedPurchaseAmountMinor: null,
-          submittedQuotationMinor: null,
-          financeCompanyFundedPortionMinor: 10_000 * 100,
-          unfinancedPortionMinor: 1_200 * 100,
-          dealerContributionMinor: 0,
-          appliedLtvPercent: 90,
-          closed: false,
-        },
-      })
-    );
+    renderFigures({
+      approvedPurchaseAmountMinor: null,
+      submittedQuotationMinor: null,
+      financeCompanyFundedPortionMinor: 10_000 * 100,
+      unfinancedPortionMinor: 1_200 * 100,
+      appliedLtvPercent: 90,
+    });
 
-    expect(document.querySelector('[data-row-kind="unfinanced"] dd')?.textContent).toBe("1,200 USD");
+    expect(notFinancedRow()).toBe("1,200 USD");
   });
 
   test("CONTROL — an ordinary deal still shows the stored unfinanced slice, which equals approved − funded", () => {
-    renderCockpit(
-      wiring({
-        currency: "USD",
-        facts: {
-          approvedPurchaseRecorded: true,
-          approvedPurchaseAmountMinor: 12_500 * 100,
-          submittedQuotationMinor: 12_500 * 100,
-          financeCompanyFundedPortionMinor: 10_625 * 100,
-          unfinancedPortionMinor: 1_875 * 100,
-          dealerContributionMinor: 1_375 * 100,
-          appliedLtvPercent: 85,
-          closed: false,
-        },
-      })
-    );
+    renderFigures({
+      approvedPurchaseAmountMinor: 12_500 * 100,
+      submittedQuotationMinor: 12_500 * 100,
+      financeCompanyFundedPortionMinor: 10_625 * 100,
+      unfinancedPortionMinor: 1_875 * 100,
+      dealerContributionMinor: 1_375 * 100,
+      appliedLtvPercent: 85,
+    });
 
     expect(screen.getByText("10,625 USD")).toBeTruthy();
-    expect(screen.getByText("1,875 USD")).toBeTruthy();
+    expect(notFinancedRow()).toBe("1,875 USD");
   });
 
   test("the applied LTV is not shown before there is a funded portion to apply it to (SCRUM-628 F-17)", () => {
