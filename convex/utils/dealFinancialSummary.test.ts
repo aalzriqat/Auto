@@ -126,21 +126,22 @@ describe("deriveDealFinancialSummary", () => {
       expect(s.customerPaidToDealer?.totalMinor).toBe(500_000);
       expect(deriveDealFinancialSummary(inputs()).customerGapToFinanceCompanyPlannedMinor).toBeNull();
     });
-    test("what was agreed but not confirmed is served on its own: agreed less confirmed, never below zero (SCRUM-766 PR-B)", () => {
-      const served = (agreed?: number, confirmed?: number) =>
+    test("what is still unconfirmed is the stored balance verbatim, never recomputed from agreed less confirmed (SCRUM-766 PR-B)", () => {
+      const served = (unconfirmed?: number, confirmed?: number) =>
         deriveDealFinancialSummary(
           inputs({
             app: {
               ...inputs().app,
-              customerGapToFinanceCompanyMinor: agreed,
+              customerGapToFinanceCompanyUnconfirmedMinor: unconfirmed,
               customerGapToFinanceCompanyAppliedMinor: confirmed,
             },
           })
         );
       expect(served(400_000, undefined).customerGapToFinanceCompanyUnconfirmedMinor).toBe(400_000);
-      expect(served(400_000, 150_000).customerGapToFinanceCompanyUnconfirmedMinor).toBe(250_000);
-      expect(served(400_000, 400_000).customerGapToFinanceCompanyUnconfirmedMinor).toBe(0);
-      expect(served(400_000, 500_000).customerGapToFinanceCompanyUnconfirmedMinor).toBe(0);
+      expect(served(250_000, 150_000).customerGapToFinanceCompanyUnconfirmedMinor).toBe(250_000);
+      expect(served(0, 400_000).customerGapToFinanceCompanyUnconfirmedMinor).toBe(0);
+      // Agreed 400 but only 325 creditable: the engine's balance is 175 after 150 confirmed, whatever agreed - confirmed says.
+      expect(served(175_000, 150_000).customerGapToFinanceCompanyUnconfirmedMinor).toBe(175_000);
       expect(served(undefined, undefined).customerGapToFinanceCompanyUnconfirmedMinor).toBeNull();
       const corrupt = served(Number.NaN, undefined);
       expect(corrupt.customerGapToFinanceCompanyUnconfirmedMinor).toBeNull();

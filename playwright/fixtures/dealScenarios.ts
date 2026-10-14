@@ -333,22 +333,36 @@ export async function resolveAppraisalGap(
   // The agreement to pay the finance company is a promise: the contribution drops, and the
   // deal can close, only after the payment is CONFIRMED with its reference (SCRUM-766 PR-B).
   if (agreement.mode !== "DEALER_ABSORBS" && (agreement.toFinanceCompany ?? 0) > 0) {
-    await confirmCustomerPaymentToFinanceCompany(managerPage);
+    await confirmCustomerPaymentToFinanceCompany(managerPage, agreement.toFinanceCompany ?? 0);
   }
+}
+
+/** The number in a rendered money figure ("400 JOD", "1,250.500 JOD" -> 1250.5). */
+function renderedAmount(text: string | null): number {
+  return Number((text ?? "").replace(/[^0-9.]/g, ""));
 }
 
 /**
  * Confirms, from the cockpit's payment card, that the customer paid the finance company the
- * whole amount still awaiting confirmation (the dialog opens pre-filled with it).
+ * whole amount still awaiting confirmation (the dialog opens pre-filled with it), then checks
+ * the figures as numbers: `toContainText("0")` would also pass "400 JOD".
  */
-export async function confirmCustomerPaymentToFinanceCompany(managerPage: Page): Promise<void> {
+export async function confirmCustomerPaymentToFinanceCompany(
+  managerPage: Page,
+  expectedConfirmedMajor: number,
+): Promise<void> {
   const card = managerPage.getByTestId("customer-finance-company-payment-card");
   await card.getByRole("button", { name: "Confirm payment" }).click();
   const dialog = managerPage.getByRole("dialog");
   await dialog.locator("#cust-fc-pay-reference").fill(`QA TEST TRF-${testDataSuffix()}`);
   await dialog.getByRole("button", { name: "Confirm payment" }).click();
   await expect(dialog).not.toBeVisible();
-  await expect(card.getByTestId("customer-finance-company-awaiting")).toContainText("0");
+  await expect
+    .poll(async () => renderedAmount(await card.getByTestId("customer-finance-company-awaiting").textContent()))
+    .toBe(0);
+  await expect
+    .poll(async () => renderedAmount(await card.getByTestId("customer-finance-company-confirmed").textContent()))
+    .toBe(expectedConfirmedMajor);
 }
 
 export async function resolveAppraisalGapDealerAbsorbs(managerPage: Page, dealUrl: string): Promise<void> {

@@ -11,8 +11,9 @@ import { resolveDealCurrency } from "./utils/settlementDeductions";
 import { MAX_DIRECT_PAYMENT_REFERENCE_CHARS } from "./utils/feeDocLimits";
 import {
   MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS,
-  confirmedCustomerPaymentTotalMinor,
+  isCurrentAgreementPayment,
   loadCustomerFinanceCompanyPayments,
+  normalizedPaymentReference,
 } from "./utils/customerFinanceCompanyPayments";
 
 /**
@@ -45,26 +46,43 @@ function assertOpenForEvidence(app: Doc<"financeApplications">): void {
   if (app.finalizedSaleId !== undefined) throw new ConvexError(CLOSED_REFUSAL);
 }
 
+/**
+ * What may still be confirmed: the deal's ONE stored balance of what the
+ * agreement leaves to confirm (`customerGapToFinanceCompanyUnconfirmedMinor`,
+ * written by the economics recompute). It is the creditable part - the
+ * agreement capped by the customer's share and by the contribution - minus what
+ * is confirmed, so a confirmation can never record more than would credit, and
+ * the closing gate and the card read the same figure.
+ */
 async function confirmableRemainder(
   ctx: MutationCtx,
-  app: Doc<"financeApplications">,
-  currency: string
+  app: Doc<"financeApplications">
 ): Promise<{ rows: Array<Doc<"customerFinanceCompanyPayments">>; remainingMinor: number }> {
   const agreedMinor = app.customerGapToFinanceCompanyMinor ?? 0;
   const settled = app.gapResolution === "CUSTOMER_ABSORBS" || app.gapResolution === "SPLIT";
-  if (!settled || !isMinorAmount(agreedMinor) || agreedMinor <= 0) {
+  if (!settled || !isMinorAmount(agreedMinor) || agreedMinor <= 0 || app.gapResolvedAt === undefined) {
     throw new ConvexError(
       "The customer has not agreed to pay part of the shortfall to the finance company on this deal, so there is no payment to record. Nothing has been recorded."
     );
   }
-  const rows = await loadCustomerFinanceCompanyPayments(ctx, app.orgId, app._id);
-  return { rows, remainingMinor: agreedMinor - confirmedCustomerPaymentTotalMinor(rows, currency) };
+  const remainingMinor = app.customerGapToFinanceCompanyUnconfirmedMinor;
+  if (remainingMinor === undefined || !isMinorAmount(remainingMinor)) {
+    throw new ConvexError(
+      "This deal's figures have not been worked out since the customer's payment was agreed, so what is still to be confirmed is not known. Nothing has been recorded."
+    );
+  }
+  return { rows: await loadCustomerFinanceCompanyPayments(ctx, app.orgId, app._id), remainingMinor };
 }
 
 /**
  * Records that the customer paid the finance company `amountMinor` toward the
  * shortfall, with the payment's reference. Capped by what is still unconfirmed
  * of the agreement; credits the contribution by exactly that much.
+ *
+ * One transfer is one confirmation: the idempotency key says "this click", not
+ * "this transfer", so the bank's reference is what refuses the same transfer
+ * confirmed twice. The key of a confirmation taken back is free again - that is
+ * how a mistake is corrected.
  */
 export const confirmPayment = mutation({
   args: {
@@ -116,9 +134,15 @@ export const confirmPayment = mutation({
           throw new ConvexError("You cannot confirm the customer's payment on your own deal. A manager or the dealership owner records it. Nothing has been recorded.");
         }
         const currency = await resolveDealCurrency(ctx, app, "recording this payment");
-        const { rows, remainingMinor } = await confirmableRemainder(ctx, app, currency);
+        const { rows, remainingMinor } = await confirmableRemainder(ctx, app);
         if (rows.length >= MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS) {
           throw new ConvexError("This deal has too many payment records. An accountant reviews the deal. Nothing has been recorded.");
+        }
+        const wanted = normalizedPaymentReference(reference);
+        if (rows.some((row) => row.status === "CONFIRMED" && normalizedPaymentReference(row.reference) === wanted)) {
+          throw new ConvexError(
+            "A payment with that reference is already recorded as confirmed on this deal, and one transfer is confirmed once. If the earlier record is wrong, take it back with a reason first. Nothing has been recorded."
+          );
         }
         if (args.amountMinor > remainingMinor) {
           throw new ConvexError("That is more than the customer agreed to pay the finance company and has not yet been confirmed. Check the amount. Nothing has been recorded.");
@@ -131,6 +155,8 @@ export const confirmPayment = mutation({
           currency,
           paidAt: args.paidAt,
           reference,
+          // The agreement this payment is evidence for (set: `confirmableRemainder` refused without one).
+          agreementResolvedAt: app.gapResolvedAt as number,
           confirmedBy: auth.user._id,
           confirmedAt: Date.now(),
         });
@@ -185,7 +211,12 @@ export const voidPayment = mutation({
   },
 });
 
-/** The deal's payment evidence, newest last, for the finance tier. */
+/**
+ * The deal's payment evidence, newest last, for the finance tier. Every row is
+ * served, voided and earlier-agreement ones included: evidence that no longer
+ * credits is still evidence, and a person has to be able to see it to correct it.
+ * `agreement` says whether the row backs the agreement the deal holds now.
+ */
 export const listPayments = query({
   args: {
     orgId: v.id("organizations"),
@@ -193,12 +224,12 @@ export const listPayments = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-    const app = await ctx.db.get(args.applicationId);
-    if (!app || app.orgId !== args.orgId) return [];
-    const rows = await loadCustomerFinanceCompanyPayments(ctx, args.orgId, args.applicationId);
+    const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId, APPLICATION_NOT_FOUND);
+    const rows = await loadCustomerFinanceCompanyPayments(ctx, args.orgId, app._id);
     return rows.slice(0, MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS).map((row: Doc<"customerFinanceCompanyPayments">) => ({
       _id: row._id as Id<"customerFinanceCompanyPayments">,
       status: row.status,
+      agreement: isCurrentAgreementPayment(row, app) ? ("CURRENT" as const) : ("PRIOR" as const),
       amountMinor: row.amountMinor,
       currency: row.currency,
       paidAt: row.paidAt,

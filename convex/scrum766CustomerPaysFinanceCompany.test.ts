@@ -91,6 +91,41 @@ function confirmPayment(s: Seeded, applicationId: Id<"financeApplications">, amo
   });
 }
 
+/** Every evidence row on a deal, voided ones included. */
+async function rowsOf(s: Seeded, applicationId: Id<"financeApplications">) {
+  return await s.t.run((ctx) =>
+    ctx.db
+      .query("customerFinanceCompanyPayments")
+      .withIndex("by_org_application", (q) => q.eq("orgId", s.orgId).eq("applicationId", applicationId))
+      .take(100)
+  );
+}
+
+/** The closing-readiness verdict for the customer-payment check, as the deal screen is served it. */
+async function paymentCheckOf(s: Seeded, applicationId: Id<"financeApplications">) {
+  const served = await s.owner.as.query(api.applications.getClosingReadiness, { orgId: s.orgId, applicationId });
+  const check = served.checks.find((c) => c.key === "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED");
+  expect(check).toBeDefined();
+  return check!;
+}
+
+function listPayments(s: Seeded, applicationId: Id<"financeApplications">) {
+  return s.approver.as.query(api.customerFinanceCompanyPayments.listPayments, { orgId: s.orgId, applicationId });
+}
+
+/** After handover only the settlement-cost writers recompute; a deducted fee drives one. */
+async function driveRecompute(s: Seeded, applicationId: Id<"financeApplications">, n: number) {
+  const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
+    expectedCurrency: "JOD", orgId: s.orgId, applicationId, feeType: "OTHER_CLOSING_EXPENSE",
+    paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
+    deductedFromSettlement: true, actualAmountMinor: 0, description: `Fee ${n} (drives the recompute)`,
+    idempotencyKey: `drive-recompute-${n}:${applicationId}`,
+  });
+  await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
+    orgId: s.orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0,
+  });
+}
+
 /** What a rejected call carried: the coded readiness reason, or just the message. */
 async function refusalOf(promise: Promise<unknown>): Promise<{ code?: string; message: string } | null> {
   try {
@@ -122,11 +157,10 @@ async function profitOf(s: Seeded, applicationId: Id<"financeApplications">): Pr
   return profit.amountMinor;
 }
 
-/** Approved at 11,500 against a 12,500 quotation; shortfall 850, resolved as given, vehicle handed over. */
-async function resolvedDeal(
-  s: Seeded,
-  split: { customer: number; dealer: number; cash: number; financeCompany: number }
-) {
+type Split = { customer: number; dealer: number; cash: number; financeCompany: number };
+
+/** Approved at 11,500 against a 12,500 quotation (shortfall 850); not yet agreed, not handed over. */
+async function approvedDeal(s: Seeded) {
   const { applicationId } = await newApplication(s);
   const { owner, approver, orgId } = s;
   await owner.as.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
@@ -135,22 +169,37 @@ async function resolvedDeal(
     orgId, applicationId, submittedQuotationMinor: jod(12_500), source: "MANUAL_ENTRY",
     customerFirstPaymentMinor: jod(500),
   });
-  await approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-    orgId, applicationId, approvedAmountMinor: jod(11_500), basis: "MANUAL", notes: "Approved below the quotation.",
+  await approveAt11500(s, applicationId);
+  return applicationId;
+}
+
+async function approveAt11500(s: Seeded, applicationId: Id<"financeApplications">) {
+  await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+    orgId: s.orgId, applicationId, approvedAmountMinor: jod(11_500), basis: "MANUAL", notes: "Approved below the quotation.",
   });
   const app = await appOf(s, applicationId);
   expect(app?.netShortfallMinor).toBe(jod(850));
   expect(app?.dealerContributionMinor).toBe(jod(1_225));
+}
 
-  const served = await approver.as.query(api.applications.get, { orgId, applicationId });
-  await approver.as.mutation(api.financingEconomics.resolveAppraisalGap, {
-    orgId, applicationId, economicsStamp: served!.economicsStamp as string,
+/** Records how the 850 shortfall is shared, as the approver. */
+async function agree(s: Seeded, applicationId: Id<"financeApplications">, split: Split) {
+  const served = await s.approver.as.query(api.applications.get, { orgId: s.orgId, applicationId });
+  await s.approver.as.mutation(api.financingEconomics.resolveAppraisalGap, {
+    orgId: s.orgId, applicationId, economicsStamp: served!.economicsStamp as string,
     customerGapShareMinor: jod(split.customer),
     dealerGapShareMinor: jod(split.dealer),
     customerGapCashToDealerMinor: jod(split.cash),
     customerGapInstallmentToDealerMinor: 0,
     customerGapToFinanceCompanyMinor: jod(split.financeCompany),
   });
+}
+
+/** Approved at 11,500 against a 12,500 quotation; shortfall 850, resolved as given, vehicle handed over. */
+async function resolvedDeal(s: Seeded, split: Split) {
+  const applicationId = await approvedDeal(s);
+  const { owner, orgId } = s;
+  await agree(s, applicationId, split);
   await registerHandover(owner.as, api, orgId, applicationId);
   await owner.as.mutation(api.applications.registerExpectedPayment, {
     orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
@@ -277,16 +326,24 @@ describe("SCRUM-766 PR-B: only CONFIRMED payment evidence reduces the contributi
   test("a payment cannot be confirmed beyond what was agreed, or where nothing was agreed", async () => {
     const s = await seed("u3");
     const applicationId = await resolvedDeal(s, SPLIT_400_TO_COMPANY);
-    expect(await refusalOf(confirmPayment(s, applicationId, 401))).not.toBeNull();
+    expect((await refusalOf(confirmPayment(s, applicationId, 401)))?.message).toContain(
+      "more than the customer agreed to pay the finance company"
+    );
     await confirmPayment(s, applicationId, 300, "TRF-1");
     // 100 remains unconfirmed; a second 300 would overpay the agreement.
-    expect(await refusalOf(confirmPayment(s, applicationId, 300, "TRF-2"))).not.toBeNull();
+    expect((await refusalOf(confirmPayment(s, applicationId, 300, "TRF-2")))?.message).toContain(
+      "more than the customer agreed to pay the finance company"
+    );
     expect((await appOf(s, applicationId))?.dealerContributionMinor).toBe(jod(925));
+    expect(await rowsOf(s, applicationId)).toHaveLength(1);
 
     const cashOnly = await seed("u3b");
     const cashApp = await resolvedDeal(cashOnly, { customer: 400, dealer: 450, cash: 400, financeCompany: 0 });
-    expect(await refusalOf(confirmPayment(cashOnly, cashApp, 100))).not.toBeNull();
+    expect((await refusalOf(confirmPayment(cashOnly, cashApp, 100)))?.message).toContain(
+      "has not agreed to pay part of the shortfall to the finance company"
+    );
     expect((await appOf(cashOnly, cashApp))?.dealerContributionMinor).toBe(jod(1_225));
+    expect(await rowsOf(cashOnly, cashApp)).toHaveLength(0);
   });
 
   test("evidence needs a reference, a real amount and finance authority, and not the deal's own salesperson", async () => {
@@ -294,24 +351,26 @@ describe("SCRUM-766 PR-B: only CONFIRMED payment evidence reduces the contributi
     const applicationId = await resolvedDeal(s, SPLIT_400_TO_COMPANY);
     const base = { orgId: s.orgId, applicationId, amountMinor: jod(400), paidAt: Date.now() - 1_000 };
 
-    expect(await refusalOf(s.approver.as.mutation(api.customerFinanceCompanyPayments.confirmPayment, {
-      ...base, reference: "   ", idempotencyKey: crypto.randomUUID(),
-    }))).not.toBeNull();
-    expect(await refusalOf(s.approver.as.mutation(api.customerFinanceCompanyPayments.confirmPayment, {
-      ...base, amountMinor: 0, reference: "TRF-1", idempotencyKey: crypto.randomUUID(),
-    }))).not.toBeNull();
-    expect(await refusalOf(s.approver.as.mutation(api.customerFinanceCompanyPayments.confirmPayment, {
-      ...base, paidAt: Date.now() + 86_400_000, reference: "TRF-1", idempotencyKey: crypto.randomUUID(),
-    }))).not.toBeNull();
+    const confirm = (caller: Seeded["approver"], overrides: Partial<typeof base> & { reference: string }) =>
+      refusalOf(caller.as.mutation(api.customerFinanceCompanyPayments.confirmPayment, {
+        ...base, ...overrides, idempotencyKey: crypto.randomUUID(),
+      }));
+
+    expect((await confirm(s.approver, { reference: "   " }))?.message).toContain("reference is required");
+    expect((await confirm(s.approver, { amountMinor: 0, reference: "TRF-1" }))?.message).toContain(
+      "positive whole number of minor units"
+    );
+    expect((await confirm(s.approver, { paidAt: Date.now() + 86_400_000, reference: "TRF-1" }))?.message).toContain(
+      "not in the future"
+    );
     // No finance-disbursement authority.
-    expect(await refusalOf(s.actors.Clerk.as.mutation(api.customerFinanceCompanyPayments.confirmPayment, {
-      ...base, reference: "TRF-1", idempotencyKey: crypto.randomUUID(),
-    }))).not.toBeNull();
+    expect((await confirm(s.actors.Clerk, { reference: "TRF-1" }))?.message).toContain(
+      "Missing required permissions: confirm:finance_disbursement"
+    );
     // The salesperson who sold the deal does not confirm money that raises their own deal's profit.
-    expect(await refusalOf(s.owner.as.mutation(api.customerFinanceCompanyPayments.confirmPayment, {
-      ...base, reference: "TRF-1", idempotencyKey: crypto.randomUUID(),
-    }))).not.toBeNull();
+    expect((await confirm(s.owner, { reference: "TRF-1" }))?.message).toContain("on your own deal");
     expect((await appOf(s, applicationId))?.dealerContributionMinor).toBe(jod(1_225));
+    expect(await rowsOf(s, applicationId)).toHaveLength(0);
   });
 
   test("a replayed confirmation records one row, not two", async () => {
@@ -374,25 +433,11 @@ describe("SCRUM-766 PR-B: only CONFIRMED payment evidence reduces the contributi
     expect(row?.status).toBe("CONFIRMED");
   });
 
-  test("withdrawing the approval clears the credit; confirmed evidence stays on file and re-applies to a new agreement", async () => {
+  test("withdrawing the approval clears the credit; the confirmed evidence stays on file", async () => {
     // Reopening is only possible before the handover seals the figures, so this deal stops short of it.
     const fresh = await seed("u8");
-    const { applicationId: freshId } = await newApplication(fresh);
-    await fresh.owner.as.mutation(api.applications.updateStatus, { orgId: fresh.orgId, applicationId: freshId, status: "UNDER_REVIEW" });
-    await fresh.approver.as.mutation(api.applications.updateStatus, { orgId: fresh.orgId, applicationId: freshId, status: "APPROVED" });
-    await fresh.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
-      orgId: fresh.orgId, applicationId: freshId, submittedQuotationMinor: jod(12_500), source: "MANUAL_ENTRY",
-      customerFirstPaymentMinor: jod(500),
-    });
-    await fresh.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-      orgId: fresh.orgId, applicationId: freshId, approvedAmountMinor: jod(11_500), basis: "MANUAL", notes: "Below.",
-    });
-    const served = await fresh.approver.as.query(api.applications.get, { orgId: fresh.orgId, applicationId: freshId });
-    await fresh.approver.as.mutation(api.financingEconomics.resolveAppraisalGap, {
-      orgId: fresh.orgId, applicationId: freshId, economicsStamp: served!.economicsStamp as string,
-      customerGapShareMinor: jod(400), dealerGapShareMinor: jod(450), customerGapCashToDealerMinor: 0,
-      customerGapInstallmentToDealerMinor: 0, customerGapToFinanceCompanyMinor: jod(400),
-    });
+    const freshId = await approvedDeal(fresh);
+    await agree(fresh, freshId, SPLIT_400_TO_COMPANY);
     await confirmPayment(fresh, freshId, 400);
     expect((await appOf(fresh, freshId))?.customerGapToFinanceCompanyAppliedMinor).toBe(jod(400));
 
@@ -402,8 +447,177 @@ describe("SCRUM-766 PR-B: only CONFIRMED payment evidence reduces the contributi
     const reopened = await appOf(fresh, freshId);
     expect(reopened?.dealerContributionMinor).toBeUndefined();
     expect(reopened?.customerGapToFinanceCompanyAppliedMinor).toBeUndefined();
-    const rows = await fresh.t.run((ctx) => ctx.db.query("customerFinanceCompanyPayments").collect());
-    expect(rows.map((row) => row.status)).toEqual(["CONFIRMED"]);
+    expect((await rowsOf(fresh, freshId)).map((row) => row.status)).toEqual(["CONFIRMED"]);
+  });
+});
+
+describe("SCRUM-766 PR-B review: ONE balance of what is still unconfirmed", () => {
+  test("a handed-over deal whose creditable part fell below the agreement closes on the creditable part, and nothing past it is accepted", async () => {
+    const s = await seed("b1");
+    const applicationId = await resolvedDeal(s, SPLIT_400_TO_COMPANY);
+    // A first payment corrected upwards after handover (SCRUM-373 D2) shrinks the contribution the
+    // customer's payment can replace from 1,225 to 325: creditable = min(400 agreed, 400 share, 325).
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: jod(1_400) }));
+    await driveRecompute(s, applicationId, 1);
+    const before = await appOf(s, applicationId);
+    expect(before?.dealerContributionMinor).toBe(jod(325));
+    expect(before?.customerGapToFinanceCompanyMinor).toBe(jod(400));
+    // Control: nothing is confirmed yet, so the deal is rightly not closable.
+    expect((await paymentCheckOf(s, applicationId)).status).toBe("BLOCKED");
+
+    // The server accepts exactly the creditable part.
+    await confirmPayment(s, applicationId, 325, "TRF-325");
+    const after = await appOf(s, applicationId);
+    expect(after?.customerGapToFinanceCompanyAppliedMinor).toBe(jod(325));
+    expect(after?.dealerContributionMinor).toBe(0);
+    // Every reader agrees there is nothing left to confirm: the gate no longer waits on the uncreditable 75.
+    expect((await paymentCheckOf(s, applicationId)).status).toBe("READY");
+    // And the 75 cannot be "confirmed" to chase it: it would credit nothing.
+    expect((await refusalOf(confirmPayment(s, applicationId, 75, "TRF-75")))?.message).toContain(
+      "more than the customer agreed to pay the finance company"
+    );
+    expect(await rowsOf(s, applicationId)).toHaveLength(1);
+    // The one stored balance: the creditable 325 before the confirmation, nothing after it.
+    expect(before?.customerGapToFinanceCompanyUnconfirmedMinor).toBe(jod(325));
+    expect(after?.customerGapToFinanceCompanyUnconfirmedMinor).toBe(0);
+  });
+
+  test("a partial confirmation leaves exactly the rest awaiting, in the stored balance the gate and the card both read", async () => {
+    const s = await seed("b2");
+    const applicationId = await resolvedDeal(s, SPLIT_400_TO_COMPANY);
+    await confirmPayment(s, applicationId, 150, "TRF-1");
+    const app = await appOf(s, applicationId);
+    expect(app?.customerGapToFinanceCompanyUnconfirmedMinor).toBe(jod(250));
+    expect((await paymentCheckOf(s, applicationId)).status).toBe("BLOCKED");
+    await confirmPayment(s, applicationId, 250, "TRF-2");
+    expect((await appOf(s, applicationId))?.customerGapToFinanceCompanyUnconfirmedMinor).toBe(0);
+    expect((await paymentCheckOf(s, applicationId)).status).toBe("READY");
+  });
+});
+
+describe("SCRUM-766 PR-B review: evidence belongs to the agreement it was confirmed against", () => {
+  async function confirmedThenReapproved(tag: string) {
+    const s = await seed(tag);
+    const applicationId = await approvedDeal(s);
+    await agree(s, applicationId, SPLIT_400_TO_COMPANY);
+    await confirmPayment(s, applicationId, 400, "TRF-OLD");
+    expect((await appOf(s, applicationId))?.dealerContributionMinor).toBe(jod(825));
+    await s.approver.as.mutation(api.financingEconomics.reopenApproval, {
+      orgId: s.orgId, applicationId, reason: "The company revised the approval.",
+    });
+    await approveAt11500(s, applicationId);
+    return { s, applicationId };
+  }
+
+  test("a payment confirmed against a withdrawn agreement does not credit the new one", async () => {
+    const { s, applicationId } = await confirmedThenReapproved("l1");
+    await agree(s, applicationId, SPLIT_400_TO_COMPANY);
+
+    // The new promise is a promise: no credit, no profit, until it is confirmed on its own.
+    const app = await appOf(s, applicationId);
+    expect(app?.customerGapToFinanceCompanyMinor).toBe(jod(400));
+    expect(app?.dealerContributionMinor).toBe(jod(1_225));
+    expect(app?.customerGapToFinanceCompanyAppliedMinor ?? 0).toBe(0);
+    expect(app?.customerGapToFinanceCompanyUnconfirmedMinor).toBe(jod(400));
+    const check = await paymentCheckOf(s, applicationId);
+    expect(check.status).toBe("BLOCKED");
+
+    // The old evidence is not discarded: it is on file, still confirmed, and marked as an earlier agreement's.
+    const listed = await listPayments(s, applicationId);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ status: "CONFIRMED", amountMinor: jod(400), reference: "TRF-OLD", agreement: "PRIOR" });
+  });
+
+  test("the same real transfer cannot be re-recorded against the new agreement until the old record is corrected", async () => {
+    const { s, applicationId } = await confirmedThenReapproved("l2");
+    await agree(s, applicationId, SPLIT_400_TO_COMPANY);
+    // One transfer, one record: the earlier confirmation of TRF-OLD still stands.
+    expect((await refusalOf(confirmPayment(s, applicationId, 400, "TRF-OLD")))?.message).toContain("already recorded");
+    expect((await appOf(s, applicationId))?.dealerContributionMinor).toBe(jod(1_225));
+
+    // The explicit disposition: take the old record back with a reason, then confirm it against the new agreement.
+    const [prior] = await listPayments(s, applicationId);
+    await s.approver.as.mutation(api.customerFinanceCompanyPayments.voidPayment, {
+      orgId: s.orgId, applicationId, paymentId: prior._id, reason: "Re-recorded against the revised agreement.",
+    });
+    await confirmPayment(s, applicationId, 400, "TRF-OLD");
+    const app = await appOf(s, applicationId);
+    expect(app?.dealerContributionMinor).toBe(jod(825));
+    expect(app?.customerGapToFinanceCompanyUnconfirmedMinor).toBe(0);
+    expect((await paymentCheckOf(s, applicationId)).status).toBe("READY");
+    const history = await listPayments(s, applicationId);
+    expect(history.map((row) => [row.status, row.agreement])).toEqual([["VOIDED", "PRIOR"], ["CONFIRMED", "CURRENT"]]);
+  });
+
+  test("a new agreement that pays the finance company nothing still cannot close over an earlier agreement's confirmed payment", async () => {
+    const { s, applicationId } = await confirmedThenReapproved("l3");
+    await agree(s, applicationId, { customer: 400, dealer: 450, cash: 400, financeCompany: 0 });
+
+    const app = await appOf(s, applicationId);
+    expect(app?.customerGapToFinanceCompanyMinor ?? 0).toBe(0);
+    expect(app?.dealerContributionMinor).toBe(jod(1_225));
+    // Real money is on file that no agreement accounts for: the deal does not close until a person disposes of it.
+    const blocked = await paymentCheckOf(s, applicationId);
+    expect(blocked.status).toBe("BLOCKED");
+    expect(blocked.reasonCode).toBe("CUSTOMER_FINANCE_COMPANY_PAYMENT_SUPERSEDED");
+    expect(await listPayments(s, applicationId)).toHaveLength(1);
+
+    const [prior] = await listPayments(s, applicationId);
+    await s.approver.as.mutation(api.customerFinanceCompanyPayments.voidPayment, {
+      orgId: s.orgId, applicationId, paymentId: prior._id, reason: "Refunded to the customer by the finance company.",
+    });
+    expect((await paymentCheckOf(s, applicationId)).status).toBe("NOT_APPLICABLE");
+    expect(await listPayments(s, applicationId)).toHaveLength(1);
+  });
+});
+
+describe("SCRUM-766 PR-B review: one transfer is one confirmation", () => {
+  test("the same transfer reference under a second idempotency key is refused; distinct transfers and a voided correction are not", async () => {
+    const s = await seed("r1");
+    const applicationId = await resolvedDeal(s, SPLIT_400_TO_COMPANY);
+
+    // Control: two DIFFERENT transfers that together make the agreement are both accepted.
+    await confirmPayment(s, applicationId, 200, "TRF-A");
+    expect((await appOf(s, applicationId))?.dealerContributionMinor).toBe(jod(1_025));
+
+    // The bank's 200 transfer confirmed a second time under another key (and a re-typed reference) is not new money.
+    const duplicate = await refusalOf(confirmPayment(s, applicationId, 200, "  trf-a "));
+    expect(duplicate?.message).toContain("already recorded");
+    expect(await rowsOf(s, applicationId)).toHaveLength(1);
+    const duplicated = await appOf(s, applicationId);
+    expect(duplicated?.dealerContributionMinor).toBe(jod(1_025));
+    expect(duplicated?.customerGapToFinanceCompanyAppliedMinor).toBe(jod(200));
+    expect((await paymentCheckOf(s, applicationId)).status).toBe("BLOCKED");
+
+    await confirmPayment(s, applicationId, 200, "TRF-B");
+    expect((await paymentCheckOf(s, applicationId)).status).toBe("READY");
+
+    // A voided confirmation frees its reference: the correction is the SAME transfer recorded properly.
+    const [first] = await rowsOf(s, applicationId);
+    await s.approver.as.mutation(api.customerFinanceCompanyPayments.voidPayment, {
+      orgId: s.orgId, applicationId, paymentId: first._id, reason: "Typed the wrong amount.",
+    });
+    await confirmPayment(s, applicationId, 200, "TRF-A");
+    expect((await appOf(s, applicationId))?.customerGapToFinanceCompanyAppliedMinor).toBe(jod(400));
+  });
+
+  test("listPayments answers only for a deal of the caller's own organization", async () => {
+    const mine = await seed("t1");
+    const applicationId = await resolvedDeal(mine, SPLIT_400_TO_COMPANY);
+    await confirmPayment(mine, applicationId, 100, "TRF-MINE");
+    const other = await seed("t2");
+
+    expect(await listPayments(mine, applicationId)).toHaveLength(1);
+    // Another organization's finance user naming this deal learns nothing about it.
+    const probe = await refusalOf(
+      other.approver.as.query(api.customerFinanceCompanyPayments.listPayments, { orgId: other.orgId, applicationId })
+    );
+    expect(probe?.message).toContain("not found in this organization");
+    // And cannot reach it by naming their own org with the foreign deal's id and then the foreign org.
+    const crossOrg = await refusalOf(
+      other.approver.as.query(api.customerFinanceCompanyPayments.listPayments, { orgId: mine.orgId, applicationId })
+    );
+    expect(crossOrg).not.toBeNull();
   });
 });
 

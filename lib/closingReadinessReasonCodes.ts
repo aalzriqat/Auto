@@ -101,6 +101,8 @@ export const CLOSING_READINESS_REASON_PARAMS = {
   FINANCING_RECONCILIATION_FLAGGED: [],
   // CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED (SCRUM-766 PR-B): part of what the customer agreed to pay the finance company has no confirmed payment behind it.
   CUSTOMER_FINANCE_COMPANY_PAYMENT_UNCONFIRMED: [],
+  // ... and a confirmed payment that belongs to an agreement since withdrawn is on file with nothing accounting for it.
+  CUSTOMER_FINANCE_COMPANY_PAYMENT_SUPERSEDED: [],
   // A check refused for a reason the evaluator does not classify.
   CHECK_REFUSED: [],
   // No verdict could be formed (`getClosingReadiness.unavailableReason`).

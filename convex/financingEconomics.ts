@@ -1,7 +1,7 @@
 import { ConvexError, v, type Value } from "convex/values";
 import { resolveDealCurrency, settlementDeductedTotalMinor } from "./utils/settlementDeductions";
 import {
-  confirmedCustomerPaymentTotalMinor,
+  customerPaymentEvidenceOf,
   loadCustomerFinanceCompanyPayments,
 } from "./utils/customerFinanceCompanyPayments";
 import { paginationOptsValidator } from "convex/server";
@@ -206,10 +206,13 @@ async function recomputeAndPatchEconomics(
   const feeDeductionsMinor = firstPaymentUnknown
     ? 0
     : await settlementDeductedTotalMinor(ctx, app._id, currency);
-  // What the customer has CONFIRMED paying the finance company: the agreement on
-  // the row is only a promise, and the contribution falls by the evidenced part.
-  const confirmedCustomerPaymentMinor = confirmedCustomerPaymentTotalMinor(
+  // What the customer has CONFIRMED paying the finance company against the
+  // agreement the deal holds now: the agreement on the row is only a promise, and
+  // the contribution falls by the evidenced part. A payment confirmed against an
+  // agreement since withdrawn is on file but is not this agreement's evidence.
+  const { currentConfirmedMinor: confirmedCustomerPaymentMinor } = customerPaymentEvidenceOf(
     await loadCustomerFinanceCompanyPayments(ctx, app.orgId, app._id),
+    app,
     currency
   );
   // Narrowed above; read into consts because the closure below loses the narrowing.
@@ -294,6 +297,7 @@ async function recomputeAndPatchEconomics(
       unfinancedPortionMinor: undefined,
       dealerContributionMinor: undefined,
       customerGapToFinanceCompanyAppliedMinor: undefined,
+      customerGapToFinanceCompanyUnconfirmedMinor: undefined,
       expectedDealerRemittanceMinor: undefined,
       rawAppraisalGapMinor: undefined,
       ...shortfallFieldsFor(undefined),
@@ -418,6 +422,8 @@ async function recomputeAndPatchEconomics(
     unfinancedPortionMinor: derived.composition.unfinancedPortionMinor,
     dealerContributionMinor: stored.customerPayment.dealerContributionMinor,
     customerGapToFinanceCompanyAppliedMinor: stored.customerPayment.appliedMinor,
+    // Written with the applied part from the same derivation, so the two cannot disagree.
+    customerGapToFinanceCompanyUnconfirmedMinor: stored.customerPayment.unconfirmedMinor,
     expectedDealerRemittanceMinor: remittanceIsKnowable
       ? stored.remittance.expectedDealerRemittanceMinor
       : undefined,
@@ -2276,6 +2282,7 @@ export const recordAppraisal = mutation({
             unfinancedPortionMinor: undefined,
             dealerContributionMinor: undefined,
             customerGapToFinanceCompanyAppliedMinor: undefined,
+            customerGapToFinanceCompanyUnconfirmedMinor: undefined,
             expectedDealerRemittanceMinor: undefined,
             rawAppraisalGapMinor: undefined,
             // The NET shortfall was measured against this approval (SCRUM-766).
@@ -2846,6 +2853,7 @@ export const reopenApproval = mutation({
       unfinancedPortionMinor: undefined,
       dealerContributionMinor: undefined,
       customerGapToFinanceCompanyAppliedMinor: undefined,
+      customerGapToFinanceCompanyUnconfirmedMinor: undefined,
       expectedDealerRemittanceMinor: undefined,
       rawAppraisalGapMinor: undefined,
       // The NET shortfall was measured against this approval (SCRUM-766).

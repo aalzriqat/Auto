@@ -42,6 +42,7 @@ import { toMinorUnits } from "./money";
 import { RETIRED_DEAL_MODE_MESSAGE, isRetiredDealMode } from "./dealModes";
 import { isManualFinanceApplication } from "./manualFinancePayer";
 import { requireCustomerGapToDealer } from "./financingEconomics";
+import { customerPaymentEvidenceOf, loadCustomerFinanceCompanyPayments } from "./customerFinanceCompanyPayments";
 import { summarizeFees } from "./feeSummary";
 import { consignedSettlementRoute, dealershipCollectsGross, isConsignedAgentSale } from "./vehicleOwnership";
 import {
@@ -669,20 +670,59 @@ export async function evaluateClosingReadiness(
   // promise until a confirmed payment row backs it. The contribution this plan
   // forwards is reduced only by the confirmed part, so closing on an
   // unconfirmed remainder would book a sale the showroom cannot cover if the
-  // customer never pays. Applies only where a payment was agreed; appended last
-  // like FINANCING_RECONCILED so existing refusals keep their order.
+  // customer never pays. Appended last like FINANCING_RECONCILED so existing
+  // refusals keep their order.
+  //
+  // Two things block, judged in this order:
+  //  - a confirmed payment that belongs to an agreement since withdrawn: real
+  //    money is on file that the deal's figures do not account for, so a person
+  //    disposes of it (takes it back with a reason, or re-records the transfer
+  //    on the new agreement) before the deal closes - whatever the new agreement says;
+  //  - the deal's ONE stored balance of what the agreement still leaves to
+  //    confirm. Not `agreed - applied`: the agreement can exceed what is
+  //    creditable, and that excess is reconciled under FINANCING_RECONCILED,
+  //    not demanded as a payment no row can ever credit.
   const agreedToCompanyMinor = app.customerGapToFinanceCompanyMinor ?? 0;
-  const unconfirmedToCompanyMinor = agreedToCompanyMinor - (app.customerGapToFinanceCompanyAppliedMinor ?? 0);
-  add(
-    "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED",
-    agreedToCompanyMinor <= 0 ? "NOT_APPLICABLE" : unconfirmedToCompanyMinor > 0 ? "BLOCKED" : "READY",
-    agreedToCompanyMinor > 0 && unconfirmedToCompanyMinor > 0
-      ? reasonOf(
-          "CUSTOMER_FINANCE_COMPANY_PAYMENT_UNCONFIRMED",
-          "The customer agreed to pay part of the shortfall to the finance company, but that payment is not confirmed in full, so the dealership's contribution cannot be reduced by it yet. Record the payment's confirmation before finalizing."
-        )
-      : null
-  );
+  let priorConfirmedMinor = 0;
+  let paymentEvidenceUnreadable: ClosingReadinessReason | null = null;
+  try {
+    priorConfirmedMinor = customerPaymentEvidenceOf(
+      await loadCustomerFinanceCompanyPayments(ctx, app.orgId, app._id),
+      app,
+      opts.currency
+    ).priorConfirmedMinor;
+  } catch (error) {
+    paymentEvidenceUnreadable = reasonOf("CHECK_REFUSED", messageOf(error));
+  }
+  const unconfirmedToCompanyMinor = app.customerGapToFinanceCompanyUnconfirmedMinor;
+  // A payment agreed with no balance stored has not been recomputed since: unknown is unconfirmed.
+  const stillUnconfirmed =
+    agreedToCompanyMinor > 0 && (unconfirmedToCompanyMinor === undefined || unconfirmedToCompanyMinor > 0);
+  if (paymentEvidenceUnreadable !== null) {
+    add("CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED", "UNAVAILABLE", paymentEvidenceUnreadable);
+  } else if (priorConfirmedMinor > 0) {
+    add(
+      "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED",
+      "BLOCKED",
+      reasonOf(
+        "CUSTOMER_FINANCE_COMPANY_PAYMENT_SUPERSEDED",
+        "A payment from the customer to the finance company was confirmed against an agreement that has since been withdrawn, so this deal's figures do not account for it. Take that confirmation back with a reason, or record the transfer again against the current agreement, before finalizing."
+      )
+    );
+  } else if (agreedToCompanyMinor <= 0) {
+    add("CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED", "NOT_APPLICABLE", null);
+  } else if (stillUnconfirmed) {
+    add(
+      "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED",
+      "BLOCKED",
+      reasonOf(
+        "CUSTOMER_FINANCE_COMPANY_PAYMENT_UNCONFIRMED",
+        "The customer agreed to pay part of the shortfall to the finance company, but that payment is not confirmed in full, so the dealership's contribution cannot be reduced by it yet. Record the payment's confirmation before finalizing."
+      )
+    );
+  } else {
+    add("CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED", "READY", null);
+  }
 
   const state = overallReadinessState(checks);
   const readiness: ClosingReadiness = { state, checks };

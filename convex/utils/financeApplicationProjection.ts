@@ -301,6 +301,7 @@ const FIELD_VISIBILITY: Record<
   customerGapInstallmentToDealerMinor: "FINANCE",
   customerGapToFinanceCompanyMinor: "FINANCE",
   customerGapToFinanceCompanyAppliedMinor: "FINANCE",
+  customerGapToFinanceCompanyUnconfirmedMinor: "FINANCE",
   gapResolvedAt: "FINANCE",
   gapResolvedBy: "FINANCE",
   gapResolutionNotes: "FINANCE",

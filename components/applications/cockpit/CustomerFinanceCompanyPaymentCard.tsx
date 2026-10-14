@@ -16,22 +16,31 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
+import { economicDateInputToMs, economicTodayDateInput, msToDateInput } from "@/lib/dateInput";
 
 /**
  * SCRUM-766 PR-B - the evidence that the customer paid the finance company.
  *
  * What the customer AGREED to pay the finance company is a promise; only a
  * confirmed payment lowers the dealership's contribution, and the deal cannot
- * close while any of the agreement is unconfirmed. This card shows the three
- * numbers side by side so the screen never reads an agreement as money, and
+ * close while any of the creditable agreement is unconfirmed. This card shows
+ * the numbers side by side so the screen never reads an agreement as money, and
  * offers the two commands the server accepts: confirm a payment (amount, date,
  * reference) and take a confirmation back (with a reason). Both are refused on
  * the server for a closed deal and for the deal's own salesperson; the card
  * withdraws the buttons for the same cases rather than offering a refusal.
+ *
+ * `awaitingMinor` is the server's stored balance, not `agreed - confirmed`: the
+ * agreement can exceed what is creditable, and the card, the closing gate and
+ * the confirm command's cap must all read the one figure. A payment confirmed
+ * against an agreement since withdrawn is listed (it can be taken back) but is
+ * marked as not counted.
  */
 export type CustomerFinanceCompanyPayment = {
   _id: string;
   status: "CONFIRMED" | "VOIDED";
+  /** Whether it backs the agreement the deal holds now. */
+  agreement: "CURRENT" | "PRIOR";
   amountMinor: number;
   paidAt: number;
   reference: string;
@@ -41,6 +50,8 @@ export type CustomerFinanceCompanyPayment = {
 type CustomerFinanceCompanyPaymentCardProps = {
   agreedMinor: number;
   confirmedMinor: number;
+  /** What is still to be confirmed, as the server stores it. */
+  awaitingMinor: number;
   /** `undefined` while the evidence list loads. */
   payments: ReadonlyArray<CustomerFinanceCompanyPayment> | undefined;
   /** Finance authority and not the deal's own salesperson. */
@@ -60,11 +71,10 @@ function toMinor(value: string, factor: number): number | null {
   return parsed.ok && parsed.minor > 0 ? parsed.minor : null;
 }
 
-const todayInputValue = () => new Date().toISOString().slice(0, 10);
-
 export function CustomerFinanceCompanyPaymentCard({
   agreedMinor,
   confirmedMinor,
+  awaitingMinor,
   payments,
   canRecord,
   closed,
@@ -78,19 +88,19 @@ export function CustomerFinanceCompanyPaymentCard({
   const [voiding, setVoiding] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [amount, setAmount] = useState("");
-  const [paidOn, setPaidOn] = useState(todayInputValue);
+  const [paidOn, setPaidOn] = useState(economicTodayDateInput);
   const [reference, setReference] = useState("");
   const [reason, setReason] = useState("");
 
-  if (agreedMinor <= 0) return null;
-  const awaitingMinor = Math.max(0, agreedMinor - confirmedMinor);
+  // An earlier agreement's evidence keeps the card on screen so it can be taken back.
+  if (agreedMinor <= 0 && (payments ?? []).length === 0) return null;
   const amountMinor = toMinor(amount, factor);
   const confirmInvalid = amountMinor === null || amountMinor > awaitingMinor || reference.trim() === "" || paidOn === "";
   const offered = canRecord && !closed;
 
   const openConfirm = () => {
     setAmount((awaitingMinor / factor).toString());
-    setPaidOn(todayInputValue());
+    setPaidOn(economicTodayDateInput());
     setReference("");
     setConfirming(true);
   };
@@ -99,10 +109,10 @@ export function CustomerFinanceCompanyPaymentCard({
     if (amountMinor === null || confirmInvalid) return;
     setSubmitting(true);
     try {
-      // Midnight at the start of the chosen day is never in the future.
+      // UTC midnight of the chosen day: the ledger calendar, never in the future.
       const recorded = await onConfirm({
         amountMinor,
-        paidAt: new Date(`${paidOn}T00:00:00`).getTime(),
+        paidAt: economicDateInputToMs(paidOn),
         reference: reference.trim(),
       });
       if (recorded) setConfirming(false);
@@ -137,7 +147,9 @@ export function CustomerFinanceCompanyPaymentCard({
           </div>
           <div>
             <dt className="text-muted-foreground">{t("CustFcPayConfirmed")}</dt>
-            <dd className="tabular-nums font-semibold"><bdi>{money(confirmedMinor)}</bdi></dd>
+            <dd className="tabular-nums font-semibold" data-testid="customer-finance-company-confirmed">
+              <bdi>{money(confirmedMinor)}</bdi>
+            </dd>
           </div>
           <div>
             <dt className="text-muted-foreground">{t("CustFcPayAwaiting")}</dt>
@@ -147,6 +159,9 @@ export function CustomerFinanceCompanyPaymentCard({
           </div>
         </dl>
         {awaitingMinor > 0 && <p className="text-xs text-muted-foreground">{t("CustFcPayAwaitingNote")}</p>}
+        {(payments ?? []).some((payment) => payment.status === "CONFIRMED" && payment.agreement === "PRIOR") && (
+          <p className="text-xs text-muted-foreground">{t("CustFcPayPriorNote")}</p>
+        )}
 
         {(payments ?? []).length > 0 && (
           <ul className="space-y-1.5">
@@ -155,10 +170,13 @@ export function CustomerFinanceCompanyPaymentCard({
                 <span className={payment.status === "VOIDED" ? "text-muted-foreground line-through" : undefined}>
                   <bdi className="tabular-nums font-medium">{money(payment.amountMinor)}</bdi>
                   {" · "}
-                  <bdi>{new Date(payment.paidAt).toLocaleDateString()}</bdi>
+                  <bdi>{msToDateInput(payment.paidAt)}</bdi>
                   {" · "}
                   <bdi>{payment.reference}</bdi>
                 </span>
+                {payment.status === "CONFIRMED" && payment.agreement === "PRIOR" && (
+                  <span className="text-xs font-medium text-amber-700">{t("CustFcPayPriorAgreement")}</span>
+                )}
                 {payment.status === "VOIDED" ? (
                   <span className="text-xs text-muted-foreground">
                     {t("CustFcPayVoided")}
@@ -218,7 +236,7 @@ export function CustomerFinanceCompanyPaymentCard({
               <Input
                 id="cust-fc-pay-date"
                 type="date"
-                max={todayInputValue()}
+                max={economicTodayDateInput()}
                 value={paidOn}
                 onChange={(event) => setPaidOn(event.target.value)}
               />

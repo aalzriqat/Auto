@@ -115,10 +115,10 @@ export type DealFinancialSummaryInputs = Readonly<{
     customerFirstPaymentMinor?: number;
     customerGapCashToDealerMinor?: number;
     customerGapInstallmentToDealerMinor?: number;
-    /** What the customer agreed to pay the finance company directly: a promise until it is confirmed paid. */
-    customerGapToFinanceCompanyMinor?: number;
-    /** The CONFIRMED part of that agreed payment, the only part credited against the contribution. */
+    /** The CONFIRMED part of what the customer agreed to pay the finance company, the only part credited against the contribution. */
     customerGapToFinanceCompanyAppliedMinor?: number;
+    /** What is still to be confirmed of the creditable part of that agreement: the deal's one balance. */
+    customerGapToFinanceCompanyUnconfirmedMinor?: number;
     dealerContributionSettlement?: "PAID_SEPARATELY" | "NETTED_FROM_REMITTANCE";
     /** What the financier is expected to remit to the dealership, as the economics froze it. */
     expectedDealerRemittanceMinor?: number;
@@ -210,10 +210,11 @@ export type DealFinancialSummary = Readonly<{
    */
   customerGapToFinanceCompanyPlannedMinor: number | null;
   /**
-   * What the customer agreed to pay the finance company that is NOT yet
-   * confirmed. The planned contribution below still includes it, and the deal
-   * cannot close until it is confirmed. `0` when fully confirmed; `null` when no
-   * payment to the finance company was agreed.
+   * What is still to be confirmed of the part of the customer's payment to the
+   * finance company that could be credited: the deal's ONE stored balance, the
+   * same figure the closing gate and the payment card read. The planned
+   * contribution below still includes it, and the deal cannot close until it is
+   * confirmed. `0` when fully confirmed; `null` when the row carries no figure.
    */
   customerGapToFinanceCompanyUnconfirmedMinor: number | null;
   /** The customer's first payment as the economics froze it, whoever receives it. */
@@ -451,11 +452,13 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
     }
   }
 
-  const agreedToFinanceCompany = boundary.serve("customerGapToFinanceCompanyUnconfirmed", app.customerGapToFinanceCompanyMinor);
   const confirmedToFinanceCompany = boundary.serve("customerGapToFinanceCompanyPlanned", app.customerGapToFinanceCompanyAppliedMinor);
-  // Never below zero: confirmed can only exceed the agreement transiently, on a row mid-repair.
-  const customerGapToFinanceCompanyUnconfirmedMinor =
-    agreedToFinanceCompany === null ? null : Math.max(0, agreedToFinanceCompany - (confirmedToFinanceCompany ?? 0));
+  // The deal's ONE stored balance, as the closing gate and the payment card read it - never
+  // re-derived here from the agreement, which can exceed what is creditable.
+  const customerGapToFinanceCompanyUnconfirmedMinor = boundary.serve(
+    "customerGapToFinanceCompanyUnconfirmed",
+    app.customerGapToFinanceCompanyUnconfirmedMinor
+  );
 
   return {
     currency,

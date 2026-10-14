@@ -1076,12 +1076,13 @@ export function DealCockpit({
   const reportFinanceCompanyForwardReturned = useMutation(
     api.financeCompanyForward.reportFinanceCompanyForwardReturned
   );
-  // SCRUM-766 PR-B: the evidence list is read only for a deal whose customer agreed to pay the
-  // finance company, and only by a caller the server would let read it.
+  // SCRUM-766 PR-B: the evidence list is read for every deal a caller the server would let read it
+  // can see, NOT only while an agreement is held: a payment confirmed against an earlier agreement
+  // (reopen / reapproval to a zero-to-finance-company split) must stay visible and correctable.
   const agreedToFinanceCompanyMinor = economicsApp?.customerGapToFinanceCompanyMinor ?? 0;
   const customerPayments = useQuery(
     api.customerFinanceCompanyPayments.listPayments,
-    agreedToFinanceCompanyMinor > 0 && !permissionsLoading && hasPermission(PERMISSIONS.VIEW_FINANCE)
+    economicsApp !== null && !permissionsLoading && hasPermission(PERMISSIONS.VIEW_FINANCE)
       ? { orgId, applicationId }
       : "skip"
   );
@@ -2694,10 +2695,13 @@ export function DealCockpit({
             });
           },
           customerPayment:
-            agreedToFinanceCompanyMinor > 0
+            agreedToFinanceCompanyMinor > 0 || (customerPayments ?? []).length > 0
               ? {
                   agreedMinor: agreedToFinanceCompanyMinor,
                   confirmedMinor: economicsApp.customerGapToFinanceCompanyAppliedMinor ?? 0,
+                  // The server's one stored balance; absent with an agreement held means nothing is confirmed yet.
+                  awaitingMinor:
+                    economicsApp.customerGapToFinanceCompanyUnconfirmedMinor ?? agreedToFinanceCompanyMinor,
                   payments: customerPayments,
                   // The same authority and the same own-deal refusal the server applies.
                   canRecord:
@@ -4797,6 +4801,7 @@ export type FinanceDecisionWiring = {
   customerPayment?: {
     agreedMinor: number;
     confirmedMinor: number;
+    awaitingMinor: number;
     payments: ReadonlyArray<CustomerFinanceCompanyPayment> | undefined;
     canRecord: boolean;
     closed: boolean;

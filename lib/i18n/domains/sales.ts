@@ -1210,6 +1210,11 @@ const dealOverviewMessages = defineBilingualMessages({
   CustFcPayDateLabel: ["Date paid", "تاريخ الدفع"],
   CustFcPayReferenceLabel: ["Payment reference", "مرجع الدفعة"],
   CustFcPayVoided: ["Taken back", "مسحوب"],
+  CustFcPayPriorAgreement: ["Earlier agreement - not counted", "اتفاق سابق - غير محتسب"],
+  CustFcPayPriorNote: [
+    "A payment confirmed against an agreement that was later withdrawn is not counted toward the current one, and the deal cannot close until it is taken back with a reason. If the transfer still stands, record it again against the current agreement.",
+    "الدفعة المؤكَّدة مقابل اتفاق سُحب لاحقًا لا تُحتسب ضمن الاتفاق الحالي، ولا يمكن إغلاق الصفقة قبل سحب تأكيدها مع ذكر السبب. وإن كان التحويل قائمًا فسجِّله من جديد مقابل الاتفاق الحالي.",
+  ],
   CustFcPayVoidAction: ["Take back", "سحب التأكيد"],
   CustFcPayVoidTitle: ["Take back this confirmation", "سحب تأكيد الدفعة"],
   CustFcPayVoidDesc: [
@@ -1662,9 +1667,13 @@ const dealOverviewMessages = defineBilingualMessages({
     "The customer agreed to pay part of the shortfall to the finance company, but that payment is not confirmed in full. Confirm the payment before closing, or settle the shortfall another way.",
     "اتفق العميل على دفع جزء من العجز لشركة التمويل، لكن هذه الدفعة غير مؤكَّدة بالكامل. أكِّد الدفعة قبل الإغلاق، أو سوِّ العجز بطريقة أخرى.",
   ],
+  ClosingReason_CUSTOMER_FINANCE_COMPANY_PAYMENT_SUPERSEDED: [
+    "A payment from the customer to the finance company was confirmed against an agreement that has since been withdrawn, so this deal's figures do not account for it. Take that confirmation back with a reason, or record the transfer again against the current agreement, before closing.",
+    "أُكِّدت دفعة من العميل إلى شركة التمويل مقابل اتفاق سُحب لاحقًا، فلا تحتسبها أرقام هذه الصفقة. تراجَع عن ذلك التأكيد مع ذكر السبب، أو سجِّل التحويل من جديد مقابل الاتفاق الحالي، قبل الإغلاق.",
+  ],
   ClosingReason_WITHHELD_CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED: [
-    "A payment the customer agreed to make to the finance company is not confirmed yet.",
-    "دفعة اتفق العميل على سدادها لشركة التمويل لم تُؤكَّد بعد.",
+    "A payment the customer made, or agreed to make, to the finance company is not settled in the deal's records yet.",
+    "دفعة سدّدها العميل أو اتفق على سدادها لشركة التمويل لم تُسوَّ بعد في سجلات الصفقة.",
   ],
   ClosingReason_WITHHELD_UNAVAILABLE: [
     "This deal's closing readiness cannot be determined from its current records. Someone with finance access can see why.",
