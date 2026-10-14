@@ -5782,6 +5782,13 @@ export default defineSchema({
     facebookPendingCredentials: v.optional(
       v.array(v.object({ id: v.string(), name: v.string(), token: v.string() }))
     ),
+    // SCRUM-841: when the Owner last disconnected Facebook for this org. An OAuth
+    // attempt begun at or before it cannot store pending Page credentials, so an
+    // exchange already in flight (or an old unconsumed state) cannot undo the
+    // disconnect. A timestamp only; never cleared, so it keeps fencing attempts
+    // begun before it after later connections. Distinct from the Meta-user
+    // `facebookRevocations` fence, which a signed callback sets.
+    facebookDisconnectedAt: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
     .index("by_instagram_business_account_id", ["instagramBusinessAccountId"])

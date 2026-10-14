@@ -20,6 +20,7 @@ const FACEBOOK_GRAPH_VERSION = "v25.0";
 const FACEBOOK_REVOKED_MESSAGE =
   "Facebook access for this account was revoked while connecting. Please start the connection again.";
 const FACEBOOK_ATTEMPT_EXPIRED_MESSAGE = "This connection attempt expired. Please start the connection again.";
+const FACEBOOK_DISCONNECTED_MESSAGE = "Facebook was disconnected while connecting. Please start the connection again.";
 
 // Facebook Login for Pages: authenticates a person, who may manage several
 // Pages. Unlike Instagram Login (whose token exchange returns the IG
@@ -257,7 +258,16 @@ export const disconnectByFacebookConnectedUserId = internalMutation({
 
 /** Disconnects Facebook for the org. Owner-only.
  *  Intentionally NOT gated behind requireFeature — downgraded orgs must
- *  still be able to revoke stored credentials. */
+ *  still be able to revoke stored credentials.
+ *
+ *  Also records WHEN, as `facebookDisconnectedAt`: an exchange already in flight
+ *  (its Graph call is an action, outside any transaction) or a state never
+ *  consumed must not be able to recreate pending credentials afterwards. That is
+ *  checked inside `saveFacebookPendingPages`, which reads the same `by_org` index
+ *  range this writes (an empty range included), so the two conflict and whichever
+ *  commits second re-runs and sees the other. The record is made even when the
+ *  org has no settings row yet. Assumes mutation clocks are ordered to within far
+ *  less than an OAuth round trip; a tie is refused. */
 export const disconnect = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
@@ -267,9 +277,20 @@ export const disconnect = mutation({
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
-    if (!settings) return;
+    const now = Date.now();
+    if (!settings) {
+      await ctx.db.insert("orgSettings", {
+        orgId: args.orgId,
+        currency: DEFAULT_SETTINGS.currency,
+        currencySymbol: DEFAULT_SETTINGS.currencySymbol,
+        enabledPaymentTypes: DEFAULT_SETTINGS.enabledPaymentTypes,
+        facebookDisconnectedAt: now,
+      });
+      return;
+    }
 
     await ctx.db.patch(settings._id, {
+      facebookDisconnectedAt: Math.max(settings.facebookDisconnectedAt ?? 0, now),
       facebookPageId: undefined,
       facebookPageAccessToken: undefined,
       facebookTokenExpiresAt: undefined,
@@ -560,6 +581,13 @@ export const saveFacebookPendingPages = internalMutation({
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", orgId))
       .unique();
+
+    // The Owner's disconnect fences attempts begun at or before it, with or
+    // without a prior settings row (ties go to the disconnect). A new attempt
+    // begun afterwards has a later start and passes.
+    if (existing?.facebookDisconnectedAt !== undefined && existing.facebookDisconnectedAt >= attemptStartedAt) {
+      throw new ConvexError(FACEBOOK_DISCONNECTED_MESSAGE);
+    }
 
     // facebookConnectedByUserId is the single key Meta's callbacks use to find
     // this row. Overwriting it while an active Page token stays would make that

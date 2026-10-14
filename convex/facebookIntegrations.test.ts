@@ -924,10 +924,12 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
     // /facebook-oauth-callback route. The parked ones hold the exchange at
     // /me/accounts, POST the HMAC-signed routes in that gap, then release it; the
     // sequential ones run the callback wholly before or wholly after the attempt.
-    // The "(mutation)" block pins the fence's own rules (ties, monotonic time,
-    // retention age); the hourly sweep that deletes expired fences is covered in
-    // adminSystem.test.ts.
-    describe("an OAuth attempt begun before a signed callback cannot restore that user's credentials", () => {
+    // "(owner disconnect + real callback)" tests do the same with the Owner's
+    // disconnect, which the signed-callback fence cannot see (see its block below).
+    // The two "(mutation)" blocks pin each fence's own rules (ties, monotonic time,
+    // retention age); the hourly sweep that deletes expired Meta-user fences is
+    // covered in adminSystem.test.ts.
+    describe("an OAuth attempt begun before a signed callback or an Owner disconnect cannot restore credentials", () => {
       const USER = "fb_user_1";
       const REVOKED = /revoked while connecting/i;
       const EXPIRED = /connection attempt expired/i;
@@ -977,6 +979,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         return {
           t,
           orgId,
+          asOwner,
           finish: async () => {
             release();
             return callback;
@@ -986,16 +989,26 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
 
       const logsOf = (t: T) => t.run((ctx) => ctx.db.query("webhookLogs").collect());
       /** The attempt was refused: error redirect, fixed log text, no token anywhere. */
-      async function expectRefused(t: T, res: Response) {
+      async function expectRefused(t: T, res: Response, reason: RegExp = REVOKED) {
         expect(res.status).toBe(302);
         expect(res.headers.get("location")).toContain("error=1");
         const logs = await logsOf(t);
-        expect(logs.find((l) => l.source === "facebook-oauth" && l.status === "error")?.error).toMatch(REVOKED);
+        expect(logs.find((l) => l.source === "facebook-oauth" && l.status === "error")?.error).toMatch(reason);
         const visible = JSON.stringify(logs) + (res.headers.get("location") ?? "");
         for (const secret of [...URL_CREDENTIALS, SYNTHETIC_PAGE_TOKEN, ACTIVE.facebookPageAccessToken]) {
           expect(visible).not.toContain(secret);
         }
       }
+      // Stores pending Pages for USER, as the exchange's final step does, for an attempt begun at the given time.
+      const savePending = (t: T, orgId: Id<"organizations">, attemptStartedAt: number) =>
+        t.run((ctx) =>
+          ctx.runMutation(internal.facebookIntegrations.saveFacebookPendingPages, {
+            orgId,
+            pages: [{ id: "page_1", name: "Dealer One", access_token: SYNTHETIC_PAGE_TOKEN }],
+            connectedByUserId: USER,
+            attemptStartedAt,
+          })
+        );
       const expectNoCredentials = (row: Awaited<ReturnType<typeof settingsOf>>) => {
         expect(row?.facebookPageId).toBeUndefined();
         expect(row?.facebookPageAccessToken).toBeUndefined();
@@ -1102,17 +1115,153 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         expect(row?.facebookPendingCredentials).toHaveLength(1);
       });
 
-      describe("(mutation) the fence itself", () => {
+      // SCRUM-841, Owner disconnect. The Owner's disconnect clears the org's credentials
+      // but is not keyed by Facebook user, so the signed-callback fence above cannot see it.
+      // An exchange already past consumeOAuthState, or a state never consumed, must not be
+      // able to recreate pending credentials afterwards. The org-scoped fence
+      // orgSettings.facebookDisconnectedAt is compared with the attempt's start inside the
+      // save mutation: the Graph call is an action, outside any transaction.
+      describe("an Owner disconnect cancels attempts begun before it", () => {
+        const DISCONNECTED = /disconnected while connecting/i;
+        const disconnectedAtOf = async (t: T, orgId: Id<"organizations">) => {
+          const at = (await settingsOf(t, orgId))?.facebookDisconnectedAt;
+          expect(at).toBeDefined();
+          return at!;
+        };
+
+        test.each([
+          ["an active connection", (seedT: T, seedOrgId: Id<"organizations">) => upsertOrgSettings(seedT, seedOrgId, ACTIVE)],
+          ["a settings row with no Facebook data", (seedT: T, seedOrgId: Id<"organizations">) => upsertOrgSettings(seedT, seedOrgId, {})],
+          ["no settings row at all", undefined],
+        ])("(owner disconnect + real callback) during the exchange: %s ends with no credentials and a refused attempt", async (_label, seed) => {
+          const { t, orgId, asOwner, finish } = await parkedExchange(seed);
+
+          await asOwner.mutation(api.facebookIntegrations.disconnect, { orgId });
+          const res = await finish();
+
+          await expectRefused(t, res, DISCONNECTED);
+          const row = await settingsOf(t, orgId);
+          expectNoCredentials(row);
+          expect(row?.facebookDisconnectedAt).toBeDefined();
+        });
+
+        test("(owner disconnect + real callback) a state that was never consumed cannot proceed after the disconnect", async () => {
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const { orgId, asOwner } = await seedOwner(t);
+          const state = await startAttempt(asOwner, orgId);
+          stubGraph(PAGES, { me: () => graphJson({ id: USER }) });
+
+          await asOwner.mutation(api.facebookIntegrations.disconnect, { orgId });
+          // The route's own entry time must be strictly later than the disconnect, so a tie
+          // cannot hide a regression that passes "now" instead of the state's createdAt.
+          await after(await disconnectedAtOf(t, orgId));
+          const res = await t.fetch(callbackUrl(state), { redirect: "manual" });
+
+          await expectRefused(t, res, DISCONNECTED);
+          expectNoCredentials(await settingsOf(t, orgId));
+        });
+
+        test("(owner disconnect + real callback) a genuinely new attempt begun after the disconnect still connects", async () => {
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const { orgId, asOwner } = await seedOwner(t);
+          await upsertOrgSettings(t, orgId, ACTIVE);
+          stubGraph(PAGES, { me: () => graphJson({ id: USER }) });
+          await asOwner.mutation(api.facebookIntegrations.disconnect, { orgId });
+          const disconnectedAt = await disconnectedAtOf(t, orgId);
+          await after(disconnectedAt); // the new state must be strictly later than the disconnect
+
+          const res = await t.fetch(callbackUrl(await startAttempt(asOwner, orgId)), { redirect: "manual" });
+
+          expect(res.headers.get("location")).toMatch(/\?connected=facebook$/);
+          const row = await settingsOf(t, orgId);
+          expect(row?.facebookConnectedByUserId).toBe(USER);
+          expect(row?.facebookPendingCredentials).toHaveLength(1);
+          expect(row?.facebookDisconnectedAt).toBe(disconnectedAt); // the fence is a record; connecting does not clear it
+        });
+
+        test("(owner disconnect + real callback) a disconnect after the attempt has stored its credentials still clears them", async () => {
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const { orgId, asOwner } = await seedOwner(t);
+          stubGraph(PAGES, { me: () => graphJson({ id: USER }) });
+          const res = await t.fetch(callbackUrl(await startAttempt(asOwner, orgId)), { redirect: "manual" });
+          expect(res.headers.get("location")).toMatch(/\?connected=facebook$/);
+          expect((await settingsOf(t, orgId))?.facebookPendingCredentials).toHaveLength(1);
+
+          await asOwner.mutation(api.facebookIntegrations.disconnect, { orgId });
+
+          expectNoCredentials(await settingsOf(t, orgId));
+        });
+
+        test("(owner disconnect + signed route) when both fences apply, the Meta-user fence is checked first", async () => {
+          const { t, orgId, asOwner, finish } = await parkedExchange();
+
+          expect((await postToRoute(t, "/facebook-deauthorize", USER)).status).toBe(200);
+          await asOwner.mutation(api.facebookIntegrations.disconnect, { orgId });
+          const res = await finish();
+
+          await expectRefused(t, res); // REVOKED: the Meta-user fence, not the org fence, is what stopped it
+          expectNoCredentials(await settingsOf(t, orgId));
+        });
+
+        describe("(mutation) the org fence itself", () => {
+          test("with no settings row the disconnect still records it: same millisecond is refused, 1 ms later is stored", async () => {
+            const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+            const { orgId, asOwner } = await seedOwner(t);
+            expect(await settingsOf(t, orgId)).toBeNull();
+
+            await asOwner.mutation(api.facebookIntegrations.disconnect, { orgId });
+            const disconnectedAt = await disconnectedAtOf(t, orgId);
+
+            await expect(savePending(t, orgId, disconnectedAt)).rejects.toThrow(DISCONNECTED);
+            expect((await settingsOf(t, orgId))?.facebookPendingCredentials).toBeUndefined();
+            await expect(savePending(t, orgId, disconnectedAt + 1)).resolves.toBeNull();
+            expect((await settingsOf(t, orgId))?.facebookPendingCredentials).toHaveLength(1);
+          });
+
+          test("a later disconnect never moves the fence backwards", async () => {
+            const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+            const { orgId, asOwner } = await seedOwner(t);
+            const later = Date.now() + 60_000;
+            await upsertOrgSettings(t, orgId, { facebookDisconnectedAt: later });
+
+            await asOwner.mutation(api.facebookIntegrations.disconnect, { orgId });
+
+            expect(await disconnectedAtOf(t, orgId)).toBe(later);
+          });
+
+          test("it is per organization: another org's attempt of the same age is not blocked", async () => {
+            const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+            const { orgId, asOwner } = await seedOwner(t);
+            const otherOrg = await newOrg(t, "Other");
+            await asOwner.mutation(api.facebookIntegrations.disconnect, { orgId });
+            const disconnectedAt = await disconnectedAtOf(t, orgId);
+
+            await expect(savePending(t, orgId, disconnectedAt)).rejects.toThrow(DISCONNECTED);
+            await expect(savePending(t, otherOrg, disconnectedAt)).resolves.toBeNull();
+            expect((await settingsOf(t, otherOrg))?.facebookDisconnectedAt).toBeUndefined();
+          });
+
+          test("only the Owner can set it: a member's disconnect is refused and records nothing", async () => {
+            const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+            const { orgId } = await seedOwner(t);
+            const memberUser = await t.run((ctx) =>
+              ctx.db.insert("users", { clerkId: "fb_member_002", email: "fbm@test.com", name: "Member" })
+            );
+            const memberRole = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "SALES", permissions: ["view:settings"] }));
+            await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: memberUser, roleId: memberRole }));
+            const asMember = t.withIdentity({ subject: "fb_member_002" });
+
+            await expect(asMember.mutation(api.facebookIntegrations.disconnect, { orgId })).rejects.toThrow(
+              /only the organization owner/i
+            );
+
+            expect(await settingsOf(t, orgId)).toBeNull();
+          });
+        });
+      });
+
+      describe("(mutation) the Meta-user fence itself", () => {
         const fences = (t: T) => t.run((ctx) => ctx.db.query("facebookRevocations").collect());
-        const savePending = (t: T, orgId: Id<"organizations">, attemptStartedAt: number) =>
-          t.run((ctx) =>
-            ctx.runMutation(internal.facebookIntegrations.saveFacebookPendingPages, {
-              orgId,
-              pages: [{ id: "page_1", name: "Dealer One", access_token: SYNTHETIC_PAGE_TOKEN }],
-              connectedByUserId: USER,
-              attemptStartedAt,
-            })
-          );
         const revoke = (t: T, userId = USER) =>
           t.run((ctx) => ctx.runMutation(internal.facebookIntegrations.disconnectByFacebookConnectedUserId, { facebookConnectedByUserId: userId }));
 
