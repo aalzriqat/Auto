@@ -7,6 +7,7 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { isMinorAmount } from "./utils/financingEconomics";
+import { assertForwardAllowsContributionChange } from "./utils/financeCompanyForward";
 import { resolveDealCurrency } from "./utils/settlementDeductions";
 import { MAX_DIRECT_PAYMENT_REFERENCE_CHARS } from "./utils/feeDocLimits";
 import {
@@ -31,6 +32,11 @@ import {
  * contribution from the rows. Rows are voided, never deleted, and neither is
  * possible once the deal is closed - the contribution is then frozen into the
  * finalized plan and a later change would silently disagree with the ledger.
+ *
+ * The same holds from the moment the showroom pays the finance company its
+ * share (SCRUM-411 P2-01): that payment is H + the contribution as it stood, so
+ * both commands refuse while any version of it is on the books or unsettled
+ * (`assertForwardAllowsContributionChange`) until it is taken back or returned.
  */
 
 const APPLICATION_NOT_FOUND = "Finance application not found in this organization.";
@@ -134,6 +140,8 @@ export const confirmPayment = mutation({
         if (auth.user._id === app.salespersonId) {
           throw new ConvexError("You cannot confirm the customer's payment on your own deal. A manager or the dealership owner records it. Nothing has been recorded.");
         }
+        // The contribution this credits may already have been paid to the finance company.
+        await assertForwardAllowsContributionChange(ctx, app);
         const currency = await resolveDealCurrency(ctx, app, "recording this payment");
         const { rows, remainingMinor } = await confirmableRemainder(ctx, app);
         if (rows.length >= MAX_CUSTOMER_FINANCE_COMPANY_PAYMENT_ROWS) {
@@ -201,6 +209,10 @@ export const voidPayment = mutation({
     if (row.status !== "CONFIRMED") {
       throw new ConvexError("That payment confirmation has already been taken back. Nothing has been changed.");
     }
+    // Only a row of the current agreement credits the contribution that may already have been paid. A
+    // withdrawn agreement's row credits nothing, and closing requires it taken back; the recompute below
+    // still refuses any contribution change this misses.
+    if (isCurrentAgreementPayment(row, app)) await assertForwardAllowsContributionChange(ctx, app);
     await ctx.db.patch(row._id, {
       status: "VOIDED",
       voidedBy: auth.user._id,

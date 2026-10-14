@@ -17,6 +17,7 @@
  */
 import { convexTestWithComponents, registerHandover, recordReconciledZeroCost } from "../test-utils/convexTest";
 import { expectFinancedSaleRequiresDeal } from "../test-utils/financedSaleRequiresDeal";
+import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -129,20 +130,11 @@ async function seedDealership(tag: string, opts: SeedOpts) {
 type Seeded = Awaited<ReturnType<typeof seedDealership>>;
 
 /** The finishing steps every finalizable deal shares. */
-async function finishDeal(
-  s: Seeded,
-  applicationId: Id<"financeApplications">,
-  invoiceMinor: number,
-  firstPaymentMinor: number,
-  issuedTo: "CUSTOMER" | "FINANCE_COMPANY"
-) {
+async function finishDeal(s: Seeded, applicationId: Id<"financeApplications">, firstPaymentMinor: number) {
+  // No legal invoice (SCRUM-411): the server derives the consideration (approved + customer gap).
   await registerHandover(s.as, api, s.orgId, applicationId);
   await s.as.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
-  });
-  await s.as.mutation(api.financeDealCosts.recordLegalInvoice, {
-    orgId: s.orgId, applicationId, legalInvoiceAmountMinor: invoiceMinor, legalInvoiceNumber: `INV-${applicationId}`,
-    legalInvoiceDate: Date.now(), issuedTo,
   });
   await recordReconciledZeroCost(s.as, api, s.orgId, applicationId);
   await s.t.run((ctx) => ctx.db.patch(applicationId, { customerFirstPaymentMinor: firstPaymentMinor }));
@@ -169,10 +161,10 @@ async function readyConfiguredDeal(s: Seeded, o: { price: number; g: number; c: 
   await s.approver.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
     orgId: s.orgId, applicationId, approvedAmountMinor: o.g, basis: "MANUAL", notes: "Approved.",
   });
-  await finishDeal(s, applicationId, o.price * SCALE, o.first, "FINANCE_COMPANY");
+  await finishDeal(s, applicationId, o.first);
   await s.t.run((ctx) => ctx.db.patch(applicationId, {
       dealerContributionMinor: o.c,
-      // The legal invoice (13,000) exceeds G (12,500) by what the customer owes the dealership.
+      // The sale price (13,000) exceeds G (12,500) by what the customer owes the dealership.
       customerGapCashToDealerMinor: o.price * SCALE - o.g,
     }));
   return { applicationId, quoteId };
@@ -193,7 +185,7 @@ async function readyManualDeal(s: Seeded, o: { price: number; g: number; sends: 
     orgId: s.orgId, applicationId, approvedAmountMinor: o.g, financierName: "Al-Ameen Islamic Finance",
     dealerSendsMinor: o.sends,
   });
-  await finishDeal(s, applicationId, o.price * SCALE, o.h, "FINANCE_COMPANY");
+  await finishDeal(s, applicationId, o.h);
   if (o.h > 0) {
     await s.t.run(async (ctx) => {
       await ctx.db.insert("deposits", {
@@ -206,8 +198,14 @@ async function readyManualDeal(s: Seeded, o: { price: number; g: number; sends: 
   return { applicationId, quoteId };
 }
 
-const finalize = (s: Seeded, applicationId: Id<"financeApplications">, key = crypto.randomUUID()) =>
-  s.as.mutation(api.applications.finalizeDeal, { idempotencyKey: key, orgId: s.orgId, applicationId });
+/**
+ * SCRUM-411 P2-01: the deposit and the contribution owed to the finance company are
+ * paid BEFORE the deal is finalized (`pay` false: finalize as is, for a retry).
+ */
+async function finalize(s: Seeded, applicationId: Id<"financeApplications">, key = crypto.randomUUID(), pay = true) {
+  if (pay) await payForwardBeforeFinalize(s, s.as, applicationId);
+  return await s.as.mutation(api.applications.finalizeDeal, { idempotencyKey: key, orgId: s.orgId, applicationId });
+}
 
 async function saleOf(s: Seeded, applicationId: Id<"financeApplications">) {
   return await s.t.run(async (ctx) => {
@@ -231,7 +229,7 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     await finalize(s, applicationId);
     const sale = await saleOf(s, applicationId);
     const app = await s.t.run((ctx) => ctx.db.get(applicationId));
-    expect(app?.financedSalePlanVersion).toBe(2);
+    expect(app?.financedSalePlanVersion).toBe(3);
     // The old base (sale price - cost = 3,000) would pay 300.
     expect(sale?.commissionAmount).toBeCloseTo(112.5, 6);
     expect(sale?.commissionBase).toEqual({ approvedMinor: 12_500_000, contributionMinor: 1_375_000, currency: "JOD" });
@@ -308,8 +306,8 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     await s.t.run((ctx) => ctx.db.patch(applicationId, { supplierSettlementRoute: "THROUGH_DEALERSHIP" }));
     await finalize(s, applicationId);
     const app = await s.t.run((ctx) => ctx.db.get(applicationId));
-    // The deal really is a v2 plan, so the exclusion is the ownership check and not a missing plan.
-    expect(app?.financedSalePlanVersion).toBe(2);
+    // The deal really is a forward (v3) plan, so the exclusion is the ownership check and not a missing plan.
+    expect(app?.financedSalePlanVersion).toBe(3);
     const sale = await saleOf(s, applicationId);
     expect(sale?.commissionBase).toBeUndefined();
     // Today's consigned basis: sale price 13,000 - entitlement 10,000 = 3,000 at 10%.
@@ -421,9 +419,9 @@ describe("SCRUM-390 OR-5: commissionable vehicle margin on a v2 financed sale", 
     const sales = () => s.t.run((ctx) => ctx.db.query("sales").collect());
     const countBefore = (await sales()).length;
 
-    await finalize(s, applicationId, key); // same key: a replay, not a second completion
+    await finalize(s, applicationId, key, false); // same key: a replay, not a second completion
     // A fresh key on an already-finalized deal: whether it replays or refuses, state must not move.
-    await finalize(s, applicationId, crypto.randomUUID()).catch(() => undefined);
+    await finalize(s, applicationId, crypto.randomUUID(), false).catch(() => undefined);
 
     const after = await saleOf(s, applicationId);
     expect(after?._id).toBe(first?._id);

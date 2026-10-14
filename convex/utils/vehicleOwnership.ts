@@ -345,6 +345,44 @@ export function recordedConsignedMargin(sale: Doc<"sales">): number | undefined 
 }
 
 /**
+ * The revenue a plan-v3 financed sale earned NET of the showroom's contribution,
+ * frozen at completion, in major units - `financedNetRevenue`. THREE answers:
+ *
+ *   `undefined`  the field is ABSENT: not a v3 financed completion (or one that
+ *                predates it). `saleEconomics` keeps the reading those rows were
+ *                written under.
+ *   `null`       the field is PRESENT and cannot be trusted: a currency that is
+ *                not a supported denomination, a currency that is not the
+ *                organization's (a valid USD on a JOD org is somebody else's
+ *                scale - converting it would need an exchange rate nobody
+ *                recorded), or a minor amount that is not a safe integer. The
+ *                only writer derives this from the same lines the ledger posts,
+ *                so an untrustworthy value is corruption of a booked figure, and
+ *                `saleEconomics` WITHHOLDS revenue and margin instead of falling
+ *                back to the gross the ledger did not post.
+ *   a number     the signed, verified amount.
+ *
+ * SIGNED, unlike the consigned amounts below: a contribution above a consigned
+ * commission is a real loss the ledger booked, and `isValidMinorAmount` would
+ * refuse it. The denomination and integrality guards are the same ones.
+ *
+ * `orgCurrency` is the currency the organization reports in - the one the sale's
+ * ledger entry was posted in (`prepared.currency` in `saleCompletion`).
+ */
+export function recordedFinancedNetRevenue(
+  sale: Doc<"sales">,
+  orgCurrency: string
+): number | null | undefined {
+  const frozen = sale.financedNetRevenue;
+  if (frozen === undefined) return undefined;
+  const denomination = denominationOf(frozen.currency);
+  if (denomination === null || frozen.currency !== orgCurrency || !Number.isSafeInteger(frozen.minor)) {
+    return null;
+  }
+  return frozen.minor / Math.pow(10, denomination.scale);
+}
+
+/**
  * One reader for all three frozen consigned amounts, because they are one basis.
  *
  * ⚠️ CX-D. Each of the three used to call `fromMinorUnits(minor, currency)`, and
@@ -659,6 +697,20 @@ export function saleEconomics(args: {
    */
   recordedMargin?: number;
   /**
+   * SCRUM-411 (plan v3): the revenue the sale earned NET of the showroom's
+   * contribution, frozen at completion - what the general ledger nets.
+   *
+   * When present it IS the recognized revenue: on a dealer-owned car the margin
+   * is this less the cost, on a consigned car it is the margin itself. It outranks
+   * `recordedMargin` (a consigned commission before the contribution) and
+   * `salePrice` (the quote's operational price), neither of which the ledger
+   * posts. Absent (`undefined`) means the sale is not a v3 financed completion
+   * and keeps the reading it was written under. `null` means the field is
+   * present and untrustworthy (see `recordedFinancedNetRevenue`): revenue and
+   * margin are WITHHELD, never replaced by the gross the ledger did not post.
+   */
+  recordedNetRevenue?: number | null;
+  /**
    * What the supplier was owed, frozen at completion, when the sale recorded it.
    *
    * `capitalizedCost` is the live vehicle's basis and it moves: a consigned car
@@ -950,14 +1002,22 @@ export function saleEconomics(args: {
   const derivedMargin = salePrice - (eligibleSupplierEntitlement ?? capitalizedCost);
   const derivedMarginIsCorrupt = agent && derivedMargin < 0;
 
+  const { recordedNetRevenue } = args;
+  const netRevenueWithheld = recordedNetRevenue === null;
   const margin =
-    financedDirectUnverified || basisUnknown
+    financedDirectUnverified || basisUnknown || recordedNetRevenue === null
       ? null
-      : agent && args.recordedMargin !== undefined
-        ? args.recordedMargin
-        : evidenceRequired || derivedMarginIsCorrupt
-          ? null
-          : derivedMargin;
+      : recordedNetRevenue !== undefined
+        ? // Plan v3: the ledger's own net. A consigned car's is already the
+          // dealership's margin; an owned car's is revenue, so its cost comes off.
+          agent
+          ? recordedNetRevenue
+          : recordedNetRevenue - capitalizedCost
+        : agent && args.recordedMargin !== undefined
+          ? args.recordedMargin
+          : evidenceRequired || derivedMarginIsCorrupt
+            ? null
+            : derivedMargin;
 
   if (!agent) {
     return {
@@ -973,7 +1033,7 @@ export function saleEconomics(args: {
       // Null exactly when the margin is — the documented contract of this
       // object. Publishing the sale price as turnover for a row whose basis
       // could not be read is the SCRUM-33 defect wearing revenue's name.
-      recognizedRevenue: basisUnknown ? null : salePrice,
+      recognizedRevenue: basisUnknown || netRevenueWithheld ? null : (args.recordedNetRevenue ?? salePrice),
       recognizedCost: capitalizedCost,
     };
   }

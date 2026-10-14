@@ -20,6 +20,7 @@ import {
   requiresLtvPercentFor,
 } from "./utils/financeApplicationProjection";
 import { PERMISSIONS } from "./utils/permissions";
+import { assertForwardAllowsEconomicsChange } from "./utils/financeCompanyForward";
 import { isManualFinanceApplication, isManualLetterUnitIntact, MANUAL_GAP_TO_FINANCIER_REFUSAL, normalizeManualPayerName } from "./utils/manualFinancePayer";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import {
@@ -138,7 +139,9 @@ async function resolveRuleSnapshot(
  *
  * Safe to call at any point: it is a pure re-derivation of stored inputs, and
  * it does nothing at all until the quotation, the approval and the applied LTV
- * all exist.
+ * all exist. It throws `DEAL_ECONOMICS_FORWARD_LIVE` when the re-derived
+ * contribution differs while a payment to the finance company is live
+ * (SCRUM-411 P2-01); callers leave that uncaught so their own write rolls back.
  */
 export async function recomputeEconomicsForApplication(
   ctx: MutationCtx,
@@ -288,6 +291,8 @@ async function recomputeAndPatchEconomics(
   // every derived figure unset rather than storing one computed against a
   // substitute basis, and say so.
   if (!derived) {
+    // Clearing the contribution changes the amount a live payment to the finance company was made for.
+    await assertForwardAllowsEconomicsChange(ctx, app, undefined);
     await ctx.db.patch(app._id, {
       economicsCurrency: currency,
       // Clearing the split moves it just as much as recomputing it: a
@@ -414,6 +419,9 @@ async function recomputeAndPatchEconomics(
       ? undefined
       : remittanceReason;
 
+  // SCRUM-411 P2-01: a recompute that would move the contribution while a payment to the finance company
+  // is live is refused before it patches. It throws, so the input write that led here rolls back with it.
+  await assertForwardAllowsEconomicsChange(ctx, app, stored.customerPayment.dealerContributionMinor);
   await ctx.db.patch(app._id, {
     economicsCurrency: currency,
     // The shared recompute — the writer the first pass at this missed, and the
@@ -2208,6 +2216,8 @@ export const recordAppraisal = mutation({
       );
     }
     if (supersedesApproval) {
+      // Withdrawing the approval clears the contribution below, outside the shared recompute.
+      await assertForwardAllowsEconomicsChange(ctx, app, undefined);
       await recordOverride(ctx, {
         orgId: args.orgId,
         applicationId: args.applicationId,
@@ -2830,6 +2840,8 @@ export const reopenApproval = mutation({
       );
     }
 
+    // Reopening clears the contribution below, outside the shared recompute.
+    await assertForwardAllowsEconomicsChange(ctx, app, undefined);
     await recordOverride(ctx, {
       orgId: args.orgId,
       applicationId: args.applicationId,

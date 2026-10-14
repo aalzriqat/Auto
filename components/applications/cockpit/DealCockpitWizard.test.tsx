@@ -772,9 +772,20 @@ describe("G7 — the settlement step resolves the reconciliation flag, then name
     expect(stepButton()).toBeNull();
   });
 
-  test("a held deposit on the direct route is named before the close is offered", () => {
+  // The close used to wait on a held deposit on the direct route. Plan v3 forwards
+  // that deposit with the contribution (SCRUM-407 c21033, SCRUM-411), so it no
+  // longer names anything: the step is the close once the readiness is READY.
+  test("a held deposit on the direct route is not a reason to withhold the close", () => {
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
+    permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    queryResults.set("applications:getClosingReadiness", {
+      state: "READY",
+      open: true,
+      checks: [{ key: "CUSTODY_SETTLED", status: "READY", reason: null }],
+      unavailableReason: null,
+      moneyWithheld: false,
+    });
     queryResults.set(COCKPIT_QUERY, settlement());
     queryResults.set(
       APP_QUERY,
@@ -785,8 +796,8 @@ describe("G7 — the settlement step resolves the reconciliation flag, then name
       })
     );
     renderCockpit();
-    expect(stepButton()).toBeNull();
-    expect(step().textContent).toContain("FinalizeNeedsHeldDepositResolved");
+    expect(stepButton()?.textContent).toBe("FinalizeDealAction");
+    expect(step().textContent).not.toContain("FinalizeNeedsHeldDepositResolved");
   });
 });
 

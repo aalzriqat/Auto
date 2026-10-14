@@ -39,6 +39,8 @@ import {
   type HandoverScope,
 } from "./utils/handoverCostPayment";
 import { dealSettlesDirect, financedSaleRecognitionApplies } from "./utils/financedSaleRecognition";
+import { checkLegalInvoiceEvidence } from "./utils/financedSalePostingPlan";
+import { isConsignedAgentSale } from "./utils/vehicleOwnership";
 import {
   assertStoredVersion,
   custodyEntryPostKey,
@@ -1697,7 +1699,8 @@ export const listDealCosts = query({
     // Whether a configured financed-sale plan covers the deal: the plan itself
     // recognises a settlement-deducted cost only then (SCRUM-443 v6).
     const handoverScope: HandoverScope = {
-      planRecognisesDeductions: financedSaleRecognitionApplies(app, { settlesDirect: await dealSettlesDirect(ctx, app) }),
+      // The direct route's transfer goes to the supplier: no settlement for the plan to deduct from.
+      planRecognisesDeductions: !(await dealSettlesDirect(ctx, app)) && financedSaleRecognitionApplies(app, { settlesDirect: false }),
     };
     const plannedHolder = mayReadPlan && app.plannedCustody ? await ctx.db.get(app.plannedCustody.userId) : null;
     const executionFee = executionFeePosition(app, fees, currency);
@@ -1801,6 +1804,8 @@ export const listDealCosts = query({
       legalInvoiceNumber: app.legalInvoiceNumber,
       legalInvoiceDate: app.legalInvoiceDate,
       legalInvoiceIssuedTo: app.legalInvoiceIssuedTo,
+      legalInvoiceIssuedBy: app.legalInvoiceIssuedBy,
+      legalInvoiceIssuerName: app.legalInvoiceIssuerName,
     };
   },
 });
@@ -4192,11 +4197,14 @@ export const planCustodyHandler = mutation({
  * are three different numbers describing three different things — and only this
  * one is what the parties signed.
  *
- * KEPT while the v1 financed-sale posting plan is in force (SCRUM-407 Part 1):
- * that plan still posts revenue from `legalInvoiceConsiderationMinor`, so a
- * recorded invoice remains a required closing-readiness item and this action
- * stays reachable from the deal's readiness panel. Replacing the invoice as the
- * revenue source is SCRUM-411.
+ * SCRUM-411 (plan v3): a deal no longer needs an invoice to close - the server
+ * derives the sale consideration - so this records OPTIONAL evidence of a
+ * document that really exists. Nothing is defaulted: the amount, number and date
+ * are the caller's explicit input. On a financed deal the server refuses a
+ * document that cannot be the deal's own: not issued to the finance company, not
+ * for the approved amount, or issued by the wrong party for the car's ownership
+ * (an importer's invoice is never recorded as the dealership's). It never
+ * becomes the revenue source; plan v1/v2 deals finalized earlier keep theirs.
  */
 export const recordLegalInvoice = mutation({
   args: {
@@ -4211,6 +4219,10 @@ export const recordLegalInvoice = mutation({
       v.literal("OTHER")
     ),
     issuedToOther: v.optional(v.string()),
+    /** Who issued the document. Omitted = the dealership, which a consigned car then refuses. */
+    issuedBy: v.optional(v.union(v.literal("DEALERSHIP"), v.literal("THIRD_PARTY"))),
+    /** The importer's or supplier's name; required when `issuedBy` is THIRD_PARTY. */
+    issuerName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [
@@ -4229,11 +4241,11 @@ export const recordLegalInvoice = mutation({
     if (args.legalInvoiceAmountMinor <= 0) {
       throw new ConvexError("The invoice amount must be greater than zero.");
     }
-    // THE recognition date. `finalizeDeal` dates the sale — and so the period
-    // its revenue, receivable and deductions land in — from this field
-    // (`financedSaleRecognitionDate`), so it is validated as a real timestamp
-    // and refused when it is in the future: revenue is not recognized in a
-    // period that has not happened. No tolerance window (final round C): an
+    // The printed invoice date is validated as a real timestamp and refused when
+    // it is in the future. Plans v1/v2 dated the sale from this field
+    // (`financedSaleRecognitionDate`); plan v3 dates it from the handover and
+    // keeps this date as evidence only, but the rule stays so a stored date is
+    // always a real past instant. No tolerance window (final round C): an
     // invoice date is a calendar date, sent as UTC midnight for a past day
     // and as the current instant for today, so a value past the server's
     // clock is a day that has not occurred, not clock skew. Judged against
@@ -4243,8 +4255,9 @@ export const recordLegalInvoice = mutation({
       throw new ConvexError(`The invoice date must be a real timestamp (got ${args.legalInvoiceDate}).`);
     }
     assertNotFuture(args.legalInvoiceDate, now, "The invoice date");
-    // Once the sale is recognized the invoice is what it was recognized from;
-    // replacing it would move revenue or its period behind a posted journal.
+    // Once the sale is recognized the recorded invoice is part of its evidence
+    // (and, for a v1/v2 deal, what it was recognized from); replacing it would
+    // rewrite the record behind a posted journal.
     assertDealEconomicsOpen(app, "recording or replacing the legal invoice");
     const invoiceNumber = args.legalInvoiceNumber.trim();
     if (!invoiceNumber) {
@@ -4253,6 +4266,27 @@ export const recordLegalInvoice = mutation({
     const issuedToOther = args.issuedToOther?.trim();
     if (args.issuedTo === "OTHER" && !issuedToOther) {
       throw new ConvexError("Say who the invoice was issued to.");
+    }
+
+    // SCRUM-411: the invoice is optional evidence of a document that really
+    // exists, so it must be one this deal could have. Checked against the
+    // server's own figures (the approval, the car's ownership), never the
+    // caller's say-so.
+    const issuedBy = args.issuedBy ?? "DEALERSHIP";
+    const issuerName = issuedBy === "THIRD_PARTY" ? args.issuerName?.trim() || undefined : undefined;
+    if (financedSaleRecognitionApplies(app, { settlesDirect: await dealSettlesDirect(ctx, app) })) {
+      const vehicle = await requireOwnedRow(ctx, args.orgId, "vehicles", app.vehicleId, "Vehicle not found.");
+      const evidence = checkLegalInvoiceEvidence({
+        legalInvoiceAmountMinor: args.legalInvoiceAmountMinor,
+        legalInvoiceIssuedTo: args.issuedTo,
+        legalInvoiceIssuedBy: issuedBy,
+        legalInvoiceIssuerName: issuerName,
+        approvedAmountMinor: app.approvedDealerPurchaseAmountMinor,
+        vehicleIsConsigned: isConsignedAgentSale(vehicle),
+      });
+      if (!evidence.ok) throw new ConvexError(evidence.refusal.message);
+    } else if (issuedBy === "THIRD_PARTY" && !issuerName) {
+      throw new ConvexError("Name the third party that issued the invoice.");
     }
 
     // Any change to a recorded invoice is audited, whatever moved — and the
@@ -4267,9 +4301,11 @@ export const recordLegalInvoice = mutation({
       number: string | undefined,
       date: number | undefined,
       issuedTo: string | undefined,
-      other: string | undefined
+      other: string | undefined,
+      by: string,
+      issuer: string | undefined
     ): string =>
-      `${amountMinor ?? "unrecorded"} (invoice ${number || "unrecorded"} dated ${date ?? "unrecorded"} to ${issuedTo ?? "unrecorded"}${other ? ` — ${other}` : ""})`;
+      `${amountMinor ?? "unrecorded"} (invoice ${number || "unrecorded"} dated ${date ?? "unrecorded"} to ${issuedTo ?? "unrecorded"}${other ? ` — ${other}` : ""}, issued by ${by}${issuer ? ` — ${issuer}` : ""})`;
 
     if (
       app.legalInvoiceAmountMinor !== undefined &&
@@ -4277,6 +4313,8 @@ export const recordLegalInvoice = mutation({
         (app.legalInvoiceNumber ?? "") !== invoiceNumber ||
         app.legalInvoiceDate !== args.legalInvoiceDate ||
         app.legalInvoiceIssuedTo !== args.issuedTo ||
+        (app.legalInvoiceIssuedBy ?? "DEALERSHIP") !== issuedBy ||
+        (app.legalInvoiceIssuerName ?? undefined) !== issuerName ||
         (app.legalInvoiceIssuedToOther ?? undefined) !== nextIssuedToOther)
     ) {
       await ctx.db.insert("financeApplicationOverrides", {
@@ -4285,11 +4323,13 @@ export const recordLegalInvoice = mutation({
         field: "legalInvoiceAmountMinor",
         previousValue: describe(
           app.legalInvoiceAmountMinor, app.legalInvoiceNumber,
-          app.legalInvoiceDate, app.legalInvoiceIssuedTo, app.legalInvoiceIssuedToOther
+          app.legalInvoiceDate, app.legalInvoiceIssuedTo, app.legalInvoiceIssuedToOther,
+          app.legalInvoiceIssuedBy ?? "DEALERSHIP", app.legalInvoiceIssuerName
         ),
         newValue: describe(
           args.legalInvoiceAmountMinor, invoiceNumber,
-          args.legalInvoiceDate, args.issuedTo, nextIssuedToOther
+          args.legalInvoiceDate, args.issuedTo, nextIssuedToOther,
+          issuedBy, issuerName
         ),
         reason: "The recorded legal invoice was replaced.",
         changedBy: user._id,
@@ -4304,6 +4344,8 @@ export const recordLegalInvoice = mutation({
       legalInvoiceDate: args.legalInvoiceDate,
       legalInvoiceIssuedTo: args.issuedTo,
       legalInvoiceIssuedToOther: nextIssuedToOther,
+      legalInvoiceIssuedBy: issuedBy,
+      legalInvoiceIssuerName: issuerName,
       legalInvoiceRecordedBy: user._id,
       legalInvoiceRecordedAt: now,
       updatedAt: now,

@@ -132,7 +132,10 @@ describe("SCRUM-761 financed deal: the customer's own share (deposit H = 200) th
     expect(gl.CASH_ON_HAND).toBe(H);
     expect(gl.CUSTOMER_DEPOSITS_LIABILITY).toBe(0);
     expect(gl.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES).toBe(G);
-    expect(gl.ACCOUNTS_PAYABLE_FINANCE_COMPANIES).toBe(-(H + C));
+    // SCRUM-411 P2-01: finalizeAsOwner pays H + C to the company BEFORE the sale. The payment debits
+    // AP-finance H + C (credit bank) and the sale then credits the same H + C, so AP-finance nets to 0.
+    expect(gl.ACCOUNTS_PAYABLE_FINANCE_COMPANIES).toBe(0);
+    expect(gl.BANK_ACCOUNT).toBe(-(H + C));
     expect(gl.SALES_REVENUE).toBe(-G);
     expect(gl.SALES_CONSIDERATION_REDUCTIONS).toBe(C);
     expect(gl.ACCOUNTS_RECEIVABLE_CUSTOMERS).toBeUndefined();
@@ -173,9 +176,7 @@ describe("SCRUM-761 financed deal: the customer's own share (deposit H = 200) th
     // SETTLEMENT must NOT be COMPLETE before the finance company's transfer is confirmed.
     expect(await stageState(s, saleId, "SETTLEMENT")).not.toBe("COMPLETE");
 
-    await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(), expectedAmountMinor: H + C, idempotencyKey: crypto.randomUUID(),
-    });
+    // The forward H + C was already recorded before finalize (finalizeAsOwner pays first, SCRUM-411 P2-01).
     await s.owner.as.mutation(api.applications.confirmDisbursement, {
       orgId: s.orgId, applicationId, disbursedAmountMinor: G, idempotencyKey: crypto.randomUUID(),
     });
@@ -204,10 +205,6 @@ describe("SCRUM-761 financed deal: the customer's own share (deposit H = 200) th
     const { applicationId: secondApplicationId } = await dealWithRealDeposit(secondDeal);
     await finalizeAsOwner(secondDeal, secondApplicationId);
     const secondSaleId = (await saleOf(s, secondApplicationId))!;
-    await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-      orgId: s.orgId, applicationId: secondApplicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
-      expectedAmountMinor: H + C, idempotencyKey: crypto.randomUUID(),
-    });
     await s.owner.as.mutation(api.applications.confirmDisbursement, {
       orgId: s.orgId, applicationId: secondApplicationId, disbursedAmountMinor: G,
       idempotencyKey: crypto.randomUUID(),
@@ -224,10 +221,6 @@ describe("SCRUM-761 financed deal: the customer's own share (deposit H = 200) th
     const { applicationId } = await dealWithRealDeposit(s);
     await finalizeAsOwner(s, applicationId);
     const saleId = (await saleOf(s, applicationId))!;
-    await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
-      expectedAmountMinor: H + C, idempotencyKey: crypto.randomUUID(),
-    });
     await s.owner.as.mutation(api.applications.confirmDisbursement, {
       orgId: s.orgId, applicationId, disbursedAmountMinor: G, idempotencyKey: crypto.randomUUID(),
     });

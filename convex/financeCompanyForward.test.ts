@@ -10,12 +10,15 @@
  * runtime (no OCC, no paginated-query limit) and not production data.
  */
 import {
-  C, G, H, downgradeToV1, finalizeAsOwner, readyDeal, refusalMessageOf, seedFinancedDealership,
+  C, G, H, downgradeToV1, downgradeToV2, finalizeAsOwner, finalizeThenTakeForwardBack, payForwardAsOwner, readyDeal,
+  refusalDataOf, refusalMessageOf, seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
 import { deriveForwardState, isReportedReturn } from "./utils/financeCompanyForward";
+import { planVersionOf } from "./utils/financedSalePostingPlan";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -61,11 +64,32 @@ async function seedDealership(tag: string) {
 }
 type Seeded = Awaited<ReturnType<typeof seedDealership>>;
 
-async function finalizedDeal(tag: string) {
+/** SCRUM-411 P2-01: approved and ready to finalize, with nothing paid to the finance company yet. */
+async function approvedDeal(tag: string) {
   const s = await seedDealership(tag);
   const { applicationId } = await readyDeal(s);
-  await finalizeAsOwner(s, applicationId);
   return { s, applicationId };
+}
+
+/**
+ * The deposit and contribution are paid BEFORE the sale (finalize refuses until they
+ * are), so a finalized deal is SETTLED with that payment as version 1.
+ */
+async function finalizedDeal(tag: string) {
+  const { s, applicationId } = await approvedDeal(tag);
+  const forwardId = await payForwardAsOwner(s, applicationId);
+  await finalizeAsOwner(s, applicationId, { payForward: false });
+  return { s, applicationId, forwardId: forwardId! };
+}
+
+/**
+ * A CLOSED deal whose forward is due again: paid, finalized, then the payment taken
+ * back as recorded in error. Version 1 is REVERSED, so the next payment is version 2.
+ */
+async function dueDeal(tag: string) {
+  const { s, applicationId } = await approvedDeal(tag);
+  const forwardId = await finalizeThenTakeForwardBack(s, applicationId);
+  return { s, applicationId, forwardId: forwardId! };
 }
 
 const record = (
@@ -113,16 +137,37 @@ const proofOf = (s: Seeded, applicationId: Id<"financeApplications">) =>
   s.t.run(async (ctx) => deriveForwardState(ctx, (await ctx.db.get(applicationId))!));
 
 describe("SCRUM-435 - the worked example books what the owner ruled", () => {
-  test("finalize freezes v2: due = deposit + contribution, the receivable is the FULL approved amount", async () => {
+  test("finalize freezes v3: due = deposit + contribution, the receivable is the FULL approved amount", async () => {
     const { s, applicationId } = await finalizedDeal("wx1");
     const app = await s.t.run((ctx) => ctx.db.get(applicationId));
     expect(app?.status).toBe("CLOSED");
-    expect(app?.financedSalePlanVersion).toBe(2);
+    expect(app?.financedSalePlanVersion).toBe(3);
     expect(app?.financeCompanyForwardDueMinor).toBe(FORWARD);
     expect(app?.financedSaleNetReceivableMinor).toBe(G);
     const proof = await proofOf(s, applicationId);
+    expect(proof.state).toBe("SETTLED");
+    expect(proof.dueMinor).toBe(FORWARD);
+  });
+
+  test("a finalized deal whose payment was taken back is due again for the same frozen H + C", async () => {
+    const { s, applicationId } = await dueDeal("wx1b");
+    const proof = await proofOf(s, applicationId);
     expect(proof.state).toBe("DUE");
     expect(proof.dueMinor).toBe(FORWARD);
+    expect(proof.versions.map((v) => v.state)).toEqual(["REVERSED"]);
+  });
+
+  test("finalize is refused until the payment is on the books, and refuses nothing once it is", async () => {
+    const { s, applicationId } = await approvedDeal("wx1c");
+    const refusal = await refusalDataOf(
+      s.owner.as.mutation(api.applications.finalizeDeal, { orgId: s.orgId, applicationId, idempotencyKey: crypto.randomUUID() })
+    );
+    expect(refusal?.code).toBe("FORWARD_FINALIZE_UNPAID");
+    expect(refusal?.message).toMatch(/have not been paid yet/i);
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("APPROVED");
+    await payForwardAsOwner(s, applicationId);
+    await finalizeAsOwner(s, applicationId, { payForward: false });
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
   });
 
   test("the sale journal balances and AP-Finance carries exactly H + C owed onward", async () => {
@@ -135,10 +180,15 @@ describe("SCRUM-435 - the worked example books what the owner ruled", () => {
     expect(Object.values(net).reduce((a, b) => a + b, 0)).toBe(0);
   });
 
-  test("recording the forward clears AP-Finance to zero; the transfer then settles the FULL G", async () => {
-    const { s, applicationId } = await finalizedDeal("wx3");
+  test("paying the forward before the sale, then the sale, clears AP-Finance to zero; the transfer then settles the FULL G", async () => {
+    const { s, applicationId } = await approvedDeal("wx3");
     const forwardId = await record(s, applicationId);
     expect(forwardId).toBeTruthy();
+    // Before the sale: AP-Finance is debited by H + C against cash, nothing else.
+    const before = await netByAccount(s, "FINANCE_COMPANY_FORWARD_PAID");
+    expect(before.ACCOUNTS_PAYABLE_FINANCE_COMPANIES).toBe(FORWARD);
+    expect(await netByAccount(s, "SALE_COMPLETED")).toEqual({});
+    await finalizeAsOwner(s, applicationId, { payForward: false });
     const proof = await proofOf(s, applicationId);
     expect(proof.state).toBe("SETTLED");
 
@@ -158,7 +208,7 @@ describe("SCRUM-435 - the worked example books what the owner ruled", () => {
 
 describe("SCRUM-435 - the transfer gate follows the proof", () => {
   test("DUE: the transfer is refused, names who acts next and never echoes H or C", async () => {
-    const { s, applicationId } = await finalizedDeal("gate1");
+    const { s, applicationId } = await dueDeal("gate1");
     const refusal = await refusalOf(confirmTransfer(s, applicationId));
     expect(refusal).toMatch(/manager or accountant records that payment/i);
     expect(refusal).not.toMatch(/200|1[,.]?375|1[,.]?575/);
@@ -170,7 +220,6 @@ describe("SCRUM-435 - the transfer gate follows the proof", () => {
     ["POSTING_FAILED", "FAILED", /failed to post/i],
   ] as const)("%s: refused; POSTED: allowed", async (state, status, message) => {
     const { s, applicationId } = await finalizedDeal(`gate_${state}`);
-    await record(s, applicationId);
     const eventId = await s.t.run(async (ctx) => {
       const events = await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect();
       const forward = events.find((e) => e.eventType === "FINANCE_COMPANY_FORWARD_PAID")!;
@@ -187,7 +236,7 @@ describe("SCRUM-435 - the transfer gate follows the proof", () => {
 
 describe("SCRUM-435 - record: idempotency, pins, periods, tenancy", () => {
   test("an idempotent replay returns the first result and books nothing twice; the same key for another amount is refused", async () => {
-    const { s, applicationId } = await finalizedDeal("idem");
+    const { s, applicationId } = await approvedDeal("idem");
     const key = crypto.randomUUID();
     const paidAt = Date.now() - 1000;
     const first = await record(s, applicationId, { idempotencyKey: key, paidAt });
@@ -201,19 +250,19 @@ describe("SCRUM-435 - record: idempotency, pins, periods, tenancy", () => {
   });
 
   test("a second payment while one is on the books is refused", async () => {
-    const { s, applicationId } = await finalizedDeal("dup");
+    const { s, applicationId } = await approvedDeal("dup");
     await record(s, applicationId);
     expect(await refusalOf(record(s, applicationId))).toMatch(/already recorded/i);
   });
 
   test("the amount the payer saw is pinned: a different figure is refused and nothing is written", async () => {
-    const { s, applicationId } = await finalizedDeal("pin");
+    const { s, applicationId } = await approvedDeal("pin");
     expect(await refusalOf(record(s, applicationId, { expectedAmountMinor: FORWARD - 1 }))).toMatch(/changed since you opened/i);
     expect(await s.t.run((ctx) => ctx.db.query("financeCompanyForwards").collect())).toHaveLength(0);
   });
 
   test("a payment dated in a CLOSED period is refused with the prior-period sentence", async () => {
-    const { s, applicationId } = await finalizedDeal("closed");
+    const { s, applicationId } = await approvedDeal("closed");
     const year = s.fiscalYear;
     // A second, earlier period that is closed.
     await s.owner.as.mutation(api.accountingPeriods.create, {
@@ -231,7 +280,7 @@ describe("SCRUM-435 - record: idempotency, pins, periods, tenancy", () => {
   });
 
   test("an OPEN-period paidAt before the sale posts at paidAt and keeps it on the row", async () => {
-    const { s, applicationId } = await finalizedDeal("open");
+    const { s, applicationId } = await approvedDeal("open");
     const paidAt = Date.UTC(s.fiscalYear, 0, 2);
     await record(s, applicationId, { paidAt });
     const event = await s.t.run(async (ctx) =>
@@ -246,7 +295,7 @@ describe("SCRUM-435 - record: idempotency, pins, periods, tenancy", () => {
   });
 
   test("a future paidAt and a missing permission are refused", async () => {
-    const { s, applicationId } = await finalizedDeal("perm");
+    const { s, applicationId } = await approvedDeal("perm");
     expect(await refusalOf(record(s, applicationId, { paidAt: Date.now() + 86_400_000 }))).toMatch(/future/i);
     // MANAGER holds no view:finance, so cannot move the money; SALES neither.
     expect(await refusalOf(record(s, applicationId, {}, s.manager.as))).not.toBeNull();
@@ -255,9 +304,8 @@ describe("SCRUM-435 - record: idempotency, pins, periods, tenancy", () => {
   });
 
   test("another organization cannot record, reverse or report on this deal", async () => {
-    const { s, applicationId } = await finalizedDeal("tenA");
+    const { s, applicationId, forwardId } = await finalizedDeal("tenA");
     const other = await seedDealership("tenB");
-    const forwardId = await record(s, applicationId);
     const asOther = other.owner.as;
     expect(
       await refusalOf(
@@ -280,8 +328,7 @@ describe("SCRUM-435 - record: idempotency, pins, periods, tenancy", () => {
 
 describe("SCRUM-435 - reversal and return", () => {
   test("reverse before the transfer: reason required, the proof reads REVERSED via the linked reversal event, the deal is due again", async () => {
-    const { s, applicationId } = await finalizedDeal("rev1");
-    const forwardId = await record(s, applicationId);
+    const { s, applicationId, forwardId } = await finalizedDeal("rev1");
     const reverse = (reason: string, key = crypto.randomUUID()) =>
       s.owner.as.mutation(api.financeCompanyForward.reverseFinanceCompanyForward, {
         orgId: s.orgId, applicationId, forwardId, reason, idempotencyKey: key,
@@ -309,8 +356,7 @@ describe("SCRUM-435 - reversal and return", () => {
   });
 
   test("a REVERSED original with no reversal link is NEEDS_REPAIR and blocks the transfer", async () => {
-    const { s, applicationId } = await finalizedDeal("rev2");
-    const forwardId = await record(s, applicationId);
+    const { s, applicationId, forwardId } = await finalizedDeal("rev2");
     await s.owner.as.mutation(api.financeCompanyForward.reverseFinanceCompanyForward, {
       orgId: s.orgId, applicationId, forwardId, reason: "Recorded twice.", idempotencyKey: crypto.randomUUID(),
     });
@@ -325,8 +371,7 @@ describe("SCRUM-435 - reversal and return", () => {
   });
 
   test("reverse is refused once the transfer is confirmed; the return is reported instead and the deal is due again", async () => {
-    const { s, applicationId } = await finalizedDeal("ret1");
-    const forwardId = await record(s, applicationId);
+    const { s, applicationId, forwardId } = await finalizedDeal("ret1");
     await confirmTransfer(s, applicationId);
     expect(
       await refusalOf(
@@ -352,7 +397,7 @@ describe("SCRUM-435 - cancelling a finalized v2 deal", () => {
     });
 
   test("SALES and ACCOUNTANT are refused; a MANAGER is allowed; the sales-role refusal names the manager", async () => {
-    const { s, applicationId } = await finalizedDeal("can1");
+    const { s, applicationId } = await dueDeal("can1");
     expect(await refusalOf(cancel(s, applicationId, s.sales.as))).not.toBeNull();
     expect(await refusalOf(cancel(s, applicationId, s.accountant.as))).not.toBeNull();
     // A user who may cancel a closed deal but not confirm the transfer is told a manager cancels.
@@ -367,8 +412,7 @@ describe("SCRUM-435 - cancelling a finalized v2 deal", () => {
   });
 
   test("a payment on the books blocks the cancel; after a REPORTED return it is allowed", async () => {
-    const { s, applicationId } = await finalizedDeal("can2");
-    const forwardId = await record(s, applicationId);
+    const { s, applicationId, forwardId } = await finalizedDeal("can2");
     expect(await refusalOf(cancel(s, applicationId))).toMatch(/already been paid to the finance company/i);
     await s.owner.as.mutation(api.financeCompanyForward.reportFinanceCompanyForwardReturned, {
       orgId: s.orgId, applicationId, forwardId, reason: "Returned by the company.", idempotencyKey: crypto.randomUUID(),
@@ -378,8 +422,7 @@ describe("SCRUM-435 - cancelling a finalized v2 deal", () => {
   });
 
   test("a reversal that is still pending blocks the cancel", async () => {
-    const { s, applicationId } = await finalizedDeal("can3");
-    const forwardId = await record(s, applicationId);
+    const { s, applicationId, forwardId } = await finalizedDeal("can3");
     await s.t.run(async (ctx) => {
       const row = (await ctx.db.get(forwardId))!;
       await ctx.db.patch(forwardId, {
@@ -407,9 +450,118 @@ describe("SCRUM-435 - v1 deals are never recomputed", () => {
   });
 });
 
+/**
+ * New finalizations freeze plan v3 (SCRUM-411), but a deal closed under v2 must
+ * keep every forward rule: the proof, the transfer gate, reverse and return,
+ * manager-only cancel and unwind. The deal is finalized through the real
+ * mutation and then re-marked v2 (version + fingerprint prefix), so this group
+ * is the only one in the file that is not v3.
+ */
+describe("SCRUM-411 - a deal closed under plan v2 keeps the forward rules", () => {
+  async function closedV2Deal(tag: string) {
+    // Due again (payment taken back), the state an old v2 deal was in after finalize.
+    const { s, applicationId } = await dueDeal(tag);
+    await downgradeToV2(s, applicationId);
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app?.status).toBe("CLOSED");
+    expect(app?.financedSalePlanVersion).toBe(2);
+    expect(planVersionOf(app!)).toBe(2);
+    return { s, applicationId };
+  }
+
+  test("the proof applies, is DUE for the frozen H + C, and the transfer is gated until it is paid", async () => {
+    const { s, applicationId } = await closedV2Deal("v2fwd");
+    const proof = await proofOf(s, applicationId);
+    expect(proof.applies).toBe(true);
+    expect(proof.state).toBe("DUE");
+    expect(proof.dueMinor).toBe(FORWARD);
+    expect(await refusalOf(confirmTransfer(s, applicationId))).toMatch(/manager or accountant records that payment/i);
+
+    await record(s, applicationId);
+    expect((await proofOf(s, applicationId)).state).toBe("SETTLED");
+    const forwardNet = await netByAccount(s, "FINANCE_COMPANY_FORWARD_PAID");
+    expect(forwardNet.ACCOUNTS_PAYABLE_FINANCE_COMPANIES).toBe(FORWARD);
+    expect(await refusalOf(confirmTransfer(s, applicationId, G))).toBeNull();
+    expect((await netByAccount(s, "FINANCE_CASH_RECEIVED")).ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES).toBe(-G);
+  });
+
+  test("reverse before the transfer makes it due again; after the transfer only a reported return does", async () => {
+    const { s, applicationId } = await closedV2Deal("v2rev");
+    const forwardId = await record(s, applicationId);
+    const reverse = (reason: string) =>
+      s.owner.as.mutation(api.financeCompanyForward.reverseFinanceCompanyForward, {
+        orgId: s.orgId, applicationId, forwardId, reason, idempotencyKey: crypto.randomUUID(),
+      });
+    await reverse("Paid the wrong company.");
+    const reversed = await proofOf(s, applicationId);
+    expect(reversed.state).toBe("DUE");
+    expect(reversed.versions[0].state).toBe("REVERSED");
+
+    const replacementId = await record(s, applicationId);
+    await confirmTransfer(s, applicationId);
+    expect(
+      await refusalOf(
+        s.owner.as.mutation(api.financeCompanyForward.reverseFinanceCompanyForward, {
+          orgId: s.orgId, applicationId, forwardId: replacementId, reason: "Too late.", idempotencyKey: crypto.randomUUID(),
+        })
+      )
+    ).toMatch(/report it as returned/i);
+    await s.owner.as.mutation(api.financeCompanyForward.reportFinanceCompanyForwardReturned, {
+      orgId: s.orgId, applicationId, forwardId: replacementId, reason: "The company sent it back.", idempotencyKey: crypto.randomUUID(),
+    });
+    const returned = await proofOf(s, applicationId);
+    expect(returned.state).toBe("DUE");
+    expect(returned.returnedExceptionOpen).toBe(true);
+  });
+
+  test("only a manager cancels it: SALES and ACCOUNTANT are refused, a cancel-only role is told a manager cancels", async () => {
+    const { s, applicationId } = await closedV2Deal("v2can");
+    const cancel = (as = s.owner.as) =>
+      as.mutation(api.applications.cancelApplication, {
+        orgId: s.orgId, applicationId, reason: "Customer withdrew.", idempotencyKey: crypto.randomUUID(),
+      });
+    expect(await refusalOf(cancel(s.sales.as))).not.toBeNull();
+    expect(await refusalOf(cancel(s.accountant.as))).not.toBeNull();
+    const userId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "v2can_fin", email: "v2can.fin@example.com", name: "fin" }));
+    const roleId = await s.t.run((ctx) =>
+      ctx.db.insert("roles", {
+        orgId: s.orgId, name: "FINALIZER",
+        permissions: ["cancel:closed_deal", "create:finance_application", "view:finance_applications"],
+      })
+    );
+    await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId }));
+    const asFinalizer = s.t.withIdentity({ subject: "v2can_fin", clerkId: "v2can_fin" });
+    expect(await refusalOf(cancel(asFinalizer))).toBe("A manager cancels a finalized deal.");
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CLOSED");
+    expect(await refusalOf(cancel(s.manager.as))).toBeNull();
+    expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.status).toBe("CANCELLED");
+  });
+
+  test("a paid v2 deal is eligible for unwind, while the same paid deal marked v1 is not", async () => {
+    const paid = async (tag: string) => {
+      const { s, applicationId } = await closedV2Deal(tag);
+      await record(s, applicationId);
+      await confirmTransfer(s, applicationId);
+      return { s, applicationId };
+    };
+    const start = (s: Seeded, applicationId: Id<"financeApplications">) =>
+      s.owner.as.mutation(api.dealUnwind.startDealUnwind, {
+        orgId: s.orgId, applicationId, reason: "Customer returned the car.", idempotencyKey: crypto.randomUUID(),
+      });
+
+    const v2 = await paid("v2unw");
+    const unwindId = await start(v2.s, v2.applicationId);
+    expect(await v2.s.t.run((ctx) => ctx.db.get(unwindId))).not.toBeNull();
+
+    const v1 = await paid("v1unw");
+    await downgradeToV1(v1.s, v1.applicationId);
+    expect(await refusalOf(start(v1.s, v1.applicationId))).toBe(DEAL_UNWIND_MESSAGES.DEAL_UNWIND_NOT_ELIGIBLE);
+  });
+});
+
 describe("SCRUM-435 - the cockpit shows the same proof, tiered by permission", () => {
   test("MANAGER sees status only (no amount anywhere); the finance tier sees the split; the rail names the dealership", async () => {
-    const { s, applicationId } = await finalizedDeal("cock");
+    const { s, applicationId } = await dueDeal("cock");
     const asManager = await s.manager.as.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
     expect(asManager?.forward.state).toBe("DUE");
     expect(asManager?.forward.mayCancelFinalized).toBe(true);
@@ -433,7 +585,7 @@ describe("SCRUM-435 - the cockpit shows the same proof, tiered by permission", (
   });
 
   test("SALES cannot cancel a finalized deal and the cockpit does not offer it", async () => {
-    const { s, applicationId } = await finalizedDeal("cock2");
+    const { s, applicationId } = await dueDeal("cock2");
     const asSales = await s.sales.as.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
     expect(asSales?.forward.mayCancelFinalized).toBe(false);
   });
@@ -441,7 +593,7 @@ describe("SCRUM-435 - the cockpit shows the same proof, tiered by permission", (
   test("SCRUM-413: a role that may cancel closed deals and confirm, WITHOUT create-application, is offered and accepted", async () => {
     // Reversing a CLOSED deal is its own authority (cancel:closed_deal) and no longer needs
     // CREATE_FINANCE_APPLICATION, so the cockpit offers it and the server accepts it.
-    const { s, applicationId } = await finalizedDeal("cock3");
+    const { s, applicationId } = await dueDeal("cock3");
     const perms = ["cancel:closed_deal", "confirm:finance_disbursement", "view:finance_applications", "view:sales", "edit:sales", "view:vehicles", "view:customers", "approve:requests"];
     const userId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "cock3_fc", email: "cock3.fc@example.com", name: "fc" }));
     const roleId = await s.t.run((ctx) => ctx.db.insert("roles", { orgId: s.orgId, name: "FIN_CONFIRM", permissions: perms }));
@@ -461,8 +613,7 @@ describe("SCRUM-435 - the cockpit shows the same proof, tiered by permission", (
 
 describe("SCRUM-435 - replacement eligibility follows the same proof", () => {
   test("a replacement payment is refused while the earlier one is on the books or its reversal is pending", async () => {
-    const { s, applicationId } = await finalizedDeal("repl");
-    const forwardId = await record(s, applicationId);
+    const { s, applicationId, forwardId } = await finalizedDeal("repl");
     expect(await refusalOf(record(s, applicationId))).toMatch(/already recorded/i);
     await s.t.run(async (ctx) => {
       const row = (await ctx.db.get(forwardId))!;
@@ -508,8 +659,7 @@ describe("SCRUM-435 - returned after the transfer: the replacement payment is re
     (await s.owner.as.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId }))!;
 
   test("record -> transfer -> returned -> replacement succeeds; SETTLED, ledger balanced, AP-Finance nets to zero", async () => {
-    const { s, applicationId } = await finalizedDeal("rat1");
-    const first = await record(s, applicationId);
+    const { s, applicationId, forwardId: first } = await finalizedDeal("rat1");
     await confirmTransfer(s, applicationId);
     await reportReturned(s, applicationId, first);
     expect((await s.t.run((ctx) => ctx.db.get(applicationId)))?.disbursedAt).toBeDefined();
@@ -539,8 +689,7 @@ describe("SCRUM-435 - returned after the transfer: the replacement payment is re
   });
 
   test("replay of the replacement (same key) books one row and one entry", async () => {
-    const { s, applicationId } = await finalizedDeal("rat2");
-    const first = await record(s, applicationId);
+    const { s, applicationId, forwardId: first } = await finalizedDeal("rat2");
     await confirmTransfer(s, applicationId);
     await reportReturned(s, applicationId, first);
     const key = crypto.randomUUID();
@@ -554,15 +703,13 @@ describe("SCRUM-435 - returned after the transfer: the replacement payment is re
 
   test("control: after the transfer with the forward SETTLED (nothing returned) the record is refused", async () => {
     const { s, applicationId } = await finalizedDeal("rat3");
-    await record(s, applicationId);
     await confirmTransfer(s, applicationId);
     expect(await refusalOf(record(s, applicationId))).toMatch(/transfer is already confirmed/i);
     expect(await s.t.run((ctx) => ctx.db.query("financeCompanyForwards").collect())).toHaveLength(1);
   });
 
   test("control: after the transfer with the forward ON_BOOKS again a second record is refused", async () => {
-    const { s, applicationId } = await finalizedDeal("rat4");
-    const first = await record(s, applicationId);
+    const { s, applicationId, forwardId: first } = await finalizedDeal("rat4");
     await confirmTransfer(s, applicationId);
     await reportReturned(s, applicationId, first);
     await record(s, applicationId);
@@ -571,8 +718,7 @@ describe("SCRUM-435 - returned after the transfer: the replacement payment is re
   });
 
   test("the replacement after the transfer still pins the amount and needs the permission", async () => {
-    const { s, applicationId } = await finalizedDeal("rat5");
-    const first = await record(s, applicationId);
+    const { s, applicationId, forwardId: first } = await finalizedDeal("rat5");
     await confirmTransfer(s, applicationId);
     await reportReturned(s, applicationId, first);
     expect(await refusalOf(record(s, applicationId, { expectedAmountMinor: FORWARD - 1 }))).toMatch(/changed since you opened/i);
@@ -619,8 +765,7 @@ describe("SCRUM-435 - a reported return with an unposted reversal keeps the exce
     });
 
   test("no period open: REVERSAL_PENDING keeps the exception and DISBURSEMENT live; replacement refused until the reversal posts", async () => {
-    const { s, applicationId } = await finalizedDeal("f2a");
-    const first = await record(s, applicationId);
+    const { s, applicationId, forwardId: first } = await finalizedDeal("f2a");
     await confirmTransfer(s, applicationId);
     await setPeriods(s, "CLOSED");
     await reportReturned(s, applicationId, first);
@@ -653,8 +798,7 @@ describe("SCRUM-435 - a reported return with an unposted reversal keeps the exce
   });
 
   test("a failed queued return reversal is NEEDS_REPAIR and keeps the exception open", async () => {
-    const { s, applicationId } = await finalizedDeal("f2b");
-    const first = await record(s, applicationId);
+    const { s, applicationId, forwardId: first } = await finalizedDeal("f2b");
     await confirmTransfer(s, applicationId);
     await setPeriods(s, "CLOSED");
     await reportReturned(s, applicationId, first);
@@ -671,8 +815,7 @@ describe("SCRUM-435 - a reported return with an unposted reversal keeps the exce
   });
 
   test("control: a take-back BEFORE the transfer with a queued reversal does not open the exception", async () => {
-    const { s, applicationId } = await finalizedDeal("f2c");
-    const forwardId = await record(s, applicationId);
+    const { s, applicationId, forwardId } = await finalizedDeal("f2c");
     await setPeriods(s, "CLOSED");
     await s.owner.as.mutation(api.financeCompanyForward.reverseFinanceCompanyForward, {
       orgId: s.orgId, applicationId, forwardId, reason: "Recorded in error.", idempotencyKey: crypto.randomUUID(),
@@ -683,8 +826,7 @@ describe("SCRUM-435 - a reported return with an unposted reversal keeps the exce
   });
 
   test("control: an open-period return is RETURNED / DUE with the exception open", async () => {
-    const { s, applicationId } = await finalizedDeal("f2d");
-    const first = await record(s, applicationId);
+    const { s, applicationId, forwardId: first } = await finalizedDeal("f2d");
     await confirmTransfer(s, applicationId);
     await reportReturned(s, applicationId, first);
     const proof = await proofOf(s, applicationId);

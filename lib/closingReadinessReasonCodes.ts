@@ -25,10 +25,12 @@ export const CLOSING_READINESS_CHECK_KEYS = [
   "HANDOVER_COSTS_PAID",
   "FIRST_PAYMENT_RECORDED",
   "LEGAL_INVOICE_RECORDED",
-  // SCRUM-420: the financing figures are not flagged for reconciliation review. Appended LAST.
+  // SCRUM-420: the financing figures are not flagged for reconciliation review. Appended after LEGAL_INVOICE_RECORDED.
   "FINANCING_RECONCILED",
   // SCRUM-766 PR-B: what the customer agreed to pay the finance company is confirmed paid. Appended after FINANCING_RECONCILED.
   "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED",
+  // SCRUM-411 (plan v3): the handover date the sale is recognised on falls in an open accounting period. Appended after the SCRUM-766 check.
+  "RECOGNITION_PERIOD_OPEN",
 ] as const;
 
 export type ClosingReadinessCheckKey = (typeof CLOSING_READINESS_CHECK_KEYS)[number];
@@ -97,6 +99,12 @@ export const CLOSING_READINESS_REASON_PARAMS = {
   LEGAL_INVOICE_MISSING: [],
   LEGAL_INVOICE_UNUSABLE: [],
   LEGAL_INVOICE_WRONG_RECIPIENT: [],
+  // SCRUM-411: a recorded (optional) invoice that does not describe this deal.
+  LEGAL_INVOICE_AMOUNT_MISMATCH: [],
+  LEGAL_INVOICE_WRONG_ISSUER: [],
+  // RECOGNITION_PERIOD_OPEN (SCRUM-411): the sale is recognised on the handover date.
+  RECOGNITION_HANDOVER_PENDING: [],
+  RECOGNITION_PERIOD_NOT_OPEN: [],
   // FINANCING_RECONCILED (SCRUM-420): the deal's financing figures are flagged for a reconciliation review.
   FINANCING_RECONCILIATION_FLAGGED: [],
   // CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED (SCRUM-766 PR-B): part of what the customer agreed to pay the finance company has no confirmed payment behind it.
