@@ -78,6 +78,75 @@ function playwrightStep(stepName: string): WorkflowStep {
   return value;
 }
 
+type GroupValue = string | number | boolean | null;
+
+/**
+ * Evaluates a `${{ }}` concurrency-group template against a flat context, for
+ * the subset the workflows use: paths, literals, `==`, `&&`, `||`, parentheses
+ * and format(). `&&`/`||` return an operand, and null, '', 0 and false are
+ * falsy, as in GitHub expressions. Paths missing from the context are null.
+ */
+function evaluateGroup(template: string, context: Record<string, GroupValue>): string {
+  return template.replace(/\$\{\{([\s\S]*?)\}\}/g, (_match, source: string) => {
+    const tokens =
+      source.match(/'(?:[^']|'')*'|\|\||&&|==|!=|[(),]|[A-Za-z_][\w.]*(?:\[\d+\](?:\.[\w]+)*)*|\d+/g) ?? [];
+    let at = 0;
+    const truthy = (value: GroupValue) => value !== null && value !== "" && value !== 0 && value !== false;
+    const text = (value: GroupValue) => (value === null ? "" : String(value));
+    const primary = (): GroupValue => {
+      const token = tokens[at++];
+      if (token === "(") {
+        const inner = or();
+        at++;
+        return inner;
+      }
+      if (token.startsWith("'")) return token.slice(1, -1).replace(/''/g, "'");
+      if (/^\d+$/.test(token)) return Number(token);
+      if (token === "format" && tokens[at] === "(") {
+        at++;
+        const args: GroupValue[] = [or()];
+        while (tokens[at] === ",") {
+          at++;
+          args.push(or());
+        }
+        at++;
+        return text(args[0]).replace(/\{(\d+)\}/g, (_m, index: string) => text(args[Number(index) + 1] ?? null));
+      }
+      return token in context ? context[token] : null;
+    };
+    const equality = (): GroupValue => {
+      const left = primary();
+      if (tokens[at] === "==" || tokens[at] === "!=") {
+        const negate = tokens[at++] === "!=";
+        const right = primary();
+        return (text(left) === text(right)) !== negate;
+      }
+      return left;
+    };
+    const and = (): GroupValue => {
+      let value = equality();
+      while (tokens[at] === "&&") {
+        at++;
+        const right = equality();
+        value = truthy(value) ? right : value;
+      }
+      return value;
+    };
+    const or = (): GroupValue => {
+      let value = and();
+      while (tokens[at] === "||") {
+        at++;
+        const right = and();
+        value = truthy(value) ? value : right;
+      }
+      return value;
+    };
+    const result = or();
+    if (at !== tokens.length) throw new Error("Unsupported expression: " + source);
+    return text(result);
+  });
+}
+
 const CANDIDATE_FORBIDDEN_ENV = [
   "CLERK_SECRET_KEY",
   "CONVEX_DEPLOY_KEY",
@@ -168,16 +237,101 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     );
   });
 
-  it("serializes ordinary E2E and trusted swarm around the same PR preview resource", () => {
+  it("SCRUM-777: a swarm run can never land in the Playwright run's concurrency group", () => {
     expect(playwrightWorkflow.concurrency).toEqual({
       group: "playwright-${{ github.event.pull_request.number || github.ref }}",
       "cancel-in-progress": true,
     });
-    expect(workflow.concurrency).toEqual({
-      group:
-        "playwright-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}",
-      "cancel-in-progress": true,
+    expect(workflow.concurrency?.["cancel-in-progress"]).toBe(true);
+
+    const playwrightGroup = String(playwrightWorkflow.concurrency?.group);
+    const swarmGroup = String(workflow.concurrency?.group);
+    const staticPrefix = (group: string) => group.slice(0, group.indexOf("${{"));
+    expect(staticPrefix(swarmGroup).length).toBeGreaterThan(0);
+    expect(staticPrefix(swarmGroup).startsWith(staticPrefix(playwrightGroup))).toBe(false);
+    expect(staticPrefix(playwrightGroup).startsWith(staticPrefix(swarmGroup))).toBe(false);
+
+    // Evaluate both real templates for the events GitHub actually creates: the
+    // PR run itself, and the swarm run each Playwright completion spawns.
+    const pullRequest = { number: 510 };
+    const playwrightValue = evaluateGroup(playwrightGroup, {
+      "github.event.pull_request.number": pullRequest.number,
+      "github.ref": "refs/pull/510/merge",
     });
+    const swarmValue = (conclusion: string, runId: number, headRepo = "o/r") =>
+      evaluateGroup(swarmGroup, {
+        "github.event.workflow_run.event": "pull_request",
+        "github.event.workflow_run.conclusion": conclusion,
+        "github.event.workflow_run.head_repository.full_name": headRepo,
+        "github.repository": "o/r",
+        "github.event.workflow_run.pull_requests[0].number": pullRequest.number,
+        "github.event.workflow_run.id": 9000 + runId,
+        "github.run_id": runId,
+      });
+
+    for (const conclusion of ["success", "cancelled", "skipped", "failure"]) {
+      expect(swarmValue(conclusion, 1), conclusion).not.toBe(playwrightValue);
+    }
+    expect(swarmValue("success", 1, "fork/r")).not.toBe(playwrightValue);
+  });
+
+  it("SCRUM-777: only a qualifying swarm joins the per-PR group, so a skipped run cancels nothing", () => {
+    const swarmGroup = String(workflow.concurrency?.group);
+    const value = (conclusion: string, runId: number, pr: number, headRepo = "o/r") =>
+      evaluateGroup(swarmGroup, {
+        "github.event.workflow_run.event": "pull_request",
+        "github.event.workflow_run.conclusion": conclusion,
+        "github.event.workflow_run.head_repository.full_name": headRepo,
+        "github.repository": "o/r",
+        "github.event.workflow_run.pull_requests[0].number": pr,
+        "github.event.workflow_run.id": 9000 + runId,
+        "github.run_id": runId,
+      });
+
+    // Two real swarms for one PR still serialize, so a newer one replaces an
+    // older one before it recreates the shared named preview.
+    expect(value("success", 1, 510)).toBe(value("success", 2, 510));
+    expect(value("success", 1, 510)).not.toBe(value("success", 2, 511));
+    // The runs that end `skipped` (SCRUM-777 mechanism) are alone in their group.
+    for (const conclusion of ["cancelled", "skipped", "failure"]) {
+      expect(value(conclusion, 3, 510), conclusion).not.toBe(value("success", 1, 510));
+      expect(value(conclusion, 3, 510), conclusion).not.toBe(value(conclusion, 4, 510));
+    }
+    expect(value("success", 5, 510, "fork/r")).not.toBe(value("success", 1, 510));
+  });
+
+  it("SCRUM-777: re-verifies the PR head against the tested head before each job that acts on the preview or attacks", () => {
+    for (const [jobName, stepName, before] of [
+      [
+        "trusted-e2e",
+        "Refuse a superseded PR head before touching the disposable preview",
+        "Scrub disposable preview environment before candidate execution",
+      ],
+      [
+        "attack-worker",
+        "Refuse a superseded PR head before attacking",
+        "Execute trusted browser missions",
+      ],
+    ] as const) {
+      const steps = job(jobName).steps ?? [];
+      const names = steps.map((entry) => entry.name);
+      const check = step(jobName, stepName);
+      expect(check.if, jobName).toBeUndefined();
+      expect(check["working-directory"], jobName).toBe("trusted");
+      expect(check.run, jobName).toContain("node scripts/intelligence/browserSwarmHeadFreshness.mjs");
+      expect(check.env, jobName).toEqual({
+        GITHUB_TOKEN: "${{ github.token }}",
+        PR_NUMBER: "${{ needs.prepare.outputs.pr_number }}",
+        EXPECTED_HEAD_SHA: "${{ needs.prepare.outputs.head_sha }}",
+        EXPECTED_TESTED_SHA: "${{ needs.prepare.outputs.tested_sha }}",
+      });
+      expect(names.indexOf(stepName), jobName).toBeGreaterThan(-1);
+      expect(names.indexOf(stepName), jobName).toBeLessThan(names.indexOf(before));
+      // The check reads trusted refs only; it runs after the trusted checkout.
+      expect(names.indexOf(stepName), jobName).toBeGreaterThan(
+        names.findIndex((name) => String(name).startsWith("Checkout trusted")),
+      );
+    }
   });
 
   it("pins the trusted control plane and executes the exact PR merge commit that produced the preview", () => {
