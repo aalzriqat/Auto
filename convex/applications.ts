@@ -6058,7 +6058,12 @@ export const confirmSupplierDisbursement = mutation({
           // margin is still outstanding on the supplier claim. Marking this
           // settled would report the deal as collected on the strength of
           // somebody else's receipt.
-          settlementStatus: "EXPECTED",
+          //
+          // On a cancelled sale settlementStatus is left untouched — NOT_READY where
+          // `cancelApplication` set it, whatever finalization left on a legacy CLOSED
+          // application: late evidence of a payment to the supplier must not reopen
+          // settlement on a deal that no longer exists.
+          ...(saleIsCancelled ? {} : { settlementStatus: "EXPECTED" as const }),
         });
 
         await auditLog(ctx, {

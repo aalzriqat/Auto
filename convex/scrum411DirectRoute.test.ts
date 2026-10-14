@@ -464,6 +464,8 @@ describe("SCRUM-411 - direct route: the supplier advice and the showroom's payme
     const app = await s.t.run((ctx) => ctx.db.get(applicationId));
     expect(app!.disbursedAt).toBeUndefined();
     expect(app!.supplierDisbursementConfirmedAt).toBeDefined();
+    // On a live deal the company's payment to the supplier moves settlement to EXPECTED (never settled).
+    expect(app!.settlementStatus).toBe("EXPECTED");
     // The cockpit offers "report returned", not "void", for the same reason.
     expect(await transferConfirmed(s, applicationId)).toBe(true);
 
@@ -501,6 +503,10 @@ describe("SCRUM-411 - direct route: the supplier advice and the showroom's payme
 
       // The advice is on file for the approved amount, agreeing with it.
       const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+      expect(app!.supplierDisbursementConfirmedAt).toBeDefined();
+      // The cancelled deal's settlement status stays where `cancelApplication` put it; the evidence does not reopen it.
+      expect(app!.settlementStatus).toBe("NOT_READY");
+      expect(app!.status).toBe("CANCELLED");
       expect(app!.supplierDisbursedAmountMinor).toBe(G);
       expect(app!.supplierDisbursementReference).toBe("WIRE-411");
       expect(app!.supplierDisbursementStatus).toBe("CONFIRMED");
