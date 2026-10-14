@@ -709,8 +709,8 @@ const dealRailMessages = defineBilingualMessages({
     "التقاسم يستلزم نصيباً للعميل — اختر «يتحمّله المعرض» بدلاً من ذلك.",
   ],
   GapAllocationMismatch: [
-    "The three amounts must add up to exactly the customer's part.",
-    "يجب أن يساوي مجموع المبالغ الثلاثة نصيب العميل بالضبط.",
+    "The amounts must add up to exactly the customer's part.",
+    "يجب أن يساوي مجموع المبالغ نصيب العميل بالضبط.",
   ],
   GapAllocationComplete: ["Everything is accounted for.", "كل شيء محسوب."],
   GapNotes: ["Notes (optional)", "ملاحظات (اختياري)"],

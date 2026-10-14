@@ -203,8 +203,8 @@ export type DealFinancialSummary = Readonly<{
    * The part of the customer's shortfall share they pay the finance company
    * directly that was credited against the contribution (SCRUM-766 PR-B):
    * planned like the rest, never dealership money, and already netted out of the
-   * planned contribution below. `null` when none
-   * was recorded.
+   * planned contribution below. `0` when nothing was credited; `null` when the
+   * row carries no figure.
    */
   customerGapToFinanceCompanyPlannedMinor: number | null;
   /** The customer's first payment as the economics froze it, whoever receives it. */

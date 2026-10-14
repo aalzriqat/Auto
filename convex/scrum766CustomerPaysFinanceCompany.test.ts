@@ -54,6 +54,7 @@ async function seed(tag: string) {
 }
 type Seeded = Awaited<ReturnType<typeof seed>>;
 
+/** Debit-positive net per system account across every journal line in the org. */
 async function glNet(s: Seeded) {
   return await s.t.run(async (ctx) => {
     const net: Record<string, number> = {};
@@ -128,7 +129,7 @@ describe("SCRUM-766 PR-B: the customer pays part of the shortfall to the finance
     const applicationId = await resolvedDeal(s, { customer: 400, dealer: 450, cash: 0, financeCompany: 400 });
     await finalizeAsOwner(s, applicationId);
 
-    const app = await s.t.run((ctx) => ctx.db.get(applicationId as Id<"financeApplications">));
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
     expect(app?.dealerContributionMinor).toBe(jod(825));
     expect(app?.financeCompanyForwardDueMinor).toBe(jod(825));
 

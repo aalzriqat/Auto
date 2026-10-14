@@ -1088,7 +1088,6 @@ export function deriveEconomics(args: {
   return {
     composition,
     customerPayment,
-    dealerContributionMinor,
     gap,
     remittance,
     proceeds,

@@ -42,7 +42,7 @@ export type FinanceDecisionFacts = {
   unfinancedPortionMinor: number | null;
   dealerContributionMinor: number | null;
   /** The customer's agreed payment to the finance company that lowered the contribution above (SCRUM-766 PR-B). */
-  customerPaidToFinanceCompanyMinor?: number | null;
+  customerGapToFinanceCompanyAppliedMinor?: number | null;
   appliedLtvPercent: number | null;
   /** CLOSED or CANCELLED: both writers refuse, so neither action is offered. */
   closed: boolean;
@@ -371,11 +371,12 @@ export function FinanceCompanyDecisionCard({
   }
   // Part of what is not financed, already out of the contribution above: without
   // this row the card's parts would not add up to the amount not financed.
-  if ((facts.customerPaidToFinanceCompanyMinor ?? 0) > 0) {
+  const customerToFinanceCompanyMinor = facts.customerGapToFinanceCompanyAppliedMinor ?? 0;
+  if (customerToFinanceCompanyMinor > 0) {
     derived.push({
       key: "customerToFinanceCompany",
       label: t("DerivedCustomerToFinanceCompany"),
-      value: money(facts.customerPaidToFinanceCompanyMinor ?? 0),
+      value: money(customerToFinanceCompanyMinor),
     });
   }
   // The rate is known before any approved amount exists; alone it reads as a

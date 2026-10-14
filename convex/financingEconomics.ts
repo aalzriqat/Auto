@@ -185,6 +185,7 @@ async function recomputeAndPatchEconomics(
   // Refused before any write: a corrupt component must not be recomputed
   // into the stored economics, and added inline a corrupt pair cancels.
   const customerGapToDealer = requireCustomerGapToDealer(app, "recomputing this deal's economics");
+  const settledSplit = requireCustomerGapToFinanceCompany(app, "recomputing this deal's economics");
 
   // The appraisal the approval was actually based on, for companies whose LTV
   // rule multiplies the appraisal rather than the approved amount.
@@ -198,7 +199,6 @@ async function recomputeAndPatchEconomics(
   // persists a first payment now, so this is reached only by a legacy row.
   const firstPaymentUnknown = app.customerFirstPaymentMinor === undefined;
 
-  const settledSplit = requireCustomerGapToFinanceCompany(app, "recomputing this deal's economics");
   const feeDeductionsMinor = firstPaymentUnknown
     ? 0
     : await settlementDeductedTotalMinor(ctx, app._id, currency);
@@ -360,7 +360,7 @@ async function recomputeAndPatchEconomics(
   // reduced contribution behind.
   const splitVoided = "customerGapToFinanceCompanyMinor" in resolutionPatch;
   const stored = splitVoided
-    ? deriveFor({ customerGapShareMinor: 0, customerGapToFinanceCompanyMinor: 0 })
+    ? (deriveFor({ customerGapShareMinor: 0, customerGapToFinanceCompanyMinor: 0 }) ?? derived)
     : derived;
 
   // A shortfall that cannot be measured is a reconciliation item, not a zero.
@@ -377,12 +377,12 @@ async function recomputeAndPatchEconomics(
   // finance company that the contribution can no longer absorb is credited only up
   // to the contribution; the rest is a human's to reconcile, not a silent drop.
   const paymentExcessReason =
-    !splitVoided && derived.customerPayment.excessMinor > 0
+    sealed && derived.customerPayment.excessMinor > 0
       ? "The customer's recorded payment to the finance company is more than the showroom contribution it replaces, so only part of it has been credited. Reconcile the gap resolution before closing the deal."
       : undefined;
-  const settlementReconcileReason = [shortfallReconcileReason, paymentExcessReason]
-    .filter(Boolean)
-    .join(" ") || undefined;
+  const settlementReasons = [shortfallReconcileReason, paymentExcessReason].filter(
+    (reason): reason is string => reason !== undefined
+  );
 
   const remittanceReason = remittanceIsKnowable
     ? app.financingReconciliationReason
@@ -390,8 +390,8 @@ async function recomputeAndPatchEconomics(
         app.financingReconciliationReason,
         `${snapshot.companyName} keeps the customer's payment rather than passing it through, and how much reached them has not been recorded. The expected dealer remittance cannot be determined until it is.`
       );
-  const reconcileReason = settlementReconcileReason
-    ? appendReconciliationReason(remittanceReason, settlementReconcileReason)
+  const reconcileReason = settlementReasons.length > 0
+    ? settlementReasons.reduce(appendReconciliationReason, remittanceReason)
     : remittanceIsKnowable
       ? undefined
       : remittanceReason;
@@ -405,7 +405,7 @@ async function recomputeAndPatchEconomics(
     economicsRevision: (app.economicsRevision ?? 0) + 1,
     financeCompanyFundedPortionMinor: derived.composition.financeCompanyFundedPortionMinor,
     unfinancedPortionMinor: derived.composition.unfinancedPortionMinor,
-    dealerContributionMinor: stored.dealerContributionMinor,
+    dealerContributionMinor: stored.customerPayment.dealerContributionMinor,
     customerGapToFinanceCompanyAppliedMinor: stored.customerPayment.appliedMinor,
     expectedDealerRemittanceMinor: remittanceIsKnowable
       ? stored.remittance.expectedDealerRemittanceMinor

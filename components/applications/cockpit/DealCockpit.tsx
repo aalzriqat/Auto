@@ -2570,7 +2570,7 @@ export function DealCockpit({
               economicsApp.financeCompanyFundedPortionMinor ?? null,
             unfinancedPortionMinor: economicsApp.unfinancedPortionMinor ?? null,
             dealerContributionMinor: economicsApp.dealerContributionMinor ?? null,
-            customerPaidToFinanceCompanyMinor:
+            customerGapToFinanceCompanyAppliedMinor:
               economicsApp.customerGapToFinanceCompanyAppliedMinor ?? null,
             appliedLtvPercent: economicsApp.appliedLtvPercent ?? null,
             closed: economicsApp.status === "CLOSED" || economicsApp.status === "CANCELLED",

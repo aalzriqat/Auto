@@ -619,7 +619,6 @@ export function buildFinancedSalePostingPlanV2(input: FinancedSalePlanV2Input): 
       "The dealership contribution recorded on this deal is not a usable amount. Correct it before finalizing."
     );
   }
-  const h = input.depositLiabilityAppliedMinor;
   const credited = input.customerPaymentToFinanceCompanyMinor ?? 0;
   if (!isWholeMinorAmount(credited) || credited < 0) {
     return refuseV2(
@@ -627,6 +626,7 @@ export function buildFinancedSalePostingPlanV2(input: FinancedSalePlanV2Input): 
       "The customer's payment to the finance company recorded on this deal is not a usable amount. Correct it before finalizing."
     );
   }
+  const h = input.depositLiabilityAppliedMinor;
   if (!isWholeMinorAmount(h) || h < 0) {
     return refuseV2(
       "DEPOSIT_INVALID",
