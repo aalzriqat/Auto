@@ -65,6 +65,7 @@ export type RecordedModel = Readonly<{
     legalInvoiceAmountMinor?: number | null;
     legalInvoiceDate?: number | null;
     legalInvoiceIssuedTo?: string | null;
+    legalInvoiceIssuerName?: string | null;
   }> | null;
 }>;
 
@@ -208,24 +209,27 @@ export const approvalReopenedReflected: ReflectedPredicate = (now, start) =>
   now.economics.approvedDealerPurchaseAmountMinor == null;
 
 /**
- * Every submitted invoice field the read model exposes: number, amount, date and
- * who it was issued to. (`issuedToOther`, the free-text name, is not on
- * `listDealCosts`, so an edit that changes only it is not provable and is said at
- * once.) The row already on screen never satisfies it: at least one of the four
- * differs from what the action started with.
+ * Every submitted invoice field the read model exposes: number, amount, date,
+ * who it was issued to and (for a third party's invoice) the issuer's name.
+ * (`issuedToOther`, the free-text recipient, is not on `listDealCosts`, so an
+ * edit that changes only it is not provable and is said at once.) The row
+ * already on screen never satisfies it: at least one of the fields differs from
+ * what the action started with.
  */
 export type LegalInvoiceSubmitted = Readonly<{
   number: string;
   amountMinor: number;
   date: number;
   issuedTo: string;
+  issuerName?: string;
 }>;
 
 const invoiceMatches = (costs: RecordedModel["costs"], submitted: LegalInvoiceSubmitted) =>
   costs?.legalInvoiceNumber === submitted.number &&
   costs?.legalInvoiceAmountMinor === submitted.amountMinor &&
   costs?.legalInvoiceDate === submitted.date &&
-  costs?.legalInvoiceIssuedTo === submitted.issuedTo;
+  costs?.legalInvoiceIssuedTo === submitted.issuedTo &&
+  (costs?.legalInvoiceIssuerName ?? undefined) === submitted.issuerName;
 
 export const legalInvoiceReflected = (submitted: LegalInvoiceSubmitted): ReflectedPredicate =>
   provable(

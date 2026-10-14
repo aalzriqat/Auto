@@ -3755,9 +3755,9 @@ export function DealCockpit({
           ? {
               readiness: closingReadiness,
               serviceUnavailable: closingReadinessServiceUnavailable,
-              // The legal invoice is still recorded by hand while the v1
-              // posting plan reads it (SCRUM-411 retires that dependency); it
-              // is shown and recorded by the disbursement tier only, as before.
+              // The legal invoice is OPTIONAL evidence since plan v3 (SCRUM-411):
+              // the server derives the sale and never reads it as revenue. It is
+              // shown and recorded by the disbursement tier only, as before.
               legalInvoice:
                 dealCosts && canConfirmFinanceDisbursement
                   ? {
@@ -3819,6 +3819,7 @@ export function DealCockpit({
           error={legalInvoiceError}
           scale={scaleForCurrency(dealCosts?.currency ?? orgCurrency.code)}
           currency={dealCosts?.currency ?? orgCurrency.code}
+          vehicleIsConsigned={isConsignedDeal}
           existing={
             dealCosts?.legalInvoiceAmountMinor !== undefined
               ? {
@@ -3826,6 +3827,7 @@ export function DealCockpit({
                   number: dealCosts.legalInvoiceNumber,
                   date: dealCosts.legalInvoiceDate,
                   issuedTo: dealCosts.legalInvoiceIssuedTo,
+                  issuerName: dealCosts.legalInvoiceIssuerName,
                 }
               : undefined
           }
@@ -3845,6 +3847,8 @@ export function DealCockpit({
                     legalInvoiceDate: values.legalInvoiceDate,
                     issuedTo: values.issuedTo,
                     issuedToOther: values.issuedToOther,
+                    issuedBy: values.issuedBy,
+                    issuerName: values.issuerName,
                   }),
                 "LegalInvoiceRecorded",
                 {
@@ -3853,6 +3857,7 @@ export function DealCockpit({
                     amountMinor: values.legalInvoiceAmountMinor,
                     date: values.legalInvoiceDate,
                     issuedTo: values.issuedTo,
+                    issuerName: values.issuerName,
                   }),
                 }
               );
