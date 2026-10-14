@@ -191,8 +191,13 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // pre-provisioning coverage gate (`pnpm browser-swarm:coverage-gate` in
   // `trusted/`, no secrets, no candidate path) and the upload of its refusal
   // evidence — plus the coverage json in the plan evidence upload.
+  // SCRUM-777: re-pinned for the swarm's own concurrency group (no longer the
+  // Playwright group) and three `contents: read` live-head checks: in prepare
+  // before the preview is created, in trusted-e2e before it deploys over the
+  // preview, and in attack-worker before the missions. None of them touches a
+  // Convex credential or a candidate path.
   "browser-attack-swarm.yml":
-    "0813fefd8357581403befd4930665e6661803ca8057e1218f67449629bbf0485",
+    "3d221eb48ab5c44addef5713aaa4663122eaea489beed39d68d6dec11e960c8f",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":

@@ -9,10 +9,22 @@ permissions:
   contents: read
 
 concurrency:
-  # Deliberately the same PR-level group used by the triggering Playwright
-  # workflow. A newer E2E run therefore cancels an older swarm before it can
-  # recreate the same named preview underneath that swarm.
-  group: playwright-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
+  # SCRUM-777: never the Playwright group. Workflow-level concurrency is
+  # evaluated before any job `if`, so a swarm run that ends `skipped` (its
+  # Playwright run was cancelled or failed) used to cancel the live Playwright
+  # run of the newer head. Only a run that can actually provision joins the
+  # per-PR group, where a newer swarm replaces an older one before it recreates
+  # the shared named preview; every other run is alone in a group of its own.
+  # A swarm for a superseded head is refused by the live-head checks below.
+  group: >-
+    browser-attack-swarm-${{
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.pull_requests[0].number &&
+      format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||
+      format('run-{0}', github.run_id)
+    }}
   cancel-in-progress: true
 
 jobs:
@@ -231,6 +243,19 @@ jobs:
             echo "Descriptor JSON exceeds the 8 KiB trusted parsing limit." >&2
             exit 1
           fi
+
+      # SCRUM-777: `provenance` read the PR refs once, at the start of this job.
+      # Install, impact and the descriptor download take minutes, so re-read them
+      # immediately before the first preview write (`convex deploy
+      # --preview-create` below); a superseded head must not recreate the preview.
+      - name: Refuse a superseded PR head before creating the disposable preview
+        working-directory: trusted
+        run: node scripts/intelligence/browserSwarmHeadFreshness.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+          EXPECTED_TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
 
       - name: Recreate disposable Convex preview from trusted main
         working-directory: trusted
@@ -497,6 +522,19 @@ jobs:
       - name: Install trusted Chromium
         working-directory: trusted
         run: pnpm exec playwright install --with-deps chromium
+
+      # SCRUM-777: the first step of this job that writes to the disposable
+      # preview (`prepare` created it, behind its own check). A run planned
+      # against a head the PR has since left must stop here; the verdict job
+      # would fail it later, but only after it had deployed over the preview.
+      - name: Refuse a superseded PR head before touching the disposable preview
+        working-directory: trusted
+        run: node scripts/intelligence/browserSwarmHeadFreshness.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          EXPECTED_TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
 
       - name: Scrub disposable preview environment before candidate execution
         working-directory: trusted
@@ -1185,6 +1223,16 @@ jobs:
           set -euo pipefail
           node scripts/intelligence/browserEgressProof.mjs | tee egress-evidence/browser-egress-proof.json
           node scripts/intelligence/browserEgressProofVerify.mjs egress-evidence/browser-egress-proof.json
+
+      # SCRUM-777: the last trusted boundary before candidate code is attacked.
+      - name: Refuse a superseded PR head before attacking
+        working-directory: trusted
+        run: node scripts/intelligence/browserSwarmHeadFreshness.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          EXPECTED_TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
 
       - name: Execute trusted browser missions
         working-directory: trusted
