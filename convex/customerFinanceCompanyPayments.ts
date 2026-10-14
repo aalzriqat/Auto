@@ -81,8 +81,9 @@ async function confirmableRemainder(
  *
  * One transfer is one confirmation: the idempotency key says "this click", not
  * "this transfer", so the bank's reference is what refuses the same transfer
- * confirmed twice. The key of a confirmation taken back is free again - that is
- * how a mistake is corrected.
+ * confirmed twice. Taking a confirmation back frees only its transfer reference,
+ * so the same transfer can be recorded again - under a NEW command and key: the
+ * old key still replays the stored result.
  */
 export const confirmPayment = mutation({
   args: {

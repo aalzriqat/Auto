@@ -676,8 +676,10 @@ export async function evaluateClosingReadiness(
   // Two things block, judged in this order:
   //  - a confirmed payment that belongs to an agreement since withdrawn: real
   //    money is on file that the deal's figures do not account for, so a person
-  //    disposes of it (takes it back with a reason, or re-records the transfer
-  //    on the new agreement) before the deal closes - whatever the new agreement says;
+  //    disposes of it before the deal closes - whatever the new agreement says.
+  //    The old row blocks until it is taken back with a reason; a new
+  //    confirmation alone never clears it. Only then, if the transfer still
+  //    stands, is it recorded again on the current agreement;
   //  - the deal's ONE stored balance of what the agreement still leaves to
   //    confirm. Not `agreed - applied`: the agreement can exceed what is
   //    creditable, and that excess is reconciled under FINANCING_RECONCILED,
@@ -706,7 +708,7 @@ export async function evaluateClosingReadiness(
       "BLOCKED",
       reasonOf(
         "CUSTOMER_FINANCE_COMPANY_PAYMENT_SUPERSEDED",
-        "A payment from the customer to the finance company was confirmed against an agreement that has since been withdrawn, so this deal's figures do not account for it. Take that confirmation back with a reason, or record the transfer again against the current agreement, before finalizing."
+        "A payment from the customer to the finance company was confirmed against an agreement that has since been withdrawn, so this deal's figures do not account for it. Take that confirmation back with a reason first; then, if the transfer still stands, record it again against the current agreement. Finalize after that."
       )
     );
   } else if (agreedToCompanyMinor <= 0) {

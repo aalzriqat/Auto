@@ -1668,8 +1668,8 @@ const dealOverviewMessages = defineBilingualMessages({
     "اتفق العميل على دفع جزء من العجز لشركة التمويل، لكن هذه الدفعة غير مؤكَّدة بالكامل. أكِّد الدفعة قبل الإغلاق، أو سوِّ العجز بطريقة أخرى.",
   ],
   ClosingReason_CUSTOMER_FINANCE_COMPANY_PAYMENT_SUPERSEDED: [
-    "A payment from the customer to the finance company was confirmed against an agreement that has since been withdrawn, so this deal's figures do not account for it. Take that confirmation back with a reason, or record the transfer again against the current agreement, before closing.",
-    "أُكِّدت دفعة من العميل إلى شركة التمويل مقابل اتفاق سُحب لاحقًا، فلا تحتسبها أرقام هذه الصفقة. تراجَع عن ذلك التأكيد مع ذكر السبب، أو سجِّل التحويل من جديد مقابل الاتفاق الحالي، قبل الإغلاق.",
+    "A payment from the customer to the finance company was confirmed against an agreement that has since been withdrawn, so this deal's figures do not account for it. Take that confirmation back with a reason first; then, if the transfer still stands, record it again against the current agreement. Close the deal after that.",
+    "أُكِّدت دفعة من العميل إلى شركة التمويل مقابل اتفاق سُحب لاحقًا، فلا تحتسبها أرقام هذه الصفقة. تراجَع أولًا عن ذلك التأكيد مع ذكر السبب؛ ثم، إن كان التحويل ما زال قائمًا، سجِّله من جديد مقابل الاتفاق الحالي. أغلق الصفقة بعد ذلك.",
   ],
   ClosingReason_WITHHELD_CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED: [
     "A payment the customer made, or agreed to make, to the finance company is not settled in the deal's records yet.",

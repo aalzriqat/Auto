@@ -549,6 +549,30 @@ describe("SCRUM-766 PR-B review: evidence belongs to the agreement it was confir
     expect(history.map((row) => [row.status, row.agreement])).toEqual([["VOIDED", "PRIOR"], ["CONFIRMED", "CURRENT"]]);
   });
 
+  test("a new confirmation under the current agreement does not clear the old confirmed row: it is taken back first", async () => {
+    const { s, applicationId } = await confirmedThenReapproved("l4");
+    await agree(s, applicationId, SPLIT_400_TO_COMPANY);
+
+    // A different transfer, confirmed against the current agreement, fully covers it ...
+    await confirmPayment(s, applicationId, 400, "TRF-NEW");
+    const app = await appOf(s, applicationId);
+    expect(app?.customerGapToFinanceCompanyUnconfirmedMinor).toBe(0);
+    expect(app?.dealerContributionMinor).toBe(jod(825));
+    // ... yet the old confirmed row still blocks: only taking it back clears it, and the reason says so in that order.
+    const blocked = await paymentCheckOf(s, applicationId);
+    expect(blocked.status).toBe("BLOCKED");
+    expect(blocked.reasonCode).toBe("CUSTOMER_FINANCE_COMPANY_PAYMENT_SUPERSEDED");
+    expect(blocked.reason).toContain("Take that confirmation back with a reason first");
+    expect(blocked.reason).not.toContain(", or record");
+
+    const prior = (await listPayments(s, applicationId)).find((row) => row.agreement === "PRIOR");
+    expect(prior).toBeDefined();
+    await s.approver.as.mutation(api.customerFinanceCompanyPayments.voidPayment, {
+      orgId: s.orgId, applicationId, paymentId: prior!._id, reason: "That transfer was recorded twice.",
+    });
+    expect((await paymentCheckOf(s, applicationId)).status).toBe("READY");
+  });
+
   test("a new agreement that pays the finance company nothing still cannot close over an earlier agreement's confirmed payment", async () => {
     const { s, applicationId } = await confirmedThenReapproved("l3");
     await agree(s, applicationId, { customer: 400, dealer: 450, cash: 400, financeCompany: 0 });
