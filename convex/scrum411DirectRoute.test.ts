@@ -24,7 +24,7 @@
  * runtime and not production data.
  */
 import {
-  C, G, closePriorYearPeriod, finalizeAsOwner, finalizeThenTakeForwardBack, readyDeal, refusalDataOf, refusalMessageOf,
+  C, G, closePriorYearPeriod, finalizeAsOwner, finalizeThenTakeForwardBack, payForwardAsOwner, readyDeal, refusalDataOf, refusalMessageOf,
   seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
 import { describe, expect, test, vi } from "vitest";
@@ -402,6 +402,169 @@ describe("SCRUM-411 - direct route: cancellation mirrors the posted plan", () =>
     ]) {
       expect(all[key] ?? 0, key).toBe(0);
     }
+  });
+});
+
+describe("SCRUM-411 - direct route: the supplier advice and the showroom's payment to the finance company", () => {
+  type AppId = Id<"financeApplications">;
+  const adviceArgs = (s: Seeded, applicationId: AppId) => ({
+    orgId: s.orgId, applicationId, disbursedAmountMinor: G, reference: "WIRE-411", idempotencyKey: crypto.randomUUID(),
+  });
+  const confirmAdvice = (s: Seeded, applicationId: AppId) =>
+    s.owner.as.mutation(api.applications.confirmSupplierDisbursement, adviceArgs(s, applicationId));
+  const voidForward = (s: Seeded, applicationId: AppId, forwardId: Id<"financeCompanyForwards">) =>
+    s.owner.as.mutation(api.financeCompanyForward.reverseFinanceCompanyForward, {
+      orgId: s.orgId, applicationId, forwardId, reason: "Recorded in error.", idempotencyKey: crypto.randomUUID(),
+    });
+  const returnForward = (s: Seeded, applicationId: AppId, forwardId: Id<"financeCompanyForwards">) =>
+    s.owner.as.mutation(api.financeCompanyForward.reportFinanceCompanyForwardReturned, {
+      orgId: s.orgId, applicationId, forwardId, reason: "The company sent it back.", idempotencyKey: crypto.randomUUID(),
+    });
+  const cancelDeal = (s: Seeded, applicationId: AppId) =>
+    s.owner.as.mutation(api.applications.cancelApplication, {
+      orgId: s.orgId, applicationId, reason: "Customer withdrew.", idempotencyKey: crypto.randomUUID(),
+    });
+  const transferConfirmed = async (s: Seeded, applicationId: AppId) =>
+    (await s.owner.as.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId }))?.forward.transferConfirmed;
+  const forwardRows = (s: Seeded, applicationId: AppId) =>
+    s.t.run((ctx) =>
+      ctx.db.query("financeCompanyForwards").withIndex("by_org_application", (q) => q.eq("orgId", s.orgId).eq("applicationId", applicationId)).take(10)
+    );
+  /** Everything a refused or evidence-only call must leave untouched: the ledger, its events and the forward rows. */
+  const books = async (s: Seeded, applicationId: AppId) => ({
+    ledger: await everyLineNet(s),
+    events: (await s.t.run((ctx) => ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect())).length,
+    forwards: await forwardRows(s, applicationId),
+  });
+  /** A finalized direct deal whose sale was cancelled by `cancelApplication` after its payment was recovered. */
+  const cancelledAfterFinalize = async (
+    s: Seeded,
+    recover: (s: Seeded, applicationId: AppId, forwardId: Id<"financeCompanyForwards">) => Promise<unknown>
+  ) => {
+    const { applicationId } = await readyDirect(s, { gapMinor: R });
+    const forwardId = await payForwardAsOwner(s, applicationId);
+    await finalizeAsOwner(s, applicationId, { payForward: false });
+    await recover(s, applicationId, forwardId!);
+    await cancelDeal(s, applicationId);
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app!.status).toBe("CANCELLED");
+    const saleId = app!.finalizedSaleId as Id<"sales">;
+    expect((await s.t.run((ctx) => ctx.db.get(saleId)))!.status).toBe("CANCELLED");
+    return { applicationId, saleId };
+  };
+
+  test("after the finance company paid the supplier, the showroom's payment can no longer be voided, and nothing changes", async () => {
+    const s = await seed("v1");
+    const { applicationId } = await readyDirect(s);
+    const forwardId = await payForwardAsOwner(s, applicationId);
+    expect(forwardId).not.toBeNull();
+    await finalizeAsOwner(s, applicationId, { payForward: false });
+    await confirmAdvice(s, applicationId);
+    // The direct route confirms its transfer through the supplier advice, not through `disbursedAt`.
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app!.disbursedAt).toBeUndefined();
+    expect(app!.supplierDisbursementConfirmedAt).toBeDefined();
+    // The cockpit offers "report returned", not "void", for the same reason.
+    expect(await transferConfirmed(s, applicationId)).toBe(true);
+
+    const before = await books(s, applicationId);
+    expect(before.forwards.every((row) => row.reversalRequestedAt === undefined)).toBe(true);
+    expect(await refusalMessageOf(voidForward(s, applicationId, forwardId!))).toMatch(/already confirmed/i);
+    expect(await books(s, applicationId)).toEqual(before);
+
+    // The way out the refusal names stays open: the company can still send the money back.
+    await returnForward(s, applicationId, forwardId!);
+    expect((await forwardRows(s, applicationId)).some((row) => row.reversalRequestedAt !== undefined)).toBe(true);
+  });
+
+  test("control: before the advice is recorded the same payment can still be voided", async () => {
+    const s = await seed("v1c");
+    const { applicationId } = await readyDirect(s);
+    const forwardId = await payForwardAsOwner(s, applicationId);
+    await finalizeAsOwner(s, applicationId, { payForward: false });
+    expect(await transferConfirmed(s, applicationId)).toBe(false);
+    await voidForward(s, applicationId, forwardId!);
+    expect((await forwardRows(s, applicationId)).some((row) => row.reversalRequestedAt !== undefined)).toBe(true);
+  });
+
+  test.each([
+    ["taken back", "v2a", voidForward],
+    ["reported returned", "v2b", returnForward],
+  ] as const)(
+    "a late advice on a cancelled sale whose payment was %s is still recorded as evidence, and revives nothing",
+    async (_label, tag, recover) => {
+      const s = await seed(tag);
+      const { applicationId, saleId } = await cancelledAfterFinalize(s, recover);
+
+      const before = await books(s, applicationId);
+      await confirmAdvice(s, applicationId);
+
+      // The advice is on file for the approved amount, agreeing with it.
+      const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+      expect(app!.supplierDisbursedAmountMinor).toBe(G);
+      expect(app!.supplierDisbursementReference).toBe("WIRE-411");
+      expect(app!.supplierDisbursementStatus).toBe("CONFIRMED");
+      // Nothing is revived: the sale stays cancelled, no payment or journal is written, the supplier claim stays cancelled.
+      expect((await s.t.run((ctx) => ctx.db.get(saleId)))!.status).toBe("CANCELLED");
+      expect(await books(s, applicationId)).toEqual(before);
+      const claims = await s.t.run((ctx) =>
+        ctx.db.query("vehicleSupplierReceivables").withIndex("by_org_sale", (q) => q.eq("orgId", s.orgId).eq("saleId", saleId)).collect()
+      );
+      expect(claims.length).toBeGreaterThan(0);
+      expect(claims.every((c) => c.status === "CANCELLED")).toBe(true);
+      // Nobody is sent to reconcile a deal that no longer exists; the exception has its own owner.
+      const notices = await s.t.run((ctx) => ctx.db.query("notifications").collect());
+      expect(notices.filter((n) => n.type === "application.settlement_advice_discrepancy")).toHaveLength(0);
+      expect(notices.filter((n) => n.type === "application.payment_on_cancelled_deal").length).toBeGreaterThan(0);
+    }
+  );
+
+  test("control: on a LIVE sale the advice still needs the showroom's payment on the books", async () => {
+    const s = await seed("v2c");
+    const { applicationId } = await readyDirect(s);
+    await finalizeThenTakeForwardBack(s, applicationId);
+
+    expect((await refusalDataOf(confirmAdvice(s, applicationId)))?.code).toBe("FORWARD_TRANSFER_UNPAID");
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app!.supplierDisbursementConfirmedAt).toBeUndefined();
+  });
+
+  test("control: an application cancelled BEFORE it was finalized has no sale, and an advice on it is refused", async () => {
+    const s = await seed("v2n");
+    const { applicationId } = await readyDirect(s);
+    await cancelDeal(s, applicationId);
+    const cancelled = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(cancelled!.status).toBe("CANCELLED");
+    expect(cancelled!.finalizedSaleId).toBeUndefined();
+
+    expect(await refusalMessageOf(confirmAdvice(s, applicationId))).toMatch(/once the deal is finalized/i);
+    const after = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(after!.supplierDisbursementConfirmedAt).toBeUndefined();
+  });
+
+  test("another organization cannot record an advice on a cancelled deal, nor lend it a cancelled sale", async () => {
+    const s = await seed("v2t");
+    const { applicationId, saleId } = await cancelledAfterFinalize(s, voidForward);
+    const otherOrgId = await s.t.run(async (ctx) => {
+      const orgId = await ctx.db.insert("organizations", { name: "S411D other", createdAt: Date.now() });
+      await ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() });
+      const userId = await ctx.db.insert("users", { clerkId: "s411d_other", email: "s411d.other@example.com", name: "other" });
+      const roleId = await ctx.db.insert("roles", { orgId, name: "OWNER", permissions: [...ALL_PERMS], isSystemOwnerRole: true });
+      await ctx.db.insert("memberships", { orgId, userId, roleId });
+      return orgId;
+    });
+    const outsider = s.t.withIdentity({ subject: "s411d_other", clerkId: "s411d_other" });
+    expect(
+      await refusalMessageOf(
+        outsider.mutation(api.applications.confirmSupplierDisbursement, { ...adviceArgs(s, applicationId), orgId: otherOrgId })
+      )
+    ).toContain("Application not found");
+
+    // A cancelled sale only makes a CANCELLED application eligible when it is this organization's own.
+    await s.t.run((ctx) => ctx.db.patch(saleId, { orgId: otherOrgId }));
+    expect(await refusalMessageOf(confirmAdvice(s, applicationId))).toMatch(/once the deal is finalized/i);
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app!.supplierDisbursementConfirmedAt).toBeUndefined();
   });
 });
 

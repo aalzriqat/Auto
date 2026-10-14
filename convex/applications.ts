@@ -2552,8 +2552,14 @@ export const dealCockpit = query({
          * actions. An id, not an amount. Null when nothing settled is on the books.
          */
         onBooksForwardId: forwardProof.onBooksForwardId,
-        /** After the transfer a payment can only be reported returned, not voided. */
-        transferConfirmed: app.disbursedAt !== undefined,
+        /**
+         * After the transfer (to the dealership, or a supplier advice on file) a payment can only be
+         * reported returned, not voided. The same predicate `reverseFinanceCompanyForward` refuses on.
+         */
+        transferConfirmed:
+          app.disbursedAt !== undefined ||
+          app.supplierDisbursementConfirmedAt !== undefined ||
+          app.supplierDisbursedAmountMinor !== undefined,
         /** Exactly the permissions the commands require. */
         mayRecord:
           isSystemOwnerRole(role) ||
@@ -5907,31 +5913,29 @@ export const confirmSupplierDisbursement = mutation({
       async () => {
         const app = await ctx.db.get(args.applicationId);
         if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found.");
-        if (app.status !== "CLOSED") {
+        // Eligible once the deal is finalized, whether or not its sale survived.
+        // `cancelApplication` moves a finalized deal to CANCELLED and keeps
+        // `finalizedSaleId`; a sale cancelled through `sales.update` before
+        // SCRUM-447 left it CLOSED. An application cancelled BEFORE it was
+        // finalized has no sale and is refused, as is one whose linked sale is
+        // not this organization's.
+        //
+        // On a cancelled sale the payment is still RECORDED. What the finance
+        // company paid the supplier is a fact about two other parties, true
+        // whether or not the dealership's sale survived — and this mutation
+        // already records an advice that contradicts the approval for exactly
+        // that reason. Refusing here would leave an operator unable to write
+        // down a payment that really happened, and both cancel paths refuse a
+        // sale whose disbursement is already confirmed, so cancel-then-confirm
+        // is the only order in which this can occur at all.
+        const linkedSale = app.finalizedSaleId ? await ctx.db.get(app.finalizedSaleId) : null;
+        const saleIsCancelled = linkedSale?.orgId === app.orgId && linkedSale.status === "CANCELLED";
+        const finalized = app.status === "CLOSED" || (app.status === "CANCELLED" && saleIsCancelled);
+        if (!finalized) {
           throw new ConvexError(
             "The company's payment to the supplier can only be recorded once the deal is finalized."
           );
         }
-        // CLOSED is not the same as live: `sales.update` can cancel a completed
-        // sale and nothing in that path touches the application, so it stays
-        // CLOSED carrying every field this mutation writes.
-        //
-        // The payment is still RECORDED. What the finance company paid the
-        // supplier is a fact about two other parties, true whether or not the
-        // dealership's sale survived — and this mutation already records an
-        // advice that contradicts the approval for exactly that reason. Refusing
-        // here would leave an operator unable to write down a payment that
-        // really happened, and `sales.update` refuses to cancel a sale whose
-        // disbursement is already confirmed, so cancel-then-confirm is the only
-        // order in which this can occur at all.
-        //
-        // What is suppressed is the CALL TO ACTION. The reconciliation notice
-        // exists to send somebody to the cockpit to resolve a stuck deal; on a
-        // cancelled one there is nothing to resolve, the cockpit renders it
-        // STOPPED, and the notice would be an alarm about a deal that no longer
-        // exists.
-        const linkedSale = app.finalizedSaleId ? await ctx.db.get(app.finalizedSaleId) : null;
-        const saleIsCancelled = linkedSale?.status === "CANCELLED";
         // The payer has to be nameable, because that is what this record IS —
         // evidence that a specific third party paid the supplier. A configured
         // finance company is identified by id; a manual provider by the name
@@ -5959,7 +5963,10 @@ export const confirmSupplierDisbursement = mutation({
         // contribution to it, on this route exactly as on the through route. The same
         // ONE proof `confirmDisbursement` asks; the refusal names who acts next and
         // never carries H or D.
-        if (isForwardPlanVersion(planVersionOf(app))) await assertForwardSettledForTransfer(ctx, app);
+        // A cancelled sale is exempt: the advice is evidence of a payment the finance company
+        // already made to the supplier (recorded above whether or not the sale survived), and the
+        // ordering rule protects a LIVE sale's transfer, which a cancelled sale no longer has.
+        if (!saleIsCancelled && isForwardPlanVersion(planVersionOf(app))) await assertForwardSettledForTransfer(ctx, app);
         // Not folded into the idempotency key's job. A retry with the same key
         // is suppressed upstream; this catches a SECOND advice recorded under a
         // different key, which is a correction somebody has to make

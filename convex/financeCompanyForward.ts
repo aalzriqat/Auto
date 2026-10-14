@@ -69,6 +69,16 @@ function cleanReason(raw: string): string {
 const isUnfinalized = (app: Doc<"financeApplications">): boolean =>
   app.finalizedSaleId === undefined && app.status !== "CLOSED";
 
+/**
+ * The finance company's transfer is confirmed: to the dealership (`disbursedAt`) on the through
+ * route, or by a supplier advice on file on the direct route. The advice counts by its amount as
+ * well as its date, exactly as both cancel paths read it.
+ */
+const isTransferConfirmed = (app: Doc<"financeApplications">): boolean =>
+  app.disbursedAt !== undefined ||
+  app.supplierDisbursementConfirmedAt !== undefined ||
+  app.supplierDisbursedAmountMinor !== undefined;
+
 async function loadV2Application(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
@@ -232,7 +242,7 @@ export const recordFinanceCompanyForward = mutation({
         // After the transfer the ONLY payment that may still be recorded is the
         // replacement for one the finance company sent back: the amount owed is
         // due again and nothing else can clear it.
-        if (app.disbursedAt !== undefined && !(proof.returnedExceptionOpen && proof.state === "DUE")) {
+        if (isTransferConfirmed(app) && !(proof.returnedExceptionOpen && proof.state === "DUE")) {
           throw new ConvexError("The finance company's transfer is already confirmed, so this payment can no longer be recorded here. A manager reviews the deal.");
         }
         if (proof.state !== "DUE") {
@@ -402,7 +412,8 @@ export const reverseFinanceCompanyForward = mutation({
       },
       async () => {
         await assertNoActiveDealUnwind(ctx, args.orgId, args.applicationId);
-        if (app.disbursedAt !== undefined) {
+        // On either route, once the transfer is confirmed the showroom's payment was not recorded in error.
+        if (isTransferConfirmed(app)) {
           throw new ConvexError("The finance company's transfer is already confirmed. If the finance company returned the money, report it as returned instead.");
         }
         return await reverseForward(
