@@ -30,6 +30,7 @@ import {
   judgeTenantRead,
   judgeUnchanged,
   probe,
+  type Judgement,
   type LedgerEvent,
   type LedgerLine,
   type LedgerSnapshot,
@@ -414,6 +415,9 @@ async function demoteOwnerOnTeamScreen(
   }
 }
 
+const SHARED_PREVIEW_MUTATED =
+  "an accepted attack changed the shared preview; missions that ran after it or alongside it, on any worker, are not independent of that change";
+
 /**
  * AUTH-1: a sensitive action must be authorized server-side. The approver seat
  * (a MANAGER, who holds MANAGE_USERS but is not the owner) attacks the
@@ -438,6 +442,14 @@ async function demoteOwnerOnTeamScreen(
  * approval permission, which is proven in convex/accountingPhase10.test.ts.
  * If the approver seat has been re-roled to hold the authority, the attack has
  * nothing to abuse and is unjudged.
+ *
+ * Residual: the attacks are not undone. An ACCEPTED attack (which is itself a
+ * confirmed breach and fails the run) leaves the shared preview changed. Workers
+ * are parallel jobs on one preview, so a restore would race the others, and after
+ * a demoted OWNER the seat that could restore it has lost its authority; no
+ * restore is attempted. A worker cannot contain this for the others, so the
+ * evidence says so (`sharedPreviewMutated`) and no other mission that ran beside
+ * or after it may be read as independent of a run that recorded it.
  */
 function authorizationAbuseSpec(options: Required<BoundaryAttackOptions>) {
   return {
@@ -485,6 +497,12 @@ function authorizationAbuseSpec(options: Required<BoundaryAttackOptions>) {
       const ownerMembershipId = asString(ownerMembership._id, "owner membership id");
       const ownerEmail = typeof ownerMembership.userEmail === "string" ? ownerMembership.userEmail : "";
 
+      /** An accepted attack really changed the preview, which every worker shares. */
+      const judge = (verdict: Judgement): void => {
+        if (verdict.violations.length > 0) detail.sharedPreviewMutated = SHARED_PREVIEW_MUTATED;
+        env.judge(verdict);
+      };
+
       const before = await readAuthorityState(client, orgId, ownRoleId);
       const attacks: [string, () => Promise<unknown>][] = [
         ["organizations.update (rename)", () => client.mutation(api.organizations.update, { orgId: org, name: `${nonce}-renamed` })],
@@ -502,7 +520,7 @@ function authorizationAbuseSpec(options: Required<BoundaryAttackOptions>) {
         ],
       ];
       for (const [label, run] of attacks) {
-        env.judge(judgeRefusedAttempt(label, await attempt(env, label, AUTHORIZATION_REFUSAL, run)));
+        judge(judgeRefusedAttempt(label, await attempt(env, label, AUTHORIZATION_REFUSAL, run)));
       }
 
       if (ownerEmail === "") {
@@ -512,7 +530,7 @@ function authorizationAbuseSpec(options: Required<BoundaryAttackOptions>) {
           const team = await demoteOwnerOnTeamScreen(env, options, ownerEmail, ownRoleId);
           detail.teamScreen = team;
           if (team.answer === "accepted") {
-            env.judge({ violations: ["the Team screen's role change (demote the OWNER) was accepted"], unjudged: [] });
+            judge({ violations: ["the Team screen's role change (demote the OWNER) was accepted"], unjudged: [] });
           } else if (team.answer === "unclassified") {
             env.unjudged(`the Team screen's role change failed with "${team.message}", which is not an authorization refusal`);
           }
@@ -525,7 +543,7 @@ function authorizationAbuseSpec(options: Required<BoundaryAttackOptions>) {
       const after = await readAuthorityState(client, orgId, ownRoleId);
       detail.authorityBefore = before;
       detail.authorityAfter = after;
-      env.judge(judgeUnchanged("the organization name, membership roles and the seat's role permissions", before, after));
+      judge(judgeUnchanged("the organization name, membership roles and the seat's role permissions", before, after));
     },
   };
 }

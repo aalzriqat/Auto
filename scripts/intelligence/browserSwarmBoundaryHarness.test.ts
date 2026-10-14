@@ -17,6 +17,8 @@ import type { MissionBrowser, MissionBrowserRuntime, MissionSeat } from "./brows
 interface Options {
   /** The first N backend evidence writes fail. */
   writeFailures?: number;
+  /** Only the Nth backend evidence write (1-based) fails. */
+  failWriteNumber?: number;
   finishFails?: boolean;
   signal?: AbortSignal;
   oracle?: BrowserOracleKind;
@@ -27,6 +29,7 @@ function setup(options: Options = {}) {
   const opened: { seat: MissionSeat; finished: boolean }[] = [];
   const order: string[] = [];
   let failuresLeft = options.writeFailures ?? 0;
+  let writes = 0;
   const runtimeApi: MissionBrowserRuntime = {
     open: async (_context, seat = "primary") => {
       const entry = { seat, finished: false };
@@ -48,6 +51,8 @@ function setup(options: Options = {}) {
     },
     writeBackendEvidence: async (paths, value) => {
       order.push("evidence");
+      writes += 1;
+      if (writes === options.failWriteNumber) throw new Error("relabel write failed");
       if (failuresLeft > 0) {
         failuresLeft -= 1;
         throw new Error("disk full");
@@ -239,6 +244,36 @@ describe("SCRUM-350 runBoundaryMission", () => {
     ).rejects.toThrow(/browser evidence cleanup failed: trace stop failed/);
   });
 
+  it("a pass whose browser cleanup fails leaves its evidence labelled HARNESS_ERROR, never pass-looking", async () => {
+    const t = setup({ finishFails: true });
+    await expect(
+      t.run(async (env) => {
+        env.judge({ violations: [], unjudged: [] });
+      }),
+    ).rejects.toThrow(/browser evidence cleanup failed/);
+    // The pass-shaped body is written first; the last write on disk must retract it.
+    expect(t.evidence.at(-1)).toMatchObject({
+      outcome: "HARNESS_ERROR",
+      reason: expect.stringContaining("browser evidence cleanup failed: trace stop failed"),
+      browserCleanupFailure: "trace stop failed",
+    });
+  });
+
+  it("relabelling a failed pass keeps the browser cleanup error as the result even when that write fails", async () => {
+    // The pass body lands; the relabelling write is the second and fails.
+    const t = setup({ finishFails: true, failWriteNumber: 2 });
+    const error: unknown = await t
+      .run(async (env) => {
+        env.judge({ violations: [], unjudged: [] });
+      })
+      .then(
+        () => null,
+        (thrown: unknown) => thrown,
+      );
+    expect((error as Error).message).toMatch(/browser evidence cleanup failed: trace stop failed/);
+    expect(((error as Error).cause as Error).message).toBe("relabel write failed");
+  });
+
   it("a breach survives a browser cleanup failure and says so", async () => {
     const t = setup({ finishFails: true });
     const result = await t.run(async (env) => {
@@ -246,6 +281,10 @@ describe("SCRUM-350 runBoundaryMission", () => {
     });
     expect(result.oracle.passed).toBe(false);
     expect(result.oracle.summary).toMatch(/browser evidence cleanup also failed: trace stop failed/);
+    // A proven breach is never relabelled: its evidence is the only write.
+    expect(t.evidence).toHaveLength(1);
+    expect(t.evidence[0]).not.toHaveProperty("outcome");
+    expect(t.evidence[0]).toMatchObject({ violations: ["leak"] });
   });
 
   it("refuses a mission whose oracle the attack does not judge, before touching anything", async () => {

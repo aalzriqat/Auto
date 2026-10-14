@@ -809,9 +809,14 @@ describe("SCRUM-350 TENANT_ESCAPE handler", () => {
   for (const [name, faults, message] of unjudged) {
     it(`${name} is unjudged, never a pass`, async () => {
       const h = tenant(faults);
-      await expect(h.run()).rejects.toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
-      await h.run().catch((error: Error) => expect(error.message).toMatch(message));
-      expect(h.evidence.at(-1)).toMatchObject({ outcome: "INCONCLUSIVE" });
+      // One run only: a second run on the same world would see state the first left behind.
+      const error: unknown = await h.run().then(
+        () => null,
+        (thrown: unknown) => thrown,
+      );
+      expect(error).toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
+      expect((error as Error).message).toMatch(message);
+      expect(h.evidence.at(-1)).toMatchObject({ outcome: "INCONCLUSIVE", reason: (error as Error).message });
     });
   }
 });
@@ -827,6 +832,8 @@ describe("SCRUM-350 AUTHORIZATION_ABUSE handler", () => {
     expect(h.world.rolePermissions["r-mgr"]).toEqual(MANAGER_PERMISSIONS);
     expect(h.world.queryLog.some((line) => line.startsWith("owner:"))).toBe(false);
     expect(h.evidence[0]).toMatchObject({ seatRole: "MANAGER" });
+    // Nothing was accepted, so nothing is claimed about the shared preview.
+    expect(h.evidence[0]).not.toHaveProperty("sharedPreviewMutated");
   });
 
   it("also attacks through the Team screen as the manager and the backend refuses it", async () => {
@@ -847,10 +854,12 @@ describe("SCRUM-350 AUTHORIZATION_ABUSE handler", () => {
   });
 
   it("a demotion of the OWNER that only the Team screen gets through is a breach", async () => {
-    const result = await auth({ demoteUnguardedForUi: true }).run();
+    const h = auth({ demoteUnguardedForUi: true });
+    const result = await h.run();
     expect(result.oracle.passed).toBe(false);
     expect(result.oracle.summary).toMatch(/Team screen.*demote the OWNER/);
     expect(result.oracle.summary).toMatch(/changed/);
+    expect(h.evidence[0]).toMatchObject({ sharedPreviewMutated: expect.stringContaining("not independent") });
   });
 
   it("a Team screen refusal for the owner-only guard is recorded as the authorization refusal", async () => {
@@ -899,10 +908,13 @@ describe("SCRUM-350 AUTHORIZATION_ABUSE handler", () => {
   ];
   for (const [name, faults, message] of breaches) {
     it(`${name} is a breach, and the state change is reported too`, async () => {
-      const result = await auth(faults).run();
+      const h = auth(faults);
+      const result = await h.run();
       expect(result.oracle.passed).toBe(false);
       expect(result.oracle.summary).toMatch(message);
       expect(result.oracle.summary).toMatch(/changed/);
+      // The preview is shared by every worker and cannot be restored by the seat that lost authority.
+      expect(h.evidence[0]).toMatchObject({ sharedPreviewMutated: expect.stringContaining("not independent") });
     });
   }
 

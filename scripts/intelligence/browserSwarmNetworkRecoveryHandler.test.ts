@@ -432,7 +432,13 @@ describe("SCRUM-350 NETWORK_RECOVERY handler", () => {
 
   it("an outage that never fires is unjudged, never a pass", async () => {
     const h = harness({ noTransmitSuffix: "-outage" });
-    await expect(h.run()).rejects.toThrow();
+    // The branch under test: nothing was observed leaving the page. Any other failure must not satisfy this.
+    await expect(h.run()).rejects.toThrow(/the outage never fired: no save of the intent was observed leaving the page/);
+    expect(h.evidence.at(-1)).toMatchObject({
+      outcome: "INCONCLUSIVE",
+      reason: expect.stringContaining("the outage never fired"),
+      outage: { dropped: 0 },
+    });
     expect(h.backend.expenses.some((row) => row.title.endsWith("-outage"))).toBe(false);
   }, 30_000);
 });

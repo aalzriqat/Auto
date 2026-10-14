@@ -156,7 +156,17 @@ export async function runBoundaryMission(
     // Screenshot or trace failures cannot retract a breach already on disk,
     // but a pass requires complete evidence.
     if (browser.failure !== null && passed) {
-      throw new Error(`browser evidence cleanup failed: ${browser.failure}`);
+      const failure = new Error(`browser evidence cleanup failed: ${browser.failure}`);
+      // The pass-shaped body is already on disk; retract it so nobody reads it as a pass.
+      try {
+        await runtimeApi.writeBackendEvidence(
+          primary.paths,
+          evidenceBody({ outcome: "HARNESS_ERROR", reason: errorText(failure), browserCleanupFailure: browser.failure }),
+        );
+      } catch (relabelError) {
+        failure.cause = relabelError;
+      }
+      throw failure;
     }
     return {
       missionId: mission.id,
