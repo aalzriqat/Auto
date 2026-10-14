@@ -192,11 +192,12 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // `trusted/`, no secrets, no candidate path) and the upload of its refusal
   // evidence — plus the coverage json in the plan evidence upload.
   // SCRUM-777: re-pinned for the swarm's own concurrency group (no longer the
-  // Playwright group) and two `contents: read` live-head checks, one in
-  // trusted-e2e before the first preview write and one in attack-worker before
-  // the missions; neither step touches a Convex credential or candidate path.
+  // Playwright group) and three `contents: read` live-head checks: in prepare
+  // before the preview is created, in trusted-e2e before it deploys over the
+  // preview, and in attack-worker before the missions. None of them touches a
+  // Convex credential or a candidate path.
   "browser-attack-swarm.yml":
-    "cc5b6f6888b2591ff641d13fb1f6695324362d98a61de22f3deec32f7e10ba77",
+    "3d221eb48ab5c44addef5713aaa4663122eaea489beed39d68d6dec11e960c8f",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":
