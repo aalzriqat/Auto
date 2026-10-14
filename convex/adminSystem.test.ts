@@ -3,6 +3,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { CRON_HEARTBEAT_JOBS } from "./constants";
+import { FACEBOOK_REVOCATION_RETENTION_MS } from "./utils/facebookRevocation";
 
 const MODULES = import.meta.glob("./**/*.ts");
 
@@ -302,7 +303,7 @@ test("pruneOperationalLogs deletes aged rows, keeps recent ones and the newest h
   });
 
   const result = await t.mutation(internal.adminSystem.pruneOperationalLogs, {});
-  expect(result).toEqual({ heartbeatsDeleted: 2, webhookLogsDeleted: 1, notificationsDeleted: 0 });
+  expect(result).toEqual({ heartbeatsDeleted: 2, webhookLogsDeleted: 1, notificationsDeleted: 0, facebookRevocationsDeleted: 0 });
 
   const remaining = await t.run((ctx) => ctx.db.query("cronHeartbeats").collect());
   expect(remaining.map((r) => r.ranAt).sort((a, b) => a - b)).toEqual(
@@ -311,6 +312,21 @@ test("pruneOperationalLogs deletes aged rows, keeps recent ones and the newest h
 
   const remainingLogs = await t.run((ctx) => ctx.db.query("webhookLogs").collect());
   expect(remainingLogs.map((r) => r.summary)).toEqual(["still in window"]);
+});
+
+test("pruneOperationalLogs removes Facebook revocation fences past the retention window and keeps newer ones (SCRUM-841)", async () => {
+  const t = convexTestWithComponents(schema, MODULES);
+  const now = Date.now();
+  await t.run(async (ctx) => {
+    await ctx.db.insert("facebookRevocations", { facebookUserId: "fb_expired", revokedAt: now - FACEBOOK_REVOCATION_RETENTION_MS - 1000 });
+    await ctx.db.insert("facebookRevocations", { facebookUserId: "fb_recent", revokedAt: now - 60_000 });
+  });
+
+  const result = await t.mutation(internal.adminSystem.pruneOperationalLogs, {});
+
+  expect(result.facebookRevocationsDeleted).toBe(1);
+  const rows = await t.run((ctx) => ctx.db.query("facebookRevocations").collect());
+  expect(rows.map((r) => r.facebookUserId)).toEqual(["fb_recent"]);
 });
 
 test("pruneOperationalLogs ages out old notifications regardless of read state", async () => {

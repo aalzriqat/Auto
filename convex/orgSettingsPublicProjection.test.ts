@@ -40,6 +40,8 @@ const SERVER_ONLY_VALUES = {
   facebookPageId: SENTINEL("facebookPageId"),
   facebookConnectedByUserId: SENTINEL("facebookConnectedByUserId"),
   facebookTokenExpiresAt: 1_900_000_000_222,
+  facebookDisconnectedAt: 1_900_000_000_333,
+  facebookPendingAttemptId: SENTINEL("facebookPendingAttemptId"),
   instagramAutoReplyLastIndex: 7,
   facebookAutoReplyLastIndex: 8,
   instagramSmartReplyEnabled: true,

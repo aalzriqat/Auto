@@ -5782,6 +5782,18 @@ export default defineSchema({
     facebookPendingCredentials: v.optional(
       v.array(v.object({ id: v.string(), name: v.string(), token: v.string() }))
     ),
+    // SCRUM-841: when the Owner last disconnected Facebook for this org. An OAuth
+    // attempt begun at or before it cannot store pending Page credentials, so an
+    // exchange already in flight (or an old unconsumed state) cannot undo the
+    // disconnect. A timestamp only; never cleared, so it keeps fencing attempts
+    // begun before it after later connections. Distinct from the Meta-user
+    // `facebookRevocations` fence, which a signed callback sets.
+    facebookDisconnectedAt: v.optional(v.number()),
+    // SCRUM-841: identifies the OAuth attempt whose Pages are in `facebookPendingCredentials`.
+    // A fresh random value is stamped each time pending credentials are saved, so a Page
+    // selection begun on an earlier attempt cannot promote a later attempt's credentials
+    // even when the user, Page and token are identical. Server-only; cleared with them.
+    facebookPendingAttemptId: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
     .index("by_instagram_business_account_id", ["instagramBusinessAccountId"])
@@ -6040,6 +6052,28 @@ export default defineSchema({
   })
     .index("by_state", ["state"])
     .index("by_org", ["orgId"]),
+
+  // SCRUM-841: per-Facebook-user revocation fence. Meta's signed deauthorize and
+  // data-deletion callbacks record when a user revoked access, even if that user
+  // has no org row yet. An OAuth attempt begun at or before `revokedAt` is
+  // refused when it tries to store pending Page credentials, so a callback that
+  // lands while the attempt is in flight cannot be undone by it. One row per
+  // user, keyed by Facebook user id (not org-scoped, so the org hard-delete does
+  // not touch it). `facebookUserId` is a Facebook user identifier, i.e. personal
+  // data; the row holds that id and a timestamp only — no tokens and no other
+  // user content. It is retained deliberately, and only briefly, as a security
+  // record: a data-deletion request writes it rather than erasing it, since it is
+  // what stops an in-flight connection undoing that request. The hourly
+  // adminSystem.pruneOperationalLogs deletes it once older than
+  // FACEBOOK_REVOCATION_RETENTION_MS: normally within about two hours of the
+  // user's latest callback, but not a hard bound, and correctness does not depend
+  // on it (both explained in utils/facebookRevocation.ts).
+  facebookRevocations: defineTable({
+    facebookUserId: v.string(),
+    revokedAt: v.number(),
+  })
+    .index("by_facebook_user_id", ["facebookUserId"])
+    .index("by_revoked_at", ["revokedAt"]),
 
   instagramEvents: defineTable({
     orgId: v.id("organizations"),

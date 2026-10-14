@@ -194,6 +194,7 @@ import type * as utils_errors from "../utils/errors.js";
 import type * as utils_executionFeePosition from "../utils/executionFeePosition.js";
 import type * as utils_expenseAmortization from "../utils/expenseAmortization.js";
 import type * as utils_facebookApi from "../utils/facebookApi.js";
+import type * as utils_facebookRevocation from "../utils/facebookRevocation.js";
 import type * as utils_fcCheque from "../utils/fcCheque.js";
 import type * as utils_feeDocLimits from "../utils/feeDocLimits.js";
 import type * as utils_feeSummary from "../utils/feeSummary.js";
@@ -472,6 +473,7 @@ declare const fullApi: ApiFromModules<{
   "utils/executionFeePosition": typeof utils_executionFeePosition;
   "utils/expenseAmortization": typeof utils_expenseAmortization;
   "utils/facebookApi": typeof utils_facebookApi;
+  "utils/facebookRevocation": typeof utils_facebookRevocation;
   "utils/fcCheque": typeof utils_fcCheque;
   "utils/feeDocLimits": typeof utils_feeDocLimits;
   "utils/feeSummary": typeof utils_feeSummary;

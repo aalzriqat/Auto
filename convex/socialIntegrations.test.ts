@@ -381,8 +381,11 @@ describe("socialIntegrations.setAutoPostEnabled", () => {
     const { orgId, asOwner } = await seedOwner(t);
 
     await t.run((ctx) =>
-      ctx.runMutation(internal.facebookIntegrations.saveFacebookCredentials, {
+      ctx.db.insert("orgSettings", {
         orgId,
+        currency: "JOD",
+        currencySymbol: "JD",
+        enabledPaymentTypes: [],
         facebookPageId: "page_123",
         facebookPageAccessToken: "page_token_abc",
       }),
