@@ -41,7 +41,7 @@ import { assertOperatedDealMode } from "./utils/dealModes";
 import { assertQuoteEconomicsMatchFrozen } from "./utils/quoteEconomicsAnchor";
 import { completeSale } from "./utils/saleCompletion";
 import { requireCommercialVehicle } from "./utils/vehicleLiveness";
-import { planVersionOf } from "./utils/financedSalePostingPlan";
+import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal, forwardGateRefusal } from "./utils/financeCompanyForward";
 import {
   resolveFinancedSalePlan,
@@ -2226,7 +2226,7 @@ export const dealCockpit = query({
         tier.every((permission) => role.permissions.includes(permission))
       );
     const cancelForwardOk =
-      app.status !== "CLOSED" || planVersion !== 2 || forwardCancelRefusal(forwardProof) === null;
+      app.status !== "CLOSED" || !isForwardPlanVersion(planVersion) || forwardCancelRefusal(forwardProof) === null;
     const disbursementCheque = clearedDisbursementCheque(linkedCheques, app);
     const stages = deriveDealStages({
       forwardState: forwardProof.state,
@@ -2540,8 +2540,8 @@ export const dealCockpit = query({
        * in `money.forward` for a caller who may see money.
        */
       forward: {
-        /** v2 deal (the manager-cancels rule applies, whether or not anything is due). */
-        planV2: planVersion === 2,
+        /** v2/v3 deal (the manager-cancels rule applies, whether or not anything is due). Name kept for the wire. */
+        planV2: isForwardPlanVersion(planVersion),
         applies: forwardProof.applies,
         state: forwardProof.state,
         returnedExceptionOpen: forwardProof.returnedExceptionOpen,
@@ -3846,7 +3846,7 @@ export const cancelApplication = mutation({
           // SCRUM-435 (v2 deals only; v1 is unchanged): the deal has payments the
           // finance company holds, so a manager cancels it - never sales or an
           // accountant alone - and only when the forward proof allows it.
-          if (planVersionOf(app) === 2) {
+          if (isForwardPlanVersion(planVersionOf(app))) {
             try {
               await requireTenantAuth(ctx, args.orgId, authority[1]);
             } catch {
@@ -3862,7 +3862,7 @@ export const cancelApplication = mutation({
           // refusal; so does a cheque deal or one whose receipt records
           // disagree (F2), which the unwind would refuse anyway.
           if (app.disbursedAt) {
-            if (planVersionOf(app) === 2 && (await paidDealReversalRoute(ctx, app)).route === "UNWIND") {
+            if (isForwardPlanVersion(planVersionOf(app)) && (await paidDealReversalRoute(ctx, app)).route === "UNWIND") {
               throwAppError(AppErrorCode.DEAL_CANCEL_USE_UNWIND, DEAL_UNWIND_MESSAGES.DEAL_CANCEL_USE_UNWIND);
             }
             throw new ConvexError(
@@ -3870,7 +3870,7 @@ export const cancelApplication = mutation({
               "This can't be auto-reversed from here; void it through a manual accounting correction instead."
             );
           }
-          if (planVersionOf(app) === 2) {
+          if (isForwardPlanVersion(planVersionOf(app))) {
             const forwardBlock = forwardCancelRefusal(await deriveForwardState(ctx, app));
             if (forwardBlock !== null) throwAppError(forwardBlock.code, forwardBlock.message);
           }
@@ -4997,10 +4997,11 @@ export const finalizeDeal = mutation({
           customerId: app.customerId,
           salespersonId: app.salespersonId,
           salePrice: quote.vehiclePrice,
-          // The legal invoice's date where one is recorded — the ONE
-          // recognition date, shared with the period the plan's journal is
-          // dated into; see `financedSaleRecognitionDate`.
-          saleDate: financedSaleRecognitionDate(app, Date.now()),
+          // The ONE recognition date, shared with the period the plan's journal
+          // is dated into; see `financedSaleRecognitionDate`. A v3 plan (every
+          // new financed deal) is recognised on the evidenced handover date; a
+          // deal the plan does not cover keeps its invoice-date rule.
+          saleDate: financedSaleRecognitionDate(app, Date.now(), financedSalePlan?.version ?? 2),
           status: "COMPLETED",
           downPayment: quote.downPayment,
           financingType: saleFinancingType,
@@ -5019,16 +5020,18 @@ export const finalizeDeal = mutation({
                 ...(app.companyId
                   ? { financeCompanyId: app.companyId as string }
                   : { payerNameSnapshot: manualPayerOf(app)?.name }),
-                legalInvoiceConsiderationMinor:
-                  financedSalePlan.legalInvoiceConsiderationMinor,
+                // v3 carries its server-derived consideration; v1/v2 their invoice's.
+                ...(financedSalePlan.version === 3
+                  ? { considerationMinor: financedSalePlan.considerationMinor }
+                  : { legalInvoiceConsiderationMinor: financedSalePlan.legalInvoiceConsiderationMinor }),
                 financeCompanyReceivableMinor:
                   financedSalePlan.financeCompanyReceivableMinor,
                 financeCompanyPayableMinor: financedSalePlan.financeCompanyPayableMinor,
                 customerReceivableMinor: financedSalePlan.customerReceivableMinor,
                 depositLiabilityAppliedMinor:
                   financedSalePlan.depositLiabilityAppliedMinor,
-                // v2 (SCRUM-435): H and C are owed onward to the company.
-                ...(financedSalePlan.version === 2
+                // v2/v3 (SCRUM-435): H and C are owed onward to the company.
+                ...(financedSalePlan.version === 2 || financedSalePlan.version === 3
                   ? {
                       forwardDepositMinor: financedSalePlan.forwardDepositMinor,
                       forwardContributionMinor: financedSalePlan.forwardContributionMinor,
@@ -5045,11 +5048,11 @@ export const finalizeDeal = mutation({
                 })),
               }
             : undefined,
-          // SCRUM-390 (OR-5): G and C for the "Commissionable vehicle margin", plan
-          // v2 only. `completeSale` applies it to a dealer-owned car alone and
+          // SCRUM-390 (OR-5): G and C for the "Commissionable vehicle margin", plans
+          // v2/v3. `completeSale` applies it to a dealer-owned car alone and
           // freezes it onto the sale row.
           commissionBase:
-            financedSalePlan?.version === 2
+            financedSalePlan && (financedSalePlan.version === 2 || financedSalePlan.version === 3)
               ? {
                   approvedMinor: financedSalePlan.financeCompanyReceivableMinor,
                   contributionMinor: financedSalePlan.forwardContributionMinor,
@@ -5157,9 +5160,9 @@ export const finalizeDeal = mutation({
                 financedSaleNetReceivableMinor:
                   financedSalePlan.financeCompanyReceivableMinor,
                 // SCRUM-435: frozen forward due (H + C) and its split.
-                ...(financedSalePlan.version === 2
+                ...(financedSalePlan.version === 2 || financedSalePlan.version === 3
                   ? {
-                      financedSalePlanVersion: 2 as const,
+                      financedSalePlanVersion: financedSalePlan.version,
                       financeCompanyForwardDueMinor: financedSalePlan.forwardDueMinor,
                       forwardDepositPortionMinor: financedSalePlan.forwardDepositMinor,
                       forwardContributionPortionMinor: financedSalePlan.forwardContributionMinor,
@@ -5168,7 +5171,7 @@ export const finalizeDeal = mutation({
                 // SCRUM-27: a manual deal's dealership contribution is derived
                 // at this moment (S minus the deposits held) and frozen here, so
                 // the cockpit and forward readers see the figure that posted.
-                ...(!app.companyId && financedSalePlan.version === 2
+                ...(!app.companyId && (financedSalePlan.version === 2 || financedSalePlan.version === 3)
                   ? {
                       dealerContributionMinor: financedSalePlan.forwardContributionMinor,
                       economicsRevision: (app.economicsRevision ?? 0) + 1,
@@ -5402,7 +5405,7 @@ export const confirmDisbursement = mutation({
         // The transfer is confirmed only once that forward is proven on the
         // books (or nothing is due) - by the ONE proof, never a second check.
         // The refusal names who acts next and never carries the forward amounts.
-        if (planVersionOf(app) === 2) {
+        if (isForwardPlanVersion(planVersionOf(app))) {
           const forward = await deriveForwardState(ctx, app);
           const forwardRefusal = forwardGateRefusal(forward.state);
           if (forwardRefusal !== null) throw new ConvexError(forwardRefusal);

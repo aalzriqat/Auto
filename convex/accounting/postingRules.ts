@@ -318,8 +318,15 @@ export interface FinancedSalePlanPayload {
   /** Exactly one of `financeCompanyId` / `payerNameSnapshot` (SCRUM-27). */
   financeCompanyId?: string;
   payerNameSnapshot?: string;
-  /** The only figure the vehicle leg's revenue is posted from. */
-  legalInvoiceConsiderationMinor: number;
+  /**
+   * v1/v2 only: the only figure the vehicle leg's revenue is posted from. A v3
+   * plan carries `considerationMinor` instead and never this field; read either
+   * through `planConsiderationMinor`, so an event of one version can never be
+   * posted from the other's field.
+   */
+  legalInvoiceConsiderationMinor?: number;
+  /** v3 only: A + R, derived by the server from the frozen economics (SCRUM-411). */
+  considerationMinor?: number;
   /** N — what the financing company will actually remit. */
   financeCompanyReceivableMinor: number;
   /** P — what the dealership owes the company when deductions exceed the gross. */
@@ -334,11 +341,27 @@ export interface FinancedSalePlanPayload {
    * liability, and debiting cash here as well would book the same money twice.
    */
   depositLiabilityAppliedMinor: number;
-  /** v2 only: H forwarded to the finance company (credit AP-Finance). */
+  /** v2/v3 only: H forwarded to the finance company (credit AP-Finance). */
   forwardDepositMinor?: number;
-  /** v2 only: C, the dealership contribution forwarded (contra-revenue / AP-Finance). */
+  /** v2/v3 only: C, the dealership contribution forwarded (contra-revenue / AP-Finance). */
   forwardContributionMinor?: number;
   components: FinancedSalePlanLine[];
+}
+
+/**
+ * The vehicle consideration a plan recognises: v3 reads its server-derived
+ * `considerationMinor`, v1/v2 their invoice-sourced field. Throws (so the
+ * outbox dead-letters the event) when the version's own field is absent,
+ * rather than reading the other version's field or posting a NaN line.
+ */
+export function planConsiderationMinor(plan: Pick<FinancedSalePlanPayload, "version" | "legalInvoiceConsiderationMinor" | "considerationMinor">): number {
+  const amount = plan.version >= 3 ? plan.considerationMinor : plan.legalInvoiceConsiderationMinor;
+  if (amount === undefined || !Number.isSafeInteger(amount) || amount < 0) {
+    throw new ConvexError(
+      `A financed sale plan (version ${plan.version}) carries no usable consideration, so its revenue cannot be posted. Re-derive the deal's settlement before posting it.`
+    );
+  }
+  return amount;
 }
 
 export interface SaleCompletedPayload {
@@ -850,8 +873,13 @@ interface SettlementFunding {
   lines: LineSpec[];
   /** C — for the basis to fold into the customer receivable it already raises. */
   customerReceivableMinor: number;
-  /** L — the consideration the plan was made under, for the basis's balance bridge. */
-  legalInvoiceConsiderationMinor: number;
+  /** L (v1/v2) or K (v3) — the consideration the plan was made under, for the basis's balance bridge. */
+  considerationMinor: number;
+  /**
+   * v3: the consideration is the server's own A + R, so a basis measures its
+   * commission from it instead of bridging it against the quote's gross.
+   */
+  serverDerivedConsideration: boolean;
 }
 
 function settlementFundingLines(
@@ -909,7 +937,7 @@ function settlementFundingLines(
   // ONWARD to the finance company, which transfers the full approved amount. H
   // is the debit above (liability released) against AP-Finance; C is
   // contra-revenue against AP-Finance. The forward payment later clears 2220.
-  if (plan.version === 2) {
+  if (plan.version === 2 || plan.version === 3) {
     const forwardDeposit = plan.forwardDepositMinor ?? 0;
     const forwardContribution = plan.forwardContributionMinor ?? 0;
     if (forwardDeposit > 0) {
@@ -962,7 +990,8 @@ function settlementFundingLines(
   return {
     lines,
     customerReceivableMinor: plan.customerReceivableMinor,
-    legalInvoiceConsiderationMinor: plan.legalInvoiceConsiderationMinor,
+    considerationMinor: planConsiderationMinor(plan),
+    serverDerivedConsideration: plan.version >= 3,
   };
 }
 
@@ -1040,10 +1069,15 @@ function consignedAgentSaleLines(
       `Consigned sale ${p.saleId} settles directly with ${supplier} and is externally financed, but records no amount actually paid to him. The dealership's claim cannot be measured against the sale price on this route — repair the event with the finance company's approved amount before posting it.`
     );
   }
+  // SCRUM-411 (plan v3): on the through route the dealership's consideration is
+  // the server-derived A + R, not the quote's gross - so commission is measured
+  // from it (K - E), and the legal-invoice bridge below no longer applies.
   const settlementBasisMinor =
     consignment.settlementRoute === "DIRECT_TO_SUPPLIER"
       ? (consignment.supplierGrossReceiptMinor ?? p.saleAmountMinor)
-      : p.saleAmountMinor;
+      : funding?.serverDerivedConsideration
+        ? funding.considerationMinor
+        : p.saleAmountMinor;
   const marginMinor = settlementBasisMinor - entitlementMinor;
 
   // Fail closed. A negative margin means the supplier is paid less than he is
@@ -1189,9 +1223,9 @@ function consignedAgentSaleLines(
     // equality with the plan's legal-invoice consideration. Do not infer a
     // balancing amount from a difference." Written down here so the next
     // reviewer does not have to re-derive it.
-    if (funding && funding.legalInvoiceConsiderationMinor !== p.saleAmountMinor) {
+    if (funding && !funding.serverDerivedConsideration && funding.considerationMinor !== p.saleAmountMinor) {
       throw new ConvexError(
-        `Consigned sale ${p.saleId} was invoiced to the financing company for ${funding.legalInvoiceConsiderationMinor} minor units but records gross proceeds of ${p.saleAmountMinor}. The supplier's entitlement and the dealership's commission are measured from the proceeds, so the two must agree before this can post. Reconcile the legal invoice with the sale before completing it.`
+        `Consigned sale ${p.saleId} was invoiced to the financing company for ${funding.considerationMinor} minor units but records gross proceeds of ${p.saleAmountMinor}. The supplier's entitlement and the dealership's commission are measured from the proceeds, so the two must agree before this can post. Reconcile the legal invoice with the sale before completing it.`
       );
     }
   }
@@ -1494,12 +1528,14 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   // to write a payload directly through the super-admin raw-JSON editor, which
   // can post an arbitrary payload to any rule by design. Stated because the
   // earlier wording claimed the refusal held generally, and it does not.
-  // With a plan the consideration comes from the legal invoice, which is the only
-  // document the sale of the car was made under. `saleAmountMinor` is the
-  // dealership's own operational figure and the two are allowed to differ — a
-  // 10,500 target against a 12,500 invoice to the financier is the ordinary
+  // With a plan the consideration comes from the plan, never from `saleAmountMinor`,
+  // the dealership's own operational figure; the two are allowed to differ — a
+  // 10,500 target against a 12,500 consideration to the financier is the ordinary
   // shape of these deals, not an error to reconcile away.
-  const vehicleRevenueMinor = plan ? plan.legalInvoiceConsiderationMinor : revenueMinor;
+  // v3 (SCRUM-411): the consideration is the server-derived A + R. A v2 event
+  // keeps posting from its own legal-invoice field; `planConsiderationMinor` reads
+  // whichever the plan's version defines.
+  const vehicleRevenueMinor = plan ? planConsiderationMinor(plan) : revenueMinor;
   if (vehicleRevenueMinor > 0) {
     lines.push(line(SYSTEM_KEYS.SALES_REVENUE, 0, vehicleRevenueMinor, "Vehicle sale revenue", dims));
   }

@@ -5,12 +5,17 @@ import { computeExpectedRemittance } from "../../lib/financingEconomics";
 import {
   buildFinancedSalePostingPlan,
   buildFinancedSalePostingPlanV2,
+  buildFinancedSalePostingPlanV3,
   checkLegalInvoice,
+  checkLegalInvoiceEvidence,
   treatmentPosting,
   type FinancedSalePostingPlan,
   type FinancedSalePostingPlanV2,
+  type FinancedSalePostingPlanV3,
   type SettlementComponentInput,
 } from "./financedSalePostingPlan";
+import { getOpenPeriodForDate } from "../accountingPeriods";
+import { isChartInitialized } from "../chartOfAccounts";
 import { executionFeePosition, executionFeeRefusal } from "./executionFeePosition";
 import {
   configuredFeesRefusal,
@@ -442,9 +447,12 @@ function rowsUnavailableReason(read: "FEES" | "CUSTODY", error: unknown): Closin
 export async function evaluateClosingReadiness(
   ctx: QueryCtx | MutationCtx,
   app: Doc<"financeApplications">,
-  opts: { settlesDirect: boolean; currency: string; planVersion?: 1 | 2 }
+  opts: { settlesDirect: boolean; currency: string; planVersion?: 1 | 2 | 3 }
 ): Promise<ClosingReadinessEvaluation> {
   const planCovered = financedSaleRecognitionApplies(app, opts);
+  // Absent means the current plan (v3, SCRUM-411); 1 and 2 exist for the legacy
+  // builders' own tests and are never used to finalize a new deal.
+  const planVersion = opts.planVersion ?? 3;
   // The scope of the cost gate is decided HERE, once, for the readiness query
   // and for finalization alike (both reach this evaluator).
   const dealMode = await dealModeOf(ctx, app);
@@ -634,19 +642,51 @@ export async function evaluateClosingReadiness(
       : ["READY", null];
   });
 
-  // Required while the v1 posting plan is in force: it posts revenue from the
-  // legal invoice. Replacing that revenue source is SCRUM-411; until then the
-  // invoice is a readiness item, and the panel offers the action that records it.
-  planOnly("LEGAL_INVOICE_RECORDED", () => {
-    const invoice = checkLegalInvoice({
-      legalInvoiceConsiderationMinor: app.legalInvoiceAmountMinor,
-      legalInvoiceIssuedTo: app.legalInvoiceIssuedTo,
-      // Asked only on the plan's route, which requires a configured company.
-      financierIsConfiguredExternal: true,
+  // Plans v1/v2 post revenue from the legal invoice, so for them it is a
+  // readiness item the panel offers to record. Plan v3 (SCRUM-411) replaced that
+  // revenue source; for v3 it is optional evidence, as below.
+  //
+  // v3 (SCRUM-411): the invoice is OPTIONAL EVIDENCE. Absent is NOT_APPLICABLE
+  // (the sale closes from the server-derived consideration); present, it must
+  // describe this deal - issued to the company, for the approved amount, by the
+  // right party for the car's ownership - or it is BLOCKED so a wrong document is
+  // never left standing as evidence.
+  if (!planCovered) {
+    add("LEGAL_INVOICE_RECORDED", "NOT_APPLICABLE", null);
+  } else if (planVersion < 3) {
+    planOnly("LEGAL_INVOICE_RECORDED", () => {
+      const invoice = checkLegalInvoice({
+        legalInvoiceConsiderationMinor: app.legalInvoiceAmountMinor,
+        legalInvoiceIssuedTo: app.legalInvoiceIssuedTo,
+        // Asked only on the plan's route, which requires a configured company.
+        financierIsConfiguredExternal: true,
+      });
+      // The plan's own code tells absent, unusable and wrong-recipient apart.
+      return invoice.ok ? ["READY", null] : ["BLOCKED", reasonOf(invoice.refusal.code, invoice.refusal.message)];
     });
-    // The plan's own code tells absent, unusable and wrong-recipient apart.
-    return invoice.ok ? ["READY", null] : ["BLOCKED", reasonOf(invoice.refusal.code, invoice.refusal.message)];
-  });
+  } else if (app.legalInvoiceAmountMinor === undefined) {
+    add("LEGAL_INVOICE_RECORDED", "NOT_APPLICABLE", null);
+  } else {
+    const vehicle = await ctx.db.get(app.vehicleId);
+    if (vehicle === null || vehicle.orgId !== app.orgId) {
+      add(
+        "LEGAL_INVOICE_RECORDED",
+        "UNAVAILABLE",
+        reasonOf("CHECK_REFUSED", "The deal's vehicle could not be read, so the recorded legal invoice cannot be checked against it.")
+      );
+    } else {
+      const evidence = checkLegalInvoiceEvidence({
+        legalInvoiceAmountMinor: app.legalInvoiceAmountMinor,
+        legalInvoiceIssuedTo: app.legalInvoiceIssuedTo,
+        legalInvoiceIssuedBy: app.legalInvoiceIssuedBy,
+        legalInvoiceIssuerName: app.legalInvoiceIssuerName,
+        approvedAmountMinor: app.approvedDealerPurchaseAmountMinor,
+        vehicleIsConsigned: isConsignedAgentSale(vehicle),
+      });
+      if (evidence.ok) add("LEGAL_INVOICE_RECORDED", "READY", null);
+      else add("LEGAL_INVOICE_RECORDED", "BLOCKED", reasonOf(evidence.refusal.code, evidence.refusal.message));
+    }
+  }
 
   // SCRUM-420: a deal flagged for financing reconciliation (true) is BLOCKED; reviewed
   // (false) is READY; never flagged (undefined) is NOT_APPLICABLE. This gates finalizeDeal
@@ -664,6 +704,34 @@ export async function evaluateClosingReadiness(
         )
       : null
   );
+
+  // SCRUM-411 (plan v3): the sale is recognised on the vehicle HANDOVER date, so
+  // that date's accounting period must be open - judged HERE, before any write,
+  // rather than discovered after the sale exists with its posting queued into a
+  // period nobody can post to. A deal whose org has no chart posts nothing
+  // anywhere, so there is no period to judge (NOT_APPLICABLE). APPENDED LAST.
+  if (!planCovered || planVersion < 3) {
+    add("RECOGNITION_PERIOD_OPEN", "NOT_APPLICABLE", null);
+  } else if (app.vehicleHandoverAt === undefined) {
+    add(
+      "RECOGNITION_PERIOD_OPEN",
+      "BLOCKED",
+      reasonOf("RECOGNITION_HANDOVER_PENDING", "The sale is recognised on the vehicle handover date, and the handover is not registered yet. Register it before finalizing.")
+    );
+  } else if (!(await isChartInitialized(ctx, app.orgId))) {
+    add("RECOGNITION_PERIOD_OPEN", "NOT_APPLICABLE", null);
+  } else if ((await getOpenPeriodForDate(ctx, app.orgId, app.vehicleHandoverAt)) === null) {
+    add(
+      "RECOGNITION_PERIOD_OPEN",
+      "BLOCKED",
+      reasonOf(
+        "RECOGNITION_PERIOD_NOT_OPEN",
+        "The vehicle was handed over on a date that has no open accounting period, so the sale cannot be recognised. Open or reopen that period before finalizing."
+      )
+    );
+  } else {
+    add("RECOGNITION_PERIOD_OPEN", "READY", null);
+  }
 
   const state = overallReadinessState(checks);
   const readiness: ClosingReadiness = { state, checks };
@@ -731,13 +799,13 @@ export async function resolveFinancedSalePlan(
      */
     mayReadMoney: boolean;
     /**
-     * SCRUM-435. Defaults to 2 (finance-company forward): `finalizeDeal` is
-     * always v2. 1 exists so the v1 builder stays exercised by its own tests
-     * and is never recomputed for a deal already finalized under it.
+     * Defaults to 3 (SCRUM-411, server-derived consideration): `finalizeDeal` is
+     * always v3. 1 and 2 exist so the legacy builders stay exercised by their
+     * own tests and are never recomputed for a deal already finalized under them.
      */
-    planVersion?: 1 | 2;
+    planVersion?: 1 | 2 | 3;
   }
-): Promise<FinancedSalePostingPlan | FinancedSalePostingPlanV2 | undefined> {
+): Promise<FinancedSalePostingPlan | FinancedSalePostingPlanV2 | FinancedSalePostingPlanV3 | undefined> {
   // The finalize door re-runs the SAME evaluator the deal screen shows — never
   // a client's verdict, never the retired stamp — and refuses on the first
   // unmet condition, before anything is written (SCRUM-407 P1.4) — including a
@@ -965,6 +1033,22 @@ export async function resolveFinancedSalePlan(
         );
       }
     }
+    if ((opts.planVersion ?? 3) === 3) {
+      // v3: the consideration is A + R, derived here from the frozen economics.
+      // The recorded invoice (if any) was validated as evidence by the readiness
+      // evaluator above and is not an input to the plan.
+      const v3 = buildFinancedSalePostingPlanV3({
+        currency: opts.currency,
+        approvedAmountMinor: app.approvedDealerPurchaseAmountMinor,
+        hasSettlementComponents: components.length > 0,
+        customerReceivableMinor,
+        depositLiabilityAppliedMinor,
+        dealerContributionMinor: contributionForPlanMinor,
+        customerFirstPaymentMinor: app.customerFirstPaymentMinor,
+      });
+      if (!v3.ok) throw new ConvexError(v3.refusal.message);
+      return v3.plan;
+    }
     const v2 = buildFinancedSalePostingPlanV2({
       currency: opts.currency,
       legalInvoiceConsiderationMinor: app.legalInvoiceAmountMinor,
@@ -1033,6 +1117,9 @@ function humanizeFeeType(feeType: string): string {
  * THE date a financed sale is recognized on — and therefore the period its
  * revenue, its finance receivable, its deductions and its commission land in.
  *
+ * Plan v3 (SCRUM-411) dates the sale at the vehicle HANDOVER and ignores any
+ * invoice date; the rest of this note describes plans v1/v2.
+ *
  * The legal invoice's date, when one is recorded: the schema note on
  * `legalInvoiceDate` has always said it "decides the period revenue lands in",
  * and `recordLegalInvoice` audits a date-only change for exactly that reason —
@@ -1052,9 +1139,27 @@ function humanizeFeeType(feeType: string): string {
  * the moment of finalization is a day that has not happened.
  */
 export function financedSaleRecognitionDate(
-  app: Pick<Doc<"financeApplications">, "legalInvoiceDate">,
-  finalizedAt: number
+  app: Pick<Doc<"financeApplications">, "legalInvoiceDate" | "vehicleHandoverAt">,
+  finalizedAt: number,
+  /** The plan being finalized. Defaults to 2 so historical two-argument callers keep the invoice-date rule. */
+  planVersion: 1 | 2 | 3 = 2
 ): number {
+  // v3 (SCRUM-411): the sale is recognised when the vehicle was handed over - an
+  // evidenced server fact - never on an invoice date a person typed. A deal with
+  // no recorded handover cannot be dated, so it is refused rather than dated at
+  // the wall clock (`finalizeDeal` requires the handover before it gets here).
+  if (planVersion >= 3) {
+    const handoverAt = app.vehicleHandoverAt;
+    if (handoverAt === undefined) {
+      throw new ConvexError("The sale is recognised on the vehicle handover date, and the handover is not registered yet. Register it before finalizing.");
+    }
+    if (!Number.isSafeInteger(handoverAt) || handoverAt < 0 || handoverAt > finalizedAt) {
+      throw new ConvexError(
+        `This deal's recorded handover time (${handoverAt}) is not a real past instant, so the sale cannot be dated for recognition. Have the handover reviewed before finalizing.`
+      );
+    }
+    return handoverAt;
+  }
   const invoiceDate = app.legalInvoiceDate;
   if (invoiceDate === undefined) return finalizedAt;
   // A PRESENT date that is not usable is refused, never quietly replaced

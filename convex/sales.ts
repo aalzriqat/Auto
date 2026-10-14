@@ -39,7 +39,7 @@ import { auditLog } from "./financialAudit";
 import { classifySaleTimeCredits, customerBilledLinesMinor, sumBilledLinesMinor, completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment";
-import { planVersionOf } from "./utils/financedSalePostingPlan";
+import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
@@ -1103,7 +1103,7 @@ export const update = mutation({
           // SCRUM-435: a v2 deal has payments held by the finance company. This door
           // applies the SAME manager gate and the SAME forward proof as
           // `cancelApplication`, so it is never a way round them.
-          if (planVersionOf(app) === 2) {
+          if (isForwardPlanVersion(planVersionOf(app))) {
             try {
               await requireTenantAuth(ctx, args.orgId, [
                 PERMISSIONS.CANCEL_CLOSED_DEAL,

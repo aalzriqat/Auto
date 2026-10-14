@@ -3103,6 +3103,15 @@ export default defineSchema({
       v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY"), v.literal("OTHER"))
     ),
     legalInvoiceIssuedToOther: v.optional(v.string()),
+    /**
+     * SCRUM-411 (plan v3): who ISSUED the invoice. A genuine dealership invoice
+     * exists only for dealer-owned stock; on a sourced/importer-owned car the
+     * importer, a separate company, invoices the finance company and the
+     * dealership issues none for its margin. Optional evidence only: nothing
+     * here ever feeds revenue, the recognition date or readiness.
+     */
+    legalInvoiceIssuedBy: v.optional(v.union(v.literal("DEALERSHIP"), v.literal("THIRD_PARTY"))),
+    legalInvoiceIssuerName: v.optional(v.string()),
 
     // Whether the deal's accounting treatment has actually been established.
     //
@@ -3147,7 +3156,7 @@ export default defineSchema({
      * at finalize so the forward due never re-derives from moving inputs.
      * Absent on a v1 deal, which is never recomputed.
      */
-    financedSalePlanVersion: v.optional(v.union(v.literal(1), v.literal(2))),
+    financedSalePlanVersion: v.optional(v.union(v.literal(1), v.literal(2), v.literal(3))),
     financeCompanyForwardDueMinor: v.optional(v.number()),
     forwardDepositPortionMinor: v.optional(v.number()),
     forwardContributionPortionMinor: v.optional(v.number()),

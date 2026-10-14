@@ -12,7 +12,7 @@ import { directPaymentMethodValidator } from "./utils/handoverCostPayment";
 import { isMinorAmount } from "./utils/financingEconomics";
 import { resolveDealCurrency } from "./utils/settlementDeductions";
 import { MAX_DIRECT_PAYMENT_REFERENCE_CHARS } from "./utils/feeDocLimits";
-import { planVersionOf } from "./utils/financedSalePostingPlan";
+import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
 import { manualPayerOf } from "./utils/manualFinancePayer";
 import {
   MAX_FORWARD_VERSIONS,
@@ -61,7 +61,7 @@ async function loadV2Application(
   applicationId: Id<"financeApplications">
 ): Promise<Doc<"financeApplications">> {
   const app = await requireOwnedRow(ctx, orgId, "financeApplications", applicationId, APPLICATION_NOT_FOUND);
-  if (planVersionOf(app) !== 2) {
+  if (!isForwardPlanVersion(planVersionOf(app))) {
     throw new ConvexError(
       "This deal was finalized before the finance-company forward step existed, so there is nothing to record here. Continue with the transfer confirmation."
     );

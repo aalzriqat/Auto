@@ -1316,8 +1316,17 @@ const dealOverviewMessages = defineBilingualMessages({
   /** Legal invoice & deal closing bindings. */
   RecordLegalInvoice: ["Record Legal Invoice", "تسجيل الفاتورة القانونية"],
   RecordLegalInvoiceDesc: [
-    "Record the official legal invoice details for this deal. The legal invoice amount establishes the official sale revenue.",
-    "تسجيل تفاصيل الفاتورة القانونية الرسمية لهذه الصفقة. يُحدّد مبلغ الفاتورة القانونية إيراد البيع الرسمي.",
+    "Optional. Record a legal invoice only if one was really issued, exactly as printed. It is checked against the deal and kept as evidence; it never sets the sale revenue or its date.",
+    "اختياري. سجّل فاتورة قانونية فقط إن صدرت فعلًا، كما هي مطبوعة. تُراجَع مقابل الصفقة وتُحفظ كدليل؛ ولا تحدّد إيراد البيع ولا تاريخه.",
+  ],
+  LegalInvoiceIssuerName: ["Issued by (importer / supplier name)", "صادرة عن (اسم المستورد / المورّد)"],
+  LegalInvoiceIssuerHintConsigned: [
+    "This car belongs to a supplier or importer, so the vehicle invoice to the finance company is theirs. The dealership issues none for its margin.",
+    "هذه السيارة مملوكة لمورّد أو مستورد، لذا فاتورة السيارة إلى شركة التمويل صادرة عنه. المعرض لا يصدر فاتورة عن هامشه.",
+  ],
+  LegalInvoiceAmountHint: [
+    "The finance company's invoice is for the approved amount only; the customer's own gap is not on it.",
+    "فاتورة شركة التمويل بمبلغ الموافقة فقط؛ فجوة العميل الخاصة ليست فيها.",
   ],
   LegalInvoiceAmount: ["Invoice amount", "مبلغ الفاتورة"],
   LegalInvoiceNumber: ["Invoice number", "رقم الفاتورة"],
@@ -1397,7 +1406,8 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingCheck_HANDOVER_COSTS_PAID: ["Handover costs are paid", "مصاريف التسليم مدفوعة"],
   // SCRUM-629 F-22: the AGREED amount is known — not that the money was received (SCRUM-635).
   ClosingCheck_FIRST_PAYMENT_RECORDED: ["The agreed first payment is known", "الدفعة الأولى المتفق عليها معروفة"],
-  ClosingCheck_LEGAL_INVOICE_RECORDED: ["The legal invoice is recorded", "الفاتورة القانونية مسجَّلة"],
+  ClosingCheck_LEGAL_INVOICE_RECORDED: ["The legal invoice (optional) agrees with the deal", "الفاتورة القانونية (اختيارية) تطابق الصفقة"],
+  ClosingCheck_RECOGNITION_PERIOD_OPEN: ["The handover date falls in an open accounting period", "تاريخ التسليم يقع في فترة محاسبية مفتوحة"],
   // SCRUM-420 — generic fallback for a check this bundle has no copy for (S420-01).
   ClosingCheck_UNKNOWN: ["Another closing check", "شرط إغلاق آخر"],
   ClosingReason_UNKNOWN: [
@@ -1540,6 +1550,26 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingReason_LEGAL_INVOICE_WRONG_RECIPIENT: [
     "The finance company is the legal buyer, but the recorded invoice was not issued to it. Re-record the invoice before closing.",
     "شركة التمويل هي المشتري القانوني، لكن الفاتورة المسجَّلة لم تصدر باسمها. أعد تسجيل الفاتورة قبل الإغلاق.",
+  ],
+  ClosingReason_LEGAL_INVOICE_AMOUNT_MISMATCH: [
+    "The recorded legal invoice does not match the finance company's approved amount. Correct it to the real document before closing.",
+    "الفاتورة القانونية المسجَّلة لا تطابق المبلغ الذي اعتمدته شركة التمويل. صحّحها لتوافق المستند الحقيقي قبل الإغلاق.",
+  ],
+  ClosingReason_LEGAL_INVOICE_WRONG_ISSUER: [
+    "The recorded invoice's issuer does not fit this car's ownership. A supplier's or importer's invoice must name them; the dealership issues none for its margin.",
+    "جهة إصدار الفاتورة المسجَّلة لا تناسب ملكية هذه السيارة. فاتورة المورّد أو المستورد يجب أن تسمّيه؛ والمعرض لا يصدر فاتورة عن هامشه.",
+  ],
+  ClosingReason_RECOGNITION_HANDOVER_PENDING: [
+    "The sale is recognised on the vehicle handover date. Register the handover first.",
+    "يُعترف بالبيع في تاريخ تسليم السيارة. سجّل التسليم أولًا.",
+  ],
+  ClosingReason_RECOGNITION_PERIOD_NOT_OPEN: [
+    "The vehicle was handed over on a date that has no open accounting period. Open or reopen that period before closing.",
+    "سُلّمت السيارة في تاريخ ليست له فترة محاسبية مفتوحة. افتح تلك الفترة أو أعد فتحها قبل الإغلاق.",
+  ],
+  ClosingReason_WITHHELD_RECOGNITION_PERIOD_OPEN: [
+    "The accounting period for the handover date is not open.",
+    "الفترة المحاسبية لتاريخ التسليم غير مفتوحة.",
   ],
   ClosingReason_CHECK_REFUSED: [
     "This condition could not be confirmed from the deal's records. Have the deal reviewed before closing.",

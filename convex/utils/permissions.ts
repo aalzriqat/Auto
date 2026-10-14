@@ -273,7 +273,8 @@ export function needsOwnerFlagStamp(role: RoleLike): boolean {
  */
 export function cancelAuthorityFor(status: string, planVersion: number): Permission[][] {
   if (status === "CLOSED") {
-    return planVersion === 2
+    // Plan versions 2 and 3 both hold payments at the finance company.
+    return planVersion >= 2
       ? [[PERMISSIONS.CANCEL_CLOSED_DEAL], [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]]
       : [[PERMISSIONS.CANCEL_CLOSED_DEAL]];
   }

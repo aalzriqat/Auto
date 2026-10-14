@@ -1,7 +1,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { AppErrorCode } from "./errors";
-import { planVersionOf } from "./financedSalePostingPlan";
+import { isForwardPlanVersion, planVersionOf } from "./financedSalePostingPlan";
 
 /**
  * SCRUM-435 - the ONE proof that the dealership has (or has not) forwarded the
@@ -188,7 +188,7 @@ export async function deriveForwardState(ctx: QueryCtx, app: ForwardApp): Promis
     onBooksForwardId: null,
     returnedExceptionOpen: false,
   };
-  if (planVersionOf(app) !== 2) return empty;
+  if (!isForwardPlanVersion(planVersionOf(app))) return empty;
 
   const rows = await ctx.db
     .query("financeCompanyForwards")

@@ -33,7 +33,11 @@ import {
   getOrgCurrency,
   commissionAccountingDate,
 } from "../accounting/workflowHooks";
-import { computeResoldProductMargin, type FinancedSalePlanPayload } from "../accounting/postingRules";
+import {
+  computeResoldProductMargin,
+  planConsiderationMinor,
+  type FinancedSalePlanPayload,
+} from "../accounting/postingRules";
 import { isChartInitialized } from "../chartOfAccounts";
 import { toMinorUnits, fromMinorUnits, denominationOf, isValidMinorAmount, addMinor } from "./money";
 import { assertProfitApproved, saleRequiresMinimumProfit } from "./profitApproval";
@@ -1544,9 +1548,17 @@ async function applySaleCompletionSideEffects(
       `This deal's financing figures are recorded in ${args.supplierGrossReceiptCurrency} but the dealership now reports in ${prepared.currency}, so what the finance company pays the supplier cannot be compared with what he is owed. Settle the deal's currency before completing it — the amounts cannot be converted here without an exchange rate nobody has recorded.`
     );
   }
+  // Plan v3 (SCRUM-411): the through-dealership consideration is the server's
+  // A + R, not the quote's operational price, so the margin, the supplier
+  // position and the recognized revenue below are measured from it - the same
+  // figure the journal's commission is posted from.
+  const serverConsiderationMinor =
+    args.financedSalePlan && args.financedSalePlan.version >= 3
+      ? planConsiderationMinor(args.financedSalePlan)
+      : undefined;
   const supplierGrossReceiptMinor = settlesDirectToSupplier
     ? (args.supplierGrossReceiptMinor ?? salePriceMinor)
-    : salePriceMinor;
+    : (serverConsiderationMinor ?? salePriceMinor);
   // The same quantity `computeConsignedSupplierPosition` calls
   // `dealershipClaimMinor`, and deliberately still spelled out here rather than
   // taken from it: that function REFUSES a receipt below the entitlement, and it
@@ -1616,7 +1628,9 @@ async function applySaleCompletionSideEffects(
     recognizedRevenue:
       isSourced && marginMinor !== null
         ? fromMinorUnits(Math.max(0, marginMinor), prepared.currency)
-        : args.salePrice,
+        : serverConsiderationMinor !== undefined
+          ? fromMinorUnits(serverConsiderationMinor, prepared.currency)
+          : args.salePrice,
     idempotencyKey: args.idempotencyKey,
   });
 
