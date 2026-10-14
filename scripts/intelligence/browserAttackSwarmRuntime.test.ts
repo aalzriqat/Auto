@@ -126,9 +126,9 @@ describe("SCRUM-350 browser swarm runtime config", () => {
         BROWSER_SWARM_WORKER_COUNT: "3",
         BROWSER_SWARM_WORKER_ID: "worker-3",
         BROWSER_SWARM_JEV_SUGGESTIONS_JSON:
-          '[{"family":"TENANT_ESCAPE","probability":0.91}]',
+          '[{"family":"CONSIGNMENT_ECONOMICS","probability":0.91}]',
       }),
-    ).toThrow(/no executable handler.*TENANT_ESCAPE/i);
+    ).toThrow(/no executable handler.*CONSIGNMENT_ECONOMICS/i);
   });
 
   it("rejects unknown Jev attack families before planning", () => {

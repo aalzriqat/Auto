@@ -270,10 +270,10 @@ describe("trusted browser swarm run assembly", () => {
     expect(() =>
       assemble({
         impactArtifact: impact([
-          { id: "TEN-1", severity: "CRITICAL" },
+          { id: "CONS-1", severity: "CRITICAL" },
         ]),
       }),
-    ).toThrow(/no executable handler.*TENANT_ESCAPE.*TEN-1/i);
+    ).toThrow(/no executable handler.*CONSIGNMENT_ECONOMICS.*CONS-1/i);
   });
 
   it("binds the executable mission plan to the trusted run evidence", () => {

@@ -25,6 +25,11 @@ export const PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES = [
   "MULTI_TAB_RACE",
   "RTL_PARITY",
   "UI_BACKEND_MISMATCH",
+  "TENANT_ESCAPE",
+  "AUTHORIZATION_ABUSE",
+  "LIFECYCLE_REVERSAL",
+  "COMPLETENESS_BOUNDARY",
+  "NETWORK_RECOVERY",
 ] as const satisfies readonly BrowserAttackFamily[];
 
 const PHASE_A_EXECUTABLE_FAMILY_SET = new Set<BrowserAttackFamily>(
@@ -40,6 +45,38 @@ export type BrowserOracleKind =
   | "ECONOMIC_AUTHORITY"
   | "LIST_COMPLETENESS"
   | "UI_BACKEND_AUTHORITY";
+
+/**
+ * A handler judges the oracles listed here and no others. A family with a
+ * handler is not "executable" for a mission whose oracle the handler does not
+ * judge: reporting it so would certify an obligation nothing checks (LIFE-1
+ * maps LIFECYCLE_REVERSAL to STATE_TRANSITION, which the ACC-2 reversal
+ * handler does not judge).
+ */
+const PHASE_A_EXECUTABLE_FAMILY_ORACLES: Readonly<
+  Record<(typeof PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES)[number], readonly BrowserOracleKind[]>
+> = {
+  DUPLICATE_SUBMIT: ["IDEMPOTENCY_SINGLE_EFFECT"],
+  MULTI_TAB_RACE: ["IDEMPOTENCY_SINGLE_EFFECT"],
+  RTL_PARITY: ["UI_BACKEND_AUTHORITY"],
+  UI_BACKEND_MISMATCH: ["UI_BACKEND_AUTHORITY"],
+  TENANT_ESCAPE: ["TENANT_ISOLATION"],
+  AUTHORIZATION_ABUSE: ["AUTHORIZATION"],
+  LIFECYCLE_REVERSAL: ["REVERSAL_RECONCILIATION"],
+  COMPLETENESS_BOUNDARY: ["LIST_COMPLETENESS"],
+  NETWORK_RECOVERY: ["IDEMPOTENCY_SINGLE_EFFECT", "STATE_TRANSITION"],
+};
+
+/** True when a handler exists for the family AND judges the mission's oracle. */
+export function isBrowserSwarmMissionExecutable(
+  family: BrowserAttackFamily,
+  oracle: BrowserOracleKind,
+): boolean {
+  if (!PHASE_A_EXECUTABLE_FAMILY_SET.has(family)) return false;
+  const judged: readonly BrowserOracleKind[] =
+    PHASE_A_EXECUTABLE_FAMILY_ORACLES[family as keyof typeof PHASE_A_EXECUTABLE_FAMILY_ORACLES];
+  return judged.includes(oracle);
+}
 
 export type MissionSource = "DETERMINISTIC" | "JEV";
 
@@ -125,6 +162,15 @@ const DEFAULT_TIMEOUT_MS = 45_000;
 const FAMILY_TIMEOUT_MS: Partial<Record<BrowserAttackFamily, number>> = {
   DUPLICATE_SUBMIT: 180_000,
   MULTI_TAB_RACE: 180_000,
+  // Opens a second authenticated seat, creates a foreign tenant and probes it.
+  TENANT_ESCAPE: 180_000,
+  AUTHORIZATION_ABUSE: 120_000,
+  // Posts an expense, waits for the ledger to settle, then reverses it twice.
+  LIFECYCLE_REVERSAL: 180_000,
+  // Seeds more rows than one page holds, then walks the whole list.
+  COMPLETENESS_BOUNDARY: 240_000,
+  // Holds the connection down, waits out the recovery window, then settles.
+  NETWORK_RECOVERY: 180_000,
 };
 
 export function browserMissionTimeoutMs(family: BrowserAttackFamily): number {
@@ -478,17 +524,20 @@ export function assertBrowserSwarmMissionsExecutable(
 ): void {
   const unsupported = new Map<string, Set<string>>();
   for (const mission of missions) {
-    if (PHASE_A_EXECUTABLE_FAMILY_SET.has(mission.family)) continue;
-    const invariants = unsupported.get(mission.family) ?? new Set<string>();
+    if (isBrowserSwarmMissionExecutable(mission.family, mission.oracle)) continue;
+    const label = PHASE_A_EXECUTABLE_FAMILY_SET.has(mission.family)
+      ? `${mission.family} with oracle ${mission.oracle}`
+      : mission.family;
+    const invariants = unsupported.get(label) ?? new Set<string>();
     for (const id of mission.invariantIds) invariants.add(id);
-    unsupported.set(mission.family, invariants);
+    unsupported.set(label, invariants);
   }
   if (unsupported.size === 0) return;
   const described = [...unsupported.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(
-      ([family, invariants]) =>
-        `${family} (${[...invariants].sort((l, r) => l.localeCompare(r)).join(", ")})`,
+      ([label, invariants]) =>
+        `${label} (${[...invariants].sort((l, r) => l.localeCompare(r)).join(", ")})`,
     );
   throw new Error(
     "Browser swarm Phase A has no executable handler for mission family/families: " +
@@ -529,7 +578,7 @@ export function browserSwarmCoverageMatrix(): readonly BrowserSwarmCoverageRow[]
       invariantId,
       family: missionTemplate.family,
       oracle: missionTemplate.oracle,
-      executable: PHASE_A_EXECUTABLE_FAMILY_SET.has(missionTemplate.family),
+      executable: isBrowserSwarmMissionExecutable(missionTemplate.family, missionTemplate.oracle),
     })),
   );
 }
