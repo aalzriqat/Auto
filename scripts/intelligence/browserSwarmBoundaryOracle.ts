@@ -8,6 +8,7 @@
  * unclassified observation (`unjudged` is never empty-handed success).
  */
 import { ConvexError } from "convex/values";
+import { denominationOf } from "../../convex/utils/money";
 import { isAuthenticationLapse } from "./browserSwarmEconomicOracle";
 
 export interface Judgement {
@@ -48,6 +49,14 @@ export const TENANT_REFUSAL = new RegExp(
 
 /** The refusals the expense mutations raise for a posted (ledger-bound) record. */
 export const POSTED_HISTORY_REFUSAL = /posted expenses (?:are locked|cannot be deleted)/i;
+
+/**
+ * What `reverseExpense` answers a second request: it soft-deletes the expense
+ * once it has reversed it, so the only legitimate refusal of a replay is that
+ * the expense is gone. A rate limit, a validation failure or a missing
+ * permission never reached the reversal and proves nothing about it.
+ */
+export const REPLAY_REFUSAL = /^Expense not found\.?$/;
 
 export function describeError(error: unknown): string {
   if (error instanceof ConvexError) {
@@ -257,7 +266,7 @@ const lineKey = (line: LedgerLine, swapped: boolean): string =>
   ].join("|");
 
 const sortedKeys = (lines: readonly LedgerLine[], swapped: boolean): string[] =>
-  lines.map((line) => lineKey(line, swapped)).sort();
+  lines.map((line) => lineKey(line, swapped)).sort((left, right) => left.localeCompare(right));
 
 function inspectLedger(
   stage: string,
@@ -284,15 +293,30 @@ function inspectLedger(
     violations.push(`${stage}: the posted journal lines were rewritten instead of reversed`);
   }
 
-  const reversals = snapshot.events.filter(
-    (event) => event.eventType === "JOURNAL_REVERSAL" && event.reversalOfEventId === original.id,
+  // The snapshot is scoped to this one expense, so ANY reversal or further
+  // posting in it is a footprint of the attack, whatever it claims to reverse.
+  const additionalPostings = snapshot.events.filter(
+    (event) => event.eventType === "EXPENSE_POSTED" && event.id !== original.id,
   );
-  if (reversals.length === 0) {
+  if (additionalPostings.length > 0) {
+    violations.push(`${stage}: the expense was posted again (${additionalPostings.length} additional posting events)`);
+  }
+  const allReversals = snapshot.events.filter((event) => event.eventType === "JOURNAL_REVERSAL");
+  if (allReversals.length === 0) {
     violations.push(`${stage}: the ledger holds no reversal event for the posted event`);
     return { violations, unjudged };
   }
-  if (reversals.length > 1) {
-    violations.push(`${stage}: the ledger holds ${reversals.length} reversal events for one posted event`);
+  if (allReversals.length > 1) {
+    violations.push(`${stage}: the ledger holds ${allReversals.length} reversal events for one posted event`);
+  }
+  const reversals = allReversals.filter((event) => event.reversalOfEventId === original.id);
+  const stray = allReversals.length - reversals.length;
+  if (stray > 0) {
+    violations.push(`${stage}: ${stray} reversal event${stray === 1 ? " is" : "s are"} not linked to the posted event`);
+  }
+  if (reversals.length === 0) {
+    violations.push(`${stage}: the ledger holds no reversal event linked to the posted event`);
+    return { violations, unjudged };
   }
   const reversal = reversals[0]!;
   if (current.status !== "REVERSED" || current.reversedByEventId !== reversal.id) {
@@ -310,6 +334,57 @@ function inspectLedger(
   return { violations, unjudged };
 }
 
+const isMinorUnits = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0;
+
+/**
+ * The expense's original posting must be a real double entry of the seeded
+ * amount: finite whole amounts, one currency at that currency's scale, debits
+ * equal to credits, and the seeded effect. Without this an unbalanced or zero
+ * posting and its exact mirror would reconcile.
+ */
+function judgePosting(lines: readonly LedgerLine[], seededAmount: number): Judgement {
+  if (lines.length < 2) {
+    return { violations: [], unjudged: ["the expense's posted event had no readable balanced journal before the reversal"] };
+  }
+  if (!lines.every((line) => isMinorUnits(line.debitMinor) && isMinorUnits(line.creditMinor) && Number.isInteger(line.scale))) {
+    return {
+      violations: [],
+      unjudged: ["the posted journal has an amount that is not a whole non-negative number of minor units"],
+    };
+  }
+  const currencies = new Set(lines.map((line) => line.currency));
+  const scales = new Set(lines.map((line) => line.scale));
+  if (currencies.size > 1 || scales.size > 1) {
+    return { violations: ["the posted journal mixes currencies or scales within one posting"], unjudged: [] };
+  }
+  const first = lines[0]!;
+  const denomination = denominationOf(first.currency);
+  if (denomination === null) {
+    return { violations: [], unjudged: [`the posted journal's currency ${first.currency} is not one the product supports`] };
+  }
+  if (denomination.scale !== first.scale) {
+    return {
+      violations: [`the posted journal is stored at scale ${first.scale} but ${first.currency} uses scale ${denomination.scale}`],
+      unjudged: [],
+    };
+  }
+  const debit = lines.reduce((sum, line) => sum + line.debitMinor, 0);
+  const credit = lines.reduce((sum, line) => sum + line.creditMinor, 0);
+  if (debit !== credit) {
+    return { violations: [`the posted journal is not balanced: debits ${debit}, credits ${credit}`], unjudged: [] };
+  }
+  if (debit === 0) return { violations: ["the posted journal is a zero posting"], unjudged: [] };
+  const expected = Math.round(seededAmount * 10 ** denomination.scale);
+  if (debit !== expected) {
+    return {
+      violations: [`the posted journal moves ${debit} minor units but the seeded expense is ${expected}`],
+      unjudged: [],
+    };
+  }
+  return CLEAN;
+}
+
 /**
  * ACC-2: posted history is immutable and a correction is the canonical, linked,
  * mirrored reversal, exactly once. `posted` is the ledger after the expense was
@@ -321,8 +396,10 @@ export function evaluateReversalReconciliation(input: {
   posted: LedgerSnapshot;
   reversed: LedgerSnapshot;
   replayed: LedgerSnapshot;
+  /** The synthetic expense's amount in major units; the posting must carry exactly this. */
+  seededAmount: number;
 }): Judgement {
-  const { posted, reversed, replayed } = input;
+  const { posted, reversed, replayed, seededAmount } = input;
   const postedEvents = posted.events.filter((event) => event.eventType === "EXPENSE_POSTED");
   if (postedEvents.length !== 1) {
     return {
@@ -336,16 +413,18 @@ export function evaluateReversalReconciliation(input: {
   }
   const original = postedEvents[0]!;
   const originalLines = original.journalEntryId ? posted.journals[original.journalEntryId] : undefined;
-  if (original.status !== "POSTED" || !originalLines || originalLines.length < 2) {
+  if (original.status !== "POSTED" || !originalLines) {
     return {
       violations: [],
       unjudged: ["the expense's posted event had no readable balanced journal before the reversal"],
     };
   }
+  const posting = judgePosting(originalLines, seededAmount);
+  if (posting.unjudged.length > 0) return posting;
 
   const stages: [string, LedgerSnapshot][] = [["after reversal", reversed]];
   if (stable(replayed) !== stable(reversed)) stages.push(["after replay", replayed]);
-  const violations = new Set<string>();
+  const violations = new Set<string>(posting.violations);
   const unjudged = new Set<string>();
   for (const [stage, snapshot] of stages) {
     const verdict = inspectLedger(stage, snapshot, original, originalLines);

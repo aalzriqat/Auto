@@ -265,6 +265,8 @@ describe("evaluateListCompleteness", () => {
 });
 
 describe("evaluateReversalReconciliation", () => {
+  const reconcile = (input: { posted: LedgerSnapshot; reversed: LedgerSnapshot; replayed: LedgerSnapshot }) =>
+    evaluateReversalReconciliation({ ...input, seededAmount: 53 });
   const originalLines = [
     { accountId: "acc-expense", debitMinor: 53_000, creditMinor: 0, scale: 3, currency: "JOD" },
     { accountId: "acc-cash", debitMinor: 0, creditMinor: 53_000, scale: 3, currency: "JOD" },
@@ -296,7 +298,7 @@ describe("evaluateReversalReconciliation", () => {
   };
 
   it("passes a canonical, linked, mirrored reversal that is idempotent", () => {
-    expect(evaluateReversalReconciliation({ posted, reversed, replayed: reversed })).toEqual({
+    expect(reconcile({ posted, reversed, replayed: reversed })).toEqual({
       violations: [],
       unjudged: [],
     });
@@ -310,13 +312,13 @@ describe("evaluateReversalReconciliation", () => {
         "je-2": mirrorLines,
       },
     };
-    const verdict = evaluateReversalReconciliation({ posted, reversed: rewritten, replayed: rewritten });
+    const verdict = reconcile({ posted, reversed: rewritten, replayed: rewritten });
     expect(verdict.violations.join(" | ")).toMatch(/posted journal lines were rewritten/);
   });
 
   it("proves a rewrite when the original event is gone", () => {
     const erased: LedgerSnapshot = { events: [reversalEvent], journals: { "je-2": mirrorLines } };
-    const verdict = evaluateReversalReconciliation({ posted, reversed: erased, replayed: erased });
+    const verdict = reconcile({ posted, reversed: erased, replayed: erased });
     expect(verdict.violations.join(" | ")).toMatch(/original posted event .* is gone/);
   });
 
@@ -325,7 +327,7 @@ describe("evaluateReversalReconciliation", () => {
       ...reversed,
       events: [{ ...postedEvent, status: "REVERSED", reversedByEventId: null }, reversalEvent],
     };
-    const verdict = evaluateReversalReconciliation({ posted, reversed: unlinked, replayed: unlinked });
+    const verdict = reconcile({ posted, reversed: unlinked, replayed: unlinked });
     expect(verdict.violations.join(" | ")).toMatch(/not linked/);
   });
 
@@ -337,7 +339,7 @@ describe("evaluateReversalReconciliation", () => {
         "je-2": [{ ...mirrorLines[0]!, creditMinor: 40_000 }, mirrorLines[1]!],
       },
     };
-    const verdict = evaluateReversalReconciliation({ posted, reversed: wrong, replayed: wrong });
+    const verdict = reconcile({ posted, reversed: wrong, replayed: wrong });
     expect(verdict.violations.join(" | ")).toMatch(/does not mirror/);
   });
 
@@ -346,7 +348,7 @@ describe("evaluateReversalReconciliation", () => {
       ...reversed,
       journals: { "je-1": originalLines, "je-2": originalLines },
     };
-    const verdict = evaluateReversalReconciliation({ posted, reversed: sameSide, replayed: sameSide });
+    const verdict = reconcile({ posted, reversed: sameSide, replayed: sameSide });
     expect(verdict.violations.join(" | ")).toMatch(/does not mirror/);
   });
 
@@ -358,27 +360,133 @@ describe("evaluateReversalReconciliation", () => {
       ],
       journals: { ...reversed.journals, "je-3": mirrorLines },
     };
-    const verdict = evaluateReversalReconciliation({ posted, reversed, replayed: doubled });
+    const verdict = reconcile({ posted, reversed, replayed: doubled });
     expect(verdict.violations.join(" | ")).toMatch(/2 reversal events/);
   });
 
   it("proves a reversal that never reached the ledger", () => {
     const notReversed: LedgerSnapshot = posted;
-    const verdict = evaluateReversalReconciliation({ posted, reversed: notReversed, replayed: notReversed });
+    const verdict = reconcile({ posted, reversed: notReversed, replayed: notReversed });
     expect(verdict.violations.join(" | ")).toMatch(/no reversal event/);
   });
 
   it("cannot judge when the expense was never posted to the ledger", () => {
     const queued: LedgerSnapshot = { events: [], journals: {} };
-    const verdict = evaluateReversalReconciliation({ posted: queued, reversed: queued, replayed: queued });
+    const verdict = reconcile({ posted: queued, reversed: queued, replayed: queued });
     expect(verdict.violations).toEqual([]);
     expect(verdict.unjudged[0]).toMatch(/never posted/);
   });
 
   it("cannot judge a journal that could not be read", () => {
     const missing: LedgerSnapshot = { events: reversed.events, journals: { "je-1": originalLines } };
-    const verdict = evaluateReversalReconciliation({ posted, reversed: missing, replayed: missing });
+    const verdict = reconcile({ posted, reversed: missing, replayed: missing });
     expect(verdict.violations).toEqual([]);
     expect(verdict.unjudged.join(" | ")).toMatch(/journal je-2 was not readable/);
+  });
+  describe("the ledger as the whole footprint of the expense", () => {
+    const withEvents = (extra: LedgerSnapshot["events"], journals: LedgerSnapshot["journals"] = {}): LedgerSnapshot => ({
+      events: [...reversed.events, ...extra],
+      journals: { ...reversed.journals, ...journals },
+    });
+
+    it("proves an extra reversal whose link to the original is missing", () => {
+      const stray = withEvents([{ ...reversalEvent, id: "ev-3", reversalOfEventId: null, journalEntryId: "je-3" }], {
+        "je-3": mirrorLines,
+      });
+      const verdict = reconcile({ posted, reversed, replayed: stray });
+      expect(verdict.violations.join(" | ")).toMatch(/2 reversal events/);
+    });
+
+    it("proves an extra reversal linked to a different event", () => {
+      const stray = withEvents([{ ...reversalEvent, id: "ev-3", reversalOfEventId: "ev-other", journalEntryId: "je-3" }], {
+        "je-3": mirrorLines,
+      });
+      const verdict = reconcile({ posted, reversed: stray, replayed: stray });
+      expect(verdict.violations.join(" | ")).toMatch(/2 reversal events/);
+    });
+
+    it("proves a stray reversal when the canonical one is missing altogether", () => {
+      const strayOnly: LedgerSnapshot = {
+        events: [postedEvent, { ...reversalEvent, reversalOfEventId: null }],
+        journals: { "je-1": originalLines, "je-2": mirrorLines },
+      };
+      const verdict = reconcile({ posted, reversed: strayOnly, replayed: strayOnly });
+      expect(verdict.violations.join(" | ")).toMatch(/no reversal event|1 reversal event .* not linked/);
+      expect(verdict.violations.length).toBeGreaterThan(0);
+    });
+
+    it("proves a second posting event for the same expense after the reversal", () => {
+      const reposted = withEvents([{ ...postedEvent, id: "ev-4", journalEntryId: "je-4" }], { "je-4": originalLines });
+      const verdict = reconcile({ posted, reversed: reposted, replayed: reposted });
+      expect(verdict.violations.join(" | ")).toMatch(/2 posting events|posted again/);
+    });
+  });
+
+  describe("the posting itself must be a real, balanced effect of the seeded amount", () => {
+    const run = (lines: readonly (typeof originalLines)[number][], mirror: readonly (typeof originalLines)[number][]) => {
+      const post: LedgerSnapshot = { events: [postedEvent], journals: { "je-1": lines } };
+      const rev: LedgerSnapshot = {
+        events: [{ ...postedEvent, status: "REVERSED", reversedByEventId: "ev-2" }, reversalEvent],
+        journals: { "je-1": lines, "je-2": mirror },
+      };
+      return evaluateReversalReconciliation({ posted: post, reversed: rev, replayed: rev, seededAmount: 53 });
+    };
+    const mirrorOf = (lines: typeof originalLines) =>
+      lines.map((line) => ({ ...line, debitMinor: line.creditMinor, creditMinor: line.debitMinor }));
+
+    it("proves an unbalanced posting even though its exact mirror reverses it", () => {
+      const lines = [originalLines[0]!, { ...originalLines[1]!, creditMinor: 40_000 }];
+      const verdict = run(lines, mirrorOf(lines));
+      expect(verdict.violations.join(" | ")).toMatch(/not balanced/);
+    });
+
+    it("proves a zero posting", () => {
+      const lines = originalLines.map((line) => ({ ...line, debitMinor: 0, creditMinor: 0 }));
+      const verdict = run(lines, mirrorOf(lines));
+      expect(verdict.violations.join(" | ")).toMatch(/zero/);
+    });
+
+    it("proves a balanced posting of the wrong amount", () => {
+      const lines = [
+        { ...originalLines[0]!, debitMinor: 5_300 },
+        { ...originalLines[1]!, creditMinor: 5_300 },
+      ];
+      const verdict = run(lines, mirrorOf(lines));
+      expect(verdict.violations.join(" | ")).toMatch(/5300 minor units .* 53000/);
+    });
+
+    it("proves a posting whose lines disagree on currency or scale", () => {
+      const lines = [originalLines[0]!, { ...originalLines[1]!, currency: "USD" }];
+      const verdict = run(lines, mirrorOf(lines));
+      expect(verdict.violations.length).toBeGreaterThan(0);
+    });
+
+    it("proves a posting stored at a scale its currency does not use", () => {
+      const lines = originalLines.map((line) => ({ ...line, scale: 2 }));
+      const verdict = run(lines, mirrorOf(lines));
+      expect(verdict.violations.join(" | ")).toMatch(/scale/);
+    });
+
+    it("cannot judge a posting with non-finite, fractional or negative amounts", () => {
+      for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, 0.5, -53_000]) {
+        const lines = [{ ...originalLines[0]!, debitMinor: bad }, originalLines[1]!];
+        const verdict = run(lines, mirrorOf(lines));
+        expect(verdict.violations).toEqual([]);
+        expect(verdict.unjudged.join(" | ")).toMatch(/not a whole non-negative number/);
+      }
+    });
+
+    it("cannot judge a currency the product does not support", () => {
+      const lines = originalLines.map((line) => ({ ...line, currency: "XXX" }));
+      const verdict = run(lines, mirrorOf(lines));
+      expect(verdict.violations).toEqual([]);
+      expect(verdict.unjudged.join(" | ")).toMatch(/currency/);
+    });
+
+    it("cannot judge a posting whose lines are not two or more", () => {
+      const verdict = run([originalLines[0]!], mirrorOf([originalLines[0]!]));
+      expect(verdict.violations).toEqual([]);
+      expect(verdict.unjudged.length).toBeGreaterThan(0);
+    });
   });
 });

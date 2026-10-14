@@ -2,12 +2,12 @@ import type { Page, WebSocketRoute } from "@playwright/test";
 import type { ConvexHttpClient } from "convex/browser";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import { ConvexError } from "convex/values";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { BrowserOracleKind } from "./browserAttackSwarm";
 import type { BrowserMissionExecutionContext } from "./browserAttackSwarmExecutor";
 import { createNetworkRecoveryHandler } from "./browserSwarmNetworkRecoveryAttack";
 import { BrowserSwarmOracleInconclusiveError } from "./browserSwarmEconomicOracle";
-import { ConvexSyncObserver, type MissionBrowser, type MissionBrowserRuntime } from "./browserSwarmEconomicAttacks";
+import type { MissionBrowser, MissionBrowserRuntime } from "./browserSwarmEconomicAttacks";
 
 /**
  * SCRUM-350 — handler-level tests for NETWORK_RECOVERY.
@@ -34,6 +34,10 @@ interface Faults {
   refuseSuffix?: string;
   /** The page never transmits the outage intent through the observed socket. */
   noTransmitSuffix?: string;
+  /** The page's sync socket was opened before routing was attached, so the route never sees it. */
+  socketBypassesRoute?: boolean;
+  /** After the connection drops the client never opens another. */
+  neverReconnects?: boolean;
 }
 
 interface ExpenseRecord {
@@ -124,6 +128,8 @@ class FakeApp {
   }
 
   async routeWebSocket(_matcher: unknown, handler: (socket: WebSocketRoute) => void): Promise<void> {
+    // Playwright routes only sockets opened after the route is attached.
+    if (this.backend.faults.socketBypassesRoute) return;
     this.routeHandler = handler;
     this.connect();
   }
@@ -171,7 +177,7 @@ class FakeApp {
           this.pending.clear();
           this.dialog = null;
         }
-        setTimeout(() => this.connect(), RECONNECT_BACKOFF_MS);
+        if (!this.backend.faults.neverReconnects) setTimeout(() => this.connect(), RECONNECT_BACKOFF_MS);
       },
     } as unknown as WebSocketRoute;
     this.routeHandler(route);
@@ -218,6 +224,12 @@ class FakeApp {
     });
     const skip = this.backend.faults.noTransmitSuffix;
     if (skip && dialog.title.endsWith(skip)) return;
+    if (this.backend.faults.socketBypassesRoute) {
+      // The save travels on the page's own socket, where nothing observes or drops it.
+      const outcome = this.backend.create({ title: dialog.title, amount: dialog.amount, status: "PAID", idempotencyKey: dialog.key }, false);
+      if (outcome.ok) this.dialog = null;
+      return;
+    }
     this.pending.set(this.nextRequestId, frame);
     this.fromPage?.(frame);
   }
@@ -351,7 +363,7 @@ describe("SCRUM-350 NETWORK_RECOVERY handler", () => {
       const h = harness({}, oracle);
       const result = await h.run();
       expect(result.oracle).toMatchObject({ kind: oracle, passed: true });
-      expect(h.backend.expenses.map((row) => row.title.replace(/^.*-(outage|control)$/, "$1")).sort()).toEqual([
+      expect(h.backend.expenses.map((row) => row.title.replace(/^.*-(outage|control)$/, "$1")).sort((left, right) => left.localeCompare(right))).toEqual([
         "control",
         "outage",
       ]);
@@ -406,20 +418,15 @@ describe("SCRUM-350 NETWORK_RECOVERY handler", () => {
     expect(h.evidence.at(-1)).toMatchObject({ outcome: "INCONCLUSIVE" });
   }, 30_000);
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it("a save that succeeds because the outage never fired is unjudged, never a pass", async () => {
-    vi.spyOn(ConvexSyncObserver.prototype, "armOutage").mockImplementation(() => undefined);
-    const h = harness();
+    // The socket predates the route, so nothing can swallow the request.
+    const h = harness({ socketBypassesRoute: true });
     await expect(h.run()).rejects.toThrow(/the outage never fired/);
     expect(h.backend.expenses).toHaveLength(2);
   }, 30_000);
 
   it("a recovery with no observed newer connection is unjudged, never a pass", async () => {
-    vi.spyOn(ConvexSyncObserver.prototype, "reconnectedAfterOutage").mockReturnValue(false);
-    const h = harness();
+    const h = harness({ neverReconnects: true });
     await expect(h.run()).rejects.toThrow(/never heard from on a newer connection/);
   }, 30_000);
 

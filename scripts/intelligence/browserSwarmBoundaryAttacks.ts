@@ -21,6 +21,7 @@ import type { BrowserAttackHandlerRegistry } from "./browserAttackSwarmExecutor"
 import {
   AUTHORIZATION_REFUSAL,
   POSTED_HISTORY_REFUSAL,
+  REPLAY_REFUSAL,
   TENANT_REFUSAL,
   describeError,
   evaluateListCompleteness,
@@ -36,6 +37,7 @@ import {
 } from "./browserSwarmBoundaryOracle";
 import { runBoundaryMission, type BoundaryMissionEnv } from "./browserSwarmBoundaryHarness";
 import {
+  UI_STEP_TIMEOUT_MS,
   gotoExpenses,
   untilAborted,
   type MissionBrowserRuntime,
@@ -51,15 +53,15 @@ export interface BoundaryAttackOptions {
   pollMs?: number;
   /** How long a freshly created expense may take to reach the ledger. */
   postingWaitMs?: number;
-  /** How long the page may sit on another organization's route before it is read. */
-  foreignRouteSettleMs?: number;
+  /** How long a screen may take to answer before its silence is reported as unjudged. */
+  uiSettleMs?: number;
 }
 
 const DEFAULTS = {
   searchSettleMs: 30_000,
   pollMs: 500,
   postingWaitMs: 20_000,
-  foreignRouteSettleMs: 4_000,
+  uiSettleMs: 15_000,
 } as const;
 
 /** `customers.list` loads this many rows before a user asks for more. */
@@ -116,6 +118,11 @@ async function walkPages(
   return inconclusive(`${label} did not terminate within ${MAX_WALK_PAGES} pages`);
 }
 
+const UI_STEP = { timeout: UI_STEP_TIMEOUT_MS };
+
+/** A screen's route without its origin, so evidence names the page and not the host. */
+const pathOf = (url: string): string => url.replace(/^https?:\/\/[^/]+/, "");
+
 function recordProbe(env: BoundaryMissionEnv, label: string, outcome: ProbeOutcome): void {
   const probes = (env.detail.probes ??= []) as { label: string; outcome: string; message?: string }[];
   probes.push({
@@ -164,13 +171,46 @@ async function readForeignState(client: ConvexHttpClient, orgId: string): Promis
 }
 
 /**
+ * Reads the page on a foreign organization's route until the product has
+ * answered by sending the attacker away from it. Any read that carries a canary
+ * counts, however briefly it was there; a page that is still on the foreign
+ * organization at the deadline has not answered, whatever it has rendered.
+ */
+async function observeForeignRoute(
+  env: BoundaryMissionEnv,
+  options: Required<BoundaryAttackOptions>,
+  foreignOrgId: string,
+  canaries: readonly string[],
+): Promise<{ leftForeignOrganization: boolean; rendersCanary: boolean; finalPath: string }> {
+  const deadline = Date.now() + options.uiSettleMs;
+  let rendersCanary = false;
+  for (;;) {
+    const html = await untilAborted(env.signal, env.page.content());
+    const url = env.page.url();
+    rendersCanary ||= canaries.some((canary) => html.includes(canary));
+    const leftForeignOrganization = !url.includes(foreignOrgId);
+    if (rendersCanary || leftForeignOrganization || Date.now() >= deadline) {
+      return { leftForeignOrganization, rendersCanary, finalPath: pathOf(url) };
+    }
+    await untilAborted(env.signal, options.sleep(options.pollMs));
+  }
+}
+
+/**
  * TEN-1: a member of one organization must not read, write or link a
  * resource of another. The dealership's approver seat creates a second,
  * private organization with a canary customer; the primary seat — a member of
  * the dealership only — then attacks it by reading, creating, deleting and
- * cross-referencing, in the backend and in the browser. Judged on refusals,
- * on the absence of the canary from every response and from the rendered page,
- * and on the victim's state being byte-identical afterwards.
+ * cross-referencing through authenticated backend calls, and then walks its own
+ * browser to the foreign organization's customers route. Judged on refusals, on
+ * the absence of the canary from every response and from the page, and on the
+ * victim's state being byte-identical afterwards.
+ *
+ * The browser leg is a ROUTE boundary only: it proves that the product's
+ * workspace guard sends an outsider away from the foreign organization. It does not type into or click anything on the foreign
+ * screens — every read and write of the attack is a direct backend call from the
+ * attacker's authenticated session — and a page that never leaves the foreign
+ * route is unjudged, because a page that has not answered proves nothing.
  *
  * Not covered: tenant-bearing relationships beyond the customer and
  * organization records (vehicles, deals, ledger); the repository census in
@@ -182,7 +222,7 @@ function tenantEscapeSpec(options: Required<BoundaryAttackOptions>) {
     seat: "primary" as const,
     oracles: ["TENANT_ISOLATION" as const],
     passSummary:
-      "A member of one organization could not read, create, delete or cross-reference a private customer of another organization through the backend, the planted canary never appeared in a response or on the rendered page, and the victim's state was unchanged.",
+      "A member of one organization could not read, create, delete or cross-reference a private customer of another organization through the backend, the planted canary never appeared in a response or on the foreign route's page before the workspace guard sent the attacker away, and the victim's state was unchanged.",
     breachSummary: "Tenant isolation was breached",
     async run(env: BoundaryMissionEnv): Promise<void> {
       const { client, orgId, nonce, signal, detail, page } = env;
@@ -269,17 +309,20 @@ function tenantEscapeSpec(options: Required<BoundaryAttackOptions>) {
       }
 
       // The browser: the attacker's own signed-in session walks to the other
-      // organization's customers screen. The canary must not be on the page.
+      // organization's customers screen. The canary must not be on the page, and
+      // that only means something once the workspace guard has answered.
       await untilAborted(signal, page.goto(`/${foreignOrgId}/customers`, { waitUntil: "domcontentloaded" }));
-      await untilAborted(signal, options.sleep(options.foreignRouteSettleMs));
-      const html = await untilAborted(signal, page.content());
-      const rendered = html.includes(canaryLastName) || html.includes(canaryEmail);
-      detail.foreignRouteRendersCanary = rendered;
-      if (rendered) {
+      const route = await observeForeignRoute(env, options, foreignOrgId, [canaryLastName, canaryEmail]);
+      detail.foreignRoute = route;
+      if (route.rendersCanary) {
         env.judge({
           violations: ["the foreign organization's customers screen rendered its canary customer in the attacker's browser"],
           unjudged: [],
         });
+      } else if (!route.leftForeignOrganization) {
+        env.unjudged(
+          "the foreign organization's route never settled (the page stayed on it), so the canary's absence from the page proves nothing",
+        );
       }
 
       const after = await readForeignState(victim.client, foreignOrgId);
@@ -323,8 +366,44 @@ async function readAuthorityState(
     members: members
       .map((row) => ({ id: asString(row._id, "membership id"), roleId: asString(row.roleId, "membership roleId") }))
       .sort((left, right) => left.id.localeCompare(right.id)),
-    ownRolePermissions: asArray(role.permissions, "role permissions").map(String).sort(),
+    ownRolePermissions: asArray(role.permissions, "role permissions").map(String).sort((left, right) => left.localeCompare(right)),
   };
+}
+
+/**
+ * The manager asks the Team screen to move the OWNER onto the manager's own
+ * role. `control: "withheld"` means the screen offers no such button; otherwise
+ * the screen's own answer is awaited (the dialog closing is acceptance, the
+ * error toast refusal) before anything is read back, and silence is inconclusive.
+ */
+async function demoteOwnerOnTeamScreen(
+  env: BoundaryMissionEnv,
+  options: Required<BoundaryAttackOptions>,
+  ownerEmail: string,
+  ownRoleId: string,
+): Promise<{ control: "withheld" | "attempted"; answer?: "accepted" | "refused" }> {
+  const { page, signal, orgId } = env;
+  await untilAborted(signal, page.goto(`/${orgId}/team`, { waitUntil: "domcontentloaded" }));
+  const ownerRow = page.locator("tr").filter({ hasText: ownerEmail });
+  await untilAborted(signal, ownerRow.waitFor({ state: "visible", ...UI_STEP }));
+  const changeRole = ownerRow.getByRole("button", { name: "Change Role", exact: true });
+  if (!(await untilAborted(signal, changeRole.isVisible())) || !(await untilAborted(signal, changeRole.isEnabled()))) {
+    return { control: "withheld" };
+  }
+  await untilAborted(signal, changeRole.click(UI_STEP));
+  const dialog = page.getByRole("dialog");
+  await untilAborted(signal, dialog.locator("div.relative > button").first().click(UI_STEP));
+  await untilAborted(signal, dialog.getByTestId(`searchable-option-${ownRoleId}`).click(UI_STEP));
+  await untilAborted(signal, dialog.getByRole("button", { name: "Save", exact: true }).click(UI_STEP));
+
+  const errorToast = page.locator("[data-sonner-toast][data-type='error']").first();
+  const deadline = Date.now() + options.uiSettleMs;
+  for (;;) {
+    if (!(await untilAborted(signal, dialog.isVisible()))) return { control: "attempted", answer: "accepted" };
+    if (await untilAborted(signal, errorToast.isVisible())) return { control: "attempted", answer: "refused" };
+    if (Date.now() >= deadline) return inconclusive("the Team screen gave no answer to the role change");
+    await untilAborted(signal, options.sleep(options.pollMs));
+  }
 }
 
 /**
@@ -335,7 +414,15 @@ async function readAuthorityState(
  * call must be refused by an authorization guard — a refusal for any other
  * reason (rate limit, validation) proves nothing and is unjudged — and the
  * organization, every membership role and the role's permissions must be
- * unchanged afterwards.
+ * unchanged afterwards. The manager then repeats the most sensitive of those,
+ * demoting the OWNER, through the Team screen's own Change Role dialog; the
+ * screen may withhold the control (recorded) or offer it, in which case the
+ * backend must refuse and the state must still be unchanged.
+ *
+ * The browser leg is that one screen. The other three attacks are direct
+ * backend calls from the manager's authenticated session, not clicks: this is
+ * not a full browser attack on every authorization boundary. A Team screen that
+ * cannot be driven or gives no answer is unjudged.
  *
  * Not covered: the same-actor separation-of-duties leg (a maker approving their
  * own manual journal); it needs a finance workflow with two actors holding the
@@ -343,13 +430,13 @@ async function readAuthorityState(
  * If the approver seat has been re-roled to hold the authority, the attack has
  * nothing to abuse and is unjudged.
  */
-function authorizationAbuseSpec() {
+function authorizationAbuseSpec(options: Required<BoundaryAttackOptions>) {
   return {
     attack: "AUTHORIZATION_ABUSE",
     seat: "approver" as const,
     oracles: ["AUTHORIZATION" as const],
     passSummary:
-      "A non-owner manager could not rename the organization, promote itself to owner, demote the owner or rewrite its own role through the backend, and no membership, role or organization record changed.",
+      "A non-owner manager could not rename the organization, promote itself to owner, demote the owner or rewrite its own role through the backend, the Team screen either withheld the owner's Change Role control or its demotion of the owner was refused, and no membership, role or organization record changed.",
     breachSummary: "Server-side authorization was breached",
     async run(env: BoundaryMissionEnv): Promise<void> {
       const { client, orgId, nonce, signal, detail } = env;
@@ -387,6 +474,7 @@ function authorizationAbuseSpec() {
       const ownerMembership = members.find((row) => String(row.roleId) === ownerRoleId);
       if (!ownerMembership) inconclusive("the dealership has no readable OWNER membership to defend");
       const ownerMembershipId = asString(ownerMembership._id, "owner membership id");
+      const ownerEmail = typeof ownerMembership.userEmail === "string" ? ownerMembership.userEmail : "";
 
       const before = await readAuthorityState(client, orgId, ownRoleId);
       const attacks: [string, () => Promise<unknown>][] = [
@@ -408,6 +496,21 @@ function authorizationAbuseSpec() {
         env.judge(judgeRefusedAttempt(label, await attempt(env, label, AUTHORIZATION_REFUSAL, run)));
       }
 
+      if (ownerEmail === "") {
+        env.unjudged("the OWNER's email was not readable, so the Team screen leg could not find the OWNER row");
+      } else {
+        try {
+          const team = await demoteOwnerOnTeamScreen(env, options, ownerEmail, ownRoleId);
+          detail.teamScreen = team;
+          if (team.answer === "accepted") {
+            env.judge({ violations: ["the Team screen's role change (demote the OWNER) was accepted"], unjudged: [] });
+          }
+        } catch (error) {
+          if (signal.aborted) throw error;
+          env.unjudged(`the Team screen could not be driven (${describeError(error)})`);
+        }
+      }
+
       const after = await readAuthorityState(client, orgId, ownRoleId);
       detail.authorityBefore = before;
       detail.authorityAfter = after;
@@ -418,7 +521,7 @@ function authorizationAbuseSpec() {
 
 // ─── COMPLETENESS_BOUNDARY ───────────────────────────────────────────────────
 
-const RATE_LIMIT_TEXT = /rate limit exceeded.*?(\d+)s/i;
+const RATE_LIMIT_TEXT = /rate limit exceeded[^\d]{0,40}(\d{1,6})s/i;
 
 /** Creates one synthetic customer, waiting out the product's own write rate limit. */
 async function createCustomerWithBackoff(
@@ -629,15 +732,36 @@ async function readSettledLedger(
   return inconclusive(`the ledger state for expense ${expenseId} did not settle`);
 }
 
+/** Delete → the posted-expense refusal flips the dialog to Reverse & Delete → reverse. */
+async function reverseOnExpenseScreen(page: Page, signal: AbortSignal, expenseId: string, reason: string): Promise<void> {
+  const row = page.locator(`#row-${expenseId}`);
+  await untilAborted(signal, row.waitFor({ state: "visible", ...UI_STEP }));
+  await untilAborted(signal, row.getByRole("button").last().click(UI_STEP));
+  const dialog = page.getByRole("dialog");
+  await untilAborted(signal, dialog.getByRole("button", { name: "Delete Permanently", exact: true }).click(UI_STEP));
+  const reasonField = dialog.locator("#reversal-reason");
+  await untilAborted(signal, reasonField.waitFor({ state: "visible", ...UI_STEP }));
+  await untilAborted(signal, reasonField.fill(reason, UI_STEP));
+  await untilAborted(signal, dialog.getByRole("button", { name: "Reverse & Delete", exact: true }).click(UI_STEP));
+  await untilAborted(signal, dialog.waitFor({ state: "hidden", ...UI_STEP }));
+}
+
 /**
  * ACC-2: posted financial history is immutable and corrections use the
  * canonical linked reversal. The attack posts a synthetic expense, then tries
  * to rewrite it — edit its amount, delete it — and both must be refused with
- * the ledger byte-identical. It then performs the canonical reversal and asks
- * for it a second time. The ledger must keep the original posted event and its
- * journal untouched, hold exactly one linked reversal event whose journal is
- * the exact mirror of the original, and acquire no second reversal footprint.
- * The browser must be able to load the expenses screen for the same seat.
+ * the ledger byte-identical. It then performs the canonical reversal through the
+ * expense screen's own Delete → Reverse & Delete flow, and asks for it a second
+ * time directly. The ledger must hold a real, balanced posting of the seeded
+ * amount, keep the original posted event and its journal untouched, hold
+ * exactly one linked reversal event whose journal is the exact mirror of the
+ * original, and acquire no further reversal or posting event of any kind.
+ *
+ * The only legitimate refusal of the repeat is the product's own "Expense not
+ * found" (the first reversal soft-deletes the expense). A rate limit, a missing
+ * permission or a validation failure is unjudged. A screen flow that cannot be
+ * completed is unjudged too: the reversal is never issued by a direct call in
+ * its place. The edit/delete attempts and the repeat are direct backend calls.
  *
  * Not covered: reversal of non-expense postings (receipts, deals, manual
  * journals) and reversals across a closed accounting period.
@@ -648,7 +772,7 @@ function lifecycleReversalSpec(options: Required<BoundaryAttackOptions>) {
     seat: "primary" as const,
     oracles: ["REVERSAL_RECONCILIATION" as const],
     passSummary:
-      "A posted expense could not be edited or deleted, its original ledger event and journal stayed untouched through a canonical reversal, the ledger held exactly one linked reversal that mirrors the original, and asking again created no second reversal.",
+      "A posted expense could not be edited or deleted, its balanced ledger posting stayed untouched through a canonical reversal made on the expense screen, the ledger held exactly one linked reversal that mirrors the original, and asking again was refused as 'Expense not found' and created no further ledger event.",
     breachSummary: "Posted financial history was not preserved by its reversal",
     async run(env: BoundaryMissionEnv): Promise<void> {
       const { client, orgId, nonce, signal, detail, page } = env;
@@ -690,33 +814,43 @@ function lifecycleReversalSpec(options: Required<BoundaryAttackOptions>) {
       );
       env.judge(judgeRefusedAttempt("expenses.remove (delete the posted expense)", removal));
 
-      // The canonical correction. A refusal of the product's own correction
-      // path means the attack could not be exercised, never a pass.
-      const reversal = await attempt(env, "expenses.reverseExpense (canonical reversal)", /(?!)/, () =>
-        client.mutation(api.expenses.reverseExpense, { orgId: org, expenseId: expense, reason: `${nonce} canonical reversal` }),
-      );
-      if (reversal.kind !== "ACCEPTED") {
+      // The canonical correction, made the way a user makes it. A flow that cannot
+      // be completed means the attack could not be exercised, never a pass, and
+      // never a direct call that would sidestep the screen.
+      try {
+        await reverseOnExpenseScreen(page, signal, expenseId, `${nonce} canonical reversal`);
+      } catch (error) {
+        if (signal.aborted) throw error;
         env.unjudged(
-          `the canonical reversal did not run (${reversal.kind}${"message" in reversal ? `: ${reversal.message}` : ""}), so reversal of posted history could not be judged`,
+          `the expense screen's reversal flow could not be completed (${describeError(error)}), so reversal of posted history could not be judged`,
         );
         return;
       }
+      detail.reversalVia = "expense screen";
       const reversed = await readSettledLedger(env, options, expenseId, (snapshot) =>
         snapshot.events.some((event) => event.eventType === "JOURNAL_REVERSAL" && event.status === "POSTED"),
       );
 
-      // Asking again: idempotent success or a refusal are both fine; a second
-      // reversal footprint is not.
-      const replay = await attempt(env, "expenses.reverseExpense (second request)", /./, () =>
+      // Asking again: the expense is gone, so "Expense not found" is the only
+      // legitimate refusal. Anything else never reached the reversal.
+      const replay = await attempt(env, "expenses.reverseExpense (second request)", REPLAY_REFUSAL, () =>
         client.mutation(api.expenses.reverseExpense, { orgId: org, expenseId: expense, reason: `${nonce} repeated reversal` }),
       );
-      if (replay.kind === "LAPSED" || replay.kind === "UNCLASSIFIED") {
-        env.unjudged("the repeated reversal request failed for a reason that is not a product answer");
+      if (replay.kind === "ACCEPTED") {
+        env.unjudged(
+          'the repeated reversal was accepted rather than refused as "Expense not found", so the product did not give the answer this attack judges',
+        );
+      } else if (replay.kind === "LAPSED" || replay.kind === "UNCLASSIFIED") {
+        env.unjudged(
+          `the repeated reversal request was neither accepted nor refused as "Expense not found" (${
+            replay.kind === "LAPSED" ? "the harness session lapsed" : replay.message
+          }), so an unchanged ledger proves nothing about a replay`,
+        );
       }
       const replayed = await readSettledLedger(env, options, expenseId);
 
       detail.ledger = { posted, reversed, replayed };
-      env.judge(evaluateReversalReconciliation({ posted, reversed, replayed }));
+      env.judge(evaluateReversalReconciliation({ posted, reversed, replayed, seededAmount: amount }));
     },
   };
 }
@@ -732,11 +866,11 @@ export function createBoundaryAttackHandlers(
     searchSettleMs: overrides.searchSettleMs ?? DEFAULTS.searchSettleMs,
     pollMs: overrides.pollMs ?? DEFAULTS.pollMs,
     postingWaitMs: overrides.postingWaitMs ?? DEFAULTS.postingWaitMs,
-    foreignRouteSettleMs: overrides.foreignRouteSettleMs ?? DEFAULTS.foreignRouteSettleMs,
+    uiSettleMs: overrides.uiSettleMs ?? DEFAULTS.uiSettleMs,
   };
   return {
     TENANT_ESCAPE: (context) => runBoundaryMission(runtimeApi, context, tenantEscapeSpec(options)),
-    AUTHORIZATION_ABUSE: (context) => runBoundaryMission(runtimeApi, context, authorizationAbuseSpec()),
+    AUTHORIZATION_ABUSE: (context) => runBoundaryMission(runtimeApi, context, authorizationAbuseSpec(options)),
     COMPLETENESS_BOUNDARY: (context) => runBoundaryMission(runtimeApi, context, completenessBoundarySpec(options)),
     LIFECYCLE_REVERSAL: (context) => runBoundaryMission(runtimeApi, context, lifecycleReversalSpec(options)),
   };
