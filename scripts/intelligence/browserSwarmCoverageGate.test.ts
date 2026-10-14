@@ -72,11 +72,11 @@ describe("SCRUM-826 trusted coverage gate before preview provisioning", () => {
     await withImpact(
       impact([
         { id: "ECON-2", severity: "CRITICAL" },
-        { id: "CONS-1", severity: "CRITICAL" },
+        { id: "ACC-1", severity: "CRITICAL" },
       ]),
       async (repoRoot) => {
         await expect(runBrowserSwarmCoverageGate({ repoRoot, env })).rejects.toThrow(
-          /no executable handler.*CONSIGNMENT_ECONOMICS.*CONS-1/i,
+          /no executable handler.*MONEY_BOUNDARY.*ACC-1/i,
         );
       },
     );

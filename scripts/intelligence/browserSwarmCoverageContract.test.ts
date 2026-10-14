@@ -33,6 +33,7 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
     expect([...PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES].sort()).toEqual([
       "AUTHORIZATION_ABUSE",
       "COMPLETENESS_BOUNDARY",
+      "CONSIGNMENT_ECONOMICS",
       "DUPLICATE_SUBMIT",
       "LIFECYCLE_REVERSAL",
       "MULTI_TAB_RACE",
@@ -55,29 +56,42 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
   it("refuses an impact set whose mandatory missions cannot execute, naming every family and invariant", () => {
     expect(() =>
       assertMandatoryBrowserSwarmCoverage([
-        { id: "CONS-1", severity: "CRITICAL" },
+        { id: "ACC-1", severity: "CRITICAL" },
         { id: "ECON-2", severity: "CRITICAL" },
       ]),
-    ).toThrow(/no executable handler.*CONSIGNMENT_ECONOMICS.*CONS-1/i);
+    ).toThrow(/no executable handler.*MONEY_BOUNDARY.*ACC-1/i);
+  });
+
+  it("accepts CONS-1 as executable: its CONSIGNMENT_ECONOMICS mission has a handler that judges ECONOMIC_AUTHORITY", () => {
+    const plan = assertMandatoryBrowserSwarmCoverage([{ id: "CONS-1", severity: "CRITICAL" }]);
+    expect(plan.missions.map((mission) => `${mission.family}/${mission.oracle}`)).toEqual([
+      "CONSIGNMENT_ECONOMICS/ECONOMIC_AUTHORITY",
+    ]);
+    expect(plan.missions[0]?.evidence).toEqual(["TRACE", "SCREENSHOT", "BACKEND_STATE"]);
+    // The handler judges ECONOMIC_AUTHORITY for this family only; the same oracle on
+    // MONEY_BOUNDARY (ACC-1) stays unexecutable.
+    expect(isBrowserSwarmMissionExecutable("CONSIGNMENT_ECONOMICS", "ECONOMIC_AUTHORITY")).toBe(true);
+    expect(isBrowserSwarmMissionExecutable("CONSIGNMENT_ECONOMICS", "STATE_TRANSITION")).toBe(false);
+    expect(isBrowserSwarmMissionExecutable("MONEY_BOUNDARY", "ECONOMIC_AUTHORITY")).toBe(false);
   });
 
   it("refuses a plan that mixes executable and non-executable missions rather than running the executable half", () => {
     const plan = planBrowserAttackSwarm({
       impactedInvariants: [
         { id: "UI-1", severity: "HIGH" },
-        { id: "CONS-1", severity: "CRITICAL" },
+        { id: "ACC-1", severity: "CRITICAL" },
       ],
     });
 
     expect(() => assertBrowserSwarmMissionsExecutable(plan.missions)).toThrow(
-      /CONSIGNMENT_ECONOMICS/,
+      /MONEY_BOUNDARY/,
     );
   });
 
   it("refuses a forged Jev mission of an unexecutable family", () => {
     const forged: BrowserAttackMission = {
-      id: "jev::CONSIGNMENT_ECONOMICS",
-      family: "CONSIGNMENT_ECONOMICS",
+      id: "jev::MONEY_BOUNDARY",
+      family: "MONEY_BOUNDARY",
       source: "JEV",
       invariantIds: ["UI-1"],
       invariantSeverity: "HIGH",
@@ -89,7 +103,7 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
     };
 
     expect(() => assertBrowserSwarmMissionsExecutable([forged])).toThrow(
-      /CONSIGNMENT_ECONOMICS/,
+      /MONEY_BOUNDARY/,
     );
   });
 
@@ -177,7 +191,6 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
     expect(missing).toEqual([
       "ACC-1:MONEY_BOUNDARY/ECONOMIC_AUTHORITY",
       "ACC-3:MONEY_BOUNDARY/STATE_TRANSITION",
-      "CONS-1:CONSIGNMENT_ECONOMICS/ECONOMIC_AUTHORITY",
       "LIFE-1:LIFECYCLE_REVERSAL/STATE_TRANSITION",
       "LIFE-1:NAVIGATION_RACE/STATE_TRANSITION",
       "LIFE-1:STALE_UI/UI_BACKEND_AUTHORITY",
@@ -196,6 +209,7 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
       "ACC-2",
       "AUTH-1",
       "CONC-1",
+      "CONS-1",
       "ECON-1",
       "ECON-2",
       "PERF-1",
@@ -212,6 +226,7 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
       "browserSwarmEconomicAttacks.ts",
       "browserSwarmBoundaryAttacks.ts",
       "browserSwarmBoundaryHarness.ts",
+      "browserSwarmConsignmentAttack.ts",
       "browserSwarmNetworkRecoveryAttack.ts",
     ]) {
       const source = readFileSync(path.join(__dirname, file), "utf8");

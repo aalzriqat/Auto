@@ -23,6 +23,7 @@ import {
   createEconomicAttackHandlers,
   type MissionSeat,
 } from "./browserSwarmEconomicAttacks";
+import { createConsignmentAttackHandlers } from "./browserSwarmConsignmentAttack";
 import { createNetworkRecoveryHandler } from "./browserSwarmNetworkRecoveryAttack";
 
 type ArtifactWriter = {
@@ -545,5 +546,7 @@ export function createInitialBrowserAttackHandlers(): BrowserAttackHandlerRegist
     // reversal) and network recovery, on the same contained lifecycle.
     ...createBoundaryAttackHandlers(missionBrowserRuntime),
     NETWORK_RECOVERY: createNetworkRecoveryHandler(missionBrowserRuntime),
+    // SCRUM-350 CONS-1: a financed consigned sale, judged against independent figures.
+    ...createConsignmentAttackHandlers(missionBrowserRuntime),
   };
 }
