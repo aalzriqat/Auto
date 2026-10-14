@@ -929,6 +929,26 @@ jobs:
           E2E_APPROVER_USER: trusted-attested
           E2E_APPROVER_PASSWORD: trusted-attested
 
+      # SCRUM-350 G4: the preview is seeded with a chart and, on purpose, no
+      # accounting period, so every swarm posting stayed QUEUED and ACC-2 could
+      # not judge reversal. Open the current period once, after trusted E2E and
+      # before any attack worker, and refuse to continue until the backend
+      # reports it open with nothing dated inside it still pending. The full
+      # suite's report and results are left untouched: this run writes its own.
+      - name: Open the swarm accounting period and verify postings can settle
+        working-directory: trusted
+        run: >-
+          pnpm exec playwright test playwright/tests/browser-swarm-accounting-period.spec.ts
+          --project=chromium --no-deps --output=test-results-swarm-period
+        env:
+          BROWSER_EGRESS_REQUIRED: "1"
+          BROWSER_SWARM_PERIOD_SETUP: "1"
+          CI: true
+          PLAYWRIGHT_HTML_REPORT: playwright-report-swarm-period
+          PLAYWRIGHT_SKIP_WEBSERVER: "1"
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+
       - name: Stop isolated trusted E2E candidate frontend
         if: always()
         run: |
@@ -953,6 +973,8 @@ jobs:
           path: |
             trusted/playwright-report/
             trusted/test-results/
+            trusted/playwright-report-swarm-period/
+            trusted/test-results-swarm-period/
             trusted/egress-evidence/
           if-no-files-found: warn
           retention-days: 14
