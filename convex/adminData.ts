@@ -230,8 +230,11 @@ export const adminGetRecord = query({
   args: { table: v.string(), id: v.string() },
   handler: async (ctx, args) => {
     await requireSuperAdmin(ctx);
-    assertAdminTable(args.table);
-    return await ctx.db.get(args.id as Id<TableNames>);
+    const { table } = assertAdminTable(args.table);
+    // `ctx.db.get` resolves by the id's real table, not the one named. Without this
+    // proof, `table:"vehicles"` plus any other table's id (an orgSettings id, say,
+    // which carries the org's connected-account credentials) returned that row.
+    return await ctx.db.get(assertIdBelongsToTable(ctx, table, args.id));
   },
 });
 

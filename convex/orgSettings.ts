@@ -4,6 +4,7 @@ import { mutation } from "./functions";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
+import { toPublicOrgSettings } from "./utils/orgSettingsProjection";
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 
@@ -38,7 +39,10 @@ export function definedPatchFields(fields: Record<string, unknown>): Record<stri
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
 /**
- * Returns the orgSettings row for the given org, or null if not yet configured.
+ * Returns the org's settings as clients may see them, or null if not yet
+ * configured. This is the allowlisted projection, never the raw row: the row also
+ * holds the connected accounts' credentials, which no public query returns
+ * (SCRUM-843). Backend code that needs one reads the table itself.
  */
 export const get = query({
   args: { orgId: v.id("organizations") },
@@ -58,7 +62,7 @@ export const get = query({
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
-    return settings ?? null;
+    return settings ? toPublicOrgSettings(settings) : null;
   },
 });
 

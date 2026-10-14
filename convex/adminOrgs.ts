@@ -9,6 +9,7 @@ import { throwAppError, AppErrorCode } from "./utils/errors";
 import { orgResetState } from "./utils/orgResetGeneration";
 import { logAdminAction } from "./adminAudit";
 import { notifyManagers } from "./utils/notifications";
+import { toPublicOrgSettings } from "./utils/orgSettingsProjection";
 
 const ORG_DELETION_BATCH_SIZE = 50;
 
@@ -786,7 +787,9 @@ export const getOrgDetail = query({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
 
-    return { org, settings, counts, subscription };
+    // The projection, not the row: this page prints `settings` as JSON, and the row
+    // holds the tenant's connected-account credentials (SCRUM-843).
+    return { org, settings: settings ? toPublicOrgSettings(settings) : null, counts, subscription };
   },
 });
 
