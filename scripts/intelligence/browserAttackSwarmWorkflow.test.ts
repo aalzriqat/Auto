@@ -1334,4 +1334,101 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       expect(hasRetryGuard("/*\n" + guard + "\n*/")).toBe(false);
     });
   });
+
+  // SCRUM-350 G4 (PR #581, run 38529903614): the swarm preview has a chart of
+  // accounts and no accounting period, so every posting stayed QUEUED and ACC-2
+  // returned HARNESS_ERROR. The period is opened once, after trusted E2E and
+  // before any attack worker, never by a worker and never by the bootstrap.
+  describe("swarm accounting period setup (SCRUM-350 G4)", () => {
+    const SETUP = "Open the swarm accounting period and drain its pending outbox";
+    const FULL_SUITE = "Run full trusted E2E suite against exact candidate";
+    const STOP = "Stop isolated trusted E2E candidate frontend";
+    const SPEC = "playwright/tests/browser-swarm-accounting-period.spec.ts";
+    const stripComments = (source: string): string =>
+      source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    const specSource = stripComments(
+      readFileSync(path.resolve(process.cwd(), SPEC), "utf8"),
+    );
+
+    it("runs inside trusted-e2e after the full suite and before the candidate is stopped", () => {
+      const names = (job("trusted-e2e").steps ?? []).map((entry) => entry.name);
+      expect(names.indexOf(FULL_SUITE)).toBeGreaterThan(-1);
+      expect(names.indexOf(STOP)).toBeGreaterThan(-1);
+      expect(names.indexOf(SETUP)).toBeGreaterThan(names.indexOf(FULL_SUITE));
+      expect(names.indexOf(SETUP)).toBeLessThan(names.indexOf(STOP));
+    });
+
+    it("cannot be skipped or soft-failed, so a failed setup fails trusted-e2e and blocks every worker", () => {
+      const setup = step("trusted-e2e", SETUP);
+      expect(setup.if).toBeUndefined();
+      expect(setup).not.toHaveProperty("continue-on-error");
+      expect(String(job("attack-worker").needs)).toContain("trusted-e2e");
+      expect(String(job("attack-worker").if)).toContain(
+        "needs.trusted-e2e.result == 'success'",
+      );
+    });
+
+    it("runs only the setup spec against the already-running candidate with the egress proxy required", () => {
+      const setup = step("trusted-e2e", SETUP);
+      const run = String(setup.run ?? "").replace(/\s+/g, " ");
+      expect(run).toContain(`playwright test ${SPEC} --project=chromium --no-deps`);
+      expect(setup["working-directory"]).toBe("trusted");
+      expect(setup.env).toMatchObject({
+        BROWSER_SWARM_PERIOD_SETUP: "1",
+        BROWSER_EGRESS_REQUIRED: "1",
+        PLAYWRIGHT_SKIP_WEBSERVER: "1",
+        NEXT_PUBLIC_CONVEX_URL: "${{ needs.prepare.outputs.convex_cloud_url }}",
+      });
+      for (const forbidden of CANDIDATE_FORBIDDEN_ENV) {
+        expect(setup.env, forbidden).not.toHaveProperty(forbidden);
+      }
+    });
+
+    it("writes its own report and results so the full suite's evidence is not erased, and uploads both", () => {
+      const setup = step("trusted-e2e", SETUP);
+      expect(String(setup.run ?? "").replace(/\s+/g, " ")).toContain(
+        "--output=test-results-swarm-period",
+      );
+      expect(setup.env).toHaveProperty("PLAYWRIGHT_HTML_REPORT", "playwright-report-swarm-period");
+      const upload = (job("trusted-e2e").steps ?? []).find(
+        (entry) => entry.name === "Upload trusted E2E report",
+      );
+      const uploaded = String(upload?.with?.path ?? "");
+      expect(uploaded).toContain("trusted/playwright-report-swarm-period/");
+      expect(uploaded).toContain("trusted/test-results-swarm-period/");
+      expect(upload?.if).toBe("always()");
+    });
+
+    it("is never run by an attack worker or the ordinary PR E2E workflow", () => {
+      for (const entry of job("attack-worker").steps ?? []) {
+        const text = JSON.stringify(entry);
+        expect(text, String(entry.name)).not.toContain("browser-swarm-accounting-period");
+        expect(text, String(entry.name)).not.toContain("BROWSER_SWARM_PERIOD_SETUP");
+      }
+      expect(playwrightWorkflowSource).not.toContain("BROWSER_SWARM_PERIOD_SETUP");
+    });
+
+    it("registers its test only on the workflow's opt-in, never retries, and judges through the module", () => {
+      expect(specSource).toMatch(
+        /if\s*\(\s*process\.env\[SWARM_PERIOD_SETUP_FLAG\]\s*===\s*"1"\s*\)/,
+      );
+      expect(specSource).toMatch(/test\.describe\.configure\(\{\s*retries:\s*0\s*\}\)/);
+      expect(specSource).toMatch(
+        /if\s*\(\s*testInfo\.retry\s*>\s*0\s*\)\s*\{?\s*throw new Error\(/,
+      );
+      expect(specSource).toContain("assertSwarmPeriodSetupEnvironment(process.env)");
+      expect(specSource).toContain("ensureSwarmAccountingPeriod(client, orgId)");
+    });
+
+    it("is part of the test:browser-swarm gate that CI runs", () => {
+      const scripts = (
+        JSON.parse(readFileSync(path.resolve(process.cwd(), "package.json"), "utf8")) as {
+          scripts: Record<string, string>;
+        }
+      ).scripts;
+      expect(scripts["test:browser-swarm"]).toContain(
+        "scripts/intelligence/browserSwarmAccountingPeriod.test.ts",
+      );
+    });
+  });
 });

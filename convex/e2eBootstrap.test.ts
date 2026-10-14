@@ -402,6 +402,30 @@ describe("bootstrapE2EOrganization — seating both identities", () => {
     expect(baseline.accounts.some((a) => a.allowManualPosting)).toBe(true);
   });
 
+  // Accounting Cloud Rehearsal relies on openTheBooks creating the one open
+  // period (scripts/accountingRehearsalCases.mjs), so the bootstrap must leave
+  // the books period-less. The browser swarm opens its own, after trusted E2E
+  // (scripts/intelligence/browserSwarmAccountingPeriod.ts), never here.
+  test("seeds a chart of accounts but no accounting period", async () => {
+    const t = await markedDeployment();
+
+    const { orgId } = await bootstrap(t);
+
+    const books = await t.run(async (ctx) => ({
+      accounts: await ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect(),
+      periods: await ctx.db
+        .query("accountingPeriods")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .collect(),
+    }));
+
+    expect(books.accounts.length).toBeGreaterThan(0);
+    expect(books.periods).toEqual([]);
+  });
+
   /** Failing-first case 6: idempotency. */
   test("running it twice changes nothing", async () => {
     const t = await markedDeployment();

@@ -196,8 +196,13 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // before the preview is created, in trusted-e2e before it deploys over the
   // preview, and in attack-worker before the missions. None of them touches a
   // Convex credential or a candidate path.
+  // SCRUM-350 G4: also re-pinned for one trusted-e2e step only — the swarm
+  // accounting period setup (`playwright test` of one trusted spec, no secret,
+  // no candidate path) — plus its report folders in the E2E report upload.
+  // The step is named for what it measures (opens the period, drains the
+  // pending outbox); it does not claim a later posting will settle.
   "browser-attack-swarm.yml":
-    "3d221eb48ab5c44addef5713aaa4663122eaea489beed39d68d6dec11e960c8f",
+    "d3e24f70b3e4b91258044cc4d78194c48af1cf8d61f9746c41c0a1999cd12362",
   "contract-skew.yml":
     "6f3179d4bc9ffecd9c056ce7bb1e9eeb0a22e8f950444c02ff99858781c8ed08",
   "deal-scenarios-e2e.yml":
