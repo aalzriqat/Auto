@@ -15,6 +15,7 @@ import {
   recordApprovedAmount,
   recordQuotation,
 } from "../fixtures/financedDeal";
+import { displayedAmount } from "../fixtures/displayedAmount";
 
 /**
  * The financed deal's economics, recorded by the two people the product
@@ -50,10 +51,6 @@ test.describe.configure({ timeout: 600_000 });
 // resolves waits out the whole 600s and reports the test as slow rather than
 // naming the control it could not find.
 test.use({ actionTimeout: 25_000 });
-
-// A figure as a whole number: "13,000" or "110,000" must not satisfy "3,000" or "10,000", which
-// an unanchored /3,000/ would. Money here is always Latin digits with "," grouping (lib/moneyDisplay).
-const wholeAmount = (figure: string) => new RegExp(`(?<![\\d,])${figure}(?![\\d,])`);
 
 test.describe("recording a financed deal's economics through the interface", () => {
   /**
@@ -157,11 +154,12 @@ test.describe("recording a financed deal's economics through the interface", () 
       // the way an operator would before reading the split.
       await openDealDetails(managerPage);
       await expect(managerPage.getByText("What that leaves")).toBeVisible();
-      // Scoped to each row's value: a page-wide match could be satisfied by another figure.
-      await expect(managerPage.locator('[data-row-kind="funded"] dd')).toContainText(wholeAmount("10,000"));
+      // Each row's whole value, figure and currency marker: a page-wide match could be satisfied by
+      // another figure, and a partial match by "-3,000" or "3,000.01".
+      await expect(managerPage.locator('[data-row-kind="funded"] dd')).toHaveText(displayedAmount("10,000"));
       const notFinanced = managerPage.locator('[data-row-kind="unfinanced"] dd');
-      await expect(notFinanced).toContainText(wholeAmount("3,000"));
-      await expect(notFinanced).not.toContainText(wholeAmount("1,300"));
+      await expect(notFinanced).toHaveText(displayedAmount("3,000"));
+      await expect(notFinanced).not.toHaveText(displayedAmount("1,300"));
       // --- handover, expected payment, and close — FROM THE COCKPIT ---------
       // SCRUM-78. This tail used to be driven through
       // `Finance Applications → row → Review`, which is exactly why the suite
