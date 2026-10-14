@@ -4964,25 +4964,6 @@ describe("resolving the appraisal gap", () => {
     expect(after.customerGapToFinanceCompanyMinor).toBe(0);
   });
 
-  // SCRUM-766 DA2-12 — failing-first. Until the customer-pays-the-finance-company
-  // mechanism exists, a destination to the finance company is refused for EVERY
-  // company, before any write: recording it would leave the allocation, the
-  // remittance and the ledger saying three different things.
-  test("a share routed to the finance company is refused with nothing persisted", async () => {
-    const { seed, applicationId } = await seedGappedDeal();
-    const before = await gapFields(seed, applicationId);
-    await expect(
-      seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
-        orgId: seed.orgId,
-        applicationId,
-        economicsStamp: await servedStamp(seed, applicationId),
-        ...allocation(850, 0, { cash: 650, financeCompany: 200 }),
-      })
-    ).rejects.toThrow(/not available yet/i);
-    expect(await gapFields(seed, applicationId)).toEqual(before);
-    expect(await overrideRows(seed, applicationId)).toHaveLength(0);
-  });
-
   test.each([
     ["shares short of the gap", allocation(500, 300, { cash: 500 }), /must equal the shortfall/i],
     ["shares over the gap", allocation(700, 400, { cash: 700 }), /must equal the shortfall/i],
@@ -6428,6 +6409,207 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
     expect(after.customerGapShareMinor).toBeUndefined();
     expect(after.customerGapCashToDealerMinor).toBeUndefined();
     expect(after.gapResolvedAt).toBeUndefined();
+  });
+
+  // SCRUM-766 PR-B (owner ruling): money the customer pays the finance company
+  // directly toward the net shortfall is the customer's part, and once it is CONFIRMED
+  // it REDUCES the showroom's contribution one for one. The agreement alone does not:
+  // it is a promise, and the dealership still owes the full contribution until the
+  // payment is evidenced. Hand-computed on the 12,500 deal
+  // (target 10,500, first payment 500, 85%, supplier 9,500, expenses 625),
+  // approved 11,500: funded 9,775 + first payment 500 + contribution 1,225 = 11,500.
+  // Net shortfall 850. Customer 400 to the finance company, showroom covers 450:
+  //   agreed only: contribution 1,225, profit 11,500 + 0 - 9,500 - 1,225 - 625 = 150
+  //   confirmed:   contribution 1,225 - 400 = 825
+  //                profit 11,500 + 0 - 9,500 - 825 - 625 = 550  (1,000 base - the showroom's 450)
+  describe("the customer pays part of the shortfall to the finance company (SCRUM-766 PR-B)", () => {
+    /** Records that the customer really paid the finance company `major` (the evidence). */
+    const confirmToCompany = async (seed: Seed, applicationId: Id<"financeApplications">, major: number) =>
+      seed.asApprover.mutation(api.customerFinanceCompanyPayments.confirmPayment, {
+        orgId: seed.orgId,
+        applicationId,
+        amountMinor: jod(major),
+        paidAt: Date.now() - 1_000,
+        reference: "TRF-FC-1",
+        idempotencyKey: crypto.randomUUID(),
+      });
+    const withSupplier = async (seed: Seed) =>
+      seed.t.run((ctx) =>
+        ctx.db.insert("vehicleSupplierPayables", {
+          orgId: seed.orgId,
+          vehicleId: seed.vehicleId,
+          sourcedFromName: "Amman Importer Co",
+          amountDue: 9_500,
+          currency: "JOD",
+          status: "DUE_ON_SALE",
+          createdBy: seed.userId,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        })
+      );
+    const cockpitProfit = async (seed: Seed, applicationId: Id<"financeApplications">) => {
+      const cockpit = await seed.asUser.query(api.applications.dealCockpit, {
+        orgId: seed.orgId,
+        applicationId,
+      });
+      const profit = cockpit?.money?.profit;
+      if (!profit || !profit.available) {
+        throw new Error(`profit not available: ${JSON.stringify(profit)}`);
+      }
+      return profit;
+    };
+
+    test("400 agreed leaves the showroom 1,225 and the profit 150; confirmed it is 825 and 550", async () => {
+      const { seed, applicationId } = await seedGappedDeal();
+      await withSupplier(seed);
+      expect((await readApp(seed, applicationId)).dealerContributionMinor).toBe(jod(1_225));
+      await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await servedStamp(seed, applicationId),
+        ...allocation(400, 450, { financeCompany: 400 }),
+      });
+      const agreed = await readApp(seed, applicationId);
+      expect(agreed.gapResolution).toBe("SPLIT");
+      expect(agreed.customerGapToFinanceCompanyMinor).toBe(jod(400));
+      // A promise is not a payment: nothing is credited, and the profit is the unreduced one.
+      expect(agreed.dealerContributionMinor).toBe(jod(1_225));
+      expect((await cockpitProfit(seed, applicationId)).amountMinor).toBe(jod(150));
+      await confirmToCompany(seed, applicationId, 400);
+      const after = await readApp(seed, applicationId);
+      expect(after.dealerContributionMinor).toBe(jod(825));
+      const profit = await cockpitProfit(seed, applicationId);
+      expect(profit.amountMinor).toBe(jod(550));
+      // Nothing was paid to the dealership: the finance-company part is not dealer income.
+      expect(profit.lines.find((line) => line.key === "CUSTOMER_PLANNED_TO_DEALER")?.amountMinor).toBe(0);
+      expect(profit.lines.find((line) => line.key === "DEALER_CONTRIBUTION")?.amountMinor).toBe(jod(825));
+      // The net shortfall itself is untouched by how it is paid.
+      expect(after.netShortfallMinor).toBe(jod(850));
+    });
+
+    test("a mixed customer part reduces the contribution by the finance-company part only", async () => {
+      const { seed, applicationId } = await seedGappedDeal();
+      await withSupplier(seed);
+      // Customer 600: 400 to the finance company, 200 cash to us. Showroom 250.
+      // Once the 400 is confirmed: contribution 1,225 - 400 = 825; profit 11,500 + 200 - 9,500 - 825 - 625 = 750.
+      await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await servedStamp(seed, applicationId),
+        ...allocation(600, 250, { cash: 200, financeCompany: 400 }),
+      });
+      expect((await readApp(seed, applicationId)).dealerContributionMinor).toBe(jod(1_225));
+      await confirmToCompany(seed, applicationId, 400);
+      expect((await readApp(seed, applicationId)).dealerContributionMinor).toBe(jod(825));
+      expect((await cockpitProfit(seed, applicationId)).amountMinor).toBe(jod(750));
+    });
+
+    test("the whole shortfall can be paid to the finance company", async () => {
+      const { seed, applicationId } = await seedGappedDeal();
+      await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await servedStamp(seed, applicationId),
+        ...allocation(850, 0, { financeCompany: 850 }),
+      });
+      const agreed = await readApp(seed, applicationId);
+      expect(agreed.gapResolution).toBe("CUSTOMER_ABSORBS");
+      expect(agreed.dealerContributionMinor).toBe(jod(1_225));
+      await confirmToCompany(seed, applicationId, 850);
+      expect((await readApp(seed, applicationId)).dealerContributionMinor).toBe(jod(375));
+    });
+
+    test("a payment to the finance company larger than the contribution it replaces is refused with nothing persisted", async () => {
+      // Quotation 12,500 / approved 5,000 at 85%: funded 4,250, first payment 500,
+      // contribution 250. The net shortfall (about 7,000) is far above it, so a
+      // customer part routed wholly to the finance company would overpay it.
+      const { seed, applicationId } = await approvedWith({ approvedMajor: 5_000 });
+      const row = await readApp(seed, applicationId);
+      expect(row.dealerContributionMinor).toBe(jod(250));
+      const shortfall = row.netShortfallMinor as number;
+      const before = await gapFields(seed, applicationId);
+      await expect(
+        seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+          orgId: seed.orgId,
+          applicationId,
+          economicsStamp: await servedStamp(seed, applicationId),
+          customerGapShareMinor: shortfall,
+          dealerGapShareMinor: 0,
+          customerGapCashToDealerMinor: 0,
+          customerGapInstallmentToDealerMinor: 0,
+          customerGapToFinanceCompanyMinor: shortfall,
+        })
+      ).rejects.toThrow(/more than the dealership would have contributed/i);
+      expect(await gapFields(seed, applicationId)).toEqual(before);
+      expect(await overrideRows(seed, applicationId)).toHaveLength(0);
+    });
+
+    test("re-approving at a different amount voids the split and restores the full contribution", async () => {
+      const { seed, applicationId } = await approvedWith({ approvedMajor: 11_500 });
+      await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await servedStamp(seed, applicationId),
+        ...allocation(400, 450, { financeCompany: 400 }),
+      });
+      await confirmToCompany(seed, applicationId, 400);
+      expect((await readApp(seed, applicationId)).dealerContributionMinor).toBe(jod(825));
+      // Re-approved at 80%: funded 9,200, first payment 500, contribution 1,800;
+      // the shortfall is now 1,425. The agreement was against 850, so it is void -
+      // and so is the 400 credited by it, although the evidence row stays on record:
+      // 1,800, not 1,400 and not 825.
+      await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+        orgId: seed.orgId,
+        applicationId,
+        approvedAmountMinor: jod(11_500),
+        basis: "APPRAISAL",
+        appliedLtvPercent: 80,
+      });
+      const after = await readApp(seed, applicationId);
+      expect(after.netShortfallMinor).toBe(jod(1_425));
+      expect(after.gapResolution).toBe("PENDING_NEGOTIATION");
+      expect(after.customerGapToFinanceCompanyMinor).toBeUndefined();
+      expect(after.dealerContributionMinor).toBe(jod(1_800));
+    });
+
+    test("a correction that leaves the shortfall at 850 but shrinks the contribution below the 400 voids the agreement instead of leaving a refusable one", async () => {
+      const { seed, applicationId } = await seedGappedDeal();
+      await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await servedStamp(seed, applicationId),
+        ...allocation(400, 450, { financeCompany: 400 }),
+      });
+      // First payment 1,500 on both sides (quote 12,500 at 85%: contribution 375;
+      // approved 11,500: funded 9,775, contribution 225): the shortfall is
+      // (12,500 - 375) - (11,500 - 225) = 850 still, but 225 < 400.
+      await seed.t.run((ctx) =>
+        ctx.db.patch(applicationId, {
+          customerFirstPaymentMinor: jod(1_500),
+          quoteFirstPaymentCorrectedMinor: jod(1_500),
+        })
+      );
+      await seed.t.run((ctx) => recomputeEconomicsForApplication(ctx, applicationId));
+      const after = await readApp(seed, applicationId);
+      expect(after.netShortfallMinor).toBe(jod(850));
+      expect(after.gapResolution).toBe("PENDING_NEGOTIATION");
+      expect(after.customerGapToFinanceCompanyMinor).toBeUndefined();
+      expect(after.customerGapToFinanceCompanyAppliedMinor).toBe(0);
+      expect(after.dealerContributionMinor).toBe(jod(225));
+    });
+
+    test("a recompute that moves nothing keeps the reduced contribution, never subtracting twice", async () => {
+      const { seed, applicationId } = await seedGappedDeal();
+      await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await servedStamp(seed, applicationId),
+        ...allocation(400, 450, { financeCompany: 400 }),
+      });
+      await confirmToCompany(seed, applicationId, 400);
+      await seed.t.run((ctx) => recomputeEconomicsForApplication(ctx, applicationId));
+      expect((await readApp(seed, applicationId)).dealerContributionMinor).toBe(jod(825));
+    });
   });
 
   // Review F1/R1 (Opus + Codex, both blocking): withdrawing the approval left the

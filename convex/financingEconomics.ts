@@ -1,5 +1,9 @@
 import { ConvexError, v, type Value } from "convex/values";
 import { resolveDealCurrency, settlementDeductedTotalMinor } from "./utils/settlementDeductions";
+import {
+  customerPaymentEvidenceOf,
+  loadCustomerFinanceCompanyPayments,
+} from "./utils/customerFinanceCompanyPayments";
 import { paginationOptsValidator } from "convex/server";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
@@ -50,9 +54,9 @@ import {
   economicsStamp,
   evaluateQuotationException,
   GAP_RESOLUTION_CLEARED,
-  GAP_TO_FINANCE_COMPANY_NOT_AVAILABLE_REFUSAL,
   gapResolutionTransition,
   requireCustomerGapToDealer,
+  requireCustomerGapToFinanceCompany,
   resolveAppliedLtv,
   selectActiveAppraisal,
   shortfallFieldsFor,
@@ -185,6 +189,7 @@ async function recomputeAndPatchEconomics(
   // Refused before any write: a corrupt component must not be recomputed
   // into the stored economics, and added inline a corrupt pair cancels.
   const customerGapToDealer = requireCustomerGapToDealer(app, "recomputing this deal's economics");
+  const settledSplit = requireCustomerGapToFinanceCompany(app, "recomputing this deal's economics");
 
   // The appraisal the approval was actually based on, for companies whose LTV
   // rule multiplies the appraisal rather than the approved amount.
@@ -198,11 +203,27 @@ async function recomputeAndPatchEconomics(
   // persists a first payment now, so this is reached only by a legacy row.
   const firstPaymentUnknown = app.customerFirstPaymentMinor === undefined;
 
-  const derived = firstPaymentUnknown ? null : deriveEconomics({
-    approvedDealerPurchaseAmountMinor: app.approvedDealerPurchaseAmountMinor,
-    appliedLtvPercent: app.appliedLtvPercent,
+  const feeDeductionsMinor = firstPaymentUnknown
+    ? 0
+    : await settlementDeductedTotalMinor(ctx, app._id, currency);
+  // What the customer has CONFIRMED paying the finance company against the
+  // agreement the deal holds now: the agreement on the row is only a promise, and
+  // the contribution falls by the evidenced part. A payment confirmed against an
+  // agreement since withdrawn is on file but is not this agreement's evidence.
+  const { currentConfirmedMinor: confirmedCustomerPaymentMinor } = customerPaymentEvidenceOf(
+    await loadCustomerFinanceCompanyPayments(ctx, app.orgId, app._id),
+    app,
+    currency
+  );
+  // Narrowed above; read into consts because the closure below loses the narrowing.
+  const { approvedDealerPurchaseAmountMinor, appliedLtvPercent, submittedQuotationMinor } = app;
+  const deriveFor = (split: typeof settledSplit) => deriveEconomics({
+    ...split,
+    confirmedCustomerPaymentMinor,
+    approvedDealerPurchaseAmountMinor,
+    appliedLtvPercent,
     customerFirstPaymentMinor: app.customerFirstPaymentMinor as number,
-    submittedQuotationMinor: app.submittedQuotationMinor,
+    submittedQuotationMinor,
     ltvBasis: snapshot.ltvBasis,
     ...(basisAppraisal && basisAppraisal.orgId === app.orgId
       ? { independentAppraisalMinor: basisAppraisal.appraisalAmountMinor }
@@ -239,7 +260,7 @@ async function recomputeAndPatchEconomics(
     // readiness check refuses while any line lacks a reconciled actual
     // (`evaluateClosingReadiness`), so no journal is ever posted from a
     // partially-recorded settlement.
-    feeDeductionsMinor: await settlementDeductedTotalMinor(ctx, app._id, currency),
+    feeDeductionsMinor,
     customerDirectToDealerMinor: customerGapToDealer,
     // The baseline the net shortfall is measured against: the quotation's OWN
     // frozen LTV and first payment, never the row's `appliedLtvPercent` (which
@@ -260,6 +281,7 @@ async function recomputeAndPatchEconomics(
     // here — it cost a ctx.db.get on every quotation and approval write to
     // compute a number nothing consumed.
   });
+  const derived = firstPaymentUnknown ? null : deriveFor(settledSplit);
 
   // The company's LTV rule names an amount nobody has recorded — commonly a
   // manual approval under a company that lends against the appraisal. Leave
@@ -274,6 +296,8 @@ async function recomputeAndPatchEconomics(
       financeCompanyFundedPortionMinor: undefined,
       unfinancedPortionMinor: undefined,
       dealerContributionMinor: undefined,
+      customerGapToFinanceCompanyAppliedMinor: undefined,
+      customerGapToFinanceCompanyUnconfirmedMinor: undefined,
       expectedDealerRemittanceMinor: undefined,
       rawAppraisalGapMinor: undefined,
       ...shortfallFieldsFor(undefined),
@@ -334,6 +358,26 @@ async function recomputeAndPatchEconomics(
       ) ?? {}
     );
   })();
+  // An agreement the resolver would refuse is void, not merely flagged: an unsealed
+  // recompute (a corrected first payment, say) can leave the customer's payment to
+  // the finance company larger than the contribution it replaces even though the
+  // shortfall itself did not move.
+  const creditOverrun =
+    !sealed &&
+    derived.customerPayment.excessMinor > 0 &&
+    !("customerGapToFinanceCompanyMinor" in shortfallResolutionPatch);
+  const resolutionPatch = creditOverrun
+    ? { gapResolution: "PENDING_NEGOTIATION" as const, ...GAP_RESOLUTION_CLEARED }
+    : shortfallResolutionPatch;
+  // A voided split takes the customer's payment to the finance company with it
+  // (SCRUM-766 PR-B): the contribution and remittance stored below must come
+  // from the same row state as the patch, or a cleared agreement would leave its
+  // reduced contribution behind.
+  const splitVoided = "customerGapToFinanceCompanyMinor" in resolutionPatch;
+  const stored = splitVoided
+    ? (deriveFor({ customerGapShareMinor: 0, customerGapToFinanceCompanyMinor: 0 }) ?? derived)
+    : derived;
+
   // A shortfall that cannot be measured is a reconciliation item, not a zero.
   // Once the vehicle is handed over the agreement cannot be voided here, so a
   // MOVED shortfall on a sealed deal is flagged for a human instead.
@@ -344,14 +388,28 @@ async function recomputeAndPatchEconomics(
         ? "The shortfall changed after the vehicle was handed over, so what was agreed about it can no longer be revisited automatically. Reconcile it before closing the deal."
         : undefined;
 
+  // On a sealed deal the agreement cannot be voided, so a recorded payment to the
+  // finance company that the contribution can no longer absorb is credited only up
+  // to the contribution; the rest is a human's to reconcile, not a silent drop.
+  const paymentExcessReason =
+    sealed && derived.customerPayment.excessMinor > 0
+      ? "The customer's recorded payment to the finance company is more than the showroom contribution it replaces, so only part of it has been credited. Reconcile the gap resolution before closing the deal."
+      : undefined;
+  const settlementReasons = [shortfallReconcileReason, paymentExcessReason].filter(
+    (reason): reason is string => reason !== undefined
+  );
+
   const remittanceReason = remittanceIsKnowable
     ? app.financingReconciliationReason
     : appendReconciliationReason(
         app.financingReconciliationReason,
         `${snapshot.companyName} keeps the customer's payment rather than passing it through, and how much reached them has not been recorded. The expected dealer remittance cannot be determined until it is.`
       );
-  const reconcileReason = shortfallReconcileReason
-    ? appendReconciliationReason(remittanceReason, shortfallReconcileReason)
+  const reconcileReason = settlementReasons.length > 0
+    ? settlementReasons.reduce(
+        (existing, addition) => appendReconciliationReason(existing, addition),
+        remittanceReason
+      )
     : remittanceIsKnowable
       ? undefined
       : remittanceReason;
@@ -365,13 +423,16 @@ async function recomputeAndPatchEconomics(
     economicsRevision: (app.economicsRevision ?? 0) + 1,
     financeCompanyFundedPortionMinor: derived.composition.financeCompanyFundedPortionMinor,
     unfinancedPortionMinor: derived.composition.unfinancedPortionMinor,
-    dealerContributionMinor: derived.composition.dealerContributionMinor,
+    dealerContributionMinor: stored.customerPayment.dealerContributionMinor,
+    customerGapToFinanceCompanyAppliedMinor: stored.customerPayment.appliedMinor,
+    // Written with the applied part from the same derivation, so the two cannot disagree.
+    customerGapToFinanceCompanyUnconfirmedMinor: stored.customerPayment.unconfirmedMinor,
     expectedDealerRemittanceMinor: remittanceIsKnowable
-      ? derived.remittance.expectedDealerRemittanceMinor
+      ? stored.remittance.expectedDealerRemittanceMinor
       : undefined,
     rawAppraisalGapMinor: derived.gap.rawAppraisalGapMinor,
     ...shortfallFields,
-    ...shortfallResolutionPatch,
+    ...resolutionPatch,
     // Blanking the remittance silently would be worse than the assumption it
     // replaced. Nothing writes customerContributionToFinanceCompanyMinor yet,
     // so for a company that retains customer funds this is not a transient
@@ -2223,6 +2284,8 @@ export const recordAppraisal = mutation({
             financeCompanyFundedPortionMinor: undefined,
             unfinancedPortionMinor: undefined,
             dealerContributionMinor: undefined,
+            customerGapToFinanceCompanyAppliedMinor: undefined,
+            customerGapToFinanceCompanyUnconfirmedMinor: undefined,
             expectedDealerRemittanceMinor: undefined,
             rawAppraisalGapMinor: undefined,
             // The NET shortfall was measured against this approval (SCRUM-766).
@@ -2792,6 +2855,8 @@ export const reopenApproval = mutation({
       financeCompanyFundedPortionMinor: undefined,
       unfinancedPortionMinor: undefined,
       dealerContributionMinor: undefined,
+      customerGapToFinanceCompanyAppliedMinor: undefined,
+      customerGapToFinanceCompanyUnconfirmedMinor: undefined,
       expectedDealerRemittanceMinor: undefined,
       rawAppraisalGapMinor: undefined,
       // The NET shortfall was measured against this approval (SCRUM-766).
@@ -2956,10 +3021,11 @@ export const applyQuoteFirstPayment = mutation({
  *    as money the customer paid the dealership directly; both deliberately
  *    exclude `customerGapToFinanceCompanyMinor` — money the customer pays the financier
  *    is not dealership money and must never become a dealer receivable or
- *    profit. A writer that recorded the share and omitted the split would
- *    understate the profit by the entire gap and nothing downstream would
- *    notice. That is why every destination is a required argument: absence is
- *    not zero here.
+ *    profit. It is credited instead against `dealerContributionMinor` (SCRUM-766
+ *    PR-B), which `recomputeAndPatchEconomics` stores already reduced. A writer
+ *    that recorded the share and omitted the split would understate the profit
+ *    by the entire gap and nothing downstream would notice. That is why every
+ *    destination is a required argument: absence is not zero here.
  * 2. It is atomic. Either the resolution, both shares, all three destinations
  *    and the audit stamp land together, or nothing does. A half-resolved row is
  *    a deal whose agreed split does not reconcile to its own gap.
@@ -3162,13 +3228,16 @@ export const resolveAppraisalGap = mutation({
     if (isManualFinanceApplication(app) && args.customerGapToFinanceCompanyMinor > 0) {
       throw new ConvexError(MANUAL_GAP_TO_FINANCIER_REFUSAL);
     }
-    // SCRUM-766 DA2-12: money the customer pays the finance company is not booked
-    // as a reduction of the showroom contribution yet (that is the follow-up
-    // change). Recording it now would leave the allocation, the remittance and the
-    // ledger saying three different things, so it is refused for every company
-    // until that change lands, before any write.
-    if (args.customerGapToFinanceCompanyMinor > 0) {
-      throw new ConvexError(GAP_TO_FINANCE_COMPANY_NOT_AVAILABLE_REFUSAL);
+    // SCRUM-766 PR-B: what the customer pays the finance company directly
+    // replaces that much of the showroom's contribution, so it cannot exceed the
+    // contribution it replaces - the company would be paid more than the
+    // approved amount. `dealerContributionMinor` is still the full requirement
+    // here: this is the initial resolution, so no payment has reduced it yet.
+    // Refused before any write.
+    if (args.customerGapToFinanceCompanyMinor > (app.dealerContributionMinor ?? 0)) {
+      throw new ConvexError(
+        "The customer's payment to the finance company is more than the dealership would have contributed to it. Record the rest as paid to the dealership, or as absorbed by the dealership."
+      );
     }
 
     const settlement = {

@@ -262,6 +262,27 @@ export function DealFinancialOverview({
             note={summary.customerGapCashPlannedMinor === null ? t("OverviewAmountUnreadable") : t("OverviewGapCashPlannedNote")}
           />
         )}
+        {((summary.customerGapToFinanceCompanyPlannedMinor ?? 0) > 0 ||
+          unreadable.has("customerGapToFinanceCompanyPlanned")) && (
+          <Fact
+            testId="overview-gap-finance-company-planned"
+            label={t("OverviewGapToFinanceCompanyPlanned")}
+            value={m(summary.customerGapToFinanceCompanyPlannedMinor)}
+            note={
+              summary.customerGapToFinanceCompanyPlannedMinor === null
+                ? t("OverviewAmountUnreadable")
+                : t("OverviewGapToFinanceCompanyPlannedNote")
+            }
+          />
+        )}
+        {(summary.customerGapToFinanceCompanyUnconfirmedMinor ?? 0) > 0 && (
+          <Fact
+            testId="overview-gap-finance-company-unconfirmed"
+            label={t("OverviewGapToFinanceCompanyUnconfirmed")}
+            value={m(summary.customerGapToFinanceCompanyUnconfirmedMinor)}
+            note={t("OverviewGapToFinanceCompanyUnconfirmedNote")}
+          />
+        )}
         <Fact
           testId="overview-first-payment"
           label={t("OverviewCustomerFirstPayment")}

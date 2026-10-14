@@ -3173,6 +3173,27 @@ export default defineSchema({
     customerGapCashToDealerMinor: v.optional(v.number()),
     customerGapInstallmentToDealerMinor: v.optional(v.number()),
     customerGapToFinanceCompanyMinor: v.optional(v.number()),
+    /**
+     * SCRUM-766 PR-B: how much of `customerGapToFinanceCompanyMinor` was credited
+     * against the showroom's contribution - only the part CONFIRMED by a
+     * `customerFinanceCompanyPayments` row; `dealerContributionMinor` is already
+     * net of it. Kept so the commissionable margin can use the contribution
+     * BEFORE the credit (owner ruling: the margin does not depend on where the
+     * customer's money goes). Absent means nothing was credited.
+     */
+    customerGapToFinanceCompanyAppliedMinor: v.optional(v.number()),
+    /**
+     * SCRUM-766 PR-B: THE balance of what the deal still needs confirmed - the
+     * part of the agreement that could be credited against the contribution
+     * (the agreement, capped by the customer's share and by the contribution)
+     * minus what is confirmed. Written by the economics recompute beside
+     * `customerGapToFinanceCompanyAppliedMinor` and nowhere else; the closing
+     * gate, the payment card, the overview and the confirm command's cap all
+     * read it, so none of them can disagree about it. Zero when nothing is left
+     * to confirm; absent until a recompute has run (a reader treats absent, with
+     * a payment agreed, as unconfirmed).
+     */
+    customerGapToFinanceCompanyUnconfirmedMinor: v.optional(v.number()),
     gapResolvedAt: v.optional(v.number()),
     gapResolvedBy: v.optional(v.id("users")),
     gapResolutionNotes: v.optional(v.string()),
@@ -3524,6 +3545,41 @@ export default defineSchema({
     reverseReason: v.optional(v.string()),
     reversedAt: v.optional(v.number()),
     reversalActorId: v.optional(v.id("users")),
+  })
+    .index("by_org_application", ["orgId", "applicationId"]),
+
+  /**
+   * SCRUM-766 PR-B: evidence that the CUSTOMER paid the finance company directly
+   * toward the shortfall. Only a CONFIRMED row reduces the showroom's
+   * contribution; the agreed amount on the application is a promise, not money.
+   * The money never touches the dealership's books, so there is deliberately no
+   * posting and no ledger link here - the row is the audit trail. A row is
+   * voided, never deleted, and neither is possible once the deal is closed
+   * (the contribution is then frozen into the finalized plan).
+   *
+   * A payment is evidence against ONE agreement: `agreementResolvedAt` is the
+   * application's `gapResolvedAt` when it was confirmed. Reopening the approval
+   * or moving the shortfall voids the agreement and gives the next one a new
+   * stamp, so an earlier agreement's rows stop crediting and stop being
+   * confirmable against it - they stay on file, visible, until a person takes
+   * them back with a reason (the transfer is then re-recorded on the new
+   * agreement if it still stands). An application's finance company is fixed
+   * for its life, so (application, reference) is also (company, reference).
+   */
+  customerFinanceCompanyPayments: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    status: v.union(v.literal("CONFIRMED"), v.literal("VOIDED")),
+    amountMinor: v.number(),
+    currency: v.string(),
+    paidAt: v.number(),
+    reference: v.string(),
+    agreementResolvedAt: v.number(),
+    confirmedBy: v.id("users"),
+    confirmedAt: v.number(),
+    voidedBy: v.optional(v.id("users")),
+    voidedAt: v.optional(v.number()),
+    voidReason: v.optional(v.string()),
   })
     .index("by_org_application", ["orgId", "applicationId"]),
 

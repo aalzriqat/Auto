@@ -280,6 +280,8 @@ function financedOverview(): FinancedDealOverviewData {
       customerPaidToDealer: { heldDepositMinor: 500 * SCALE, totalMinor: 500 * SCALE },
       // Agreed under the gap resolution, not received: its own row, never inside "paid".
       customerGapCashPlannedMinor: 200 * SCALE,
+      customerGapToFinanceCompanyPlannedMinor: null,
+      customerGapToFinanceCompanyUnconfirmedMinor: null,
       customerFirstPaymentMinor: 1_200 * SCALE,
       financier: {
         receivedMinor: null,

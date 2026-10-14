@@ -5052,7 +5052,7 @@ export const finalizeDeal = mutation({
             financedSalePlan?.version === 2
               ? {
                   approvedMinor: financedSalePlan.financeCompanyReceivableMinor,
-                  contributionMinor: financedSalePlan.forwardContributionMinor,
+                  contributionMinor: financedSalePlan.commissionContributionMinor,
                   currency: financedSalePlan.currency,
                 }
               : undefined,

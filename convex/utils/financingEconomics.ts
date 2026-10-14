@@ -9,6 +9,7 @@ import {
 import {
   PERCENT_DECIMAL_PLACES,
   percentRoundsToZero,
+  applyCustomerPaymentToFinanceCompany,
   computeAppraisalGap,
   computeDealerProceeds,
   computeExpectedRemittance,
@@ -704,6 +705,26 @@ export function requireCustomerGapToDealer(
   return composed.amountMinor;
 }
 
+/**
+ * The settled split's customer share and the part the customer pays the finance
+ * company directly (SCRUM-766 PR-B), each validated before it can reach the
+ * contribution arithmetic. Absent is zero: "nothing agreed yet", the same
+ * reading `composeCustomerGapToDealer` takes.
+ */
+export function requireCustomerGapToFinanceCompany(
+  app: Readonly<{ customerGapShareMinor?: number; customerGapToFinanceCompanyMinor?: number }>,
+  action: string
+): { customerGapShareMinor: number; customerGapToFinanceCompanyMinor: number } {
+  const customerGapShareMinor = app.customerGapShareMinor ?? 0;
+  const customerGapToFinanceCompanyMinor = app.customerGapToFinanceCompanyMinor ?? 0;
+  if (!isMinorAmount(customerGapShareMinor) || !isMinorAmount(customerGapToFinanceCompanyMinor)) {
+    throw new ConvexError(
+      `The customer's gap share or the part they pay the finance company is not a readable amount (share ${app.customerGapShareMinor}, to the finance company ${app.customerGapToFinanceCompanyMinor}), so ${action} is refused until the gap resolution is corrected.`
+    );
+  }
+  return { customerGapShareMinor, customerGapToFinanceCompanyMinor };
+}
+
 /** Rejects a caller-supplied money amount that is not a sane minor-unit integer. */
 export function assertMinorAmount(value: number, label: string): void {
   if (!isMinorAmount(value)) {
@@ -989,6 +1010,16 @@ export function deriveEconomics(args: {
   customerContributionToFinanceCompanyMinor: number;
   feeDeductionsMinor: number;
   customerDirectToDealerMinor: number;
+  /**
+   * The settled gap split's customer share and the part of it the customer
+   * AGREED to pay the finance company directly (SCRUM-766 PR-B). Zero until a
+   * split is agreed; only the CONFIRMED part is credited against the
+   * contribution, never the stored figure.
+   */
+  customerGapShareMinor: number;
+  customerGapToFinanceCompanyMinor: number;
+  /** The total of this deal's confirmed payment evidence; zero when none is recorded. */
+  confirmedCustomerPaymentMinor: number;
   dealerBorneExpensesMinor: number;
   /** Only needed for the profit figures, which nothing stores yet. */
   vehicleCostMinor?: number;
@@ -1030,9 +1061,20 @@ export function deriveEconomics(args: {
     appliedLtvPercent: args.appliedLtvPercent,
   });
 
+  // What the customer has CONFIRMED paying the finance company directly replaces
+  // that much of the showroom's contribution (SCRUM-766 PR-B), so the remittance
+  // and the profit below are both measured on the reduced figure.
+  const customerPayment = applyCustomerPaymentToFinanceCompany({
+    requiredContributionMinor: composition.dealerContributionMinor,
+    customerGapShareMinor: args.customerGapShareMinor,
+    customerGapToFinanceCompanyMinor: args.customerGapToFinanceCompanyMinor,
+    confirmedPaymentMinor: args.confirmedCustomerPaymentMinor,
+  });
+  const { dealerContributionMinor } = customerPayment;
+
   const remittance = computeExpectedRemittance({
     approvedDealerPurchaseAmountMinor: args.approvedDealerPurchaseAmountMinor,
-    dealerContributionMinor: composition.dealerContributionMinor,
+    dealerContributionMinor,
     dealerContributionSettlement: args.dealerContributionSettlement,
     customerContributionToFinanceCompanyMinor: args.customerContributionToFinanceCompanyMinor,
     customerContributionSettlement: args.customerContributionSettlement,
@@ -1041,7 +1083,7 @@ export function deriveEconomics(args: {
 
   const proceeds = computeDealerProceeds({
     approvedDealerPurchaseAmountMinor: args.approvedDealerPurchaseAmountMinor,
-    dealerContributionMinor: composition.dealerContributionMinor,
+    dealerContributionMinor,
     customerDirectToDealerMinor: args.customerDirectToDealerMinor,
     dealerBorneExpensesMinor: args.dealerBorneExpensesMinor,
     vehicleCostMinor: args.vehicleCostMinor ?? 0,
@@ -1049,6 +1091,7 @@ export function deriveEconomics(args: {
 
   return {
     composition,
+    customerPayment,
     gap,
     remittance,
     proceeds,
@@ -1284,14 +1327,6 @@ export function assertAppraisalGapSettledToAdvance(
   );
 }
 
-
-/**
- * SCRUM-766 DA2-12: refused until the customer-pays-the-finance-company
- * mechanism (the shortfall's option 1) exists. One message, one enforcement
- * point.
- */
-export const GAP_TO_FINANCE_COMPANY_NOT_AVAILABLE_REFUSAL =
-  "Recording part of the shortfall as paid by the customer to the finance company is not available yet. Record it as paid to the dealership, or as absorbed by the dealership.";
 
 /** Every field a settled appraisal-gap split writes; clearing them voids the split. */
 export const GAP_RESOLUTION_CLEARED = Object.freeze({

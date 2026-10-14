@@ -236,6 +236,8 @@ const KNOWN_SURVIVING_REFERENCES: Record<string, string> = {
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "depositVehicleHolds.depositId->deposits":
     "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
+  "customerFinanceCompanyPayments.applicationId->financeApplications":
+    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row. Same shape and decision as financeCompanyForwards.applicationId; nothing reads the evidence except through its application.",
   "employeeAdvanceRecoveries.payrollItemId->payrollItems":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "financeCompanyForwards.applicationId->financeApplications":

@@ -550,6 +550,7 @@ const ECONOMIC_COMMANDS: Record<string, string[]> = {
   "./workOrders": ["create"],
   "./expenses": ["create"],
   "./financeCompanyForward": ["recordFinanceCompanyForward", "reverseFinanceCompanyForward", "reportFinanceCompanyForwardReturned"],
+  "./customerFinanceCompanyPayments": ["confirmPayment"],
   "./dealUnwind": ["startDealUnwind", "recordDealUnwindForwardReturn", "finishDealUnwind", "abandonDealUnwind"],
   "./financeDealCosts": [
     "recordDealFee",
@@ -645,7 +646,8 @@ describe("SCRUM-57 — classification ratchet", () => {
     // 48 -> 49 by SCRUM-239: `applications.returnFinanceDisbursementCheque`.
     // 49 -> 54: SCRUM-693's four `dealUnwind` steps (ruling B folded the refund into finish) + SCRUM-690's `financeDealCosts.recordExecutionFeeActual`.
     // 54 -> 56: SCRUM-724's retainedCreditRefunds respond + execute.
-    expect(checked).toBe(56);
+    // 56 -> 57: SCRUM-766 PR-B's `customerFinanceCompanyPayments.confirmPayment`.
+    expect(checked).toBe(57);
   });
 
   /**
@@ -711,9 +713,10 @@ describe("SCRUM-57 — classification ratchet", () => {
     // 44 -> 45 / 45 -> 46: SCRUM-443's `financeDealCosts.recordDirectFeePayment`.
     // 48 -> 49 by SCRUM-239: `applications.returnFinanceDisbursementCheque`.
     // 49 -> 54: SCRUM-693's four `dealUnwind` steps (ruling B folded the refund into finish) + SCRUM-690's `financeDealCosts.recordExecutionFeeActual`.
-    expect(economicInSource.size).toBe(56);
+    // 56 -> 57: SCRUM-766 PR-B's `customerFinanceCompanyPayments.confirmPayment`.
+    expect(economicInSource.size).toBe(57);
     expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(57);
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(58);
   });
 
   /**

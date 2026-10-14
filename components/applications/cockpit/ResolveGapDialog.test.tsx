@@ -48,6 +48,7 @@ function props(overrides: Partial<Props> = {}): Props {
     shortfallMinor: GAP_MINOR,
     breakdown: { valuationMinor: GAP_MINOR, termsMinor: 0 },
     grossLabel: false,
+    allowFinanceCompany: true,
     submittedQuotationMinor: 12_500 * FACTOR,
     approvedPurchaseAmountMinor: 11_500 * FACTOR,
     economicsStamp: "v2|3",
@@ -100,9 +101,9 @@ describe("the figures the agreement is about", () => {
     expect(screen.getByTestId("gap-gross-note").textContent).toBe("GapShortfallGrossManual");
   });
 
-  test("there is no way to record the customer's part as paid to the finance company", () => {
+  test("the customer's part can be recorded as paid to the finance company (SCRUM-766 PR-B)", () => {
     renderDialog();
-    expect(screen.queryByLabelText("GapToFinanceCompany")).toBeNull();
+    expect(screen.getByLabelText("GapToFinanceCompany")).toBeTruthy();
   });
 
   test("withholds the context figures with a dash when the caller cannot see them — the gap itself still shows", () => {
@@ -132,6 +133,7 @@ describe("the dialog never invents a destination the operator left blank", () =>
     renderDialog({ onSubmit });
     fireEvent.change(input("GapCashToDealer"), { target: { value: String(GAP_MAJOR) } });
     fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
+    fireEvent.change(input("GapToFinanceCompany"), { target: { value: "0" } });
     expect(readiness()).toBe("GapAllocationComplete");
     fireEvent.click(confirmButton());
     expect(onSubmit).toHaveBeenCalledWith({
@@ -145,11 +147,12 @@ describe("the dialog never invents a destination the operator left blank", () =>
     });
   });
 
-  test("money placed nowhere does not reconcile: with no finance-company box, 0 + 0 is a mismatch, not a submission", () => {
+  test("money placed nowhere does not reconcile: 0 + 0 + 0 is a mismatch, not a submission", () => {
     const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
     renderDialog({ onSubmit });
     fireEvent.change(input("GapCashToDealer"), { target: { value: "0" } });
     fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
+    fireEvent.change(input("GapToFinanceCompany"), { target: { value: "0" } });
     expect(readiness()).toBe("GapAllocationMismatch");
     fireEvent.click(confirmButton());
     expect(onSubmit).not.toHaveBeenCalled();
@@ -161,6 +164,7 @@ describe("the dialog never invents a destination the operator left blank", () =>
     // Rounded to fils this is exactly the gap, and used to submit as such.
     fireEvent.change(input("GapCashToDealer"), { target: { value: `${GAP_MAJOR}.0004` } });
     fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
+    fireEvent.change(input("GapToFinanceCompany"), { target: { value: "0" } });
     expect(confirmButton().disabled).toBe(true);
     // Every box is filled, so "incomplete" would send the operator hunting for
     // a blank that is not there; the message names the actual problem.
@@ -180,6 +184,7 @@ describe("the dialog never invents a destination the operator left blank", () =>
     renderDialog();
     fireEvent.change(input("GapCashToDealer"), { target: { value: "600" } });
     fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
+    fireEvent.change(input("GapToFinanceCompany"), { target: { value: "0" } });
     expect(confirmButton().disabled).toBe(true);
     expect(readiness()).toBe("GapAllocationMismatch");
   });
@@ -210,6 +215,50 @@ describe("who covers it", () => {
     expect(readiness()).toBe("AmountTooPrecise");
   });
 
+  test("a customer part paid to the finance company submits as that destination: 400 of an 850 shortfall, the dealership covering 450", () => {
+    const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
+    renderDialog({ onSubmit });
+    fireEvent.click(radio(/^GapSplit/));
+    fireEvent.change(input("GapCustomerShare"), { target: { value: "400" } });
+    fireEvent.change(input("GapCashToDealer"), { target: { value: "0" } });
+    fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
+    fireEvent.change(input("GapToFinanceCompany"), { target: { value: "400" } });
+    expect(readiness()).toBe("GapAllocationComplete");
+    fireEvent.click(confirmButton());
+    expect(onSubmit).toHaveBeenCalledWith({
+      customerGapShareMinor: 400 * FACTOR,
+      dealerGapShareMinor: 450 * FACTOR,
+      customerGapCashToDealerMinor: 0,
+      customerGapInstallmentToDealerMinor: 0,
+      customerGapToFinanceCompanyMinor: 400 * FACTOR,
+      notes: "",
+      economicsStamp: "v2|3",
+    });
+  });
+
+  test("a manually recorded approval is not offered the finance-company box and needs no zero typed for it", () => {
+    const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
+    renderDialog({ onSubmit, allowFinanceCompany: false, grossLabel: true, breakdown: null });
+    expect(screen.queryByLabelText("GapToFinanceCompany")).toBeNull();
+    expect(document.body.textContent).toContain("GapWhereCustomerPaysManualHint");
+    fireEvent.change(input("GapCashToDealer"), { target: { value: String(GAP_MAJOR) } });
+    fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
+    expect(readiness()).toBe("GapAllocationComplete");
+    fireEvent.click(confirmButton());
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ customerGapToFinanceCompanyMinor: 0 });
+  });
+
+  test("a finance-company amount with more decimals than the currency holds is too precise, not rounded", () => {
+    renderDialog();
+    fireEvent.click(radio(/^GapSplit/));
+    fireEvent.change(input("GapCustomerShare"), { target: { value: "400" } });
+    fireEvent.change(input("GapCashToDealer"), { target: { value: "0" } });
+    fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
+    fireEvent.change(input("GapToFinanceCompany"), { target: { value: "400.0004" } });
+    expect(readiness()).toBe("AmountTooPrecise");
+    expect(confirmButton().disabled).toBe(true);
+  });
+
   test("a real SPLIT derives the dealership's part and submits both", () => {
     const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
     renderDialog({ onSubmit });
@@ -218,6 +267,7 @@ describe("who covers it", () => {
     expect(screen.getByText("GapDealerShare").parentElement?.textContent).toContain("400 JOD");
     fireEvent.change(input("GapCashToDealer"), { target: { value: "450" } });
     fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
+    fireEvent.change(input("GapToFinanceCompany"), { target: { value: "0" } });
     fireEvent.click(confirmButton());
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
       customerGapShareMinor: 450 * FACTOR,
@@ -270,6 +320,7 @@ describe("the figures are a snapshot", () => {
     expect(screen.getByTestId("gap-amount").textContent).toBe("850 JOD");
     fireEvent.change(input("GapCashToDealer"), { target: { value: String(GAP_MAJOR) } });
     fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
+    fireEvent.change(input("GapToFinanceCompany"), { target: { value: "0" } });
     fireEvent.click(confirmButton());
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
       economicsStamp: "v2|3",

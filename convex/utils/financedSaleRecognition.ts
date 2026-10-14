@@ -42,6 +42,7 @@ import { toMinorUnits } from "./money";
 import { RETIRED_DEAL_MODE_MESSAGE, isRetiredDealMode } from "./dealModes";
 import { isManualFinanceApplication } from "./manualFinancePayer";
 import { requireCustomerGapToDealer } from "./financingEconomics";
+import { customerPaymentEvidenceOf, loadCustomerFinanceCompanyPayments } from "./customerFinanceCompanyPayments";
 import { summarizeFees } from "./feeSummary";
 import { consignedSettlementRoute, dealershipCollectsGross, isConsignedAgentSale } from "./vehicleOwnership";
 import {
@@ -665,6 +666,66 @@ export async function evaluateClosingReadiness(
       : null
   );
 
+  // SCRUM-766 PR-B: what the customer AGREED to pay the finance company is a
+  // promise until a confirmed payment row backs it. The contribution this plan
+  // forwards is reduced only by the confirmed part, so closing on an
+  // unconfirmed remainder would book a sale the showroom cannot cover if the
+  // customer never pays. Appended last like FINANCING_RECONCILED so existing
+  // refusals keep their order.
+  //
+  // Two things block, judged in this order:
+  //  - a confirmed payment that belongs to an agreement since withdrawn: real
+  //    money is on file that the deal's figures do not account for, so a person
+  //    disposes of it before the deal closes - whatever the new agreement says.
+  //    The old row blocks until it is taken back with a reason; a new
+  //    confirmation alone never clears it. Only then, if the transfer still
+  //    stands, is it recorded again on the current agreement;
+  //  - the deal's ONE stored balance of what the agreement still leaves to
+  //    confirm. Not `agreed - applied`: the agreement can exceed what is
+  //    creditable, and that excess is reconciled under FINANCING_RECONCILED,
+  //    not demanded as a payment no row can ever credit.
+  const agreedToCompanyMinor = app.customerGapToFinanceCompanyMinor ?? 0;
+  let priorConfirmedMinor = 0;
+  let paymentEvidenceUnreadable: ClosingReadinessReason | null = null;
+  try {
+    priorConfirmedMinor = customerPaymentEvidenceOf(
+      await loadCustomerFinanceCompanyPayments(ctx, app.orgId, app._id),
+      app,
+      opts.currency
+    ).priorConfirmedMinor;
+  } catch (error) {
+    paymentEvidenceUnreadable = reasonOf("CHECK_REFUSED", messageOf(error));
+  }
+  const unconfirmedToCompanyMinor = app.customerGapToFinanceCompanyUnconfirmedMinor;
+  // A payment agreed with no balance stored has not been recomputed since: unknown is unconfirmed.
+  const stillUnconfirmed =
+    agreedToCompanyMinor > 0 && (unconfirmedToCompanyMinor === undefined || unconfirmedToCompanyMinor > 0);
+  if (paymentEvidenceUnreadable !== null) {
+    add("CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED", "UNAVAILABLE", paymentEvidenceUnreadable);
+  } else if (priorConfirmedMinor > 0) {
+    add(
+      "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED",
+      "BLOCKED",
+      reasonOf(
+        "CUSTOMER_FINANCE_COMPANY_PAYMENT_SUPERSEDED",
+        "A payment from the customer to the finance company was confirmed against an agreement that has since been withdrawn, so this deal's figures do not account for it. Take that confirmation back with a reason first; then, if the transfer still stands, record it again against the current agreement. Finalize after that."
+      )
+    );
+  } else if (agreedToCompanyMinor <= 0) {
+    add("CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED", "NOT_APPLICABLE", null);
+  } else if (stillUnconfirmed) {
+    add(
+      "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED",
+      "BLOCKED",
+      reasonOf(
+        "CUSTOMER_FINANCE_COMPANY_PAYMENT_UNCONFIRMED",
+        "The customer agreed to pay part of the shortfall to the finance company, but that payment is not confirmed in full, so the dealership's contribution cannot be reduced by it yet. Record the payment's confirmation before finalizing."
+      )
+    );
+  } else {
+    add("CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED", "READY", null);
+  }
+
   const state = overallReadinessState(checks);
   const readiness: ClosingReadiness = { state, checks };
   // A READY verdict is one every row check passed, so the rows were read.
@@ -975,6 +1036,7 @@ export async function resolveFinancedSalePlan(
       customerReceivableMinor,
       depositLiabilityAppliedMinor,
       dealerContributionMinor: contributionForPlanMinor,
+      customerPaymentToFinanceCompanyMinor: app.customerGapToFinanceCompanyAppliedMinor,
       customerFirstPaymentMinor: app.customerFirstPaymentMinor,
     });
     if (!v2.ok) throw new ConvexError(v2.refusal.message);

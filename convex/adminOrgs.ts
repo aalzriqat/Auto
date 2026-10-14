@@ -121,6 +121,8 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // SCRUM-435: forward rows reference the application; gone before it. The
   // index leads with orgId, so the org-scoped read is the same prefix scan.
   { kind: "orgRows", table: "financeCompanyForwards", index: "by_org_application" },
+  // SCRUM-766 PR-B: the customer's confirmed payments to the finance company reference the application too.
+  { kind: "orgRows", table: "customerFinanceCompanyPayments", index: "by_org_application" },
   { kind: "orgRows", table: "financeDealCustodyEntries", index: "by_org" },
   { kind: "financeDealFeesWithStorage" },
   { kind: "orgRows", table: "financeDealCustody", index: "by_org" },

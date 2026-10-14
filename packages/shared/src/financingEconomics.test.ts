@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FinancingEconomicsError,
+  applyCustomerPaymentToFinanceCompany,
   classifyGapResolution,
   computeAppraisalGap,
   isApprovalFarFromEvidence,
@@ -775,6 +776,116 @@ describe("validateGapShares", () => {
     });
     expect(violations).toHaveLength(1);
     expect(violations[0]!.code).toBe("NEGATIVE_AMOUNT");
+  });
+});
+
+describe("applyCustomerPaymentToFinanceCompany (SCRUM-766 PR-B)", () => {
+  // Approved 11,500 at 85%, first payment 500: funded 9,775, contribution 1,225.
+  // Net shortfall 850 (12,500 quoted, contribution 1,375 at the quotation).
+  const REQUIRED = jod(1_225);
+
+  it("owner ruling: the customer paying 400 to the company leaves the showroom 825 and profit 550", () => {
+    const credited = applyCustomerPaymentToFinanceCompany({
+      requiredContributionMinor: REQUIRED,
+      customerGapShareMinor: jod(400),
+      customerGapToFinanceCompanyMinor: jod(400),
+      confirmedPaymentMinor: jod(400),
+    });
+    expect(credited).toEqual({
+      dealerContributionMinor: jod(825),
+      appliedMinor: jod(400),
+      unconfirmedMinor: 0,
+      excessMinor: 0,
+    });
+    // 11,500 + 0 - 9,500 vehicle - 825 contribution - 625 expenses.
+    const proceeds = computeDealerProceeds({
+      approvedDealerPurchaseAmountMinor: jod(11_500),
+      dealerContributionMinor: credited.dealerContributionMinor,
+      customerDirectToDealerMinor: 0,
+      dealerBorneExpensesMinor: jod(625),
+      vehicleCostMinor: jod(9_500),
+    });
+    expect(proceeds.profitMinor).toBe(jod(550));
+  });
+
+  it("an agreement with no confirmed payment credits nothing: the showroom still owes the full contribution", () => {
+    expect(
+      applyCustomerPaymentToFinanceCompany({
+        requiredContributionMinor: REQUIRED,
+        customerGapShareMinor: jod(400),
+        customerGapToFinanceCompanyMinor: jod(400),
+        confirmedPaymentMinor: 0,
+      })
+    ).toEqual({ dealerContributionMinor: REQUIRED, appliedMinor: 0, unconfirmedMinor: jod(400), excessMinor: 0 });
+  });
+
+  it("credits only the confirmed part of the agreement", () => {
+    expect(
+      applyCustomerPaymentToFinanceCompany({
+        requiredContributionMinor: REQUIRED,
+        customerGapShareMinor: jod(400),
+        customerGapToFinanceCompanyMinor: jod(400),
+        confirmedPaymentMinor: jod(150),
+      })
+    ).toEqual({ dealerContributionMinor: jod(1_075), appliedMinor: jod(150), unconfirmedMinor: jod(250), excessMinor: 0 });
+  });
+
+  it("never credits evidence beyond the agreement", () => {
+    expect(
+      applyCustomerPaymentToFinanceCompany({
+        requiredContributionMinor: REQUIRED,
+        customerGapShareMinor: jod(400),
+        customerGapToFinanceCompanyMinor: jod(400),
+        confirmedPaymentMinor: jod(900),
+      })
+    ).toEqual({ dealerContributionMinor: jod(825), appliedMinor: jod(400), unconfirmedMinor: 0, excessMinor: 0 });
+  });
+
+  it("changes nothing when the customer pays the company nothing", () => {
+    expect(
+      applyCustomerPaymentToFinanceCompany({
+        requiredContributionMinor: REQUIRED,
+        customerGapShareMinor: jod(850),
+        customerGapToFinanceCompanyMinor: 0,
+        confirmedPaymentMinor: 0,
+      })
+    ).toEqual({ dealerContributionMinor: REQUIRED, appliedMinor: 0, unconfirmedMinor: 0, excessMinor: 0 });
+  });
+
+  it("is capped at the customer's allocated share, reporting the rest as excess", () => {
+    expect(
+      applyCustomerPaymentToFinanceCompany({
+        requiredContributionMinor: REQUIRED,
+        customerGapShareMinor: jod(300),
+        customerGapToFinanceCompanyMinor: jod(400),
+        confirmedPaymentMinor: jod(400),
+      })
+    ).toEqual({ dealerContributionMinor: jod(925), appliedMinor: jod(300), unconfirmedMinor: 0, excessMinor: jod(100) });
+  });
+
+  it("never takes the showroom's contribution below zero", () => {
+    expect(
+      applyCustomerPaymentToFinanceCompany({
+        requiredContributionMinor: jod(250),
+        customerGapShareMinor: jod(7_000),
+        customerGapToFinanceCompanyMinor: jod(7_000),
+        confirmedPaymentMinor: jod(7_000),
+      })
+    ).toEqual({ dealerContributionMinor: 0, appliedMinor: jod(250), unconfirmedMinor: 0, excessMinor: jod(6_750) });
+  });
+
+  it.each([-1, 0.5, Number.NaN])("refuses an unreadable amount (%s)", (bad) => {
+    for (const field of ["customerGapToFinanceCompanyMinor", "confirmedPaymentMinor"] as const) {
+      expect(() =>
+        applyCustomerPaymentToFinanceCompany({
+          requiredContributionMinor: REQUIRED,
+          customerGapShareMinor: jod(400),
+          customerGapToFinanceCompanyMinor: jod(400),
+          confirmedPaymentMinor: jod(400),
+          [field]: bad,
+        })
+      ).toThrow(FinancingEconomicsError);
+    }
   });
 });
 
