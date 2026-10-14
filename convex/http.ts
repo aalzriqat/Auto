@@ -1432,6 +1432,7 @@ http.route({
       await ctx.runAction(internal.facebookIntegrations.exchangeCodeForToken, {
         orgId: stateRecord.orgId,
         code,
+        attemptStartedAt: stateRecord.createdAt,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

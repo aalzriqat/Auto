@@ -95,6 +95,10 @@ export const SERVER_ONLY_ORG_SETTINGS_FIELDS = [
   "facebookPageId",
   "facebookConnectedByUserId",
   "facebookTokenExpiresAt",
+  // Facebook connection state that only the OAuth and disconnect code reads: when the
+  // Owner last disconnected, and which OAuth attempt the pending Pages belong to.
+  "facebookDisconnectedAt",
+  "facebookPendingAttemptId",
   // Internal state.
   "instagramAutoReplyLastIndex",
   "facebookAutoReplyLastIndex",
