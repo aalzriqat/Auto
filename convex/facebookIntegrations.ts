@@ -8,10 +8,18 @@ import { requireOwner, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { getValidatedEnv } from "./utils/env";
 import { DEFAULT_SETTINGS } from "./orgSettings";
+import { FACEBOOK_REVOCATION_RETENTION_MS } from "./utils/facebookRevocation";
 import { requireFeature } from "./subscriptions";
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const FACEBOOK_GRAPH_VERSION = "v25.0";
+
+// Fixed text for the revocation fence (see `facebookRevocations` in schema.ts).
+// FACEBOOK_REVOCATION_RETENTION_MS must stay well above OAUTH_STATE_TTL_MS plus
+// the exchange action's runtime.
+const FACEBOOK_REVOKED_MESSAGE =
+  "Facebook access for this account was revoked while connecting. Please start the connection again.";
+const FACEBOOK_ATTEMPT_EXPIRED_MESSAGE = "This connection attempt expired. Please start the connection again.";
 
 // Facebook Login for Pages: authenticates a person, who may manage several
 // Pages. Unlike Instagram Login (whose token exchange returns the IG
@@ -213,6 +221,16 @@ export const setFacebookLeadCreationConfig = mutation({
 export const disconnectByFacebookConnectedUserId = internalMutation({
   args: { facebookConnectedByUserId: v.string() },
   handler: async (ctx, args) => {
+    // Record the revocation first and unconditionally: a first-time connection
+    // still in flight has no row for the clear below to find, and without this
+    // its exchange would store the tokens it already fetched after we replied 200.
+    // One row per user; its time never moves backwards.
+    // Expired fences are removed by the hourly adminSystem.pruneOperationalLogs.
+    const now = Date.now();
+    const fence = await findFacebookRevocation(ctx, args.facebookConnectedByUserId);
+    if (fence) await ctx.db.patch(fence._id, { revokedAt: Math.max(fence.revokedAt, now) });
+    else await ctx.db.insert("facebookRevocations", { facebookUserId: args.facebookConnectedByUserId, revokedAt: now });
+
     // One Facebook user can connect several orgs (e.g. a dealer-group admin);
     // Meta sends a single callback for that user, so every one must be cleared.
     const rows = await ctx.db
@@ -283,9 +301,17 @@ export const consumeOAuthState = internalMutation({
     }
 
     await ctx.db.delete(record._id);
-    return { orgId: record.orgId };
+    return { orgId: record.orgId, createdAt: record.createdAt };
   },
 });
+
+/** The user's revocation fence, if any. One row per user (see disconnectByFacebookConnectedUserId). */
+function findFacebookRevocation(ctx: MutationCtx, facebookUserId: string) {
+  return ctx.db
+    .query("facebookRevocations")
+    .withIndex("by_facebook_user_id", (q) => q.eq("facebookUserId", facebookUserId))
+    .unique();
+}
 
 export const FACEBOOK_PAGE_IN_USE_MESSAGE =
   "This Facebook Page is already connected to another AutoFlow organization. Disconnect it there first.";
@@ -426,7 +452,9 @@ async function graphGet(url: URL, failureMessage: string): Promise<{ ok: boolean
  * Runs as a Node action since it needs `fetch`.
  */
 export const exchangeCodeForToken = internalAction({
-  args: { orgId: v.id("organizations"), code: v.string() },
+  // attemptStartedAt: when the user began this OAuth attempt (the state's
+  // createdAt); the revocation fence is compared against it.
+  args: { orgId: v.id("organizations"), code: v.string(), attemptStartedAt: v.number() },
   handler: async (ctx, args): Promise<void> => {
     const { appId, appSecret, redirectUri } = await ctx.runQuery(internal.facebookIntegrations.getEnvForExchange, {});
 
@@ -492,6 +520,7 @@ export const exchangeCodeForToken = internalAction({
       orgId: args.orgId,
       pages,
       connectedByUserId,
+      attemptStartedAt: args.attemptStartedAt,
     });
   },
 });
@@ -508,9 +537,25 @@ export const saveFacebookPendingPages = internalMutation({
     // Required: it is the only key Meta's deauthorize / data-deletion callbacks
     // can use to find and erase these credentials.
     connectedByUserId: v.string(),
+    attemptStartedAt: v.number(),
   },
   handler: async (ctx, args) => {
-    const { orgId, pages, connectedByUserId } = args;
+    const { orgId, pages, connectedByUserId, attemptStartedAt } = args;
+
+    // An attempt begun at or before this user's last signed revocation must not
+    // store anything: the callback has already committed and cleared what it
+    // could find. Ties go to the revocation; a genuinely new attempt has a later
+    // start. An attempt older than the retention window cannot be judged (its
+    // fence may already have been swept) and is refused; no live attempt is that
+    // old, so this is a backstop.
+    if (attemptStartedAt < Date.now() - FACEBOOK_REVOCATION_RETENTION_MS) {
+      throw new ConvexError(FACEBOOK_ATTEMPT_EXPIRED_MESSAGE);
+    }
+    const fence = await findFacebookRevocation(ctx, connectedByUserId);
+    if (fence && fence.revokedAt >= attemptStartedAt) {
+      throw new ConvexError(FACEBOOK_REVOKED_MESSAGE);
+    }
+
     const existing = await ctx.db
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", orgId))

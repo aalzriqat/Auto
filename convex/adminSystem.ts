@@ -7,6 +7,7 @@
 // app edges is safe to initialize before anything that can participate in
 // a cycle, so it goes above every local import.
 import { recordWebhookLog } from "./utils/webhookLog";
+import { FACEBOOK_REVOCATION_RETENTION_MS } from "./utils/facebookRevocation";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
@@ -314,7 +315,22 @@ export const pruneOperationalLogs = internalMutation({
       notificationsDeleted++;
     }
 
-    return { heartbeatsDeleted, webhookLogsDeleted, notificationsDeleted };
+    // SCRUM-841: a Facebook revocation fence is only needed by an OAuth attempt
+    // begun before it, which cannot outlive the retention window. Sweeping it here
+    // rather than inside the callback bounds how long a Facebook user id lingers
+    // whatever the callback traffic.
+    const staleFences = await ctx.db
+      .query("facebookRevocations")
+      .withIndex("by_revoked_at", (q) => q.lt("revokedAt", now - FACEBOOK_REVOCATION_RETENTION_MS))
+      .take(RETENTION_DELETE_BATCH);
+
+    let facebookRevocationsDeleted = 0;
+    for (const row of staleFences) {
+      await ctx.db.delete(row._id);
+      facebookRevocationsDeleted++;
+    }
+
+    return { heartbeatsDeleted, webhookLogsDeleted, notificationsDeleted, facebookRevocationsDeleted };
   },
 });
 

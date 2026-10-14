@@ -204,14 +204,16 @@ describe("facebookIntegrations.consumeOAuthState", () => {
     const { orgId, asOwner } = await seedOwner(t);
 
     await asOwner.mutation(api.facebookIntegrations.createConnectUrl, { orgId });
-    const state = await t.run(async (ctx) => {
+    const { state, createdAt } = await t.run(async (ctx) => {
       const row = await ctx.db.query("oauthStates").first();
-      return row!.state;
+      return { state: row!.state, createdAt: row!.createdAt };
     });
 
     const result = await t.run((ctx) =>
       ctx.runMutation(internal.facebookIntegrations.consumeOAuthState, { state })
     );
+    // The attempt's start, which the revocation fence is compared against.
+    expect(result?.createdAt).toBe(createdAt);
     expect(result?.orgId).toBe(orgId);
 
     const replay = await t.run((ctx) =>
@@ -406,7 +408,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
       })
     );
 
-    await t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" });
+    await t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc", attemptStartedAt: Date.now() });
 
     const row = await settings();
     expect(row?.facebookAvailablePages).toEqual([{ id: "page_1", name: "Dealer One" }]);
@@ -424,7 +426,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
     const good = { id: "page_2", name: "Dealer Two", access_token: SYNTHETIC_PAGE_TOKEN };
     const { orgId, t, settings } = await run(() => graphJson({ data: [good, bad] }));
 
-    const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
+    const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc", attemptStartedAt: Date.now() }));
 
     expect(text).toMatch(/unexpected Pages response/i);
     expect(text).not.toContain(SYNTHETIC_PAGE_TOKEN);
@@ -466,7 +468,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
       });
       expect(before?.facebookPendingCredentials).toBeUndefined();
 
-      const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
+      const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc", attemptStartedAt: Date.now() }));
 
       expect(text).toMatch(ME_FAILED);
       for (const secret of [...URL_CREDENTIALS, SYNTHETIC_PROVIDER_TEXT, SYNTHETIC_PAGE_TOKEN]) {
@@ -490,14 +492,14 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
   test("a first-time connection whose /me fails stores no pending credentials at all", async () => {
     const { orgId, t, settings } = await run(PAGES, { me: () => graphJson({ id: 12345 }) });
     await expect(
-      t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" })
+      t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc", attemptStartedAt: Date.now() })
     ).rejects.toThrow(ME_FAILED);
     expect(await settings()).toBeNull();
   });
 
   test("a recorded /me id lets the data-deletion lookup erase the pending Page tokens", async () => {
     const { orgId, t, settings } = await run(PAGES);
-    await t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" });
+    await t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc", attemptStartedAt: Date.now() });
     expect((await settings())?.facebookPendingCredentials).toHaveLength(1);
     expect((await settings())?.facebookConnectedByUserId).toBe("fb_user_1");
 
@@ -514,14 +516,14 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
 
   test("a /me/accounts body whose data is not an array fails generically", async () => {
     const { orgId, t } = await run(() => graphJson({ data: { access_token: SYNTHETIC_PAGE_TOKEN } }));
-    const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
+    const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc", attemptStartedAt: Date.now() }));
     expect(text).toMatch(/unexpected Pages response/i);
     expect(text).not.toContain(SYNTHETIC_PAGE_TOKEN);
   });
 
   test("a non-JSON /me/accounts body fails generically without quoting the body", async () => {
     const { orgId, t } = await run(() => new Response(`<html>${SYNTHETIC_PROVIDER_TEXT}</html>`, { status: 200 }));
-    const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
+    const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc", attemptStartedAt: Date.now() }));
     expect(text).toMatch(/unexpected Pages response/i);
     expect(text).not.toContain(SYNTHETIC_PROVIDER_TEXT);
   });
@@ -540,7 +542,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
     "a failure in %s throws a fixed step-specific error that quotes no credential",
     async (_label, overrides, accounts, expected) => {
       const { orgId, t } = await run(accounts, overrides);
-      const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
+      const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc", attemptStartedAt: Date.now() }));
       expect(text).toMatch(expected);
       for (const secret of [...URL_CREDENTIALS, SYNTHETIC_PROVIDER_TEXT]) expect(text).not.toContain(secret);
     }
@@ -652,7 +654,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         const allSettings = () => t.run((ctx) => ctx.db.query("orgSettings").collect());
         const before = await allSettings();
 
-        const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
+        const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc", attemptStartedAt: Date.now() }));
 
         expect(text).toMatch(OTHER_USER_FAILED);
         for (const secret of [...URL_CREDENTIALS, SYNTHETIC_PAGE_TOKEN, ACTIVE.facebookPageAccessToken]) {
@@ -665,7 +667,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         const { orgId, t, settings } = await run(PAGES, { me: () => graphJson({ id: "fb_intruder" }) });
         await upsertOrgSettings(t, orgId, { ...ACTIVE, facebookConnectedByUserId: "fb_original_user" });
         await expect(
-          t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" })
+          t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc", attemptStartedAt: Date.now() })
         ).rejects.toThrow(OTHER_USER_FAILED);
 
         const res = await postToRoute(t, "/facebook-deauthorize", "fb_original_user");
@@ -681,7 +683,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         const { orgId, t, settings } = await run(PAGES, { me: () => graphJson({ id: "fb_original_user" }) });
         await upsertOrgSettings(t, orgId, { ...ACTIVE, facebookConnectedByUserId: "fb_original_user" });
 
-        await t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" });
+        await t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc", attemptStartedAt: Date.now() });
 
         const row = await settings();
         expect(row?.facebookPageAccessToken).toBe(ACTIVE.facebookPageAccessToken);
@@ -696,7 +698,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
           facebookPendingCredentials: [{ id: "page_old", name: "Old", token: "synthetic-old-pending" }],
         });
 
-        await t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" });
+        await t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc", attemptStartedAt: Date.now() });
 
         const row = await settings();
         expect(row?.facebookConnectedByUserId).toBe("fb_new_user");
@@ -782,7 +784,12 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         async (_label, userId, pages) => {
           const { t, orgId, settings, finish } = await parkedSelect();
           await t.run((ctx) =>
-            ctx.runMutation(internal.facebookIntegrations.saveFacebookPendingPages, { orgId, pages, connectedByUserId: userId })
+            ctx.runMutation(internal.facebookIntegrations.saveFacebookPendingPages, {
+              orgId,
+              pages,
+              connectedByUserId: userId,
+              attemptStartedAt: Date.now(),
+            })
           );
 
           const text = await finish();
@@ -806,6 +813,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
             orgId,
             pages: [{ id: "page_1", name: "Dealer One", access_token: "synthetic-newer-token" }],
             connectedByUserId: "fb_user_1",
+            attemptStartedAt: Date.now(),
           })
         );
 
@@ -908,6 +916,261 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
       });
     });
 
+    // SCRUM-841 R1. The exchange awaits /me/accounts after it knows the Facebook
+    // user. A signed callback for that user landing in that gap used to be undone
+    // when the exchange then stored the Page tokens it had already fetched
+    // (including for a first-time connection, where the callback finds no row to
+    // clear). Every "(signed route + real callback)" test drives the real
+    // /facebook-oauth-callback route. The parked ones hold the exchange at
+    // /me/accounts, POST the HMAC-signed routes in that gap, then release it; the
+    // sequential ones run the callback wholly before or wholly after the attempt.
+    // The "(mutation)" block pins the fence's own rules (ties, monotonic time,
+    // retention age); the hourly sweep that deletes expired fences is covered in
+    // adminSystem.test.ts.
+    describe("an OAuth attempt begun before a signed callback cannot restore that user's credentials", () => {
+      const USER = "fb_user_1";
+      const REVOKED = /revoked while connecting/i;
+      const EXPIRED = /connection attempt expired/i;
+      const ROUTES = ["/facebook-deauthorize", "/facebook-data-deletion"] as const;
+      const ACTIVE = { facebookPageId: "page_old", facebookPageAccessToken: "synthetic-old-active-token", facebookConnectedByUserId: USER };
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      // A timer can fire with no measurable delay after a long microtask chain, so
+      // order events on the clock the code under test reads: wait until it is
+      // strictly past `ms`. Ties favour the revocation, so this is what makes
+      // "strictly later" true.
+      const after = async (ms: number) => {
+        while (Date.now() <= ms) await sleep(1);
+      };
+      const fenceTime = async (t: T) => (await t.run((ctx) => ctx.db.query("facebookRevocations").first()))!.revokedAt;
+
+      let releaseExchange: (() => void) | undefined;
+      afterEach(() => releaseExchange?.());
+
+      /** Creates a real OAuth state (the attempt's start) and returns its token. */
+      async function startAttempt(asOwner: ReturnType<T["withIdentity"]>, orgId: Id<"organizations">) {
+        const url = await asOwner.mutation(api.facebookIntegrations.createConnectUrl, { orgId });
+        return new URL(url).searchParams.get("state")!;
+      }
+      const callbackUrl = (state: string) => `/facebook-oauth-callback?code=abc&state=${state}`;
+
+      /** Runs the real callback with the exchange parked inside /me/accounts. */
+      async function parkedExchange(seed?: (t: T, orgId: Id<"organizations">) => Promise<void>) {
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+        const { orgId, asOwner } = await seedOwner(t);
+        await seed?.(t, orgId);
+        const state = await startAttempt(asOwner, orgId);
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => (release = resolve));
+        releaseExchange = release;
+        let parked = false;
+        stubGraph(
+          async () => {
+            parked = true;
+            await gate;
+            return PAGES();
+          },
+          { me: () => graphJson({ id: USER }) }
+        );
+        const callback = t.fetch(callbackUrl(state), { redirect: "manual" });
+        callback.catch(() => undefined); // observed by finish(); never an unhandled rejection
+        await vi.waitFor(() => expect(parked).toBe(true), { timeout: 4_000 });
+        return {
+          t,
+          orgId,
+          finish: async () => {
+            release();
+            return callback;
+          },
+        };
+      }
+
+      const logsOf = (t: T) => t.run((ctx) => ctx.db.query("webhookLogs").collect());
+      /** The attempt was refused: error redirect, fixed log text, no token anywhere. */
+      async function expectRefused(t: T, res: Response) {
+        expect(res.status).toBe(302);
+        expect(res.headers.get("location")).toContain("error=1");
+        const logs = await logsOf(t);
+        expect(logs.find((l) => l.source === "facebook-oauth" && l.status === "error")?.error).toMatch(REVOKED);
+        const visible = JSON.stringify(logs) + (res.headers.get("location") ?? "");
+        for (const secret of [...URL_CREDENTIALS, SYNTHETIC_PAGE_TOKEN, ACTIVE.facebookPageAccessToken]) {
+          expect(visible).not.toContain(secret);
+        }
+      }
+      const expectNoCredentials = (row: Awaited<ReturnType<typeof settingsOf>>) => {
+        expect(row?.facebookPageId).toBeUndefined();
+        expect(row?.facebookPageAccessToken).toBeUndefined();
+        expect(row?.facebookConnectedByUserId).toBeUndefined();
+        expect(row?.facebookPendingCredentials).toBeUndefined();
+        expect(row?.facebookAvailablePages).toBeUndefined();
+      };
+
+      test.each(ROUTES)("(signed route + real callback) %s during the exchange: a first-time connection stores nothing", async (path) => {
+        const { t, orgId, finish } = await parkedExchange();
+
+        expect((await postToRoute(t, path, USER)).status).toBe(200);
+        const res = await finish();
+
+        await expectRefused(t, res);
+        expect(await settingsOf(t, orgId)).toBeNull();
+      });
+
+      test.each(ROUTES)("(signed route + real callback) %s during the exchange: a same-user reconnect over an active connection ends with no credentials", async (path) => {
+        const { t, orgId, finish } = await parkedExchange((seedT, seedOrgId) => upsertOrgSettings(seedT, seedOrgId, ACTIVE));
+
+        expect((await postToRoute(t, path, USER)).status).toBe(200);
+        const res = await finish();
+
+        await expectRefused(t, res);
+        expectNoCredentials(await settingsOf(t, orgId));
+      });
+
+      test.each(ROUTES)("(signed route + real callback) %s during the exchange: every org of that user ends with no credentials", async (path) => {
+        let orgB!: Id<"organizations">;
+        const { t, orgId, finish } = await parkedExchange(async (seedT, seedOrgId) => {
+          await upsertOrgSettings(seedT, seedOrgId, ACTIVE);
+          orgB = await newOrg(seedT, "B");
+          await upsertOrgSettings(seedT, orgB, {
+            facebookPageId: "page_b",
+            facebookPageAccessToken: "synthetic-b-active-token",
+            facebookConnectedByUserId: USER,
+            facebookPendingCredentials: [{ id: "page_b2", name: "B2", token: "synthetic-b-pending" }],
+          });
+        });
+
+        expect((await postToRoute(t, path, USER)).status).toBe(200);
+        const res = await finish();
+
+        await expectRefused(t, res);
+        expectNoCredentials(await settingsOf(t, orgId));
+        expectNoCredentials(await settingsOf(t, orgB));
+      });
+
+      test.each(ROUTES)("(signed route + real callback) %s arriving after the attempt has stored its credentials still clears them", async (path) => {
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+        const { orgId, asOwner } = await seedOwner(t);
+        stubGraph(PAGES, { me: () => graphJson({ id: USER }) });
+        const res = await t.fetch(callbackUrl(await startAttempt(asOwner, orgId)), { redirect: "manual" });
+        expect(res.headers.get("location")).toMatch(/\?connected=facebook$/);
+        expect((await settingsOf(t, orgId))?.facebookPendingCredentials).toHaveLength(1);
+
+        expect((await postToRoute(t, path, USER)).status).toBe(200);
+
+        expectNoCredentials(await settingsOf(t, orgId));
+      });
+
+      test("(signed route + real callback) a callback for an unrelated Facebook user does not stop the attempt", async () => {
+        const { t, orgId, finish } = await parkedExchange();
+
+        expect((await postToRoute(t, "/facebook-deauthorize", "fb_someone_else")).status).toBe(200);
+        const res = await finish();
+
+        expect(res.headers.get("location")).toMatch(/\?connected=facebook$/);
+        expect((await settingsOf(t, orgId))?.facebookPendingCredentials).toEqual([
+          { id: "page_1", name: "Dealer One", token: SYNTHETIC_PAGE_TOKEN },
+        ]);
+      });
+
+      test("(signed route + real callback) an attempt begun BEFORE the callback is refused even when its exchange runs entirely AFTER it", async () => {
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+        const { orgId, asOwner } = await seedOwner(t);
+        const state = await startAttempt(asOwner, orgId);
+        stubGraph(PAGES, { me: () => graphJson({ id: USER }) });
+
+        expect((await postToRoute(t, "/facebook-deauthorize", USER)).status).toBe(200);
+        // The route's own entry time must be strictly later than the callback, so a
+        // tie cannot hide a regression that passes "now" instead of the state's
+        // createdAt (which is what makes this attempt "begun before").
+        await after(await fenceTime(t));
+        const res = await t.fetch(callbackUrl(state), { redirect: "manual" });
+
+        await expectRefused(t, res);
+        expect(await settingsOf(t, orgId)).toBeNull();
+      });
+
+      test.each(ROUTES)("(signed route + real callback) a genuinely new attempt begun after %s still connects", async (path) => {
+        const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+        const { orgId, asOwner } = await seedOwner(t);
+        stubGraph(PAGES, { me: () => graphJson({ id: USER }) });
+        expect((await postToRoute(t, path, USER)).status).toBe(200);
+        await after(await fenceTime(t)); // the new state must be strictly later than the callback
+
+        const res = await t.fetch(callbackUrl(await startAttempt(asOwner, orgId)), { redirect: "manual" });
+
+        expect(res.headers.get("location")).toMatch(/\?connected=facebook$/);
+        const row = await settingsOf(t, orgId);
+        expect(row?.facebookConnectedByUserId).toBe(USER);
+        expect(row?.facebookPendingCredentials).toHaveLength(1);
+      });
+
+      describe("(mutation) the fence itself", () => {
+        const fences = (t: T) => t.run((ctx) => ctx.db.query("facebookRevocations").collect());
+        const savePending = (t: T, orgId: Id<"organizations">, attemptStartedAt: number) =>
+          t.run((ctx) =>
+            ctx.runMutation(internal.facebookIntegrations.saveFacebookPendingPages, {
+              orgId,
+              pages: [{ id: "page_1", name: "Dealer One", access_token: SYNTHETIC_PAGE_TOKEN }],
+              connectedByUserId: USER,
+              attemptStartedAt,
+            })
+          );
+        const revoke = (t: T, userId = USER) =>
+          t.run((ctx) => ctx.runMutation(internal.facebookIntegrations.disconnectByFacebookConnectedUserId, { facebookConnectedByUserId: userId }));
+
+        test("a callback with no org row records a fence; an attempt starting in the same millisecond is refused, one starting 1 ms later connects", async () => {
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const { orgId } = await seedOwner(t);
+          await revoke(t);
+          const [fence] = await fences(t);
+          expect(fence).toMatchObject({ facebookUserId: USER });
+
+          await expect(savePending(t, orgId, fence.revokedAt)).rejects.toThrow(REVOKED);
+          expect(await settingsOf(t, orgId)).toBeNull();
+          await expect(savePending(t, orgId, fence.revokedAt + 1)).resolves.toBeNull();
+          expect((await settingsOf(t, orgId))?.facebookPendingCredentials).toHaveLength(1);
+        });
+
+        test("a repeated callback keeps one row per user and advances its time", async () => {
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          await revoke(t);
+          const [first] = await fences(t);
+          expect(first).toMatchObject({ facebookUserId: USER });
+          await after(first.revokedAt);
+          await revoke(t);
+          const rows = await fences(t);
+          expect(rows).toHaveLength(1);
+          expect(rows[0].revokedAt).toBeGreaterThan(first.revokedAt);
+        });
+
+        test("a callback never moves a fence's time backwards", async () => {
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const later = Date.now() + 60_000;
+          await t.run((ctx) => ctx.db.insert("facebookRevocations", { facebookUserId: USER, revokedAt: later }));
+
+          await revoke(t);
+
+          expect(await fences(t)).toMatchObject([{ facebookUserId: USER, revokedAt: later }]);
+        });
+
+        test("an attempt older than the retention window is refused as expired when no fence is on record (as after the sweep)", async () => {
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const { orgId } = await seedOwner(t);
+          expect(await fences(t)).toEqual([]);
+
+          for (const age of [2 * 60 * 60 * 1000, 61 * 60 * 1000]) {
+            await expect(savePending(t, orgId, Date.now() - age)).rejects.toThrow(EXPIRED);
+          }
+          expect(await settingsOf(t, orgId)).toBeNull();
+        });
+
+        test("an attempt still inside the retention window (59 minutes old) is not refused for age alone", async () => {
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const { orgId } = await seedOwner(t);
+
+          await expect(savePending(t, orgId, Date.now() - 59 * 60 * 1000)).resolves.toBeNull();
+        });
+      });
+    });
+
     describe("promoting pending credentials needs a stored Facebook user id", () => {
       async function select(fields: Partial<WithoutSystemFields<Doc<"orgSettings">>>) {
         const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
@@ -972,7 +1235,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
   test("an account with no Pages keeps its own message", async () => {
     const { orgId, t } = await run(() => graphJson({ data: [] }));
     await expect(
-      t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" })
+      t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc", attemptStartedAt: Date.now() })
     ).rejects.toThrow(/doesn't manage any Pages/i);
   });
 
@@ -980,7 +1243,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
     const { orgId, t } = await run(() =>
       graphJson({ error: { message: `${SYNTHETIC_PROVIDER_TEXT} ${SYNTHETIC_PAGE_TOKEN}` } }, 400)
     );
-    const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
+    const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc", attemptStartedAt: Date.now() }));
     expect(text).toMatch(/could not be retrieved/i);
     expect(text).not.toContain(SYNTHETIC_PROVIDER_TEXT);
     expect(text).not.toContain(SYNTHETIC_PAGE_TOKEN);
@@ -990,7 +1253,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
     const { orgId, t } = await run(() => graphJson({ data: [] }), {
       shortToken: () => graphJson({ error: { message: `${SYNTHETIC_PROVIDER_TEXT} ${SYNTHETIC_PAGE_TOKEN}` } }, 400),
     });
-    const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc" }));
+    const text = await failureText(t.action(internal.facebookIntegrations.exchangeCodeForToken, { orgId, code: "abc", attemptStartedAt: Date.now() }));
     expect(text).toMatch(/token exchange failed/i);
     expect(text).not.toContain(SYNTHETIC_PROVIDER_TEXT);
     expect(text).not.toContain(SYNTHETIC_PAGE_TOKEN);

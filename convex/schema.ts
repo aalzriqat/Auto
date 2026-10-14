@@ -6041,6 +6041,25 @@ export default defineSchema({
     .index("by_state", ["state"])
     .index("by_org", ["orgId"]),
 
+  // SCRUM-841: per-Facebook-user revocation fence. Meta's signed deauthorize and
+  // data-deletion callbacks record when a user revoked access, even if that user
+  // has no org row yet. An OAuth attempt begun at or before `revokedAt` is
+  // refused when it tries to store pending Page credentials, so a callback that
+  // lands while the attempt is in flight cannot be undone by it. One row per
+  // user, keyed by Facebook user id (not org-scoped, so the org hard-delete does
+  // not touch it). Holds an id and a timestamp only — no credentials. It is kept
+  // deliberately even after a data-deletion request (a short-lived security
+  // record, not user data) and deleted by the hourly
+  // adminSystem.pruneOperationalLogs once older than
+  // FACEBOOK_REVOCATION_RETENTION_MS (utils/facebookRevocation.ts): at most about
+  // two hours after the callback.
+  facebookRevocations: defineTable({
+    facebookUserId: v.string(),
+    revokedAt: v.number(),
+  })
+    .index("by_facebook_user_id", ["facebookUserId"])
+    .index("by_revoked_at", ["revokedAt"]),
+
   instagramEvents: defineTable({
     orgId: v.id("organizations"),
     externalId: v.string(),
