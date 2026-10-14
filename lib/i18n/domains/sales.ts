@@ -685,6 +685,10 @@ const dealRailMessages = defineBilingualMessages({
     "Money paid to the dealership is dealership income. Money the customer pays the finance company directly is not: it lowers what the dealership has to put in, by the same amount.",
     "ما يُدفع للمعرض دخلٌ للمعرض. أما ما يدفعه العميل لشركة التمويل مباشرةً فليس دخلاً، بل يُخفِّض ما على المعرض أن يدفعه بالمبلغ نفسه.",
   ],
+  GapWhereCustomerPaysManualHint: [
+    "Money paid to the dealership is dealership income, so it is recorded here rather than assumed.",
+    "ما يُدفع للمعرض دخلٌ للمعرض، لذا يُسجَّل هنا بدل افتراضه.",
+  ],
   GapCashToDealer: ["Cash to us", "نقداً لنا"],
   GapInstallmentsToDealer: ["Instalments to us", "أقساطاً لنا"],
   GapToFinanceCompany: ["To the finance company", "لشركة التمويل"],
@@ -1167,8 +1171,8 @@ const dealOverviewMessages = defineBilingualMessages({
   OverviewGapCashPlanned: ["Shortfall cash agreed with the customer", "نقد العجز المتفق عليه مع العميل"],
   OverviewGapCashPlannedNote: ["allocated, not received — no receipt yet", "مخصَّص وليس مقبوضًا — لا إيصال بعد"],
   OverviewGapToFinanceCompanyPlanned: [
-    "Shortfall paid by the customer to the finance company",
-    "جزء العجز الذي يدفعه العميل لشركة التمويل",
+    "Shortfall the customer agreed to pay the finance company",
+    "جزء العجز الذي اتفق العميل على دفعه لشركة التمويل",
   ],
   OverviewGapToFinanceCompanyPlannedNote: [
     "not dealership money — it lowers the dealership's contribution by the same amount",
@@ -3525,6 +3529,7 @@ export const salesEn = {
   DerivedFundedPortion: "Funded by the finance company",
   DerivedUnfinancedPortion: "Not financed",
   DerivedDealerContribution: "Dealership contribution",
+  DerivedCustomerToFinanceCompany: "Customer payment agreed with the finance company",
   DerivedAppliedLtv: "Applied LTV",
 
   RecordQuotationTitle: "Record the quotation we submitted",
@@ -4598,6 +4603,7 @@ export const salesAr = {
   DerivedFundedPortion: "الجزء المموَّل من شركة التمويل",
   DerivedUnfinancedPortion: "الجزء غير المموَّل",
   DerivedDealerContribution: "مساهمة المعرض",
+  DerivedCustomerToFinanceCompany: "دفعة العميل المتفق عليها مع شركة التمويل",
   DerivedAppliedLtv: "نسبة التمويل المطبَّقة",
 
   RecordQuotationTitle: "تسجيل عرض السعر المُرسَل",

@@ -48,6 +48,7 @@ function props(overrides: Partial<Props> = {}): Props {
     shortfallMinor: GAP_MINOR,
     breakdown: { valuationMinor: GAP_MINOR, termsMinor: 0 },
     grossLabel: false,
+    allowFinanceCompany: true,
     submittedQuotationMinor: 12_500 * FACTOR,
     approvedPurchaseAmountMinor: 11_500 * FACTOR,
     economicsStamp: "v2|3",
@@ -233,6 +234,18 @@ describe("who covers it", () => {
       notes: "",
       economicsStamp: "v2|3",
     });
+  });
+
+  test("a manually recorded approval is not offered the finance-company box and needs no zero typed for it", () => {
+    const onSubmit = vi.fn<(values: Submitted) => Promise<void>>(async () => {});
+    renderDialog({ onSubmit, allowFinanceCompany: false, grossLabel: true, breakdown: null });
+    expect(screen.queryByLabelText("GapToFinanceCompany")).toBeNull();
+    expect(document.body.textContent).toContain("GapWhereCustomerPaysManualHint");
+    fireEvent.change(input("GapCashToDealer"), { target: { value: String(GAP_MAJOR) } });
+    fireEvent.change(input("GapInstallmentsToDealer"), { target: { value: "0" } });
+    expect(readiness()).toBe("GapAllocationComplete");
+    fireEvent.click(confirmButton());
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ customerGapToFinanceCompanyMinor: 0 });
   });
 
   test("a finance-company amount with more decimals than the currency holds is too precise, not rounded", () => {

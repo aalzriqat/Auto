@@ -199,7 +199,9 @@ async function recomputeAndPatchEconomics(
   const firstPaymentUnknown = app.customerFirstPaymentMinor === undefined;
 
   const settledSplit = requireCustomerGapToFinanceCompany(app, "recomputing this deal's economics");
-  const feeDeductionsMinor = await settlementDeductedTotalMinor(ctx, app._id, currency);
+  const feeDeductionsMinor = firstPaymentUnknown
+    ? 0
+    : await settlementDeductedTotalMinor(ctx, app._id, currency);
   // Narrowed above; read into consts because the closure below loses the narrowing.
   const { approvedDealerPurchaseAmountMinor, appliedLtvPercent, submittedQuotationMinor } = app;
   const deriveFor = (split: typeof settledSplit) => deriveEconomics({
@@ -341,15 +343,25 @@ async function recomputeAndPatchEconomics(
       ) ?? {}
     );
   })();
+  // An agreement the resolver would refuse is void, not merely flagged: a unsealed
+  // recompute (a corrected first payment, say) can leave the customer's payment to
+  // the finance company larger than the contribution it replaces even though the
+  // shortfall itself did not move.
+  const creditOverrun =
+    !sealed &&
+    derived.customerPayment.excessMinor > 0 &&
+    !("customerGapToFinanceCompanyMinor" in shortfallResolutionPatch);
+  const resolutionPatch = creditOverrun
+    ? { gapResolution: "PENDING_NEGOTIATION" as const, ...GAP_RESOLUTION_CLEARED }
+    : shortfallResolutionPatch;
   // A voided split takes the customer's payment to the finance company with it
   // (SCRUM-766 PR-B): the contribution and remittance stored below must come
   // from the same row state as the patch, or a cleared agreement would leave its
   // reduced contribution behind.
-  const splitVoided = "customerGapToFinanceCompanyMinor" in shortfallResolutionPatch;
+  const splitVoided = "customerGapToFinanceCompanyMinor" in resolutionPatch;
   const stored = splitVoided
     ? deriveFor({ customerGapShareMinor: 0, customerGapToFinanceCompanyMinor: 0 })
     : derived;
-  if (!stored) throw new ConvexError("This deal's economics could not be re-derived. Nothing was saved.");
 
   // A shortfall that cannot be measured is a reconciliation item, not a zero.
   // Once the vehicle is handed over the agreement cannot be voided here, so a
@@ -361,8 +373,8 @@ async function recomputeAndPatchEconomics(
         ? "The shortfall changed after the vehicle was handed over, so what was agreed about it can no longer be revisited automatically. Reconcile it before closing the deal."
         : undefined;
 
-  // A recorded payment to the finance company that the contribution can no
-  // longer absorb (the funding terms moved on a sealed deal) is credited only up
+  // On a sealed deal the agreement cannot be voided, so a recorded payment to the
+  // finance company that the contribution can no longer absorb is credited only up
   // to the contribution; the rest is a human's to reconcile, not a silent drop.
   const paymentExcessReason =
     !splitVoided && derived.customerPayment.excessMinor > 0
@@ -400,7 +412,7 @@ async function recomputeAndPatchEconomics(
       : undefined,
     rawAppraisalGapMinor: derived.gap.rawAppraisalGapMinor,
     ...shortfallFields,
-    ...shortfallResolutionPatch,
+    ...resolutionPatch,
     // Blanking the remittance silently would be worse than the assumption it
     // replaced. Nothing writes customerContributionToFinanceCompanyMinor yet,
     // so for a company that retains customer funds this is not a transient

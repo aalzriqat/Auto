@@ -119,7 +119,7 @@ describe("deriveDealFinancialSummary", () => {
     });
     test("the part the customer pays the finance company is served as its own planned figure, never inside gap cash or the paid total (SCRUM-766 PR-B)", () => {
       const s = deriveDealFinancialSummary(
-        inputs({ app: { ...inputs().app, customerGapToFinanceCompanyMinor: 400_000 } })
+        inputs({ app: { ...inputs().app, customerGapToFinanceCompanyAppliedMinor: 400_000 } })
       );
       expect(s.customerGapToFinanceCompanyPlannedMinor).toBe(400_000);
       expect(s.customerGapCashPlannedMinor).toBe(200_000);
@@ -128,7 +128,7 @@ describe("deriveDealFinancialSummary", () => {
     });
     test("an unreadable finance-company payment is withheld and named, not served as a figure", () => {
       const s = deriveDealFinancialSummary(
-        inputs({ app: { ...inputs().app, customerGapToFinanceCompanyMinor: Number.NaN } })
+        inputs({ app: { ...inputs().app, customerGapToFinanceCompanyAppliedMinor: Number.NaN } })
       );
       expect(s.customerGapToFinanceCompanyPlannedMinor).toBeNull();
       expect(s.unreadable).toContainEqual({ field: "customerGapToFinanceCompanyPlanned", reason: "UNSAFE_AMOUNT" });

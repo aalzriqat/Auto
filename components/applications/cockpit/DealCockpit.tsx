@@ -2570,6 +2570,8 @@ export function DealCockpit({
               economicsApp.financeCompanyFundedPortionMinor ?? null,
             unfinancedPortionMinor: economicsApp.unfinancedPortionMinor ?? null,
             dealerContributionMinor: economicsApp.dealerContributionMinor ?? null,
+            customerPaidToFinanceCompanyMinor:
+              economicsApp.customerGapToFinanceCompanyAppliedMinor ?? null,
             appliedLtvPercent: economicsApp.appliedLtvPercent ?? null,
             closed: economicsApp.status === "CLOSED" || economicsApp.status === "CANCELLED",
             ltvMissing,
@@ -7270,6 +7272,7 @@ export function DealCockpitView({
               : null
           }
           grossLabel={deal.money.shortfall.method !== "NET"}
+          allowFinanceCompany={deal.money.shortfall.method !== "GROSS_MANUAL"}
           submittedQuotationMinor={gapResolution.submittedQuotationMinor}
           approvedPurchaseAmountMinor={gapResolution.approvedPurchaseAmountMinor}
           economicsStamp={"economicsStamp" in deal ? deal.economicsStamp : undefined}

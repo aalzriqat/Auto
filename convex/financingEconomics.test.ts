@@ -6548,6 +6548,32 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
       expect(after.dealerContributionMinor).toBe(jod(1_800));
     });
 
+    test("a correction that leaves the shortfall at 850 but shrinks the contribution below the 400 voids the agreement instead of leaving a refusable one", async () => {
+      const { seed, applicationId } = await seedGappedDeal();
+      await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
+        orgId: seed.orgId,
+        applicationId,
+        economicsStamp: await servedStamp(seed, applicationId),
+        ...allocation(400, 450, { financeCompany: 400 }),
+      });
+      // First payment 1,500 on both sides (quote 12,500 at 85%: contribution 375;
+      // approved 11,500: funded 9,775, contribution 225): the shortfall is
+      // (12,500 - 375) - (11,500 - 225) = 850 still, but 225 < 400.
+      await seed.t.run((ctx) =>
+        ctx.db.patch(applicationId, {
+          customerFirstPaymentMinor: jod(1_500),
+          quoteFirstPaymentCorrectedMinor: jod(1_500),
+        })
+      );
+      await seed.t.run((ctx) => recomputeEconomicsForApplication(ctx, applicationId));
+      const after = await readApp(seed, applicationId);
+      expect(after.netShortfallMinor).toBe(jod(850));
+      expect(after.gapResolution).toBe("PENDING_NEGOTIATION");
+      expect(after.customerGapToFinanceCompanyMinor).toBeUndefined();
+      expect(after.customerGapToFinanceCompanyAppliedMinor).toBe(0);
+      expect(after.dealerContributionMinor).toBe(jod(225));
+    });
+
     test("a recompute that moves nothing keeps the reduced contribution, never subtracting twice", async () => {
       const { seed, applicationId } = await seedGappedDeal();
       await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
