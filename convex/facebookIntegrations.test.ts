@@ -260,6 +260,7 @@ describe("facebookIntegrations: a Page belongs to one org", () => {
   const seedPending = (t: T, orgId: Id<"organizations">, facebookPageId: string) =>
     upsertOrgSettings(t, orgId, {
       facebookConnectedByUserId: "fb_user_x",
+      facebookPendingAttemptId: "attempt-x",
       facebookPendingCredentials: [{ id: facebookPageId, name: "Page", token: "token" }],
     });
   const finalize = (t: T, orgId: Id<"organizations">, facebookPageId: string) =>
@@ -269,6 +270,7 @@ describe("facebookIntegrations: a Page belongs to one org", () => {
         facebookPageId,
         facebookPageAccessToken: "token",
         facebookConnectedByUserId: "fb_user_x",
+        pendingAttemptId: "attempt-x",
       })
     );
   const save = async (t: T, orgId: Id<"organizations">, facebookPageId: string) => {
@@ -344,6 +346,7 @@ describe("facebookIntegrations: a Page belongs to one org", () => {
 describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () => {
   const SYNTHETIC_PAGE_TOKEN = "synthetic-page-token-DO-NOT-LEAK";
   const SYNTHETIC_PROVIDER_TEXT = "synthetic-provider-error-DO-NOT-LEAK";
+  const CHANGED = /changed before it could be completed/i;
   const graphJson = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -712,7 +715,6 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
     // callback, or a newer OAuth) must stop the finalization, or the token is
     // resurrected after the callback reported success.
     describe("finalizing a Page selection requires the pending credentials to still match", () => {
-      const CHANGED = /changed before it could be completed/i;
       const PENDING = [{ id: "page_1", name: "Dealer One", token: SYNTHETIC_PAGE_TOKEN }];
 
       // A test that fails before finishing must not leave the action parked.
@@ -723,7 +725,12 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
       async function parkedSelect(extra: Partial<WithoutSystemFields<Doc<"orgSettings">>> = {}) {
         const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
         const { orgId, asOwner } = await seedOwner(t);
-        await upsertOrgSettings(t, orgId, { facebookConnectedByUserId: "fb_user_1", facebookPendingCredentials: PENDING, ...extra });
+        await upsertOrgSettings(t, orgId, {
+          facebookConnectedByUserId: "fb_user_1",
+          facebookPendingAttemptId: "attempt-a",
+          facebookPendingCredentials: PENDING,
+          ...extra,
+        });
         let release!: (reply: Response) => void;
         const gate = new Promise<Response>((resolve) => (release = resolve));
         releaseParked = () => release(graphJson({ success: true }));
@@ -847,7 +854,11 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
       });
 
       describe("(mutation) saveFacebookCredentials itself", () => {
-        const call = (t: T, orgId: Id<"organizations">, over: { pageId?: string; token?: string; userId?: string } = {}) =>
+        const call = (
+          t: T,
+          orgId: Id<"organizations">,
+          over: { pageId?: string; token?: string; userId?: string; attemptId?: string } = {}
+        ) =>
           t.run((ctx) =>
             ctx.runMutation(internal.facebookIntegrations.saveFacebookCredentials, {
               orgId,
@@ -855,6 +866,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
               facebookPageAccessToken: over.token ?? SYNTHETIC_PAGE_TOKEN,
               facebookPageName: "Dealer One",
               facebookConnectedByUserId: over.userId ?? "fb_user_1",
+              pendingAttemptId: over.attemptId ?? "attempt-1",
             })
           );
 
@@ -872,6 +884,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
           const { orgId } = await seedOwner(t);
           await upsertOrgSettings(t, orgId, {
             facebookConnectedByUserId: storedUserId,
+            facebookPendingAttemptId: "attempt-1",
             facebookPendingCredentials: pending && [...pending],
           });
           const before = await settingsOf(t, orgId);
@@ -880,6 +893,36 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
 
           expect(text).toMatch(CHANGED);
           for (const secret of [SYNTHETIC_PAGE_TOKEN, "synthetic-other-token"]) expect(text).not.toContain(secret);
+          expect(await settingsOf(t, orgId)).toEqual(before);
+        });
+
+        // SCRUM-841: the Page, token and user can be identical across two attempts, so only
+        // the attempt generation tells an old selection from the current one.
+        test("refuses a different attempt generation even when the Page, token and user all match", async () => {
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const { orgId } = await seedOwner(t);
+          await upsertOrgSettings(t, orgId, {
+            facebookConnectedByUserId: "fb_user_1",
+            facebookPendingAttemptId: "attempt-2",
+            facebookPendingCredentials: [...PENDING],
+          });
+          const before = await settingsOf(t, orgId);
+
+          const text = await failureText(call(t, orgId, { attemptId: "attempt-1" }));
+
+          expect(text).toMatch(CHANGED);
+          expect(text).not.toContain(SYNTHETIC_PAGE_TOKEN);
+          expect(await settingsOf(t, orgId)).toEqual(before);
+        });
+
+        test("refuses when the row has no attempt generation at all", async () => {
+          const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+          const { orgId } = await seedOwner(t);
+          await upsertOrgSettings(t, orgId, { facebookConnectedByUserId: "fb_user_1", facebookPendingCredentials: [...PENDING] });
+          const before = await settingsOf(t, orgId);
+
+          await expect(call(t, orgId)).rejects.toThrow(CHANGED);
+
           expect(await settingsOf(t, orgId)).toEqual(before);
         });
 
@@ -897,6 +940,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
           const { orgId } = await seedOwner(t);
           await upsertOrgSettings(t, orgId, {
             facebookConnectedByUserId: "fb_user_1",
+            facebookPendingAttemptId: "attempt-1",
             facebookPendingCredentials: [...PENDING, { id: "page_2", name: "Second", token: "synthetic-second-token" }],
             facebookAvailablePages: [{ id: "page_1", name: "Dealer One" }],
           });
@@ -912,6 +956,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
           });
           expect(row?.facebookPendingCredentials).toBeUndefined();
           expect(row?.facebookAvailablePages).toBeUndefined();
+          expect(row?.facebookPendingAttemptId).toBeUndefined();
         });
       });
     });
@@ -1203,6 +1248,108 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
           expectNoCredentials(await settingsOf(t, orgId));
         });
 
+        // SCRUM-841. A Page selection is long-lived: it awaits Meta's subscribed_apps call and then
+        // promotes whatever is pending. If the Owner disconnects meanwhile and a genuinely new
+        // attempt for the same user, Pages and token stores pending credentials again, an old
+        // selection that checks only Page, token and user would promote the NEW attempt's
+        // credentials. Only the attempt generation tells them apart.
+        describe("a Page selection begun on an earlier attempt cannot promote a later attempt's credentials", () => {
+          /** Two real OAuth attempts (same user, Pages, token) with the first one's selection parked in between. */
+          async function interleave(between: "an Owner disconnect" | "a second attempt, no disconnect" | "no second attempt") {
+            const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+            const { orgId, asOwner } = await seedOwner(t);
+            stubGraph(PAGES, { me: () => graphJson({ id: USER }) });
+            const graphFetch = globalThis.fetch;
+            let release!: () => void;
+            const gate = new Promise<void>((resolve) => (release = resolve));
+            releaseExchange = release;
+            let subscribeCalls = 0;
+            vi.stubGlobal(
+              "fetch",
+              vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+                const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+                if (href.includes("/subscribed_apps")) {
+                  subscribeCalls += 1;
+                  await gate;
+                  return graphJson({ success: true });
+                }
+                return graphFetch(input, init);
+              })
+            );
+            const connect = async () => {
+              const res = await t.fetch(callbackUrl(await startAttempt(asOwner, orgId)), { redirect: "manual" });
+              expect(res.headers.get("location")).toMatch(/\?connected=facebook$/);
+            };
+
+            await connect(); // attempt 1
+            const generation1 = (await settingsOf(t, orgId))?.facebookPendingAttemptId;
+            const oldSelection = asOwner.action(api.facebookIntegrations.selectFacebookPage, { orgId, pageId: "page_1" });
+            oldSelection.catch(() => undefined); // observed by the test; never an unhandled rejection
+            await vi.waitFor(() => expect(subscribeCalls).toBe(1), { timeout: 4_000 });
+
+            if (between !== "no second attempt") {
+              if (between === "an Owner disconnect") {
+                await asOwner.mutation(api.facebookIntegrations.disconnect, { orgId });
+                await after(await disconnectedAtOf(t, orgId)); // the new attempt must start strictly later
+              }
+              await connect(); // attempt 2: the same user, Pages and token
+            }
+            const generation2 = (await settingsOf(t, orgId))?.facebookPendingAttemptId;
+            return { t, orgId, asOwner, release, oldSelection, generation1, generation2 };
+          }
+
+          test.each([
+            ["owner disconnect + real callback + selection", "an Owner disconnect"],
+            ["real callback + selection", "a second attempt, no disconnect"],
+          ] as const)(
+            "(%s) after %s, the old selection is refused and the new attempt's credentials are untouched",
+            async (_label, between) => {
+              const x = await interleave(between);
+              // The premise: the credentials are identical, only the generation differs.
+              expect(x.generation1).toBeDefined();
+              expect(x.generation2).toBeDefined();
+              expect(x.generation2).not.toBe(x.generation1);
+
+              x.release();
+              const text = await failureText(x.oldSelection);
+
+              expect(text).toMatch(CHANGED);
+              expect(text).not.toContain(SYNTHETIC_PAGE_TOKEN);
+              const row = await settingsOf(x.t, x.orgId);
+              expect(row?.facebookPageId).toBeUndefined();
+              expect(row?.facebookPageAccessToken).toBeUndefined();
+              expect(row?.facebookPendingAttemptId).toBe(x.generation2);
+              expect(row?.facebookPendingCredentials).toEqual([{ id: "page_1", name: "Dealer One", token: SYNTHETIC_PAGE_TOKEN }]);
+            }
+          );
+
+          test("(owner disconnect + real callback + selection) the new attempt's own selection then succeeds", async () => {
+            const x = await interleave("an Owner disconnect");
+            x.release();
+            await failureText(x.oldSelection); // the old one is refused...
+
+            await x.asOwner.action(api.facebookIntegrations.selectFacebookPage, { orgId: x.orgId, pageId: "page_1" });
+
+            const row = await settingsOf(x.t, x.orgId); // ...and the current one promotes
+            expect(row?.facebookPageAccessToken).toBe(SYNTHETIC_PAGE_TOKEN);
+            expect(row?.facebookConnectedByUserId).toBe(USER);
+            expect(row?.facebookPendingCredentials).toBeUndefined();
+            expect(row?.facebookPendingAttemptId).toBeUndefined();
+          });
+
+          test("(real callback + selection) an uninterrupted selection succeeds", async () => {
+            const x = await interleave("no second attempt");
+            expect(x.generation2).toBe(x.generation1);
+
+            x.release();
+            await x.oldSelection;
+
+            const row = await settingsOf(x.t, x.orgId);
+            expect(row?.facebookPageAccessToken).toBe(SYNTHETIC_PAGE_TOKEN);
+            expect(row?.facebookPendingAttemptId).toBeUndefined();
+          });
+        });
+
         describe("(mutation) the org fence itself", () => {
           test("with no settings row the disconnect still records it: same millisecond is refused, 1 ms later is stored", async () => {
             const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
@@ -1325,6 +1472,7 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
         const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
         const { orgId, asOwner } = await seedOwner(t);
         await upsertOrgSettings(t, orgId, {
+          facebookPendingAttemptId: "attempt-1",
           ...fields,
           facebookPendingCredentials: [{ id: "page_1", name: "Dealer One", token: SYNTHETIC_PAGE_TOKEN }],
         });
@@ -1340,9 +1488,10 @@ describe("facebookIntegrations.exchangeCodeForToken: Page payload boundary", () 
       }
 
       test.each([
-        ["missing", {}],
-        ["empty", { facebookConnectedByUserId: "" }],
-      ])("(action) a stored user id that is %s is refused before subscribed_apps, and nothing is promoted", async (_label, fields) => {
+        ["a stored user id that is missing", {}],
+        ["a stored user id that is empty", { facebookConnectedByUserId: "" }],
+        ["a pending row with no attempt id", { facebookConnectedByUserId: "fb_user_1", facebookPendingAttemptId: undefined }],
+      ])("(action) %s is refused before subscribed_apps, and nothing is promoted", async (_label, fields) => {
         const { fetchSpy, settings, call } = await select(fields);
         const before = await settings();
 
@@ -1427,6 +1576,7 @@ describe("facebookIntegrations.selectFacebookPage: subscription failure logging"
         currencySymbol: "JD",
         enabledPaymentTypes: [],
         facebookConnectedByUserId: "fb_user_1",
+        facebookPendingAttemptId: "attempt-1",
         facebookPendingCredentials: [{ id: "page_1", name: "Dealer One", token: SYNTHETIC_PAGE_TOKEN }],
       })
     );

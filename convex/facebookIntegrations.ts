@@ -251,6 +251,7 @@ export const disconnectByFacebookConnectedUserId = internalMutation({
         facebookAutoReplyEnabled: false,
         facebookAvailablePages: undefined,
         facebookPendingCredentials: undefined,
+        facebookPendingAttemptId: undefined,
       });
     }
   },
@@ -299,6 +300,7 @@ export const disconnect = mutation({
       facebookAutoReplyEnabled: false,
       facebookAvailablePages: undefined,
       facebookPendingCredentials: undefined,
+      facebookPendingAttemptId: undefined,
     });
   },
 });
@@ -365,6 +367,12 @@ const FACEBOOK_SELECTION_CHANGED_MESSAGE =
  * pending credential with the same Page id and token, under the same non-empty
  * connecting-user id, read in this transaction. Otherwise a token the callback
  * had already erased would be written back after it reported success.
+ *
+ * It must also still be the SAME ATTEMPT: every save of pending credentials stamps
+ * a fresh `facebookPendingAttemptId`, and the selection carries the one it read. A
+ * disconnect followed by a genuinely new attempt for the same user, Page and token
+ * matches on everything above, and only this tells the old selection from the new
+ * attempt whose credentials it would otherwise promote.
  */
 export const saveFacebookCredentials = internalMutation({
   args: {
@@ -374,9 +382,11 @@ export const saveFacebookCredentials = internalMutation({
     facebookTokenExpiresAt: v.optional(v.number()),
     facebookPageName: v.optional(v.string()),
     facebookConnectedByUserId: v.string(),
+    pendingAttemptId: v.string(),
   },
   handler: async (ctx, args) => {
-    const { orgId, ...fields } = args;
+    // `pendingAttemptId` is destructured out so it is not spread into the row below.
+    const { orgId, pendingAttemptId, ...fields } = args;
     await assertFacebookPageFree(ctx, orgId, fields.facebookPageId);
     const existing = await ctx.db
       .query("orgSettings")
@@ -390,16 +400,19 @@ export const saveFacebookCredentials = internalMutation({
       !existing ||
       !stillPending ||
       !fields.facebookConnectedByUserId ||
-      existing.facebookConnectedByUserId !== fields.facebookConnectedByUserId
+      existing.facebookConnectedByUserId !== fields.facebookConnectedByUserId ||
+      !pendingAttemptId ||
+      existing.facebookPendingAttemptId !== pendingAttemptId
     ) {
       throw new ConvexError(FACEBOOK_SELECTION_CHANGED_MESSAGE);
     }
 
-    // Clear both pending-page fields now that selection is finalised.
+    // Clear the pending-page fields now that selection is finalised.
     await ctx.db.patch(existing._id, {
       ...fields,
       facebookAvailablePages: undefined,
       facebookPendingCredentials: undefined,
+      facebookPendingAttemptId: undefined,
     });
   },
 });
@@ -611,6 +624,7 @@ export const saveFacebookPendingPages = internalMutation({
     const patch = {
       facebookAvailablePages: pickerPages,
       facebookPendingCredentials: pendingCredentials,
+      facebookPendingAttemptId: crypto.randomUUID(),
       facebookConnectedByUserId: connectedByUserId,
       // Active connection (facebookPageId / facebookPageAccessToken / facebookPageName)
       // is intentionally NOT cleared here — the current Page keeps working while the
@@ -633,7 +647,8 @@ export const saveFacebookPendingPages = internalMutation({
 
 /** Auth guard run inside a mutation so `requireTenantAuth` receives a MutationCtx.
  *  Also resolves the pending token for the chosen page, returning it so the
- *  action can call the Graph API without touching DB credentials from ActionCtx. */
+ *  action can call the Graph API without touching DB credentials from ActionCtx,
+ *  and the attempt id that `saveFacebookCredentials` must find still current. */
 export const validateFacebookPageSelectAuth = internalMutation({
   args: { orgId: v.id("organizations"), pageId: v.string() },
   handler: async (ctx, args) => {
@@ -657,8 +672,11 @@ export const validateFacebookPageSelectAuth = internalMutation({
     await assertFacebookPageFree(ctx, args.orgId, cred.id);
     // Credentials saved before the user id was mandatory carry none, and Meta's
     // deauthorize / data-deletion callbacks could never find them once promoted.
+    // Likewise a pending row from before the attempt id: nothing could tie the
+    // selection to it at save time.
     const facebookConnectedByUserId = settings?.facebookConnectedByUserId;
-    if (!facebookConnectedByUserId) {
+    const pendingAttemptId = settings?.facebookPendingAttemptId;
+    if (!facebookConnectedByUserId || !pendingAttemptId) {
       throw new ConvexError("This Facebook connection is incomplete. Please reconnect via OAuth.");
     }
     return {
@@ -666,6 +684,7 @@ export const validateFacebookPageSelectAuth = internalMutation({
       pageName: cred.name,
       pageAccessToken: cred.token,
       facebookConnectedByUserId,
+      pendingAttemptId,
     };
   },
 });
@@ -717,6 +736,7 @@ export const selectFacebookPage = action({
       facebookPageAccessToken: page.pageAccessToken,
       facebookPageName: page.pageName,
       facebookConnectedByUserId: page.facebookConnectedByUserId,
+      pendingAttemptId: page.pendingAttemptId,
     });
   },
 });

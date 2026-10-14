@@ -5789,6 +5789,11 @@ export default defineSchema({
     // begun before it after later connections. Distinct from the Meta-user
     // `facebookRevocations` fence, which a signed callback sets.
     facebookDisconnectedAt: v.optional(v.number()),
+    // SCRUM-841: identifies the OAuth attempt whose Pages are in `facebookPendingCredentials`.
+    // A fresh random value is stamped each time pending credentials are saved, so a Page
+    // selection begun on an earlier attempt cannot promote a later attempt's credentials
+    // even when the user, Page and token are identical. Server-only; cleared with them.
+    facebookPendingAttemptId: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
     .index("by_instagram_business_account_id", ["instagramBusinessAccountId"])
