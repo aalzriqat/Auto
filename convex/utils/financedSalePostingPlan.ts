@@ -526,6 +526,12 @@ export interface FinancedSalePlanV2Input {
   depositLiabilityAppliedMinor: number;
   /** C — the dealership's contribution to the finance company. */
   dealerContributionMinor: number;
+  /**
+   * What the customer paid the finance company directly toward the shortfall
+   * (SCRUM-766 PR-B). C is already net of it; it is carried only so the
+   * commissionable margin can use C before the credit. Absent means none.
+   */
+  customerPaymentToFinanceCompanyMinor?: number;
   /** The customer's first payment; H may not exceed it. Undefined = not known. */
   customerFirstPaymentMinor: number | undefined;
 }
@@ -544,6 +550,12 @@ export interface FinancedSalePostingPlanV2 {
   depositLiabilityAppliedMinor: number;
   forwardDepositMinor: number;
   forwardContributionMinor: number;
+  /**
+   * C before the customer's direct payment to the company: the contribution the
+   * commissionable margin is measured on, so the commission does not depend on
+   * where the customer's money went (SCRUM-766 PR-B, Batch 2 Q-A).
+   */
+  commissionContributionMinor: number;
   /** H + C — what the dealership owes the company. */
   forwardDueMinor: number;
   components: PlannedComponent[];
@@ -608,6 +620,13 @@ export function buildFinancedSalePostingPlanV2(input: FinancedSalePlanV2Input): 
     );
   }
   const h = input.depositLiabilityAppliedMinor;
+  const credited = input.customerPaymentToFinanceCompanyMinor ?? 0;
+  if (!isWholeMinorAmount(credited) || credited < 0) {
+    return refuseV2(
+      "CONTRIBUTION_INVALID",
+      "The customer's payment to the finance company recorded on this deal is not a usable amount. Correct it before finalizing."
+    );
+  }
   if (!isWholeMinorAmount(h) || h < 0) {
     return refuseV2(
       "DEPOSIT_INVALID",
@@ -641,6 +660,7 @@ export function buildFinancedSalePostingPlanV2(input: FinancedSalePlanV2Input): 
       depositLiabilityAppliedMinor: h,
       forwardDepositMinor: h,
       forwardContributionMinor: c,
+      commissionContributionMinor: c + credited,
       forwardDueMinor,
       components: [],
       fingerprint: [
@@ -652,6 +672,9 @@ export function buildFinancedSalePostingPlanV2(input: FinancedSalePlanV2Input): 
         `D${h}`,
         `C${c}`,
         `R${input.customerReceivableMinor}`,
+        // Appended only when there is one, so every plan without it keeps its
+        // stored fingerprint byte for byte.
+        ...(credited > 0 ? [`K${credited}`] : []),
       ].join(";"),
     },
   };

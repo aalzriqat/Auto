@@ -115,6 +115,7 @@ export type DealFinancialSummaryInputs = Readonly<{
     customerFirstPaymentMinor?: number;
     customerGapCashToDealerMinor?: number;
     customerGapInstallmentToDealerMinor?: number;
+    customerGapToFinanceCompanyMinor?: number;
     dealerContributionSettlement?: "PAID_SEPARATELY" | "NETTED_FROM_REMITTANCE";
     /** What the financier is expected to remit to the dealership, as the economics froze it. */
     expectedDealerRemittanceMinor?: number;
@@ -197,6 +198,13 @@ export type DealFinancialSummary = Readonly<{
     installmentMinor: number;
   }> | null;
   customerGapCashPlannedMinor: number | null;
+  /**
+   * The part of the customer's shortfall share they pay the finance company
+   * directly (SCRUM-766 PR-B): planned like the rest, never dealership money,
+   * and already netted out of the planned contribution below. `null` when none
+   * was recorded.
+   */
+  customerGapToFinanceCompanyPlannedMinor: number | null;
   /** The customer's first payment as the economics froze it, whoever receives it. */
   customerFirstPaymentMinor: number | null;
   financier: Readonly<{
@@ -270,6 +278,7 @@ export type SummaryMoneyField =
   | "customerPaidToDealer"
   | "customerGapPlanned"
   | "customerGapCashPlanned"
+  | "customerGapToFinanceCompanyPlanned"
   | "customerFirstPayment"
   | "financierReceived"
   | "financierFundedPortion"
@@ -437,6 +446,10 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
     customerPaidToDealer,
     customerGapPlanned,
     customerGapCashPlannedMinor: boundary.serve("customerGapCashPlanned", app.customerGapCashToDealerMinor),
+    customerGapToFinanceCompanyPlannedMinor: boundary.serve(
+      "customerGapToFinanceCompanyPlanned",
+      app.customerGapToFinanceCompanyMinor
+    ),
     customerFirstPaymentMinor: boundary.serve("customerFirstPayment", app.customerFirstPaymentMinor),
     financier: {
       receivedMinor: boundary.serve("financierReceived", app.disbursedAmountMinor),

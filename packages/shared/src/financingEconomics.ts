@@ -317,6 +317,57 @@ export function computeFundingComposition(
   };
 }
 
+export interface CustomerPaymentToFinanceCompanyInput {
+  /** What the showroom must put in at the approved amount, before any customer payment to the company. */
+  requiredContributionMinor: number;
+  /** The customer's allocated share of the net shortfall. */
+  customerGapShareMinor: number;
+  /** The part of that share the customer pays the finance company directly. */
+  customerGapToFinanceCompanyMinor: number;
+}
+
+export interface CustomerPaymentToFinanceCompany {
+  /** What the showroom still puts in: the required contribution less the customer's payment. */
+  dealerContributionMinor: number;
+  /** The customer's payment actually credited against the contribution. */
+  appliedMinor: number;
+  /** Recorded payment beyond what could be credited; non-zero means the record is inconsistent. */
+  excessMinor: number;
+}
+
+/**
+ * Credits the customer's direct payment to the finance company against the
+ * showroom's contribution (SCRUM-766 PR-B, owner ruling).
+ *
+ * The company is paid the same purchase amount either way - the customer's
+ * money simply replaces that much of the showroom's. The credit is capped by
+ * the customer's allocated share (they cannot pay toward more than they agreed
+ * to) and by the contribution itself (the showroom's cost never goes below
+ * zero). A recorded payment above both caps is reported as `excessMinor`
+ * rather than silently dropped.
+ *
+ * Always applied to the required contribution and never to a stored, already
+ * reduced one, so a recompute cannot subtract the same payment twice.
+ */
+export function applyCustomerPaymentToFinanceCompany(
+  input: CustomerPaymentToFinanceCompanyInput
+): CustomerPaymentToFinanceCompany {
+  assertNonNegativeMinor(input.requiredContributionMinor, "Required contribution");
+  assertNonNegativeMinor(input.customerGapShareMinor, "Customer gap share");
+  assertNonNegativeMinor(input.customerGapToFinanceCompanyMinor, "Customer payment to the finance company");
+
+  const appliedMinor = Math.min(
+    input.customerGapToFinanceCompanyMinor,
+    input.customerGapShareMinor,
+    input.requiredContributionMinor
+  );
+  return {
+    dealerContributionMinor: input.requiredContributionMinor - appliedMinor,
+    appliedMinor,
+    excessMinor: input.customerGapToFinanceCompanyMinor - appliedMinor,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Submitted quotation
 // ---------------------------------------------------------------------------

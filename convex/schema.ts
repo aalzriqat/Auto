@@ -3173,6 +3173,14 @@ export default defineSchema({
     customerGapCashToDealerMinor: v.optional(v.number()),
     customerGapInstallmentToDealerMinor: v.optional(v.number()),
     customerGapToFinanceCompanyMinor: v.optional(v.number()),
+    /**
+     * SCRUM-766 PR-B: how much of `customerGapToFinanceCompanyMinor` was credited
+     * against the showroom's contribution - `dealerContributionMinor` is already
+     * net of it. Kept so the commissionable margin can use the contribution
+     * BEFORE the credit (owner ruling: the margin does not depend on where the
+     * customer's money goes). Absent means nothing was credited.
+     */
+    customerGapToFinanceCompanyAppliedMinor: v.optional(v.number()),
     gapResolvedAt: v.optional(v.number()),
     gapResolvedBy: v.optional(v.id("users")),
     gapResolutionNotes: v.optional(v.string()),

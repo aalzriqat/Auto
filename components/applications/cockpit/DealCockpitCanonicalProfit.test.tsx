@@ -92,6 +92,7 @@ function overview(): FinancedDealOverviewData {
       approvedPurchaseAmountMinor: 12_500 * SCALE,
       customerPaidToDealer: { heldDepositMinor: 0, totalMinor: 0 },
       customerGapCashPlannedMinor: null,
+      customerGapToFinanceCompanyPlannedMinor: null,
       customerFirstPaymentMinor: null,
       financier: { receivedMinor: null, fundedPortionMinor: 12_000 * SCALE, outstanding: { state: "NOT_YET_RECEIVABLE", amountMinor: null, basis: null } },
       dealerOutlay: {

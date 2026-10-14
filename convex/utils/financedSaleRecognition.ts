@@ -975,6 +975,7 @@ export async function resolveFinancedSalePlan(
       customerReceivableMinor,
       depositLiabilityAppliedMinor,
       dealerContributionMinor: contributionForPlanMinor,
+      customerPaymentToFinanceCompanyMinor: app.customerGapToFinanceCompanyAppliedMinor,
       customerFirstPaymentMinor: app.customerFirstPaymentMinor,
     });
     if (!v2.ok) throw new ConvexError(v2.refusal.message);

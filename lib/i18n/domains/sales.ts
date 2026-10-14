@@ -682,8 +682,8 @@ const dealRailMessages = defineBilingualMessages({
   GapDealerShare: ["The dealership then covers", "ويتحمّل المعرض"],
   GapWhereCustomerPays: ["Where the customer's part is paid", "أين يُدفع نصيب العميل"],
   GapWhereCustomerPaysHint: [
-    "Money paid to the dealership is dealership income, so it is recorded here rather than assumed.",
-    "ما يُدفع للمعرض دخلٌ للمعرض، لذا يُسجَّل هنا بدل افتراضه.",
+    "Money paid to the dealership is dealership income. Money the customer pays the finance company directly is not: it lowers what the dealership has to put in, by the same amount.",
+    "ما يُدفع للمعرض دخلٌ للمعرض. أما ما يدفعه العميل لشركة التمويل مباشرةً فليس دخلاً، بل يُخفِّض ما على المعرض أن يدفعه بالمبلغ نفسه.",
   ],
   GapCashToDealer: ["Cash to us", "نقداً لنا"],
   GapInstallmentsToDealer: ["Instalments to us", "أقساطاً لنا"],
@@ -705,8 +705,8 @@ const dealRailMessages = defineBilingualMessages({
     "التقاسم يستلزم نصيباً للعميل — اختر «يتحمّله المعرض» بدلاً من ذلك.",
   ],
   GapAllocationMismatch: [
-    "The two amounts must add up to exactly the customer's part.",
-    "يجب أن يساوي مجموع المبلغين نصيب العميل بالضبط.",
+    "The three amounts must add up to exactly the customer's part.",
+    "يجب أن يساوي مجموع المبالغ الثلاثة نصيب العميل بالضبط.",
   ],
   GapAllocationComplete: ["Everything is accounted for.", "كل شيء محسوب."],
   GapNotes: ["Notes (optional)", "ملاحظات (اختياري)"],
@@ -1166,6 +1166,14 @@ const dealOverviewMessages = defineBilingualMessages({
   OverviewGapInstallmentBreakdown: ["Dealership installments", "أقساط للمعرض"],
   OverviewGapCashPlanned: ["Shortfall cash agreed with the customer", "نقد العجز المتفق عليه مع العميل"],
   OverviewGapCashPlannedNote: ["allocated, not received — no receipt yet", "مخصَّص وليس مقبوضًا — لا إيصال بعد"],
+  OverviewGapToFinanceCompanyPlanned: [
+    "Shortfall paid by the customer to the finance company",
+    "جزء العجز الذي يدفعه العميل لشركة التمويل",
+  ],
+  OverviewGapToFinanceCompanyPlannedNote: [
+    "not dealership money — it lowers the dealership's contribution by the same amount",
+    "ليس مالاً للمعرض — يخفّض مساهمة المعرض بالمبلغ نفسه",
+  ],
   OverviewCustomerPaidUnknown: ["cannot be totalled — a deposit could not be read", "تعذّر الجمع — عربون غير قابل للقراءة"],
   OverviewCustomerFirstPayment: ["Customer first payment", "الدفعة الأولى من العميل"],
   OverviewFinancierFunds: ["Finance company funded portion", "حصة تمويل شركة التمويل"],

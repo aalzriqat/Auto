@@ -274,12 +274,13 @@ export async function recordApproved(managerPage: Page, dealUrl: string, amount:
 
 /**
  * Who covers the net shortfall (SCRUM-766), in major units. The customer's part
- * is placed on the dealership-bound destinations that must add up to it
- * (ResolveGapDialog): cash or instalments. Paying the finance company is refused
- * until SCRUM-766 PR-B, so it is not a scenario input. The dealership-bound part
- * becomes a customer receivable (1200) at close and is billed on the legal
- * invoice (financedSalePostingPlan v2: legal invoice = approved + customer's
- * dealership-bound part).
+ * is placed on the destinations that must add up to it (ResolveGapDialog): cash
+ * or instalments to the dealership, or paid straight to the finance company. The
+ * dealership-bound part becomes a customer receivable (1200) at close and is
+ * billed on the legal invoice (financedSalePostingPlan v2: legal invoice =
+ * approved + customer's dealership-bound part). The finance-company part is not
+ * the dealership's money: it lowers the contribution the dealership forwards by
+ * the same amount (SCRUM-766 PR-B).
  */
 export type GapAgreement =
   | { mode: "DEALER_ABSORBS" }
@@ -289,6 +290,8 @@ export type GapAgreement =
       customerShare?: number;
       cash: number;
       installments: number;
+      /** Paid by the customer straight to the finance company (SCRUM-766 PR-B); 0 when absent. */
+      toFinanceCompany?: number;
     };
 
 const GAP_MODE_LABEL = {
@@ -321,6 +324,7 @@ export async function resolveAppraisalGap(
     }
     await dialog.locator("#gap-cash").fill(String(agreement.cash));
     await dialog.locator("#gap-installments").fill(String(agreement.installments));
+    await dialog.locator("#gap-financier").fill(String(agreement.toFinanceCompany ?? 0));
   }
   await dialog.locator("#gap-notes").fill(`QA TEST: net shortfall settled as ${agreement.mode}.`);
   await dialog.getByRole("button", { name: "Resolve the shortfall" }).click();

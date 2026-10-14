@@ -13,6 +13,7 @@ export {
   PERCENT_DECIMAL_PLACES,
   percentRoundsToZero,
   computeFundingComposition,
+  applyCustomerPaymentToFinanceCompany,
   computeSubmittedQuotation,
   computeAppraisalGap,
   computeNetShortfall,

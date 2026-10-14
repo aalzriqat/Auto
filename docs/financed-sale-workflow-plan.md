@@ -160,6 +160,12 @@ customerGapCashToDealer + customerGapInstallmentToDealer + customerGapToFinanceC
   = customerGapShare
 ```
 
+The portion paid to the finance company is not dealership money: it never becomes
+profit, and (SCRUM-766 PR-B) it lowers the contribution the showroom puts in by
+the same amount, up to the customer's share and never below zero. The stored
+`dealerContributionMinor` is the reduced figure, so the ledger, the remittance,
+the profit and the commission margin all read it.
+
 If the two sides cannot agree, the deal fails: no sale, no handover, the vehicle
 returns to its pre-sale state.
 

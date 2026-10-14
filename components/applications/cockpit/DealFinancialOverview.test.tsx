@@ -25,6 +25,7 @@ const summary: FinancialSummaryData = {
   customerPaidToDealer: { heldDepositMinor: 500_000, totalMinor: 500_000 },
   // Agreed under the gap resolution, not received: served beside "paid", never inside it.
   customerGapCashPlannedMinor: 200_000,
+  customerGapToFinanceCompanyPlannedMinor: null,
   customerFirstPaymentMinor: 1_000_000,
   financier: { receivedMinor: null, fundedPortionMinor: 9_350_000, outstanding: { state: "OUTSTANDING", amountMinor: 4_000_000, basis: "RECEIVABLE" } },
   dealerOutlay: {
@@ -302,6 +303,24 @@ describe("DealFinancialOverview", () => {
     render(<DealFinancialOverview summary={{ ...summary, customerGapCashPlannedMinor: null }} money={money} t={tAr} />);
     expect(screen.queryByTestId("overview-gap-cash-planned")).toBeNull();
     expect(within(screen.getByTestId("overview-customer-paid")).getByText(salesAr.OverviewCustomerPaidNote)).toBeTruthy();
+  });
+
+  test.each([tEn, tAr])("a payment to the finance company is a planned row of its own, and absent when none was agreed — %#", (t) => {
+    const dictionary = t === tEn ? salesEn : salesAr;
+    const { unmount } = render(
+      <DealFinancialOverview
+        summary={{ ...summary, customerGapToFinanceCompanyPlannedMinor: 400_000 }}
+        money={money}
+        t={t}
+      />
+    );
+    const row = within(screen.getByTestId("overview-gap-finance-company-planned"));
+    expect(row.getByText(dictionary.OverviewGapToFinanceCompanyPlanned)).toBeTruthy();
+    expect(row.getByText("400 JOD")).toBeTruthy();
+    expect(row.getByText(dictionary.OverviewGapToFinanceCompanyPlannedNote)).toBeTruthy();
+    unmount();
+    render(<DealFinancialOverview summary={summary} money={money} t={t} />);
+    expect(screen.queryByTestId("overview-gap-finance-company-planned")).toBeNull();
   });
 
   test.each([tEn, tAr])("an unreadable composed gap is named as the TOTAL plan and never falls back to a readable cash component — %#", (t) => {

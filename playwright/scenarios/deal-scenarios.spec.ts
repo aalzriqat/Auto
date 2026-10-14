@@ -602,10 +602,31 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
       disbursement: { "1110": { dr: jod(12_000) }, "1210": { cr: jod(12_000) } },
     },
   },
-  // F24 (customer pays the gap to the finance company) is RETIRED by SCRUM-766: that
-  // destination is refused until PR-B (customer-pays-FC reduces the showroom
-  // contribution). It returns, re-ruled, with PR-B; the refusal itself is pinned by
-  // convex/financingEconomics.test.ts.
+  {
+    id: "F24",
+    title: "LTV 70, approved 12,000 of 13,000: net shortfall 700, customer pays 400 to the finance company, dealer 300",
+    company: LTV70,
+    ...BASE,
+    approved: 12_000,
+    legalInvoice: 12_000,
+    gap: { mode: "SPLIT", customerShare: 400, cash: 0, installments: 0, toFinanceCompany: 400 },
+    expectedPayment: "BANK_TRANSFER",
+    forwardMethod: "BANK_TRANSFER",
+    // As F23, but the customer's 400 goes to the finance company (SCRUM-766 PR-B): the
+    // contribution is 12,000 − 8,400 − 3,000 = 600 less the 400 = 200, and no customer
+    // receivable exists, so the legal invoice is the approved 12,000.
+    expect: {
+      close: {
+        "1210": { dr: jod(12_000) },
+        "4100": { cr: jod(12_000) },
+        "4180": { dr: jod(200) },
+        "2220": { cr: jod(200) },
+        ...COST_OF_SALE,
+      },
+      forward: { "2220": { dr: jod(200) }, "1110": { cr: jod(200) } },
+      disbursement: { "1110": { dr: jod(12_000) }, "1210": { cr: jod(12_000) } },
+    },
+  },
   {
     id: "F25",
     title: "LTV 90, 400 cash deposit, net shortfall 900: customer 500 (300 cash + 200 instalments), dealer 400",

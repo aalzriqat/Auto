@@ -22,6 +22,38 @@ const base: FinancedSalePlanV2Input = {
 };
 
 describe("v2 financed-sale plan (finance company forward)", () => {
+  it("a customer payment to the finance company is already out of C: forward is the reduced C, the commission contribution is C before it (SCRUM-766 PR-B)", () => {
+    // G 11,500 (invoice = G, no customer receivable), C 1,225 - 400 paid = 825.
+    const r = buildFinancedSalePostingPlanV2({
+      ...base,
+      legalInvoiceConsiderationMinor: 11_500,
+      approvedAmountMinor: 11_500,
+      customerReceivableMinor: 0,
+      depositLiabilityAppliedMinor: 0,
+      dealerContributionMinor: 825,
+      customerPaymentToFinanceCompanyMinor: 400,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.plan.forwardContributionMinor).toBe(825);
+    expect(r.plan.forwardDueMinor).toBe(825);
+    expect(r.plan.commissionContributionMinor).toBe(1_225);
+    expect(r.plan.fingerprint).toBe("v2;JOD;L11500;G11500;F825;D0;C825;R0;K400");
+  });
+
+  it("without a customer payment the commission contribution is C and the fingerprint is the historical one", () => {
+    const r = buildFinancedSalePostingPlanV2(base);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.plan.commissionContributionMinor).toBe(1_375);
+    expect(r.plan.fingerprint).toBe("v2;JOD;L13000;G12500;F1575;D200;C1375;R500");
+  });
+
+  it.each([-1, 0.5, Number.NaN])("refuses an unusable customer payment to the finance company (%s)", (bad) => {
+    const r = buildFinancedSalePostingPlanV2({ ...base, customerPaymentToFinanceCompanyMinor: bad });
+    expect(r.ok).toBe(false);
+  });
+
   it("worked example: receivable is the full approved amount, forward is H + C", () => {
     const r = buildFinancedSalePostingPlanV2(base);
     expect(r.ok).toBe(true);
