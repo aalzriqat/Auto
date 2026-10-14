@@ -240,7 +240,7 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
 
   it("fails before manifest creation when Phase A has no executable handler", () => {
     const plan = planBrowserAttackSwarm({
-      impactedInvariants: [{ id: "CONS-1", severity: "CRITICAL" }],
+      impactedInvariants: [{ id: "ACC-1", severity: "CRITICAL" }],
     });
 
     expect(PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES).toEqual([
@@ -253,6 +253,7 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
       "LIFECYCLE_REVERSAL",
       "COMPLETENESS_BOUNDARY",
       "NETWORK_RECOVERY",
+      "CONSIGNMENT_ECONOMICS",
     ]);
     expect(() =>
       buildBrowserSwarmRunManifest({
@@ -262,7 +263,7 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
         previewName: "e2e-pr-350-abcdef1234",
         expectedCloudUrl: "https://example-preview.convex.cloud",
       }),
-    ).toThrow(/no executable handler.*CONSIGNMENT_ECONOMICS/i);
+    ).toThrow(/no executable handler.*MONEY_BOUNDARY/i);
   });
 
   it("refuses ambiguous or non-preview swarm targets before browser execution", () => {
