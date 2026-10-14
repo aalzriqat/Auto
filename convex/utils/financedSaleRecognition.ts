@@ -118,15 +118,18 @@ export function costsGateApplies(
 /** Deals this model covers. Everything else posts the way it always did. */
 export function financedSaleRecognitionApplies(
   app: Doc<"financeApplications">,
-  opts: { settlesDirect: boolean }
+  opts: { settlesDirect: boolean; planVersion?: 1 | 2 | 3 }
 ): boolean {
-  // On the direct route the financing company pays the supplier, so no
-  // dealership-side finance receivable exists to recognise. Without a configured
-  // company there is no counterparty to owe one.
-  if (opts.settlesDirect) return false;
   // SCRUM-27: a MANUAL finance company is a counterparty too - identified by the
   // name on its approval letter rather than by a configured row.
-  return app.companyId !== undefined || isManualFinanceApplication(app);
+  const hasFinancier = app.companyId !== undefined || isManualFinanceApplication(app);
+  // SCRUM-411 (plan v3): the direct route is recognised under the same convention
+  // as every other financed deal - K = A + R, the contribution D as contra-revenue,
+  // dated on the handover. The finance company pays the SUPPLIER there, so the
+  // plan opens no finance receivable; only v3 describes that route, and the
+  // legacy builders (1, 2) never did.
+  if (opts.settlesDirect) return hasFinancier && (opts.planVersion ?? 3) === 3;
+  return hasFinancier;
 }
 
 /**
@@ -585,8 +588,10 @@ export async function evaluateClosingReadiness(
   // Row verdicts first (a line with no source at all); only when every line
   // has one is each direct payment proven on the LEDGER — a ledger that cannot
   // be read is UNAVAILABLE, never READY.
-  // Deductions are the plan's to recognise only where a plan covers the deal.
-  const handoverScope: HandoverScope = { planRecognisesDeductions: planCovered };
+  // Deductions are the plan's to recognise only where a plan covers the deal -
+  // and never on the direct route, where the company's transfer goes to the
+  // supplier and there is no dealership-side settlement to deduct from.
+  const handoverScope: HandoverScope = { planRecognisesDeductions: planCovered && !opts.settlesDirect };
   let ledgerFeeIds: string[] = [];
   await onRows(
     "HANDOVER_COSTS_PAID",
@@ -618,7 +623,10 @@ export async function evaluateClosingReadiness(
   // leave it unable ever to finalize. It is READY only when its agreed first
   // payment is actually stored; otherwise this quotation-based check does not
   // apply to it (NOT_APPLICABLE), rather than claiming a figure nobody recorded.
-  planOnly("FIRST_PAYMENT_RECORDED", () => {
+  // Not asked on the direct route: the dealership bills the customer nothing for
+  // the car there and holds no deposit, so the first payment is no plan input.
+  if (opts.settlesDirect) add("FIRST_PAYMENT_RECORDED", "NOT_APPLICABLE", null);
+  else planOnly("FIRST_PAYMENT_RECORDED", () => {
     if (app.approvedDealerPurchaseAmountMinor === undefined) {
       return [
         "UNAVAILABLE",
@@ -1045,6 +1053,7 @@ export async function resolveFinancedSalePlan(
         depositLiabilityAppliedMinor,
         dealerContributionMinor: contributionForPlanMinor,
         customerFirstPaymentMinor: app.customerFirstPaymentMinor,
+        settlesDirect: opts.settlesDirect,
       });
       if (!v3.ok) throw new ConvexError(v3.refusal.message);
       return v3.plan;

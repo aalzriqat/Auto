@@ -791,6 +791,14 @@ export interface FinancedSalePlanV3Input {
   dealerContributionMinor: number;
   /** The customer's first payment; H may not exceed it. Undefined = not known. */
   customerFirstPaymentMinor: number | undefined;
+  /**
+   * True on a consigned car settled DIRECT to the supplier: the finance company
+   * pays the SUPPLIER the approved amount A, so the dealership is owed none of it
+   * and the plan opens no finance receivable. K, D and R are derived exactly as on
+   * the through route; the dealership bills the customer nothing for the car, so a
+   * held deposit has no place in the plan.
+   */
+  settlesDirect?: boolean;
 }
 
 export interface FinancedSalePostingPlanV3 {
@@ -800,8 +808,10 @@ export interface FinancedSalePostingPlanV3 {
   considerationMinor: number;
   grossDealerSettlementMinor: number;
   totalDeductionsMinor: 0;
-  /** A in full. */
+  /** A in full on the through route; 0 on the direct route, where the company pays the supplier. */
   financeCompanyReceivableMinor: number;
+  /** Present (true) only on the direct route. */
+  settlesDirect?: true;
   financeCompanyPayableMinor: 0;
   customerReceivableMinor: number;
   depositLiabilityAppliedMinor: number;
@@ -856,6 +866,17 @@ export function buildFinancedSalePostingPlanV3(input: FinancedSalePlanV3Input): 
       "The customer's gap owed to the dealership is not a usable amount. Correct the gap resolution before finalizing."
     );
   }
+  const direct = input.settlesDirect === true;
+  // On the direct route the dealership bills the customer nothing for the car, so
+  // a deposit it holds for this deal has no place in the plan: it is resolved
+  // first (refunded, forfeited or offset), never forwarded as if the company were
+  // the dealership's debtor.
+  if (direct && h > 0) {
+    return refuseV3(
+      "DEPOSIT_INVALID",
+      "This deal settles directly with the supplier and the dealership bills the customer nothing for the car, so a reservation deposit it holds has to be resolved before finalizing."
+    );
+  }
   if (input.customerFirstPaymentMinor !== undefined && h > input.customerFirstPaymentMinor) {
     return refuseV3(
       "DEPOSIT_EXCEEDS_FIRST_PAYMENT",
@@ -879,6 +900,14 @@ export function buildFinancedSalePostingPlanV3(input: FinancedSalePlanV3Input): 
     );
   }
   const forwardDueMinor = h + d;
+  // Each term is whole, but their sum can leave the safe-integer range and would
+  // be frozen (and forwarded to the company) as a rounded figure.
+  if (!Number.isSafeInteger(forwardDueMinor)) {
+    return refuseV3(
+      "DEPOSIT_INVALID",
+      "The deposit held for this deal plus the dealership contribution is not a representable amount, so what the dealership owes the finance company cannot be recorded. Have accounting review the deposit and the contribution before finalizing."
+    );
+  }
   return {
     ok: true,
     plan: {
@@ -887,7 +916,9 @@ export function buildFinancedSalePostingPlanV3(input: FinancedSalePlanV3Input): 
       considerationMinor: consideration,
       grossDealerSettlementMinor: a,
       totalDeductionsMinor: 0,
-      financeCompanyReceivableMinor: a,
+      // The company pays the supplier on the direct route: nothing is owed to the dealership.
+      financeCompanyReceivableMinor: direct ? 0 : a,
+      ...(direct ? { settlesDirect: true as const } : {}),
       financeCompanyPayableMinor: 0,
       customerReceivableMinor: r,
       depositLiabilityAppliedMinor: h,
@@ -904,6 +935,7 @@ export function buildFinancedSalePostingPlanV3(input: FinancedSalePlanV3Input): 
         `D${h}`,
         `C${d}`,
         `R${r}`,
+        ...(direct ? ["DIRECT"] : []),
       ].join(";"),
     },
   };

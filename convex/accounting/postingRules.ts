@@ -364,6 +364,23 @@ export function planConsiderationMinor(plan: Pick<FinancedSalePlanPayload, "vers
   return amount;
 }
 
+/**
+ * The contra-revenue a plan posts against the vehicle leg: the showroom's
+ * contribution C (v2/v3) plus every classified component whose treatment posts to
+ * SALES_CONSIDERATION_REDUCTIONS, net of any that credit it. This is the SAME
+ * set of lines `settlementFundingLines` writes, so `consideration - this` is the
+ * revenue the ledger nets - the figure a sale freezes for the reports to read.
+ */
+export function planContraRevenueMinor(plan: Pick<FinancedSalePlanPayload, "version" | "forwardContributionMinor" | "components">): number {
+  let contra = plan.version === 2 || plan.version === 3 ? (plan.forwardContributionMinor ?? 0) : 0;
+  for (const component of plan.components) {
+    if (component.systemKey === SYSTEM_KEYS.SALES_CONSIDERATION_REDUCTIONS) {
+      contra += component.side === "DEBIT" ? component.amountMinor : -component.amountMinor;
+    }
+  }
+  return contra;
+}
+
 export interface SaleCompletedPayload {
   saleId: string;
   saleAmountMinor: number;
@@ -880,6 +897,10 @@ interface SettlementFunding {
    * commission from it instead of bridging it against the quote's gross.
    */
   serverDerivedConsideration: boolean;
+  /** N - what the company will remit to the dealership. A direct-route plan must carry none. */
+  financeReceivableMinor: number;
+  /** H - the deposit liability released. A direct-route plan must carry none. */
+  depositAppliedMinor: number;
 }
 
 function settlementFundingLines(
@@ -992,6 +1013,8 @@ function settlementFundingLines(
     customerReceivableMinor: plan.customerReceivableMinor,
     considerationMinor: planConsiderationMinor(plan),
     serverDerivedConsideration: plan.version >= 3,
+    financeReceivableMinor: plan.financeCompanyReceivableMinor,
+    depositAppliedMinor: plan.depositLiabilityAppliedMinor,
   };
 }
 
@@ -1144,7 +1167,30 @@ function consignedAgentSaleLines(
       `Consigned sale ${p.saleId} carries ${taxMinor} minor units of sales tax, and agency sales have no agreed tax treatment yet: the dealership sells this car as ${supplier}'s agent, so whether the tax is his liability or its own changes which of them the money is owed by. Record the tax against the supplier agreement, or sell the car as dealership stock, before completing the sale.`
     );
   }
-  const commissionMinor = marginMinor;
+  // SCRUM-411 (plan v3) on the DIRECT route. The finance company pays the supplier
+  // A, so the supplier now owes the dealership A - E (`marginMinor`, the claim the
+  // subledger opens); the dealership's commission is the whole consideration over
+  // the entitlement, K - E, because the customer's gap R is also the dealership's
+  // to collect. The contribution D is contra-revenue owed onward to the company.
+  const directV3 = consignment.settlementRoute === "DIRECT_TO_SUPPLIER" && funding?.serverDerivedConsideration === true;
+  if (directV3 && funding) {
+    // A v3 direct plan opens no finance receivable and applies no deposit; one that
+    // does is a through-route plan on a direct event, and posting it would credit
+    // revenue for money the company never owed the dealership. Fail closed.
+    if (funding.financeReceivableMinor !== 0 || funding.depositAppliedMinor !== 0) {
+      throw new ConvexError(
+        `Consigned sale ${p.saleId} settles directly with ${supplier} but its settlement plan carries a finance-company receivable or an applied deposit, which only a sale settled through the dealership has. Re-derive the deal's settlement before posting it.`
+      );
+    }
+    // K must be exactly what reaches the supplier plus what the customer owes; the
+    // two sides of the entry balance only then, and a gap is never plugged.
+    if (settlementBasisMinor + funding.customerReceivableMinor !== funding.considerationMinor) {
+      throw new ConvexError(
+        `Consigned sale ${p.saleId} settles directly with ${supplier}: the amount paid to him plus what the customer owes the dealership does not equal the settlement plan's consideration of ${funding.considerationMinor} minor units. Re-derive the deal's settlement before posting it.`
+      );
+    }
+  }
+  const commissionMinor = directV3 && funding ? funding.considerationMinor - entitlementMinor : marginMinor;
 
   // A zero margin is a real deal, not a broken one: the dealership placed the
   // car for a supplier and made nothing on the metal, earning only the dealer
@@ -1161,9 +1207,10 @@ function consignedAgentSaleLines(
   // handler and turned "no settlement route" and "below the minimum profit"
   // into the wrong message.
   //
-  // DIRECT_TO_SUPPLIER is excluded because no plan is ever built for it: the
-  // company pays the supplier, so the dealership holds no finance receivable to
-  // recognise (`financedSaleRecognitionApplies` returns false on that route).
+  // DIRECT_TO_SUPPLIER is excluded because the company pays the supplier, so the
+  // dealership holds no finance receivable and no gross to bridge. A v3 plan on
+  // that route carries only the contribution and the customer's gap, which the
+  // direct branch below posts itself (`directV3`).
   if (consignment.settlementRoute !== "DIRECT_TO_SUPPLIER") {
     // FAIL CLOSED. A consigned sale financed by a configured company funds its
     // gross from that company, which is the legal buyer of the car. Falling
@@ -1232,7 +1279,21 @@ function consignedAgentSaleLines(
 
   const lines: LineSpec[] =
     consignment.settlementRoute === "DIRECT_TO_SUPPLIER"
-      ? marginMinor > 0
+      ? directV3 && funding
+        ? [
+            ...(marginMinor > 0
+              ? [line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, marginMinor, 0, `Commission due from ${supplier}`, dims)]
+              : []),
+            // The contribution, owed onward to the company (contra-revenue / AP-finance).
+            ...funding.lines,
+            ...(funding.customerReceivableMinor > 0
+              ? [line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, funding.customerReceivableMinor, 0, "Consigned sale — customer's own share", dims)]
+              : []),
+            ...(commissionMinor > 0
+              ? [line(SYSTEM_KEYS.CONSIGNMENT_COMMISSION_REVENUE, 0, commissionMinor, "Consignment commission earned", dims)]
+              : []),
+          ]
+        : marginMinor > 0
         ? [
             // The buyer paid the supplier. Nothing gross ever reaches these
             // books; the only asset is the margin he now owes back.

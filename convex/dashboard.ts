@@ -9,6 +9,7 @@ import { isCashOutExpense, isShowroomBorne } from "./utils/costBearer";
 import { verifiedFinancingApplicationSaleIds } from "./utils/financingProvenance";
 import {
   recordedConsignedMargin,
+  recordedFinancedNetRevenue,
   recordedSupplierEntitlement,
   recordedSupplierGrossReceipt,
   saleEconomics,
@@ -591,6 +592,9 @@ export const stats = query({
      * query already knows whether the row was consigned. Re-reading the document
      * would double the query's cost for a value it is already holding.
      */
+    // The currency a frozen sale figure must be in to be published; a frozen net
+    // revenue in any other currency is withheld, not converted.
+    const { currency: orgCurrency } = await getOrgTimezoneAndCurrency(ctx, args.orgId);
     const economicsGiven =
       (
         basisOf: (sale: Doc<"sales">) => WindowVehicleBasis,
@@ -612,6 +616,7 @@ export const stats = query({
           capitalizedCost: basis.known && basis.cost !== null ? basis.cost : 0,
           supplierSettlementRoute: sale.supplierSettlementRoute,
           recordedMargin: recordedConsignedMargin(sale),
+          recordedNetRevenue: recordedFinancedNetRevenue(sale, orgCurrency),
           recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
           recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
           hasFinancingApplication: verifiedFinancing.has(sale._id),

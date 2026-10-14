@@ -107,10 +107,11 @@ interface DealSeed {
   approver: Awaited<ReturnType<typeof seedFinancedDealership>>["approver"];
 }
 
-export async function newApplication(s: DealSeed) {
+export async function newApplication(s: DealSeed, opts: { gapMinor?: number } = {}) {
   const quoteId = await s.owner.as.mutation(api.quotes.saveQuote, {
     orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId,
-    vehiclePrice: G / SCALE, downPayment: 0, termMonths: 48,
+    // A customer gap R is what the quoted price exceeds the approved amount by.
+    vehiclePrice: (G + (opts.gapMinor ?? 0)) / SCALE, downPayment: 0, termMonths: 48,
     mode: "CONFIGURED_FINANCE_COMPANY", companyId: s.companyId,
     customerEligibilityStatusIds: [s.customerStatusId], totalFinancedAmount: G / SCALE,
   });
@@ -130,11 +131,29 @@ export async function approved(s: DealSeed) {
   return applicationId;
 }
 
-/** Approved, with a held deposit H and a dealership contribution C, ready to finalize. */
-export async function readyDeal(s: DealSeed) {
-  const { quoteId, applicationId } = await newApplication(s);
+/**
+ * Approved, with a held deposit H and a dealership contribution C, ready to finalize.
+ * `gapMinor` is the customer gap R owed to the showroom on top of the approved amount;
+ * `route` is the consigned car's settlement route (a SOURCED car cannot finalize without one).
+ */
+export async function readyDeal(
+  s: DealSeed,
+  opts: {
+    gapMinor?: number;
+    contributionMinor?: number;
+    route?: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
+    /** false: no reservation deposit is held (the direct route refuses a deal that holds one). Defaults to true. */
+    deposit?: boolean;
+  } = {}
+) {
+  const { quoteId, applicationId } = await newApplication(s, { gapMinor: opts.gapMinor });
   await s.owner.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "UNDER_REVIEW" });
   await s.approver.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "APPROVED" });
+  if (opts.route) {
+    await s.owner.as.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId: s.orgId, applicationId, route: opts.route,
+    });
+  }
   await s.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
     orgId: s.orgId, applicationId, submittedQuotationMinor: G, source: "MANUAL_ENTRY",
   });
@@ -154,13 +173,20 @@ export async function readyDeal(s: DealSeed) {
     orgId: s.orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0,
   });
   // The deposit H the dealership holds for this customer and car, and the contribution C.
+  const holdsDeposit = opts.deposit !== false;
   await s.t.run(async (ctx) => {
-    await ctx.db.insert("deposits", {
-      orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, quoteId,
-      amount: H / SCALE, amountMinor: H, currency: "JOD", method: "CASH", status: "HELD", holdActive: true,
-      createdBy: (await ctx.db.query("users").first())!._id, createdAt: Date.now(),
-    } as never);
-    await ctx.db.patch(applicationId, { customerFirstPaymentMinor: H, dealerContributionMinor: C });
+    if (holdsDeposit) {
+      await ctx.db.insert("deposits", {
+        orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, quoteId,
+        amount: H / SCALE, amountMinor: H, currency: "JOD", method: "CASH", status: "HELD", holdActive: true,
+        createdBy: (await ctx.db.query("users").first())!._id, createdAt: Date.now(),
+      } as never);
+    }
+    await ctx.db.patch(applicationId, {
+      ...(holdsDeposit ? { customerFirstPaymentMinor: H } : {}),
+      dealerContributionMinor: opts.contributionMinor ?? C,
+      ...(opts.gapMinor ? { customerGapCashToDealerMinor: opts.gapMinor } : {}),
+    });
   });
   return { applicationId, quoteId };
 }

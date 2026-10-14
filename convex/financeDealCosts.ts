@@ -1699,7 +1699,8 @@ export const listDealCosts = query({
     // Whether a configured financed-sale plan covers the deal: the plan itself
     // recognises a settlement-deducted cost only then (SCRUM-443 v6).
     const handoverScope: HandoverScope = {
-      planRecognisesDeductions: financedSaleRecognitionApplies(app, { settlesDirect: await dealSettlesDirect(ctx, app) }),
+      // The direct route's transfer goes to the supplier: no settlement for the plan to deduct from.
+      planRecognisesDeductions: !(await dealSettlesDirect(ctx, app)) && financedSaleRecognitionApplies(app, { settlesDirect: false }),
     };
     const plannedHolder = mayReadPlan && app.plannedCustody ? await ctx.db.get(app.plannedCustody.userId) : null;
     const executionFee = executionFeePosition(app, fees, currency);

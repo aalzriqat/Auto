@@ -4149,7 +4149,9 @@ describe("financed direct evidence that has gone missing fails closed", () => {
     // dashboard was publishing a confident 5,000 for it.
     const { s, saleId } = await financedDirectSale("s30DashUnknown", 18_000);
     await s.t.run(async (ctx) => {
-      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+      // Both records of the earning: the plan-v3 completion also freezes the
+      // ledger's own net, and a legacy row never carried it.
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined, financedNetRevenue: undefined });
     });
 
     const dash = (await s.asUser.query(api.dashboard.stats, {
@@ -4212,6 +4214,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
       await ctx.db.patch(saleId, {
         saleDate: Date.now() - FORTY_FIVE_DAYS,
         consignedMarginMinor: undefined,
+        financedNetRevenue: undefined,
       });
     });
 
@@ -4265,11 +4268,12 @@ describe("financed direct evidence that has gone missing fails closed", () => {
           supplierSettlementRoute: undefined,
           consignedMarginMinor: undefined,
           consignedMarginCurrency: undefined,
+          financedNetRevenue: undefined,
         } as never);
       }
 
       // The state the fallback is reached from: no recorded earning at all.
-      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined, financedNetRevenue: undefined });
     });
 
     // MONTH, deliberately, and not ALL_TIME: with no lower bound the query
@@ -4328,13 +4332,14 @@ describe("financed direct evidence that has gone missing fails closed", () => {
           supplierSettlementRoute: undefined,
           consignedMarginMinor: undefined,
           consignedMarginCurrency: undefined,
+          financedNetRevenue: undefined,
         } as never);
       };
 
       // The deal user: 1,000 of complete earnings, plus one deal whose earning
       // cannot be established at all.
       await ownedSale(1_000, s.userId, "A");
-      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined, financedNetRevenue: undefined });
       // The approver: 900, and every dinar of it accounted for.
       await ownedSale(900, s.approverId, "B");
 
@@ -4490,7 +4495,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
   test("the sales report withholds the profit it cannot establish instead of publishing 5,000", async () => {
     const { s, saleId } = await financedDirectSale("s30ReportErased", 18_000);
     await s.t.run(async (ctx) => {
-      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined, financedNetRevenue: undefined });
     });
 
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
@@ -4516,7 +4521,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
   test("salesperson performance does not rank a rep on an earning nobody can substantiate", async () => {
     const { s, saleId } = await financedDirectSale("s30PerfErased", 18_000);
     await s.t.run(async (ctx) => {
-      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined, financedNetRevenue: undefined });
     });
 
     const perf = await s.asUser.query(api.reports.getSalespersonPerformance, {
@@ -6214,7 +6219,7 @@ describe("one recognized-earning rule, asked identically by every surface", () =
   test("a turnover shortened by an unknown earning says so on the flag the UI reads", async () => {
     const { s, saleId } = await financedDirectDeal("s30TurnFlag");
     await s.t.run(async (ctx) => {
-      await ctx.db.patch(saleId, { consignedMarginMinor: undefined });
+      await ctx.db.patch(saleId, { consignedMarginMinor: undefined, financedNetRevenue: undefined });
     });
 
     const dash = (await s.asUser.query(api.dashboard.stats, {

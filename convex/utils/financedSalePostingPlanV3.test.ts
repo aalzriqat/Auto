@@ -126,6 +126,67 @@ describe("v3 financed-sale plan (server-derived consideration)", () => {
     expect(equal.ok).toBe(true);
   });
 
+  it("freezes a forward due only when H + D is a safe integer (P2 boundary)", () => {
+    const MAX = Number.MAX_SAFE_INTEGER;
+    // H + D lands exactly on the last safe integer: allowed, and frozen exactly.
+    const onBoundary = buildFinancedSalePostingPlanV3({
+      ...base,
+      depositLiabilityAppliedMinor: MAX - 1_375,
+      dealerContributionMinor: 1_375,
+    });
+    expect(onBoundary.ok).toBe(true);
+    if (onBoundary.ok) expect(onBoundary.plan.forwardDueMinor).toBe(MAX);
+    // One minor unit past it: each term is a whole number, the sum is not
+    // representable, so the plan is refused instead of freezing a rounded due.
+    for (const [h, d] of [
+      [MAX - 1_374, 1_375],
+      [MAX, 1],
+      [2 ** 60, 0],
+    ]) {
+      const r = buildFinancedSalePostingPlanV3({
+        ...base,
+        depositLiabilityAppliedMinor: h,
+        dealerContributionMinor: d,
+      });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.refusal.code).toBe("DEPOSIT_INVALID");
+    }
+  });
+
+  it("direct-to-supplier: the dealership holds no finance receivable, the plan says so, and a deposit is refused", () => {
+    const r = buildFinancedSalePostingPlanV3({ ...base, settlesDirect: true });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // The company paid the supplier, so nothing of A is receivable by the dealership.
+    expect(r.plan.financeCompanyReceivableMinor).toBe(0);
+    expect(r.plan.settlesDirect).toBe(true);
+    // K and the amount owed onward (D) are unchanged by the route.
+    expect(r.plan.considerationMinor).toBe(12_500);
+    expect(r.plan.forwardDueMinor).toBe(1_375);
+    expect(r.plan.fingerprint).toBe("v3;JOD;K12500;G12500;F1375;D0;C1375;R0;DIRECT");
+    // Still a v3 fingerprint, so version routing needs no new branch.
+    expect(planVersionOf({ financedSaleRecognitionFingerprint: r.plan.fingerprint })).toBe(3);
+
+    // The through route is untouched by the new flag being absent or false.
+    for (const settlesDirect of [undefined, false]) {
+      const through = buildFinancedSalePostingPlanV3({ ...base, settlesDirect });
+      expect(through.ok).toBe(true);
+      if (through.ok) {
+        expect(through.plan.financeCompanyReceivableMinor).toBe(12_500);
+        expect(through.plan.settlesDirect).toBeUndefined();
+      }
+    }
+
+    // A reservation deposit cannot be forwarded when the dealership never held the money.
+    const withDeposit = buildFinancedSalePostingPlanV3({
+      ...base,
+      settlesDirect: true,
+      depositLiabilityAppliedMinor: 500,
+    });
+    expect(withDeposit.ok).toBe(false);
+    if (!withDeposit.ok) expect(withDeposit.refusal.code).toBe("DEPOSIT_INVALID");
+  });
+
   it("refuses a zero consideration", () => {
     const r = buildFinancedSalePostingPlanV3({ ...base, approvedAmountMinor: 0, dealerContributionMinor: 0 });
     expect(r.ok).toBe(false);

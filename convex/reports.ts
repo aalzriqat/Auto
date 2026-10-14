@@ -21,6 +21,7 @@ import {
 import {
   saleEconomics,
   recordedConsignedMargin,
+  recordedFinancedNetRevenue,
   recordedSupplierEntitlement,
   recordedSupplierGrossReceipt,
 } from "./utils/vehicleOwnership";
@@ -152,8 +153,11 @@ export const getSalesAndProfitReport = query({
     // doing that per sale inside the map would be an N+1 read on a
     // live-subscribed report.
     const verifiedFinancing = await verifiedFinancingApplicationSaleIds(ctx, salesInDateRange);
+    // The currency every frozen sale figure must be in to be published (a frozen
+    // net revenue in any other currency is withheld, not converted).
+    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
 
-    const enrichedSales = salesInDateRange.map((sale) => {
+    const enrichedSales =salesInDateRange.map((sale) => {
       const vehicle = vehicleMap.get(sale.vehicleId);
       // SCRUM-389: a supplier-borne cost is the supplier's, owed back — not
       // an expense this sale carried.
@@ -171,6 +175,9 @@ export const getSalesAndProfitReport = query({
         // deal re-deriving it from the sale price overstates by
         // salePrice - approved, which is money that reaches no party.
         recordedMargin: recordedConsignedMargin(sale),
+        // A v3 financed sale's revenue NET of the showroom's contribution - the
+        // figure the ledger nets - so this report cannot publish the gross.
+        recordedNetRevenue: recordedFinancedNetRevenue(sale, orgCurrency),
         recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
         recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
         // The application that approved what the financier would pay. A frozen
@@ -785,8 +792,9 @@ export const getSalespersonPerformance = query({
 
     // Same one-pass provenance resolution as the profit report above.
     const verifiedFinancing = await verifiedFinancingApplicationSaleIds(ctx, salesInDateRange);
+    const orgCurrency = await getOrgCurrency(ctx, args.orgId);
 
-    const result = Object.entries(salesBySalesperson).map(([userId, userSales]) => {
+    const result =Object.entries(salesBySalesperson).map(([userId, userSales]) => {
       let totalRevenue = 0;
       let totalProfit = 0;
       let totalGrossTransactionValue = 0;
@@ -808,6 +816,7 @@ export const getSalespersonPerformance = query({
           // the dealership actually earned rather than on a spread that
           // includes money no party paid.
           recordedMargin: recordedConsignedMargin(sale),
+          recordedNetRevenue: recordedFinancedNetRevenue(sale, orgCurrency),
           recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
           recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
           hasFinancingApplication: verifiedFinancing.has(sale._id),

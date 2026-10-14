@@ -17,6 +17,7 @@ import {
   consignedSettlementRouteValidator,
   isConsignedAgentSale,
   recordedConsignedMargin,
+  recordedFinancedNetRevenue,
   recordedSupplierEntitlement,
   recordedSupplierGrossReceipt,
   saleIsAgentSale,
@@ -3092,6 +3093,7 @@ export const dealCockpit = query({
       capitalizedCost,
       supplierSettlementRoute: sale.supplierSettlementRoute,
       recordedMargin: recordedConsignedMargin(sale),
+      recordedNetRevenue: recordedFinancedNetRevenue(sale, await getOrgCurrency(ctx, sale.orgId)),
       recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
       recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
       // Always false on this screen in practice — `money` is already null for a

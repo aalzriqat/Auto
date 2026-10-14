@@ -2042,6 +2042,31 @@ export default defineSchema({
       })
     ),
     /**
+     * SCRUM-411 (plan v3): the revenue this financed sale earned, net of the
+     * showroom's contribution, in minor units of `currency`, frozen at completion.
+     *
+     *   dealer-owned car:  consideration (A + R) - contra-revenue
+     *   consigned car:     consideration (A + R) - supplier entitlement - contra-revenue
+     *
+     * The same figure the general ledger nets (revenue credited less
+     * SALES_CONSIDERATION_REDUCTIONS debited), recorded so every report reads
+     * the books' number instead of re-deriving a gross one. SIGNED: a
+     * contribution larger than a consigned commission is a real loss and is
+     * recorded as one, never floored.
+     *
+     * Absent on every sale that is not a v3 financed completion (cash,
+     * `sales.create`, plan v1/v2, no plan) - readers keep the sale-price /
+     * `consignedMarginMinor` reading for those, exactly as before. Distinct from
+     * `consignedMarginMinor`, which stays the commission / supplier-claim basis
+     * (K - E) and is not netted of the contribution.
+     */
+    financedNetRevenue: v.optional(
+      v.object({
+        minor: v.number(),
+        currency: v.string(),
+      })
+    ),
+    /**
      * What the supplier is owed for the car, in minor units, frozen at
      * completion — his entitlement, denominated in `consignedMarginCurrency`.
      *

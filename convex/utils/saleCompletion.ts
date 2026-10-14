@@ -36,6 +36,7 @@ import {
 import {
   computeResoldProductMargin,
   planConsiderationMinor,
+  planContraRevenueMinor,
   type FinancedSalePlanPayload,
 } from "../accounting/postingRules";
 import { isChartInitialized } from "../chartOfAccounts";
@@ -1571,6 +1572,18 @@ async function applySaleCompletionSideEffects(
     isSourced && costMinor !== undefined
       ? supplierGrossReceiptMinor - costMinor
       : null;
+  // Plan v3: the revenue the ledger NETS for the vehicle leg - the consideration
+  // (less the supplier's entitlement on a consigned car) less the contra-revenue
+  // the plan posts against it, from the same lines the journal is built from. It
+  // is frozen on the sale below so the reports read the books' figure, not the
+  // gross; signed, because a contribution above a consigned commission is a real
+  // loss and flooring it would make the report disagree with the ledger.
+  const frozenNetRevenueMinor =
+    serverConsiderationMinor !== undefined && args.financedSalePlan && (!isSourced || costMinor !== undefined)
+      ? serverConsiderationMinor -
+        (isSourced ? (costMinor ?? 0) : 0) -
+        planContraRevenueMinor(args.financedSalePlan)
+      : undefined;
 
   const { previouslyCollected, appliedDeposits, appliedToSupplierSettlement } =
     await resolveReservationDeposits(ctx, {
@@ -1625,14 +1638,28 @@ async function applySaleCompletionSideEffects(
     // 3000.2000000000007 while the ledger credits 3000.2. The report could
     // then never tie to the journal, off by an amount too small to chase and
     // too persistent to ignore.
+    //
+    // A v3 financed sale recognizes the frozen net figure above instead: its
+    // ledger revenue is NET of the showroom's contribution, so the cashflow row
+    // the dashboard falls back to must carry the same number.
     recognizedRevenue:
-      isSourced && marginMinor !== null
-        ? fromMinorUnits(Math.max(0, marginMinor), prepared.currency)
-        : serverConsiderationMinor !== undefined
-          ? fromMinorUnits(serverConsiderationMinor, prepared.currency)
+      frozenNetRevenueMinor !== undefined
+        ? fromMinorUnits(frozenNetRevenueMinor, prepared.currency)
+        : isSourced && marginMinor !== null
+          ? fromMinorUnits(Math.max(0, marginMinor), prepared.currency)
           : args.salePrice,
     idempotencyKey: args.idempotencyKey,
   });
+  if (frozenNetRevenueMinor !== undefined) {
+    if (!Number.isSafeInteger(frozenNetRevenueMinor)) {
+      throw new ConvexError(
+        "This financed sale's net revenue is not a representable amount, so it cannot be recorded. Re-derive the deal's settlement before completing it."
+      );
+    }
+    await ctx.db.patch(saleId, {
+      financedNetRevenue: { minor: frozenNetRevenueMinor, currency: prepared.currency },
+    });
+  }
 
   await closeLeadsAsWon(ctx, {
     orgId: args.orgId,
