@@ -63,6 +63,7 @@ const ACCOUNTS = [
 
 class World {
   readonly calls: string[] = [];
+  readonly vins: string[] = [];
   readonly actorOf = new Map<string, "owner" | "manager">();
   private nextId = 0;
   private vehicleRateLimited = false;
@@ -125,6 +126,7 @@ class World {
           this.vehicleRateLimited = true;
           throw new ConvexError("Rate limit exceeded. Try again in 1s");
         }
+        this.vins.push(String(a.vin));
         if (a.sourceType !== "SOURCED" || a.sourceCost !== 15_000 || a.sellingPrice !== 20_000) {
           throw new ConvexError("scenario sent a car other than the consigned one");
         }
@@ -294,6 +296,13 @@ describe("SCRUM-350 CONSIGNMENT_ECONOMICS handler: mission contract", () => {
       "REVERSAL",
     ]);
     expect(h.world.calls).toContain("ui:goto /org1/sales");
+  });
+
+  it("seeds the car with a VIN the product accepts: 17 uppercase characters with no I, O or Q", async () => {
+    const h = harness();
+    await h.run();
+    expect(h.world.vins).toHaveLength(1);
+    expect(h.world.vins[0]).toMatch(/^[A-HJ-NPR-Z0-9]{17}$/);
   });
 
   it("drives the deal through the two seats: the OWNER submits and the MANAGER approves", async () => {
