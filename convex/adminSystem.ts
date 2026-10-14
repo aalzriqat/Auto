@@ -316,9 +316,12 @@ export const pruneOperationalLogs = internalMutation({
     }
 
     // SCRUM-841: a Facebook revocation fence is only needed by an OAuth attempt
-    // begun before it, which cannot outlive the retention window. Sweeping it here
-    // rather than inside the callback bounds how long a Facebook user id lingers
-    // whatever the callback traffic.
+    // begun at or before it, which cannot outlive the retention window. Sweeping
+    // it here rather than inside the callback means a fence is removed even when
+    // no further callback arrives. Like every sweep above, it deletes at most
+    // RETENTION_DELETE_BATCH rows per run and needs the cron to fire, so removal
+    // is usually within an hour of expiry but not guaranteed (see
+    // utils/facebookRevocation.ts).
     const staleFences = await ctx.db
       .query("facebookRevocations")
       .withIndex("by_revoked_at", (q) => q.lt("revokedAt", now - FACEBOOK_REVOCATION_RETENTION_MS))

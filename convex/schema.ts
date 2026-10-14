@@ -6047,12 +6047,15 @@ export default defineSchema({
   // refused when it tries to store pending Page credentials, so a callback that
   // lands while the attempt is in flight cannot be undone by it. One row per
   // user, keyed by Facebook user id (not org-scoped, so the org hard-delete does
-  // not touch it). Holds an id and a timestamp only — no credentials. It is kept
-  // deliberately even after a data-deletion request (a short-lived security
-  // record, not user data) and deleted by the hourly
-  // adminSystem.pruneOperationalLogs once older than
-  // FACEBOOK_REVOCATION_RETENTION_MS (utils/facebookRevocation.ts): at most about
-  // two hours after the callback.
+  // not touch it). `facebookUserId` is a Facebook user identifier, i.e. personal
+  // data; the row holds that id and a timestamp only — no tokens and no other
+  // user content. It is retained deliberately, and only briefly, as a security
+  // record: a data-deletion request writes it rather than erasing it, since it is
+  // what stops an in-flight connection undoing that request. The hourly
+  // adminSystem.pruneOperationalLogs deletes it once older than
+  // FACEBOOK_REVOCATION_RETENTION_MS: normally within about two hours of the
+  // user's latest callback, but not a hard bound, and correctness does not depend
+  // on it (both explained in utils/facebookRevocation.ts).
   facebookRevocations: defineTable({
     facebookUserId: v.string(),
     revokedAt: v.number(),
