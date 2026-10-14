@@ -741,7 +741,7 @@ describe("the derived figures", () => {
     );
 
     expect(screen.getByText("10,625 USD")).toBeTruthy();
-    expect(screen.getByText("1,875 USD")).toBeTruthy();
+    expect(document.querySelector('[data-row-kind="unfinanced"] dd')?.textContent).toBe("1,875 USD");
   });
 
   test("the applied LTV is not shown before there is a funded portion to apply it to (SCRUM-628 F-17)", () => {

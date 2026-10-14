@@ -51,6 +51,10 @@ test.describe.configure({ timeout: 600_000 });
 // naming the control it could not find.
 test.use({ actionTimeout: 25_000 });
 
+// A figure as a whole number: "13,000" or "110,000" must not satisfy "3,000" or "10,000", which
+// an unanchored /3,000/ would. Money here is always Latin digits with "," grouping (lib/moneyDisplay).
+const wholeAmount = (figure: string) => new RegExp(`(?<![\\d,])${figure}(?![\\d,])`);
+
 test.describe("recording a financed deal's economics through the interface", () => {
   /**
    * This spec RUNS on Trusted Main E2E; it is not skipped. Since SCRUM-417 UX3
@@ -141,10 +145,10 @@ test.describe("recording a financed deal's economics through the interface", () 
         await expect(approvalDialog.getByText(`${PURCHASE_LTV}%`)).toBeVisible();
       });
 
-      // --- the derived economics, worked out by the server -----------------
-      // 13,000 approved - 3,000 customer first payment = 10,000 funded (within 90% cap of 11,700),
-      // leaving 3,000 not financed (SCRUM-613 F-19, owner option أ: the first payment
-      // exceeds the 1,300 slice, so the company lends less and 10,000 + 3,000 = 13,000).
+      // --- the derived economics (funded from the server; not financed = approved − funded) ---
+      // 13,000 approved - 3,000 customer first payment = 10,000 funded (within 90% cap of 11,700).
+      // The first payment exceeds the 1,300 unfinanced slice, so the company lends less and
+      // 3,000 is not financed: 10,000 + 3,000 = 13,000 (SCRUM-613 F-19, owner option أ).
       // Asserted as figures rather than as "a panel appeared":
       // a split that renders but does not add up is the failure this is here to catch.
 
@@ -153,10 +157,11 @@ test.describe("recording a financed deal's economics through the interface", () 
       // the way an operator would before reading the split.
       await openDealDetails(managerPage);
       await expect(managerPage.getByText("What that leaves")).toBeVisible();
-      await expect(managerPage.getByText(/10,000/).first()).toBeVisible();
-      // Scoped to the row: a page-wide match could be satisfied by another figure.
-      await expect(managerPage.locator('[data-row-kind="unfinanced"]')).toContainText(/3,000/);
-      await expect(managerPage.locator('[data-row-kind="unfinanced"]')).not.toContainText(/1,300/);
+      // Scoped to each row's value: a page-wide match could be satisfied by another figure.
+      await expect(managerPage.locator('[data-row-kind="funded"] dd')).toContainText(wholeAmount("10,000"));
+      const notFinanced = managerPage.locator('[data-row-kind="unfinanced"] dd');
+      await expect(notFinanced).toContainText(wholeAmount("3,000"));
+      await expect(notFinanced).not.toContainText(wholeAmount("1,300"));
       // --- handover, expected payment, and close — FROM THE COCKPIT ---------
       // SCRUM-78. This tail used to be driven through
       // `Finance Applications → row → Review`, which is exactly why the suite
