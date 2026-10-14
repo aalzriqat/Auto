@@ -1352,8 +1352,9 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
 
     it("runs inside trusted-e2e after the full suite and before the candidate is stopped", () => {
       const names = (job("trusted-e2e").steps ?? []).map((entry) => entry.name);
+      expect(names.indexOf(FULL_SUITE)).toBeGreaterThan(-1);
+      expect(names.indexOf(STOP)).toBeGreaterThan(-1);
       expect(names.indexOf(SETUP)).toBeGreaterThan(names.indexOf(FULL_SUITE));
-      expect(names.indexOf(SETUP)).toBeGreaterThan(-1);
       expect(names.indexOf(SETUP)).toBeLessThan(names.indexOf(STOP));
     });
 

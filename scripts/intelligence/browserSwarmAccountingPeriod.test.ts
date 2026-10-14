@@ -268,11 +268,12 @@ describe("ensureSwarmAccountingPeriod", () => {
 
     it("bounds the wait by elapsed time when every backend call consumes time, not by an attempt count", async () => {
       // Fake time: each client call costs 400ms and each sleep advances the clock
-      // by what it was asked for. The 5s budget starts after the redrive (t=800ms):
-      //   check 1 = two queries -> t=1600, remaining 4200, sleep 1000 -> 2600
-      //   check 2 -> 3400, remaining 2400, sleep 1000 -> 4400
-      //   check 3 -> 5200, remaining 600, sleep clamped to 600 -> 5800
-      //   check 4 -> 6600, deadline passed -> refuse
+      // by what it was asked for. List, create and redrive are three calls, so the
+      // 5s budget starts at t=1200ms and the deadline is t=6200ms:
+      //   check 1 = two queries -> t=2000, remaining 4200, sleep 1000 -> 3000
+      //   check 2 -> 3800, remaining 2400, sleep 1000 -> 4800
+      //   check 3 -> 5600, remaining 600, sleep clamped to 600 -> 6200
+      //   check 4 -> 7000, deadline passed -> refuse
       // An attempt-count loop (ceil(5000 / 1000) = 5) would run a fifth check and
       // never clamp the last sleep.
       let elapsed = 0;
