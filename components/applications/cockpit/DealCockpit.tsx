@@ -108,6 +108,10 @@ import {
   type FinanceDecisionDialog,
   type FinanceDecisionFacts,
 } from "./FinanceCompanyDecisionCard";
+import {
+  CustomerFinanceCompanyPaymentCard,
+  type CustomerFinanceCompanyPayment,
+} from "./CustomerFinanceCompanyPaymentCard";
 import { ResolveReconciliationDialog } from "./ResolveReconciliationDialog";
 import { ResolveGapDialog } from "./ResolveGapDialog";
 import {
@@ -1072,6 +1076,17 @@ export function DealCockpit({
   const reportFinanceCompanyForwardReturned = useMutation(
     api.financeCompanyForward.reportFinanceCompanyForwardReturned
   );
+  // SCRUM-766 PR-B: the evidence list is read only for a deal whose customer agreed to pay the
+  // finance company, and only by a caller the server would let read it.
+  const agreedToFinanceCompanyMinor = economicsApp?.customerGapToFinanceCompanyMinor ?? 0;
+  const customerPayments = useQuery(
+    api.customerFinanceCompanyPayments.listPayments,
+    agreedToFinanceCompanyMinor > 0 && !permissionsLoading && hasPermission(PERMISSIONS.VIEW_FINANCE)
+      ? { orgId, applicationId }
+      : "skip"
+  );
+  const confirmCustomerFinanceCompanyPayment = useMutation(api.customerFinanceCompanyPayments.confirmPayment);
+  const voidCustomerFinanceCompanyPayment = useMutation(api.customerFinanceCompanyPayments.voidPayment);
   const confirmSupplierDisbursement = useMutation(api.applications.confirmSupplierDisbursement);
   const returnFinanceDisbursementCheque = useMutation(api.applications.returnFinanceDisbursementCheque);
   const setSupplierSettlementRoute = useMutation(api.applications.setSupplierSettlementRoute);
@@ -2678,6 +2693,54 @@ export function DealCockpit({
               reason: values.reason,
             });
           },
+          customerPayment:
+            agreedToFinanceCompanyMinor > 0
+              ? {
+                  agreedMinor: agreedToFinanceCompanyMinor,
+                  confirmedMinor: economicsApp.customerGapToFinanceCompanyAppliedMinor ?? 0,
+                  payments: customerPayments,
+                  // The same authority and the same own-deal refusal the server applies.
+                  canRecord:
+                    hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT) &&
+                    hasPermission(PERMISSIONS.VIEW_FINANCE) &&
+                    membership?.userId !== economicsApp.salespersonId,
+                  closed: economicsApp.status !== "APPROVED" || economicsApp.finalizedSaleId !== undefined,
+                  onConfirm: async (values: { amountMinor: number; paidAt: number; reference: string }) => {
+                    // One key per attempt: a retry after a lost response is the SAME command.
+                    const intent = `confirm-customer-fc-payment:${applicationId}:${values.amountMinor}:${values.paidAt}:${values.reference}`;
+                    try {
+                      await confirmCustomerFinanceCompanyPayment({
+                        orgId,
+                        applicationId,
+                        ...values,
+                        idempotencyKey: commandId.for(intent),
+                      });
+                      commandId.retire(intent);
+                      toast.success(t("CustFcPayConfirmedSuccess"));
+                      return true;
+                    } catch (error) {
+                      if (isConvexError(error)) commandId.retire(intent);
+                      toast.error(getErrorMessage(error));
+                      return false;
+                    }
+                  },
+                  onVoid: async (values: { paymentId: string; reason: string }) => {
+                    try {
+                      await voidCustomerFinanceCompanyPayment({
+                        orgId,
+                        applicationId,
+                        paymentId: values.paymentId as Id<"customerFinanceCompanyPayments">,
+                        reason: values.reason,
+                      });
+                      toast.success(t("CustFcPayVoidedSuccess"));
+                      return true;
+                    } catch (error) {
+                      toast.error(getErrorMessage(error));
+                      return false;
+                    }
+                  },
+                }
+              : null,
         }
       : undefined;
 
@@ -4726,6 +4789,20 @@ export type FinanceDecisionWiring = {
   /** SCRUM-373 D2: present only when the server would accept the correction. */
   firstPaymentCorrection?: { quoteDownPaymentMinor: number; economicsStamp: string } | null;
   onApplyQuoteFirstPayment?: (values: { reason: string; economicsStamp: string }) => Promise<void>;
+  /**
+   * SCRUM-766 PR-B: present only when the customer agreed to pay part of the
+   * shortfall to the finance company. The agreement is a promise; the card shows
+   * how much of it is confirmed paid and offers the confirm / take-back commands.
+   */
+  customerPayment?: {
+    agreedMinor: number;
+    confirmedMinor: number;
+    payments: ReadonlyArray<CustomerFinanceCompanyPayment> | undefined;
+    canRecord: boolean;
+    closed: boolean;
+    onConfirm: (values: { amountMinor: number; paidAt: number; reference: string }) => Promise<boolean>;
+    onVoid: (values: { paymentId: string; reason: string }) => Promise<boolean>;
+  } | null;
   onRecordAppraisal: (values: {
     appraisalAmountMinor: number;
     providerType: AppraisalProviderType;
@@ -6166,6 +6243,14 @@ export function DealCockpitView({
             setReopeningApproval(true);
           }}
         />
+      {financeDecision.customerPayment && (
+        <CustomerFinanceCompanyPaymentCard
+          {...financeDecision.customerPayment}
+          factor={decisionFactor}
+          money={decisionMoney}
+          t={t}
+        />
+      )}
       {/* SCRUM-373 D2 — only on the server's verdict that it would accept. */}
       {financeDecision?.firstPaymentCorrection && (
         <div

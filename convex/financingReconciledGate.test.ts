@@ -81,7 +81,12 @@ describe("SCRUM-420 — a deal flagged needsFinancingReconciliation cannot final
     // The fixture is otherwise closeable: the flag is the ONLY unmet condition.
     expect(blocked.map((check) => check.key)).toEqual(["FINANCING_RECONCILED"]);
     expect(served.state).toBe("BLOCKED");
+    // Ordered after every check that existed when it was added; SCRUM-766's check follows it (NOT_APPLICABLE here).
     expect(served.checks[served.checks.length - 1]).toMatchObject({
+      key: "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED",
+      status: "NOT_APPLICABLE",
+    });
+    expect(served.checks[served.checks.length - 2]).toMatchObject({
       key: "FINANCING_RECONCILED",
       status: "BLOCKED",
       reasonCode: "FINANCING_RECONCILIATION_FLAGGED",
@@ -153,7 +158,8 @@ describe("SCRUM-420 — a deal flagged needsFinancingReconciliation cannot final
     const s = await seedDeal({ flag: true, reconcileFee: false });
     const served = await readiness(s.asOwner, s);
     const keys = served.checks.map((check) => check.key);
-    expect(keys[keys.length - 1]).toBe("FINANCING_RECONCILED");
+    // SCRUM-766 appended the customer-payment check after it, so it is now second to last.
+    expect(keys.slice(-2)).toEqual(["FINANCING_RECONCILED", "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED"]);
     expect(served.checks.find((c) => c.key === "COSTS_CLOSABLE")).toMatchObject({
       status: "BLOCKED", reasonCode: "COSTS_AWAITING_RECONCILIATION",
     });

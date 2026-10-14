@@ -675,10 +675,13 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // unchanged at 354 (re-measured FROM THE ANALYSER). A super-admin-only mutation (requireSuperAdmin) with
   // no `orgId` arg that patches the PLATFORM `supportThreads` table (not tenant data); the unguarded-write
   // audit stays empty.
+  // SCRUM-766 PR-B: + customerFinanceCompanyPayments.confirmPayment/voidPayment (+2) - 528 -> 530 total,
+  // 354 -> 356 analysed (re-measured FROM THE ANALYSER). Each takes `orgId`, runs requireTenantAuth and reads
+  // the application and (for void) the evidence row through requireOwnedRow before its only write.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 528,
-      analysed: 354,
+      totalMutations: 530,
+      analysed: 356,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 159,
     });

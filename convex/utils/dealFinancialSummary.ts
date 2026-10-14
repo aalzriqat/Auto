@@ -115,7 +115,9 @@ export type DealFinancialSummaryInputs = Readonly<{
     customerFirstPaymentMinor?: number;
     customerGapCashToDealerMinor?: number;
     customerGapInstallmentToDealerMinor?: number;
-    /** The part of the customer's agreed payment to the finance company that was credited against the contribution. */
+    /** What the customer agreed to pay the finance company directly: a promise until it is confirmed paid. */
+    customerGapToFinanceCompanyMinor?: number;
+    /** The CONFIRMED part of that agreed payment, the only part credited against the contribution. */
     customerGapToFinanceCompanyAppliedMinor?: number;
     dealerContributionSettlement?: "PAID_SEPARATELY" | "NETTED_FROM_REMITTANCE";
     /** What the financier is expected to remit to the dealership, as the economics froze it. */
@@ -201,12 +203,19 @@ export type DealFinancialSummary = Readonly<{
   customerGapCashPlannedMinor: number | null;
   /**
    * The part of the customer's shortfall share they pay the finance company
-   * directly that was credited against the contribution (SCRUM-766 PR-B):
-   * planned like the rest, never dealership money, and already netted out of the
+   * directly that is CONFIRMED paid and so credited against the contribution
+   * (SCRUM-766 PR-B): never dealership money, and already netted out of the
    * planned contribution below. `0` when nothing was credited; `null` when the
    * row carries no figure.
    */
   customerGapToFinanceCompanyPlannedMinor: number | null;
+  /**
+   * What the customer agreed to pay the finance company that is NOT yet
+   * confirmed. The planned contribution below still includes it, and the deal
+   * cannot close until it is confirmed. `0` when fully confirmed; `null` when no
+   * payment to the finance company was agreed.
+   */
+  customerGapToFinanceCompanyUnconfirmedMinor: number | null;
   /** The customer's first payment as the economics froze it, whoever receives it. */
   customerFirstPaymentMinor: number | null;
   financier: Readonly<{
@@ -281,6 +290,7 @@ export type SummaryMoneyField =
   | "customerGapPlanned"
   | "customerGapCashPlanned"
   | "customerGapToFinanceCompanyPlanned"
+  | "customerGapToFinanceCompanyUnconfirmed"
   | "customerFirstPayment"
   | "financierReceived"
   | "financierFundedPortion"
@@ -441,6 +451,12 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
     }
   }
 
+  const agreedToFinanceCompany = boundary.serve("customerGapToFinanceCompanyUnconfirmed", app.customerGapToFinanceCompanyMinor);
+  const confirmedToFinanceCompany = boundary.serve("customerGapToFinanceCompanyPlanned", app.customerGapToFinanceCompanyAppliedMinor);
+  // Never below zero: confirmed can only exceed the agreement transiently, on a row mid-repair.
+  const customerGapToFinanceCompanyUnconfirmedMinor =
+    agreedToFinanceCompany === null ? null : Math.max(0, agreedToFinanceCompany - (confirmedToFinanceCompany ?? 0));
+
   return {
     currency,
     customerSalePrice: customerSalePriceFor(app, boundary),
@@ -448,10 +464,8 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
     customerPaidToDealer,
     customerGapPlanned,
     customerGapCashPlannedMinor: boundary.serve("customerGapCashPlanned", app.customerGapCashToDealerMinor),
-    customerGapToFinanceCompanyPlannedMinor: boundary.serve(
-      "customerGapToFinanceCompanyPlanned",
-      app.customerGapToFinanceCompanyAppliedMinor
-    ),
+    customerGapToFinanceCompanyPlannedMinor: confirmedToFinanceCompany,
+    customerGapToFinanceCompanyUnconfirmedMinor,
     customerFirstPaymentMinor: boundary.serve("customerFirstPayment", app.customerFirstPaymentMinor),
     financier: {
       receivedMinor: boundary.serve("financierReceived", app.disbursedAmountMinor),

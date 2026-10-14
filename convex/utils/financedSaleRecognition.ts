@@ -665,6 +665,25 @@ export async function evaluateClosingReadiness(
       : null
   );
 
+  // SCRUM-766 PR-B: what the customer AGREED to pay the finance company is a
+  // promise until a confirmed payment row backs it. The contribution this plan
+  // forwards is reduced only by the confirmed part, so closing on an
+  // unconfirmed remainder would book a sale the showroom cannot cover if the
+  // customer never pays. Applies only where a payment was agreed; appended last
+  // like FINANCING_RECONCILED so existing refusals keep their order.
+  const agreedToCompanyMinor = app.customerGapToFinanceCompanyMinor ?? 0;
+  const unconfirmedToCompanyMinor = agreedToCompanyMinor - (app.customerGapToFinanceCompanyAppliedMinor ?? 0);
+  add(
+    "CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED",
+    agreedToCompanyMinor <= 0 ? "NOT_APPLICABLE" : unconfirmedToCompanyMinor > 0 ? "BLOCKED" : "READY",
+    agreedToCompanyMinor > 0 && unconfirmedToCompanyMinor > 0
+      ? reasonOf(
+          "CUSTOMER_FINANCE_COMPANY_PAYMENT_UNCONFIRMED",
+          "The customer agreed to pay part of the shortfall to the finance company, but that payment is not confirmed in full, so the dealership's contribution cannot be reduced by it yet. Record the payment's confirmation before finalizing."
+        )
+      : null
+  );
+
   const state = overallReadinessState(checks);
   const readiness: ClosingReadiness = { state, checks };
   // A READY verdict is one every row check passed, so the rows were read.

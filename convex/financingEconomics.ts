@@ -1,5 +1,9 @@
 import { ConvexError, v, type Value } from "convex/values";
 import { resolveDealCurrency, settlementDeductedTotalMinor } from "./utils/settlementDeductions";
+import {
+  confirmedCustomerPaymentTotalMinor,
+  loadCustomerFinanceCompanyPayments,
+} from "./utils/customerFinanceCompanyPayments";
 import { paginationOptsValidator } from "convex/server";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
@@ -202,10 +206,17 @@ async function recomputeAndPatchEconomics(
   const feeDeductionsMinor = firstPaymentUnknown
     ? 0
     : await settlementDeductedTotalMinor(ctx, app._id, currency);
+  // What the customer has CONFIRMED paying the finance company: the agreement on
+  // the row is only a promise, and the contribution falls by the evidenced part.
+  const confirmedCustomerPaymentMinor = confirmedCustomerPaymentTotalMinor(
+    await loadCustomerFinanceCompanyPayments(ctx, app.orgId, app._id),
+    currency
+  );
   // Narrowed above; read into consts because the closure below loses the narrowing.
   const { approvedDealerPurchaseAmountMinor, appliedLtvPercent, submittedQuotationMinor } = app;
   const deriveFor = (split: typeof settledSplit) => deriveEconomics({
     ...split,
+    confirmedCustomerPaymentMinor,
     approvedDealerPurchaseAmountMinor,
     appliedLtvPercent,
     customerFirstPaymentMinor: app.customerFirstPaymentMinor as number,

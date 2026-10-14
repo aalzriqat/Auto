@@ -682,8 +682,8 @@ const dealRailMessages = defineBilingualMessages({
   GapDealerShare: ["The dealership then covers", "ويتحمّل المعرض"],
   GapWhereCustomerPays: ["Where the customer's part is paid", "أين يُدفع نصيب العميل"],
   GapWhereCustomerPaysHint: [
-    "Money paid to the dealership is dealership income. Money the customer pays the finance company directly is not: it lowers what the dealership has to put in, by the same amount.",
-    "ما يُدفع للمعرض دخلٌ للمعرض. أما ما يدفعه العميل لشركة التمويل مباشرةً فليس دخلاً، بل يُخفِّض ما على المعرض أن يدفعه بالمبلغ نفسه.",
+    "Money paid to the dealership is dealership income. Money the customer pays the finance company directly is not: once the payment is confirmed, it lowers what the dealership has to put in, by the same amount. Until then the dealership's contribution is unchanged and the deal cannot close.",
+    "ما يُدفع للمعرض دخلٌ للمعرض. أما ما يدفعه العميل لشركة التمويل مباشرةً فليس دخلاً، بل يُخفِّض ما على المعرض أن يدفعه بالمبلغ نفسه بعد تأكيد الدفعة. وقبل ذلك تبقى مساهمة المعرض كما هي ولا يمكن إغلاق الصفقة.",
   ],
   GapWhereCustomerPaysManualHint: [
     "Money paid to the dealership is dealership income, so it is recorded here rather than assumed.",
@@ -1171,13 +1171,54 @@ const dealOverviewMessages = defineBilingualMessages({
   OverviewGapCashPlanned: ["Shortfall cash agreed with the customer", "نقد العجز المتفق عليه مع العميل"],
   OverviewGapCashPlannedNote: ["allocated, not received — no receipt yet", "مخصَّص وليس مقبوضًا — لا إيصال بعد"],
   OverviewGapToFinanceCompanyPlanned: [
-    "Shortfall the customer agreed to pay the finance company",
-    "جزء العجز الذي اتفق العميل على دفعه لشركة التمويل",
+    "Shortfall the customer paid the finance company (confirmed)",
+    "جزء العجز الذي دفعه العميل لشركة التمويل (مؤكَّد)",
   ],
   OverviewGapToFinanceCompanyPlannedNote: [
-    "not dealership money — it lowers the dealership's contribution by the same amount",
-    "ليس مالاً للمعرض — يخفّض مساهمة المعرض بالمبلغ نفسه",
+    "not dealership money — the confirmed payment lowers the dealership's contribution by the same amount",
+    "ليس مالاً للمعرض — الدفعة المؤكَّدة تخفّض مساهمة المعرض بالمبلغ نفسه",
   ],
+  OverviewGapToFinanceCompanyUnconfirmed: [
+    "Agreed with the finance company, payment not yet confirmed",
+    "متفق عليه مع شركة التمويل، والدفعة غير مؤكَّدة بعد",
+  ],
+  OverviewGapToFinanceCompanyUnconfirmedNote: [
+    "the contribution still includes this amount and the deal cannot close until the payment is confirmed",
+    "ما زالت المساهمة تتضمن هذا المبلغ، ولا يمكن إغلاق الصفقة قبل تأكيد الدفعة",
+  ],
+  // SCRUM-766 PR-B: the card that records the customer's payment to the finance company.
+  CustFcPayTitle: ["Customer payment to the finance company", "دفعة العميل إلى شركة التمويل"],
+  CustFcPayAgreed: ["Agreed", "المتفق عليه"],
+  CustFcPayConfirmed: ["Confirmed paid", "المؤكَّد دفعه"],
+  CustFcPayAwaiting: ["Awaiting confirmation", "بانتظار التأكيد"],
+  CustFcPayAwaitingNote: [
+    "Until the payment is confirmed the dealership's contribution is unchanged and the deal cannot close.",
+    "إلى أن تُؤكَّد الدفعة تبقى مساهمة المعرض كما هي ولا يمكن إغلاق الصفقة.",
+  ],
+  CustFcPayNotAllowed: [
+    "Only a manager or the owner who did not sell this deal can confirm the payment.",
+    "لا يؤكد الدفعة إلا مدير أو مالك لم يبع هذه الصفقة.",
+  ],
+  CustFcPayConfirmAction: ["Confirm payment", "تأكيد الدفعة"],
+  CustFcPayDialogTitle: ["Confirm the customer's payment", "تأكيد دفعة العميل"],
+  CustFcPayDialogDesc: [
+    "Record that the customer really paid the finance company. This lowers the dealership's contribution by the amount confirmed.",
+    "سجّل أن العميل دفع فعلاً لشركة التمويل. يخفّض هذا مساهمة المعرض بالمبلغ المؤكَّد.",
+  ],
+  CustFcPayAmountLabel: ["Amount paid", "المبلغ المدفوع"],
+  CustFcPayAtMost: ["At most", "بحدٍّ أقصى"],
+  CustFcPayDateLabel: ["Date paid", "تاريخ الدفع"],
+  CustFcPayReferenceLabel: ["Payment reference", "مرجع الدفعة"],
+  CustFcPayVoided: ["Taken back", "مسحوب"],
+  CustFcPayVoidAction: ["Take back", "سحب التأكيد"],
+  CustFcPayVoidTitle: ["Take back this confirmation", "سحب تأكيد الدفعة"],
+  CustFcPayVoidDesc: [
+    "The dealership's contribution rises again by this amount and the deal cannot close until the payment is confirmed in full.",
+    "تعود مساهمة المعرض لترتفع بهذا المبلغ، ولا يمكن إغلاق الصفقة قبل تأكيد الدفعة بالكامل.",
+  ],
+  CustFcPayVoidReasonLabel: ["Why is it being taken back?", "لماذا يُسحب التأكيد؟"],
+  CustFcPayConfirmedSuccess: ["Payment confirmed", "تم تأكيد الدفعة"],
+  CustFcPayVoidedSuccess: ["Confirmation taken back", "تم سحب تأكيد الدفعة"],
   OverviewCustomerPaidUnknown: ["cannot be totalled — a deposit could not be read", "تعذّر الجمع — عربون غير قابل للقراءة"],
   OverviewCustomerFirstPayment: ["Customer first payment", "الدفعة الأولى من العميل"],
   OverviewFinancierFunds: ["Finance company funded portion", "حصة تمويل شركة التمويل"],
@@ -1417,6 +1458,10 @@ const dealOverviewMessages = defineBilingualMessages({
     "هذا الشرط لم يتحقق بعد، لذا لا يمكن إغلاق الصفقة.",
   ],
   ClosingCheck_FINANCING_RECONCILED: ["The financing figures have been reviewed", "تمت مراجعة أرقام التمويل"],
+  ClosingCheck_CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED: [
+    "The customer's payment to the finance company is confirmed",
+    "دفعة العميل إلى شركة التمويل مؤكَّدة",
+  ],
   // SCRUM-414 — why a check is not met, by the server's reason code (lib/closingReadinessReasonCodes.ts).
   ClosingReason_REMITTANCE_APPROVAL_MISSING: [
     "The finance company's approved purchase amount is not recorded yet, so what it will remit is not known. Record the approval before closing.",
@@ -1611,6 +1656,15 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingReason_WITHHELD_FINANCING_RECONCILED: [
     "The financing figures are still flagged for review.",
     "ما زالت أرقام التمويل موسومة لمراجعة التسوية.",
+  ],
+  // SCRUM-766 PR-B — the customer's agreed payment to the finance company needs a confirmed payment behind it.
+  ClosingReason_CUSTOMER_FINANCE_COMPANY_PAYMENT_UNCONFIRMED: [
+    "The customer agreed to pay part of the shortfall to the finance company, but that payment is not confirmed in full. Confirm the payment before closing, or settle the shortfall another way.",
+    "اتفق العميل على دفع جزء من العجز لشركة التمويل، لكن هذه الدفعة غير مؤكَّدة بالكامل. أكِّد الدفعة قبل الإغلاق، أو سوِّ العجز بطريقة أخرى.",
+  ],
+  ClosingReason_WITHHELD_CUSTOMER_FINANCE_COMPANY_PAYMENT_CONFIRMED: [
+    "A payment the customer agreed to make to the finance company is not confirmed yet.",
+    "دفعة اتفق العميل على سدادها لشركة التمويل لم تُؤكَّد بعد.",
   ],
   ClosingReason_WITHHELD_UNAVAILABLE: [
     "This deal's closing readiness cannot be determined from its current records. Someone with finance access can see why.",
@@ -3529,7 +3583,7 @@ export const salesEn = {
   DerivedFundedPortion: "Funded by the finance company",
   DerivedUnfinancedPortion: "Not financed",
   DerivedDealerContribution: "Dealership contribution",
-  DerivedCustomerToFinanceCompany: "Customer payment agreed with the finance company",
+  DerivedCustomerToFinanceCompany: "Customer payment to the finance company (confirmed)",
   DerivedAppliedLtv: "Applied LTV",
 
   RecordQuotationTitle: "Record the quotation we submitted",
@@ -4603,7 +4657,7 @@ export const salesAr = {
   DerivedFundedPortion: "الجزء المموَّل من شركة التمويل",
   DerivedUnfinancedPortion: "الجزء غير المموَّل",
   DerivedDealerContribution: "مساهمة المعرض",
-  DerivedCustomerToFinanceCompany: "دفعة العميل المتفق عليها مع شركة التمويل",
+  DerivedCustomerToFinanceCompany: "دفعة العميل إلى شركة التمويل (مؤكَّدة)",
   DerivedAppliedLtv: "نسبة التمويل المطبَّقة",
 
   RecordQuotationTitle: "تسجيل عرض السعر المُرسَل",

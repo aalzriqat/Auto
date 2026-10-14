@@ -3175,7 +3175,8 @@ export default defineSchema({
     customerGapToFinanceCompanyMinor: v.optional(v.number()),
     /**
      * SCRUM-766 PR-B: how much of `customerGapToFinanceCompanyMinor` was credited
-     * against the showroom's contribution - `dealerContributionMinor` is already
+     * against the showroom's contribution - only the part CONFIRMED by a
+     * `customerFinanceCompanyPayments` row; `dealerContributionMinor` is already
      * net of it. Kept so the commissionable margin can use the contribution
      * BEFORE the credit (owner ruling: the margin does not depend on where the
      * customer's money goes). Absent means nothing was credited.
@@ -3532,6 +3533,31 @@ export default defineSchema({
     reverseReason: v.optional(v.string()),
     reversedAt: v.optional(v.number()),
     reversalActorId: v.optional(v.id("users")),
+  })
+    .index("by_org_application", ["orgId", "applicationId"]),
+
+  /**
+   * SCRUM-766 PR-B: evidence that the CUSTOMER paid the finance company directly
+   * toward the shortfall. Only a CONFIRMED row reduces the showroom's
+   * contribution; the agreed amount on the application is a promise, not money.
+   * The money never touches the dealership's books, so there is deliberately no
+   * posting and no ledger link here - the row is the audit trail. A row is
+   * voided, never deleted, and neither is possible once the deal is closed
+   * (the contribution is then frozen into the finalized plan).
+   */
+  customerFinanceCompanyPayments: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    status: v.union(v.literal("CONFIRMED"), v.literal("VOIDED")),
+    amountMinor: v.number(),
+    currency: v.string(),
+    paidAt: v.number(),
+    reference: v.string(),
+    confirmedBy: v.id("users"),
+    confirmedAt: v.number(),
+    voidedBy: v.optional(v.id("users")),
+    voidedAt: v.optional(v.number()),
+    voidReason: v.optional(v.string()),
   })
     .index("by_org_application", ["orgId", "applicationId"]),
 

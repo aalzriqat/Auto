@@ -6412,14 +6412,27 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
   });
 
   // SCRUM-766 PR-B (owner ruling): money the customer pays the finance company
-  // directly toward the net shortfall is the customer's part, and it REDUCES the
-  // showroom's contribution one for one. Hand-computed on the 12,500 deal
+  // directly toward the net shortfall is the customer's part, and once it is CONFIRMED
+  // it REDUCES the showroom's contribution one for one. The agreement alone does not:
+  // it is a promise, and the dealership still owes the full contribution until the
+  // payment is evidenced. Hand-computed on the 12,500 deal
   // (target 10,500, first payment 500, 85%, supplier 9,500, expenses 625),
   // approved 11,500: funded 9,775 + first payment 500 + contribution 1,225 = 11,500.
   // Net shortfall 850. Customer 400 to the finance company, showroom covers 450:
-  //   contribution 1,225 - 400 = 825
-  //   profit 11,500 + 0 - 9,500 - 825 - 625 = 550  (1,000 base - the showroom's 450)
+  //   agreed only: contribution 1,225, profit 11,500 + 0 - 9,500 - 1,225 - 625 = 150
+  //   confirmed:   contribution 1,225 - 400 = 825
+  //                profit 11,500 + 0 - 9,500 - 825 - 625 = 550  (1,000 base - the showroom's 450)
   describe("the customer pays part of the shortfall to the finance company (SCRUM-766 PR-B)", () => {
+    /** Records that the customer really paid the finance company `major` (the evidence). */
+    const confirmToCompany = async (seed: Seed, applicationId: Id<"financeApplications">, major: number) =>
+      seed.asApprover.mutation(api.customerFinanceCompanyPayments.confirmPayment, {
+        orgId: seed.orgId,
+        applicationId,
+        amountMinor: jod(major),
+        paidAt: Date.now() - 1_000,
+        reference: "TRF-FC-1",
+        idempotencyKey: crypto.randomUUID(),
+      });
     const withSupplier = async (seed: Seed) =>
       seed.t.run((ctx) =>
         ctx.db.insert("vehicleSupplierPayables", {
@@ -6446,7 +6459,7 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
       return profit;
     };
 
-    test("400 paid to the finance company leaves the showroom 825 and the profit 550", async () => {
+    test("400 agreed leaves the showroom 1,225 and the profit 150; confirmed it is 825 and 550", async () => {
       const { seed, applicationId } = await seedGappedDeal();
       await withSupplier(seed);
       expect((await readApp(seed, applicationId)).dealerContributionMinor).toBe(jod(1_225));
@@ -6456,9 +6469,14 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
         economicsStamp: await servedStamp(seed, applicationId),
         ...allocation(400, 450, { financeCompany: 400 }),
       });
+      const agreed = await readApp(seed, applicationId);
+      expect(agreed.gapResolution).toBe("SPLIT");
+      expect(agreed.customerGapToFinanceCompanyMinor).toBe(jod(400));
+      // A promise is not a payment: nothing is credited, and the profit is the unreduced one.
+      expect(agreed.dealerContributionMinor).toBe(jod(1_225));
+      expect((await cockpitProfit(seed, applicationId)).amountMinor).toBe(jod(150));
+      await confirmToCompany(seed, applicationId, 400);
       const after = await readApp(seed, applicationId);
-      expect(after.gapResolution).toBe("SPLIT");
-      expect(after.customerGapToFinanceCompanyMinor).toBe(jod(400));
       expect(after.dealerContributionMinor).toBe(jod(825));
       const profit = await cockpitProfit(seed, applicationId);
       expect(profit.amountMinor).toBe(jod(550));
@@ -6473,13 +6491,15 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
       const { seed, applicationId } = await seedGappedDeal();
       await withSupplier(seed);
       // Customer 600: 400 to the finance company, 200 cash to us. Showroom 250.
-      // contribution 1,225 - 400 = 825; profit 11,500 + 200 - 9,500 - 825 - 625 = 750.
+      // Once the 400 is confirmed: contribution 1,225 - 400 = 825; profit 11,500 + 200 - 9,500 - 825 - 625 = 750.
       await seed.asApprover.mutation(api.financingEconomics.resolveAppraisalGap, {
         orgId: seed.orgId,
         applicationId,
         economicsStamp: await servedStamp(seed, applicationId),
         ...allocation(600, 250, { cash: 200, financeCompany: 400 }),
       });
+      expect((await readApp(seed, applicationId)).dealerContributionMinor).toBe(jod(1_225));
+      await confirmToCompany(seed, applicationId, 400);
       expect((await readApp(seed, applicationId)).dealerContributionMinor).toBe(jod(825));
       expect((await cockpitProfit(seed, applicationId)).amountMinor).toBe(jod(750));
     });
@@ -6492,9 +6512,11 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
         economicsStamp: await servedStamp(seed, applicationId),
         ...allocation(850, 0, { financeCompany: 850 }),
       });
-      const after = await readApp(seed, applicationId);
-      expect(after.gapResolution).toBe("CUSTOMER_ABSORBS");
-      expect(after.dealerContributionMinor).toBe(jod(375));
+      const agreed = await readApp(seed, applicationId);
+      expect(agreed.gapResolution).toBe("CUSTOMER_ABSORBS");
+      expect(agreed.dealerContributionMinor).toBe(jod(1_225));
+      await confirmToCompany(seed, applicationId, 850);
+      expect((await readApp(seed, applicationId)).dealerContributionMinor).toBe(jod(375));
     });
 
     test("a payment to the finance company larger than the contribution it replaces is refused with nothing persisted", async () => {
@@ -6530,10 +6552,12 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
         economicsStamp: await servedStamp(seed, applicationId),
         ...allocation(400, 450, { financeCompany: 400 }),
       });
+      await confirmToCompany(seed, applicationId, 400);
       expect((await readApp(seed, applicationId)).dealerContributionMinor).toBe(jod(825));
       // Re-approved at 80%: funded 9,200, first payment 500, contribution 1,800;
       // the shortfall is now 1,425. The agreement was against 850, so it is void -
-      // and so is the 400 credited by it: 1,800, not 1,400 and not 825.
+      // and so is the 400 credited by it, although the evidence row stays on record:
+      // 1,800, not 1,400 and not 825.
       await seed.asApprover.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
         orgId: seed.orgId,
         applicationId,
@@ -6582,6 +6606,7 @@ describe("the net shortfall's baseline and sides (SCRUM-766)", () => {
         economicsStamp: await servedStamp(seed, applicationId),
         ...allocation(400, 450, { financeCompany: 400 }),
       });
+      await confirmToCompany(seed, applicationId, 400);
       await seed.t.run((ctx) => recomputeEconomicsForApplication(ctx, applicationId));
       expect((await readApp(seed, applicationId)).dealerContributionMinor).toBe(jod(825));
     });

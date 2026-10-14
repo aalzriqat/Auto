@@ -275,6 +275,14 @@ export function DealFinancialOverview({
             }
           />
         )}
+        {(summary.customerGapToFinanceCompanyUnconfirmedMinor ?? 0) > 0 && (
+          <Fact
+            testId="overview-gap-finance-company-unconfirmed"
+            label={t("OverviewGapToFinanceCompanyUnconfirmed")}
+            value={m(summary.customerGapToFinanceCompanyUnconfirmedMinor)}
+            note={t("OverviewGapToFinanceCompanyUnconfirmedNote")}
+          />
+        )}
         <Fact
           testId="overview-first-payment"
           label={t("OverviewCustomerFirstPayment")}

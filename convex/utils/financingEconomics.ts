@@ -1011,12 +1011,15 @@ export function deriveEconomics(args: {
   feeDeductionsMinor: number;
   customerDirectToDealerMinor: number;
   /**
-   * The settled gap split's customer share and the part of it the customer pays
-   * the finance company directly (SCRUM-766 PR-B). Zero until a split is agreed;
-   * the payment is credited against the contribution, never the stored figure.
+   * The settled gap split's customer share and the part of it the customer
+   * AGREED to pay the finance company directly (SCRUM-766 PR-B). Zero until a
+   * split is agreed; only the CONFIRMED part is credited against the
+   * contribution, never the stored figure.
    */
   customerGapShareMinor: number;
   customerGapToFinanceCompanyMinor: number;
+  /** The total of this deal's confirmed payment evidence; zero when none is recorded. */
+  confirmedCustomerPaymentMinor: number;
   dealerBorneExpensesMinor: number;
   /** Only needed for the profit figures, which nothing stores yet. */
   vehicleCostMinor?: number;
@@ -1058,13 +1061,14 @@ export function deriveEconomics(args: {
     appliedLtvPercent: args.appliedLtvPercent,
   });
 
-  // What the customer pays the finance company directly replaces that much of
-  // the showroom's contribution (SCRUM-766 PR-B), so the remittance and the
-  // profit below are both measured on the reduced figure.
+  // What the customer has CONFIRMED paying the finance company directly replaces
+  // that much of the showroom's contribution (SCRUM-766 PR-B), so the remittance
+  // and the profit below are both measured on the reduced figure.
   const customerPayment = applyCustomerPaymentToFinanceCompany({
     requiredContributionMinor: composition.dealerContributionMinor,
     customerGapShareMinor: args.customerGapShareMinor,
     customerGapToFinanceCompanyMinor: args.customerGapToFinanceCompanyMinor,
+    confirmedPaymentMinor: args.confirmedCustomerPaymentMinor,
   });
   const { dealerContributionMinor } = customerPayment;
 

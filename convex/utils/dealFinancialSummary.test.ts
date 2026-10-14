@@ -126,6 +126,26 @@ describe("deriveDealFinancialSummary", () => {
       expect(s.customerPaidToDealer?.totalMinor).toBe(500_000);
       expect(deriveDealFinancialSummary(inputs()).customerGapToFinanceCompanyPlannedMinor).toBeNull();
     });
+    test("what was agreed but not confirmed is served on its own: agreed less confirmed, never below zero (SCRUM-766 PR-B)", () => {
+      const served = (agreed?: number, confirmed?: number) =>
+        deriveDealFinancialSummary(
+          inputs({
+            app: {
+              ...inputs().app,
+              customerGapToFinanceCompanyMinor: agreed,
+              customerGapToFinanceCompanyAppliedMinor: confirmed,
+            },
+          })
+        );
+      expect(served(400_000, undefined).customerGapToFinanceCompanyUnconfirmedMinor).toBe(400_000);
+      expect(served(400_000, 150_000).customerGapToFinanceCompanyUnconfirmedMinor).toBe(250_000);
+      expect(served(400_000, 400_000).customerGapToFinanceCompanyUnconfirmedMinor).toBe(0);
+      expect(served(400_000, 500_000).customerGapToFinanceCompanyUnconfirmedMinor).toBe(0);
+      expect(served(undefined, undefined).customerGapToFinanceCompanyUnconfirmedMinor).toBeNull();
+      const corrupt = served(Number.NaN, undefined);
+      expect(corrupt.customerGapToFinanceCompanyUnconfirmedMinor).toBeNull();
+      expect(corrupt.unreadable).toContainEqual({ field: "customerGapToFinanceCompanyUnconfirmed", reason: "UNSAFE_AMOUNT" });
+    });
     test("an unreadable finance-company payment is withheld and named, not served as a figure", () => {
       const s = deriveDealFinancialSummary(
         inputs({ app: { ...inputs().app, customerGapToFinanceCompanyAppliedMinor: Number.NaN } })
