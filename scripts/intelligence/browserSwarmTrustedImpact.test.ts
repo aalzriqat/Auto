@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -233,6 +233,84 @@ describe("trusted browser swarm impact: modular money and fee-void swarm modules
         .map((mission) => `${mission.invariantIds.join(",")}/${mission.oracle}`),
     ).toEqual(["CONS-1/ECONOMIC_AUTHORITY"]);
     expect(moneyMissions).toEqual(["ACC-1/ECONOMIC_AUTHORITY", "LIFE-1/STATE_TRANSITION"]);
+  });
+
+  // Trusted run 38800859273 (PR #586): a change to exactly these files scheduled NO CONSIGNMENT_ECONOMICS
+  // mission, so the consignment scenario was never executed for the change that edited it.
+  const consignmentMissions = (changedFile: string) => {
+    const impact = impactFor(changedFile);
+    const plan = planBrowserAttackSwarm({ impactedInvariants: impact.impactedInvariants });
+    return {
+      impact,
+      missions: plan.missions
+        .filter((mission) => mission.family === "CONSIGNMENT_ECONOMICS")
+        .map((mission) => `${mission.invariantIds.join(",")}/${mission.oracle}`),
+    };
+  };
+
+  // Files the trusted-main controller itself ships. These must already be on main.
+  const CONTROLLER_PATHS = [
+    "scripts/intelligence/browserSwarmConsignmentAttack.ts",
+    "scripts/intelligence/browserSwarmConsignmentHandler.test.ts",
+    "scripts/intelligence/browserSwarmConsignmentOracle.ts",
+    "scripts/intelligence/browserSwarmConsignmentOracle.test.ts",
+  ];
+
+  // Candidate evidence the controller must plan BEFORE it merges (still-open PR #586). The controller runs from
+  // main, so these cannot be required to exist there: they are mapped below, not asserted present.
+  const PENDING_CANDIDATE_PATHS = [
+    "convex/scrum350Cons1V3PriceBasis.test.ts",
+    "regression/scenarios/money/financed-v3-consigned-sale-books-revenue-on-approved-plus-gap-not-price.scenario.json",
+    "regression/scenarios/money/financed-v3-consigned-sale-supplier-payable-row-matches-the-ledger.scenario.json",
+  ];
+
+  const CONSIGNMENT_PATHS = [...CONTROLLER_PATHS, ...PENDING_CANDIDATE_PATHS];
+
+  // A renamed or deleted controller file would leave its string here still matching the catalog glob, so the
+  // cases below would stay green while the catalog went stale. Every controller path must be a real file.
+  const expectPathsExist = async (paths: readonly string[]) => {
+    const missing: string[] = [];
+    for (const relative of paths) {
+      try {
+        await access(path.join(repoRoot, relative));
+      } catch {
+        missing.push(relative);
+      }
+    }
+    expect(missing).toEqual([]);
+  };
+
+  it("names controller files that exist in the repository", async () => {
+    await expectPathsExist(CONTROLLER_PATHS);
+  });
+
+  it("the existence check fails for a controller path that is not in the repository", async () => {
+    await expect(
+      expectPathsExist([...CONTROLLER_PATHS, "scripts/intelligence/browserSwarmConsignmentRenamed.ts"]),
+    ).rejects.toThrow();
+  });
+
+  it("pending candidate evidence is never also listed as a controller path", () => {
+    expect(PENDING_CANDIDATE_PATHS.filter((entry) => CONTROLLER_PATHS.includes(entry))).toEqual([]);
+  });
+
+  it.each(CONSIGNMENT_PATHS)("%s schedules the CONS-1 consignment mission", (changedFile) => {
+    const { impact, missions } = consignmentMissions(changedFile);
+    expect(impact.shouldRun).toBe(true);
+    expect(impact.impactedInvariants.map((entry) => entry.id)).toContain("CONS-1");
+    expect(missions).toEqual(["CONS-1/ECONOMIC_AUTHORITY"]);
+  });
+
+  // The mapping is the consigned-sale scenario family, not the money directory: a scenario about another
+  // deal shape, or about the consigned REPORTS, must not schedule the consignment mission.
+  it.each([
+    "regression/scenarios/money/financed-v3-owned-reports-read-ledger-net-revenue.scenario.json",
+    "regression/scenarios/money/financed-v3-consigned-reports-read-ledger-net-commission.scenario.json",
+    "regression/scenarios/money/financed-v3-closes-with-no-legal-invoice-from-server-economics.scenario.json",
+  ])("%s does not schedule the CONS-1 consignment mission", (changedFile) => {
+    const { impact, missions } = consignmentMissions(changedFile);
+    expect(impact.impactedInvariants.map((entry) => entry.id)).not.toContain("CONS-1");
+    expect(missions).toEqual([]);
   });
 
   // SCRUM-849: ACC-3's sourceAreas are convex/financialAudit.ts, convex/accountingPeriods.ts and
