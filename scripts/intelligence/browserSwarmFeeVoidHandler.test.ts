@@ -385,6 +385,10 @@ describe("SCRUM-350 LIFE-1 fee void handler: the discriminating scenario", () =>
     const fees = h.world.argsOf.filter((entry) => entry.name === "financeDealCosts:recordDealFee");
     expect(fees.map((entry) => entry.args.actualAmountMinor)).toEqual([50_000, 20_000]);
     expect(h.world.calls.filter((call) => /sales|finalizeDeal|deposits:/.test(call))).toEqual([]);
+    // The product refuses a priced owned car with no declared payment method. Paid outright, so not ON_ACCOUNT (no supplier payable).
+    const create = h.world.argsOf.find((entry) => entry.name === "vehicles:create");
+    expect(create?.args).toMatchObject({ sourceType: "STOCK", purchasePrice: 15_000, purchasePaymentMethod: "BANK_TRANSFER" });
+    expect(create?.args).not.toHaveProperty("purchaseSupplierName");
   });
 
   it("FAILS a void that leaves the payment on the books", async () => {
