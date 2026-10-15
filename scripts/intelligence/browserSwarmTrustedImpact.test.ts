@@ -248,18 +248,26 @@ describe("trusted browser swarm impact: modular money and fee-void swarm modules
     };
   };
 
-  const CONSIGNMENT_PATHS = [
+  // Files the trusted-main controller itself ships. These must already be on main.
+  const CONTROLLER_PATHS = [
     "scripts/intelligence/browserSwarmConsignmentAttack.ts",
     "scripts/intelligence/browserSwarmConsignmentHandler.test.ts",
     "scripts/intelligence/browserSwarmConsignmentOracle.ts",
     "scripts/intelligence/browserSwarmConsignmentOracle.test.ts",
+  ];
+
+  // Candidate evidence the controller must plan BEFORE it merges (still-open PR #586). The controller runs from
+  // main, so these cannot be required to exist there: they are mapped below, not asserted present.
+  const PENDING_CANDIDATE_PATHS = [
     "convex/scrum350Cons1V3PriceBasis.test.ts",
     "regression/scenarios/money/financed-v3-consigned-sale-books-revenue-on-approved-plus-gap-not-price.scenario.json",
     "regression/scenarios/money/financed-v3-consigned-sale-supplier-payable-row-matches-the-ledger.scenario.json",
   ];
 
-  // A renamed or deleted file would leave its string here still matching the catalog glob, so the cases below
-  // would stay green while the catalog went stale. Every positive path must be a real file in this repository.
+  const CONSIGNMENT_PATHS = [...CONTROLLER_PATHS, ...PENDING_CANDIDATE_PATHS];
+
+  // A renamed or deleted controller file would leave its string here still matching the catalog glob, so the
+  // cases below would stay green while the catalog went stale. Every controller path must be a real file.
   const expectPathsExist = async (paths: readonly string[]) => {
     const missing: string[] = [];
     for (const relative of paths) {
@@ -272,14 +280,18 @@ describe("trusted browser swarm impact: modular money and fee-void swarm modules
     expect(missing).toEqual([]);
   };
 
-  it("names only files that exist in the repository", async () => {
-    await expectPathsExist(CONSIGNMENT_PATHS);
+  it("names controller files that exist in the repository", async () => {
+    await expectPathsExist(CONTROLLER_PATHS);
   });
 
-  it("the existence check fails for a path that is not in the repository", async () => {
+  it("the existence check fails for a controller path that is not in the repository", async () => {
     await expect(
-      expectPathsExist([...CONSIGNMENT_PATHS, "scripts/intelligence/browserSwarmConsignmentRenamed.ts"]),
+      expectPathsExist([...CONTROLLER_PATHS, "scripts/intelligence/browserSwarmConsignmentRenamed.ts"]),
     ).rejects.toThrow();
+  });
+
+  it("pending candidate evidence is never also listed as a controller path", () => {
+    expect(PENDING_CANDIDATE_PATHS.filter((entry) => CONTROLLER_PATHS.includes(entry))).toEqual([]);
   });
 
   it.each(CONSIGNMENT_PATHS)("%s schedules the CONS-1 consignment mission", (changedFile) => {
