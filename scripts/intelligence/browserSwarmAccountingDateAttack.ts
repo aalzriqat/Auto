@@ -325,15 +325,6 @@ export function accountingDateSpec(options: MissionTiming) {
       const orgEntriesAfter = await readEntries(env, command, null);
       const { listed: draftStillPending, view: draftAfter } = await readPendingDraft(env, command, closedDraft);
 
-      // The screen a dealer sees; its screenshot is part of the mission's evidence.
-      try {
-        await untilAborted(signal, page.goto(`/${orgId}/accounting`, { waitUntil: "domcontentloaded", timeout: options.uiSettleMs }));
-      } catch (error) {
-        if (signal.aborted) throw error;
-        env.unjudged(`the accounting screen could not be opened for the screenshot (${describeError(error)})`);
-        return;
-      }
-
       detail.journal = journal;
       const refused = {
         approval,
@@ -362,6 +353,15 @@ export function accountingDateSpec(options: MissionTiming) {
           refused,
         }),
       );
+
+      // The screen a dealer sees; its screenshot is part of the mission's evidence. Opened only AFTER the backend
+      // state is judged, so a screen that will not load can leave a clean run inconclusive but never hide a proven breach.
+      try {
+        await untilAborted(signal, page.goto(`/${orgId}/accounting`, { waitUntil: "domcontentloaded", timeout: options.uiSettleMs }));
+      } catch (error) {
+        if (signal.aborted) throw error;
+        env.unjudged(`the accounting screen could not be opened for the screenshot (${describeError(error)})`);
+      }
     },
   };
 }

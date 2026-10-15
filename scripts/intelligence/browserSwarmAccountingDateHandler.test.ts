@@ -599,6 +599,17 @@ describe("SCRUM-849 ACC-3 accounting-date handler: never a pass without a judged
     await inconclusive({ screenFails: true }, /accounting screen could not be opened for the screenshot/);
   });
 
+  it("still reports a proven breach when the accounting screen cannot be opened for the screenshot", async () => {
+    const h = await breach({ wrongDate: true, screenFails: true }, /not the declared/);
+    // The breach is PARTIAL: proven, with the unreachable screen recorded beside it as unjudged.
+    expect(h.evidence).toHaveLength(1);
+    expect(h.evidence[0]).toMatchObject({
+      phase: "PARTIAL",
+      violations: expect.arrayContaining([expect.stringMatching(/not the declared/)]),
+      unjudged: [expect.stringMatching(/accounting screen could not be opened for the screenshot/)],
+    });
+  });
+
   it("refuses a mission for an oracle the scenario does not judge, before touching the backend", async () => {
     const h = harness({}, { oracle: "TENANT_ISOLATION" });
     await expect(h.run()).rejects.toThrow(/does not judge the TENANT_ISOLATION oracle/);
