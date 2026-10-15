@@ -15,6 +15,19 @@ export type UtcMonthPeriod = {
   endDate: string;
 };
 
+/**
+ * The periods that must be open so a server timestamp taken anywhere in
+ * [now, now + windowMs] falls in one: the current UTC month, plus the next when
+ * the window reaches it. The handover is stamped by the server's clock at the
+ * moment it is registered, so a period opened for "today" is not enough when
+ * that moment can land after midnight at a month end.
+ */
+export function utcMonthPeriodsCovering(now: Date, windowMs: number): UtcMonthPeriod[] {
+  const current = utcMonthPeriod(now);
+  const latest = utcMonthPeriod(new Date(now.getTime() + windowMs));
+  return latest.startDate === current.startDate ? [current] : [current, latest];
+}
+
 export function utcMonthPeriod(now: Date): UtcMonthPeriod {
   const year = now.getUTCFullYear();
   const month = now.getUTCMonth();

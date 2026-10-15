@@ -10,7 +10,8 @@ import {
   resolveOrgId,
   testDataSuffix,
 } from "../utils";
-import { utcMonthPeriod } from "./utcMonthPeriod";
+import { openPeriodCovering, type DisplayedPeriodRow } from "./periodCoverage";
+import { utcMonthPeriodsCovering, type UtcMonthPeriod } from "./utcMonthPeriod";
 
 /**
  * Building a financed deal through the interface — the steps, without the
@@ -494,33 +495,119 @@ export async function openDealDetails(page: Page): Promise<void> {
 }
 
 /**
- * An OPEN accounting period covering today, established through the Accounting
- * settings screen.
+ * How far ahead of the check the server may stamp the handover. The check runs
+ * immediately before the handover is confirmed, so this only has to exceed the
+ * check's own navigation plus the click — minutes of margin, not the length of
+ * the deal journey. It costs nothing outside the last minutes of a UTC month.
+ */
+export const HANDOVER_PERIOD_WINDOW_MS = 5 * 60_000;
+
+/**
+ * Accounting periods that are OPEN for the moment the handover is stamped,
+ * established through the Accounting screens.
  *
  * Closing a financed deal recognises the sale on the handover date, and the
  * server refuses (RECOGNITION_PERIOD_OPEN) when no open period covers it. A
  * fresh dealership has none, so the deal cannot close until an operator opens
- * one — the product's rule, not weakened here. The handover is registered
- * today, so the period must cover today.
+ * one — the product's rule, not weakened here. The server stamps the handover
+ * with its own clock when it is confirmed, so call this immediately before
+ * confirming: the current UTC month must be open, and so must the next one when
+ * `windowMs` reaches it.
  *
- * Idempotent and non-destructive: when the screen already reports an open
- * period covering today nothing is touched. Otherwise the current UTC month is
- * created and opened immediately. A period that exists for that month but is
- * not open (FUTURE/CLOSED) is refused by the server; that surfaces as a failure
- * here rather than being reopened, locked or deleted behind the operator's back.
+ * Coverage is judged by the periods' DATES, not their labels, so an open
+ * full-year period labelled 2026-01 covers a September handover. Idempotent and
+ * non-destructive: a covered instant creates nothing. Otherwise the month is
+ * created and opened immediately, then its own row is read back as OPEN. A
+ * period that exists but is not open, or a table too full to show every period,
+ * is a failure with a diagnostic — never a blind create, and never a reopen,
+ * lock or delete behind the operator's back.
+ *
+ * The returned `assertConfirmedWithinWindow` must be called once the handover is
+ * confirmed: it throws if that happened after the window this check covered.
  */
-export async function ensureOpenAccountingPeriod(page: Page): Promise<void> {
-  // gotoOrgRoute matches on the bare pathname, so the section deep link is
-  // navigated to directly.
+export async function ensureOpenAccountingPeriod(
+  page: Page,
+  windowMs: number = HANDOVER_PERIOD_WINDOW_MS,
+): Promise<{ assertConfirmedWithinWindow: () => void }> {
+  const windowStart = Date.now();
+  const windowEnd = windowStart + windowMs;
   const orgId = await resolveOrgId(page);
-  await page.goto(`/${orgId}/accounting?section=settings`);
+
+  // The period card, its Create dialog and the table all render on the
+  // reconcile section (the settings section only shows the chart). gotoOrgRoute
+  // matches on the bare pathname, so the deep link is navigated to directly.
+  await page.goto(`/${orgId}/accounting?section=reconcile`);
   await dismissOverlays(page);
 
-  const openPeriod = page.getByText(/^Open period:/);
-  const noOpenPeriod = page.getByText("No open period covers today.");
-  await expect(openPeriod.or(noOpenPeriod).first()).toBeVisible({ timeout: 30_000 });
-  if (await openPeriod.count()) return;
+  for (const [index, period] of utcMonthPeriodsCovering(new Date(windowStart), windowMs).entries()) {
+    // The earliest instant of this month the handover can be stamped at.
+    const instantMs = index === 0 ? windowStart : Date.parse(`${period.startDate}T00:00:00Z`);
+    const rows = await readPeriodRows(page);
+    if (openPeriodCovering(rows, instantMs)) continue;
 
+    const label = `${period.fiscalYear}-${period.periodNumber.padStart(2, "0")}`;
+    if (rows.length >= PERIODS_TABLE_LIMIT) {
+      throw new Error(
+        `Cannot tell whether an open accounting period covers ${new Date(instantMs).toISOString()}: the table shows only the ${PERIODS_TABLE_LIMIT} newest periods and none of them covers it. Nothing was created.`,
+      );
+    }
+    const existing = rows.find((row) => row.label === label);
+    if (existing) {
+      throw new Error(
+        `Accounting period ${label} exists with status "${existing.status}" and does not cover ${new Date(instantMs).toISOString()}. This spec does not reopen periods.`,
+      );
+    }
+
+    await createOpenPeriod(page, period);
+    await expect(
+      periodsSection(page).getByRole("row").filter({ hasText: label }).getByText("Open", { exact: true }),
+      `Accounting period ${label} was created but its row is not OPEN.`,
+    ).toBeVisible();
+    if (!openPeriodCovering(await readPeriodRows(page), instantMs)) {
+      throw new Error(`Accounting period ${label} is open but does not cover ${new Date(instantMs).toISOString()}.`);
+    }
+  }
+
+  return {
+    assertConfirmedWithinWindow: () => {
+      const lateMs = Date.now() - windowEnd;
+      if (lateMs > 0) {
+        throw new Error(
+          `The handover was confirmed ${lateMs} ms after the ${windowMs} ms window the accounting periods were checked for; the period covering its date is not established.`,
+        );
+      }
+    },
+  };
+}
+
+/** `recentPeriods` in convex/accountingSetup.ts: the table never shows more. */
+const PERIODS_TABLE_LIMIT = 24;
+
+function periodsSection(page: Page) {
+  return page.getByRole("heading", { name: "Accounting Periods", exact: true }).locator("xpath=..");
+}
+
+async function readPeriodRows(page: Page): Promise<DisplayedPeriodRow[]> {
+  await expect(page.getByRole("heading", { name: "Accounting Periods", exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
+  // The table formats its dates in the browser's zone; they are the stored UTC
+  // day bounds only when that zone is UTC.
+  const offsetMinutes = await page.evaluate(() => new Date().getTimezoneOffset());
+  if (offsetMinutes !== 0) {
+    throw new Error(
+      `Cannot read the accounting periods' dates: the browser is ${offsetMinutes} minutes from UTC, and the table shows them in its own zone.`,
+    );
+  }
+  const rows: DisplayedPeriodRow[] = [];
+  for (const row of await periodsSection(page).getByRole("row").all()) {
+    const cells = (await row.getByRole("cell").allInnerTexts()).map((cell) => cell.replace(/\s+/g, " ").trim());
+    if (cells.length === 4) rows.push({ label: cells[0], range: cells[1], status: cells[2] });
+  }
+  return rows;
+}
+
+async function createOpenPeriod(page: Page, period: UtcMonthPeriod): Promise<void> {
   const create = page.getByRole("button", { name: "Create period", exact: true });
   await expect(
     create,
@@ -530,11 +617,10 @@ export async function ensureOpenAccountingPeriod(page: Page): Promise<void> {
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("Create Accounting Period");
 
-  // The current UTC month, not the dialog's full-year default (which would
+  // A single UTC month, not the dialog's full-year default (which would
   // overlap another month's period in a shared org). The dialog's labels are
   // not associated with their inputs, so each field is the input that follows
   // its label.
-  const period = utcMonthPeriod(new Date());
   const field = (label: string) =>
     dialog.locator(`xpath=.//label[normalize-space()="${label}"]/following-sibling::input`);
   await field("Fiscal year").fill(period.fiscalYear);
@@ -544,13 +630,12 @@ export async function ensureOpenAccountingPeriod(page: Page): Promise<void> {
   await expect(dialog.getByRole("checkbox")).toBeChecked();
   await dialog.getByRole("button", { name: "Create period", exact: true }).click();
 
-  // Durable state, not the toast: the dialog closes only on success, and the
-  // status card then names the open period. A dialog that stays open means the
-  // create did not succeed (for example a server refusal) — nothing is reopened
-  // or removed to get past it.
+  // Durable state, not the toast: the dialog closes only on success. A dialog
+  // that stays open means the create did not succeed (for example a server
+  // refusal) — nothing is reopened or removed to get past it. The caller then
+  // reads the new row back.
   await expect(
     dialog,
     `Creating accounting period ${period.fiscalYear}-${period.periodNumber} did not succeed: the dialog stayed open. This spec does not reopen, lock or delete periods.`,
   ).not.toBeVisible();
-  await expect(openPeriod.first()).toBeVisible();
 }
