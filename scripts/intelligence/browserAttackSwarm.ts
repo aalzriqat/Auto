@@ -64,7 +64,8 @@ const PHASE_A_EXECUTABLE_FAMILY_ORACLES: Readonly<
   UI_BACKEND_MISMATCH: ["UI_BACKEND_AUTHORITY"],
   TENANT_ESCAPE: ["TENANT_ISOLATION"],
   AUTHORIZATION_ABUSE: ["AUTHORIZATION"],
-  LIFECYCLE_REVERSAL: ["REVERSAL_RECONCILIATION"],
+  // ACC-2 reconciles a reversed expense; LIFE-1 judges a deposit void's state transition.
+  LIFECYCLE_REVERSAL: ["REVERSAL_RECONCILIATION", "STATE_TRANSITION"],
   COMPLETENESS_BOUNDARY: ["LIST_COMPLETENESS"],
   NETWORK_RECOVERY: ["IDEMPOTENCY_SINGLE_EFFECT", "STATE_TRANSITION"],
   CONSIGNMENT_ECONOMICS: ["ECONOMIC_AUTHORITY"],
@@ -169,8 +170,9 @@ const FAMILY_TIMEOUT_MS: Partial<Record<BrowserAttackFamily, number>> = {
   // Opens a second authenticated seat, creates a foreign tenant and probes it.
   TENANT_ESCAPE: 180_000,
   AUTHORIZATION_ABUSE: 120_000,
-  // Posts an expense, waits for the ledger to settle, then reverses it twice.
-  LIFECYCLE_REVERSAL: 180_000,
+  // Posts an expense and reverses it twice (ACC-2), or takes two deposits, voids one
+  // and reads the ledger three times (LIFE-1); the larger bound fits the deposit leg.
+  LIFECYCLE_REVERSAL: 240_000,
   // Seeds more rows than one page holds, then walks the whole list.
   COMPLETENESS_BOUNDARY: 240_000,
   // Holds the connection down, waits out the recovery window, then settles.

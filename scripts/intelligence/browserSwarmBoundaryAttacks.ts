@@ -44,6 +44,7 @@ import {
   type MissionBrowserRuntime,
 } from "./browserSwarmEconomicAttacks";
 import { BrowserSwarmOracleInconclusiveError } from "./browserSwarmEconomicOracle";
+import { depositVoidTransitionSpec } from "./browserSwarmLifecycleAttack";
 
 export interface BoundaryAttackOptions {
   /** Replaces real waiting so tests run instantly. */
@@ -934,6 +935,14 @@ export function createBoundaryAttackHandlers(
     TENANT_ESCAPE: (context) => runBoundaryMission(runtimeApi, context, tenantEscapeSpec(options)),
     AUTHORIZATION_ABUSE: (context) => runBoundaryMission(runtimeApi, context, authorizationAbuseSpec(options)),
     COMPLETENESS_BOUNDARY: (context) => runBoundaryMission(runtimeApi, context, completenessBoundarySpec(options)),
-    LIFECYCLE_REVERSAL: (context) => runBoundaryMission(runtimeApi, context, lifecycleReversalSpec(options)),
+    // One family, two obligations: ACC-2 judges the reconciliation of a reversed
+    // expense, LIFE-1 judges the state transition of a voided deposit. The spec's
+    // own oracle list refuses any mission asking for a third.
+    LIFECYCLE_REVERSAL: (context) =>
+      runBoundaryMission(
+        runtimeApi,
+        context,
+        context.mission.oracle === "STATE_TRANSITION" ? depositVoidTransitionSpec(options) : lifecycleReversalSpec(options),
+      ),
   };
 }

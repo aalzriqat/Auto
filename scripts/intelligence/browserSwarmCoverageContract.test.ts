@@ -124,10 +124,7 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
     );
   });
 
-  it("refuses a mission whose family has a handler but whose oracle that handler does not judge", () => {
-    // LIFE-1 maps LIFECYCLE_REVERSAL to a STATE_TRANSITION oracle. The ACC-2
-    // handler judges REVERSAL_RECONCILIATION only, so reporting LIFE-1 as
-    // executable by family alone would certify an obligation nothing checks.
+  it("executes LIFE-1's LIFECYCLE_REVERSAL mission: the family's handler judges STATE_TRANSITION as well as ACC-2's reconciliation", () => {
     const plan = planBrowserAttackSwarm({
       impactedInvariants: [{ id: "LIFE-1", severity: "CRITICAL" }],
     });
@@ -135,14 +132,36 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
       (mission) => mission.family === "LIFECYCLE_REVERSAL",
     );
     expect(lifecycle?.oracle).toBe("STATE_TRANSITION");
+    expect(lifecycle?.timeoutMs).toBeGreaterThanOrEqual(240_000);
 
-    expect(() => assertBrowserSwarmMissionsExecutable([lifecycle!])).toThrow(
-      /LIFECYCLE_REVERSAL.*STATE_TRANSITION.*LIFE-1/,
-    );
+    expect(() => assertBrowserSwarmMissionsExecutable([lifecycle!])).not.toThrow();
+    expect(isBrowserSwarmMissionExecutable("LIFECYCLE_REVERSAL", "STATE_TRANSITION")).toBe(true);
+    expect(isBrowserSwarmMissionExecutable("LIFECYCLE_REVERSAL", "REVERSAL_RECONCILIATION")).toBe(true);
     const rows = browserSwarmCoverageMatrix().filter(
       (row) => row.invariantId === "LIFE-1" && row.family === "LIFECYCLE_REVERSAL",
     );
-    expect(rows.map((row) => row.executable)).toEqual([false]);
+    expect(rows.map((row) => row.executable)).toEqual([true]);
+  });
+
+  it("refuses a mission whose family has a handler but whose oracle that handler does not judge", () => {
+    // The lifecycle handler judges a reversal's reconciliation and a deposit
+    // void's state transition. A LIFECYCLE_REVERSAL mission asking for any other
+    // oracle would be reported executable by family alone while nothing checks it.
+    const forged: BrowserAttackMission = {
+      id: "forged::LIFECYCLE_REVERSAL",
+      family: "LIFECYCLE_REVERSAL",
+      source: "DETERMINISTIC",
+      invariantIds: ["LIFE-1"],
+      invariantSeverity: "CRITICAL",
+      oracle: "ECONOMIC_AUTHORITY",
+      timeoutMs: 240_000,
+      estimatedCostUnits: 7,
+      evidence: ["TRACE", "SCREENSHOT", "BACKEND_STATE"],
+    };
+    expect(() => assertBrowserSwarmMissionsExecutable([forged])).toThrow(
+      /LIFECYCLE_REVERSAL.*ECONOMIC_AUTHORITY.*LIFE-1/,
+    );
+    expect(isBrowserSwarmMissionExecutable("LIFECYCLE_REVERSAL", "ECONOMIC_AUTHORITY")).toBe(false);
   });
 
   it("executes every mandatory mission of the five newly covered invariants", () => {
@@ -208,7 +227,6 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
     expect(missing).toEqual([
       "ACC-1:MONEY_BOUNDARY/ECONOMIC_AUTHORITY",
       "ACC-3:MONEY_BOUNDARY/STATE_TRANSITION",
-      "LIFE-1:LIFECYCLE_REVERSAL/STATE_TRANSITION",
       "LIFE-1:NAVIGATION_RACE/STATE_TRANSITION",
     ]);
 
