@@ -24,6 +24,7 @@ import { v, ConvexError } from "convex/values";
 import { query, QueryCtx, MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { requireTenantAuth } from "./utils/tenancy";
+import { AppErrorCode, throwAppError } from "./utils/errors";
 import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { getOrgCurrency } from "./accounting/workflowHooks";
@@ -170,6 +171,37 @@ async function hasOpeningBalanceCommitment(ctx: QueryCtx, orgId: Id<"organizatio
   return pendingDraft !== null;
 }
 
+/**
+ * True once the org has ANY POSTED or REVERSED journal entry. Status, not period
+ * state, decides: a REVERSED entry is still history, and a later period being
+ * open says nothing about earlier postings. DRAFT/VALIDATED never count.
+ *
+ * Deliberately no category filter: an ordinary new opening after the reversal of
+ * an old one is refused too. No correction path exists yet (SCRUM-850); the
+ * refusal only tells the finance owner a cutover correction needs review.
+ */
+async function hasPostedLedgerActivity(ctx: QueryCtx, orgId: Id<"organizations">): Promise<boolean> {
+  for (const status of ["POSTED", "REVERSED"] as const) {
+    const entry = await ctx.db
+      .query("journalEntries")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .first();
+    if (entry) return true;
+  }
+  return false;
+}
+
+/**
+ * The English text of the coded refusal; lib/i18n/domains/common.ts carries the
+ * same text under `ServerError_OPENING_BALANCE_AFTER_LEDGER_ACTIVITY`.
+ */
+export const POSTED_LEDGER_ACTIVITY_MESSAGE =
+  "This organization already has posted ledger activity, so an opening balance cannot be posted. The cutover needs finance-owner review.";
+
+function refuseOpeningAfterLedgerActivity(): never {
+  throwAppError(AppErrorCode.OPENING_BALANCE_AFTER_LEDGER_ACTIVITY, POSTED_LEDGER_ACTIVITY_MESSAGE);
+}
+
 export const draftOpeningBalance = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -195,6 +227,12 @@ export const draftOpeningBalance = mutation({
 
     if (await hasOpeningBalanceCommitment(ctx, args.orgId)) {
       throw new ConvexError("An opening balance has already been posted or is awaiting approval for this organization.");
+    }
+
+    // Preflight only: don't knowingly create a draft that approval must refuse.
+    // Activity that lands after this point is still caught at posting time.
+    if (await hasPostedLedgerActivity(ctx, args.orgId)) {
+      refuseOpeningAfterLedgerActivity();
     }
 
     validateManualJournalLines(args.lines as ManualJournalLine[]);
@@ -331,6 +369,13 @@ async function postOpeningBalanceDraft(
   },
 ): Promise<Id<"journalEntries">> {
   const { orgId, draft, approverId, autoApproved } = args;
+
+  // The chokepoint both routes share, checked in the posting transaction itself
+  // so activity that landed after the draft was prepared is still caught. A
+  // balanced opening journal proves arithmetic, not a cutover basis.
+  if (await hasPostedLedgerActivity(ctx, orgId)) {
+    refuseOpeningAfterLedgerActivity();
+  }
 
   const totalDebits = validateManualJournalLines(draft.lines as ManualJournalLine[]);
 

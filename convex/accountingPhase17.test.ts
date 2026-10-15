@@ -1454,3 +1454,183 @@ describe("Phase 17 — owner-only direct opening balance", () => {
     expect(await ctx.t.run((c) => c.db.query("journalEntries").collect())).toHaveLength(0);
   });
 });
+
+describe("SCRUM-850 — an opening balance cannot be posted over posted ledger activity", () => {
+  const LATE = /posted ledger activity/i;
+
+  // Conservative by design: ANY prior POSTED/REVERSED journal, whatever its
+  // category, refuses a new opening — including a new opening after the
+  // reversal of an old one. No correction route is implemented yet; a finance
+  // owner must review a cutover correction.
+  let bizSeq = 0;
+
+  async function insertBusinessJournal(
+    ctx: Ctx,
+    opts: {
+      status?: "POSTED" | "REVERSED" | "DRAFT";
+      category?: "SYSTEM" | "OPENING_BALANCE";
+      periodId?: Id<"accountingPeriods">;
+      date?: number;
+    } = {}
+  ) {
+    const periodId = opts.periodId ?? (await ctx.asOwner.query(api.accountingPeriods.list, { orgId: ctx.orgId }))[0]._id;
+    bizSeq += 1;
+    return await ctx.t.run((c) =>
+      c.db.insert("journalEntries", {
+        orgId: ctx.orgId,
+        periodId,
+        journalNumber: `BIZ-${bizSeq}`,
+        accountingDate: opts.date ?? Date.now(),
+        sourceType: "sales",
+        sourceId: "sale-1",
+        category: opts.category ?? "SYSTEM",
+        memo: "ordinary business posting",
+        status: opts.status ?? "POSTED",
+        currency: "JOD",
+        postedBy: ctx.userId,
+        postedAt: Date.now(),
+        createdAt: Date.now(),
+      })
+    );
+  }
+
+  function obLines(ctx: Ctx) {
+    return [
+      { accountId: account(ctx, "CASH_ON_HAND")._id, debitMinor: 1_000, creditMinor: 0 },
+      { accountId: account(ctx, "PARTNER_CAPITAL")._id, debitMinor: 0, creditMinor: 1_000 },
+    ];
+  }
+
+  /** Full row contents (not counts) of everything a posting would touch, in a stable order. */
+  async function ledgerRows(ctx: Ctx) {
+    return await ctx.t.run(async (c) => {
+      const byId = <T extends { _id: string }>(rows: T[]) => [...rows].sort((x, y) => x._id.localeCompare(y._id));
+      return {
+        entries: byId(await c.db.query("journalEntries").collect()),
+        lines: byId(await c.db.query("journalLines").collect()),
+        snapshots: byId(await c.db.query("accountBalanceSnapshots").collect()),
+      };
+    });
+  }
+
+  async function postedOpeningJournals(ctx: Ctx) {
+    const entries = await ctx.t.run((c) =>
+      c.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", ctx.orgId)).collect()
+    );
+    return entries.filter((e) => e.category === "OPENING_BALANCE" && e.status === "POSTED");
+  }
+
+  test("a clean org posts an opening journal via the two-person route", async () => {
+    const ctx = await seedCutoverDealer();
+    const d = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
+      orgId: ctx.orgId, expectedCurrency: "JOD", asOfDate: Date.now(), lines: obLines(ctx),
+    });
+    await ctx.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, {
+      orgId: ctx.orgId, draftId: d.draftId as Id<"openingBalanceDrafts">,
+    });
+    expect(await postedOpeningJournals(ctx)).toHaveLength(1);
+  });
+
+  test("a clean org posts an opening journal via the owner-direct route", async () => {
+    const ctx = await seedCutoverDealer();
+    await ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+      orgId: ctx.orgId, expectedCurrency: "JOD", asOfDate: Date.now(), lines: obLines(ctx),
+    });
+    expect(await postedOpeningJournals(ctx)).toHaveLength(1);
+  });
+
+  /** Submit a draft that the preflight must refuse; nothing may be written. */
+  async function expectDraftRefused(ctx: Ctx) {
+    const before = await ledgerRows(ctx);
+    await expect(
+      ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
+        orgId: ctx.orgId, expectedCurrency: "JOD", asOfDate: Date.now(), lines: obLines(ctx),
+      })
+    ).rejects.toThrow(LATE);
+    expect(await ledgerRows(ctx)).toEqual(before);
+    expect(await ctx.t.run((c) => c.db.query("openingBalanceDrafts").collect())).toHaveLength(0);
+  }
+
+  /** Owner-direct post that the guard must refuse; ledger rows must not change. */
+  async function expectDirectRefused(ctx: Ctx) {
+    const before = await ledgerRows(ctx);
+    await expect(
+      ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+        orgId: ctx.orgId, expectedCurrency: "JOD", asOfDate: Date.now(), lines: obLines(ctx),
+      })
+    ).rejects.toThrow(LATE);
+    expect(await ledgerRows(ctx)).toEqual(before);
+  }
+
+  test("a new opening after a REVERSED opening is refused as posted ledger activity", async () => {
+    const ctx = await seedCutoverDealer();
+    // Reversed history only: no POSTED opening, so the duplicate-opening rule
+    // does not fire and both routes reach the ledger-activity guard.
+    await insertBusinessJournal(ctx, { status: "REVERSED", category: "OPENING_BALANCE" });
+    await expectDraftRefused(ctx);
+    await expectDirectRefused(ctx);
+  });
+
+  test("draft submission refuses prior activity in the same open period", async () => {
+    const ctx = await seedCutoverDealer();
+    await insertBusinessJournal(ctx);
+    await expectDraftRefused(ctx);
+  });
+
+  async function openPriorYearPeriod(ctx: Ctx) {
+    const year = new Date().getUTCFullYear() - 1;
+    await ctx.asOwner.mutation(api.accountingPeriods.create, {
+      orgId: ctx.orgId,
+      startDate: Date.UTC(year, 0, 1),
+      endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+      fiscalYear: year, periodNumber: 1,
+    });
+    const other = (await ctx.asOwner.query(api.accountingPeriods.list, { orgId: ctx.orgId })).find(
+      (p) => p.fiscalYear === year
+    )!;
+    await ctx.asOwner.mutation(api.accountingPeriods.open, { orgId: ctx.orgId, periodId: other._id });
+    return { periodId: other._id, date: Date.UTC(year, 5, 1) };
+  }
+
+  for (const status of ["POSTED", "REVERSED"] as const) {
+    test(`draft submission refuses a ${status} entry in a different open period`, async () => {
+      const ctx = await seedCutoverDealer();
+      const { periodId, date } = await openPriorYearPeriod(ctx);
+      await insertBusinessJournal(ctx, { periodId, date, status });
+      await expectDraftRefused(ctx);
+    });
+  }
+
+  test("activity appearing AFTER the draft blocks approval, leaves the ledger untouched and the draft pending", async () => {
+    const ctx = await seedCutoverDealer();
+    const d = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
+      orgId: ctx.orgId, expectedCurrency: "JOD", asOfDate: Date.now(), lines: obLines(ctx),
+    });
+    await insertBusinessJournal(ctx);
+    const before = await ledgerRows(ctx);
+    await expect(
+      ctx.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, {
+        orgId: ctx.orgId, draftId: d.draftId as Id<"openingBalanceDrafts">,
+      })
+    ).rejects.toThrow(LATE);
+    expect(await ledgerRows(ctx)).toEqual(before);
+    const draft = await ctx.t.run((c) => c.db.get(d.draftId as Id<"openingBalanceDrafts">));
+    expect(draft?.status).toBe("PENDING_APPROVAL");
+  });
+
+  test("owner-direct route refuses activity and writes no draft, journal or snapshot", async () => {
+    const ctx = await seedCutoverDealer();
+    await insertBusinessJournal(ctx);
+    await expectDirectRefused(ctx);
+    expect(await ctx.t.run((c) => c.db.query("openingBalanceDrafts").collect())).toHaveLength(0);
+  });
+
+  test("an unposted DRAFT journal is not business activity", async () => {
+    const ctx = await seedCutoverDealer();
+    await insertBusinessJournal(ctx, { status: "DRAFT" });
+    await ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+      orgId: ctx.orgId, expectedCurrency: "JOD", asOfDate: Date.now(), lines: obLines(ctx),
+    });
+    expect(await postedOpeningJournals(ctx)).toHaveLength(1);
+  });
+});

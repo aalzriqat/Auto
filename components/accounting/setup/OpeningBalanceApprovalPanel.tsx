@@ -10,7 +10,8 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/sonner";
-import { errorMessage, scaleForCurrency } from "../AccountingTabShared";
+import { getLocalizedErrorMessage } from "@/lib/errors";
+import { scaleForCurrency } from "../AccountingTabShared";
 import { accountDisplayName } from "../reports/FinancialReportShared";
 
 export type PendingOpeningBalanceLine = {
@@ -508,7 +509,7 @@ export function OpeningBalanceApprovalPanel({
       await action();
       toast.success(t(successKey));
     } catch (error) {
-      toast.error(errorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t));
     } finally {
       setBusy(false);
     }

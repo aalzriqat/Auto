@@ -145,14 +145,38 @@ describe("hasOpeningBalanceCommitment (via draftOpeningBalance) / hasOpeningBala
     const status = await d.asOwner.query(api.accountingCutover.openingBalanceStatus, { orgId: d.orgId });
     expect(status.posted).toBe(false);
 
-    // hasOpeningBalanceCommitment found nothing, so the draft is accepted.
-    const draft = await d.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
-      orgId: d.orgId,
-      lines,
-      asOfDate: Date.UTC(2026, 0, 1),
-      expectedCurrency: "JOD",
-    });
-    expect(draft.draftId).toBeTruthy();
+    // hasOpeningBalanceCommitment found nothing, so the duplicate-opening rule
+    // does not fire. The seeded POSTED/REVERSED non-opening journals are real
+    // ledger activity though (SCRUM-850), so the next guard refuses the draft.
+    await expect(
+      d.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
+        orgId: d.orgId,
+        lines,
+        asOfDate: Date.UTC(2026, 0, 1),
+        expectedCurrency: "JOD",
+      })
+    ).rejects.toThrow(/posted ledger activity/);
+  });
+
+  test("SCRUM-850: both routes throw the stable coded refusal the screens localize", async () => {
+    const d = await seedDealer("c1b");
+    await insertJournal(d.t, { orgId: d.orgId, postedBy: d.userId, category: "SYSTEM", status: "POSTED" });
+    const { lines } = await setUpPostingPrerequisites(d);
+    const args = { orgId: d.orgId, lines, asOfDate: Date.UTC(2026, 0, 1), expectedCurrency: "JOD" };
+    const codeOf = async (attempt: Promise<unknown>) => {
+      try {
+        await attempt;
+      } catch (error) {
+        return (error as { data?: { code?: string } }).data?.code;
+      }
+      return undefined;
+    };
+    expect(await codeOf(d.asOwner.mutation(api.accountingCutover.draftOpeningBalance, args))).toBe(
+      "OPENING_BALANCE_AFTER_LEDGER_ACTIVITY"
+    );
+    expect(await codeOf(d.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, args))).toBe(
+      "OPENING_BALANCE_AFTER_LEDGER_ACTIVITY"
+    );
   });
 
   test("a POSTED OPENING_BALANCE journal after the non-matching ones counts everywhere", async () => {

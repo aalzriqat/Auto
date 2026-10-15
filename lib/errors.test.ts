@@ -281,6 +281,21 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     }
   });
 
+  it("SCRUM-850 opening-balance-after-ledger-activity refusal resolves to Arabic in ar and keeps the server text in en", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const { POSTED_LEDGER_ACTIVITY_MESSAGE: serverText } = await import("../convex/accountingCutover");
+    const { AppErrorCode } = await import("../convex/utils/errors");
+    const error = new ConvexError({ code: AppErrorCode.OPENING_BALANCE_AFTER_LEDGER_ACTIVITY, message: serverText });
+    const arText = getLocalizedErrorMessage(error, ar);
+    expect(arText).toMatch(/[؀-ۿ]/);
+    expect(arText).not.toBe(serverText);
+    expect(getLocalizedErrorMessage(error, en)).toBe(serverText);
+    // Must not point at the Manual Journal flow, which cannot correct system cash/bank accounts.
+    expect(arText).not.toMatch(/قيد يدوي|يومية يدوية/);
+  });
+
   it("SCRUM-650 purchase-cost correction refusals resolve to Arabic in ar and the server text in en", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     const { AppErrorCode } = await import("../convex/utils/errors");

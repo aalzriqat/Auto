@@ -28,7 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "@/convex/utils/money";
-import { errorMessage } from "../AccountingTabShared";
+import { getLocalizedErrorMessage } from "@/lib/errors";
 import { accountDisplayName } from "../reports/FinancialReportShared";
 
 /**
@@ -175,7 +175,7 @@ export function OpeningBalanceCard() {
       setOpen(false);
       resetForm();
     } catch (error) {
-      toast.error(errorMessage(error));
+      toast.error(getLocalizedErrorMessage(error, t));
     } finally {
       setSubmitting(false);
     }
