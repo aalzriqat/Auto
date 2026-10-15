@@ -11,6 +11,7 @@ import {
   approveCreditDecision,
   createFinancedApplication,
   ensureFinanceCompany,
+  ensureOpenAccountingPeriod,
   openDealDetails,
   recordApprovedAmount,
   recordQuotation,
@@ -98,7 +99,6 @@ test.describe("recording a financed deal's economics through the interface", () 
     browser,
   }) => {
     await ensureFinanceCompany(page);
-
     const { model } = await createVehicle(page, {
       model: `E2E-ECON-${testDataSuffix()}`,
       requireImmediate: true,
@@ -173,6 +173,14 @@ test.describe("recording a financed deal's economics through the interface", () 
       const nextStep = managerPage.getByTestId("deal-next-step");
       await expect(nextStep).toContainText("Vehicle handover");
 
+      // The sale is recognised on the handover date, which the server stamps
+      // with its own clock when the handover is confirmed, and it refuses to
+      // close without an open period covering it (RECOGNITION_PERIOD_OPEN).
+      // Opened here, not at the start, so a run crossing a UTC month end cannot
+      // hand over into a month with no open period. Uses the salesperson's page
+      // (the manager's stays on the cockpit).
+      const periodWindow = await ensureOpenAccountingPeriod(page);
+
       await nextStep.getByRole("button", { name: "Register vehicle handover" }).click();
       const handoverDialog = managerPage.getByRole("dialog");
       // The one-way door, stated before it closes. `reopenApproval` refuses once
@@ -185,6 +193,8 @@ test.describe("recording a financed deal's economics through the interface", () 
       await expect(handoverDialog.getByText(/13,000/).first()).toBeVisible();
       await handoverDialog.getByRole("button", { name: "Confirm handover" }).click();
       await expect(handoverDialog).not.toBeVisible();
+      // Fails if the confirmation ran past the window the periods were checked for.
+      periodWindow.assertConfirmedWithinWindow();
 
       // Durable state, not the toast that fades: the rail has moved on, and the
       // block now names the step AFTER handover and offers it.
@@ -251,6 +261,13 @@ test.describe("recording a financed deal's economics through the interface", () 
         "NOT_APPLICABLE",
       );
       await expect(checklist.getByTestId("closing-check-go-LEGAL_INVOICE_RECORDED")).toHaveCount(0);
+
+      // The handover date falls in the open period established above: the
+      // server's guard is satisfied, not bypassed.
+      await expect(checklist.getByTestId("closing-check-RECOGNITION_PERIOD_OPEN")).toHaveAttribute(
+        "data-status",
+        "READY",
+      );
 
       // Closing is the step the rail names.
       await expect(close).toBeVisible();
