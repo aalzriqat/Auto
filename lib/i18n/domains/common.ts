@@ -66,6 +66,11 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   AccountingAdminSections: ["Admin", "الإدارة"],
   // SCRUM-542. The English text must equal FIXED_ASSET_DATE_REFUSALS in convex/fixedAssets.ts.
   DisposalAccountingDateLabel: ["Accounting date", "التاريخ المحاسبي"],
+  // SCRUM-850. The English text must equal POSTED_LEDGER_ACTIVITY_MESSAGE in convex/accountingCutover.ts.
+  ServerError_OPENING_BALANCE_AFTER_LEDGER_ACTIVITY: [
+    "This organization already has posted ledger activity, so an opening balance cannot be posted. The cutover needs finance-owner review.",
+    "لدى هذه المنشأة قيود مرحَّلة في دفتر الأستاذ، لذا لا يمكن ترحيل رصيد افتتاحي. يلزم أن يراجع المسؤول المالي تصحيح أرصدة الانتقال.",
+  ],
   ServerError_ASSET_EVENT_DATE_INVALID: [
     "The accounting date is not a valid date.",
     "التاريخ المحاسبي غير صالح.",
