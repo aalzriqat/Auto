@@ -1010,6 +1010,12 @@ export const commonEn = {
   OpeningBalancePostedToast: "Opening balance posted.",
   OpeningBalanceSubmittedToast: "Opening balance saved for approval.",
   OpeningBalanceSelectAccount: "Select an account",
+  OpeningBalanceBankAccount: "Bank account",
+  OpeningBalanceSelectBank: "Select a bank account",
+  OpeningBalanceNoBankAccounts:
+    "There is no active bank account in this currency. Add one under Bank Accounts first.",
+  OpeningBalanceBankMissing:
+    "A bank line on this draft has no usable bank account selected, so it cannot be posted.",
   TransactionRegister: "Transaction Register",
   TransactionRegisterDesc: "Operational money activity from sales, deposits, collections, and expenses.",
   GLReports: "GL Reports",
@@ -2005,6 +2011,12 @@ export const commonAr = {
   OpeningBalancePostedToast: "تم ترحيل الرصيد الافتتاحي.",
   OpeningBalanceSubmittedToast: "تم حفظ الرصيد الافتتاحي بانتظار الموافقة.",
   OpeningBalanceSelectAccount: "اختر الحساب",
+  OpeningBalanceBankAccount: "الحساب المصرفي",
+  OpeningBalanceSelectBank: "اختر الحساب المصرفي",
+  OpeningBalanceNoBankAccounts:
+    "لا يوجد حساب مصرفي نشط بهذه العملة. أضف حساباً من الحسابات المصرفية أولاً.",
+  OpeningBalanceBankMissing:
+    "أحد بنود البنك في هذه المسودة لا يحدد حساباً مصرفياً صالحاً، لذا لا يمكن ترحيلها.",
   TransactionRegister: "سجل الحركات",
   TransactionRegisterDesc: "حركات مالية تشغيلية من المبيعات والعربون والتحصيلات والمصروفات.",
   GLReports: "تقارير الأستاذ العام",

@@ -1020,6 +1020,10 @@ export default defineSchema({
       debitMinor: v.number(),
       creditMinor: v.number(),
       description: v.optional(v.string()),
+      // SCRUM-54: the physical bank a BANK_ACCOUNT-control line seeds. Required
+      // by the mutations for that account, absent on every other line and on
+      // drafts saved before this field existed (which approval refuses).
+      bankAccountId: v.optional(v.id("bankAccounts")),
     })),
     asOfDate: v.number(),
     memo: v.optional(v.string()),
