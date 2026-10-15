@@ -28,8 +28,9 @@
 import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { registerHandover } from "../test-utils/convexTest";
+import { recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
 import { finalizeAsOwner, seedFinancedDealership } from "../test-utils/financedDealFixture";
+import { deriveSettlementStatus } from "./utils/supplierSettlement";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -145,14 +146,7 @@ async function closeDeal(s: Seeded) {
     orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
   });
   // No legal invoice: under v3 the server derives the consideration (A + R).
-  const feeId = await owner.as.mutation(api.financeDealCosts.recordDealFee, {
-    expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId, applicationId,
-    feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
-    deductedFromSettlement: false, actualAmountMinor: 0, description: "No closing costs.",
-  });
-  await owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
-    orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0,
-  });
+  await recordReconciledZeroCost(owner.as, api, orgId, applicationId);
   // H + D = 2,700, an amount the product must itself agree is due.
   await approver.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
     orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now() - 5_000,
@@ -195,7 +189,10 @@ describe("SCRUM-350 CONS-1 v3: a financed consigned sale approved below its pric
     expect(rows[0]).toMatchObject({
       orgId: s.orgId, vehicleId: s.vehicleId, saleId, amountDue: 15_000, currency: "JOD", sourcedFromName: "Amman Importer Co",
     });
-    expect(["PENDING", "NOT_YET_DUE", "DUE_ON_SALE"]).toContain(rows[0].status);
+    // Sale completion stores PENDING (no due trigger); the settlement status every reader derives from it is
+    // DUE_ON_SALE, because the sale now exists and nothing is paid.
+    expect(rows[0].status).toBe("PENDING");
+    expect(deriveSettlementStatus(rows[0])).toBe("DUE_ON_SALE");
     expect(rows[0].amountPaid ?? 0).toBe(0);
     // The journal's supplier payable is the same 15,000 the subledger holds.
     expect(-net.ACCOUNTS_PAYABLE_SUPPLIERS).toBe(jod(rows[0].amountDue));
