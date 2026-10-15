@@ -131,8 +131,14 @@ describe("SCRUM-350 LIFE-1 real-mutation regression: voiding one of two deposits
     });
 
     const voidedEvents = await asCreator.query(api.accountingLedger.listAccountingEvents, { orgId, sourceType: "deposits", sourceId: String(voidedId) });
-    expect(voidedEvents.find((event) => event.eventType === "DEPOSIT_RECEIVED")?.status).toBe("REVERSED");
-    expect(voidedEvents.filter((event) => event.eventType === "JOURNAL_REVERSAL")).toHaveLength(1);
+    const voidedReceipt = voidedEvents.find((event) => event.eventType === "DEPOSIT_RECEIVED");
+    const voidedReversals = voidedEvents.filter((event) => event.eventType === "JOURNAL_REVERSAL");
+    expect(voidedReceipt?.status).toBe("REVERSED");
+    expect(voidedReversals).toHaveLength(1);
+    // The one reversal is the mirror of THIS deposit's receipt, not merely some reversal.
+    expect(voidedReceipt?._id).toBeDefined();
+    expect(voidedReversals[0]?.reversalOfEventId).toBe(voidedReceipt?._id);
+    expect(voidedReceipt?.reversedByEventId).toBe(voidedReversals[0]?._id);
     const survivorEvents = await asCreator.query(api.accountingLedger.listAccountingEvents, { orgId, sourceType: "deposits", sourceId: String(survivorId) });
     expect(survivorEvents.map((event) => [event.eventType, event.status])).toEqual([["DEPOSIT_RECEIVED", "POSTED"]]);
 
