@@ -243,6 +243,13 @@ test.describe("recording a financed deal's economics through the interface", () 
         "data-status",
         "READY",
       );
+      // No legal invoice is needed: the check is NOT_APPLICABLE (exactly — the
+      // transitional legacy BLOCKED status is not accepted on this branch) and
+      // there is nothing to register.
+      await expect(checklist.getByTestId("closing-check-LEGAL_INVOICE_RECORDED")).toHaveAttribute(
+        "data-status",
+        "NOT_APPLICABLE",
+      );
       await expect(checklist.getByTestId("closing-check-go-LEGAL_INVOICE_RECORDED")).toHaveCount(0);
 
       // Closing is the step the rail names.
