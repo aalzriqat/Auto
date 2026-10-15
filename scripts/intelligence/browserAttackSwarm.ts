@@ -51,9 +51,9 @@ export type BrowserOracleKind =
 /**
  * A handler judges the oracles listed here and no others. A family with a
  * handler is not "executable" for a mission whose oracle the handler does not
- * judge: reporting it so would certify an obligation nothing checks (LIFE-1
- * maps LIFECYCLE_REVERSAL to STATE_TRANSITION, which the ACC-2 reversal
- * handler does not judge).
+ * judge: reporting it so would certify an obligation nothing checks (a forged
+ * LIFECYCLE_REVERSAL mission asking for ECONOMIC_AUTHORITY has a handler, but
+ * that handler judges only REVERSAL_RECONCILIATION and STATE_TRANSITION).
  */
 const PHASE_A_EXECUTABLE_FAMILY_ORACLES: Readonly<
   Record<(typeof PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES)[number], readonly BrowserOracleKind[]>

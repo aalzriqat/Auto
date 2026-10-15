@@ -85,11 +85,13 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
     expect(isBrowserSwarmMissionExecutable("STALE_UI", "UI_BACKEND_AUTHORITY")).toBe(true);
     // The handler judges that oracle for this family only.
     expect(isBrowserSwarmMissionExecutable("STALE_UI", "STATE_TRANSITION")).toBe(false);
-    // LIFE-1 stays refused as a whole: its reversal and navigation missions have no handler that judges them.
+    // LIFE-1 stays refused as a whole: its navigation mission has no handler that judges it.
     expect(() => assertMandatoryBrowserSwarmCoverage([{ id: "LIFE-1", severity: "CRITICAL" }])).toThrow(
-      /LIFECYCLE_REVERSAL.*STATE_TRANSITION.*LIFE-1/,
+      /NAVIGATION_RACE.*LIFE-1/,
     );
+    // Neither the stale-UI mission nor the lifecycle reversal mission is listed missing any more.
     expect(() => assertMandatoryBrowserSwarmCoverage([{ id: "LIFE-1", severity: "CRITICAL" }])).not.toThrow(/STALE_UI/);
+    expect(() => assertMandatoryBrowserSwarmCoverage([{ id: "LIFE-1", severity: "CRITICAL" }])).not.toThrow(/LIFECYCLE_REVERSAL/);
   });
 
   it("refuses a plan that mixes executable and non-executable missions rather than running the executable half", () => {
