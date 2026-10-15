@@ -790,7 +790,7 @@ export async function armReversalOnExpenseScreen(
 }
 
 /** Arms the reversal, then submits it and waits for the dialog to close. */
-async function reverseOnExpenseScreen(page: Page, signal: AbortSignal, expenseId: string, reason: string): Promise<void> {
+export async function reverseOnExpenseScreen(page: Page, signal: AbortSignal, expenseId: string, reason: string): Promise<void> {
   await armReversalOnExpenseScreen(page, signal, expenseId, reason);
   const dialog = page.getByRole("dialog");
   await untilAborted(signal, dialog.getByRole("button", { name: "Reverse & Delete", exact: true }).click(UI_STEP));
