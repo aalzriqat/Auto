@@ -333,6 +333,71 @@ describe("corrections: an amount edit or a void reverses the payment and never r
     expect((await directEvents(seed))[0].status).toBe("REVERSED");
   });
 
+  // SCRUM-350 ACC-3: a new way to spend creates a reversal obligation on the path that un-happens it.
+  test("void takes back ONLY its own payment: one linked mirror reversal, the other paid cost untouched, a retry a no-op", async () => {
+    const seed = await seedDeal("void-pair");
+    const voidedFee = await dealerFee(seed, jod(50));
+    const keptFee = await dealerFee(seed, jod(20));
+    await payDirect(seed, voidedFee);
+    await payDirect(seed, keptFee);
+
+    // Every event whose source is the fee, and the lines of each event's journal, as the ledger holds them.
+    const ledgerOf = async (feeId: Id<"financeDealFees">) =>
+      await seed.t.run(async (ctx) => {
+        const events = (await ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", seed.orgId)).collect())
+          .filter((event) => event.sourceType === "financeDealFees" && event.sourceId === feeId)
+          .sort((left, right) => left._creationTime - right._creationTime);
+        const journals: Record<string, { accountId: string; debitMinor: number; creditMinor: number }[]> = {};
+        for (const event of events) {
+          if (!event.journalEntryId) continue;
+          const lines = await ctx.db
+            .query("journalLines")
+            .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event.journalEntryId!))
+            .collect();
+          journals[event.journalEntryId] = lines
+            .map((l) => ({ accountId: l.accountId as string, debitMinor: l.debitMinor, creditMinor: l.creditMinor }))
+            .sort((left, right) => left.accountId.localeCompare(right.accountId));
+        }
+        return { events, journals };
+      });
+
+    const keptBefore = await ledgerOf(keptFee);
+    const voidedBefore = await ledgerOf(voidedFee);
+    expect(voidedBefore.events.map((event) => `${event.eventType}/${event.status}`)).toEqual(["HANDOVER_COST_PAID_DIRECT/POSTED"]);
+    const [original] = voidedBefore.events;
+
+    await seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId: voidedFee, reason: "paid the wrong cost" });
+    const voidedAfter = await ledgerOf(voidedFee);
+    expect(voidedAfter.events.map((event) => `${event.eventType}/${event.status}`)).toEqual([
+      "HANDOVER_COST_PAID_DIRECT/REVERSED",
+      "JOURNAL_REVERSAL/POSTED",
+    ]);
+    const [reversedOriginal, reversal] = voidedAfter.events;
+    expect(reversal.reversalOfEventId).toBe(original._id);
+    expect(reversedOriginal.reversedByEventId).toBe(reversal._id);
+    // Posted history is untouched, and the reversal is its exact mirror: every line's debit and credit swapped.
+    const originalLines = voidedBefore.journals[original.journalEntryId!];
+    expect(voidedAfter.journals[original.journalEntryId!]).toEqual(originalLines);
+    expect(voidedAfter.journals[reversal.journalEntryId!]).toEqual(
+      originalLines.map((l) => ({ accountId: l.accountId, debitMinor: l.creditMinor, creditMinor: l.debitMinor })),
+    );
+    expect(originalLines.reduce((sum, l) => sum + l.debitMinor, 0)).toBe(jod(50));
+
+    // The other directly paid cost: same events, same journals, still paid on the deal.
+    expect(await ledgerOf(keptFee)).toEqual(keptBefore);
+    const kept = await lineOf(seed, keptFee);
+    expect(kept?.directPayment?.amountMinor).toBe(jod(20));
+    expect(await lineOf(seed, voidedFee)).toBeUndefined();
+    const netAfterVoid = await ledger(seed);
+    expect(expense(netAfterVoid)).toBe(jod(20));
+
+    // A retry (a double click, a lost response) changes neither ledger.
+    await seed.asUser.mutation(api.financeDealCosts.voidDealFee, { orgId: seed.orgId, feeId: voidedFee, reason: "again" });
+    expect(await ledgerOf(voidedFee)).toEqual(voidedAfter);
+    expect(await ledgerOf(keptFee)).toEqual(keptBefore);
+    expect(await ledger(seed)).toEqual(netAfterVoid);
+  });
+
   test("an amount edit reverses the payment, leaves the line unpaid, and posts nothing by itself", async () => {
     const seed = await seedDeal("edit");
     const feeId = await dealerFee(seed, jod(50));

@@ -133,7 +133,7 @@ function staleUiSpec(options: Required<StaleUiAttackOptions>) {
         ),
       );
       detail.expenseId = expenseId;
-      const posted = await readSettledLedger(env, options, expenseId, isPosted);
+      const posted = await readSettledLedger(env, options, expenseId, { until: isPosted });
 
       // The stale action: armed on the page, before the lifecycle moves.
       try {
@@ -165,7 +165,7 @@ function staleUiSpec(options: Required<StaleUiAttackOptions>) {
         );
         return;
       }
-      const reversed = await readSettledLedger(env, options, expenseId, isReversed);
+      const reversed = await readSettledLedger(env, options, expenseId, { until: isReversed });
 
       const offered = await reversalActionOffered(env);
       let screenAnswer: StaleScreenAnswer | null = null;
