@@ -657,7 +657,15 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
     state: "PARTIAL",
     statement:
       "Every posted economic event must produce zero or one semantically correct balanced journal entry; balancing alone is insufficient if wrong accounts or amounts offset each other.",
-    sourceAreas: ["convex/accounting/**", "convex/accounting*.ts", "convex/utils/saleCompletion.ts"],
+    sourceAreas: [
+      "convex/accounting/**",
+      "convex/accounting*.ts",
+      "convex/utils/saleCompletion.ts",
+      // SCRUM-350: the financed owned-stock sale swarm mission (attack, oracle and their tests) judges ECONOMIC_AUTHORITY.
+      "scripts/intelligence/browserSwarmMoneyBoundary*",
+      // The seed steps this scenario shares with the consignment and fee-void scenarios.
+      "scripts/intelligence/browserSwarmSeedHelpers.ts",
+    ],
     profile: profile({
       economicImpact: "DIRECT",
       concurrency: "UNKNOWN",
@@ -812,7 +820,13 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
     state: "PARTIAL",
     statement:
       "A SOURCED or consigned vehicle remains agent-basis rather than dealership-owned inventory, and its sale economics must preserve supplier settlement and dealership margin without inventing ownership or tax treatment.",
-    sourceAreas: ["convex/utils/vehicleOwnership.ts", "convex/utils/financingEconomics.ts", "convex/accounting/**"],
+    sourceAreas: [
+      "convex/utils/vehicleOwnership.ts",
+      "convex/utils/financingEconomics.ts",
+      "convex/accounting/**",
+      // SCRUM-350: the consignment scenario seeds through these steps, shared with the ACC-1 and LIFE-1 scenarios.
+      "scripts/intelligence/browserSwarmSeedHelpers.ts",
+    ],
     profile: profile({
       economicImpact: "DIRECT",
       concurrency: "NOT_APPLICABLE",
@@ -866,7 +880,18 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
     state: "PARTIAL",
     statement:
       "Cancellation, void, return, reopen, or reversal of an economic lifecycle must unwind effects owned by that lifecycle without erasing independent surviving obligations.",
-    sourceAreas: ["convex/sales.ts", "convex/collections.ts", "convex/financeDealCosts.ts", "convex/commitments.ts"],
+    sourceAreas: [
+      "convex/sales.ts",
+      "convex/collections.ts",
+      "convex/financeDealCosts.ts",
+      "convex/commitments.ts",
+      // SCRUM-350: voiding a directly paid deal cost must unwind only that cost's posting (STATE_TRANSITION).
+      "scripts/intelligence/browserSwarmFeeVoid*",
+      // The MONEY_BOUNDARY dispatcher sends STATE_TRANSITION missions to the fee-void scenario (it is also ACC-1's).
+      "scripts/intelligence/browserSwarmMoneyBoundaryAttack.ts",
+      // The seed steps this scenario shares with the consignment and financed-sale scenarios.
+      "scripts/intelligence/browserSwarmSeedHelpers.ts",
+    ],
     profile: profile({
       economicImpact: "DIRECT",
       concurrency: "UNKNOWN",

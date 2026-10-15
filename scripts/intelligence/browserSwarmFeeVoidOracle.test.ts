@@ -3,7 +3,7 @@ import type { LedgerEvent, LedgerLine, LedgerSnapshot } from "./browserSwarmBoun
 import { evaluateDirectFeeVoid, feeVoidAmounts, type FeeLineView, type FeeVoidObservation } from "./browserSwarmFeeVoidOracle";
 
 /**
- * SCRUM-350 ACC-3 — the pure judgement of voiding a directly paid cost.
+ * SCRUM-350 LIFE-1 — the pure judgement of voiding a directly paid cost.
  *
  * Every figure is written out by hand: a 50 cost is voided, a 20 cost stays, in JOD (scale 3), so
  * the payment is 50,000 minor units debiting the ownership-transfer expense and crediting the bank.
@@ -87,7 +87,7 @@ function observation(over: Partial<FeeVoidObservation> = {}): FeeVoidObservation
 
 const verdict = (over: Partial<FeeVoidObservation> = {}) => evaluateDirectFeeVoid(observation(over));
 
-describe("SCRUM-350 ACC-3 fee void oracle: the hand-worked scenario", () => {
+describe("SCRUM-350 LIFE-1 fee void oracle: the hand-worked scenario", () => {
   it("judges a correct void clean: one linked mirror reversal, the line gone, the sibling and a retry untouched", () => {
     expect(verdict()).toEqual({ violations: [], unjudged: [] });
   });
@@ -102,7 +102,7 @@ describe("SCRUM-350 ACC-3 fee void oracle: the hand-worked scenario", () => {
   });
 });
 
-describe("SCRUM-350 ACC-3 fee void oracle: the transition", () => {
+describe("SCRUM-350 LIFE-1 fee void oracle: the transition", () => {
   const withVoided = (afterVoid: LedgerSnapshot, afterRepeat: LedgerSnapshot = afterVoid) => {
     const base = observation();
     return verdict({ voided: { ...base.voided, afterVoid, afterRepeat } });
@@ -170,7 +170,7 @@ describe("SCRUM-350 ACC-3 fee void oracle: the transition", () => {
   });
 });
 
-describe("SCRUM-350 ACC-3 fee void oracle: unrelated obligations and a retry", () => {
+describe("SCRUM-350 LIFE-1 fee void oracle: unrelated obligations and a retry", () => {
   it("FAILS a void that also reverses the other directly paid cost", () => {
     const base = observation();
     const result = verdict({ surviving: { ...base.surviving, afterVoid: taken("b", 20_000), afterRepeat: taken("b", 20_000) } });
@@ -233,7 +233,7 @@ describe("SCRUM-350 ACC-3 fee void oracle: unrelated obligations and a retry", (
   });
 });
 
-describe("SCRUM-350 ACC-3 fee void oracle: the figures helper both callers share", () => {
+describe("SCRUM-350 LIFE-1 fee void oracle: the figures helper both callers share", () => {
   it("returns both amounts in minor units, or one reason for any figures that cannot tell the costs apart", () => {
     expect(feeVoidAmounts({ voidedMajor: 50, survivingMajor: 20 }, "JOD")).toEqual({ ok: true, voidedMinor: 50_000, survivingMinor: 20_000 });
     for (const [figures, currency] of [
@@ -251,7 +251,7 @@ describe("SCRUM-350 ACC-3 fee void oracle: the figures helper both callers share
   });
 });
 
-describe("SCRUM-350 ACC-3 fee void oracle: never a vacuous pass", () => {
+describe("SCRUM-350 LIFE-1 fee void oracle: never a vacuous pass", () => {
   it("is unjudged without a currency, and for figures that cannot tell the two costs apart", () => {
     expect(verdict({ currency: null }).unjudged).toHaveLength(1);
     expect(verdict({ figures: { voidedMajor: 20, survivingMajor: 20 } }).unjudged[0]).toMatch(/not two distinct whole positive amounts in JOD/);

@@ -72,8 +72,8 @@ const PHASE_A_EXECUTABLE_FAMILY_ORACLES: Readonly<
   NETWORK_RECOVERY: ["IDEMPOTENCY_SINGLE_EFFECT", "STATE_TRANSITION"],
   CONSIGNMENT_ECONOMICS: ["ECONOMIC_AUTHORITY"],
   STALE_UI: ["UI_BACKEND_AUTHORITY"],
-  // ACC-1 (a financed sale of owned stock) judges ECONOMIC_AUTHORITY; ACC-3 (voiding a directly paid cost) is a
-  // distinct scenario of the same family that judges STATE_TRANSITION. Only that one path of ACC-3 is covered.
+  // ACC-1 (a financed sale of owned stock) judges ECONOMIC_AUTHORITY; LIFE-1 (voiding a directly paid cost) is a
+  // distinct scenario of the same family that judges STATE_TRANSITION. Only that one LIFE-1 path is covered.
   MONEY_BOUNDARY: ["ECONOMIC_AUTHORITY", "STATE_TRANSITION"],
   NAVIGATION_RACE: ["STATE_TRANSITION"],
 };
@@ -268,13 +268,8 @@ const DETERMINISTIC_MISSIONS: Readonly<
       "BACKEND_STATE",
     ]),
   ],
-  "ACC-3": [
-    template("MONEY_BOUNDARY", "STATE_TRANSITION", 5, [
-      "TRACE",
-      "SCREENSHOT",
-      "BACKEND_STATE",
-    ]),
-  ],
+  // ACC-3 (accounting date and period authority) is deliberately unmapped: no mission judges the posting
+  // date or the closed-period boundary, so planning it throws instead of certifying an unchecked invariant.
   "CONS-1": [
     template("CONSIGNMENT_ECONOMICS", "ECONOMIC_AUTHORITY", 6, [
       "TRACE",
@@ -294,6 +289,12 @@ const DETERMINISTIC_MISSIONS: Readonly<
       "BACKEND_STATE",
     ]),
     template("STALE_UI", "UI_BACKEND_AUTHORITY", 4, [
+      "TRACE",
+      "SCREENSHOT",
+      "BACKEND_STATE",
+    ]),
+    // Voiding a directly paid deal cost: one linked reversal, the sibling cost untouched.
+    template("MONEY_BOUNDARY", "STATE_TRANSITION", 5, [
       "TRACE",
       "SCREENSHOT",
       "BACKEND_STATE",
@@ -334,6 +335,14 @@ const DETERMINISTIC_MISSIONS: Readonly<
 export const SUPPORTED_BROWSER_SWARM_INVARIANT_IDS = Object.freeze(
   Object.keys(DETERMINISTIC_MISSIONS).sort((left, right) => left.localeCompare(right)),
 );
+
+/**
+ * Active invariants no browser mission judges. Planning one throws, so a change that impacts it refuses the
+ * swarm rather than passing it. Removing an entry requires a mission whose oracle really judges the invariant.
+ */
+export const UNSUPPORTED_BROWSER_SWARM_INVARIANTS: Readonly<Record<string, string>> = Object.freeze({
+  "ACC-3": "no browser oracle judges the declared accounting date or the closed-period boundary",
+});
 
 const JEV_DEFAULT_ORACLE: Readonly<Record<BrowserAttackFamily, BrowserOracleKind>> = {
   TENANT_ESCAPE: "TENANT_ISOLATION",

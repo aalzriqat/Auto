@@ -705,7 +705,7 @@ describe("SCRUM-350 MONEY_BOUNDARY handler: mission contract", () => {
   });
 
   it("refuses a mission for an oracle it does not judge, before touching the backend", async () => {
-    // STATE_TRANSITION is judged by the ACC-3 fee-void scenario (browserSwarmFeeVoidHandler.test.ts), not by this one.
+    // STATE_TRANSITION is judged by the LIFE-1 fee-void scenario (browserSwarmFeeVoidHandler.test.ts), not by this one.
     const h = harness({}, { oracle: "UI_BACKEND_AUTHORITY" });
     await expect(h.run()).rejects.toThrow(/does not judge the UI_BACKEND_AUTHORITY oracle/);
     expect(h.world.calls).toEqual([]);
