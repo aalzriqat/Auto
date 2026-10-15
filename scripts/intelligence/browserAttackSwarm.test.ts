@@ -249,9 +249,9 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
   });
 
   it("fails before manifest creation when Phase A has no executable handler", () => {
-    // ACC-3's MONEY_BOUNDARY mission is judged by STATE_TRANSITION, which the ACC-1 handler does not judge.
+    // LIFE-1's LIFECYCLE_REVERSAL mission is judged by STATE_TRANSITION, which the ACC-2 handler does not judge.
     const plan = planBrowserAttackSwarm({
-      impactedInvariants: [{ id: "ACC-3", severity: "CRITICAL" }],
+      impactedInvariants: [{ id: "LIFE-1", severity: "CRITICAL" }],
     });
 
     expect(PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES).toEqual([
@@ -276,7 +276,7 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
         previewName: "e2e-pr-350-abcdef1234",
         expectedCloudUrl: "https://example-preview.convex.cloud",
       }),
-    ).toThrow(/no executable handler.*MONEY_BOUNDARY/i);
+    ).toThrow(/no executable handler.*LIFECYCLE_REVERSAL/i);
   });
 
   it("refuses ambiguous or non-preview swarm targets before browser execution", () => {

@@ -30,7 +30,6 @@
  * customer receivable subledger rows, and cancellation or reversal. The records the run
  * creates stay in the disposable preview; a finalized deal is posted financial history.
  */
-import { createHash } from "node:crypto";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import type { BrowserAttackHandlerRegistry } from "./browserAttackSwarmExecutor";
@@ -50,6 +49,8 @@ import {
   type MissionTiming,
 } from "./browserSwarmConsignmentAttack";
 import { untilAborted, type MissionBrowserRuntime } from "./browserSwarmEconomicAttacks";
+import { feeVoidSpec } from "./browserSwarmFeeVoidAttack";
+import { chartKeysById, syntheticVin } from "./browserSwarmSeedHelpers";
 import {
   MONEY_BOUNDARY_FIGURES,
   buildMoneyBoundaryScenario,
@@ -63,11 +64,6 @@ import {
 export interface MoneyBoundaryAttackOptions extends Omit<ConsignmentAttackOptions, "figures"> {
   /** Replaces parts of the scenario's figures (major units); tests use it to build a scenario that cannot discriminate. */
   figures?: Partial<MoneyBoundaryFigures>;
-}
-
-/** 17 uppercase characters, unique to the run, free of the letters a VIN forbids. */
-function syntheticVin(nonce: string): string {
-  return "MNYB1" + createHash("sha256").update(nonce).digest("hex").slice(0, 12).toUpperCase();
 }
 
 function moneyBoundarySpec(options: MissionTiming, figures: Readonly<MoneyBoundaryFigures>) {
@@ -169,7 +165,7 @@ function moneyBoundarySpec(options: MissionTiming, figures: Readonly<MoneyBounda
       const vehicleId = await command(() =>
         client.mutation(api.vehicles.create, {
           orgId: org,
-          vin: syntheticVin(nonce),
+          vin: syntheticVin("MNYB1", nonce),
           make: "Toyota",
           model: "Camry-acc1",
           year: 2022,
@@ -370,12 +366,7 @@ function moneyBoundarySpec(options: MissionTiming, figures: Readonly<MoneyBounda
       }
 
       const chart = asArray(await command(() => client.query(api.chartOfAccounts.list, { orgId: org })), "chartOfAccounts.list");
-      const keyOf = new Map<string, string>();
-      for (const account of chart) {
-        if (!isRecord(account) || typeof account._id !== "string") continue;
-        const key = typeof account.systemKey === "string" ? account.systemKey : typeof account.code === "string" ? account.code : null;
-        if (key !== null) keyOf.set(account._id, key);
-      }
+      const keyOf = chartKeysById(chart);
       // Every read, including one that throws, leaves what it read (events, journals, account ids) in the evidence.
       const ledger = await readSettledSaleLedger(env, options, saleId, keyOf);
       const completed = ledger.events.filter((event) => isSaleCompleted(event, "POSTED"));
@@ -404,6 +395,11 @@ export function createMoneyBoundaryAttackHandlers(
   };
   const figures: MoneyBoundaryFigures = { ...MONEY_BOUNDARY_FIGURES, ...overrides.figures };
   return {
-    MONEY_BOUNDARY: (context) => runBoundaryMission(runtimeApi, context, moneyBoundarySpec(options, figures)),
+    // ACC-3 asks the same family to be judged by STATE_TRANSITION: a distinct scenario (a directly paid cost is
+    // voided) with its own oracle. Any other oracle reaches the ACC-1 spec, which refuses it.
+    MONEY_BOUNDARY: (context) => {
+      const spec = context.mission.oracle === "STATE_TRANSITION" ? feeVoidSpec(options) : moneyBoundarySpec(options, figures);
+      return runBoundaryMission(runtimeApi, context, spec);
+    },
   };
 }
