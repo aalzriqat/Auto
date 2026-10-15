@@ -11,6 +11,7 @@ import {
   approveCreditDecision,
   createFinancedApplication,
   ensureFinanceCompany,
+  ensureOpenAccountingPeriod,
   openDealDetails,
   recordApprovedAmount,
   recordQuotation,
@@ -98,6 +99,9 @@ test.describe("recording a financed deal's economics through the interface", () 
     browser,
   }) => {
     await ensureFinanceCompany(page);
+    // The sale is recognised on the handover date, and the server refuses to
+    // close without an open period covering it (RECOGNITION_PERIOD_OPEN).
+    await ensureOpenAccountingPeriod(page);
 
     const { model } = await createVehicle(page, {
       model: `E2E-ECON-${testDataSuffix()}`,
@@ -251,6 +255,13 @@ test.describe("recording a financed deal's economics through the interface", () 
         "NOT_APPLICABLE",
       );
       await expect(checklist.getByTestId("closing-check-go-LEGAL_INVOICE_RECORDED")).toHaveCount(0);
+
+      // The handover date falls in the open period established above: the
+      // server's guard is satisfied, not bypassed.
+      await expect(checklist.getByTestId("closing-check-RECOGNITION_PERIOD_OPEN")).toHaveAttribute(
+        "data-status",
+        "READY",
+      );
 
       // Closing is the step the rail names.
       await expect(close).toBeVisible();

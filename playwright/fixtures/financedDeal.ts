@@ -7,8 +7,10 @@ import {
   createCustomer,
   createVehicle,
   gotoOrgRoute,
+  resolveOrgId,
   testDataSuffix,
 } from "../utils";
+import { utcMonthPeriod } from "./utcMonthPeriod";
 
 /**
  * Building a financed deal through the interface — the steps, without the
@@ -489,4 +491,66 @@ export async function openDealDetails(page: Page): Promise<void> {
     await toggle.click();
   }
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
+}
+
+/**
+ * An OPEN accounting period covering today, established through the Accounting
+ * settings screen.
+ *
+ * Closing a financed deal recognises the sale on the handover date, and the
+ * server refuses (RECOGNITION_PERIOD_OPEN) when no open period covers it. A
+ * fresh dealership has none, so the deal cannot close until an operator opens
+ * one — the product's rule, not weakened here. The handover is registered
+ * today, so the period must cover today.
+ *
+ * Idempotent and non-destructive: when the screen already reports an open
+ * period covering today nothing is touched. Otherwise the current UTC month is
+ * created and opened immediately. A period that exists for that month but is
+ * not open (FUTURE/CLOSED) is refused by the server; that surfaces as a failure
+ * here rather than being reopened, locked or deleted behind the operator's back.
+ */
+export async function ensureOpenAccountingPeriod(page: Page): Promise<void> {
+  // gotoOrgRoute matches on the bare pathname, so the section deep link is
+  // navigated to directly.
+  const orgId = await resolveOrgId(page);
+  await page.goto(`/${orgId}/accounting?section=settings`);
+  await dismissOverlays(page);
+
+  const openPeriod = page.getByText(/^Open period:/);
+  const noOpenPeriod = page.getByText("No open period covers today.");
+  await expect(openPeriod.or(noOpenPeriod).first()).toBeVisible({ timeout: 30_000 });
+  if (await openPeriod.count()) return;
+
+  const create = page.getByRole("button", { name: "Create period", exact: true });
+  await expect(
+    create,
+    "Creating an accounting period needs the finance-management permission; this identity cannot reach the screen that does it.",
+  ).toBeEnabled();
+  await create.click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("Create Accounting Period");
+
+  // The current UTC month, not the dialog's full-year default (which would
+  // overlap another month's period in a shared org). The dialog's labels are
+  // not associated with their inputs, so each field is the input that follows
+  // its label.
+  const period = utcMonthPeriod(new Date());
+  const field = (label: string) =>
+    dialog.locator(`xpath=.//label[normalize-space()="${label}"]/following-sibling::input`);
+  await field("Fiscal year").fill(period.fiscalYear);
+  await field("Period number").fill(period.periodNumber);
+  await field("Start Date").fill(period.startDate);
+  await field("End Date").fill(period.endDate);
+  await expect(dialog.getByRole("checkbox")).toBeChecked();
+  await dialog.getByRole("button", { name: "Create period", exact: true }).click();
+
+  // Durable state, not the toast: the dialog closes only on success, and the
+  // status card then names the open period. A dialog that stays open means the
+  // create did not succeed (for example a server refusal) — nothing is reopened
+  // or removed to get past it.
+  await expect(
+    dialog,
+    `Creating accounting period ${period.fiscalYear}-${period.periodNumber} did not succeed: the dialog stayed open. This spec does not reopen, lock or delete periods.`,
+  ).not.toBeVisible();
+  await expect(openPeriod.first()).toBeVisible();
 }
