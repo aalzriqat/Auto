@@ -212,7 +212,20 @@ function moneyBoundarySpec(options: MissionTiming, figures: Readonly<MoneyBounda
           }),
         `the product refused to reconcile the dealership-paid admin fee of ${expectation.adminFeeMinor}`,
       );
-      // Read the fee back: an accepted command is not proof the stored line is the dealership-paid, reconciled 300
+      // The dealership really paid the fee: the finance guard refuses the forward while a dealership-paid cost has no recorded payment.
+      await refusalIsInconclusive(
+        () =>
+          client.mutation(api.financeDealCosts.recordDirectFeePayment, {
+            orgId: org,
+            feeId,
+            method: "BANK_TRANSFER",
+            paidAt: Date.now() - PAID_AT_SKEW_MS,
+            expectedAmountMinor: expectation.adminFeeMinor,
+            idempotencyKey: `${nonce}-admin-fee-pay`,
+          }),
+        `the product refused the direct payment of the dealership-paid admin fee of ${expectation.adminFeeMinor}`,
+      );
+      // Read the fee back: an accepted command is not proof the stored line is the dealership-paid, reconciled, paid 300
       // that the posting below is judged against.
       const costs: unknown = await command(() => client.query(api.financeDealCosts.listDealCosts, { orgId: org, applicationId }));
       const fees = isRecord(costs) ? asArray(costs.fees, "listDealCosts.fees") : [];
@@ -226,7 +239,8 @@ function moneyBoundarySpec(options: MissionTiming, figures: Readonly<MoneyBounda
         storedFee.actualAmountMinor === expectation.adminFeeMinor &&
         storedFee.paidBy === "DEALER" &&
         storedFee.deductedFromSettlement === false &&
-        storedFee.status === "RECONCILED";
+        storedFee.status === "RECONCILED" &&
+        storedFee.handoverPayment === "PAID_DIRECT";
       if (!feeReadBack) {
         env.unjudged(
           `the stored admin fee is not exactly one reconciled, dealership-paid ${expectation.adminFeeMinor} ${currency} line outside the settlement for this application (${fees.length} fee line(s) read back), so the posting is not judged against this scenario`,
