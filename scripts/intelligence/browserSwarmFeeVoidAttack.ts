@@ -139,6 +139,8 @@ export function feeVoidSpec(options: MissionTiming, figures: Readonly<FeeVoidFig
           sellingPrice: 20_000,
           sourceType: "STOCK",
           purchasePrice: 15_000,
+          // A priced owned car needs a declared payment method. Paid outright, so not ON_ACCOUNT (no supplier payable).
+          purchasePaymentMethod: "BANK_TRANSFER",
           status: "AVAILABLE",
           idempotencyKey: `${nonce}-vehicle`,
         }),

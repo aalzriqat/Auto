@@ -510,6 +510,10 @@ describe("SCRUM-350 MONEY_BOUNDARY handler: the discriminating scenario", () => 
     const create = h.world.argsOf.find((entry) => entry.name === "vehicles:create");
     expect(create?.args).toMatchObject({ sourceType: "STOCK", purchasePrice: 15_000, sellingPrice: 20_000 });
     expect(create?.args).not.toHaveProperty("sourceCost");
+    // A positive purchase price posts an acquisition, which the product refuses without a declared method. The dealership paid its
+    // own supplier outright (bank transfer): not ON_ACCOUNT, which would add a supplier payable this scenario does not judge.
+    expect(create?.args).toMatchObject({ purchasePaymentMethod: "BANK_TRANSFER" });
+    expect(create?.args).not.toHaveProperty("purchaseSupplierName");
     expect(h.world.calls.filter((call) => /setSupplierSettlementRoute/.test(call))).toEqual([]);
     const fee = h.world.argsOf.find((entry) => entry.name === "financeDealCosts:recordDealFee");
     expect(fee?.args).toMatchObject({ deductedFromSettlement: false, actualAmountMinor: 300_000, paidBy: "DEALER", expectedCurrency: "JOD" });

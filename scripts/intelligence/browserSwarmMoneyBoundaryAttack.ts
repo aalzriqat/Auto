@@ -151,6 +151,9 @@ function moneyBoundarySpec(options: MissionTiming, figures: Readonly<MoneyBounda
           sourceType: "STOCK",
           // The dealership's own purchase price: the car is its stock, and its cost leaves inventory at the sale.
           purchasePrice: figures.costMajor,
+          // A positive purchase price posts an acquisition, which the product refuses without a declared method. Paid outright, so
+          // not ON_ACCOUNT (that would add a supplier payable this scenario does not judge).
+          purchasePaymentMethod: "BANK_TRANSFER",
           status: "AVAILABLE",
           idempotencyKey: `${nonce}-vehicle`,
         }),
