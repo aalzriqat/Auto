@@ -93,8 +93,10 @@ interface Faults {
   forwardRefused?: boolean;
   /** The product refuses to record the admin fee. */
   feeRefused?: boolean;
+  /** The product refuses the direct payment of the admin fee. */
+  feePaymentRefused?: boolean;
   /** The fee list reads back something other than one reconciled dealership-paid fee line. */
-  feeReadback?: "wrongAmount" | "twoLines" | "deducted" | "notReconciled" | "otherApplication" | "empty";
+  feeReadback?: "wrongAmount" | "twoLines" | "deducted" | "notReconciled" | "otherApplication" | "empty" | "unpaid";
   /** finalizeDeal answers with a sale of another organization. */
   saleOtherOrg?: boolean;
   /** The product refuses to reconcile the admin fee. */
@@ -140,6 +142,7 @@ class World {
   private gapResolved = false;
   private handedOver = false;
   private forwarded = false;
+  private feePaid = false;
   private depositHeld = false;
   private readonly seeded = { vehicle: "", customer: "", application: "" };
 
@@ -295,6 +298,21 @@ class World {
         if (this.faults.feeReconcileRefused) throw new ConvexError("The fee has changed since it was reviewed.");
         if (a.expectedActualAmountMinor !== plan.adminFee) throw new ConvexError("reconciled amount is not the fee's");
         return null;
+      case "financeDealCosts:recordDirectFeePayment":
+        if (this.faults.feePaymentRefused) throw new ConvexError("This cost cannot be paid directly.");
+        if (
+          actor !== "owner" ||
+          a.feeId !== this.feeId ||
+          a.method !== "BANK_TRANSFER" ||
+          a.expectedAmountMinor !== plan.adminFee ||
+          typeof a.paidAt !== "number" ||
+          a.paidAt > Date.now() ||
+          typeof a.idempotencyKey !== "string"
+        ) {
+          throw new ConvexError("the payment is not the dealership's 300 admin fee by bank transfer");
+        }
+        this.feePaid = true;
+        return null;
       case "financeDealCosts:listDealCosts": {
         const mode = this.faults.feeReadback;
         if (mode === "empty") return { fees: [] };
@@ -306,12 +324,15 @@ class World {
           paidBy: "DEALER",
           deductedFromSettlement: mode === "deducted",
           status: mode === "notReconciled" ? "ACTUAL_RECORDED" : "RECONCILED",
+          handoverPayment: this.feePaid && mode !== "unpaid" ? "PAID_DIRECT" : "UNPAID",
         };
         return { fees: mode === "twoLines" ? [fee, { ...fee, _id: "fee-extra" }] : [fee] };
       }
       case "financeCompanyForward:recordFinanceCompanyForward":
         if (actor !== "manager") throw new ConvexError("the forward is paid by the approver seat");
         if (!this.handedOver) throw new ConvexError("the forward needs a handover first");
+        // The product's own guard: a dealership-paid cost with no recorded payment blocks the forward.
+        if (!this.feePaid) throw new ConvexError("A dealership-paid cost has no recorded payment, so the forward is refused.");
         if (typeof a.paidAt !== "number" || a.paidAt > Date.now()) throw new ConvexError("paidAt is in the future");
         if (this.faults.forwardRefused || a.expectedAmountMinor !== plan.forward) {
           throw new ConvexError("The amount due to the finance company has changed.");
@@ -529,6 +550,7 @@ describe("SCRUM-350 MONEY_BOUNDARY handler: the discriminating scenario", () => 
       "owner:applications:registerVehicleHandover",
       "owner:financeDealCosts:recordDealFee",
       "owner:financeDealCosts:reconcileDealFee",
+      "owner:financeDealCosts:recordDirectFeePayment",
       "manager:financeCompanyForward:recordFinanceCompanyForward",
       "owner:applications:finalizeDeal",
     ].map((call) => h.world.calls.indexOf(call));
@@ -620,6 +642,23 @@ describe("SCRUM-350 MONEY_BOUNDARY handler: product answers that disagree with t
     expect(h.world.calls).not.toContain("owner:applications:finalizeDeal");
   });
 
+  it("records the dealership's direct admin-fee payment before the forward, so the judged scenario reaches its money oracle", async () => {
+    const h = harness();
+    const result = await h.run();
+    expect(result.oracle.passed).toBe(true);
+    const pay = h.world.argsOf.find((entry) => entry.name === "financeDealCosts:recordDirectFeePayment");
+    expect(pay?.args).toMatchObject({ method: "BANK_TRANSFER", expectedAmountMinor: 300_000 });
+    // The money oracle ran: the judged sale reached a verdict with its ledger read in full, not merely no throw.
+    expect(h.world.calls).toContain("owner:applications:finalizeDeal");
+    expect(h.evidence[0]).toMatchObject({ ledger: { complete: true }, violations: [] });
+  });
+
+  it("is INCONCLUSIVE, and never forwards, when the product refuses the direct payment of the admin fee", async () => {
+    const h = await inconclusive({ feePaymentRefused: true }, /refused the direct payment of the dealership-paid admin fee of 300000: This cost cannot be paid directly/);
+    expect(h.world.calls).not.toContain("manager:financeCompanyForward:recordFinanceCompanyForward");
+    expect(h.world.calls).not.toContain("owner:applications:finalizeDeal");
+  });
+
   it("is INCONCLUSIVE when the product serves no economics stamp for the gap agreement", async () => {
     await inconclusive({ noGapStamp: true }, /no economics stamp for the gap agreement/);
   });
@@ -638,7 +677,7 @@ describe("SCRUM-350 MONEY_BOUNDARY handler: product answers that disagree with t
   });
 
   it("is unjudged, and never finalizes, when the stored fee is not exactly one reconciled dealership-paid admin fee", async () => {
-    for (const feeReadback of ["wrongAmount", "twoLines", "deducted", "notReconciled", "otherApplication", "empty"] as const) {
+    for (const feeReadback of ["wrongAmount", "twoLines", "deducted", "notReconciled", "otherApplication", "empty", "unpaid"] as const) {
       const h = await inconclusive({ feeReadback }, /stored admin fee is not exactly one reconciled, dealership-paid 300000 JOD line/);
       expect(h.world.calls).not.toContain("manager:financeCompanyForward:recordFinanceCompanyForward");
       expect(h.world.calls).not.toContain("owner:applications:finalizeDeal");
