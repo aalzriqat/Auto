@@ -360,8 +360,43 @@ export function expectationProblem(expectation: ConsignmentExpectation): string 
   return null;
 }
 
-function unjudgedOnly(reason: string): Judgement {
+export function unjudgedOnly(reason: string): Judgement {
   return { violations: [], unjudged: [reason] };
+}
+
+/**
+ * What is wrong with the lines themselves, before any account is judged: a line in
+ * another currency or scale, an amount that is not a nonnegative safe integer, a line
+ * with both a debit and a credit, and an entry that does not balance.
+ */
+export function lineStructureViolations(currency: string, lines: readonly ConsignmentLine[]): string[] {
+  const decimals = currencyDecimals(currency);
+  const violations: string[] = [];
+  for (const line of lines) {
+    if (line.currency !== currency || line.scale !== decimals) {
+      violations.push(`a ${line.key} line is denominated ${line.currency} at scale ${line.scale}, not ${currency} at scale ${decimals}`);
+    }
+    if (!isWholeMinor(line.debitMinor) || !isWholeMinor(line.creditMinor)) {
+      violations.push(
+        `a ${line.key} line has an amount (debit ${line.debitMinor}, credit ${line.creditMinor}) that is not a nonnegative safe integer`,
+      );
+    } else if (line.debitMinor !== 0 && line.creditMinor !== 0) {
+      violations.push(`a ${line.key} line carries both a debit and a credit (${line.debitMinor} / ${line.creditMinor})`);
+    }
+  }
+  for (const [entryId, totals] of totalsBy(lines, (line) => line.entryId ?? "")) {
+    if (totals.debit !== totals.credit) {
+      violations.push(
+        `${entryId === "" ? "journal" : `journal ${entryId}`} does not balance: debits ${totals.debit}, credits ${totals.credit}`,
+      );
+    }
+  }
+  return violations;
+}
+
+/** Sum of debits and of credits per account key. */
+export function totalsByAccount(lines: readonly ConsignmentLine[]): Map<string, { debit: number; credit: number }> {
+  return totalsBy(lines, (line) => line.key);
 }
 
 /**
@@ -378,33 +413,10 @@ export function evaluateConsignmentEconomics(
   if (lines.length === 0) {
     return unjudgedOnly("the sale's posting was not read: no journal line to judge");
   }
-  const decimals = currencyDecimals(expectation.currency);
   const deposit = expectation.depositForwardMinor ?? 0;
   const gap = expectation.customerGapMinor ?? 0;
 
-  const violations: string[] = [];
-  for (const line of lines) {
-    if (line.currency !== expectation.currency || line.scale !== decimals) {
-      violations.push(
-        `a ${line.key} line is denominated ${line.currency} at scale ${line.scale}, not ${expectation.currency} at scale ${decimals}`,
-      );
-    }
-    if (!isWholeMinor(line.debitMinor) || !isWholeMinor(line.creditMinor)) {
-      violations.push(
-        `a ${line.key} line has an amount (debit ${line.debitMinor}, credit ${line.creditMinor}) that is not a nonnegative safe integer`,
-      );
-    } else if (line.debitMinor !== 0 && line.creditMinor !== 0) {
-      violations.push(`a ${line.key} line carries both a debit and a credit (${line.debitMinor} / ${line.creditMinor})`);
-    }
-  }
-
-  for (const [entryId, totals] of totalsBy(lines, (line) => line.entryId ?? "")) {
-    if (totals.debit !== totals.credit) {
-      violations.push(
-        `${entryId === "" ? "journal" : `journal ${entryId}`} does not balance: debits ${totals.debit}, credits ${totals.credit}`,
-      );
-    }
-  }
+  const violations = lineStructureViolations(expectation.currency, lines);
 
   const byAccount = totalsBy(lines, (line) => line.key);
   /** One account's totals and its net on each side; zero for an account the posting never touched. */

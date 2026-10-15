@@ -249,8 +249,9 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
   });
 
   it("fails before manifest creation when Phase A has no executable handler", () => {
+    // ACC-3's MONEY_BOUNDARY mission is judged by STATE_TRANSITION, which the ACC-1 handler does not judge.
     const plan = planBrowserAttackSwarm({
-      impactedInvariants: [{ id: "ACC-1", severity: "CRITICAL" }],
+      impactedInvariants: [{ id: "ACC-3", severity: "CRITICAL" }],
     });
 
     expect(PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES).toEqual([
@@ -265,6 +266,7 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
       "NETWORK_RECOVERY",
       "CONSIGNMENT_ECONOMICS",
       "STALE_UI",
+      "MONEY_BOUNDARY",
     ]);
     expect(() =>
       buildBrowserSwarmRunManifest({
