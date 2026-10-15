@@ -45,8 +45,18 @@ type Scenario = {
   languageButtonVisible: boolean;
   initialLanguageButton: "en" | "ar";
   addCustomerVisible: boolean;
+  // The Add Customer control only renders this long after /customers loads
+  // (the app shows "Loading your workspace..." until then). Absent = instant.
+  addCustomerVisibleAfterMs?: number;
   dialogVisible: boolean;
-  searchVisibleAfterReload: boolean;
+  // After page.reload() the search control only renders this long later.
+  // Absent = instant.
+  reloadVisibleAfterMs?: number;
+  // After the search is typed, the customer result only renders this long
+  // later. Absent = instant.
+  resultVisibleAfterMs?: number;
+  searchControlVisible: boolean;
+  resultVisibleAfterReload: boolean;
   backendOwnsOrg: boolean;
   backendCustomerMatches: number;
   backendQueryError?: Error;
@@ -65,7 +75,8 @@ function defaultScenario(overrides: Partial<Scenario> = {}): Scenario {
     initialLanguageButton: "en",
     addCustomerVisible: true,
     dialogVisible: true,
-    searchVisibleAfterReload: true,
+    searchControlVisible: true,
+    resultVisibleAfterReload: true,
     backendOwnsOrg: true,
     backendCustomerMatches: 1,
     ...overrides,
@@ -143,8 +154,27 @@ function makeBrowserFixture(
     }),
   };
 
+  // Real Playwright: isVisible() answers for this instant and ignores any
+  // timeout; waitFor() is what waits, and rejects with a TimeoutError.
+  let controlRevealed = scenario.addCustomerVisibleAfterMs === undefined;
+  let reloadRevealed = true;
+  let resultRevealed = true;
+  // A finite stand-in for the real timeout: 20 polls x 5ms = 100ms.
+  const waitUntilVisible = async (visible: () => boolean) => {
+    for (let poll = 0; poll < 20; poll += 1) {
+      if (visible()) return undefined;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const error = new Error("locator.waitFor: Timeout exceeded.");
+    error.name = "TimeoutError";
+    throw error;
+  };
+
   const addCustomerButton = {
-    isVisible: vi.fn(async () => scenario.addCustomerVisible),
+    isVisible: vi.fn(async () => scenario.addCustomerVisible && controlRevealed),
+    waitFor: vi.fn(async () =>
+      waitUntilVisible(() => scenario.addCustomerVisible && controlRevealed),
+    ),
     click: vi.fn(async () => {
       state.dialogOpened = true;
     }),
@@ -160,6 +190,9 @@ function makeBrowserFixture(
     isVisible: vi.fn(
       async () => state.dialogOpened && scenario.dialogVisible,
     ),
+    waitFor: vi.fn(async () =>
+      waitUntilVisible(() => state.dialogOpened && scenario.dialogVisible),
+    ),
     getByLabel: vi.fn((label: string) => {
       if (label === "First Name") return field("firstName");
       if (label === "Last Name") return field("lastName");
@@ -174,9 +207,19 @@ function makeBrowserFixture(
   };
 
   const searchInput = {
-    isVisible: vi.fn(async () => true),
+    isVisible: vi.fn(async () => reloadRevealed && scenario.searchControlVisible),
+    waitFor: vi.fn(async () =>
+      waitUntilVisible(() => reloadRevealed && scenario.searchControlVisible),
+    ),
     fill: vi.fn(async (value: string) => {
       state.search = value;
+      const delay = scenario.resultVisibleAfterMs;
+      if (delay !== undefined) {
+        resultRevealed = false;
+        setTimeout(() => {
+          resultRevealed = true;
+        }, delay);
+      }
     }),
   };
 
@@ -211,6 +254,13 @@ function makeBrowserFixture(
           "http://127.0.0.1:3000/" + scenario.orgId + "/dashboard";
       } else {
         state.currentUrl = "http://127.0.0.1:3000" + url;
+        const delay = scenario.addCustomerVisibleAfterMs;
+        if (url.endsWith("/customers") && delay !== undefined) {
+          controlRevealed = false;
+          setTimeout(() => {
+            controlRevealed = true;
+          }, delay);
+        }
       }
     }),
     waitForURL: vi.fn(
@@ -219,13 +269,14 @@ function makeBrowserFixture(
         // Resolve as soon as the current URL (now or after a later redirect)
         // matches. With no redirect left to wait for and no match, the real
         // 20s timeout is what would fire; model it as an immediate rejection.
-        for (;;) {
+        // The loop is bounded well below Vitest's per-test timeout instead:
+        // 200 polls x 5ms = 1s, still far longer than any modeled redirect.
+        for (let poll = 0; poll < 200; poll += 1) {
           if (urlMatches(matcher, state.currentUrl)) return undefined;
-          if (pendingRedirects === 0) {
-            throw new Error("page.waitForURL: Timeout 20000ms exceeded.");
-          }
+          if (pendingRedirects === 0) break;
           await new Promise((resolve) => setTimeout(resolve, 5));
         }
+        throw new Error("page.waitForURL: Timeout 20000ms exceeded.");
       },
     ),
     url: vi.fn(() => state.currentUrl),
@@ -259,17 +310,28 @@ function makeBrowserFixture(
         first: vi.fn(() => searchInput),
       };
     }),
-    reload: vi.fn(async () => undefined),
-    getByText: vi.fn(() => ({
-      first: vi.fn(() => ({
-        isVisible: vi.fn(
-          async () =>
-            scenario.searchVisibleAfterReload &&
-            state.submitted &&
-            state.search === state.email,
-        ),
-      })),
-    })),
+    reload: vi.fn(async () => {
+      const delay = scenario.reloadVisibleAfterMs;
+      if (delay !== undefined) {
+        reloadRevealed = false;
+        setTimeout(() => {
+          reloadRevealed = true;
+        }, delay);
+      }
+    }),
+    getByText: vi.fn(() => {
+      const resultVisible = () =>
+        resultRevealed &&
+        scenario.resultVisibleAfterReload &&
+        state.submitted &&
+        state.search === state.email;
+      return {
+        first: vi.fn(() => ({
+          isVisible: vi.fn(async () => resultVisible()),
+          waitFor: vi.fn(async () => waitUntilVisible(resultVisible)),
+        })),
+      };
+    }),
     isClosed: vi.fn(() => state.closed),
     screenshot: vi.fn(async () => undefined),
   };
@@ -330,6 +392,7 @@ function makeBrowserFixture(
     browserContext,
     tracing,
     addCustomerButton,
+    searchInput,
   };
 }
 
@@ -772,6 +835,36 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     expect(fixture.browser.close).toHaveBeenCalledTimes(1);
   });
 
+  it("waits for the Add Customer control while the workspace is still loading", async () => {
+    const fixture = makeBrowserFixture(
+      defaultScenario({ addCustomerVisibleAfterMs: 40 }),
+    );
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(
+      executionContext("UI_BACKEND_MISMATCH"),
+    );
+
+    expect(evidence.oracle).toMatchObject({ passed: true });
+    expect(fixture.state.submitted).toBe(true);
+  });
+
+  it("treats an Add Customer control that never appears as a harness failure with the route", async () => {
+    const fixture = makeBrowserFixture(
+      defaultScenario({ addCustomerVisible: false }),
+    );
+
+    await expect(
+      handlerFor("UI_BACKEND_MISMATCH")(
+        executionContext("UI_BACKEND_MISMATCH"),
+      ),
+    ).rejects.toThrow(
+      /could not locate the Add Customer control within 15000ms at \/org_preview_1\/customers/,
+    );
+
+    expect(fixture.addCustomerButton.click).not.toHaveBeenCalled();
+    expect(fixture.browser.close).toHaveBeenCalled();
+  });
+
   it("treats a dialog that never opens as a harness failure, not a product breach", async () => {
     const fixture = makeBrowserFixture(defaultScenario({ dialogVisible: false }));
 
@@ -784,11 +877,71 @@ describe("SCRUM-350 initial browser attack handlers", () => {
     expect(fixture.browser.close).toHaveBeenCalled();
   });
 
+  it("waits for the search control while the page reloads", async () => {
+    const fixture = makeBrowserFixture(
+      defaultScenario({ reloadVisibleAfterMs: 40 }),
+    );
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(
+      executionContext("UI_BACKEND_MISMATCH"),
+    );
+
+    expect(evidence.oracle).toMatchObject({ passed: true });
+    expect(fixture.state.search).toBe(fixture.state.email);
+    expect(fixture.addCustomerButton.waitFor).toHaveBeenCalledWith({
+      state: "visible",
+      timeout: 15_000,
+    });
+    expect(fixture.searchInput.waitFor).toHaveBeenCalledWith({
+      state: "visible",
+      timeout: 15_000,
+    });
+  });
+
+  it("waits for the customer result that renders after the search is typed", async () => {
+    const fixture = makeBrowserFixture(
+      defaultScenario({ resultVisibleAfterMs: 40 }),
+    );
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(
+      executionContext("UI_BACKEND_MISMATCH"),
+    );
+
+    expect(evidence.oracle).toMatchObject({ passed: true });
+    expect(fixture.searchInput.fill).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a search control that never reappears after reload as a harness failure", async () => {
+    const fixture = makeBrowserFixture(
+      defaultScenario({ searchControlVisible: false }),
+    );
+
+    await expect(
+      handlerFor("UI_BACKEND_MISMATCH")(
+        executionContext("UI_BACKEND_MISMATCH"),
+      ),
+    ).rejects.toThrow(/could not locate the customer search control after reload/);
+
+    expect(fixture.state.search).toBe("");
+    expect(fixture.browser.close).toHaveBeenCalled();
+  });
+
+  it("fails the oracle, never passes, when the customer never shows after reload", async () => {
+    makeBrowserFixture(defaultScenario({ resultVisibleAfterReload: false }));
+
+    const evidence = await handlerFor("UI_BACKEND_MISMATCH")(
+      executionContext("UI_BACKEND_MISMATCH"),
+    );
+
+    expect(evidence.oracle.passed).toBe(false);
+  });
+
   it("propagates a post-reload visibility probe failure as a harness error", async () => {
     const fixture = makeBrowserFixture(defaultScenario());
     fixture.page.getByText.mockReturnValueOnce({
       first: vi.fn(() => ({
-        isVisible: vi.fn(async () => {
+        isVisible: vi.fn(async () => false),
+        waitFor: vi.fn(async () => {
           throw new Error("page closed during oracle");
         }),
       })),
