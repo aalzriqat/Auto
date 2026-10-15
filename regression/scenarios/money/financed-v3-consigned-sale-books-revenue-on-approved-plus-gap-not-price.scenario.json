@@ -1,0 +1,88 @@
+{
+  "id": "financed-v3-consigned-sale-books-revenue-on-approved-plus-gap-not-price",
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "priceMinor": 20000000,
+        "supplierEntitlementMinor": 15000000,
+        "approvedMinor": 18000000,
+        "depositMinor": 200000,
+        "customerGapCashMinor": 1000000,
+        "contributionMinor": 2500000,
+        "forwardMinor": 2700000,
+        "legalInvoiceRecorded": false
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "application.status",
+      "value": "CLOSED"
+    },
+    {
+      "observable": "application.netShortfallMinor",
+      "value": 1700000
+    },
+    {
+      "observable": "saleJournal.financeReceivableNetMinor",
+      "value": 18000000
+    },
+    {
+      "observable": "saleJournal.customerReceivableNetMinor",
+      "value": 1000000
+    },
+    {
+      "observable": "saleJournal.customerDepositsNetMinor",
+      "value": 200000
+    },
+    {
+      "observable": "saleJournal.considerationReductionsNetMinor",
+      "value": 2500000
+    },
+    {
+      "observable": "saleJournal.financePayableNetMinor",
+      "value": -2700000
+    },
+    {
+      "observable": "saleJournal.supplierPayableNetMinor",
+      "value": -15000000
+    },
+    {
+      "observable": "saleJournal.consignmentCommissionNetMinor",
+      "value": -4000000
+    },
+    {
+      "observable": "saleJournal.netRevenueMinor",
+      "value": 1500000
+    },
+    {
+      "observable": "saleJournal.totalNetMinor",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum350Cons1V3PriceBasis.test.ts",
+    "testName": "P 20,000, A 18,000, R 1,000, D 2,500, H 200: the sale posts net revenue 1,500, not the price-basis 2,500"
+  },
+  "matrixRow": "pilot-financed-v3-consigned-price-basis",
+  "fingerprint": "56de177132a64a265664468aeff228217a76646d2574a408a162d37caf35b185",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum350-cons1-v3",
+    "firstSeen": "2026-10-15"
+  }
+}
