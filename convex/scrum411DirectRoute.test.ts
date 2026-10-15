@@ -180,7 +180,8 @@ describe("SCRUM-411 - direct-to-supplier financed sourced deal: plan v3 and its 
   test("the sale is dated on the evidenced handover, not on the wall clock", async () => {
     const s = await seed("d3");
     const { applicationId } = await readyDirect(s);
-    const handoverAt = Date.now() - 3 * DAY;
+    // Clamped to the seeded (current UTC) fiscal year: on Jan 1-3, now - 3 days is in the prior, unopened year.
+    const handoverAt = Math.max(Date.now() - 3 * DAY, Date.UTC(s.fiscalYear, 0, 1));
     await s.t.run((ctx) => ctx.db.patch(applicationId, { vehicleHandoverAt: handoverAt }));
     await finalizeAsOwner(s, applicationId);
     const app = await s.t.run((ctx) => ctx.db.get(applicationId));
