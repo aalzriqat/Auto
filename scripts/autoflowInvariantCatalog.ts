@@ -1023,7 +1023,14 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
     state: "ENFORCED",
     statement:
       "The Unified Deal and transitional Review surfaces must call the same canonical backend commands for migrated actions; no duplicate deal mutation namespace or V2 economic path may be introduced.",
-    sourceAreas: ["components/applications/**", "scripts/reviewActionParity.test.ts"],
+    sourceAreas: [
+      "components/applications/**",
+      "scripts/reviewActionParity.test.ts",
+      // SCRUM-350/#594 bridge: exact paths only, so UI mismatch handler edits
+      // schedule UI-1 missions; shared handler changes need broader mapping later.
+      "scripts/intelligence/browserAttackSwarmHandlers.ts",
+      "scripts/intelligence/browserAttackSwarmHandlers.test.ts",
+    ],
     profile: profile({ economicImpact: "INDIRECT" }),
     requirements: [
       required("POSITIVE"),
