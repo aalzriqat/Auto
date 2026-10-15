@@ -235,11 +235,46 @@ describe("trusted browser swarm impact: modular money and fee-void swarm modules
     expect(moneyMissions).toEqual(["ACC-1/ECONOMIC_AUTHORITY", "LIFE-1/STATE_TRANSITION"]);
   });
 
-  it("fails closed when a real ACC-3 path changes: no mission judges accounting date and period authority", () => {
-    const impact = impactFor("convex/accountingPeriods.ts");
+  // SCRUM-849: ACC-3's sourceAreas are convex/financialAudit.ts, convex/accountingPeriods.ts and
+  // components/accounting/**. Each must schedule the ACCOUNTING_DATE_BOUNDARY mission through the real catalog,
+  // impact mapper and planner; before the mission existed each of them made planning throw instead.
+  const accountingDateMissions = (changedFile: string) => {
+    const impact = impactFor(changedFile);
+    const plan = planBrowserAttackSwarm({ impactedInvariants: impact.impactedInvariants });
+    return {
+      impact,
+      missions: plan.missions
+        .filter((mission) => mission.family === "ACCOUNTING_DATE_BOUNDARY")
+        .map((mission) => `${mission.invariantIds.join(",")}/${mission.oracle}`),
+    };
+  };
+
+  it.each([
+    "convex/financialAudit.ts",
+    "convex/accountingPeriods.ts",
+    "components/accounting/ManualJournalTab.tsx",
+    "components/accounting/setup/AccountingPeriodsTable.tsx",
+  ])("%s schedules the ACC-3 accounting-date mission", (changedFile) => {
+    const { impact, missions } = accountingDateMissions(changedFile);
+    expect(impact.shouldRun).toBe(true);
     expect(impact.impactedInvariants.map((entry) => entry.id)).toContain("ACC-3");
-    expect(() => planBrowserAttackSwarm({ impactedInvariants: impact.impactedInvariants })).toThrow(
-      /no deterministic mission mapping.*ACC-3/,
-    );
+    expect(missions).toEqual(["ACC-3/STATE_TRANSITION"]);
+  });
+
+  it.each([
+    "scripts/intelligence/browserSwarmAccountingDateAttack.ts",
+    "scripts/intelligence/browserSwarmAccountingDateOracle.ts",
+    "scripts/intelligence/browserSwarmAccountingDateOracle.test.ts",
+    "scripts/intelligence/browserSwarmAccountingDateHandler.test.ts",
+  ])("%s plans exactly the ACC-3 mission and nothing else", (changedFile) => {
+    const { impact, missions } = accountingDateMissions(changedFile);
+    expect(impact.impactedInvariants.map((entry) => entry.id)).toEqual(["ACC-3"]);
+    expect(missions).toEqual(["ACC-3/STATE_TRANSITION"]);
+  });
+
+  it("does not schedule the ACC-3 mission for a path no invariant owns", () => {
+    const { impact, missions } = accountingDateMissions("docs/unrelated-note.md");
+    expect(impact.impactedInvariants.map((entry) => entry.id)).not.toContain("ACC-3");
+    expect(missions).toEqual([]);
   });
 });

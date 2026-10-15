@@ -18,7 +18,8 @@ export type BrowserAttackFamily =
   | "MULTI_TAB_RACE"
   | "COMPLETENESS_BOUNDARY"
   | "RTL_PARITY"
-  | "UI_BACKEND_MISMATCH";
+  | "UI_BACKEND_MISMATCH"
+  | "ACCOUNTING_DATE_BOUNDARY";
 
 export const PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES = [
   "DUPLICATE_SUBMIT",
@@ -34,6 +35,7 @@ export const PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES = [
   "STALE_UI",
   "MONEY_BOUNDARY",
   "NAVIGATION_RACE",
+  "ACCOUNTING_DATE_BOUNDARY",
 ] as const satisfies readonly BrowserAttackFamily[];
 
 const PHASE_A_EXECUTABLE_FAMILY_SET = new Set<BrowserAttackFamily>(
@@ -76,6 +78,9 @@ const PHASE_A_EXECUTABLE_FAMILY_ORACLES: Readonly<
   // distinct scenario of the same family that judges STATE_TRANSITION. Only that one LIFE-1 path is covered.
   MONEY_BOUNDARY: ["ECONOMIC_AUTHORITY", "STATE_TRANSITION"],
   NAVIGATION_RACE: ["STATE_TRANSITION"],
+  // ACC-3: a manual journal posts to its declared date, and posting into a closed period is refused. Only that
+  // one manual-journal scenario is covered (not a LOCKED or unopened period, outbox posting or a reopen).
+  ACCOUNTING_DATE_BOUNDARY: ["STATE_TRANSITION"],
 };
 
 /** True when a handler exists for the family AND judges the mission's oracle. */
@@ -193,6 +198,8 @@ const FAMILY_TIMEOUT_MS: Partial<Record<BrowserAttackFamily, number>> = {
   MONEY_BOUNDARY: 240_000,
   // Posts an expense, races its reversal against history back/forward, settles the ledger and repeats the reversal if it did not apply.
   NAVIGATION_RACE: 180_000,
+  // Establishes two periods, closes one, prepares and approves two journals, then reads the periods, the journals and the pending list.
+  ACCOUNTING_DATE_BOUNDARY: 180_000,
 };
 
 export function browserMissionTimeoutMs(family: BrowserAttackFamily): number {
@@ -268,8 +275,14 @@ const DETERMINISTIC_MISSIONS: Readonly<
       "BACKEND_STATE",
     ]),
   ],
-  // ACC-3 (accounting date and period authority) is deliberately unmapped: no mission judges the posting
-  // date or the closed-period boundary, so planning it throws instead of certifying an unchecked invariant.
+  // The posted date and the closed-period boundary of a manual journal, judged on the backend's journal and period state.
+  "ACC-3": [
+    template("ACCOUNTING_DATE_BOUNDARY", "STATE_TRANSITION", 5, [
+      "TRACE",
+      "SCREENSHOT",
+      "BACKEND_STATE",
+    ]),
+  ],
   "CONS-1": [
     template("CONSIGNMENT_ECONOMICS", "ECONOMIC_AUTHORITY", 6, [
       "TRACE",
@@ -340,9 +353,7 @@ export const SUPPORTED_BROWSER_SWARM_INVARIANT_IDS = Object.freeze(
  * Active invariants no browser mission judges. Planning one throws, so a change that impacts it refuses the
  * swarm rather than passing it. Removing an entry requires a mission whose oracle really judges the invariant.
  */
-export const UNSUPPORTED_BROWSER_SWARM_INVARIANTS: Readonly<Record<string, string>> = Object.freeze({
-  "ACC-3": "no browser oracle judges the declared accounting date or the closed-period boundary",
-});
+export const UNSUPPORTED_BROWSER_SWARM_INVARIANTS: Readonly<Record<string, string>> = Object.freeze({});
 
 const JEV_DEFAULT_ORACLE: Readonly<Record<BrowserAttackFamily, BrowserOracleKind>> = {
   TENANT_ESCAPE: "TENANT_ISOLATION",
@@ -359,6 +370,7 @@ const JEV_DEFAULT_ORACLE: Readonly<Record<BrowserAttackFamily, BrowserOracleKind
   COMPLETENESS_BOUNDARY: "LIST_COMPLETENESS",
   RTL_PARITY: "UI_BACKEND_AUTHORITY",
   UI_BACKEND_MISMATCH: "UI_BACKEND_AUTHORITY",
+  ACCOUNTING_DATE_BOUNDARY: "STATE_TRANSITION",
 };
 
 const FAMILY_EVIDENCE: Readonly<
@@ -378,6 +390,7 @@ const FAMILY_EVIDENCE: Readonly<
   COMPLETENESS_BOUNDARY: ["TRACE", "SCREENSHOT", "BACKEND_STATE"],
   RTL_PARITY: ["TRACE", "SCREENSHOT"],
   UI_BACKEND_MISMATCH: ["TRACE", "SCREENSHOT", "BACKEND_STATE"],
+  ACCOUNTING_DATE_BOUNDARY: ["TRACE", "SCREENSHOT", "BACKEND_STATE"],
 };
 
 function stableId(parts: readonly string[]): string {
