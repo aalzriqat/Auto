@@ -32,6 +32,7 @@ export const PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES = [
   "NETWORK_RECOVERY",
   "CONSIGNMENT_ECONOMICS",
   "STALE_UI",
+  "MONEY_BOUNDARY",
 ] as const satisfies readonly BrowserAttackFamily[];
 
 const PHASE_A_EXECUTABLE_FAMILY_SET = new Set<BrowserAttackFamily>(
@@ -69,6 +70,8 @@ const PHASE_A_EXECUTABLE_FAMILY_ORACLES: Readonly<
   NETWORK_RECOVERY: ["IDEMPOTENCY_SINGLE_EFFECT", "STATE_TRANSITION"],
   CONSIGNMENT_ECONOMICS: ["ECONOMIC_AUTHORITY"],
   STALE_UI: ["UI_BACKEND_AUTHORITY"],
+  // ACC-1 only: ACC-3 maps the same family to STATE_TRANSITION, which this handler does not judge.
+  MONEY_BOUNDARY: ["ECONOMIC_AUTHORITY"],
 };
 
 /** True when a handler exists for the family AND judges the mission's oracle. */
@@ -179,6 +182,8 @@ const FAMILY_TIMEOUT_MS: Partial<Record<BrowserAttackFamily, number>> = {
   CONSIGNMENT_ECONOMICS: 240_000,
   // Posts an expense, arms its reversal on the screen, reverses it server-side, then settles the ledger three times.
   STALE_UI: 180_000,
+  // About 27 product commands (some may wait out the write rate limit) plus up to 30s for the sale to post.
+  MONEY_BOUNDARY: 240_000,
 };
 
 export function browserMissionTimeoutMs(family: BrowserAttackFamily): number {
