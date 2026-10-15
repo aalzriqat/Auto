@@ -27,7 +27,7 @@
  * Evidence boundary: convex-test only - repository behaviour, not the Convex
  * runtime (no OCC, no paginated-query limit) and not production data.
  */
-import { finalizeAsOwner, readyDeal, refusalMessageOf, seedFinancedDealership } from "../test-utils/financedDealFixture";
+import { finalizeThenTakeForwardBack, readyDeal, refusalMessageOf, seedFinancedDealership } from "../test-utils/financedDealFixture";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { settleOutbox } from "../test-utils/outboxWork";
 import { describe, expect, test, vi } from "vitest";
@@ -105,7 +105,10 @@ async function financedDeal(tag: string, opts: { deposit?: boolean } = {}): Prom
     });
   }
   await setManualCommissionMode(s);
-  await finalizeAsOwner(s, applicationId);
+  // SCRUM-411 P2-01: the deal owes the company D (and H) and cannot close until that payment is on
+  // the books, yet a cancel is refused while it is. So: pay -> finalize -> take the payment back.
+  // The payment and its reversal net to zero in every account, so the matrix below is unchanged.
+  await finalizeThenTakeForwardBack(s, applicationId);
   const saleId = (await s.t.run((ctx) => ctx.db.get(applicationId)))!.finalizedSaleId!;
   await s.owner.as.mutation(api.sales.setCommissionAmount, { orgId: s.orgId, saleId, commissionAmount: COMMISSION });
   return {

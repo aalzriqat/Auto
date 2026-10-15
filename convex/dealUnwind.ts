@@ -28,7 +28,7 @@ import { DEAL_UNWIND_MESSAGES, type DealUnwindRefusalCode } from "./utils/dealUn
 import { activeDealUnwindFor, paidDealReversalRoute, receiptPostedToPaymentAccount } from "./utils/dealUnwindGuard";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
-import { planVersionOf } from "./utils/financedSalePostingPlan";
+import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
 import { reverseForward } from "./financeCompanyForward";
 import { disbursementVersionOf, financeDisbursementKeys } from "./utils/financeDisbursementKeys";
@@ -204,7 +204,7 @@ async function assertDealUnwindable(
   app: Doc<"financeApplications">,
   action: string
 ): Promise<Doc<"sales">> {
-  if (app.status !== "CLOSED" || planVersionOf(app) !== 2) refuse("DEAL_UNWIND_NOT_ELIGIBLE");
+  if (app.status !== "CLOSED" || !isForwardPlanVersion(planVersionOf(app))) refuse("DEAL_UNWIND_NOT_ELIGIBLE");
   if (app.supplierDisbursementConfirmedAt !== undefined || app.supplierDisbursedAmountMinor !== undefined) {
     refuse("DEAL_UNWIND_DIRECT_ROUTE");
   }

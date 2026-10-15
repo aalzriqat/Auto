@@ -17,6 +17,8 @@ import {
   consignedSettlementRouteValidator,
   isConsignedAgentSale,
   recordedConsignedMargin,
+  recordedFinancedConsideration,
+  recordedFinancedNetRevenue,
   recordedSupplierEntitlement,
   recordedSupplierGrossReceipt,
   saleIsAgentSale,
@@ -39,7 +41,7 @@ import { auditLog } from "./financialAudit";
 import { classifySaleTimeCredits, customerBilledLinesMinor, sumBilledLinesMinor, completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment";
-import { planVersionOf } from "./utils/financedSalePostingPlan";
+import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
 import { deriveForwardState, forwardCancelRefusal } from "./utils/financeCompanyForward";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
@@ -1103,7 +1105,7 @@ export const update = mutation({
           // SCRUM-435: a v2 deal has payments held by the finance company. This door
           // applies the SAME manager gate and the SAME forward proof as
           // `cancelApplication`, so it is never a way round them.
-          if (planVersionOf(app) === 2) {
+          if (isForwardPlanVersion(planVersionOf(app))) {
             try {
               await requireTenantAuth(ctx, args.orgId, [
                 PERMISSIONS.CANCEL_CLOSED_DEAL,
@@ -2776,6 +2778,7 @@ export const dealCockpit = query({
       recordedMargin: recordedConsignedMargin(sale),
       recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
       recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+      recordedConsideration: recordedFinancedConsideration(sale),
       // The FACTS, not a pre-derived boolean: `saleIsAgentSale` asks the one
       // admissibility derivation itself, so this screen cannot reach a
       // different verdict than `saleEconomics` does about the same sale.
@@ -3092,8 +3095,10 @@ export const dealCockpit = query({
       capitalizedCost,
       supplierSettlementRoute: sale.supplierSettlementRoute,
       recordedMargin: recordedConsignedMargin(sale),
+      recordedNetRevenue: recordedFinancedNetRevenue(sale, await getOrgCurrency(ctx, sale.orgId)),
       recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
       recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+      recordedConsideration: recordedFinancedConsideration(sale),
       // Always false on this screen in practice — `money` is already null for a
       // sale that HAS an application, because its real screen is the
       // application-keyed one. Passed rather than hardcoded so the two can never

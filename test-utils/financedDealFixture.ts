@@ -1,7 +1,10 @@
+import { ConvexError } from "convex/values";
 import { convexTestWithComponents, registerHandover } from "./convexTest";
 import schema from "../convex/schema";
 import { api } from "../convex/_generated/api";
+import { prospectiveForwardPlan } from "../convex/applications";
 import type { Id } from "../convex/_generated/dataModel";
+import type { MutationCtx } from "../convex/_generated/server";
 
 /**
  * The owner's worked example for a financed deal (SCRUM-435 / SCRUM-413 PR-B):
@@ -107,10 +110,21 @@ interface DealSeed {
   approver: Awaited<ReturnType<typeof seedFinancedDealership>>["approver"];
 }
 
-export async function newApplication(s: DealSeed) {
+/**
+ * What recording the pre-finalize payment needs of a seeded dealership. Structural, so
+ * suites that build their own `convexTest` instance (a different instance type from
+ * `seedFinancedDealership`'s) can use it.
+ */
+interface ForwardPayerSeed {
+  t: { run: <T>(fn: (ctx: MutationCtx) => Promise<T>) => Promise<T> };
+  orgId: Id<"organizations">;
+}
+
+export async function newApplication(s: DealSeed, opts: { gapMinor?: number } = {}) {
   const quoteId = await s.owner.as.mutation(api.quotes.saveQuote, {
     orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId,
-    vehiclePrice: G / SCALE, downPayment: 0, termMonths: 48,
+    // A customer gap R is what the quoted price exceeds the approved amount by.
+    vehiclePrice: (G + (opts.gapMinor ?? 0)) / SCALE, downPayment: 0, termMonths: 48,
     mode: "CONFIGURED_FINANCE_COMPANY", companyId: s.companyId,
     customerEligibilityStatusIds: [s.customerStatusId], totalFinancedAmount: G / SCALE,
   });
@@ -130,11 +144,29 @@ export async function approved(s: DealSeed) {
   return applicationId;
 }
 
-/** Approved, with a held deposit H and a dealership contribution C, ready to finalize. */
-export async function readyDeal(s: DealSeed) {
-  const { quoteId, applicationId } = await newApplication(s);
+/**
+ * Approved, with a held deposit H and a dealership contribution C, ready to finalize.
+ * `gapMinor` is the customer gap R owed to the showroom on top of the approved amount;
+ * `route` is the consigned car's settlement route (a SOURCED car cannot finalize without one).
+ */
+export async function readyDeal(
+  s: DealSeed,
+  opts: {
+    gapMinor?: number;
+    contributionMinor?: number;
+    route?: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
+    /** false: no reservation deposit is held. Defaults to true. */
+    deposit?: boolean;
+  } = {}
+) {
+  const { quoteId, applicationId } = await newApplication(s, { gapMinor: opts.gapMinor });
   await s.owner.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "UNDER_REVIEW" });
   await s.approver.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "APPROVED" });
+  if (opts.route) {
+    await s.owner.as.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId: s.orgId, applicationId, route: opts.route,
+    });
+  }
   await s.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
     orgId: s.orgId, applicationId, submittedQuotationMinor: G, source: "MANUAL_ENTRY",
   });
@@ -145,10 +177,6 @@ export async function readyDeal(s: DealSeed) {
   await s.owner.as.mutation(api.applications.registerExpectedPayment, {
     orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
   });
-  await s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
-    orgId: s.orgId, applicationId, legalInvoiceAmountMinor: G, legalInvoiceNumber: `INV-${applicationId}`,
-    legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
-  });
   const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
     expectedCurrency: "JOD", idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
     feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER", accountingTreatment: "SELLING_EXPENSE",
@@ -158,22 +186,108 @@ export async function readyDeal(s: DealSeed) {
     orgId: s.orgId, feeId, notes: "Matched.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0,
   });
   // The deposit H the dealership holds for this customer and car, and the contribution C.
+  const holdsDeposit = opts.deposit !== false;
   await s.t.run(async (ctx) => {
-    await ctx.db.insert("deposits", {
-      orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, quoteId,
-      amount: H / SCALE, amountMinor: H, currency: "JOD", method: "CASH", status: "HELD", holdActive: true,
-      createdBy: (await ctx.db.query("users").first())!._id, createdAt: Date.now(),
-    } as never);
-    await ctx.db.patch(applicationId, { customerFirstPaymentMinor: H, dealerContributionMinor: C });
+    if (holdsDeposit) {
+      await ctx.db.insert("deposits", {
+        orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, quoteId,
+        amount: H / SCALE, amountMinor: H, currency: "JOD", method: "CASH", status: "HELD", holdActive: true,
+        createdBy: (await ctx.db.query("users").first())!._id, createdAt: Date.now(),
+      } as never);
+    }
+    await ctx.db.patch(applicationId, {
+      ...(holdsDeposit ? { customerFirstPaymentMinor: H } : {}),
+      dealerContributionMinor: opts.contributionMinor ?? C,
+      ...(opts.gapMinor ? { customerGapCashToDealerMinor: opts.gapMinor } : {}),
+    });
   });
   return { applicationId, quoteId };
 }
 
-/** Finalizes a ready deal as the owner. */
-export async function finalizeAsOwner(s: DealSeed, applicationId: Id<"financeApplications">) {
+/**
+ * What the dealership owes the finance company onward (H + D) according to the plan
+ * finalize WOULD freeze now, or 0 when no forward plan covers the deal or the deal is
+ * not ready to close (finalize then refuses for its own reason, which the caller sees).
+ */
+async function prospectiveForwardDueMinor(s: ForwardPayerSeed, applicationId: Id<"financeApplications">): Promise<number> {
+  return await s.t.run(async (ctx) => {
+    const app = await ctx.db.get(applicationId);
+    if (app === null) return 0;
+    try {
+      return (await prospectiveForwardPlan(ctx, app, true))?.forwardDueMinor ?? 0;
+    } catch (error) {
+      // Only the deliberate "not ready to close" refusal; a fixture or code defect must surface.
+      if (error instanceof ConvexError) return 0;
+      throw error;
+    }
+  });
+}
+
+/**
+ * SCRUM-411 P2-01: the deposit and the contribution are paid to the finance company
+ * BEFORE the deal is finalized. Records that payment through the real mutation as
+ * `payer` (an identity that may move finance money), for the amount the deal is about
+ * to freeze; null when nothing is owed. For suites that seed their own dealership.
+ */
+export async function payForwardBeforeFinalize(
+  s: ForwardPayerSeed,
+  payer: DealSeed["owner"]["as"],
+  applicationId: Id<"financeApplications">
+): Promise<Id<"financeCompanyForwards"> | null> {
+  // A payment already on file (a test that paid explicitly, then finalizes through
+  // `finalizeAsOwner`) is the payment: a second one would be refused as a duplicate.
+  const live = await s.t.run(async (ctx) =>
+    (await ctx.db.query("financeCompanyForwards").withIndex("by_org_application", (q) => q.eq("orgId", s.orgId).eq("applicationId", applicationId)).take(10)).filter(
+      (row) => row.reversalRequestedAt === undefined
+    )
+  );
+  if (live.length > 0) return null;
+  const expectedAmountMinor = await prospectiveForwardDueMinor(s, applicationId);
+  if (expectedAmountMinor <= 0) return null;
+  return await payer.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
+    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
+    expectedAmountMinor, idempotencyKey: crypto.randomUUID(),
+  });
+}
+
+/** The same payment, recorded as the seeded owner. */
+export async function payForwardAsOwner(
+  s: DealSeed,
+  applicationId: Id<"financeApplications">
+): Promise<Id<"financeCompanyForwards"> | null> {
+  return await payForwardBeforeFinalize(s, s.owner.as, applicationId);
+}
+
+/**
+ * Finalizes a ready deal as the owner. Pays the forward first when one is owed
+ * (finalize refuses until it is on the books); `payForward: false` finalizes as is,
+ * for the tests that assert that refusal.
+ */
+export async function finalizeAsOwner(
+  s: DealSeed,
+  applicationId: Id<"financeApplications">,
+  opts: { payForward?: boolean } = {}
+) {
+  if (opts.payForward !== false) await payForwardAsOwner(s, applicationId);
   await s.owner.as.mutation(api.applications.finalizeDeal, {
     idempotencyKey: crypto.randomUUID(), orgId: s.orgId, applicationId,
   });
+}
+
+/**
+ * A CLOSED deal whose forward is due again: paid, finalized, then the payment taken
+ * back. Finalize now refuses an unpaid forward, so this is the only way a CLOSED
+ * deal reaches DUE (a manager who voids a recorded-in-error payment).
+ */
+export async function finalizeThenTakeForwardBack(s: DealSeed, applicationId: Id<"financeApplications">) {
+  const forwardId = await payForwardAsOwner(s, applicationId);
+  await finalizeAsOwner(s, applicationId, { payForward: false });
+  if (forwardId !== null) {
+    await s.owner.as.mutation(api.financeCompanyForward.reverseFinanceCompanyForward, {
+      orgId: s.orgId, applicationId, forwardId, reason: "Recorded in error.", idempotencyKey: crypto.randomUUID(),
+    });
+  }
+  return forwardId;
 }
 
 /** Rewrites a finalized deal as a pre-v2 (v1) deal: no v2 marker, the v1 fingerprint. */
@@ -184,6 +298,69 @@ export async function downgradeToV1(s: Pick<DealSeed, "t">, applicationId: Id<"f
       financedSaleRecognitionFingerprint: V1_FINGERPRINT,
     })
   );
+}
+
+/**
+ * Creates the previous fiscal year's period, opens it and CLOSES it through the
+ * real mutations (checklist warnings acknowledged as the close dialog does), so
+ * a handover dated in it meets a genuinely CLOSED period rather than a missing
+ * one. Returns a handover timestamp inside that period.
+ */
+export async function closePriorYearPeriod(
+  s: Pick<DealSeed, "orgId" | "owner"> & { fiscalYear: number }
+): Promise<{ periodId: Id<"accountingPeriods">; handoverAt: number }> {
+  const year = s.fiscalYear - 1;
+  const periodId = await s.owner.as.mutation(api.accountingPeriods.create, {
+    orgId: s.orgId,
+    startDate: Date.UTC(year, 0, 1),
+    endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
+    fiscalYear: year,
+    periodNumber: 1,
+    openImmediately: true,
+  });
+  const checklist = await s.owner.as.query(api.accountingPeriods.closeChecklist, { orgId: s.orgId, periodId });
+  await s.owner.as.mutation(api.accountingPeriods.close, {
+    orgId: s.orgId, periodId, acknowledgedWarnings: checklist.warnings,
+  });
+  return { periodId, handoverAt: Date.UTC(year, 5, 15) };
+}
+
+/** The `{ code, message }` a refused call carried, or null when it was accepted. */
+export async function refusalDataOf(promise: Promise<unknown>): Promise<{ code?: string; message: string } | null> {
+  try {
+    await promise;
+  } catch (error) {
+    const data = (error as { data?: unknown })?.data;
+    if (typeof data === "object" && data !== null) {
+      const { code, message } = data as { code?: unknown; message?: unknown };
+      return {
+        ...(typeof code === "string" ? { code } : {}),
+        message: typeof message === "string" ? message : refusalMessageOfError(error),
+      };
+    }
+    return { message: refusalMessageOfError(error) };
+  }
+  return null;
+}
+
+/**
+ * Rewrites a finalized deal as a CLOSED v2 deal (the plan version live before
+ * server-derived economics): the v2 marker and the v2 fingerprint prefix. Every
+ * other frozen figure of a non-direct deal is the same under v2 and v3, so the
+ * forward fields stay as finalize froze them.
+ */
+export async function downgradeToV2(s: Pick<DealSeed, "t">, applicationId: Id<"financeApplications">) {
+  await s.t.run(async (ctx) => {
+    const app = await ctx.db.get(applicationId);
+    const fingerprint = app?.financedSaleRecognitionFingerprint;
+    if (typeof fingerprint !== "string" || !fingerprint.startsWith("v3;")) {
+      throw new Error("downgradeToV2 expects a deal finalized under plan v3");
+    }
+    await ctx.db.patch(applicationId, {
+      financedSalePlanVersion: 2,
+      financedSaleRecognitionFingerprint: `v2;${fingerprint.slice(3)}`,
+    });
+  });
 }
 
 export function refusalMessageOfError(error: unknown): string {

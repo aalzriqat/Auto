@@ -1,0 +1,88 @@
+{
+  "id": "financed-v3-direct-to-supplier-held-deposit-forwarded-with-contribution",
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "financeCompanyForward.recordFinanceCompanyForward",
+      "input": {
+        "expectedAmountMinor": 1575000
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "approvedMinor": 12500000,
+        "supplierEntitlementMinor": 9000000,
+        "gapMinor": 500000,
+        "depositMinor": 200000,
+        "contributionMinor": 1375000,
+        "route": "DIRECT_TO_SUPPLIER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "ledger.supplierClaimMinor",
+      "value": 3500000
+    },
+    {
+      "observable": "ledger.customerReceivableMinor",
+      "value": 500000
+    },
+    {
+      "observable": "ledger.depositLiabilityDebitMinor",
+      "value": 200000
+    },
+    {
+      "observable": "ledger.contraRevenueMinor",
+      "value": 1375000
+    },
+    {
+      "observable": "ledger.commissionMinor",
+      "value": 4000000
+    },
+    {
+      "observable": "ledger.financeReceivableMinor",
+      "value": 0
+    },
+    {
+      "observable": "ledger.financePayableAfterForwardMinor",
+      "value": 0
+    },
+    {
+      "observable": "ledger.depositAppliedEvents",
+      "value": 0
+    },
+    {
+      "observable": "sale.netRevenueMinor",
+      "value": 2625000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum411ForwardOrdering.test.ts",
+    "testName": "A 12,500, E 9,000, R 500, H 200, D 1,375: the hand-worked entry posts once and balances"
+  },
+  "matrixRow": "pilot-financed-v3-direct-deposit",
+  "fingerprint": "76df2648151daebf14a1aa9246d451ebf85777c53e9ff46699a9acddd62f349c",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum411-forward-ordering",
+    "firstSeen": "2026-10-14"
+  }
+}

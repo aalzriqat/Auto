@@ -1020,15 +1020,7 @@ describe("the bounded fee read behind every closure rule", () => {
     const seed = await seedDealer("cap");
     const companyId = await createCompany(seed, "Two Fees", COMPANY_B_TEMPLATES);
     const applicationId = await createApplicationFor(seed, companyId);
-    // An invoice on file, so nothing but the bound stands in the way.
-    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
-      orgId: seed.orgId,
-      applicationId,
-      legalInvoiceAmountMinor: jod(20_000),
-      legalInvoiceNumber: "INV-CAP",
-      legalInvoiceDate: Date.now(),
-      issuedTo: "FINANCE_COMPANY",
-    });
+    // No invoice is needed (SCRUM-411), so nothing but the bound stands in the way.
 
     // One past the cap, every one of them live.
     const seeded = await seedLiveLines(seed, applicationId, MAX_LIVE_DEAL_FEE_LINES + 1);
@@ -1228,14 +1220,6 @@ describe("the fee-template cap", () => {
         companyRuleSnapshot: { ...app.companyRuleSnapshot, feeTemplates: templates(MAX_LIVE_DEAL_FEE_LINES + 1) },
       });
     });
-    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
-      orgId: seed.orgId,
-      applicationId,
-      legalInvoiceAmountMinor: jod(20_000),
-      legalInvoiceNumber: "INV-OVERSIZE",
-      legalInvoiceDate: Date.now(),
-      issuedTo: "FINANCE_COMPANY",
-    });
     const feeId = await recordTemplateActual(seed, applicationId, 0, "LICENSING", jod(250));
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, { orgId: seed.orgId, feeId, notes: "checked", expectedActualAmountMinor: jod(250), expectedActualEvidenceRevision: 0 });
     const configuredReason = async () =>
@@ -1259,16 +1243,6 @@ describe("the fee-template cap", () => {
 });
 
 describe("closing the deal", () => {
-  async function invoiced(seed: Seed, applicationId: Id<"financeApplications">) {
-    await seed.asUser.mutation(api.financeDealCosts.recordLegalInvoice, {
-      orgId: seed.orgId,
-      applicationId,
-      legalInvoiceAmountMinor: jod(20_000),
-      legalInvoiceNumber: `INV-${applicationId}`,
-      legalInvoiceDate: Date.now(),
-      issuedTo: "FINANCE_COMPANY",
-    });
-  }
   async function reconcile(seed: Seed, feeId: Id<"financeDealFees">, actualAmountMinor: number) {
     await seed.asUser.mutation(api.financeDealCosts.reconcileDealFee, {
       orgId: seed.orgId,
@@ -1292,7 +1266,6 @@ describe("closing the deal", () => {
     const seed = await seedDealer("close");
     const companyId = await createCompany(seed, "Two Fees", COMPANY_B_TEMPLATES);
     const applicationId = await createApplicationFor(seed, companyId);
-    await invoiced(seed, applicationId);
 
     const first = await recordTemplateActual(seed, applicationId, 0, "APPRAISAL_FEE", jod(80));
     await reconcile(seed, first, jod(80));
@@ -1348,7 +1321,6 @@ describe("closing the deal", () => {
     const seed = await seedDealer("spoofClose");
     const companyId = await createCompany(seed, "Two Fees", COMPANY_B_TEMPLATES);
     const applicationId = await createApplicationFor(seed, companyId);
-    await invoiced(seed, applicationId);
 
     // One exact actual, one line that only LOOKS like the other template:
     // the legacy shape, written straight to the table with no position.
@@ -1425,7 +1397,6 @@ describe("closing the deal", () => {
     const seed = await seedDealer("closeNone");
     const companyId = await createCompany(seed, "Bare Company", []);
     const applicationId = await createApplicationFor(seed, companyId);
-    await invoiced(seed, applicationId);
     const feeId = await seed.asUser.mutation(api.financeDealCosts.recordDealFee, {
       orgId: seed.orgId,
       applicationId,
@@ -1439,8 +1410,10 @@ describe("closing the deal", () => {
       idempotencyKey: crypto.randomUUID(),
     });
     await reconcile(seed, feeId, 0);
-    for (const key of ["CONFIGURED_FEES_RECORDED", "COSTS_CLOSABLE", "LEGAL_INVOICE_RECORDED"]) {
+    for (const key of ["CONFIGURED_FEES_RECORDED", "COSTS_CLOSABLE"]) {
       expect(await closingCheck(seed, applicationId, key)).toMatchObject({ key, status: "READY", reason: null });
     }
+    // No legal invoice is recorded and none is needed (SCRUM-411).
+    expect(await closingCheck(seed, applicationId, "LEGAL_INVOICE_RECORDED")).toMatchObject({ status: "NOT_APPLICABLE", reason: null });
   });
 });

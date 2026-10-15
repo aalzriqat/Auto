@@ -37,6 +37,8 @@ vi.mock("@/hooks/useCurrency", () => ({
 
 const stubs = vi.hoisted(() => ({
   queryResults: new Map<string, unknown>(),
+  /** The args the cockpit last asked each `useQueries` function with. */
+  queryArgs: new Map<string, unknown>(),
   permissions: new Set<string>(),
   mutationCalls: new Map<string, unknown[]>(),
   mutationFailures: new Map<string, string>(),
@@ -62,9 +64,12 @@ vi.mock("convex/react", async () => {
   const { ConvexError } = await import("convex/values");
   return {
     // The cockpit reads closing readiness through the non-throwing useQueries (SCRUM-414 R2).
-    useQueries: (queries: Record<string, { query: never }>) =>
+    useQueries: (queries: Record<string, { query: never; args: unknown }>) =>
       Object.fromEntries(
-        Object.entries(queries).map(([key, { query }]) => [key, stubs.queryResults.get(getFunctionName(query))])
+        Object.entries(queries).map(([key, { query, args }]) => {
+          stubs.queryArgs.set(getFunctionName(query), args);
+          return [key, stubs.queryResults.get(getFunctionName(query))];
+        })
       ),
     useQuery: (reference: never, args: unknown) =>
       args === "skip" ? undefined : stubs.queryResults.get(getFunctionName(reference)),
@@ -223,6 +228,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   queryResults.clear();
+  stubs.queryArgs.clear();
   permissions.clear();
   mutationCalls.clear();
   stubs.membershipUserId = "user_manager";
@@ -402,7 +408,9 @@ describe("settlement route — applications.setSupplierSettlementRoute, beside t
     });
   });
 
-  test("the direct route is shown disabled with the server's reason while a deposit is held", () => {
+  // A held deposit no longer refuses the direct route (SCRUM-407 c21033, SCRUM-411):
+  // plan v3 forwards it to the finance company. The refusals left are about the payer.
+  test("the direct route is shown disabled with the server's reason while the payer cannot be attributed", () => {
     permissions.add(PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT);
     permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
     queryResults.set(COCKPIT_QUERY, cockpit({ status: "APPROVED" }));
@@ -412,7 +420,7 @@ describe("settlement route — applications.setSupplierSettlementRoute, beside t
         status: "APPROVED",
         vehicle: { sourceType: "SOURCED", sourcedFromName: "أبو خالد" },
         canSettleDirectToSupplier: false,
-        directRouteRefusal: "HeldDeposit",
+        directRouteRefusal: "LEASE",
       })
     );
     renderCockpit();
@@ -420,7 +428,7 @@ describe("settlement route — applications.setSupplierSettlementRoute, beside t
       name: /RouteDirectToSupplier/,
     }) as HTMLButtonElement;
     expect(direct.disabled).toBe(true);
-    expect(direct.textContent).toContain("RouteDirectUnavailableHeldDeposit");
+    expect(direct.textContent).toContain("RouteDirectUnavailableLease");
   });
 
   test("no route control without the finalize permission, on an owned car, or on a closed deal", () => {
@@ -885,6 +893,193 @@ describe("disbursement - the payment to the finance company comes first", () => 
     renderCockpit();
     expect(within(focusRow()).queryByRole("button")).toBeNull();
     expect(within(focusRow()).getByText("ForwardNeedsPermission")).toBeTruthy();
+  });
+
+  describe("SCRUM-411 P2-01 - the payment to the finance company comes BEFORE the close", () => {
+    const PRE_QUERY = "financeCompanyForward:preFinalizeForwardStatus";
+    const READY = {
+      state: "READY",
+      open: true,
+      checks: [{ key: "CUSTODY_SETTLED", status: "READY", reason: null }],
+      unavailableReason: null,
+      moneyWithheld: false,
+    };
+    const preMoney = { dueMinor: 1_575_000, depositMinor: 200_000, contributionMinor: 1_375_000, onBooksMinor: 0 };
+    const pre = (overrides: Record<string, unknown> = {}) => ({
+      state: "UNPAID",
+      mayRecord: true,
+      onBooksForwardId: null,
+      blocksCancel: false,
+      money: preMoney,
+      ...overrides,
+    });
+    /** An APPROVED deal at the close: nothing is frozen yet, so the cockpit's own `forward` says nothing is due. */
+    function approvedAtTheClose(status: Record<string, unknown> | undefined) {
+      permissions.add(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+      permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+      queryResults.set(
+        COCKPIT_QUERY,
+        cockpit({
+          status: "APPROVED",
+          stages: [
+            { key: "APPROVED_PURCHASE", state: "COMPLETE", authority: "DEALER" },
+            { key: "HANDOVER", state: "COMPLETE", authority: "DEALER" },
+            { key: "SETTLEMENT", state: "BLOCKED", blocker: "AwaitingSettlement", authority: "DEALER" },
+          ],
+          expectedPaymentRegistered: true,
+          forward: forward({ planV2: false, applies: false, state: "NOT_DUE" }),
+        })
+      );
+      queryResults.set(GET_QUERY, application({ status: "APPROVED" }));
+      queryResults.set("applications:getClosingReadiness", READY);
+      if (status !== undefined) queryResults.set(PRE_QUERY, status);
+    }
+
+    test("UNPAID: the step is the payment, not the close, and it sends the amount the server pinned", async () => {
+      approvedAtTheClose(pre());
+      renderCockpit();
+
+      expect(within(focusRow()).queryByRole("button", { name: "FinalizeDealAction" })).toBeNull();
+      expect(within(focusRow()).getByTestId("deal-next-step-note").textContent).toBe("FinalizeNeedsForwardPayment");
+      fireEvent.click(within(focusRow()).getByRole("button", { name: "RecordForwardToFinanceCompany" }));
+      expect(screen.getByTestId("forward-breakdown").textContent).toContain("1,575");
+      fireEvent.change(screen.getByLabelText("DirectPaymentMethodLabel"), { target: { value: "BANK_TRANSFER" } });
+      fireEvent.click(screen.getByRole("button", { name: "RecordForwardConfirm" }));
+
+      await waitFor(() =>
+        expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")).toHaveLength(1)
+      );
+      expect(mutationCalls.get("financeCompanyForward:recordFinanceCompanyForward")![0]).toMatchObject({
+        orgId: ORG,
+        applicationId: APP,
+        method: "BANK_TRANSFER",
+        expectedAmountMinor: 1_575_000,
+      });
+      expect(mutationCalls.get("applications:finalizeDeal")).toBeUndefined();
+    });
+
+    test("UNPAID for a caller who may not record it: no button, the reason names the manager or accountant", () => {
+      approvedAtTheClose(pre({ mayRecord: false, money: null }));
+      renderCockpit();
+      expect(within(focusRow()).queryByRole("button")).toBeNull();
+      expect(within(focusRow()).getByText("ForwardNeedsPermission")).toBeTruthy();
+    });
+
+    test.each([
+      // The plan itself is refused (a first payment agreed on a deposit that was since refunded):
+      // the screen names the next action instead of offering a close the server will refuse.
+      ["FIRST_PAYMENT_UNFUNDED", "FinalizeFirstPaymentUnfunded"],
+      ["STALE", "FinalizeForwardPaymentStale"],
+      ["POSTING_PENDING", "FinalizeForwardPaymentPosting"],
+      ["POSTING_FAILED", "FinalizeForwardPaymentPostingFailed"],
+      ["REVERSAL_PENDING", "FinalizeForwardPaymentReversing"],
+      ["NEEDS_REPAIR", "FinalizeForwardPaymentNeedsReview"],
+    ])("%s: the close is withheld with its own reason and nothing offers a second payment", (state, reasonKey) => {
+      approvedAtTheClose(pre({ state }));
+      renderCockpit();
+      expect(within(focusRow()).queryByRole("button", { name: "FinalizeDealAction" })).toBeNull();
+      expect(within(focusRow()).queryByRole("button", { name: "RecordForwardToFinanceCompany" })).toBeNull();
+      expect(within(focusRow()).getByText(reasonKey)).toBeTruthy();
+    });
+
+    test.each(["SETTLED", "NOT_OWED", "NOT_READY"])("%s: the payment is not in the way, the close is the step", (state) => {
+      approvedAtTheClose(pre({ state }));
+      renderCockpit();
+      expect(within(focusRow()).getByRole("button", { name: "FinalizeDealAction" })).toBeTruthy();
+      expect(within(focusRow()).queryByRole("button", { name: "RecordForwardToFinanceCompany" })).toBeNull();
+    });
+
+    const NOT_READY = {
+      ...READY,
+      state: "BLOCKED",
+      checks: [{ key: "CUSTODY_SETTLED", status: "BLOCKED", reason: "Settle the custody first." }],
+    };
+
+    test("a deal that is not ready to close asks only the cheap question (planReady false): the readiness reason stands alone", () => {
+      // What the server answers when it is told the plan is not formable: nothing owed is judged.
+      approvedAtTheClose(pre({ state: "NOT_READY", money: null }));
+      queryResults.set("applications:getClosingReadiness", NOT_READY);
+      renderCockpit();
+      expect(stubs.queryArgs.get(PRE_QUERY)).toMatchObject({ orgId: ORG, applicationId: APP, planReady: false });
+      expect(within(focusRow()).queryByRole("button", { name: "RecordForwardToFinanceCompany" })).toBeNull();
+      expect(within(focusRow()).queryByText("FinalizeNeedsForwardPayment")).toBeNull();
+    });
+
+    test("a deal that is ready to close asks for the plan too (planReady true)", () => {
+      approvedAtTheClose(pre());
+      renderCockpit();
+      expect(stubs.queryArgs.get(PRE_QUERY)).toMatchObject({ orgId: ORG, applicationId: APP, planReady: true });
+    });
+
+    describe("SCRUM-411 B1 - a payment on the books is never stranded: it can be taken back and Cancel waits", () => {
+      beforeEach(() => {
+        permissions.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+        permissions.add(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+      });
+
+      test.each([
+        // Its deposit was refunded after the payment: the plan cannot be formed, the payment stays.
+        ["FIRST_PAYMENT_UNFUNDED", true],
+        // The deal fell out of "ready to close" after the payment was recorded.
+        ["NOT_READY", false],
+      ])("%s: the take-back control is offered, Cancel is withheld and the hint names the payment", (state, ready) => {
+        approvedAtTheClose(pre({ state, onBooksForwardId: "fwd_1", blocksCancel: true, money: null }));
+        if (!ready) queryResults.set("applications:getClosingReadiness", NOT_READY);
+        renderCockpit();
+
+        expect(screen.getByTestId("deal-forward-void")).toBeTruthy();
+        expect(screen.getByTestId("deal-forward-returned")).toBeTruthy();
+        expect(screen.queryByTestId("deal-cancel-application")).toBeNull();
+        expect(screen.getByTestId("deal-cancel-manager-hint").textContent).toBe("CancelWaitsForForward");
+      });
+
+      test("control: with no payment on the books Cancel is offered and there is nothing to take back", () => {
+        approvedAtTheClose(pre());
+        renderCockpit();
+        expect(screen.getByTestId("deal-cancel-application")).toBeTruthy();
+        expect(screen.queryByTestId("deal-forward-correction")).toBeNull();
+        expect(screen.queryByTestId("deal-cancel-manager-hint")).toBeNull();
+      });
+
+      test("an unsettled payment (no id to act on) still withholds Cancel", () => {
+        approvedAtTheClose(pre({ state: "POSTING_PENDING", onBooksForwardId: null, blocksCancel: true }));
+        renderCockpit();
+        expect(screen.queryByTestId("deal-cancel-application")).toBeNull();
+        expect(screen.getByTestId("deal-cancel-manager-hint").textContent).toBe("CancelWaitsForForward");
+      });
+    });
+
+    test("no verdict (still loading, or a backend that does not have the query): nothing is claimed, the server decides at the close", () => {
+      approvedAtTheClose(undefined);
+      renderCockpit();
+      expect(within(focusRow()).getByRole("button", { name: "FinalizeDealAction" })).toBeTruthy();
+    });
+
+    test("a payment recorded for other figures is taken back from the same control, then recorded again", async () => {
+      approvedAtTheClose(pre({ state: "STALE", onBooksForwardId: "fwd_old", money: { ...preMoney, onBooksMinor: 1_575_000 } }));
+      renderCockpit();
+
+      expect(screen.queryByTestId("deal-forward-returned")).toBeTruthy();
+      fireEvent.click(screen.getByTestId("deal-forward-void"));
+      fireEvent.change(screen.getByLabelText("ForwardReasonLabel"), { target: { value: "The contribution changed" } });
+      fireEvent.click(screen.getAllByRole("button", { name: "ForwardVoidAction" }).at(-1)!);
+
+      await waitFor(() =>
+        expect(mutationCalls.get("financeCompanyForward:reverseFinanceCompanyForward")).toHaveLength(1)
+      );
+      expect(mutationCalls.get("financeCompanyForward:reverseFinanceCompanyForward")![0]).toMatchObject({
+        orgId: ORG,
+        applicationId: APP,
+        forwardId: "fwd_old",
+        reason: "The contribution changed",
+      });
+    });
+
+    test("a caller who may not record the payment is not offered the take-back control either", () => {
+      approvedAtTheClose(pre({ state: "SETTLED", onBooksForwardId: "fwd_1", mayRecord: false, money: null }));
+      renderCockpit();
+      expect(screen.queryByTestId("deal-forward-correction")).toBeNull();
+    });
   });
 
   test("an unsettled payment (pending/failed/reversing): no button at all, an accountant resolves it", () => {

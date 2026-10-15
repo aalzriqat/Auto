@@ -2042,6 +2042,37 @@ export default defineSchema({
       })
     ),
     /**
+     * SCRUM-411 (plan v3): the revenue this financed sale earned, net of the
+     * showroom's contribution, in minor units of `currency`, frozen at completion.
+     *
+     *   dealer-owned car:  consideration (A + R) - contra-revenue
+     *   consigned car:     consideration (A + R) - supplier entitlement - contra-revenue
+     *
+     * The same figure the general ledger nets (revenue credited less
+     * SALES_CONSIDERATION_REDUCTIONS debited), recorded so every report reads
+     * the books' number instead of re-deriving a gross one. SIGNED: a
+     * contribution larger than a consigned commission is a real loss and is
+     * recorded as one, never floored.
+     *
+     * Absent on every sale that is not a v3 financed completion (cash,
+     * `sales.create`, plan v1/v2, no plan) - readers keep the sale-price /
+     * `consignedMarginMinor` reading for those, exactly as before. Distinct from
+     * `consignedMarginMinor`, which stays the commission / supplier-claim basis
+     * (K - E) and is not netted of the contribution.
+     *
+     * `considerationMinor` is that consideration K = A + R itself, in the same
+     * `currency`, frozen in the same patch. It bounds a THROUGH_DEALERSHIP supplier's
+     * entitlement for the readers (K exceeds the operational `salePrice` when the customer
+     * absorbs a net shortfall). Absent on a v3 sale completed before it was recorded.
+     */
+    financedNetRevenue: v.optional(
+      v.object({
+        minor: v.number(),
+        currency: v.string(),
+        considerationMinor: v.optional(v.number()),
+      })
+    ),
+    /**
      * What the supplier is owed for the car, in minor units, frozen at
      * completion — his entitlement, denominated in `consignedMarginCurrency`.
      *
@@ -3103,6 +3134,15 @@ export default defineSchema({
       v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY"), v.literal("OTHER"))
     ),
     legalInvoiceIssuedToOther: v.optional(v.string()),
+    /**
+     * SCRUM-411 (plan v3): who ISSUED the invoice. A genuine dealership invoice
+     * exists only for dealer-owned stock; on a sourced/importer-owned car the
+     * importer, a separate company, invoices the finance company and the
+     * dealership issues none for its margin. Optional evidence only: nothing
+     * here ever feeds revenue, the recognition date or readiness.
+     */
+    legalInvoiceIssuedBy: v.optional(v.union(v.literal("DEALERSHIP"), v.literal("THIRD_PARTY"))),
+    legalInvoiceIssuerName: v.optional(v.string()),
 
     // Whether the deal's accounting treatment has actually been established.
     //
@@ -3147,7 +3187,7 @@ export default defineSchema({
      * at finalize so the forward due never re-derives from moving inputs.
      * Absent on a v1 deal, which is never recomputed.
      */
-    financedSalePlanVersion: v.optional(v.union(v.literal(1), v.literal(2))),
+    financedSalePlanVersion: v.optional(v.union(v.literal(1), v.literal(2), v.literal(3))),
     financeCompanyForwardDueMinor: v.optional(v.number()),
     forwardDepositPortionMinor: v.optional(v.number()),
     forwardContributionPortionMinor: v.optional(v.number()),
@@ -3538,6 +3578,10 @@ export default defineSchema({
     reference: v.optional(v.string()),
     actorId: v.id("users"),
     createdAt: v.number(),
+    // SCRUM-411 P2-01: the sale plan fingerprint (A/F/H/D/R) this payment was
+    // recorded against. A payment made BEFORE finalizing counts only while the plan
+    // finalize would freeze still has this fingerprint; absent on older rows.
+    planFingerprint: v.optional(v.string()),
     // Reversal intent (the ledger decides whether it happened).
     reversalRequestedAt: v.optional(v.number()),
     reversalIdempotencyKey: v.optional(v.string()),
@@ -3582,6 +3626,36 @@ export default defineSchema({
     voidReason: v.optional(v.string()),
   })
     .index("by_org_application", ["orgId", "applicationId"]),
+
+  /**
+   * SCRUM-411 P2-02: the immutable provenance of the DEPOSIT part of one forward version -
+   * which deposit (and which hold, when the deposit carries one) was paid onward to the
+   * finance company inside H + D, and for how much. Written in the same transaction as the
+   * forward row and NEVER patched or deleted: whether the money is still FORWARDED, or has
+   * been recovered, is DERIVED from the forward version's accounting events (a posted
+   * reversal), exactly like the forward's own state, so there is no label here that could
+   * disagree with the ledger. `sum(amountMinor)` over a version's slices equals that row's
+   * `depositPortionMinor` (checked when it is written). Absent for forwards recorded before
+   * this table existed and for a replacement recorded after the sale (its deposit is already
+   * consumed into the sale); the deposit spend guard treats a live unsliced version of an
+   * unfinalized deal as covering every deposit of its quote.
+   */
+  financeCompanyForwardSlices: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    forwardId: v.id("financeCompanyForwards"),
+    version: v.number(),
+    depositId: v.id("deposits"),
+    /** The one live hold row of this deposit on the car, when the deposit carries hold rows. */
+    holdId: v.optional(v.id("depositVehicleHolds")),
+    vehicleId: v.id("vehicles"),
+    amountMinor: v.number(),
+    currency: v.string(),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org_forward", ["orgId", "forwardId"])
+    .index("by_org_deposit", ["orgId", "depositId"]),
 
   /**
    * SCRUM-693: one server-owned unwind of a CLOSED, finance-company-paid deal.
