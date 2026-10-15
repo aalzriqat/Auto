@@ -176,6 +176,8 @@ const FAMILY_TIMEOUT_MS: Partial<Record<BrowserAttackFamily, number>> = {
   // Opens a second authenticated seat, creates a foreign tenant and probes it.
   TENANT_ESCAPE: 180_000,
   AUTHORIZATION_ABUSE: 120_000,
+  // Readiness waits alone can total 60s (20s org route, 15s Add Customer, 5s dialog, 15s reload search, 5s result) before launch, the customer submit and the backend query.
+  UI_BACKEND_MISMATCH: 120_000,
   // Posts an expense and reverses it twice (ACC-2), or takes two deposits, voids one
   // and reads the ledger three times (LIFE-1); the larger bound fits the deposit leg.
   LIFECYCLE_REVERSAL: 240_000,

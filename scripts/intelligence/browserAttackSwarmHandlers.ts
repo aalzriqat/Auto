@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
@@ -386,12 +386,33 @@ async function runRtlParityAttack(
   }
 }
 
+// Locator.isVisible() ignores its timeout option and answers for the instant it
+// is called, so it reports false while the app still shows "Loading your
+// workspace...". waitFor() is the bounded wait; a control that never appears is
+// still false, which the caller turns into a HARNESS_ERROR.
+const CONTROL_READY_TIMEOUT_MS = 15_000;
+const DIALOG_READY_TIMEOUT_MS = 5_000;
+
+const RELOAD_READY_TIMEOUT_MS = 15_000;
+const RESULT_READY_TIMEOUT_MS = 5_000;
+
+async function waitVisible(locator: Locator, timeout: number): Promise<boolean> {
+  try {
+    await locator.waitFor({ state: "visible", timeout });
+    return true;
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") return false;
+    throw error;
+  }
+}
+
 async function safeVisible(
   page: Page,
   role: "button" | "dialog",
   name: string | RegExp,
+  timeout: number,
 ): Promise<boolean> {
-  return await page.getByRole(role, { name }).isVisible({ timeout: 3_000 });
+  return await waitVisible(page.getByRole(role, { name }), timeout);
 }
 
 async function runUiBackendMismatchAttack(
@@ -420,10 +441,15 @@ async function runUiBackendMismatchAttack(
       runtime.page,
       "button",
       "Add Customer",
+      CONTROL_READY_TIMEOUT_MS,
     );
     if (!addVisible) {
       throw new Error(
-        "UI/backend authority harness could not locate the Add Customer control.",
+        "UI/backend authority harness could not locate the Add Customer control within " +
+          CONTROL_READY_TIMEOUT_MS +
+          "ms at " +
+          new URL(runtime.page.url()).pathname +
+          ".",
       );
     }
 
@@ -435,6 +461,7 @@ async function runUiBackendMismatchAttack(
       runtime.page,
       "dialog",
       /Add Customer/,
+      DIALOG_READY_TIMEOUT_MS,
     );
     if (!dialogVisible) {
       throw new Error(
@@ -476,7 +503,10 @@ async function runUiBackendMismatchAttack(
     const searchInput = runtime.page
       .locator('main input[placeholder^="Search"]:not([readonly])')
       .first();
-    const searchVisible = await searchInput.isVisible({ timeout: 3_000 });
+    const searchVisible = await waitVisible(
+      searchInput,
+      RELOAD_READY_TIMEOUT_MS,
+    );
     if (!searchVisible) {
       throw new Error(
         "UI/backend authority harness could not locate the customer search control after reload.",
@@ -484,10 +514,10 @@ async function runUiBackendMismatchAttack(
     }
     await searchInput.fill(email);
 
-    const visibleAfterReload = await runtime.page
-      .getByText(lastName, { exact: false })
-      .first()
-      .isVisible({ timeout: 5_000 });
+    const visibleAfterReload = await waitVisible(
+      runtime.page.getByText(lastName, { exact: false }).first(),
+      RESULT_READY_TIMEOUT_MS,
+    );
 
     const passed =
       exactBackendMatches.length === 1 &&

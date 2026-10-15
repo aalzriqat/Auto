@@ -34,6 +34,20 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
     for (const mission of missions) expect(mission.timeoutMs).toBeGreaterThanOrEqual(180_000);
   });
 
+  it("gives UI_BACKEND_MISMATCH a budget above its 60s of readiness waits on both the deterministic and suggestion paths", () => {
+    expect(browserMissionTimeoutMs("UI_BACKEND_MISMATCH")).toBeGreaterThanOrEqual(120_000);
+    const deterministic = planBrowserAttackSwarm({ impactedInvariants: [{ id: "UI-1", severity: "HIGH" }] })
+      .missions.find((mission) => mission.family === "UI_BACKEND_MISMATCH");
+    expect(deterministic?.source).toBe("DETERMINISTIC");
+    expect(deterministic?.timeoutMs).toBe(browserMissionTimeoutMs("UI_BACKEND_MISMATCH"));
+    const suggested = planBrowserAttackSwarm({
+      impactedInvariants: [{ id: "ACC-1", severity: "HIGH" }],
+      jevSuggestions: [{ family: "UI_BACKEND_MISMATCH", probability: 0.95 }],
+    }).missions.find((mission) => mission.family === "UI_BACKEND_MISMATCH");
+    expect(suggested?.source).toBe("JEV");
+    expect(suggested?.timeoutMs).toBe(browserMissionTimeoutMs("UI_BACKEND_MISMATCH"));
+  });
+
   it("fails closed when an impacted invariant has no deterministic browser mapping", () => {
     expect(() =>
       planBrowserAttackSwarm({
