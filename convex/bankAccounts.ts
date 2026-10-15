@@ -4,9 +4,10 @@
  * Bank accounts are reference/reconciliation records, not new GL control
  * accounts — there remains exactly one SYSTEM_KEYS.BANK_ACCOUNT control
  * account (see convex/utils/defaultChart.ts). Only one bank account per org
- * may be the reconciliation target; its "book balance" is computed here at
- * query time (opening balance + a dated ledger scan), not posted as a
- * journal entry, so this file never touches the posting engine.
+ * may be the reconciliation target; its "book balance" is derived from the
+ * GL at query time (see getBookBalance), never posted as a journal entry, so
+ * this file never touches the posting engine. `openingBalanceMinor` is
+ * reference metadata only.
  */
 import { v, ConvexError } from "convex/values";
 import { query, MutationCtx } from "./_generated/server";
@@ -16,7 +17,8 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { resolveSystemAccount } from "./chartOfAccounts";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
-import { getPostedLines } from "./accountingReports";
+import { NO_ACCOUNTING_DATE_SENTINEL } from "./accountingReports";
+import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 
 export const list = query({
   args: { orgId: v.id("organizations") },
@@ -167,11 +169,19 @@ export const deactivate = mutation({
 });
 
 /**
- * Book balance for the org's reconciliation-target bank account: opening
- * balance plus net activity on the single BANK_ACCOUNT control account
- * between the account's openingBalanceDate and asOf. This is a reporting-
- * layer computation only — no journal entry is ever posted for it, so it
- * carries zero risk to the posting engine or existing hooks.
+ * Book balance for the org's reconciliation-target bank account (SCRUM-54).
+ * The GL is the sole authority: the balance is the cumulative net of the
+ * BANK_ACCOUNT control lines whose journal line names this physical bank
+ * (`bankAccountId`). `openingBalanceMinor` is reference metadata and is never
+ * added — an opening already posted to the GL would be counted twice.
+ *
+ * The control account's snapshot-aware cumulative total (closed periods read
+ * from snapshots) must be fully explained by identified lines, and no
+ * relevant line may lack a known same-org bank (even when its net is zero).
+ * Otherwise the balance is withheld (`balanceMinor: null`), never inferred
+ * by amount/date and never assigned to the target. `unmatchedMinor` is a net
+ * diagnostic; `unattributedLineCount` distinguishes net-zero unattributed
+ * activity.
  */
 export const getBookBalance = query({
   args: {
@@ -190,27 +200,70 @@ export const getBookBalance = query({
 
     const bankChartAccountId = await resolveSystemAccount(ctx, args.orgId, SYSTEM_KEYS.BANK_ACCOUNT);
     const asOf = args.asOf ?? Date.now();
-    const lines = await getPostedLines(ctx, args.orgId, target.openingBalanceDate, asOf);
 
-    let netMinor = 0;
-    for (const line of lines) {
-      if (line.accountId !== bankChartAccountId) continue;
-      // Every real bank account shares this one control account (see file
-      // header), so a second bank account in a different currency would
-      // otherwise have its activity silently folded into this one's balance
-      // — filter to the target account's own currency, same as everywhere
-      // else in this file that reads/writes target.currency.
-      if (line.currency !== target.currency) continue;
-      // BANK_ACCOUNT is a DEBIT-normal asset — debits increase the balance.
-      netMinor += line.debitMinor - line.creditMinor;
+    // Authoritative control total for this currency (BANK_ACCOUNT is a
+    // DEBIT-normal asset — debits increase the balance).
+    const cumulative = await getCumulativeBalancesAsOf(ctx, args.orgId, asOf);
+    let controlNetMinor = 0;
+    for (const b of cumulative) {
+      if (b.accountId === bankChartAccountId && b.currency === target.currency) {
+        controlNetMinor += b.debitMinor - b.creditMinor;
+      }
     }
 
-    return {
-      bankAccountId: target._id,
-      name: target.name,
-      currency: target.currency,
-      balanceMinor: target.openingBalanceMinor + netMinor,
-      asOf,
-    };
+    // Valid attribution = a same-org bank (deleted banks still own their
+    // history) in the line's own currency; a JOD line naming a USD bank is
+    // not a physical identity for that line.
+    const bankCurrencyById = new Map<string, string>(accounts.map((a) => [a._id, a.currency]));
+    // Only the control account's own lines, bounded by date on the index
+    // (the -1 "no date" sentinel is excluded, as in getPostedLines).
+    const lines = await ctx.db
+      .query("journalLines")
+      .withIndex("by_org_account_date", (q) =>
+        q
+          .eq("orgId", args.orgId)
+          .eq("accountId", bankChartAccountId)
+          .gt("accountingDate", NO_ACCOUNTING_DATE_SENTINEL)
+          .lte("accountingDate", asOf)
+      )
+      .collect();
+    // Draft/validated entries are not ledger activity; REVERSED originals are
+    // (their reversal is a separate entry). One lookup per entry.
+    const countsAsLedger = new Map<string, boolean>();
+    let targetNetMinor = 0;
+    let identifiedNetMinor = 0;
+    // Counted by line, not by net: equal-and-opposite unidentified lines net
+    // to zero but are still activity with no physical bank behind it.
+    let unattributedLineCount = 0;
+    for (const line of lines) {
+      if (line.currency !== target.currency) continue;
+      let counts = countsAsLedger.get(line.journalEntryId);
+      if (counts === undefined) {
+        const entry = await ctx.db.get(line.journalEntryId);
+        counts = entry?.status === "POSTED" || entry?.status === "REVERSED";
+        countsAsLedger.set(line.journalEntryId, counts);
+      }
+      if (!counts) continue;
+      if (!line.bankAccountId || bankCurrencyById.get(line.bankAccountId) !== line.currency) {
+        unattributedLineCount += 1;
+        continue;
+      }
+      const netMinor = line.debitMinor - line.creditMinor;
+      identifiedNetMinor += netMinor;
+      if (line.bankAccountId === target._id) targetNetMinor += netMinor;
+    }
+
+    const base = { bankAccountId: target._id, name: target.name, currency: target.currency, asOf };
+    const unmatchedMinor = controlNetMinor - identifiedNetMinor;
+    if (unmatchedMinor !== 0 || unattributedLineCount > 0) {
+      return {
+        ...base,
+        status: "UNATTRIBUTED_GL_ACTIVITY" as const,
+        balanceMinor: null,
+        unmatchedMinor,
+        unattributedLineCount,
+      };
+    }
+    return { ...base, status: "OK" as const, balanceMinor: targetNetMinor, unmatchedMinor: 0, unattributedLineCount: 0 };
   },
 });

@@ -751,6 +751,12 @@ export default defineSchema({
     payerNameSnapshot: v.optional(v.string()),
     salespersonId: v.optional(v.id("users")),
     cashierId: v.optional(v.id("users")),
+    /**
+     * SCRUM-54: the physical bank account a BANK_ACCOUNT control line moved
+     * money through, captured by the money-moving producer. Absent on legacy
+     * lines — those are unmatched and never inferred by amount/date.
+     */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     description: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
