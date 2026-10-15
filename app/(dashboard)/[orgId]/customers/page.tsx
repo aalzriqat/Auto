@@ -146,7 +146,8 @@ export default function CustomersPage() {
 
   return (
     <RoleGuard permissions={["view:customers"]}>
-      <div className="space-y-6">
+      {/* Non-visual: lets the browser swarm tell a finished search ("Exhausted") from one still paging. */}
+      <div className="space-y-6" data-testid="customers-results" data-customers-status={customersStatus}>
       <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         <Button variant="outline" onClick={() => setIsImportDialogOpen(true)}>
           <FileSpreadsheet className="me-2 h-4 w-4" /> {t("Import")}
