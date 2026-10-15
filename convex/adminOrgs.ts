@@ -228,6 +228,10 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   // SCRUM-724: standalone retained-credit refund requests. Appended last because
   // the order is pinned; nothing references these rows, so no pre-drain needed.
   { kind: "orgRows", table: "retainedCreditRefundRequests", index: "by_org" },
+  // SCRUM-411 P2-02: per-deposit provenance of a forward payment. Appended last
+  // because the order is pinned; the index leads with orgId, so the read is a
+  // prefix scan, and nothing references these rows.
+  { kind: "orgRows", table: "financeCompanyForwardSlices", index: "by_org_forward" },
 ];
 
 async function findActiveDeletionRequest(ctx: MutationCtx, orgId: Id<"organizations">) {

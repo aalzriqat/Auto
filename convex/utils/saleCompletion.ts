@@ -33,7 +33,13 @@ import {
   getOrgCurrency,
   commissionAccountingDate,
 } from "../accounting/workflowHooks";
-import { computeResoldProductMargin, type FinancedSalePlanPayload } from "../accounting/postingRules";
+import {
+  computeResoldProductMargin,
+  planConsiderationMinor,
+  planContraRevenueMinor,
+  type FinancedSalePlanPayload,
+} from "../accounting/postingRules";
+import { isServerDerivedPlanVersion } from "./financedSalePostingPlan";
 import { isChartInitialized } from "../chartOfAccounts";
 import { toMinorUnits, fromMinorUnits, denominationOf, isValidMinorAmount, addMinor } from "./money";
 import { assertProfitApproved, saleRequiresMinimumProfit } from "./profitApproval";
@@ -1544,9 +1550,17 @@ async function applySaleCompletionSideEffects(
       `This deal's financing figures are recorded in ${args.supplierGrossReceiptCurrency} but the dealership now reports in ${prepared.currency}, so what the finance company pays the supplier cannot be compared with what he is owed. Settle the deal's currency before completing it — the amounts cannot be converted here without an exchange rate nobody has recorded.`
     );
   }
+  // Plan v3 (SCRUM-411): the through-dealership consideration is the server's
+  // A + R, not the quote's operational price, so the margin, the supplier
+  // position and the recognized revenue below are measured from it - the same
+  // figure the journal's commission is posted from.
+  const serverConsiderationMinor =
+    args.financedSalePlan && isServerDerivedPlanVersion(args.financedSalePlan.version)
+      ? planConsiderationMinor(args.financedSalePlan)
+      : undefined;
   const supplierGrossReceiptMinor = settlesDirectToSupplier
     ? (args.supplierGrossReceiptMinor ?? salePriceMinor)
-    : salePriceMinor;
+    : (serverConsiderationMinor ?? salePriceMinor);
   // The same quantity `computeConsignedSupplierPosition` calls
   // `dealershipClaimMinor`, and deliberately still spelled out here rather than
   // taken from it: that function REFUSES a receipt below the entitlement, and it
@@ -1559,6 +1573,18 @@ async function applySaleCompletionSideEffects(
     isSourced && costMinor !== undefined
       ? supplierGrossReceiptMinor - costMinor
       : null;
+  // Plan v3: the revenue the ledger NETS for the vehicle leg - the consideration
+  // (less the supplier's entitlement on a consigned car) less the contra-revenue
+  // the plan posts against it, from the same lines the journal is built from. It
+  // is frozen on the sale below so the reports read the books' figure, not the
+  // gross; signed, because a contribution above a consigned commission is a real
+  // loss and flooring it would make the report disagree with the ledger.
+  const frozenNetRevenueMinor =
+    serverConsiderationMinor !== undefined && args.financedSalePlan && (!isSourced || costMinor !== undefined)
+      ? serverConsiderationMinor -
+        (isSourced ? (costMinor ?? 0) : 0) -
+        planContraRevenueMinor(args.financedSalePlan)
+      : undefined;
 
   const { previouslyCollected, appliedDeposits, appliedToSupplierSettlement } =
     await resolveReservationDeposits(ctx, {
@@ -1613,12 +1639,33 @@ async function applySaleCompletionSideEffects(
     // 3000.2000000000007 while the ledger credits 3000.2. The report could
     // then never tie to the journal, off by an amount too small to chase and
     // too persistent to ignore.
+    //
+    // A v3 financed sale recognizes the frozen net figure above instead: its
+    // ledger revenue is NET of the showroom's contribution, so the cashflow row
+    // the dashboard falls back to must carry the same number.
     recognizedRevenue:
-      isSourced && marginMinor !== null
-        ? fromMinorUnits(Math.max(0, marginMinor), prepared.currency)
-        : args.salePrice,
+      frozenNetRevenueMinor !== undefined
+        ? fromMinorUnits(frozenNetRevenueMinor, prepared.currency)
+        : isSourced && marginMinor !== null
+          ? fromMinorUnits(Math.max(0, marginMinor), prepared.currency)
+          : args.salePrice,
     idempotencyKey: args.idempotencyKey,
   });
+  if (frozenNetRevenueMinor !== undefined) {
+    if (!Number.isSafeInteger(frozenNetRevenueMinor)) {
+      throw new ConvexError(
+        "This financed sale's net revenue is not a representable amount, so it cannot be recorded. Re-derive the deal's settlement before completing it."
+      );
+    }
+    await ctx.db.patch(saleId, {
+      financedNetRevenue: {
+        minor: frozenNetRevenueMinor,
+        currency: prepared.currency,
+        // K, frozen beside the net so the readers bound the entitlement by what completion did.
+        considerationMinor: serverConsiderationMinor,
+      },
+    });
+  }
 
   await closeLeadsAsWon(ctx, {
     orgId: args.orgId,

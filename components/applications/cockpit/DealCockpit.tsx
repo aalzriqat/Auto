@@ -192,6 +192,7 @@ import {
 import { RecordLegalInvoiceDialog, type RecordLegalInvoiceValues } from "./RecordLegalInvoiceDialog";
 import { DealClosingReadinessList, closingReasonText, type ClosingReadinessView } from "./DealClosingReadinessList";
 import { useClosingReadiness } from "./useClosingReadiness";
+import { usePreFinalizeForward, type PreFinalizeForward } from "./usePreFinalizeForward";
 import { closingReadinessRefusalOf } from "@/lib/closingReadinessReasonCodes";
 import { ProfitApprovalNotice, useProfitApproval } from "@/components/sales/ProfitApprovalNotice";
 import { formatMinorAmount, formatMoneyAmount } from "@/lib/moneyDisplay";
@@ -506,33 +507,68 @@ const LEGAL_INVOICE_ISSUED_TO_LABEL: Record<string, string> = {
 function finalizeUnavailableReasonKey({
   routeRequired,
   canRecordRoute,
-  heldDepositBlocksDirectClose,
   readinessBlocksClose,
   readinessUnreadable,
+  forwardReasonKey,
   canClose,
   canReadReadiness,
 }: Readonly<{
   routeRequired: boolean;
   canRecordRoute: boolean;
-  /**
-   * `finalizeDeal` refuses a DIRECT_TO_SUPPLIER deal whose quote still holds a
-   * reservation deposit (SCRUM-417, G7) — the same refusal
-   * `setSupplierSettlementRoute` makes, by the other door.
-   */
-  heldDepositBlocksDirectClose: boolean;
   readinessBlocksClose: boolean;
   readinessUnreadable: boolean;
+  /**
+   * SCRUM-411 P2-01: `finalizeDeal` refuses until the deposit and the
+   * contribution owed to the finance company are on the books for the plan it
+   * would freeze. Judged after the readiness (the server cannot form the plan
+   * before the deal is ready to close) and before the close permission, because
+   * the payment is a fact about the deal that someone other than the closer may
+   * have to act on.
+   */
+  forwardReasonKey: string | undefined;
   canClose: boolean;
   canReadReadiness: boolean;
 }>): string | undefined {
   if (routeRequired && !canRecordRoute) return "FinalizeNeedsRouteAndPermission";
   if (routeRequired) return "FinalizeNeedsSettlementRoute";
-  if (heldDepositBlocksDirectClose) return "FinalizeNeedsHeldDepositResolved";
   if (readinessUnreadable) return "FinalizeWaitsForReadiness";
   if (readinessBlocksClose) return "FinalizeNeedsClosingReadiness";
+  if (forwardReasonKey !== undefined) return forwardReasonKey;
   if (!canClose) return "FinalizeNeedsPermission";
   if (!canReadReadiness) return "FinalizeNeedsReadinessAccess";
   return undefined;
+}
+
+/** The step's note when the caller may record the payment: the close waits for it, and the step IS the payment. */
+const FORWARD_PAYMENT_STEP_KEY = "FinalizeNeedsForwardPayment";
+
+/**
+ * Why the close waits on the payment to the finance company (SCRUM-411 P2-01), or
+ * `undefined` when it does not. The server's own verdict, never recomputed here:
+ * UNPAID is the payment still to be recorded - by this caller, or by the manager
+ * or accountant who may; every other blocking state names who resolves it. A
+ * verdict still loading, unavailable or not applicable (`undefined`) blocks
+ * nothing on this screen; `finalizeDeal` judges it on the server regardless.
+ */
+function preFinalizeForwardReasonKey(status: PreFinalizeForward | undefined): string | undefined {
+  switch (status?.state) {
+    case "FIRST_PAYMENT_UNFUNDED":
+      return "FinalizeFirstPaymentUnfunded";
+    case "UNPAID":
+      return status.mayRecord ? FORWARD_PAYMENT_STEP_KEY : "ForwardNeedsPermission";
+    case "STALE":
+      return "FinalizeForwardPaymentStale";
+    case "POSTING_PENDING":
+      return "FinalizeForwardPaymentPosting";
+    case "POSTING_FAILED":
+      return "FinalizeForwardPaymentPostingFailed";
+    case "REVERSAL_PENDING":
+      return "FinalizeForwardPaymentReversing";
+    case "NEEDS_REPAIR":
+      return "FinalizeForwardPaymentNeedsReview";
+    default:
+      return undefined;
+  }
 }
 
 /**
@@ -1058,6 +1094,20 @@ export function DealCockpit({
     readinessUnreadable: closingReadinessServiceUnavailable,
   });
   const finalizeAllowedByReadiness = finalizeReadinessHoldKey === undefined;
+  // SCRUM-411 P2-01: the deposit and the contribution owed to the finance company
+  // are paid BEFORE the close. The server judges it against the plan the close
+  // would freeze (the cockpit's own `forward` block only knows a frozen plan, so
+  // it says nothing about an approved deal that is not finalized yet). Asked while
+  // the deal is APPROVED; the plan it judges is formed from the same inputs the
+  // readiness already evaluated, so `planReady` tells the server to skip that second
+  // derivation until the deal is ready to close. The payment itself (which one to take
+  // back, and that Cancel must wait) is answered either way (SCRUM-411 B1). Read
+  // without throwing like the readiness above.
+  const preFinalizeForward = usePreFinalizeForward(
+    canViewApplications && deal?.status === "APPROVED"
+      ? { orgId, applicationId, planReady: finalizeAllowedByReadiness }
+      : "skip"
+  );
   const planCustodyHandler = useMutation(api.financeDealCosts.planCustodyHandler);
   const openDealCustody = useMutation(api.financeDealCosts.openDealCustody);
   const recordCustodyMovement = useMutation(api.financeDealCosts.recordCustodyMovement);
@@ -1882,13 +1932,17 @@ export function DealCockpit({
   // once APPROVED). A CLOSED deal is cancelled only on the server's own answer
   // (`mayCancelFinalized`: the same permission tiers AND the forward gate); no
   // answer yet means no Cancel, never a permission-only guess.
+  // SCRUM-411 B1: an approved deal that already carries a payment to the finance company
+  // cannot be cancelled either (the server refuses until it is taken back), so the
+  // server's `blocksCancel` withholds Cancel before the close as `mayCancelFinalized` does after.
+  const preFinalizeCancelBlocked = app?.status !== "CLOSED" && preFinalizeForward?.blocksCancel === true;
   const canCancel =
     app != null &&
     app.status !== "CANCELLED" &&
     (app.status === "CLOSED"
       ? // A recorded supplier payment bars bare cancellation just as the company's own payment does.
         canCancelClosedDeal && deal?.forward?.mayCancelFinalized === true && !app.disbursedAt && !app.supplierDisbursementStatus
-      : canCreateApplication && (app.status === "APPROVED" ? canApproveApplication : true));
+      : canCreateApplication && (app.status === "APPROVED" ? canApproveApplication : true) && !preFinalizeCancelBlocked);
   // The caller holds the cancel authority but the server still refuses: with no
   // disbursement authority the missing piece is a manager; with it, only the
   // forward gate is left, which is not a permission.
@@ -1902,9 +1956,33 @@ export function DealCockpit({
       ? canConfirmFinanceDisbursement
         ? "FORWARD"
         : "MANAGER"
-      : undefined;
+      : preFinalizeCancelBlocked && canCreateApplication && canApproveApplication
+        ? "FORWARD"
+        : undefined;
   const forwardBlocksTransfer =
     deal?.forward?.applies === true && deal.forward.state !== "SETTLED" && deal.forward.state !== "NOT_DUE";
+  /**
+   * The figures the payment dialog pins, and the amount it sends. After the close
+   * they are the frozen plan's (`money.forward`); before it, the plan the close
+   * WOULD freeze (SCRUM-411 P2-01), offered only while the server says the payment
+   * is still to be recorded and this caller may record it. The two never overlap:
+   * the cockpit's `forward.applies` is false until a plan is frozen.
+   */
+  const forwardPayment =
+    deal?.forward?.applies === true && deal.money?.forward
+      ? deal.money.forward
+      : preFinalizeForward?.state === "UNPAID" && preFinalizeForward.mayRecord
+        ? preFinalizeForward.money
+        : null;
+  /**
+   * The payment the take-back / report-returned control acts on. A finalized
+   * deal's comes from the cockpit; before the close, from the server's status of
+   * the payment recorded for the plan the close would freeze, which is also how a
+   * STALE payment (recorded against other figures) is taken back and re-recorded.
+   */
+  const forwardCorrectionTargetId = deal?.forward?.onBooksForwardId ?? preFinalizeForward?.onBooksForwardId ?? null;
+  const mayCorrectForward =
+    deal?.forward?.planV2 === true ? deal.forward.mayRecord === true : preFinalizeForward?.mayRecord === true;
   const applicationDeposits: DealDeposit[] = (app?.deposits ?? []).map((deposit) => ({
     _id: deposit._id,
     amount: deposit.amount,
@@ -2437,15 +2515,26 @@ export function DealCockpit({
       : finalizeUnavailableReasonKey({
           routeRequired: settlementRouteRequired,
           canRecordRoute: canRecordSupplierRoute,
-          heldDepositBlocksDirectClose:
-            app?.supplierSettlementRoute === "DIRECT_TO_SUPPLIER" &&
-            (app.deposits ?? []).some((deposit) => deposit.status === "HELD"),
           readinessBlocksClose:
             closingReadiness !== undefined && closingReadiness.open && closingReadiness.state !== "READY",
           readinessUnreadable: closingReadinessServiceUnavailable,
+          forwardReasonKey: preFinalizeForwardReasonKey(preFinalizeForward),
           canClose: canCloseDeal,
           canReadReadiness: canViewApplications,
         });
+    // SCRUM-411 P2-01: the deposit and the contribution go to the finance company
+    // BEFORE the close. For the caller who may record that payment the step IS the
+    // payment (the existing dialog, with the server's pinned amount); everyone else
+    // is told who does, by the reason above. Nothing here forms its own opinion of
+    // what is owed: the status is the server's.
+    if (finalizeReasonKey === FORWARD_PAYMENT_STEP_KEY) {
+      return {
+        stageKey: "SETTLEMENT",
+        actionKey: "RecordForwardToFinanceCompany",
+        onStart: () => setRecordingForward(true),
+        noteKey: FORWARD_PAYMENT_STEP_KEY,
+      };
+    }
     // The same wait as `app` above, for the readiness verdict (S414-R2-SKEW-1,
     // S414-R3-1): the close is offered only under `finalizeAllowedByReadiness`.
     // With no reason to name — a read still in flight, or a verdict that says
@@ -2479,14 +2568,6 @@ export function DealCockpit({
        */
       unavailableReasonKey: finalizeReasonKey,
       unavailableDetail: finalizeDenominationDetail,
-      // SCRUM-417 UX1 (S4): the held deposit is resolved in the vehicle's
-      // deposit manager, on the vehicles page. Linked only for a caller who
-      // can resolve deposits AND open that page; everyone else is told who acts.
-      ...(finalizeReasonKey === "FinalizeNeedsHeldDepositResolved"
-        ? canResolveDeposits && hasPermission(PERMISSIONS.VIEW_VEHICLES)
-          ? { unavailableLink: { href: `/${orgId}/vehicles`, labelKey: "OpenDepositManagerAction" } }
-          : { unavailableNoteKey: "DepositManagerNeedsApprover" }
-        : {}),
     };
   }
 
@@ -3054,23 +3135,22 @@ export function DealCockpit({
           : undefined
       }
       forwardCorrection={
-        deal?.forward?.planV2 === true &&
-        deal.forward.mayRecord === true &&
-        deal.forward.onBooksForwardId &&
+        mayCorrectForward &&
+        forwardCorrectionTargetId &&
         // A live unwind owns the forward payment: the server refuses either correction meanwhile.
         !unwindBars
           ? {
-              canVoid: deal.forward.transferConfirmed !== true,
+              canVoid: deal?.forward?.transferConfirmed !== true,
               open: forwardCorrection,
               submitting: forwardCorrectionSubmitting,
               onOpen: setForwardCorrection,
               onClose: () => setForwardCorrection(null),
               onConfirm: async (reason: string) => {
-                const forwardId = deal.forward?.onBooksForwardId;
+                const forwardId = forwardCorrectionTargetId;
                 const kind = forwardCorrection;
                 if (!forwardId || !kind) return;
                 // A VOID dialog opened before the transfer was confirmed must not submit after it.
-                if (kind === "VOID" && deal.forward?.transferConfirmed === true) {
+                if (kind === "VOID" && deal?.forward?.transferConfirmed === true) {
                   toast.error(t("ForwardVoidAfterTransfer"));
                   setForwardCorrection(null);
                   return;
@@ -3498,16 +3578,16 @@ export function DealCockpit({
                 },
               },
               forward:
-                deal?.forward?.applies === true && deal.money?.forward
+                forwardPayment
                   ? {
                       confirming: recordingForward,
                       submitting: forwardSubmitting,
-                      totalLabel: formatEconomics(deal.money.forward.dueMinor),
-                      depositLabel: formatEconomics(deal.money.forward.depositMinor),
-                      contributionLabel: formatEconomics(deal.money.forward.contributionMinor),
+                      totalLabel: formatEconomics(forwardPayment.dueMinor),
+                      depositLabel: formatEconomics(forwardPayment.depositMinor),
+                      contributionLabel: formatEconomics(forwardPayment.contributionMinor),
                       onOpenChange: setRecordingForward,
                       onConfirm: async (values) => {
-                        const dueMinor = deal.money?.forward?.dueMinor;
+                        const dueMinor = forwardPayment.dueMinor;
                         if (!dueMinor) return;
                         setForwardSubmitting(true);
                         // One key per attempt: a retry after a lost response is the
@@ -3824,9 +3904,9 @@ export function DealCockpit({
           ? {
               readiness: closingReadiness,
               serviceUnavailable: closingReadinessServiceUnavailable,
-              // The legal invoice is still recorded by hand while the v1
-              // posting plan reads it (SCRUM-411 retires that dependency); it
-              // is shown and recorded by the disbursement tier only, as before.
+              // The legal invoice is OPTIONAL evidence since plan v3 (SCRUM-411):
+              // the server derives the sale and never reads it as revenue. It is
+              // shown and recorded by the disbursement tier only, as before.
               legalInvoice:
                 dealCosts && canConfirmFinanceDisbursement
                   ? {
@@ -3888,6 +3968,7 @@ export function DealCockpit({
           error={legalInvoiceError}
           scale={scaleForCurrency(dealCosts?.currency ?? orgCurrency.code)}
           currency={dealCosts?.currency ?? orgCurrency.code}
+          vehicleIsConsigned={isConsignedDeal}
           existing={
             dealCosts?.legalInvoiceAmountMinor !== undefined
               ? {
@@ -3895,6 +3976,7 @@ export function DealCockpit({
                   number: dealCosts.legalInvoiceNumber,
                   date: dealCosts.legalInvoiceDate,
                   issuedTo: dealCosts.legalInvoiceIssuedTo,
+                  issuerName: dealCosts.legalInvoiceIssuerName,
                 }
               : undefined
           }
@@ -3914,6 +3996,8 @@ export function DealCockpit({
                     legalInvoiceDate: values.legalInvoiceDate,
                     issuedTo: values.issuedTo,
                     issuedToOther: values.issuedToOther,
+                    issuedBy: values.issuedBy,
+                    issuerName: values.issuerName,
                   }),
                 "LegalInvoiceRecorded",
                 {
@@ -3922,6 +4006,7 @@ export function DealCockpit({
                     amountMinor: values.legalInvoiceAmountMinor,
                     date: values.legalInvoiceDate,
                     issuedTo: values.issuedTo,
+                    issuerName: values.issuerName,
                   }),
                 }
               );

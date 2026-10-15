@@ -44,7 +44,6 @@ export type FinancedScenario = {
   approved: number;
   deposit?: { amount: number; method: DepositMethod };
   expectedPayment: ExpectedPaymentMethod;
-  legalInvoice: number;
   forwardMethod?: ForwardMethod;
   /** How an approval below the quotation is settled; absent = the dealership absorbs it. */
   gap?: GapAgreement;
@@ -424,22 +423,9 @@ export async function closeFinancedDeal(
   await costs.getByRole("button", { name: "Confirm reconciliation" }).click();
   await expect(costs.getByRole("button", { name: "Reconcile fee" })).toHaveCount(0);
 
-  const checklist = managerPage.getByTestId("deal-closing-checklist");
-  await checklist.getByTestId("closing-check-go-LEGAL_INVOICE_RECORDED").click();
-  const invoice = managerPage.getByRole("dialog");
-  await invoice.locator("#legal-invoice-amount").fill(String(s.legalInvoice));
-  await invoice.locator("#legal-invoice-number").fill(`INV-QA-${testDataSuffix()}`);
-  const invoiceDate = invoice.locator("#legal-invoice-date");
-  const latestDay = await invoiceDate.getAttribute("max");
-  expect(latestDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-  await invoiceDate.fill(latestDay!);
-  await invoice.getByRole("button", { name: "Save Legal Invoice" }).click();
-  await expect(invoice).not.toBeVisible();
-  await expect(checklist.getByTestId("closing-check-LEGAL_INVOICE_RECORDED")).toHaveAttribute(
-    "data-status",
-    "READY",
-  );
-
+  // SCRUM-411: no legal invoice is recorded. The server derives the sale from the
+  // approved amount, the contribution and the customer's gap, so a deal with no
+  // real invoice closes once the other prerequisites are met.
   const close = nextStep.getByRole("button", { name: "Close the deal", exact: true });
   await expect(close).toBeVisible();
   await close.click();

@@ -77,7 +77,6 @@ const BASE = {
   downPayment: 3_000,
   quotation: 13_000,
   approved: 13_000,
-  legalInvoice: 13_000,
 };
 
 /**
@@ -454,7 +453,6 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
     company: LTV90,
     ...BASE,
     approved: 12_000,
-    legalInvoice: 12_000,
     expectedPayment: "BANK_TRANSFER",
     // OR-1: the company owes the APPROVED 12,000.
     // funded = min(12,000×0.9=10,800, 12,000−3,000=9,000) = 9,000; contribution 0.
@@ -469,7 +467,6 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
     company: LTV70,
     ...BASE,
     approved: 12_000,
-    legalInvoice: 12_000,
     expectedPayment: "BANK_TRANSFER",
     forwardMethod: "BANK_TRANSFER",
     // funded = min(12,000×0.7=8,400, 9,000) = 8,400; contribution = 12,000 − 8,400 − 3,000 = 600.
@@ -562,7 +559,6 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
     company: LTV90,
     ...BASE,
     approved: 12_000,
-    legalInvoice: 13_000,
     gap: { mode: "CUSTOMER_ABSORBS", cash: 1_000, installments: 0 },
     expectedPayment: "BANK_TRANSFER",
     // funded = min(10,800, 9,000) = 9,000; contribution 0. Net shortfall (SCRUM-766)
@@ -583,7 +579,6 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
     company: LTV70,
     ...BASE,
     approved: 12_000,
-    legalInvoice: 12_400,
     gap: { mode: "SPLIT", customerShare: 400, cash: 0, installments: 400 },
     expectedPayment: "BANK_TRANSFER",
     forwardMethod: "BANK_TRANSFER",
@@ -608,13 +603,13 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
     company: LTV70,
     ...BASE,
     approved: 12_000,
-    legalInvoice: 12_000,
     gap: { mode: "SPLIT", customerShare: 400, cash: 0, installments: 0, toFinanceCompany: 400 },
     expectedPayment: "BANK_TRANSFER",
     forwardMethod: "BANK_TRANSFER",
     // As F23, but the customer's 400 goes to the finance company (SCRUM-766 PR-B): the
     // contribution is 12,000 − 8,400 − 3,000 = 600 less the 400 = 200, and no customer
-    // receivable exists, so the legal invoice is the approved 12,000.
+    // receivable exists. The server derives the consideration (plan v3: approved 12,000 +
+    // receivable 0 = 12,000); no legal invoice is entered.
     expect: {
       close: {
         "1210": { dr: jod(12_000) },
@@ -633,7 +628,6 @@ const SCENARIOS: Array<FinancedScenario & { expect: Expectation }> = [
     company: LTV90,
     ...BASE,
     approved: 12_000,
-    legalInvoice: 12_500,
     deposit: { amount: 400, method: "CASH" },
     gap: { mode: "SPLIT", customerShare: 500, cash: 300, installments: 200 },
     expectedPayment: "CHEQUE",
@@ -1022,7 +1016,6 @@ const CANCEL_SCENARIOS: CancelScenario[] = [
     company: LTV90,
     ...BASE,
     approved: 12_000,
-    legalInvoice: 13_000,
     gap: { mode: "CUSTOMER_ABSORBS", cash: 1_000, installments: 0 },
     expectedPayment: "BANK_TRANSFER",
     cancelAfterClose: true,

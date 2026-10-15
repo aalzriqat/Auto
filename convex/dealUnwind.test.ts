@@ -103,11 +103,8 @@ async function paidDeal(
     });
   }
   await beforeFinalize?.(s, applicationId);
+  // SCRUM-411 P2-01: finalizeAsOwner records the H + D payment to the company BEFORE it closes the deal.
   await finalizeAsOwner(s, applicationId);
-  await s.owner.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-    orgId: s.orgId, applicationId, method: "BANK_TRANSFER", paidAt: Date.now(),
-    expectedAmountMinor: FORWARD, idempotencyKey: crypto.randomUUID(),
-  });
   if (method === "CASH") await s.t.run((ctx) => ctx.db.patch(applicationId, { expectedPaymentMethod: "CASH" }));
   await s.owner.as.mutation(api.applications.confirmDisbursement, {
     orgId: s.orgId, applicationId, disbursedAmountMinor: G, idempotencyKey: crypto.randomUUID(),

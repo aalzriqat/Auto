@@ -234,6 +234,38 @@ export const AppErrorCode = {
   FORWARD_CANCEL_POSTING_UNSETTLED: "FORWARD_CANCEL_POSTING_UNSETTLED",
   FORWARD_CANCEL_REVERSAL_PENDING: "FORWARD_CANCEL_REVERSAL_PENDING",
   FORWARD_CANCEL_NEEDS_REPAIR: "FORWARD_CANCEL_NEEDS_REPAIR",
+  // SCRUM-411 P2-01. `finalizeDeal` and the finance company's transfer (`confirmDisbursement`,
+  // `confirmSupplierDisbursement`) refuse while the deposit + contribution payment to the finance
+  // company is not on the books (`forwardGateRefusal`). One code per (gate, reason); the EN
+  // dictionary text equals the server message. Translated under ServerError_<code>.
+  // SCRUM-411 P2-02 containment. A held deposit already inside a live pre-finalize payment to the
+  // finance company cannot also be refunded, forfeited, voided or paid out (`assertDepositNotInLiveForward`).
+  DEPOSIT_PAID_ONWARD_TO_FINANCE_COMPANY: "DEPOSIT_PAID_ONWARD_TO_FINANCE_COMPANY",
+  // SCRUM-411 P2-02. The deposits held on the deal cannot be tied, one by one, to the payment being recorded
+  // (`recordFinanceCompanyForward`), so no provenance is written and no payment is recorded.
+  FORWARD_DEPOSIT_PROVENANCE_UNCLEAR: "FORWARD_DEPOSIT_PROVENANCE_UNCLEAR",
+  // SCRUM-411 P2-01 / SCRUM-766 Q2. `customerFinanceCompanyPayments.confirmPayment` / `voidPayment` change the
+  // showroom's contribution, so they refuse while a payment to the finance company is on the books or unsettled
+  // (`assertForwardAllowsContributionChange`): the amount already paid would no longer match the plan.
+  CUSTOMER_PAYMENT_FORWARD_LIVE: "CUSTOMER_PAYMENT_FORWARD_LIVE",
+  // SCRUM-411 P2-01. The shared economics recompute and the two writers that clear the contribution refuse a
+  // change to the showroom's contribution while a payment to the finance company is live
+  // (`assertForwardAllowsEconomicsChange`): the amount already paid would no longer match the plan.
+  DEAL_ECONOMICS_FORWARD_LIVE: "DEAL_ECONOMICS_FORWARD_LIVE",
+  FORWARD_FINALIZE_UNPAID: "FORWARD_FINALIZE_UNPAID",
+  FORWARD_FINALIZE_STALE: "FORWARD_FINALIZE_STALE",
+  FORWARD_FINALIZE_POSTING_PENDING: "FORWARD_FINALIZE_POSTING_PENDING",
+  FORWARD_FINALIZE_POSTING_FAILED: "FORWARD_FINALIZE_POSTING_FAILED",
+  FORWARD_FINALIZE_REVERSAL_PENDING: "FORWARD_FINALIZE_REVERSAL_PENDING",
+  FORWARD_FINALIZE_NEEDS_REPAIR: "FORWARD_FINALIZE_NEEDS_REPAIR",
+  FORWARD_TRANSFER_UNPAID: "FORWARD_TRANSFER_UNPAID",
+  FORWARD_TRANSFER_POSTING_PENDING: "FORWARD_TRANSFER_POSTING_PENDING",
+  FORWARD_TRANSFER_POSTING_FAILED: "FORWARD_TRANSFER_POSTING_FAILED",
+  FORWARD_TRANSFER_REVERSAL_PENDING: "FORWARD_TRANSFER_REVERSAL_PENDING",
+  FORWARD_TRANSFER_NEEDS_REPAIR: "FORWARD_TRANSFER_NEEDS_REPAIR",
+  // SCRUM-411 P2-03. The agreed first payment was founded on a reservation deposit that is not being
+  // applied to the purchase (`resolveFinancedSalePlan`), so it would be funded by nothing.
+  FIRST_PAYMENT_UNFUNDED: "FIRST_PAYMENT_UNFUNDED",
   // SCRUM-413 S413B-4/L-2
   OWNER_NAMED_ROLE_LOCKED: "OWNER_NAMED_ROLE_LOCKED",
   // SCRUM-693. Unwinding a paid finance deal (convex/dealUnwind.ts). Messages live in

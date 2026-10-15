@@ -1,0 +1,49 @@
+{
+  "id": "financed-v3-refunded-deposit-leaves-first-payment-unfunded-refused",
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "approvedMinor": 12500000,
+        "firstPaymentMinor": 200000,
+        "depositMinor": 0,
+        "depositStatus": "REFUNDED",
+        "contributionMinor": 1375000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "finalize.refusalCode",
+      "value": "FIRST_PAYMENT_UNFUNDED"
+    },
+    {
+      "observable": "sales.count",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum411ForwardOrdering.test.ts",
+    "testName": "a deposit already refunded before finalize is refused too: H is zero but the first payment is still owed"
+  },
+  "matrixRow": "pilot-financed-v3-unfunded-first-payment",
+  "fingerprint": "7ba33a032cee83c24739ee54435b9dcd43334a9703a2b20228c778a9ec9258d8",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum411-forward-ordering",
+    "firstSeen": "2026-10-14"
+  }
+}

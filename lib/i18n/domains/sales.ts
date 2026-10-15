@@ -249,6 +249,39 @@ const dealRailMessages = defineBilingualMessages({
     "An accountant resolves the payment to the finance company before the transfer can be confirmed.",
     "يعالج المحاسب الدفع لشركة التمويل قبل أن يمكن تأكيد التحويل.",
   ],
+  /**
+   * SCRUM-411 P2-01. The deposit and the contribution are paid to the finance
+   * company BEFORE the deal is closed; the close waits for the payment to be on
+   * the books for the figures the close would freeze. Each names who acts next.
+   */
+  FinalizeNeedsForwardPayment: [
+    "The customer's deposit and the dealership's contribution are paid to the finance company before the deal is closed. Record that payment, then close the deal.",
+    "يُدفع عربون العميل ومساهمة المعرض لشركة التمويل قبل إغلاق الصفقة. سجّل هذا الدفع ثم أغلق الصفقة.",
+  ],
+  FinalizeForwardPaymentStale: [
+    "The payment to the finance company was recorded against different figures than this deal has now. A manager or accountant voids it (Void the payment, above) and records it again before the deal is closed.",
+    "سُجّل الدفع لشركة التمويل على أرقام تختلف عمّا في الصفقة الآن. يلغي المدير أو المحاسب هذا الدفع (إلغاء الدفع، في الأعلى) ويسجّله من جديد قبل إغلاق الصفقة.",
+  ],
+  FinalizeForwardPaymentPosting: [
+    "The payment to the finance company is recorded but not yet posted to the books. An accountant posts it before the deal is closed.",
+    "الدفع لشركة التمويل مسجَّل لكنه لم يُرحَّل إلى الدفاتر بعد. يرحّله المحاسب قبل إغلاق الصفقة.",
+  ],
+  FinalizeForwardPaymentPostingFailed: [
+    "The payment to the finance company failed to post to the books. An accountant resolves it before the deal is closed.",
+    "تعذّر ترحيل الدفع لشركة التمويل إلى الدفاتر. يعالجه المحاسب قبل إغلاق الصفقة.",
+  ],
+  FinalizeForwardPaymentReversing: [
+    "The payment to the finance company is being reversed and the reversal is not yet posted. An accountant posts it before the deal is closed.",
+    "يجري عكس الدفع لشركة التمويل ولم يُرحَّل العكس بعد. يرحّله المحاسب قبل إغلاق الصفقة.",
+  ],
+  FinalizeForwardPaymentNeedsReview: [
+    "The record of the payment to the finance company does not match the books. An accountant reviews it before the deal is closed.",
+    "سجل الدفع لشركة التمويل لا يطابق الدفاتر. يراجعه المحاسب قبل إغلاق الصفقة.",
+  ],
+  FinalizeFirstPaymentUnfunded: [
+    "The customer's first payment was agreed on the strength of a reservation deposit that has since been refunded or forfeited, so nothing funds it. A manager reopens the approval and amends the first payment before the deal is closed.",
+    "اتُّفق على الدفعة الأولى للعميل اعتمادًا على عربون حجز جرى استرداده أو مصادرته لاحقًا، فلا يوجد ما يموّلها. يعيد المدير فتح الموافقة ويعدّل الدفعة الأولى قبل إغلاق الصفقة.",
+  ],
   ForwardReturnedNotSettledReason: [
     "The finance company returned the payment. An accountant resolves its reversal before the replacement payment can be recorded.",
     "أعادت شركة التمويل الدفعة. يعالج المحاسب عكسها قبل أن يمكن تسجيل الدفعة البديلة.",
@@ -1374,8 +1407,17 @@ const dealOverviewMessages = defineBilingualMessages({
   /** Legal invoice & deal closing bindings. */
   RecordLegalInvoice: ["Record Legal Invoice", "تسجيل الفاتورة القانونية"],
   RecordLegalInvoiceDesc: [
-    "Record the official legal invoice details for this deal. The legal invoice amount establishes the official sale revenue.",
-    "تسجيل تفاصيل الفاتورة القانونية الرسمية لهذه الصفقة. يُحدّد مبلغ الفاتورة القانونية إيراد البيع الرسمي.",
+    "Optional. Record a legal invoice only if one was really issued, exactly as printed. It is checked against the deal and kept as evidence; it never sets the sale revenue or its date.",
+    "اختياري. سجّل فاتورة قانونية فقط إن صدرت فعلًا، كما هي مطبوعة. تُراجَع مقابل الصفقة وتُحفظ كدليل؛ ولا تحدّد إيراد البيع ولا تاريخه.",
+  ],
+  LegalInvoiceIssuerName: ["Issued by (importer / supplier name)", "صادرة عن (اسم المستورد / المورّد)"],
+  LegalInvoiceIssuerHintConsigned: [
+    "This car belongs to a supplier or importer, so the vehicle invoice to the finance company is theirs. The dealership issues none for its margin.",
+    "هذه السيارة مملوكة لمورّد أو مستورد، لذا فاتورة السيارة إلى شركة التمويل صادرة عنه. المعرض لا يصدر فاتورة عن هامشه.",
+  ],
+  LegalInvoiceAmountHint: [
+    "The finance company's invoice is for the approved amount only; the customer's own gap is not on it.",
+    "فاتورة شركة التمويل بمبلغ الموافقة فقط؛ فجوة العميل الخاصة ليست فيها.",
   ],
   LegalInvoiceAmount: ["Invoice amount", "مبلغ الفاتورة"],
   LegalInvoiceNumber: ["Invoice number", "رقم الفاتورة"],
@@ -1383,14 +1425,6 @@ const dealOverviewMessages = defineBilingualMessages({
   LegalInvoiceDateNotOpenYet: [
     "Today's date opens on the ledger at {time} (midnight UTC). Pick the date printed on the invoice; if it is today, save the invoice after that time.",
     "يبدأ تاريخ اليوم في الدفاتر الساعة {time} (منتصف الليل بتوقيت UTC). اختر التاريخ المطبوع على الفاتورة، وإن كان تاريخ اليوم فاحفظ الفاتورة بعد ذلك الوقت.",
-  ],
-  LegalInvoiceDateDayChanged: [
-    "The day changed while this form was open. Pick the date printed on the invoice.",
-    "تغيّر اليوم بينما كان هذا النموذج مفتوحًا. اختر التاريخ المطبوع على الفاتورة.",
-  ],
-  LegalInvoiceDateNowOpen: [
-    "Today's date is now open on the ledger. Pick the date printed on the invoice.",
-    "أصبح تاريخ اليوم متاحًا الآن في الدفاتر. اختر التاريخ المطبوع على الفاتورة.",
   ],
   LegalInvoiceIssuedTo: ["Issued to", "صادرة إلى"],
   LegalInvoiceIssuedToOther: ["Specify recipient", "تحديد المستلم"],
@@ -1455,7 +1489,8 @@ const dealOverviewMessages = defineBilingualMessages({
   ClosingCheck_HANDOVER_COSTS_PAID: ["Handover costs are paid", "مصاريف التسليم مدفوعة"],
   // SCRUM-629 F-22: the AGREED amount is known — not that the money was received (SCRUM-635).
   ClosingCheck_FIRST_PAYMENT_RECORDED: ["The agreed first payment is known", "الدفعة الأولى المتفق عليها معروفة"],
-  ClosingCheck_LEGAL_INVOICE_RECORDED: ["The legal invoice is recorded", "الفاتورة القانونية مسجَّلة"],
+  ClosingCheck_LEGAL_INVOICE_RECORDED: ["The legal invoice (optional) agrees with the deal", "الفاتورة القانونية (اختيارية) تطابق الصفقة"],
+  ClosingCheck_RECOGNITION_PERIOD_OPEN: ["The handover date falls in an open accounting period", "تاريخ التسليم يقع في فترة محاسبية مفتوحة"],
   // SCRUM-420 — generic fallback for a check this bundle has no copy for (S420-01).
   ClosingCheck_UNKNOWN: ["Another closing check", "شرط إغلاق آخر"],
   ClosingReason_UNKNOWN: [
@@ -1603,6 +1638,26 @@ const dealOverviewMessages = defineBilingualMessages({
     "The finance company is the legal buyer, but the recorded invoice was not issued to it. Re-record the invoice before closing.",
     "شركة التمويل هي المشتري القانوني، لكن الفاتورة المسجَّلة لم تصدر باسمها. أعد تسجيل الفاتورة قبل الإغلاق.",
   ],
+  ClosingReason_LEGAL_INVOICE_AMOUNT_MISMATCH: [
+    "The recorded legal invoice does not match the finance company's approved amount. Correct it to the real document before closing.",
+    "الفاتورة القانونية المسجَّلة لا تطابق المبلغ الذي اعتمدته شركة التمويل. صحّحها لتوافق المستند الحقيقي قبل الإغلاق.",
+  ],
+  ClosingReason_LEGAL_INVOICE_WRONG_ISSUER: [
+    "The recorded invoice's issuer does not fit this car's ownership. A supplier's or importer's invoice must name them; the dealership issues none for its margin.",
+    "جهة إصدار الفاتورة المسجَّلة لا تناسب ملكية هذه السيارة. فاتورة المورّد أو المستورد يجب أن تسمّيه؛ والمعرض لا يصدر فاتورة عن هامشه.",
+  ],
+  ClosingReason_RECOGNITION_HANDOVER_PENDING: [
+    "The sale is recognised on the vehicle handover date. Register the handover first.",
+    "يُعترف بالبيع في تاريخ تسليم السيارة. سجّل التسليم أولًا.",
+  ],
+  ClosingReason_RECOGNITION_PERIOD_NOT_OPEN: [
+    "The vehicle was handed over on a date that has no open accounting period. Open or reopen that period before closing.",
+    "سُلّمت السيارة في تاريخ ليست له فترة محاسبية مفتوحة. افتح تلك الفترة أو أعد فتحها قبل الإغلاق.",
+  ],
+  ClosingReason_WITHHELD_RECOGNITION_PERIOD_OPEN: [
+    "The accounting period for the handover date is not open.",
+    "الفترة المحاسبية لتاريخ التسليم غير مفتوحة.",
+  ],
   ClosingReason_CHECK_REFUSED: [
     "This condition could not be confirmed from the deal's records. Have the deal reviewed before closing.",
     "تعذّر تأكيد هذا الشرط من سجلات الصفقة. اطلب مراجعة الصفقة قبل الإغلاق.",
@@ -1652,7 +1707,10 @@ const dealOverviewMessages = defineBilingualMessages({
     "The customer's first payment is not recorded yet.",
     "لم تُسجَّل الدفعة الأولى للعميل بعد.",
   ],
-  ClosingReason_WITHHELD_LEGAL_INVOICE_RECORDED: ["The legal invoice is not recorded yet.", "لم تُسجَّل الفاتورة القانونية بعد."],
+  ClosingReason_WITHHELD_LEGAL_INVOICE_RECORDED: [
+    "The legal invoice is missing, or the one recorded does not agree with this deal.",
+    "الفاتورة القانونية غير مسجَّلة، أو أن المسجَّلة منها لا تتفق مع هذه الصفقة.",
+  ],
   // SCRUM-420 — the financing figures are flagged for a reconciliation review.
   ClosingReason_FINANCING_RECONCILIATION_FLAGGED: [
     "This deal's financing figures are flagged for reconciliation review. Review them and record the review before closing.",
@@ -2693,8 +2751,6 @@ export const salesEn = {
   NotRecorded: "Not recorded",
   LeaseFinancing: "Lease",
   CashOrDirect: "Cash / Direct",
-  RouteDirectUnavailableHeldDeposit:
-    "A reservation deposit is still held. On this route the dealership bills the customer nothing for the car, so settle the deposit first.",
   RouteDirectUnavailableNoExternalFinancier:
     "No outside financier on this deal, so nobody but the dealership pays the supplier.",
   RouteDirectUnavailableLease:
@@ -3871,8 +3927,6 @@ export const salesAr = {
   NotRecorded: "غير مسجّل",
   LeaseFinancing: "تأجير تمويلي",
   CashOrDirect: "نقدي / مباشر",
-  RouteDirectUnavailableHeldDeposit:
-    "ما زال هناك عربون محجوز. في هذا المسار لا يُطالب المعرض المشتري بثمن السيارة، لذا يجب معالجة العربون أولًا.",
   RouteDirectUnavailableNoExternalFinancier:
     "لا توجد جهة تمويل خارجية في هذه الصفقة، فلا أحد غير المعرض يدفع للمورّد.",
   RouteDirectUnavailableLease:

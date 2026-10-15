@@ -242,6 +242,11 @@ const KNOWN_SURVIVING_REFERENCES: Record<string, string> = {
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "financeCompanyForwards.applicationId->financeApplications":
     "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
+  // SCRUM-411 P2-02: the per-deposit provenance of a forward; same treatment as its parent forward row.
+  "financeCompanyForwardSlices.applicationId->financeApplications":
+    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
+  "financeCompanyForwardSlices.depositId->deposits":
+    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
   "fixedAssetEvents.accountingEventId->accountingEvents":
     "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
   "manualJournalDrafts.journalEntryId->journalEntries":

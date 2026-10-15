@@ -278,10 +278,6 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     await s.owner.as.mutation(api.applications.registerExpectedPayment, {
       orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
     });
-    await s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
-      orgId: s.orgId, applicationId, legalInvoiceAmountMinor: 12_500_000,
-      legalInvoiceNumber: `CERT-${applicationId}`, legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
-    });
     const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
       expectedCurrency: "JOD", idempotencyKey: "s486-financed-held-zero-fee", orgId: s.orgId, applicationId,
       feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER",
@@ -293,6 +289,25 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       expectedActualAmountMinor: 0,
       expectedActualEvidenceRevision: 0,
     });
+    // SCRUM-411 P2-01: the deposit (200) and the contribution (1,375) are paid to the
+    // finance company BEFORE the deal is finalized; finalize refuses until that payment
+    // is on the books.
+    const paidAt = Date.now();
+    const forwardArgs = {
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER" as const, paidAt,
+      expectedAmountMinor: 1_575_000, reference: "CERT-FORWARD",
+      idempotencyKey: "s486-financed-held-forward",
+    };
+    await expect(s.owner.as.mutation(api.applications.finalizeDeal, {
+      idempotencyKey: "s486-financed-held-finalize-unpaid", orgId: s.orgId, applicationId,
+    })).rejects.toThrow(/have not been paid yet/);
+    const beforeForward = await dbSnapshot(s.t, Object.keys(schema.tables));
+    await expect(s.actors.salesperson.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
+      ...forwardArgs,
+      idempotencyKey: "s486-financed-held-forward-salesperson-denied",
+    })).rejects.toThrow(/confirm:finance_disbursement/);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(beforeForward);
+    await s.approver.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, forwardArgs);
     await s.owner.as.mutation(api.applications.finalizeDeal, {
       idempotencyKey: "s486-financed-held-finalize", orgId: s.orgId, applicationId,
     });
@@ -325,13 +340,18 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       { account: "2220", currency: "JOD", debit: 0, credit: 1_375_000, entryStatus: "POSTED" },
       { account: "2100", currency: "JOD", debit: 200_000, credit: 0, entryStatus: "POSTED" },
       { account: "2220", currency: "JOD", debit: 0, credit: 200_000, entryStatus: "POSTED" },
+      // The payment to the finance company recorded before the sale: 200 + 1,375.
+      { account: "2220", currency: "JOD", debit: 1_575_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1110", currency: "JOD", debit: 0, credit: 1_575_000, entryStatus: "POSTED" },
     ]);
     expectBalanced(rows);
+    // The sale credits 2220 by 1,575 (200 deposit + 1,375 contribution) and the earlier
+    // payment debited it by 1,575, so the finance-company payable nets to nothing.
     expect(await trialBalanceNormalBalance(s)).toEqual({
       "1100|JOD": 200_000,
+      "1110|JOD": -1_575_000,
       "1210|JOD": 12_500_000,
       "1400|JOD": -10_000_000,
-      "2220|JOD": 1_575_000,
       "4100|JOD": 12_500_000,
       "4180|JOD": -1_375_000,
       "5100|JOD": 10_000_000,
@@ -349,24 +369,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       ["4180", -1_375_000],
     ]);
 
-    const paidAt = Date.now();
-    const forwardArgs = {
-      orgId: s.orgId, applicationId, method: "BANK_TRANSFER" as const, paidAt,
-      expectedAmountMinor: 1_575_000, reference: "CERT-FORWARD",
-      idempotencyKey: "s486-financed-held-forward",
-    };
-    const beforeForward = await dbSnapshot(s.t, Object.keys(schema.tables));
-    await expect(s.actors.salesperson.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
-      ...forwardArgs,
-      idempotencyKey: "s486-financed-held-forward-salesperson-denied",
-    })).rejects.toThrow(/confirm:finance_disbursement/);
-    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(beforeForward);
-    await s.approver.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, forwardArgs);
-    const afterForward = await journalRows(s);
-    expectAdditionalRows(rows, afterForward, [
-      { account: "2220", currency: "JOD", debit: 1_575_000, credit: 0, entryStatus: "POSTED" },
-      { account: "1110", currency: "JOD", debit: 0, credit: 1_575_000, entryStatus: "POSTED" },
-    ]);
+    const afterForward = rows;
     expect(netByAccount(afterForward)).toEqual({
       "1100|JOD": 200_000,
       "1110|JOD": -1_575_000,
@@ -467,10 +470,6 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     await registerHandover(s.owner.as, api, s.orgId, applicationId);
     await s.owner.as.mutation(api.applications.registerExpectedPayment, {
       orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
-    });
-    await s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
-      orgId: s.orgId, applicationId, legalInvoiceAmountMinor: 12_500_000,
-      legalInvoiceNumber: `CERT-${applicationId}`, legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
     });
     const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
       expectedCurrency: "JOD", idempotencyKey: `${tag}-zero-fee`, orgId: s.orgId, applicationId,
@@ -669,10 +668,6 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     await registerHandover(s.owner.as, api, s.orgId, applicationId);
     await s.owner.as.mutation(api.applications.registerExpectedPayment, {
       orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
-    });
-    await s.owner.as.mutation(api.financeDealCosts.recordLegalInvoice, {
-      orgId: s.orgId, applicationId, legalInvoiceAmountMinor: 12_500_000,
-      legalInvoiceNumber: `CERT-${applicationId}`, legalInvoiceDate: Date.now(), issuedTo: "FINANCE_COMPANY",
     });
     const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
       expectedCurrency: "JOD", idempotencyKey: `${tag}-zero-fee`, orgId: s.orgId, applicationId,

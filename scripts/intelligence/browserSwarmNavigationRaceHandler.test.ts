@@ -2,12 +2,14 @@ import type { Page } from "@playwright/test";
 import type { ConvexHttpClient } from "convex/browser";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import { ConvexError } from "convex/values";
-import { describe, expect, it } from "vitest";
-import type { BrowserMissionEvidence } from "./browserAttackSwarm";
+import { describe, expect, it, vi } from "vitest";
+import { browserMissionTimeoutMs, type BrowserMissionEvidence } from "./browserAttackSwarm";
+import { readSettledLedger } from "./browserSwarmBoundaryAttacks";
+import type { BoundaryMissionEnv } from "./browserSwarmBoundaryHarness";
 import type { BrowserMissionExecutionContext } from "./browserAttackSwarmExecutor";
 import { BrowserSwarmOracleInconclusiveError } from "./browserSwarmEconomicOracle";
 import type { MissionBrowser, MissionBrowserRuntime } from "./browserSwarmEconomicAttacks";
-import { createNavigationRaceAttackHandlers } from "./browserSwarmNavigationRaceAttack";
+import { NAVIGATION_RACE_LEDGER_WAIT_BOUND_MS, createNavigationRaceAttackHandlers } from "./browserSwarmNavigationRaceAttack";
 
 /**
  * SCRUM-350 LIFE-1 — handler-level tests for NAVIGATION_RACE.
@@ -53,7 +55,22 @@ interface Faults {
   sentinelAfterReadFails?: boolean;
   /** The repeat's click fails inside the browser although the reloaded screen shows the expense. */
   repeatClickThrows?: boolean;
+  /**
+   * The seeded expense does not post inline. "drains": the outbox tick posts it after many ledger reads, with a
+   * waiting row until then. "stuck": a waiting row that never posts. "failed": a failed row (raw error text).
+   * "none": it never posts and nothing is queued.
+   */
+  queuedPost?: "drains" | "stuck" | "failed" | "none";
+  /** The outbox cannot be read. */
+  outboxUnreadable?: boolean;
+  /** The newest PENDING page is full (200 rows), with or without the seeded expense's own row in it. */
+  outboxPage?: "full";
 }
+
+/** Ledger reads of the seeded expense before the outbox tick posts a "drains" row; more than one settle phase reads. */
+const TICK_AFTER_READS = 60;
+const RAW_OUTBOX_REASON = "Waiting on a predecessor: customer 4471 deal D-93";
+const RAW_OUTBOX_ERROR ="Error: internal posting failure for customer 4471";
 
 interface FakeEvent {
   sourceId: string;
@@ -87,6 +104,23 @@ class World {
 
   constructor(readonly faults: Faults) {}
 
+  private postSeeded(): void {
+    const currency = this.faults.wrongCurrency ? "USD" : "JOD";
+    this.events.push({
+      sourceId: "exp1",
+      _id: "e1",
+      eventType: "EXPENSE_POSTED",
+      status: "POSTED",
+      reversalOfEventId: null,
+      reversedByEventId: null,
+      journalEntryId: "j1",
+    });
+    this.journals.j1 = [
+      { accountId: "expense", debitMinor: 59_000, creditMinor: 0, scale: 3, currency },
+      { accountId: "cash", debitMinor: 0, creditMinor: 59_000, scale: 3, currency },
+    ];
+  }
+
   call(name: string, args: Record<string, unknown>): unknown {
     this.calls.push(`owner:${name}`);
     switch (name) {
@@ -94,7 +128,6 @@ class World {
         return { currency: "JOD" };
       case "expenses:create": {
         this.created.push(String(args.title));
-        const currency = this.faults.wrongCurrency ? "USD" : "JOD";
         if (this.created.length === 2) {
           this.events.push({
             sourceId: "exp2",
@@ -111,23 +144,54 @@ class World {
           ];
           return "exp2";
         }
-        this.events.push({
-          sourceId: "exp1",
-          _id: "e1",
-          eventType: "EXPENSE_POSTED",
-          status: "POSTED",
-          reversalOfEventId: null,
-          reversedByEventId: null,
-          journalEntryId: "j1",
-        });
-        this.journals.j1 = [
-          { accountId: "expense", debitMinor: 59_000, creditMinor: 0, scale: 3, currency },
-          { accountId: "cash", debitMinor: 0, creditMinor: 59_000, scale: 3, currency },
-        ];
+        if (this.faults.queuedPost) return "exp1";
+        this.postSeeded();
         return "exp1";
+      }
+      case "accountingOutbox:listPending": {
+        if (this.faults.outboxUnreadable) throw new Error("outbox unavailable");
+        const queued = this.faults.queuedPost;
+        const waiting = queued === "drains" ? !this.events.some((row) => row.sourceId === "exp1") : queued === "stuck";
+        const status = waiting ? "PENDING" : queued === "failed" ? "FAILED" : null;
+        const own =
+          status === null || args.status !== status
+            ? []
+            : [
+                {
+                  kind: "POST",
+                  status,
+                  sourceType: "expenses",
+                  sourceId: "exp1",
+                  eventType: "EXPENSE_POSTED",
+                  attempts: status === "FAILED" ? 10 : 0,
+                  reason: RAW_OUTBOX_REASON,
+                  lastError: status === "FAILED" ? RAW_OUTBOX_ERROR : undefined,
+                  payload: { amountMinor: 59_000 },
+                },
+              ];
+        // Other sources' rows; a page filled to the server cap (200) is the newest page only.
+        const others = (count: number) =>
+          Array.from({ length: count }, (_, index) => ({
+            kind: "POST",
+            status: args.status,
+            sourceType: "expenses",
+            sourceId: `someone-elses-${index}`,
+            eventType: "EXPENSE_POSTED",
+            attempts: 0,
+          }));
+        if (this.faults.outboxPage === "full" && args.status === "PENDING") return [...own, ...others(200 - own.length)];
+        return [...own, ...others(1)];
       }
       case "accountingLedger:listAccountingEvents":
         this.calls.push(`read:${String(args.sourceId)}`);
+        if (
+          this.faults.queuedPost === "drains" &&
+          args.sourceId === "exp1" &&
+          this.calls.filter((call) => call === "read:exp1").length > TICK_AFTER_READS &&
+          !this.events.some((row) => row.sourceId === "exp1")
+        ) {
+          this.postSeeded();
+        }
         if (this.faults.sentinelAfterReadFails && args.sourceId === "exp2" && this.calls.includes("ui:click Reverse & Delete")) {
           throw new Error("ledger unavailable");
         }
@@ -381,6 +445,8 @@ function harness(faults: Faults = {}, options: { signal?: AbortSignal; finishFai
   const handler = createNavigationRaceAttackHandlers(runtimeApi, {
     sleep: async () => undefined,
     pollMs: 1,
+    postingWaitMs: 500,
+    queuedPostingExtraMs: 300,
     raceSettleMs: 0,
     uiSettleMs: 0,
   }).NAVIGATION_RACE;
@@ -612,6 +678,128 @@ describe("SCRUM-350 NAVIGATION_RACE handler: never a vacuous pass", () => {
     expect(error).toBeInstanceOf(Error);
     expect(error).not.toBeInstanceOf(BrowserSwarmOracleInconclusiveError);
     expect(h.world.calls).not.toContain("owner:expenses:create");
+  });
+});
+
+describe("SCRUM-851 NAVIGATION_RACE handler: a posting that waits in the outbox", () => {
+  const seededReads = (h: { world: World }): number => h.world.calls.filter((call) => call === "read:exp1").length;
+  const timeoutEvidence = (h: { evidence: Record<string, unknown>[] }): Record<string, unknown> =>
+    (h.evidence[0]?.ledgerSettleTimeouts as Record<string, unknown>[])[0] as Record<string, unknown>;
+
+  it("waits past the inline wait for a row the outbox verifiably holds, and judges the posting once it lands", async () => {
+    const h = harness({ queuedPost: "drains" });
+    const result = await h.run();
+    expect(result.oracle).toMatchObject({ kind: "STATE_TRANSITION", passed: true });
+    expect(seededReads(h)).toBeGreaterThan(TICK_AFTER_READS);
+    expect(h.world.calls).toContain("owner:accountingOutbox:listPending");
+  });
+
+  it("is INCONCLUSIVE, with the last ledger read and the waiting row, when the queued row never posts", async () => {
+    const h = await inconclusive({ queuedPost: "stuck" }, /exp1 did not settle \(0 event\(s\) read, 1 queued post\(s\), wait extended\)/);
+    expect(timeoutEvidence(h)).toEqual({
+      sourceType: "expenses",
+      sourceId: "exp1",
+      extendedForQueuedPost: true,
+      lastRead: [],
+      outbox: "COMPLETE",
+      queuedPosts: [{ kind: "POST", status: "PENDING", eventType: "EXPENSE_POSTED", attempts: 0, hasError: false }],
+      outboxPagesWithoutMatch: [],
+    });
+    expect(seededReads(h)).toBeGreaterThan(100);
+    // The outbox row's free text can hold tenant data: only structure is published.
+    expect(JSON.stringify(h.evidence)).not.toContain(RAW_OUTBOX_REASON);
+    expect(JSON.stringify(h.evidence)).not.toContain("4471");
+  });
+
+  it("does not extend the wait for a failed row, and publishes no raw error text", async () => {
+    const h = await inconclusive({ queuedPost: "failed" }, /1 queued post\(s\)\)/);
+    expect(timeoutEvidence(h)).toMatchObject({
+      extendedForQueuedPost: false,
+      queuedPosts: [{ status: "FAILED", attempts: 10, hasError: true }],
+    });
+    expect(seededReads(h)).toBeLessThanOrEqual(40);
+    expect(JSON.stringify(h.evidence)).not.toContain(RAW_OUTBOX_ERROR);
+    expect(JSON.stringify(h.evidence)).not.toContain("someone-elses");
+  });
+
+  it("does not extend the wait when a complete page shows nothing queued", async () => {
+    const h = await inconclusive({ queuedPost: "none" }, /0 queued post\(s\)\)/);
+    expect(timeoutEvidence(h)).toMatchObject({ extendedForQueuedPost: false, outbox: "COMPLETE", queuedPosts: [] });
+    expect(seededReads(h)).toBeLessThanOrEqual(40);
+  });
+
+  it("does not read an unreadable outbox as empty, nor extend the wait for it", async () => {
+    const h = await inconclusive({ queuedPost: "stuck", outboxUnreadable: true }, /outbox unreadable/);
+    expect(timeoutEvidence(h)).toMatchObject({ extendedForQueuedPost: false, outbox: "UNREADABLE", queuedPosts: null });
+    expect(seededReads(h)).toBeLessThanOrEqual(40);
+  });
+
+  it("does not infer absence from a full newest page without the source: the inspection is incomplete and fails closed", async () => {
+    const h = await inconclusive({ queuedPost: "none", outboxPage: "full" }, /outbox inspection incomplete, newest page full/);
+    const evidence = timeoutEvidence(h);
+    expect(evidence).toMatchObject({ extendedForQueuedPost: false, outbox: "INCOMPLETE", outboxPagesWithoutMatch: ["PENDING"] });
+    expect((h.evidence[0]?.reason as string) ?? "").not.toMatch(/0 queued post/);
+    expect(seededReads(h)).toBeLessThanOrEqual(40);
+  });
+
+  it("still extends for a waiting row found in a full page", async () => {
+    const h = await inconclusive({ queuedPost: "stuck", outboxPage: "full" }, /1 queued post\(s\), wait extended/);
+    expect(timeoutEvidence(h)).toMatchObject({ extendedForQueuedPost: true, outbox: "COMPLETE" });
+    expect(seededReads(h)).toBeGreaterThan(100);
+  });
+
+  it("spends the extension once across the mission's ledger reads, and records no extension for a read after it is spent", async () => {
+    let now = 1_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const detail: Record<string, unknown> = {};
+      const client = {
+        query: async (ref: FunctionReference<"query">, args: unknown) => {
+          const name = getFunctionName(ref);
+          if (name === "accountingLedger:listAccountingEvents") return [];
+          if (name === "accountingOutbox:listPending") {
+            return (args as { status: string }).status !== "PENDING"
+              ? []
+              : [{ kind: "POST", sourceType: "expenses", sourceId: "exp-a", eventType: "EXPENSE_POSTED", attempts: 0 }];
+          }
+          throw new Error(`unscripted ${name}`);
+        },
+      };
+      const env = { client, orgId: "org1", signal: new AbortController().signal, detail } as unknown as BoundaryMissionEnv;
+      const options = {
+        pollMs: 10,
+        postingWaitMs: 100,
+        sleep: async (ms: number) => {
+          now += ms;
+        },
+      };
+      const extraWait = { remainingMs: 300 };
+      const started = now;
+      await expect(readSettledLedger(env, options, "exp-a", { extraWait, until: () => false })).rejects.toBeInstanceOf(
+        BrowserSwarmOracleInconclusiveError,
+      );
+      const first = now - started;
+      expect(first).toBeGreaterThanOrEqual(100 + 300);
+      expect(first).toBeLessThanOrEqual(100 + 300 + 3 * options.pollMs);
+      expect(extraWait.remainingMs).toBe(0);
+
+      const secondStarted = now;
+      await expect(readSettledLedger(env, options, "exp-a", { extraWait, until: () => false })).rejects.toBeInstanceOf(
+        BrowserSwarmOracleInconclusiveError,
+      );
+      expect(now - secondStarted).toBeLessThanOrEqual(100 + 2 * options.pollMs);
+      const timeouts = detail.ledgerSettleTimeouts as { extendedForQueuedPost: boolean }[];
+      expect(timeouts.map((timeout) => timeout.extendedForQueuedPost)).toEqual([true, false]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("leaves room in the mission budget for every ledger wait plus the screen steps", () => {
+    const timeoutMs = browserMissionTimeoutMs("NAVIGATION_RACE");
+    // Healthy screen steps (navigations, dialog, race settle, reload, repeat) are measured in tens of seconds.
+    expect(timeoutMs - NAVIGATION_RACE_LEDGER_WAIT_BOUND_MS).toBeGreaterThanOrEqual(60_000);
+    expect(NAVIGATION_RACE_LEDGER_WAIT_BOUND_MS).toBe(5 * 20_000 + 60_000);
   });
 });
 

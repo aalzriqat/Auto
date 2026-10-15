@@ -61,6 +61,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -371,6 +372,10 @@ async function walkToFinalization(
         orgId: s.orgId, feeId, notes: "Nothing to match.", expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0,
       })
     )) ??
+    // SCRUM-411 P2-01: the contribution (and any deposit) owed to the finance company is
+    // paid BEFORE finalizing. Recorded by the owner role, who holds the finance-money
+    // permissions the manager lacks; a no-op when nothing is owed.
+    (await step("payFinanceCompanyForward", () => payForwardBeforeFinalize(s, s.asOwner, applicationId))) ??
     // SCRUM-407: no manual classification step — finalizeDeal checks the
     // deal's closing readiness itself.
     (await step("finalizeDeal", () =>

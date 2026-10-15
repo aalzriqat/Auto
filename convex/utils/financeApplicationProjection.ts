@@ -170,6 +170,8 @@ const FIELD_VISIBILITY: Record<
   legalInvoiceRecordedAt: "OPEN",
   legalInvoiceIssuedTo: "OPEN",
   legalInvoiceIssuedToOther: "OPEN",
+  legalInvoiceIssuedBy: "OPEN",
+  legalInvoiceIssuerName: "OPEN",
   accountingClassification: "OPEN",
   accountingClassifiedBy: "OPEN",
   accountingClassifiedAt: "OPEN",

@@ -197,7 +197,8 @@ const FAMILY_TIMEOUT_MS: Partial<Record<BrowserAttackFamily, number>> = {
   // About 27 product commands (some may wait out the write rate limit) plus up to 30s for the sale to post.
   MONEY_BOUNDARY: 240_000,
   // Posts an expense, races its reversal against history back/forward, settles the ledger and repeats the reversal if it did not apply.
-  NAVIGATION_RACE: 180_000,
+  // Five ledger reads of up to 20s each plus one shared 60s wait for a queued posting (SCRUM-851), with screen steps on top.
+  NAVIGATION_RACE: 240_000,
   // Establishes two periods, closes one, prepares and approves two journals, then reads the periods, the journals and the pending list.
   ACCOUNTING_DATE_BOUNDARY: 180_000,
 };

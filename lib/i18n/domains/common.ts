@@ -465,6 +465,78 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "The record of the payment to the finance company does not match the books. An accountant reviews it before this deal can be cancelled.",
     "سجل الدفعة المسدَّدة لشركة التمويل لا يطابق الدفاتر. يراجعه المحاسب قبل أن يمكن إلغاء هذه الصفقة.",
   ],
+  // SCRUM-411 P2-01. Finalizing, and the finance company's transfer, are refused until the deposit and
+  // contribution payment to the company is on the books (convex/utils/financeCompanyForward.ts
+  // forwardGateRefusal). The EN text equals the server message.
+  // SCRUM-411 P2-02 containment (convex/utils/financeCompanyForward.ts assertDepositNotInLiveForward).
+  ServerError_DEPOSIT_PAID_ONWARD_TO_FINANCE_COMPANY: [
+    "This deposit has already been paid to the finance company as part of the deal's first payment. Take that payment back before the deposit is refunded, forfeited, voided or paid out.",
+    "هذا العربون سُدِّد فعلاً لشركة التمويل ضمن الدفعة الأولى للصفقة. تُسترجع تلك الدفعة قبل أن يُردّ العربون أو يُصادَر أو يُلغى أو يُصرف.",
+  ],
+  // SCRUM-411 P2-02 (convex/utils/financeCompanyForward.ts FORWARD_DEPOSIT_PROVENANCE_REFUSAL).
+  ServerError_FORWARD_DEPOSIT_PROVENANCE_UNCLEAR: [
+    "The deposits held on this deal changed since the amount due was worked out, or cannot be tied to the payment. Review the deal and try again. Nothing has been recorded.",
+    "تغيّرت العرابين المحجوزة على هذه الصفقة منذ احتساب المبلغ المستحق، أو يتعذّر ربطها بالدفعة. راجع الصفقة وحاول مرة أخرى. لم يُسجَّل شيء.",
+  ],
+  // SCRUM-411 P2-01 / SCRUM-766 Q2 (convex/utils/financeCompanyForward.ts CUSTOMER_PAYMENT_FORWARD_LIVE_REFUSAL).
+  ServerError_CUSTOMER_PAYMENT_FORWARD_LIVE: [
+    "The deposit and the dealership's contribution have already been paid to the finance company, or that payment is not yet settled on the books. Recording or taking back the customer's payment to the finance company would change the amount that was paid. A manager reports the payment as returned by the company, or takes it back, and an accountant resolves anything unsettled, before this is changed. Nothing has been changed.",
+    "تم سداد العربون ومساهمة المعرض إلى شركة التمويل بالفعل، أو أن تلك الدفعة لم تُسوَّ في الدفاتر بعد. تسجيل دفعة العميل لشركة التمويل أو استرجاعها سيغيّر المبلغ الذي سُدِّد. يسجّل المدير أن الشركة أعادت الدفعة أو يسترجعها، ويعالج المحاسب أي دفعة غير مسوّاة، قبل إجراء هذا التغيير. لم يتغيّر شيء.",
+  ],
+  // SCRUM-411 P2-01 (convex/utils/financeCompanyForward.ts DEAL_ECONOMICS_FORWARD_LIVE_REFUSAL).
+  ServerError_DEAL_ECONOMICS_FORWARD_LIVE: [
+    "The deposit and the dealership's contribution have already been paid to the finance company, or that payment is not yet settled on the books. This change would alter the amount that was paid. A manager reports the payment as returned by the company, or takes it back, and an accountant resolves anything unsettled, before the deal's figures are changed. Nothing has been changed.",
+    "تم سداد العربون ومساهمة المعرض إلى شركة التمويل بالفعل، أو أن تلك الدفعة لم تُسوَّ في الدفاتر بعد. هذا التغيير سيغيّر المبلغ الذي سُدِّد. يسجّل المدير أن الشركة أعادت الدفعة أو يسترجعها، ويعالج المحاسب أي دفعة غير مسوّاة، قبل تغيير أرقام الصفقة. لم يتغيّر شيء.",
+  ],
+  ServerError_FORWARD_FINALIZE_UNPAID: [
+    "The deposit and contribution owed to the finance company have not been paid yet. A manager or accountant records the payment to the finance company before finalizing.",
+    "العربون ومساهمة المعرض المستحقان لشركة التمويل لم يُسدَّدا بعد. يسجّل المدير أو المحاسب الدفعة المسدَّدة لشركة التمويل قبل إتمام الصفقة.",
+  ],
+  ServerError_FORWARD_FINALIZE_STALE: [
+    "The payment to the finance company was recorded against different figures than this deal has now (the approved amount, the deposit or the contribution changed since). A manager or accountant takes that payment back and records it again before finalizing.",
+    "سُجّلت الدفعة المسدَّدة لشركة التمويل وفق أرقام تختلف عن أرقام هذه الصفقة الآن (تغيّر المبلغ المعتمد أو العربون أو مساهمة المعرض منذ ذلك الحين). يسترجع المدير أو المحاسب تلك الدفعة ويسجّلها من جديد قبل إتمام الصفقة.",
+  ],
+  ServerError_FORWARD_FINALIZE_POSTING_PENDING: [
+    "The payment to the finance company is recorded but not yet posted to the books. An accountant must post it before finalizing.",
+    "الدفعة المسدَّدة لشركة التمويل مسجَّلة لكنها لم تُرحَّل إلى الدفاتر بعد. يجب أن يرحّلها المحاسب قبل إتمام الصفقة.",
+  ],
+  ServerError_FORWARD_FINALIZE_POSTING_FAILED: [
+    "The payment to the finance company failed to post to the books. An accountant must resolve it before finalizing.",
+    "فشل ترحيل الدفعة المسدَّدة لشركة التمويل إلى الدفاتر. يجب أن يعالجها المحاسب قبل إتمام الصفقة.",
+  ],
+  ServerError_FORWARD_FINALIZE_REVERSAL_PENDING: [
+    "The payment to the finance company is being reversed and the reversal is not yet posted. An accountant must post it before finalizing.",
+    "الدفعة المسدَّدة لشركة التمويل قيد العكس ولم يُرحَّل العكس بعد. يجب أن يرحّله المحاسب قبل إتمام الصفقة.",
+  ],
+  ServerError_FORWARD_FINALIZE_NEEDS_REPAIR: [
+    "The record of the payment to the finance company does not match the books. An accountant must review it before finalizing.",
+    "سجل الدفعة المسدَّدة لشركة التمويل لا يطابق الدفاتر. يجب أن يراجعه المحاسب قبل إتمام الصفقة.",
+  ],
+  ServerError_FORWARD_TRANSFER_UNPAID: [
+    "The deposit and contribution owed to the finance company have not been paid yet. A manager or accountant records that payment before the transfer can be confirmed.",
+    "العربون ومساهمة المعرض المستحقان لشركة التمويل لم يُسدَّدا بعد. يسجّل المدير أو المحاسب تلك الدفعة قبل أن يمكن تأكيد التحويل.",
+  ],
+  ServerError_FORWARD_TRANSFER_POSTING_PENDING: [
+    "The payment to the finance company is recorded but not yet posted to the books. An accountant must post it before the transfer can be confirmed.",
+    "الدفعة المسدَّدة لشركة التمويل مسجَّلة لكنها لم تُرحَّل إلى الدفاتر بعد. يجب أن يرحّلها المحاسب قبل أن يمكن تأكيد التحويل.",
+  ],
+  ServerError_FORWARD_TRANSFER_POSTING_FAILED: [
+    "The payment to the finance company failed to post to the books. An accountant must resolve it before the transfer can be confirmed.",
+    "فشل ترحيل الدفعة المسدَّدة لشركة التمويل إلى الدفاتر. يجب أن يعالجها المحاسب قبل أن يمكن تأكيد التحويل.",
+  ],
+  ServerError_FORWARD_TRANSFER_REVERSAL_PENDING: [
+    "The payment to the finance company is being reversed and the reversal is not yet posted. An accountant must post it before the transfer can be confirmed.",
+    "الدفعة المسدَّدة لشركة التمويل قيد العكس ولم يُرحَّل العكس بعد. يجب أن يرحّله المحاسب قبل أن يمكن تأكيد التحويل.",
+  ],
+  ServerError_FORWARD_TRANSFER_NEEDS_REPAIR: [
+    "The record of the payment to the finance company does not match the books. An accountant must review it before the transfer can be confirmed.",
+    "سجل الدفعة المسدَّدة لشركة التمويل لا يطابق الدفاتر. يجب أن يراجعه المحاسب قبل أن يمكن تأكيد التحويل.",
+  ],
+  // SCRUM-411 P2-03 (convex/utils/financedSaleRecognition.ts FIRST_PAYMENT_UNFUNDED_MESSAGE). The EN text equals the server message.
+  ServerError_FIRST_PAYMENT_UNFUNDED: [
+    "The customer's first payment on this deal was agreed on the strength of a reservation deposit that is not being applied to it, so that first payment would be funded by nothing. Apply the deposit to the transaction settlement, or reopen the approval and amend the first payment, before finalizing.",
+    "اتُّفق على الدفعة الأولى للعميل في هذه الصفقة اعتمادًا على عربون حجز لا يُطبَّق عليها، فستكون الدفعة الأولى بلا أي مصدر تمويل. طبّق العربون على تسوية المعاملة، أو أعد فتح الموافقة وعدّل الدفعة الأولى، قبل إتمام الصفقة.",
+  ],
   // SCRUM-413 S413B-4/L-2
   ServerError_OWNER_NAMED_ROLE_LOCKED: [
     "This role is named OWNER but is not the system owner role, so its permissions cannot be edited. Rename it to a different name first.",
