@@ -78,32 +78,69 @@ export interface ConsignmentAttackOptions {
   figures?: Partial<ConsignmentFigures>;
 }
 
-/** The options the mission runs with; the figures are resolved separately. */
-type MissionTiming = Required<Omit<ConsignmentAttackOptions, "figures">>;
+/** The timing a ledger-reading mission runs with; the figures are resolved separately. */
+export type MissionTiming = Required<Omit<ConsignmentAttackOptions, "figures">>;
 
-const DEFAULTS = { pollMs: 500, postingWaitMs: 30_000, uiSettleMs: 15_000 } as const;
+export const MISSION_TIMING_DEFAULTS = { pollMs: 500, postingWaitMs: 30_000, uiSettleMs: 15_000 } as const;
 const RATE_LIMIT_TEXT = /rate limit exceeded[^\d]{0,40}(\d{1,6})s/i;
 const RATE_LIMIT_RETRIES = 3;
 const LEDGER_ROW_LIMIT = 200;
 const LEDGER_MAX_READS = 40;
 /** The forward's paid date sits this far in the past so a skewed clock cannot make it "in the future". */
-const PAID_AT_SKEW_MS = 5_000;
+export const PAID_AT_SKEW_MS = 5_000;
 
-function inconclusive(message: string): never {
+export function inconclusive(message: string): never {
   throw new BrowserSwarmOracleInconclusiveError(message);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function asArray(value: unknown, label: string): unknown[] {
+export function asArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) inconclusive(`${label} returned a non-array response`);
   return value;
 }
 
-function realSleep(ms: number): Promise<void> {
+export function realSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * The two ways a mission issues product commands: waiting out the product's own write rate
+ * limit (a bounded number of retries, then the failure propagates), and a command whose
+ * refusal disagrees with the scenario's independent figures, which is inconclusive and never
+ * a pass.
+ */
+export function missionCommands(
+  env: Pick<BoundaryMissionEnv, "signal">,
+  options: Pick<MissionTiming, "sleep">,
+): {
+  command: <T>(run: () => Promise<T>) => Promise<T>;
+  refusalIsInconclusive: <T>(run: () => Promise<T>, refused: string) => Promise<T>;
+} {
+  const { signal } = env;
+  const command = async <T>(run: () => Promise<T>): Promise<T> => {
+    for (let retries = 0; ; retries += 1) {
+      try {
+        return await untilAborted(signal, run());
+      } catch (error) {
+        const wait = RATE_LIMIT_TEXT.exec(describeError(error));
+        // Once the retries are spent, this attempt's failure, a rate limit included, propagates.
+        if (!wait || retries >= RATE_LIMIT_RETRIES) throw error;
+        await untilAborted(signal, options.sleep((Number(wait[1]) + 1) * 1000));
+      }
+    }
+  };
+  const refusalIsInconclusive = async <T>(run: () => Promise<T>, refused: string): Promise<T> => {
+    try {
+      return await command(run);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      inconclusive(`${refused}: ${describeError(error)}`);
+    }
+  };
+  return { command, refusalIsInconclusive };
 }
 
 /** 17 uppercase characters, unique to the run, free of the letters a VIN forbids. */
@@ -113,7 +150,7 @@ function syntheticVin(nonce: string): string {
 
 const EVENT_STATUSES = ["PENDING", "POSTED", "FAILED", "REVERSED"] as const;
 
-interface SaleLedger {
+export interface SaleLedger {
   events: { id: string; eventType: string; status: string; journalEntryId: string | null }[];
   journals: { id: string; eventId: string; status: string }[];
   lines: ConsignmentLine[];
@@ -123,7 +160,7 @@ interface SaleLedger {
   defects: string[];
 }
 
-function isSaleCompleted(event: SaleLedger["events"][number], status: string): boolean {
+export function isSaleCompleted(event: SaleLedger["events"][number], status: string): boolean {
   return event.eventType === "SALE_COMPLETED" && event.status === status;
 }
 
@@ -242,7 +279,7 @@ async function readSaleLedger(
  * whole window (with nothing posted or pending) is returned as it stands: that
  * is the product's failure to post, to be judged, not a wait that ran out.
  */
-async function readSettledSaleLedger(
+export async function readSettledSaleLedger(
   env: BoundaryMissionEnv,
   options: MissionTiming,
   saleId: string,
@@ -312,29 +349,7 @@ function consignmentEconomicsSpec(options: MissionTiming, figures: Readonly<Cons
     async run(env: BoundaryMissionEnv): Promise<void> {
       const { client, orgId, nonce, signal, detail, page } = env;
       const org = orgId as Id<"organizations">;
-
-      /** One product command, waiting out the product's own write rate limit. */
-      const command = async <T>(run: () => Promise<T>): Promise<T> => {
-        for (let retries = 0; ; retries += 1) {
-          try {
-            return await untilAborted(signal, run());
-          } catch (error) {
-            const wait = RATE_LIMIT_TEXT.exec(describeError(error));
-            // Once the retries are spent, this attempt's failure, a rate limit included, propagates.
-            if (!wait || retries >= RATE_LIMIT_RETRIES) throw error;
-            await untilAborted(signal, options.sleep((Number(wait[1]) + 1) * 1000));
-          }
-        }
-      };
-      /** A product command whose refusal disagrees with the scenario's independent figures: inconclusive, never a pass. */
-      const refusalIsInconclusive = async (run: () => Promise<unknown>, refused: string): Promise<void> => {
-        try {
-          await command(run);
-        } catch (error) {
-          if (signal.aborted) throw error;
-          inconclusive(`${refused}: ${describeError(error)}`);
-        }
-      };
+      const { command, refusalIsInconclusive } = missionCommands(env, options);
 
       // The denomination is the organization's own, read before anything is seeded.
       const settings: unknown = await untilAborted(signal, client.query(api.orgSettings.get, { orgId: org }));
@@ -649,9 +664,9 @@ export function createConsignmentAttackHandlers(
 ): BrowserAttackHandlerRegistry {
   const options: MissionTiming = {
     sleep: overrides.sleep ?? realSleep,
-    pollMs: overrides.pollMs ?? DEFAULTS.pollMs,
-    postingWaitMs: overrides.postingWaitMs ?? DEFAULTS.postingWaitMs,
-    uiSettleMs: overrides.uiSettleMs ?? DEFAULTS.uiSettleMs,
+    pollMs: overrides.pollMs ?? MISSION_TIMING_DEFAULTS.pollMs,
+    postingWaitMs: overrides.postingWaitMs ?? MISSION_TIMING_DEFAULTS.postingWaitMs,
+    uiSettleMs: overrides.uiSettleMs ?? MISSION_TIMING_DEFAULTS.uiSettleMs,
   };
   const figures: ConsignmentFigures = { ...CONSIGNMENT_FIGURES, ...overrides.figures };
   return {

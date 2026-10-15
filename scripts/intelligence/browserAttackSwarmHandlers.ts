@@ -24,6 +24,7 @@ import {
   type MissionSeat,
 } from "./browserSwarmEconomicAttacks";
 import { createConsignmentAttackHandlers } from "./browserSwarmConsignmentAttack";
+import { createMoneyBoundaryAttackHandlers } from "./browserSwarmMoneyBoundaryAttack";
 import { createNetworkRecoveryHandler } from "./browserSwarmNetworkRecoveryAttack";
 import { createStaleUiAttackHandlers } from "./browserSwarmStaleUiAttack";
 
@@ -549,6 +550,8 @@ export function createInitialBrowserAttackHandlers(): BrowserAttackHandlerRegist
     NETWORK_RECOVERY: createNetworkRecoveryHandler(missionBrowserRuntime),
     // SCRUM-350 CONS-1: a financed consigned sale, judged against independent figures.
     ...createConsignmentAttackHandlers(missionBrowserRuntime),
+    // SCRUM-350 ACC-1: a financed sale of owned stock, judged account by account against independent figures.
+    ...createMoneyBoundaryAttackHandlers(missionBrowserRuntime),
     // SCRUM-350 LIFE-1: a stale screen's action, judged against backend authority.
     ...createStaleUiAttackHandlers(missionBrowserRuntime),
   };
