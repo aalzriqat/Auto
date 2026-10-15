@@ -72,8 +72,9 @@ const PHASE_A_EXECUTABLE_FAMILY_ORACLES: Readonly<
   NETWORK_RECOVERY: ["IDEMPOTENCY_SINGLE_EFFECT", "STATE_TRANSITION"],
   CONSIGNMENT_ECONOMICS: ["ECONOMIC_AUTHORITY"],
   STALE_UI: ["UI_BACKEND_AUTHORITY"],
-  // ACC-1 only: ACC-3 maps the same family to STATE_TRANSITION, which this handler does not judge.
-  MONEY_BOUNDARY: ["ECONOMIC_AUTHORITY"],
+  // ACC-1 (a financed sale of owned stock) judges ECONOMIC_AUTHORITY; ACC-3 (voiding a directly paid cost) is a
+  // distinct scenario of the same family that judges STATE_TRANSITION. Only that one path of ACC-3 is covered.
+  MONEY_BOUNDARY: ["ECONOMIC_AUTHORITY", "STATE_TRANSITION"],
   NAVIGATION_RACE: ["STATE_TRANSITION"],
 };
 

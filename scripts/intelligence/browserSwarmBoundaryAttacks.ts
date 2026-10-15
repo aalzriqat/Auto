@@ -697,17 +697,22 @@ function completenessBoundarySpec(options: Required<BoundaryAttackOptions>) {
 
 // ─── LIFECYCLE_REVERSAL ──────────────────────────────────────────────────────
 
-async function readLedger(client: ConvexHttpClient, orgId: string, expenseId: string): Promise<LedgerSnapshot> {
+async function readLedger(
+  client: ConvexHttpClient,
+  orgId: string,
+  sourceId: string,
+  sourceType: string,
+): Promise<LedgerSnapshot> {
   const raw = asArray(
     await client.query(api.accountingLedger.listAccountingEvents, {
       orgId: orgId as Id<"organizations">,
-      sourceType: "expenses",
-      sourceId: expenseId,
+      sourceType,
+      sourceId,
       limit: LEDGER_ROW_LIMIT,
     }),
     "listAccountingEvents",
   );
-  if (raw.length >= LEDGER_ROW_LIMIT) inconclusive(`accounting events for expense ${expenseId} may be truncated`);
+  if (raw.length >= LEDGER_ROW_LIMIT) inconclusive(`accounting events for ${sourceType}/${sourceId} may be truncated`);
   const events: LedgerEvent[] = raw.map((row) => {
     if (!isRecord(row)) inconclusive("listAccountingEvents returned a malformed row");
     return {
@@ -750,23 +755,34 @@ async function readLedger(client: ConvexHttpClient, orgId: string, expenseId: st
   return { events, journals };
 }
 
-/** Two consecutive identical reads: the posting outbox drains asynchronously. */
+/** What `readSettledLedger` waits for, and whose events it reads. */
+export interface SettledLedgerRead {
+  /** The snapshot must also satisfy this before it counts as settled. */
+  until?: (snapshot: LedgerSnapshot) => boolean;
+  /** The ledger source `sourceId` belongs to; an expense unless a mission names another. */
+  sourceType?: string;
+}
+
+/**
+ * Two consecutive identical reads: the posting outbox drains asynchronously. The events are those whose
+ * source is `sourceId` in `sourceType`.
+ */
 export async function readSettledLedger(
   env: BoundaryMissionEnv,
   options: Pick<Required<BoundaryAttackOptions>, "sleep" | "pollMs" | "postingWaitMs">,
-  expenseId: string,
-  until?: (snapshot: LedgerSnapshot) => boolean,
+  sourceId: string,
+  { until, sourceType = "expenses" }: SettledLedgerRead = {},
 ): Promise<LedgerSnapshot> {
   const deadline = Date.now() + options.postingWaitMs;
-  let previous = await untilAborted(env.signal, readLedger(env.client, env.orgId, expenseId));
+  let previous = await untilAborted(env.signal, readLedger(env.client, env.orgId, sourceId, sourceType));
   for (let reads = 1; reads < LEDGER_MAX_READS && Date.now() < deadline; reads += 1) {
     await untilAborted(env.signal, options.sleep(options.pollMs));
-    const current = await untilAborted(env.signal, readLedger(env.client, env.orgId, expenseId));
+    const current = await untilAborted(env.signal, readLedger(env.client, env.orgId, sourceId, sourceType));
     const repeated = JSON.stringify(current) === JSON.stringify(previous);
     if (repeated && (until === undefined || until(current))) return current;
     previous = current;
   }
-  return inconclusive(`the ledger state for expense ${expenseId} did not settle`);
+  return inconclusive(`the ledger state for ${sourceType}/${sourceId} did not settle`);
 }
 
 /**
@@ -867,7 +883,7 @@ function lifecycleReversalSpec(options: Required<BoundaryAttackOptions>) {
       detail.expenseId = expenseId;
       const expense = expenseId as Id<"expenses">;
 
-      const posted = await readSettledLedger(env, options, expenseId, isPosted);
+      const posted = await readSettledLedger(env, options, expenseId, { until: isPosted });
 
       // Rewrite attempts on posted history: both must be refused as locked.
       const edit = await attempt(env, "expenses.update (rewrite the posted amount)", POSTED_HISTORY_REFUSAL, () =>
@@ -892,7 +908,7 @@ function lifecycleReversalSpec(options: Required<BoundaryAttackOptions>) {
         return;
       }
       detail.reversalVia = "expense screen";
-      const reversed = await readSettledLedger(env, options, expenseId, isReversed);
+      const reversed = await readSettledLedger(env, options, expenseId, { until: isReversed });
 
       // Asking again: the expense is gone, so "Expense not found" is the only
       // legitimate refusal. Anything else never reached the reversal.

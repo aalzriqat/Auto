@@ -56,13 +56,25 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
     expect(plan.jevMissionCount).toBe(0);
   });
 
-  it("refuses an impact set whose mandatory missions cannot execute, naming every family and invariant", () => {
-    expect(() =>
-      assertMandatoryBrowserSwarmCoverage([
-        { id: "ACC-3", severity: "CRITICAL" },
-        { id: "ECON-2", severity: "CRITICAL" },
-      ]),
-    ).toThrow(/no executable handler.*MONEY_BOUNDARY.*ACC-3/i);
+  // No active invariant maps to an unexecutable mission any more (see the Phase A gap test below), so the
+  // refusals are exercised with a forged mission whose oracle its family's handler does not judge.
+  const forgedMoneyMission = (invariantIds: string[]): BrowserAttackMission => ({
+    id: "jev::MONEY_BOUNDARY",
+    family: "MONEY_BOUNDARY",
+    source: "JEV",
+    invariantIds,
+    invariantSeverity: "CRITICAL",
+    oracle: "UI_BACKEND_AUTHORITY",
+    timeoutMs: 45_000,
+    estimatedCostUnits: 5,
+    evidence: ["TRACE"],
+    jevProbability: 0.9,
+  });
+
+  it("refuses missions that cannot execute, naming every family, oracle and invariant", () => {
+    expect(() => assertBrowserSwarmMissionsExecutable([forgedMoneyMission(["ACC-3", "UI-1"])])).toThrow(
+      /no executable handler.*MONEY_BOUNDARY with oracle UI_BACKEND_AUTHORITY \(ACC-3, UI-1\)/i,
+    );
   });
 
   it("accepts ACC-1 as executable: its MONEY_BOUNDARY mission has a handler that judges ECONOMIC_AUTHORITY", () => {
@@ -74,11 +86,20 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
     // A sale drives ~27 product commands and a posting wait: the 45s default would end in HARNESS_ERROR.
     expect(plan.missions[0]?.timeoutMs).toBeGreaterThanOrEqual(180_000);
     expect(isBrowserSwarmMissionExecutable("MONEY_BOUNDARY", "ECONOMIC_AUTHORITY")).toBe(true);
-    // The handler judges ECONOMIC_AUTHORITY only: ACC-3 maps the same family to STATE_TRANSITION, which stays refused.
-    expect(isBrowserSwarmMissionExecutable("MONEY_BOUNDARY", "STATE_TRANSITION")).toBe(false);
-    expect(() => assertMandatoryBrowserSwarmCoverage([{ id: "ACC-3", severity: "CRITICAL" }])).toThrow(
-      /MONEY_BOUNDARY.*STATE_TRANSITION.*ACC-3/,
-    );
+  });
+
+  it("accepts ACC-3 as executable through its own STATE_TRANSITION scenario, and no other oracle for the family", () => {
+    const plan = assertMandatoryBrowserSwarmCoverage([{ id: "ACC-3", severity: "CRITICAL" }]);
+    expect(plan.missions.map((mission) => `${mission.family}/${mission.oracle}`)).toEqual([
+      "MONEY_BOUNDARY/STATE_TRANSITION",
+    ]);
+    expect(plan.missions[0]?.evidence).toEqual(["TRACE", "SCREENSHOT", "BACKEND_STATE"]);
+    // Two costs recorded, reconciled and paid, then voided twice, with six ledger settles.
+    expect(plan.missions[0]?.timeoutMs).toBeGreaterThanOrEqual(180_000);
+    expect(isBrowserSwarmMissionExecutable("MONEY_BOUNDARY", "STATE_TRANSITION")).toBe(true);
+    // The family's handler judges these two oracles; a forged mission for any other is still refused.
+    expect(isBrowserSwarmMissionExecutable("MONEY_BOUNDARY", "UI_BACKEND_AUTHORITY")).toBe(false);
+    expect(isBrowserSwarmMissionExecutable("MONEY_BOUNDARY", "REVERSAL_RECONCILIATION")).toBe(false);
   });
 
   it("accepts CONS-1 as executable: its CONSIGNMENT_ECONOMICS mission has a handler that judges ECONOMIC_AUTHORITY", () => {
@@ -119,25 +140,22 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
 
   it("refuses a plan that mixes executable and non-executable missions rather than running the executable half", () => {
     const plan = planBrowserAttackSwarm({
-      impactedInvariants: [
-        { id: "UI-1", severity: "HIGH" },
-        { id: "ACC-3", severity: "CRITICAL" },
-      ],
+      impactedInvariants: [{ id: "UI-1", severity: "HIGH" }],
     });
+    const missions = [...plan.missions, forgedMoneyMission(["ACC-3"])];
 
-    expect(() => assertBrowserSwarmMissionsExecutable(plan.missions)).toThrow(
-      /MONEY_BOUNDARY/,
-    );
+    expect(() => assertBrowserSwarmMissionsExecutable(plan.missions)).not.toThrow();
+    expect(() => assertBrowserSwarmMissionsExecutable(missions)).toThrow(/MONEY_BOUNDARY/);
   });
 
-  it("refuses a forged Jev MONEY_BOUNDARY mission whose STATE_TRANSITION oracle its handler does not judge", () => {
+  it("refuses a forged Jev MONEY_BOUNDARY mission whose UI_BACKEND_AUTHORITY oracle its handler does not judge", () => {
     const forged: BrowserAttackMission = {
       id: "jev::MONEY_BOUNDARY",
       family: "MONEY_BOUNDARY",
       source: "JEV",
       invariantIds: ["UI-1"],
       invariantSeverity: "HIGH",
-      oracle: "STATE_TRANSITION",
+      oracle: "UI_BACKEND_AUTHORITY",
       timeoutMs: 45_000,
       estimatedCostUnits: 5,
       evidence: ["TRACE"],
@@ -260,9 +278,9 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
       .map((row) => `${row.invariantId}:${row.family}/${row.oracle}`)
       .sort();
 
-    expect(missing).toEqual([
-      "ACC-3:MONEY_BOUNDARY/STATE_TRANSITION",
-    ]);
+    // Every mandatory mapping now has a handler that judges its oracle; the ACC-3 entry is covered for the
+    // direct-paid cost void only (see the MONEY_BOUNDARY comment in browserAttackSwarm.ts).
+    expect(missing).toEqual([]);
 
     const fullyCovered = [
       ...new Set(browserSwarmCoverageMatrix().map((row) => row.invariantId)),
@@ -276,6 +294,7 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
     expect(fullyCovered).toEqual([
       "ACC-1",
       "ACC-2",
+      "ACC-3",
       "AUTH-1",
       "CONC-1",
       "CONS-1",
@@ -297,6 +316,7 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
       "browserSwarmBoundaryAttacks.ts",
       "browserSwarmBoundaryHarness.ts",
       "browserSwarmConsignmentAttack.ts",
+      "browserSwarmFeeVoidAttack.ts",
       "browserSwarmMoneyBoundaryAttack.ts",
       "browserSwarmNavigationRaceAttack.ts",
       "browserSwarmNetworkRecoveryAttack.ts",

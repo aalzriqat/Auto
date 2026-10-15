@@ -140,7 +140,7 @@ function navigationRaceSpec(options: Required<NavigationRaceAttackOptions>) {
         ),
       );
       detail.expenseId = expenseId;
-      const posted = await readSettledLedger(env, options, expenseId, isPosted);
+      const posted = await readSettledLedger(env, options, expenseId, { until: isPosted });
 
       // The sentinel: a second posted expense the race must not touch. Its row on the reloaded screen proves
       // the list has loaded, so the target's absence is evidence; its ledger is the bystander posting.
@@ -160,7 +160,7 @@ function navigationRaceSpec(options: Required<NavigationRaceAttackOptions>) {
         ),
       );
       detail.sentinelId = sentinelId;
-      const sentinelPosted = await readSettledLedger(env, options, sentinelId, isPosted);
+      const sentinelPosted = await readSettledLedger(env, options, sentinelId, { until: isPosted });
 
       try {
         await armReversalOnExpenseScreen(page, signal, expenseId, `${nonce} interrupted reversal`);
@@ -273,7 +273,7 @@ function navigationRaceSpec(options: Required<NavigationRaceAttackOptions>) {
           judge(afterRace, null, screenRow, false, await readSentinelAfter());
           return;
         }
-        final = await readSettledLedger(env, options, expenseId, isReversed);
+        final = await readSettledLedger(env, options, expenseId, { until: isReversed });
       }
 
       judge(afterRace, final, screenRow, outcome === "NOT_APPLIED", await readSentinelAfter());

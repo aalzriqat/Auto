@@ -249,10 +249,24 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
   });
 
   it("fails before manifest creation when Phase A has no executable handler", () => {
-    // ACC-3's MONEY_BOUNDARY mission is judged by STATE_TRANSITION, which the ACC-1 handler does not judge.
-    const plan = planBrowserAttackSwarm({
+    // Every real mandatory mapping is executable now, so the refusal is driven by a forged mission whose
+    // oracle (UI_BACKEND_AUTHORITY) the MONEY_BOUNDARY handler does not judge.
+    const real = planBrowserAttackSwarm({
       impactedInvariants: [{ id: "ACC-3", severity: "CRITICAL" }],
     });
+    const forged: BrowserAttackMission = {
+      id: "jev::MONEY_BOUNDARY",
+      family: "MONEY_BOUNDARY",
+      source: "JEV",
+      invariantIds: ["UI-1"],
+      invariantSeverity: "HIGH",
+      oracle: "UI_BACKEND_AUTHORITY",
+      timeoutMs: 45_000,
+      estimatedCostUnits: 5,
+      evidence: ["TRACE"],
+      jevProbability: 0.9,
+    };
+    const plan = { ...real, missions: [...real.missions, forged] };
 
     expect(PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES).toEqual([
       "DUPLICATE_SUBMIT",
@@ -277,7 +291,7 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
         previewName: "e2e-pr-350-abcdef1234",
         expectedCloudUrl: "https://example-preview.convex.cloud",
       }),
-    ).toThrow(/no executable handler.*MONEY_BOUNDARY/i);
+    ).toThrow(/no executable handler.*MONEY_BOUNDARY with oracle UI_BACKEND_AUTHORITY/i);
   });
 
   it("refuses ambiguous or non-preview swarm targets before browser execution", () => {
