@@ -285,33 +285,37 @@ describe("trusted browser swarm run assembly", () => {
   // to reject. Run 38224038549 shows what that cost: preview provisioning, an
   // exact-SHA build and a full trusted E2E suite all ran before both workers
   // refused at setup. The trusted plan now refuses it itself.
-  // No active mapping is unexecutable any more (ACC-3 was the last), so the refusal is reached through the
+  // No active mapping is unexecutable any more (the ACC-3 mapping was removed instead), so the refusal is reached through the
   // planner seam above: a MONEY_BOUNDARY / UI_BACKEND_AUTHORITY mission that the family's handler does not judge.
   it("refuses impact whose planned missions have no executable handler before workers are scheduled", () => {
     seam.forge = true;
     expect(() =>
-      assemble({ impactArtifact: impact([{ id: "ACC-3", severity: "CRITICAL" }]) }),
+      assemble({ impactArtifact: impact([{ id: "ACC-1", severity: "CRITICAL" }]) }),
     ).toThrow(FORGED_MISSION_REFUSAL);
     // The same impact assembles once nothing unexecutable is planned: the refusal is the mission's, not the impact's.
     seam.forge = false;
-    expect(assemble({ impactArtifact: impact([{ id: "ACC-3", severity: "CRITICAL" }]) }).workerCount).toBe(2);
+    expect(assemble({ impactArtifact: impact([{ id: "ACC-1", severity: "CRITICAL" }]) }).workerCount).toBe(2);
   });
 
-  it("assembles ACC-3's MONEY_BOUNDARY / STATE_TRANSITION mission into the scheduled plan", () => {
+  it("assembles LIFE-1's MONEY_BOUNDARY / STATE_TRANSITION fee-void mission into the scheduled plan", () => {
     const payload = assemble({
-      impactArtifact: impact([{ id: "ACC-3", severity: "CRITICAL" }]),
+      impactArtifact: impact([{ id: "LIFE-1", severity: "CRITICAL" }]),
       jevArtifact: jev("LIVE", { suggestions: [] }),
     });
-    expect(payload.plannedMissions).toEqual([
-      {
-        id: "det::ACC-3::MONEY_BOUNDARY",
-        family: "MONEY_BOUNDARY",
-        source: "DETERMINISTIC",
-        invariantIds: ["ACC-3"],
-        oracle: "STATE_TRANSITION",
-        timeoutMs: 240_000,
-      },
-    ]);
+    expect(payload.plannedMissions).toContainEqual({
+      id: "det::LIFE-1::MONEY_BOUNDARY",
+      family: "MONEY_BOUNDARY",
+      source: "DETERMINISTIC",
+      invariantIds: ["LIFE-1"],
+      oracle: "STATE_TRANSITION",
+      timeoutMs: 240_000,
+    });
+  });
+
+  it("refuses ACC-3 impact: no mission judges accounting date and period authority", () => {
+    expect(() => assemble({ impactArtifact: impact([{ id: "ACC-3", severity: "CRITICAL" }]) })).toThrow(
+      /no deterministic mission mapping.*ACC-3/,
+    );
   });
 
   it("binds the executable mission plan to the trusted run evidence", () => {

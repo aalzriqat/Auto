@@ -1,5 +1,5 @@
 /**
- * SCRUM-350 ACC-3 — executable MONEY_BOUNDARY / STATE_TRANSITION browser attack.
+ * SCRUM-350 LIFE-1 — executable MONEY_BOUNDARY / STATE_TRANSITION browser attack.
  *
  * Owner invariant: a new way to SPEND creates reversal obligations on every path that
  * un-happens it. The spend here is a cost the DEALERSHIP pays directly (SCRUM-443); the

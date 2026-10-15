@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES,
+  UNSUPPORTED_BROWSER_SWARM_INVARIANTS,
   assertBrowserSwarmMissionsExecutable,
   assertMandatoryBrowserSwarmCoverage,
   browserSwarmCoverageMatrix,
@@ -88,14 +89,19 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
     expect(isBrowserSwarmMissionExecutable("MONEY_BOUNDARY", "ECONOMIC_AUTHORITY")).toBe(true);
   });
 
-  it("accepts ACC-3 as executable through its own STATE_TRANSITION scenario, and no other oracle for the family", () => {
-    const plan = assertMandatoryBrowserSwarmCoverage([{ id: "ACC-3", severity: "CRITICAL" }]);
-    expect(plan.missions.map((mission) => `${mission.family}/${mission.oracle}`)).toEqual([
-      "MONEY_BOUNDARY/STATE_TRANSITION",
-    ]);
-    expect(plan.missions[0]?.evidence).toEqual(["TRACE", "SCREENSHOT", "BACKEND_STATE"]);
+  it("refuses ACC-3: nothing judges accounting date and period authority, so it can never be reported executable", () => {
+    expect(() => assertMandatoryBrowserSwarmCoverage([{ id: "ACC-3", severity: "CRITICAL" }])).toThrow(
+      /no deterministic mission mapping.*ACC-3/,
+    );
+  });
+
+  it("accepts LIFE-1's fee void as executable through its own STATE_TRANSITION scenario, and no other oracle for the family", () => {
+    const plan = assertMandatoryBrowserSwarmCoverage([{ id: "LIFE-1", severity: "CRITICAL" }]);
+    const feeVoid = plan.missions.find((mission) => mission.family === "MONEY_BOUNDARY");
+    expect(feeVoid).toMatchObject({ oracle: "STATE_TRANSITION", invariantIds: ["LIFE-1"] });
+    expect(feeVoid?.evidence).toEqual(["TRACE", "SCREENSHOT", "BACKEND_STATE"]);
     // Two costs recorded, reconciled and paid, then voided twice, with six ledger settles.
-    expect(plan.missions[0]?.timeoutMs).toBeGreaterThanOrEqual(180_000);
+    expect(feeVoid?.timeoutMs).toBeGreaterThanOrEqual(180_000);
     expect(isBrowserSwarmMissionExecutable("MONEY_BOUNDARY", "STATE_TRANSITION")).toBe(true);
     // The family's handler judges these two oracles; a forged mission for any other is still refused.
     expect(isBrowserSwarmMissionExecutable("MONEY_BOUNDARY", "UI_BACKEND_AUTHORITY")).toBe(false);
@@ -253,9 +259,14 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
       .sort();
     const matrix = browserSwarmCoverageMatrix();
 
-    expect([...new Set(matrix.map((row) => row.invariantId))].sort()).toEqual(
-      activeIds,
-    );
+    // An explicitly unsupported invariant has no row, so it can never read as covered.
+    expect(
+      [
+        ...new Set(matrix.map((row) => row.invariantId)),
+        ...Object.keys(UNSUPPORTED_BROWSER_SWARM_INVARIANTS),
+      ].sort(),
+    ).toEqual(activeIds);
+    expect(matrix.map((row) => row.invariantId)).not.toContain("ACC-3");
     for (const row of matrix) {
       expect(row.executable).toBe(
         isBrowserSwarmMissionExecutable(row.family, row.oracle),
@@ -278,8 +289,8 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
       .map((row) => `${row.invariantId}:${row.family}/${row.oracle}`)
       .sort();
 
-    // Every mandatory mapping now has a handler that judges its oracle; the ACC-3 entry is covered for the
-    // direct-paid cost void only (see the MONEY_BOUNDARY comment in browserAttackSwarm.ts).
+    // Every mandatory mapping now has a handler that judges its oracle; LIFE-1's fee void is covered for the
+    // direct-paid cost void only (see the MONEY_BOUNDARY comment in browserAttackSwarm.ts). ACC-3 has no mapping.
     expect(missing).toEqual([]);
 
     const fullyCovered = [
@@ -294,7 +305,6 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
     expect(fullyCovered).toEqual([
       "ACC-1",
       "ACC-2",
-      "ACC-3",
       "AUTH-1",
       "CONC-1",
       "CONS-1",
