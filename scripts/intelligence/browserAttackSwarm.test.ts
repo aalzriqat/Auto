@@ -7,6 +7,7 @@ import {
   browserMissionTimeoutMs,
   buildBrowserSwarmRunManifest,
   classifyBrowserMissionEvidence,
+  isBrowserSwarmMissionExecutable,
   partitionBrowserAttackMissions,
   planBrowserAttackSwarm,
   type BrowserAttackMission,
@@ -26,7 +27,20 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
     // Every active invariant is either mapped to missions or explicitly, reasonably unsupported (fails closed).
     const unsupportedIds = Object.keys(UNSUPPORTED_BROWSER_SWARM_INVARIANTS).sort();
     expect([...SUPPORTED_BROWSER_SWARM_INVARIANT_IDS, ...unsupportedIds].sort()).toEqual(activeIds);
-    expect(unsupportedIds).toEqual(["ACC-3"]);
+    // ACC-3 left this list when SCRUM-849 added the mission that judges it; nothing is unsupported now.
+    expect(unsupportedIds).toEqual([]);
+  });
+
+  it("plans exactly one ACCOUNTING_DATE_BOUNDARY mission for ACC-3, judged by STATE_TRANSITION", () => {
+    const plan = planBrowserAttackSwarm({ impactedInvariants: [{ id: "ACC-3", severity: "CRITICAL" }] });
+    expect(plan.missions.map((mission) => `${mission.family}/${mission.oracle}/${mission.invariantIds.join(",")}`)).toEqual([
+      "ACCOUNTING_DATE_BOUNDARY/STATE_TRANSITION/ACC-3",
+    ]);
+    expect(plan.missions[0]?.timeoutMs).toBe(browserMissionTimeoutMs("ACCOUNTING_DATE_BOUNDARY"));
+    expect(browserMissionTimeoutMs("ACCOUNTING_DATE_BOUNDARY")).toBeGreaterThanOrEqual(180_000);
+    expect(isBrowserSwarmMissionExecutable("ACCOUNTING_DATE_BOUNDARY", "STATE_TRANSITION")).toBe(true);
+    // The handler judges no other oracle, so a forged ECONOMIC_AUTHORITY mission for the family is not executable.
+    expect(isBrowserSwarmMissionExecutable("ACCOUNTING_DATE_BOUNDARY", "ECONOMIC_AUTHORITY")).toBe(false);
   });
 
   it("gives CONSIGNMENT_ECONOMICS its own budget of at least 180s, never the 45s default its ~25 commands and 30s posting wait exceed", () => {
@@ -300,6 +314,7 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
       "STALE_UI",
       "MONEY_BOUNDARY",
       "NAVIGATION_RACE",
+      "ACCOUNTING_DATE_BOUNDARY",
     ]);
     expect(() =>
       buildBrowserSwarmRunManifest({

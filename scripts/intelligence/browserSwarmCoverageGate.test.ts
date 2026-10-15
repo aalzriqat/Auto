@@ -130,6 +130,30 @@ describe("SCRUM-826 trusted coverage gate before preview provisioning", () => {
     );
   });
 
+  it("plans ACC-3's ACCOUNTING_DATE_BOUNDARY / STATE_TRANSITION mission as executable", async () => {
+    await withImpact(impact([{ id: "ACC-3", severity: "CRITICAL" }]), async (repoRoot) => {
+      const result = await runBrowserSwarmCoverageGate({ repoRoot, env });
+      expect(result.status).toBe("EXECUTABLE");
+      expect(
+        result.mandatoryMissions.map((mission: { family: string; oracle: string }) => `${mission.family}/${mission.oracle}`),
+      ).toEqual(["ACCOUNTING_DATE_BOUNDARY/STATE_TRANSITION"]);
+    });
+  });
+
+  it("refuses an absent or unparseable impact artifact for an ACC-3 change, and writes no coverage as if it had passed", async () => {
+    const repoRoot = await mkdtemp(path.join(tmpdir(), "autoflow-swarm-coverage-"));
+    try {
+      const artifacts = path.join(repoRoot, "artifacts");
+      await mkdir(artifacts, { recursive: true });
+      await expect(runBrowserSwarmCoverageGate({ repoRoot, env })).rejects.toThrow(/missing or is not valid JSON/);
+      await writeFile(path.join(artifacts, "browser-swarm-trusted-impact.json"), '{"impactedInvariants": [{"id": "ACC-3"', "utf8");
+      await expect(runBrowserSwarmCoverageGate({ repoRoot, env })).rejects.toThrow(/missing or is not valid JSON/);
+      await expect(readFile(path.join(artifacts, "browser-swarm-coverage.json"), "utf8")).rejects.toThrow(/ENOENT/);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("records an explicit no-impact result instead of planning missions", async () => {
     await withImpact(impact([]), async (repoRoot) => {
       const result = await runBrowserSwarmCoverageGate({ repoRoot, env });
