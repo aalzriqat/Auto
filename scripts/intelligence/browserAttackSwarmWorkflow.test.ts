@@ -1337,8 +1337,9 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
 
   // SCRUM-350 G4 (PR #581, run 38529903614): the swarm preview has a chart of
   // accounts and no accounting period, so every posting stayed QUEUED and ACC-2
-  // returned HARNESS_ERROR. The period is opened once, after trusted E2E and
-  // before any attack worker, never by a worker and never by the bootstrap.
+  // returned HARNESS_ERROR. The period is opened before the full trusted E2E and
+  // verified again after it, before any attack worker, never by a worker and
+  // never by the bootstrap.
   describe("swarm accounting period setup (SCRUM-350 G4)", () => {
     const SETUP = "Open the swarm accounting period and drain its pending outbox";
     const FULL_SUITE = "Run full trusted E2E suite against exact candidate";
@@ -1397,6 +1398,55 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       expect(uploaded).toContain("trusted/playwright-report-swarm-period/");
       expect(uploaded).toContain("trusted/test-results-swarm-period/");
       expect(upload?.if).toBe("always()");
+    });
+
+    // SCRUM-411: finance PR #585 run 38693332010 ran main's financed-deal spec
+    // against the candidate; 33/34 passed but the deal could not close because
+    // HANDOVER_PERIOD_OPEN was "Needs action". The period must already be open
+    // when the full suite starts, and is still re-verified after it.
+    describe("period established before the full suite (SCRUM-411)", () => {
+      const PRE = "Establish the open accounting period before the full trusted E2E suite";
+      const EGRESS_PROOF = "Prove browser egress containment before authenticated traffic";
+      const names = (job("trusted-e2e").steps ?? []).map((entry) => entry.name);
+      const outputOf = (run: unknown): string | undefined =>
+        /--output=(\S+)/.exec(String(run ?? ""))?.[1];
+
+      it("runs after egress proof and before the full suite, unskippable", () => {
+        const proof = names.indexOf(EGRESS_PROOF);
+        expect(proof).toBeGreaterThan(-1);
+        expect(names.indexOf(PRE)).toBeGreaterThan(proof);
+        expect(names.indexOf(PRE)).toBeLessThan(names.indexOf(FULL_SUITE));
+        const pre = step("trusted-e2e", PRE);
+        expect(pre.if).toBeUndefined();
+        expect(pre).not.toHaveProperty("continue-on-error");
+      });
+
+      it("uses the same setup spec and env but its own report and results, and uploads both", () => {
+        const pre = step("trusted-e2e", PRE);
+        const post = step("trusted-e2e", SETUP);
+        const run = String(pre.run ?? "").replace(/\s+/g, " ");
+        expect(run).toContain(`playwright test ${SPEC} --project=chromium --no-deps`);
+        expect(outputOf(pre.run)).toBe("test-results-swarm-period-pre");
+        expect(outputOf(post.run)).toBe("test-results-swarm-period");
+        expect(outputOf(pre.run)).not.toBe(outputOf(post.run));
+        expect(pre["working-directory"]).toBe("trusted");
+        expect(pre.env).toMatchObject({
+          BROWSER_SWARM_PERIOD_SETUP: "1",
+          BROWSER_EGRESS_REQUIRED: "1",
+          PLAYWRIGHT_SKIP_WEBSERVER: "1",
+          NEXT_PUBLIC_CONVEX_URL: "${{ needs.prepare.outputs.convex_cloud_url }}",
+          PLAYWRIGHT_HTML_REPORT: "playwright-report-swarm-period-pre",
+        });
+        for (const forbidden of CANDIDATE_FORBIDDEN_ENV) {
+          expect(pre.env, forbidden).not.toHaveProperty(forbidden);
+        }
+        const upload = (job("trusted-e2e").steps ?? []).find(
+          (entry) => entry.name === "Upload trusted E2E report",
+        );
+        const uploaded = String(upload?.with?.path ?? "");
+        expect(uploaded).toContain("trusted/playwright-report-swarm-period-pre/");
+        expect(uploaded).toContain("trusted/test-results-swarm-period-pre/");
+      });
     });
 
     it("is never run by an attack worker or the ordinary PR E2E workflow", () => {
