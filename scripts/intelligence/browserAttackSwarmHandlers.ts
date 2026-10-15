@@ -25,6 +25,7 @@ import {
 } from "./browserSwarmEconomicAttacks";
 import { createConsignmentAttackHandlers } from "./browserSwarmConsignmentAttack";
 import { createNetworkRecoveryHandler } from "./browserSwarmNetworkRecoveryAttack";
+import { createNavigationRaceAttackHandlers } from "./browserSwarmNavigationRaceAttack";
 import { createStaleUiAttackHandlers } from "./browserSwarmStaleUiAttack";
 
 type ArtifactWriter = {
@@ -551,5 +552,7 @@ export function createInitialBrowserAttackHandlers(): BrowserAttackHandlerRegist
     ...createConsignmentAttackHandlers(missionBrowserRuntime),
     // SCRUM-350 LIFE-1: a stale screen's action, judged against backend authority.
     ...createStaleUiAttackHandlers(missionBrowserRuntime),
+    // SCRUM-350 LIFE-1: a lifecycle transition interrupted by history back/forward, judged against the ledger.
+    ...createNavigationRaceAttackHandlers(missionBrowserRuntime),
   };
 }

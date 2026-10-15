@@ -37,6 +37,7 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
       "DUPLICATE_SUBMIT",
       "LIFECYCLE_REVERSAL",
       "MULTI_TAB_RACE",
+      "NAVIGATION_RACE",
       "NETWORK_RECOVERY",
       "RTL_PARITY",
       "STALE_UI",
@@ -85,11 +86,24 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
     expect(isBrowserSwarmMissionExecutable("STALE_UI", "UI_BACKEND_AUTHORITY")).toBe(true);
     // The handler judges that oracle for this family only.
     expect(isBrowserSwarmMissionExecutable("STALE_UI", "STATE_TRANSITION")).toBe(false);
-    // LIFE-1 stays refused as a whole: its reversal and navigation missions have no handler that judges them.
+    // LIFE-1 stays refused as a whole: its reversal mission has no handler that judges it.
     expect(() => assertMandatoryBrowserSwarmCoverage([{ id: "LIFE-1", severity: "CRITICAL" }])).toThrow(
       /LIFECYCLE_REVERSAL.*STATE_TRANSITION.*LIFE-1/,
     );
     expect(() => assertMandatoryBrowserSwarmCoverage([{ id: "LIFE-1", severity: "CRITICAL" }])).not.toThrow(/STALE_UI/);
+  });
+
+  it("executes LIFE-1's NAVIGATION_RACE mission through a handler that judges STATE_TRANSITION for that family only", () => {
+    const plan = planBrowserAttackSwarm({ impactedInvariants: [{ id: "LIFE-1", severity: "CRITICAL" }] });
+    const race = plan.missions.find((mission) => mission.family === "NAVIGATION_RACE");
+    expect(race).toMatchObject({ oracle: "STATE_TRANSITION", evidence: ["TRACE", "SCREENSHOT", "BACKEND_STATE"] });
+    expect(race?.timeoutMs).toBeGreaterThan(45_000);
+    expect(() => assertBrowserSwarmMissionsExecutable([race!])).not.toThrow();
+    expect(isBrowserSwarmMissionExecutable("NAVIGATION_RACE", "STATE_TRANSITION")).toBe(true);
+    expect(isBrowserSwarmMissionExecutable("NAVIGATION_RACE", "UI_BACKEND_AUTHORITY")).toBe(false);
+    // The reversal mission shares the oracle kind but has no handler: the oracle alone never makes it executable.
+    expect(isBrowserSwarmMissionExecutable("LIFECYCLE_REVERSAL", "STATE_TRANSITION")).toBe(false);
+    expect(() => assertMandatoryBrowserSwarmCoverage([{ id: "LIFE-1", severity: "CRITICAL" }])).not.toThrow(/NAVIGATION_RACE/);
   });
 
   it("refuses a plan that mixes executable and non-executable missions rather than running the executable half", () => {
@@ -209,7 +223,6 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
       "ACC-1:MONEY_BOUNDARY/ECONOMIC_AUTHORITY",
       "ACC-3:MONEY_BOUNDARY/STATE_TRANSITION",
       "LIFE-1:LIFECYCLE_REVERSAL/STATE_TRANSITION",
-      "LIFE-1:NAVIGATION_RACE/STATE_TRANSITION",
     ]);
 
     const fullyCovered = [
@@ -243,6 +256,7 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
       "browserSwarmBoundaryAttacks.ts",
       "browserSwarmBoundaryHarness.ts",
       "browserSwarmConsignmentAttack.ts",
+      "browserSwarmNavigationRaceAttack.ts",
       "browserSwarmNetworkRecoveryAttack.ts",
       "browserSwarmStaleUiAttack.ts",
     ]) {
