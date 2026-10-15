@@ -3,6 +3,7 @@ import {
   MAX_BROWSER_SWARM_MISSIONS,
   PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES,
   SUPPORTED_BROWSER_SWARM_INVARIANT_IDS,
+  browserMissionTimeoutMs,
   buildBrowserSwarmRunManifest,
   classifyBrowserMissionEvidence,
   partitionBrowserAttackMissions,
@@ -22,6 +23,15 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
       .sort();
 
     expect(SUPPORTED_BROWSER_SWARM_INVARIANT_IDS).toEqual(activeIds);
+  });
+
+  it("gives CONSIGNMENT_ECONOMICS its own budget of at least 180s, never the 45s default its ~25 commands and 30s posting wait exceed", () => {
+    expect(browserMissionTimeoutMs("CONSIGNMENT_ECONOMICS")).toBeGreaterThanOrEqual(180_000);
+    expect(browserMissionTimeoutMs("RTL_PARITY")).toBe(45_000);
+    const plan = planBrowserAttackSwarm({ impactedInvariants: [{ id: "CONS-1", severity: "CRITICAL" }] });
+    const missions = plan.missions.filter((mission) => mission.family === "CONSIGNMENT_ECONOMICS");
+    expect(missions.length).toBeGreaterThan(0);
+    for (const mission of missions) expect(mission.timeoutMs).toBeGreaterThanOrEqual(180_000);
   });
 
   it("fails closed when an impacted invariant has no deterministic browser mapping", () => {

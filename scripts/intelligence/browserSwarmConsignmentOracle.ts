@@ -109,8 +109,9 @@ const CURRENCY_DECIMALS: Readonly<Record<string, number>> = {
   JPY: 0,
 };
 
+/** Exact ISO codes only: a non-canonical code is unknown (unjudged), never judged against canonical lines. */
 export function currencyDecimals(currency: string): number | null {
-  return CURRENCY_DECIMALS[currency.toUpperCase()] ?? null;
+  return CURRENCY_DECIMALS[currency] ?? null;
 }
 
 /** Major units to minor units; null when the amount is not whole at that scale. */
@@ -151,12 +152,212 @@ export function expectedConsignedRevenueMinor(expectation: ConsignmentExpectatio
 }
 
 /**
+ * The net revenue a posting would show if it measured the margin on the car's
+ * SALE PRICE instead of on what the dealership is actually paid (approved amount
+ * plus the customer's gap): price − entitlement − contribution. This is the wrong
+ * figure the scenario must be able to tell from the right one.
+ */
+export function priceBasisRevenueMinor(expectation: ConsignmentExpectation): number {
+  return expectation.priceMinor - expectation.entitlementMinor - expectation.contributionMinor;
+}
+
+/**
  * Whether the scenario can tell a margin measured on the financier's approval
- * from one measured on the car's price: only when the two differ. Equal, both
- * bases give the same figures, so a pass proves nothing about which was used.
+ * (plus the customer's gap) from one measured on the car's price: only when the
+ * two revenues differ, i.e. approved + gap ≠ price. Approved < price is not
+ * enough: a customer gap that fills the whole difference makes both bases post
+ * identical figures, and a pass would prove nothing about which was used.
  */
 export function discriminatesApprovedFromPrice(expectation: ConsignmentExpectation): boolean {
-  return expectation.approvedMinor < expectation.priceMinor;
+  return expectedConsignedRevenueMinor(expectation) !== priceBasisRevenueMinor(expectation);
+}
+
+/**
+ * The scenario's own figures, in major units. Nothing here is read back from the
+ * product. The customer's first payment is the held deposit (the one deposit the
+ * dealership forwards to the financier).
+ */
+export interface ConsignmentFigures {
+  priceMajor: number;
+  entitlementMajor: number;
+  /** What the dealership asked the financier to buy the car at. */
+  quotationMajor: number;
+  approvedMajor: number;
+  /** The financier's loan-to-value percentage (a whole number). */
+  ltvPercent: number;
+  depositMajor: number;
+  /** The part of the shortfall the customer agrees to pay the dealership in cash. */
+  customerGapMajor: number;
+}
+
+/**
+ * A 20,000 car the supplier is owed 15,000 for, quoted to an 85% financier at 20,000
+ * and approved at 18,000. The net shortfall is 1,700 (not the gross 2,000); the customer
+ * pays 1,000 of it to the dealership and the dealership absorbs 700, so approved + gap
+ * (19,000) is 1,000 short of the price.
+ */
+export const CONSIGNMENT_FIGURES: Readonly<ConsignmentFigures> = {
+  priceMajor: 20_000,
+  entitlementMajor: 15_000,
+  quotationMajor: 20_000,
+  approvedMajor: 18_000,
+  ltvPercent: 85,
+  depositMajor: 200,
+  customerGapMajor: 1_000,
+};
+
+/**
+ * What the dealership must put in to complete a purchase the financier lends
+ * `ltvPercent` of, after the customer's first payment: purchase − funded − first
+ * payment, funded being the lesser of the LTV share and what the first payment
+ * leaves. Null when the percentage does not give a whole minor amount.
+ */
+export function fundingContributionMinor(purchaseMinor: number, ltvPercent: number, firstPaymentMinor: number): number | null {
+  const scaled = purchaseMinor * ltvPercent;
+  if (!Number.isInteger(ltvPercent) || ltvPercent < 0 || ltvPercent > 100 || !Number.isSafeInteger(scaled) || scaled % 100 !== 0) {
+    return null;
+  }
+  const applied = Math.min(firstPaymentMinor, purchaseMinor);
+  const funded = Math.min(scaled / 100, purchaseMinor - applied);
+  return purchaseMinor - funded - applied;
+}
+
+/**
+ * The owner's NET shortfall (SCRUM-407 c21031): what the showroom would have kept
+ * of the quotation (quotation − its contribution) less what it keeps of the approval
+ * (approved − its contribution), both at the same LTV and first payment. 20,000 → 18,000
+ * at 85% with a 200 first payment is 17,200 − 15,500 = 1,700, not the gross 2,000.
+ */
+export function netShortfallMinor(quotationMinor: number, approvedMinor: number, ltvPercent: number, firstPaymentMinor: number): number | null {
+  const quoted = fundingContributionMinor(quotationMinor, ltvPercent, firstPaymentMinor);
+  const approved = fundingContributionMinor(approvedMinor, ltvPercent, firstPaymentMinor);
+  return quoted === null || approved === null ? null : quotationMinor - quoted - (approvedMinor - approved);
+}
+
+/** One concrete scenario, every figure derived here from the major-unit inputs. */
+export interface ConsignmentScenario {
+  expectation: ConsignmentExpectation;
+  quotationMinor: number;
+  ltvPercent: number;
+  /** The customer's first payment, which is the held deposit. */
+  firstPaymentMinor: number;
+  depositMinor: number;
+  shortfallMinor: number;
+  customerShareMinor: number;
+  dealerShareMinor: number;
+  /** H + D: what the dealership forwards to the financier before the sale is finalized. */
+  forwardDueMinor: number;
+}
+
+/** The scenario for `currency`, or why it cannot be expressed there; never a partial one. */
+export function buildConsignmentScenario(
+  currency: string,
+  figures: Readonly<ConsignmentFigures> = CONSIGNMENT_FIGURES,
+): { ok: true; scenario: ConsignmentScenario } | { ok: false; reason: string } {
+  const priceMinor = toMinor(figures.priceMajor, currency);
+  const entitlementMinor = toMinor(figures.entitlementMajor, currency);
+  const quotationMinor = toMinor(figures.quotationMajor, currency);
+  const approvedMinor = toMinor(figures.approvedMajor, currency);
+  const depositMinor = toMinor(figures.depositMajor, currency);
+  const customerShareMinor = toMinor(figures.customerGapMajor, currency);
+  if (
+    priceMinor === null ||
+    entitlementMinor === null ||
+    quotationMinor === null ||
+    approvedMinor === null ||
+    depositMinor === null ||
+    customerShareMinor === null
+  ) {
+    return {
+      ok: false,
+      reason:
+        currencyDecimals(currency) === null
+          ? `the organization's currency ${JSON.stringify(currency)} has no known minor-unit scale, so no amount of the scenario can be expressed or judged`
+          : `an amount of the scenario cannot be expressed in whole minor units of ${JSON.stringify(currency)}`,
+    };
+  }
+  const contributionMinor = fundingContributionMinor(approvedMinor, figures.ltvPercent, depositMinor);
+  const shortfallMinor = netShortfallMinor(quotationMinor, approvedMinor, figures.ltvPercent, depositMinor);
+  if (contributionMinor === null || shortfallMinor === null) {
+    return { ok: false, reason: `an LTV of ${figures.ltvPercent}% does not give whole minor amounts for this scenario` };
+  }
+  if (shortfallMinor <= 0 || customerShareMinor > shortfallMinor) {
+    return {
+      ok: false,
+      reason: `the net shortfall (${shortfallMinor}) must be positive and cover the customer's share (${customerShareMinor})`,
+    };
+  }
+  const expectation: ConsignmentExpectation = {
+    currency,
+    priceMinor,
+    approvedMinor,
+    entitlementMinor,
+    contributionMinor,
+    route: "THROUGH_DEALERSHIP",
+    depositForwardMinor: depositMinor,
+    customerGapMinor: customerShareMinor,
+  };
+  // A scenario the oracle could never judge is refused here, before the mission seeds anything for it.
+  const problem = expectationProblem(expectation);
+  if (problem !== null) return { ok: false, reason: problem };
+  return {
+    ok: true,
+    scenario: {
+      expectation,
+      quotationMinor,
+      ltvPercent: figures.ltvPercent,
+      firstPaymentMinor: depositMinor,
+      depositMinor,
+      shortfallMinor,
+      customerShareMinor,
+      dealerShareMinor: shortfallMinor - customerShareMinor,
+      forwardDueMinor: depositMinor + contributionMinor,
+    },
+  };
+}
+
+/**
+ * Why `expectation` is not a scenario this file can judge, or null when it is. The
+ * builder refuses on it before anything is seeded; the oracle checks it again
+ * because it is exported and may be handed any expectation.
+ */
+export function expectationProblem(expectation: ConsignmentExpectation): string | null {
+  if (currencyDecimals(expectation.currency) === null) {
+    return `the organization's currency ${JSON.stringify(expectation.currency)} has no known minor-unit scale, so no amount can be judged`;
+  }
+  const gap = expectation.customerGapMinor ?? 0;
+  const inputs: [string, number][] = [
+    ["price", expectation.priceMinor],
+    ["approved amount", expectation.approvedMinor],
+    ["supplier entitlement", expectation.entitlementMinor],
+    ["contribution", expectation.contributionMinor],
+    ["deposit forward", expectation.depositForwardMinor ?? 0],
+    ["customer gap", gap],
+  ];
+  for (const [label, value] of inputs) {
+    if (!isWholeMinor(value)) return `the scenario's ${label} (${value}) is not a whole non-negative minor amount`;
+  }
+  if (expectation.approvedMinor > expectation.priceMinor || expectation.entitlementMinor >= expectation.approvedMinor) {
+    return "the scenario is not a placement with a positive margin (entitlement < approved <= price), so it cannot discriminate";
+  }
+  if (expectation.route !== "THROUGH_DEALERSHIP" && expectation.route !== "DIRECT_TO_SUPPLIER") {
+    return `the settlement route ${JSON.stringify(expectation.route)} is not modelled, so no posting can be judged`;
+  }
+  if (expectation.approvedMinor < expectation.priceMinor && expectation.customerGapMinor === undefined) {
+    // The shortfall's resolution (customer gap, deposit) is a fact the scenario must state, never one inferred here.
+    return "the financier approved less than the price but the scenario states no customer gap, so the posting cannot be judged";
+  }
+  if (expectation.approvedMinor + gap > expectation.priceMinor) {
+    return "the scenario's customer gap exceeds the shortfall between price and approval";
+  }
+  if (
+    expectation.route === "DIRECT_TO_SUPPLIER" &&
+    (expectation.contributionMinor > 0 || (expectation.depositForwardMinor ?? 0) > 0 || gap > 0)
+  ) {
+    // The funding lines of a direct sale (contribution, deposit, customer gap) are not modelled here, so the posting cannot be proven complete.
+    return "a direct-to-supplier sale with a contribution, deposit or customer gap is not modelled, so its posting cannot be judged complete";
+  }
+  return null;
 }
 
 function unjudgedOnly(reason: string): Judgement {
@@ -172,45 +373,14 @@ export function evaluateConsignmentEconomics(
   expectation: ConsignmentExpectation,
   lines: readonly ConsignmentLine[],
 ): Judgement {
-  const decimals = currencyDecimals(expectation.currency);
-  if (decimals === null) {
-    return unjudgedOnly(`the organization's currency ${JSON.stringify(expectation.currency)} has no known minor-unit scale, so no amount can be judged`);
-  }
-  const deposit = expectation.depositForwardMinor ?? 0;
-  const gap = expectation.customerGapMinor ?? 0;
-  const inputs: [string, number][] = [
-    ["price", expectation.priceMinor],
-    ["approved amount", expectation.approvedMinor],
-    ["supplier entitlement", expectation.entitlementMinor],
-    ["contribution", expectation.contributionMinor],
-    ["deposit forward", deposit],
-    ["customer gap", gap],
-  ];
-  for (const [label, value] of inputs) {
-    if (!isWholeMinor(value)) {
-      return unjudgedOnly(`the scenario's ${label} (${value}) is not a whole non-negative minor amount`);
-    }
-  }
-  if (expectation.approvedMinor > expectation.priceMinor || expectation.entitlementMinor >= expectation.approvedMinor) {
-    return unjudgedOnly("the scenario is not a placement with a positive margin (entitlement < approved <= price), so it cannot discriminate");
-  }
-  if (expectation.route !== "THROUGH_DEALERSHIP" && expectation.route !== "DIRECT_TO_SUPPLIER") {
-    return unjudgedOnly(`the settlement route ${JSON.stringify(expectation.route)} is not modelled, so no posting can be judged`);
-  }
-  if (expectation.approvedMinor < expectation.priceMinor && expectation.customerGapMinor === undefined) {
-    // The shortfall's resolution (customer gap, deposit) is a fact the scenario must state, never one inferred here.
-    return unjudgedOnly("the financier approved less than the price but the scenario states no customer gap, so the posting cannot be judged");
-  }
-  if (expectation.approvedMinor + gap > expectation.priceMinor) {
-    return unjudgedOnly("the scenario's customer gap exceeds the shortfall between price and approval");
-  }
-  if (expectation.route === "DIRECT_TO_SUPPLIER" && (expectation.contributionMinor > 0 || deposit > 0 || gap > 0)) {
-    // The funding lines of a direct sale (contribution, deposit, customer gap) are not modelled here, so the posting cannot be proven complete.
-    return unjudgedOnly("a direct-to-supplier sale with a contribution, deposit or customer gap is not modelled, so its posting cannot be judged complete");
-  }
+  const problem = expectationProblem(expectation);
+  if (problem !== null) return unjudgedOnly(problem);
   if (lines.length === 0) {
     return unjudgedOnly("the sale's posting was not read: no journal line to judge");
   }
+  const decimals = currencyDecimals(expectation.currency);
+  const deposit = expectation.depositForwardMinor ?? 0;
+  const gap = expectation.customerGapMinor ?? 0;
 
   const violations: string[] = [];
   for (const line of lines) {
@@ -245,12 +415,13 @@ export function evaluateConsignmentEconomics(
 
   // Allowlist: a line on any account the route may not touch is a violation, whatever it nets to.
   const allowed: readonly string[] = ROUTE_ACCOUNTS[expectation.route];
-  const ownMessage: readonly string[] = [
+  // Forbidden accounts that get their own, more specific violation below; listing them here would report them twice.
+  const judgedBelow: readonly string[] = [
     ...OWNED_STOCK_KEYS,
     expectation.route === "THROUGH_DEALERSHIP" ? "RECEIVABLE_FROM_SUPPLIERS" : "ACCOUNTS_PAYABLE_SUPPLIERS",
   ];
   for (const [key, touched] of byAccount) {
-    if (allowed.includes(key) || ownMessage.includes(key)) continue;
+    if (allowed.includes(key) || judgedBelow.includes(key)) continue;
     violations.push(
       `${key} (debit ${touched.debit}, credit ${touched.credit}) is not an account a ${ROUTE_LABEL[expectation.route]} consigned sale may post to`,
     );
@@ -260,9 +431,13 @@ export function evaluateConsignmentEconomics(
   const revenue = REVENUE_KEYS.reduce((sum, key) => sum + net(key).creditNet, 0);
   if (revenue !== expectedRevenue) {
     const grossPrice = revenue >= expectation.priceMinor;
+    const priceBasis = priceBasisRevenueMinor(expectation);
     violations.push(
       `recognized revenue is ${revenue} minor units, expected ${expectedRevenue} (approved ${expectation.approvedMinor} + customer gap ${gap} − supplier entitlement ${expectation.entitlementMinor} − contribution ${expectation.contributionMinor})` +
-        (grossPrice ? "; the car's gross price was recognized as the dealership's revenue" : ""),
+        (grossPrice ? "; the car's gross price was recognized as the dealership's revenue" : "") +
+        (revenue === priceBasis
+          ? `; the margin was measured on the sale price ${expectation.priceMinor} instead of the approved amount plus the customer's gap`
+          : ""),
     );
   }
 
@@ -337,5 +512,76 @@ export function evaluateConsignmentEconomics(
     }
   }
 
+  return { violations, unjudged: [] };
+}
+
+/** A `vehicleSupplierPayables` row as `sourcingPayables.list` serves it; amounts are in MAJOR units of `currency`. */
+export interface SupplierPayableRow {
+  id: string;
+  saleId: string | null;
+  vehicleId: string;
+  currency: string;
+  amountDueMajor: number;
+  /** Zero when the row records no payment. */
+  amountPaidMajor: number;
+  status: string;
+}
+
+/** The sale and car the payable must belong to. */
+export interface SupplierPayableSubject {
+  saleId: string;
+  vehicleId: string;
+}
+
+/** A just-completed sale's payable is still unpaid: any other status means the supplier was paid, disputed or the debt cancelled. */
+const UNPAID_PAYABLE_STATUSES: readonly string[] = ["PENDING", "NOT_YET_DUE", "DUE_ON_SALE"];
+
+/**
+ * Judges the canonical supplier-subledger record of ONE through-dealership consigned
+ * sale. The journal credits the supplier payable, but `vehicleSupplierPayables` is what
+ * the dealership settles the supplier from, so a correct journal beside a missing or wrong
+ * row is still a defect. `rows` is every payable the organization lists; exactly one must
+ * belong to the sale, for this car, in the organization's currency, owing the independently
+ * computed entitlement and not yet paid. A payable naming the car under another sale is a
+ * violation too, whatever the sale's own row says.
+ */
+export function evaluateSupplierPayable(
+  expectation: ConsignmentExpectation,
+  subject: SupplierPayableSubject,
+  rows: readonly SupplierPayableRow[],
+): Judgement {
+  const problem = expectationProblem(expectation);
+  if (problem !== null) return unjudgedOnly(problem);
+  if (expectation.route !== "THROUGH_DEALERSHIP") {
+    return unjudgedOnly("a direct-to-supplier sale's supplier record is not modelled, so its payable row cannot be judged");
+  }
+  const violations: string[] = [];
+  const forSale = rows.filter((row) => row.saleId === subject.saleId);
+  for (const stray of rows.filter((row) => row.saleId !== subject.saleId && row.vehicleId === subject.vehicleId)) {
+    violations.push(`supplier payable ${stray.id} is for this car but names ${stray.saleId === null ? "no sale" : `sale ${stray.saleId}`}, not sale ${subject.saleId}`);
+  }
+  if (forSale.length !== 1) {
+    violations.push(
+      forSale.length === 0
+        ? `no supplier payable row exists for sale ${subject.saleId}, although the journal credits the supplier ${expectation.entitlementMinor} minor units`
+        : `${forSale.length} supplier payable rows exist for sale ${subject.saleId}, expected exactly one`,
+    );
+  }
+  for (const row of forSale) {
+    const label = `supplier payable ${row.id}`;
+    if (row.vehicleId !== subject.vehicleId) violations.push(`${label} is for vehicle ${row.vehicleId}, not the sold car ${subject.vehicleId}`);
+    if (row.currency !== expectation.currency) violations.push(`${label} is denominated ${row.currency}, not ${expectation.currency}`);
+    // At the organization's scale: a row in another currency is already one violation, not two.
+    const due = toMinor(row.amountDueMajor, expectation.currency);
+    if (due !== expectation.entitlementMinor) {
+      violations.push(
+        `${label} owes ${due === null ? `an amount (${row.amountDueMajor}) that is not whole in ${expectation.currency}` : `${due} minor units`}, expected the supplier's entitlement ${expectation.entitlementMinor}`,
+      );
+    }
+    if (!UNPAID_PAYABLE_STATUSES.includes(row.status)) {
+      violations.push(`${label} has status ${row.status}, expected an unpaid one (${UNPAID_PAYABLE_STATUSES.join(", ")}) on a sale just completed`);
+    }
+    if (row.amountPaidMajor !== 0) violations.push(`${label} records ${row.amountPaidMajor} already paid on a sale just completed`);
+  }
   return { violations, unjudged: [] };
 }

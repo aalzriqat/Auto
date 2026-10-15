@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildConsignmentScenario,
+  CONSIGNMENT_FIGURES,
   discriminatesApprovedFromPrice,
   evaluateConsignmentEconomics,
+  evaluateSupplierPayable,
   expectedConsignedRevenueMinor,
+  fundingContributionMinor,
+  netShortfallMinor,
+  priceBasisRevenueMinor,
   toMinor,
   type ConsignmentExpectation,
   type ConsignmentLine,
+  type SupplierPayableRow,
 } from "./browserSwarmConsignmentOracle";
 
 // Literal worked figures, JOD (3 decimals): a 20,000 car the supplier is owed
@@ -19,6 +26,7 @@ const THROUGH: ConsignmentExpectation = {
   contributionMinor: 0,
   route: "THROUGH_DEALERSHIP",
 };
+const DIRECT: ConsignmentExpectation = { ...THROUGH, route: "DIRECT_TO_SUPPLIER" };
 
 const line = (key: string, debitMinor: number, creditMinor: number, currency = "JOD", scale = 3): ConsignmentLine => ({
   key,
@@ -52,6 +60,8 @@ describe("CONS-1 oracle: independent expectation", () => {
     expect(toMinor(1.0005, "JOD")).toBeNull();
     expect(toMinor(1.00049, "JOD")).toBeNull();
     expect(toMinor(5, "XXX")).toBeNull();
+    // A non-canonical code is unknown, so it fails closed instead of being judged against canonical lines.
+    expect(toMinor(5, "jod")).toBeNull();
   });
 });
 
@@ -185,9 +195,8 @@ describe("CONS-1 oracle: unmodelled shapes fail closed", () => {
   });
 
   it("is unjudged for a direct-to-supplier sale with a deposit or a customer gap", () => {
-    const direct: ConsignmentExpectation = { ...THROUGH, route: "DIRECT_TO_SUPPLIER" };
-    expect(unjudgedOf({ ...direct, depositForwardMinor: 1 })).toMatch(/not modelled/);
-    expect(unjudgedOf({ ...direct, approvedMinor: 19_000_000, customerGapMinor: 1_000_000 })).toMatch(/not modelled/);
+    expect(unjudgedOf({ ...DIRECT, depositForwardMinor: 1 })).toMatch(/not modelled/);
+    expect(unjudgedOf({ ...DIRECT, approvedMinor: 19_000_000, customerGapMinor: 1_000_000 })).toMatch(/not modelled/);
   });
 
   it("is unjudged for a settlement route the oracle does not model", () => {
@@ -200,8 +209,6 @@ describe("CONS-1 oracle: unmodelled shapes fail closed", () => {
 });
 
 describe("CONS-1 oracle: direct-to-supplier route", () => {
-  const DIRECT: ConsignmentExpectation = { ...THROUGH, route: "DIRECT_TO_SUPPLIER" };
-
   it("passes a margin held as a claim on the supplier", () => {
     const verdict = evaluateConsignmentEconomics(DIRECT, [
       line("RECEIVABLE_FROM_SUPPLIERS", 5_000_000, 0),
@@ -246,8 +253,6 @@ describe("CONS-1 oracle: never a vacuous pass", () => {
 });
 
 describe("CONS-1 oracle: B1 — an allowlist of accounts and exact per-route amounts", () => {
-  const DIRECT: ConsignmentExpectation = { ...THROUGH, route: "DIRECT_TO_SUPPLIER" };
-
   it("is a violation when a balanced pair hides on accounts the route may not touch", () => {
     const out = violationsOf([...correctThrough(), line("DEFERRED_REVENUE", 3_000_000, 0), line("PREPAID_EXPENSES", 0, 3_000_000)]);
     expect(out).toMatch(/DEFERRED_REVENUE .* not an account a through-dealership consigned sale may post to/);
@@ -341,10 +346,14 @@ describe("CONS-1 oracle: B2 — line amounts are nonnegative safe integers with 
 describe("CONS-1 oracle: B3 — the approved basis is told from the price basis only when they differ", () => {
   it("reports whether the scenario can discriminate the approved amount from the price", () => {
     expect(discriminatesApprovedFromPrice(THROUGH)).toBe(false);
-    expect(discriminatesApprovedFromPrice({ ...THROUGH, approvedMinor: 19_000_000 })).toBe(true);
+    // Approved < price is NOT enough: a customer gap that fills the difference leaves both bases identical.
+    expect(discriminatesApprovedFromPrice({ ...THROUGH, approvedMinor: 19_000_000, customerGapMinor: 1_000_000 })).toBe(false);
+    // Approved + gap < price is: the two bases differ by exactly price − (approved + gap).
+    expect(discriminatesApprovedFromPrice({ ...THROUGH, approvedMinor: 18_000_000, customerGapMinor: 1_000_000 })).toBe(true);
   });
 
   // The financier approved 19,000 of the 20,000 price; the customer owes the 1,000 gap.
+  // Approved + gap equals the price here, so this is a posting check, not a price-basis discriminator.
   const GAP: ConsignmentExpectation = { ...THROUGH, approvedMinor: 19_000_000, customerGapMinor: 1_000_000 };
   const correctGap = (): ConsignmentLine[] => [
     line("ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", 19_000_000, 0),
@@ -374,5 +383,227 @@ describe("CONS-1 oracle: B3 — the approved basis is told from the price basis 
     const out = violationsOf(lines, GAP);
     expect(out).toMatch(/recognized revenue is 4600000 minor units, expected 5000000/);
     expect(out).toMatch(/receivable from the customer is 600000 minor units, expected the gap 1000000/);
+  });
+});
+
+// The v3 discriminating scenario, written out by hand (JOD minor units): a 20,000 car the supplier is
+// owed 15,000 for, quoted at 20,000 to an 85% financier that approves 18,000, a 200 deposit (the first
+// payment), a net shortfall of 1,700 of which the customer pays 1,000 in cash and the dealership absorbs 700.
+const V3: ConsignmentExpectation = {
+  currency: "JOD",
+  priceMinor: 20_000_000,
+  approvedMinor: 18_000_000,
+  entitlementMinor: 15_000_000,
+  contributionMinor: 2_500_000,
+  route: "THROUGH_DEALERSHIP",
+  depositForwardMinor: 200_000,
+  customerGapMinor: 1_000_000,
+};
+
+const correctV3 = (): ConsignmentLine[] => [
+  line("ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES", 18_000_000, 0),
+  line("ACCOUNTS_RECEIVABLE_CUSTOMERS", 1_000_000, 0),
+  line("CUSTOMER_DEPOSITS_LIABILITY", 200_000, 0),
+  line("SALES_CONSIDERATION_REDUCTIONS", 2_500_000, 0),
+  line("ACCOUNTS_PAYABLE_FINANCE_COMPANIES", 0, 2_700_000),
+  line("ACCOUNTS_PAYABLE_SUPPLIERS", 0, 15_000_000),
+  line("CONSIGNMENT_COMMISSION_REVENUE", 0, 4_000_000),
+];
+
+/** The same sale posted with its margin measured on the 20,000 price: balanced, and wrong by price − (approved + gap). */
+const priceBasisV3 = (): ConsignmentLine[] => {
+  const lines = correctV3();
+  lines[1] = line("ACCOUNTS_RECEIVABLE_CUSTOMERS", 2_000_000, 0);
+  lines[6] = line("CONSIGNMENT_COMMISSION_REVENUE", 0, 5_000_000);
+  return lines;
+};
+
+describe("CONS-1 v3: approved + the customer's gap differs from the price, so the price basis is caught", () => {
+  it("derives expected revenue 1,500 and price-basis revenue 2,500 by hand, differing by price − (approved + gap)", () => {
+    // 18,000 + 1,000 − 15,000 − 2,500 = 1,500 against 20,000 − 15,000 − 2,500 = 2,500.
+    expect(expectedConsignedRevenueMinor(V3)).toBe(1_500_000);
+    expect(priceBasisRevenueMinor(V3)).toBe(2_500_000);
+    expect(priceBasisRevenueMinor(V3) - expectedConsignedRevenueMinor(V3)).toBe(
+      V3.priceMinor - (V3.approvedMinor + (V3.customerGapMinor ?? 0)),
+    );
+    expect(discriminatesApprovedFromPrice(V3)).toBe(true);
+  });
+
+  it("passes the correct posting: debits and credits both 21,700, no invoice needed", () => {
+    expect(evaluateConsignmentEconomics(V3, correctV3())).toEqual({ violations: [], unjudged: [] });
+    const lines = correctV3();
+    expect(lines.reduce((sum, l) => sum + l.debitMinor, 0)).toBe(21_700_000);
+    expect(lines.reduce((sum, l) => sum + l.creditMinor, 0)).toBe(21_700_000);
+  });
+
+  it("is a violation, naming the price basis, when a balanced posting measures the margin on the sale price", () => {
+    const lines = priceBasisV3();
+    expect(lines.reduce((sum, l) => sum + l.debitMinor, 0)).toBe(lines.reduce((sum, l) => sum + l.creditMinor, 0));
+    const verdict = evaluateConsignmentEconomics(V3, lines);
+    expect(verdict.unjudged).toEqual([]);
+    const out = verdict.violations.join("\n");
+    expect(out).toMatch(/recognized revenue is 2500000 minor units, expected 1500000/);
+    expect(out).toMatch(/the margin was measured on the sale price 20000000 instead of the approved amount plus the customer's gap/);
+    expect(out).toMatch(/commission revenue is 5000000 minor units, expected the margin 4000000/);
+    expect(out).toMatch(/receivable from the customer is 2000000 minor units, expected the gap 1000000/);
+  });
+
+  it("would not tell the two bases apart if the customer's gap filled the difference", () => {
+    const filled: ConsignmentExpectation = { ...V3, approvedMinor: 19_000_000, contributionMinor: 0, depositForwardMinor: 0 };
+    expect(expectedConsignedRevenueMinor(filled)).toBe(priceBasisRevenueMinor(filled));
+    expect(discriminatesApprovedFromPrice(filled)).toBe(false);
+  });
+
+  it("is a violation when the deposit is released but the forward owed onward omits it", () => {
+    const lines = correctV3();
+    lines[4] = line("ACCOUNTS_PAYABLE_FINANCE_COMPANIES", 0, 2_500_000);
+    lines[6] = line("CONSIGNMENT_COMMISSION_REVENUE", 0, 4_200_000);
+    expect(violationsOf(lines, V3)).toMatch(/payable to the financing company is 2500000 minor units, expected 2700000/);
+  });
+});
+
+describe("CONS-1 v3: the scenario builder", () => {
+  it("builds the hand-written scenario from the production figures", () => {
+    const built = buildConsignmentScenario("JOD");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    expect(built.scenario).toEqual({
+      expectation: V3,
+      quotationMinor: 20_000_000,
+      ltvPercent: 85,
+      firstPaymentMinor: 200_000,
+      depositMinor: 200_000,
+      shortfallMinor: 1_700_000,
+      customerShareMinor: 1_000_000,
+      dealerShareMinor: 700_000,
+      forwardDueMinor: 2_700_000,
+    });
+    expect(discriminatesApprovedFromPrice(built.scenario.expectation)).toBe(true);
+  });
+
+  it("derives the owner's worked example: 12,500 → 11,500 at 85% with a 500 first payment", () => {
+    expect(fundingContributionMinor(12_500_000, 85, 500_000)).toBe(1_375_000);
+    expect(fundingContributionMinor(11_500_000, 85, 500_000)).toBe(1_225_000);
+    expect(netShortfallMinor(12_500_000, 11_500_000, 85, 500_000)).toBe(850_000);
+  });
+
+  it("derives the scenario's net shortfall (1,700), smaller than the gross gap (2,000)", () => {
+    expect(netShortfallMinor(20_000_000, 18_000_000, 85, 200_000)).toBe(1_700_000);
+    expect(fundingContributionMinor(20_000_000, 85, 200_000)).toBe(2_800_000);
+    expect(fundingContributionMinor(18_000_000, 85, 200_000)).toBe(2_500_000);
+  });
+
+  it("returns null for an LTV that is not whole or does not give whole minor amounts", () => {
+    expect(fundingContributionMinor(1_000, 85.5, 0)).toBeNull();
+    expect(fundingContributionMinor(1_000, 101, 0)).toBeNull();
+    expect(fundingContributionMinor(1_000, -1, 0)).toBeNull();
+    expect(fundingContributionMinor(10, 85, 0)).toBeNull();
+  });
+
+  it("refuses a scenario with no shortfall, or a customer share beyond it, and one that cannot be expressed", () => {
+    const noShortfall = buildConsignmentScenario("JOD", { ...CONSIGNMENT_FIGURES, approvedMajor: 20_000 });
+    expect(noShortfall.ok).toBe(false);
+    expect(!noShortfall.ok && noShortfall.reason).toMatch(/net shortfall/);
+    const tooMuch = buildConsignmentScenario("JOD", { ...CONSIGNMENT_FIGURES, customerGapMajor: 1_701 });
+    expect(tooMuch.ok).toBe(false);
+    expect(!tooMuch.ok && tooMuch.reason).toMatch(/must be positive and cover the customer's share/);
+    const noScale = buildConsignmentScenario("XXX");
+    expect(noScale.ok).toBe(false);
+    expect(!noScale.ok && noScale.reason).toMatch(/no known minor-unit scale/);
+    const notWhole = buildConsignmentScenario("JOD", { ...CONSIGNMENT_FIGURES, depositMajor: 0.0005 });
+    expect(notWhole.ok).toBe(false);
+    expect(!notWhole.ok && notWhole.reason).toMatch(/cannot be expressed in whole minor units/);
+  });
+
+  it("refuses, before anything is seeded, a scenario the oracle could never judge", () => {
+    const noMargin = buildConsignmentScenario("JOD", { ...CONSIGNMENT_FIGURES, entitlementMajor: 18_000 });
+    expect(noMargin.ok).toBe(false);
+    expect(!noMargin.ok && noMargin.reason).toMatch(/positive margin/);
+    const approvedAbovePrice = buildConsignmentScenario("JOD", { ...CONSIGNMENT_FIGURES, priceMajor: 17_000 });
+    expect(approvedAbovePrice.ok).toBe(false);
+    expect(!approvedAbovePrice.ok && approvedAbovePrice.reason).toMatch(/positive margin/);
+  });
+});
+
+describe("CONS-1: the canonical supplier payable row", () => {
+  // The 15,000 entitlement of the same 20,000 car, as `vehicleSupplierPayables` records it (major units).
+  const subject = { saleId: "sale-1", vehicleId: "veh-1" };
+  const row = (over: Partial<SupplierPayableRow> = {}): SupplierPayableRow => ({
+    id: "pay-1",
+    saleId: "sale-1",
+    vehicleId: "veh-1",
+    currency: "JOD",
+    amountDueMajor: 15_000,
+    amountPaidMajor: 0,
+    status: "PENDING",
+    ...over,
+  });
+  const judged = (rows: SupplierPayableRow[], expectation = THROUGH) => evaluateSupplierPayable(expectation, subject, rows);
+
+  it("accepts exactly one unpaid row for the sale and car that owes the independent 15,000", () => {
+    expect(judged([row()])).toEqual({ violations: [], unjudged: [] });
+    for (const status of ["PENDING", "NOT_YET_DUE", "DUE_ON_SALE"]) expect(judged([row({ status })]).violations).toEqual([]);
+  });
+
+  it("ignores another sale's row for another car, whatever it owes", () => {
+    const unrelated = row({ id: "pay-2", saleId: "sale-2", vehicleId: "veh-2", amountDueMajor: 1 });
+    expect(judged([unrelated, row()]).violations).toEqual([]);
+  });
+
+  it("rejects a sale with no payable row, even though the journal credits the supplier", () => {
+    expect(judged([]).violations).toEqual([expect.stringMatching(/no supplier payable row exists for sale sale-1.*15000000/)]);
+    expect(judged([row({ saleId: "sale-2", vehicleId: "veh-2" })]).violations).toEqual([expect.stringMatching(/no supplier payable row/)]);
+  });
+
+  it("rejects an amount that is not the entitlement, by a single minor unit and by a whole thousand", () => {
+    expect(judged([row({ amountDueMajor: 14_999.999 })]).violations).toEqual([
+      expect.stringMatching(/owes 14999999 minor units, expected the supplier's entitlement 15000000/),
+    ]);
+    expect(judged([row({ amountDueMajor: 14_000 })]).violations).toEqual([expect.stringMatching(/owes 14000000/)]);
+    // Minor units mistaken for major units is a thousand-fold error.
+    expect(judged([row({ amountDueMajor: 15_000_000 })]).violations).toEqual([expect.stringMatching(/owes 15000000000/)]);
+    // The sale price is not the entitlement.
+    expect(judged([row({ amountDueMajor: 20_000 })]).violations).toEqual([expect.stringMatching(/owes 20000000/)]);
+  });
+
+  it("rejects an amount that is not whole at the currency's scale", () => {
+    expect(judged([row({ amountDueMajor: 15_000.0004 })]).violations).toEqual([expect.stringMatching(/not whole in JOD/)]);
+  });
+
+  it("rejects another currency once, without comparing its figure at the wrong scale", () => {
+    expect(judged([row({ currency: "USD" })]).violations).toEqual([expect.stringMatching(/is denominated USD, not JOD/)]);
+  });
+
+  it("rejects a row attached to another sale, to another vehicle, or stray beside the right one", () => {
+    expect(judged([row({ saleId: "sale-2" })]).violations).toEqual([
+      expect.stringMatching(/is for this car but names sale sale-2, not sale sale-1/),
+      expect.stringMatching(/no supplier payable row exists/),
+    ]);
+    expect(judged([row({ saleId: null })]).violations).toEqual([
+      expect.stringMatching(/is for this car but names no sale/),
+      expect.stringMatching(/no supplier payable row exists/),
+    ]);
+    expect(judged([row({ vehicleId: "veh-2" })]).violations).toEqual([expect.stringMatching(/is for vehicle veh-2, not the sold car veh-1/)]);
+    expect(judged([row(), row({ id: "pay-9", saleId: "sale-0" })]).violations).toEqual([
+      expect.stringMatching(/pay-9 is for this car but names sale sale-0/),
+    ]);
+  });
+
+  it("rejects two rows for one sale", () => {
+    expect(judged([row(), row({ id: "pay-2" })]).violations).toEqual([
+      expect.stringMatching(/2 supplier payable rows exist for sale sale-1, expected exactly one/),
+    ]);
+  });
+
+  it("rejects a payable that is paid, partly paid, disputed or cancelled, or that records a payment, on a sale just completed", () => {
+    for (const status of ["PAID", "PARTIALLY_PAID", "DISPUTED", "CANCELLED", "UNKNOWN"]) {
+      expect(judged([row({ status })]).violations).toEqual([expect.stringMatching(new RegExp(`has status ${status}, expected an unpaid one`))]);
+    }
+    expect(judged([row({ amountPaidMajor: 100 })]).violations).toEqual([expect.stringMatching(/records 100 already paid/)]);
+  });
+
+  it("is unjudged, never clean, for an expectation it cannot judge and for the route it does not model", () => {
+    expect(judged([row()], { ...THROUGH, currency: "XXX" }).unjudged).toEqual([expect.stringMatching(/no known minor-unit scale/)]);
+    expect(judged([row()], DIRECT)).toEqual({ violations: [], unjudged: [expect.stringMatching(/direct-to-supplier.*not modelled/)] });
   });
 });

@@ -1,36 +1,48 @@
 /**
- * SCRUM-350 CONS-1 — executable CONSIGNMENT_ECONOMICS browser attack.
+ * SCRUM-350 CONS-1 — executable CONSIGNMENT_ECONOMICS browser attack (finance plan v3).
  *
  * Drives a financed sale of a SOURCED (consigned) car end to end through the
  * product's own public commands, on the isolated, marker-gated disposable
- * preview, with run-unique synthetic data: customer, finance company, a
- * 20,000 car the supplier is owed 15,000 for, a deal approved at 20,000 and
- * routed THROUGH_DEALERSHIP, finalized by the OWNER seat after the MANAGER seat
- * approves. It then reads the sale's posted journal back through the same
- * permission-checked queries an accountant uses and judges it against figures
- * computed here (browserSwarmConsignmentOracle.ts), never from the product:
- * the dealership recognizes only the 5,000 spread, the supplier is owed his
- * 15,000, and the car's price, cost and inventory never reach revenue, COGS or
- * inventory.
+ * preview, with run-unique synthetic data: customer, an 85% finance company, a
+ * 20,000 car the supplier is owed 15,000 for, a 200 reservation deposit (also the
+ * customer's first payment), a 20,000 quotation the financier approves at only
+ * 18,000, and a REAL resolved shortfall (net 1,700: the customer owes the
+ * dealership 1,000, agreed as cash and never collected here; the dealership
+ * absorbs 700). The deal is routed
+ * THROUGH_DEALERSHIP, approved by the MANAGER seat, handed over, its H + D
+ * (deposit + contribution) paid to the financier, and finalized by the OWNER
+ * seat. No legal invoice is recorded: under plan v3 the server derives the
+ * consideration (approved + customer gap) and an invoice is optional evidence.
+ *
+ * The sale's posted journal is then read back through the same permission-checked
+ * queries an accountant uses and judged, account by account, against figures
+ * computed in browserSwarmConsignmentOracle.ts, never from the product: revenue
+ * is approved + gap − entitlement − contribution (the contribution is
+ * contra-revenue), the supplier is owed his 15,000, and the car's price, cost and
+ * inventory never reach revenue, COGS or inventory. The supplier's canonical
+ * `vehicleSupplierPayables` row, read through the public VIEW_FINANCE-gated
+ * `sourcingPayables.list`, is judged beside the journal: one unpaid row for this sale
+ * and car owing the independently computed 15,000. A row that cannot be read is
+ * INCONCLUSIVE, never a pass.
+ *
+ * Why this scenario can certify: approved + gap (19,000) differs from the sale
+ * price (20,000), so a margin measured on the price would post 1,000 too much and
+ * fail. Approved < price alone would not suffice (a gap that fills the difference
+ * gives identical figures), so the mission checks that the two revenues differ and
+ * ends INCONCLUSIVE with `APPROVED_VS_PRICE_BASIS` otherwise.
  *
  * The mission lifecycle (egress-contained browser, evidence, cleanup and the
  * fail-closed rule) is the shared runBoundaryMission: a posting that never
- * settles, a deal that cannot be finalized, or a setup the product refuses is
- * INCONCLUSIVE or a harness error — never a pass.
+ * settles, a deal that cannot be finalized, a setup the product refuses, or a
+ * product that disagrees with the scenario's independently derived shortfall or
+ * forward amount is INCONCLUSIVE or a harness error — never a pass.
  *
- * ⚠️ This mission cannot PASS yet. The scenario approves the whole price, so a
- * margin measured on the price cannot be told from one measured on the
- * financier's approval; while that holds it ends INCONCLUSIVE with
- * `APPROVED_VS_PRICE_BASIS` in the evidence (a proven breach is still a breach).
- * It becomes certifiable only when an approved < price case with a resolved
- * customer gap is seeded and judged (oracle: `customerGapMinor`).
- *
- * Not covered, and recorded as such in the evidence: a nonzero dealership
- * contribution (its contra-revenue treatment is judged by the oracle, but this
- * scenario seeds none), a customer reservation deposit and its forward to the
- * financier, the DIRECT_TO_SUPPLIER route, and cancellation or reversal of the
- * sale. The records the run creates stay in the disposable preview; a finalized
- * deal is posted financial history and is never deleted.
+ * Not covered, and recorded as such in the evidence: the DIRECT_TO_SUPPLIER route,
+ * a customer payment made to the finance company, and cancellation or reversal of
+ * the sale. Only the journals whose source is the sale and the supplier payable row are
+ * read: the deposit-receipt and forward-payment postings and the finance-company and
+ * customer receivable subledger rows are not. The records the run creates stay in the disposable preview; a
+ * finalized deal is posted financial history and is never deleted.
  */
 import { createHash } from "node:crypto";
 import { api } from "../../convex/_generated/api";
@@ -39,11 +51,16 @@ import type { BrowserAttackHandlerRegistry } from "./browserAttackSwarmExecutor"
 import { describeError } from "./browserSwarmBoundaryOracle";
 import { runBoundaryMission, type BoundaryMissionEnv } from "./browserSwarmBoundaryHarness";
 import {
+  buildConsignmentScenario,
+  CONSIGNMENT_FIGURES,
   discriminatesApprovedFromPrice,
   evaluateConsignmentEconomics,
-  toMinor,
-  type ConsignmentExpectation,
+  evaluateSupplierPayable,
+  expectedConsignedRevenueMinor,
+  priceBasisRevenueMinor,
+  type ConsignmentFigures,
   type ConsignmentLine,
+  type SupplierPayableRow,
 } from "./browserSwarmConsignmentOracle";
 import { untilAborted, type MissionBrowserRuntime } from "./browserSwarmEconomicAttacks";
 import { BrowserSwarmOracleInconclusiveError } from "./browserSwarmEconomicOracle";
@@ -57,18 +74,20 @@ export interface ConsignmentAttackOptions {
   postingWaitMs?: number;
   /** How long the sales screen may take to load for the screenshot. */
   uiSettleMs?: number;
+  /** Replaces parts of the scenario's figures (major units); tests use it to build a scenario that cannot discriminate. */
+  figures?: Partial<ConsignmentFigures>;
 }
+
+/** The options the mission runs with; the figures are resolved separately. */
+type MissionTiming = Required<Omit<ConsignmentAttackOptions, "figures">>;
 
 const DEFAULTS = { pollMs: 500, postingWaitMs: 30_000, uiSettleMs: 15_000 } as const;
 const RATE_LIMIT_TEXT = /rate limit exceeded[^\d]{0,40}(\d{1,6})s/i;
 const RATE_LIMIT_RETRIES = 3;
 const LEDGER_ROW_LIMIT = 200;
 const LEDGER_MAX_READS = 40;
-
-/** The scenario, in major units. Nothing is read back from the product to derive an expectation. */
-const PRICE_MAJOR = 20_000;
-const ENTITLEMENT_MAJOR = 15_000;
-const APPROVED_MAJOR = 20_000;
+/** The forward's paid date sits this far in the past so a skewed clock cannot make it "in the future". */
+const PAID_AT_SKEW_MS = 5_000;
 
 function inconclusive(message: string): never {
   throw new BrowserSwarmOracleInconclusiveError(message);
@@ -108,19 +127,6 @@ function isSaleCompleted(event: SaleLedger["events"][number], status: string): b
   return event.eventType === "SALE_COMPLETED" && event.status === status;
 }
 
-/** Leaves what has been read so far in the evidence (`complete` once the whole read finished), so a thrown read still does. */
-function recordLedger(env: BoundaryMissionEnv, ledger: SaleLedger, complete: boolean, reads: number): void {
-  env.detail.ledger = {
-    complete,
-    reads,
-    events: [...ledger.events],
-    journals: [...ledger.journals],
-    lines: [...ledger.lines],
-    unmappedAccountIds: [...ledger.unmappedAccountIds],
-    defects: [...ledger.defects],
-  };
-}
-
 async function readSaleLedger(
   env: BoundaryMissionEnv,
   saleId: string,
@@ -129,12 +135,10 @@ async function readSaleLedger(
 ): Promise<SaleLedger> {
   const org = env.orgId as Id<"organizations">;
   const ledger: SaleLedger = { events: [], journals: [], lines: [], unmappedAccountIds: [], defects: [] };
-  const record = (complete: boolean): void => recordLedger(env, ledger, complete, reads);
-  /** Inconclusive, with what was read before the problem kept as evidence. */
-  const fail: (message: string) => never = (message) => {
-    record(false);
-    return inconclusive(message);
-  };
+  // The evidence holds this read's live arrays, so whatever was read before a throw (of any kind) stays in it;
+  // `complete` turns true only once the whole read finished.
+  const evidence = { complete: false, reads, ...ledger };
+  env.detail.ledger = evidence;
   const raw = asArray(
     await env.client.query(api.accountingLedger.listAccountingEvents, {
       orgId: org,
@@ -144,7 +148,7 @@ async function readSaleLedger(
     }),
     "listAccountingEvents",
   );
-  if (raw.length >= LEDGER_ROW_LIMIT) fail(`accounting events for sale ${saleId} may be truncated`);
+  if (raw.length >= LEDGER_ROW_LIMIT) inconclusive(`accounting events for sale ${saleId} may be truncated`);
   for (const row of raw) {
     if (
       !isRecord(row) ||
@@ -153,10 +157,10 @@ async function readSaleLedger(
       typeof row.status !== "string" ||
       !(EVENT_STATUSES as readonly string[]).includes(row.status)
     ) {
-      fail("listAccountingEvents returned a malformed row");
+      inconclusive("listAccountingEvents returned a malformed row");
     }
     if (row.sourceType !== "sales" || row.sourceId !== saleId) {
-      fail(`accounting event ${row._id} belongs to ${String(row.sourceType)}/${String(row.sourceId)}, not sales/${saleId}`);
+      inconclusive(`accounting event ${row._id} belongs to ${String(row.sourceType)}/${String(row.sourceId)}, not sales/${saleId}`);
     }
     ledger.events.push({
       id: row._id,
@@ -165,7 +169,6 @@ async function readSaleLedger(
       journalEntryId: typeof row.journalEntryId === "string" ? row.journalEntryId : null,
     });
   }
-  record(false);
 
   for (const event of ledger.events) {
     const label = `event ${event.id} (${event.eventType})`;
@@ -180,10 +183,14 @@ async function readSaleLedger(
       orgId: org,
       journalEntryId: event.journalEntryId as Id<"journalEntries">,
     });
-    if (!isRecord(entry) || !isRecord(entry.entry)) fail(`journal ${event.journalEntryId} could not be read back`);
+    if (!isRecord(entry) || !isRecord(entry.entry)) inconclusive(`journal ${event.journalEntryId} could not be read back`);
     const header = entry.entry;
     if (header._id !== event.journalEntryId || typeof header.status !== "string") {
-      fail(`journal ${event.journalEntryId} came back with another identity or no status`);
+      inconclusive(`journal ${event.journalEntryId} came back with another identity or no status`);
+    }
+    // The lines below are this event's evidence only if the journal says it was posted for this event.
+    if (header.accountingEventId !== event.id) {
+      inconclusive(`journal ${event.journalEntryId} belongs to accounting event ${String(header.accountingEventId)}, not ${event.id}`);
     }
     ledger.journals.push({ id: event.journalEntryId, eventId: event.id, status: header.status });
     if (header.status !== "POSTED") {
@@ -201,7 +208,7 @@ async function readSaleLedger(
         !Number.isFinite(line.creditMinor) ||
         !Number.isFinite(line.scale)
       ) {
-        fail(`journal ${event.journalEntryId} has a malformed line`);
+        inconclusive(`journal ${event.journalEntryId} has a malformed line`);
       }
       // An account the chart cannot name could be COGS, inventory or revenue in disguise: never judge around it.
       const key = keyOf.get(line.accountId);
@@ -220,7 +227,7 @@ async function readSaleLedger(
       });
     }
   }
-  record(true);
+  evidence.complete = true;
   if (ledger.unmappedAccountIds.length > 0) {
     inconclusive(
       `the sale's journals post to ${ledger.unmappedAccountIds.length} account(s) that are not in the chart (${ledger.unmappedAccountIds.join(", ")}), so the lines cannot be judged`,
@@ -237,7 +244,7 @@ async function readSaleLedger(
  */
 async function readSettledSaleLedger(
   env: BoundaryMissionEnv,
-  options: Required<ConsignmentAttackOptions>,
+  options: MissionTiming,
   saleId: string,
   keyOf: ReadonlyMap<string, string>,
 ): Promise<SaleLedger> {
@@ -263,13 +270,44 @@ async function readSettledSaleLedger(
   return inconclusive(`the ledger state for sale ${saleId} did not settle with a posted SALE_COMPLETED entry (last read: ${last})`);
 }
 
-function consignmentEconomicsSpec(options: Required<ConsignmentAttackOptions>) {
+/**
+ * Every supplier payable the organization lists (`sourcingPayables.list`: public, VIEW_FINANCE-gated,
+ * all of the organization's rows). A row this read cannot interpret is inconclusive, never skipped.
+ */
+function parseSupplierPayables(raw: unknown): SupplierPayableRow[] {
+  return asArray(raw, "sourcingPayables.list").map((row) => {
+    if (
+      !isRecord(row) ||
+      typeof row._id !== "string" ||
+      typeof row.vehicleId !== "string" ||
+      (row.saleId !== undefined && typeof row.saleId !== "string") ||
+      typeof row.currency !== "string" ||
+      typeof row.amountDue !== "number" ||
+      !Number.isFinite(row.amountDue) ||
+      (row.amountPaid !== undefined && (typeof row.amountPaid !== "number" || !Number.isFinite(row.amountPaid))) ||
+      typeof row.status !== "string"
+    ) {
+      return inconclusive("sourcingPayables.list returned a malformed supplier payable row");
+    }
+    return {
+      id: row._id,
+      saleId: row.saleId ?? null,
+      vehicleId: row.vehicleId,
+      currency: row.currency,
+      amountDueMajor: row.amountDue,
+      amountPaidMajor: row.amountPaid ?? 0,
+      status: row.status,
+    };
+  });
+}
+
+function consignmentEconomicsSpec(options: MissionTiming, figures: Readonly<ConsignmentFigures>) {
   return {
     attack: "CONSIGNMENT_ECONOMICS",
     seat: "primary" as const,
     oracles: ["ECONOMIC_AUTHORITY" as const],
     passSummary:
-      "A financed sale of a consigned car recognized only the dealership's 5,000 spread as revenue, owed the supplier his 15,000 entitlement, and never posted the car's price, cost or inventory as the dealership's own, read from the sale's posted journal against independently computed figures.",
+      "A financed sale of a consigned car, approved below its price with a resolved customer gap and a forwarded deposit, posted a sale journal (the entries whose source is the sale) that recognized revenue on the approved amount plus the customer's gap (less the supplier's entitlement and the dealership's contribution), recorded the supplier's entitlement, the financier's receivable and the amount owed onward to the financier (forwarded deposit and contribution) in the sale journal, and never posted the car's price, cost or inventory as the dealership's own; the supplier's canonical payable row agreed with the entitlement. Judged against independently computed figures. Not read: the deposit-receipt and forward-payment postings, and the finance-company and customer receivable subledger rows.",
     breachSummary: "A financed consigned sale was not recognized on the agent basis",
     async run(env: BoundaryMissionEnv): Promise<void> {
       const { client, orgId, nonce, signal, detail, page } = env;
@@ -277,52 +315,77 @@ function consignmentEconomicsSpec(options: Required<ConsignmentAttackOptions>) {
 
       /** One product command, waiting out the product's own write rate limit. */
       const command = async <T>(run: () => Promise<T>): Promise<T> => {
-        for (let retries = 0; retries < RATE_LIMIT_RETRIES; retries += 1) {
+        for (let retries = 0; ; retries += 1) {
           try {
             return await untilAborted(signal, run());
           } catch (error) {
             const wait = RATE_LIMIT_TEXT.exec(describeError(error));
-            if (!wait) throw error;
+            // Once the retries are spent, this attempt's failure, a rate limit included, propagates.
+            if (!wait || retries >= RATE_LIMIT_RETRIES) throw error;
             await untilAborted(signal, options.sleep((Number(wait[1]) + 1) * 1000));
           }
         }
-        // The retries are spent: this last attempt's failure, a rate limit included, propagates.
-        return untilAborted(signal, run());
+      };
+      /** A product command whose refusal disagrees with the scenario's independent figures: inconclusive, never a pass. */
+      const refusalIsInconclusive = async (run: () => Promise<unknown>, refused: string): Promise<void> => {
+        try {
+          await command(run);
+        } catch (error) {
+          if (signal.aborted) throw error;
+          inconclusive(`${refused}: ${describeError(error)}`);
+        }
       };
 
       // The denomination is the organization's own, read before anything is seeded.
       const settings: unknown = await untilAborted(signal, client.query(api.orgSettings.get, { orgId: org }));
       const currency = isRecord(settings) && typeof settings.currency === "string" ? settings.currency : null;
       detail.currency = currency;
-      const priceMinor = currency === null ? null : toMinor(PRICE_MAJOR, currency);
-      const entitlementMinor = currency === null ? null : toMinor(ENTITLEMENT_MAJOR, currency);
-      const approvedMinor = currency === null ? null : toMinor(APPROVED_MAJOR, currency);
-      if (currency === null || priceMinor === null || entitlementMinor === null || approvedMinor === null) {
-        env.unjudged(
-          "the organization's currency is unreadable or has no known minor-unit scale, so no amount of the scenario can be expressed or judged; nothing was seeded",
-        );
+      if (currency === null) {
+        env.unjudged("the organization's currency is unreadable, so no amount of the scenario can be expressed or judged; nothing was seeded");
         return;
       }
+      const built = buildConsignmentScenario(currency, figures);
+      if (!built.ok) {
+        env.unjudged(`${built.reason}; nothing was seeded`);
+        return;
+      }
+      const { scenario } = built;
+      const { expectation } = scenario;
 
       // Computed from the scenario's own figures before anything is seeded, so every non-pass states what was expected.
-      const expectation: ConsignmentExpectation = {
-        currency,
-        priceMinor,
-        approvedMinor,
-        entitlementMinor,
-        contributionMinor: 0,
-        route: "THROUGH_DEALERSHIP",
-      };
       detail.expected = expectation;
-      detail.notExercised = ["DEALERSHIP_CONTRIBUTION", "CUSTOMER_DEPOSIT_FORWARD", "DIRECT_TO_SUPPLIER", "REVERSAL"];
-      // Approved equals price here, so a margin measured on the price would pass too. A pass would certify
-      // a property this scenario cannot tell apart, so the mission is UNAVAILABLE (never a pass) until an
-      // approved < price case with a resolved customer gap is seeded. Breaches it can still prove are reported.
+      detail.scenario = {
+        quotationMinor: scenario.quotationMinor,
+        ltvPercent: scenario.ltvPercent,
+        firstPaymentMinor: scenario.firstPaymentMinor,
+        depositMinor: scenario.depositMinor,
+        netShortfallMinor: scenario.shortfallMinor,
+        customerShareMinor: scenario.customerShareMinor,
+        dealerShareMinor: scenario.dealerShareMinor,
+        forwardDueMinor: scenario.forwardDueMinor,
+        expectedRevenueMinor: expectedConsignedRevenueMinor(expectation),
+        priceBasisRevenueMinor: priceBasisRevenueMinor(expectation),
+      };
+      // No legal invoice is recorded: the server derives the consideration (approved + customer gap), and an invoice is optional evidence.
+      detail.invoiceSeeded = false;
+      detail.notExercised = [
+        "DIRECT_TO_SUPPLIER",
+        "CUSTOMER_PAYMENT_TO_FINANCE_COMPANY",
+        "CUSTOMER_GAP_COLLECTION",
+        "REVERSAL",
+        // Read nowhere: only the journals whose source is this sale, and the supplier payable row, are judged.
+        "DEPOSIT_RECEIPT_AND_FORWARD_PAYMENT_POSTINGS",
+        "FINANCE_COMPANY_RECEIVABLE_SUBLEDGER",
+        "CUSTOMER_RECEIVABLE_SUBLEDGER",
+      ];
+      // When approved + the customer's gap equals the price, a margin measured on the price gives the same
+      // figures. A pass would then certify a property the scenario cannot tell apart, so the mission is
+      // UNAVAILABLE (never a pass). Breaches it can still prove are reported.
       const discriminates = discriminatesApprovedFromPrice(expectation);
       detail.notDiscriminated = discriminates ? [] : ["APPROVED_VS_PRICE_BASIS"];
       if (!discriminates) {
         env.unjudged(
-          `UNAVAILABLE (APPROVED_VS_PRICE_BASIS): the scenario seeds approved = price (${approvedMinor} minor units), so a margin measured on the price is indistinguishable from one measured on the financier's approval; CONSIGNMENT_ECONOMICS cannot be certified until an approved < price case with a resolved customer gap is seeded`,
+          `UNAVAILABLE (APPROVED_VS_PRICE_BASIS): approved (${expectation.approvedMinor}) plus the customer's gap (${scenario.customerShareMinor}) equals the sale price (${expectation.priceMinor}), so a margin measured on the price is indistinguishable from one measured on the financier's approval; CONSIGNMENT_ECONOMICS cannot be certified until the two revenues differ`,
         );
       }
 
@@ -350,7 +413,7 @@ function consignmentEconomicsSpec(options: Required<ConsignmentAttackOptions>) {
           profitRate: 5,
           maxTermMonths: 60,
           gracePeriodMonths: 0,
-          defaultLtvPercent: 100,
+          defaultLtvPercent: scenario.ltvPercent,
           adminFees: 0,
           acceptedStatuses: [statusId],
           isActive: true,
@@ -368,11 +431,11 @@ function consignmentEconomicsSpec(options: Required<ConsignmentAttackOptions>) {
           color: "Blue",
           fuelType: "Gasoline",
           transmission: "Automatic",
-          sellingPrice: PRICE_MAJOR,
+          sellingPrice: figures.priceMajor,
           sourceType: "SOURCED",
           sourcedFromName: supplierName,
           // The supplier's ENTITLEMENT, not a purchase price: the car was never the dealership's.
-          sourceCost: ENTITLEMENT_MAJOR,
+          sourceCost: figures.entitlementMajor,
           status: "AVAILABLE",
           idempotencyKey: `${nonce}-vehicle`,
         }),
@@ -381,7 +444,7 @@ function consignmentEconomicsSpec(options: Required<ConsignmentAttackOptions>) {
 
       // The product must have recorded the car as consigned at the supplier's price; otherwise the scenario is not the one judged.
       const stored: unknown = await command(() => client.query(api.vehicles.get, { orgId: org, vehicleId }));
-      if (!isRecord(stored) || stored.sourceType !== "SOURCED" || stored.sourceCost !== ENTITLEMENT_MAJOR) {
+      if (!isRecord(stored) || stored.sourceType !== "SOURCED" || stored.sourceCost !== figures.entitlementMajor) {
         env.unjudged("the stored vehicle is not the SOURCED car at the supplier's entitlement the scenario created, so it is not the case judged");
         return;
       }
@@ -391,13 +454,23 @@ function consignmentEconomicsSpec(options: Required<ConsignmentAttackOptions>) {
           orgId: org,
           customerId,
           vehicleId,
-          vehiclePrice: PRICE_MAJOR,
+          vehiclePrice: figures.priceMajor,
           downPayment: 0,
           termMonths: 48,
           mode: "CONFIGURED_FINANCE_COMPANY",
           companyId,
           customerEligibilityStatusIds: [statusId],
-          totalFinancedAmount: PRICE_MAJOR,
+          totalFinancedAmount: figures.priceMajor,
+        }),
+      );
+      // The customer's reservation deposit: also the first payment the dealership later forwards to the financier.
+      await command(() =>
+        client.mutation(api.deposits.create, {
+          orgId: org,
+          quoteId,
+          amount: figures.depositMajor,
+          method: "CASH",
+          idempotencyKey: `${nonce}-deposit`,
         }),
       );
       const applicationId = await command(() => client.mutation(api.applications.createFromQuote, { orgId: org, quoteId }));
@@ -411,19 +484,41 @@ function consignmentEconomicsSpec(options: Required<ConsignmentAttackOptions>) {
         client.mutation(api.financingEconomics.recordSubmittedQuotation, {
           orgId: org,
           applicationId,
-          submittedQuotationMinor: approvedMinor,
+          submittedQuotationMinor: scenario.quotationMinor,
           source: "MANUAL_ENTRY",
+          customerFirstPaymentMinor: scenario.firstPaymentMinor,
         }),
       );
       await command(() =>
         approver.client.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
           orgId: org,
           applicationId,
-          approvedAmountMinor: approvedMinor,
+          approvedAmountMinor: expectation.approvedMinor,
           basis: "MANUAL",
-          notes: "Swarm approval of the full vehicle price.",
+          notes: "Swarm approval below the quotation.",
         }),
       );
+
+      // The product's own validation cross-checks the independently derived shortfall: it refuses shares that
+      // do not sum to ITS net shortfall. That refusal is inconclusive, never a pass and never a silent re-derivation.
+      const served: unknown = await command(() => approver.client.query(api.applications.get, { orgId: org, applicationId }));
+      const gapStamp = isRecord(served) && typeof served.economicsStamp === "string" ? served.economicsStamp : null;
+      if (gapStamp === null) inconclusive("the product issued no economics stamp for the gap agreement, so the deal cannot proceed");
+      await refusalIsInconclusive(
+        () =>
+          approver.client.mutation(api.financingEconomics.resolveAppraisalGap, {
+            orgId: org,
+            applicationId,
+            economicsStamp: gapStamp,
+            customerGapShareMinor: scenario.customerShareMinor,
+            dealerGapShareMinor: scenario.dealerShareMinor,
+            customerGapCashToDealerMinor: scenario.customerShareMinor,
+            customerGapInstallmentToDealerMinor: 0,
+            customerGapToFinanceCompanyMinor: 0,
+          }),
+        `the product refused the gap agreement for the independently derived net shortfall of ${scenario.shortfallMinor} (customer ${scenario.customerShareMinor}, dealership ${scenario.dealerShareMinor})`,
+      );
+
       const economicsStamp = await command(() => client.query(api.applications.handoverStamp, { orgId: org, applicationId }));
       if (!economicsStamp) inconclusive("the product issued no economics stamp for the handover, so the deal cannot proceed");
       await command(() => client.mutation(api.applications.registerVehicleHandover, { orgId: org, applicationId, economicsStamp }));
@@ -433,16 +528,6 @@ function consignmentEconomicsSpec(options: Required<ConsignmentAttackOptions>) {
           applicationId,
           method: "BANK_TRANSFER",
           expectedDate: Date.now(),
-        }),
-      );
-      await command(() =>
-        client.mutation(api.financeDealCosts.recordLegalInvoice, {
-          orgId: org,
-          applicationId,
-          legalInvoiceAmountMinor: approvedMinor,
-          legalInvoiceNumber: `SWARM-${nonce}`.slice(0, 60),
-          legalInvoiceDate: Date.now(),
-          issuedTo: "FINANCE_COMPANY",
         }),
       );
       const feeId = await command(() =>
@@ -469,6 +554,20 @@ function consignmentEconomicsSpec(options: Required<ConsignmentAttackOptions>) {
           expectedActualEvidenceRevision: 0,
         }),
       );
+      // H + D must reach the financier before the sale can close. `expectedAmountMinor` is the independently
+      // derived figure: the product refuses unless it equals its own due amount, which cross-checks both.
+      await refusalIsInconclusive(
+        () =>
+          approver.client.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
+            orgId: org,
+            applicationId,
+            method: "BANK_TRANSFER",
+            paidAt: Date.now() - PAID_AT_SKEW_MS,
+            expectedAmountMinor: scenario.forwardDueMinor,
+            idempotencyKey: `${nonce}-forward`,
+          }),
+        `the product refused the forward to the financier of the independently derived ${scenario.forwardDueMinor} (deposit ${scenario.depositMinor} plus contribution ${expectation.contributionMinor})`,
+      );
       const saleId = String(
         await command(() =>
           client.mutation(api.applications.finalizeDeal, { idempotencyKey: `${nonce}-finalize`, orgId: org, applicationId }),
@@ -489,7 +588,7 @@ function consignmentEconomicsSpec(options: Required<ConsignmentAttackOptions>) {
         String(sale.customerId) === String(customerId) &&
         String(sale.applicationId) === String(applicationId) &&
         String(sale._id) === saleId &&
-        sale.salePrice === PRICE_MAJOR;
+        sale.salePrice === figures.priceMajor;
       if (!sameIdentity) {
         env.unjudged("the finalized sale is not the vehicle, customer, application and price this scenario seeded, so its journal is not this mission's evidence");
         return;
@@ -511,7 +610,7 @@ function consignmentEconomicsSpec(options: Required<ConsignmentAttackOptions>) {
         const key = typeof account.systemKey === "string" ? account.systemKey : typeof account.code === "string" ? account.code : null;
         if (key !== null) keyOf.set(account._id, key);
       }
-      // Every read, including one that throws, leaves its events, journals and account ids in the evidence.
+      // Every read, including one that throws, leaves what it read (events, journals, account ids) in the evidence.
       const ledger = await readSettledSaleLedger(env, options, saleId, keyOf);
       const completed = ledger.events.filter((event) => isSaleCompleted(event, "POSTED"));
 
@@ -523,6 +622,23 @@ function consignmentEconomicsSpec(options: Required<ConsignmentAttackOptions>) {
         });
       }
       env.judge(evaluateConsignmentEconomics(expectation, ledger.lines));
+
+      // The journal is not the supplier's record: what the dealership settles him from is the canonical
+      // payable row. A correct journal beside a missing or wrong row is a defect, and a row that cannot
+      // be read is no pass: a refused read is unjudged and a malformed one is inconclusive.
+      let raw: unknown;
+      try {
+        raw = await command(() => client.query(api.sourcingPayables.list, { orgId: org }));
+      } catch (error) {
+        if (signal.aborted) throw error;
+        env.unjudged(
+          `the canonical supplier payable could not be read through sourcingPayables.list (${describeError(error)}), so the supplier's record is unverified although the journal was judged`,
+        );
+        return;
+      }
+      const payables = parseSupplierPayables(raw);
+      detail.supplierPayables = payables.filter((row) => row.saleId === saleId || row.vehicleId === String(vehicleId));
+      env.judge(evaluateSupplierPayable(expectation, { saleId, vehicleId: String(vehicleId) }, payables));
     },
   };
 }
@@ -531,13 +647,14 @@ export function createConsignmentAttackHandlers(
   runtimeApi: MissionBrowserRuntime,
   overrides: ConsignmentAttackOptions = {},
 ): BrowserAttackHandlerRegistry {
-  const options: Required<ConsignmentAttackOptions> = {
+  const options: MissionTiming = {
     sleep: overrides.sleep ?? realSleep,
     pollMs: overrides.pollMs ?? DEFAULTS.pollMs,
     postingWaitMs: overrides.postingWaitMs ?? DEFAULTS.postingWaitMs,
     uiSettleMs: overrides.uiSettleMs ?? DEFAULTS.uiSettleMs,
   };
+  const figures: ConsignmentFigures = { ...CONSIGNMENT_FIGURES, ...overrides.figures };
   return {
-    CONSIGNMENT_ECONOMICS: (context) => runBoundaryMission(runtimeApi, context, consignmentEconomicsSpec(options)),
+    CONSIGNMENT_ECONOMICS: (context) => runBoundaryMission(runtimeApi, context, consignmentEconomicsSpec(options, figures)),
   };
 }

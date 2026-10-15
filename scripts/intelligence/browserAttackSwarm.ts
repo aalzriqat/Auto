@@ -173,6 +173,8 @@ const FAMILY_TIMEOUT_MS: Partial<Record<BrowserAttackFamily, number>> = {
   COMPLETENESS_BOUNDARY: 240_000,
   // Holds the connection down, waits out the recovery window, then settles.
   NETWORK_RECOVERY: 180_000,
+  // About 25 product commands (some may wait out the write rate limit) plus up to 30s for the sale to post.
+  CONSIGNMENT_ECONOMICS: 240_000,
 };
 
 export function browserMissionTimeoutMs(family: BrowserAttackFamily): number {
