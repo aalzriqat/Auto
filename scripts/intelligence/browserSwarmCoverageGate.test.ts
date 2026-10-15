@@ -96,7 +96,7 @@ describe("SCRUM-826 trusted coverage gate before preview provisioning", () => {
     await withImpact(
       impact([
         { id: "ECON-2", severity: "CRITICAL" },
-        { id: "ACC-3", severity: "CRITICAL" },
+        { id: "ACC-1", severity: "CRITICAL" },
       ]),
       async (repoRoot) => {
         await expect(runBrowserSwarmCoverageGate({ repoRoot, env })).rejects.toThrow(FORGED_MISSION_REFUSAL);
@@ -114,11 +114,11 @@ describe("SCRUM-826 trusted coverage gate before preview provisioning", () => {
     );
   });
 
-  it("plans ACC-3's MONEY_BOUNDARY / STATE_TRANSITION mission as executable", async () => {
+  it("plans LIFE-1's MONEY_BOUNDARY / STATE_TRANSITION fee-void mission as executable", async () => {
     await withImpact(
       impact([
         { id: "ECON-2", severity: "CRITICAL" },
-        { id: "ACC-3", severity: "CRITICAL" },
+        { id: "LIFE-1", severity: "CRITICAL" },
       ]),
       async (repoRoot) => {
         const result = await runBrowserSwarmCoverageGate({ repoRoot, env });

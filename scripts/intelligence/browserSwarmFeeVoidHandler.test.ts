@@ -9,7 +9,7 @@ import type { MissionBrowser, MissionBrowserRuntime, MissionSeat } from "./brows
 import { createMoneyBoundaryAttackHandlers } from "./browserSwarmMoneyBoundaryAttack";
 
 /**
- * SCRUM-350 ACC-3 — handler-level tests for MONEY_BOUNDARY judged by STATE_TRANSITION.
+ * SCRUM-350 LIFE-1 — handler-level tests for MONEY_BOUNDARY judged by STATE_TRANSITION.
  *
  * The real handler runs end to end against a scripted two-seat backend. The scenario: two
  * dealership-paid ownership-transfer costs (50 and 20 JOD, scale 1,000) on one approved deal, the
@@ -339,7 +339,7 @@ const breach = async (faults: Faults, ...patterns: RegExp[]) => {
   for (const pattern of patterns) expect(result.oracle.summary).toMatch(pattern);
 };
 
-describe("SCRUM-350 ACC-3 fee void handler: the discriminating scenario", () => {
+describe("SCRUM-350 LIFE-1 fee void handler: the discriminating scenario", () => {
   it("PASSES a correct product: the 50 payment reversed once, the 20 payment and line untouched, a retry a no-op", async () => {
     const h = harness();
     const result = (await h.run()) as { oracle: { passed: boolean; kind: string; summary: string } };
@@ -421,7 +421,7 @@ describe("SCRUM-350 ACC-3 fee void handler: the discriminating scenario", () => 
   });
 });
 
-describe("SCRUM-350 ACC-3 fee void handler: never a pass without a judged transition", () => {
+describe("SCRUM-350 LIFE-1 fee void handler: never a pass without a judged transition", () => {
   it("is INCONCLUSIVE when the payment never leaves PENDING, naming what was waited for", async () => {
     await inconclusive({ neverPosts: true }, /did not settle/);
   });

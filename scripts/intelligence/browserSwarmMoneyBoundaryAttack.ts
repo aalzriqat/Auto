@@ -304,7 +304,7 @@ export function createMoneyBoundaryAttackHandlers(
   };
   const figures: MoneyBoundaryFigures = { ...MONEY_BOUNDARY_FIGURES, ...overrides.figures };
   return {
-    // ACC-3 asks the same family to be judged by STATE_TRANSITION: a distinct scenario (a directly paid cost is
+    // LIFE-1 asks the same family to be judged by STATE_TRANSITION: a distinct scenario (a directly paid cost is
     // voided) with its own oracle. Any other oracle reaches the ACC-1 spec, which refuses it.
     MONEY_BOUNDARY: (context) => {
       const spec = context.mission.oracle === "STATE_TRANSITION" ? feeVoidSpec(options) : moneyBoundarySpec(options, figures);
