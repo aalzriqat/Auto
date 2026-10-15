@@ -30,6 +30,10 @@ export const PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES = [
   "LIFECYCLE_REVERSAL",
   "COMPLETENESS_BOUNDARY",
   "NETWORK_RECOVERY",
+  "CONSIGNMENT_ECONOMICS",
+  "STALE_UI",
+  "MONEY_BOUNDARY",
+  "NAVIGATION_RACE",
 ] as const satisfies readonly BrowserAttackFamily[];
 
 const PHASE_A_EXECUTABLE_FAMILY_SET = new Set<BrowserAttackFamily>(
@@ -49,9 +53,9 @@ export type BrowserOracleKind =
 /**
  * A handler judges the oracles listed here and no others. A family with a
  * handler is not "executable" for a mission whose oracle the handler does not
- * judge: reporting it so would certify an obligation nothing checks (LIFE-1
- * maps LIFECYCLE_REVERSAL to STATE_TRANSITION, which the ACC-2 reversal
- * handler does not judge).
+ * judge: reporting it so would certify an obligation nothing checks (a forged
+ * LIFECYCLE_REVERSAL mission asking for ECONOMIC_AUTHORITY has a handler, but
+ * that handler judges only REVERSAL_RECONCILIATION and STATE_TRANSITION).
  */
 const PHASE_A_EXECUTABLE_FAMILY_ORACLES: Readonly<
   Record<(typeof PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES)[number], readonly BrowserOracleKind[]>
@@ -62,9 +66,16 @@ const PHASE_A_EXECUTABLE_FAMILY_ORACLES: Readonly<
   UI_BACKEND_MISMATCH: ["UI_BACKEND_AUTHORITY"],
   TENANT_ESCAPE: ["TENANT_ISOLATION"],
   AUTHORIZATION_ABUSE: ["AUTHORIZATION"],
-  LIFECYCLE_REVERSAL: ["REVERSAL_RECONCILIATION"],
+  // ACC-2 reconciles a reversed expense; LIFE-1 judges a deposit void's state transition.
+  LIFECYCLE_REVERSAL: ["REVERSAL_RECONCILIATION", "STATE_TRANSITION"],
   COMPLETENESS_BOUNDARY: ["LIST_COMPLETENESS"],
   NETWORK_RECOVERY: ["IDEMPOTENCY_SINGLE_EFFECT", "STATE_TRANSITION"],
+  CONSIGNMENT_ECONOMICS: ["ECONOMIC_AUTHORITY"],
+  STALE_UI: ["UI_BACKEND_AUTHORITY"],
+  // ACC-1 (a financed sale of owned stock) judges ECONOMIC_AUTHORITY; ACC-3 (voiding a directly paid cost) is a
+  // distinct scenario of the same family that judges STATE_TRANSITION. Only that one path of ACC-3 is covered.
+  MONEY_BOUNDARY: ["ECONOMIC_AUTHORITY", "STATE_TRANSITION"],
+  NAVIGATION_RACE: ["STATE_TRANSITION"],
 };
 
 /** True when a handler exists for the family AND judges the mission's oracle. */
@@ -165,12 +176,21 @@ const FAMILY_TIMEOUT_MS: Partial<Record<BrowserAttackFamily, number>> = {
   // Opens a second authenticated seat, creates a foreign tenant and probes it.
   TENANT_ESCAPE: 180_000,
   AUTHORIZATION_ABUSE: 120_000,
-  // Posts an expense, waits for the ledger to settle, then reverses it twice.
-  LIFECYCLE_REVERSAL: 180_000,
+  // Posts an expense and reverses it twice (ACC-2), or takes two deposits, voids one
+  // and reads the ledger three times (LIFE-1); the larger bound fits the deposit leg.
+  LIFECYCLE_REVERSAL: 240_000,
   // Seeds more rows than one page holds, then walks the whole list.
   COMPLETENESS_BOUNDARY: 240_000,
   // Holds the connection down, waits out the recovery window, then settles.
   NETWORK_RECOVERY: 180_000,
+  // About 25 product commands (some may wait out the write rate limit) plus up to 30s for the sale to post.
+  CONSIGNMENT_ECONOMICS: 240_000,
+  // Posts an expense, arms its reversal on the screen, reverses it server-side, then settles the ledger three times.
+  STALE_UI: 180_000,
+  // About 27 product commands (some may wait out the write rate limit) plus up to 30s for the sale to post.
+  MONEY_BOUNDARY: 240_000,
+  // Posts an expense, races its reversal against history back/forward, settles the ledger and repeats the reversal if it did not apply.
+  NAVIGATION_RACE: 180_000,
 };
 
 export function browserMissionTimeoutMs(family: BrowserAttackFamily): number {

@@ -3,6 +3,7 @@ import {
   MAX_BROWSER_SWARM_MISSIONS,
   PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES,
   SUPPORTED_BROWSER_SWARM_INVARIANT_IDS,
+  browserMissionTimeoutMs,
   buildBrowserSwarmRunManifest,
   classifyBrowserMissionEvidence,
   partitionBrowserAttackMissions,
@@ -22,6 +23,15 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
       .sort();
 
     expect(SUPPORTED_BROWSER_SWARM_INVARIANT_IDS).toEqual(activeIds);
+  });
+
+  it("gives CONSIGNMENT_ECONOMICS its own budget of at least 180s, never the 45s default its ~25 commands and 30s posting wait exceed", () => {
+    expect(browserMissionTimeoutMs("CONSIGNMENT_ECONOMICS")).toBeGreaterThanOrEqual(180_000);
+    expect(browserMissionTimeoutMs("RTL_PARITY")).toBe(45_000);
+    const plan = planBrowserAttackSwarm({ impactedInvariants: [{ id: "CONS-1", severity: "CRITICAL" }] });
+    const missions = plan.missions.filter((mission) => mission.family === "CONSIGNMENT_ECONOMICS");
+    expect(missions.length).toBeGreaterThan(0);
+    for (const mission of missions) expect(mission.timeoutMs).toBeGreaterThanOrEqual(180_000);
   });
 
   it("fails closed when an impacted invariant has no deterministic browser mapping", () => {
@@ -239,9 +249,24 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
   });
 
   it("fails before manifest creation when Phase A has no executable handler", () => {
-    const plan = planBrowserAttackSwarm({
-      impactedInvariants: [{ id: "CONS-1", severity: "CRITICAL" }],
+    // Every real mandatory mapping is executable now, so the refusal is driven by a forged mission whose
+    // oracle (UI_BACKEND_AUTHORITY) the MONEY_BOUNDARY handler does not judge.
+    const real = planBrowserAttackSwarm({
+      impactedInvariants: [{ id: "ACC-3", severity: "CRITICAL" }],
     });
+    const forged: BrowserAttackMission = {
+      id: "jev::MONEY_BOUNDARY",
+      family: "MONEY_BOUNDARY",
+      source: "JEV",
+      invariantIds: ["UI-1"],
+      invariantSeverity: "HIGH",
+      oracle: "UI_BACKEND_AUTHORITY",
+      timeoutMs: 45_000,
+      estimatedCostUnits: 5,
+      evidence: ["TRACE"],
+      jevProbability: 0.9,
+    };
+    const plan = { ...real, missions: [...real.missions, forged] };
 
     expect(PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES).toEqual([
       "DUPLICATE_SUBMIT",
@@ -253,6 +278,10 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
       "LIFECYCLE_REVERSAL",
       "COMPLETENESS_BOUNDARY",
       "NETWORK_RECOVERY",
+      "CONSIGNMENT_ECONOMICS",
+      "STALE_UI",
+      "MONEY_BOUNDARY",
+      "NAVIGATION_RACE",
     ]);
     expect(() =>
       buildBrowserSwarmRunManifest({
@@ -262,7 +291,7 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
         previewName: "e2e-pr-350-abcdef1234",
         expectedCloudUrl: "https://example-preview.convex.cloud",
       }),
-    ).toThrow(/no executable handler.*CONSIGNMENT_ECONOMICS/i);
+    ).toThrow(/no executable handler.*MONEY_BOUNDARY with oracle UI_BACKEND_AUTHORITY/i);
   });
 
   it("refuses ambiguous or non-preview swarm targets before browser execution", () => {

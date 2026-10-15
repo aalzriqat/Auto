@@ -23,7 +23,11 @@ import {
   createEconomicAttackHandlers,
   type MissionSeat,
 } from "./browserSwarmEconomicAttacks";
+import { createConsignmentAttackHandlers } from "./browserSwarmConsignmentAttack";
+import { createMoneyBoundaryAttackHandlers } from "./browserSwarmMoneyBoundaryAttack";
 import { createNetworkRecoveryHandler } from "./browserSwarmNetworkRecoveryAttack";
+import { createNavigationRaceAttackHandlers } from "./browserSwarmNavigationRaceAttack";
+import { createStaleUiAttackHandlers } from "./browserSwarmStaleUiAttack";
 
 type ArtifactWriter = {
   root: string;
@@ -545,5 +549,13 @@ export function createInitialBrowserAttackHandlers(): BrowserAttackHandlerRegist
     // reversal) and network recovery, on the same contained lifecycle.
     ...createBoundaryAttackHandlers(missionBrowserRuntime),
     NETWORK_RECOVERY: createNetworkRecoveryHandler(missionBrowserRuntime),
+    // SCRUM-350 CONS-1: a financed consigned sale, judged against independent figures.
+    ...createConsignmentAttackHandlers(missionBrowserRuntime),
+    // SCRUM-350 ACC-1: a financed sale of owned stock, judged account by account against independent figures.
+    ...createMoneyBoundaryAttackHandlers(missionBrowserRuntime),
+    // SCRUM-350 LIFE-1: a stale screen's action, judged against backend authority.
+    ...createStaleUiAttackHandlers(missionBrowserRuntime),
+    // SCRUM-350 LIFE-1: a lifecycle transition interrupted by history back/forward, judged against the ledger.
+    ...createNavigationRaceAttackHandlers(missionBrowserRuntime),
   };
 }
