@@ -265,6 +265,7 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
       "NETWORK_RECOVERY",
       "CONSIGNMENT_ECONOMICS",
       "STALE_UI",
+      "NAVIGATION_RACE",
     ]);
     expect(() =>
       buildBrowserSwarmRunManifest({
