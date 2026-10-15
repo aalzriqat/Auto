@@ -761,28 +761,140 @@ export interface SettledLedgerRead {
   until?: (snapshot: LedgerSnapshot) => boolean;
   /** The ledger source `sourceId` belongs to; an expense unless a mission names another. */
   sourceType?: string;
+  /**
+   * Extra wait a mission lets a verifiably queued posting use after `postingWaitMs`, shared by all its reads:
+   * each use is subtracted from `remainingMs`. Absent means no extension.
+   */
+  extraWait?: { remainingMs: number };
+}
+
+/** An outbox row for one source, reduced to structural fields: no payload, ids, reason or error text. */
+interface QueuedPost {
+  kind: string;
+  status: string;
+  eventType: string | null;
+  attempts: number;
+  hasError: boolean;
+}
+
+/**
+ * What the outbox showed for one source. `listPending` returns only the newest page (the server caps it at
+ * `LEDGER_ROW_LIMIT`), so a full page without a match cannot show absence: that status is `incomplete`.
+ */
+interface QueuedInspection {
+  posts: QueuedPost[];
+  incomplete: ("PENDING" | "FAILED")[];
+}
+
+/** The outbox rows for one source; null when they cannot be read, never taken to mean "nothing queued". */
+async function readQueuedPosts(env: BoundaryMissionEnv, sourceType: string, sourceId: string): Promise<QueuedInspection | null> {
+  try {
+    const inspection: QueuedInspection = { posts: [], incomplete: [] };
+    for (const status of ["PENDING", "FAILED"] as const) {
+      const rows = asArray(
+        await untilAborted(
+          env.signal,
+          env.client.query(api.accountingOutbox.listPending, {
+            orgId: env.orgId as Id<"organizations">,
+            status,
+            limit: LEDGER_ROW_LIMIT,
+          }),
+        ),
+        "listPending",
+      );
+      const before = inspection.posts.length;
+      for (const row of rows) {
+        if (!isRecord(row) || row.sourceType !== sourceType || row.sourceId !== sourceId) continue;
+        inspection.posts.push({
+          kind: typeof row.kind === "string" ? row.kind : "UNKNOWN",
+          status,
+          eventType: typeof row.eventType === "string" ? row.eventType : null,
+          attempts: typeof row.attempts === "number" ? row.attempts : 0,
+          hasError: typeof row.lastError === "string" && row.lastError.length > 0,
+        });
+      }
+      if (rows.length >= LEDGER_ROW_LIMIT && inspection.posts.length === before) inspection.incomplete.push(status);
+    }
+    return inspection;
+  } catch (error) {
+    if (env.signal.aborted) throw error;
+    return null;
+  }
 }
 
 /**
  * Two consecutive identical reads: the posting outbox drains asynchronously. The events are those whose
  * source is `sourceId` in `sourceType`.
+ *
+ * A posting that did not land inline waits in the outbox for the one-minute tick, which `postingWaitMs`
+ * alone does not cover. A mission that passes `extraWait` lets the wait grow, once per read and from that
+ * shared allowance, when the outbox verifiably holds a still-waiting row for this source and no failed one
+ * (and the failed rows were fully inspected). Without `extraWait` the wait is never extended. Every lapse is
+ * unjudged (never a pass) and records the last ledger read and the outbox inspection on
+ * `env.detail.ledgerSettleTimeouts`.
  */
 export async function readSettledLedger(
   env: BoundaryMissionEnv,
   options: Pick<Required<BoundaryAttackOptions>, "sleep" | "pollMs" | "postingWaitMs">,
   sourceId: string,
-  { until, sourceType = "expenses" }: SettledLedgerRead = {},
+  { until, sourceType = "expenses", extraWait }: SettledLedgerRead = {},
 ): Promise<LedgerSnapshot> {
-  const deadline = Date.now() + options.postingWaitMs;
-  let previous = await untilAborted(env.signal, readLedger(env.client, env.orgId, sourceId, sourceType));
-  for (let reads = 1; reads < LEDGER_MAX_READS && Date.now() < deadline; reads += 1) {
-    await untilAborted(env.signal, options.sleep(options.pollMs));
-    const current = await untilAborted(env.signal, readLedger(env.client, env.orgId, sourceId, sourceType));
-    const repeated = JSON.stringify(current) === JSON.stringify(previous);
-    if (repeated && (until === undefined || until(current))) return current;
-    previous = current;
+  let last = await untilAborted(env.signal, readLedger(env.client, env.orgId, sourceId, sourceType));
+  const settle = async (waitMs: number, maxReads: number): Promise<LedgerSnapshot | null> => {
+    const deadline = Date.now() + waitMs;
+    for (let reads = 0; reads < maxReads && Date.now() < deadline; reads += 1) {
+      await untilAborted(env.signal, options.sleep(options.pollMs));
+      const current = await untilAborted(env.signal, readLedger(env.client, env.orgId, sourceId, sourceType));
+      const repeated = JSON.stringify(current) === JSON.stringify(last);
+      last = current;
+      if (repeated && (until === undefined || until(current))) return current;
+    }
+    return null;
+  };
+
+  const settled = await settle(options.postingWaitMs, LEDGER_MAX_READS - 1);
+  if (settled) return settled;
+
+  let queued = await readQueuedPosts(env, sourceType, sourceId);
+  const extraMs = Math.max(extraWait?.remainingMs ?? 0, 0);
+  const extend =
+    extraWait !== undefined &&
+    extraMs > 0 &&
+    queued !== null &&
+    queued.posts.some((post) => post.status === "PENDING") &&
+    !queued.posts.some((post) => post.status === "FAILED") &&
+    !queued.incomplete.includes("FAILED");
+  if (extend) {
+    const extendedAt = Date.now();
+    const lateSettled = await settle(extraMs, Math.ceil(extraMs / Math.max(options.pollMs, 1)));
+    extraWait.remainingMs = Math.max(extraMs - (Date.now() - extendedAt), 0);
+    if (lateSettled) return lateSettled;
+    queued = await readQueuedPosts(env, sourceType, sourceId);
   }
-  return inconclusive(`the ledger state for ${sourceType}/${sourceId} did not settle`);
+  const outbox = queued === null ? "UNREADABLE" : queued.incomplete.length > 0 ? "INCOMPLETE" : "COMPLETE";
+  const timeouts = (env.detail.ledgerSettleTimeouts ??= []) as unknown[];
+  timeouts.push({
+    sourceType,
+    sourceId,
+    extendedForQueuedPost: extend,
+    lastRead: last.events.map((event) => ({
+      eventType: event.eventType,
+      status: event.status,
+      journalRead: event.journalEntryId === null ? null : event.journalEntryId in last.journals,
+    })),
+    outbox,
+    queuedPosts: queued?.posts ?? null,
+    outboxPagesWithoutMatch: queued?.incomplete ?? null,
+  });
+  const queuedNote =
+    outbox === "UNREADABLE"
+      ? "outbox unreadable"
+      : outbox === "INCOMPLETE"
+        ? "outbox inspection incomplete, newest page full"
+        : `${queued?.posts.length ?? 0} queued post(s)${extend ? ", wait extended" : ""}`;
+  return inconclusive(
+    `the ledger state for ${sourceType}/${sourceId} did not settle (${last.events.length} event(s) read, ${queuedNote})`,
+  );
 }
 
 /**

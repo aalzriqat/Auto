@@ -53,13 +53,32 @@ export interface NavigationRaceAttackOptions {
   pollMs?: number;
   /** How long a posting may take to reach the ledger. */
   postingWaitMs?: number;
+  /**
+   * Extra wait, shared by every ledger read in the mission, for a posting verifiably queued in the outbox
+   * (which ticks once a minute). Spent once across the mission, not once per read.
+   */
+  queuedPostingExtraMs?: number;
   /** How long an in-flight request is given to land before the ledger is read. */
   raceSettleMs?: number;
   /** How long the reloaded screen may take to agree with the ledger. */
   uiSettleMs?: number;
 }
 
-const DEFAULTS = { pollMs: 500, postingWaitMs: 20_000, raceSettleMs: 3_000, uiSettleMs: 15_000 } as const;
+const DEFAULTS = {
+  pollMs: 500,
+  postingWaitMs: 20_000,
+  queuedPostingExtraMs: 60_000,
+  raceSettleMs: 3_000,
+  uiSettleMs: 15_000,
+} as const;
+
+/**
+ * The most time the mission's five ledger reads can spend waiting on the ledger: each read's own wait, plus
+ * the one shared extension. `browserMissionTimeoutMs("NAVIGATION_RACE")` must leave room for this and the
+ * screen steps (SCRUM-851).
+ */
+export const NAVIGATION_RACE_LEDGER_WAIT_BOUND_MS =
+  5 * DEFAULTS.postingWaitMs + DEFAULTS.queuedPostingExtraMs;
 const UI_STEP = { timeout: UI_STEP_TIMEOUT_MS };
 const NAVIGATION = { waitUntil: "domcontentloaded" as const, timeout: UI_STEP_TIMEOUT_MS };
 const SEEDED_AMOUNT = 59;
@@ -115,6 +134,7 @@ function navigationRaceSpec(options: Required<NavigationRaceAttackOptions>) {
     async run(env: BoundaryMissionEnv): Promise<void> {
       const { client, orgId, nonce, signal, detail, page } = env;
       const org = orgId as Id<"organizations">;
+      const extraWait = { remainingMs: options.queuedPostingExtraMs };
 
       // History needs an entry before the expenses screen to go back to.
       await untilAborted(signal, page.goto(`/${orgId}/dashboard`, NAVIGATION));
@@ -140,7 +160,7 @@ function navigationRaceSpec(options: Required<NavigationRaceAttackOptions>) {
         ),
       );
       detail.expenseId = expenseId;
-      const posted = await readSettledLedger(env, options, expenseId, { until: isPosted });
+      const posted = await readSettledLedger(env, options, expenseId, { until: isPosted, extraWait });
 
       // The sentinel: a second posted expense the race must not touch. Its row on the reloaded screen proves
       // the list has loaded, so the target's absence is evidence; its ledger is the bystander posting.
@@ -160,7 +180,7 @@ function navigationRaceSpec(options: Required<NavigationRaceAttackOptions>) {
         ),
       );
       detail.sentinelId = sentinelId;
-      const sentinelPosted = await readSettledLedger(env, options, sentinelId, { until: isPosted });
+      const sentinelPosted = await readSettledLedger(env, options, sentinelId, { until: isPosted, extraWait });
 
       try {
         await armReversalOnExpenseScreen(page, signal, expenseId, `${nonce} interrupted reversal`);
@@ -198,7 +218,7 @@ function navigationRaceSpec(options: Required<NavigationRaceAttackOptions>) {
       /** The sentinel's ledger after everything else; a failed read is null (unjudged), never a thrown mission. */
       const readSentinelAfter = async (): Promise<LedgerSnapshot | null> => {
         try {
-          return await readSettledLedger(env, options, sentinelId);
+          return await readSettledLedger(env, options, sentinelId, { extraWait });
         } catch (error) {
           if (signal.aborted) throw error;
           detail.sentinelAfterError = describeError(error);
@@ -244,7 +264,7 @@ function navigationRaceSpec(options: Required<NavigationRaceAttackOptions>) {
       }
 
       await untilAborted(signal, options.sleep(options.raceSettleMs));
-      const afterRace = await readSettledLedger(env, options, expenseId);
+      const afterRace = await readSettledLedger(env, options, expenseId, { extraWait });
       const outcome = raceOutcome(afterRace);
       detail.raceOutcome = outcome;
 
@@ -273,7 +293,7 @@ function navigationRaceSpec(options: Required<NavigationRaceAttackOptions>) {
           judge(afterRace, null, screenRow, false, await readSentinelAfter());
           return;
         }
-        final = await readSettledLedger(env, options, expenseId, { until: isReversed });
+        final = await readSettledLedger(env, options, expenseId, { until: isReversed, extraWait });
       }
 
       judge(afterRace, final, screenRow, outcome === "NOT_APPLIED", await readSentinelAfter());
@@ -289,6 +309,7 @@ export function createNavigationRaceAttackHandlers(
     sleep: overrides.sleep ?? realSleep,
     pollMs: overrides.pollMs ?? DEFAULTS.pollMs,
     postingWaitMs: overrides.postingWaitMs ?? DEFAULTS.postingWaitMs,
+    queuedPostingExtraMs: overrides.queuedPostingExtraMs ?? DEFAULTS.queuedPostingExtraMs,
     raceSettleMs: overrides.raceSettleMs ?? DEFAULTS.raceSettleMs,
     uiSettleMs: overrides.uiSettleMs ?? DEFAULTS.uiSettleMs,
   };
