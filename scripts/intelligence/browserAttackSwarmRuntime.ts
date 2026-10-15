@@ -28,6 +28,7 @@ const KNOWN_FAMILIES = new Set<BrowserAttackFamily>([
   "COMPLETENESS_BOUNDARY",
   "RTL_PARITY",
   "UI_BACKEND_MISMATCH",
+  "ACCOUNTING_DATE_BOUNDARY",
 ]);
 
 function required(env: Env, key: string): string {
