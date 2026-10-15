@@ -32,6 +32,7 @@ import {
 describe("SCRUM-826 browser swarm coverage contract", () => {
   it("executes real DUPLICATE_SUBMIT and MULTI_TAB_RACE handlers for ECON-2", () => {
     expect([...PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES].sort()).toEqual([
+      "ACCOUNTING_DATE_BOUNDARY",
       "AUTHORIZATION_ABUSE",
       "COMPLETENESS_BOUNDARY",
       "CONSIGNMENT_ECONOMICS",
@@ -89,9 +90,16 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
     expect(isBrowserSwarmMissionExecutable("MONEY_BOUNDARY", "ECONOMIC_AUTHORITY")).toBe(true);
   });
 
-  it("refuses ACC-3: nothing judges accounting date and period authority, so it can never be reported executable", () => {
-    expect(() => assertMandatoryBrowserSwarmCoverage([{ id: "ACC-3", severity: "CRITICAL" }])).toThrow(
-      /no deterministic mission mapping.*ACC-3/,
+  it("accepts ACC-3 as executable: its ACCOUNTING_DATE_BOUNDARY mission has a handler that judges STATE_TRANSITION", () => {
+    const plan = assertMandatoryBrowserSwarmCoverage([{ id: "ACC-3", severity: "CRITICAL" }]);
+    expect(plan.missions.map((mission) => `${mission.family}/${mission.oracle}`)).toEqual([
+      "ACCOUNTING_DATE_BOUNDARY/STATE_TRANSITION",
+    ]);
+    expect(plan.missions[0]?.evidence).toEqual(["TRACE", "SCREENSHOT", "BACKEND_STATE"]);
+    expect(plan.missions[0]?.timeoutMs).toBeGreaterThanOrEqual(180_000);
+    // A forged mission that routes ACC-3 to a family whose handler judges another oracle is still refused whole.
+    expect(() => assertBrowserSwarmMissionsExecutable([...plan.missions, forgedMoneyMission(["ACC-3"])])).toThrow(
+      /no executable handler.*MONEY_BOUNDARY with oracle UI_BACKEND_AUTHORITY \(ACC-3\)/i,
     );
   });
 
@@ -266,7 +274,9 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
         ...Object.keys(UNSUPPORTED_BROWSER_SWARM_INVARIANTS),
       ].sort(),
     ).toEqual(activeIds);
-    expect(matrix.map((row) => row.invariantId)).not.toContain("ACC-3");
+    expect(matrix.filter((row) => row.invariantId === "ACC-3").map((row) => `${row.family}/${row.oracle}/${row.executable}`)).toEqual([
+      "ACCOUNTING_DATE_BOUNDARY/STATE_TRANSITION/true",
+    ]);
     for (const row of matrix) {
       expect(row.executable).toBe(
         isBrowserSwarmMissionExecutable(row.family, row.oracle),
@@ -290,7 +300,8 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
       .sort();
 
     // Every mandatory mapping now has a handler that judges its oracle; LIFE-1's fee void is covered for the
-    // direct-paid cost void only (see the MONEY_BOUNDARY comment in browserAttackSwarm.ts). ACC-3 has no mapping.
+    // direct-paid cost void only (see the MONEY_BOUNDARY comment in browserAttackSwarm.ts). ACC-3 is covered for a
+    // manual journal's declared date and the closed-period refusal only (see the ACCOUNTING_DATE_BOUNDARY comment).
     expect(missing).toEqual([]);
 
     const fullyCovered = [
@@ -305,6 +316,7 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
     expect(fullyCovered).toEqual([
       "ACC-1",
       "ACC-2",
+      "ACC-3",
       "AUTH-1",
       "CONC-1",
       "CONS-1",
@@ -322,6 +334,7 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
     // the only launch path is openMissionBrowser, which REQUIRES the egress
     // proxy (SCRUM-784). A second launch path would be an unconstrained one.
     for (const file of [
+      "browserSwarmAccountingDateAttack.ts",
       "browserSwarmEconomicAttacks.ts",
       "browserSwarmBoundaryAttacks.ts",
       "browserSwarmBoundaryHarness.ts",

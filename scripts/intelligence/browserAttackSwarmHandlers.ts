@@ -26,6 +26,7 @@ import {
 import { createConsignmentAttackHandlers } from "./browserSwarmConsignmentAttack";
 import { createMoneyBoundaryAttackHandlers } from "./browserSwarmMoneyBoundaryAttack";
 import { createNetworkRecoveryHandler } from "./browserSwarmNetworkRecoveryAttack";
+import { createAccountingDateAttackHandlers } from "./browserSwarmAccountingDateAttack";
 import { createNavigationRaceAttackHandlers } from "./browserSwarmNavigationRaceAttack";
 import { createStaleUiAttackHandlers } from "./browserSwarmStaleUiAttack";
 
@@ -587,5 +588,7 @@ export function createInitialBrowserAttackHandlers(): BrowserAttackHandlerRegist
     ...createStaleUiAttackHandlers(missionBrowserRuntime),
     // SCRUM-350 LIFE-1: a lifecycle transition interrupted by history back/forward, judged against the ledger.
     ...createNavigationRaceAttackHandlers(missionBrowserRuntime),
+    // SCRUM-849 ACC-3: a manual journal's declared accounting date and the closed-period boundary, judged on backend state.
+    ...createAccountingDateAttackHandlers(missionBrowserRuntime),
   };
 }

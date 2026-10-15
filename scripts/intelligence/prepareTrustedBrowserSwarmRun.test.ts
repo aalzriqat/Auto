@@ -312,10 +312,21 @@ describe("trusted browser swarm run assembly", () => {
     });
   });
 
-  it("refuses ACC-3 impact: no mission judges accounting date and period authority", () => {
-    expect(() => assemble({ impactArtifact: impact([{ id: "ACC-3", severity: "CRITICAL" }]) })).toThrow(
-      /no deterministic mission mapping.*ACC-3/,
-    );
+  it("assembles ACC-3's ACCOUNTING_DATE_BOUNDARY / STATE_TRANSITION mission into the scheduled plan", () => {
+    const payload = assemble({
+      impactArtifact: impact([{ id: "ACC-3", severity: "CRITICAL" }]),
+      jevArtifact: jev("LIVE", { suggestions: [] }),
+    });
+    expect(payload.plannedMissions).toEqual([
+      {
+        id: "det::ACC-3::ACCOUNTING_DATE_BOUNDARY",
+        family: "ACCOUNTING_DATE_BOUNDARY",
+        source: "DETERMINISTIC",
+        invariantIds: ["ACC-3"],
+        oracle: "STATE_TRANSITION",
+        timeoutMs: 180_000,
+      },
+    ]);
   });
 
   it("binds the executable mission plan to the trusted run evidence", () => {
