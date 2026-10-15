@@ -79,7 +79,7 @@ function inconclusive(message: string): never {
   throw new BrowserSwarmOracleInconclusiveError(message);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -750,9 +750,9 @@ async function readLedger(client: ConvexHttpClient, orgId: string, expenseId: st
 }
 
 /** Two consecutive identical reads: the posting outbox drains asynchronously. */
-async function readSettledLedger(
+export async function readSettledLedger(
   env: BoundaryMissionEnv,
-  options: Required<BoundaryAttackOptions>,
+  options: Pick<Required<BoundaryAttackOptions>, "sleep" | "pollMs" | "postingWaitMs">,
   expenseId: string,
   until?: (snapshot: LedgerSnapshot) => boolean,
 ): Promise<LedgerSnapshot> {
@@ -768,8 +768,16 @@ async function readSettledLedger(
   return inconclusive(`the ledger state for expense ${expenseId} did not settle`);
 }
 
-/** Delete → the posted-expense refusal flips the dialog to Reverse & Delete → reverse. */
-async function reverseOnExpenseScreen(page: Page, signal: AbortSignal, expenseId: string, reason: string): Promise<void> {
+/**
+ * Delete → the posted-expense refusal flips the dialog to Reverse & Delete → the
+ * reason is typed, which arms the action. Nothing is submitted.
+ */
+export async function armReversalOnExpenseScreen(
+  page: Page,
+  signal: AbortSignal,
+  expenseId: string,
+  reason: string,
+): Promise<void> {
   const row = page.locator(`#row-${expenseId}`);
   await untilAborted(signal, row.waitFor({ state: "visible", ...UI_STEP }));
   await untilAborted(signal, row.getByRole("button").last().click(UI_STEP));
@@ -778,9 +786,24 @@ async function reverseOnExpenseScreen(page: Page, signal: AbortSignal, expenseId
   const reasonField = dialog.locator("#reversal-reason");
   await untilAborted(signal, reasonField.waitFor({ state: "visible", ...UI_STEP }));
   await untilAborted(signal, reasonField.fill(reason, UI_STEP));
+}
+
+/** Arms the reversal, then submits it and waits for the dialog to close. */
+async function reverseOnExpenseScreen(page: Page, signal: AbortSignal, expenseId: string, reason: string): Promise<void> {
+  await armReversalOnExpenseScreen(page, signal, expenseId, reason);
+  const dialog = page.getByRole("dialog");
   await untilAborted(signal, dialog.getByRole("button", { name: "Reverse & Delete", exact: true }).click(UI_STEP));
   await untilAborted(signal, dialog.waitFor({ state: "hidden", ...UI_STEP }));
 }
+
+/** The expense's posting is on the ledger with every journal it names readable. */
+export const isPosted = (snapshot: LedgerSnapshot): boolean =>
+  snapshot.events.some((event) => event.eventType === "EXPENSE_POSTED" && event.status === "POSTED") &&
+  snapshot.events.every((event) => event.journalEntryId === null || event.journalEntryId in snapshot.journals);
+
+/** The ledger holds a posted reversal event. */
+export const isReversed = (snapshot: LedgerSnapshot): boolean =>
+  snapshot.events.some((event) => event.eventType === "JOURNAL_REVERSAL" && event.status === "POSTED");
 
 /**
  * ACC-2: posted financial history is immutable and corrections use the
@@ -843,9 +866,6 @@ function lifecycleReversalSpec(options: Required<BoundaryAttackOptions>) {
       detail.expenseId = expenseId;
       const expense = expenseId as Id<"expenses">;
 
-      const isPosted = (snapshot: LedgerSnapshot): boolean =>
-        snapshot.events.some((event) => event.eventType === "EXPENSE_POSTED" && event.status === "POSTED") &&
-        snapshot.events.every((event) => event.journalEntryId === null || event.journalEntryId in snapshot.journals);
       const posted = await readSettledLedger(env, options, expenseId, isPosted);
 
       // Rewrite attempts on posted history: both must be refused as locked.
@@ -871,9 +891,7 @@ function lifecycleReversalSpec(options: Required<BoundaryAttackOptions>) {
         return;
       }
       detail.reversalVia = "expense screen";
-      const reversed = await readSettledLedger(env, options, expenseId, (snapshot) =>
-        snapshot.events.some((event) => event.eventType === "JOURNAL_REVERSAL" && event.status === "POSTED"),
-      );
+      const reversed = await readSettledLedger(env, options, expenseId, isReversed);
 
       // Asking again: the expense is gone, so "Expense not found" is the only
       // legitimate refusal. Anything else never reached the reversal.
