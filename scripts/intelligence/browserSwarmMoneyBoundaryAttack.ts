@@ -151,6 +151,9 @@ function moneyBoundarySpec(options: MissionTiming, figures: Readonly<MoneyBounda
           sourceType: "STOCK",
           // The dealership's own purchase price: the car is its stock, and its cost leaves inventory at the sale.
           purchasePrice: figures.costMajor,
+          // A positive purchase price posts an acquisition, which the product refuses without a declared method. Paid outright, so
+          // not ON_ACCOUNT (that would add a supplier payable this scenario does not judge).
+          purchasePaymentMethod: "BANK_TRANSFER",
           status: "AVAILABLE",
           idempotencyKey: `${nonce}-vehicle`,
         }),
@@ -304,7 +307,7 @@ export function createMoneyBoundaryAttackHandlers(
   };
   const figures: MoneyBoundaryFigures = { ...MONEY_BOUNDARY_FIGURES, ...overrides.figures };
   return {
-    // ACC-3 asks the same family to be judged by STATE_TRANSITION: a distinct scenario (a directly paid cost is
+    // LIFE-1 asks the same family to be judged by STATE_TRANSITION: a distinct scenario (a directly paid cost is
     // voided) with its own oracle. Any other oracle reaches the ACC-1 spec, which refuses it.
     MONEY_BOUNDARY: (context) => {
       const spec = context.mission.oracle === "STATE_TRANSITION" ? feeVoidSpec(options) : moneyBoundarySpec(options, figures);

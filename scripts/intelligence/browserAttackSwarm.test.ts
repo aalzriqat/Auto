@@ -3,6 +3,7 @@ import {
   MAX_BROWSER_SWARM_MISSIONS,
   PHASE_A_EXECUTABLE_BROWSER_ATTACK_FAMILIES,
   SUPPORTED_BROWSER_SWARM_INVARIANT_IDS,
+  UNSUPPORTED_BROWSER_SWARM_INVARIANTS,
   browserMissionTimeoutMs,
   buildBrowserSwarmRunManifest,
   classifyBrowserMissionEvidence,
@@ -22,7 +23,10 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
       .map((invariant) => invariant.id)
       .sort();
 
-    expect(SUPPORTED_BROWSER_SWARM_INVARIANT_IDS).toEqual(activeIds);
+    // Every active invariant is either mapped to missions or explicitly, reasonably unsupported (fails closed).
+    const unsupportedIds = Object.keys(UNSUPPORTED_BROWSER_SWARM_INVARIANTS).sort();
+    expect([...SUPPORTED_BROWSER_SWARM_INVARIANT_IDS, ...unsupportedIds].sort()).toEqual(activeIds);
+    expect(unsupportedIds).toEqual(["ACC-3"]);
   });
 
   it("gives CONSIGNMENT_ECONOMICS its own budget of at least 180s, never the 45s default its ~25 commands and 30s posting wait exceed", () => {
@@ -32,6 +36,20 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
     const missions = plan.missions.filter((mission) => mission.family === "CONSIGNMENT_ECONOMICS");
     expect(missions.length).toBeGreaterThan(0);
     for (const mission of missions) expect(mission.timeoutMs).toBeGreaterThanOrEqual(180_000);
+  });
+
+  it("gives UI_BACKEND_MISMATCH a budget above its 60s of readiness waits on both the deterministic and suggestion paths", () => {
+    expect(browserMissionTimeoutMs("UI_BACKEND_MISMATCH")).toBeGreaterThanOrEqual(120_000);
+    const deterministic = planBrowserAttackSwarm({ impactedInvariants: [{ id: "UI-1", severity: "HIGH" }] })
+      .missions.find((mission) => mission.family === "UI_BACKEND_MISMATCH");
+    expect(deterministic?.source).toBe("DETERMINISTIC");
+    expect(deterministic?.timeoutMs).toBe(browserMissionTimeoutMs("UI_BACKEND_MISMATCH"));
+    const suggested = planBrowserAttackSwarm({
+      impactedInvariants: [{ id: "ACC-1", severity: "HIGH" }],
+      jevSuggestions: [{ family: "UI_BACKEND_MISMATCH", probability: 0.95 }],
+    }).missions.find((mission) => mission.family === "UI_BACKEND_MISMATCH");
+    expect(suggested?.source).toBe("JEV");
+    expect(suggested?.timeoutMs).toBe(browserMissionTimeoutMs("UI_BACKEND_MISMATCH"));
   });
 
   it("fails closed when an impacted invariant has no deterministic browser mapping", () => {
@@ -78,7 +96,7 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
   it("never lets Jev suggestions crowd deterministic attacks out of a bounded mission budget", () => {
     const plan = planBrowserAttackSwarm({
       impactedInvariants: [{ id: "LIFE-1", severity: "CRITICAL" }],
-      maxMissions: 4,
+      maxMissions: 5,
       jevSuggestions: [
         { family: "RTL_PARITY", probability: 0.99 },
         { family: "TENANT_ESCAPE", probability: 0.98 },
@@ -87,8 +105,8 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
     });
 
     const deterministic = plan.missions.filter((mission) => mission.source === "DETERMINISTIC");
-    expect(deterministic).toHaveLength(3);
-    expect(plan.missions).toHaveLength(4);
+    expect(deterministic).toHaveLength(4);
+    expect(plan.missions).toHaveLength(5);
     expect(plan.droppedJevSuggestions).toBe(2);
   });
 
@@ -252,7 +270,7 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
     // Every real mandatory mapping is executable now, so the refusal is driven by a forged mission whose
     // oracle (UI_BACKEND_AUTHORITY) the MONEY_BOUNDARY handler does not judge.
     const real = planBrowserAttackSwarm({
-      impactedInvariants: [{ id: "ACC-3", severity: "CRITICAL" }],
+      impactedInvariants: [{ id: "ACC-1", severity: "CRITICAL" }],
     });
     const forged: BrowserAttackMission = {
       id: "jev::MONEY_BOUNDARY",

@@ -228,6 +228,49 @@ describe("vehicles.create — an explicit ownership decision", () => {
     expect(await worldCounts(d)).toEqual(before);
   });
 
+  test("owned BANK_TRANSFER with a price and no supplier name posts one acquisition and no payable; the same car with no method is refused, writing nothing", async () => {
+    const d = await seedDealer("c6b");
+    const before = await worldCounts(d);
+    await expectAppError(
+      d.asOwner.mutation(api.vehicles.create, {
+        idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, sourceType: "STOCK", purchasePrice: 15000,
+      }),
+      "VALIDATION_FAILED",
+      "Payment method is required when a purchase price is entered."
+    );
+    expect(await worldCounts(d)).toEqual(before);
+
+    const vehicleId = await d.asOwner.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId: d.orgId, ...baseVehicle, sourceType: "STOCK",
+      purchasePrice: 15000, purchasePaymentMethod: "BANK_TRANSFER",
+    });
+    const events = await acquisitionEvents(d, vehicleId);
+    expect(events).toHaveLength(1);
+    expect(events[0].status).toBe("POSTED");
+    const lines = await d.t.run((ctx) =>
+      ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", events[0].journalEntryId!)).collect()
+    );
+    // By account id, not label: the dealer paid from the bank, so the posting is exactly Vehicle Inventory debited and Bank (not
+    // Cash on Hand) credited, and no other line.
+    const accountId = async (systemKey: string) =>
+      (await d.t.run((ctx) =>
+        ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", d.orgId).eq("systemKey", systemKey)).unique()
+      ))!._id;
+    const inventoryId = await accountId("VEHICLE_INVENTORY");
+    const bankId = await accountId("BANK_ACCOUNT");
+    const amounts = (id: typeof inventoryId) =>
+      lines.filter((l) => l.accountId === id).map(({ debitMinor, creditMinor }) => ({ debitMinor, creditMinor }));
+    expect(lines).toHaveLength(2);
+    expect(amounts(inventoryId)).toEqual([{ debitMinor: 15_000_000, creditMinor: 0 }]);
+    expect(amounts(bankId)).toEqual([{ debitMinor: 0, creditMinor: 15_000_000 }]);
+    expect(await payablesOf(d, vehicleId)).toHaveLength(0);
+    const row = await d.t.run((ctx) => ctx.db.get(vehicleId));
+    expect(row?.sourceType).toBe("STOCK");
+    expect(row?.purchasePrice).toBe(15000);
+    expect(row?.sourcedFromName).toBeUndefined();
+    expect(row?.sourceCost).toBeUndefined();
+  });
+
   test("retry: creating twice with the same idempotency key yields one vehicle and one acquisition journal", async () => {
     const d = await seedDealer("c7");
     const args = {

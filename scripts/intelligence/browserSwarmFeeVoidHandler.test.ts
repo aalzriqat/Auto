@@ -9,7 +9,7 @@ import type { MissionBrowser, MissionBrowserRuntime, MissionSeat } from "./brows
 import { createMoneyBoundaryAttackHandlers } from "./browserSwarmMoneyBoundaryAttack";
 
 /**
- * SCRUM-350 ACC-3 — handler-level tests for MONEY_BOUNDARY judged by STATE_TRANSITION.
+ * SCRUM-350 LIFE-1 — handler-level tests for MONEY_BOUNDARY judged by STATE_TRANSITION.
  *
  * The real handler runs end to end against a scripted two-seat backend. The scenario: two
  * dealership-paid ownership-transfer costs (50 and 20 JOD, scale 1,000) on one approved deal, the
@@ -339,7 +339,7 @@ const breach = async (faults: Faults, ...patterns: RegExp[]) => {
   for (const pattern of patterns) expect(result.oracle.summary).toMatch(pattern);
 };
 
-describe("SCRUM-350 ACC-3 fee void handler: the discriminating scenario", () => {
+describe("SCRUM-350 LIFE-1 fee void handler: the discriminating scenario", () => {
   it("PASSES a correct product: the 50 payment reversed once, the 20 payment and line untouched, a retry a no-op", async () => {
     const h = harness();
     const result = (await h.run()) as { oracle: { passed: boolean; kind: string; summary: string } };
@@ -385,6 +385,10 @@ describe("SCRUM-350 ACC-3 fee void handler: the discriminating scenario", () => 
     const fees = h.world.argsOf.filter((entry) => entry.name === "financeDealCosts:recordDealFee");
     expect(fees.map((entry) => entry.args.actualAmountMinor)).toEqual([50_000, 20_000]);
     expect(h.world.calls.filter((call) => /sales|finalizeDeal|deposits:/.test(call))).toEqual([]);
+    // The product refuses a priced owned car with no declared payment method. Paid outright, so not ON_ACCOUNT (no supplier payable).
+    const create = h.world.argsOf.find((entry) => entry.name === "vehicles:create");
+    expect(create?.args).toMatchObject({ sourceType: "STOCK", purchasePrice: 15_000, purchasePaymentMethod: "BANK_TRANSFER" });
+    expect(create?.args).not.toHaveProperty("purchaseSupplierName");
   });
 
   it("FAILS a void that leaves the payment on the books", async () => {
@@ -421,7 +425,7 @@ describe("SCRUM-350 ACC-3 fee void handler: the discriminating scenario", () => 
   });
 });
 
-describe("SCRUM-350 ACC-3 fee void handler: never a pass without a judged transition", () => {
+describe("SCRUM-350 LIFE-1 fee void handler: never a pass without a judged transition", () => {
   it("is INCONCLUSIVE when the payment never leaves PENDING, naming what was waited for", async () => {
     await inconclusive({ neverPosts: true }, /did not settle/);
   });

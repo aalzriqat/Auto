@@ -1,5 +1,5 @@
 /**
- * The seed steps the CONS-1, ACC-1 and ACC-3 MONEY_BOUNDARY missions share, so each mission's own file holds only
+ * The seed steps the CONS-1, ACC-1 and LIFE-1 MONEY_BOUNDARY missions share, so each mission's own file holds only
  * what is particular to its scenario: a run-unique synthetic VIN, the organization's currency, the approver seat
  * with a customer and a finance company, an approved application, the gap agreement through handover, and the
  * chart-of-accounts key map. Every step is the mission's own public product command, in the order the missions

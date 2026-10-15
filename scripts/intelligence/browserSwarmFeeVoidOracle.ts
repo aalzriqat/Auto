@@ -1,7 +1,7 @@
 /**
- * SCRUM-350 ACC-3 — the pure judgement of voiding a cost the dealership paid directly.
+ * SCRUM-350 LIFE-1 — the pure judgement of voiding a cost the dealership paid directly.
  *
- * ACC-3: a new way to SPEND creates a reversal obligation on every path that un-happens it.
+ * LIFE-1: a new way to SPEND creates a reversal obligation on every path that un-happens it.
  * A dealership-paid handover cost is recorded, reconciled and paid directly (DR the cost's
  * expense, CR the bank). Voiding the cost must take exactly that payment back: the original
  * posting untouched, ONE linked mirror reversal, the cost line gone, a repeated void a no-op,
