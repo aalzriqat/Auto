@@ -39,6 +39,7 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
       "MULTI_TAB_RACE",
       "NETWORK_RECOVERY",
       "RTL_PARITY",
+      "STALE_UI",
       "TENANT_ESCAPE",
       "UI_BACKEND_MISMATCH",
     ]);
@@ -73,6 +74,22 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
     expect(isBrowserSwarmMissionExecutable("CONSIGNMENT_ECONOMICS", "ECONOMIC_AUTHORITY")).toBe(true);
     expect(isBrowserSwarmMissionExecutable("CONSIGNMENT_ECONOMICS", "STATE_TRANSITION")).toBe(false);
     expect(isBrowserSwarmMissionExecutable("MONEY_BOUNDARY", "ECONOMIC_AUTHORITY")).toBe(false);
+  });
+
+  it("executes LIFE-1's STALE_UI mission through a handler that judges UI_BACKEND_AUTHORITY, and no other LIFE-1 mission by that", () => {
+    const plan = planBrowserAttackSwarm({ impactedInvariants: [{ id: "LIFE-1", severity: "CRITICAL" }] });
+    const stale = plan.missions.find((mission) => mission.family === "STALE_UI");
+    expect(stale).toMatchObject({ oracle: "UI_BACKEND_AUTHORITY", evidence: ["TRACE", "SCREENSHOT", "BACKEND_STATE"] });
+    expect(stale?.timeoutMs).toBeGreaterThan(45_000);
+    expect(() => assertBrowserSwarmMissionsExecutable([stale!])).not.toThrow();
+    expect(isBrowserSwarmMissionExecutable("STALE_UI", "UI_BACKEND_AUTHORITY")).toBe(true);
+    // The handler judges that oracle for this family only.
+    expect(isBrowserSwarmMissionExecutable("STALE_UI", "STATE_TRANSITION")).toBe(false);
+    // LIFE-1 stays refused as a whole: its reversal and navigation missions have no handler that judges them.
+    expect(() => assertMandatoryBrowserSwarmCoverage([{ id: "LIFE-1", severity: "CRITICAL" }])).toThrow(
+      /LIFECYCLE_REVERSAL.*STATE_TRANSITION.*LIFE-1/,
+    );
+    expect(() => assertMandatoryBrowserSwarmCoverage([{ id: "LIFE-1", severity: "CRITICAL" }])).not.toThrow(/STALE_UI/);
   });
 
   it("refuses a plan that mixes executable and non-executable missions rather than running the executable half", () => {
@@ -193,7 +210,6 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
       "ACC-3:MONEY_BOUNDARY/STATE_TRANSITION",
       "LIFE-1:LIFECYCLE_REVERSAL/STATE_TRANSITION",
       "LIFE-1:NAVIGATION_RACE/STATE_TRANSITION",
-      "LIFE-1:STALE_UI/UI_BACKEND_AUTHORITY",
     ]);
 
     const fullyCovered = [
@@ -228,6 +244,7 @@ describe("SCRUM-826 browser swarm coverage contract", () => {
       "browserSwarmBoundaryHarness.ts",
       "browserSwarmConsignmentAttack.ts",
       "browserSwarmNetworkRecoveryAttack.ts",
+      "browserSwarmStaleUiAttack.ts",
     ]) {
       const source = readFileSync(path.join(__dirname, file), "utf8");
       expect(source, file).not.toMatch(/chromium|firefox|webkit|\.launch\(|newContext\(/);

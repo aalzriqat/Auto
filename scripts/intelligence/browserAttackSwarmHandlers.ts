@@ -25,6 +25,7 @@ import {
 } from "./browserSwarmEconomicAttacks";
 import { createConsignmentAttackHandlers } from "./browserSwarmConsignmentAttack";
 import { createNetworkRecoveryHandler } from "./browserSwarmNetworkRecoveryAttack";
+import { createStaleUiAttackHandlers } from "./browserSwarmStaleUiAttack";
 
 type ArtifactWriter = {
   root: string;
@@ -548,5 +549,7 @@ export function createInitialBrowserAttackHandlers(): BrowserAttackHandlerRegist
     NETWORK_RECOVERY: createNetworkRecoveryHandler(missionBrowserRuntime),
     // SCRUM-350 CONS-1: a financed consigned sale, judged against independent figures.
     ...createConsignmentAttackHandlers(missionBrowserRuntime),
+    // SCRUM-350 LIFE-1: a stale screen's action, judged against backend authority.
+    ...createStaleUiAttackHandlers(missionBrowserRuntime),
   };
 }
