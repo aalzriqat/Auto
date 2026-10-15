@@ -832,6 +832,12 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       "convex/accounting/**",
       // SCRUM-350: the consignment scenario seeds through these steps (and their test), shared with the ACC-1 and LIFE-1 scenarios.
       "scripts/intelligence/browserSwarmSeedHelpers*",
+      // SCRUM-350: the consignment browser mission (attack, oracle and their tests), so an edit to it schedules it.
+      "scripts/intelligence/browserSwarmConsignment*",
+      // SCRUM-350 / SCRUM-761: the consigned-sale backend regression and its two library records, named by family
+      // rather than the whole money directory so an unrelated money scenario does not schedule this mission.
+      "convex/scrum350Cons1V3PriceBasis.test.ts",
+      "regression/scenarios/money/financed-v3-consigned-sale-*.scenario.json",
     ],
     profile: profile({
       economicImpact: "DIRECT",
