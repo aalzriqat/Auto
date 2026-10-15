@@ -663,8 +663,8 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       "convex/utils/saleCompletion.ts",
       // SCRUM-350: the financed owned-stock sale swarm mission (attack, oracle and their tests) judges ECONOMIC_AUTHORITY.
       "scripts/intelligence/browserSwarmMoneyBoundary*",
-      // The seed steps this scenario shares with the consignment and fee-void scenarios.
-      "scripts/intelligence/browserSwarmSeedHelpers.ts",
+      // The seed steps this scenario shares with the consignment and fee-void scenarios (and their test).
+      "scripts/intelligence/browserSwarmSeedHelpers*",
     ],
     profile: profile({
       economicImpact: "DIRECT",
@@ -824,8 +824,8 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       "convex/utils/vehicleOwnership.ts",
       "convex/utils/financingEconomics.ts",
       "convex/accounting/**",
-      // SCRUM-350: the consignment scenario seeds through these steps, shared with the ACC-1 and LIFE-1 scenarios.
-      "scripts/intelligence/browserSwarmSeedHelpers.ts",
+      // SCRUM-350: the consignment scenario seeds through these steps (and their test), shared with the ACC-1 and LIFE-1 scenarios.
+      "scripts/intelligence/browserSwarmSeedHelpers*",
     ],
     profile: profile({
       economicImpact: "DIRECT",
@@ -889,8 +889,8 @@ export const AUTOFLOW_INVARIANTS: readonly InvariantDefinition[] = [
       "scripts/intelligence/browserSwarmFeeVoid*",
       // The MONEY_BOUNDARY dispatcher sends STATE_TRANSITION missions to the fee-void scenario (it is also ACC-1's).
       "scripts/intelligence/browserSwarmMoneyBoundaryAttack.ts",
-      // The seed steps this scenario shares with the consignment and financed-sale scenarios.
-      "scripts/intelligence/browserSwarmSeedHelpers.ts",
+      // The seed steps this scenario shares with the consignment and financed-sale scenarios (and their test).
+      "scripts/intelligence/browserSwarmSeedHelpers*",
     ],
     profile: profile({
       economicImpact: "DIRECT",

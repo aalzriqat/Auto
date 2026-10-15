@@ -218,9 +218,13 @@ describe("trusted browser swarm impact: modular money and fee-void swarm modules
   });
 
   // browserSwarmSeedHelpers.ts is imported by the consignment, financed-sale and fee-void attacks, so an edit to
-  // it can break any of them. Each invariant is judged by its own oracle; none may be attributed another's.
-  it("browserSwarmSeedHelpers.ts plans every mission whose scenario imports it, each with its own oracle", () => {
-    const { impact, moneyMissions } = plannedFor("scripts/intelligence/browserSwarmSeedHelpers.ts");
+  // it can break any of them, and so can an edit to its own test. Each invariant is judged by its own oracle;
+  // none may be attributed another's.
+  it.each([
+    "scripts/intelligence/browserSwarmSeedHelpers.ts",
+    "scripts/intelligence/browserSwarmSeedHelpers.test.ts",
+  ])("%s plans every mission whose scenario imports the seed helpers, each with its own oracle", (changedFile) => {
+    const { impact, moneyMissions } = plannedFor(changedFile);
     const plan = planBrowserAttackSwarm({ impactedInvariants: impact.impactedInvariants });
     expect(impact.impactedInvariants.map((entry) => entry.id)).toEqual(["ACC-1", "CONS-1", "LIFE-1"]);
     expect(
