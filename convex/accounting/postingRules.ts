@@ -178,6 +178,8 @@ export interface LineSpec {
   financeCompanyId?: string;
   /** SCRUM-27: a MANUAL finance company has no id; its letter name is its identity. */
   payerNameSnapshot?: string;
+  /** SCRUM-54: the physical bank a BANK_ACCOUNT control line moved money through. */
+  bankAccountId?: string;
 }
 
 /**
@@ -248,7 +250,7 @@ function line(
   debitMinor: number,
   creditMinor: number,
   description?: string,
-  dims?: Partial<Pick<LineSpec, "vehicleId" | "customerId" | "salespersonId" | "cashierId" | "financeCompanyId" | "payerNameSnapshot">>
+  dims?: Partial<Pick<LineSpec, "vehicleId" | "customerId" | "salespersonId" | "cashierId" | "financeCompanyId" | "payerNameSnapshot" | "bankAccountId">>
 ): LineSpec {
   return { accountSystemKey, debitMinor, creditMinor, description, ...dims };
 }
@@ -2863,12 +2865,19 @@ export interface CashDrawerDepositedPayload {
   sessionId: string;
   amountMinor: number;
   currency: string;
+  /**
+   * SCRUM-54: the physical bank the cash was deposited into, chosen by the
+   * approver. Optional only so an event queued before this field existed still
+   * drains; `cashDrawer.approveVariance` requires it for every new deposit.
+   */
+  bankAccountId?: string;
 }
 
 export function ruleCashDrawerDeposited(p: CashDrawerDepositedPayload): RuleResult {
   return {
     lines: [
-      line(SYSTEM_KEYS.BANK_ACCOUNT, p.amountMinor, 0, "Cash drawer deposited to bank"),
+      // Only the bank control line names the bank - CASH_ON_HAND is not a bank.
+      line(SYSTEM_KEYS.BANK_ACCOUNT, p.amountMinor, 0, "Cash drawer deposited to bank", { bankAccountId: p.bankAccountId }),
       line(SYSTEM_KEYS.CASH_ON_HAND, 0, p.amountMinor, "Drawer cash removed"),
     ],
     memo: "Cash drawer session deposited",

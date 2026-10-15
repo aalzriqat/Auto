@@ -5448,6 +5448,8 @@ export default defineSchema({
     occurredAt: v.number(),
     notes: v.optional(v.string()),
     accountingEventId: v.optional(v.id("accountingEvents")),
+    /** SCRUM-54: the physical bank a BANK_DEPOSIT movement went into. */
+    bankAccountId: v.optional(v.id("bankAccounts")),
     actorId: v.id("users"),
     createdAt: v.number(),
     idempotencyKey: v.string(),

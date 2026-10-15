@@ -9,7 +9,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { assertDifferentActors } from "./utils/financialGuards";
@@ -45,6 +45,39 @@ async function computeExpectedCashMinor(
   return expected;
 }
 
+/** A bank a deposit may name: this org's, live, active and in the session's currency. */
+function isDepositBank(
+  bank: Doc<"bankAccounts"> | null,
+  orgId: Id<"organizations">,
+  currency: string
+): bank is Doc<"bankAccounts"> {
+  return bank !== null && bank.orgId === orgId && !bank.isDeleted && bank.isActive && bank.currency === currency;
+}
+
+async function requireDepositBank(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  bankAccountId: Id<"bankAccounts"> | undefined,
+  currency: string
+): Promise<Id<"bankAccounts">> {
+  if (!bankAccountId) {
+    throw new ConvexError("Select the bank account this cash drawer deposit goes into.");
+  }
+  const bank = await ctx.db.get(bankAccountId);
+  if (!bank || bank.orgId !== orgId || bank.isDeleted) {
+    throw new ConvexError("The selected bank account was not found in this organization.");
+  }
+  if (!bank.isActive) {
+    throw new ConvexError("The selected bank account is inactive.");
+  }
+  if (bank.currency !== currency) {
+    throw new ConvexError(
+      `The selected bank account is denominated in ${bank.currency}, but this cash drawer is in ${currency}.`
+    );
+  }
+  return bankAccountId;
+}
+
 export const open = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -58,12 +91,19 @@ export const open = mutation({
       throw new ConvexError("Opening float must be a non-negative integer minor-unit amount.");
     }
 
-    const existingOpen = await ctx.db
+    const openSession = await ctx.db
       .query("cashDrawerSessions")
-      .withIndex("by_org_branch_status", (q) => q.eq("orgId", args.orgId).eq("branchId", args.branchId))
-      .filter((q) => q.or(q.eq(q.field("status"), "OPEN"), q.eq(q.field("status"), "COUNTING")))
+      .withIndex("by_org_branch_status", (q) =>
+        q.eq("orgId", args.orgId).eq("branchId", args.branchId).eq("status", "OPEN")
+      )
       .first();
-    if (existingOpen) {
+    const countingSession = await ctx.db
+      .query("cashDrawerSessions")
+      .withIndex("by_org_branch_status", (q) =>
+        q.eq("orgId", args.orgId).eq("branchId", args.branchId).eq("status", "COUNTING")
+      )
+      .first();
+    if (openSession || countingSession) {
       throw new ConvexError("A cash drawer session is already open for this branch. Close it before opening a new one.");
     }
 
@@ -191,6 +231,12 @@ export const approveVariance = mutation({
   args: {
     orgId: v.id("organizations"),
     sessionId: v.id("cashDrawerSessions"),
+    /**
+     * SCRUM-54: the physical bank the counted cash goes into. Required when
+     * the deposit is above zero, never defaulted or inferred; ignored for a
+     * zero-deposit approval.
+     */
+    bankAccountId: v.optional(v.id("bankAccounts")),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
@@ -215,11 +261,16 @@ export const approveVariance = mutation({
     const now = Date.now();
 
     if (depositMinor > 0) {
+      // Before the first write: a refused bank leaves no event, outbox row,
+      // movement, journal or snapshot behind.
+      const bankAccountId = await requireDepositBank(ctx, args.orgId, args.bankAccountId, session.currency);
+
       await hookCashDrawerDeposited(ctx, {
         orgId: args.orgId,
         sessionId: args.sessionId,
         amountMinor: depositMinor,
         currency: session.currency,
+        bankAccountId,
         actorId: user._id,
         occurredAt: now,
       });
@@ -229,6 +280,7 @@ export const approveVariance = mutation({
         sessionId: args.sessionId,
         type: "BANK_DEPOSIT",
         amountMinor: depositMinor,
+        bankAccountId,
         occurredAt: now,
         actorId: user._id,
         createdAt: now,
@@ -243,6 +295,29 @@ export const approveVariance = mutation({
       approvedBy: user._id,
       approvedAt: now,
     });
+  },
+});
+
+/**
+ * The banks an approver may name for this session's deposit. Gated on the
+ * approval permission, not view:finance, and returns only id, name and
+ * currency - never IBAN or account numbers.
+ */
+export const listDepositBankOptions = query({
+  args: { orgId: v.id("organizations"), sessionId: v.id("cashDrawerSessions") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    const session = await ctx.db.get(args.sessionId);
+    if (!session || session.orgId !== args.orgId) {
+      throw new ConvexError("Cash drawer session not found in this organization.");
+    }
+    const banks = await ctx.db
+      .query("bankAccounts")
+      .withIndex("by_org_active", (q) => q.eq("orgId", args.orgId).eq("isActive", true))
+      .take(100);
+    return banks
+      .filter((bank) => isDepositBank(bank, args.orgId, session.currency))
+      .map((bank) => ({ _id: bank._id, name: bank.name, currency: bank.currency }));
   },
 });
 
