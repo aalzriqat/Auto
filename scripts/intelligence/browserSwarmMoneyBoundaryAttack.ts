@@ -38,9 +38,6 @@ import { runBoundaryMission, type BoundaryMissionEnv } from "./browserSwarmBound
 import {
   MISSION_TIMING_DEFAULTS,
   PAID_AT_SKEW_MS,
-  asArray,
-  inconclusive,
-  isRecord,
   isSaleCompleted,
   missionCommands,
   readSettledSaleLedger,
@@ -50,7 +47,16 @@ import {
 } from "./browserSwarmConsignmentAttack";
 import { untilAborted, type MissionBrowserRuntime } from "./browserSwarmEconomicAttacks";
 import { feeVoidSpec } from "./browserSwarmFeeVoidAttack";
-import { chartKeysById, syntheticVin } from "./browserSwarmSeedHelpers";
+import {
+  agreeEconomicsAndHandOver,
+  asArray,
+  isRecord,
+  readChartKeys,
+  readOrgCurrency,
+  seedFinancedCustomer,
+  submitApprovedApplication,
+  syntheticVin,
+} from "./browserSwarmSeedHelpers";
 import {
   MONEY_BOUNDARY_FIGURES,
   buildMoneyBoundaryScenario,
@@ -80,13 +86,8 @@ function moneyBoundarySpec(options: MissionTiming, figures: Readonly<MoneyBounda
       const { command, refusalIsInconclusive } = missionCommands(env, options);
 
       // The denomination is the organization's own, read before anything is seeded.
-      const settings: unknown = await untilAborted(signal, client.query(api.orgSettings.get, { orgId: org }));
-      const currency = isRecord(settings) && typeof settings.currency === "string" ? settings.currency : null;
-      detail.currency = currency;
-      if (currency === null) {
-        env.unjudged("the organization's currency is unreadable, so no amount of the scenario can be expressed or judged; nothing was seeded");
-        return;
-      }
+      const currency = await readOrgCurrency(env);
+      if (currency === null) return;
       const built = buildMoneyBoundaryScenario(currency, figures);
       if (!built.ok) {
         env.unjudged(`${built.reason}; nothing was seeded`);
@@ -131,37 +132,10 @@ function moneyBoundarySpec(options: MissionTiming, figures: Readonly<MoneyBounda
         );
       }
 
-      // The MANAGER seat approves what the OWNER seat submits. A split dealership means no deal can be approved.
-      const approver = await env.openSeat("approver");
-      if (approver.orgId !== orgId) {
-        env.unjudged("the approver seat signed in to a different organization, so the deal could not be approved; nothing was seeded");
-        return;
-      }
-
-      const customerId = await command(() =>
-        client.mutation(api.customers.create, { orgId: org, firstName: "Swarm", lastName: `Boundary-${nonce}` }),
-      );
-      await command(() => client.mutation(api.orgCustomerStatuses.seed, { orgId: org }));
-      const statuses = asArray(await command(() => client.query(api.orgCustomerStatuses.list, { orgId: org })), "orgCustomerStatuses.list");
-      const status = statuses.find((row) => isRecord(row) && row.isActive === true);
-      if (!isRecord(status) || typeof status._id !== "string") {
-        inconclusive("no active customer eligibility status exists after seeding");
-      }
-      const statusId = status._id as Id<"orgCustomerStatuses">;
-      const companyId = await command(() =>
-        client.mutation(api.finance.createCompany, {
-          orgId: org,
-          name: `Swarm Finance ${nonce}`,
-          profitRate: 5,
-          maxTermMonths: 60,
-          gracePeriodMonths: 0,
-          defaultLtvPercent: scenario.ltvPercent,
-          // The admin fee below is recorded as the dealership's own cost; the company configures none.
-          adminFees: 0,
-          acceptedStatuses: [statusId],
-          isActive: true,
-        }),
-      );
+      // The finance company configures no admin fee: the one recorded below is the dealership's own cost.
+      const customer = await seedFinancedCustomer(env, command, { lastName: `Boundary-${nonce}`, ltvPercent: scenario.ltvPercent });
+      if (customer === null) return;
+      const { approver, customerId } = customer;
       const vehicleId = await command(() =>
         client.mutation(api.vehicles.create, {
           orgId: org,
@@ -190,84 +164,20 @@ function moneyBoundarySpec(options: MissionTiming, figures: Readonly<MoneyBounda
         return;
       }
 
-      const quoteId = await command(() =>
-        client.mutation(api.quotes.saveQuote, {
-          orgId: org,
-          customerId,
-          vehicleId,
-          vehiclePrice: figures.priceMajor,
-          downPayment: 0,
-          termMonths: 48,
-          mode: "CONFIGURED_FINANCE_COMPANY",
-          companyId,
-          customerEligibilityStatusIds: [statusId],
-          totalFinancedAmount: figures.priceMajor,
-        }),
-      );
-      // The customer's reservation deposit: also the first payment the dealership later forwards to the financier.
-      await command(() =>
-        client.mutation(api.deposits.create, {
-          orgId: org,
-          quoteId,
-          amount: figures.depositMajor,
-          method: "CASH",
-          idempotencyKey: `${nonce}-deposit`,
-        }),
-      );
-      const applicationId = await command(() => client.mutation(api.applications.createFromQuote, { orgId: org, quoteId }));
-      detail.applicationId = String(applicationId);
-      await command(() => client.mutation(api.applications.updateStatus, { orgId: org, applicationId, status: "UNDER_REVIEW" }));
-      await command(() => approver.client.mutation(api.applications.updateStatus, { orgId: org, applicationId, status: "APPROVED" }));
-      await command(() =>
-        client.mutation(api.financingEconomics.recordSubmittedQuotation, {
-          orgId: org,
-          applicationId,
-          submittedQuotationMinor: scenario.quotationMinor,
-          source: "MANUAL_ENTRY",
-          customerFirstPaymentMinor: scenario.firstPaymentMinor,
-        }),
-      );
-      await command(() =>
-        approver.client.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
-          orgId: org,
-          applicationId,
-          approvedAmountMinor: expectation.approvedMinor,
-          basis: "MANUAL",
-          notes: "Swarm approval below the quotation.",
-        }),
-      );
-
-      // The product's own validation cross-checks the independently derived shortfall: it refuses shares that
-      // do not sum to ITS net shortfall. That refusal is inconclusive, never a pass and never a silent re-derivation.
-      const served: unknown = await command(() => approver.client.query(api.applications.get, { orgId: org, applicationId }));
-      const gapStamp = isRecord(served) && typeof served.economicsStamp === "string" ? served.economicsStamp : null;
-      if (gapStamp === null) inconclusive("the product issued no economics stamp for the gap agreement, so the deal cannot proceed");
-      await refusalIsInconclusive(
-        () =>
-          approver.client.mutation(api.financingEconomics.resolveAppraisalGap, {
-            orgId: org,
-            applicationId,
-            economicsStamp: gapStamp,
-            customerGapShareMinor: scenario.customerShareMinor,
-            dealerGapShareMinor: scenario.dealerShareMinor,
-            customerGapCashToDealerMinor: scenario.customerShareMinor,
-            customerGapInstallmentToDealerMinor: 0,
-            customerGapToFinanceCompanyMinor: 0,
-          }),
-        `the product refused the gap agreement for the independently derived net shortfall of ${scenario.shortfallMinor} (customer ${scenario.customerShareMinor}, dealership ${scenario.dealerShareMinor})`,
-      );
-
-      const economicsStamp = await command(() => client.query(api.applications.handoverStamp, { orgId: org, applicationId }));
-      if (!economicsStamp) inconclusive("the product issued no economics stamp for the handover, so the deal cannot proceed");
-      await command(() => client.mutation(api.applications.registerVehicleHandover, { orgId: org, applicationId, economicsStamp }));
-      await command(() =>
-        client.mutation(api.applications.registerExpectedPayment, {
-          orgId: org,
-          applicationId,
-          method: "BANK_TRANSFER",
-          expectedDate: Date.now(),
-        }),
-      );
+      // The customer's reservation deposit is also the first payment the dealership later forwards to the financier.
+      const applicationId = await submitApprovedApplication(env, command, customer, {
+        vehicleId,
+        priceMajor: figures.priceMajor,
+        depositMajor: figures.depositMajor,
+      });
+      await agreeEconomicsAndHandOver(env, { command, refusalIsInconclusive }, approver, applicationId, {
+        quotationMinor: scenario.quotationMinor,
+        firstPaymentMinor: scenario.firstPaymentMinor,
+        approvedMinor: expectation.approvedMinor,
+        shortfallMinor: scenario.shortfallMinor,
+        customerShareMinor: scenario.customerShareMinor,
+        dealerShareMinor: scenario.dealerShareMinor,
+      });
       // The dealership's own admin fee: a cost of the deal, not a deduction from the financier's transfer.
       const feeId = await refusalIsInconclusive(
         () =>
@@ -365,8 +275,7 @@ function moneyBoundarySpec(options: MissionTiming, figures: Readonly<MoneyBounda
         return;
       }
 
-      const chart = asArray(await command(() => client.query(api.chartOfAccounts.list, { orgId: org })), "chartOfAccounts.list");
-      const keyOf = chartKeysById(chart);
+      const keyOf = await readChartKeys(env, command);
       // Every read, including one that throws, leaves what it read (events, journals, account ids) in the evidence.
       const ledger = await readSettledSaleLedger(env, options, saleId, keyOf);
       const completed = ledger.events.filter((event) => isSaleCompleted(event, "POSTED"));

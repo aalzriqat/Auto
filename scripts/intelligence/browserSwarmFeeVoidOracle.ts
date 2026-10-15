@@ -77,7 +77,7 @@ export interface FeeVoidObservation {
 }
 
 const sortedLines = (lines: readonly LedgerLine[]): string[] =>
-  lines.map((line) => `${line.accountId ?? ""}|${line.debitMinor}|${line.creditMinor}|${line.scale}|${line.currency}`).sort();
+  lines.map((line) => `${line.accountId ?? ""}|${line.debitMinor}|${line.creditMinor}|${line.scale}|${line.currency}`).sort((a, b) => a.localeCompare(b));
 
 /** The lines of an event's journal as `key|debit|credit`, or null when a line sits on an account the chart cannot name. */
 function keyedLines(lines: readonly LedgerLine[], keyOf: ReadonlyMap<string, string>): string[] | null {
@@ -87,7 +87,7 @@ function keyedLines(lines: readonly LedgerLine[], keyOf: ReadonlyMap<string, str
     if (key === undefined) return null;
     keyed.push(`${key}|${line.debitMinor}|${line.creditMinor}`);
   }
-  return keyed.sort();
+  return keyed.sort((a, b) => a.localeCompare(b));
 }
 
 const directPayments = (snapshot: LedgerSnapshot): LedgerEvent[] =>
@@ -123,7 +123,7 @@ function judgePaid(
   if (!lines.every((line) => line.currency === currency && line.scale === decimals)) {
     violations.push(`${label}: the direct payment is not posted in ${currency} at that currency's scale`);
   }
-  const expected = [`${FEE_VOID_EXPENSE_KEY}|${amountMinor}|0`, `${FEE_VOID_BANK_KEY}|0|${amountMinor}`].sort();
+  const expected = [`${FEE_VOID_EXPENSE_KEY}|${amountMinor}|0`, `${FEE_VOID_BANK_KEY}|0|${amountMinor}`].sort((a, b) => a.localeCompare(b));
   if (keyed.join(",") !== expected.join(",")) {
     violations.push(
       `${label}: the direct payment moved [${keyed.join(", ")}] but a ${amountMinor} bank-transfer payment debits ${FEE_VOID_EXPENSE_KEY} and credits ${FEE_VOID_BANK_KEY} by exactly that`,

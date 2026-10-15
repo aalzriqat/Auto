@@ -34,14 +34,7 @@ import type { Id } from "../../convex/_generated/dataModel";
 import { describeError } from "./browserSwarmBoundaryOracle";
 import { readSettledLedger } from "./browserSwarmBoundaryAttacks";
 import type { BoundaryMissionEnv } from "./browserSwarmBoundaryHarness";
-import {
-  PAID_AT_SKEW_MS,
-  asArray,
-  inconclusive,
-  isRecord,
-  missionCommands,
-  type MissionTiming,
-} from "./browserSwarmConsignmentAttack";
+import { PAID_AT_SKEW_MS, missionCommands, type MissionTiming } from "./browserSwarmConsignmentAttack";
 import { untilAborted } from "./browserSwarmEconomicAttacks";
 import {
   DIRECT_PAYMENT_EVENT,
@@ -55,7 +48,16 @@ import {
   type FeeVoidFigures,
 } from "./browserSwarmFeeVoidOracle";
 import type { LedgerSnapshot } from "./browserSwarmBoundaryOracle";
-import { chartKeysById, syntheticVin } from "./browserSwarmSeedHelpers";
+import {
+  asArray,
+  inconclusive,
+  isRecord,
+  readChartKeys,
+  readOrgCurrency,
+  seedFinancedCustomer,
+  submitApprovedApplication,
+  syntheticVin,
+} from "./browserSwarmSeedHelpers";
 
 /** The fee's source in the ledger: events are keyed by the cost line, not the deal. */
 const FEE_SOURCE = "financeDealFees";
@@ -101,13 +103,8 @@ export function feeVoidSpec(options: MissionTiming, figures: Readonly<FeeVoidFig
       const { command, refusalIsInconclusive } = missionCommands(env, options);
 
       // The denomination is the organization's own, read before anything is seeded.
-      const settings: unknown = await untilAborted(signal, client.query(api.orgSettings.get, { orgId: org }));
-      const currency = isRecord(settings) && typeof settings.currency === "string" ? settings.currency : null;
-      detail.currency = currency;
-      if (currency === null) {
-        env.unjudged("the organization's currency is unreadable, so no amount of the scenario can be expressed or judged; nothing was seeded");
-        return;
-      }
+      const currency = await readOrgCurrency(env);
+      if (currency === null) return;
       const amounts = feeVoidAmounts(figures, currency);
       if (!amounts.ok) {
         env.unjudged(`${amounts.reason}, so the void cannot be told from its sibling; nothing was seeded`);
@@ -126,36 +123,8 @@ export function feeVoidSpec(options: MissionTiming, figures: Readonly<FeeVoidFig
         "SALE_DEPOSIT_AND_REFUND_REVERSALS",
       ];
 
-      // The MANAGER seat approves what the OWNER seat submits. A split dealership means no deal can be approved.
-      const approver = await env.openSeat("approver");
-      if (approver.orgId !== orgId) {
-        env.unjudged("the approver seat signed in to a different organization, so the deal could not be approved; nothing was seeded");
-        return;
-      }
-
-      const customerId = await command(() =>
-        client.mutation(api.customers.create, { orgId: org, firstName: "Swarm", lastName: `FeeVoid-${nonce}` }),
-      );
-      await command(() => client.mutation(api.orgCustomerStatuses.seed, { orgId: org }));
-      const statuses = asArray(await command(() => client.query(api.orgCustomerStatuses.list, { orgId: org })), "orgCustomerStatuses.list");
-      const status = statuses.find((row) => isRecord(row) && row.isActive === true);
-      if (!isRecord(status) || typeof status._id !== "string") {
-        inconclusive("no active customer eligibility status exists after seeding");
-      }
-      const statusId = status._id as Id<"orgCustomerStatuses">;
-      const companyId = await command(() =>
-        client.mutation(api.finance.createCompany, {
-          orgId: org,
-          name: `Swarm Finance ${nonce}`,
-          profitRate: 5,
-          maxTermMonths: 60,
-          gracePeriodMonths: 0,
-          defaultLtvPercent: 85,
-          adminFees: 0,
-          acceptedStatuses: [statusId],
-          isActive: true,
-        }),
-      );
+      const customer = await seedFinancedCustomer(env, command, { lastName: `FeeVoid-${nonce}`, ltvPercent: 85 });
+      if (customer === null) return;
       const vehicleId = await command(() =>
         client.mutation(api.vehicles.create, {
           orgId: org,
@@ -174,24 +143,7 @@ export function feeVoidSpec(options: MissionTiming, figures: Readonly<FeeVoidFig
           idempotencyKey: `${nonce}-vehicle`,
         }),
       );
-      const quoteId = await command(() =>
-        client.mutation(api.quotes.saveQuote, {
-          orgId: org,
-          customerId,
-          vehicleId,
-          vehiclePrice: 20_000,
-          downPayment: 0,
-          termMonths: 48,
-          mode: "CONFIGURED_FINANCE_COMPANY",
-          companyId,
-          customerEligibilityStatusIds: [statusId],
-          totalFinancedAmount: 20_000,
-        }),
-      );
-      const applicationId = await command(() => client.mutation(api.applications.createFromQuote, { orgId: org, quoteId }));
-      detail.applicationId = String(applicationId);
-      await command(() => client.mutation(api.applications.updateStatus, { orgId: org, applicationId, status: "UNDER_REVIEW" }));
-      await command(() => approver.client.mutation(api.applications.updateStatus, { orgId: org, applicationId, status: "APPROVED" }));
+      const applicationId = await submitApprovedApplication(env, command, customer, { vehicleId, priceMajor: 20_000 });
 
       // Two dealership-paid costs on the deal; only the first is reconciled. Each is paid directly, by bank transfer, at
       // the amount the approver saw.
@@ -297,8 +249,7 @@ export function feeVoidSpec(options: MissionTiming, figures: Readonly<FeeVoidFig
         return;
       }
 
-      const chart = asArray(await command(() => client.query(api.chartOfAccounts.list, { orgId: org })), "chartOfAccounts.list");
-      const keyOf = chartKeysById(chart);
+      const keyOf = await readChartKeys(env, command);
 
       const voided: FeeLedgerStages = { paid: voidedPaid, afterVoid: voidedAfterVoid, afterRepeat: voidedAfterRepeat };
       const surviving: FeeLedgerStages = { paid: survivingPaid, afterVoid: survivingAfterVoid, afterRepeat: survivingAfterRepeat };
