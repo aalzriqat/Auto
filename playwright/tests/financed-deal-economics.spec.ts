@@ -233,53 +233,67 @@ test.describe("recording a financed deal's economics through the interface", () 
       await costs.getByRole("button", { name: "Confirm reconciliation" }).click();
       await expect(costs.getByRole("button", { name: "Reconcile fee" })).toHaveCount(0);
 
-      // The costs are closable now, and the close is STILL withheld — for the
-      // legal invoice alone. Without this the first withheld assertion could
-      // be satisfied by the costs, and a broken invoice gate would go unseen.
+      // The costs are closable now, so the costs can no longer be what withholds
+      // the close. On the legacy backend (invoice BLOCKED) the close is STILL
+      // withheld, for the legal invoice alone: asserting that keeps the legacy
+      // gate honest, because the first withheld assertion could otherwise be
+      // satisfied by the costs and a broken invoice gate would go unseen. On the
+      // optional-invoice backend (NOT_APPLICABLE) no invoice gate exists, so
+      // nothing is withheld and the close is offered.
       const checklist = managerPage.getByTestId("deal-closing-checklist");
       await expect(checklist.getByTestId("closing-check-COSTS_CLOSABLE")).toHaveAttribute(
         "data-status",
         "READY",
       );
-      await expect(
-        checklist.getByTestId("closing-check-LEGAL_INVOICE_RECORDED"),
-      ).toHaveAttribute("data-status", "BLOCKED");
-      await expect(close).toHaveCount(0);
+      // SCRUM-411 transition: this spec runs from immutable main against both
+      // the legacy backend (invoice BLOCKED until recorded) and the
+      // optional-invoice backend (NOT_APPLICABLE, server-derived sale). Exactly
+      // those two statuses are accepted; any other status fails here.
+      const invoiceCheck = checklist.getByTestId("closing-check-LEGAL_INVOICE_RECORDED");
+      await expect(invoiceCheck).toHaveAttribute("data-status", /^(BLOCKED|NOT_APPLICABLE)$/);
+      const invoiceStatus = await invoiceCheck.getAttribute("data-status");
 
-      // The legal invoice, made out to the finance company (the dialog's
-      // default). The plan must balance: with no deposit, no customer gap and
-      // nothing deducted, revenue is exactly the 13,000 the company remits.
-      // The checklist's own link for the blocked check opens the same dialog
-      // (both call legalInvoice.onRecord); the card-header button shares the
-      // name, so a role+name lookup matches two elements.
-      await checklist.getByTestId("closing-check-go-LEGAL_INVOICE_RECORDED").click();
-      const invoiceDialog = managerPage.getByRole("dialog");
-      await invoiceDialog.locator("#legal-invoice-amount").fill("13000");
-      await invoiceDialog.locator("#legal-invoice-number").fill(`INV-E2E-${testDataSuffix()}`);
-      // SCRUM-596 (F-28): the invoice date is the paper's date. While the
-      // browser's day has not begun on the ledger's UTC clock (00:00-03:00 in
-      // Amman) nothing is pre-filled and saving waits for an explicit pick —
-      // never a silent move into the previous day. Either way the test picks
-      // the latest day the picker allows, which the server always accepts.
-      const invoiceDate = invoiceDialog.locator("#legal-invoice-date");
-      const save = invoiceDialog.getByRole("button", { name: "Save Legal Invoice" });
-      if (await invoiceDialog.locator("#legal-invoice-date-hint").isVisible()) {
-        await expect(invoiceDate).toHaveValue("");
-        await expect(save).toBeDisabled();
-        await managerPage.screenshot({
-          path: test.info().outputPath("legal-invoice-date-not-open-yet.png"),
-        });
+      if (invoiceStatus === "NOT_APPLICABLE") {
+        // No invoice is needed: there is nothing to register.
+        await expect(
+          checklist.getByTestId("closing-check-go-LEGAL_INVOICE_RECORDED"),
+        ).toHaveCount(0);
+      } else {
+        await expect(close).toHaveCount(0);
+
+        // The legal invoice, made out to the finance company (the dialog's
+        // default). The plan must balance: with no deposit, no customer gap and
+        // nothing deducted, revenue is exactly the 13,000 the company remits.
+        // The checklist's own link for the blocked check opens the same dialog
+        // (both call legalInvoice.onRecord); the card-header button shares the
+        // name, so a role+name lookup matches two elements.
+        await checklist.getByTestId("closing-check-go-LEGAL_INVOICE_RECORDED").click();
+        const invoiceDialog = managerPage.getByRole("dialog");
+        await invoiceDialog.locator("#legal-invoice-amount").fill("13000");
+        await invoiceDialog.locator("#legal-invoice-number").fill(`INV-E2E-${testDataSuffix()}`);
+        // SCRUM-596 (F-28): the invoice date is the paper's date. While the
+        // browser's day has not begun on the ledger's UTC clock (00:00-03:00 in
+        // Amman) nothing is pre-filled and saving waits for an explicit pick —
+        // never a silent move into the previous day. Either way the test picks
+        // the latest day the picker allows, which the server always accepts.
+        const invoiceDate = invoiceDialog.locator("#legal-invoice-date");
+        const save = invoiceDialog.getByRole("button", { name: "Save Legal Invoice" });
+        if (await invoiceDialog.locator("#legal-invoice-date-hint").isVisible()) {
+          await expect(invoiceDate).toHaveValue("");
+          await expect(save).toBeDisabled();
+          await managerPage.screenshot({
+            path: test.info().outputPath("legal-invoice-date-not-open-yet.png"),
+          });
+        }
+        const latestDay = await invoiceDate.getAttribute("max");
+        expect(latestDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+        await invoiceDate.fill(latestDay!);
+        await save.click();
+        await expect(invoiceDialog).not.toBeVisible();
+        await expect(invoiceCheck).toHaveAttribute("data-status", "READY");
       }
-      const latestDay = await invoiceDate.getAttribute("max");
-      expect(latestDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      await invoiceDate.fill(latestDay!);
-      await save.click();
-      await expect(invoiceDialog).not.toBeVisible();
-      await expect(
-        checklist.getByTestId("closing-check-LEGAL_INVOICE_RECORDED"),
-      ).toHaveAttribute("data-status", "READY");
 
-      // And now — and only now — closing is the step the rail names.
+      // Closing is the step the rail names (after the invoice, when one is required).
       await expect(close).toBeVisible();
       await close.click();
       const finalizeDialog = managerPage.getByRole("dialog");
