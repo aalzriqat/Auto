@@ -425,7 +425,9 @@ export async function depositForwardDisposition(
  * Per-slice, so a deposit the payment did not carry - one added after it was recorded - stays
  * spendable (the plan changed, so finalize refuses the stale payment on its own). A live version
  * with NO slices (recorded before slices existed) cannot say which deposits it carried, so it
- * holds back every deposit of its quote, as before.
+ * holds back every deposit of its quote, as before. The one exception is a payment that is
+ * provably contribution-only: stamped with a plan fingerprint (so recorded after slices existed)
+ * and `depositPortionMinor === 0`. It carried no deposit and wrote no slice by design.
  *
  * Call it at every mutation that SPENDS or MOVES a deposit. Finalize consumes the deposit into
  * the sale through `applyHeldDeposits`, which is the intended use and is not guarded.
@@ -456,8 +458,12 @@ export async function assertDepositNotInLiveForward(
         .query("financeCompanyForwardSlices")
         .withIndex("by_org_forward", (q) => q.eq("orgId", deposit.orgId).eq("forwardId", version.forwardId))
         .take(1);
-      // A live version with no slices cannot say which deposits it carried: hold the whole quote.
-      if (carried.length === 0) refusePaidOnward();
+      if (carried.length > 0) continue;
+      // A stamped payment that carried no deposit (H = 0, contribution only) writes no slice by design.
+      const row = await ctx.db.get(version.forwardId);
+      if (row !== null && row.orgId === deposit.orgId && row.planFingerprint !== undefined && row.depositPortionMinor === 0) continue;
+      // Any other live version with no slices cannot say which deposits it carried: hold the whole quote.
+      refusePaidOnward();
     }
   }
 }

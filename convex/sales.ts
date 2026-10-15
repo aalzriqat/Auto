@@ -17,6 +17,7 @@ import {
   consignedSettlementRouteValidator,
   isConsignedAgentSale,
   recordedConsignedMargin,
+  recordedFinancedConsideration,
   recordedFinancedNetRevenue,
   recordedSupplierEntitlement,
   recordedSupplierGrossReceipt,
@@ -2777,6 +2778,7 @@ export const dealCockpit = query({
       recordedMargin: recordedConsignedMargin(sale),
       recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
       recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+      recordedConsideration: recordedFinancedConsideration(sale),
       // The FACTS, not a pre-derived boolean: `saleIsAgentSale` asks the one
       // admissibility derivation itself, so this screen cannot reach a
       // different verdict than `saleEconomics` does about the same sale.
@@ -3096,6 +3098,7 @@ export const dealCockpit = query({
       recordedNetRevenue: recordedFinancedNetRevenue(sale, await getOrgCurrency(ctx, sale.orgId)),
       recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
       recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+      recordedConsideration: recordedFinancedConsideration(sale),
       // Always false on this screen in practice — `money` is already null for a
       // sale that HAS an application, because its real screen is the
       // application-keyed one. Passed rather than hardcoded so the two can never

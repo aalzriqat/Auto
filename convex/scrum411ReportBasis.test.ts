@@ -19,8 +19,9 @@
  * runtime and not production data.
  */
 import {
-  C, G, finalizeAsOwner, finalizeThenTakeForwardBack, readyDeal, seedFinancedDealership,
+  C, G, finalizeAsOwner, finalizeThenTakeForwardBack, newApplication, readyDeal, seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
+import { recordReconciledZeroCost, registerHandover } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -239,6 +240,86 @@ describe("SCRUM-411 - consigned car: reports agree with the ledger's net commiss
     expect(r.row.netProfit).toBe(-500);
     expect(r.report.totalRevenue).toBe(-500);
     expect(r.dashboardRevenue).toBe(-500);
+  });
+});
+
+describe("SCRUM-411 - consigned THROUGH_DEALERSHIP: the entitlement ceiling is the persisted consideration K", () => {
+  /**
+   * CodeRabbit 4276958526, driven end to end through public mutations - no `salePrice` patch.
+   *
+   * The reachable case is a financing-TERMS shortfall, which the net shortfall embeds and the
+   * gross (price - approved) does not: the quotation, its submitted figure and the approval are
+   * all 12,500, but the company approves at 90% where the quote-time LTV was 100%. The
+   * showroom's contribution rises 0 -> 1,250, so N = (12,500 - 0) - (12,500 - 1,250) = 1,250
+   * while price - approved = 0. `resolveAppraisalGap` bounds the customer's share by N alone,
+   * so the customer can absorb all 1,250 in cash: R = 1,250, K = A + R = 13,750, and finalize
+   * passes the quote's 12,500 as the sale price. K exceeds the price by R.
+   *
+   * A supplier entitlement E = 13,000 sits between the two: completion measures his position
+   * against K and accepts it, so every reader must publish it.
+   * Hand figures: commission K - E = 750; contribution 1,250; net 750 - 1,250 = -500.
+   */
+  async function closeWithEntitlementAbovePrice(tag: string) {
+    const s = await seed(tag, true);
+    const { applicationId } = await newApplication(s);
+    await s.owner.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "UNDER_REVIEW" });
+    await s.approver.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "APPROVED" });
+    await s.owner.as.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId: s.orgId, applicationId, route: "THROUGH_DEALERSHIP",
+    });
+    await s.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId, applicationId, submittedQuotationMinor: G, source: "MANUAL_ENTRY",
+    });
+    await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId, applicationId, approvedAmountMinor: G, appliedLtvPercent: 90, basis: "MANUAL",
+      notes: "Approved at the quotation, at a lower LTV.",
+    });
+    // The customer absorbs the whole terms shortfall, paid in cash to the dealership.
+    const served = await s.approver.as.query(api.applications.get, { orgId: s.orgId, applicationId });
+    await s.approver.as.mutation(api.financingEconomics.resolveAppraisalGap, {
+      orgId: s.orgId, applicationId, economicsStamp: served!.economicsStamp!,
+      customerGapShareMinor: 1_250_000, dealerGapShareMinor: 0,
+      customerGapCashToDealerMinor: 1_250_000, customerGapInstallmentToDealerMinor: 0,
+      customerGapToFinanceCompanyMinor: 0,
+    });
+    await registerHandover(s.owner.as, api, s.orgId, applicationId);
+    await s.owner.as.mutation(api.applications.registerExpectedPayment, {
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
+    });
+    await recordReconciledZeroCost(s.owner.as, api, s.orgId, applicationId);
+    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { sourceCost: 13_000 }));
+    await finalizeAsOwner(s, applicationId);
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    const sale = (await s.t.run((ctx) => ctx.db.get(app!.finalizedSaleId!)))!;
+    return { s, applicationId, saleId: sale._id, sale };
+  }
+
+  test("completion freezes K, the ledger nets -500, and every report publishes E 13,000 as the supplier's settlement", async () => {
+    const { s, applicationId, sale } = await closeWithEntitlementAbovePrice("ceil1");
+
+    // The reachable shape, asserted rather than assumed: net shortfall above price - approved.
+    const app = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(app!.netShortfallMinor).toBe(1_250_000);
+    expect(sale.salePrice).toBe(12_500);
+    expect(sale.consignedSupplierEntitlementMinor).toBe(13_000_000);
+    expect(sale.financedNetRevenue).toEqual({ minor: -500_000, currency: "JOD", considerationMinor: 13_750_000 });
+    expect(await ledgerNetRevenueMinor(s, "CONSIGNMENT_COMMISSION_REVENUE")).toBe(-500_000);
+
+    const r = await readEveryConsumer(s);
+    expect(r.row.isAgentSale).toBe(true);
+    expect(r.row.supplierSettlement).toBe(13_000);
+    expect(r.row.recognizedRevenue).toBe(-500);
+    expect(r.report.totalRevenue).toBe(-500);
+  });
+
+  test("a v3 row completed before K was recorded keeps the sale-price ceiling: the same entitlement is withheld", async () => {
+    const { s, saleId, sale } = await closeWithEntitlementAbovePrice("ceil2");
+    await s.t.run((ctx) =>
+      ctx.db.patch(saleId, { financedNetRevenue: { minor: sale.financedNetRevenue!.minor, currency: "JOD" } })
+    );
+
+    const r = await readEveryConsumer(s);
+    expect(r.row.supplierSettlement).toBeNull();
   });
 });
 

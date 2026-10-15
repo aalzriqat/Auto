@@ -218,7 +218,8 @@ describe("blocker 1 - the direct-route sale entry with a held deposit", () => {
     const claims = await s.t.run((ctx) => ctx.db.query("vehicleSupplierReceivables").collect());
     expect(claims.map((c) => c.amountDue)).toEqual([3_500]);
     const sale = (await s.t.run((ctx) => ctx.db.get(app.finalizedSaleId!)))!;
-    expect(sale.financedNetRevenue).toEqual({ minor: 2_625_000, currency: "JOD" });
+    // Net K - E - D = 2,625, beside the consideration K = A + R = 13,000 it was worked from.
+    expect(sale.financedNetRevenue).toEqual({ minor: 2_625_000, currency: "JOD", considerationMinor: 13_000_000 });
     const deposits = await s.t.run((ctx) => ctx.db.query("deposits").collect());
     expect(deposits.map((d) => d.status)).toEqual(["APPLIED"]);
   });

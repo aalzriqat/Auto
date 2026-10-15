@@ -25,7 +25,9 @@ import { describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { payOutDepositSlice, recordUnpostedDepositTreatment, releaseHeldDeposit } from "./utils/depositHelpers";
-import { assertDepositNotInLiveForward, depositForwardDisposition } from "./utils/financeCompanyForward";
+import {
+  FORWARD_VERSIONS_ONLY, assertDepositNotInLiveForward, depositForwardDisposition, deriveForwardState, forwardIsLive,
+} from "./utils/financeCompanyForward";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -142,6 +144,10 @@ const forwardsOf = (s: Seeded) => s.t.run((ctx) => ctx.db.query("financeCompanyF
 
 const dispositionOf = (s: Seeded, depositId: Id<"deposits">, holdId?: Id<"depositVehicleHolds">) =>
   s.t.run(async (ctx) => await depositForwardDisposition(ctx, (await ctx.db.get(depositId))!, holdId));
+
+/** Whether any version of the deal's payment is on the books or unsettled (versions only: the deal is not finalized). */
+const forwardLiveOf = (s: Seeded, applicationId: AppId) =>
+  s.t.run(async (ctx) => forwardIsLive(await deriveForwardState(ctx, (await ctx.db.get(applicationId))!, FORWARD_VERSIONS_ONLY)));
 
 /** The code the guard refuses with for this deposit (or hold), or null when it lets the spend through. */
 const guardCodeOf = async (s: Seeded, depositId: Id<"deposits">, holdId?: Id<"depositVehicleHolds">) => {
@@ -600,5 +606,55 @@ describe("P2-02 - a payment recorded before slices existed holds back the whole 
     await voidForward(s, applicationId, forwardId);
     expect(await refusalDataOf(voidDeposit(s, other))).toBeNull();
     expect(await refusalDataOf(release(s, depositId, "FORFEITED"))).toBeNull();
+  });
+});
+
+describe("P2-02 - a contribution-only payment (H = 0) carries no deposit", () => {
+  /** A deal that holds no deposit when the contribution D alone is paid onward: no slice is written. */
+  async function contributionOnlyDeal(tag: string) {
+    const s = await seed(tag);
+    const { applicationId, quoteId } = await readyDeal(s, { deposit: false });
+    const forwardId = await payForwardAsOwner(s, applicationId);
+    if (forwardId === null) throw new Error("fixture: the deal owes the finance company nothing");
+    return { s, applicationId, quoteId, forwardId };
+  }
+
+  test("a deposit taken after the payment stays spendable while the new-era H = 0 payment is on the books", async () => {
+    const { s, applicationId, quoteId, forwardId } = await contributionOnlyDeal("z1");
+    const forward = await s.t.run((ctx) => ctx.db.get(forwardId));
+    expect(forward?.depositPortionMinor).toBe(0);
+    expect(forward?.planFingerprint).toBeDefined();
+    expect(await slicesOf(s)).toEqual([]);
+    // The guard is only tested while the payment is on the books: a reversed one would pass anyway.
+    expect(await forwardLiveOf(s, applicationId)).toBe(true);
+
+    const toVoid = await rawDeposit(s, quoteId, 50_000);
+    const toForfeit = await rawDeposit(s, quoteId, 60_000);
+    expect(await guardCodeOf(s, toVoid)).toBeNull();
+    expect(await refusalDataOf(voidDeposit(s, toVoid))).toBeNull();
+    expect(await refusalDataOf(release(s, toForfeit, "FORFEITED"))).toBeNull();
+    // The payment itself is untouched, and still recoverable.
+    expect((await forwardsOf(s)).map((row) => row._id)).toEqual([forwardId]);
+    expect(await forwardLiveOf(s, applicationId)).toBe(true);
+    await voidForward(s, applicationId, forwardId);
+    // Recovered: the payment is no longer live, and the spends above left no slice behind.
+    expect(await forwardLiveOf(s, applicationId)).toBe(false);
+    expect(await slicesOf(s)).toEqual([]);
+  });
+
+  test("a legacy-shaped H = 0 payment (no plan fingerprint) is still held back: it cannot say what it carried", async () => {
+    const { s, quoteId, forwardId } = await contributionOnlyDeal("z2");
+    await s.t.run((ctx) => ctx.db.patch(forwardId, { planFingerprint: undefined }));
+    const later = await rawDeposit(s, quoteId, 50_000);
+    expect(await guardCodeOf(s, later)).toBe(GUARD);
+    expect((await refusalDataOf(voidDeposit(s, later)))?.code).toBe(GUARD);
+  });
+
+  test("a payment that claims a deposit portion but has no slices is still held back", async () => {
+    const { s, quoteId, forwardId } = await contributionOnlyDeal("z3");
+    await s.t.run((ctx) => ctx.db.patch(forwardId, { depositPortionMinor: H }));
+    const later = await rawDeposit(s, quoteId, 50_000);
+    expect(await guardCodeOf(s, later)).toBe(GUARD);
+    expect((await refusalDataOf(voidDeposit(s, later)))?.code).toBe(GUARD);
   });
 });

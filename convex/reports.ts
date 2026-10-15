@@ -21,6 +21,7 @@ import {
 import {
   saleEconomics,
   recordedConsignedMargin,
+  recordedFinancedConsideration,
   recordedFinancedNetRevenue,
   recordedSupplierEntitlement,
   recordedSupplierGrossReceipt,
@@ -180,6 +181,7 @@ export const getSalesAndProfitReport = query({
         recordedNetRevenue: recordedFinancedNetRevenue(sale, orgCurrency),
         recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
         recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+        recordedConsideration: recordedFinancedConsideration(sale),
         // The application that approved what the financier would pay. A frozen
         // receipt proves its amount, not its provenance — see the field's note.
         // PROVEN, not merely referenced: a Convex id carries no referential
@@ -819,6 +821,7 @@ export const getSalespersonPerformance = query({
           recordedNetRevenue: recordedFinancedNetRevenue(sale, orgCurrency),
           recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
           recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+          recordedConsideration: recordedFinancedConsideration(sale),
           hasFinancingApplication: verifiedFinancing.has(sale._id),
           externallyFinanced:
             sale.financingType === "FINANCED" || sale.financingType === "LEASE",

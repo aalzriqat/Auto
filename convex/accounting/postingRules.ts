@@ -904,7 +904,7 @@ interface SettlementFunding {
   serverDerivedConsideration: boolean;
   /** N - what the company will remit to the dealership. A direct-route plan must carry none. */
   financeReceivableMinor: number;
-  /** H - the deposit liability released. A direct-route plan must carry none. */
+  /** H - the deposit liability released. A direct-route plan may carry it: it is discharged against the amount owed onward to the finance company. */
   depositAppliedMinor: number;
 }
 
@@ -1176,7 +1176,8 @@ function consignedAgentSaleLines(
   // A, so the supplier now owes the dealership A - E (`marginMinor`, the claim the
   // subledger opens); the dealership's commission is the whole consideration over
   // the entitlement, K - E, because the customer's gap R is also the dealership's
-  // to collect. The contribution D is contra-revenue owed onward to the company.
+  // to collect. The contribution D is contra-revenue owed onward to the company, and
+  // any held deposit H is discharged against that same amount owed onward.
   const directV3 = consignment.settlementRoute === "DIRECT_TO_SUPPLIER" && funding?.serverDerivedConsideration === true;
   if (directV3 && funding) {
     // A v3 direct plan opens no finance receivable; one that does is a
@@ -1217,8 +1218,8 @@ function consignedAgentSaleLines(
   //
   // DIRECT_TO_SUPPLIER is excluded because the company pays the supplier, so the
   // dealership holds no finance receivable and no gross to bridge. A v3 plan on
-  // that route carries only the contribution and the customer's gap, which the
-  // direct branch below posts itself (`directV3`).
+  // that route carries the contribution, any held deposit H and the customer's
+  // gap, which the direct branch below posts itself (`directV3`).
   if (consignment.settlementRoute !== "DIRECT_TO_SUPPLIER") {
     // FAIL CLOSED. A consigned sale financed by a configured company funds its
     // gross from that company, which is the legal buyer of the car. Falling
@@ -1292,7 +1293,8 @@ function consignedAgentSaleLines(
             ...(marginMinor > 0
               ? [line(SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, marginMinor, 0, `Commission due from ${supplier}`, dims)]
               : []),
-            // The contribution, owed onward to the company (contra-revenue / AP-finance).
+            // The contribution D (contra-revenue) and any held deposit H (Dr deposit liability),
+            // both against the amount owed onward to the company (AP-finance).
             ...funding.lines,
             ...(funding.customerReceivableMinor > 0
               ? [line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, funding.customerReceivableMinor, 0, "Consigned sale — customer's own share", dims)]

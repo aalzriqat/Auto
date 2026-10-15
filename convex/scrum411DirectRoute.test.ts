@@ -158,7 +158,7 @@ describe("SCRUM-411 - direct-to-supplier financed sourced deal: plan v3 and its 
     expect(financeReceivables.filter((r) => r.payerType === "FINANCE_COMPANY")).toEqual([]);
 
     // The frozen net revenue the reports read is K - E - D = 2,125.
-    expect(sale.financedNetRevenue).toEqual({ minor: 2_125_000, currency: "JOD" });
+    expect(sale.financedNetRevenue).toEqual({ minor: 2_125_000, currency: "JOD", considerationMinor: 12_500_000 });
   });
 
   test("no legal invoice is needed or invented: the deal closes with none, and the stored plan carries no invoice figure", async () => {
@@ -202,7 +202,7 @@ describe("SCRUM-411 - direct-to-supplier financed sourced deal: plan v3 and its 
 
     const claims = await s.t.run((ctx) => ctx.db.query("vehicleSupplierReceivables").collect());
     expect(claims.filter((c) => c.saleId === saleId).map((c) => c.amountDue)).toEqual([3_500]);
-    expect(sale.financedNetRevenue).toEqual({ minor: 2_625_000, currency: "JOD" });
+    expect(sale.financedNetRevenue).toEqual({ minor: 2_625_000, currency: "JOD", considerationMinor: 13_000_000 });
 
     // The canonical customer invoice bills exactly the gap the ledger debits.
     const invoices = await s.t.run((ctx) => ctx.db.query("receivableDocuments").collect());

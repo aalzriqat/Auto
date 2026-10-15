@@ -9,6 +9,7 @@ import { isCashOutExpense, isShowroomBorne } from "./utils/costBearer";
 import { verifiedFinancingApplicationSaleIds } from "./utils/financingProvenance";
 import {
   recordedConsignedMargin,
+  recordedFinancedConsideration,
   recordedFinancedNetRevenue,
   recordedSupplierEntitlement,
   recordedSupplierGrossReceipt,
@@ -619,6 +620,7 @@ export const stats = query({
           recordedNetRevenue: recordedFinancedNetRevenue(sale, orgCurrency),
           recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
           recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+          recordedConsideration: recordedFinancedConsideration(sale),
           hasFinancingApplication: verifiedFinancing.has(sale._id),
           externallyFinanced:
             sale.financingType === "FINANCED" || sale.financingType === "LEASE",

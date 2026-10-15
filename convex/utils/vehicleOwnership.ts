@@ -383,6 +383,23 @@ export function recordedFinancedNetRevenue(
 }
 
 /**
+ * The consideration K = A + R a plan-v3 financed sale was completed under, frozen beside
+ * `financedNetRevenue` and in major units. It is the most a THROUGH_DEALERSHIP supplier's
+ * entitlement can be on that sale (see `entitlementCeiling`).
+ *
+ * `undefined` for every row that does not carry it (v1/v2, cash, or a v3 completed before it
+ * was recorded): those keep the sale-price ceiling. It must be in the SAME denomination as
+ * the entitlement it bounds, so a currency that is not `consignedMarginCurrency`, an
+ * unsupported one, or an amount that is not a valid minor amount is withheld, never guessed.
+ */
+export function recordedFinancedConsideration(sale: Doc<"sales">): number | undefined {
+  const frozen = sale.financedNetRevenue;
+  if (frozen === undefined || frozen.considerationMinor === undefined) return undefined;
+  if (frozen.currency !== sale.consignedMarginCurrency) return undefined;
+  return recordedConsignedAmount(frozen.considerationMinor, frozen.currency);
+}
+
+/**
  * One reader for all three frozen consigned amounts, because they are one basis.
  *
  * ⚠️ CX-D. Each of the three used to call `fromMinorUnits(minor, currency)`, and
@@ -512,9 +529,19 @@ function entitlementCeiling(
   args: {
     salePrice: number;
     recordedSupplierGrossReceipt?: number;
+    recordedConsideration?: number;
   } & ReceiptAdmissibilityFacts
 ): number {
-  if (!supplierReceiptIsAdmissible(args)) return args.salePrice;
+  if (!supplierReceiptIsAdmissible(args)) {
+    // SCRUM-411 plan v3, THROUGH_DEALERSHIP only: completion measured the supplier's position
+    // against the sale's own consideration K = A + R, which exceeds the operational price when
+    // the customer absorbs a net shortfall. A row without a persisted K (every earlier plan)
+    // keeps the sale price.
+    const throughConsideration = dealershipCollectsGross(consignedSettlementRoute(args))
+      ? args.recordedConsideration
+      : undefined;
+    return throughConsideration ?? args.salePrice;
+  }
   return verifiedSupplierReceiptFor(args.recordedSupplierGrossReceipt) ?? args.salePrice;
 }
 
@@ -639,6 +666,8 @@ export function saleIsAgentSale(args: {
    * economics must not disagree about which entitlements are believable.
    */
   recordedSupplierGrossReceipt?: number;
+  /** `recordedFinancedConsideration` - bounds a THROUGH_DEALERSHIP v3 entitlement; see `entitlementCeiling`. */
+  recordedConsideration?: number;
 } & ReceiptAdmissibilityFacts): boolean {
   if (args.vehicle !== null) return isConsignedAgentSale(args.vehicle);
   // Derived HERE from the route rather than accepted as a boolean. Three call
@@ -739,6 +768,13 @@ export function saleEconomics(args: {
    */
   recordedSupplierGrossReceipt?: number;
   /**
+   * SCRUM-411 plan v3: the consideration K = A + R the sale was completed under
+   * (`recordedFinancedConsideration`). On THROUGH_DEALERSHIP it, not the operational
+   * `salePrice`, bounds the supplier's entitlement, because completion measured his position
+   * against it. Absent keeps the sale-price ceiling; never consulted on the direct route.
+   */
+  recordedConsideration?: number;
+  /**
    * Whether the sale carries an `applicationId` — the finance application that
    * approved what the financier would pay.
    *
@@ -809,6 +845,7 @@ export function saleEconomics(args: {
     recordedMargin: args.recordedMargin,
     recordedSupplierEntitlement: args.recordedSupplierEntitlement,
     recordedSupplierGrossReceipt: args.recordedSupplierGrossReceipt,
+    recordedConsideration: args.recordedConsideration,
     supplierSettlementRoute: args.supplierSettlementRoute,
     externallyFinanced: args.externallyFinanced,
   });

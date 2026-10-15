@@ -146,6 +146,7 @@ import {
   directSettlementBelowEntitlementRefusal,
   isConsignedAgentSale,
   recordedConsignedMargin,
+  recordedFinancedConsideration,
   recordedSupplierEntitlement,
   recordedSupplierGrossReceipt,
   saleIsAgentSale,
@@ -913,6 +914,7 @@ async function loadDealRoute(ctx: QueryCtx | MutationCtx, app: Doc<"financeAppli
         recordedMargin: recordedConsignedMargin(sale),
         recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
         recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
+        recordedConsideration: recordedFinancedConsideration(sale),
         // The FACTS, not a pre-derived boolean — see `supplierReceiptIsAdmissible`.
         supplierSettlementRoute: sale.supplierSettlementRoute,
         externallyFinanced:

@@ -2059,11 +2059,17 @@ export default defineSchema({
      * `consignedMarginMinor` reading for those, exactly as before. Distinct from
      * `consignedMarginMinor`, which stays the commission / supplier-claim basis
      * (K - E) and is not netted of the contribution.
+     *
+     * `considerationMinor` is that consideration K = A + R itself, in the same
+     * `currency`, frozen in the same patch. It bounds a THROUGH_DEALERSHIP supplier's
+     * entitlement for the readers (K exceeds the operational `salePrice` when the customer
+     * absorbs a net shortfall). Absent on a v3 sale completed before it was recorded.
      */
     financedNetRevenue: v.optional(
       v.object({
         minor: v.number(),
         currency: v.string(),
+        considerationMinor: v.optional(v.number()),
       })
     ),
     /**

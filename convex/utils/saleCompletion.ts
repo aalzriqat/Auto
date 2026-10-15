@@ -1658,7 +1658,12 @@ async function applySaleCompletionSideEffects(
       );
     }
     await ctx.db.patch(saleId, {
-      financedNetRevenue: { minor: frozenNetRevenueMinor, currency: prepared.currency },
+      financedNetRevenue: {
+        minor: frozenNetRevenueMinor,
+        currency: prepared.currency,
+        // K, frozen beside the net so the readers bound the entitlement by what completion did.
+        considerationMinor: serverConsiderationMinor,
+      },
     });
   }
 
