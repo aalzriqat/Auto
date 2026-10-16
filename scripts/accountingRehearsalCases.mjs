@@ -282,7 +282,7 @@ export function candidateNamesReceiptBank(source) {
   const argsAt = declaration.indexOf("args: {");
   const handlerAt = declaration.indexOf("handler:", argsAt);
   if (argsAt < 0 || handlerAt < 0) return undefined;
-  return /^\s*bankAccountId\s*:/m.test(declaration.slice(argsAt, handlerAt));
+  return /^[ \t]*bankAccountId[ \t]*:/m.test(declaration.slice(argsAt, handlerAt));
 }
 
 export async function runRehearsalCases(ctx) {
