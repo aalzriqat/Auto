@@ -270,10 +270,19 @@ export function candidateNamesReceiptBank(source) {
   if (typeof source !== "string") return undefined;
   const at = source.indexOf("export const confirmDisbursement = mutation({");
   if (at < 0) return undefined;
-  const argsAt = source.indexOf("args: {", at);
-  const handlerAt = source.indexOf("handler:", argsAt);
+  // Bound everything to the target declaration so shared args (`args: sharedArgs`) can
+  // never borrow a later declaration's inline args, exported or not. The body is
+  // indented; it ends at the first column-0 line after the header that is not a
+  // closing `}` / `)` (the next statement, export or comment).
+  const headerEnd = source.indexOf("\n", at);
+  if (headerEnd < 0) return undefined;
+  const afterHeader = source.slice(headerEnd + 1);
+  const nextTopLevel = afterHeader.search(/^[^\s})\]]/m);
+  const declaration = source.slice(at, nextTopLevel < 0 ? source.length : headerEnd + 1 + nextTopLevel);
+  const argsAt = declaration.indexOf("args: {");
+  const handlerAt = declaration.indexOf("handler:", argsAt);
   if (argsAt < 0 || handlerAt < 0) return undefined;
-  return /^\s*bankAccountId\s*:/m.test(source.slice(argsAt, handlerAt));
+  return /^\s*bankAccountId\s*:/m.test(declaration.slice(argsAt, handlerAt));
 }
 
 export async function runRehearsalCases(ctx) {

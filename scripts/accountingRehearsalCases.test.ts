@@ -3171,6 +3171,13 @@ describe("evidence-floor closure — the assertions detect incorrect results", (
       const withoutBank = "export const other = mutation({ args: { bankAccountId: v.id(\"bankAccounts\") }, handler: async () => {} });\nexport const confirmDisbursement = mutation({\n  args: {\n    // bankAccountId: not yet\n    orgId: v.id(\"organizations\"),\n  },\n  handler: async () => {},\n});";
       expect(candidateNamesReceiptBank(withBank)).toBe(true);
       expect(candidateNamesReceiptBank(withoutBank)).toBe(false);
+      // Shared args (no inline block) cannot be read, and a LATER export's bankAccountId
+      // must never be attributed to the target: unknown, not true.
+      const sharedArgs = "export const confirmDisbursement = mutation({\n  args: sharedArgs,\n  handler: async () => {},\n});\nexport const later = mutation({\n  args: {\n    bankAccountId: v.id(\"bankAccounts\"),\n  },\n  handler: async () => {},\n});";
+      expect(candidateNamesReceiptBank(sharedArgs)).toBeUndefined();
+      // ...including a later NON-exported top-level declaration, which `^export` would not stop at.
+      const sharedArgsThenHelper = "export const confirmDisbursement = mutation({\n  args: sharedArgs,\n  handler: async () => {},\n});\n\nconst helper = internalMutation({\n  args: {\n    bankAccountId: v.id(\"bankAccounts\"),\n  },\n  handler: async () => {},\n});";
+      expect(candidateNamesReceiptBank(sharedArgsThenHelper)).toBeUndefined();
       expect(candidateNamesReceiptBank("export const nothing = 1;")).toBeUndefined();
       expect(candidateNamesReceiptBank(undefined)).toBeUndefined();
     });
