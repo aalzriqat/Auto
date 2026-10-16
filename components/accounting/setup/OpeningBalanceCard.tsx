@@ -143,8 +143,11 @@ export function OpeningBalanceCard() {
   const filledLines = lines.filter(
     (line) => line.accountId && (Number(line.debit) > 0 || Number(line.credit) > 0)
   );
+  // A chosen bank counts only while it is still offered: a bank deactivated, or a currency
+  // changed, after the choice leaves a stale id that the server would refuse.
+  const selectableBankIds = new Set(selectableBanks.map((bank) => bank._id as string));
   const bankChosenForEveryBankLine = filledLines.every(
-    (line) => !bankControlIds.has(line.accountId) || Boolean(line.bankAccountId)
+    (line) => !bankControlIds.has(line.accountId) || selectableBankIds.has(line.bankAccountId)
   );
   const canSubmit =
     Boolean(activeOrgId) &&

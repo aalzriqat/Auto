@@ -9,11 +9,11 @@
 import { v, ConvexError } from "convex/values";
 import { query, MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
-import { Doc, Id } from "./_generated/dataModel";
-import { requireTenantAuth } from "./utils/tenancy";
+import { Id } from "./_generated/dataModel";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { assertDifferentActors } from "./utils/financialGuards";
-import { requireActiveBankInCurrency } from "./utils/bankAccountGuards";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { hookCashDrawerDeposited, getOrgCurrency } from "./accounting/workflowHooks";
 
 const movementTypeValidator = v.union(
@@ -44,15 +44,6 @@ async function computeExpectedCashMinor(
     else if (m.type === "PAYOUT") expected -= m.amountMinor;
   }
   return expected;
-}
-
-/** A bank a deposit may name: this org's, live, active and in the session's currency. */
-function isDepositBank(
-  bank: Doc<"bankAccounts"> | null,
-  orgId: Id<"organizations">,
-  currency: string
-): bank is Doc<"bankAccounts"> {
-  return bank !== null && bank.orgId === orgId && !bank.isDeleted && bank.isActive && bank.currency === currency;
 }
 
 async function requireDepositBank(
@@ -299,17 +290,16 @@ export const listDepositBankOptions = query({
   args: { orgId: v.id("organizations"), sessionId: v.id("cashDrawerSessions") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
-    const session = await ctx.db.get(args.sessionId);
-    if (!session || session.orgId !== args.orgId) {
-      throw new ConvexError("Cash drawer session not found in this organization.");
-    }
-    const banks = await ctx.db
-      .query("bankAccounts")
-      .withIndex("by_org_active", (q) => q.eq("orgId", args.orgId).eq("isActive", true))
-      .take(100);
-    return banks
-      .filter((bank) => isDepositBank(bank, args.orgId, session.currency))
-      .map((bank) => ({ _id: bank._id, name: bank.name, currency: bank.currency }));
+    const session = await requireOwnedRow(
+      ctx,
+      args.orgId,
+      "cashDrawerSessions",
+      args.sessionId,
+      "Cash drawer session not found in this organization."
+    );
+    // Read by the session's currency, so other currencies never crowd out an eligible bank;
+    // more eligible banks than the limit is `truncated`, never a partial list.
+    return await listEligibleBanks(ctx, args.orgId, session.currency);
   },
 });
 

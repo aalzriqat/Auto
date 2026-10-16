@@ -138,7 +138,7 @@ import {
   voidCanonicalPayment,
 } from "./subledger";
 import { disbursementVersionOf, financeDisbursementKeys } from "./utils/financeDisbursementKeys";
-import { requireActiveBankInCurrency } from "./utils/bankAccountGuards";
+import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { summarizeFees } from "./financeDealCosts";
 import {
   consignedSettlementRoute,
@@ -5311,9 +5311,6 @@ export const finalizeDeal = mutation({
   },
 });
 
-/** SCRUM-54: the most active banks the receipt picker will read before it refuses to guess. */
-const DISBURSEMENT_BANK_OPTIONS_LIMIT = 100;
-
 /**
  * SCRUM-54: what the confirm-receipt dialog needs to name the physical bank.
  * `needsBank` is the server's own answer (the registered method is not CASH);
@@ -5333,22 +5330,10 @@ export const listDisbursementBankOptions = query({
     // unknowable, so this is its own state - never an empty list that reads as "no bank".
     const receivable = await findFinanceReceivable(ctx, app);
     if (!receivable) return { needsBank, banks: [], truncated: false, receivableMissing: true };
-    const page = await ctx.db
-      .query("bankAccounts")
-      .withIndex("by_org_active", (q) => q.eq("orgId", args.orgId).eq("isActive", true))
-      .take(DISBURSEMENT_BANK_OPTIONS_LIMIT + 1);
-    // Fail closed on truncation: the active-bank index is not keyed by currency, so a
-    // page that was cut short cannot say whether an eligible bank lies beyond it. An
-    // empty list would then claim "no eligible bank" falsely; report truncation instead.
-    if (page.length > DISBURSEMENT_BANK_OPTIONS_LIMIT) return { needsBank, banks: [], truncated: true, receivableMissing: false };
-    return {
-      needsBank,
-      truncated: false,
-      receivableMissing: false,
-      banks: page
-        .filter((bank) => !bank.isDeleted && bank.currency === receivable.currency)
-        .map((bank) => ({ _id: bank._id, name: bank.name, currency: bank.currency })),
-    };
+    // Read by currency, so banks in other currencies never crowd out an eligible one; more
+    // eligible banks than the limit is reported as truncation, never as a partial list.
+    const { banks, truncated } = await listEligibleBanks(ctx, args.orgId, receivable.currency);
+    return { needsBank, banks, truncated, receivableMissing: false };
   },
 });
 

@@ -310,7 +310,12 @@ function ApproveDrawerDialog({
     api.cashDrawer.listDepositBankOptions,
     activeOrgId && session && needsBank ? { orgId: activeOrgId, sessionId: session._id } : "skip"
   );
-  const noEligibleBank = needsBank && bankOptions !== undefined && bankOptions.length === 0;
+  const banks = bankOptions?.banks;
+  // Too many banks to list is its own state: never "no bank", and nothing can be chosen.
+  const bankListTruncated = needsBank && bankOptions?.truncated === true;
+  const noEligibleBank = needsBank && banks !== undefined && !bankListTruncated && banks.length === 0;
+  // A choice the server no longer offers (the list moved while the dialog was open) cannot be submitted.
+  const chosenBankOffered = banks?.some((bank) => bank._id === bankAccountId) === true;
 
   function handleOpenChange(nextOpen: boolean) {
     if (!nextOpen) setBankAccountId("");
@@ -347,12 +352,16 @@ function ApproveDrawerDialog({
         {needsBank && (
           <div className="space-y-2">
             <p className="text-sm font-medium">{formatAmount(depositMinor)}</p>
-            <Select value={bankAccountId} onValueChange={setBankAccountId} disabled={bankOptions === undefined || noEligibleBank}>
+            <Select
+              value={chosenBankOffered ? bankAccountId : ""}
+              onValueChange={setBankAccountId}
+              disabled={bankOptions === undefined || noEligibleBank || bankListTruncated}
+            >
               <SelectTrigger aria-label={t("CashDrawerDepositBank" as any)}>
                 <SelectValue placeholder={t(bankOptions === undefined ? "CashDrawerLoadingBanks" : "CashDrawerSelectBank" as any)} />
               </SelectTrigger>
               <SelectContent className="max-h-72">
-                {(bankOptions ?? []).map((bank) => (
+                {(banks ?? []).map((bank) => (
                   <SelectItem key={bank._id} value={bank._id}>
                     <bdi>{bank.name}</bdi>
                     {" · "}
@@ -362,13 +371,16 @@ function ApproveDrawerDialog({
               </SelectContent>
             </Select>
             {noEligibleBank && (
-              <p className="text-xs text-amber-700 dark:text-amber-300">{t("CashDrawerNoDepositBank" as any)}</p>
+              <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t("CashDrawerNoDepositBank" as any)}</p>
+            )}
+            {bankListTruncated && (
+              <p role="alert" className="text-xs text-amber-700 dark:text-amber-300">{t("CashDrawerTooManyBanks" as any)}</p>
             )}
           </div>
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => handleOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button onClick={submit} disabled={submitting || (needsBank && !bankAccountId)}>
+          <Button onClick={submit} disabled={submitting || (needsBank && !chosenBankOffered)}>
             {submitting ? t("Saving" as any) : t("Approve" as any)}
           </Button>
         </DialogFooter>

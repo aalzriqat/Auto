@@ -10,6 +10,32 @@ import { requireOwnedRow } from "./tenancy";
 
 const BANK_NOT_FOUND_MESSAGE = "The selected bank account was not found in this organization.";
 
+/** The most eligible banks a picker reads before it reports truncation instead of guessing. */
+export const BANK_OPTIONS_LIMIT = 100;
+
+/**
+ * SCRUM-54: the banks a picker may offer - this org's, live, active and in `currency`
+ * (the same test `requireActiveBankInCurrency` applies). Read through the currency index,
+ * so other currencies never consume the limit. More than the limit is reported as
+ * `truncated` with no banks, never as a silently incomplete list. Only id, name and
+ * currency leave, never IBAN or account numbers.
+ */
+export async function listEligibleBanks(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  currency: string
+): Promise<{ banks: Array<{ _id: Id<"bankAccounts">; name: string; currency: string }>; truncated: boolean }> {
+  const page = await ctx.db
+    .query("bankAccounts")
+    .withIndex("by_org_active_currency", (q) => q.eq("orgId", orgId).eq("isActive", true).eq("currency", currency))
+    .take(BANK_OPTIONS_LIMIT + 1);
+  if (page.length > BANK_OPTIONS_LIMIT) return { banks: [], truncated: true };
+  return {
+    banks: page.filter((bank) => !bank.isDeleted).map((bank) => ({ _id: bank._id, name: bank.name, currency: bank.currency })),
+    truncated: false,
+  };
+}
+
 export async function requireActiveBankInCurrency(
   ctx: QueryCtx | MutationCtx,
   args: {

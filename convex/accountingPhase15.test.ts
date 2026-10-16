@@ -417,7 +417,71 @@ describe("Phase 15 — variance approval and bank deposit", () => {
     await insertBank(ctx, { orgId: otherOrg, name: "Foreign" });
 
     const options = await ctx.asManager.query(api.cashDrawer.listDepositBankOptions, { orgId: ctx.orgId, sessionId });
-    expect(options).toEqual([{ _id: good, name: "Good bank", currency: "JOD" }]);
+    expect(options).toEqual({ banks: [{ _id: good, name: "Good bank", currency: "JOD" }], truncated: false });
+  });
+
+  describe("the bank picker is bounded by the session's currency and never silently incomplete", () => {
+    const insertMany = (ctx: Ctx, count: number, currency: string) =>
+      ctx.t.run(async (c) => {
+        const now = Date.now();
+        for (let i = 0; i < count; i++) {
+          await c.db.insert("bankAccounts", {
+            orgId: ctx.orgId, name: `Bulk ${currency} ${i}`, currency, openingBalanceMinor: 0, openingBalanceDate: now,
+            isActive: true, isReconciliationTarget: false, createdBy: ctx.managerId, createdAt: now, updatedAt: now,
+          });
+        }
+      });
+
+    test("more than 100 banks in other currencies do not hide or truncate the eligible bank", async () => {
+      const ctx = await seedDrawerDealer();
+      const sessionId = await closedSession(ctx, 0, 400_000, 400_000);
+      await insertMany(ctx, 150, "USD");
+      const good = await insertBank(ctx, { name: "Good bank" });
+
+      const options = await ctx.asManager.query(api.cashDrawer.listDepositBankOptions, { orgId: ctx.orgId, sessionId });
+      expect(options).toEqual({ banks: [{ _id: good, name: "Good bank", currency: "JOD" }], truncated: false });
+    });
+
+    test("more than 100 eligible banks report truncation with no banks, never a partial list; exactly 100 are listed", async () => {
+      const ctx = await seedDrawerDealer();
+      const sessionId = await closedSession(ctx, 0, 400_000, 400_000);
+      await insertMany(ctx, 100, "JOD");
+      const atLimit = await ctx.asManager.query(api.cashDrawer.listDepositBankOptions, { orgId: ctx.orgId, sessionId });
+      expect(atLimit.truncated).toBe(false);
+      expect(atLimit.banks).toHaveLength(100);
+
+      await insertMany(ctx, 1, "JOD");
+      const over = await ctx.asManager.query(api.cashDrawer.listDepositBankOptions, { orgId: ctx.orgId, sessionId });
+      expect(over).toEqual({ banks: [], truncated: true });
+    });
+
+    test("a session of another organization is refused", async () => {
+      const ctx = await seedDrawerDealer();
+      const otherOrg = await ctx.t.run((c) => c.db.insert("organizations", { name: "Other Dealer", createdAt: Date.now() }));
+      const foreignSession = await ctx.t.run((c) =>
+        c.db.insert("cashDrawerSessions", {
+          orgId: otherOrg, openingFloatMinor: 0, currency: "JOD", openedBy: ctx.managerId, openedAt: Date.now(), status: "CLOSED",
+        })
+      );
+      await expect(
+        ctx.asManager.query(api.cashDrawer.listDepositBankOptions, { orgId: ctx.orgId, sessionId: foreignSession })
+      ).rejects.toThrow("Cash drawer session not found in this organization.");
+    });
+
+    test("a bank deactivated after it was listed is refused at approval", async () => {
+      const ctx = await seedDrawerDealer();
+      const sessionId = await closedSession(ctx, 0, 400_000, 400_000);
+      const bankAccountId = await insertBank(ctx);
+      const listed = await ctx.asManager.query(api.cashDrawer.listDepositBankOptions, { orgId: ctx.orgId, sessionId });
+      expect(listed.banks.map((b) => b._id)).toEqual([bankAccountId]);
+
+      await ctx.t.run((c) => c.db.patch(bankAccountId, { isActive: false }));
+
+      await expect(
+        ctx.asManager.mutation(api.cashDrawer.approveVariance, { orgId: ctx.orgId, sessionId, bankAccountId })
+      ).rejects.toThrow(/inactive/i);
+      expect((await approvalEffects(ctx, sessionId)).session?.status).toBe("CLOSED");
+    });
   });
 
   test("viewing finance alone does not expose the bank picker", async () => {

@@ -360,9 +360,8 @@ describe("SCRUM-54 - a finance-company receipt names the physical bank", () => {
     expect(options.receivableMissing).toBe(false);
   });
 
-  test("the bank options fail closed when more than 100 active banks exist: truncated, never a false 'none'", async () => {
+  test("more than 100 banks in other currencies never hide or truncate the eligible bank; more than 100 eligible banks report truncation, never a partial list", async () => {
     const { s, applicationId } = await finalizedDeal("optstrunc", "BANK_TRANSFER", "MANUAL");
-    // 99 USD banks and one eligible JOD bank = exactly 100 active banks: still listed in full.
     const insertMany = (count: number, currency: string) =>
       s.t.run(async (ctx) => {
         const now = Date.now();
@@ -373,15 +372,21 @@ describe("SCRUM-54 - a finance-company receipt names the physical bank", () => {
           });
         }
       });
-    await insertMany(99, "USD");
+    // 150 active USD banks (created first, so they precede the eligible one) must not crowd it out.
+    await insertMany(150, "USD");
     const eligible = await insertBank(s);
+    const foreignHeavy = await s.owner.query(api.applications.listDisbursementBankOptions, { orgId: s.orgId, applicationId });
+    expect(foreignHeavy.truncated).toBe(false);
+    expect(foreignHeavy.banks.map((b) => b._id)).toEqual([eligible]);
+
+    // Exactly 100 eligible banks are still listed in full.
+    await insertMany(99, "JOD");
     const atLimit = await s.owner.query(api.applications.listDisbursementBankOptions, { orgId: s.orgId, applicationId });
     expect(atLimit.truncated).toBe(false);
-    expect(atLimit.banks.map((b) => b._id)).toEqual([eligible]);
+    expect(atLimit.banks).toHaveLength(100);
 
-    // One more active bank (any currency) pushes the org past what can be read: the server
-    // cannot prove whether an eligible bank lies beyond, so it reports truncation, not "none".
-    await insertMany(1, "USD");
+    // One more eligible bank passes what can be read: truncated with no banks, never a partial list.
+    await insertMany(1, "JOD");
     const overLimit = await s.owner.query(api.applications.listDisbursementBankOptions, { orgId: s.orgId, applicationId });
     expect(overLimit).toEqual({ needsBank: true, banks: [], truncated: true, receivableMissing: false });
   });

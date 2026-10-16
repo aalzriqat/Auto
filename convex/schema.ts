@@ -5484,7 +5484,9 @@ export default defineSchema({
     deletedBy: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
-    .index("by_org_active", ["orgId", "isActive"]),
+    // SCRUM-54: the receipt / deposit bank pickers read only the banks in the one currency a
+    // bank must match, so a long list in other currencies cannot crowd out an eligible bank.
+    .index("by_org_active_currency", ["orgId", "isActive", "currency"]),
 
   // Uploaded bank-statement rows for the reconciliation-target bank account,
   // matched against posted journalLines on SYSTEM_KEYS.BANK_ACCOUNT.

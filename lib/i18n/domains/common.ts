@@ -1380,6 +1380,8 @@ export const commonEn = {
   CashDrawerLoadingBanks: "Loading bank accounts...",
   CashDrawerNoDepositBank:
     "There is no active bank account in this currency. Add one under Bank Accounts before approving this deposit.",
+  CashDrawerTooManyBanks:
+    "This currency has too many active bank accounts to list here, so the deposit cannot be approved from this screen. Deactivate the accounts that are no longer used, then try again.",
   ConfirmCashDrawerApprovalNoDeposit: "Approve this cash drawer count? Nothing was counted, so no bank deposit will be made.",
   Payments: "Payments",
   CollectionOutstanding: "Outstanding",
@@ -2387,6 +2389,8 @@ export const commonAr = {
   CashDrawerLoadingBanks: "جاري تحميل الحسابات المصرفية...",
   CashDrawerNoDepositBank:
     "لا يوجد حساب مصرفي نشط بهذه العملة. أضف حساباً من الحسابات المصرفية قبل اعتماد هذا الإيداع.",
+  CashDrawerTooManyBanks:
+    "عدد الحسابات المصرفية النشطة بهذه العملة أكبر من أن يُعرض هنا، لذا لا يمكن اعتماد الإيداع من هذه الشاشة. عطّل الحسابات غير المستخدمة ثم حاول مجدداً.",
   ConfirmCashDrawerApprovalNoDeposit: "اعتماد عدّ صندوق النقد؟ لم يُعدّ أي نقد، لذا لن يتم أي إيداع مصرفي.",
   Payments: "الدفعات",
   CollectionOutstanding: "المتبقي",
