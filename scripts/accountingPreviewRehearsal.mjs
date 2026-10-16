@@ -51,6 +51,7 @@
  * canonical payments, ledger effects, remaining balance — and asserts on that.
  */
 import { spawn, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { isPreviewDeployKey } from "./e2ePreviewBootstrap.mjs";
@@ -493,6 +494,24 @@ export function summarize(results) {
   };
 }
 
+/**
+ * FD1's SCRUM-54 bank-contract input, from trusted provenance only.
+ *
+ * The tested merge is checked out BESIDE this trusted checkout (`../candidate`) and
+ * read as data; an unreadable source is `undefined`, which leaves FD1 UNPROVEN.
+ * The bank receipt contract itself is unconditional: FD1 fails unless the candidate
+ * source and the deployed backend both take the physical bank.
+ */
+export function fd1BankContractInputs({ cwd, readText = (file) => readFileSync(file, "utf8") }) {
+  let candidateSource;
+  try {
+    candidateSource = readText(path.join(cwd, "..", "candidate", "convex", "applications.ts"));
+  } catch {
+    candidateSource = undefined;
+  }
+  return { candidateSource };
+}
+
 /* c8 ignore start — the orchestration below only runs inside CI against a preview. */
 export async function main(env = process.env) {
   const config = assertRehearsalEnv(env);
@@ -570,8 +589,10 @@ export async function main(env = process.env) {
   evidence.orgId = orgId;
 
   const results = evidence.cases;
-  const { runRehearsalCases } = await import("./accountingRehearsalCases.mjs");
+  const { runRehearsalCases, candidateNamesReceiptBank } = await import("./accountingRehearsalCases.mjs");
+  const fd1Bank = fd1BankContractInputs({ cwd: process.cwd() });
   await runRehearsalCases({
+    candidateFinanceReceiptNamesBank: candidateNamesReceiptBank(fd1Bank.candidateSource),
     results,
     orgId,
     config,

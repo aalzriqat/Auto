@@ -260,6 +260,31 @@ export async function reconcileDealFeeCompat(call, { orgId, applicationId, feeId
   return call("mutation", "financeDealCosts:reconcileDealFee", { orgId, feeId, notes });
 }
 
+/**
+ * Whether the tested source's `applications:confirmDisbursement` args declare a
+ * `bankAccountId`. Pure text analysis of the candidate's source as DATA; it never
+ * imports or runs it. Returns undefined when the command block cannot be found, so
+ * the caller treats "unknown" as UNPROVEN rather than as "legacy".
+ */
+export function candidateNamesReceiptBank(source) {
+  if (typeof source !== "string") return undefined;
+  const at = source.indexOf("export const confirmDisbursement = mutation({");
+  if (at < 0) return undefined;
+  // Bound everything to the target declaration so shared args (`args: sharedArgs`) can
+  // never borrow a later declaration's inline args, exported or not. The body is
+  // indented; it ends at the first column-0 line after the header that is not a
+  // closing `}` / `)` (the next statement, export or comment).
+  const headerEnd = source.indexOf("\n", at);
+  if (headerEnd < 0) return undefined;
+  const afterHeader = source.slice(headerEnd + 1);
+  const nextTopLevel = afterHeader.search(/^[^\s})\]]/m);
+  const declaration = source.slice(at, nextTopLevel < 0 ? source.length : headerEnd + 1 + nextTopLevel);
+  const argsAt = declaration.indexOf("args: {");
+  const handlerAt = declaration.indexOf("handler:", argsAt);
+  if (argsAt < 0 || handlerAt < 0) return undefined;
+  return /^[ \t]*bankAccountId[ \t]*:/m.test(declaration.slice(argsAt, handlerAt));
+}
+
 export async function runRehearsalCases(ctx) {
   const { results, orgId, recordCase, fireConcurrentReleases, tokens, config } = ctx;
   unproven = ctx.unproven;
@@ -2894,18 +2919,6 @@ export async function runRehearsalCases(ctx) {
       expectEqual(receivable.scale, denom.decimals, "the receivable's minor-unit scale");
       expectEqual(receivable.status, "OPEN", "the receivable's status before the receipt");
 
-      // SCRUM-54: a BANK_TRANSFER receipt names the physical bank it reached. A
-      // zero-balance, same-org, active bank in the deal's denomination is created
-      // through the authorized public command; no existing bank is ever selected.
-      const receiptBankAccountId = await ownerMust("mutation", "bankAccounts:create", {
-        orgId,
-        name: `Rehearsal receiving bank ${stamp}`,
-        currency: denom.currency,
-        openingBalanceMinor: 0,
-        openingBalanceDate: Date.now(),
-      });
-      if (!receiptBankAccountId) fail("bankAccounts:create returned no id for the receiving bank");
-
       // A refused receipt leaves no application settlement, allocation or receipt event.
       const expectNothingWritten = async (what) => {
         const after = await ownerMust("query", "applications:get", { orgId, applicationId });
@@ -2921,9 +2934,60 @@ export async function runRehearsalCases(ctx) {
         expectEqual((events ?? []).length, 0, `FINANCE_CASH_RECEIVED events after ${what}`);
       };
 
-      // SCRUM-54 negative control: a BANK_TRANSFER receipt with the correct amount but NO bank,
-      // while a valid bank exists, is refused for the missing bank - never defaulted to the one
-      // bank there is - and writes nothing.
+      // SCRUM-54 bank receipt contract. Two independent observations must agree:
+      // what the candidate's own source declares for this command (read as data
+      // from the exact tested SHA), and what the deployed backend does with the
+      // field. A probe with a non-id value writes nothing on either backend: a
+      // pre-SCRUM-54 validator refuses the unknown field, a SCRUM-54 validator
+      // refuses the malformed id. Disagreement, or agreement on the legacy contract,
+      // is a FAIL, never a quiet fallback to the legacy flow - that would let a
+      // broken or missing bank feature pass.
+      const declaredBank = ctx.candidateFinanceReceiptNamesBank;
+      if (typeof declaredBank !== "boolean") {
+        unproven("the candidate's confirmDisbursement contract could not be read from the tested source, so the FD1 bank contract has no expectation to be held to");
+      }
+      const probe = await ownerCall("mutation", "applications:confirmDisbursement", {
+        orgId,
+        applicationId,
+        disbursedAmountMinor: net - dealerCost,
+        idempotencyKey: `rehearsal-fd1-contract-probe-${stamp}`,
+        bankAccountId: "rehearsal-contract-probe-not-an-id",
+      });
+      if (probe.ok) fail("the bank-contract probe (a malformed bank id on a short receipt) was accepted");
+      const probeError = String(probe.error ?? "");
+      const observedLegacy = /extra field/i.test(probeError) && /bankAccountId/i.test(probeError);
+      const observedBank = /bankAccountId/i.test(probeError) && !/extra field/i.test(probeError);
+      if (observedBank === observedLegacy) {
+        fail(`the bank-contract probe was refused in a way that identifies neither contract: ${probeError.slice(0, 200)}`);
+      }
+      if (declaredBank !== observedBank) {
+        fail(
+          declaredBank
+            ? "the tested source declares a bank on confirmDisbursement but the deployed backend does not take one (the bank feature is absent or not deployed)"
+            : "the deployed backend takes a bank on confirmDisbursement but the tested source does not declare one"
+        );
+      }
+      // Source and backend agreeing on the legacy contract is the defect itself - the
+      // bank feature is absent - not a pass.
+      if (!observedBank) {
+        fail("the tested source and deployed backend both lack the SCRUM-54 bank contract on confirmDisbursement (the bank feature is absent)");
+      }
+      await expectNothingWritten("the contract probe");
+
+      // A BANK_TRANSFER receipt names the physical bank it reached: a zero-balance,
+      // same-org, active bank in the deal's denomination, created through the
+      // authorized public command; no existing bank is ever selected.
+      const receiptBankAccountId = await ownerMust("mutation", "bankAccounts:create", {
+        orgId,
+        name: `Rehearsal receiving bank ${stamp}`,
+        currency: denom.currency,
+        openingBalanceMinor: 0,
+        openingBalanceDate: Date.now(),
+      });
+      if (!receiptBankAccountId) fail("bankAccounts:create returned no id for the receiving bank");
+
+      // The correct amount with NO bank, while a valid bank exists, is refused for
+      // the missing bank - never defaulted to the one bank there is - and writes nothing.
       const noBank = await ownerCall("mutation", "applications:confirmDisbursement", {
         orgId,
         applicationId,
@@ -3003,6 +3067,10 @@ export async function runRehearsalCases(ctx) {
         ],
         { currency: denom.currency, decimals: denom.decimals, what: "the finance cash receipt posting" }
       );
+      // The receipt's bank identity must reach the ledger, not only the application.
+      const bankLines = cash.lines.filter((l) => keyOf.get(String(l.accountId)) === "BANK_ACCOUNT");
+      expectEqual(bankLines.length, 1, "BANK_ACCOUNT lines on the finance cash receipt");
+      expectEqual(String(bankLines[0].bankAccountId), String(receiptBankAccountId), "the bank identity on the BANK_ACCOUNT journal line");
 
       return {
         applicationId: String(applicationId),
@@ -3017,6 +3085,8 @@ export async function runRehearsalCases(ctx) {
         allocationMinor: active[0].amountMinor,
         journal: { entryId: String(cash.entry._id), journalNumber: cash.entry.journalNumber },
         shortReceiptRefused: true,
+        bankContract: "named-bank",
+        receiptBankAccountId: String(receiptBankAccountId),
         commandsExercised: [
           "finance.createCompany", "quotes.saveQuote", "applications.createFromQuote", "applications.updateStatus",
           "financingEconomics.recordSubmittedQuotation", "financingEconomics.approveDealerPurchaseAmount",
